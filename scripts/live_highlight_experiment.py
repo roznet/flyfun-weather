@@ -2,7 +2,7 @@
 tick, written by a small model from facts the code has already computed.
 
     python scripts/live_highlight_experiment.py <live.json or /live body> [...]
-        [--model claude-haiku-4-5] [--facts-only]
+        [--model claude-haiku-5-5] [--facts-only]
 
 Code does the weather: it reduces the tick (glance, ribbon bands, storms,
 SIGMETs, change rows) to a short facts block. The model only chooses what
@@ -27,9 +27,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from weatherbrief.tasks.live_highlight import (  # noqa: E402
+    DEFAULT_MODEL,
+    EFFORT,
     MAX_TOKENS,
     MAX_WORDS,
     SYSTEM,
+    THINKING,
     check_grounding,
     facts,
 )
@@ -50,7 +53,14 @@ def _at(live: dict, flown: float | None) -> dict:
 
 def highlight(client, model: str, f: dict) -> tuple[str, dict, float]:
     t = time.time()
-    extra = {} if model.startswith("claude-haiku") else {"output_config": {"effort": "low"}}
+    # Production's request for its own model (#715); Haiku 4.5 takes neither
+    # field, any other model gets low effort.
+    if model == DEFAULT_MODEL:
+        extra = {"thinking": THINKING, "output_config": {"effort": EFFORT}}
+    elif model.startswith("claude-haiku-4"):
+        extra = {}
+    else:
+        extra = {"output_config": {"effort": "low"}}
     resp = client.messages.create(
         model=model, max_tokens=MAX_TOKENS, system=SYSTEM, **extra,
         messages=[{"role": "user", "content": "FACTS:\n" + json.dumps(f, indent=1, ensure_ascii=False)}],
@@ -62,7 +72,7 @@ def highlight(client, model: str, f: dict) -> tuple[str, dict, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+", type=Path)
-    ap.add_argument("--model", default="claude-haiku-4-5")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--facts-only", action="store_true")
     ap.add_argument("--show-facts", action="store_true")
     ap.add_argument("--flown", type=float, action="append",
@@ -109,8 +119,10 @@ def main() -> None:
         if reason is not None:
             rejected += 1
     if client is not None:
-        price = {"claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-5-5": (2.0, 10.0)}.get(args.model, (4.0, 20.0))
-        cost = total_in / 1e6 * price[0] + total_out / 1e6 * price[1]
+        from weatherbrief.costs import token_rates_for
+
+        in_rate, out_rate = token_rates_for(args.model)  # per 1k; raises if unpriced
+        cost = total_in / 1e3 * in_rate + total_out / 1e3 * out_rate
         print(f"\n{len(cases)} calls, {total_in} in / {total_out} out tokens, ${cost:.4f}"
               f" (${cost / len(cases):.5f} per tick), {rejected} rejected by grounding")
 

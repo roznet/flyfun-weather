@@ -44,15 +44,25 @@ logger = logging.getLogger(__name__)
 #: read back from afterwards.
 LIVE_HIGHLIGHT_LOG = "live_highlights.jsonl"
 
-DEFAULT_MODEL = "claude-haiku-4-5"
-#: Haiku's p95 on the busiest real tick is 1.19 s; 5 s is a hung-connection
+#: Haiku 5.5 since #715. The A/B on the first flight day's 311 facts blocks:
+#: ~7x cheaper per call than Haiku 4.5, and right on the cases 4.5 got wrong
+#: (it led with the TS SIGMETs 4.5 dropped, read "130 NM along, 19 NM left"
+#: correctly). It writes longer, hence the 60-word ceiling below.
+DEFAULT_MODEL = "claude-haiku-5-5"
+#: Thinking off, effort low (#715). Adaptive thinking at low effort added no
+#: visible quality on the A/B and cost a 4 s p95, empty replies and
+#: ``max_tokens`` stops; with it off, p50/p95 were 0.8/1.2 s.
+THINKING = {"type": "disabled"}
+EFFORT = "low"
+#: Haiku's p95 on the busiest real tick is ~1.2 s; 5 s is a hung-connection
 #: guard, not a latency budget. Nothing waits on this call, so one retry is
 #: free — but two would let a flapping API hold a tick's worth of threads.
 REQUEST_TIMEOUT_S = 5.0
 MAX_RETRIES = 1
-#: Hard ceiling (owner, 2026-10-07). The prompt still asks for 25 words so the
-#: model keeps leading hard; 40 is where we stop trusting it to have led.
-MAX_WORDS = 40
+#: Hard ceiling (owner, 2026-10-08, #715; was 40 on Haiku 4.5). The prompt
+#: asks for 35 so the model aims below it. On the A/B, Haiku 5.5's overruns of
+#: 40 were almost all 41-50 words; 50 and 60 rejected the same 9 %.
+MAX_WORDS = 60
 #: Billed generations per facts state before giving up on it.
 #:
 #: The tick retries any flight with no stored highlight, and a rejection stores
@@ -63,17 +73,18 @@ MAX_WORDS = 40
 #: cost that flight its highlight until the weather moved. Two attempts gives
 #: a bad draw a second chance and caps a systematic failure at twice the price.
 MAX_ATTEMPTS_PER_FACTS = 2
-#: ~70 output tokens covers 40 words with room for punctuation; a longer
-#: generation is a prompt failure and the post-check rejects it anyway.
-MAX_TOKENS = 200
+#: 60 words is ~110 output tokens on Haiku 5.5's tokenizer (~30 % more tokens
+#: than 4.5's for the same text); 300 leaves room without paying for a runaway,
+#: which the post-check rejects anyway.
+MAX_TOKENS = 300
 
 SYSTEM = """You write the one-glance highlight at the top of a pilot's in-flight weather screen.
 
 You get FACTS about one flight at one moment: where the flight is, the departure and destination conditions, the airports along the route (METAR now, TAF at the time the flight is abeam, their position against the route), SIGMETs, rain and convective cells near the route ahead (from radar) and how they move, and what changed since the briefing.
 
-Write a highlight of at most two short sentences, 25 words in total at most, that tells the pilot what deserves their attention along the route ahead, most important first. Do not repeat the route or the airports' names as a title.
+Write a highlight of at most two short sentences, 35 words in total at most, that tells the pilot what deserves their attention along the route ahead, most important first. Do not repeat the route or the airports' names as a title.
 
-40 words is a hard limit: a longer highlight is discarded and the pilot sees nothing. When the facts hold more than fits, leave the least important item out entirely rather than shortening every clause — one item said properly beats three said in fragments.
+60 words is a hard limit: a longer highlight is discarded and the pilot sees nothing. When the facts hold more than fits, leave the least important item out entirely rather than shortening every clause — one item said properly beats three said in fragments.
 
 What leads, in this order:
 1. Hazards on the track ahead: an active SIGMET covering the route (always mention it, with where it covers), cells within 10 NM of the track (lightning and closing ones first), rain lying over the track.
@@ -84,7 +95,8 @@ Mention a missing source (radar, METAR) only when leaving it out would make the 
 
 Rules:
 - Use only the facts given. Never add weather, causes, forecasts or numbers that are not in them.
-- No verdict and no advice: never say safe, unsafe, go, no-go, avoid, divert, recommend or should. Point at the thing; the pilot decides.
+- No verdict and no advice: never say safe, unsafe, go, no-go, avoid, divert, recommend, should, watch or monitor. Point at the thing; the pilot decides.
+- Say what is there, not what is absent: don't list missing hazards ("no SIGMETs", "no lightning", "no cells"). Absence belongs only in the quiet-route sentence below.
 - Plain cockpit words. Places as distance along the route ("mid-route", "near LFMD") or ICAO codes. Times in Z.
 - Give every distance, time and figure exactly as the facts give it. Do not round it, convert it, or work out a span, total or difference of your own: say "from 235 NM to the destination" when the facts say 235, never "the last 41 NM".
 - Keep every condition at the place the facts give it. A route airport's METAR is that airport's, never the destination's.
@@ -646,7 +658,9 @@ def gate_changes(previous: dict, current: dict) -> list[str]:
 VERDICT_WORDS = frozenset(
     "safe unsafe safely dangerous hazardous go no-go nogo avoid divert diverting "
     "recommend recommended should must advise advisable unflyable "
-    "caution careful suggest suggested consider".split()
+    "caution careful suggest suggested consider "
+    # #715: Haiku 5.5 wrote "Watch LFAC…" on 19 of 311 A/B lines — advice.
+    "watch watching monitor monitoring".split()
 )
 
 #: Conditions an *airport* can be in, each with the surface forms the facts and
@@ -704,6 +718,22 @@ _NOT_ICAO = frozenset(
 )
 
 _ICAO_RE = re.compile(r"\b[A-Z]{4}\b")
+#: The model narrating its own drafting. With thinking off (#715), naming a
+#: banned word in the prompt made Haiku 5.5 write "Wait, that contains
+#: 'watch'… Corrected:" into the highlight, or dump its reasoning about the
+#: facts. Every leak on the replay had a blank line, so a line break alone
+#: rejects; the words catch a one-paragraph leak.
+_META_RE = re.compile(
+    r"\n|\b(?:instructions?|corrected|the facts|highlight|wait|I was told|I'll|let me)\b", re.IGNORECASE)
+#: "no lightning", "without thunderstorms": a stated absence, not a claim of
+#: one. Haiku 5.5 writes "(no lightning)" after a cell, which the thunderstorm
+#: rule read as the word itself (7 of 9 thunderstorm rejections on the #715 A/B).
+_NEGATED_TS_RE = re.compile(
+    r"\b(?:no|without|nor)\s+(?:lightning|thunderstorms?|ts)\b", re.IGNORECASE)
+#: An aerodrome named only as the reference point of a distance — "85-125 NM
+#: from EGBJ", "10 NM past LFMD" — is not the subject of the clause's weather.
+#: Binding "rain" to it rejected correct lines on the #715 A/B.
+_ANCHOR_ICAO_RE = re.compile(r"\bNM\b[^,;.]*?\b(?:from|after|past|beyond|before|of)\s+([A-Z]{4})\b")
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _CLAUSE_RE = re.compile(r"[;,.]|\band\b|\bbut\b|\bwhile\b|\bwith\b")
 
@@ -730,8 +760,11 @@ def _words(text: str) -> list[str]:
 
 
 def _conditions_in(text: str) -> set[str]:
-    """Which airport conditions a piece of text claims."""
-    toks = set(_words(text))
+    """Which airport conditions a piece of text claims.
+
+    "Low IFR" is LIFR spelled out (Haiku 5.5 writes it); read word by word it
+    claimed plain IFR at an LIFR airport and failed the binding (#715)."""
+    toks = set(_words(re.sub(r"\blow\s+ifr\b", "lifr", text, flags=re.IGNORECASE)))
     return {name for name, forms in AIRPORT_CONDITIONS.items() if toks & forms}
 
 
@@ -770,8 +803,11 @@ def _facts_for_icao(f: dict, icao: str) -> str:
 def check_grounding(text: str, f: dict) -> str | None:
     """Reject a highlight that is not carried by the facts.
 
-    Returns ``None`` when it passes, else a short reason. Five rules, each one
-    a failure seen in the experiment or a voice rule from the issue:
+    Returns ``None`` when it passes, else a short reason. Before the rules,
+    the line must be one paragraph of highlight, not the model's drafting
+    (#715: with thinking off it sometimes narrates its own corrections). Five
+    rules, each one a failure seen in the experiment or a voice rule from the
+    issue:
 
     1. **ICAOs** — every 4-letter code must appear in the facts.
     2. **Figures** — every number must appear in the facts. Catches an invented
@@ -785,8 +821,10 @@ def check_grounding(text: str, f: dict) -> str | None:
        observed lightning or a TS hazard earns the word.
 
     Known limits, accepted deliberately: a clause naming two airports is not
-    bound (ambiguous attribution), and a clause hedged with "no"/"better" is
-    skipped (rule 3 cannot read a negation). Both let a wrong line through
+    bound (ambiguous attribution), a clause hedged with "no"/"better" is
+    skipped (rule 3 cannot read a negation), and an aerodrome that only anchors
+    a distance ("NM from EGBJ") is not bound to the clause's weather. A stated
+    absence ("no lightning") does not count as saying thunderstorm (rule 5). Both let a wrong line through
     rather than reject a right one — the replay set and the review log are the
     backstop, and every rejection is logged with its text so a false one is
     visible rather than silent.
@@ -798,6 +836,10 @@ def check_grounding(text: str, f: dict) -> str | None:
     words = text.split()
     if len(words) > MAX_WORDS:
         return f"too long ({len(words)} words > {MAX_WORDS})"
+
+    meta = _META_RE.search(text)
+    if meta:
+        return f"not a highlight (drafting text: {meta.group(0).strip() or 'line break'!r})"
 
     blob = json.dumps(f, default=str)
 
@@ -811,11 +853,12 @@ def check_grounding(text: str, f: dict) -> str | None:
         return f"figure not in facts: {', '.join(invented)}"
 
     said = set(_words(text))
+    asserted = set(_words(_NEGATED_TS_RE.sub(" ", text)))
     verdict = sorted(said & VERDICT_WORDS)
     if verdict:
         return f"verdict word: {', '.join(verdict)}"
 
-    if said & AIRPORT_CONDITIONS["thunderstorm"]:
+    if asserted & AIRPORT_CONDITIONS["thunderstorm"]:
         # Two sources can license the word, and they license different claims
         # (§41: a radar core is a "cell"; only observed electrification or a
         # TS hazard earns "thunderstorm").
@@ -835,7 +878,7 @@ def check_grounding(text: str, f: dict) -> str | None:
             if isinstance(s, dict)
         )
         if not (from_cells or from_sigmet):
-            for clause in _CLAUSE_RE.split(text):
+            for clause in _CLAUSE_RE.split(_NEGATED_TS_RE.sub(" ", text)):
                 words_here = set(_words(clause))
                 if not (words_here & AIRPORT_CONDITIONS["thunderstorm"]):
                     continue
@@ -845,7 +888,7 @@ def check_grounding(text: str, f: dict) -> str | None:
                     return "says thunderstorm at a position, but only a station reports TS"
 
     for clause in _CLAUSE_RE.split(text):
-        icaos = _icaos(clause)
+        icaos = _icaos(clause) - set(_ANCHOR_ICAO_RE.findall(clause))
         if len(icaos) != 1:
             continue
         if set(_words(clause)) & _HEDGES:
@@ -888,17 +931,31 @@ def _anthropic_client():
     return _client
 
 
+class HighlightRefused(Exception):
+    """The model declined (``stop_reason == "refusal"``). Billed, unlike a
+    transport failure, so the caller logs it as a rejection: it counts toward
+    ``MAX_ATTEMPTS_PER_FACTS`` instead of being retried every tick. Haiku 5.5
+    runs safety classifiers and has no server-side fallback (#715)."""
+
+    def __init__(self, category: str | None, usage: dict, latency_ms: int):
+        super().__init__(f"refusal ({category or 'no category'})")
+        self.usage, self.latency_ms = usage, latency_ms
+
+
 def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
     """One highlight from one facts block: ``(text, usage, latency_ms)``.
 
-    Raises on an API failure — every caller treats that as "no highlight this
-    tick" and keeps the previous one.
+    Raises :class:`HighlightRefused` on a refusal, and any other exception on
+    an API failure — every caller treats both as "no highlight this tick" and
+    keeps the previous one.
     """
     client = _anthropic_client()
     t = time.perf_counter()
     resp = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
+        thinking=THINKING,
+        output_config={"effort": EFFORT},
         system=SYSTEM,
         messages=[{"role": "user", "content": "FACTS:\n" + json.dumps(f, indent=1, ensure_ascii=False)}],
     )
@@ -911,6 +968,9 @@ def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
         "cache_read_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
         "cache_write_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
     }
+    if resp.stop_reason == "refusal":
+        details = getattr(resp, "stop_details", None)
+        raise HighlightRefused(getattr(details, "category", None), usage, latency_ms)
     return text, usage, latency_ms
 
 
@@ -1138,6 +1198,12 @@ def ensure_highlight(
 
     try:
         text, usage, latency_ms = generate(f, model=model)
+    except HighlightRefused as exc:
+        logger.warning("LIVE_HIGHLIGHT_REJECTED flight=%s reason=%s", layer.flight_id, exc)
+        _log_attempt(flight_dir, {**base, "outcome": "rejected", "reason": str(exc), "text": "",
+                                  "usage": exc.usage, "latency_ms": exc.latency_ms,
+                                  "cost_usd": call_cost(exc.usage)})
+        return HighlightOutcome("rejected", text="", usage=exc.usage, reason=str(exc))
     except Exception as exc:
         # Expected failure mode (timeout, rate limit, outage). One line, not a
         # traceback per tick: the highlight is optional and the tick is intact.

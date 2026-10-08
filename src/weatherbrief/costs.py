@@ -185,6 +185,9 @@ def compute_cost(
 # a fraction of a cent. A model must be priced here before anything bills it.
 MODEL_TOKEN_RATES_PER_1K: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (0.001, 0.005),
+    # Prompts of 100k tokens or fewer; longer ones bill $0.50/$2.50 per MTok.
+    # The live highlight's are ~1.7k, so one flat rate holds (#715).
+    "claude-haiku-5-5": (0.0001, 0.0005),
 }
 
 
