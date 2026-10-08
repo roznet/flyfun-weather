@@ -146,7 +146,7 @@ is reachable. Those keywords don't trigger GitHub's auto-close. Rare — about a
 this project's history.
 
 **Why a keyword whitelist:** plain `#N` mentions may be passing references ("see #50 for
-context") and must not trigger anything. Only an explicit keyword counts. The skill's regex
+context") and must not trigger anything. Only an explicit keyword counts. The regex (`REF_RE` in `scripts/ops/notify_deploy_issues.py`)
 matches the auto-close keywords too — deliberately, so already-closed issues still get the
 "Deployed" comment.
 
@@ -163,7 +163,7 @@ Two GitHub gotchas:
   matters for the rare deferred-close PRs: for those, use `Addresses #N` in the commit body
   too.
 - Auto-close matches `Fixes #N` but **not** `Fixes issue #N` — the word "issue" between the
-  keyword and `#` breaks it. One PR was missed this way. The skill's regex includes an optional
+  keyword and `#` breaks it. One PR was missed this way. The script's regex includes an optional
   `issue` token to catch the variant on the deploy side; prefer dropping the word in PR bodies
   so GitHub's own auto-close fires at merge time.
 

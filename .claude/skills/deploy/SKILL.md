@@ -364,48 +364,23 @@ auto-close gotchas: §D6.
 
 Runs **only after** the health check returns 200.
 
-1. Collect the PR numbers in this deploy:
-   ```bash
-   REPO="roznet/flyfun-weather"
-   PRS=$(
-     for sha in $(git log --format=%H "${SERVER_SHA}..${LOCAL_SHA}"); do
-       gh api "repos/${REPO}/commits/${sha}/pulls" --jq '.[].number' 2>/dev/null
-     done | sort -u
-   )
-   ```
+```bash
+python3 scripts/ops/notify_deploy_issues.py ${SERVER_SHA} ${LOCAL_SHA}
+```
 
-2. For each PR, extract referenced issues and act by state — OPEN: comment + close;
-   CLOSED: comment only, don't reopen.
-   ```bash
-   for pr in $PRS; do
-     body=$(gh pr view "$pr" --json body --jq .body)
-     issues=$(printf '%s\n' "$body" \
-       | grep -oiE '(addresses|refs?|references|related to|closes?|closed|fix(es|ed)?|resolves?|resolved)[[:space:]]+(issue[[:space:]]+)?#[0-9]+' \
-       | grep -oE '[0-9]+' | sort -u)
-     for issue in $issues; do
-       state=$(gh issue view "$issue" --json state --jq .state 2>/dev/null)
-       if [ "$state" = "OPEN" ]; then
-         gh issue comment "$issue" --body "Deployed to https://weather.flyfun.aero — give it a try and let us know how it works."
-         gh issue close "$issue"
-         echo "  closed #${issue} (from PR #${pr})"
-       elif [ "$state" = "CLOSED" ]; then
-         already=$(gh issue view "$issue" --json comments --jq '.comments[] | select(.body | test("Deployed to https://weather.flyfun.aero")) | .id' | head -1)
-         if [ -z "$already" ]; then
-           gh issue comment "$issue" --body "Deployed to https://weather.flyfun.aero — give it a try and let us know how it works."
-           echo "  notified #${issue} (already closed, from PR #${pr})"
-         fi
-       fi
-     done
-   done
-   ```
+It walks the deployed commits to their PRs, reads each PR body for an explicit keyword
+reference, and acts by issue state — OPEN: comment + close; CLOSED: comment once, never
+reopen. `--dry-run` prints the same report without writing. Run it with the sandbox disabled
+(otherwise `gh` returns empty with exit 0). Relay its report: which issues were **notified**
+(already closed at merge — the common case) and which were **closed** (deferred
+outside-reporter issues), or "no linked issues in this deploy".
 
-3. Summarize which issues were **notified** (already closed at merge — the common case) and
-   which were **closed** (deferred outside-reporter issues). Say "no linked issues in this
-   deploy" if empty.
+It is a script rather than a shell loop because the agent's shell is zsh, which doesn't
+word-split an unquoted `$PRS` — the old loop passed every PR number as one argument and failed.
 
-**Skip when:** no PRs in the range (data-only changes) — silently; `gh auth status` fails —
-tell the user so they can do it manually; deploy failed or health check wasn't 200 — **do not
-close**, the fix isn't live.
+**Skip when:** the deploy failed or the health check wasn't 200 — **do not close**, the fix
+isn't live; `gh auth status` fails — tell the user so they can do it manually. A range with no
+PRs (data-only changes) needs no skip: the script says so in one line.
 
 ## Suggest a What's New entry (only with explicit confirmation)
 
