@@ -722,7 +722,10 @@ _ICAO_RE = re.compile(r"\b[A-Z]{4}\b")
 #: banned word in the prompt made Haiku 5.5 write "Wait, that contains
 #: 'watch'… Corrected:" into the highlight, or dump its reasoning about the
 #: facts. Every leak on the replay had a blank line, so a line break alone
-#: rejects; the words catch a one-paragraph leak.
+#: rejects; the words catch a one-paragraph leak. Bare words, not the leak's
+#: exact shape, on purpose: the one-paragraph leak on the replay was "at the
+#: times in the facts", which no "Wait, … Corrected:" pattern catches. A false
+#: reject costs only the fallback headline, logged under its own reason.
 _META_RE = re.compile(
     r"\n|\b(?:instructions?|corrected|the facts|highlight|wait|I was told|I'll|let me)\b", re.IGNORECASE)
 #: "no lightning", "without thunderstorms": a stated absence, not a claim of
@@ -732,8 +735,10 @@ _NEGATED_TS_RE = re.compile(
     r"\b(?:no|without|nor)\s+(?:lightning|thunderstorms?|ts)\b", re.IGNORECASE)
 #: An aerodrome named only as the reference point of a distance — "85-125 NM
 #: from EGBJ", "10 NM past LFMD" — is not the subject of the clause's weather.
-#: Binding "rain" to it rejected correct lines on the #715 A/B.
-_ANCHOR_ICAO_RE = re.compile(r"\bNM\b[^,;.]*?\b(?:from|after|past|beyond|before|of)\s+([A-Z]{4})\b")
+#: Binding "rain" to it rejected correct lines on the #715 A/B. Deliberately
+#: only from/past/beyond: "IFR 20 NM before LFMD" or "TSRA 10 NM of LFMD" can
+#: be a condition placed on LFMD, and the binding rule must still see it.
+_ANCHOR_ICAO_RE = re.compile(r"\bNM\b[^,;.]*?\b(?:from|past|beyond)\s+([A-Z]{4})\b")
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _CLAUSE_RE = re.compile(r"[;,.]|\band\b|\bbut\b|\bwhile\b|\bwith\b")
 
@@ -821,13 +826,13 @@ def check_grounding(text: str, f: dict) -> str | None:
        observed lightning or a TS hazard earns the word.
 
     Known limits, accepted deliberately: a clause naming two airports is not
-    bound (ambiguous attribution), a clause hedged with "no"/"better" is
-    skipped (rule 3 cannot read a negation), and an aerodrome that only anchors
-    a distance ("NM from EGBJ") is not bound to the clause's weather. A stated
-    absence ("no lightning") does not count as saying thunderstorm (rule 5). Both let a wrong line through
-    rather than reject a right one — the replay set and the review log are the
-    backstop, and every rejection is logged with its text so a false one is
-    visible rather than silent.
+    bound (ambiguous attribution); a clause hedged with "no"/"better" is
+    skipped (rule 3 cannot read a negation); an aerodrome that only anchors a
+    distance ("NM from/past/beyond EGBJ") is not bound to the clause's weather;
+    a stated absence ("no lightning") does not count as saying thunderstorm
+    (rule 5). Each lets a wrong line through rather than reject a right one —
+    the replay set and the review log are the backstop, and every rejection is
+    logged with its text so a false one is visible rather than silent.
     """
     text = (text or "").strip()
     if not text:
@@ -967,6 +972,7 @@ def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
         "output_tokens": resp.usage.output_tokens,
         "cache_read_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
         "cache_write_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+        "stop_reason": resp.stop_reason,
     }
     if resp.stop_reason == "refusal":
         details = getattr(resp, "stop_details", None)
@@ -1218,7 +1224,12 @@ def ensure_highlight(
         } | {"outcome": "call_failed", "error": str(exc)})
         return HighlightOutcome("call_failed", reason=str(exc))
 
-    reason = check_grounding(text, f)
+    # A reply cut at MAX_TOKENS is unfinished whatever it says; name it so a
+    # truncation is not mistaken for a grounding failure in the review log.
+    if usage.get("stop_reason") == "max_tokens":
+        reason = f"truncated (max_tokens {MAX_TOKENS})"
+    else:
+        reason = check_grounding(text, f)
     if reason is not None:
         # Loud: a systematic rejection means the prompt drifted, and the
         # fallback (the nutshell headline) hides it from every surface.
