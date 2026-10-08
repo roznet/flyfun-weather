@@ -95,7 +95,7 @@ Mention a missing source (radar, METAR) only when leaving it out would make the 
 
 Rules:
 - Use only the facts given. Never add weather, causes, forecasts or numbers that are not in them.
-- No verdict and no advice: never say safe, unsafe, go, no-go, avoid, divert, recommend, should, watch or monitor. Point at the thing; the pilot decides.
+- No verdict and no advice: never say safe, unsafe, go, no-go, avoid, divert, recommend or should. Point at the thing; the pilot decides.
 - Say what is there, not what is absent: don't list missing hazards ("no SIGMETs", "no lightning", "no cells"). Absence belongs only in the quiet-route sentence below.
 - Plain cockpit words. Places as distance along the route ("mid-route", "near LFMD") or ICAO codes. Times in Z.
 - Give every distance, time and figure exactly as the facts give it. Do not round it, convert it, or work out a span, total or difference of your own: say "from 235 NM to the destination" when the facts say 235, never "the last 41 NM".
@@ -661,10 +661,13 @@ VERDICT_WORDS = frozenset(
     "caution careful suggest suggested consider".split()
 )
 #: Advice rather than a verdict, kept apart so the review log can tell them
-#: from go/no-go words: Haiku 5.5 wrote "Watch LFAC…" on 19 of 311 A/B lines
-#: (#715), and a bare-word ban also rejects a noun ("convective watch"), which
-#: only a distinct reason makes visible (review on PR #716).
-ADVICE_WORDS = frozenset("watch watching monitor monitoring".split())
+#: from go/no-go words (review on PR #716). Checker only, never named in the
+#: prompt: naming "watch" there made Haiku 5.5 narrate around it ("Watch-free
+#: note: …"), and one such line passed every rule. "Watch LFAC, MVFR…" is
+#: allowed (owner, 2026-10-08): it points at the airport, it does not tell the
+#: pilot what to do. Monitor stays: "Monitor the destination TAF" is an
+#: instruction, and no replay line used it.
+ADVICE_WORDS = frozenset("monitor monitoring".split())
 
 #: Conditions an *airport* can be in, each with the surface forms the facts and
 #: the model may use for it. Used only to bind a condition to the place the

@@ -295,13 +295,25 @@ def test_drafting_text_is_not_a_highlight(text):
     assert lh.check_grounding("Quiet route ahead.", _facts_with()) is None
 
 
-@pytest.mark.parametrize("text", ["Watch LFAC, MVFR at 130 NM along.", "Monitor the destination TAF."])
-def test_watch_and_monitor_are_advice(text):
-    f = _facts_with(airports_along_route_ahead={
+def _lfac_facts() -> dict:
+    return _facts_with(airports_along_route_ahead={
         "notable": [{"icao": "LFAC", "role": "route", "where": "130 NM along, 19 NM left of track",
                      "metar_now": "MVFR at 11:00Z"}], "other_airports_ahead_all_VFR": 3})
-    reason = lh.check_grounding(text, f)
+
+
+def test_monitor_is_advice():
+    reason = lh.check_grounding("Monitor the destination TAF.", _lfac_facts())
     assert reason is not None and reason.startswith("advice word")
+
+
+def test_watch_pointing_at_an_airport_is_allowed():
+    """Owner, 2026-10-08: "Watch LFAC, MVFR…" points at the thing, it is not
+    advice. 9 of 22 rejections on the #715 replay were this word, and banning it
+    in the prompt made the model write "Watch-free note:" around it."""
+    assert lh.check_grounding(
+        "Quiet route ahead. Watch LFAC, MVFR at 11:00Z, 130 NM along and 19 NM left of track.",
+        _lfac_facts()) is None
+    assert "watch" not in lh.SYSTEM.lower()
 
 
 # --- Facts ------------------------------------------------------------------
