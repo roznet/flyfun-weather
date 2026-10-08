@@ -1,5 +1,10 @@
 # PIREP Collection & Model Validation — Implementation Plan
 
+> **Direction changed 2026-10-06:** pilot reports move into the flight debrief
+> (private bookmarks + an automatic observed recap; sharing becomes an optional later
+> phase). See [flight-debrief-observed.md](./flight-debrief-observed.md). M2/M3 below
+> are superseded where they conflict.
+
 ## Build Status (checked 2026-08-15)
 
 Partly built. **M0 and M1 are shipped — code is the source of truth for them; the
