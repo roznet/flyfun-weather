@@ -43,7 +43,7 @@ LABELS = {
     "to-start": ("0e8a16", "Issue: plan agreed, run /implement-issue"),
     "implementing": ("bfdadc", "Issue: a PR exists, look at the PR list"),
     "working": ("ededed", "PR: agent on it, or bot review pending on the head"),
-    "to-review": ("fbca04", "PR: fresh bot review + brief waiting for you"),
+    "to-review": ("fbca04", "PR: bot review (or a fresh PR's brief) waiting for you"),
     "to-land": ("0e8a16", "PR: review loop clean, run /land-pr"),
     "mac": ("5319e7", "Needs Mac-only verification (see the PR body checklist)"),
     "question": ("d93f0b", "An agent is waiting on your answer in the thread"),

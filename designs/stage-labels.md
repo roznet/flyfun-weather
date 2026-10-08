@@ -36,7 +36,7 @@ PRs carry exactly one of:
 | Label | Means | Owner's action |
 |---|---|---|
 | `working` | Agent on it, or a bot review pending on the head commit | Nothing |
-| `to-review` | Fresh bot review and brief on the current head | Read, then `/process-review`, `/land-pr`, or comment |
+| `to-review` | Something to read on the current head: the bot review, or for a PR not pushed since opening, the brief while the first review runs | Read, then `/process-review`, `/land-pr`, or comment |
 | `to-land` | Review loop concluded clean | `/land-pr n` |
 
 Flags, zero or more, on either:
@@ -66,9 +66,11 @@ Mechanical, in `stage-labels.yml` via `stage_labels.py event`:
 | PR merged | referenced issues still open (`Addresses #n`, outside reporter) lose `implementing` |
 | Review bot posts (end of `claude-code-review.yml`) | PR `to-review` |
 
-Push then review gives `working` then `to-review`, so `to-review` means
-exactly "a review exists on this head", the freshness check `process-review`
-used to do by hand.
+Push then review gives `working` then `to-review`, so after any push
+`to-review` means "a review exists on this head", the freshness check
+`process-review` used to do by hand. A freshly opened PR reads `to-review`
+straight away, before its first review: the brief in the body is already worth
+reading, and `/process-review` waits for the bot itself.
 
 Agent-set, each in the skill that is at that step:
 
@@ -106,6 +108,10 @@ when the lists look wrong, or after a session died mid-flight.
 
 ## Gotchas
 
+- The review action skips itself on a PR that edits `claude-code-review.yml`
+  (the workflow must match the default branch) but exits success, so the
+  `to-review` step still runs: such a PR reads `to-review` with no review.
+  Review it by hand (#703 was the first).
 - Labels are one namespace for issues and PRs. The two stage families are
   disjoint so a label never means two things; the flags share meaning.
 - `GITHUB_TOKEN` label edits do not trigger other workflows, so there is no
