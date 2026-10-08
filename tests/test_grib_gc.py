@@ -41,6 +41,29 @@ def test_invalid_override_falls_back_to_default(monkeypatch, raw):
     assert grib._grib_gc_generation() == 1
 
 
+def test_invalid_override_warns_once(monkeypatch, caplog):
+    monkeypatch.setenv("WB_GRIB_GC_GENERATION", "bogus")
+    with caplog.at_level(logging.WARNING, logger=grib.logger.name):
+        for _ in range(5):
+            grib._grib_gc_generation()
+    assert sum("WB_GRIB_GC_GENERATION" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_timer_resolves_generation_once(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(gc, "collect", lambda generation=2: calls.append(generation) or 0)
+    monkeypatch.setenv("WB_GRIB_GC_GENERATION", "0")
+    timer = grib._GribTimer()
+    monkeypatch.setenv("WB_GRIB_GC_GENERATION", "2")
+    token = grib._GRIB_TIMER.set(timer)
+    try:
+        grib._grib_gc("site")
+    finally:
+        grib._GRIB_TIMER.reset(token)
+    assert calls == [0]
+    assert timer.gc_generation == 0
+
+
 def test_grib_gc_collects_at_the_chosen_generation(monkeypatch):
     calls: list[int] = []
     monkeypatch.setattr(gc, "collect", lambda generation=2: calls.append(generation) or 0)

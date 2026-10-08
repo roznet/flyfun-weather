@@ -102,6 +102,8 @@ class _GribTimer:
         self.gc_count: int = 0
         # label -> (seconds, calls, objects collected, RSS freed MB)
         self.gc_by_label: dict[str, tuple[float, int, int, float]] = {}
+        # Resolved once per call, so every site and the summary line agree.
+        self.gc_generation: int = _grib_gc_generation()
         self.rss_baseline: float | None = _read_rss_mb()
         self.rss_max: dict[str, float] = {}
         self.rss_count: dict[str, int] = {}
@@ -173,7 +175,7 @@ class _GribTimer:
                 f"{label}={secs:.2f}s/{n} objs={objs} freed={mb:+.0f}MB"
                 for label, (secs, n, objs, mb) in items
             ]
-            logger.info("GRIB gc (gen %d): %s", _grib_gc_generation(), " ".join(parts))
+            logger.info("GRIB gc (gen %d): %s", self.gc_generation, " ".join(parts))
 
         if rss_max:
             items = sorted(rss_max.items(), key=lambda kv: -kv[1])
@@ -209,6 +211,9 @@ def _grib_time(label: str):
         yield
 
 
+_GC_GENERATION_WARNED: set[str] = set()
+
+
 def _grib_gc_generation() -> int:
     """Oldest generation the GRIB stage's explicit collections walk (#704).
 
@@ -224,7 +229,8 @@ def _grib_gc_generation() -> int:
     With the pool off (``GRIB_DECODE_WORKERS=0``) decode is back in-process
     and the full collection is kept, as before. ``WB_GRIB_GC_GENERATION``
     (0, 1 or 2) overrides both, e.g. ``2`` restores the old behaviour without
-    a deploy if RSS climbs.
+    a deploy if RSS climbs. An active :class:`_GribTimer` resolves this once,
+    so a change takes effect from the next briefing.
     """
     raw = os.environ.get("WB_GRIB_GC_GENERATION", "").strip()
     if raw:
@@ -234,7 +240,9 @@ def _grib_gc_generation() -> int:
                 return v
         except ValueError:
             pass
-        logger.warning("Invalid WB_GRIB_GC_GENERATION=%r, using the default", raw)
+        if raw not in _GC_GENERATION_WARNED:
+            _GC_GENERATION_WARNED.add(raw)
+            logger.warning("Invalid WB_GRIB_GC_GENERATION=%r, using the default", raw)
     return 1 if decode_pool_enabled() else 2
 
 
@@ -245,12 +253,11 @@ def _grib_gc(label: str) -> None:
     accounted under *label* (``GRIB gc`` log line); without one it is a plain
     ``gc.collect``.
     """
-    generation = _grib_gc_generation()
     t = _timer()
     if t is None:
-        gc.collect(generation)
+        gc.collect(_grib_gc_generation())
         return
-    t.gc(label, generation)
+    t.gc(label, t.gc_generation)
 
 
 def _grib_rss_mark(label: str) -> None:
