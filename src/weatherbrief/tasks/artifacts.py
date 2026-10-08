@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+import orjson
+
 from weatherbrief.models import (
     Diagnostic,
     ElevationProfile,
@@ -22,6 +24,25 @@ from weatherbrief.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _loads(raw: bytes) -> dict | list:
+    """Parse a (possibly large) JSON artifact, orjson first (#704).
+
+    ``cross_section.json`` runs to ~80 MB on long routes and is re-read for
+    the sounding sidecar and by every from-disk recompute; orjson parses it
+    ~3x faster than the stdlib. orjson rejects the non-standard ``NaN`` /
+    ``Infinity`` tokens that ``json.dumps`` writes for non-finite floats, so
+    such a file falls back to ``json.loads`` and reads back exactly as before.
+
+    Only the read side moved: ``orjson.dumps`` would write ``null`` for a NaN
+    the stdlib writes as ``NaN``, which reloads as ``None`` rather than a
+    float — a silent change to what downstream code sees.
+    """
+    try:
+        return orjson.loads(raw)
+    except orjson.JSONDecodeError:
+        return json.loads(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +202,7 @@ def _write_sounding_sidecar(pack_dir: Path, manifest: RouteAnalysesManifest) -> 
         # with JSON-compatible types (datetime → ISO string) and skips the lossy
         # serialise-then-parse float round-trip.
         ra_full = manifest.model_dump(mode="json")
-        cs_data = json.loads(cs_path.read_text())
+        cs_data = _loads(cs_path.read_bytes())
         count = write_sounding_sidecar(pack_dir, ra_full, cs_data)
         logger.debug("Wrote sounding sidecar with %d profiles to %s", count, pack_dir)
     except Exception:
@@ -278,12 +299,12 @@ def _read_json_or_gz(base: Path) -> dict | list | None:
     Prefers the plain file when both exist. Returns None if neither does.
     """
     if base.exists():
-        return json.loads(base.read_text())
+        return _loads(base.read_bytes())
     gz = Path(str(base) + ".gz")
     if gz.exists():
         import gzip
 
-        return json.loads(gzip.decompress(gz.read_bytes()))
+        return _loads(gzip.decompress(gz.read_bytes()))
     return None
 
 

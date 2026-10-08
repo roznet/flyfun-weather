@@ -60,9 +60,14 @@ Bounded below by `terrain(i) + margin` (per point) and above by the flight ceili
 - the **blocking segment** when no feasible path exists ("no VMC between 180–220 nm,
   deck surface→FL80").
 
-The grid is tiny (≈60 × ≈40 bins), so a general DP is effectively free versus a bespoke
+The grid is tiny (≈60 × ≈40 bins), so a general DP is cheap versus a bespoke
 connectivity solver, and it handles multi-deck-with-gaps routes that a greedy
-"single max clear altitude" scan misjudges.
+"single max clear altitude" scan misjudges. "Cheap" needed vectorising, though: the
+first, scalar version (Python loop over points × to-bin × from-bin, with an O(|a−b|)
+crossing sum per edge, so O(n·B³)) measured 196 ms per solve at 64 × 37 and 641 ms at
+64 × 61, and it runs per model and per time-scan candidate. Since #704 each DP step is
+one numpy pass over the `(from-bin × to-bin)` matrix (see *Testing* for how
+equivalence is pinned).
 
 ### Locked decisions (see #335 comment thread)
 
@@ -257,6 +262,21 @@ guard decisions that are easy to silently break — keep them if you refactor:
 - **soft-wall preference** (decision 5, hazard tier): a feasible stay-at-cruise path
   through light icing must lose to a two-transition escape — guards against the
   finite-cost tier degenerating into a no-op.
+
+**Vectorised DP ≡ scalar DP, ties included** (#704). The test file keeps the original
+scalar solver as an oracle and compares on random fields, including fields built from a
+few repeated costs so exact ties are common. Exactness is by construction, and easy to
+lose in a "harmless" cleanup:
+
+- Crossing sums use a row-wise `cumsum` from `0.0` (`_crossing_matrix`), which adds in
+  the same order as the scalar loop. A prefix-sum *difference* is also O(1) but rounds
+  differently, and in a lexicographic objective a one-ulp hazard difference flips which
+  path wins a tie.
+- Candidate hazard is `(dp + edge) + node`, in that order, as `_Cost.__add__` did.
+- Among equal `(hazard, deviation, transitions)` keys, the lowest from-bin wins
+  (`argmax` of the tie mask), matching the scalar strict-`<` scan in ascending order.
+- End-bin selection and blockage localisation stay in plain Python on `_Cost`
+  objects, unchanged.
 
 Regression method used (keep it if the solver is touched again): port as a **pure
 refactor** emitting the same flat `Mitigation` objects, behavior-compare over the eval

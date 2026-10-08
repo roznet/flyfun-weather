@@ -243,3 +243,139 @@ def test_fewest_transitions_tiebreak():
     prof = solve(_model(cf), preferred_alt_ft=5000)
     assert isinstance(prof, Profile)
     assert prof.transitions == []
+
+
+# ---------------------------------------------------------------------------
+# Vectorised solver ≡ scalar DP (issue #704)
+# ---------------------------------------------------------------------------
+#
+# `solve` vectorises the per-step (from-bin × to-bin) transition. The scalar
+# triple-loop it replaced is kept below, verbatim in logic, as the reference: the
+# two must agree exactly — same bin sequence, same total cost, same blockage —
+# including exact-tie decisions, which is why random fields below draw from a
+# small set of repeated costs (ties are common) as well as arbitrary floats.
+
+import random  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+from weatherbrief.analysis.advisories import vertical_profile as _vp  # noqa: E402
+
+
+def _solve_reference(model: CostModel, preferred_alt_ft: int):
+    """The pre-#704 scalar DP, used only as an equivalence oracle."""
+    cf = model.cost_field
+    n = len(cf)
+    if n == 0:
+        return Blockage(0.0, 0.0, "no route points")
+    nbins = len(model.bin_altitudes_ft)
+    alts = model.bin_altitudes_ft
+    start_bins = model.allowed_start_bins if model.allowed_start_bins is not None else set(range(nbins))
+    end_bins = model.allowed_end_bins if model.allowed_end_bins is not None else set(range(nbins))
+
+    def dev(b):
+        return abs(alts[b] - preferred_alt_ft)
+
+    dp = [_vp._INF_COST] * nbins
+    parent = [[-1] * nbins for _ in range(n)]
+    for b in range(nbins):
+        if b in start_bins and cf[0][b] != INF:
+            dp[b] = _vp._Cost(cf[0][b], 0, dev(b))
+    reachable_upto = 0 if any(c.hazard != INF for c in dp) else -1
+    for i in range(1, n):
+        ndp = [_vp._INF_COST] * nbins
+        col_prev, col_cur = cf[i - 1], cf[i]
+        for b in range(nbins):
+            if col_cur[b] == INF:
+                continue
+            best = _vp._INF_COST
+            best_a = -1
+            node = _vp._Cost(col_cur[b], 0, dev(b))
+            for a in range(nbins):
+                if dp[a].hazard == INF:
+                    continue
+                if a == b:
+                    edge = _vp._Cost(0.0, 0, 0.0)
+                else:
+                    cc = _vp._crossing_cost(col_prev, col_cur, a, b)
+                    if cc == INF:
+                        continue
+                    edge = _vp._Cost(cc, 1, 0.0)
+                cand = dp[a] + edge + node
+                if cand < best:
+                    best = cand
+                    best_a = a
+            ndp[b] = best
+            parent[i][b] = best_a
+        dp = ndp
+        if any(c.hazard != INF for c in dp):
+            reachable_upto = i
+    best_end = -1
+    best_cost = _vp._INF_COST
+    for b in end_bins:
+        if dp[b].hazard != INF and dp[b] < best_cost:
+            best_cost = dp[b]
+            best_end = b
+    if best_end < 0:
+        return _vp._blockage(model, reachable_upto, end_bins, dp)
+    seq = [0] * n
+    seq[n - 1] = best_end
+    for i in range(n - 1, 0, -1):
+        seq[i - 1] = parent[i][seq[i]]
+    return _vp._to_profile(model, seq, best_cost.hazard)
+
+
+def _random_field(rng: random.Random, n: int, nbins: int, style: str) -> list[list[float]]:
+    field = []
+    for _ in range(n):
+        col = []
+        for _ in range(nbins):
+            r = rng.random()
+            if style == "hard":      # VFR-like: clear or walled
+                col.append(INF if r < 0.25 else 0.0)
+            elif style == "ties":    # few distinct soft costs → many exact ties
+                col.append(INF if r < 0.1 else rng.choice([0.0, 0.0, 0.5, 1.0, 2.0]))
+            else:                    # arbitrary floats, non-dyadic sums
+                col.append(INF if r < 0.1 else (0.0 if r < 0.5 else rng.uniform(0.0, 3.0)))
+        field.append(col)
+    return field
+
+
+def test_crossing_matrix_matches_scalar_crossing_cost():
+    rng = random.Random(704)
+    for _ in range(50):
+        nbins = rng.randint(1, 15)
+        ci = [INF if rng.random() < 0.15 else rng.uniform(0, 3) for _ in range(nbins)]
+        cj = [INF if rng.random() < 0.15 else rng.uniform(0, 3) for _ in range(nbins)]
+        mi, mj = _vp._crossing_matrix(np.array(ci)), _vp._crossing_matrix(np.array(cj))
+        for a in range(nbins):
+            for b in range(nbins):
+                if a == b:
+                    continue
+                assert max(mi[a, b], mj[a, b]) == _vp._crossing_cost(ci, cj, a, b)
+
+
+def test_vectorised_solve_matches_scalar_reference():
+    rng = random.Random(335704)
+    for trial in range(400):
+        style = ("hard", "ties", "float")[trial % 3]
+        n = rng.randint(1, 12)
+        nbins = rng.randint(1, 12)
+        field = _random_field(rng, n, nbins, style)
+        bins = [500 * (b + 1) for b in range(nbins)]
+        start = end = None
+        if rng.random() < 0.5:
+            start = floor_reachable_bins(field[0])
+            end = floor_reachable_bins(field[-1])
+        elif rng.random() < 0.3:
+            start = set(rng.sample(range(nbins), rng.randint(0, nbins)))
+            end = set(rng.sample(range(nbins), rng.randint(0, nbins)))
+        model = CostModel(
+            cost_field=field,
+            distances_nm=[10.0 * i for i in range(n)],
+            bin_altitudes_ft=bins,
+            allowed_start_bins=start,
+            allowed_end_bins=end,
+        )
+        preferred = rng.choice(bins)
+        assert solve(model, preferred) == _solve_reference(model, preferred), (trial, style)

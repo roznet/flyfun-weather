@@ -130,7 +130,7 @@ for fhour in forecast_hours:
 
 **ICON Cloud Diagnostics** (`_enrich_icon_eu_cloud_diagnostics`): same per-hour loop for single-level ceiling/convective fields, plus CLC-derived layer base/top from that hour's model-level data. Accumulated fields (`rain_con`) are de-accumulated against a prepended leading step so the first window hour has a predecessor (#421). ICON-D2 additionally carries an explicit-convection pass (#462).
 
-Three of these (GFS cloud water, GFS cloud diag, ICON cloud diag) follow the same `del decoded_points; _grib_gc()` pattern at the end of each fhour iteration. The ICON sounding path decodes in parallel and `_grib_gc()`s once after its merge loop. Without these collections, decoded_points dicts accumulate across the loop on long-route briefings and contribute to OOM pressure. Diagnostics arrays (`diagnostics_per_point`) are deleted alongside in the diag loops. `_grib_gc()` is the timing-instrumented `gc.collect()` wrapper used throughout GRIB enrichment.
+Three of these (GFS cloud water, GFS cloud diag, ICON cloud diag) follow the same `del decoded_points; _grib_gc()` pattern at the end of each fhour iteration. The ICON sounding path decodes in parallel and `_grib_gc()`s once after its merge loop. Without these collections, decoded_points dicts accumulate across the loop on long-route briefings and contribute to OOM pressure. Diagnostics arrays (`diagnostics_per_point`) are deleted alongside in the diag loops. `_grib_gc(label)` is the timing-instrumented `gc.collect()` wrapper used throughout GRIB enrichment; since #704 it collects only the young generations while decode runs in the pool (see `fetch.md`).
 
 ### Hour Matching
 

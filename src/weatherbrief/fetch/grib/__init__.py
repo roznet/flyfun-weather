@@ -100,6 +100,8 @@ class _GribTimer:
         self.timing_counts: dict[str, int] = {}
         self.gc_seconds: float = 0.0
         self.gc_count: int = 0
+        # label -> (seconds, calls, objects collected, RSS freed MB)
+        self.gc_by_label: dict[str, tuple[float, int, int, float]] = {}
         self.rss_baseline: float | None = _read_rss_mb()
         self.rss_max: dict[str, float] = {}
         self.rss_count: dict[str, int] = {}
@@ -117,14 +119,24 @@ class _GribTimer:
         finally:
             self._record_time(label, _time_mod.perf_counter() - t0)
 
-    def gc(self) -> None:
-        """gc.collect() with cumulative timing accounting."""
+    def gc(self, label: str, generation: int) -> None:
+        """gc.collect(*generation*) with cumulative timing and yield accounting.
+
+        Per *label* it keeps the time, the objects the collector found
+        unreachable (``gc.collect``'s return) and the RSS it gave back, so the
+        summary shows which call sites still earn their pause (#704).
+        """
+        rss0 = _read_rss_mb()
         t0 = _time_mod.perf_counter()
-        gc.collect()
+        collected = gc.collect(generation)
         elapsed = _time_mod.perf_counter() - t0
+        rss1 = _read_rss_mb()
+        freed = (rss0 - rss1) if rss0 is not None and rss1 is not None else 0.0
         with self._lock:
             self.gc_seconds += elapsed
             self.gc_count += 1
+            secs, n, objs, mb = self.gc_by_label.get(label, (0.0, 0, 0, 0.0))
+            self.gc_by_label[label] = (secs + elapsed, n + 1, objs + collected, mb + freed)
 
     def rss_mark(self, label: str) -> None:
         """Record current RSS under *label*. Keeps max-per-label across calls."""
@@ -144,6 +156,7 @@ class _GribTimer:
             counts = dict(self.timing_counts)
             gc_secs = self.gc_seconds
             gc_n = self.gc_count
+            gc_by_label = dict(self.gc_by_label)
             rss_max = dict(self.rss_max)
             rss_count = dict(self.rss_count)
             baseline = self.rss_baseline
@@ -153,6 +166,14 @@ class _GribTimer:
             parts = [f"{label}={secs:.2f}s/{counts.get(label, 0)}" for label, secs in items]
             parts.append(f"gc={gc_secs:.2f}s/{gc_n}")
             logger.info("GRIB timing: %s", " ".join(parts))
+
+        if gc_by_label:
+            items = sorted(gc_by_label.items(), key=lambda kv: -kv[1][0])
+            parts = [
+                f"{label}={secs:.2f}s/{n} objs={objs} freed={mb:+.0f}MB"
+                for label, (secs, n, objs, mb) in items
+            ]
+            logger.info("GRIB gc (gen %d): %s", _grib_gc_generation(), " ".join(parts))
 
         if rss_max:
             items = sorted(rss_max.items(), key=lambda kv: -kv[1])
@@ -188,13 +209,48 @@ def _grib_time(label: str):
         yield
 
 
-def _grib_gc() -> None:
-    """gc.collect() with cumulative timing accounting (or plain gc.collect if no timer)."""
+def _grib_gc_generation() -> int:
+    """Oldest generation the GRIB stage's explicit collections walk (#704).
+
+    The explicit ``gc.collect()`` calls date from in-process decode, when each
+    forecast hour left hundreds of MB of cfgrib/xarray garbage in this
+    interpreter (OOM fixes 7500d304, 5fa01664). Decode now runs in the
+    process pool, so a *full* collection here mostly re-walks the long-lived
+    heap (euro_aip, pydantic packs, ~2.6 GB in prod) for a median 7.7 s per
+    briefing, holding the GIL against every other request. What the GRIB
+    stage itself leaves behind between sites is young, so with the pool on
+    the sites collect generations 0-1 only, which skips that heap.
+
+    With the pool off (``GRIB_DECODE_WORKERS=0``) decode is back in-process
+    and the full collection is kept, as before. ``WB_GRIB_GC_GENERATION``
+    (0, 1 or 2) overrides both, e.g. ``2`` restores the old behaviour without
+    a deploy if RSS climbs.
+    """
+    raw = os.environ.get("WB_GRIB_GC_GENERATION", "").strip()
+    if raw:
+        try:
+            v = int(raw)
+            if 0 <= v <= 2:
+                return v
+        except ValueError:
+            pass
+        logger.warning("Invalid WB_GRIB_GC_GENERATION=%r, using the default", raw)
+    return 1 if decode_pool_enabled() else 2
+
+
+def _grib_gc(label: str) -> None:
+    """Explicit collection at a GRIB call site, at :func:`_grib_gc_generation`.
+
+    With an active timer the time, objects collected and RSS freed are
+    accounted under *label* (``GRIB gc`` log line); without one it is a plain
+    ``gc.collect``.
+    """
+    generation = _grib_gc_generation()
     t = _timer()
     if t is None:
-        gc.collect()
+        gc.collect(generation)
         return
-    t.gc()
+    t.gc(label, generation)
 
 
 def _grib_rss_mark(label: str) -> None:
@@ -2742,7 +2798,7 @@ def _enrich_ecmwf_inner(
                 )
                 prev_a1_valid_utc = valid_time
                 del sfc_data, sfc_covered, diagnostics
-    _grib_gc()
+    _grib_gc("ecmwf")
 
     if enriched_steps > 0:
         logger.info(
@@ -3071,7 +3127,7 @@ def _enrich_gfs_from_hrrr_pinned(
                     run_dir=run_dir, session=session,
                 )
             )
-            _grib_gc()
+            _grib_gc("hrrr_stage_hour")
     except Exception as exc:
         logger.warning(
             "HRRR hour f%s unusable (%s); falling back to GFS for the whole "
@@ -3081,7 +3137,7 @@ def _enrich_gfs_from_hrrr_pinned(
         )
         return None
     finally:
-        _grib_gc()
+        _grib_gc("hrrr_stage_end")
 
     if not staged:
         logger.warning("HRRR produced no enrichment; falling back to GFS")
@@ -3131,7 +3187,7 @@ def _enrich_gfs_from_hrrr_pinned(
         return None
     finally:
         staged.clear()
-        _grib_gc()
+        _grib_gc("hrrr_commit")
 
     if merged_hours == 0:
         logger.warning(
@@ -3410,7 +3466,7 @@ def _enrich_clwmr_icmr(
             valid_utc=valid_utc,
         )
         del decoded_points
-        _grib_gc()
+        _grib_gc("gfs_clwmr")
 
     if total_enriched:
         logger.info(
@@ -3823,7 +3879,7 @@ def _enrich_cloud_diagnostics(
         )
         del decoded_points
         del diagnostics_per_point
-        _grib_gc()
+        _grib_gc("gfs_cloud_diag")
 
     if total_enriched:
         logger.info("GRIB2 enrichment: %d hourly entries enriched with cloud diagnostics", total_enriched)
@@ -4558,7 +4614,7 @@ def _decode_and_merge_icon_eu(
         # clc_layers list is now owned by ``clc_layers_by_fhour`` (small: a few
         # float bases/tops per point), so it stays alive until enrichment.
         decoded_by_fhour[fhour] = None
-    _grib_gc()
+    _grib_gc("icon_eu")
     _grib_rss_mark("icon_fhour_post_gc")
 
     if not total_enriched:
@@ -4771,7 +4827,7 @@ def _enrich_icon_eu_cloud_diagnostics(
         del decoded_points
         del diagnostics_per_point
         del wp_diag_lookup
-        _grib_gc()
+        _grib_gc("icon_eu_cloud_diag")
 
     if total_enriched:
         logger.info(
@@ -5045,7 +5101,7 @@ def _enrich_icon_d2_explicit_convective(
                     _attach(hourly, idx)
 
         del decoded_points
-        _grib_gc()
+        _grib_gc("icon_d2_conv")
 
     if total_enriched:
         logger.info(
@@ -5397,7 +5453,7 @@ def _decode_and_merge_arome(
                     return None, problem
                 staged[fhour] = pts
             del result, points_by_hour
-            _grib_gc()
+            _grib_gc("arome")
 
     if not staged:
         return None, "no_data"

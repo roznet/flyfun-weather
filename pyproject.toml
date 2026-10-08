@@ -21,6 +21,10 @@ dependencies = [
     "euro-aip>=0.20.0",
     "metpy>=1.5",
     "numpy>=1.24",
+    # Large pack artifacts (cross_section.json, ~80 MB) are parsed with orjson
+    # (tasks/artifacts.py, #704). Already pulled in transitively; declared so
+    # the import can never silently go missing.
+    "orjson>=3.9",
     "matplotlib>=3.7",
     "langchain>=1.2",
     "langgraph>=1.0",
