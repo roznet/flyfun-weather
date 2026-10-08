@@ -9,6 +9,7 @@ interpolation.
 from __future__ import annotations
 
 import logging
+from itertools import compress
 
 import numpy as np
 
@@ -133,3 +134,109 @@ def interpolate_model_to_pressure_levels(
         result[target_hpa] = interp_val
 
     return result
+
+
+def interpolate_columns_to_pressure_levels(
+    model_pressures_pa: np.ndarray,
+    model_values: np.ndarray,
+    target_pressures_hpa: list[int] | None = None,
+    bounds: tuple[float | None, float | None] | None = None,
+) -> list[dict[int, float]]:
+    """Batched :func:`interpolate_model_to_pressure_levels`, one column per row.
+
+    ``model_pressures_pa`` / ``model_values`` are ``(n_points, n_levels)``
+    float64 arrays in model-level order, NaN where a level is missing. Row
+    ``i`` of the result is exactly what the scalar function returns for that
+    column with the NaNs dropped — same keys, same key order, same Python
+    floats, bit for bit (#704).
+
+    The filter, sort and log run once over the whole matrix; only the final
+    ``np.interp`` stays per column, called with all of the column's in-range
+    targets at once. It is not re-derived in numpy arithmetic on purpose:
+    numpy's compiled interp fuses ``slope*dx + y0`` into an FMA on arm64 and
+    not on x86, so no single numpy expression matches it on both. A column
+    whose valid pressures repeat goes through the scalar function, because
+    the order a sort leaves equal pressures in is not guaranteed to match.
+    """
+    if target_pressures_hpa is None:
+        target_pressures_hpa = TARGET_PRESSURE_LEVELS_HPA
+
+    p_pa = np.asarray(model_pressures_pa, dtype=np.float64)
+    vals = np.asarray(model_values, dtype=np.float64)
+    n_points = p_pa.shape[0]
+    results: list[dict[int, float]] = [{} for _ in range(n_points)]
+    if n_points == 0 or p_pa.shape[1] < 2 or not target_pressures_hpa:
+        return results
+
+    valid = np.isfinite(p_pa) & (p_pa > 0) & np.isfinite(vals)
+    n_valid = valid.sum(axis=1)
+    # Invalid cells sort last (+inf) and are never read: each row is sliced
+    # to its first n_valid entries below.
+    key = np.where(valid, p_pa, np.inf)
+    order = np.argsort(key, axis=1, kind="stable")
+    p_sorted = np.take_along_axis(key, order, axis=1)
+    v_sorted = np.take_along_axis(np.where(valid, vals, 0.0), order, axis=1)
+    ln_p = np.log(p_sorted)
+    repeats = p_sorted[:, 1:] == p_sorted[:, :-1]
+
+    # Per-target scalars, computed exactly as the scalar function does, then
+    # put in pressure order so each column's in-range targets are one slice.
+    targets_pa = np.array([t * 100.0 for t in target_pressures_hpa], dtype=np.float64)
+    ln_targets = np.array(
+        [np.log(t * 100.0) for t in target_pressures_hpa], dtype=np.float64,
+    )
+    t_order = np.argsort(targets_pa, kind="stable")
+    t_sorted = targets_pa[t_order]
+    ln_t_sorted = ln_targets[t_order]
+
+    rows = np.flatnonzero(n_valid >= 2)
+    n_row = n_valid[rows]
+    # Targets outside the column's [p_min, p_max] are skipped (no extrapolation).
+    first = np.searchsorted(t_sorted, p_sorted[rows, 0], side="left")
+    stop = np.searchsorted(t_sorted, p_sorted[rows, n_row - 1], side="right")
+    t_idx = np.arange(t_sorted.size)
+    in_range = (t_idx[None, :] >= first[:, None]) & (t_idx[None, :] < stop[:, None])
+    interp = np.zeros((rows.size, t_sorted.size), dtype=np.float64)
+
+    scalar_rows: list[int] = []
+    for i, (r, k, a, b) in enumerate(
+        zip(rows.tolist(), n_row.tolist(), first.tolist(), stop.tolist()),
+    ):
+        if repeats[r, : k - 1].any():
+            scalar_rows.append(i)
+            continue
+        if a >= b:
+            continue
+        xp = ln_p[r, :k]
+        fp = v_sorted[r, :k]
+        if b - a < k:
+            interp[i, a:b] = np.interp(ln_t_sorted[a:b], xp, fp)
+        else:
+            # With at least as many targets as levels np.interp may take its
+            # precomputed-slope path, which need not round like the scalar
+            # call; keep to the scalar call for this (sparse) column.
+            interp[i, a:b] = [np.interp(x, xp, fp) for x in ln_t_sorted[a:b]]
+
+    lo, hi = (None, None) if bounds is None else bounds
+    if lo is not None:
+        interp = np.where(interp < lo, lo, interp)
+    if hi is not None:
+        interp = np.where(interp > hi, hi, interp)
+
+    # Back to the caller's target order for the dict keys.
+    t_back = np.empty_like(t_order)
+    t_back[t_order] = np.arange(t_order.size)
+    in_range_rows = in_range[:, t_back].tolist()
+    interp_rows = interp[:, t_back].tolist()
+    for i, r in enumerate(rows.tolist()):
+        results[r] = dict(
+            compress(zip(target_pressures_hpa, interp_rows[i]), in_range_rows[i]),
+        )
+    for i in scalar_rows:
+        r = int(rows[i])
+        results[r] = interpolate_model_to_pressure_levels(
+            p_pa[r, valid[r]].tolist(), vals[r, valid[r]].tolist(),
+            target_pressures_hpa, bounds,
+        )
+
+    return results
