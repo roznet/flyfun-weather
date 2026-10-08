@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -646,15 +647,36 @@ def check_grounding(text: str, f: dict) -> str | None:
 # --- Model call -------------------------------------------------------------
 
 
+_client = None
+_client_lock = threading.Lock()
+
+
+def _anthropic_client():
+    """One client for the process, built on first use.
+
+    The tick fans out up to ``_HIGHLIGHT_WORKERS`` threads, and a client per
+    call meant a new HTTP connection pool per flight per tick. The SDK client
+    is safe to share across threads; building it is what needs the lock.
+    """
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                import anthropic
+
+                _client = anthropic.Anthropic(
+                    timeout=REQUEST_TIMEOUT_S, max_retries=MAX_RETRIES,
+                )
+    return _client
+
+
 def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
     """One highlight from one facts block: ``(text, usage, latency_ms)``.
 
     Raises on an API failure — every caller treats that as "no highlight this
     tick" and keeps the previous one.
     """
-    import anthropic
-
-    client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT_S, max_retries=MAX_RETRIES)
+    client = _anthropic_client()
     t = time.perf_counter()
     resp = client.messages.create(
         model=model,
@@ -753,7 +775,11 @@ def rejected_attempts(flight_dir: Path | str, digest: str) -> int:
     n = 0
     try:
         for line in path.read_text().splitlines():
-            if not line.strip():
+            # Cheap reject first: this runs every tick for every flight with no
+            # highlight, and all but one or two lines of the log belong to
+            # other facts states. Parsing each one as JSON to find that out is
+            # per-tick work that grows with the flight.
+            if digest not in line or '"rejected"' not in line:
                 continue
             try:
                 rec = json.loads(line)
@@ -873,7 +899,14 @@ def ensure_highlight(
         # Expected failure mode (timeout, rate limit, outage). One line, not a
         # traceback per tick: the highlight is optional and the tick is intact.
         logger.warning("Live highlight call failed for %s: %s", layer.flight_id, exc)
-        _log_attempt(flight_dir, {**base, "outcome": "call_failed", "error": str(exc)})
+        # Without the facts block. There is no text to judge against them, so
+        # they would add nothing to the review — and a sustained outage retries
+        # every tick (deliberately: a timeout costs nothing and is right to
+        # retry), which with the block attached wrote ~1.8 kB per flight per
+        # tick for as long as it lasted.
+        _log_attempt(flight_dir, {
+            k: v for k, v in base.items() if k != "facts"
+        } | {"outcome": "call_failed", "error": str(exc)})
         return HighlightOutcome("call_failed", reason=str(exc))
 
     reason = check_grounding(text, f)

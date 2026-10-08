@@ -11,6 +11,7 @@ failing.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -479,6 +480,73 @@ def test_a_failed_call_does_not_count_against_the_retry_cap(monkeypatch, tmp_pat
     for _ in range(5):
         assert lh.ensure_highlight(tmp_path, layer).outcome == "call_failed"
     assert lh.rejected_attempts(tmp_path, lh.facts_hash(_facts_with())) == 0
+
+
+def test_a_failed_call_is_logged_without_the_facts_block(monkeypatch, tmp_path):
+    """There is no text to judge against the facts, so they add nothing to the
+    review — and a timeout retries every tick by design, which with the block
+    attached wrote ~1.8 kB per flight per tick for as long as an outage ran."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+
+    def boom(*a, **k):
+        raise TimeoutError("read timeout")
+
+    monkeypatch.setattr(lh, "generate", boom)
+    lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
+    rec = json.loads((tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()[0])
+    assert rec["outcome"] == "call_failed"
+    assert "facts" not in rec
+    # the hash is still there, so a later rejection for the same state is
+    # still countable
+    assert rec["facts_hash"] == lh.facts_hash(_facts_with())
+    assert len(json.dumps(rec)) < 400
+
+
+def test_skipped_markers_are_not_counted_as_rejections(tmp_path):
+    """``rejected_attempts`` pre-filters lines on the raw text before parsing
+    them; ``skipped_rejected`` must not satisfy that filter, or the cap would
+    tighten itself every tick."""
+    digest = "abc123"
+    path = tmp_path / lh.LIVE_HIGHLIGHT_LOG
+    path.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"facts_hash": digest, "outcome": "rejected"},
+        {"facts_hash": digest, "outcome": "skipped_rejected", "attempts": 1},
+        {"facts_hash": digest, "outcome": "skipped_rejected", "attempts": 1},
+        {"facts_hash": digest, "outcome": "call_failed"},
+        {"facts_hash": "other", "outcome": "rejected"},
+        {"facts_hash": digest, "outcome": "written"},
+    ]))
+    assert lh.rejected_attempts(tmp_path, digest) == 1
+
+
+def test_rejected_attempts_survives_a_truncated_line(tmp_path):
+    digest = "abc123"
+    path = tmp_path / lh.LIVE_HIGHLIGHT_LOG
+    path.write_text(
+        json.dumps({"facts_hash": digest, "outcome": "rejected"}) + "\n"
+        + '{"facts_hash": "abc123", "outcome": "rejec\n'
+    )
+    assert lh.rejected_attempts(tmp_path, digest) == 1
+
+
+def test_the_anthropic_client_is_built_once(monkeypatch):
+    """The tick fans out across threads; a client per call meant a new HTTP
+    pool per flight per tick."""
+    monkeypatch.setattr(lh, "_client", None)
+    built = []
+
+    class FakeAnthropic:
+        def __init__(self, **kw):
+            built.append(kw)
+
+    monkeypatch.setitem(sys.modules, "anthropic", type("m", (), {"Anthropic": FakeAnthropic}))
+    first = lh._anthropic_client()
+    second = lh._anthropic_client()
+    assert first is second
+    assert len(built) == 1
+    assert built[0] == {"timeout": lh.REQUEST_TIMEOUT_S, "max_retries": lh.MAX_RETRIES}
+    monkeypatch.setattr(lh, "_client", None)
 
 
 def test_charge_is_skipped_without_a_session():

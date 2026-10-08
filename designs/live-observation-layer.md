@@ -557,7 +557,10 @@ worded differently run to run), so a transient bad line would cost that flight
 its highlight until the weather moved.
 
 `MAX_ATTEMPTS_PER_FACTS = 2`, counted per **facts state** from the review log
-(`rejected_attempts`) — no extra state to carry across ticks. A bad draw gets a
+(`rejected_attempts`) — no extra state to carry across ticks. That count runs
+every tick for every flight without a highlight, so it rejects lines on raw
+text before parsing any JSON; `skipped_rejected` deliberately does not satisfy
+that filter, or the cap would tighten itself every tick. A bad draw gets a
 second chance; a systematic failure costs twice, not 33 times. Only `rejected`
 counts: a `written` one is carried forward anyway, and a `call_failed` one is a
 timeout that cost nothing and is right to retry. When the weather moves the hash
@@ -588,7 +591,10 @@ flight generates roughly one record per facts state — ~6 for a 1.5 h flight,
 ~10 for 3.5 h — so **11–18 kB per flight**, or 25–40 kB in the worst case where
 every state is rejected twice and the rest of the window logs markers. Nothing
 prunes it: it is **kept until the flight is deleted**, which `remove_live`
-does. At these sizes a cap would be more machinery than it saves; revisit if
+does. A `call_failed` record carries **no** facts block: there is no text to
+judge against them, and a timeout retries every tick by design (it costs
+nothing and is right to retry), so with the block attached a sustained outage
+wrote ~1.8 kB per flight per tick for as long as it lasted. At these sizes a cap would be more machinery than it saves; revisit if
 the facts block grows or the window lengthens.
 
 **Measured rejection rate: 2 of 120 generations (1.7%)** across 8 facts shapes,
@@ -626,6 +632,10 @@ positive above.
   undisplayed, so there is no decode risk today. When a client starts showing
   it, run `/sync-ios-web` and add the field to `web/ts/types` and
   `Models/API/LiveGlance.swift` as optional.
+- One **process-wide Anthropic client**, built lazily under a lock
+  (`_anthropic_client`). The fan-out opens up to `_HIGHLIGHT_WORKERS` threads
+  and a client per call meant a new HTTP connection pool per flight per tick;
+  the SDK client is safe to share, building it is what needs the lock.
 - Prompt caching and streaming are both no-ops here and deliberately absent:
   the request is ~1.4 k tokens against Haiku 4.5's 4096-token minimum cacheable
   prefix, and the client gets the text as one JSON field.
