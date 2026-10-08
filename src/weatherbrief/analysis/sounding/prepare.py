@@ -7,7 +7,7 @@ in and get plain-number Pydantic models back.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -39,6 +39,8 @@ class PreparedProfile:
     surface_pressure: Quantity | None  # hPa
     surface_temperature: Quantity | None  # degC
     surface_dewpoint: Quantity | None  # degC
+    # (metpy_mode, backend) cached by thermodynamics._parcel_backend (#704).
+    parcel_backend: tuple | None = field(default=None, repr=False, compare=False)
 
 
 def _derive_dewpoint(temperature_c: float, relative_humidity_pct: float) -> float:

@@ -259,3 +259,44 @@ def test_kernel_failure_falls_back_to_metpy(monkeypatch):
     out = thermo.compute_indices_core(prof).indices
     assert out.cape_surface_jkg == ref.cape_surface_jkg
     assert out.cin_surface_jkg == ref.cin_surface_jkg
+
+
+def test_backend_is_built_once_per_profile(monkeypatch):
+    monkeypatch.delenv("WB_SOUNDING_KERNEL", raising=False)
+    prof = _profile(*EDGE_CASES["deep_convective"])
+    first = thermo._parcel_backend(prof)
+    assert thermo._parcel_backend(prof) is first
+    monkeypatch.setenv("WB_SOUNDING_KERNEL", "metpy")
+    assert isinstance(thermo._parcel_backend(prof), thermo._MetPyParcel)
+
+
+def test_divergent_fallback_warns_once(monkeypatch, caplog):
+    """A kernel failure MetPy does not share is logged at WARNING, once per value."""
+    import logging
+
+    monkeypatch.delenv("WB_SOUNDING_KERNEL", raising=False)
+    monkeypatch.setattr(thermo, "_FALLBACK_WARNED", set())
+
+    def boom(*_a, **_k):
+        raise RuntimeError("kernel broken")
+
+    monkeypatch.setattr(K, "cape_cin", boom)
+    with caplog.at_level(logging.WARNING, logger=thermo.logger.name):
+        for name in ("deep_convective", "elevated_instability"):
+            thermo.compute_indices_core(_profile(*EDGE_CASES[name]))
+    warned = [r.getMessage() for r in caplog.records if "Parcel kernel cape_cin" in r.getMessage()]
+    assert len(warned) == 1
+
+
+def test_shared_failure_stays_quiet(monkeypatch, caplog):
+    """High terrain: kernel and MetPy both have no Showalter — normal, no warning."""
+    import logging
+
+    monkeypatch.delenv("WB_SOUNDING_KERNEL", raising=False)
+    monkeypatch.setattr(thermo, "_FALLBACK_WARNED", set())
+    prof = _profile(*EDGE_CASES["high_terrain"])
+    result = thermo.compute_indices_core(prof)
+    with caplog.at_level(logging.WARNING, logger=thermo.logger.name):
+        thermo.compute_indices_extended(prof, result.indices)
+    assert result.indices.showalter_index is None
+    assert not [r for r in caplog.records if "Parcel kernel" in r.getMessage()]

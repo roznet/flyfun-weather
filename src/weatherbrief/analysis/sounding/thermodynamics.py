@@ -142,6 +142,9 @@ class _MetPyParcel:
         return _mag(mpcalc.showalter_index(self.p, self.t, self.td).to("delta_degC"))
 
 
+_FALLBACK_WARNED: set[str] = set()
+
+
 class _KernelParcel:
     """The same computations through the unit-free kernel (``parcel.py``).
 
@@ -161,7 +164,19 @@ class _KernelParcel:
             return kernel_call()
         except Exception:
             logger.debug("Parcel kernel %s failed, using MetPy", name, exc_info=True)
-            return getattr(self._metpy, name)(*args)
+            # If MetPy raises too, the profile simply has no such value (high
+            # terrain without an 850 hPa parcel, ...) and the caller reports
+            # None. Only a kernel failure MetPy does not share is a divergence
+            # (or a renamed MetPy private seam) worth surfacing: warn once per
+            # value per process, so it shows in prod logs without flooding.
+            value = getattr(self._metpy, name)(*args)
+            if name not in _FALLBACK_WARNED:
+                _FALLBACK_WARNED.add(name)
+                logger.warning(
+                    "Parcel kernel %s raised where MetPy succeeded; using MetPy "
+                    "(logged once per process)", name, exc_info=True,
+                )
+            return value
 
     def lcl_hpa(self) -> float:
         return self._try("lcl_hpa", lambda: parcel._lcl(self.p[0], self.t[0], self.td[0])[0])
@@ -206,10 +221,19 @@ class _KernelParcel:
 
 
 def _parcel_backend(profile: PreparedProfile) -> _MetPyParcel | _KernelParcel:
-    """Kernel by default; ``WB_SOUNDING_KERNEL=metpy`` restores pure MetPy (#704)."""
-    if os.environ.get("WB_SOUNDING_KERNEL", "").strip().lower() == "metpy":
-        return _MetPyParcel(profile)
-    return _KernelParcel(profile)
+    """Kernel by default; ``WB_SOUNDING_KERNEL=metpy`` restores pure MetPy (#704).
+
+    Built once per profile and kept on it, so the core and extended passes
+    share one backend (and its unit conversions); keyed by the mode so a
+    changed env var still takes effect.
+    """
+    mode = os.environ.get("WB_SOUNDING_KERNEL", "").strip().lower() == "metpy"
+    cached = profile.parcel_backend
+    if cached is not None and cached[0] == mode:
+        return cached[1]
+    calc = _MetPyParcel(profile) if mode else _KernelParcel(profile)
+    profile.parcel_backend = (mode, calc)
+    return calc
 
 
 def _round_level(value: float | None) -> float | None:
