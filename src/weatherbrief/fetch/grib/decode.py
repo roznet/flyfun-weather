@@ -1380,6 +1380,69 @@ def _decode_icon_eu_single_var(
         return {}
 
 
+def _icon_padded_column(
+    col: list[float | None] | None, n_points: int,
+) -> list[float | None]:
+    """One level's per-point column, cut or None-padded to ``n_points``."""
+    if col is None:
+        return [None] * n_points
+    if len(col) == n_points:
+        return col
+    return list(col[:n_points]) + [None] * (n_points - len(col))
+
+
+def _icon_level_matrix(
+    level_data: dict[int, list[float | None]],
+    model_levels: list[int],
+    n_points: int,
+) -> "np.ndarray":
+    """``(n_points, n_levels)`` float64 of ``level_data``; NaN where missing.
+
+    A level absent from ``level_data``, a ``None`` value and a point past the
+    end of a short column all become NaN, which the column interpolation
+    drops exactly as the per-point gather dropped them (#704).
+    """
+    import numpy as np
+
+    cols = [
+        _icon_padded_column(level_data.get(lev), n_points) for lev in model_levels
+    ]
+    if not cols:
+        return np.empty((n_points, 0), dtype=np.float64)
+    return np.ascontiguousarray(np.array(cols, dtype=np.float64).T)
+
+
+def _interpolate_icon_field_into(
+    results: list[dict[int, dict[str, float]]],
+    p_matrix: "np.ndarray",
+    field_data: dict[int, list[float | None]],
+    model_levels: list[int],
+    field_key: str,
+    target_pressures_hpa: list[int],
+) -> None:
+    """Interpolate one ICON field to pressure levels for every point at once.
+
+    Inserts into ``results`` in the same point/target order as the per-point
+    loop it replaces, so the nested dicts keep their key order (#704).
+    """
+    from weatherbrief.fetch.grib.icon_eu_levels import (
+        bounds_for_field,
+        interpolate_columns_to_pressure_levels,
+    )
+
+    v_matrix = _icon_level_matrix(field_data, model_levels, len(results))
+    per_point = interpolate_columns_to_pressure_levels(
+        p_matrix, v_matrix, target_pressures_hpa, bounds=bounds_for_field(field_key),
+    )
+    for pt_levels, interp_result in zip(results, per_point):
+        for p_hpa, val in interp_result.items():
+            level_fields = pt_levels.get(p_hpa)
+            if level_fields is None:
+                pt_levels[p_hpa] = {field_key: val}
+            else:
+                level_fields[field_key] = val
+
+
 def _derive_clc_cloud_layers(
     pressure_data: dict[int, list[float | None]],
     clc_data: dict[int, list[float | None]],
@@ -1408,23 +1471,27 @@ def _derive_clc_cloud_layers(
     LOW_TOP_PA = 80_000   # 800 hPa
     MID_TOP_PA = 40_000   # 400 hPa
 
-    model_levels = sorted(pressure_data.keys())
+    model_levels = [lev for lev in sorted(pressure_data.keys()) if lev in clc_data]
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    if not model_levels or n_points == 0:
+        return results
+
+    # Transpose the level columns once into per-point rows (#704) instead of
+    # two dict lookups per (point, level).
+    p_rows = list(zip(*(
+        _icon_padded_column(pressure_data[lev], n_points) for lev in model_levels
+    )))
+    c_rows = list(zip(*(
+        _icon_padded_column(clc_data[lev], n_points) for lev in model_levels
+    )))
 
     for pt_idx in range(n_points):
         # Build (pressure_pa, clc%) pairs
-        profile: list[tuple[float, float]] = []
-        for lev in model_levels:
-            p_vals = pressure_data.get(lev)
-            c_vals = clc_data.get(lev)
-            if p_vals is None or c_vals is None:
-                continue
-            if pt_idx >= len(p_vals) or pt_idx >= len(c_vals):
-                continue
-            p_val = p_vals[pt_idx]
-            c_val = c_vals[pt_idx]
-            if p_val is not None and c_val is not None:
-                profile.append((p_val, c_val))
+        profile: list[tuple[float, float]] = [
+            (p_val, c_val)
+            for p_val, c_val in zip(p_rows[pt_idx], c_rows[pt_idx])
+            if p_val is not None and c_val is not None
+        ]
 
         if not profile:
             continue
@@ -1514,11 +1581,7 @@ def decode_icon_eu_per_point_chunked(
     """
     import gc
 
-    from weatherbrief.fetch.grib.icon_eu_levels import (
-        TARGET_PRESSURE_LEVELS_HPA,
-        bounds_for_field,
-        interpolate_model_to_pressure_levels,
-    )
+    from weatherbrief.fetch.grib.icon_eu_levels import TARGET_PRESSURE_LEVELS_HPA
 
     if target_pressures_hpa is None:
         target_pressures_hpa = TARGET_PRESSURE_LEVELS_HPA
@@ -1541,6 +1604,7 @@ def decode_icon_eu_per_point_chunked(
         return [{} for _ in range(n_points)], empty_clc_layers
 
     model_levels = sorted(pressure_data.keys())
+    p_matrix = _icon_level_matrix(pressure_data, model_levels, n_points)
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
     clc_cloud_layers = empty_clc_layers
 
@@ -1572,32 +1636,11 @@ def decode_icon_eu_per_point_chunked(
         if not field_data:
             continue
 
-        for pt_idx in range(n_points):
-            model_pressures: list[float] = []
-            model_values: list[float] = []
-
-            for lev in model_levels:
-                p_vals = pressure_data.get(lev)
-                f_vals = field_data.get(lev)
-                if p_vals is None or f_vals is None:
-                    continue
-                if pt_idx >= len(p_vals) or pt_idx >= len(f_vals):
-                    continue
-                p_val = p_vals[pt_idx]
-                f_val = f_vals[pt_idx]
-                if p_val is not None and f_val is not None:
-                    model_pressures.append(p_val)
-                    model_values.append(f_val)
-
-            if len(model_pressures) < 2:
-                continue
-
-            interp_result = interpolate_model_to_pressure_levels(
-                model_pressures, model_values, target_pressures_hpa,
-                bounds=bounds_for_field(field_key),
-            )
-            for p_hpa, val in interp_result.items():
-                results[pt_idx].setdefault(p_hpa, {})[field_key] = val
+        # All points in one batched log-p interpolation (#704).
+        _interpolate_icon_field_into(
+            results, p_matrix, field_data, model_levels, field_key,
+            target_pressures_hpa,
+        )
 
         # Derive cloud layer boundaries from model-level CLC before discarding
         if var_name == "clc":
@@ -1633,11 +1676,7 @@ def decode_icon_eu_per_point(
     """
     import cfgrib
 
-    from weatherbrief.fetch.grib.icon_eu_levels import (
-        TARGET_PRESSURE_LEVELS_HPA,
-        bounds_for_field,
-        interpolate_model_to_pressure_levels,
-    )
+    from weatherbrief.fetch.grib.icon_eu_levels import TARGET_PRESSURE_LEVELS_HPA
 
     if target_pressures_hpa is None:
         target_pressures_hpa = TARGET_PRESSURE_LEVELS_HPA
@@ -1724,6 +1763,7 @@ def decode_icon_eu_per_point(
 
         # Get sorted model levels
         model_levels = sorted(pressure_data.keys())
+        p_matrix = _icon_level_matrix(pressure_data, model_levels, n_points)
 
         results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
 
@@ -1739,33 +1779,10 @@ def decode_icon_eu_per_point(
             if not field_data:
                 continue
 
-            for pt_idx in range(n_points):
-                # Build the pressure and value columns for this point
-                model_pressures: list[float] = []
-                model_values: list[float] = []
-
-                for lev in model_levels:
-                    p_vals = pressure_data.get(lev)
-                    f_vals = field_data.get(lev)
-                    if p_vals is None or f_vals is None:
-                        continue
-                    if pt_idx >= len(p_vals) or pt_idx >= len(f_vals):
-                        continue
-                    p_val = p_vals[pt_idx]
-                    f_val = f_vals[pt_idx]
-                    if p_val is not None and f_val is not None:
-                        model_pressures.append(p_val)
-                        model_values.append(f_val)
-
-                if len(model_pressures) < 2:
-                    continue
-
-                interp_result = interpolate_model_to_pressure_levels(
-                    model_pressures, model_values, target_pressures_hpa,
-                    bounds=bounds_for_field(field_key),
-                )
-                for p_hpa, val in interp_result.items():
-                    results[pt_idx].setdefault(p_hpa, {})[field_key] = val
+            _interpolate_icon_field_into(
+                results, p_matrix, field_data, model_levels, field_key,
+                target_pressures_hpa,
+            )
 
         return results
     except Exception:
@@ -3531,6 +3548,8 @@ def _decode_ecmwf_pressure_direct(
     longitudes: list[float],
 ) -> tuple[list[dict[int, dict[str, float]]], list[bool]]:
     """eccodes body of ``decode_ecmwf_pressure_per_point``."""
+    import numpy as np
+
     n_points = len(latitudes)
     results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
     covered: list[bool] = [False] * n_points
@@ -3545,6 +3564,12 @@ def _decode_ecmwf_pressure_direct(
 
     series = _gather_series(file_path, latitudes, longitudes, select, bridge_seams=True)
     seams = _series_seams(series, latitudes, longitudes)
+    # (p_hpa, field) → points already holding a value: first grid wins. The
+    # NaN / first-wins test and the scale run on whole rows; only the values
+    # that land touch a dict, written in the per-value loop's order so every
+    # dict keeps its key order (#704).
+    held: dict[tuple[int, str], np.ndarray] = {}
+    covered_mask = np.zeros(n_points, dtype=bool)
     for si, s in enumerate(series):
         if len(s.levels) < 2:
             logger.debug("skip %s: single pressure level %s", s.var, list(s.levels))
@@ -3562,15 +3587,23 @@ def _decode_ecmwf_pressure_direct(
             row = s.level_values(lev)
             if row is None:
                 continue
-            for k, pt_idx in enumerate(inb_idx):
-                v = float(row[k])
-                if math.isnan(v):
-                    continue
-                level_fields = results[pt_idx].setdefault(p_hpa, {})
-                if field_name in level_fields:
-                    continue  # first grid wins
-                level_fields[field_name] = v * scale
-                covered[pt_idx] = True
+            taken = held.get((p_hpa, field_name))
+            if taken is None:
+                taken = held[(p_hpa, field_name)] = np.zeros(n_points, dtype=bool)
+            ok = ~np.isnan(row) & ~taken[inb_idx]
+            pts = inb_idx[ok]
+            if not pts.size:
+                continue
+            taken[pts] = True
+            covered_mask[pts] = True
+            values = np.asarray(row, dtype=np.float64)[ok] * scale
+            for pt_idx, v in zip(pts.tolist(), values.tolist()):
+                level_fields = results[pt_idx].get(p_hpa)
+                if level_fields is None:
+                    results[pt_idx][p_hpa] = {field_name: v}
+                else:
+                    level_fields[field_name] = v
+    covered = covered_mask.tolist()
 
     # Seam points are outside every grid, so nothing above has filled them;
     # drain_into keeps first-wins explicit all the same.
@@ -3587,6 +3620,8 @@ def _decode_ecmwf_surface_direct(
     longitudes: list[float],
 ) -> tuple[list[dict[str, float]], list[bool]]:
     """eccodes body of ``decode_ecmwf_surface_per_point``."""
+    import numpy as np
+
     n_points = len(latitudes)
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
     covered: list[bool] = [False] * n_points
@@ -3603,6 +3638,10 @@ def _decode_ecmwf_surface_direct(
     seams = _series_seams(
         series, latitudes, longitudes, _ecmwf_seam_sentinels(), fill_held=False,
     )
+    # field → points already holding a value: first grid wins. Row-wise like
+    # the pressure decoder (#704).
+    held: dict[str, np.ndarray] = {}
+    covered_mask = np.zeros(n_points, dtype=bool)
     for si, s in enumerate(series):
         # The surface decoder interpolated 2-D fields only: a series with more
         # than one level or step was a 3-D cfgrib variable and yielded nothing.
@@ -3615,12 +3654,20 @@ def _decode_ecmwf_surface_direct(
         row = s.level_values(lev)
         if row is None:
             continue
-        for k, pt_idx in enumerate(s.bw.inb_idx):
-            v = float(row[k])
-            if math.isnan(v) or field_name in results[pt_idx]:
-                continue
+        inb_idx = s.bw.inb_idx
+        taken = held.get(field_name)
+        if taken is None:
+            taken = held[field_name] = np.zeros(n_points, dtype=bool)
+        ok = ~np.isnan(row) & ~taken[inb_idx]
+        pts = inb_idx[ok]
+        if not pts.size:
+            continue
+        taken[pts] = True
+        covered_mask[pts] = True
+        values = np.asarray(row, dtype=np.float64)[ok]
+        for pt_idx, v in zip(pts.tolist(), values.tolist()):
             results[pt_idx][field_name] = v
-            covered[pt_idx] = True
+    covered = covered_mask.tolist()
 
     if seams is not None:
         seams.drain_into(results, covered, "surface")
