@@ -215,8 +215,76 @@ def test_rejects_empty():
 
 
 def test_max_words_is_the_agreed_ceiling():
-    """Raised from 30 to 40 by the owner on 2026-10-07 (issue #697)."""
-    assert lh.MAX_WORDS == 40
+    """30 → 40 (owner, 2026-10-07, #697) → 60 with the move to Haiku 5.5
+    (owner, 2026-10-08, #715). The prompt must state the same hard limit."""
+    assert lh.MAX_WORDS == 60
+    assert f"{lh.MAX_WORDS} words is a hard limit" in lh.SYSTEM
+
+
+def test_a_line_under_the_ceiling_passes_and_one_over_fails():
+    f = _facts_with()
+    assert lh.check_grounding(" ".join(["VFR"] * 55), f) is None
+    assert "too long" in lh.check_grounding(" ".join(["VFR"] * 61), f)
+
+
+# --- Grounding: #715 false positives ----------------------------------------
+
+
+def test_a_stated_absence_of_lightning_is_not_a_thunderstorm():
+    """Haiku 5.5 writes "(no lightning)" after a cell; that is the opposite of
+    claiming a thunderstorm, and the rule used to reject it."""
+    f = _facts_with(cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
+        {"peak_dBZ": 40, "at_route_nm": 92, "off_track_nm": 3, "side": "right"}]})
+    assert lh.check_grounding("Cell 3 NM right of track at 92 NM (no lightning).", f) is None
+    assert lh.check_grounding("Cell 3 NM right of track at 92 NM, without thunderstorms.", f) is None
+    # The claim itself is still caught, even next to a negation.
+    reason = lh.check_grounding("Thunderstorm 3 NM right of track at 92 NM, no lightning seen yet.", f)
+    assert reason is not None and "lightning" in reason
+
+
+def test_low_ifr_spelled_out_binds_as_lifr():
+    f = _facts_with(destination={"icao": "KGKY", "metar_now": "LIFR at 11:53Z", "taf_at_eta": "LIFR"})
+    assert lh.check_grounding("Low IFR at destination KGKY now and at ETA.", f) is None
+    reason = lh.check_grounding("KGKY reporting IFR.", f)
+    assert reason is not None and "IFR" in reason
+
+
+def test_an_airport_anchoring_a_distance_is_not_bound():
+    """"85-125 NM from EGBJ" places the rain on the route; it says nothing about
+    EGBJ's own weather."""
+    f = _facts_with(
+        route="EGBJ to EGNS, 159 NM",
+        departure={"icao": "EGBJ", "metar_now": "VFR at 06:20Z"},
+        rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[85, 125]]},
+    )
+    assert lh.check_grounding("Rain lies over the track 85-125 NM from EGBJ.", f) is None
+    # The same airport as the subject is still bound.
+    reason = lh.check_grounding("EGBJ reporting rain.", f)
+    assert reason is not None and "EGBJ" in reason
+
+
+@pytest.mark.parametrize("text", [
+    "Quiet route ahead.\n\nWait, that contains a banned word. Corrected highlight: Quiet route ahead.",
+    "Quiet route ahead. Corrected to avoid the banned word.",
+    "Arrived, so the facts describe nothing ahead.",
+])
+def test_drafting_text_is_not_a_highlight(text):
+    """#715: with thinking off, Haiku 5.5 sometimes wrote its self-correction
+    or its reasoning into the reply. Short enough leaks would pass every other
+    rule, so the shape itself rejects."""
+    reason = lh.check_grounding(text, _facts_with())
+    assert reason is not None and "not a highlight" in reason
+    # The quiet line on its own is fine.
+    assert lh.check_grounding("Quiet route ahead.", _facts_with()) is None
+
+
+@pytest.mark.parametrize("text", ["Watch LFAC, MVFR at 130 NM along.", "Monitor the destination TAF."])
+def test_watch_and_monitor_are_advice(text):
+    f = _facts_with(airports_along_route_ahead={
+        "notable": [{"icao": "LFAC", "role": "route", "where": "130 NM along, 19 NM left of track",
+                     "metar_now": "MVFR at 11:00Z"}], "other_airports_ahead_all_VFR": 3})
+    reason = lh.check_grounding(text, f)
+    assert reason is not None and "verdict" in reason
 
 
 # --- Facts ------------------------------------------------------------------
@@ -629,6 +697,16 @@ def test_gate_from_a_real_layer():
     assert lh.gate_changes(_gate(layer), _gate(later)) == []
 
 
+def test_haiku_5_5_is_priced():
+    """#715: an unpriced model raises, which would blank the review log's
+    cost_usd and fail the ledger charge. ~1750 in / ~85 out on the A/B."""
+    from weatherbrief.costs import compute_call_cost
+
+    assert lh.DEFAULT_MODEL == "claude-haiku-5-5"
+    cost = compute_call_cost("claude-haiku-5-5", input_tokens=1750, output_tokens=85)
+    assert cost == pytest.approx(0.0002175, abs=1e-6)
+
+
 def test_call_cost_prices_a_real_usage_block():
     """Measured: ~1450 in / ~45 out is about $0.0016 on Haiku 4.5."""
     cost = lh.call_cost({"model": "claude-haiku-4-5", "input_tokens": 1450, "output_tokens": 45})
@@ -952,3 +1030,58 @@ def test_highlight_stays_out_of_the_agent_block():
     blob = json.dumps(summarize_live(layer, {}), default=str)
     assert "SECRET HIGHLIGHT" not in blob
     assert "Observed 09:00Z" in blob  # the nutshell headline is exposed, as before
+
+
+# --- Model request (#715) ---------------------------------------------------
+
+
+class _Resp:
+    def __init__(self, text="Quiet route ahead.", stop_reason="end_turn", category=None):
+        self.content = [type("B", (), {"type": "text", "text": text})()]
+        self.stop_reason = stop_reason
+        self.stop_details = type("D", (), {"category": category})() if category else None
+        self.usage = type("U", (), {"input_tokens": 1750, "output_tokens": 85,
+                                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})()
+
+
+class _Client:
+    def __init__(self, resp):
+        self.resp, self.kwargs = resp, None
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.kwargs = kwargs
+        return self.resp
+
+
+def test_generate_turns_thinking_off_at_low_effort(monkeypatch):
+    """Thinking eats max_tokens on Haiku 5.5 and bought nothing on the A/B."""
+    client = _Client(_Resp())
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: client)
+    text, usage, _ = lh.generate(_facts_with())
+    assert text == "Quiet route ahead."
+    assert client.kwargs["model"] == "claude-haiku-5-5"
+    assert client.kwargs["thinking"] == {"type": "disabled"}
+    assert client.kwargs["output_config"] == {"effort": "low"}
+    assert client.kwargs["max_tokens"] == lh.MAX_TOKENS
+    assert usage["output_tokens"] == 85
+
+
+def test_a_refusal_is_a_billed_rejection_under_the_retry_cap(monkeypatch, tmp_path):
+    """A refusal is billed, so it counts like a rejection: logged with its
+    category and cost, retried once, then left alone for that state."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    client = _Client(_Resp(text="", stop_reason="refusal", category="general_harms"))
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: client)
+    layer = _Layer(glance=_glance())
+
+    out = lh.ensure_highlight(tmp_path, layer)
+    assert out.outcome == "rejected" and out.reason == "refusal (general_harms)"
+    assert out.usage["input_tokens"] == 1750
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
+    assert lh.ensure_highlight(tmp_path, layer).outcome == "skipped"
+    records = [json.loads(l) for l in (tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()]
+    assert [r["outcome"] for r in records] == ["rejected", "rejected", "skipped_rejected"]
+    assert records[0]["reason"] == "refusal (general_harms)" and records[0]["cost_usd"] > 0
+    assert layer.glance.highlight is None

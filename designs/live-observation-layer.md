@@ -482,7 +482,8 @@ logs `Live glance failed` and leaves both null for that tick.
 ## Observed highlight (#697) — written, not displayed
 
 One or two sentences above the nutshell saying what deserves attention on the
-route ahead, written by Claude Haiku 4.5 from a facts block the code computes.
+route ahead, written by Claude Haiku 5.5 (#715; Haiku 4.5 before) from a facts
+block the code computes.
 **Code does the weather, the model phrases it**: no analysis by the model, so a
 highlight can never say something the tick did not already know.
 
@@ -492,6 +493,33 @@ calibrated before any client renders it. Deliberately also out of the agent
 `live` block — `summarize_live` names the glance fields it exposes, and a
 pinned test keeps it that way, because an agent quoting it would be a
 user-facing surface by the back door.
+
+### Model choice (#715)
+
+**Haiku 5.5, thinking off, effort `low`, `MAX_WORDS` 60, `MAX_TOKENS` 300.**
+Chosen on an A/B of the first flight day's 311 logged facts blocks
+(2026-10-08, offline replay through this prompt and checker):
+
+- **Better where 4.5 failed:** it led with three TS SIGMETs over 0–90 NM that
+  4.5 omitted; read "130 NM along, 19 NM left of track" where 4.5 wrote
+  "130 NM left"; didn't invent rain "from behind".
+- **~7x cheaper per call** ($0.24 vs $1.75 per 1k) after its ~30 % larger
+  tokenizer. p50/p95 0.85/1.2 s.
+- **Wordier.** At the old 40-word ceiling it was rejected 26 % of the time,
+  almost all 41–50-word lines; 50 and 60 rejected the same. The owner chose 60
+  (prompt target 35).
+- **Thinking off** because adaptive thinking at `low` added nothing visible and
+  cost a 4 s p95, empty replies and `max_tokens` stops (thinking counts toward
+  `max_tokens`). With thinking off the model can narrate its own drafting into
+  the reply — see the drafting rule under Grounding check.
+
+Final configuration measured at **~7 % rejected** (22/311; 4.5 was 6 %), half
+of it "Watch LFAC…" caught as advice. Run-to-run variance is large: small
+prompt edits moved it between 7 % and 16 %, and an extra "one paragraph, no
+notes" output line made it *wordier* (median 38 → 45 words) — the checker
+handles leaks instead. A refusal (`stop_reason: refusal`; 5.5 has safety
+classifiers and no server-side fallback) is logged as a `rejected` attempt
+with its category and cost, so it counts toward the retry cap.
 
 ### Off the critical path
 
@@ -586,7 +614,11 @@ Remaining known trigger on busy convective flights: rain edges crossing
 ### Grounding check
 
 `check_grounding` is the only thing between a model sentence and a cockpit
-screen, so it rejects on five rules and falls back to the nutshell `headline`:
+screen, so it rejects on five rules and falls back to the nutshell `headline`.
+First, the reply must be a highlight at all: a line break or drafting words
+("corrected", "instructions", "the facts", "wait", "highlight") reject it
+(#715: with thinking off, Haiku 5.5 wrote "Wait, that contains 'watch'…
+Corrected highlight: …", and once "at the times in the facts").
 
 1. **ICAOs** — every aerodrome code must appear in the facts.
 2. **Figures** — every number must appear in the facts. The prompt therefore
@@ -600,7 +632,9 @@ screen, so it rejects on five rules and falls back to the nutshell `headline`:
    LIFR onto LEMI passes rules 1 and 2 and fails here. Conditions are matched
    through a surface-form map, so the facts' `TSRA` supports the model's
    "thunderstorm".
-4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`).
+4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`); "watch" and
+   "monitor" too (#715: Haiku 5.5 writes "Watch LFAC…" even when the prompt
+   names the word; dropping the ban would halve the rejections).
 5. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell".
 
 Gotcha that cost a test: `\b[A-Z]{4}\b` matches `LIFR` and `TSRA` as if they
@@ -614,6 +648,11 @@ than reject a right one, and the review log is the backstop:
 - A clause naming **two** airports is not bound (ambiguous attribution).
 - A clause hedged with "no" / "better" is skipped: the rule cannot read a
   negation.
+- An aerodrome that only **anchors a distance** ("85–125 NM from EGBJ",
+  "10 NM past LFMD") is not bound to the clause's weather (#715 false positive).
+- A **stated absence** ("no lightning", "without thunderstorms") does not count
+  as saying thunderstorm (#715: Haiku 5.5 writes "(no lightning)" after cells;
+  7 of 9 thunderstorm rejections on the A/B). "Low IFR" binds as LIFR.
 - A clause naming a **SIGMET** is skipped, because a SIGMET describes a region
   and names an aerodrome only as its edge. Measured: "embedded thunderstorms
   from 235 NM to destination (LEMI)" is accurate — the span ends at LEMI,
@@ -706,7 +745,7 @@ positive above.
   (which is also how the test suite runs the whole tick without calling
   anything — `conftest` deletes the key so a developer's shell cannot bill the
   suite).
-- **Cost** ~$0.0016 per call through the shared ledger (`action=live_highlight`,
+- **Cost** ~$0.00024 per call on Haiku 5.5 (~$0.0016 on 4.5) through the shared ledger (`action=live_highlight`,
   priced by `compute_call_cost`, never the per-briefing `compute_cost`). Charged
   on the tick's own thread: a `Session` is not thread-safe, so
   `ensure_highlight` returns the usage and the caller charges it.
@@ -723,8 +762,9 @@ positive above.
   and a client per call meant a new HTTP connection pool per flight per tick;
   the SDK client is safe to share, building it is what needs the lock.
 - Prompt caching and streaming are both no-ops here and deliberately absent:
-  the request is ~1.4 k tokens against Haiku 4.5's 4096-token minimum cacheable
-  prefix, and the client gets the text as one JSON field.
+  the request was ~1.4 k tokens against Haiku 4.5's 4096-token minimum cacheable
+  prefix (~1.7 k on 5.5's tokenizer; re-check its minimum before relying on
+  caching if the prompt grows), and the client gets the text as one JSON field.
 
 ## SIGMET reissues (#682)
 
