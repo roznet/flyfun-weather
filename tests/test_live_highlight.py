@@ -23,6 +23,13 @@ from weatherbrief.tasks import live_highlight as lh
 SCENARIOS = Path(__file__).resolve().parent.parent / "app/flyfun-weather/flyfun-weatherUITests/LiveScenarios"
 
 
+def _fg(**over) -> tuple[dict, dict]:
+    """(facts, gate) for the wiring tests: the gate is the facts minus the
+    clock, which is all the orchestration paths need to tell states apart."""
+    f = _facts_with(**over)
+    return f, {"phase": "en route", **{k: v for k, v in f.items() if k not in ("now", "flight")}}
+
+
 def _facts_with(**over) -> dict:
     """A minimal facts block in the real shape, with overrides."""
     f = {
@@ -234,72 +241,366 @@ def test_facts_from_a_real_layer(name):
         assert key in f
 
 
-def test_facts_hash_ignores_the_tick_time():
-    f = _facts_with()
-    assert lh.facts_hash(f) == lh.facts_hash(_facts_with(now="09:10Z"))
+# --- Regeneration gate (#706) -----------------------------------------------
+#
+# A synthetic tick in the serialized ``live.json`` shape, so the gate is
+# exercised through ``facts_and_gate`` exactly as the tick runs it. Fictional
+# ZZ.. aerodromes throughout.
+
+ROUTE_NM = 300
 
 
-def test_facts_hash_ignores_progress_flown_on_the_clock():
-    """The gate's whole point. ``flown_nm`` is interpolated from departure, so
-    on a 276 NM / 1.5 h plan it advances ~30 NM every 10-minute tick: hashing
-    it meant paying for an identical highlight every tick of every flight."""
-    at_69 = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
-    at_100 = _facts_with(flight="en route, about 100 of 276 NM flown, arrival planned 10:00Z")
-    assert lh.facts_hash(at_69) == lh.facts_hash(at_100)
+def _obs(icao, along, *, cat="VFR", ceil=None, vis=9999, wx=(), cloud="FEW040",
+         time="2026-10-08T09:00:00Z", gust=None, wind="green", rwy="27"):
+    return {
+        "icao": icao, "distance_from_route_nm": 5.0, "enroute_distance_nm": along,
+        "nearest_waypoint_icao": icao, "has_metar": True,
+        "metar_raw": f"METAR {icao} 080900Z 27010KT 9999 {' '.join(wx)} {cloud} 15/10 Q1015",
+        "metar_time": time, "metar_flight_category": cat, "metar_ceiling_ft": ceil,
+        "metar_visibility_m": vis, "metar_weather": list(wx), "metar_wind_gust_kt": gust,
+        "metar_wind_advisory": wind, "metar_best_runway_id": rwy,
+    }
 
 
-def test_facts_hash_ignores_the_drifting_rain_percentage():
-    """Same cause: the denominator is ``route_nm - flown``."""
-    a = _facts_with(rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]],
-                                "rain_within_10_NM_either_side": "on 45% of the route ahead"})
-    b = _facts_with(rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]],
-                                "rain_within_10_NM_either_side": "on 52% of the route ahead"})
-    assert lh.facts_hash(a) == lh.facts_hash(b)
+def _station(icao, along, role="route", cross=4.0):
+    return {"icao": icao, "role": role, "along_nm": along, "cross_nm": cross,
+            "eta": "2026-10-08T10:00:00Z", "convective": []}
 
 
-def test_facts_hash_still_moves_on_a_phase_change():
-    """Coarse phase is kept: taking off and landing must regenerate."""
-    before = _facts_with(flight="before departure (departure planned 08:00Z)")
-    airborne = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
-    arrived = _facts_with(flight="arrived (at plan)")
-    assert len({lh.facts_hash(before), lh.facts_hash(airborne), lh.facts_hash(arrived)}) == 3
+def _live(*, flown=100.0, airports=(), dest=None, sigmets=(), weather=None, storms=None, changes=()):
+    """One tick. ``airports`` are (station, obs) pairs along the route."""
+    dest_obs = dest or _obs("ZZDS", ROUTE_NM)
+    return {
+        "glance": {"as_of": "2026-10-08T09:00:00Z"},
+        "ribbon": {
+            "route_nm": ROUTE_NM, "flown_nm": flown,
+            "departure_at": "2026-10-08T08:00:00Z", "arrival_at": "2026-10-08T10:30:00Z",
+            "waypoints": [{"icao": "ZZDP"}, {"icao": "ZZDS"}],
+            "stations": [_station("ZZDP", 0, "departure"), _station("ZZDS", ROUTE_NM, "destination")]
+                        + [st for st, _o in airports],
+            "sigmets": list(sigmets),
+            "weather": list(weather or []), "weather_status": "available" if weather is not None else "unavailable",
+            "segments": [],
+        },
+        "route_observations": {"airports": [_obs("ZZDP", 0), dest_obs] + [o for _s, o in airports]},
+        "storms": storms if storms is not None else {"status": "unavailable"},
+        "changes": {"changes": list(changes)},
+    }
 
 
-def test_facts_hash_still_moves_when_the_route_length_differs():
-    """Only the flown figure is dropped, not the route it is measured against."""
-    a = _facts_with(flight="en route, about 69 of 276 NM flown, arrival planned 10:00Z")
-    b = _facts_with(flight="en route, about 69 of 300 NM flown, arrival planned 10:00Z")
-    assert lh.facts_hash(a) != lh.facts_hash(b)
+def _gate(live):
+    return lh.facts_and_gate(live)[1]
 
 
-@pytest.mark.parametrize("changed", [
-    {"rain_ahead": {"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[10, 40]]}},
-    {"sigmets_ahead": [{"what": "EMBD TS", "id": "LECB 2", "covers_route_nm": [10, 276]}]},
-    {"cells_ahead": {"count": 1, "with_lightning": 1, "closing_on_track": 1,
-                     "within_10_NM_of_track": 1, "nearest_to_track": []}},
-    {"destination": {"icao": "LEMI", "metar_now": "IFR at 09:20Z", "taf_at_eta": "IFR"}},
-    {"changes_since_briefing": {"worse": [{"where": "destination LEMI", "what": "VFR to IFR"}],
-                                "improved_count": 0}},
+def _changed(a, b) -> list[str]:
+    return lh.gate_changes(_gate(a), _gate(b))
+
+
+def _dest(**kw):
+    return _live(dest=_obs("ZZDS", ROUTE_NM, **kw))
+
+
+def test_metar_observation_time_alone_does_not_regenerate():
+    assert _changed(_dest(time="2026-10-08T09:00:00Z"), _dest(time="2026-10-08T09:30:00Z")) == []
+
+
+@pytest.mark.parametrize("cat,lo,hi", [("MVFR", 2400, 2900), ("IFR", 600, 800)])
+def test_a_ceiling_move_inside_its_category_does_not_regenerate(cat, lo, hi):
+    assert _changed(_dest(cat=cat, ceil=lo), _dest(cat=cat, ceil=hi)) == []
+
+
+def test_a_gust_below_the_threshold_does_not_regenerate():
+    """No runway data, so no advisory: gusts count from GUST_NOTABLE_KT."""
+    assert _changed(_dest(wind=None, gust=18), _dest(wind=None, gust=22)) == []
+    assert _changed(_dest(wind=None, gust=18), _dest(wind=None, gust=28)) == ["destination"]
+
+
+def test_a_runway_change_inside_the_wind_band_does_not_regenerate():
+    assert _changed(_dest(wind="amber", rwy="27"), _dest(wind="amber", rwy="09")) == []
+
+
+@pytest.mark.parametrize("codes,words", [
+    (["-SHRA", "BR"], ["showers"]),          # mist left out; showers say the rain
+    (["FZFG"], ["freezing fog"]),
+    (["+RASN"], ["heavy rain", "heavy snow"]),
+    (["VCSH"], ["showers nearby"]),
+    (["TSRA"], []),                          # said once, as TS (convective)
 ])
-def test_facts_hash_moves_on_real_weather(changed):
-    """What progress actually decides is captured here, and still hashed: a
-    cell passing behind you drops out of ``cells_ahead``, a SIGMET falls out
-    of ``sigmets_ahead``. Dropping the flown figure loses none of that."""
-    assert lh.facts_hash(_facts_with()) != lh.facts_hash(_facts_with(**changed))
+def test_weather_is_named_by_family(codes, words):
+    from weatherbrief.models.observations import AirportObservation
+
+    obs = AirportObservation(icao="ZZAA", distance_from_route_nm=0, nearest_waypoint_icao="ZZAA",
+                             metar_weather=codes)
+    assert lh._weather_families(obs) == words
 
 
-def test_hash_fix_on_the_real_tick_that_proved_the_bug():
-    """The LELL→LEMI 08:30 tick, replayed 10 minutes later with the weather
-    byte-identical: before the fix the hash changed and we paid again."""
+def test_light_and_moderate_showers_are_the_same_state():
+    assert _changed(_dest(wx=["-SHRA"]), _dest(wx=["SHRA"])) == []
+
+
+@pytest.mark.parametrize("before,after", [
+    ({"cat": "VFR"}, {"cat": "MVFR", "ceil": 2500}),          # category change
+    ({}, {"cloud": "BKN030CB"}),                             # new CB
+    ({"wind": "green"}, {"wind": "amber"}),                  # wind band change
+    ({}, {"wx": ["+SHRA"]}),                                  # heavy showers
+    ({}, {"wx": ["TSRA"]}),                                   # thunderstorm
+])
+def test_a_real_metar_change_regenerates(before, after):
+    assert _changed(_dest(**before), _dest(**after)) == ["destination"]
+
+
+def test_a_new_sigmet_regenerates_and_so_does_a_reissue():
+    s2 = {"label": "ZZFR 2: EMBD TS", "hazard": "TS", "qualifier": "EMBD", "from_nm": 150, "to_nm": 300}
+    s3 = dict(s2, label="ZZFR 3: EMBD TS")
+    assert _changed(_live(), _live(sigmets=[s2])) == ["sigmets"]
+    # #706 item 10: the highlight quotes the id, so a reissue must regenerate.
+    assert _changed(_live(sigmets=[s2]), _live(sigmets=[s3])) == ["sigmets"]
+
+
+def _sim(ticks: list[dict]) -> int:
+    """How many generations a run of ticks costs through the real
+    ``carry_forward``: a tick with no carried highlight generates one."""
+    gens, stored = 0, None
+    for live in ticks:
+        layer = _Layer(glance=_glance(), dump=live)
+        if not lh.carry_forward(stored, layer):
+            f, gate = lh.facts_and_gate(live)
+            gens += 1
+            layer.glance.highlight = _highlight(facts_hash=lh.gate_hash(gate), gate=gate)
+        stored = layer
+    return gens
+
+
+def test_drift_across_a_category_boundary_regenerates_once():
+    """Baseline is the state at the last generation: three small ceiling steps
+    that only together cross VFR → MVFR regenerate once, at the crossing — and
+    the in-category steps either side of it never do."""
+    ceilings = [3400, 3200, 3050, 2900, 2700, 2500]
+    ticks = [_dest(cat="VFR" if c >= 3000 else "MVFR", ceil=c) for c in ceilings]
+    assert _sim(ticks) == 2  # the first tick, then the crossing
+
+
+def test_a_quiet_flight_does_not_regenerate_on_progress_or_metar_cadence():
+    times = ["09:00", "09:30", "10:00", "10:30"]
+    ticks = [_live(flown=60 + 20 * i, dest=_obs("ZZDS", ROUTE_NM, time=f"2026-10-08T{t}:00Z"))
+             for i, t in enumerate(times)]
+    assert _sim(ticks) == 1
+
+
+def _notable_airport(icao, along, **kw):
+    return _station(icao, along), _obs(icao, along, cat="IFR", ceil=800, **kw)
+
+
+def test_passing_a_notable_airport_does_not_regenerate():
+    ap = _notable_airport("ZZRA", 120)
+    before = _live(flown=100, airports=[ap])
+    after = _live(flown=130, airports=[ap])  # 120 < 130 - 5: behind
+    assert "ZZRA" not in json.dumps(lh.facts(after))
+    assert _changed(before, after) == []
+
+
+def test_an_airport_turning_quiet_ahead_regenerates():
+    ap = _notable_airport("ZZRA", 200)
+    quiet = (_station("ZZRA", 200), _obs("ZZRA", 200))
+    assert _changed(_live(airports=[ap]), _live(airports=[quiet])) == ["airport ZZRA no longer notable"]
+    assert _changed(_live(airports=[quiet]), _live(airports=[ap])) == ["airport ZZRA now notable"]
+
+
+def test_the_next_airport_sliding_into_the_cap_does_not_regenerate():
+    """13 notable airports, 12 shown: passing the first slides the 13th in.
+    The gate tracks all of them, so that is not "now notable"."""
+    aps = [_notable_airport(f"ZZ{chr(65 + i)}{chr(65 + i)}", 110 + 10 * i) for i in range(13)]
+    before, after = _live(flown=100, airports=aps), _live(flown=120, airports=aps)
+    assert len(lh.facts(before)["airports_along_route_ahead"]["notable"]) == 12
+    assert _changed(before, after) == []
+
+
+def _band(lo, hi, cross=(-2, 2), motion=None, tier="rain"):
+    prof = [(a + 2.5, *cross) for a in range(int(lo), int(hi), 5)]
+    return {"id": f"r{lo}", "tier": tier, "from_nm": lo, "to_nm": hi, "side": "both",
+            "near_nm": 0, "far_nm": 2, "profile": prof, "motion_rel_deg": motion}
+
+
+def test_rain_edges_moving_inside_a_bin_do_not_regenerate():
+    assert _changed(_live(weather=[_band(130, 160)]), _live(weather=[_band(130, 165)])) == []
+
+
+def test_rain_moving_into_a_new_bin_regenerates():
+    assert _changed(_live(weather=[_band(130, 160)]), _live(weather=[_band(130, 190)])) == ["rain"]
+
+
+def test_flank_rain_coverage_crossing_a_band_regenerates():
+    """#706 item 9: 5 % → 80 % of the route ahead must regenerate on its own."""
+    small = _live(weather=[_band(150, 155, cross=(6, 9))])
+    wide = _live(weather=[_band(110, 280, cross=(6, 9))])
+    assert _changed(small, wide) == ["rain"]
+
+
+def test_the_main_rain_area_word_is_not_gated_and_ignores_rain_behind():
+    behind = _band(20, 60, cross=(15, 25), motion=170)
+    ahead = _band(150, 160, cross=(15, 25), motion=10)
+    f = lh.facts(_live(weather=[behind, ahead]))
+    # Rain behind the aircraft no longer reads as "moving toward the flight".
+    assert f["rain_ahead"]["main_rain_area"].startswith("moving along the route")
+    assert lh.facts(_live(weather=[behind]))["rain_ahead"].get("main_rain_area") is None
+    assert _changed(_live(weather=[ahead]), _live(weather=[dict(ahead, motion_rel_deg=170)])) == []
+
+
+def _storm(off, *, along=150, dbz=42, flashes=None, motion="parallel", abeam="2026-10-08T09:40:00Z"):
+    return {"id": f"s{along}", "ahead": True, "peak_dbz": dbz, "along_nm": along, "offtrack_nm": off,
+            "side": "left", "abeam_eta": abeam, "flashes": flashes, "relative_motion": motion,
+            "closing_kt": 12 if motion == "closing" else None, "trend": "steady"}
+
+
+def _cells(*storms):
+    return {"status": "available", "corridor_nm": 30, "storms": list(storms)}
+
+
+def test_cell_figures_moving_do_not_regenerate():
+    a = _live(storms=_cells(_storm(6, along=150, dbz=40)))
+    b = _live(storms=_cells(_storm(7, along=152, dbz=44, abeam="2026-10-08T09:38:00Z")))
+    assert _changed(a, b) == []
+
+
+@pytest.mark.parametrize("after", [
+    _storm(6, flashes=3),               # lightning appears
+    _storm(2),                          # nearest band ≤ 10 → ≤ 3 NM
+    _storm(6, motion="closing"),        # closing within 10 NM
+])
+def test_a_real_cell_change_regenerates(after):
+    assert _changed(_live(storms=_cells(_storm(6))), _live(storms=_cells(after))) == ["cells"]
+
+
+def _row(key, kind, message, *, icao=None, role="route", to=None, tier="alert", direction="worse"):
+    return {"key": key, "kind": kind, "message": message, "icao": icao, "role": role,
+            "to_value": to, "tier": tier, "direction": direction, "enroute_distance_nm": 120.0}
+
+
+def test_storm_rows_are_left_out_of_the_facts_and_the_gate():
+    storm = _row("storm:s1", "storm", "Convective activity at 102 NM ahead, peak 42 dBZ")
+    f, gate = lh.facts_and_gate(_live(changes=[storm]))
+    assert f["changes_since_briefing"]["worse"] == "none"
+    assert gate["changes"] == []
+
+
+def test_a_change_row_reworded_with_the_same_identity_does_not_regenerate():
+    pending = _row("sigmet:ZZFR|3", "sigmet_issued", "New SIGMET ZZFR 3: EMBD TS from 08:35Z", to="EMBD TS")
+    valid = dict(pending, message="New SIGMET ZZFR 3: EMBD TS")
+    assert _changed(_live(changes=[pending]), _live(changes=[valid])) == []
+    cleared = dict(pending, kind="sigmet_cancelled", direction="better", to=None)
+    assert _changed(_live(changes=[pending]), _live(changes=[cleared])) == ["changes"]
+
+
+def test_improvements_and_quiet_airports_are_flags_out_of_the_gate():
+    better = _row("metar:ZZRB", "metar_category", "ZZRB METAR: IFR → VFR", icao="ZZRB",
+                  direction="better", tier="highlight")
+    q1 = (_station("ZZRB", 200), _obs("ZZRB", 200))
+    q2 = (_station("ZZRC", 220), _obs("ZZRC", 220))
+    a = _live(airports=[q1, q2])
+    b = _live(airports=[q2], changes=[better])
+    assert _changed(a, b) == []
+    f = lh.facts(b)
+    assert f["changes_since_briefing"]["improved_since_briefing"] == "some"
+    assert f["airports_along_route_ahead"]["other_airports_ahead"] == "all VFR"
+
+
+def _busy(**over) -> dict:
+    """A busy tick with every figure the gate ignores set to one value."""
+    t = over.get("time", "2026-10-08T09:00:00Z")
+    return _live(
+        flown=over.get("flown", 100),
+        dest=_obs("ZZDS", ROUTE_NM, cat="IFR", ceil=over.get("ceil", 700), vis=over.get("vis", 4000),
+                  wx=["-SHRA"], time=t, wind="amber", rwy=over.get("rwy", "27"), gust=over.get("gust", 27)),
+        airports=[(_station("ZZRA", 200), _obs("ZZRA", 200, cat="MVFR", ceil=over.get("ceil_ra", 2400),
+                                               wx=["BR"], time=t))],
+        sigmets=[{"label": "ZZFR 2: EMBD TS", "hazard": "TS", "qualifier": "EMBD",
+                  "from_nm": 150, "to_nm": 300}],
+        weather=[_band(130, over.get("rain_to", 160), motion=over.get("motion", 10))],
+        storms=_cells(_storm(over.get("off", 6), along=over.get("along", 150), dbz=over.get("dbz", 42),
+                             flashes=4, abeam=over.get("abeam", "2026-10-08T09:40:00Z"))),
+        changes=[_row("metar:ZZDS", "metar_category", "ZZDS METAR: VFR → IFR", icao="ZZDS",
+                      role="destination", to="IFR"),
+                 _row("wind:ZZDS", "metar_wind", f"ZZDS wind: green → amber (crosswind {over.get('xw', 14)} kt RWY 27)",
+                      icao="ZZDS", role="destination", to="amber")],
+    )
+
+
+def test_the_facts_never_show_a_figure_the_gate_ignores():
+    """#706 item 5. Move every figure the gate ignores at once: the gate holds,
+    and the facts the model reads are then identical too, apart from the
+    clock, the flown figure and the rain-motion word (all three named in
+    ``facts_and_gate``) — so a carried-forward highlight cannot quote a figure
+    that has since moved."""
+    base = _busy()
+    moved = _busy(time="2026-10-08T09:30:00Z", flown=104, ceil=800, vis=3500, ceil_ra=2800, gust=29,
+                  rwy="09", rain_to=165, motion=150, off=7, along=153, dbz=45,
+                  abeam="2026-10-08T09:37:00Z", xw=17)
+    assert _changed(base, moved) == []
+
+    def comparable(f):
+        f = json.loads(json.dumps(f))
+        for k in ("now", "flight"):
+            f.pop(k)
+        f["rain_ahead"].pop("main_rain_area", None)
+        return f
+
+    assert comparable(lh.facts(base)) == comparable(lh.facts(moved))
+
+
+def test_an_airport_condition_is_named_without_its_figures():
+    words = lh.facts(_busy())["destination"]["metar_now"]
+    assert words == "IFR (low ceiling, low visibility), showers, wind advisory amber"
+    assert not any(ch.isdigit() for ch in words)
+
+
+def test_the_facts_still_bind_for_the_grounding_check():
+    """The new wording must still license the words the model will use."""
+    f = lh.facts(_busy())
+    assert lh.check_grounding("ZZDS IFR with showers and a gusty wind.", f) is None
+    assert lh.check_grounding("Cells near the track ahead, one with lightning: thunderstorm risk.", f) is None
+
+
+def test_no_highlight_after_planned_arrival(monkeypatch, tmp_path):
+    """#706 item 6: nothing generated, and nothing carried forward either."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "generate", lambda *a, **k: pytest.fail("should not call the model"))
+    arrived = _live(flown=ROUTE_NM)
+    out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance(), dump=arrived))
+    assert out.outcome == "skipped" and out.reason == "after planned arrival"
+    gate = _gate(_live(flown=290))
+    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=lh.gate_hash(gate), gate=gate)))
+    fresh = _Layer(glance=_glance(), dump=arrived)
+    assert lh.carry_forward(stored, fresh) is False
+    assert fresh.glance.highlight is None
+
+
+def test_a_highlight_from_before_the_gate_regenerates_once():
+    """No stored gate state to compare with: regenerate, then gate."""
+    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash="old-shape")))
+    assert lh.carry_forward(stored, _Layer(glance=_glance(), dump=_live())) is False
+
+
+def test_a_carried_highlight_keeps_its_baseline():
+    """The kept highlight's gate is the one it was written from, so the next
+    comparison is still against that state, not this tick's."""
+    g0 = _gate(_dest(cat="VFR", ceil=3400))
+    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=lh.gate_hash(g0), gate=g0)))
+    fresh = _Layer(glance=_glance(), dump=_dest(cat="VFR", ceil=3200, time="2026-10-08T09:30:00Z"))
+    assert lh.carry_forward(stored, fresh) is True
+    assert fresh.glance.highlight.gate == g0
+
+
+def test_gate_from_a_real_layer():
+    """The real LELL→LEMI 08:30 tick, replayed 10 minutes later with the
+    weather byte-identical: same gate state, and the facts keep the real
+    flown figure."""
     layer = json.loads((SCENARIOS / "2026-10-02_lell_lemi_0830.json").read_text())
     layer = layer.get("body", layer)
-    base = lh.facts(layer)
     later = json.loads(json.dumps(layer))
-    rate = later["ribbon"]["route_nm"] / 1.5  # NM per hour at plan
+    rate = later["ribbon"]["route_nm"] / 1.5
     later["ribbon"]["flown_nm"] = later["ribbon"]["flown_nm"] + rate / 6
-    moved = lh.facts(later)
-    assert base["flight"] != moved["flight"], "the facts the model sees must keep the real figure"
-    assert lh.facts_hash(base) == lh.facts_hash(moved)
+    assert lh.facts(layer)["flight"] != lh.facts(later)["flight"]
+    assert lh.gate_changes(_gate(layer), _gate(later)) == []
 
 
 def test_call_cost_prices_a_real_usage_block():
@@ -316,14 +617,16 @@ def test_call_cost_prices_a_real_usage_block():
 class _Layer:
     """Enough of a LiveLayer for the orchestration paths."""
 
-    def __init__(self, *, glance, ribbon=object(), flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00"):
+    def __init__(self, *, glance, ribbon=object(), flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00",
+                 dump=None):
         self.glance = glance
+        self._dump = dump or {}
         self.ribbon = ribbon
         self.flight_id = flight_id
         self.pack_timestamp = pack_timestamp
 
     def model_dump(self, mode="json"):
-        return {}
+        return self._dump
 
 
 def _glance(as_of=None, highlight=None) -> LiveGlance:
@@ -336,15 +639,15 @@ def _glance(as_of=None, highlight=None) -> LiveGlance:
     )
 
 
-def _highlight(facts_hash="abc", text="Quiet route ahead.") -> LiveHighlight:
-    return LiveHighlight(text=text, model="claude-haiku-4-5", facts_hash=facts_hash,
+def _highlight(facts_hash="abc", text="Quiet route ahead.", gate=None) -> LiveHighlight:
+    return LiveHighlight(text=text, model="claude-haiku-4-5", facts_hash=facts_hash, gate=gate,
                          generated_at=datetime(2026, 10, 2, 9, 0, tzinfo=timezone.utc))
 
 
 def test_carry_forward_keeps_the_previous_highlight_on_unchanged_facts(monkeypatch):
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
-    digest = lh.facts_hash(_facts_with())
-    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=digest)))
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    digest = lh.gate_hash(_fg()[1])
+    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=digest, gate=_fg()[1])))
     fresh = _Layer(glance=_glance())
     assert lh.carry_forward(stored, fresh) is True
     assert fresh.glance.highlight is not None
@@ -352,8 +655,9 @@ def test_carry_forward_keeps_the_previous_highlight_on_unchanged_facts(monkeypat
 
 
 def test_carry_forward_drops_a_highlight_whose_facts_moved(monkeypatch):
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
-    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash="stale")))
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    old = _fg(sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2"}])[1]
+    stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=lh.gate_hash(old), gate=old)))
     fresh = _Layer(glance=_glance())
     assert lh.carry_forward(stored, fresh) is False
     assert fresh.glance.highlight is None
@@ -392,7 +696,7 @@ def test_kill_switch_stops_generation(monkeypatch):
 def test_api_failure_leaves_the_tick_intact(monkeypatch, tmp_path):
     """The acceptance criterion: a failed call must not raise into the tick."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
 
     def boom(*a, **k):
         raise TimeoutError("read timeout")
@@ -409,7 +713,7 @@ def test_a_rejected_line_is_logged_with_its_text(monkeypatch, tmp_path):
     """A false rejection must be reviewable, not silent: the log keeps the
     text and the facts behind it, which is what the calibration period reads."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
     monkeypatch.setattr(lh, "generate", lambda *a, **k: ("LFMD is IFR.", {"model": "claude-haiku-4-5"}, 900))
     out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
     assert out.outcome == "rejected"
@@ -425,7 +729,7 @@ def test_a_rejected_facts_state_is_retried_once_then_given_up(monkeypatch, tmp_p
     the whole window. One retry, because the model is stochastic and a bad
     draw deserves a second chance; then stop paying."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
     calls = []
 
     def bad(*a, **k):
@@ -456,13 +760,13 @@ def test_a_different_facts_state_generates_again(monkeypatch, tmp_path):
     monkeypatch.setattr(lh, "generate",
                         lambda *a, **k: ("LFMD is IFR.", {"model": "claude-haiku-4-5"}, 900))
     layer = _Layer(glance=_glance())
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
     assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
     assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
     assert lh.ensure_highlight(tmp_path, layer).outcome == "skipped"
     # weather moves -> new facts hash -> allowed to try again
-    monkeypatch.setattr(lh, "facts_for",
-                        lambda layer: _facts_with(sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2"}]))
+    monkeypatch.setattr(lh, "facts_and_gate_for",
+                        lambda layer: _fg(sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2"}]))
     assert lh.ensure_highlight(tmp_path, layer).outcome == "rejected"
 
 
@@ -470,7 +774,7 @@ def test_a_failed_call_does_not_count_against_the_retry_cap(monkeypatch, tmp_pat
     """A timeout costs nothing and is right to retry; only billed rejections
     count."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
 
     def boom(*a, **k):
         raise TimeoutError("read timeout")
@@ -479,7 +783,7 @@ def test_a_failed_call_does_not_count_against_the_retry_cap(monkeypatch, tmp_pat
     layer = _Layer(glance=_glance())
     for _ in range(5):
         assert lh.ensure_highlight(tmp_path, layer).outcome == "call_failed"
-    assert lh.rejected_attempts(tmp_path, lh.facts_hash(_facts_with())) == 0
+    assert lh.rejected_attempts(tmp_path, lh.gate_hash(_fg()[1])) == 0
 
 
 def test_a_failed_call_is_logged_without_the_facts_block(monkeypatch, tmp_path):
@@ -487,7 +791,7 @@ def test_a_failed_call_is_logged_without_the_facts_block(monkeypatch, tmp_path):
     review — and a timeout retries every tick by design, which with the block
     attached wrote ~1.8 kB per flight per tick for as long as an outage ran."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-    monkeypatch.setattr(lh, "facts_for", lambda layer: _facts_with())
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
 
     def boom(*a, **k):
         raise TimeoutError("read timeout")
@@ -499,7 +803,7 @@ def test_a_failed_call_is_logged_without_the_facts_block(monkeypatch, tmp_path):
     assert "facts" not in rec
     # the hash is still there, so a later rejection for the same state is
     # still countable
-    assert rec["facts_hash"] == lh.facts_hash(_facts_with())
+    assert rec["facts_hash"] == lh.gate_hash(_fg()[1])
     assert len(json.dumps(rec)) < 400
 
 

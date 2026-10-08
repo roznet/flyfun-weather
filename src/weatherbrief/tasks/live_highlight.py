@@ -138,32 +138,124 @@ def _rel_words(deg):
     return f"moving across the route toward its {'right' if deg > 0 else 'left'} side"
 
 
-def _stretches(bins, route_nm):
-    """Merge [along, ...] bins (5 NM) into [from, to] stretches."""
+#: Present-weather families the highlight names (listed sorted). The facts give an airport's weather as these words, not as the METAR's
+#: codes: "-SHRA" → "SHRA" → "-SHRA" is noise a pilot would not read as a
+#: change, and the gate (:func:`gate_changes`) compares exactly what the facts
+#: show (#706). Mist, haze, smoke and dust are left out on purpose: they come
+#: and go with a few hundred metres of visibility, which the flight category
+#: already carries when it matters. Thunderstorms come through
+#: :func:`convective_tags` (TS / CB / TCU), not from here.
+_WX_FAMILIES = (
+    ("FZ", "freezing precipitation"),
+    ("GR", "hail"),
+    ("GS", "small hail"),
+    ("SQ", "squall"),
+    ("FC", "funnel cloud"),
+    ("SN", "snow"),
+    ("SH", "showers"),
+    ("RA", "rain"),
+    ("DZ", "drizzle"),
+    ("FG", "fog"),
+)
+#: Gust at which an airport with no wind advisory (no runway data) is shown
+#: as gusty. The issue's replay used the same threshold (#706).
+GUST_NOTABLE_KT = 25
+
+
+def _weather_families(obs) -> list[str]:
+    """The present weather as family words, heavy ones marked."""
+    from weatherbrief.tasks.live_significance import _present_weather
+
+    out: list[str] = []
+    for code in _present_weather(obs):
+        if "TS" in code:
+            continue  # convective, said once as TS
+        body = code.lstrip("+-")
+        nearby = body.startswith("VC")
+        for token, word in _WX_FAMILIES:
+            if token not in body:
+                continue
+            if word in ("rain", "drizzle") and "SH" in body:
+                continue  # "showers" already says it
+            if token == "FZ" and "FG" in body:
+                word = "freezing fog"
+            elif token == "FG" and "FZ" in body:
+                continue  # said as "freezing fog"
+            if code.startswith("+"):
+                word = f"heavy {word}"
+            elif nearby:
+                word = f"{word} nearby"
+            if word not in out:
+                out.append(word)
+    return sorted(out)
+
+
+def _category_drivers(obs) -> list[str]:
+    """What sets a non-VFR category: "low ceiling", "low visibility" or both.
+
+    Words, never the figure (#706 item 5): a carried-forward highlight that
+    quoted "ceiling 2400 ft" would go stale silently when the ceiling drifts
+    to 2900 ft inside the same category, because the gate does not regenerate
+    on that.
+    """
+    from weatherbrief.analysis.airport_conditions import classify_flight_category
+
+    cat = obs.metar_flight_category
+    if not cat or cat == "VFR":
+        return []
     out = []
-    for a in sorted(bins):
-        lo, hi = a - 2.5, a + 2.5
-        if out and lo <= out[-1][1] + 0.1:
-            out[-1][1] = hi
-        else:
-            out.append([lo, hi])
-    return [[max(0, _f(lo)), min(_f(route_nm), _f(hi))] for lo, hi in out]
+    if obs.metar_ceiling_ft is not None and classify_flight_category(obs.metar_ceiling_ft, None).value == cat:
+        out.append("low ceiling")
+    if obs.metar_visibility_m is not None and classify_flight_category(None, obs.metar_visibility_m / 1609.344).value == cat:
+        out.append("low visibility")
+    return out
+
+
+def _metar_state(a: dict) -> dict:
+    """One airport's METAR as the significance classifier reads it.
+
+    The same interpretation ``live_significance._airport_metar_changes``
+    compares: flight category, convective level (TCU < CB < TS), significant
+    weather (as families) and the wind-advisory band. Observation time, exact
+    ceiling / visibility / gust figures and the runway are deliberately
+    absent: none of them is a change a pilot would read (#706).
+    """
+    from weatherbrief.models.observations import AirportObservation
+    from weatherbrief.tasks.live_significance import (
+        _CONVECTIVE_RANK,
+        _convective_level,
+        convective_tags,
+    )
+
+    obs = AirportObservation.model_validate(a)
+    tags = convective_tags(obs)
+    level = _convective_level(tags)
+    state: dict = {"category": obs.metar_flight_category or "category unknown"}
+    drivers = _category_drivers(obs)
+    if drivers:
+        state["drivers"] = drivers
+    top = sorted(t for t in tags if _CONVECTIVE_RANK[t] == level)
+    if top:
+        state["convective"] = top
+    wx = _weather_families(obs)
+    if wx:
+        state["weather"] = wx
+    if obs.metar_wind_advisory in ("amber", "red"):
+        state["wind"] = f"wind advisory {obs.metar_wind_advisory}"
+    elif obs.metar_wind_advisory is None and (obs.metar_wind_gust_kt or 0) >= GUST_NOTABLE_KT:
+        state["wind"] = "gusts"
+    return state
 
 
 def _metar_words(a: dict) -> str:
-    bits = [a.get("metar_flight_category") or "category unknown"]
-    if a.get("metar_time"):
-        bits[0] += f" at {_hhmm(a['metar_time'])}"
-    vis = a.get("metar_visibility_m")
-    if vis is not None and vis < 8000:
-        bits.append(f"visibility {_f(vis)} m")
-    ceil = a.get("metar_ceiling_ft")
-    if ceil is not None and ceil < 5000:
-        bits.append(f"ceiling {_f(ceil)} ft")
-    if a.get("metar_weather"):
-        bits.append(" ".join(a["metar_weather"]))
-    if a.get("metar_wind_gust_kt"):
-        bits.append(f"gusts {_f(a['metar_wind_gust_kt'])} kt")
+    """"IFR (low ceiling), CB, showers, wind advisory amber"."""
+    s = _metar_state(a)
+    head = s["category"]
+    if s.get("drivers"):
+        head += f" ({', '.join(s['drivers'])})"
+    bits = [head, *s.get("convective", []), *s.get("weather", [])]
+    if s.get("wind"):
+        bits.append(s["wind"])
     return ", ".join(bits)
 
 
@@ -181,17 +273,33 @@ def _taf_words(a: dict, st: dict) -> str | None:
 
 
 def _notable(a: dict) -> bool:
-    if (a.get("metar_flight_category") or "VFR") != "VFR":
-        return True
-    if a.get("metar_weather"):
-        return True
+    """Worth naming: non-VFR, convective, notable weather or wind, or a worse
+    TAF at ETA. Judged on the interpretation the facts show, so an airport
+    is never listed for something the facts then leave out (plain mist)."""
+    if a.get("has_metar"):
+        s = _metar_state(a)
+        if s["category"] != "VFR" or s.get("convective") or s.get("weather") or s.get("wind"):
+            return True
     for k in ("taf_prevailing_category_at_eta", "taf_temporary_category_at_eta"):
         if a.get(k) and a[k] != "VFR":
             return True
     return bool(a.get("taf_significant_weather"))
 
 
-def _airports_along(live: dict, flown: float) -> dict:
+#: Notable airports the facts list; the gate tracks them all (#706 item 7).
+MAX_NOTABLE_AIRPORTS = 12
+#: An airport this far behind the aircraft is "passed" and leaves the list.
+PASSED_MARGIN_NM = 5
+
+
+def _airports_along(live: dict, flown: float) -> tuple[dict, dict]:
+    """The facts' route-airport block, and the gate's view of it.
+
+    The gate's view is every notable airport ahead, **uncapped**, with its
+    position: passing one is not a change, and neither is the next one
+    sliding into the 12-entry cap (#706 item 7) — :func:`gate_changes` needs
+    both to tell those apart from an airport becoming notable or quiet.
+    """
     r = live.get("ribbon") or {}
     by_icao = {a["icao"]: a for a in ((live.get("route_observations") or {}).get("airports") or [])}
     rows, quiet = [], 0
@@ -199,7 +307,7 @@ def _airports_along(live: dict, flown: float) -> dict:
         if st.get("role") in ("departure", "destination"):
             continue
         along = st.get("along_nm")
-        if along is not None and along < flown - 5:
+        if along is not None and along < flown - PASSED_MARGIN_NM:
             continue
         a = by_icao.get(st["icao"], {})
         cross = st.get("cross_nm")
@@ -212,21 +320,131 @@ def _airports_along(live: dict, flown: float) -> dict:
         if taf:
             line["taf_at_eta"] = taf
         if _notable(a) or st.get("role") == "alternate":
-            rows.append((0, along or 0, line))
+            rows.append((0, along or 0, line, along))
         else:
             quiet += 1
-            rows.append((1, along or 0, line))
     rows.sort(key=lambda x: (x[0], x[1]))
-    shown = [line for rank, _along, line in rows if rank == 0][:12]
-    return {"notable": shown or "none", "other_airports_ahead_all_VFR": quiet}
+    notable = [(line, along) for _rank, _k, line, along in rows]
+    shown = [line for line, _along in notable][:MAX_NOTABLE_AIRPORTS]
+    gate = {line["icao"]: {"along": along, **{k: v for k, v in line.items() if k not in ("icao", "where")}}
+            for line, along in notable}
+    # No count: it falls by one each time an airport is passed, which is not a
+    # change, and a kept highlight quoting "five other airports" would go stale.
+    return ({"notable": shown or "none", "other_airports_ahead": "all VFR" if quiet else "none"}, gate)
 
 
-def facts(live: dict) -> dict:
-    """The facts block for one tick, from a serialized live layer.
+#: Rain over the track is gated at this resolution (#706 item 4): a stretch
+#: edge moving within a bin is radar-frame noise, not a change.
+RAIN_BIN_NM = 25
 
-    Keep it this size — the experiment found the model drops items once the
-    block grows (issue #697, lesson 2), and every condition carries its place
-    because without that it relocated a route airport's LIFR onto the
+
+def _coverage_band(pct: float) -> str:
+    """Rain within 10 NM of the track as a band (#706 item 9): the exact
+    percentage drifts with progress (its denominator is the route ahead), but
+    flank rain going from 5 % to 80 % of the route must regenerate."""
+    if pct <= 0:
+        return "none of the route ahead"
+    if pct < 25:
+        return "under 25% of the route ahead"
+    if pct < 50:
+        return "25 to 50% of the route ahead"
+    return "50% or more of the route ahead"
+
+
+def _coarse_stretches(bins: set[float], route_nm: float, flown: float) -> list[str]:
+    """Rain-over-track 5 NM bins as stretches on a :data:`RAIN_BIN_NM` grid.
+
+    The first stretch says "from the aircraft" rather than a figure behind it
+    once airborne, so its start does not move with the clock.
+    """
+    coarse = sorted({int(a // RAIN_BIN_NM) for a in bins})
+    spans: list[list[int]] = []
+    for b in coarse:
+        if spans and b == spans[-1][1]:
+            spans[-1][1] = b + 1
+        else:
+            spans.append([b, b + 1])
+    out = []
+    for lo, hi in spans:
+        lo_nm, hi_nm = lo * RAIN_BIN_NM, min(_f(route_nm), hi * RAIN_BIN_NM)
+        start = "from the aircraft" if flown > 0 and lo_nm <= flown else f"from {lo_nm} NM"
+        out.append(f"{start} to {hi_nm} NM")
+    return out
+
+
+#: How close the nearest cell ahead is to the track, as the gate sees it.
+_CELL_BANDS = ((3, "within 3 NM of the track"), (10, "within 10 NM of the track"))
+
+
+def _cells_ahead(st: dict) -> str | dict:
+    """Radar cells ahead as flags (#706 item 4).
+
+    Exact positions, dBZ, abeam times and motion speeds move with every radar
+    frame, so the gate cannot follow them — and so the facts don't show them
+    either (item 5): a kept highlight quoting "42 dBZ at 102 NM" would go
+    stale silently. What is left is what a pilot acts on: how close the
+    nearest one is, whether any has lightning, whether one near the track is
+    closing on it.
+    """
+    corridor = _f(st.get("corridor_nm") or 30)
+    ahead = [s for s in st.get("storms") or [] if s.get("ahead")]
+    if not ahead:
+        return f"none within {corridor} NM of the track"
+    nearest = min((s.get("offtrack_nm") if s.get("offtrack_nm") is not None else 99) for s in ahead)
+    band = next((words for limit, words in _CELL_BANDS if nearest <= limit), f"within {corridor} NM of the track")
+    out: dict = {"nearest": band}
+    if any(s.get("flashes") for s in ahead):
+        # Only present when true: ``check_grounding`` reads this key as the
+        # licence for "thunderstorm".
+        out["lightning_flashes"] = "in at least one cell"
+    if any(s.get("relative_motion") == "closing" and (s.get("offtrack_nm") or 99) <= 10 for s in ahead):
+        out["closing_on_track"] = "at least one cell within 10 NM"
+    if any(s.get("trend") == "developing" and (s.get("offtrack_nm") or 99) <= 10 for s in ahead):
+        out["developing"] = "at least one cell within 10 NM"
+    return out
+
+
+#: Change rows the facts carry. Radar storm / ring rows are left out: they
+#: flicker present ↔ absent tick to tick with figures in their text, and
+#: ``cells_ahead`` is the radar source (#706 item 3).
+_FACT_CHANGE_KINDS = frozenset({
+    "metar_category", "metar_convective", "metar_weather", "metar_wind",
+    "taf_category", "sigmet_issued", "sigmet_cancelled",
+})
+
+
+def _change_words(c: dict) -> str:
+    """The row's text without figures the gate does not follow: the wind row's
+    crosswind / gust detail moves every METAR inside the same band."""
+    if c.get("kind") == "metar_wind" and c.get("icao"):
+        return f"{c['icao']} wind advisory: {c.get('from_value')} → {c.get('to_value')}"
+    return c["message"]
+
+
+def _phase(r: dict, flown: float, route_nm: float) -> tuple[str, str]:
+    """(facts wording, gate key) of the flight's phase."""
+    if flown <= 0:
+        return f"before departure (departure planned {_hhmm(r.get('departure_at'))})", "before departure"
+    if flown >= route_nm - 1:
+        return "arrived (at plan)", "arrived"
+    return (f"en route, about {_f(flown)} of {_f(route_nm)} NM flown, arrival planned {_hhmm(r.get('arrival_at'))}",
+            "en route")
+
+
+def facts_and_gate(live: dict) -> tuple[dict, dict]:
+    """The facts block for one tick, and the gate state behind it.
+
+    The facts are what the model reads. The gate state (#706) is what
+    regeneration is decided on — compared with the state at the last
+    *generation* by :func:`gate_changes`, not with the previous tick. Both are
+    built here from one pass so they cannot disagree, and the rule that ties
+    them is item 5: **what the gate ignores, the facts don't show** — no
+    observation time, no exact ceiling, no cell position — or a carried-
+    forward highlight would quote a figure that has since moved.
+
+    Keep the block this size — the experiment found the model drops items once
+    the block grows (issue #697, lesson 2), and every condition carries its
+    place because without that it relocated a route airport's LIFR onto the
     destination (lesson 1).
     """
     g = live.get("glance") or {}
@@ -238,19 +456,15 @@ def facts(live: dict) -> dict:
     dep, dest = (wps[0]["icao"], wps[-1]["icao"]) if wps else ("DEP", "DEST")
     now = g.get("as_of") or live.get("live_updated_at")
 
-    if flown <= 0:
-        phase = f"before departure (departure planned {_hhmm(r.get('departure_at'))})"
-    elif flown >= route_nm - 1:
-        phase = "arrived (at plan)"
-    else:
-        phase = f"en route, about {_f(flown)} of {_f(route_nm)} NM flown, arrival planned {_hhmm(r.get('arrival_at'))}"
-
+    phase, phase_key = _phase(r, flown, route_nm)
     out: dict = {"now": _hhmm(now), "route": f"{dep} to {dest}, {_f(route_nm)} NM", "flight": phase}
+    gate: dict = {"route": out["route"], "phase": phase_key, "_flown_nm": flown}
 
     stations = {s.get("role"): s for s in r.get("stations") or [] if s.get("role") in ("departure", "destination")}
+    obs_by_icao = {x["icao"]: x for x in ((live.get("route_observations") or {}).get("airports") or [])}
     for role, icao in (("departure", dep), ("destination", dest)):
         s = stations.get(role) or {}
-        obs = {x["icao"]: x for x in ((live.get("route_observations") or {}).get("airports") or [])}.get(icao, {})
+        obs = obs_by_icao.get(icao, {})
         a = {"icao": icao, "metar_now": _metar_words(obs) if obs.get("has_metar") else (s.get("metar_category") or "unavailable")}
         if s.get("convective"):
             a["reported_convection"] = s["convective"]
@@ -264,10 +478,12 @@ def facts(live: dict) -> dict:
         if role == "departure" and flown > 0:
             continue
         out[role] = a
+        gate[role] = a
 
-    out["airports_along_route_ahead"] = _airports_along(live, flown)
+    out["airports_along_route_ahead"], gate["airports"] = _airports_along(live, flown)
 
-    # SIGMETs touching the route ahead.
+    # SIGMETs touching the route ahead. Gated exactly, id included (#706
+    # item 10): the highlight quotes ids, so a reissue must regenerate.
     sig = []
     for s in r.get("sigmets") or []:
         lo, hi = s.get("from_nm"), s.get("to_nm")
@@ -284,9 +500,8 @@ def facts(live: dict) -> dict:
         if s.get("motion") in ("toward", "away"):
             item["moving"] = f"{s['motion']} the route"
         sig.append(item)
-    out["sigmets_ahead"] = sig or "none"
+    out["sigmets_ahead"] = gate["sigmets"] = sig or "none"
 
-    cells_ok = st.get("status") == "available"
     weather = r.get("weather") if r.get("weather_status") == "available" else None
     if weather is not None:
         on_track, near = set(), set()
@@ -299,14 +514,22 @@ def facts(live: dict) -> dict:
                     on_track.add(a)
                 if min(abs(lo), abs(hi)) <= 10 or lo <= 0 <= hi:
                     near.add(a)
-            if b.get("tier") == "rain" and b.get("motion_rel_deg") is not None:
-                rain_motion.append((b["to_nm"] - b["from_nm"], b["motion_rel_deg"]))
+            # Only the part of a rain area still ahead (#706 item 8): rain
+            # behind the aircraft once read as "moving toward the route from
+            # behind" with no rain ahead at all.
+            ahead_len = (b.get("to_nm") or 0) - max(b.get("from_nm") or 0, flown)
+            if b.get("tier") == "rain" and b.get("motion_rel_deg") is not None and ahead_len > 0:
+                rain_motion.append((ahead_len, b["motion_rel_deg"]))
         ahead_nm = max(route_nm - flown, 1)
         rain = {
-            "stretches_where_radar_rain_lies_over_the_track_itself_nm": _stretches(on_track, route_nm) or "none",
-            "rain_within_10_NM_either_side": f"on {min(100, _f(len(near) * 5 / ahead_nm * 100))}% of the route ahead",
+            "stretches_where_radar_rain_lies_over_the_track_itself": _coarse_stretches(on_track, route_nm, flown) or "none",
+            "rain_within_10_NM_either_side": "on " + _coverage_band(len(near) * 5 / ahead_nm * 100),
         }
+        gate["rain"] = dict(rain)
         if rain_motion:
+            # Shown, not gated (#706 item 8): it flips null ↔ "moving along"
+            # as small areas come and go, and it is a direction word, not a
+            # figure that could go stale in a kept highlight.
             rain["main_rain_area"] = _rel_words(max(rain_motion)[1])
         out["rain_ahead"] = rain
     else:
@@ -314,41 +537,13 @@ def facts(live: dict) -> dict:
         wet = [s for s in segs if (s.get("radar_max_dbz") or 0) >= 20]
         out["rain_ahead"] = ({"radar_rain_within_10_NM_of_track_nm": [[_f(s["from_nm"]), _f(s["to_nm"])] for s in wet]}
                              if wet else "none within 10 NM of the track") if segs else "radar unavailable"
+        gate["rain"] = out["rain_ahead"]
 
-    if not cells_ok:
-        out["cells_ahead"] = "radar cell tracking unavailable"
-    else:
-        ahead = [s for s in st.get("storms") or [] if s.get("ahead")]
-        if not ahead:
-            out["cells_ahead"] = f"none within {_f(st.get('corridor_nm') or 30)} NM of the track"
-        else:
-            def cell(s):
-                c = {"peak_dBZ": _f(s.get("peak_dbz")), "at_route_nm": _f(s.get("along_nm")),
-                     "off_track_nm": _f(s.get("offtrack_nm")), "side": s.get("side") or s.get("end_bearing") or "on track"}
-                if s.get("abeam_eta"):
-                    c["abeam_at"] = _hhmm(s["abeam_eta"])
-                if s.get("flashes"):
-                    c["lightning_flashes"] = s["flashes"]
-                rm = s.get("relative_motion")
-                if rm == "closing" and s.get("closing_kt") is not None:
-                    c["motion"] = f"closing on the track at {_f(s['closing_kt'])} kt"
-                elif rm == "moving_away":
-                    c["motion"] = "moving away from the track"
-                elif rm == "parallel":
-                    c["motion"] = "moving along the track"
-                if s.get("trend") in ("developing", "decaying"):
-                    c["trend"] = s["trend"]
-                return c
-            listed = sorted(ahead, key=lambda s: s.get("offtrack_nm") or 0)[:5]
-            out["cells_ahead"] = {
-                "count": len(ahead),
-                "with_lightning": sum(1 for s in ahead if s.get("flashes")),
-                "closing_on_track": sum(1 for s in ahead if s.get("relative_motion") == "closing"),
-                "within_10_NM_of_track": sum(1 for s in ahead if (s.get("offtrack_nm") or 99) <= 10),
-                "nearest_to_track": [cell(s) for s in listed],
-            }
+    out["cells_ahead"] = gate["cells"] = (
+        _cells_ahead(st) if st.get("status") == "available" else "radar cell tracking unavailable"
+    )
 
-    rows = (live.get("changes") or {}).get("changes") or []
+    rows = [c for c in (live.get("changes") or {}).get("changes") or [] if c.get("kind") in _FACT_CHANGE_KINDS]
 
     def place(c):
         role = c.get("role") or "route"
@@ -358,69 +553,81 @@ def facts(live: dict) -> dict:
         if icao:
             d = c.get("enroute_distance_nm")
             return f"route airport {icao}" + (f" at {_f(d)} NM along" if d is not None else "")
-        d = c.get("enroute_distance_nm")
-        return f"en route at {_f(d)} NM" if d is not None else "en route"
+        # A SIGMET row: its span is in ``sigmets_ahead``; the row's own
+        # distance moves with the geometry and is not gated.
+        return "en route"
 
-    worse = [{"where": place(c), "what": c["message"]} for c in rows
-             if c.get("direction") == "worse" and c.get("tier") in ("alert", "highlight")]
-    better = sum(1 for c in rows if c.get("direction") == "better")
-    out["changes_since_briefing"] = {"worse": worse[:4] or "none", "improved_count": better}
-    return out
+    worse_rows = [c for c in rows if c.get("direction") == "worse" and c.get("tier") in ("alert", "highlight")]
+    worse = [{"where": place(c), "what": _change_words(c)} for c in worse_rows]
+    better = any(c.get("direction") == "better" for c in rows)
+    # Improvements as a flag, not a count, and out of the gate (#706 item 8):
+    # the count ticks 0 → 1 → 2 with nothing to say about the route ahead.
+    out["changes_since_briefing"] = {"worse": worse[:4] or "none",
+                                     "improved_since_briefing": "some" if better else "none"}
+    # By identity, not message (#706 item 3): the same row re-worded (a
+    # SIGMET's "from 08:35Z" dropping once valid) is not a change.
+    gate["changes"] = sorted({f"{c.get('key')}|{c.get('direction')}|{c.get('to_value')}" for c in worse_rows})
+    return out, gate
 
 
-#: "en route, about 69 of 276 NM flown, arrival planned 10:00Z" — the flown
-#: figure is interpolated from the clock, so it moves every tick.
-_FLOWN_RE = re.compile(r"about \d+ of (\d+) NM flown")
-#: "on 45% of the route ahead" — the denominator is ``route_nm - flown``, so
-#: this drifts continuously too.
-_AHEAD_PCT_RE = re.compile(r"on \d+% of the route ahead")
+def facts(live: dict) -> dict:
+    """The facts block for one tick, from a serialized live layer."""
+    return facts_and_gate(live)[0]
 
 
-def _hash_view(f: dict) -> dict:
-    """The facts as change *detection* should see them.
+def arrived(gate: dict) -> bool:
+    """At or past the planned arrival (#706 item 6). The flown figure is
+    interpolated from the plan, so this is the plan's arrival, not a landing:
+    after it the "ahead" cells have abeam times in the past and every figure
+    "ahead" is about a route the aircraft has (on paper) finished."""
+    return gate.get("phase") == "arrived"
 
-    Three things move on the wall clock alone, with no change a pilot would
-    read, and hashing them means paying for an identical highlight every tick
-    of the flight:
 
-    - ``now`` — the tick time.
-    - the flown figure in ``flight`` — interpolated from departure, so on a
-      276 NM / 1.5 h plan it advances ~30 NM every 10-minute tick. Measured on
-      the real LELL→LEMI 08:30 tick: identical weather, different hash.
-    - the "% of the route ahead" in ``rain_ahead`` — same cause, via the
-      ``route_nm - flown`` denominator.
+def gate_hash(gate: dict) -> str:
+    """Stable hash of a gate state — the cheap first check: identical hash ⇒
+    nothing to compare. Keys starting with ``_`` (the flown figure) are
+    context for :func:`gate_changes`, not state."""
+    view = {k: v for k, v in gate.items() if not k.startswith("_")}
+    return hashlib.sha256(json.dumps(view, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
-    Dropping the figure loses nothing, because everything progress actually
-    decides is captured exactly elsewhere and still hashed: which cells are
-    ``ahead``, which SIGMET spans are still in front, which airports remain,
-    and the rain stretches — all filtered by ``flown`` and so changing in real
-    steps when you pass something. The **coarse phase** is kept, so
-    before-departure → en route → arrived still regenerates.
+
+def gate_changes(previous: dict, current: dict) -> list[str]:
+    """What changed significantly between the state at the last generation and
+    now (#706). Empty means the stored highlight still holds.
+
+    Comparing with the last *generated* state, not the previous tick, is what
+    stops slow drift slipping through one small step at a time — and since
+    the state holds interpretations (category, convective level, weather
+    families, wind band, 25 NM rain bins, cell flags), a fixed bucket cannot
+    flap a regeneration per tick either: it regenerates once, when the state
+    the highlight was written from no longer holds.
+
+    One rule is not plain equality: a notable airport present at the last
+    generation and gone now is **passed** when it is now behind the aircraft,
+    and that is not a change (#706 item 7). One appearing that was not
+    notable before is — the uncapped list means one merely sliding into the
+    12-entry cap is not "new".
     """
-    body = {k: v for k, v in f.items() if k != "now"}
-    flight = body.get("flight")
-    if isinstance(flight, str):
-        body["flight"] = _FLOWN_RE.sub(r"en route of \1 NM", flight)
-    rain = body.get("rain_ahead")
-    if isinstance(rain, dict):
-        rain = dict(rain)
-        for key, value in rain.items():
-            if isinstance(value, str):
-                rain[key] = _AHEAD_PCT_RE.sub("on some % of the route ahead", value)
-        body["rain_ahead"] = rain
-    return body
-
-
-def facts_hash(f: dict) -> str:
-    """Stable hash of a facts block, ignoring what only the clock moved.
-
-    See :func:`_hash_view` for what is left out and why. Everything else
-    counts — a new METAR, a cell's abeam time, a cell passing behind you and a
-    SIGMET falling off the route ahead are all real movement.
-    """
-    return hashlib.sha256(
-        json.dumps(_hash_view(f), sort_keys=True, default=str).encode()
-    ).hexdigest()[:16]
+    reasons = []
+    for key in sorted((set(previous) | set(current)) - {"airports"}):
+        if key.startswith("_"):
+            continue
+        if previous.get(key) != current.get(key):
+            reasons.append(key)
+    prev_ap, cur_ap = previous.get("airports") or {}, current.get("airports") or {}
+    flown = current.get("_flown_nm") or 0
+    for icao in sorted(set(prev_ap) | set(cur_ap)):
+        p, c = prev_ap.get(icao), cur_ap.get(icao)
+        if p is not None and c is not None:
+            if {k: v for k, v in p.items() if k != "along"} != {k: v for k, v in c.items() if k != "along"}:
+                reasons.append(f"airport {icao}")
+        elif c is None:
+            along = p.get("along")
+            if along is None or along >= flown - PASSED_MARGIN_NM:
+                reasons.append(f"airport {icao} no longer notable")
+        else:
+            reasons.append(f"airport {icao} now notable")
+    return reasons
 
 
 # --- Grounding --------------------------------------------------------------
@@ -454,7 +661,9 @@ AIRPORT_CONDITIONS: dict[str, frozenset[str]] = {
                        "rain", "showers", "shower", "drizzle"}),
     "snow": frozenset({"sn", "-sn", "+sn", "shsn", "snow", "sleet", "gs", "gr", "hail"}),
     "obscuration": frozenset({"fg", "bcfg", "mifg", "br", "hz", "fu", "fog", "mist", "haze", "smoke"}),
-    "gusts": frozenset({"gusts", "gusting", "gust"}),
+    # "wind" because the facts give an airport's wind as its advisory band
+    # ("wind advisory amber"), never a gust figure (#706).
+    "gusts": frozenset({"gusts", "gusting", "gust", "wind"}),
     "ceiling": frozenset({"ceiling", "overcast", "broken"}),
     "visibility": frozenset({"visibility", "vis"}),
 }
@@ -699,23 +908,30 @@ def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
 # --- Orchestration ----------------------------------------------------------
 
 
-def facts_for(layer) -> dict:
-    """The facts block for a committed :class:`LiveLayer`.
+def facts_and_gate_for(layer) -> tuple[dict, dict]:
+    """The facts block and gate state for a committed :class:`LiveLayer`.
 
     Goes through the serialized form on purpose: the experiment script feeds
     :func:`facts` a ``live.json`` / ``/live`` body, and prompt v3 was
     calibrated against that exact shape. One code path, one input shape.
     """
-    return facts(layer.model_dump(mode="json"))
+    return facts_and_gate(layer.model_dump(mode="json"))
 
 
 def carry_forward(stored, layer) -> bool:
-    """Keep the previous highlight when this tick's facts are unchanged.
+    """Keep the previous highlight unless the weather moved significantly.
 
     ``build_glance`` rebuilds the whole glance every tick, so without this the
     previous highlight is destroyed on every commit and every tick pays for a
     new one. Returns True when one was carried over. Never raises: a highlight
     problem must not fail a tick.
+
+    The comparison is against the gate state stored **with the highlight**
+    — the state it was written from — not the previous tick (#706). A carried
+    highlight keeps that baseline, so drift is measured from where the text
+    was true. After the planned arrival nothing is carried (item 6): the
+    "ahead" a kept line talks about is a route already flown, so the layer
+    falls back to the nutshell headline.
 
     Runs *inside* the commit because the glance it attaches to is written
     there. Pure computation — no model call, no network.
@@ -724,8 +940,19 @@ def carry_forward(stored, layer) -> bool:
         previous = stored.glance.highlight if stored is not None and stored.glance else None
         if previous is None or layer.glance is None:
             return False
-        if previous.facts_hash != facts_hash(facts_for(layer)):
+        _f_block, gate = facts_and_gate_for(layer)
+        if arrived(gate):
             return False
+        if previous.gate is None:
+            # Written before #706: its hash is of the old facts shape, so
+            # nothing to compare against. Regenerate once, then gate.
+            return False
+        if previous.facts_hash != gate_hash(gate):
+            reasons = gate_changes(previous.gate, gate)
+            if reasons:
+                logger.info("Live highlight regenerates for %s: %s",
+                            getattr(layer, "flight_id", "?"), ", ".join(reasons))
+                return False
         layer.glance.highlight = previous
         return True
     except Exception:
@@ -762,7 +989,7 @@ def call_cost(usage: dict | None) -> float | None:
 
 
 def rejected_attempts(flight_dir: Path | str, digest: str) -> int:
-    """How many billed generations this facts state has already thrown away.
+    """How many billed generations this gate state has already thrown away.
 
     Counted from the review log, which is already per flight and append-only —
     no extra state to carry across ticks. Only ``rejected`` counts: a
@@ -841,8 +1068,9 @@ def ensure_highlight(
     which is a glance with no highlight, and clients fall back to its
     ``headline``.
 
-    No-ops when the facts are unchanged (``carry_forward`` already attached the
-    previous highlight during the commit), which is most ticks.
+    No-ops when nothing significant changed (``carry_forward`` already
+    attached the previous highlight during the commit), which is most ticks,
+    and after the planned arrival.
 
     Does **not** charge the ledger: it is called from a worker thread and a
     SQLAlchemy ``Session`` is not thread-safe. The caller charges
@@ -866,12 +1094,18 @@ def ensure_highlight(
     from weatherbrief.tasks.live_layer import patch_highlight
 
     try:
-        f = facts_for(layer)
+        f, gate = facts_and_gate_for(layer)
     except Exception:
         logger.exception("LIVE_HIGHLIGHT_FAILED flight=%s — could not build facts", layer.flight_id)
         return HighlightOutcome("skipped")
+    if arrived(gate):
+        # #706 item 6: 34 of a flight day's 311 attempts came after the planned
+        # arrival, about "ahead" cells already abeam in the past.
+        return HighlightOutcome("skipped", reason="after planned arrival")
 
-    digest = facts_hash(f)
+    # The retry cap counts per gate state, so a rejected state is not retried
+    # on a change the gate ignores (a rain-motion word, an airport passed).
+    digest = gate_hash(gate)
     already = rejected_attempts(flight_dir, digest)
     if already >= MAX_ATTEMPTS_PER_FACTS:
         # Logged without the facts block: a one-line marker keeps the
@@ -923,7 +1157,7 @@ def ensure_highlight(
 
     written = patch_highlight(
         flight_dir,
-        LiveHighlight(text=text, model=model, facts_hash=digest,
+        LiveHighlight(text=text, model=model, facts_hash=digest, gate=gate,
                       generated_at=datetime.now(timezone.utc), latency_ms=latency_ms),
         pack_timestamp=layer.pack_timestamp,
         as_of=layer.glance.as_of,

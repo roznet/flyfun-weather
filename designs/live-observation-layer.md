@@ -499,7 +499,8 @@ user-facing surface by the back door.
 *after* it returns:
 
 1. **Commit** writes the layer as before, and `live_highlight.carry_forward`
-   re-attaches the previous highlight when this tick's facts hash is unchanged
+   re-attaches the previous highlight unless the gate (below) sees a
+   significant change
    (the glance is rebuilt wholesale each tick, so without this every tick loses
    the highlight and pays for a new one). Measured cost on a real 69 KB layer:
    **0.29 ms**.
@@ -521,39 +522,60 @@ in ~1.2 s, so the tick grows by one call's latency, not by the flight count.
 different pack, or a newer `glance.as_of`): the text was written from *those*
 facts, and the next tick generates its own.
 
-### What counts as "changed" (the cost gate)
+### What counts as "changed" (the regeneration gate, #706)
 
-`facts_hash` hashes a **`_hash_view`** of the facts, not the facts, because
-three things move on the wall clock alone with nothing a pilot would read
-having changed — and hashing them meant paying for an identical highlight
-every tick of every flight:
+The first real flight day (2026-10-08, 17 flights) made **311** calls where a
+hash of the facts *strings* was the gate: every half-hourly METAR's time,
+every ±100 ft of ceiling, every radar frame's cell figures and 5 NM rain
+edges, storm change rows flickering in and out, and an airports-ahead count
+that ticks down as each is passed. 19 calls reproduced the previous sentence.
 
-- `now`;
-- the flown figure in `flight` — interpolated from departure, so on a
-  276 NM / 1.5 h plan it advances ~30 NM per 10-minute tick;
-- the "% of the route ahead" in `rain_ahead`, whose denominator is
-  `route_nm - flown`.
+Now `facts_and_gate(live)` builds the facts block **and a gate state** in one
+pass, and `gate_changes(previous, current)` decides. The previous state is the
+one **stored with the highlight** (`LiveHighlight.gate`), i.e. the state at the
+last *generation*, not the previous tick: tick-to-tick lets slow drift through
+(2400 → 2900 → 3400 ft one step at a time), and a fixed bucket compared with
+the last generated state regenerates once on a crossing instead of flapping.
+A carried highlight keeps its baseline. `gate_hash` (stored in `facts_hash`)
+is the cheap first check, and also what the retry cap counts per.
 
-Measured on the real LELL→LEMI 08:30 tick replayed 10 min later with the
-weather byte-identical: the hash changed, so the gate was dead for the whole
-airborne phase — the part that matters. Dropping the figure loses nothing,
-because everything progress actually decides is captured exactly elsewhere and
-still hashed: which cells are `ahead`, which SIGMET spans are still in front,
-which airports remain, the rain stretches. The **coarse phase** is kept, so
-take-off and landing still regenerate.
+What the gate holds, and so what the facts show:
 
-Replaying all 33 ticks of that flight's window with the weather held
-identical: **10 billed calls before the fix, 6 after** (−40%), and all 6 are
-real — take-off, landing, and four airports dropping out of "ahead" as the
-flight passes them. The facts the model sees keep the exact figure; only
-change detection is coarse.
+| Part | Gated as | Not a change |
+|---|---|---|
+| Airport METAR | category + its driver word ("low ceiling"), convective level tags (TS/CB/TCU, as `convective_tags`), weather **families** (showers, rain, snow, fog, freezing, hail…, heavy marked), wind advisory band (or "gusts" ≥ 25 kt without runway data) | obs time, exact ceiling/vis/gust, runway id, `-SHRA` ↔ `SHRA`, mist/haze |
+| Route airports | every notable one ahead, **uncapped**, by ICAO | passing one (`along < flown − 5`); the next sliding into the 12 cap |
+| SIGMETs | exactly, **id included** (the highlight quotes ids, a reissue must regenerate) | — |
+| Rain on track | stretches on a **25 NM** grid; 10 NM coverage as a band none / < 25 / < 50 / ≥ 50 % | edges within a bin; `main_rain_area` (shown, not gated) |
+| Cells ahead | nearest band (≤ 3 / ≤ 10 / corridor NM), any lightning, any closing ≤ 10 NM, any developing ≤ 10 NM | dBZ, along, side, abeam time, closing speed |
+| Change rows | METAR/TAF/SIGMET rows by identity `key|direction|to_value` | storm / radar / lightning rows (dropped: `cells_ahead` is the radar source); re-wording; improvement count |
+| Phase | before departure / en route / arrived | the flown figure |
 
-Cost: **~$0.0016 a call** measured (1050–1509 input tokens, 21–96 output;
-input is ~90% of it and nearly constant because the facts block is capped).
-A 2 h flight sits in the window for 36 ticks. Note the admin cost views filter
-on `category == "briefing"`, so these rows are recorded and queryable but **not
-shown** anywhere — which is why `call_cost` puts the USD of every attempt into
-the review log, rejected ones included.
+**The rule that ties the two halves (item 5): what the gate ignores, the
+facts don't show.** Otherwise a carried-forward line quoting "ceiling 2400 ft"
+or "42 dBZ at 102 NM" goes stale silently. So the facts lost every figure in
+the table's right column, and `test_the_facts_never_show_a_figure_the_gate_ignores`
+moves all of them at once and asserts the facts are identical except `now`,
+the flown figure in `flight` and `main_rain_area` — the three deliberate
+exceptions (the model may say where the aircraft is; the motion word is not a
+figure). Cost of the rule: the model can no longer place a cell along the
+route or quote its dBZ; if that turns out to matter, add a position to the
+gate (e.g. thirds of the route) and to the facts together, never one alone.
+
+**After the planned arrival nothing is generated or carried** (item 6): 34 of
+the 311 calls came after it, about "ahead" cells already abeam in the past.
+The layer falls back to the nutshell headline. "Arrived" is the plan's
+(`flown` is interpolated from it), not a landing.
+
+`main_rain_area` reads only rain bands still ahead (it once said "moving
+toward the route from behind" with no rain ahead). A highlight written before
+#706 has no stored gate and regenerates once. Each regeneration logs its
+reasons at INFO (`Live highlight regenerates for <id>: destination, cells`).
+
+The issue's offline replay of that corpus estimated **~188 calls (−39 %)** for
+this gate; it is not reproduced in the repo (the corpus lives on prod).
+Remaining known trigger on busy convective flights: rain edges crossing
+25 NM bins (10–18 per flight in the replay) — #706 item 11, not done.
 
 ### Grounding check
 
@@ -614,14 +636,14 @@ would be wrong the other way: the model is stochastic (the same tick comes back
 worded differently run to run), so a transient bad line would cost that flight
 its highlight until the weather moved.
 
-`MAX_ATTEMPTS_PER_FACTS = 2`, counted per **facts state** from the review log
+`MAX_ATTEMPTS_PER_FACTS = 2`, counted per **gate state** (`gate_hash`) from the review log
 (`rejected_attempts`) — no extra state to carry across ticks. That count runs
 every tick for every flight without a highlight, so it rejects lines on raw
 text before parsing any JSON; `skipped_rejected` deliberately does not satisfy
 that filter, or the cap would tighten itself every tick. A bad draw gets a
 second chance; a systematic failure costs twice, not 33 times. Only `rejected`
 counts: a `written` one is carried forward anyway, and a `call_failed` one is a
-timeout that cost nothing and is right to retry. When the weather moves the hash
+timeout that cost nothing and is right to retry. When the gate state moves the hash
 changes and the flight gets a fresh go. Further ticks log a one-line
 `skipped_rejected` marker **without** the facts block, so the frequency stays
 visible for review without repeating 1.5 kB every tick.

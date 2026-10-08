@@ -321,10 +321,12 @@ class LiveHighlight(BaseModel):
     comes from the facts block :mod:`weatherbrief.tasks.live_highlight` built
     deterministically from this tick. Written after the tick has committed, so
     a layer always exists without one: ``None`` until the first generation
-    lands, and ``None`` again each time the facts change until the next tick
-    fills it. A facts state whose generation is rejected is retried once and
-    then left alone (``MAX_ATTEMPTS_PER_FACTS``), so this stays ``None`` for
-    that state — the next real weather change gets a fresh attempt. Readers
+    lands, and ``None`` again each time the weather changes significantly
+    (#706: compared with :attr:`LiveHighlight.gate`) until the next tick fills
+    it, and after the planned arrival. A gate state whose generation is
+    rejected is retried once and then left alone (``MAX_ATTEMPTS_PER_FACTS``),
+    so this stays ``None`` for that state — the next real weather change gets
+    a fresh attempt. Readers
     fall back to :attr:`LiveGlance.headline`.
 
     **Not displayed yet** (owner, 2026-10-07): written to the layer so real
@@ -335,9 +337,14 @@ class LiveHighlight(BaseModel):
 
     text: str
     model: str
-    # Hash of the facts block minus ``now``: the same facts carry the previous
-    # highlight forward instead of paying for an identical call.
+    # Hash of the gate state the text was written from (#706; before it, of
+    # the facts block minus ``now``). Identical hash: nothing to compare.
     facts_hash: str
+    # The gate state itself (``live_highlight.facts_and_gate``): what the
+    # next ticks are compared against to decide whether to regenerate — the
+    # state at this generation, not the previous tick, so slow drift is
+    # caught. ``None`` on a highlight written before #706 (regenerated once).
+    gate: dict | None = None
     generated_at: datetime
     # Round-trip of the model call, for the latency budget (#697: p50 ~1.0 s).
     latency_ms: int | None = None
