@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic import ValidationError
+
 logger = logging.getLogger(__name__)
 
 #: Review log, one record per generation attempt (kept, reused or rejected).
@@ -227,7 +229,12 @@ def _metar_state(a: dict) -> dict:
         convective_tags,
     )
 
-    obs = AirportObservation.model_validate(a)
+    try:
+        obs = AirportObservation.model_validate(a)
+    except ValidationError:
+        # One malformed row must not drop the whole flight's highlight.
+        logger.warning("Live highlight: unreadable METAR row for %s", a.get("icao", "?"), exc_info=True)
+        return {"category": "METAR unreadable", "unreadable": True}
     tags = convective_tags(obs)
     level = _convective_level(tags)
     state: dict = {"category": obs.metar_flight_category or "category unknown"}
@@ -278,7 +285,9 @@ def _notable(a: dict) -> bool:
     is never listed for something the facts then leave out (plain mist)."""
     if a.get("has_metar"):
         s = _metar_state(a)
-        if s["category"] != "VFR" or s.get("convective") or s.get("weather") or s.get("wind"):
+        if s.get("unreadable"):
+            pass
+        elif s["category"] != "VFR" or s.get("convective") or s.get("weather") or s.get("wind"):
             return True
     for k in ("taf_prevailing_category_at_eta", "taf_temporary_category_at_eta"):
         if a.get(k) and a[k] != "VFR":
@@ -397,9 +406,9 @@ def _cells_ahead(st: dict) -> str | dict:
         # Only present when true: ``check_grounding`` reads this key as the
         # licence for "thunderstorm".
         out["lightning_flashes"] = "in at least one cell"
-    if any(s.get("relative_motion") == "closing" and (s.get("offtrack_nm") or 99) <= 10 for s in ahead):
+    if any(s.get("relative_motion") == "closing" and (s["offtrack_nm"] if s.get("offtrack_nm") is not None else 99) <= 10 for s in ahead):
         out["closing_on_track"] = "at least one cell within 10 NM"
-    if any(s.get("trend") == "developing" and (s.get("offtrack_nm") or 99) <= 10 for s in ahead):
+    if any(s.get("trend") == "developing" and (s["offtrack_nm"] if s.get("offtrack_nm") is not None else 99) <= 10 for s in ahead):
         out["developing"] = "at least one cell within 10 NM"
     return out
 

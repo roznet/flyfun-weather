@@ -2395,6 +2395,27 @@ class TestLiveLayerEndpoint:
         assert snap["live_updated_at"] is not None
         assert json.loads((pack_dir / "briefing.json").read_text()) == {"route": {}}
 
+    def test_live_serves_the_highlight_without_its_gate(self, client, app_db, sample_flight, tmp_path):
+        """#706: the gate is the server's regeneration baseline — kept in
+        live.json, never sent to clients."""
+        from weatherbrief.models.live import LiveGlance, LiveHighlight
+        from weatherbrief.tasks.live_layer import LIVE_FILE, flight_dir_for_pack, live_for_pack
+
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        self._commit(pack_dir)
+        layer = live_for_pack(pack_dir)
+        layer.glance = LiveGlance(
+            as_of=_NOW, headline="Observed · as briefed", comparison="as_briefed",
+            highlight=LiveHighlight(text="Quiet route.", model="m", facts_hash="h",
+                                    gate={"route": "ZZDP to ZZDS"}, generated_at=_NOW),
+        )
+        (flight_dir_for_pack(pack_dir) / LIVE_FILE).write_text(layer.model_dump_json())
+
+        live = client.get(f"/api/flights/{sample_flight.id}/live").json()
+        assert live["glance"]["highlight"]["text"] == "Quiet route."
+        assert live["glance"]["highlight"]["gate"] is None
+        assert live_for_pack(pack_dir).glance.highlight.gate == {"route": "ZZDP to ZZDS"}
+
     def test_live_carries_trails_and_the_overlay_does_not(self, client, app_db, sample_flight, tmp_path):
         """#669: /live adds each change's trail and the recently cleared rows,
         computed from the history at read time; the snapshot overlay is

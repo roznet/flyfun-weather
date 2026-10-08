@@ -5174,7 +5174,10 @@ def get_live_layer(
         observed_conditions=layer.observed_conditions,
         observed_updated_at=layer.observed_updated_at,
         storms=layer.storms,
-        glance=layer.glance,
+        # The highlight's gate state (#706) is the server's regeneration
+        # baseline, uncapped over the route: no client reads it.
+        glance=(layer.glance.model_copy(update={"highlight": layer.glance.highlight.model_copy(update={"gate": None})})
+                if layer.glance and layer.glance.highlight else layer.glance),
         ribbon=layer.ribbon,
         changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,

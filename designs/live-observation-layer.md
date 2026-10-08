@@ -571,6 +571,12 @@ The layer falls back to the nutshell headline. "Arrived" is the plan's
 toward the route from behind" with no rain ahead). A highlight written before
 #706 has no stored gate and regenerates once. Each regeneration logs its
 reasons at INFO (`Live highlight regenerates for <id>: destination, cells`).
+The gate is persisted in `live.json` (it must survive a JSON round trip
+unchanged, pinned by `test_the_gate_survives_a_json_round_trip`) but `/live`
+serves the highlight with `gate: null`: it is the server's baseline, uncapped
+over the route, and no client reads it. An airport row that fails
+`AirportObservation` validation reads "METAR unreadable" and is not notable on
+its METAR alone; it does not drop the flight's facts.
 
 The issue's offline replay of that corpus estimated **~188 calls (−39 %)** for
 this gate; it is not reproduced in the repo (the corpus lives on prod).

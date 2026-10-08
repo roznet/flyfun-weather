@@ -471,6 +471,32 @@ def test_a_real_cell_change_regenerates(after):
     assert _changed(_live(storms=_cells(_storm(6))), _live(storms=_cells(after))) == ["cells"]
 
 
+def test_a_cell_exactly_on_track_counts_as_closing():
+    """``offtrack_nm == 0`` is on the track, not unknown."""
+    assert _gate(_live(storms=_cells(_storm(0, motion="closing"))))["cells"]["closing_on_track"]
+
+
+def test_the_gate_survives_a_json_round_trip():
+    """The gate is stored in ``live.json`` and compared with ``!=`` after a
+    reload: a tuple turned list would regenerate every tick."""
+    live = _live(
+        airports=[(_station("ZZRA", 150), _obs("ZZRA", 150, cat="IFR", ceil=400, wx=("SHRA",), wind="amber"))],
+        sigmets=[{"label": "ZZ1: TS", "hazard": "TS", "from_nm": 120, "to_nm": 180, "new": True}],
+        weather=[_band(140, 190, motion=90)],
+        storms=_cells(_storm(2, flashes=3, motion="closing")),
+        changes=[_row("ZZRA:cat", "metar_category", "ZZRA VFR → IFR", icao="ZZRA", to="IFR")],
+    )
+    g = _gate(live)
+    assert lh.gate_changes(json.loads(json.dumps(g)), g) == []
+
+
+def test_a_malformed_airport_row_does_not_drop_the_facts():
+    bad = _obs("ZZRB", 150)
+    bad["metar_visibility_m"] = "not a number"
+    f, g = lh.facts_and_gate(_live(airports=[(_station("ZZRB", 150), bad)]))
+    assert f["airports_along_route_ahead"]["notable"] == "none"
+
+
 def _row(key, kind, message, *, icao=None, role="route", to=None, tier="alert", direction="worse"):
     return {"key": key, "kind": kind, "message": message, "icao": icao, "role": role,
             "to_value": to, "tier": tier, "direction": direction, "enroute_distance_nm": 120.0}
