@@ -181,6 +181,27 @@ private func band(tier: String = "core", peakDbz: String = "47.0") throws -> Rib
                 == "1 rain areas, 1 cells along the route, strongest 47 dBZ")
     }
 
+    /// The web mirrors this with `roundHalfAway`, because JS `Math.round`
+    /// breaks ties toward +∞ instead. Reflectivity is the one mirrored input
+    /// that can go negative, so the pair is asserted on both sides.
+    @Test func breaksRoundingTiesAwayFromZero() throws {
+        #expect((2.5).rounded() == 3)
+        #expect((-2.5).rounded() == -3)
+        #expect((0.5).rounded() == 1)
+        #expect((-0.5).rounded() == -1)
+        #expect(RouteRibbonRules.segmentLabel(try segment(status: "measured", dbz: "-2.5"))
+                == "0–25 NM: radar peak -3 dBZ")
+    }
+
+    @Test func dropsAnEmptyHazardRatherThanLeavingAStraySeparator() throws {
+        let partial = try decode(RibbonSigmet.self,
+            #"{"id": "sigmet:LECM|6", "label": "LECM 6: x", "qualifier": "EMBD", "hazard": ""}"#)
+        #expect(RouteRibbonRules.sigmetText(partial) == "LECM 6 EMBD")
+        let empty = try decode(RibbonSigmet.self,
+            #"{"id": "sigmet:LECM|6", "label": "LECM 6: x", "qualifier": "", "hazard": ""}"#)
+        #expect(RouteRibbonRules.sigmetText(empty) == "LECM 6 SIGMET")
+    }
+
     @Test func namesASigmetByItsFirAndHazardFallingBackToSigmet() throws {
         let full = try decode(RibbonSigmet.self, """
         {"id": "sigmet:LECM|6", "label": "LECM 6: EMBD TS", "hazard": "TS", "qualifier": "EMBD"}

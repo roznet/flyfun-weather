@@ -46,6 +46,13 @@ import SwiftUI
 // and strength — never "go".
 // =============================================================================
 
+private extension Array where Element == String? {
+    /// The non-nil, **non-empty** members — the web side's `filter(Boolean)`.
+    /// `compactMap { $0 }` alone keeps `""`, which left a stray separator in a
+    /// label the two clients are supposed to produce identically.
+    var present: [String] { compactMap { $0 }.filter { !$0.isEmpty } }
+}
+
 enum RouteRibbonRules {
 
     // MARK: Geometry (points from the top of the drawing)
@@ -155,9 +162,9 @@ enum RouteRibbonRules {
     // MARK: Words (labels + the accessible name of each mark)
 
     static func sigmetText(_ s: RibbonSigmet) -> String {
-        let hazard = [s.qualifier, s.hazard].compactMap { $0 }.joined(separator: " ")
+        let hazard = [s.qualifier, s.hazard].present.joined(separator: " ")
         let fir = s.label?.split(separator: ":").first.map(String.init)
-        return [fir, hazard.isEmpty ? "SIGMET" : hazard].compactMap { $0 }.joined(separator: " ")
+        return [fir, hazard.isEmpty ? "SIGMET" : hazard].present.joined(separator: " ")
     }
 
     static func segmentLabel(_ seg: LiveRibbonSegment) -> String {
@@ -214,7 +221,7 @@ enum RouteRibbonRules {
         let off = "\(Int((storm.offtrackNm ?? 0).rounded())) NM"
         if storm.end != nil {
             let place = storm.endIcao ?? storm.end ?? ""
-            return [off, storm.endBearing, "of", place].compactMap { $0 }.joined(separator: " ")
+            return [off, storm.endBearing, "of", place].present.joined(separator: " ")
         }
         guard let side = storm.side else { return "on track at \(Int((storm.alongNm ?? 0).rounded())) NM" }
         return "\(off) \(side) of track at \(Int((storm.alongNm ?? 0).rounded())) NM"

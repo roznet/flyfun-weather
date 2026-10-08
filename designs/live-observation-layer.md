@@ -431,7 +431,11 @@ logs `Live glance failed` and leaves both null for that tick.
   Tap-to-map goes through `RouteMapRenderer.focusBbox` (pads a degenerate box
   and caps `maxZoom`, so one cell does not zoom to the tile limit) after
   switching to the `split` layout and turning on the focus's layers; a cell
-  opens `stormDetailHtml` in the shared info popup.
+  opens `stormDetailHtml` in the shared info popup. `focusMapOn` honours the
+  two layers the web map has a switch for — `cells`, and `radar` (only when
+  the overlay is not already on a radar product, so a deliberate rain-rate
+  choice survives). `route` is always drawn, `lightning` rides with the
+  overlay, and `metar` / `sigmets` have no toggleable layer here.
   - **Deliberate, not a gap:** like iOS, the web honours only part of the
     focus contract — it ignores `time` and draws no SIGMET polygons. There is
     no SIGMET polygon layer on the route map and no frame stepper for `time`
@@ -455,6 +459,12 @@ logs `Live glance failed` and leaves both null for that tick.
   would paint one airport two colours on one page), and the **dBZ hexes** come
   from the web's own VIP ramp while the *boundaries* (35 / 41 / 50, the cell
   tiers) are shared exactly. Registered in the `sync-ios-web` skill.
+  Two traps the pair hit and now guards: JS `Math.round` breaks ties toward
+  +∞ while Swift's `.rounded()` breaks them away from zero (reflectivity is
+  the one mirrored input that can go negative), so every web label rounds
+  through `roundHalfAway`; and Swift `compactMap` keeps `""` where the web's
+  `filter(Boolean)` drops it, so the Swift joins go through `[String?].present`.
+  Both are asserted on both sides.
   `web/tests/unit/observed-live-fixtures.test.ts` renders the **same** exported
   `/live` ticks the iOS UI test consumes
   (`flyfun-weatherUITests/LiveScenarios/`, written by

@@ -151,6 +151,21 @@ export function motionArrowDir(
 
 // --- Words (labels + the accessible name of each mark) ---------------------
 
+/** Round the way Swift's `Double.rounded()` does — half **away from zero**.
+ *
+ * SYNC-critical: JS `Math.round` breaks ties toward +∞, so `Math.round(-2.5)`
+ * is -2 where Swift's `(-2.5).rounded()` is -3. Every number below ends up in
+ * a label string the two clients are supposed to produce identically, and
+ * `ribbon-core.test.ts` / `RouteRibbonRulesTests.swift` assert them verbatim.
+ * Rather than reason about which inputs can go negative (reflectivity can),
+ * every mirrored label rounds through this.
+ */
+export function roundHalfAway(v: number): number {
+  // `|| 0` normalises the -0 that `Math.sign(-0.2) * 0` would otherwise give,
+  // since `${-0}` prints "-0" in a few engines.
+  return (v < 0 ? -1 : 1) * Math.round(Math.abs(v)) || 0;
+}
+
 export function sigmetText(s: RibbonSigmet): string {
   const hazard = [s.qualifier, s.hazard].filter(Boolean).join(' ');
   const fir = s.label ? s.label.split(':')[0] : null;
@@ -158,11 +173,11 @@ export function sigmetText(s: RibbonSigmet): string {
 }
 
 export function segmentLabel(seg: LiveRibbonSegment): string {
-  const span = `${Math.round(seg.from_nm ?? 0)}–${Math.round(seg.to_nm ?? 0)} NM`;
+  const span = `${roundHalfAway(seg.from_nm ?? 0)}–${roundHalfAway(seg.to_nm ?? 0)} NM`;
   switch (seg.radar_status) {
     case 'measured':
       return seg.radar_max_dbz != null
-        ? `${span}: radar peak ${Math.round(seg.radar_max_dbz)} dBZ`
+        ? `${span}: radar peak ${roundHalfAway(seg.radar_max_dbz)} dBZ`
         : `${span}: no radar echo`;
     case 'no_coverage': return `${span}: radar coverage insufficient`;
     default: return `${span}: no radar sample`;
@@ -177,13 +192,13 @@ export function stationLabel(st: RibbonStation): string {
     parts.push(`${st.taf_temporary_type} ${st.taf_temporary_category}`);
   }
   if (st.cross_nm != null && (st.role === 'route' || st.role === 'alternate')) {
-    parts.push(`${Math.round(Math.abs(st.cross_nm))} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`);
+    parts.push(`${roundHalfAway(Math.abs(st.cross_nm))} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`);
   }
   return parts.join(' ');
 }
 
 export function stormLabel(storm: LiveStorm): string {
-  const parts = [`Cell ${Math.round(storm.peak_dbz ?? 0)} dBZ`];
+  const parts = [`Cell ${roundHalfAway(storm.peak_dbz ?? 0)} dBZ`];
   parts.push(stormPositionText(storm));
   parts.push(stormMotionText(storm));
   if (storm.flashes != null && storm.flashes > 0) {
@@ -198,7 +213,7 @@ export function weatherSummary(bands: RibbonWeather[]): string {
   const cores = bands.filter((b) => b.tier === 'core');
   const peaks = cores.map((c) => c.peak_dbz).filter((v): v is number => v != null);
   let s = `${bands.length - cores.length} rain areas, ${cores.length} cells along the route`;
-  if (peaks.length > 0) s += `, strongest ${Math.round(Math.max(...peaks))} dBZ`;
+  if (peaks.length > 0) s += `, strongest ${roundHalfAway(Math.max(...peaks))} dBZ`;
   return s;
 }
 
@@ -213,12 +228,12 @@ export function relativeMotionText(deg: number): string {
 /** "8 NM right of track at 85 NM", or from the airport past the route's ends
  *  — the server's `storm_position_text`. */
 export function stormPositionText(storm: LiveStorm): string {
-  const off = `${Math.round(storm.offtrack_nm ?? 0)} NM`;
+  const off = `${roundHalfAway(storm.offtrack_nm ?? 0)} NM`;
   if (storm.end != null) {
     const place = storm.end_icao ?? storm.end ?? '';
     return [off, storm.end_bearing, 'of', place].filter(Boolean).join(' ');
   }
-  const along = Math.round(storm.along_nm ?? 0);
+  const along = roundHalfAway(storm.along_nm ?? 0);
   if (!storm.side) return `on track at ${along} NM`;
   return `${off} ${storm.side} of track at ${along} NM`;
 }
@@ -227,10 +242,10 @@ export function stormPositionText(storm: LiveStorm): string {
 export function stormMotionText(storm: LiveStorm): string {
   switch (storm.relative_motion) {
     case 'closing':
-      return storm.closing_kt != null ? `closing ${Math.round(storm.closing_kt)} kt` : 'closing';
+      return storm.closing_kt != null ? `closing ${roundHalfAway(storm.closing_kt)} kt` : 'closing';
     case 'moving_away':
       return storm.closing_kt != null
-        ? `moving away ${Math.round(-storm.closing_kt)} kt` : 'moving away';
+        ? `moving away ${roundHalfAway(-storm.closing_kt)} kt` : 'moving away';
     case 'parallel': return 'moving along the track';
     case 'stationary': return 'nearly stationary';
     default: return 'motion not yet measured';
@@ -246,9 +261,9 @@ export function ribbonCaption(
   const parts: string[] = [];
   if (weatherAvailable(ribbon)) {
     const corridor = ribbon.weather_corridor_nm ?? stormCorridorNm;
-    if (corridor != null) parts.push(`±${Math.round(corridor)} NM of course`);
+    if (corridor != null) parts.push(`±${roundHalfAway(corridor)} NM of course`);
   } else if (ribbon.radar_radius_nm != null) {
-    parts.push(`radar ≤${Math.round(ribbon.radar_radius_nm)} NM`);
+    parts.push(`radar ≤${roundHalfAway(ribbon.radar_radius_nm)} NM`);
   }
   if (ribbon.radar_time) {
     const t = zulu(ribbon.radar_time);

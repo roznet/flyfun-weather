@@ -2225,8 +2225,25 @@ async function init(): Promise<void> {
   /** Open the route map framed on what the pilot tapped, with the layers the
    *  focus names switched on. */
   function focusMapOn(focus: LiveFocus | null, layers?: string[]): void {
+    // The server names the layers the item needs (`route`, `radar`, `cells`,
+    // `lightning`, `sigmets`, `metar`). Honour the ones the web map actually
+    // has a switch for; the rest are either always drawn or have no layer:
+    //   route    — the track is always on the route map.
+    //   lightning— rides with the observed overlay, no separate switch.
+    //   sigmets  — no polygon layer on this map (see live-observation-layer.md).
+    //   metar    — station markers are not a toggleable layer here.
+    // Framing without turning the named layer on was the bug: a radar focus
+    // would open the map on a cell with the overlay still set to satellite.
     const want = layers ?? focus?.layers ?? [];
     if (want.includes('cells')) store.getState().setObservedCells(true);
+    if (want.includes('radar')) {
+      // Only when the pilot is not already looking at a radar product, so a
+      // deliberate choice of rain-rate is not reset to reflectivity.
+      const current = store.getState().vizSettings.observedOverlay;
+      if (current !== 'opera_dbzh' && current !== 'opera_rate') {
+        store.getState().setObservedOverlay('opera_dbzh');
+      }
+    }
     // The map has to be on screen before Leaflet can be framed: in
     // cross-section-only layout there is no map instance at all.
     if (store.getState().vizSettings.layout === 'cross-section') {

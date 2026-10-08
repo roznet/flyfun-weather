@@ -123,8 +123,19 @@ Those rules were deliberately extracted into one comparable pair — neither is
 
 | Platform | File | Contents |
 |---|---|---|
-| Web | `web/ts/visualization/observed/ribbon-core.ts` | geometry constants, `xForNm`, `yForCross`, `categoryColour`, `dbzColour`, `bandFill`, `radarFill`, `motionArrowDir`, `stormMarkSize`, `ARROW_MIN_GAP`, `ARROW_MIN_RAIN_NM`, the label fns, `bandRects` / `bandAnchor` / `ribbonArrows` / `stormTargets` / `stationPoint` / `segmentFocusAt` |
+| Web | `web/ts/visualization/observed/ribbon-core.ts` | geometry constants, `xForNm`, `yForCross`, `categoryColour`, `dbzColour`, `bandFill`, `radarFill`, `motionArrowDir`, `stormMarkSize`, `stationMarkSize`, `ARROW_MIN_GAP`, `ARROW_MIN_RAIN_NM`, `roundHalfAway`, the label fns |
 | iOS | `app/flyfun-weather/flyfun-weather/Views/Briefing/RouteRibbonRules.swift` | the same, under Swift names — the file header carries the full symbol map |
+
+**Paired only down to the label fns.** The derived geometry — `bandRects`,
+`bandAnchor`, `ribbonArrows`, `stormTargets`, `stationPoint`, `segmentFocusAt`
+— is **web-only** in the shared module. On iOS the equivalents are private
+methods on `RouteRibbonView` (`anchor`, `arrows`, `stormTargets`,
+`stationPoint`, `segmentFocus`), because they return SwiftUI/CoreGraphics
+types. Don't report their absence from `RouteRibbonRules.swift` as drift —
+compare the *rules they encode* (which band gets an arrow, where a station
+sits) rather than expecting matching symbols. `roundHalfAway` has no Swift
+counterpart by design: Swift's `Double.rounded()` is already half-away-from-zero,
+and the web helper exists to match it.
 
 Check, in this order of consequence:
 

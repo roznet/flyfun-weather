@@ -13,6 +13,7 @@ import {
   radarFill,
   relativeMotionText,
   ribbonArrows,
+  roundHalfAway,
   ribbonCaption,
   segmentFocusAt,
   segmentLabel,
@@ -144,6 +145,34 @@ describe('motion marks', () => {
   });
 });
 
+describe('rounding parity with Swift', () => {
+  // The whole point of the mirrored pair is that the label strings match.
+  // JS `Math.round` breaks ties toward +∞; Swift's `.rounded()` breaks them
+  // away from zero. Verified against a real Swift run: (-2.5).rounded() = -3.
+  it('breaks ties away from zero, as Swift does', () => {
+    expect(roundHalfAway(2.5)).toBe(3);
+    expect(roundHalfAway(-2.5)).toBe(-3);
+    expect(roundHalfAway(0.5)).toBe(1);
+    expect(roundHalfAway(-0.5)).toBe(-1);
+    expect(roundHalfAway(2.4)).toBe(2);
+    expect(roundHalfAway(-2.4)).toBe(-2);
+    // This is where plain Math.round would have disagreed.
+    expect(roundHalfAway(-2.5)).not.toBe(Math.round(-2.5));
+  });
+
+  it('never prints a negative zero', () => {
+    expect(`${roundHalfAway(-0.2)}`).toBe('0');
+    expect(`${roundHalfAway(-0)}`).toBe('0');
+  });
+
+  it('rounds a negative reflectivity in a segment label the Swift way', () => {
+    // Reflectivity is the one mirrored input that can go negative.
+    expect(segmentLabel({ index: 0, from_nm: 0, to_nm: 25,
+      radar_status: 'measured', radar_max_dbz: -2.5 }))
+      .toBe('0–25 NM: radar peak -3 dBZ');
+  });
+});
+
 describe('words', () => {
   it('names a stretch of route by what the radar did there', () => {
     const base: LiveRibbonSegment = { index: 0, from_nm: 0, to_nm: 25 };
@@ -207,6 +236,15 @@ describe('words', () => {
     expect(sigmetText({ id: 'sigmet:LECM|6', label: 'LECM 6: EMBD TS', hazard: 'TS', qualifier: 'EMBD' }))
       .toBe('LECM 6 EMBD TS');
     expect(sigmetText({ id: 'sigmet:LECM|6', label: 'LECM 6: ???' })).toBe('LECM 6 SIGMET');
+  });
+
+  it('drops an empty hazard rather than leaving a stray separator', () => {
+    // Swift `compactMap` keeps "" where the web's `filter(Boolean)` drops it;
+    // both now drop it, so neither emits a double space.
+    expect(sigmetText({ id: 'sigmet:LECM|6', label: 'LECM 6: x', qualifier: 'EMBD', hazard: '' }))
+      .toBe('LECM 6 EMBD');
+    expect(sigmetText({ id: 'sigmet:LECM|6', label: 'LECM 6: x', qualifier: '', hazard: '' }))
+      .toBe('LECM 6 SIGMET');
   });
 
   it('captions the ribbon with the scale it is actually drawn to', () => {
