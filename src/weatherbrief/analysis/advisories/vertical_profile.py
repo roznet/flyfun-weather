@@ -33,6 +33,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 INF = math.inf
 
 # Canonical altitude-bin granularity (ft) for every consumer's cost grid. 500 ft matches
@@ -164,13 +166,39 @@ def floor_reachable_bins(column: list[float], floor_bin: int = 0) -> set[int]:
     return bins
 
 
+def _crossing_matrix(col: np.ndarray) -> np.ndarray:
+    """Summed cost of the bins strictly between every pair of bins in one column.
+
+    ``out[lo, hi]`` (``lo < hi``) is ``col[lo+1] + … + col[hi-1]`` — ``0`` for adjacent
+    bins, ``inf`` if any in-between bin is ``inf`` (costs are ≥ 0, so an ``inf`` term
+    makes the sum ``inf`` with no ``nan``). The matrix is symmetric; the diagonal is
+    unused (staying in a bin is not a crossing).
+
+    Built with ``cumsum`` along rows, which accumulates strictly left to right from
+    ``0.0`` — the same order, and so the same float result bit for bit, as summing the
+    interval in a loop. A prefix-sum difference (``P[hi] - P[lo+1]``) would be O(1)
+    too but rounds differently, which could flip exact-tie decisions in the
+    lexicographic objective. O(B²) per column instead of O(B³) per edge.
+    """
+    nbins = col.shape[0]
+    k = np.arange(nbins)
+    # row lo holds col[k] for k > lo, else 0 (adding 0.0 first is exact).
+    terms = np.where(k[None, :] > k[:, None], col[None, :], 0.0)
+    acc = np.cumsum(terms, axis=1)  # acc[lo, k] = col[lo+1] + … + col[k]
+    upper = np.zeros((nbins, nbins))
+    upper[:, 1:] = acc[:, :-1]      # upper[lo, hi] = col[lo+1] + … + col[hi-1]
+    upper = np.triu(upper, 1)
+    return upper + upper.T
+
+
 def _crossing_cost(col_i: list[float], col_j: list[float], a: int, b: int) -> float:
     """Cost of a transition crossing bins strictly between ``a`` and ``b``.
 
     Conservative column convention (decision 6): ``inf`` if either endpoint column walls
     any strictly-in-between bin, else the ``max`` of the two columns' summed finite
     costs over that interval. Endpoints ``a``/``b`` are node-costed at their own points,
-    so they are excluded here.
+    so they are excluded here. Scalar reference for :func:`_crossing_matrix`, which
+    :func:`solve` uses.
     """
     lo, hi = (a, b) if a < b else (b, a)
     sum_i = 0.0
@@ -187,10 +215,18 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
     """Return the lexicographically-best vertical profile, or a :class:`Blockage`.
 
     ``rate_limit`` is an accepted-but-unused hook (design decision 4). The search is a
-    forward dynamic program over points; with a ~60×40 grid it is effectively free.
+    forward dynamic program over points, vectorised over the ``(from-bin × to-bin)``
+    transition matrix at each step (issue #704: the scalar triple loop cost ~0.2–0.6 s
+    per solve on a 64-point grid and runs per model, per time-scan candidate).
+
+    Equivalence with the scalar formulation is exact, ties included: hazard and
+    deviation are summed in the same order (``(dp + edge) + node``), crossing sums come
+    from :func:`_crossing_matrix`, and among equal ``(hazard, deviation, transitions)``
+    keys the lowest from-bin wins, as the scalar ``a``-ascending strict-``<`` scan did.
+    ``tests/test_vertical_profile.py`` pins this against a copy of the scalar solver.
     """
-    cf = model.cost_field
-    n = len(cf)
+    cf_list = model.cost_field
+    n = len(cf_list)
     if n == 0:
         return Blockage(0.0, 0.0, "no route points")
     nbins = len(model.bin_altitudes_ft)
@@ -199,48 +235,63 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
     start_bins = model.allowed_start_bins if model.allowed_start_bins is not None else set(range(nbins))
     end_bins = model.allowed_end_bins if model.allowed_end_bins is not None else set(range(nbins))
 
-    def dev(b: int) -> float:
-        return abs(alts[b] - preferred_alt_ft)
+    cf = np.asarray(cf_list, dtype=float).reshape(n, nbins)
+    dev = np.abs(np.asarray(alts, dtype=float) - preferred_alt_ft)
+    step = (np.arange(nbins)[:, None] != np.arange(nbins)[None, :]).astype(np.int64)
 
-    # dp[b] = best cost to reach bin b at the current point; parent[i][b] = prev bin.
-    dp: list[_Cost] = [_INF_COST] * nbins
-    parent: list[list[int]] = [[-1] * nbins for _ in range(n)]
+    # dp_* = best cost to reach each bin at the current point (inf hazard = unreachable);
+    # parent[i, b] = previous bin on the best path into (i, b).
+    dp_h = np.full(nbins, INF)
+    dp_t = np.full(nbins, _INF_COST.transitions, dtype=np.int64)
+    dp_d = np.full(nbins, INF)
+    parent = np.full((n, nbins), -1, dtype=np.int64)
 
     for b in range(nbins):
-        if b in start_bins and cf[0][b] != INF:
-            dp[b] = _Cost(cf[0][b], 0, dev(b))
+        if b in start_bins and cf[0, b] != INF:
+            dp_h[b] = cf[0, b]
+            dp_t[b] = 0
+            dp_d[b] = dev[b]
 
     # Track forward reachability for blockage localisation.
-    reachable_upto = 0 if any(c.hazard != INF for c in dp) else -1
+    reachable_upto = 0 if np.any(dp_h != INF) else -1
 
+    cross_prev = _crossing_matrix(cf[0])
     for i in range(1, n):
-        ndp: list[_Cost] = [_INF_COST] * nbins
-        col_prev, col_cur = cf[i - 1], cf[i]
-        for b in range(nbins):
-            if col_cur[b] == INF:
-                continue
-            best = _INF_COST
-            best_a = -1
-            node = _Cost(col_cur[b], 0, dev(b))
-            for a in range(nbins):
-                if dp[a].hazard == INF:
-                    continue
-                if a == b:
-                    edge = _Cost(0.0, 0, 0.0)
-                else:
-                    cc = _crossing_cost(col_prev, col_cur, a, b)
-                    if cc == INF:
-                        continue
-                    edge = _Cost(cc, 1, 0.0)
-                cand = dp[a] + edge + node
-                if cand < best:
-                    best = cand
-                    best_a = a
-            ndp[b] = best
-            parent[i][b] = best_a
-        dp = ndp
-        if any(c.hazard != INF for c in dp):
+        col_cur = cf[i]
+        cross_cur = _crossing_matrix(col_cur)
+        edge_h = np.maximum(cross_prev, cross_cur)
+        np.fill_diagonal(edge_h, 0.0)
+        # cand_*[a, b]: arrive at bin b of point i from bin a of point i-1.
+        valid = (dp_h != INF)[:, None] & (edge_h != INF) & (col_cur != INF)[None, :]
+        with np.errstate(invalid="ignore"):
+            cand_h = np.where(valid, (dp_h[:, None] + edge_h) + col_cur[None, :], INF)
+            cand_d = np.where(valid, (dp_d[:, None] + 0.0) + dev[None, :], INF)
+        cand_t = np.where(valid, dp_t[:, None] + step, _INF_COST.transitions)
+
+        # Lexicographic argmin down each column: hazard → deviation → transitions →
+        # lowest from-bin (argmax returns the first True).
+        tie = cand_h == cand_h.min(axis=0)
+        d_masked = np.where(tie, cand_d, INF)
+        tie &= d_masked == d_masked.min(axis=0)
+        t_masked = np.where(tie, cand_t, np.iinfo(np.int64).max)
+        tie &= t_masked == t_masked.min(axis=0)
+        best_a = np.argmax(tie, axis=0)
+
+        reached = valid.any(axis=0)
+        cols = np.arange(nbins)
+        dp_h = np.where(reached, cand_h[best_a, cols], INF)
+        dp_d = np.where(reached, cand_d[best_a, cols], INF)
+        dp_t = np.where(reached, cand_t[best_a, cols], _INF_COST.transitions)
+        # A reachable-from-nowhere bin keeps parent -1 (only read on a feasible path).
+        parent[i] = np.where(reached, best_a, -1)
+        cross_prev = cross_cur
+        if reached.any():
             reachable_upto = i
+
+    dp = [
+        _Cost(float(h), int(t), float(d)) if h != INF else _INF_COST
+        for h, t, d in zip(dp_h, dp_t, dp_d)
+    ]
 
     # Pick the best feasible end bin.
     best_end = -1
@@ -257,7 +308,7 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
     seq = [0] * n
     seq[n - 1] = best_end
     for i in range(n - 1, 0, -1):
-        seq[i - 1] = parent[i][seq[i]]
+        seq[i - 1] = int(parent[i, seq[i]])
 
     return _to_profile(model, seq, best_cost.hazard)
 
