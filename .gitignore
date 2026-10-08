@@ -77,3 +77,7 @@ deploy/hosts.json
 # shape. Not a deploy artifact — the authoritative config lives in the private
 # infra repo that owns the MySQL compose stack.
 deploy/mysql-baseline.json
+
+# Local scratch exports (icons, storyboards, screenshots) from working
+# sessions. Never part of the repo.
+artifacts/
