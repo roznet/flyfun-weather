@@ -325,6 +325,31 @@ from, and it was not chased further — a home node has gigabytes spare, the
 droplet never runs this, and 0.24 s is the side worth having in a chain #666
 tuned for latency.
 
+**On the node itself the delta is below the noise floor.** Paired on **682
+frames the live `cells-2` loop and a `cells-3` replay both processed** — same
+stamps, and **identical cell counts on all 682**, which is also the check that
+the policy bump changed no detection:
+
+| | analysis p50 | p90 |
+|---|---:|---:|
+| live `cells-2`, 988 cells/frame | 3.81 s | 4.11 s |
+| replay `cells-3`, same frames | 3.77 s | 4.14 s |
+| per-frame delta | **−0.02 s** | p10 −0.15 … p90 +0.36 |
+
+Read that as "it fits inside the existing envelope", **not** as "it is free":
+the replay ran `nice`d on the same cores as the live loop, so both sides are
+load-confounded, and a partial overlap of the same run gave +0.30 s before the
+full set gave −0.02 s. The clean number is the MacBook's interleaved
+idle-machine **+0.44 s**; the mini's value is confirming the cost disappears
+into run-to-run variance at the ~4.5 min frame→droplet budget. Measure a delta
+on an idle machine; use the node only to confirm the envelope.
+
+Catalogue growth is independently confirmed here: 228,881 → 248,724 bytes on a
+paired frame (**+8.7 %**, against the +11 % below) and display +2.6 %.
+`peak_rss_mb` is **not** comparable between the two: it is `ru_maxrss`, a
+process-*lifetime* high-water mark, so a days-old daemon and a fresh replay
+measure different things.
+
 **Size.** The catalogue carries every feature on every assessed core, so it
 grows **+11 %** (median 197 → 219 KB gzipped): ~22 KB a frame, ~6 MB a day,
 ~2.3 GB a year added to the NAS's analysis tree (which keeps catalogues
@@ -385,10 +410,13 @@ evidence, not proof — diurnal orographic convection also fires in the same pla
 on consecutive days — so the report prints, beside each site, whether lightning
 was *ever* seen there and which hours it covers. A clutter site shows neither.
 
-Measured over 144 frames on four dates — 2026-10-03/04 daytime pooled with the
-10-06/07 night: **1.83 % / 2.55 % flagged, 0 of 4,191 corroborated cores lost,
-21 sites on ≥ 2 days carrying 495 of 1,551 flags and not one with a single
-flash** (meteorology-decisions §42 has the table).
+Measured over **825 frames / 489,503 cores** — every frame the mini held,
+three full diurnal cycles (2026-10-05 → 10-07): **1.77 % / 2.43 % flagged,
+0 of 38,692 corroborated cores lost, and of 2,205 flagged sites not one ever
+showed a flash.** 55 % of flagging happens at sites that recur across days;
+the top one is flagged in 621 of 825 frames. meteorology-decisions §42 has the
+table and the honest limit (45 % of flags sit at single-day sites, where
+recurrence cannot corroborate).
 
 The first run of this harness on a day the thresholds had not seen is also what
 caught the sentinel leak below — which is the argument for the gates: a

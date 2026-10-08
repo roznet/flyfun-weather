@@ -5539,6 +5539,41 @@ All three cell ids the issue names come out `confirmed`, on every frame.
   it**: switching would move every intensity word and the §41
   `RADAR_SIGNIFICANT_DBZ` comparison at once. A separate decision.
 
+### Validated on three full days on the node (2026-10-07)
+
+`scripts/clutter_validate.py` over **825 frames / 489,503 assessed cores** —
+every frame the Mac mini held, 2026-10-05 03:05Z → 10-07 23:50Z, three
+complete diurnal cycles replayed under `cells-3` on the node itself:
+
+| | core35 | core41 |
+|---|---:|---:|
+| assessed cores | 290,079 | 199,424 |
+| flagged | **1.77 %** | **2.43 %** |
+| lightning- or top-corroborated | 18,862 | 19,830 |
+| **lost** | **0** | **0** |
+
+**Zero of 38,692 corroborated cores flagged.** The flagged set and the
+corroborated set are *disjoint*: of 2,205 distinct flagged sites, **not one
+ever showed a single flash**. The flag rate is also stable across regimes —
+1.77 / 2.43 % here against 1.83 / 2.55 % on the calibration spans.
+
+Recurrence, which is the positive evidence: 76 sites on all three days carry
+3,000 flags, 220 sites on two days carry 2,499, so **55 % of all flagging
+happens at places that recur across days**. The top site (53.9 N 21.4 E,
+Masuria) is flagged in **621 of 825 frames** — a permanent fixture, never a
+flash. Then a Norwegian fjord at 62 dBZ, two more Polish sites, Serra da
+Estrela at 64 dBZ, a Dutch echo reaching **71.5 dBZ** (impossible in
+precipitation), and a ten-bucket cluster across the Dinaric Alps at
+44.4–45.0 N 16.5–17.4 E — one extended terrain-clutter region split by the
+0.1° grid, every bucket on all three days.
+
+**The honest limit:** 45 % of flags (4,478) are at sites seen on a single day,
+where recurrence cannot corroborate. None carried lightning either, and
+`weather_lost` bounds the harm at zero, but an uncorroborated core is where
+this rule is blind — a genuine isolated shower with no flash and no cloud top
+would look the same. That is the gap a longer corpus closes, not a cleverer
+threshold.
+
 ### Validated on a second, independent span (2026-10-07)
 
 `scripts/clutter_validate.py` over **144 frames / 72,940 assessed cores** on
@@ -5565,19 +5600,20 @@ the map stays unbuilt.
 
 ### Real-world validation needed
 
-- Four dates in one autumn week is still one season. A **winter stratiform
+- Three days in one autumn week is still one season. A **winter stratiform
   day** and a **summer afternoon** remain unseen; `weather_lost` must stay zero
-  and the flag rate should not jump. The mini's 48 h of frames and, from the
-  first `cells-3` deploy, its 90 days of catalogues are the corpus.
+  and the flag rate should not jump. From the first `cells-3` deploy the node's
+  90 days of catalogues become the corpus and the check costs no replay.
 - `onset_db` is the weakest threshold. Because the earlier field is floored at
   `onset_floor_dbz`, a cell genuinely born over empty ground reads as a large
   onset: p99 is ~20 dB on the quiet night but **43 dB** on the convective day.
   It only ever acts behind the isolation gate, but its 20/25 dB steps are tuned
   to the night and should be re-read from a wider corpus.
-- The lightning veto has never had to fire on real data — across four days no
-  flagged core carried lightning, so what is measured is that corroborated
-  cores are not flagged, not that the veto works. The veto itself has unit
-  tests only, as does the cloud-top veto (CTTH is opt-in and was not collected).
+- The lightning veto has **still** never had to fire on real data — across
+  489,503 cores not one flagged core carried lightning, so what is measured is
+  that the two sets are disjoint, not that the veto works. The veto itself has
+  unit tests only, as does the cloud-top veto (CTTH is opt-in and the node does
+  not collect it).
 - A suppressed core still leaves its own bare `rain20` outline, so the ribbon
   can keep a floor-intensity rain band where the storm row went away. Judge it
   on a real replay before adding machinery for it.
