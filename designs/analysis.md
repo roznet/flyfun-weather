@@ -59,7 +59,7 @@ Pint arrays **never leak** beyond the sounding subpackage.
 All MetPy calls live here. Each is split into a **core** function (cheap subset, also used by standalone verification) and an **extended** function (full-briefing fields). `compute_indices()` / `compute_derived_levels()` are convenience wrappers that run core then extended.
 
 **`compute_indices_core(profile) → CoreIndicesResult`** — profile-level values (the `.indices` field is `ThermodynamicIndices`, `.parcel_path` is the captured parcel path for client-side Skew-T CAPE/CIN):
-- Parcel profile, LCL, LFC, EL (via MetPy, handles None for stable profiles)
+- Parcel profile, LCL, LFC, EL (handles None for stable profiles)
 - CAPE/CIN: surface-based, most-unstable, mixed-layer (MU/ML live in **core** — the convective tier needs them everywhere)
 - Lifted index
 - Temperature crossings: freezing level (0°C), -10°C, -20°C (linear interpolation)
@@ -68,6 +68,8 @@ All MetPy calls live here. Each is split into a **core** function (cheap subset,
 - Showalter index, K-index, Total Totals
 - Precipitable water
 - Bulk wind shear: 0-6km and 0-1km
+
+**Parcel kernel (`sounding/parcel.py`, #704).** The parcel values above (LCL, parcel path, LFC, EL, surface/MU/ML CAPE and CIN, lifted index) and the Showalter index go through a unit-free port of MetPy 1.7's parcel chain, not MetPy itself: same branch structure (LFC `which='top'` for the reported LFC, `'bottom'` inside CAPE, LCL inserted for MU/ML, zero crossings appended, the same `isclose` tolerances), MetPy's own `lcl._nounit`, and MetPy's moist-adiabat integrand on fixed-step RK4 in ln p instead of LSODA. ~10x faster per profile (the cost was pint, decorators and `solve_ivp`, not arithmetic). The seam is two backends with one API in `thermodynamics.py`: `_KernelParcel` (default) tries the kernel per value and falls back to MetPy for that value if the kernel raises; `_MetPyParcel` is the reference and is selected by `WB_SOUNDING_KERNEL=metpy` (exactly the pre-#704 output, no deploy). Parity contract and why: [meteorology-decisions §43](./meteorology-decisions.md); pinned by `tests/test_parcel_kernel.py`. **Gotcha:** a MetPy upgrade can move the reference — rerun the parity tests and, if MetPy changed an algorithm, port the change. K-index, Total Totals, PW and bulk shear stay on MetPy (cheap, not parcel-based).
 
 Ceiling (`sounding_ceiling_ft` — lowest BKN/OVC cloud layer, LCL as floor when cloud starts at first level — and `nwp_ceiling_ft` from NWP diagnostics) is set in `analyze_sounding_lite`, not in these functions.
 
@@ -79,7 +81,7 @@ Ceiling (`sounding_ceiling_ft` — lowest BKN/OVC cloud layer, LCL as floor when
 - Omega (Pa/s) raw — read by the convective loaded-gun trigger before extended runs
 
 **`compute_derived_levels_extended(profile, levels)`** — mutates levels in place, adds MetPy-derived:
-- Wet-bulb temperature (`mpcalc.wet_bulb_temperature`)
+- Wet-bulb temperature (`wet_bulb.py`: vectorised RK4 on MetPy's integrand, MetPy fallback)
 - Theta-E (`mpcalc.equivalent_potential_temperature`)
 - Relative humidity (from `mpcalc.relative_humidity_from_dewpoint`)
 - Vertical velocity w (ft/min) from omega

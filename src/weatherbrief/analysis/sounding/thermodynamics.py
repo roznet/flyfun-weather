@@ -7,11 +7,14 @@ ThermodynamicIndices + list[DerivedLevel] with plain-number values.
 from __future__ import annotations
 
 import logging
+import os
 from typing import NamedTuple
 
 import metpy.calc as mpcalc
 import numpy as np
+from metpy.units import units
 
+from weatherbrief.analysis.sounding import parcel
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 from weatherbrief.analysis.sounding.wet_bulb import wet_bulb_degc
 from weatherbrief.models import DerivedLevel, ParcelPathPoint, ThermodynamicIndices
@@ -87,6 +90,135 @@ class CoreIndicesResult(NamedTuple):
     parcel_path: list[ParcelPathPoint]
 
 
+class _MetPyParcel:
+    """The parcel computations through MetPy (the reference implementation).
+
+    Every method takes and returns plain numbers (hPa, kelvin, J/kg); the
+    profile's own pint arrays are passed to MetPy unchanged, so with
+    ``WB_SOUNDING_KERNEL=metpy`` the results are exactly the pre-#704 ones.
+    """
+
+    def __init__(self, profile: PreparedProfile) -> None:
+        self.p = profile.pressure
+        self.t = profile.temperature
+        self.td = profile.dewpoint
+
+    def lcl_hpa(self) -> float:
+        lcl_p, _ = mpcalc.lcl(self.p[0], self.t[0], self.td[0])
+        return _mag(lcl_p.to("hPa"))
+
+    def parcel_k(self) -> np.ndarray:
+        return mpcalc.parcel_profile(self.p, self.t[0], self.td[0]).to("kelvin").magnitude
+
+    def lfc_hpa(self, parcel_k: np.ndarray) -> float | None:
+        lfc_p, _ = mpcalc.lfc(
+            self.p, self.t, self.td, parcel_temperature_profile=parcel_k * units.kelvin,
+        )
+        return None if lfc_p is None else _mag(lfc_p.to("hPa"))
+
+    def el_hpa(self, parcel_k: np.ndarray) -> float | None:
+        el_p, _ = mpcalc.el(
+            self.p, self.t, self.td, parcel_temperature_profile=parcel_k * units.kelvin,
+        )
+        return None if el_p is None else _mag(el_p.to("hPa"))
+
+    def cape_cin(self, parcel_k: np.ndarray) -> tuple[float, float]:
+        cape, cin = mpcalc.cape_cin(self.p, self.t, self.td, parcel_k * units.kelvin)
+        return _mag(cape.to("J/kg")), _mag(cin.to("J/kg"))
+
+    def mu_cape(self) -> float:
+        cape, _ = mpcalc.most_unstable_cape_cin(self.p, self.t, self.td)
+        return _mag(cape.to("J/kg"))
+
+    def ml_cape(self) -> float:
+        cape, _ = mpcalc.mixed_layer_cape_cin(self.p, self.t, self.td)
+        return _mag(cape.to("J/kg"))
+
+    def lifted_index(self, parcel_k: np.ndarray) -> float:
+        li = mpcalc.lifted_index(self.p, self.t, parcel_k * units.kelvin)
+        return _mag(li.to("delta_degC"))
+
+    def showalter(self) -> float:
+        return _mag(mpcalc.showalter_index(self.p, self.t, self.td).to("delta_degC"))
+
+
+class _KernelParcel:
+    """The same computations through the unit-free kernel (``parcel.py``).
+
+    Any kernel exception falls back to MetPy for that one value, so a kernel
+    gap can never turn a value MetPy would produce into ``None``; when MetPy
+    raises too, the caller's ``try`` reports ``None`` as before.
+    """
+
+    def __init__(self, profile: PreparedProfile) -> None:
+        self._metpy = _MetPyParcel(profile)
+        self.p = profile.pressure.to("hPa").magnitude.astype(float)
+        self.t = profile.temperature.to("kelvin").magnitude.astype(float)
+        self.td = profile.dewpoint.to("kelvin").magnitude.astype(float)
+
+    def _try(self, name: str, kernel_call, *args):
+        try:
+            return kernel_call()
+        except Exception:
+            logger.debug("Parcel kernel %s failed, using MetPy", name, exc_info=True)
+            return getattr(self._metpy, name)(*args)
+
+    def lcl_hpa(self) -> float:
+        return self._try("lcl_hpa", lambda: parcel._lcl(self.p[0], self.t[0], self.td[0])[0])
+
+    def parcel_k(self) -> np.ndarray:
+        return self._try(
+            "parcel_k", lambda: parcel.parcel_profile(self.p, self.t[0], self.td[0]),
+        )
+
+    def lfc_hpa(self, parcel_k: np.ndarray) -> float | None:
+        return self._try(
+            "lfc_hpa", lambda: parcel.lfc(self.p, self.t, self.td, parcel_k), parcel_k,
+        )
+
+    def el_hpa(self, parcel_k: np.ndarray) -> float | None:
+        return self._try(
+            "el_hpa", lambda: parcel.el(self.p, self.t, self.td, parcel_k), parcel_k,
+        )
+
+    def cape_cin(self, parcel_k: np.ndarray) -> tuple[float, float]:
+        return self._try(
+            "cape_cin", lambda: parcel.cape_cin(self.p, self.t, self.td, parcel_k), parcel_k,
+        )
+
+    def mu_cape(self) -> float:
+        return self._try(
+            "mu_cape", lambda: parcel.most_unstable_cape_cin(self.p, self.t, self.td)[0],
+        )
+
+    def ml_cape(self) -> float:
+        return self._try(
+            "ml_cape", lambda: parcel.mixed_layer_cape_cin(self.p, self.t, self.td)[0],
+        )
+
+    def lifted_index(self, parcel_k: np.ndarray) -> float:
+        return self._try(
+            "lifted_index", lambda: parcel.lifted_index(self.p, self.t, parcel_k), parcel_k,
+        )
+
+    def showalter(self) -> float:
+        return self._try("showalter", lambda: parcel.showalter_index(self.p, self.t, self.td))
+
+
+def _parcel_backend(profile: PreparedProfile) -> _MetPyParcel | _KernelParcel:
+    """Kernel by default; ``WB_SOUNDING_KERNEL=metpy`` restores pure MetPy (#704)."""
+    if os.environ.get("WB_SOUNDING_KERNEL", "").strip().lower() == "metpy":
+        return _MetPyParcel(profile)
+    return _KernelParcel(profile)
+
+
+def _round_level(value: float | None) -> float | None:
+    """Round a level pressure to 0.1 hPa; ``None`` for a missing (NaN) level."""
+    if value is None or np.isnan(value):
+        return None
+    return round(value, 1)
+
+
 def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     """Compute core thermodynamic indices needed for ceiling and convective risk.
 
@@ -98,51 +230,48 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     (captured for client-side Skew-T CAPE/CIN rendering).
     """
     idx = ThermodynamicIndices()
-    p = profile.pressure
-    t = profile.temperature
-    td = profile.dewpoint
+    calc = _parcel_backend(profile)
 
     # --- LCL ---
     try:
-        lcl_p, lcl_t = mpcalc.lcl(p[0], t[0], td[0])
-        idx.lcl_pressure_hpa = round(_mag(lcl_p.to("hPa")), 1)
+        idx.lcl_pressure_hpa = round(calc.lcl_hpa(), 1)
         idx.lcl_altitude_ft = round(_pressure_to_altitude_ft(idx.lcl_pressure_hpa))
     except Exception:
         logger.debug("LCL computation failed", exc_info=True)
 
     # --- Parcel profile (needed for LFC, EL, CAPE/CIN) ---
     try:
-        parcel = mpcalc.parcel_profile(p, t[0], td[0])
+        parcel_k = calc.parcel_k()
     except Exception:
         logger.debug("Parcel profile computation failed", exc_info=True)
-        parcel = None
+        parcel_k = None
 
     # --- LFC ---
-    if parcel is not None:
+    if parcel_k is not None:
         try:
-            lfc_p, lfc_t = mpcalc.lfc(p, t, td, parcel_temperature_profile=parcel)
-            if lfc_p is not None and not np.isnan(_mag(lfc_p)):
-                idx.lfc_pressure_hpa = round(_mag(lfc_p.to("hPa")), 1)
-                idx.lfc_altitude_ft = round(_pressure_to_altitude_ft(idx.lfc_pressure_hpa))
+            lfc_hpa = _round_level(calc.lfc_hpa(parcel_k))
+            if lfc_hpa is not None:
+                idx.lfc_pressure_hpa = lfc_hpa
+                idx.lfc_altitude_ft = round(_pressure_to_altitude_ft(lfc_hpa))
         except Exception:
             logger.debug("LFC computation failed", exc_info=True)
 
     # --- EL ---
-    if parcel is not None:
+    if parcel_k is not None:
         try:
-            el_p, el_t = mpcalc.el(p, t, td, parcel_temperature_profile=parcel)
-            if el_p is not None and not np.isnan(_mag(el_p)):
-                idx.el_pressure_hpa = round(_mag(el_p.to("hPa")), 1)
-                idx.el_altitude_ft = round(_pressure_to_altitude_ft(idx.el_pressure_hpa))
+            el_hpa = _round_level(calc.el_hpa(parcel_k))
+            if el_hpa is not None:
+                idx.el_pressure_hpa = el_hpa
+                idx.el_altitude_ft = round(_pressure_to_altitude_ft(el_hpa))
         except Exception:
             logger.debug("EL computation failed", exc_info=True)
 
     # --- CAPE / CIN (surface-based) ---
-    if parcel is not None:
+    if parcel_k is not None:
         try:
-            cape, cin = mpcalc.cape_cin(p, t, td, parcel)
-            idx.cape_surface_jkg = round(_mag(cape.to("J/kg")), 1)
-            idx.cin_surface_jkg = round(_mag(cin.to("J/kg")), 1)
+            cape, cin = calc.cape_cin(parcel_k)
+            idx.cape_surface_jkg = round(cape, 1)
+            idx.cin_surface_jkg = round(cin, 1)
         except Exception:
             logger.debug("Surface CAPE/CIN failed", exc_info=True)
 
@@ -151,23 +280,20 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     # flags elevated instability from MU-CAPE, so both must be available wherever
     # convective risk is assessed (briefing and standalone verification alike).
     try:
-        mu_cape, _ = mpcalc.most_unstable_cape_cin(p, t, td)
-        idx.cape_most_unstable_jkg = round(_mag(mu_cape.to("J/kg")), 1)
+        idx.cape_most_unstable_jkg = round(calc.mu_cape(), 1)
     except Exception:
         logger.debug("MU CAPE failed", exc_info=True)
 
     # --- Mixed-layer CAPE (realizable, well-mixed boundary layer) ---
     try:
-        ml_cape, _ = mpcalc.mixed_layer_cape_cin(p, t, td)
-        idx.cape_mixed_layer_jkg = round(_mag(ml_cape.to("J/kg")), 1)
+        idx.cape_mixed_layer_jkg = round(calc.ml_cape(), 1)
     except Exception:
         logger.debug("ML CAPE failed", exc_info=True)
 
     # --- Lifted index ---
-    if parcel is not None:
+    if parcel_k is not None:
         try:
-            li = mpcalc.lifted_index(p, t, parcel)
-            idx.lifted_index = round(_mag(li.to("delta_degC")), 1)
+            idx.lifted_index = round(calc.lifted_index(parcel_k), 1)
         except Exception:
             logger.debug("Lifted index failed", exc_info=True)
 
@@ -178,12 +304,10 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
 
     # --- Capture parcel path for client-side CAPE/CIN rendering ---
     parcel_path: list[ParcelPathPoint] = []
-    if parcel is not None:
+    if parcel_k is not None:
         try:
-            pressures = p.magnitude if hasattr(p, "magnitude") else np.array(p)
-            # MetPy parcel_profile returns Kelvin — convert to °C
-            temps_c = parcel.to("degC").magnitude if hasattr(parcel, "to") else np.array(parcel) - 273.15
-            for p_val, t_val in zip(pressures, temps_c):
+            pressures = profile.pressure.to("hPa").magnitude
+            for p_val, t_val in zip(pressures, parcel_k - 273.15):
                 if not np.isnan(t_val):
                     parcel_path.append(
                         ParcelPathPoint(
@@ -215,8 +339,7 @@ def compute_indices_extended(
 
     # --- Showalter index ---
     try:
-        si = mpcalc.showalter_index(p, t, td)
-        idx.showalter_index = round(_mag(si.to("delta_degC")), 1)
+        idx.showalter_index = round(_parcel_backend(profile).showalter(), 1)
     except Exception:
         logger.debug("Showalter index failed", exc_info=True)
 

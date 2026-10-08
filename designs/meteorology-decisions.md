@@ -5617,3 +5617,70 @@ the map stays unbuilt.
 - A suppressed core still leaves its own bare `rain20` outline, so the ribbon
   can keep a floor-intensity rain band where the storm row went away. Judge it
   on a real replay before adding machinery for it.
+
+## 43. Parcel thermodynamics run on a MetPy port, held to an agreed parity with MetPy (#704)
+
+**Date:** 2026-10-08. **Issue:** #704 (item 2). **Status:** live by default;
+`WB_SOUNDING_KERNEL=metpy` restores pure MetPy without a deploy.
+
+### Context
+
+The parcel values every convective and ceiling decision reads (LCL, parcel
+path, LFC, EL, surface / MU / ML CAPE and CIN, lifted index, Showalter) came
+from MetPy at ~19 ms per profile, and almost none of it was arithmetic: pint,
+MetPy's argument decorators and an LSODA ODE solve per ascent on 20-28-level
+profiles. At ~320 profiles a briefing, up to 7,680 per time scan and ~56K per
+standalone cycle, this was the largest CPU consumer in the system.
+
+### The decision
+
+`analysis/sounding/parcel.py` is a **port** of MetPy 1.7's parcel chain, not a
+new method: same LFC/EL selection (`which='top'` for the reported LFC and EL,
+`'bottom'` LFC inside CAPE, as MetPy's defaults), LCL inserted for the MU and
+ML parcels, zero crossings appended before the trapezoid, virtual-temperature
+correction, MU over the lowest 300 hPa by max θe, ML over the lowest 100 hPa,
+the same `isclose` tolerances. Two pieces are MetPy's own code: the LCL
+(`lcl._nounit`, Romps 2017) and the moist-adiabat integrand. Only the
+integrator changes: fixed-step RK4 in ln p (≤ 0.05 per step) instead of
+LSODA, the move `wet_bulb.py` already made.
+
+So this changes **how** MU/ML/SB CAPE are computed, not **which** quantities
+the convective tier reads — §4's realizable-CAPE and regime choices and §18's grade stand untouched.
+
+**Agreed parity (owner, 2026-10-08):** against MetPy on the same profile,
+CAPE/CIN within max(1 %, 5 J/kg); LCL/LFC/EL within 2 hPa; lifted index and
+Showalter within 0.2 °C; parcel path within 0.1 °C at every level; presence
+agrees (a value MetPy leaves missing is missing here and vice versa). Plus a
+pack replay with unchanged advisory grades.
+
+**Measured:** 5,886 real soundings from every local pack (Europe and US,
+February to October, ECMWF/ICON/GFS/…): zero tolerance failures, presence
+identical. Worst cases: CAPE 0.025 J/kg on 6,054 J/kg, LFC 0.018 hPa, EL
+0.012 hPa, LI/Showalter 4e-5 °C, parcel path 1e-4 K. The tolerances are
+therefore ~200x wider than the observed error; a breach means the logic
+diverged, not the integrator. Speed: 19.0 → 1.2 ms per profile (~15x).
+
+### Safety rails
+
+- **Per-value fallback:** if the kernel raises for one value, that value is
+  computed by MetPy, so a kernel gap can never turn a MetPy number into
+  `None`.
+- **Switch:** `WB_SOUNDING_KERNEL=metpy` is byte-for-byte the pre-#704 path.
+- **Pinned:** `tests/test_parcel_kernel.py` checks the tolerances on 160
+  seeded random soundings plus named edge cases (no LFC, EL above the top,
+  saturated surface, superadiabatic surface, elevated instability, high
+  terrain without an 850 hPa parcel, a profile stopping below 500 hPa).
+
+### Rejected
+
+- **numba `@njit`:** closest to the issue's 100x estimate, but adds
+  numba/llvmlite to the image and a JIT warm-up per worker process; the
+  numpy/float port already removes the dominant cost.
+- **Dropping the duplicate LFC/EL calls:** the reported LFC (`'top'`) and the
+  CAPE integration's LFC (`'bottom'`) are different quantities, not a
+  duplicate; only the EL repeats, and with the kernel it costs microseconds.
+
+### Revisit when
+
+- MetPy is upgraded: rerun `tests/test_parcel_kernel.py`; if MetPy changed an
+  algorithm (it is the reference), port the change.
