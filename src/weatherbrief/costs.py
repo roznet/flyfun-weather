@@ -185,11 +185,18 @@ def compute_cost(
 # a fraction of a cent. A model must be priced here before anything bills it.
 MODEL_TOKEN_RATES_PER_1K: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (0.001, 0.005),
-    # The short-prompt rate (prompts <= 100k tokens; longer ones bill
-    # $0.50/$2.50 per MTok). Applied flat with no size check: the only caller,
-    # the live highlight, sends ~1.7k tokens (#715). Add a tier before using
-    # this model for long prompts.
+    # Prompts of 100k input tokens or fewer; longer ones take the tier in
+    # MODEL_LONG_PROMPT_RATES_PER_1K (#715).
     "claude-haiku-5-5": (0.0001, 0.0005),
+}
+
+# Models whose whole call bills at a higher rate once the prompt exceeds a
+# size: ``{family: (input-token threshold, (input, output) USD per 1k)}``.
+# Priced from the call's own ``input_tokens`` (cache reads and writes are
+# subsets of it), so a long-prompt caller is never billed at the short rate
+# silently (review on PR #716).
+MODEL_LONG_PROMPT_RATES_PER_1K: dict[str, tuple[int, tuple[float, float]]] = {
+    "claude-haiku-5-5": (100_000, (0.0005, 0.0025)),
 }
 
 
@@ -227,6 +234,10 @@ def compute_call_cost(
     ``compute_cost``.
     """
     in_rate, out_rate = token_rates_for(model)
+    name = model.split(":", 1)[-1]
+    for family, (threshold, rates) in MODEL_LONG_PROMPT_RATES_PER_1K.items():
+        if (name == family or name.startswith(family + "-")) and input_tokens > threshold:
+            in_rate, out_rate = rates
     cached = min(cache_read_tokens + cache_write_tokens, input_tokens)
     cost = (
         ((input_tokens - cached) / 1000) * in_rate

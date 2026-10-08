@@ -632,9 +632,11 @@ Corrected highlight: …", and once "at the times in the facts").
    LIFR onto LEMI passes rules 1 and 2 and fails here. Conditions are matched
    through a surface-form map, so the facts' `TSRA` supports the model's
    "thunderstorm".
-4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`); "watch" and
-   "monitor" too (#715: Haiku 5.5 writes "Watch LFAC…" even when the prompt
-   names the word; dropping the ban would halve the rejections).
+4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`). "watch" and
+   "monitor" are rejected too, under their own reason `advice word` (#715:
+   Haiku 5.5 writes "Watch LFAC…" even when the prompt names the word;
+   dropping the ban would halve the rejections; the distinct reason keeps a
+   noun false reject such as "convective watch" visible in the log).
 5. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell".
 
 Gotcha that cost a test: `\b[A-Z]{4}\b` matches `LIFR` and `TSRA` as if they

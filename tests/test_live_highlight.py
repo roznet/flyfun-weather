@@ -301,7 +301,7 @@ def test_watch_and_monitor_are_advice(text):
         "notable": [{"icao": "LFAC", "role": "route", "where": "130 NM along, 19 NM left of track",
                      "metar_now": "MVFR at 11:00Z"}], "other_airports_ahead_all_VFR": 3})
     reason = lh.check_grounding(text, f)
-    assert reason is not None and "verdict" in reason
+    assert reason is not None and reason.startswith("advice word")
 
 
 # --- Facts ------------------------------------------------------------------
@@ -722,6 +722,17 @@ def test_haiku_5_5_is_priced():
     assert lh.DEFAULT_MODEL == "claude-haiku-5-5"
     cost = compute_call_cost("claude-haiku-5-5", input_tokens=1750, output_tokens=85)
     assert cost == pytest.approx(0.0002175, abs=1e-6)
+
+
+def test_haiku_5_5_long_prompts_take_the_higher_tier():
+    """Above 100k input tokens the whole call bills at $0.50/$2.50 per MTok;
+    the flat short rate would under-bill it silently (review on PR #716)."""
+    from weatherbrief.costs import compute_call_cost
+
+    assert compute_call_cost("claude-haiku-5-5", input_tokens=100_000, output_tokens=1000) == pytest.approx(0.0105)
+    assert compute_call_cost("claude-haiku-5-5", input_tokens=100_001, output_tokens=1000) == pytest.approx(0.0525, abs=1e-5)
+    # Other models are untouched by the tier table.
+    assert compute_call_cost("claude-haiku-4-5", input_tokens=200_000, output_tokens=0) == pytest.approx(0.2)
 
 
 def test_call_cost_prices_a_real_usage_block():

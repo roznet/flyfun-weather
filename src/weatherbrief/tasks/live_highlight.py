@@ -658,10 +658,13 @@ def gate_changes(previous: dict, current: dict) -> list[str]:
 VERDICT_WORDS = frozenset(
     "safe unsafe safely dangerous hazardous go no-go nogo avoid divert diverting "
     "recommend recommended should must advise advisable unflyable "
-    "caution careful suggest suggested consider "
-    # #715: Haiku 5.5 wrote "Watch LFAC…" on 19 of 311 A/B lines — advice.
-    "watch watching monitor monitoring".split()
+    "caution careful suggest suggested consider".split()
 )
+#: Advice rather than a verdict, kept apart so the review log can tell them
+#: from go/no-go words: Haiku 5.5 wrote "Watch LFAC…" on 19 of 311 A/B lines
+#: (#715), and a bare-word ban also rejects a noun ("convective watch"), which
+#: only a distinct reason makes visible (review on PR #716).
+ADVICE_WORDS = frozenset("watch watching monitor monitoring".split())
 
 #: Conditions an *airport* can be in, each with the surface forms the facts and
 #: the model may use for it. Used only to bind a condition to the place the
@@ -862,6 +865,9 @@ def check_grounding(text: str, f: dict) -> str | None:
     verdict = sorted(said & VERDICT_WORDS)
     if verdict:
         return f"verdict word: {', '.join(verdict)}"
+    advice = sorted(said & ADVICE_WORDS)
+    if advice:
+        return f"advice word: {', '.join(advice)}"
 
     if asserted & AIRPORT_CONDITIONS["thunderstorm"]:
         # Two sources can license the word, and they license different claims
