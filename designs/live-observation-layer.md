@@ -650,6 +650,8 @@ than reject a right one, and the review log is the backstop:
   negation.
 - An aerodrome that only **anchors a distance** ("85–125 NM from EGBJ",
   "10 NM past LFMD") is not bound to the clause's weather (#715 false positive).
+  Only from/past/beyond: "IFR 20 NM before LFMD" may place IFR on LFMD, so
+  `before`/`after`/`of` still bind (review on PR #716).
 - A **stated absence** ("no lightning", "without thunderstorms") does not count
   as saying thunderstorm (#715: Haiku 5.5 writes "(no lightning)" after cells;
   7 of 9 thunderstorm rejections on the A/B). "Low IFR" binds as LIFR.
@@ -745,8 +747,10 @@ positive above.
   (which is also how the test suite runs the whole tick without calling
   anything — `conftest` deletes the key so a developer's shell cannot bill the
   suite).
-- **Cost** ~$0.00024 per call on Haiku 5.5 (~$0.0016 on 4.5) through the shared ledger (`action=live_highlight`,
-  priced by `compute_call_cost`, never the per-briefing `compute_cost`). Charged
+- **Cost** ~$0.00024 per call on Haiku 5.5 (~$0.0016 on 4.5), through the
+  shared ledger (`action=live_highlight`, priced by `compute_call_cost`, never
+  the per-briefing `compute_cost`). A `max_tokens` stop is rejected as
+  `truncated`, not graded. Charged
   on the tick's own thread: a `Session` is not thread-safe, so
   `ensure_highlight` returns the usage and the caller charges it.
 - Prompt, facts block and check live in `tasks/live_highlight.py` — the code

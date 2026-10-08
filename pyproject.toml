@@ -33,6 +33,10 @@ dependencies = [
     # ephemeral_{5m,1h}_input_tokens. digest/llm_digest.py handles both,
     # but the floor keeps a fresh dev venv on the shape prod actually runs.
     "langchain-anthropic>=1.5",
+    # Direct SDK use (live highlight): >=1.11 for `thinking`/`output_config`
+    # on messages.create and `stop_details` on Message (#715). An older SDK
+    # fails every call with a TypeError the tick logs as an API failure.
+    "anthropic>=1.11",
     "langchain-openai>=0.3",
     "python-dotenv>=1.0",
     "weasyprint>=62.0",

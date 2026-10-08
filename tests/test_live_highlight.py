@@ -264,6 +264,23 @@ def test_an_airport_anchoring_a_distance_is_not_bound():
 
 
 @pytest.mark.parametrize("text", [
+    "IFR 20 NM before LFMD.",
+    "Fog 10 NM of LFMD.",
+    "Showers 5 NM after LFMD.",
+])
+def test_before_after_and_of_still_bind_the_airport(text):
+    """Review on PR #716: only from/past/beyond mark a distance anchor. With
+    before/after/of the airport can be the subject, and LFMD is VFR here."""
+    f = _facts_with(destination={"icao": "LFMD", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
+                    rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[5, 20]]})
+    reason = lh.check_grounding(text, f)
+    assert reason is not None and "LFMD not given as" in reason
+    # The same claim anchored with "from" is a position, not LFMD's weather.
+    anchored = text.replace(" before ", " from ").replace(" of ", " from ").replace(" after ", " from ")
+    assert lh.check_grounding(anchored, f) is None
+
+
+@pytest.mark.parametrize("text", [
     "Quiet route ahead.\n\nWait, that contains a banned word. Corrected highlight: Quiet route ahead.",
     "Quiet route ahead. Corrected to avoid the banned word.",
     "Arrived, so the facts describe nothing ahead.",
@@ -1085,3 +1102,12 @@ def test_a_refusal_is_a_billed_rejection_under_the_retry_cap(monkeypatch, tmp_pa
     assert [r["outcome"] for r in records] == ["rejected", "rejected", "skipped_rejected"]
     assert records[0]["reason"] == "refusal (general_harms)" and records[0]["cost_usd"] > 0
     assert layer.glance.highlight is None
+
+
+def test_a_reply_cut_at_max_tokens_is_rejected_as_truncated(monkeypatch, tmp_path):
+    """Unfinished text is not graded: it gets its own reason in the log."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: _Client(_Resp(text="Quiet route", stop_reason="max_tokens")))
+    out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
+    assert out.outcome == "rejected" and out.reason.startswith("truncated")
