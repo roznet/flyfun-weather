@@ -63,12 +63,34 @@ After a run, load the results JSON and compare old vs new assessments. Key metri
 - **Distribution**: GREEN/AMBER/RED balance (watch for AMBER over-cautiousness)
 - **Direction**: `v` = downgraded (e.g. AMBER→GREEN), `^` = upgraded (e.g. GREEN→AMBER)
 
+### 6. Model / prompt A/B on recent prod briefings (#717)
+
+The labelled corpus is small and ages; a candidate model or prompt also needs
+checking against what pilots see today. Each recent prod pack stores the
+byte-faithful `digest_context.txt` AND the digest prod showed, so only the
+candidate needs running:
+
+```bash
+# on the droplet (see the script docstring for the scp/docker cp recipe)
+python export_digest_replay.py --thumbs-since <current prompt's go-live date> --last-hours 24
+# locally
+python scripts/replay_prod_digests.py <export_dir> --config <candidate> --output replay.json
+```
+
+Valid only while the stored digests were written by the prompt/model you compare
+against — keep `--thumbs-since` at or after the current briefer prompt's
+go-live. Both runners print cost (USD), tokens and timing per call and in a
+summary; `--reconstruct-missing` lets `run_digest_eval.py` rebuild contexts for
+old packs (tagged `reconstructed`, no advisories when the pack kept none —
+report them apart). `sonnet46` is the pre-#717 production config for baselines.
+
 ## Key files
 
 | File | Purpose |
 |------|---------|
 | `scripts/extract_digest_eval.py` | Extracts fixtures from `data/packs/` |
 | `scripts/run_digest_eval.py` | Replays fixtures through LLM |
+| `scripts/export_digest_replay.py` / `scripts/replay_prod_digests.py` | Prod-pack A/B export (droplet) / replay (local) |
 | `tests/eval_data/digests/` | Fixture directory (context.txt + digest.json + meta.json per fixture) |
 | `configs/weather_digest/prompts/briefer_v2.md` | Current system prompt (v1 kept for rollback/diff) |
 | `src/weatherbrief/digest/prompt_builder.py` | Context string assembly |

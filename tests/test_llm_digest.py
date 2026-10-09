@@ -509,7 +509,9 @@ class TestDigestModelLabelling:
             return outputs.run_llm_digest(MagicMock(), MagicMock()).llm_model
 
     def test_short_range_labels_the_main_model(self):
-        assert self._label(longrange=False) == "anthropic:claude-sonnet-4-6"
+        from weatherbrief.digest.llm_config import load_digest_config
+        llm = load_digest_config().llm
+        assert self._label(longrange=False) == f"{llm.provider}:{llm.model}"
 
     def test_long_range_labels_the_longrange_model(self):
         label = self._label(longrange=True)

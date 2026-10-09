@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "name": "sonnet46",
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "temperature": 0.0
+  },
+  "prompts": {
+    "briefer": "prompts/briefer_v3.md"
+  },
+  "cache_locales": [
+    "en"
+  ]
+}

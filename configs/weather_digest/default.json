@@ -3,11 +3,19 @@
   "name": "default",
   "llm": {
     "provider": "anthropic",
-    "model": "claude-sonnet-4-6",
-    "temperature": 0.0
+    "model": "claude-sonnet-5-5",
+    "temperature": null,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "effort": "low",
+    "structured_output": "json_schema",
+    "max_tokens": 16000
   },
   "prompts": {
-    "briefer": "prompts/briefer_v3.md"
+    "briefer": "prompts/briefer_v4.md"
   },
-  "cache_locales": ["en"]
+  "cache_locales": [
+    "en"
+  ]
 }

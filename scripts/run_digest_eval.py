@@ -52,7 +52,11 @@ from dotenv import load_dotenv
 # Load .env from project root (works regardless of cwd)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from weatherbrief.digest.llm_config import DigestConfig, create_llm, load_digest_config
+from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
+from weatherbrief.costs import compute_call_cost
+from weatherbrief.digest.llm_config import (
+    DigestConfig, create_llm, load_digest_config, with_structured,
+)
 from weatherbrief.digest.llm_digest import (
     WeatherDigest,
     _system_content,
@@ -86,13 +90,41 @@ def collect(areas: list[str]) -> list[CorpusPack]:
     return sorted(packs, key=lambda p: (p.meta.days_out, p.corpus_id))
 
 
-def partition(packs: list[CorpusPack]) -> tuple[list[CorpusPack], Counter]:
+def load_context(pack: CorpusPack) -> tuple[str, str]:
+    """``(context, source)``: the persisted LLM input, else a reconstruction.
+
+    ``source`` is ``"persisted"`` (byte-faithful) or ``"reconstructed"`` —
+    rebuilt by today's prompt builder from the pack, so it can differ from what
+    the model saw at labelling time (and has no advisories when the pack kept
+    no ``route_advisories.json``). Report the two apart.
+    """
+    cp = context_path(pack)
+    if cp.exists():
+        # Saved before #717 spelled the runway wind out for the LLM; decode the
+        # arrows the way the prompt builder now does (no-op on newer contexts).
+        return spell_out_runway_wind(cp.read_text()), "persisted"
+    from weatherbrief.eval_workbench.ingest import load_pack_context
+    from weatherbrief.eval_workbench.situations import load_snapshot_from_pack
+    from weatherbrief.models import RouteAdvisoriesManifest
+
+    pack_dir = pack_path(pack.corpus_id, pack.area)
+    snapshot = load_snapshot_from_pack(pack_dir)
+    adv_path = pack_dir / "route_advisories.json"
+    advisories = (RouteAdvisoriesManifest.model_validate(json.loads(adv_path.read_text()))
+                  if adv_path.exists() else None)
+    context, _, source = load_pack_context(pack_dir, snapshot, advisories)
+    return context, source
+
+
+def partition(
+    packs: list[CorpusPack], *, reconstruct: bool = False,
+) -> tuple[list[CorpusPack], Counter]:
     """Split into runnable packs and a tally of why the rest were excluded."""
     runnable, excluded = [], Counter()
     for p in packs:
         if is_long_range(p):
             excluded["long-range (d>7) — outlook scale, not GREEN/AMBER/RED"] += 1
-        elif not context_path(p).exists():
+        elif not reconstruct and not context_path(p).exists():
             excluded["no digest_context.txt (re-pull with pull_eval_corpus.py)"] += 1
         elif not p.is_labeled:
             excluded["no golden label"] += 1
@@ -144,7 +176,7 @@ def run_one(
     tail to keep outside the breakpoint the way production has.
     """
     llm = create_llm(config)
-    structured_llm = llm.with_structured_output(WeatherDigest, include_raw=True)
+    structured_llm = with_structured(llm, WeatherDigest, config.llm, include_raw=True)
 
     system_content = (
         cached_system_content(system_prompt, config)
@@ -167,6 +199,15 @@ def run_one(
             info["output_tokens"] = usage.get("output_tokens", 0)
             details = usage.get("input_token_details") or {}
             info["cache_read"] = details.get("cache_read") or 0
+            info["cache_write"] = details.get("cache_creation") or 0
+            # Cache writes here are the 5m tier (``cached_system_content``).
+            info["cost_usd"] = compute_call_cost(
+                config.llm.model, info["input_tokens"], info["output_tokens"],
+                info["cache_read"], info["cache_write"], cache_ttl="5m",
+            )
+        info["stop_reason"] = (raw_msg.response_metadata or {}).get("stop_reason")
+    # Visible output size, separate from output_tokens (which include thinking).
+    info["output_chars"] = len(digest.model_dump_json())
     return digest, info
 
 
@@ -196,6 +237,9 @@ def main() -> int:
     parser.add_argument("--output", type=str, help="Save results JSON here")
     parser.add_argument("--baseline", type=str,
                         help="A previous --output JSON; also report drift against it")
+    parser.add_argument("--reconstruct-missing", action="store_true",
+                        help="Rebuild the context of packs with no digest_context.txt "
+                             "(tagged context_source=reconstructed, not byte-faithful)")
     parser.add_argument("--no-cache", action="store_true",
                         help="Disable the 5-minute prompt cache (on by default)")
     args = parser.parse_args()
@@ -232,7 +276,7 @@ def main() -> int:
     if args.situation:
         packs = [p for p in packs if args.situation in p.meta.situations]
 
-    runnable, excluded = partition(packs)
+    runnable, excluded = partition(packs, reconstruct=args.reconstruct_missing)
     if args.limit:
         runnable = runnable[:args.limit]
 
@@ -282,8 +326,10 @@ def main() -> int:
         # Render per job: guidance changes the prompt, so it cannot be hoisted.
         system_prompt = config.render_prompt(template, guidance_key=guidance)
         try:
-            digest, info = run_one(context_path(p).read_text(), system_prompt, config,
+            context, context_source = load_context(p)
+            digest, info = run_one(context, system_prompt, config,
                                    cache=not args.no_cache)
+            info["context_source"] = context_source
         except Exception as exc:  # noqa: BLE001 — one bad entry must not kill the run
             print(f"  [{i:>3}/{len(jobs)}] ERROR {p.corpus_id[:40]}: {exc}", flush=True)
             results.append({"corpus_id": p.corpus_id, "guidance": guidance, "error": str(exc)})
@@ -300,7 +346,8 @@ def main() -> int:
         print(f"  [{i:>3}/{len(jobs)}] {'PASS' if ok else 'FAIL'} "
               f"{golden:5} {compare_assessment(golden, got)} {got:5} | "
               f"{guidance:<13} d{p.meta.days_out:<3} {p.meta.route[:34]:<34} "
-              f"{info.get('elapsed_s', '?')}s", flush=True)
+              f"{info.get('elapsed_s', '?')}s {info.get('output_tokens', '?')}tok "
+              f"${info.get('cost_usd', 0):.4f}", flush=True)
         if not ok:
             print(f"         golden rationale: {(p.label.rationale or '-')[:88]}")
             print(f"         model said      : {digest.assessment_reason[:88]}")
@@ -358,6 +405,19 @@ def main() -> int:
                 print(f"  ({missing} result(s) absent from the baseline — not compared)")
 
     print(f"Tokens: {tok_in:,} in ({cached:,} from cache) + {tok_out:,} out")
+    ok_rows = [r for r in results if "elapsed_s" in r]
+    if ok_rows:
+        def _med(key):
+            vals = sorted(r.get(key) or 0 for r in ok_rows)
+            return vals[len(vals) // 2]
+        cost = sum(r.get("cost_usd") or 0 for r in ok_rows)
+        print(f"Cost: ${cost:.4f} total, ${cost / len(ok_rows):.4f}/call "
+              f"(median ${_med('cost_usd'):.4f})  |  "
+              f"time: median {_med('elapsed_s')}s, "
+              f"max {max(r['elapsed_s'] for r in ok_rows)}s, "
+              f"sum {sum(r['elapsed_s'] for r in ok_rows):.0f}s  |  "
+              f"median out {_med('output_tokens')} tok / {_med('output_chars')} chars  |  "
+              f"errors {len(results) - len(ok_rows)}")
 
     if args.output:
         Path(args.output).write_text(json.dumps(results, indent=2, ensure_ascii=False))

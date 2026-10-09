@@ -44,7 +44,25 @@ class LLMConfig(BaseModel):
 
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
-    temperature: float = 0.0
+    # ``None`` omits the parameter: the 5.x Claude models reject any
+    # non-default sampling value with a 400, ``temperature=0.0`` included.
+    temperature: float | None = 0.0
+    # Anthropic ``thinking`` block, sent as-is when set (e.g. ``{"type":
+    # "adaptive"}`` or ``{"type": "between_tools"}``, Sonnet 5.5's thinking-off
+    # mode). Unset, the model's own default applies — which on the 5.x models
+    # is adaptive thinking *on*, unlike Sonnet 4.6.
+    thinking: dict | None = None
+    # ``output_config.effort`` (low | medium | high | xhigh | max); unset keeps
+    # the model default.
+    effort: str | None = None
+    # Output cap, thinking included. Unset keeps LangChain's per-model default,
+    # which for a model its profile table does not know yet (claude-sonnet-5-5)
+    # is only 4096 — too tight once adaptive thinking shares the budget.
+    max_tokens: int | None = None
+    # How ``with_structured_output`` gets the schema back. ``function_calling``
+    # forces a tool call, which Sonnet 5.5 / Opus 5.5 reject with a 400;
+    # ``json_schema`` uses native structured outputs (``output_config.format``).
+    structured_output: str = "function_calling"
 
 
 class PromptsConfig(BaseModel):
@@ -310,11 +328,31 @@ def load_guidance_index(locale: str | None = None) -> list[dict]:
 
 
 def create_chat_model(llm_config: LLMConfig) -> BaseChatModel:
-    """Create a LangChain chat model from a single LLMConfig block."""
+    """Create a LangChain chat model from a single LLMConfig block.
+
+    Optional knobs are passed only when set, so a config that leaves them out
+    sends exactly the request it always did.
+    """
+    kwargs: dict = {}
+    if llm_config.temperature is not None:
+        kwargs["temperature"] = llm_config.temperature
+    if llm_config.thinking is not None:
+        kwargs["thinking"] = llm_config.thinking
+    if llm_config.effort is not None:
+        kwargs["effort"] = llm_config.effort
+    if llm_config.max_tokens is not None:
+        kwargs["max_tokens"] = llm_config.max_tokens
     return init_chat_model(
         model=llm_config.model,
         model_provider=llm_config.provider,
-        temperature=llm_config.temperature,
+        **kwargs,
+    )
+
+
+def with_structured(llm: BaseChatModel, schema, llm_config: LLMConfig, **kwargs):
+    """``llm.with_structured_output(schema)`` using the config's method."""
+    return llm.with_structured_output(
+        schema, method=llm_config.structured_output, **kwargs,
     )
 
 
