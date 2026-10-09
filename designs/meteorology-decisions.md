@@ -5578,6 +5578,30 @@ this rule is blind — a genuine isolated shower with no flash and no cloud top
 would look the same. That is the gap a longer corpus closes, not a cleverer
 threshold.
 
+### The rain tier follows its cores (#702, 2026-10-09)
+
+`rain20` carries no evidence of its own (isolation is vacuous at the rain
+threshold), so suppression used to leave a phantom's bare rain skirt on the
+ribbon at 20 dBZ, exactly where the storm row was removed. The node now marks
+a rain region as the echo's own (`display.suspect_regions`, carried as
+`suspect_outlines`) when **all three** hold: it contains at least one core,
+**every** core in it is suspect, and it is no bigger than
+`rain_ratio_thin` (2.0) × those cores' own pixels. The droplet skips marked
+rings when suppression is on.
+
+- **The area test reuses `rain_ratio_thin`**, not a new number: it is the same
+  quantity (enclosing rain / core) the per-core score already reads as "barely
+  any rain around the core". The reference clutter core reads 1.0. A rain area
+  bigger than that is weather in its own right and keeps its band, at the
+  intensity of what is left (the per-cell gate already does that part).
+- **One genuine core keeps the ring.** Safety-first: hiding a rain area that
+  holds real convection is worse than drawing a phantom's skirt.
+- **Rejected:** a fixed area floor (`RAIN_MIN_AREA_KM2`) — it would hide a
+  genuine small shower whose one core happens to look isolated at its edge,
+  and keep a large clutter skirt; carrying the suspect pixel footprint — a
+  bigger payload for the same answer; listing small rain areas as cells —
+  hundreds of markers per frame for one case.
+
 ### Validated on a second, independent span (2026-10-07)
 
 `scripts/clutter_validate.py` over **144 frames / 72,940 assessed cores** on

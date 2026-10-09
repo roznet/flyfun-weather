@@ -453,8 +453,8 @@ def assessable(tier, policy: ClutterPolicy) -> bool:
     area is below 20 dBZ because that is where the area ends — so every rain
     area in Europe would read as isolated.  A clutter block does also raise a
     small bare rain20 area; it stays far below ``RAIN_MIN_AREA_KM2`` so it
-    never becomes a displayed cell, though it can still contribute a tiny
-    floor-intensity rain band on the ribbon (documented limitation, #696).
+    never becomes a displayed cell, and the display file marks its outline
+    instead, from the cores inside it (``display.suspect_regions``, #702).
     """
     return tier.threshold_dbz > policy.rain_dbz
 

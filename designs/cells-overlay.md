@@ -174,7 +174,10 @@ them. The droplet does two things with it:
 - **Optionally keeps it out of the route products** —
   `cells_display.clutter_suppress_enabled()` / `WB_CELLS_CLUTTER_SUPPRESS`,
   **off by default**, consumed by `storms.operational_cells`
-  (`live-observation-layer.md`). Suppression is not a clear-sky claim.
+  (`live-observation-layer.md`), and by `route_bands`, which also skips the
+  `rain20` rings listed in `suspect_outlines` (#702; `cells_display.suspect_outlines`
+  reads them, `validate` refuses an index that points nowhere, `filter_bbox`
+  re-maps them). Suppression is not a clear-sky claim.
 
 ## Gotchas
 

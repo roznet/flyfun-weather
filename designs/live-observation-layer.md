@@ -284,7 +284,8 @@ Rule in meteorology-decisions §41. Pieces:
   storm's earlier-frame history too, so a suppressed cell cannot return through
   the off-track trail. A `core` band whose every member was suppressed is
   dropped rather than reported at the tier floor; a mixed band keeps the peak of
-  what is left. Dropping a cell is **not** a claim the sky is clear there: the
+  what is left; a `rain20` ring the node marked as the echo's own skirt
+  (`suspect_outlines`, #702) is skipped, so no band of any tier remains. Dropping a cell is **not** a claim the sky is clear there: the
   cell stays in the display file with its reasons and the overlay can draw it.
 - **Geometry** (`build_storms`, droplet side, no analysis): cells grouped by
   the node's `within` (core41 → its core35; older files: nearest core35 within

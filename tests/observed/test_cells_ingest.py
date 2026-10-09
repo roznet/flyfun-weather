@@ -370,3 +370,48 @@ def test_one_file_name_per_revision():
     assert cd.name_of("20261004T1200.r1.json.gz") == ("20261004T1200", 1)
     for bad in ("20261004T1200.r0.json.gz", "20261004T1200.r01.json.gz"):
         assert cd.name_of(bad) is None
+
+
+# --- Suspect outlines (#702) --------------------------------------------------------
+
+
+def _marked_doc():
+    near = [[50.0, 1.0], [50.4, 1.2], [50.2, 1.6], [50.0, 1.0]]
+    far = [[45.0, 10.0], [45.1, 10.1], [45.0, 10.2], [45.0, 10.0]]
+    doc = display_doc(NOW, outlines={"rain20": [far, near, far], "core35": []})
+    doc["suspect_outlines"] = {"rain20": [1, 2]}
+    return doc, near
+
+
+def test_suspect_outlines_validate():
+    doc, _ = _marked_doc()
+    data = cd.validate(display_bytes(doc), frame_stamp(NOW))
+    assert cd.suspect_outlines(data) == {"rain20": {1, 2}}
+
+
+@pytest.mark.parametrize("marks", [
+    {"rain20": [3]}, {"rain20": [-1]}, {"rain20": ["1"]}, {"rain20": [True]},
+    {"core41": [0]}, {"rain20": 1}, [1],
+])
+def test_a_suspect_mark_that_points_nowhere_is_refused(marks):
+    doc, _ = _marked_doc()
+    doc["suspect_outlines"] = marks
+    with pytest.raises(cd.InvalidDisplay, match="suspect_outlines"):
+        cd.validate(display_bytes(doc), frame_stamp(NOW))
+
+
+def test_a_file_from_before_702_has_no_marks():
+    assert cd.suspect_outlines(display_doc(NOW)) == {}
+
+
+def test_bbox_carries_the_marks_with_their_rings():
+    doc, near = _marked_doc()
+    out = cd.filter_bbox(doc, 49.8, 0.4, 51.2, 2.9)
+    assert out["outlines"]["rain20"] == [near]
+    assert out["suspect_outlines"] == {"rain20": [0]}
+    out = cd.filter_bbox(doc, 44.9, 9.9, 45.2, 10.3)
+    assert len(out["outlines"]["rain20"]) == 2
+    assert out["suspect_outlines"] == {"rain20": [1]}
+    # A box holding no marked ring drops the block rather than keep stale indices.
+    out = cd.filter_bbox(doc, 30.0, -20.0, 31.0, -19.0)
+    assert "suspect_outlines" not in out

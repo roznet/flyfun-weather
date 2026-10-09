@@ -102,13 +102,11 @@ def clutter_suppress_enabled() -> bool:
     act — an echo with the isolation evidence against it has no business in a
     confident storm row either way (#696).
 
-    **Coverage is not complete.**  It holds suspect cells out of the storm
-    rows, the §41 alerts that read them, the glance and the ribbon's *core*
-    bands.  It cannot touch the ``rain20`` outlines: those are traced from the
-    tier mask on the node, not per cell, so a suppressed echo can still leave
-    a bare rain band at the floor intensity (``route_bands``,
-    ``observed-cells.md``, issue #702).  Worth knowing before the flag is
-    flipped.
+    It holds suspect cells out of the storm rows, the §41 alerts that read
+    them, the glance and the ribbon's core bands (``operational_cells``), and
+    the ``rain20`` rings the node marked as a suspect echo's own skirt out of
+    the rain bands (``suspect_outlines``, #702).  A genuine rain area holding a
+    suspect core keeps its band, at the intensity of what is left.
     """
     return os.environ.get(CELLS_CLUTTER_SUPPRESS_ENV, "").strip().lower() in ("1", "true", "yes")
 
@@ -207,7 +205,27 @@ def validate(raw: bytes, stamp: str, revision: int = 0) -> dict[str, Any]:
             isinstance(line, list) and all(_is_latlon(pt) for pt in line) for line in lines
         ):
             raise InvalidDisplay(f"outlines[{tier}] is not a list of [lat, lon] polylines")
+    # Indices the droplet itself acts on (#702): a wrong one would hide the
+    # wrong ring, so a malformed block refuses the file like a bad outline.
+    marks = data.get("suspect_outlines", {})
+    if not isinstance(marks, dict):
+        raise InvalidDisplay("suspect_outlines is not an object")
+    for tier, idx in marks.items():
+        n = len(data["outlines"].get(tier) or [])
+        if not isinstance(idx, list) or not all(
+            isinstance(i, int) and not isinstance(i, bool) and 0 <= i < n for i in idx
+        ):
+            raise InvalidDisplay(f"suspect_outlines[{tier}] is not a list of indices into outlines[{tier}]")
     return data
+
+
+def suspect_outlines(display: dict[str, Any]) -> dict[str, set[int]]:
+    """``{tier: {ring index}}`` of the outlines the node marked as a suspect
+    echo's own (#702); empty for a frame with none or from before #702."""
+    marks = display.get("suspect_outlines")
+    if not isinstance(marks, dict):
+        return {}
+    return {tier: {i for i in idx if isinstance(i, int)} for tier, idx in marks.items() if isinstance(idx, list)}
 
 
 def _is_latlon(point: Any) -> bool:
@@ -511,9 +529,18 @@ def filter_bbox(display: dict[str, Any], south: float, west: float, north: float
     out = dict(display)
     out["cells"] = [c for c in display.get("cells", [])
                     if south <= c["lat"] <= north and west <= c["lon"] <= east]
-    out["outlines"] = {
-        tier: [line for line in lines if line and _box_overlaps(line, south, west, north, east)]
-        for tier, lines in display.get("outlines", {}).items()
-    }
+    marks = suspect_outlines(display)
+    out["outlines"] = {}
+    kept_marks: dict[str, list[int]] = {}
+    for tier, lines in display.get("outlines", {}).items():
+        kept = [i for i, line in enumerate(lines) if line and _box_overlaps(line, south, west, north, east)]
+        out["outlines"][tier] = [lines[i] for i in kept]
+        # The marks are indices, so they follow the rings they point at (#702).
+        new = [j for j, i in enumerate(kept) if i in marks.get(tier, ())]
+        if new:
+            kept_marks[tier] = new
+    out.pop("suspect_outlines", None)
+    if kept_marks:
+        out["suspect_outlines"] = kept_marks
     out["bbox"] = [south, west, north, east]
     return out
