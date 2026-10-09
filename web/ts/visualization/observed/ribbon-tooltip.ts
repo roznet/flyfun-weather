@@ -1,12 +1,15 @@
-/** Route ribbon hover tooltips (#742) — web only.
+/** Route ribbon hover tooltips (#742); the iOS tap card mirrors them (#747).
  *
  * Hovering a mark of the "Along the route" drawing with a mouse says what the
  * mark stands for: an airport's name, categories and raw METAR / TAF, a
  * cell's strength and motion, the rain band under the pointer, a SIGMET.
  * Clicks are unchanged (map / cell detail).
  *
- * Deliberately not mirrored in `RouteRibbonRules.swift`: hover is a pointer
- * affordance the iOS ribbon has no equivalent for (it opens a sheet on tap).
+ * SYNC — paired with `app/flyfun-weather/flyfun-weather/Views/Briefing/
+ * RouteRibbonInspectorRules.swift` (#747): iOS shows the same rows in a card
+ * under the ribbon when a mark is tapped. Same wording, same `bandAt`; the
+ * Swift header carries the symbol map, and `ribbon-tooltip.test.ts` ↔
+ * `RouteRibbonInspectorRulesTests.swift` assert the same strings.
  *
  * Every word comes from fields the page already holds — the ribbon, the
  * storms and `route_observations.airports` of the same `/live` response,
