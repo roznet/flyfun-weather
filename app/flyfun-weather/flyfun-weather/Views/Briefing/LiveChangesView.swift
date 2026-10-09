@@ -14,10 +14,21 @@ import SwiftUI
 /// Rendered only when the snapshot carries a live layer (`liveChanges != nil`);
 /// an empty list still renders, as an explicit "no significant change" line, so
 /// "nothing moved" is distinguishable from "not checked".
+///
+/// On the Observed tab with a nutshell (#697) the alert-tier rows are shown
+/// above the highlight (`ObservedAlertsCard`) and this panel, inside the
+/// "Details" fold, lists the rest (`excludesAlerts`); its counts still cover
+/// every row.
 struct LiveChangesView: View {
     let changes: LiveChanges
     /// When the briefing (assessment + AI digest) was written.
     let baseline: Date?
+    /// Leave the alert-tier rows out: they are already on screen above.
+    var excludesAlerts: Bool = false
+
+    private var rows: [LiveChange] {
+        excludesAlerts ? changes.items.filter { !$0.isAlert } : changes.items
+    }
 
     var body: some View {
         // Ages keep counting while the tab stays open.
@@ -30,8 +41,13 @@ struct LiveChangesView: View {
                         .foregroundStyle(Theme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("liveChangesEmpty")
+                } else if rows.isEmpty {
+                    Text("Alert changes are shown at the top")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    ForEach(changes.items) { change in
+                    ForEach(rows) { change in
                         LiveChangeRow(change: change, now: context.date)
                     }
                 }
@@ -99,7 +115,7 @@ struct LiveChangesView: View {
 /// than the row (#669), the trail line under it ("12:42–13:02Z, since 13:33Z ·
 /// 2nd time today", or a category row's report strip). A recently cleared row
 /// is plain (never alert-styled) with "cleared HH:MMZ" in place of the age.
-private struct LiveChangeRow: View {
+struct LiveChangeRow: View {
     let change: LiveChange
     let now: Date
     var cleared: Bool = false

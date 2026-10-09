@@ -55,8 +55,28 @@ nonisolated struct LiveGlance: Codable, Sendable {
     /// as_briefed / worse / better / mixed / unavailable.
     let comparison: String?
     let lines: [LiveGlanceLine]?
+    /// The model-written one-glance line (#697). nil until the first
+    /// generation lands, after a rejected one and after arrival: show
+    /// `headline` in its place then.
+    var highlight: LiveHighlight? = nil
 
     var items: [LiveGlanceLine] { lines ?? [] }
+    /// Alert-tier lines sit above the highlight and are never folded (#697).
+    var alertItems: [LiveGlanceLine] { items.filter { $0.alert == true } }
+    var otherItems: [LiveGlanceLine] { items.filter { $0.alert != true } }
+}
+
+/// `glance.highlight` as `/live` serves it (the server's regeneration gate is
+/// stripped). Mirrors `models/live.py::LiveHighlight`. A rating sends these
+/// four fields back verbatim (`HighlightFeedbackRequest.context`), so they
+/// stay strings: no re-formatting on the way back.
+nonisolated struct LiveHighlight: Codable, Sendable, Equatable, Hashable {
+    let text: String
+    let model: String?
+    /// Keys the rating back into the server's `live_highlights.jsonl`.
+    let factsHash: String?
+    /// When the line was written: older than the layer when carried forward.
+    let generatedAt: String?
 }
 
 /// One nutshell line. The text is the server's, shown as is: observations

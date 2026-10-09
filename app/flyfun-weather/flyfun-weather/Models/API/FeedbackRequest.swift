@@ -37,6 +37,54 @@ nonisolated struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
     }
 }
 
+/// A 👍 / 👎 on the Observed tab's highlight (#697), posted to
+/// `POST /api/feedback` with `category = "highlight_rating"` and
+/// `target = "live_highlight"` (mirrors the web highlight thumbs).
+///
+/// `context` is the rated line exactly as `/live` served it: the highlight is
+/// regenerated as the weather changes, so the rating is only reviewable with
+/// the line it rated. Nested keys go snake_case through
+/// `JSONEncoder.weatherBrief` (`facts_hash`, `generated_at`), as the server
+/// expects; no dictionary keys, so the strategy is safe.
+nonisolated struct HighlightFeedbackRequest: Encodable, Sendable, Equatable {
+    struct Context: Encodable, Sendable, Equatable {
+        let factsHash: String
+        let generatedAt: String
+        let model: String
+        let text: String
+    }
+
+    let flightId: String
+    /// The pack the live layer is relative to.
+    let packTimestamp: String
+    /// Always `"highlight_rating"`.
+    let category: String
+    let comment: String
+    /// `"up"` | `"down"`.
+    let sentiment: String
+    /// Always `"live_highlight"`.
+    let target: String
+    let contactOk: Bool
+    let context: Context
+
+    init(flightId: String, packTimestamp: String, highlight: LiveHighlight,
+         sentiment: String, comment: String, contactOk: Bool) {
+        self.flightId = flightId
+        self.packTimestamp = packTimestamp
+        self.category = "highlight_rating"
+        self.comment = comment
+        self.sentiment = sentiment
+        self.target = "live_highlight"
+        self.contactOk = contactOk
+        self.context = Context(
+            factsHash: highlight.factsHash ?? "",
+            generatedAt: highlight.generatedAt ?? "",
+            model: highlight.model ?? "",
+            text: highlight.text
+        )
+    }
+}
+
 /// Free-text feedback with a category, posted to `POST /api/feedback` with
 /// `target = "general"` — the iOS twin of the web help page's "Submit Feedback"
 /// modal (`help-main.ts::showFeedbackModal`). No `sentiment`, so the server
@@ -49,7 +97,7 @@ nonisolated struct DigestFeedbackRequest: Encodable, Sendable, Equatable {
 nonisolated struct GeneralFeedbackRequest: Encodable, Sendable, Equatable {
     let flightId: String
     let packTimestamp: String
-    /// One of the server's `ALLOWED_CATEGORIES` minus `digest_rating` — see
+    /// One of the server's `ALLOWED_CATEGORIES` minus the thumb ratings — see
     /// `FeedbackCategory`, which is the only thing that builds this.
     let category: String
     /// Free-text (≤ 2000 chars). Must be non-empty.

@@ -458,6 +458,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.submitDigestFeedback(request)
     }
 
+    func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws {
+        try await online.submitHighlightFeedback(request)
+    }
+
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws {
         try await online.submitGeneralFeedback(request)
     }

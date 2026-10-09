@@ -92,6 +92,18 @@ final class AppState {
         ratedDigests.insert("\(flightId)|\(packTimestamp)")
     }
 
+    /// Observed highlights (#697) rated this session, keyed
+    /// "flightId|factsHash" (per rated line). Session-only, like `ratedDigests`.
+    private(set) var ratedHighlights: Set<String> = []
+
+    func isHighlightRated(flightId: String, factsHash: String) -> Bool {
+        ratedHighlights.contains("\(flightId)|\(factsHash)")
+    }
+
+    func markHighlightRated(flightId: String, factsHash: String) {
+        ratedHighlights.insert("\(flightId)|\(factsHash)")
+    }
+
     /// External "server data changed" nudge (e.g. a refresh push). The flight list
     /// and any open briefing observe this and re-sync to the newest online pack —
     /// push is just one more sync trigger, not a special path. `token` makes every
