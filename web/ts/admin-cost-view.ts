@@ -6,13 +6,16 @@
  * Two sections:
  *  1. Program cost report (7d/30d) — real prorated fixed cost + actual
  *     variable cost from the ledger, plus per-briefing/per-user economics.
+ *     Below it, "Other LLM spend" (#741): non-briefing per-call charges
+ *     (live highlight, trip summary) by category / day / user — shown apart
+ *     because the report's figures drive the per-briefing economics.
  *  2. Rate-card editor — edit fixed costs (incl. itemized subscriptions),
  *     token rates, margin; saving creates a new versioned config.
  */
 
 import {
   fetchCostReport, fetchCostConfig, fetchCostConfigHistory, updateCostConfig,
-  type CostReport, type CostConfigData, type CostConfigVersion,
+  type CostReport, type CostConfigData, type CostConfigVersion, type OtherLlmSpend,
 } from './adapters/admin-adapter';
 import { escapeHtml, formatDate, usd4, signedUsd4 } from './utils';
 
@@ -73,6 +76,8 @@ function renderReport(r: CostReport | null): void {
   const tbody = document.getElementById('cost-fixed-tbody')!;
   const note = document.getElementById('cost-report-note')!;
 
+  renderOtherLlm(r?.other_llm ?? null);
+
   if (!r) {
     summary.innerHTML = '<p class="muted">No active cost config — set the rate card below.</p>';
     tbody.innerHTML = '';
@@ -122,6 +127,54 @@ function renderReport(r: CostReport | null): void {
   note.innerHTML = `Fixed cost is prorated from the rate card (monthly &times; ${r.window_days}/30). `
     + `Variable is the actual LLM token (${usd4(r.variable_token_usd)}) + storage (${usd4(r.variable_storage_usd)}) `
     + `charged over the window.${savingNote} Total includes the ${r.margin_percent}% margin.`;
+}
+
+/** Rows shown per table before the rest is cut (30d of daily rows per
+ *  category, and the heaviest users). */
+const OTHER_LLM_MAX_ROWS = 31;
+
+function renderOtherLlm(o: OtherLlmSpend | null): void {
+  const el = document.getElementById('cost-other-llm');
+  if (!el) return;
+  if (!o) {
+    el.innerHTML = '<p class="muted" style="font-size:0.85rem;">Shown with the program report.</p>';
+    return;
+  }
+  if (o.calls === 0) {
+    el.innerHTML = '<p class="muted" style="font-size:0.85rem;">No non-briefing LLM calls in this window.</p>';
+    return;
+  }
+
+  const cards = o.by_category.map((c) => `
+    <div class="summary-card"><div class="value">${usd4(c.cost_usd)}</div><div class="label">${escapeHtml(c.category)} (${c.calls})</div></div>`).join('');
+
+  const table = (head: string, rows: string[]): string => `
+    <div style="overflow-x:auto;margin-top:0.5rem;">
+      <table class="admin-table">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${rows.slice(0, OTHER_LLM_MAX_ROWS).join('')}</tbody>
+      </table>
+    </div>`;
+
+  const dayRows = o.by_day.map((d) => `
+    <tr><td>${escapeHtml(d.date)}</td><td>${escapeHtml(d.category)}</td><td class="num">${d.calls}</td><td class="num">${usd4(d.cost_usd)}</td></tr>`);
+  const userRows = o.by_user.map((u) => `
+    <tr>
+      <td><a href="/user-costs.html?user=${encodeURIComponent(u.user_id)}">${escapeHtml(u.email ?? u.user_id)}</a></td>
+      <td class="num">${u.calls}</td><td class="num">${usd4(u.cost_usd)}</td>
+    </tr>`);
+
+  el.innerHTML = `
+    <div class="summary-bar">
+      <div class="summary-card"><div class="value">${usd4(o.total_usd)}</div><div class="label">Total (${o.calls} calls)</div></div>
+      ${cards}
+    </div>
+    <details style="margin-top:0.5rem;"><summary style="cursor:pointer;font-size:0.85rem;">By day</summary>
+      ${table('<th>Day (UTC)</th><th>Category</th><th class="num">Calls</th><th class="num">Cost</th>', dayRows)}
+    </details>
+    <details style="margin-top:0.5rem;"><summary style="cursor:pointer;font-size:0.85rem;">By user</summary>
+      ${table('<th>User</th><th class="num">Calls</th><th class="num">Cost</th>', userRows)}
+    </details>`;
 }
 
 // --- Rate-card editor ---

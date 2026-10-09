@@ -337,7 +337,7 @@ def get_user_costs(
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    from weatherbrief.api.credits import SERVICE, _cost_since
+    from weatherbrief.api.credits import SERVICE, _cost_since, other_llm_spend
 
     week_start = (now - timedelta(days=now.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -369,6 +369,7 @@ def get_user_costs(
     ) or 0
 
     avg_cost_usd = round(total_cost_usd / total_briefings, 4) if total_briefings > 0 else 0.0
+    other_total = other_llm_spend(db, None, user_id)
 
     # --- Last active ---
     last_active_row = (
@@ -378,11 +379,15 @@ def get_user_costs(
     )
 
     # --- Transactions with flight_id via briefing_usage join ---
+    # Only a briefing row's reference_id is a briefing_usage id. A live
+    # highlight's is the flight id itself, and casting that to an integer
+    # would, on MySQL, keep any leading digits and join a stranger's row.
     tx_query = (
         db.query(CostLedgerRow, BriefingUsageRow.flight_id)
         .outerjoin(
             BriefingUsageRow,
-            func.cast(CostLedgerRow.reference_id, Integer) == BriefingUsageRow.id,
+            (CostLedgerRow.category == "briefing")
+            & (func.cast(CostLedgerRow.reference_id, Integer) == BriefingUsageRow.id),
         )
         .filter(
             CostLedgerRow.user_id == user_id,
@@ -407,7 +412,10 @@ def get_user_costs(
             "category": ledger_row.category or ledger_row.action,
             "description": ledger_row.description or "",
             "breakdown": breakdown,
-            "flight_id": flight_id or None,
+            "flight_id": flight_id or (
+                ledger_row.reference_id
+                if ledger_row.category == "live_highlight" else None
+            ),
         })
 
     # --- Recent flights ---
@@ -498,6 +506,14 @@ def get_user_costs(
         "transactions": transactions,
         "recent_flights": recent_flights,
         "cost_breakdown": agg_breakdown,
+        # Non-briefing LLM calls (live highlight, trip summary), kept out of
+        # every figure above so the per-briefing numbers stay comparable (#741).
+        "other_llm": {
+            "total_usd": other_total["total_usd"],
+            "this_month_usd": other_llm_spend(db, month_start, user_id)["total_usd"],
+            "calls": other_total["calls"],
+            "by_category": other_total["by_category"],
+        },
     }
 
 

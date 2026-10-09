@@ -844,7 +844,9 @@ positive above.
   or for a `days_out == 0` pack; iOS has no window check.
 - **Cost** ~$0.00024 per call on Haiku 5.5 (~$0.0016 on 4.5), through the
   shared ledger (`action=live_highlight`, priced by `compute_call_cost`, never
-  the per-briefing `compute_cost`). A `max_tokens` stop is rejected as
+  the per-briefing `compute_cost`). Admins see it as "Other LLM spend" on the
+  Cost tab and per-user cost page; pilot totals and per-briefing figures
+  exclude it (#741, see `cost-attribution-design.md`). A `max_tokens` stop is rejected as
   `truncated`, not graded. Charged
   on the tick's own thread: a `Session` is not thread-safe, so
   `ensure_highlight` returns the usage and the caller charges it.

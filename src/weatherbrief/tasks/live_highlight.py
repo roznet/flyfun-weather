@@ -1072,9 +1072,9 @@ def call_cost(usage: dict | None) -> float | None:
 
     Pure pricing (``compute_call_cost``, no session), so the review log can
     carry the cost of every attempt — including a rejected one, which is
-    billed and otherwise invisible. The ledger row is the accounting record;
-    this is what makes a calibration review self-contained, since the admin
-    cost views filter on ``category == "briefing"`` and do not show these.
+    billed and otherwise invisible. The ledger row is the accounting record
+    (shown on the admin Cost tab and per-user cost page as "other LLM
+    spend"); this is what makes a calibration review self-contained.
     """
     if not usage or not usage.get("model"):
         return None

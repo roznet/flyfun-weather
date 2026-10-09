@@ -298,3 +298,103 @@ class TestConfigCacheMultiplierGuard:
             "/api/admin/cost-config", json={"cache_write_multiplier": "free"},
         )
         assert resp.status_code == 422
+
+
+def _add_call(session, user_id, category, cost, *, days_ago=0, reference_id=None):
+    """Seed a non-briefing per-call LLM charge (live highlight, trip summary)."""
+    session.add(CostLedgerRow(
+        user_id=user_id,
+        service=SERVICE,
+        action=category,
+        cost=cost,
+        category=category,
+        description=category,
+        reference_id=reference_id,
+        created_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+    ))
+
+
+class TestOtherLlmSpend:
+    """#741: non-briefing LLM spend is visible to admins, separately, and
+    never moves a briefing count or per-briefing figure."""
+
+    def _seed(self, app_db):
+        _seed_active_config(app_db())
+        s = app_db()
+        _add_briefing(s, DEV_USER_ID, 0.20, 0.01)
+        _add_briefing(s, "user-b", 0.10, 0.00)
+        _add_call(s, DEV_USER_ID, "live_highlight", 0.0016, reference_id="zz-a-2026-10-09-ab12")
+        _add_call(s, DEV_USER_ID, "live_highlight", 0.0016, days_ago=1)
+        _add_call(s, "user-b", "trip_summary", 0.01)
+        _add_call(s, DEV_USER_ID, "live_highlight", 5.0, days_ago=40)  # outside 30d
+        _add_call(s, DEV_USER_ID, "topup", 0.0)  # retired, never "LLM spend"
+        s.commit()
+        s.close()
+
+    def test_report_carries_other_llm_without_touching_briefing_figures(self, client, app_db):
+        self._seed(app_db)
+        data = client.get("/api/admin/cost-report?window=30d").json()
+
+        # Program report: briefing-only, exactly as before.
+        assert data["num_briefings"] == 2
+        assert abs(data["variable_token_usd"] - 0.30) < 1e-6
+
+        other = data["other_llm"]
+        assert other["calls"] == 3
+        assert abs(other["total_usd"] - 0.0132) < 1e-6
+        cats = {c["category"]: c for c in other["by_category"]}
+        assert set(cats) == {"live_highlight", "trip_summary"}
+        assert cats["live_highlight"]["calls"] == 2
+        assert abs(cats["live_highlight"]["cost_usd"] - 0.0032) < 1e-6
+        # Biggest spender first.
+        assert other["by_category"][0]["category"] == "trip_summary"
+
+        days = [(d["date"], d["category"]) for d in other["by_day"]]
+        assert len(days) == 3
+        assert days == sorted(days, key=lambda t: t[0], reverse=True)
+
+        users = {u["user_id"]: u for u in other["by_user"]}
+        assert users[DEV_USER_ID]["email"] == "dev@localhost"
+        assert users[DEV_USER_ID]["calls"] == 2
+        assert users["user-b"]["email"] is None  # no account row
+
+    def test_user_costs_keep_briefing_figures_and_add_other_llm(self, client, app_db):
+        self._seed(app_db)
+        data = client.get(f"/api/admin/users/{DEV_USER_ID}/costs").json()
+
+        s = data["summary"]
+        assert s["total_briefings"] == 1
+        assert abs(s["total_cost_usd"] - 0.35) < 1e-6  # 0.20 + 0.01 + 0.14
+        assert abs(s["avg_cost_per_briefing_usd"] - 0.35) < 1e-6
+        assert abs(data["cost_breakdown"]["total_usd"] - 0.35) < 1e-6
+
+        other = data["other_llm"]
+        assert other["calls"] == 3  # all time, incl. the 40-day-old one
+        assert abs(other["total_usd"] - 5.0032) < 1e-6
+        assert other["by_category"] == [
+            {"category": "live_highlight", "cost_usd": 5.0032, "calls": 3},
+        ]
+        assert 0 < other["this_month_usd"] <= other["total_usd"]
+
+    def test_pilot_credits_stay_briefing_only(self, client, app_db):
+        self._seed(app_db)
+        data = client.get("/api/user/credits").json()
+        assert data["total_briefings"] == 1
+        assert abs(data["total_cost_usd"] - 0.35) < 1e-6
+
+    def test_highlight_transaction_links_its_flight_not_a_usage_row(self, client, app_db):
+        """A highlight's reference_id is a flight id. Cast to an integer it
+        would keep its leading digits and join briefing_usage row 7."""
+        from weatherbrief.db.models import BriefingUsageRow
+
+        s = app_db()
+        s.add(BriefingUsageRow(id=7, user_id=DEV_USER_ID, flight_id="zz-other-flight"))
+        _add_call(s, DEV_USER_ID, "live_highlight", 0.0016, reference_id="7zz-b-2026-10-09-cd34")
+        _add_call(s, DEV_USER_ID, "trip_summary", 0.01, reference_id="7")
+        s.commit()
+        s.close()
+
+        txs = client.get(f"/api/admin/users/{DEV_USER_ID}/costs").json()["transactions"]
+        by_cat = {t["category"]: t for t in txs}
+        assert by_cat["live_highlight"]["flight_id"] == "7zz-b-2026-10-09-cd34"
+        assert by_cat["trip_summary"]["flight_id"] is None
