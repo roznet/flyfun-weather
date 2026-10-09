@@ -299,6 +299,21 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
         #expect(I.hits(at: CGPoint(x: x, y: RouteRibbonRules.trackY), in: t).first == .segment(1))
     }
 
+    /// A band has no focus of its own: "Show on map" frames the radar
+    /// stretch under its middle, or the last one past the end.
+    @Test func aBandShowsItsRadarStretchOnTheMap() throws {
+        let r = try ribbon("""
+        , "weather": [{"id": "b1", "tier": "rain", "from_nm": 10, "to_nm": 30},
+                      {"id": "b2", "tier": "core", "from_nm": 96, "to_nm": 110}],
+          "segments": [{"index": 0, "from_nm": 0, "to_nm": 50, "focus": {"kind": "segment", "id": "seg:0"}},
+                       {"index": 1, "from_nm": 50, "to_nm": 100, "focus": {"kind": "segment", "id": "seg:1"}}]
+        """)
+        let inside = try #require(I.resolve(.band("b1"), ribbon: r, storms: [], airports: nil))
+        #expect(inside.focus?.id == "seg:0")
+        let pastTheEnd = try #require(I.resolve(.band("b2"), ribbon: r, storms: [], airports: nil))
+        #expect(pastTheEnd.focus?.id == "seg:1")
+    }
+
     @Test func aTapOpensSwapsAndClosesTheCard() {
         let a = RibbonMarkKey.station("ZZAA"), b = RibbonMarkKey.storm("c1")
         let opened = I.inspection(after: [a, b], current: nil)

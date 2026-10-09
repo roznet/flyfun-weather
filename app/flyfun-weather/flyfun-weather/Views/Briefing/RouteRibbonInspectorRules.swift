@@ -113,7 +113,9 @@ nonisolated extension RibbonStation {
 nonisolated enum RibbonMark {
     case station(RibbonStation, AirportObservation?)
     case storm(LiveStorm)
-    case band(RibbonWeather)
+    /// A band has no focus of its own: it carries its radar stretch's
+    /// (`RouteRibbonInspectorRules.bandFocus`).
+    case band(RibbonWeather, LiveFocus?)
     case sigmet(RibbonSigmet)
     case segment(LiveRibbonSegment)
 
@@ -121,7 +123,7 @@ nonisolated enum RibbonMark {
         switch self {
         case .station(let st, _): st.focus
         case .storm(let s): s.focus
-        case .band: nil
+        case .band(_, let focus): focus
         case .sigmet(let s): s.focus
         case .segment(let seg): seg.focus
         }
@@ -279,7 +281,7 @@ enum RouteRibbonInspectorRules {
         switch mark {
         case .station(let st, let airport): stationContent(st, airport: airport)
         case .storm(let s): stormContent(s)
-        case .band(let b): bandContent(b)
+        case .band(let b, _): bandContent(b)
         case .sigmet(let s): sigmetContent(s)
         case .segment(let seg): segmentContent(seg)
         }
@@ -291,7 +293,7 @@ enum RouteRibbonInspectorRules {
         switch mark {
         case .station(let st, _): st.icao
         case .storm: "Cell"
-        case .band(let b): b.isCore ? "Core" : "Rain"
+        case .band(let b, _): b.isCore ? "Core" : "Rain"
         case .sigmet(let s): R.sigmetText(s)
         case .segment(let seg): "Radar \(nm(seg.fromNm ?? 0))–\(nm(seg.toNm ?? 0)) NM"
         }
@@ -310,12 +312,22 @@ enum RouteRibbonInspectorRules {
         case .storm(let id):
             return storms.first { $0.id == id }.map { .storm($0) }
         case .band(let id):
-            return (ribbon.weather ?? []).first { $0.id == id }.map { .band($0) }
+            return (ribbon.weather ?? []).first { $0.id == id }.map { .band($0, bandFocus($0, in: ribbon)) }
         case .sigmet(let id):
             return (ribbon.sigmets ?? []).first { $0.id == id }.map { .sigmet($0) }
         case .segment(let index):
             return (ribbon.segments ?? []).first { $0.index == index }.map { .segment($0) }
         }
+    }
+
+    /// "Show on map" for a rain area or core: the radar stretch under the
+    /// band's middle (the last one past the end), as tapping the weather
+    /// zones did before the card (`segmentFocus`).
+    static func bandFocus(_ band: RibbonWeather, in ribbon: LiveRibbon) -> LiveFocus? {
+        let segments = ribbon.segments ?? []
+        let mid = ((band.fromNm ?? 0) + (band.toNm ?? band.fromNm ?? 0)) / 2
+        return segments.first { ($0.fromNm ?? 0) <= mid && mid < ($0.toNm ?? 0) }?.focus
+            ?? segments.last?.focus
     }
 
     // MARK: Geometry (shared with the drawing, so a tap matches what is seen)
