@@ -32,7 +32,6 @@ import tarfile
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-PACKS_ROOT = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "packs")
 ORDER = {"green": 0, "amber": 1, "red": 2}
 
 # Mechanical-check patterns. Kept here (not in the skill text) so the record's
@@ -81,7 +80,9 @@ def _window(since: str, until: str):
 
 
 def _pack_dir(artifact_path: str) -> str:
-    return artifact_path if artifact_path.startswith("/") else os.path.join(PACKS_ROOT, artifact_path)
+    # The app's own resolver: re-roots a stored path under the current DATA_DIR.
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    return _resolve_artifact_path(artifact_path)
 
 
 def cmd_health(a):
