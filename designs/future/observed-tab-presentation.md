@@ -134,7 +134,7 @@ and the route; a station → its METAR/TAF marker). One contract for iOS and web
 
 - Each tick logs every storm's estimate in `live_history.jsonl` (new row type, e.g.
   `"type":"estimate"`), keyed by lineage id and tick time.
-- A `review.py score-estimates` step (live-review skill) joins each estimate with the
+- A `review.py score-estimates` step (prod-briefings-review skill) joins each estimate with the
   same lineage's observed position at `cpa_time` from later display frames, and
   reports the CPA distance error and timing error by horizon (0–30, 30–60, 60+ min),
   and by motion confidence.
@@ -170,7 +170,7 @@ Screens at 14:29Z against the data:
 
 1. **Correctness fixes** (iOS + the tops clause): items 1–5, 7, 9 of §7 (#689).
 2. **#688 geometry + estimate logging** (addendum comment on #688): per-storm route geometry in the tick;
-   estimates logged; `score-estimates` in the live-review skill. Built: `LiveLayer.storms` (§4's
+   estimates logged; `score-estimates` in the prod-briefings-review skill. Built: `LiveLayer.storms` (§4's
    `storms[]` minus `focus`; names as in `models/live.py::LiveStorm`), storm rows (meteorology §41).
 3. **Server `glance` + `ribbon` + `focus`**, and the agent `live` block uses `glance` (#690).
 4. **iOS**: nutshell, ribbon, tap-to-map, storm detail pop-up with the estimate (#695).

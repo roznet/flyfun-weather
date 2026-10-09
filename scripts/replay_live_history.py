@@ -1,6 +1,6 @@
 """Replay real flights' live histories through the current live layer (#688).
 
-Promoted from the live-review skill's ad-hoc replay: each flight's prod ticks
+Promoted from the prod-briefings-review skill's ad-hoc replay: each flight's prod ticks
 are re-run through the production ``commit_live_update`` at their own tick
 times, with the METAR/TAF/SIGMET texts from ``live_history.jsonl`` and,
 optionally, what the droplet would have had of the observed layers:
@@ -20,7 +20,7 @@ Usage (from the repo root, repo venv):
     python scripts/replay_live_history.py score-estimates DIR CELLS_DIR [FLIGHT...]
 
 DIR is a pulled tree of ``DATA_DIR/packs/<user>/<flight>/`` (live files plus
-the pack ``briefing.json`` files), see ``.claude/skills/live-review/SKILL.md``.
+the pack ``briefing.json`` files), see ``.claude/skills/prod-briefings-review/SKILL.md``.
 Needs ``AIRPORTS_DB`` for the replay (corridor discovery).
 """
 
