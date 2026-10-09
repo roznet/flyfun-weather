@@ -17,7 +17,7 @@ Meteorology choices (what counts as significant, tiers) are in
 [meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–41
 (§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
 replacements, categorical radar/lightning values; §38, #683: pending SIGMETs
-(§45, #686: a failed fetch is no fetch, a covered missing pending SIGMET is
+(§46, #686: a failed fetch is no fetch, a covered missing pending SIGMET is
 "cancelled");
 §39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts;
 §40, #689: a SIGMET starting after arrival is a highlight, a plain reissue
@@ -859,12 +859,12 @@ What the code relies on:
   start is not "gone", and `_pending_key` keeps the alert memory of a missing
   SIGMET whose trace is still before its start. Both rely on the trace
   (`ClassifierMemory.sigmets`) holding `valid_from`.
-- **Fetch status (#686, §45).** `RouteSigmets.fetch_ok` / `queried_at` come
+- **Fetch status (#686, §46).** `RouteSigmets.fetch_ok` / `queried_at` come
   from euro_aip `fetch_isigmet_result`. A failed base query never reaches the
   layer: `run_realtime_refresh` turns it into `None` (stored SIGMETs kept),
   `SharedSigmetSource` raises `SigmetSourceUnavailable`, and
   `classify_changes` skips a `fetch_ok=False` block anyway.
-- **Cancelled (#686, §45).** `_cancelled_traces`: a trace last seen pending,
+- **Cancelled (#686, §46).** `_cancelled_traces`: a trace last seen pending,
   missing, not superseded, and `isigmet_covers(latest.queried_at, …)` gets
   `cancelled_at` and a `sigmet_cancelled` highlight row; `_pending_key` then
   releases its memory. Briefing SIGMETs have no trace in `_trace_sigmets`
