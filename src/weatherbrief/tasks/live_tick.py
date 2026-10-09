@@ -35,12 +35,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import BriefingPackRow, FlightRow
 from weatherbrief.tasks.route_weather import SigmetSourceUnavailable
+
+if TYPE_CHECKING:
+    from euro_aip.briefing.weather.sigmet import IsigmetFetch
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +166,7 @@ class SharedSigmetSource:
 
     def __init__(self, upstream=None) -> None:
         self._upstream = upstream
-        self._cache: dict[tuple, object] = {}
+        self._cache: dict[tuple, IsigmetFetch | BaseException] = {}
 
     def fetch_isigmet_result(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
         key = (region, hazard, level, date, lookahead)

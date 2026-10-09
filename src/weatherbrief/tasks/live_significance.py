@@ -1024,6 +1024,12 @@ def _cancelled_traces(
     cancelled. Both the briefing's pending SIGMETs and the ones first seen
     live count.
 
+    "Pending" is judged at the last time the SIGMET was seen: for one only in
+    the briefing, the pack's fetch time. So a briefing SIGMET that began and
+    was withdrawn early, between two ticks that both missed it, reads
+    "cancelled … from HH:MMZ" rather than "no longer active" (a highlight
+    either way).
+
     Once set, ``cancelled_at`` holds while the trace is kept (until its
     validity ended more than :data:`SIGMET_REISSUE_WINDOW` ago), so a later
     tick whose lookahead fails short of it does not take the row back.
