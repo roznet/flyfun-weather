@@ -16,6 +16,9 @@ import {
   stormTooltipHtml,
 } from '../../ts/visualization/observed/ribbon-tooltip';
 
+// Deliberately the iOS UI test's directory: one exported fixture set feeds the
+// iOS journeys, these web tests and pytest's drift check
+// (`test_ios_live_fixtures_match_the_server`), as in observed-live-fixtures.
 const DIR = resolve(__dirname, '../../../app/flyfun-weather/flyfun-weatherUITests/LiveScenarios');
 const WIDTH = 520;
 

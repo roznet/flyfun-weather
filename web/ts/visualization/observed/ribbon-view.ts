@@ -478,6 +478,25 @@ export function mountRibbon(
   };
 
   let pointer: { x: number; y: number } | null = null;
+  let focused: Element | null = null;
+
+  /** Re-read the tooltip from where it is anchored now: the mouse when it is
+   *  over the ribbon, else the keyboard-focused mark, else nothing. */
+  const reanchor = () => {
+    if (pointer) {
+      const under = document.elementFromPoint(pointer.x, pointer.y);
+      if (under && el.contains(under)) {
+        showAt(under, pointer.x, pointer.y);
+        return;
+      }
+    } else if (focused && el.contains(focused)) {
+      const r = focused.getBoundingClientRect();
+      showAt(focused, r.right, r.top + r.height / 2);
+      return;
+    }
+    hideTip();
+  };
+
   const onMove = (ev: PointerEvent) => {
     // Hover is a mouse affordance: a touch keeps its tap (map / detail).
     if (ev.pointerType !== 'mouse' || !(ev.target instanceof Element)) return;
@@ -486,24 +505,26 @@ export function mountRibbon(
   };
   const onLeave = () => {
     pointer = null;
-    hideTip();
+    reanchor();
   };
-  // The page scrolls under a still mouse: re-read what is under it now, so
-  // the fixed tooltip neither floats off its mark nor misses one that
-  // scrolled under the pointer. Listened in the capture phase: `scroll` does
-  // not bubble, and the split layout scrolls a container, not the window.
+  // The page scrolls under a still mouse or a focused mark: re-read, so the
+  // fixed tooltip neither floats off its mark nor misses one that scrolled
+  // under the pointer. Listened in the capture phase: `scroll` does not
+  // bubble, and the split layout scrolls a container, not the window.
   const onScroll = () => {
-    if (!pointer) return;
-    const under = document.elementFromPoint(pointer.x, pointer.y);
-    if (under && el.contains(under)) showAt(under, pointer.x, pointer.y);
-    else hideTip();
+    if (pointer || focused) reanchor();
   };
   // Keyboard parity: a focused mark shows its tooltip beside it, so the raw
   // METAR / TAF is reachable without a mouse.
   const onFocusIn = (ev: FocusEvent) => {
     if (!(ev.target instanceof Element)) return;
-    const r = ev.target.getBoundingClientRect();
-    showAt(ev.target, r.right, r.top + r.height / 2);
+    focused = ev.target;
+    // The mouse, when it is over the ribbon, keeps the tooltip.
+    if (!pointer) reanchor();
+  };
+  const onFocusOut = () => {
+    focused = null;
+    reanchor();
   };
 
   const focusFor = (token: string): LiveFocus | null => {
@@ -557,7 +578,7 @@ export function mountRibbon(
   el.addEventListener('pointermove', onMove);
   el.addEventListener('pointerleave', onLeave);
   el.addEventListener('focusin', onFocusIn);
-  el.addEventListener('focusout', hideTip);
+  el.addEventListener('focusout', onFocusOut);
   window.addEventListener('scroll', onScroll, { passive: true, capture: true });
   draw();
 
@@ -581,7 +602,7 @@ export function mountRibbon(
     el.removeEventListener('pointermove', onMove);
     el.removeEventListener('pointerleave', onLeave);
     el.removeEventListener('focusin', onFocusIn);
-    el.removeEventListener('focusout', hideTip);
+    el.removeEventListener('focusout', onFocusOut);
     window.removeEventListener('scroll', onScroll, { capture: true });
     tip.remove();
   };
