@@ -71,11 +71,14 @@ class WeatherbriefClient:
         cruise_altitude_ft: int | None = None,
         flight_duration_hours: float | None = None,
         description: str | None = None,
+        raw_route: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "waypoints": waypoints,
             "departure_time": departure_time,
         }
+        if raw_route:
+            body["raw_route"] = raw_route
         if description:
             body["description"] = description
         if cruise_altitude_ft is not None:
@@ -83,6 +86,10 @@ class WeatherbriefClient:
         if flight_duration_hours is not None:
             body["flight_duration_hours"] = flight_duration_hours
         return self._post("/flights", json=body)
+
+    def interpret_route(self, raw_route: str) -> dict:
+        """Resolve a route string (Field-15 or a plain waypoint list)."""
+        return self._post("/flights/interpret-route", json={"raw_route": raw_route})
 
     # -- Briefing packs --
 

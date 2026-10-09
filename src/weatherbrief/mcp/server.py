@@ -132,7 +132,8 @@ mcp = FastMCP(
         "digests, and METAR/TAF observations for ~620 European airports.\n\n"
         "Typical workflow:\n"
         "1. list_flights — see the user's upcoming flights and briefing status\n"
-        "2. create_flight — set up a new flight (auto-triggers briefing generation)\n"
+        "2. create_flight — set up a new flight from a route string, as filed or as "
+        "waypoints (auto-triggers briefing generation)\n"
         "3. get_briefing — retrieve weather assessment, advisories, and AI digest\n"
         "4. refresh_briefing — update stale briefings (checks model freshness first)\n"
         "5. get_airport_weather — quick forecast + METAR for specific airports\n\n"
@@ -349,9 +350,20 @@ def list_flights() -> dict[str, Any]:
     ),
 )
 def create_flight(
-    waypoints: Annotated[
-        list[str],
-        Field(description="Route waypoints as ICAO codes or navaid names, e.g. ['LFBO', 'LFML']. Minimum 2."),
+    route: Annotated[
+        str,
+        Field(
+            description=(
+                "The route as one string, from departure to destination, either "
+                "as filed (ICAO Field-15: SIDs, airways, DCT, speed/level groups "
+                "are fine) or as a plain list of waypoints. Always include the "
+                "departure and destination ICAO codes, even when the filed route "
+                "omits them. E.g. 'EGTK DCT LFPB' or "
+                "'EGTK SAPRE1D SAPRE/N0190F180 L615 DJL LSGS'."
+            ),
+            min_length=1,
+            max_length=2000,
+        ),
     ],
     departure_time: Annotated[
         str,
@@ -375,6 +387,12 @@ def create_flight(
 ) -> dict[str, Any]:
     """Create a new flight and automatically trigger a weather briefing.
 
+    The route string is interpreted server-side, the same way as a route
+    pasted into the web form: airways, SIDs/STARs and speed/level groups
+    are dropped, and waypoints far off the direct leg are rejected. The
+    response's ``route`` block lists what was kept and what was dropped;
+    tell the pilot about any dropped waypoint.
+
     The briefing generation takes ~2 minutes. The response includes the
     flight details and a processing status. Call get_briefing after a
     couple of minutes to retrieve the results.
@@ -385,9 +403,34 @@ def create_flight(
         return _error_result(str(e))
 
     with client:
+        # One route input for the agent (#745): the server's interpret-route
+        # turns a filed or plain route into waypoints, and the original string
+        # is stored as the flight's raw_route like the web Save flow does.
+        try:
+            interpretation = client.interpret_route(route)
+        except httpx.HTTPStatusError as e:
+            return _error_result(f"Failed to interpret route: {e.response.text}", e.response.status_code)
+
+        route_summary = {
+            "interpreted": interpretation.get("interpreted", []),
+            "skipped": interpretation.get("skipped", []),
+            "off_route": interpretation.get("off_route", []),
+        }
+        waypoints = route_summary["interpreted"]
+        if len(waypoints) < 2:
+            return {
+                **_error_result(
+                    "The route did not resolve to at least a departure and a "
+                    "destination. Include both ICAO codes in the route string and "
+                    "check the codes listed under 'skipped' and 'off_route'."
+                ),
+                "route": route_summary,
+            }
+
         try:
             flight = client.create_flight(
                 waypoints=waypoints,
+                raw_route=route,
                 departure_time=departure_time,
                 cruise_altitude_ft=cruise_altitude_ft,
                 flight_duration_hours=flight_duration_hours,
@@ -445,6 +488,7 @@ def create_flight(
             "coverage": coverage,
             "web_url": _flight_web_url(flight_id),
         },
+        "route": route_summary,
         "briefing": refresh_status,
     }
 

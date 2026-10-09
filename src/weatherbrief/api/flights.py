@@ -102,9 +102,10 @@ class CreateFlightRequest(BaseModel):
     description: str | None = Field(default=None, max_length=FLIGHT_DESCRIPTION_MAX_LEN)
     waypoints: list[str] = Field(default_factory=list, max_length=MAX_ROUTE_WAYPOINTS)  # ICAO codes, navaids, or fixes
     # Original Field-15 input the pilot typed, when the client captured one
-    # (web Save flow). The server stores it verbatim alongside ``waypoints``
-    # so future parser improvements can re-derive the route. Optional —
-    # iOS/MCP clients pass only ``waypoints``.
+    # (web and iOS route entry, MCP create_flight). The server stores it
+    # verbatim alongside ``waypoints`` so future parser improvements can
+    # re-derive the route. Optional — a client that only has a waypoint
+    # list omits it.
     raw_route: str | None = Field(default=None, max_length=4000)
     departure_time: str  # ISO 8601 datetime with timezone (e.g. "2026-02-21T09:00:00Z")
     cruise_altitude_ft: int | None = None
@@ -1001,7 +1002,7 @@ def create_flight(
 
     # Stamp the parser version only when we actually have a raw_route.
     # No raw_route → no derivation happened on the server → no version
-    # to record (iOS/MCP path). ``strip() or None`` collapses the empty
+    # to record (waypoint-list path). ``strip() or None`` collapses the empty
     # and whitespace-only cases to NULL — same idiom as update/move,
     # avoiding the contradictory ``(raw_route="", parser_version=None)``
     # state that would result from storing a whitespace-only string.
