@@ -16,6 +16,7 @@
 import { escapeHtml } from '../../utils';
 import { formatHhmmZ } from '../../helpers/live-layer';
 import type {
+  AirportObservation,
   LiveFocus,
   LiveRibbon,
   LiveStorm,
@@ -60,6 +61,15 @@ import {
   xForNm,
   yForCross,
 } from './ribbon-core';
+import {
+  airportFor,
+  bandAt,
+  bandTooltipHtml,
+  segmentTooltipHtml,
+  sigmetTooltipHtml,
+  stationTooltipHtml,
+  stormTooltipHtml,
+} from './ribbon-tooltip';
 
 /** Minimum drawing width: below this the ribbon is unreadable and the caller
  *  is better off waiting for a real measurement. */
@@ -107,7 +117,8 @@ function sigmetMark(s: RibbonSigmet, ribbon: LiveRibbon, width: number, i: numbe
   const w = Math.max(x1 - x0, 4);
   const label = sigmetText(s);
   const focusable = s.focus ? ' ribbon-hit' : '';
-  return `<g class="ribbon-sigmet${focusable}"${s.focus ? ` data-ribbon-focus="sigmet:${i}" tabindex="0" role="button"` : ''}`
+  return `<g class="ribbon-sigmet${focusable}" data-ribbon-sigmet="${i}"`
+    + `${s.focus ? ` data-ribbon-focus="sigmet:${i}" tabindex="0" role="button"` : ''}`
     + ` aria-label="${escapeHtml(s.label || s.id)}">`
     + `<rect x="${x0.toFixed(1)}" y="${SIGMET_Y - 5.5}" width="${w.toFixed(1)}" height="11" rx="2"`
     + ` fill="var(--amber)" opacity="${s.pending ? 0.25 : 0.5}"/>`
@@ -130,7 +141,8 @@ function radarStrip(ribbon: LiveRibbon, width: number): string {
         + ' text-anchor="middle">⚡</text>'
       : '';
     const hit = seg.focus ? ' ribbon-hit' : '';
-    return `<g class="ribbon-radar${hit}"${seg.focus ? ` data-ribbon-focus="segment:${i}" tabindex="0" role="button"` : ''}`
+    return `<g class="ribbon-radar${hit}" data-ribbon-seg="${i}"`
+      + `${seg.focus ? ` data-ribbon-focus="segment:${i}" tabindex="0" role="button"` : ''}`
       + ` aria-label="${escapeHtml(segmentLabel(seg))}">`
       + `<rect x="${x0.toFixed(1)}" y="${TRACK_Y - 8}" width="${w.toFixed(1)}" height="16"`
       + ` fill="${radarFill(seg)}"/>${bolt}</g>`;
@@ -242,7 +254,7 @@ export function ribbonSvg(
     const hit = st.focus ? ' ribbon-hit' : '';
     // Without a focus it is still a labelled mark, just not a control.
     const role = st.focus ? ` data-ribbon-focus="station:${i}" tabindex="0" role="button"` : ' role="img"';
-    return `<g class="ribbon-station${hit}"${role}`
+    return `<g class="ribbon-station${hit}" data-ribbon-station="${i}"${role}`
       + ` aria-label="${escapeHtml(stationLabel(st))}">`
       + airportCircle(st, at.x, at.y, stationMarkSize(st))
       + `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="${STATION_HIT_RADIUS}" fill="transparent"/></g>`;
@@ -357,12 +369,16 @@ export function stormDetailHtml(storm: LiveStorm): string {
 /** The whole "Route ribbon" section: heading, caption, drawing, key.
  *
  *  Re-lays out on resize (the marks are px-sized, so the drawing is measured,
- *  never scaled). Returns a teardown that drops the observer. */
+ *  never scaled). `airports` (the same `/live` response's
+ *  `route_observations.airports`) gives the hover tooltips (#742) each
+ *  airport's name and raw METAR / TAF. Returns a teardown that drops the
+ *  observer and the tooltip. */
 export function mountRibbon(
   el: HTMLElement,
   ribbon: LiveRibbon,
   storms: LiveStorms | null | undefined,
   handlers: RibbonHandlers,
+  airports: AirportObservation[] | null = null,
 ): () => void {
   const list = storms?.status === 'available' ? storms.storms ?? [] : [];
   const corridorNm = storms?.corridor_nm ?? 30;
@@ -383,6 +399,102 @@ export function mountRibbon(
         : '<p class="ribbon-fallback-note">Rain and cells unavailable: radar strip within '
           + `${Math.round(ribbon.radar_radius_nm ?? 10)} NM of the route</p>`)
       + ribbonLegendHtml(bands);
+    // innerHTML just dropped it; fixed-positioned, so `.ribbon-plot`'s
+    // overflow clip does not cut it.
+    el.appendChild(tip);
+  };
+
+  const tip = document.createElement('div');
+  tip.className = 'ribbon-tip';
+  tip.setAttribute('role', 'tooltip');
+  tip.dataset.testid = 'ribbon-tip';
+  tip.hidden = true;
+  let tipKey = '';
+
+  /** What the pointer is over, as [cache key, tooltip markup]. */
+  const tipFor = (target: Element, clientX: number, clientY: number): [string, string] | null => {
+    const stormEl = target.closest<HTMLElement>('[data-ribbon-storm]');
+    if (stormEl) {
+      const storm = list.find((s) => s.id === stormEl.dataset.ribbonStorm);
+      return storm ? [`storm:${storm.id}`, stormTooltipHtml(storm)] : null;
+    }
+    const stationEl = target.closest<HTMLElement>('[data-ribbon-station]');
+    if (stationEl) {
+      const i = Number(stationEl.dataset.ribbonStation);
+      const st = (ribbon.stations ?? [])[i];
+      return st ? [`station:${i}`, stationTooltipHtml(st, airportFor(st, airports))] : null;
+    }
+    const sigmetEl = target.closest<HTMLElement>('[data-ribbon-sigmet]');
+    if (sigmetEl) {
+      const i = Number(sigmetEl.dataset.ribbonSigmet);
+      const s = (ribbon.sigmets ?? [])[i];
+      return s ? [`sigmet:${i}`, sigmetTooltipHtml(s)] : null;
+    }
+    const segEl = target.closest<HTMLElement>('[data-ribbon-seg]');
+    if (segEl) {
+      const i = Number(segEl.dataset.ribbonSeg);
+      const seg = (ribbon.segments ?? [])[i];
+      return seg ? [`seg:${i}`, segmentTooltipHtml(seg)] : null;
+    }
+    if (!bands) return null;
+    const svg = el.querySelector('.ribbon-svg');
+    if (!svg || !svg.contains(target)) return null;
+    const rect = svg.getBoundingClientRect();
+    const band = bandAt(ribbon, clientX - rect.left, clientY - rect.top, rect.width);
+    if (!band) return null;
+    // A core is a cell: its own tooltip says more than the band's.
+    const storm = band.storm_id ? list.find((s) => s.id === band.storm_id) : undefined;
+    if (storm) return [`storm:${storm.id}`, stormTooltipHtml(storm)];
+    return [`band:${band.id}`, bandTooltipHtml(band)];
+  };
+
+  const hideTip = () => {
+    tip.hidden = true;
+    tipKey = '';
+  };
+
+  /** Show the tooltip for whatever is under a window point, or hide it. */
+  const showAt = (target: Element, clientX: number, clientY: number) => {
+    const hit = tipFor(target, clientX, clientY);
+    if (!hit) {
+      hideTip();
+      return;
+    }
+    if (hit[0] !== tipKey) {
+      tip.innerHTML = hit[1];
+      tipKey = hit[0];
+    }
+    tip.hidden = false;
+    // Beside the pointer, flipped to stay inside the window.
+    const gap = 14;
+    const w = tip.offsetWidth;
+    const h = tip.offsetHeight;
+    let left = clientX + gap;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, clientX - gap - w);
+    let top = clientY + gap;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - gap - h);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  };
+
+  let pointer: { x: number; y: number } | null = null;
+  const onMove = (ev: PointerEvent) => {
+    // Hover is a mouse affordance: a touch keeps its tap (map / detail).
+    if (ev.pointerType !== 'mouse' || !(ev.target instanceof Element)) return;
+    pointer = { x: ev.clientX, y: ev.clientY };
+    showAt(ev.target, ev.clientX, ev.clientY);
+  };
+  const onLeave = () => {
+    pointer = null;
+    hideTip();
+  };
+  // The page scrolls under a still mouse: re-read what is under it now, so
+  // the fixed tooltip neither floats off its mark nor vanishes from one.
+  const onScroll = () => {
+    if (!pointer || tip.hidden) return;
+    const under = document.elementFromPoint(pointer.x, pointer.y);
+    if (under && el.contains(under)) showAt(under, pointer.x, pointer.y);
+    else hideTip();
   };
 
   const focusFor = (token: string): LiveFocus | null => {
@@ -433,6 +545,9 @@ export function mountRibbon(
 
   el.addEventListener('click', onClick);
   el.addEventListener('keydown', onKey);
+  el.addEventListener('pointermove', onMove);
+  el.addEventListener('pointerleave', onLeave);
+  window.addEventListener('scroll', onScroll, { passive: true });
   draw();
 
   let observer: ResizeObserver | null = null;
@@ -452,5 +567,9 @@ export function mountRibbon(
     observer?.disconnect();
     el.removeEventListener('click', onClick);
     el.removeEventListener('keydown', onKey);
+    el.removeEventListener('pointermove', onMove);
+    el.removeEventListener('pointerleave', onLeave);
+    window.removeEventListener('scroll', onScroll);
+    tip.remove();
   };
 }

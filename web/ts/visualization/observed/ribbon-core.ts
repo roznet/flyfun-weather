@@ -29,6 +29,8 @@
  *  - **dBZ hexes** come from the web's own VIP ramp (`layer-legends.ts`) so
  *    the ribbon matches the radar legend beside it. The *boundaries*
  *    (35 / 41 / 50) are shared with iOS exactly — those are the cell tiers.
+ *  - **Hover tooltips** (`ribbon-tooltip.ts`, #742) are web only: a mouse
+ *    affordance with no iOS counterpart, so nothing there is mirrored.
  * ===========================================================================
  *
  * Observations only: no verdict, no estimate. Nothing here re-grades the

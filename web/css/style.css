@@ -9337,6 +9337,64 @@ button.glance-line:hover {
   pointer-events: all;
 }
 
+/* Hover tooltip (#742): mouse only, fixed so the plot's clip does not cut it. */
+.ribbon-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(420px, calc(100vw - 16px));
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.ribbon-tip[hidden] {
+  display: none;
+}
+
+.ribbon-tip-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ribbon-tip-sub {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.ribbon-tip-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ribbon-tip-label {
+  flex: 0 0 auto;
+  min-width: 80px;
+  color: var(--text-muted);
+}
+
+.ribbon-tip-raw {
+  margin-top: 4px;
+}
+
+.ribbon-tip-raw code {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.7rem;
+}
+
+.ribbon-tip-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* --- Ribbon key --- */
 
 .ribbon-key {

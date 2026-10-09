@@ -2327,7 +2327,8 @@ async function init(): Promise<void> {
               focusMapOn(storm.focus ?? null);
             });
         },
-      });
+      // Same tick as the ribbon when the layer has them; else the pack's.
+      }, state.live?.route_observations?.airports ?? state.snapshot?.route_observations?.airports ?? null);
     }
   }
 
