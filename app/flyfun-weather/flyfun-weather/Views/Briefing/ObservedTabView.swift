@@ -4,12 +4,15 @@ import SwiftUI
 /// order a pilot reads it in the cockpit — on the day, and in the aircraft,
 /// this is the screen the app is opened for (planning happens on a computer).
 ///
-/// 1. **At a glance** — the server's nutshell (#690: one line per phase plus
-///    the comparison with the briefing, each line opening the map on what it
-///    summarises) and the route ribbon. A layer without them (older server, a
-///    tick that could not build them) falls back to the departure /
-///    destination tiles and chips.
-/// 2. **Since this briefing** — the live layer's significant changes (#637).
+/// 1. **At a glance** (#697) — alert-tier nutshell lines and change rows
+///    (never folded), the model-written highlight (or the nutshell headline
+///    in its place), the route ribbon, then a **Details** fold (collapsed by
+///    default, remembered) with the headline, the other nutshell lines (#690)
+///    and the other "Since this briefing" rows (#637). A layer without a
+///    nutshell (older server, a tick that could not build it) falls back to
+///    the departure / destination tiles and chips, with every change row in
+///    the panel below them.
+/// 2. **Since this briefing** — only in that fallback; otherwise in Details.
 /// 3. **Radar & lightning now** — the server's per-source summary clauses
 ///    (#574), each with its own frame age; missing sources are named.
 /// 4. **Cells** — the experimental cell analysis for the route box (#656).
@@ -24,20 +27,26 @@ struct ObservedTabView: View {
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-                if let glance = viewModel.liveLayerForPack?.glance, !glance.items.isEmpty {
-                    ObservedNutshellCard(viewModel: viewModel, glance: glance)
-                        .spyAnchor("glance")
+                if let glance = nutshell {
+                    VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+                        ObservedAlertsCard(viewModel: viewModel, glance: glance, changes: viewModel.liveChanges)
+                        ObservedHighlightCard(viewModel: viewModel, glance: glance)
+                    }
+                    .spyAnchor("glance")
                     if let ribbon = viewModel.liveLayerForPack?.ribbon {
                         RouteRibbonCard(viewModel: viewModel, ribbon: ribbon, storms: viewModel.liveLayerForPack?.storms)
                             .spyAnchor("ribbon")
                     }
+                    ObservedDetailsFold(viewModel: viewModel, glance: glance,
+                                        changes: viewModel.liveChanges, baseline: viewModel.liveBaselineDate)
+                        .spyAnchor("details")
                 } else {
                     ObservedGlanceCard(viewModel: viewModel)
                         .spyAnchor("glance")
-                }
-                if let liveChanges = viewModel.liveChanges {
-                    LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
-                        .spyAnchor("live")
+                    if let liveChanges = viewModel.liveChanges {
+                        LiveChangesView(changes: liveChanges, baseline: viewModel.liveBaselineDate)
+                            .spyAnchor("live")
+                    }
                 }
                 if let observed = observedConditions, observed.hasAnyField {
                     ObservedNowView(observed: observed)
@@ -68,6 +77,12 @@ struct ObservedTabView: View {
         }
     }
 
+    /// The server's nutshell for the pack on screen, when it has lines.
+    private var nutshell: LiveGlance? {
+        guard let glance = viewModel.liveLayerForPack?.glance, !glance.items.isEmpty else { return nil }
+        return glance
+    }
+
     private var snapshot: SnapshotResponse? {
         if case .loaded(let snapshot) = viewModel.snapshotState { return snapshot }
         return nil
@@ -94,10 +109,12 @@ struct ObservedTabView: View {
 
     private var spySections: [SpySection] {
         var sections = [SpySection("glance", "Now")]
-        if !(viewModel.liveLayerForPack?.glance?.items.isEmpty ?? true), viewModel.liveLayerForPack?.ribbon != nil {
-            sections.append(SpySection("ribbon", "Route"))
+        if nutshell != nil {
+            if viewModel.liveLayerForPack?.ribbon != nil { sections.append(SpySection("ribbon", "Route")) }
+            sections.append(SpySection("details", "Details"))
+        } else if viewModel.liveChanges != nil {
+            sections.append(SpySection("live", "Changes"))
         }
-        if viewModel.liveChanges != nil { sections.append(SpySection("live", "Changes")) }
         if observedConditions?.hasAnyField ?? false { sections.append(SpySection("radar", "Radar")) }
         if showsCells { sections.append(SpySection("cells", "Cells")) }
         if hasObservations { sections.append(SpySection("observations", "METAR/TAF")) }

@@ -624,9 +624,14 @@ final class flyfun_weatherUITests: XCTestCase {
         openFixture1Briefing(app)
         switchToBriefingTab(app, "Observed")
 
-        XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].waitForExistence(timeout: Self.uiTimeout),
-                      "the Observed tab should open on the server's nutshell")
-        XCTAssertTrue(app.staticTexts["Observed 08:10Z · as briefed"].firstMatch.exists, "the headline should render")
+        // #697: the top is the highlight slot; with no highlight served the
+        // nutshell headline stands in it. The other lines are under Details.
+        XCTAssertTrue(app.descendants(matching: .any)["observedHighlight"].waitForExistence(timeout: Self.uiTimeout),
+                      "the Observed tab should open on the highlight slot")
+        XCTAssertTrue(app.staticTexts["Observed 08:10Z · as briefed"].firstMatch.exists,
+                      "with no highlight, the headline should stand in its slot")
+        XCTAssertFalse(app.descendants(matching: .any)["observedHighlightCaption"].firstMatch.exists,
+                       "the experimental caption belongs to a highlight, not the headline")
         XCTAssertTrue(app.descendants(matching: .any)["observedRibbon"].firstMatch.exists, "the route ribbon should render")
         attachScreenshot(app, "Observed-Nutshell")
 
@@ -799,6 +804,23 @@ final class flyfun_weatherUITests: XCTestCase {
     }
 
     @MainActor
+    /// Open the Observed tab's "Details" fold (#697) unless it already is:
+    /// the expanded state is remembered across launches, so read the toggle's
+    /// value before tapping rather than toggling blind.
+    @MainActor
+    private func openObservedDetails(_ app: XCUIApplication) {
+        let toggle = app.buttons["observedDetailsToggle"].firstMatch
+        guard toggle.waitForExistence(timeout: Self.uiTimeout) else {
+            XCTFail("the Observed tab should have a Details fold")
+            return
+        }
+        guard (toggle.value as? String) != "expanded" else { return }
+        // Below the ribbon: bring it on screen before tapping.
+        for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "expanded", "tapping Details should open it")
+    }
+
     private func attachScreenshot(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -1237,6 +1259,9 @@ final class flyfun_weatherUITests: XCTestCase {
                 openFixture1Briefing(app)
                 switchToBriefingTab(app, "Observed")
 
+                // #697: the nutshell lines and the non-alert change rows live
+                // under the Details fold; alert ones stay above the highlight.
+                openObservedDetails(app)
                 let section = app.descendants(matching: .any)["liveChangesSection"]
                 XCTAssertTrue(section.waitForExistence(timeout: Self.uiTimeout),
                               "\(hhmm): the live changes panel should render")
@@ -1419,5 +1444,65 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(cleared.contains { $0["key"] as? String == "metar:LEMI" })
         let current = (at0710["changes"] as? [[String: Any]]) ?? []
         XCTAssertTrue(current.contains { (($0["trail"] as? [String: Any])?["times_today"] as? Int ?? 0) >= 2 })
+    }
+
+    /// #697: the 08:30 tick with a fixed, grounded highlight (exported as
+    /// `2026-10-02_lell_lemi_0830_highlight.json`). Alert-tier lines and
+    /// change rows sit above the highlight, which carries its experimental
+    /// caption with the written time and a 👍/👎; nothing alert is folded.
+    @MainActor
+    func testObservedHighlight() throws {
+        let tick = try liveScenarioTick("2026-10-02_lell_lemi", "0830_highlight")
+        let glance = try XCTUnwrap(tick.body["glance"] as? [String: Any])
+        let highlight = try XCTUnwrap(glance["highlight"] as? [String: Any])
+        let text = try XCTUnwrap(highlight["text"] as? String)
+        let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": tick.json])
+        defer { app.terminate() }
+        openFixture1Briefing(app)
+        switchToBriefingTab(app, "Observed")
+
+        let card = app.descendants(matching: .any)["observedHighlight"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "the highlight card should render")
+        let body = app.descendants(matching: .any)["observedHighlightText"].firstMatch
+        XCTAssertTrue(body.exists && body.label == text, "the highlight is the server's text, word for word")
+        let caption = app.descendants(matching: .any)["observedHighlightCaption"].firstMatch
+        XCTAssertTrue(caption.label.contains("Experimental, still being calibrated"), "got \(caption.label)")
+        XCTAssertTrue(caption.label.contains("written 08:20Z"), "the caption should carry the written time")
+        XCTAssertTrue(app.buttons["highlightThumb-up"].firstMatch.exists, "the highlight should offer 👍")
+        XCTAssertTrue(app.buttons["highlightThumb-down"].firstMatch.exists, "the highlight should offer 👎")
+
+        // Alerts above the highlight, never folded: every alert-tier line
+        // and change row is on screen without opening Details.
+        let alerts = app.descendants(matching: .any)["observedAlerts"].firstMatch
+        XCTAssertTrue(alerts.exists, "the alert block should render above the highlight")
+        XCTAssertLessThan(alerts.frame.minY, card.frame.minY, "alerts sit above the highlight")
+        for line in (glance["lines"] as? [[String: Any]]) ?? [] where line["alert"] as? Bool == true {
+            let phase = line["phase"] as? String ?? ""
+            XCTAssertTrue(app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch.exists,
+                          "the alert \(phase) line should not be folded")
+        }
+        let changes = (tick.body["changes"] as? [String: Any])?["changes"] as? [[String: Any]] ?? []
+        for change in changes where change["tier"] as? String == "alert" {
+            let key = change["key"] as? String ?? ""
+            XCTAssertTrue(app.descendants(matching: .any)["liveChangeRow-\(key)"].firstMatch.exists,
+                          "the alert change \(key) should not be folded")
+        }
+        // The headline is under Details when the highlight holds the slot.
+        attachScreenshot(app, "Observed-Highlight")
+        openObservedDetails(app)
+        XCTAssertTrue(app.descendants(matching: .any)["observedNutshellHeadline"].waitForExistence(timeout: Self.uiTimeout),
+                      "the headline should be under Details")
+        attachScreenshot(app, "Observed-Highlight-Details")
+
+        // A 👎 opens the comment sheet; sending it collapses the thumbs.
+        let down = app.buttons["highlightThumb-down"].firstMatch
+        for _ in 0..<4 where !down.isHittable { app.swipeDown() }
+        down.tap()
+        let send = app.buttons["Send"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: Self.uiTimeout), "a thumb should open the comment sheet")
+        send.tap()
+        XCTAssertTrue(app.staticTexts["Thanks for the feedback!"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "after a rating the highlight shows a thank-you")
+        XCTAssertFalse(app.buttons["highlightThumb-down"].firstMatch.exists)
     }
 }

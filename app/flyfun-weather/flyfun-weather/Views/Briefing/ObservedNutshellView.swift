@@ -17,23 +17,30 @@ import SwiftUI
 
 // MARK: - Nutshell
 
-/// Layer 0: the headline comparing with the briefing, then one line per phase.
-/// Each line opens the map on what it summarises (its `focus`).
+/// The headline comparing with the briefing, then one line per phase. Each
+/// line opens the map on what it summarises (its `focus`).
+///
+/// Since #697 this is the body of the Observed tab's "Details" fold: the
+/// alert-tier lines sit above the highlight (`ObservedAlertsCard`) and are
+/// passed here only by a caller that wants every line. `showsHeadline` is
+/// false when the headline already stands in the highlight's slot.
 struct ObservedNutshellCard: View {
     let viewModel: BriefingViewModel
     let glance: LiveGlance
+    var lines: [LiveGlanceLine]? = nil
+    var showsHeadline: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
-            if let headline = glance.headline {
+            if showsHeadline, let headline = glance.headline {
                 Text(headline)
                     .font(.headline)
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("observedNutshellHeadline")
             }
-            ForEach(glance.items) { line in
-                lineRow(line)
+            ForEach(lines ?? glance.items) { line in
+                ObservedNutshellLineRow(viewModel: viewModel, line: line)
             }
             if showsMapButton {
                 Button {
@@ -62,9 +69,17 @@ struct ObservedNutshellCard: View {
         }
         return false
     }
+}
 
-    @ViewBuilder
-    private func lineRow(_ line: LiveGlanceLine) -> some View {
+/// One nutshell line: alert bar, phase label, the server's text, and the tap
+/// that opens the map on its `focus`. Shared by the nutshell (Details) and
+/// the alert block above the highlight (#697), so an alert line reads the
+/// same in both places.
+struct ObservedNutshellLineRow: View {
+    let viewModel: BriefingViewModel
+    let line: LiveGlanceLine
+
+    var body: some View {
         let content = HStack(alignment: .top, spacing: Theme.spacingS) {
             // An alert-tier change in this phase: a red bar, nothing more —
             // the words are the server's.

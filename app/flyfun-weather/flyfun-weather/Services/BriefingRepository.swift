@@ -164,6 +164,8 @@ protocol BriefingRepository: Sendable {
     // Digest feedback (👍/👎 on the AI digest)
     /// Submit a thumb rating (+ optional comment) for a briefing pack's digest.
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws
+    /// Submit a thumb rating (+ optional comment) for the Observed highlight (#697).
+    func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws
     /// Submit categorized free-text feedback (the web help page's twin).
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws
 }
@@ -510,6 +512,11 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        _ = try await client.requestData("/api/feedback", method: "POST", body: body)
+    }
+
+    func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws {
         let body = try JSONEncoder.weatherBrief.encode(request)
         _ = try await client.requestData("/api/feedback", method: "POST", body: body)
     }
