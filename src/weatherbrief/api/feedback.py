@@ -31,10 +31,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
-ALLOWED_CATEGORIES = {"data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other", "digest_rating"}
+ALLOWED_CATEGORIES = {
+    "data_issue", "too_conservative", "too_optimistic", "incorrect_interpretation", "other",
+    "digest_rating", "highlight_rating",
+}
+# Quick 👍/👎 ratings (looser limiters, the admin "ratings" tab) rather than
+# the verbose feedback form.
+RATING_CATEGORIES = ("digest_rating", "highlight_rating")
 ALLOWED_STATUSES = {"pending", "ready", "replied", "ignored"}
 ALLOWED_SENTIMENTS = {"up", "down"}
-ALLOWED_TARGETS = {"digest", "general"}
+ALLOWED_TARGETS = {"digest", "general", "live_highlight"}
+# What a live-highlight rating records about the rated line (#697): exactly
+# what /live served, so the rating survives the highlight being regenerated.
+# ``facts_hash`` keys back into the flight's ``live_highlights.jsonl``.
+HIGHLIGHT_CONTEXT_KEYS = ("facts_hash", "generated_at", "model", "text")
+HIGHLIGHT_CONTEXT_MAX_LEN = {"facts_hash": 128, "generated_at": 64, "model": 64, "text": 1000}
 
 
 class FeedbackRequest(BaseModel):
@@ -45,6 +56,8 @@ class FeedbackRequest(BaseModel):
     sentiment: Optional[str] = Field(None, max_length=8)
     target: Optional[str] = Field(None, max_length=16)
     contact_ok: bool = True
+    # Only for target="live_highlight": the rated line as /live served it.
+    context: Optional[dict] = None
 
     @field_validator("category")
     @classmethod
@@ -88,6 +101,30 @@ class FeedbackRequest(BaseModel):
             raise ValueError("comment must not be empty")
         return self
 
+    @model_validator(mode="after")
+    def validate_highlight_context(self) -> "FeedbackRequest":
+        # A highlight is regenerated as the weather changes, so a rating is
+        # meaningless without the line it rated; any other target has no
+        # context. Only the known keys, as short strings, are stored.
+        if self.target != "live_highlight":
+            if self.context is not None:
+                raise ValueError("context is only accepted for target 'live_highlight'")
+            return self
+        if self.category != "highlight_rating":
+            raise ValueError("target 'live_highlight' requires category 'highlight_rating'")
+        if not isinstance(self.context, dict):
+            raise ValueError("target 'live_highlight' requires a context")
+        clean: dict[str, str] = {}
+        for key in HIGHLIGHT_CONTEXT_KEYS:
+            value = self.context.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"context.{key} must be a non-empty string")
+            if len(value) > HIGHLIGHT_CONTEXT_MAX_LEN[key]:
+                raise ValueError(f"context.{key} is too long")
+            clean[key] = value
+        self.context = clean
+        return self
+
 
 class StatusUpdate(BaseModel):
     status: str
@@ -125,10 +162,10 @@ def submit_feedback(
     db: Session = Depends(get_db),
 ):
     """Submit feedback for a specific briefing pack."""
-    # Lightweight digest thumb ratings get their own, looser limiters — a pilot
-    # may legitimately rate several briefings in a session, which the verbose
+    # Lightweight thumb ratings (digest, live highlight) get their own, looser
+    # limiters — a pilot may legitimately rate several briefings in a session, which the verbose
     # form's 1/min burst would block. The form keeps the stricter limits.
-    if body.category == "digest_rating":
+    if body.category in RATING_CATEGORIES:
         digest_rating_burst_limiter.check(user_id)
         digest_rating_daily_limiter.check(user_id)
     else:
@@ -158,6 +195,7 @@ def submit_feedback(
         sentiment=body.sentiment,
         target=body.target,
         contact_ok=body.contact_ok,
+        context=json.dumps(body.context) if body.context is not None else None,
         client=client,
         user_agent=user_agent,
     )
@@ -209,6 +247,7 @@ def submit_feedback(
             base_url=base_url,
             sentiment=body.sentiment,
             client=client,
+            rated_text=(body.context or {}).get("text"),
         )
     except Exception:
         logger.warning("Failed to send feedback notification email", exc_info=True)
@@ -239,6 +278,17 @@ def _parse_waypoints(waypoints_json: Optional[str]) -> list[str]:
     return [str(w) for w in value] if isinstance(value, list) else []
 
 
+def _parse_context(context_json: Optional[str]) -> Optional[dict]:
+    """Parse a feedback row's ``context`` column (JSON text) into a dict."""
+    if not context_json:
+        return None
+    try:
+        value = json.loads(context_json)
+    except (ValueError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _serialize_feedback(
     fb: FeedbackRow,
     email: str,
@@ -259,6 +309,7 @@ def _serialize_feedback(
         "comment": fb.comment,
         "sentiment": fb.sentiment,
         "target": fb.target,
+        "context": _parse_context(fb.context),
         "contact_ok": fb.contact_ok,
         "client": fb.client,
         "user_agent": fb.user_agent,
@@ -279,7 +330,8 @@ def list_feedback(
     status: Optional[str] = Query(None, description="Comma-separated status filter"),
     kind: Optional[str] = Query(
         None,
-        description="'feedback' excludes digest_rating; 'ratings' returns only digest_rating",
+        description="'feedback' excludes the thumb ratings; 'ratings' returns only them "
+        "(digest_rating and highlight_rating)",
     ),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -305,9 +357,9 @@ def list_feedback(
         query = query.filter(FeedbackRow.status.in_(statuses))
 
     if kind == "ratings":
-        query = query.filter(FeedbackRow.category == "digest_rating")
+        query = query.filter(FeedbackRow.category.in_(RATING_CATEGORIES))
     elif kind == "feedback":
-        query = query.filter(FeedbackRow.category != "digest_rating")
+        query = query.filter(FeedbackRow.category.not_in(RATING_CATEGORIES))
     elif kind is not None:
         raise HTTPException(400, "kind must be 'feedback' or 'ratings'")
 

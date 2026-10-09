@@ -1146,19 +1146,41 @@ def test_highlight_log_is_removed_with_the_layer():
     assert LIVE_HIGHLIGHT_LOG in LIVE_FILES
 
 
-def test_highlight_stays_out_of_the_agent_block():
-    """Not displayed anywhere yet (owner, 2026-10-07) — an agent quoting it
-    would be a user-facing surface by the back door."""
+def test_highlight_is_in_the_agent_block_without_its_gate():
+    """Displayed since 2026-10-09: the agent quotes the same line the apps
+    show, with its own written time. The regeneration gate and the model name
+    are server internals and never leave it."""
+    from weatherbrief.models.live import LiveLayer
+    from weatherbrief.tasks.live_layer import summarize_live
+
+    hl = _highlight(facts_hash="hash-9f3e", text="SIGMET TS from 40 to 90 NM.",
+                    gate={"secret_gate_key": 1})
+    layer = LiveLayer(
+        flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00", pack_dir_name="p",
+        glance=_glance(highlight=hl),
+    )
+    out = summarize_live(layer, {})
+    assert out["highlight"] == {
+        "text": "SIGMET TS from 40 to 90 NM.",
+        "written_at": hl.generated_at.isoformat(),
+    }
+    blob = json.dumps(out, default=str)
+    assert "secret_gate_key" not in blob
+    assert hl.facts_hash not in blob
+    assert "Observed 09:00Z" in blob  # the nutshell headline is still exposed
+
+
+def test_agent_block_highlight_is_null_without_one():
     from weatherbrief.models.live import LiveLayer
     from weatherbrief.tasks.live_layer import summarize_live
 
     layer = LiveLayer(
         flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00", pack_dir_name="p",
-        glance=_glance(highlight=_highlight(text="SECRET HIGHLIGHT")),
+        glance=_glance(),
     )
-    blob = json.dumps(summarize_live(layer, {}), default=str)
-    assert "SECRET HIGHLIGHT" not in blob
-    assert "Observed 09:00Z" in blob  # the nutshell headline is exposed, as before
+    assert summarize_live(layer, {})["highlight"] is None
+    bare = LiveLayer(flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00", pack_dir_name="p")
+    assert summarize_live(bare, {})["highlight"] is None
 
 
 # --- Model request (#715) ---------------------------------------------------

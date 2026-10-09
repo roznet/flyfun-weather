@@ -1,0 +1,2311 @@
+{
+ "changes": {
+  "alert_count": 1,
+  "baseline_at": "2026-10-02T06:52:55Z",
+  "baseline_source": "briefing",
+  "changes": [
+   {
+    "cleared_at": null,
+    "direction": "worse",
+    "enroute_distance_nm": 235.12697602257145,
+    "from_value": null,
+    "icao": null,
+    "key": "sigmet:LECB|3+sigmet:LECM|3",
+    "kind": "sigmet_issued",
+    "message": "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)",
+    "new_alert": true,
+    "observed_at": "2026-10-02T08:35:00Z",
+    "replaces": null,
+    "role": "destination",
+    "source": "SIGMET",
+    "station_id": null,
+    "storm_ids": null,
+    "tier": "alert",
+    "to_value": "EMBD TS",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:30:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   },
+   {
+    "cleared_at": null,
+    "direction": "better",
+    "enroute_distance_nm": 268.7,
+    "from_value": "MVFR",
+    "icao": "LERI",
+    "key": "metar:LERI",
+    "kind": "metar_category",
+    "message": "LERI METAR: MVFR \u2192 VFR",
+    "new_alert": false,
+    "observed_at": "2026-10-02T08:30:00Z",
+    "replaces": null,
+    "role": "alternate",
+    "source": "METAR",
+    "station_id": null,
+    "storm_ids": null,
+    "tier": "highlight",
+    "to_value": "VFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T07:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T07:00:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   },
+   {
+    "cleared_at": null,
+    "direction": "worse",
+    "enroute_distance_nm": 126.16,
+    "from_value": "IFR",
+    "icao": "LECH",
+    "key": "metar:LECH",
+    "kind": "metar_category",
+    "message": "LECH METAR: IFR \u2192 LIFR",
+    "new_alert": false,
+    "observed_at": "2026-10-02T08:30:00Z",
+    "replaces": null,
+    "role": "route",
+    "source": "METAR",
+    "station_id": null,
+    "storm_ids": null,
+    "tier": "highlight",
+    "to_value": "LIFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "LIFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": null,
+       "start": "2026-10-02T08:30:00Z"
+      }
+     ],
+     "times_today": 1
+    }
+   },
+   {
+    "cleared_at": null,
+    "direction": "better",
+    "enroute_distance_nm": 169.93,
+    "from_value": "TCU",
+    "icao": "LEVC",
+    "key": "conv:LEVC",
+    "kind": "metar_convective",
+    "message": "LEVC METAR: TCU no longer reported",
+    "new_alert": false,
+    "observed_at": "2026-10-02T08:30:00Z",
+    "replaces": null,
+    "role": "route",
+    "source": "METAR",
+    "station_id": null,
+    "storm_ids": null,
+    "tier": "highlight",
+    "to_value": "none",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": null,
+     "spans": [
+      {
+       "end": "2026-10-02T07:00:00Z",
+       "start": "2026-10-02T06:20:00Z"
+      },
+      {
+       "end": null,
+       "start": "2026-10-02T08:00:00Z"
+      }
+     ],
+     "times_today": 2
+    }
+   }
+  ],
+  "computed_at": "2026-10-02T08:30:00Z",
+  "improved_count": 2,
+  "new_sigmets": [
+   "sigmet:LECB|3",
+   "sigmet:LECM|3"
+  ],
+  "recently_cleared": [
+   {
+    "cleared_at": "2026-10-02T07:30:00Z",
+    "direction": "worse",
+    "enroute_distance_nm": 169.93,
+    "from_value": "MVFR",
+    "icao": "LEVC",
+    "key": "metar:LEVC",
+    "kind": "metar_category",
+    "message": "LEVC METAR: MVFR \u2192 IFR (SPECI)",
+    "new_alert": false,
+    "observed_at": "2026-10-02T07:18:00Z",
+    "replaces": null,
+    "role": "route",
+    "source": "SPECI",
+    "station_id": null,
+    "storm_ids": null,
+    "tier": "highlight",
+    "to_value": "IFR",
+    "trail": {
+     "baseline_source": "briefing",
+     "reports": [
+      {
+       "at": "2026-10-02T07:10:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T07:18:00Z",
+       "category": "IFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T07:30:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:00:00Z",
+       "category": "MVFR",
+       "report_type": "METAR"
+      },
+      {
+       "at": "2026-10-02T08:11:00Z",
+       "category": "MVFR",
+       "report_type": "SPECI"
+      },
+      {
+       "at": "2026-10-02T08:30:00Z",
+       "category": "VFR",
+       "report_type": "METAR"
+      }
+     ],
+     "spans": [
+      {
+       "end": "2026-10-02T06:20:00Z",
+       "start": "2026-10-02T06:00:00Z"
+      },
+      {
+       "end": "2026-10-02T07:30:00Z",
+       "start": "2026-10-02T07:20:00Z"
+      }
+     ],
+     "times_today": 2
+    }
+   }
+  ],
+  "worsened_count": 2
+ },
+ "flight_id": "fixture-1",
+ "glance": {
+  "as_of": "2026-10-02T08:30:00Z",
+  "comparison": "mixed",
+  "headline": "Observed 08:30Z \u00b7 2 worse since the briefing (en route, arrival), en route and arrival improving",
+  "highlight": {
+   "facts_hash": "fixture-lell-lemi-0830",
+   "gate": null,
+   "generated_at": "2026-10-02T08:20:00Z",
+   "latency_ms": null,
+   "model": "fixture",
+   "text": "New EMBD TS SIGMETs LECB 3 and LECM 3 from 235 NM to LEMI, valid from 08:35Z; EMBD TS SIGMET LECB 2 covers 10 to 276 NM. LECH, 126 NM along, now LIFR."
+  },
+  "lines": [
+   {
+    "alert": false,
+    "focus": {
+     "bbox": [
+      1.6599,
+      41.1876,
+      2.5503,
+      41.8542
+     ],
+     "id": "LELL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": "LELL",
+    "passed": true,
+    "phase": "departure",
+    "sources": [
+     "metar:LELL"
+    ],
+    "text": "LELL VFR \u00b7 radar cells unavailable \u00b7 lightning unavailable",
+    "unavailable": [
+     "storms",
+     "lightning"
+    ]
+   },
+   {
+    "alert": false,
+    "focus": {
+     "bbox": [
+      -1.3401,
+      37.6362,
+      1.2999,
+      40.838
+     ],
+     "id": "seg:ahead",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": null,
+    "passed": false,
+    "phase": "enroute",
+    "sources": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers last 266 NM (briefed), EMBD TS SIGMET LECB 3 covers last 40 NM from 08:35Z (new), +1 more SIGMET",
+    "unavailable": [
+     "storms"
+    ]
+   },
+   {
+    "alert": true,
+    "focus": {
+     "bbox": [
+      -1.5468,
+      37.4695,
+      -0.703,
+      38.1362
+     ],
+     "id": "LEMI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "icao": "LEMI",
+    "passed": false,
+    "phase": "arrival",
+    "sources": [
+     "metar:LEMI"
+    ],
+    "text": "LEMI VFR \u00b7 no TAF for ETA \u00b7 radar cells unavailable \u00b7 lightning unavailable",
+    "unavailable": [
+     "taf",
+     "storms",
+     "lightning"
+    ]
+   }
+  ]
+ },
+ "last_refresh_delta": {
+  "computed_at": "2026-10-02T08:30:00Z",
+  "messages": [
+   "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)",
+   "LECH METAR: IFR \u2192 LIFR"
+  ],
+  "worsened": true
+ },
+ "live_updated_at": "2026-10-02T08:30:00Z",
+ "observations_updated_at": "2026-10-02T08:30:00Z",
+ "observed_conditions": null,
+ "observed_updated_at": null,
+ "pack_timestamp": "2099-06-30T06:00:00+00:00",
+ "ribbon": {
+  "arrival_at": "2026-10-02T10:00:00Z",
+  "departure_at": "2026-10-02T08:00:00Z",
+  "flown_nm": 68.9,
+  "radar_radius_nm": 10.0,
+  "radar_time": null,
+  "route_nm": 275.6,
+  "segment_nm": 9.8,
+  "segments": [
+   {
+    "eta_from": "2026-10-02T08:00:00Z",
+    "eta_to": "2026-10-02T08:04:17.142857Z",
+    "focus": {
+     "bbox": [
+      1.7369,
+      41.2329,
+      2.3275,
+      41.6876
+     ],
+     "id": "seg:0",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 0.0,
+    "index": 0,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [],
+    "storm_ids": [],
+    "to_nm": 9.8
+   },
+   {
+    "eta_from": "2026-10-02T08:04:17.142857Z",
+    "eta_to": "2026-10-02T08:08:34.285714Z",
+    "focus": {
+     "bbox": [
+      1.5916,
+      41.1115,
+      2.1813,
+      41.5662
+     ],
+     "id": "seg:1",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 9.8,
+    "index": 1,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 19.7
+   },
+   {
+    "eta_from": "2026-10-02T08:08:34.285714Z",
+    "eta_to": "2026-10-02T08:12:51.428571Z",
+    "focus": {
+     "bbox": [
+      1.4462,
+      40.9902,
+      2.0351,
+      41.4448
+     ],
+     "id": "seg:2",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 19.7,
+    "index": 2,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 29.5
+   },
+   {
+    "eta_from": "2026-10-02T08:12:51.428571Z",
+    "eta_to": "2026-10-02T08:17:08.571429Z",
+    "focus": {
+     "bbox": [
+      1.3009,
+      40.8688,
+      1.889,
+      41.3235
+     ],
+     "id": "seg:3",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 29.5,
+    "index": 3,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 39.4
+   },
+   {
+    "eta_from": "2026-10-02T08:17:08.571429Z",
+    "eta_to": "2026-10-02T08:21:25.714286Z",
+    "focus": {
+     "bbox": [
+      1.1555,
+      40.7474,
+      1.7428,
+      41.2021
+     ],
+     "id": "seg:4",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 39.4,
+    "index": 4,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 49.2
+   },
+   {
+    "eta_from": "2026-10-02T08:21:25.714286Z",
+    "eta_to": "2026-10-02T08:25:42.857143Z",
+    "focus": {
+     "bbox": [
+      1.0102,
+      40.6261,
+      1.5966,
+      41.0808
+     ],
+     "id": "seg:5",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 49.2,
+    "index": 5,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 59.0
+   },
+   {
+    "eta_from": "2026-10-02T08:25:42.857143Z",
+    "eta_to": "2026-10-02T08:30:00Z",
+    "focus": {
+     "bbox": [
+      0.8648,
+      40.5047,
+      1.4505,
+      40.9594
+     ],
+     "id": "seg:6",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 59.0,
+    "index": 6,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 68.9
+   },
+   {
+    "eta_from": "2026-10-02T08:30:00Z",
+    "eta_to": "2026-10-02T08:34:17.142857Z",
+    "focus": {
+     "bbox": [
+      0.7195,
+      40.3834,
+      1.3043,
+      40.838
+     ],
+     "id": "seg:7",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 68.9,
+    "index": 7,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 78.7
+   },
+   {
+    "eta_from": "2026-10-02T08:34:17.142857Z",
+    "eta_to": "2026-10-02T08:38:34.285714Z",
+    "focus": {
+     "bbox": [
+      0.5741,
+      40.262,
+      1.1581,
+      40.7167
+     ],
+     "id": "seg:8",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 78.7,
+    "index": 8,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 88.6
+   },
+   {
+    "eta_from": "2026-10-02T08:38:34.285714Z",
+    "eta_to": "2026-10-02T08:42:51.428571Z",
+    "focus": {
+     "bbox": [
+      0.4287,
+      40.1406,
+      1.012,
+      40.5953
+     ],
+     "id": "seg:9",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 88.6,
+    "index": 9,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 98.4
+   },
+   {
+    "eta_from": "2026-10-02T08:42:51.428571Z",
+    "eta_to": "2026-10-02T08:47:08.571429Z",
+    "focus": {
+     "bbox": [
+      0.2768,
+      40.025,
+      0.8658,
+      40.474
+     ],
+     "id": "seg:10",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 98.4,
+    "index": 10,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 108.3
+   },
+   {
+    "eta_from": "2026-10-02T08:47:08.571429Z",
+    "eta_to": "2026-10-02T08:51:25.714286Z",
+    "focus": {
+     "bbox": [
+      0.1204,
+      39.9132,
+      0.7132,
+      40.3583
+     ],
+     "id": "seg:11",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 108.3,
+    "index": 11,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 118.1
+   },
+   {
+    "eta_from": "2026-10-02T08:51:25.714286Z",
+    "eta_to": "2026-10-02T08:55:42.857143Z",
+    "focus": {
+     "bbox": [
+      -0.0358,
+      39.8013,
+      0.556,
+      40.2465
+     ],
+     "id": "seg:12",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 118.1,
+    "index": 12,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 127.9
+   },
+   {
+    "eta_from": "2026-10-02T08:55:42.857143Z",
+    "eta_to": "2026-10-02T09:00:00Z",
+    "focus": {
+     "bbox": [
+      -0.1914,
+      39.6892,
+      0.3991,
+      40.1346
+     ],
+     "id": "seg:13",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 127.9,
+    "index": 13,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 137.8
+   },
+   {
+    "eta_from": "2026-10-02T09:00:00Z",
+    "eta_to": "2026-10-02T09:04:17.142857Z",
+    "focus": {
+     "bbox": [
+      -0.346,
+      39.5767,
+      0.2428,
+      40.0225
+     ],
+     "id": "seg:14",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 137.8,
+    "index": 14,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 147.6
+   },
+   {
+    "eta_from": "2026-10-02T09:04:17.142857Z",
+    "eta_to": "2026-10-02T09:08:34.285714Z",
+    "focus": {
+     "bbox": [
+      -0.5003,
+      39.464,
+      0.0875,
+      39.91
+     ],
+     "id": "seg:15",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 147.6,
+    "index": 15,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 157.5
+   },
+   {
+    "eta_from": "2026-10-02T09:08:34.285714Z",
+    "eta_to": "2026-10-02T09:12:51.428571Z",
+    "focus": {
+     "bbox": [
+      -0.6546,
+      39.3514,
+      -0.0675,
+      39.7974
+     ],
+     "id": "seg:16",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 157.5,
+    "index": 16,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 167.3
+   },
+   {
+    "eta_from": "2026-10-02T09:12:51.428571Z",
+    "eta_to": "2026-10-02T09:17:08.571429Z",
+    "focus": {
+     "bbox": [
+      -0.7415,
+      39.2071,
+      -0.2226,
+      39.6847
+     ],
+     "id": "seg:17",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 167.3,
+    "index": 17,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 177.1
+   },
+   {
+    "eta_from": "2026-10-02T09:17:08.571429Z",
+    "eta_to": "2026-10-02T09:21:25.714286Z",
+    "focus": {
+     "bbox": [
+      -0.801,
+      39.05,
+      -0.3103,
+      39.5405
+     ],
+     "id": "seg:18",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 177.1,
+    "index": 18,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 187.0
+   },
+   {
+    "eta_from": "2026-10-02T09:21:25.714286Z",
+    "eta_to": "2026-10-02T09:25:42.857143Z",
+    "focus": {
+     "bbox": [
+      -0.8604,
+      38.8929,
+      -0.3707,
+      39.3834
+     ],
+     "id": "seg:19",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 187.0,
+    "index": 19,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 196.8
+   },
+   {
+    "eta_from": "2026-10-02T09:25:42.857143Z",
+    "eta_to": "2026-10-02T09:30:00Z",
+    "focus": {
+     "bbox": [
+      -0.9198,
+      38.7358,
+      -0.4311,
+      39.2263
+     ],
+     "id": "seg:20",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 196.8,
+    "index": 20,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 206.7
+   },
+   {
+    "eta_from": "2026-10-02T09:30:00Z",
+    "eta_to": "2026-10-02T09:34:17.142857Z",
+    "focus": {
+     "bbox": [
+      -0.9793,
+      38.5788,
+      -0.4915,
+      39.0692
+     ],
+     "id": "seg:21",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 206.7,
+    "index": 21,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 216.5
+   },
+   {
+    "eta_from": "2026-10-02T09:34:17.142857Z",
+    "eta_to": "2026-10-02T09:38:34.285714Z",
+    "focus": {
+     "bbox": [
+      -1.0387,
+      38.4217,
+      -0.5519,
+      38.9121
+     ],
+     "id": "seg:22",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 216.5,
+    "index": 22,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2"
+    ],
+    "storm_ids": [],
+    "to_nm": 226.4
+   },
+   {
+    "eta_from": "2026-10-02T09:38:34.285714Z",
+    "eta_to": "2026-10-02T09:42:51.428571Z",
+    "focus": {
+     "bbox": [
+      -1.0982,
+      38.2646,
+      -0.6123,
+      38.755
+     ],
+     "id": "seg:23",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 226.4,
+    "index": 23,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 236.2
+   },
+   {
+    "eta_from": "2026-10-02T09:42:51.428571Z",
+    "eta_to": "2026-10-02T09:47:08.571429Z",
+    "focus": {
+     "bbox": [
+      -1.1577,
+      38.1075,
+      -0.6727,
+      38.5979
+     ],
+     "id": "seg:24",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 236.2,
+    "index": 24,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 246.0
+   },
+   {
+    "eta_from": "2026-10-02T09:47:08.571429Z",
+    "eta_to": "2026-10-02T09:51:25.714286Z",
+    "focus": {
+     "bbox": [
+      -1.2171,
+      37.9504,
+      -0.7331,
+      38.4408
+     ],
+     "id": "seg:25",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 246.0,
+    "index": 25,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 255.9
+   },
+   {
+    "eta_from": "2026-10-02T09:51:25.714286Z",
+    "eta_to": "2026-10-02T09:55:42.857143Z",
+    "focus": {
+     "bbox": [
+      -1.2766,
+      37.7933,
+      -0.7934,
+      38.2837
+     ],
+     "id": "seg:26",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 255.9,
+    "index": 26,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 265.7
+   },
+   {
+    "eta_from": "2026-10-02T09:55:42.857143Z",
+    "eta_to": "2026-10-02T10:00:00Z",
+    "focus": {
+     "bbox": [
+      -1.336,
+      37.6362,
+      -0.8538,
+      38.1266
+     ],
+     "id": "seg:27",
+     "kind": "segment",
+     "layers": [
+      "route",
+      "radar",
+      "cells",
+      "lightning",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 265.7,
+    "index": 27,
+    "lightning": null,
+    "radar_intensity": null,
+    "radar_max_dbz": null,
+    "radar_status": "no_sample",
+    "sigmet_ids": [
+     "sigmet:LECB|2",
+     "sigmet:LECB|3",
+     "sigmet:LECM|3"
+    ],
+    "storm_ids": [],
+    "to_nm": 275.6
+   }
+  ],
+  "sigmets": [
+   {
+    "focus": {
+     "bbox": [
+      -1.1,
+      37.817,
+      1.633,
+      40.867
+     ],
+     "id": "sigmet:LECB|2",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": null
+    },
+    "from_nm": 10.0,
+    "hazard": "TS",
+    "id": "sigmet:LECB|2",
+    "label": "LECB 2: EMBD TS",
+    "min_distance_nm": 0.0,
+    "motion": "stationary",
+    "new": false,
+    "pending": false,
+    "qualifier": "EMBD",
+    "to_nm": 275.6,
+    "valid_from": "2026-10-02T05:05:00Z",
+    "valid_to": "2026-10-02T09:00:00Z"
+   },
+   {
+    "focus": {
+     "bbox": [
+      -1.767,
+      36.717,
+      -0.7,
+      37.8
+     ],
+     "id": "sigmet:LECB|3",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": "2026-10-02T08:35:00Z"
+    },
+    "from_nm": 235.1,
+    "hazard": "TS",
+    "id": "sigmet:LECB|3",
+    "label": "LECB 3: EMBD TS",
+    "min_distance_nm": 12.0,
+    "motion": "stationary",
+    "new": true,
+    "pending": true,
+    "qualifier": "EMBD",
+    "to_nm": 275.6,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   },
+   {
+    "focus": {
+     "bbox": [
+      -2.217,
+      36.683,
+      -1.567,
+      37.8
+     ],
+     "id": "sigmet:LECM|3",
+     "kind": "sigmet",
+     "layers": [
+      "route",
+      "sigmets"
+     ],
+     "time": "2026-10-02T08:35:00Z"
+    },
+    "from_nm": 240.1,
+    "hazard": "TS",
+    "id": "sigmet:LECM|3",
+    "label": "LECM 3: EMBD TS",
+    "min_distance_nm": 21.0,
+    "motion": "stationary",
+    "new": true,
+    "pending": true,
+    "qualifier": "EMBD",
+    "to_nm": 275.6,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   }
+  ],
+  "stations": [
+   {
+    "along_nm": 0.0,
+    "convective": [],
+    "cross_nm": 0.0,
+    "eta": "2026-10-02T08:00:00Z",
+    "focus": {
+     "bbox": [
+      1.8825,
+      41.3542,
+      2.3277,
+      41.6876
+     ],
+     "id": "LELL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LELL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "departure",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 13.5,
+    "convective": [],
+    "cross_nm": -8.1,
+    "eta": "2026-10-02T08:05:52.469264Z",
+    "focus": {
+     "bbox": [
+      1.8566,
+      41.1304,
+      2.3003,
+      41.4638
+     ],
+     "id": "LEBL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LEBL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 47.8,
+    "convective": [],
+    "cross_nm": 16.4,
+    "eta": "2026-10-02T08:20:49.188698Z",
+    "focus": {
+     "bbox": [
+      0.947,
+      40.9808,
+      1.3897,
+      41.3142
+     ],
+     "id": "LERS",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LERS",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 126.2,
+    "convective": [],
+    "cross_nm": 14.2,
+    "eta": "2026-10-02T08:54:56.332276Z",
+    "focus": {
+     "bbox": [
+      -0.1449,
+      40.0472,
+      0.2916,
+      40.3806
+     ],
+     "id": "LECH",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LECH",
+    "metar_category": "LIFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 169.9,
+    "convective": [],
+    "cross_nm": 0.1,
+    "eta": "2026-10-02T09:13:59.963092Z",
+    "focus": {
+     "bbox": [
+      -0.6969,
+      39.3225,
+      -0.265,
+      39.6558
+     ],
+     "id": "LEVC",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LEVC",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "route",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 242.5,
+    "convective": [],
+    "cross_nm": -17.3,
+    "eta": "2026-10-02T09:45:35.563177Z",
+    "focus": {
+     "bbox": [
+      -0.7705,
+      38.1155,
+      -0.3458,
+      38.4489
+     ],
+     "id": "LEAL",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LEAL",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 268.7,
+    "convective": [],
+    "cross_nm": 7.3,
+    "eta": "2026-10-02T09:57:00.644282Z",
+    "focus": {
+     "bbox": [
+      -1.4417,
+      37.7844,
+      -1.019,
+      38.1178
+     ],
+     "id": "LERI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LERI",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 274.0,
+    "convective": [],
+    "cross_nm": -14.7,
+    "eta": "2026-10-02T09:59:19.123682Z",
+    "focus": {
+     "bbox": [
+      -1.0232,
+      37.6083,
+      -0.6015,
+      37.9417
+     ],
+     "id": "LELC",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LELC",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "alternate",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   },
+   {
+    "along_nm": 275.6,
+    "convective": [],
+    "cross_nm": 0.0,
+    "eta": "2026-10-02T10:00:00Z",
+    "focus": {
+     "bbox": [
+      -1.3358,
+      37.6362,
+      -0.9139,
+      37.9695
+     ],
+     "id": "LEMI",
+     "kind": "station",
+     "layers": [
+      "route",
+      "metar"
+     ],
+     "time": "2026-10-02T08:30:00Z"
+    },
+    "icao": "LEMI",
+    "metar_category": "VFR",
+    "metar_time": "2026-10-02T08:30:00Z",
+    "role": "destination",
+    "taf_category_at_eta": null,
+    "taf_temporary_category": null,
+    "taf_temporary_type": null,
+    "taf_weather": []
+   }
+  ],
+  "waypoints": [
+   {
+    "along_nm": 0.0,
+    "eta": "2026-10-02T08:00:00Z",
+    "icao": "LELL"
+   },
+   {
+    "along_nm": 102.4,
+    "eta": "2026-10-02T08:44:35.767852Z",
+    "icao": "TORDU"
+   },
+   {
+    "along_nm": 124.5,
+    "eta": "2026-10-02T08:54:13.389830Z",
+    "icao": "DIKUT"
+   },
+   {
+    "along_nm": 139.7,
+    "eta": "2026-10-02T09:00:50.452585Z",
+    "icao": "SOPET"
+   },
+   {
+    "along_nm": 170.1,
+    "eta": "2026-10-02T09:14:05.636735Z",
+    "icao": "VLC"
+   },
+   {
+    "along_nm": 275.6,
+    "eta": "2026-10-02T10:00:00Z",
+    "icao": "LEMI"
+   }
+  ],
+  "weather": [],
+  "weather_bin_nm": 5.0,
+  "weather_corridor_nm": 30.0,
+  "weather_status": "unavailable"
+ },
+ "route_observations": {
+  "airports": [
+   {
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": 0.0,
+    "eta_hour_offset": 0,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LELL",
+    "lat": 41.520901,
+    "lon": 2.10508,
+    "metar_best_runway_id": null,
+    "metar_ceiling_ft": 5000,
+    "metar_crosswind_kt": null,
+    "metar_dewpoint_c": 16,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": null,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1027.0,
+    "metar_raw": "METAR LELL 020830Z 36003KT 320V050 9000 FEW010 SCT020 BKN050 21/16 Q1027",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 21,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 9000,
+    "metar_weather": [],
+    "metar_wind_advisory": null,
+    "metar_wind_dir": 360,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 3,
+    "name": "Sabadell Airfield",
+    "nearest_waypoint_icao": "LELL",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 8.24,
+    "enroute_distance_nm": 13.49,
+    "eta_hour_offset": 0,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LEBL",
+    "lat": 41.2971,
+    "lon": 2.07846,
+    "metar_best_runway_id": "06L",
+    "metar_ceiling_ft": 4300,
+    "metar_crosswind_kt": 1.4,
+    "metar_dewpoint_c": 17,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 12.9,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1027.0,
+    "metar_raw": "METAR LEBL 020830Z 06013KT 020V080 9999 FEW008 SCT024 BKN043 23/17 Q1027 NOSIG",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 23,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 10000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 60,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 13,
+    "name": "Josep Tarradellas Barcelona-El Prat Airport",
+    "nearest_waypoint_icao": "LELL",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 16.05,
+    "enroute_distance_nm": 47.81,
+    "eta_hour_offset": 0,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LERS",
+    "lat": 41.147509,
+    "lon": 1.168354,
+    "metar_best_runway_id": "07",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 6.0,
+    "metar_dewpoint_c": 18,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 5.3,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1027.0,
+    "metar_raw": "METAR LERS 020830Z 02008KT 350V050 9000 RA FEW026 19/18 Q1027",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 19,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 9000,
+    "metar_weather": [
+     "RA"
+    ],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 20,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 8,
+    "name": "Reus Airport",
+    "nearest_waypoint_icao": "LELL",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 14.18,
+    "enroute_distance_nm": 126.16,
+    "eta_hour_offset": 1,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LECH",
+    "lat": 40.213889,
+    "lon": 0.073333,
+    "metar_best_runway_id": "06",
+    "metar_ceiling_ft": 300,
+    "metar_crosswind_kt": 2.7,
+    "metar_dewpoint_c": 18,
+    "metar_flight_category": "LIFR",
+    "metar_headwind_kt": 5.3,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1027.0,
+    "metar_raw": "METAR LECH 020830Z AUTO 03006KT 350V060 6000 BKN003 BKN033 18/18 Q1027",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 18,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 6000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 30,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 6,
+    "name": "Castell\u00f3n-Costa Azahar Airport",
+    "nearest_waypoint_icao": "DIKUT",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 0.09,
+    "enroute_distance_nm": 169.93,
+    "eta_hour_offset": 1,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LEVC",
+    "lat": 39.489162,
+    "lon": -0.480961,
+    "metar_best_runway_id": "12",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 7.0,
+    "metar_dewpoint_c": 19,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 0.5,
+    "metar_previous_flight_category": "MVFR",
+    "metar_previous_time": "2026-10-02T08:11:00Z",
+    "metar_qnh": 1025.0,
+    "metar_raw": "METAR LEVC 020830Z 03007KT 360V070 9000 SCT012 SCT035 21/19 Q1025 NOSIG",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 21,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 9000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 30,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 7,
+    "name": "Valencia Airport",
+    "nearest_waypoint_icao": "VLC",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 17.48,
+    "enroute_distance_nm": 242.48,
+    "eta_hour_offset": 2,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LEAL",
+    "lat": 38.2822,
+    "lon": -0.558156,
+    "metar_best_runway_id": "10",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 7.0,
+    "metar_dewpoint_c": 20,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 8.5,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1023.0,
+    "metar_raw": "METAR LEAL 020830Z 06011KT 030V090 9999 FEW025 26/20 Q1023 NOSIG",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 26,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 10000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 60,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 11,
+    "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
+    "nearest_waypoint_icao": "LEMI",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 7.3,
+    "enroute_distance_nm": 268.7,
+    "eta_hour_offset": 2,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LERI",
+    "lat": 37.951099,
+    "lon": -1.23032,
+    "metar_best_runway_id": "07",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 0.9,
+    "metar_dewpoint_c": 18,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 11.0,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1024.0,
+    "metar_raw": "METAR LERI 020830Z 06011KT 030V090 9999 FEW025 SCT042 24/18 Q1024 NOSIG",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 24,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 10000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 60,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 11,
+    "name": "Alcantarilla Air Base",
+    "nearest_waypoint_icao": "LEMI",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 14.69,
+    "enroute_distance_nm": 274.0,
+    "eta_hour_offset": 2,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LELC",
+    "lat": 37.775002,
+    "lon": -0.812389,
+    "metar_best_runway_id": "05L",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 1.0,
+    "metar_dewpoint_c": 21,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 14.0,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1023.0,
+    "metar_raw": "METAR LELC 020830Z 05014KT 010V080 9999 FEW035 SCT050 26/21 Q1023 NOSIG",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 26,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 10000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 50,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 14,
+    "name": "San Javier Airport",
+    "nearest_waypoint_icao": "LEMI",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   },
+   {
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": 275.56,
+    "eta_hour_offset": 2,
+    "has_metar": true,
+    "has_taf": false,
+    "icao": "LEMI",
+    "lat": 37.802852,
+    "lon": -1.124884,
+    "metar_best_runway_id": "05",
+    "metar_ceiling_ft": null,
+    "metar_crosswind_kt": 1.0,
+    "metar_dewpoint_c": 20,
+    "metar_flight_category": "VFR",
+    "metar_headwind_kt": 9.9,
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-02T08:00:00Z",
+    "metar_qnh": 1024.0,
+    "metar_raw": "METAR LEMI 020830Z 04010KT 9999 SCT025 SCT035 23/20 Q1024",
+    "metar_report_type": "METAR",
+    "metar_temperature_c": 23,
+    "metar_time": "2026-10-02T08:30:00Z",
+    "metar_visibility_m": 10000,
+    "metar_weather": [],
+    "metar_wind_advisory": "green",
+    "metar_wind_dir": 40,
+    "metar_wind_gust_kt": null,
+    "metar_wind_speed_kt": 10,
+    "name": "Region of Murcia International Airport",
+    "nearest_waypoint_icao": "LEMI",
+    "taf_applicable_lines": [],
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_flight_category_at_eta": null,
+    "taf_headwind_kt": null,
+    "taf_issue_time": null,
+    "taf_prevailing_category_at_eta": null,
+    "taf_raw": null,
+    "taf_significant_weather": [],
+    "taf_temporary_category_at_eta": null,
+    "taf_temporary_type": null,
+    "taf_trend_type": null,
+    "taf_valid_at_eta": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_wind_advisory": null,
+    "taf_wind_dir": null,
+    "taf_wind_gust_kt": null,
+    "taf_wind_speed_kt": null
+   }
+  ],
+  "airports_found": 21,
+  "airports_with_metar": 9,
+  "airports_with_taf": 0,
+  "comparisons": [],
+  "corridor_nm": 30.0,
+  "fetch_time": "2026-10-02T08:30:00Z",
+  "has_conflicts": false,
+  "phenomena_along_route": [],
+  "worst_metar_category": null,
+  "worst_taf_category": null
+ },
+ "route_sigmets": {
+  "altitude_high_ft": null,
+  "altitude_low_ft": null,
+  "corridor_nm": 50.0,
+  "count": 3,
+  "fetch_ok": true,
+  "fetch_time": "2026-10-02T08:30:00Z",
+  "has_severe": false,
+  "hazards": [
+   "TS"
+  ],
+  "queried_at": null,
+  "route_firs": [],
+  "sigmets": [
+   {
+    "base_ft": null,
+    "coords": [
+     [
+      -1.1,
+      39.467
+     ],
+     [
+      0.133,
+      40.867
+     ],
+     [
+      1.367,
+      40.733
+     ],
+     [
+      1.633,
+      38.883
+     ],
+     [
+      0.7,
+      37.817
+     ],
+     [
+      -0.55,
+      38.2
+     ],
+     [
+      -1.1,
+      39.467
+     ]
+    ],
+    "direction": null,
+    "enroute_distance_from_nm": 9.96131147641169,
+    "enroute_distance_to_nm": 275.5684207179973,
+    "fir_id": "LECB",
+    "fir_name": "LECB BARCELONA",
+    "hazard": "TS",
+    "matched_firs": [
+     "LECB"
+    ],
+    "min_distance_nm": 0.0,
+    "qualifier": "EMBD",
+    "raw_text": "WSSP32 LEMM 020506\nLECB SIGMET 2 VALID 020505/020900 LEVA-\nLECB BARCELONA FIR/UIR EMBD TS FCST WI N3928 W00106 - N4052\nE00008 - N4044 E00122 - N3853 E00138 - N3749 E00042 - N3812\nW00033 - N3928 W00106  TOP FL450 STNR NC=",
+    "speed_kt": 0,
+    "top_ft": 45000,
+    "valid_from": "2026-10-02T05:05:00Z",
+    "valid_to": "2026-10-02T09:00:00Z"
+   },
+   {
+    "base_ft": null,
+    "coords": [
+     [
+      -1.517,
+      37.8
+     ],
+     [
+      -1.767,
+      36.717
+     ],
+     [
+      -0.7,
+      37.267
+     ],
+     [
+      -1.517,
+      37.8
+     ]
+    ],
+    "direction": null,
+    "enroute_distance_from_nm": 235.12697602257145,
+    "enroute_distance_to_nm": 275.5684207179973,
+    "fir_id": "LECB",
+    "fir_name": "LECB BARCELONA",
+    "hazard": "TS",
+    "matched_firs": [
+     "LECB"
+    ],
+    "min_distance_nm": 11.975655652116362,
+    "qualifier": "EMBD",
+    "raw_text": "WSSP32 LEMM 020827\nLECB SIGMET 3 VALID 020835/021035 LEVA-\nLECB BARCELONA FIR/UIR EMBD TS FCST WI N3748 W00131 - N3643\nW00146 - N3716 W00042 - N3748 W00131  TOP FL400 STNR NC=",
+    "speed_kt": 0,
+    "top_ft": 40000,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   },
+   {
+    "base_ft": null,
+    "coords": [
+     [
+      -1.567,
+      37.8
+     ],
+     [
+      -2.117,
+      37.567
+     ],
+     [
+      -2.217,
+      37.1
+     ],
+     [
+      -1.817,
+      36.683
+     ],
+     [
+      -1.567,
+      37.8
+     ]
+    ],
+    "direction": null,
+    "enroute_distance_from_nm": 240.12836095004945,
+    "enroute_distance_to_nm": 275.5684207179973,
+    "fir_id": "LECM",
+    "fir_name": "LECM MADRID",
+    "hazard": "TS",
+    "matched_firs": [],
+    "min_distance_nm": 20.97443409072469,
+    "qualifier": "EMBD",
+    "raw_text": "WSSP31 LEMM 020829\nLECM SIGMET 3 VALID 020835/021035 LEVA-\nLECM MADRID FIR/UIR EMBD TS FCST WI N3748 W00134 - N3734 W00207\n- N3706 W00213 - N3641 W00149 - N3748 W00134  TOP FL400 STNR NC=",
+    "speed_kt": 0,
+    "top_ft": 40000,
+    "valid_from": "2026-10-02T08:35:00Z",
+    "valid_to": "2026-10-02T10:35:00Z"
+   }
+  ],
+  "time_window_from": null,
+  "time_window_to": null
+ },
+ "sigmets_updated_at": "2026-10-02T08:30:00Z",
+ "storms": {
+  "corridor_nm": 30.0,
+  "frame_time": null,
+  "lightning_pending": false,
+  "policy_version": null,
+  "route_nm": null,
+  "status": "unavailable",
+  "storms": [],
+  "unavailable_since": null
+ }
+}

@@ -858,7 +858,10 @@ LIVE_NOTE = (
     "digest predates it rather than reconciling the two. glance holds the "
     "same at-a-glance lines the app shows (one per flight phase, observations "
     "only, 'unavailable' means the source could not be read, not clear): use "
-    "them as the overview. times_today of 2 or "
+    "them as the overview. highlight is the one-line summary the app shows "
+    "above them (null when there is none): quote it like the glance lines, and "
+    "say it was written at its written_at, which can be older than "
+    "live_updated_at. times_today of 2 or "
     "more means the change has come and gone today (bouncing, not building); "
     "recently_cleared lists what cleared in the last hour."
 )
@@ -926,6 +929,17 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
                 "lines": [{"phase": ln.phase, "text": ln.text} for ln in layer.glance.lines],
             }
             if layer.glance is not None else None
+        ),
+        # The highlight the apps show above the nutshell (#697), word for
+        # word, with its own written time: a line carried forward over
+        # unchanged ticks is older than the layer. The regeneration gate and
+        # the model name stay server-side.
+        "highlight": (
+            {
+                "text": layer.glance.highlight.text,
+                "written_at": _iso(layer.glance.highlight.generated_at),
+            }
+            if layer.glance is not None and layer.glance.highlight is not None else None
         ),
     }
 

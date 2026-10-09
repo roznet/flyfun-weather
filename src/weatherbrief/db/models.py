@@ -504,8 +504,12 @@ class FeedbackRow(Base):
     comment: Mapped[str] = mapped_column(Text)
     # 'up'/'down' for quick thumb ratings; NULL for the traditional form
     sentiment: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    # 'digest' for thumb ratings; NULL/'general' for the traditional form
+    # 'digest' / 'live_highlight' for thumb ratings; NULL/'general' for the
+    # traditional form
     target: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # JSON text. For a live-highlight rating (#697), the rated line as /live
+    # served it: {facts_hash, generated_at, model, text}. NULL otherwise.
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
     # User is OK to receive an email reply about this feedback. Default-on:
     # a reply answers feedback the user initiated, and the opt-out exists so
     # a reply in their inbox isn't a surprise. Legacy rows backfill to
