@@ -2316,6 +2316,10 @@ async function init(): Promise<void> {
     ribbonTeardown?.();
     ribbonTeardown = null;
     if (hasRibbon && ribbonEl && ribbon) {
+      // The tooltips' airports: the ribbon's own tick when the layer has
+      // them, else the pack's.
+      const airports = state.live?.route_observations?.airports
+        ?? state.snapshot?.route_observations?.airports ?? null;
       ribbonTeardown = mountRibbon(ribbonEl, ribbon, state.live?.storms, {
         onFocus: (focus) => focusMapOn(focus),
         onStorm: (storm) => {
@@ -2327,8 +2331,7 @@ async function init(): Promise<void> {
               focusMapOn(storm.focus ?? null);
             });
         },
-      // Same tick as the ribbon when the layer has them; else the pack's.
-      }, state.live?.route_observations?.airports ?? state.snapshot?.route_observations?.airports ?? null);
+      }, airports);
     }
   }
 

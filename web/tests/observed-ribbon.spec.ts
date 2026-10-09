@@ -381,6 +381,13 @@ test.describe('Observed nutshell + route ribbon', () => {
     // Leaving the drawing hides it; a click still opens the detail.
     await page.mouse.move(box.x + box.width / 2, box.y - 60);
     await expect(tip).toBeHidden();
+
+    // Keyboard: a focused airport shows the same tooltip, raw text included.
+    await page.locator('[data-ribbon-station="1"]').focus();
+    await expect(tip).toBeVisible();
+    await expect(tip).toContainText('TAF EGLF 120500Z');
+    await page.locator('[data-ribbon-station="1"]').blur();
+    await expect(tip).toBeHidden();
   });
 
   test('a cell opens its detail, with the estimate kept in its own block', async ({ page }) => {

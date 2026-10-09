@@ -93,10 +93,14 @@ export function stationTooltipHtml(st: RibbonStation, airport: AirportObservatio
     html += row('Position', `${off} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`
       + (st.along_nm != null ? ` at ${roundHalfAway(st.along_nm)} NM` : ''));
   }
-  if (airport?.metar_raw) html += raw(airport.metar_report_type === 'SPECI' ? 'SPECI' : 'METAR', airport.metar_raw);
-  else html += row('METAR', 'no report');
-  if (airport?.taf_raw) html += raw('TAF', airport.taf_raw);
-  else if (airport) html += row('TAF', 'none issued');
+  // Without a joined airport the raw text is unknown, not absent: say
+  // nothing rather than "no report" beside the station's own METAR category.
+  if (airport) {
+    if (airport.metar_raw) html += raw(airport.metar_report_type === 'SPECI' ? 'SPECI' : 'METAR', airport.metar_raw);
+    else html += row('METAR', 'no report');
+    if (airport.taf_raw) html += raw('TAF', airport.taf_raw);
+    else html += row('TAF', 'none issued');
+  }
   return html;
 }
 
@@ -105,7 +109,7 @@ export function stormTooltipHtml(storm: LiveStorm): string {
   const title = storm.intensity
     ? `${storm.intensity.charAt(0).toUpperCase()}${storm.intensity.slice(1)} cell`
     : 'Cell';
-  let html = head(title, `${roundHalfAway(storm.peak_dbz ?? 0)} dBZ`);
+  let html = head(title, storm.peak_dbz != null ? `${roundHalfAway(storm.peak_dbz)} dBZ` : null);
   html += row('Position', stormPositionText(storm));
   if (storm.abeam_eta && storm.end == null) html += row('Abeam at plan', formatHhmmZ(storm.abeam_eta));
   html += row('Motion', stormMotionText(storm));

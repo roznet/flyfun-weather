@@ -68,7 +68,9 @@ describe('ribbon tooltips: airports', () => {
     expect(html).toContain('METAR now');
     expect(html).toContain('unavailable');
     expect(html).toContain('5 NM left of course at 40 NM');
-    expect(html).toContain('no report');
+    // Not joined is not "no report": the raw text is unknown, so nothing.
+    expect(html).not.toContain('no report');
+    expect(html).not.toContain('none issued');
     expect(html).not.toContain('<code>');
   });
 
