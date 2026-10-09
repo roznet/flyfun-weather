@@ -231,9 +231,10 @@ const nwpCeiling: MapMetric = {
     return ROUTE_WEIGHT_MAX - (clamped / 5000) * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN);
   },
   formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
+  // Stops sit mid-band so a boundary tweak can't flip a swatch.
   legendStops: [
-    { value: 200, label: 'LIFR <500', color: ceilingMapColor(200) },
-    { value: 800, label: 'IFR <1000', color: ceilingMapColor(800) },
+    { value: 300, label: 'LIFR <500', color: ceilingMapColor(300) },
+    { value: 700, label: 'IFR <1000', color: ceilingMapColor(700) },
     { value: 2000, label: 'MVFR <3000', color: ceilingMapColor(2000) },
     { value: 5000, label: 'VFR 3000+', color: ceilingMapColor(5000) },
   ],
