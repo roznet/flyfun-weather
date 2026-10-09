@@ -111,6 +111,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   incorrect_interpretation: 'Incorrect Interpretation',
   other: 'Other Bug/Issue',
   digest_rating: 'Digest Rating',
+  highlight_rating: 'Live highlight rating',
 };
 
 const STATUS_BADGES: Record<FeedbackStatus, { label: string; color: string }> = {
@@ -361,7 +362,7 @@ function attachFeedbackHandlers(container: HTMLElement): void {
   });
 }
 
-// --- Ratings tab (digest thumb feedback) ---
+// --- Ratings tab (digest and live-highlight thumb feedback) ---
 
 let ratingsPeriod: AdminPeriod = '30d';
 let ratingsFilter: 'all' | 'attention' = 'all';
@@ -477,6 +478,9 @@ function renderRatingRow(fb: FeedbackEntry): string {
     ? `&ldquo;${escapeHtml(fb.comment.length > 60 ? fb.comment.slice(0, 60) + '…' : fb.comment)}&rdquo;`
     : '—';
   const when = fb.created_at ? relativeTime(fb.created_at) : '';
+  // Which surface was rated: the digest, or the Observed tab's highlight (#697).
+  const isHighlight = fb.target === 'live_highlight';
+  const targetTag = isHighlight ? 'Highlight' : 'Digest';
 
   const isArchived = fb.status === 'replied' || fb.status === 'ignored';
   // Any comment is worth a reply — a 👍 with a question in it deserves an
@@ -485,6 +489,13 @@ function renderRatingRow(fb: FeedbackEntry): string {
 
   // Expanded detail
   let detail = '';
+  if (isHighlight && fb.context) {
+    // The rated line itself: the highlight is regenerated as the weather
+    // changes, so the stored copy is the only record of what was rated.
+    const written = formatBriefingDate(fb.context.generated_at);
+    detail += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Rated highlight · written ${escapeHtml(written)} · ${escapeHtml(fb.context.model)}</div>`;
+    detail += `<blockquote style="margin:0 0 8px;padding:8px 10px;border-left:3px solid var(--border);">${escapeHtml(fb.context.text)}</blockquote>`;
+  }
   if (fb.comment) {
     detail += `<div style="background:var(--surface);border-radius:6px;padding:10px;white-space:pre-wrap;margin-bottom:8px;">${escapeHtml(fb.comment)}</div>`;
   }
@@ -513,6 +524,7 @@ function renderRatingRow(fb: FeedbackEntry): string {
     <details class="rating-row" style="border:1px solid var(--border);border-radius:6px;margin-bottom:6px;overflow:hidden;">
       <summary style="display:flex;align-items:center;gap:12px;padding:8px 12px;cursor:pointer;font-size:13px;list-style:none;">
         <span style="font-size:15px;width:20px;text-align:center;flex-shrink:0;">${thumb}</span>
+        <span style="width:64px;flex-shrink:0;font-size:11px;color:var(--text-muted);">${targetTag}</span>
         <span style="width:120px;flex-shrink:0;">${briefingCell}</span>
         <span style="width:120px;flex-shrink:0;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(route)}</span>
         <span style="width:140px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(user)}</span>

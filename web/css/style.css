@@ -9231,6 +9231,42 @@ button.glance-line:hover {
   min-height: 44px;
 }
 
+/* The model-written highlight (#697): body text with a quiet caption. Never
+   styled as an alert — the alert lines sit above it with their red bars. */
+.glance-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.glance-highlight-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.glance-highlight-caption {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.glance-highlight-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.glance-highlight-feedback .digest-feedback-form {
+  flex-basis: 100%;
+}
+
 /* --- Ribbon --- */
 
 .ribbon-head {

@@ -279,6 +279,13 @@ export async function fetchHubUsers(period = '30d'): Promise<HubResponse> {
 
 export type FeedbackStatus = 'pending' | 'ready' | 'replied' | 'ignored';
 
+export interface HighlightRatingContext {
+  facts_hash: string;
+  generated_at: string;
+  model: string;
+  text: string;
+}
+
 export interface FeedbackEntry {
   id: number;
   user_email: string;
@@ -291,6 +298,8 @@ export interface FeedbackEntry {
   comment: string;
   sentiment: 'up' | 'down' | null;
   target: string | null;
+  /** For a live-highlight rating (#697): the rated line as /live served it. */
+  context: HighlightRatingContext | null;
   contact_ok: boolean;
   /** Surface that submitted it, from the User-Agent; null on pre-097 rows. */
   client: 'ios' | 'web' | 'other' | null;

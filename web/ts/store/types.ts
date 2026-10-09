@@ -1216,6 +1216,20 @@ export interface LiveGlance {
   headline: string;
   comparison: 'as_briefed' | 'worse' | 'better' | 'mixed' | 'unavailable';
   lines: LiveGlanceLine[];
+  /** The model-written one-glance highlight (#697); null/absent until the
+   *  first generation lands, after a rejected generation and after arrival —
+   *  show `headline` in its place then. */
+  highlight?: LiveHighlight | null;
+}
+
+/** `glance.highlight` as `/live` serves it (the server's gate is stripped).
+ *  A rating sends these four fields back verbatim as its `context`. */
+export interface LiveHighlight {
+  text: string;
+  model: string;
+  facts_hash: string;
+  /** When the line was written: older than the layer when carried forward. */
+  generated_at: string;
 }
 
 export interface RibbonWaypoint {
