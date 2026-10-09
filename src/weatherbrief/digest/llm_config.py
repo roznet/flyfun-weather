@@ -75,7 +75,9 @@ class PromptsConfig(BaseModel):
     briefer_longrange: str = "prompts/briefer_longrange_v1.md"
     # Trip chain paragraph (#602) — rewriting, not judging: it runs over
     # already-summarized per-leg conclusions and never sees a sounding.
-    trip: str = "prompts/trip_v1.md"
+    # v2 is the Haiku 5.5 calibration: no pipeline words or raw enum values,
+    # at most 70 words, days out copied exactly, no soft trip-level verdict.
+    trip: str = "prompts/trip_v2.md"
 
 
 class DigestConfig(BaseModel):
@@ -104,11 +106,21 @@ class DigestConfig(BaseModel):
     # sees a sounding or re-derives meteorology.  There is nothing left for a
     # bigger model to do, and a model that only ever sees three colours and
     # nine advisory names cannot invent a verdict from weather it never read.
-    # Pinned to match the ``longrange`` / ``translator`` blocks above.
+    #
+    # Haiku 5.5 since the 2026-10-09 A/B (8 prod trips + 10 fictional, ~300
+    # calls): ~8x cheaper than 4.5 and it keeps RED chips 4.5 flattened to
+    # "amber". Thinking off + effort low, as for the live highlight (#715);
+    # ``json_schema`` because forced tool calls leaked pipeline words into the
+    # paragraph 3x as often. It needs ``trip_v2.md`` — on v1 it wrote
+    # "deterministic", "binding" and raw ``TRENDING_SETTLED`` into the prose.
     trip: LLMConfig = LLMConfig(
         provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        temperature=0.0,
+        model="claude-haiku-5-5",
+        temperature=None,
+        thinking={"type": "disabled"},
+        effort="low",
+        max_tokens=1024,
+        structured_output="json_schema",
     )
     prompts: PromptsConfig = PromptsConfig()
     # Locales that get a prompt-cache breakpoint.  Locale is injected *before*

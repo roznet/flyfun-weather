@@ -282,8 +282,9 @@ per-flight `notify_override` wins, else the trip's, else the account scope.
 
 ## AI trip summary — Haiku, and why that is structural
 
-`claude-haiku-4-5-20251001`, matching the existing `longrange` / `translator`
-pins in `digest/llm_config.py`. Haiku is right here not merely because it is
+`claude-haiku-5-5` with thinking off, effort low and `json_schema` structured
+output, on `prompts/trip_v2.md` (it was `claude-haiku-4-5-20251001` on
+`trip_v1.md` until 2026-10-09). Haiku is right here not merely because it is
 cheap: the task is **rewriting, not analysis**. It runs over already-analysed
 conclusions — per-leg assessment/outlook, advisory chips, `days_out`, and the
 deterministic binding leg — and never sees a sounding or re-derives meteorology.
@@ -352,6 +353,24 @@ Three properties are load-bearing:
   metadata. It was first routed through the per-briefing `compute_cost`, which
   adds a droplet/subscription share and margin to every call and so billed a
   sub-cent Haiku paragraph at ~$0.62, more than the briefing it summarises.
+
+**The 5.5 switch (2026-10-09)** was decided on an A/B over the 8 prod trips'
+real contexts plus 10 fictional ones (~300 calls). Haiku 5.5 is ~8x cheaper
+per paragraph and keeps RED chips that 4.5 flattened to "amber", but on
+`trip_v1.md` it wrote ~40% longer and leaked pipeline words into the prose
+("deterministic", "binding", "gradeable", raw `TRENDING_SETTLED`) — 3x as
+often through forced tool calls as through `json_schema`, hence the latter.
+`trip_v2.md` bans those words by name, caps the paragraph at three sentences /
+70 words, says "Sun" is an advisory rather than a weekday, gives an all-flown
+trip two sentences, and rules out soft trip-level verdicts ("broadly
+favourable"); on it, 90/90 runs passed with no leak. Two traps from that run:
+an example "D-6 or six days out" in the prompt made the model write "six days
+out" for legs that were not (copy days out as given instead), and with thinking
+off it once corrected itself in the output ("... wait, it is two days out").
+The guardrail therefore also rejects meta text — those pipeline words, "wait" /
+"corrected", a line break — and raw enum values, mirroring the live highlight's
+`_META_RE`. Unlike 4.5 at `temperature=0`, the paragraph is no longer
+word-for-word stable across regenerations.
 
 No prompt-cache breakpoint: the minimum cacheable prefix is 512–4096 tokens
 depending on model and this prompt head may sit below it, so a breakpoint could
