@@ -16,28 +16,28 @@ Run all three unless the user asks for one. Parts B and C each stand alone after
 
 ## 0. Where things are
 
-Resolve every path with the ops tool; never hardcode them:
+**All transport goes through `fetch.py`** (`$S/fetch.py` below). It resolves the droplet and
+the Mac mini itself from `deploy/hosts.json` (via `scripts/ops/hosts.py`), streams files in
+and out of the container, uses unique temp names and removes them even on failure. Never
+`eval "$(hosts.py … --env)"` here: each Bash call is a fresh shell, so the variables would be
+empty in the next step. Each command prints `ok|problem|unknown  what  (evidence)` on stderr
+and exits 0 / 1 (a step failed) / 2 (a host unreachable — e.g. the mini from another network).
+
+Each Bash call starts fresh, so put these lines at the top of every block that uses them:
 
 ```bash
-eval "$(python3 scripts/ops/hosts.py server --env)"   # SERVER_SSH, HOST_DATA_DIR, SERVER_CONTAINER, SERVER_HEAD
-python3 scripts/ops/hosts.py nodes                    # the Mac mini: reachable only on the home LAN
-eval "$(python3 scripts/ops/hosts.py local --env)"    # LOCAL_AIRPORTS_DB, LOCAL_VENV, LOCAL_DATA_DIR
 S=.claude/skills/prod-briefings-review/scripts
-W=$CLAUDE_JOB_DIR/tmp/prod-briefings-review    # or another scratch dir
-RECORD=$LOCAL_DATA_DIR/reviews/digest_reviews.jsonl  # shared by every worktree; not in git
+W=$CLAUDE_JOB_DIR/tmp/prod-briefings-review       # or another scratch dir; mkdir -p it once
 SINCE_DAY=2026-10-09; UNTIL_DAY=2026-10-10           # UTC dates, UNTIL exclusive
-SINCE="$SINCE_DAY 00:00"
-mkdir -p $W
-scp -q $S/briefings.py $SERVER_SSH:/tmp/ && ssh $SERVER_SSH "docker cp /tmp/briefings.py $SERVER_CONTAINER:/tmp/"
-BR="ssh $SERVER_SSH docker exec $SERVER_CONTAINER python /tmp/briefings.py"
+RECORD=$(python3 scripts/ops/hosts.py local --get LOCAL_DATA_DIR)/reviews/digest_reviews.jsonl
 ```
 
-Confirm prod is what you think it is. The container start time and the euro-aip version
-catch the "healthy container, old image" deploy race:
+`RECORD` is shared by every worktree and not in git. Then confirm prod is what you think it
+is; the container start time and the image's euro-aip version catch the "healthy container,
+old image" deploy race, and `server_head` is the SHA for C5:
 
 ```bash
-ssh $SERVER_SSH "docker inspect -f '{{.State.StartedAt}}' $SERVER_CONTAINER; \
-  docker exec $SERVER_CONTAINER python -c 'import euro_aip; print(euro_aip.__version__)'"
+python3 $S/fetch.py prod-check
 ```
 
 If a deploy landed inside the window, split the comparisons at the container start time.
@@ -45,7 +45,7 @@ If a deploy landed inside the window, split the comparisons at the container sta
 ## A. Pipeline health
 
 ```bash
-$BR health $SINCE_DAY $UNTIL_DAY
+python3 $S/fetch.py br health $SINCE_DAY $UNTIL_DAY
 ```
 
 Refresh jobs by status and trigger (any `failed`/`abandoned` printed with its stage and
@@ -55,8 +55,7 @@ cost per briefing from the ledger.
 Latency comes from the `Pipeline timing` log line; compare against a baseline day:
 
 ```bash
-ssh $SERVER_SSH "journalctl CONTAINER_NAME=weatherbrief --since '$SINCE' --until '$UNTIL_DAY 00:00' --utc -o cat" > $W/app.log
-ssh $SERVER_SSH "journalctl CONTAINER_NAME=weatherbrief --since '<baseline day> 00:00' --until '<next day> 00:00' --utc -o cat | grep 'Pipeline timing'" > $W/baseline.log
+python3 $S/fetch.py logs $SINCE_DAY $UNTIL_DAY $W/app.log --baseline <baseline day> $W/baseline.log
 python3 $S/briefings.py timing $W/app.log $W/baseline.log
 grep -cE '^ERROR|Traceback' $W/app.log
 grep WARNING $W/app.log | sed -E 's/[0-9]+(\.[0-9]+)?/N/g' | cut -c1-120 | sort | uniq -c | sort -rn | head -20
@@ -85,17 +84,16 @@ Fetch the live files and the pack `briefing.json` the replay needs. That's about
 flight; never pull observed frames.
 
 ```bash
-mkdir -p $W/live
-ssh $SERVER_SSH "cd $HOST_DATA_DIR/packs && find . -maxdepth 3 \( -name live_history.jsonl \
-  -o -name live_meta.json -o -name live.json \) -newermt '$SINCE' | tar czf - -T -" | tar xzf - -C $W/live
-$LOCAL_VENV/bin/python $S/review.py briefing-list $W/live \
-  | ssh $SERVER_SSH "cd $HOST_DATA_DIR/packs && tar czf - -T -" | tar xzf - -C $W/live
+python3 $S/fetch.py live "$SINCE_DAY" $W/live
 ```
+
+It reads the packs directly on the droplet (under `HOST_DATA_DIR`, the host side of the
+container's `/app/data` mount) and reports the flight count.
 
 ### B2. Every alert, with its raw report
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py summarize $W/live
+venv/bin/python $S/review.py summarize $W/live
 ```
 
 For each flight this prints:
@@ -139,8 +137,8 @@ It re-runs each flight's prod ticks through the current code (`scripts/replay_li
 the METAR/TAF/SIGMET texts from the history, with SIGMETs re-dated to their WMO-header issue time.
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py replay $W/live $W/replay [--observed $W/observed.json] [--cells $W/cells] [FLIGHT_SUBSTR...]
-$LOCAL_VENV/bin/python $S/review.py compare $W/live $W/replay [FLIGHT_SUBSTR to detail alert diffs]
+venv/bin/python $S/review.py replay $W/live $W/replay [--observed $W/observed.json] [--cells $W/cells] [FLIGHT_SUBSTR...]
+venv/bin/python $S/review.py compare $W/live $W/replay [FLIGHT_SUBSTR to detail alert diffs]
 ```
 
 `compare` counts alerts, pings, ring rows, storm rows and **flicker** (rows that cleared and
@@ -154,25 +152,23 @@ Mac mini, which holds the observed archive. Run the analysis there and bring bac
 copying frames costs about 1 GB per day over a slow link.
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py observed-jobs $W/live $W/jobs.json
-scp $W/jobs.json $S/on_mini.py $NODE_SSH:/tmp/
-ssh $NODE_SSH "cd /tmp && \$HOME/Developer/public/flyfun-weather/venv/bin/python on_mini.py observed jobs.json observed.json && gzip -f observed.json"
-scp $NODE_SSH:/tmp/observed.json.gz $W/ && gunzip -f $W/observed.json.gz
-ssh $NODE_SSH "rm -f /tmp/jobs.json /tmp/on_mini.py /tmp/observed.json*"
+venv/bin/python $S/review.py observed-jobs $W/live $W/jobs.json
+python3 $S/fetch.py mini observed $W/jobs.json $W/observed.json
 ```
 
-`NODE_SSH` comes from `hosts.py nodes --env`. The Mini's repo must contain
-`weatherbrief.observed` at a commit whose payload code matches prod; check with `hosts.py nodes`.
+`fetch.py mini` runs `on_mini.py` with the node's own venv in a private temp dir there and
+removes it afterwards. The Mini's repo must contain `weatherbrief.observed` at a commit whose
+payload code matches prod; check with `python3 scripts/ops/hosts.py nodes` (its HEAD). From
+another network the mini is unreachable: exit 2, "not known to be down" — say the step
+couldn't run rather than reviewing without radar.
 The archive starts 2026-10-03 15:05Z. The archive job moves frames older than 48 h to the
 NAS, so replay recent days from the Mini.
 
-The cells display files for `--cells` (and for B6; copy `jobs.json` and `on_mini.py` over as above first), cut to the routes' box, mtime kept so
+The cells display files for `--cells` (and for B6), cut to the routes' box, mtime kept so
 the replay only reads a file the droplet had by each tick:
 
 ```bash
-ssh $NODE_SSH "cd /tmp && \$HOME/Developer/public/flyfun-weather/venv/bin/python on_mini.py cells jobs.json cells && tar czf cells.tgz cells"
-scp $NODE_SSH:/tmp/cells.tgz $W/ && tar xzf $W/cells.tgz -C $W
-ssh $NODE_SSH "rm -rf /tmp/cells /tmp/cells.tgz"
+python3 $S/fetch.py mini cells $W/jobs.json $W/cells
 ```
 
 Display files stay on the Mini 90 days (`observed-cells.md`), so older flights can be replayed
@@ -189,11 +185,9 @@ Use this when an alert or highlight rests on a station's CB/TCU. It samples rada
 lightning around each METAR's airport over the 10 min before the report.
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py metar-points $W/live $W/points.json "2026-10-03T15:15"
-scp $W/points.json $S/on_mini.py $NODE_SSH:/tmp/
-ssh $NODE_SSH "cd /tmp && \$HOME/Developer/public/flyfun-weather/venv/bin/python on_mini.py airport-radar points.json radar.json"
-scp $NODE_SSH:/tmp/radar.json $W/ && ssh $NODE_SSH "rm -f /tmp/points.json /tmp/on_mini.py /tmp/radar.json"
-$LOCAL_VENV/bin/python $S/review.py radar-summary $W/radar.json LFBO LFMT
+venv/bin/python $S/review.py metar-points $W/live $W/points.json "2026-10-03T15:15"
+python3 $S/fetch.py mini airport-radar $W/points.json $W/radar.json
+venv/bin/python $S/review.py radar-summary $W/radar.json LFBO LFMT
 ```
 
 **Baseline (2026-10-03..05, 2,523 METARs):** AUTO `///CB` had a heavy echo (≥41 dBZ) within
@@ -207,7 +201,7 @@ Each tick logs a closest-approach estimate per storm with available motion (`est
 B4), by horizon, next to persistence (the storm staying put):
 
 ```bash
-$LOCAL_VENV/bin/python $S/review.py score-estimates $W/live $W/cells [FLIGHT_SUBSTR...]
+venv/bin/python $S/review.py score-estimates $W/live $W/cells [FLIGHT_SUBSTR...]
 ```
 
 `lost` counts storms whose lineage ended before the estimated time. The estimate stays in the
@@ -222,7 +216,7 @@ pack keeps byte-for-byte, so a digest can be checked against exactly what the mo
 ### C1. Mechanical checks on every digest
 
 ```bash
-$BR digest-check $SINCE_DAY $UNTIL_DAY
+python3 $S/fetch.py br digest-check $SINCE_DAY $UNTIL_DAY
 ```
 
 Counts, with examples:
@@ -237,14 +231,11 @@ Counts, with examples:
 ### C2. Pick the sample
 
 ```bash
-python3 $S/briefings.py seen $RECORD --days 7 > $W/seen.json
-scp -q $W/seen.json $SERVER_SSH:/tmp/ && ssh $SERVER_SSH "docker cp /tmp/seen.json $SERVER_CONTAINER:/tmp/"
-$BR sample $SINCE_DAY $UNTIL_DAY --n 12 --seen /tmp/seen.json --out /tmp/briefings_sample.json
-$BR export /tmp/briefings_sample.json /tmp/briefings_export.tgz
-ssh $SERVER_SSH "docker cp $SERVER_CONTAINER:/tmp/briefings_export.tgz /tmp/ && docker cp $SERVER_CONTAINER:/tmp/briefings_sample.json /tmp/"
-mkdir -p $W/digests && scp -q $SERVER_SSH:/tmp/briefings_export.tgz $SERVER_SSH:/tmp/briefings_sample.json $W/ \
-  && tar xzf $W/briefings_export.tgz -C $W/digests
+python3 $S/fetch.py sample $SINCE_DAY $UNTIL_DAY $W --n 12 --record $RECORD --days 7
 ```
+
+It builds the seen-list from the record, ranks and exports in the container, and unpacks
+the picked packs to `$W/digests/<pack_id>/` with the picks in `$W/briefings_sample.json`.
 
 Per day, `--n` is a ceiling (default 12) and the packs come ranked:
 1. Pool: the newest pack per flight, at most two flights per user, long-range outlooks out.
@@ -289,7 +280,7 @@ Write one entry per reviewed pack (core and tail) to `$W/findings.json`:
 ```
 
 ```bash
-python3 $S/briefings.py record $RECORD $W/findings.json --server-head $SERVER_HEAD
+python3 $S/briefings.py record $RECORD $W/findings.json --server-head <server_head from prod-check>
 python3 $S/briefings.py tally $RECORD --since <a week or two back>
 ```
 

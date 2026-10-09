@@ -28,7 +28,23 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(os.environ.get("WB_REPO") or Path(__file__).resolve().parents[4])
-AIRPORTS_DB = os.environ.get("AIRPORTS_DB") or str(REPO / "data" / "nav.db")
+
+
+def _airports_db() -> str:
+    """AIRPORTS_DB from the env, else this checkout's .env via hosts.py -- not
+    REPO/data/nav.db, which is empty in a worktree (DATA_DIR points at main's)."""
+    if os.environ.get("AIRPORTS_DB"):
+        return os.environ["AIRPORTS_DB"]
+    sys.path.insert(0, str(REPO / "scripts" / "ops"))
+    import hosts
+
+    db = hosts.check_local(REPO).values.get("LOCAL_AIRPORTS_DB")
+    if not db:
+        sys.exit("AIRPORTS_DB did not resolve -- run `python3 scripts/ops/hosts.py local`")
+    return db
+
+
+AIRPORTS_DB = _airports_db()
 
 TREND = re.compile(r"\s(TEMPO|BECMG|NOSIG|PROB\d{2}|RMK)\b")
 CLOUD = re.compile(r"(?:\b(?:FEW|SCT|BKN|OVC|VV)(?:\d{3}|///)|(?<![A-Z0-9])///)(CB|TCU)\b")

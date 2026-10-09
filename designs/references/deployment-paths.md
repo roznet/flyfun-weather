@@ -40,8 +40,9 @@ simply unavailable there.
 | `<HOST_DATA_DIR>` | Host path for the app's data dir (packs, GRIB caches, SRTM, nav.db) | server `.env`, checked |
 | `<HOST_ECMWF_GRIB_DIR>` | Host path for ECMWF deliveries | server `.env`, checked |
 | `<HOST_SNAPSHOT_INBOX>`, `<HOST_CELLS_INBOX>` | Where compute nodes drop artifacts / observed cells for ingest | server `.env`, checked |
-| `<HOST_AIRPORTS_DB>` | The host-side nav.db file (`AIRPORTS_DB`'s basename under `HOST_DATA_DIR`) | derived, checked |
+| `<HOST_AIRPORTS_DB>` | The host-side nav.db file: the container path `AIRPORTS_DB` translated through the container's real mounts | `docker inspect` mounts, checked |
 | `<DATA_VOLUME>` | The **mount point** holding all of the above — the disk gauge in health checks | derived from `HOST_DATA_DIR` |
+| `<CONTAINER_DATA_DIR>` | Where the container sees `HOST_DATA_DIR` (`/app/data` today) | `docker inspect` mounts, checked: a container that doesn't mount `HOST_DATA_DIR` is a `problem` |
 | `<NODE_SSH>`, `<NODE_REPO>`, `<NODE_VENV>`, `<NODE_HEAD>` | Compute-node values | `hosts.py node <name>`, checked on the node |
 | `<node.name>`, `<node.branch>`, `lan_only`, `schedule_utc` … | Compute-node inventory fields | `hosts.json` `nodes[]` as written |
 | `<LOCAL_DATA_DIR>`, `<LOCAL_AIRPORTS_DB>`, `<LOCAL_ECMWF_GRIB_DIR>`, `<LOCAL_DEV_DB>` | This checkout's paths (`${WORKING_DIR}` expanded) | `hosts.py local` |

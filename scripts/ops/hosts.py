@@ -21,7 +21,7 @@ Output modes (default: a readable report, one line per check with evidence):
 Exported names: SERVER_SSH, SERVER_PROJECT_DIR, SERVER_URL, SERVER_REPO,
 SERVER_HEAD, SERVER_CONTAINER, HOST_DATA_DIR, HOST_ECMWF_GRIB_DIR,
 HOST_SNAPSHOT_INBOX, HOST_CELLS_INBOX, HOST_AIRPORTS_DB (the host-side nav.db
-file), DATA_VOLUME; NODE_SSH, NODE_REPO, NODE_HEAD, NODE_BRANCH, NODE_VENV,
+file), DATA_VOLUME, CONTAINER_DATA_DIR (where the container sees HOST_DATA_DIR); NODE_SSH, NODE_REPO, NODE_HEAD, NODE_BRANCH, NODE_VENV,
 NODE_DATA_DIR, NODE_AIRPORTS_DB, NODE_ECMWF_GRIB_DIR, NODE_DEV_DB;
 LOCAL_REPO, LOCAL_DATA_DIR, LOCAL_AIRPORTS_DB, LOCAL_ECMWF_GRIB_DIR,
 LOCAL_EVAL_CORPUS_DIR, LOCAL_CELLS_INBOX_DIR, LOCAL_DEV_DB.
@@ -84,9 +84,9 @@ SERVER_KEYS = [
     {"key": "HOST_ECMWF_GRIB_DIR"},
     {"key": "HOST_SNAPSHOT_INBOX"},
     {"key": "HOST_CELLS_INBOX", "required": False},
-    # AIRPORTS_DB in the server .env is a CONTAINER path; the host file is its
-    # basename under HOST_DATA_DIR (compose maps HOST_DATA_DIR -> /app/data).
-    {"key": "AIRPORTS_DB", "under": "HOST_DATA_DIR", "kind": "file",
+    # AIRPORTS_DB in the server .env is a CONTAINER path; it is translated to the
+    # host file through the container's real bind mounts (docker inspect).
+    {"key": "AIRPORTS_DB", "container_path": True, "kind": "file",
      "label": "nav.db (host side)", "export": "HOST_AIRPORTS_DB"},
 ]
 CHECKOUT_KEYS = [  # a compute node and a dev checkout read the same .env names
@@ -167,13 +167,13 @@ def check_server(cfg: dict, runner=subprocess.run) -> Report:
         rep.values["SERVER_URL"] = s["url"]
     project = s["project_dir"]
     spec = {"repo": project if project.startswith(("/", "~")) else f"~/{project}",
-            "keys": SERVER_KEYS, "mount_of": "HOST_DATA_DIR",
+            "keys": SERVER_KEYS, "mount_of": "HOST_DATA_DIR", "data_mount": "HOST_DATA_DIR",
             "container": s.get("container"), "hostname": s.get("hostname")}
     result, err = run_remote_probe(s["ssh"], spec, runner)
     if result is None:
         rep.add("ssh", UNKNOWN, s["ssh"], err)
         return rep
-    _merge(rep, result, "SERVER_", passthrough=("HOST_", "DATA_VOLUME"))
+    _merge(rep, result, "SERVER_", passthrough=("HOST_", "DATA_VOLUME", "CONTAINER_DATA_DIR"))
     return rep
 
 
@@ -223,10 +223,41 @@ def server_values(*required: str, hosts_file: Path = DEFAULT_HOSTS_FILE,
         raise SystemExit(f"hosts: {exc}") from None
     for key in required:
         if key not in rep.values:
-            bad = [c.line() for c in rep.checks if c.status in (PROBLEM, UNKNOWN)]
-            raise SystemExit(f"hosts: {key} did not resolve for {rep.title}:\n"
-                             + "\n".join(bad or ["  (no failing check -- unknown key?)"])
-                             + "\nrun `python3 scripts/ops/hosts.py server` for the full report")
+            _raise_unresolved(rep, key, "server")
+    return rep.values
+
+
+def _raise_unresolved(rep: Report, key: str, cmd: str):
+    bad = [c.line() for c in rep.checks if c.status in (PROBLEM, UNKNOWN)]
+    raise SystemExit(f"hosts: {key} did not resolve for {rep.title}:\n"
+                     + "\n".join(bad or ["  (no failing check -- unknown key?)"])
+                     + f"\nrun `python3 scripts/ops/hosts.py {cmd}` for the full report")
+
+
+def node_values(*required: str, name: str | None = None,
+                hosts_file: Path = DEFAULT_HOSTS_FILE,
+                runner=subprocess.run) -> dict[str, str]:
+    """Like server_values, for one compute node.
+
+    `name` may be omitted when exactly one node is configured. Also returns
+    NODE_NAME and NODE_LAN_ONLY ("1"/"0") from the inventory.
+    """
+    try:
+        nodes = load_hosts(hosts_file).get("nodes", [])
+    except ConfigError as exc:
+        raise SystemExit(f"hosts: {exc}") from None
+    match = [n for n in nodes if name in (None, n["name"])]
+    if len(match) != 1:
+        names = ", ".join(n["name"] for n in nodes) or "none configured"
+        raise SystemExit(f"hosts: name a node ({names})" if match else
+                         f"hosts: no node named {name!r} ({names})")
+    node = match[0]
+    rep = check_node(node, runner)
+    rep.values.update({"NODE_NAME": node["name"],
+                       "NODE_LAN_ONLY": "1" if node.get("lan_only") else "0"})
+    for key in required:
+        if key not in rep.values:
+            _raise_unresolved(rep, key, f"node {node['name']}")
     return rep.values
 
 
@@ -262,6 +293,16 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.target == "node" and not args.name:
         ap.error("`node` needs a node name")
+    if args.target in ("nodes", "all") and (args.env or args.get):
+        # Every node exports the same NODE_* names, so with several nodes the
+        # last one would silently win.
+        try:
+            n = len(load_hosts(args.hosts_file).get("nodes", []))
+        except ConfigError:
+            n = 0
+        if n > 1:
+            ap.error(f"--env/--get with {n} nodes would mix their NODE_* values; "
+                     "use `node NAME --env`")
 
     try:
         reports = build_reports(args.target, args.name, args.hosts_file)

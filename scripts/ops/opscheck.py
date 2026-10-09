@@ -114,6 +114,20 @@ def parse_env(text: str, environ: dict[str, str] | None = None) -> dict[str, str
     return out
 
 
+def container_to_host(path: str, mounts: list[dict]) -> str | None:
+    """Map a container path to its host path through the longest covering mount."""
+    best = None
+    for m in mounts:
+        dest = m["Destination"].rstrip("/")
+        if path == dest or path.startswith(dest + "/"):
+            if best is None or len(dest) > len(best["Destination"].rstrip("/")):
+                best = m
+    if best is None:
+        return None
+    rest = path[len(best["Destination"].rstrip("/")):]
+    return best["Source"].rstrip("/") + rest
+
+
 def mount_point(path: str) -> str:
     p = Path(path).resolve()
     while not os.path.ismount(p) and p != p.parent:
@@ -144,6 +158,9 @@ def probe(spec: dict) -> dict:
       hostname    expected short hostname (optional)
       mount_of    key whose mount point to report as DATA_VOLUME (optional)
       dev_db      true: check {DATA_DIR}/flyfun.db is the DB the app opens
+      data_mount  key (e.g. HOST_DATA_DIR) the container must bind-mount; exports
+                  CONTAINER_DATA_DIR. A key with "container_path": true is a
+                  container path, translated to the host through docker's mounts.
       env_optional  reason string: a missing env file is a skip, not a problem
                     (a cloud session has no .env by design)
     """
@@ -190,16 +207,31 @@ def probe(spec: dict) -> dict:
     env = parse_env(env_path.read_text(), environ={})
     add("env file", OK, str(env_path))
 
+    # The container's bind mounts, read from docker itself rather than assumed
+    # from the compose file: they are what maps a container path to a host path.
+    mounts: list[dict] | None = None
+    if spec.get("container"):
+        rc, out = _run(["docker", "inspect", "-f", "{{json .Mounts}}", spec["container"]])
+        if rc == 0:
+            try:
+                mounts = [m for m in json.loads(out) if m.get("Source") and m.get("Destination")]
+            except json.JSONDecodeError:
+                mounts = None
+
     for k in spec.get("keys", []):
         key, kind, required = k["key"], k.get("kind", "dir"), k.get("required", True)
         val = env.get(key, "")
-        if k.get("under"):
-            base = env.get(k["under"], "")
-            if not base or not val:
-                add(k.get("label", key), PROBLEM if required else SKIP, "",
-                    f"needs {k['under']} and {key} in .env")
+        if k.get("container_path") and val:
+            # A container path in the .env (e.g. AIRPORTS_DB=/app/data/nav.db):
+            # translate it through the mount that covers it.
+            if mounts is None:
+                add(k.get("label", key), UNKNOWN, val, "container mounts unreadable")
                 continue
-            val = str(Path(base) / Path(val).name)
+            host = container_to_host(val, mounts)
+            if host is None:
+                add(k.get("label", key), PROBLEM, val, "no container mount covers this path")
+                continue
+            val = host
         if not val:
             add(k.get("label", key), PROBLEM if required else SKIP, "(not set)",
                 "required in .env" if required else "", )
@@ -214,6 +246,19 @@ def probe(spec: dict) -> dict:
         else:
             what = "exists but is not a " + kind if p.exists() else "does not exist"
             add(k.get("label", key), PROBLEM, str(p), what)
+
+    if spec.get("data_mount") and mounts is not None:
+        host_dir = values.get(spec["data_mount"])
+        hit = [m for m in mounts if host_dir and
+               os.path.realpath(m["Source"]) == os.path.realpath(host_dir)]
+        if hit:
+            add("data mount", OK, hit[0]["Destination"], f"container path of {spec['data_mount']}",
+                export="CONTAINER_DATA_DIR")
+        elif host_dir:
+            add("data mount", PROBLEM, host_dir, f"the container does not mount "
+                f"{spec['data_mount']} -- the app is reading other data")
+    elif spec.get("data_mount") and spec.get("container"):
+        add("data mount", UNKNOWN, spec["container"], "docker inspect failed")
 
     if spec.get("mount_of") and spec["mount_of"] in values:
         add("DATA_VOLUME", OK, mount_point(values[spec["mount_of"]]),

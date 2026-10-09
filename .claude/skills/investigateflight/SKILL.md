@@ -13,47 +13,25 @@ layout, the 13-evaluator catalog, the analysis result structure, the API surface
 importantly — the field-name traps and the one destructive default that can silently overwrite
 the pack you're investigating. This file holds the recipes; that one holds the facts.
 
-## Step 1 — Extract the flight ID from the URL
-
-The user provides a briefing URL of the form `.../briefing.html?flight={flight_id}` (localhost
-or production). Extract `{flight_id}`, and `{timestamp}` if present. The ID format is
-documented in the reference.
-
-## Step 2 — Get the pack data onto local disk
+## Steps 1–2 — Get the pack onto local disk
 
 The primary investigation method is **disk + Python** — loading artifacts directly and calling
 individual functions. The API is only useful for quick final-result checks; it can't expose the
 intermediate computations that real debugging needs.
 
-**Local flight** — data is already on disk:
+Pass the briefing URL the user gave (localhost or production) or a bare flight id:
 
 ```bash
-ls {DATA_DIR}/packs/*/{flight_id}/
+python3 scripts/ops/fetch_pack.py "<briefing URL or flight_id>" [--pack <timestamp>] [--prod] [--all]
 ```
 
-If the dev server is running, the API can find the latest timestamp:
-
-```bash
-curl -s http://localhost:8000/api/flights/{flight_id}/packs/latest | python -m json.tool
-```
-
-**Production flight** — rsync the pack to a local scratch directory and work locally. Pack
-data does **not** live under the project directory on the server (and the server's `DATA_DIR`
-is a container path), so resolve the host-side paths first:
-
-```bash
-python3 scripts/ops/hosts.py server      # <SERVER_SSH>, <HOST_DATA_DIR>
-python3 scripts/ops/hosts.py local       # <LOCAL_DATA_DIR> for {DATA_DIR} below
-```
-
-Then use those values — the `user_id` segment varies, so wildcard it:
-
-```bash
-ssh <SERVER_SSH> "ls <HOST_DATA_DIR>/packs/*/{flight_id}/"
-
-rsync -avz <SERVER_SSH>:<HOST_DATA_DIR>/packs/\*/{flight_id}/ \
-  {DATA_DIR}/packs/debug/{flight_id}/
-```
+It reads `flight` and `pack` (or the admin page's `t`) from the URL, looks in this checkout's
+`DATA_DIR/packs/*/<flight>/` first, and otherwise rsyncs **one** pack — the named one, else the
+newest — from the droplet's `HOST_DATA_DIR` (resolved by `hosts.py`; the server's `DATA_DIR`
+is the container path) into `DATA_DIR/packs/debug/<flight>/<pack>/`. `--all` takes every pack
+of the flight; `--prod` skips the local copy, for a flight that also exists in dev. The last
+line is `PACK_DIR=<path>`: that is `pack_dir` below. Exit 1 names what wasn't found; exit 2
+means the droplet couldn't be reached. The flight ID format is in the reference.
 
 ## Step 3 — Load data in Python
 

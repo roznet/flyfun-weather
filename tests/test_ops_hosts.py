@@ -91,17 +91,47 @@ def test_probe_dir_where_file_expected_is_a_problem(checkout):
     assert st["AIRPORTS_DB"] == "problem"
 
 
-def test_probe_resolves_container_path_basename_under_host_dir(tmp_path):
+def test_container_to_host_uses_the_longest_covering_mount():
+    mounts = [{"Source": "/mnt/d/weather/data", "Destination": "/app/data"},
+              {"Source": "/mnt/d/ecmwf", "Destination": "/app/data/ecmwf"},
+              {"Source": "/etc/x", "Destination": "/app/database"}]
+    c2h = opscheck.container_to_host
+    assert c2h("/app/data/nav.db", mounts) == "/mnt/d/weather/data/nav.db"
+    assert c2h("/app/data/ecmwf/a.grib", mounts) == "/mnt/d/ecmwf/a.grib"
+    assert c2h("/app/data", mounts) == "/mnt/d/weather/data"
+    assert c2h("/app/databasex", mounts) is None  # prefix match must stop at a "/"
+    assert c2h("/srv/other", mounts) is None
+
+
+def test_probe_maps_container_paths_through_docker_mounts(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     host_data = tmp_path / "host-data"
     host_data.mkdir()
     (host_data / "nav.db").write_text("x")
-    (repo / ".env").write_text(f"HOST_DATA_DIR={host_data}\nAIRPORTS_DB=/app/data/nav.db\n")
-    keys = [{"key": "HOST_DATA_DIR"}, {"key": "AIRPORTS_DB", "under": "HOST_DATA_DIR",
-                                       "kind": "file", "export": "HOST_AIRPORTS_DB"}]
-    result = opscheck.probe({"repo": str(repo), "keys": keys})
+    (repo / ".env").write_text(f"HOST_DATA_DIR={host_data}\nAIRPORTS_DB=/app/data/nav.db\n"
+                               "OTHER=/nowhere/x.db\n")
+    mounts = json.dumps([{"Source": str(host_data), "Destination": "/app/data"}])
+
+    def fake_run(cmd, cwd=None):
+        if cmd[:2] == ["docker", "inspect"]:
+            return 0, mounts
+        if cmd[:2] == ["docker", "ps"]:
+            return 0, "app\tUp 1 hour (healthy)"
+        return opscheck_run(cmd, cwd)
+    opscheck_run = opscheck._run
+    monkeypatch.setattr(opscheck, "_run", fake_run)
+    keys = [{"key": "HOST_DATA_DIR"},
+            {"key": "AIRPORTS_DB", "container_path": True, "kind": "file",
+             "export": "HOST_AIRPORTS_DB"},
+            {"key": "OTHER", "container_path": True, "kind": "file"}]
+    result = opscheck.probe({"repo": str(repo), "keys": keys, "container": "app",
+                             "data_mount": "HOST_DATA_DIR"})
+    st = _statuses(result)
     assert result["values"]["HOST_AIRPORTS_DB"] == str(host_data / "nav.db")
+    assert result["values"]["CONTAINER_DATA_DIR"] == "/app/data"
+    assert st["OTHER"] == "problem"          # no mount covers it: never guessed
+    assert st["data mount"] == "ok"
 
 
 def test_probe_wrong_hostname_is_a_problem(checkout):
