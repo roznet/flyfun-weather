@@ -39,6 +39,10 @@ Three endpoints:
 
 Auth mirrors the other flight-independent map endpoints: any authenticated
 user.  Nothing here is user-specific, but none of it is public either.
+Every endpoint authenticates with ``current_user_id_short``, never the
+``Depends(get_db)``-backed ``current_user_id``: a tile can wait up to ~16 s on
+EUMETView, and holding a pooled connection across that wait let one map pan
+exhaust the pool and 500 the whole app (#719).
 """
 
 from __future__ import annotations
@@ -51,7 +55,7 @@ from urllib.parse import quote
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from flyfun_common.db import current_user_id
+from weatherbrief.api.deps import current_user_id_short
 from weatherbrief.observed.collect import observed_enabled
 from weatherbrief.observed import satellite_ir, tiles
 from weatherbrief.observed.frames import (
@@ -138,7 +142,7 @@ def _bounds(
 
 
 @router.get("/status")
-def observed_status(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
+def observed_status(_user_id: str = Depends(current_user_id_short)) -> dict[str, Any]:
     """What this deployment holds right now, per source.
 
     Each entry carries its own frame's valid time and age — there is no
@@ -198,7 +202,7 @@ def observed_overlay(
     west: float = Query(...),
     north: float = Query(...),
     east: float = Query(...),
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id_short),
 ) -> Response:
     """Newest frame for ``source``, clipped to the rectangle, as one PNG."""
     _require_enabled()
@@ -244,7 +248,7 @@ def observed_flashes(
     north: float = Query(...),
     east: float = Query(...),
     minutes: float | None = Query(None, gt=0),
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id_short),
 ) -> dict[str, Any]:
     """Lightning flashes inside the rectangle, each with its own time.
 
@@ -394,7 +398,7 @@ def _tile_url_template(source: str) -> str:
 @router.get("/frames/{source}")
 def observed_frames(
     source: str,
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id_short),
 ) -> dict[str, Any]:
     """Frames a tiled layer can draw, newest first.
 
@@ -468,7 +472,7 @@ def observed_tile(
     z: int,
     x: int,
     y: int,
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id_short),
 ) -> Response:
     """One Web Mercator tile of one frame."""
     _require_enabled()
@@ -536,7 +540,7 @@ def _tile_response(png: bytes, cache_control: str = _TILE_CACHE_CONTROL) -> Resp
 
 
 @router.get("/cells/frames")
-def observed_cell_frames(_user_id: str = Depends(current_user_id)) -> dict[str, Any]:
+def observed_cell_frames(_user_id: str = Depends(current_user_id_short)) -> dict[str, Any]:
     """Overlay stamps newest first, each with its valid and received time.
 
     ``stale`` / ``unavailable_since`` carry "cell analysis unavailable since
@@ -557,7 +561,7 @@ def observed_cell_display(
     west: float | None = Query(None),
     north: float | None = Query(None),
     east: float | None = Query(None),
-    _user_id: str = Depends(current_user_id),
+    _user_id: str = Depends(current_user_id_short),
 ) -> Response:
     """One frame's overlay, optionally clipped to a box (the route map's).
 

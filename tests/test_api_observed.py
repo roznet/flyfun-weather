@@ -15,9 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
-from flyfun_common.db import DEV_USER_ID, current_user_id, get_db
+from flyfun_common.db import DEV_USER_ID, get_db
 from flyfun_common.db.models import UserPreferencesRow, UserRow
 from weatherbrief.api.app import create_app
+from weatherbrief.api.deps import current_user_id_short
 from weatherbrief.observed.frames import (
     SOURCE_EUMETSAT_CTTH,
     SOURCE_EUMETSAT_LI,
@@ -107,7 +108,7 @@ def _build_app(app_db):
 @pytest.fixture
 def client(app_db, observed_env):
     app = _build_app(app_db)
-    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
+    app.dependency_overrides[current_user_id_short] = lambda: DEV_USER_ID
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -135,7 +136,7 @@ def test_endpoints_are_absent_unless_the_collector_is_enabled(
     # that is already set.
     monkeypatch.setenv("WB_OBSERVED_ENABLED", "0")
     app = _build_app(app_db)
-    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
+    app.dependency_overrides[current_user_id_short] = lambda: DEV_USER_ID
     client = TestClient(app, raise_server_exceptions=False)
     assert client.get("/api/observed/status").status_code == 404
 
