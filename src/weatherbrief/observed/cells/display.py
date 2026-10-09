@@ -28,6 +28,12 @@ Contents (``DISPLAY_SCHEMA``):
   fired.  Absent on a clear cell, so clean frames keep the pre-#696 shape.
   ``robust_peak_dbz`` (the 3x3-median peak) rides along on every assessed
   cell; nothing displays or alerts on it yet;
+* **suspect_outlines** — ``{tier: [index, ...]}`` into that tier's outlines,
+  for the rings of an *unassessed* tier (``rain20``) that are a suspect
+  echo's own skirt rather than weather (#702, see :func:`suspect_regions`).
+  The rings stay in ``outlines`` so every map keeps drawing them; the
+  droplet's route products skip them when suppression is on.  Absent on a
+  frame with none;
 * **within** — on a cell inside a cell of the next lower tier (a core41
   inside its core35, a core35 inside its rain20), that cell's id (#688), so
   the droplet groups the tiers of one storm without re-deriving geometry;
@@ -52,7 +58,9 @@ from ..frames import SOURCE_EUMETSAT_CTTH, SOURCE_EUMETSAT_LI, SOURCE_OPERA_DBZH
 from ..grid import GridSpec
 from .advect import MotionField, project_centroid
 from .catalogue import encode, r
+from .clutter import assessable
 from .detect import TierDetection, distance_km, initial_bearing_deg
+from .levels import suspect
 from .policy import CellPolicy
 
 DISPLAY_SCHEMA = "observed-cells-display/1"
@@ -79,11 +87,15 @@ def outline_step(tier: str, big: bool) -> int:
 
 
 def outlines(det: TierDetection, grid: GridSpec, r0: int, r1: int, c0: int, c1: int,
-             step: int, digits: int = 3) -> list:
-    """Cell boundaries in the crop as ``[[lat, lon], ...]`` polylines."""
+             step: int, digits: int = 3, keep: np.ndarray | None = None) -> list:
+    """Cell boundaries in the crop as ``[[lat, lon], ...]`` polylines.
+
+    ``keep`` is a boolean lookup indexed by label: only those cells are traced
+    (``keep[0]`` must be False).  ``None`` traces every cell."""
     import contourpy
 
-    mask = det.labels[r0:r1, c0:c1] > 0
+    crop = det.labels[r0:r1, c0:c1]
+    mask = crop > 0 if keep is None else keep[crop]
     if step > 1:
         h = (mask.shape[0] // step) * step
         w = (mask.shape[1] // step) * step
@@ -151,6 +163,94 @@ def enclosing_cells(catalogue_cells: list[dict], detections: dict[str, TierDetec
             if parent is not None:
                 out[own] = parent
     return out
+
+
+def suspect_regions(catalogue_cells: list[dict], detections: dict[str, TierDetection],
+                    policy: CellPolicy) -> dict[str, set[int]]:
+    """Labels of the *unassessed* tiers' regions that are a suspect echo's own (#702).
+
+    ``rain20`` cannot carry clutter evidence (``clutter.assessable``), so a
+    clutter block's own bare rain skirt is judged by what it contains.  A
+    region is the echo's own when all three hold:
+
+    * it contains at least one core (a plain rain area has none, and is
+      never touched);
+    * **every** core in it is suspect (one genuine core makes it weather);
+    * it is no bigger than ``rain_ratio_thin`` times those cores' own area —
+      the same "barely any rain around the core" boundary the per-core score
+      uses (``ClutterPolicy``), measured here over the region.  A genuine rain
+      area holding a suspect core is bigger than that, keeps its band, and
+      gets its intensity from what is left (the droplet's own member filter).
+
+    Cores are the cells of the assessed tiers, read off their labels under
+    the region; a core-tier blob below that tier's minimum area is no cell and
+    is not counted either way.
+    """
+    flagged = {(c["tier"], c["label"]) for c in catalogue_cells if "label" in c and suspect(c)}
+    if not flagged:
+        return {}
+    assessed = [t for t in policy.tiers if t.name in detections and assessable(t, policy.clutter)]
+    out: dict[str, set[int]] = {}
+    for tier in policy.tiers:
+        if tier.name not in detections or assessable(tier, policy.clutter):
+            continue
+        rain = detections[tier.name]
+        hosts: set[int] = set()
+        for up in assessed:
+            det = detections[up.name]
+            for cell in det.cells:
+                if (up.name, cell.label) not in flagged:
+                    continue
+                sub = det.labels[cell.slice_rows, cell.slice_cols] == cell.label
+                under = rain.labels[cell.slice_rows, cell.slice_cols][sub]
+                hosts.update(int(v) for v in np.unique(under[under > 0]))
+        by_label = rain.cell_by_label()
+        found = set()
+        for label in sorted(hosts):
+            region_cell = by_label.get(label)
+            if region_cell is None:
+                continue
+            sl = (region_cell.slice_rows, region_cell.slice_cols)
+            region = rain.labels[sl] == label
+            core_px = np.zeros(region.shape, dtype=bool)
+            genuine = False
+            for up in assessed:
+                labs = detections[up.name].labels[sl]
+                inside = labs[region]
+                if any((up.name, int(v)) not in flagged for v in np.unique(inside[inside > 0])):
+                    genuine = True
+                    break
+                core_px |= region & (labs > 0)
+            n_core = int(core_px.sum())
+            if genuine or n_core == 0:
+                continue
+            if int(region.sum()) <= policy.clutter.rain_ratio_thin * n_core:
+                found.add(label)
+        if found:
+            out[tier.name] = found
+    return out
+
+
+def tier_outlines(det: TierDetection, grid: GridSpec, step: int,
+                  suspect_labels: set[int] | None = None) -> tuple[list, list[int]]:
+    """One tier's outlines over the whole window, plus the indices of the rings
+    traced from ``suspect_labels`` (#702).
+
+    With no suspect labels this is exactly the single trace it always was, so
+    a clean frame's display file does not change by a byte.  Otherwise the
+    rest of the tier is traced first and the suspect regions after it, so
+    their rings are a known tail of the list.
+    """
+    ny, nx = det.labels.shape
+    if not suspect_labels:
+        return outlines(det, grid, 0, ny, 0, nx, step), []
+    bad = np.zeros(int(det.labels.max()) + 1, dtype=bool)
+    bad[sorted(suspect_labels)] = True
+    good = ~bad
+    good[0] = False
+    rest = outlines(det, grid, 0, ny, 0, nx, step, keep=good)
+    own = outlines(det, grid, 0, ny, 0, nx, step, keep=bad)
+    return rest + own, list(range(len(rest), len(rest) + len(own)))
 
 
 def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: MotionField | None = None,
@@ -226,7 +326,13 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
     rate_time = inputs.get(SOURCE_OPERA_RATE)
     rate_as_of = rate_time if rate_time and rate_time != inputs.get(SOURCE_OPERA_DBZH) else None
     within = enclosing_cells(catalogue["cells"], detections, policy)
-    return {
+    suspect_labels = suspect_regions(catalogue["cells"], detections, policy)
+    traced = {
+        tier.name: tier_outlines(detections[tier.name], grid, outline_step(tier.name, big),
+                                 suspect_labels.get(tier.name))
+        for tier in policy.tiers if tier.name in detections
+    }
+    out = {
         "schema": DISPLAY_SCHEMA,
         "policy_version": catalogue["policy_version"],
         "code_revision": catalogue.get("code_revision"),
@@ -244,16 +350,18 @@ def build_display(catalogue: dict, detections: dict[str, TierDetection], grid: G
         "unavailable": [u for u in unavailable if u != LIGHTNING_PENDING],
         "rain_min_area_km2": RAIN_MIN_AREA_KM2,
         "arrow_minutes": ARROW_MINUTES,
-        "outlines": {
-            tier.name: outlines(detections[tier.name], grid, 0, ny, 0, nx, outline_step(tier.name, big))
-            for tier in policy.tiers if tier.name in detections
-        },
+        "outlines": {name: lines for name, (lines, _) in traced.items()},
         "motion_variant": variant,
         "cells": [display_cell(c, grid, variant=variant, field=field, policy=policy,
                                flashes_pending=lightning_pending, rate_as_of=rate_as_of,
                                within=within.get(c["id"]))
                   for c in catalogue["cells"] if shown(c)],
     }
+    suspect_outlines = {name: idx for name, (_, idx) in traced.items() if idx}
+    if suspect_outlines:
+        # Absent on a clean frame, like the cells' clutter block (#702).
+        out["suspect_outlines"] = suspect_outlines
+    return out
 
 
 def write_display(path: Path, display: dict) -> int:

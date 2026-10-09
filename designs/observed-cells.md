@@ -456,6 +456,15 @@ from the same detections, and writes `cells/display/<stamp>.json.gz`
   plus `robust_peak_dbz` on every assessed cell. Additive under
   `observed-cells-display/1`; the droplet's validator is key-agnostic, so an
   older droplet still accepts the file.
+- `suspect_outlines` (#702): `{tier: [ring index, …]}` into `outlines[tier]`
+  for the `rain20` rings that are a suspect echo's own skirt
+  (`suspect_regions`: holds a core, every core in it suspect, area ≤
+  `rain_ratio_thin` × those cores' pixels; meteorology-decisions §42). The
+  rest of the tier is traced first and the marked regions after it
+  (`tier_outlines`), so marks are a tail of the list; with none, the single
+  trace is unchanged and the key is absent. Rings stay in `outlines` so maps
+  keep drawing them; the droplet validates the indices and `filter_bbox`
+  re-maps them. Rebuilt on the lightning amend, so a veto clears the mark.
 - `within` (#688): the id of the cell of the next lower tier that contains
   this one (core41 → core35 → rain20), read off that tier's labels under the
   cell's pixels (`enclosing_cells`); absent when the lower-tier region was
@@ -714,13 +723,10 @@ motion variant the map shows (#662).  Every one is in `policy.py`.
   from a 1,044 dB `robust_drop`. Both now read as *unknown*. Any new
   neighbourhood feature must decide explicitly what a mostly-empty window
   means before it is scored.
-- A suppressed core (#696) still leaves its own bare `rain20` outline: the
-  outlines are traced from the tier masks and cannot be filtered per cell, so
-  the ribbon can keep a floor-intensity rain band where the storm row went
-  away. So suppression is **not** complete coverage, and
-  `clutter_suppress_enabled`'s docstring says so. Fixing it properly means the
-  node marking suspect *outlines* rather than only cells — a display-schema
-  change, tracked as #702 rather than bolted on.
+- A suppressed core's bare `rain20` skirt is marked by the node (#702), not
+  assessed: the rain tier is judged by the cores it holds. A rain region whose
+  cores were dropped by their tier's minimum area counts no core and is never
+  marked; a `core35` ring is handled per cell on the droplet, not marked.
 - `clutter` evidence is only on `core35`/`core41`. Asking for it on `rain20`
   would flag every rain area in Europe (see "Non-meteorological echoes").
 - The tight poll's probe is a `collect_opera` with `warn_if_empty=False`

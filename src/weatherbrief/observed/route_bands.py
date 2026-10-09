@@ -23,6 +23,7 @@ from typing import Any
 
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.models.live import LiveStorm, RibbonWeather
+from weatherbrief.observed.cells_display import clutter_suppress_enabled, suspect_outlines
 from weatherbrief.observed.intensity import classify_dbz, intensity_label
 from weatherbrief.observed.storms import STORM_CORRIDOR_NM, operational_cells
 
@@ -206,13 +207,13 @@ def build_weather_bands(
     outlines = frame.get("outlines") or {}
     # One gate with the storm rows (#696): a suppressed cell must not set a
     # band's peak intensity either, and a `core` band whose every member was
-    # suppressed is not reported at all.  The outlines themselves are traced
-    # from the tier masks on the node and cannot be filtered per cell, so a
-    # suspect echo can still leave a bare rain20 ring on the ribbon at the
-    # floor intensity — a known limitation, recorded in observed-cells.md.
+    # suppressed is not reported at all.  The rain tier carries no clutter
+    # evidence of its own, so the node marks the rain20 rings that are a
+    # suspect echo's own skirt (#702) and those are skipped here too.
     all_cells = [c for c in frame.get("cells") or [] if isinstance(c, dict)]
     cells = operational_cells(all_cells)
     suppressed = len(all_cells) - len(cells)
+    hidden = suspect_outlines(frame) if clutter_suppress_enabled() else {}
     storm_by_cell = {cid: st.id for st in storms for cid in st.cell_ids}
     s, n_, w, e = _corridor_box(track, corridor_nm)
 
@@ -220,7 +221,7 @@ def build_weather_bands(
     for tier in TIERS:
         found = []
         for n, ring in enumerate(outlines.get(tier) or []):
-            if len(ring) < 3:
+            if len(ring) < 3 or n in hidden.get(tier, ()):
                 continue
             lats = [p[0] for p in ring]
             lons = [p[1] for p in ring]

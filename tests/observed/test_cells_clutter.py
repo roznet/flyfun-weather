@@ -296,7 +296,7 @@ REFERENCE_CELLS = {
 @pytest.mark.skipif(not os.environ.get(REAL_FRAMES_ENV),
                     reason=f"set {REAL_FRAMES_ENV} to an archive root holding the "
                            "2026-10-07 00:00-00:40Z OPERA frames")
-def test_reference_case_from_real_frames():
+def test_reference_case_from_real_frames(monkeypatch):
     """The issue's acceptance criterion, against the frames themselves.
 
     Not committed data: OPERA frames are not redistributable from this
@@ -322,6 +322,34 @@ def test_reference_case_from_real_frames():
         cell = next((c for c in catalogue["cells"] if c["id"] == cell_id), None)
         assert cell is not None, f"{cell_id} not found at {valid_time}"
         assert suspect(cell), f"{cell_id} was not flagged: {cell.get('clutter')}"
+
+    # #702: with suppression on, the LFAT -> LFQA ribbon has no band of any
+    # tier from that echo — its cores are dropped per cell and its own rain
+    # skirt is marked by the node.  Band ids are "<tier>:<ring index>".
+    import gzip
+    import json
+
+    from weatherbrief.analysis.route_geometry import RouteTrack
+    from weatherbrief.models.analysis import RouteConfig, Waypoint
+    from weatherbrief.observed.cells.catalogue import display_path
+    from weatherbrief.observed.route_bands import TIERS, _inside, build_weather_bands
+
+    track = RouteTrack.from_route(RouteConfig(
+        name="LFAT-LFQA",
+        waypoints=[Waypoint(icao="LFAT", name="LFAT", lat=50.515, lon=1.6275),
+                   Waypoint(icao="LFQA", name="LFQA", lat=49.2067, lon=4.1567)],
+        flight_duration_hours=1.0,
+    ))
+    monkeypatch.setenv("WB_CELLS_CLUTTER_SUPPRESS", "1")
+    for valid_time, cell_id in REFERENCE_CELLS.items():
+        catalogue = read_catalogue(catalogue_path(root, valid_time))
+        cell = next(c for c in catalogue["cells"] if c["id"] == cell_id)
+        display = json.loads(gzip.decompress(display_path(root, valid_time).read_bytes()))
+        phantom = {f"{TIERS[tier]}:{i}" for tier in TIERS
+                   for i, ring in enumerate(display["outlines"].get(tier) or [])
+                   if _inside(cell["lat"], cell["lon"], ring)}
+        bands = {b.id for b in build_weather_bands(display, track)}
+        assert not (bands & phantom), f"{valid_time}: bands {sorted(bands & phantom)} from {cell_id}"
 
 
 # --- The validation harness's own logic (#696) --------------------------------

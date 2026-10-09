@@ -122,7 +122,8 @@ def test_a_band_whose_only_member_is_suspect_is_dropped(suppressing):
     cells = [flagged(cell("core41-phantom", along=50.0, peak=57.0))]
     frame_data = {"outlines": {"core35": [ring]}, "cells": cells}
     assert build_weather_bands(frame_data, TRACK) == []
-    # The rain tier is not assessed, so its band is untouched by design.
+    # The rain tier is not assessed: an unmarked rain ring keeps its band
+    # (the node marks the suspect echo's own skirt, #702 — see below).
     rain = build_weather_bands({"outlines": {"rain20": [ring]}, "cells": cells}, TRACK)
     assert len(rain) == 1
 
@@ -173,3 +174,46 @@ def test_a_suspect_core35_takes_its_genuine_core41_with_it(suppressing):
     layer = storms_at(DEP + timedelta(minutes=30), [base, inner])
     assert [s.id for s in layer.storms] == ["core41-b"]
     assert layer.storms[0].peak_dbz == pytest.approx(50.0)
+
+
+# --- The rain tier: the node's suspect_outlines (#702) ---------------------------
+
+
+def _phantom_frame():
+    """A phantom core at 50 NM, its own bare rain skirt (marked by the node),
+    and an unrelated rain area at 80 NM."""
+    skirt = ring_around(50.0, 0.0, half=0.05)
+    rain = ring_around(80.0, 0.0)
+    cells = [flagged(cell("core41-phantom", along=50.0, peak=57.0)),
+             flagged(cell("core35-phantom", "core35", along=50.0, peak=57.0))]
+    return {"outlines": {"rain20": [rain, skirt], "core35": [skirt]}, "cells": cells,
+            "suspect_outlines": {"rain20": [1]}}
+
+
+def test_the_phantoms_rain_skirt_leaves_no_band(suppressing):
+    """#702 acceptance: no band of any tier from the suspect echo."""
+    bands = build_weather_bands(_phantom_frame(), TRACK)
+    assert [(b.tier, b.from_nm < 70.0) for b in bands] == [("rain", False)]
+
+
+def test_the_rain_skirt_stays_by_default():
+    bands = build_weather_bands(_phantom_frame(), TRACK)
+    assert sorted(b.tier for b in bands) == ["core", "rain", "rain"]
+
+
+def test_a_genuine_rain_area_holding_a_suspect_core_keeps_its_band(suppressing):
+    """Unmarked by the node, so it stays, at the peak of what is left in it."""
+    ring = [[49.0, 0.5], [49.0, 1.5], [51.0, 1.5], [51.0, 0.5], [49.0, 0.5]]
+    cells = [flagged(cell("core41-phantom", along=50.0, peak=57.0)),
+             cell("rain20-real", "rain20", along=55.0, peak=31.0)]
+    bands = build_weather_bands({"outlines": {"rain20": [ring]}, "cells": cells}, TRACK)
+    assert len(bands) == 1 and bands[0].peak_dbz == pytest.approx(31.0)
+    # With nothing but the suspect core inside, it falls back to the floor.
+    bands = build_weather_bands({"outlines": {"rain20": [ring]}, "cells": cells[:1]}, TRACK)
+    assert len(bands) == 1 and bands[0].peak_dbz == pytest.approx(20.0)
+
+
+def test_a_plain_rain_area_with_no_cores_is_untouched(suppressing):
+    ring = ring_around(50.0, 0.0)
+    bands = build_weather_bands({"outlines": {"rain20": [ring]}, "cells": []}, TRACK)
+    assert len(bands) == 1 and bands[0].tier == "rain"
