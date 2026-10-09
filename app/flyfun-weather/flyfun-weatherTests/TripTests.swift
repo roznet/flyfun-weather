@@ -590,6 +590,17 @@ struct TripDTOTests {
         #expect(TripFixture.trip(name: "EGTF → LSGS → EGTF", legs: [leg]).headerSubtitle == nil)
     }
 
+    @Test("An unnamed trip with no chain is never titled blank")
+    func displayNameWithoutChain() {
+        let trip = TripResponse(
+            id: "trip-empty",
+            userId: "u1",
+            name: "",
+            summary: TripSummary(tripId: "trip-empty", name: "", legs: [], chainLabel: "")
+        )
+        #expect(trip.displayName == "Trip")
+    }
+
     /// Both per-flight refresh paths refuse a claimed leg, and the app must tell
     /// that apart from an ordinary already-refreshing 409 — the retry policy and
     /// the banner styling both depend on it.

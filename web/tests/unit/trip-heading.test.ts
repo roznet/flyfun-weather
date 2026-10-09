@@ -29,6 +29,11 @@ describe('tripHeading', () => {
     expect(tripHeading(trip('EGTF → LSGS → EGTF')).subtitle).toBeNull();
   });
 
+  it('never titles an unnamed trip with no chain blank', () => {
+    expect(tripHeading({ ...trip('', ''), display_name: 'New trip' }).title).toBe('New trip');
+    expect(tripHeading(trip('', '')).title).toBe('Trip');
+  });
+
   it('drops the subtitle when there is no chain', () => {
     expect(tripHeading(trip('Alpine tour', ''))).toEqual({ title: 'Alpine tour', subtitle: null });
   });
