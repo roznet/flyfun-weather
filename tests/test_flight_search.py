@@ -87,6 +87,19 @@ class TestMatches:
         assert not matches(self.WPS, "", parse_query("ily"), "Family visit")
         assert matches([], "", parse_query("family"), "Family visit")
 
+    def test_trip_name_words_match(self):
+        # #738: the name of the trip a flight belongs to is searchable too.
+        t = "Alpine tour"
+        assert matches(self.WPS, "", parse_query("alpine"), None, t)
+        assert matches(self.WPS, "", parse_query("tou"), None, t)
+        assert matches(self.WPS, "", parse_query("LFMD alpine"), None, t)
+        assert not matches(self.WPS, "", parse_query("LFAT alpine"), None, t)
+        assert not matches(self.WPS, "", parse_query("pine"), None, t)
+        assert matches([], "", parse_query("alpine"), None, t)
+        # A flight with no trip is unaffected.
+        assert not matches(self.WPS, "", parse_query("alpine"), None, None)
+        assert matches(self.WPS, "", parse_query("LFMD"), None, None)
+
     def test_no_haystack_never_matches(self):
         assert not matches([], "", parse_query("LFMD"))
         assert not matches(None, None, parse_query("LFMD"))
@@ -216,6 +229,23 @@ class TestPastQueryEndpoint:
         assert len(past) == 2
         assert all(f["waypoints"] == ["LESB", "LFMD"] for f in past)
         assert resp.headers["X-Past-Total"] == "3"
+
+    def test_past_filter_matches_trip_name(self, client, app_db):
+        # #738: every past leg of a named trip is found by a word of its name.
+        a = _save(app_db, waypoints=["LESB", "LFMD"], days_offset=-90, idx=1)
+        b = _save(app_db, waypoints=["LFMD", "LESB"], days_offset=-89, idx=2)
+        _save(app_db, waypoints=["EGTF", "LFAT"], days_offset=-91, idx=3)
+        r = client.post("/api/trips", json={"flight_ids": [a.id, b.id], "name": "Riviera hop"})
+        assert r.status_code == 201, r.text
+
+        resp = client.get("/api/flights?past_q=rivi")
+        past = _sections(resp.json())["past"]
+        assert sorted(p["id"] for p in past) == sorted([a.id, b.id])
+        assert resp.headers["X-Past-Total"] == "2"
+
+        # ANDed with a waypoint token like any other field.
+        resp = client.get("/api/flights?past_q=riviera+EGTF")
+        assert _sections(resp.json())["past"] == []
 
     def test_does_not_touch_future_section(self, client, app_db):
         # past_q is past-scoped on purpose: the web client filters the
