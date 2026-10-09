@@ -367,10 +367,14 @@ function renderTripCard(
       <div class="trip-card-header">
         <button type="button" class="trip-toggle" data-trip-toggle="${escapeHtml(trip.id)}"
                 aria-expanded="${expanded ? 'true' : 'false'}">
-          <span class="trip-chain">${escapeHtml(heading.title)}</span>
-          ${heading.subtitle ? `<span class="trip-chain-sub">${escapeHtml(heading.subtitle)}</span>` : ''}
-          <span class="trip-dates">${escapeHtml(dates)}</span>
-          <span class="trip-count">${escapeHtml(ahead)}</span>
+          <span class="trip-heading">
+            <span class="trip-chain">${escapeHtml(heading.title)}</span>
+            <span class="trip-meta">
+              ${heading.subtitle ? `<span class="trip-chain-sub">${escapeHtml(heading.subtitle)}</span>` : ''}
+              <span class="trip-dates">${escapeHtml(dates)}</span>
+              <span class="trip-count">${escapeHtml(ahead)}</span>
+            </span>
+          </span>
         </button>
         <div class="trip-card-status">${refreshing}${bindingChip(summary)}</div>
         <a class="btn btn-secondary btn-sm trip-open" href="/trip.html?id=${encodeURIComponent(trip.id)}">${escapeHtml(t('trips.open'))}</a>
