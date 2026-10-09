@@ -194,7 +194,7 @@ export interface TripResponse {
    *  `helpers/trip-heading.ts::tripHeading`, not this field directly. */
   name: string;
   /** `name`, else the derived "chain, date span". Never empty. */
-  display_name?: string;
+  display_name: string;
   notes: string | null;
   auto_refresh: boolean;
   auto_refresh_hour: number | null;

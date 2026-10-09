@@ -12,9 +12,13 @@ export interface TripHeading {
   subtitle: string | null;
 }
 
-export function tripHeading(trip: { name: string; summary: { chain_label: string } }): TripHeading {
+export function tripHeading(
+  trip: { name: string; display_name?: string; summary: { chain_label: string } },
+): TripHeading {
   const name = trip.name.trim();
   const chain = trip.summary.chain_label;
-  if (!name) return { title: chain, subtitle: null };
+  // A trip with no airports yet (created empty, legs added later) has no
+  // chain; fall back to the server's derived label rather than a blank title.
+  if (!name) return { title: chain || trip.display_name || 'Trip', subtitle: null };
   return { title: name, subtitle: chain && chain !== name ? chain : null };
 }
