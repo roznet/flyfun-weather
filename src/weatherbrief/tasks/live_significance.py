@@ -1499,8 +1499,10 @@ def classify_changes(
         c.key,
     ))
 
-    # Alert once per value; forget keys that are no longer changed so a
-    # recurrence alerts afresh.
+    # Alert memory. Airport rows alert only when worse than the worst already
+    # alerted for that key on this flight, and remember it through a return to
+    # baseline (§45, #722). Other keys alert once per value and are forgotten
+    # once no longer changed, so a recurrence alerts afresh.
     alerted = dict(memory.alerted)
     live_alert_keys: set[str] = set()
     for c in changes:
@@ -1524,6 +1526,9 @@ def classify_changes(
                 alerted[_span_key(span)] = "alerted"
             continue
         value = c.to_value or ""
+        if c.kind in _AIRPORT_ALERT_KINDS:
+            c.new_alert, alerted[c.key] = _airport_alert(c.kind, alerted.get(c.key), value)
+            continue
         if alerted.get(c.key) != value:
             # A merged SIGMET's key changes when a partner FIR issues late or
             # one of the pair lapses ("sigmet:A|3" ↔ "sigmet:A|3+sigmet:B|3"):
@@ -1537,6 +1542,8 @@ def classify_changes(
                 c.new_alert = True
             alerted[c.key] = value
     for k in list(alerted):
+        if k.startswith(_AIRPORT_ALERT_PREFIXES):
+            continue  # kept for the flight (§45)
         if k not in live_alert_keys and k not in unknown and any(k.startswith(p) for p in evaluated):
             if _pending_key(k, sigmet_traces, now):
                 # Missing from this fetch before it ever became valid (a failed
@@ -1551,6 +1558,46 @@ def classify_changes(
         new_sigmets=new_sigmets,
     )
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
+
+
+#: Airport change kinds under worst-alerted memory (§45, #722), with the rank
+#: that orders their values; ``metar_weather`` has no order and alerts once
+#: per phenomenon instead. Rank keys are upper-cased (the wind advisory is
+#: "green" / "amber" / "red").
+_AIRPORT_ALERT_RANKS: dict[str, dict[str, int]] = {
+    kind: {k.upper(): v for k, v in ranks.items()}
+    for kind, ranks in {
+        "metar_category": _CATEGORY_RANK,
+        "taf_category": _CATEGORY_RANK,
+        "metar_wind": _WIND_RANK,
+        # A row's value is the label of its level ("TCU" < "CB" < "TS").
+        "metar_convective": {label: level for level, label in _CONVECTIVE_LABEL.items()},
+    }.items()
+}
+_AIRPORT_ALERT_KINDS = frozenset(_AIRPORT_ALERT_RANKS) | {"metar_weather"}
+_AIRPORT_ALERT_PREFIXES = tuple(f"{p}:" for p in (*_KEY_PREFIX.values(), "taf"))
+
+
+def _airport_alert(kind: str, prior: str | None, value: str) -> tuple[bool, str]:
+    """(new_alert, value to remember) for an airport alert row.
+
+    Ordered kinds ping only above the worst value already alerted for the key,
+    which is what is remembered. ``metar_weather`` pings when it carries a
+    phenomenon not alerted yet, and remembers the union. A memory written
+    before #722 holds the last alerted value, a valid worst to start from.
+    """
+    if kind == "metar_weather":
+        seen = {p for p in (prior or "").split(", ") if p}
+        now = {p for p in value.split(", ") if p}
+        return bool(now - seen), ", ".join(sorted(seen | now))
+    ranks = _AIRPORT_ALERT_RANKS[kind]
+    rank = ranks.get(value.upper())
+    if rank is None:
+        # Not a value this kind orders (never expected): the pre-#722 rule.
+        return prior != value, value
+    if prior is not None and ranks.get(prior.upper(), -1) >= rank:
+        return False, prior
+    return True, value
 
 
 def _span_key(span: tuple[float, float]) -> str:

@@ -150,13 +150,18 @@ def test_same_report_as_briefing_is_no_change():
     assert changes.changes == []
 
 
-def test_one_report_back_at_baseline_clears_the_change_and_alert_memory():
-    t1, t2 = T0 + timedelta(minutes=30), T0 + timedelta(minutes=60)
+def test_one_report_back_at_baseline_clears_the_change_but_not_the_alert_memory():
+    """§45 (#722): the row clears, but the airport's worst alerted value is
+    kept for the flight, so the relapse shows without pinging again."""
+    t1, t2, t3 = (T0 + timedelta(minutes=m) for m in (30, 60, 90))
     base = _obs([_apt("ZZDS", "VFR")])
     _, mem = _classify(base, _obs([_apt("ZZDS", "IFR", t=t1)]))
     cleared, mem = _classify(base, _obs([_apt("ZZDS", "VFR", t=t2, prev="IFR", prev_t=t1)]), memory=mem)
     assert cleared.changes == []
-    assert mem.alerted == {}
+    assert mem.alerted == {"metar:ZZDS": "IFR"}
+    relapse, _ = _classify(base, _obs([_apt("ZZDS", "IFR", t=t3)]), memory=mem)
+    [c] = relapse.changes
+    assert c.tier == "alert" and c.new_alert is False
 
 
 def test_report_without_category_neither_raises_nor_clears():

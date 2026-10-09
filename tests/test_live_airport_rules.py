@@ -392,6 +392,88 @@ def test_alert_fires_once_per_value_per_kind():
     assert {c.kind: c.new_alert for c in worse} == {"metar_convective": False, "metar_wind": True}
 
 
+# --- Worst-alerted memory (§45, #722) ---------------------------------------
+
+
+def _pings(base, sequence, memory=None):
+    """Run one airport report per tick; return (kind, value) of each ping and
+    the final memory. Every report still shows as an alert row."""
+    pings = []
+    for i, latest in enumerate(sequence):
+        changes, memory = classify(base, [latest], now=T1 + timedelta(minutes=30 * i), memory=memory)
+        assert all(c.tier == "alert" for c in changes)
+        pings += [(c.kind, c.to_value) for c in changes if c.new_alert]
+    return pings, memory
+
+
+def _at(i):
+    return T1 + timedelta(minutes=30 * i)
+
+
+def test_category_hovering_pings_only_when_worse_than_already_alerted():
+    cats = ["MVFR", "IFR", "MVFR", "IFR", "MVFR", "VFR", "IFR", "LIFR"]
+    pings, mem = _pings([apt("ZZDS")], [apt("ZZDS", cat=c, t=_at(i)) for i, c in enumerate(cats)])
+    assert pings == [("metar_category", "MVFR"), ("metar_category", "IFR"), ("metar_category", "LIFR")]
+    assert mem.alerted == {"metar:ZZDS": "LIFR"}
+
+
+def test_relapse_still_shows_its_current_value():
+    _, mem = _pings([apt("ZZDS")], [apt("ZZDS", cat="IFR", t=_at(0))])
+    changes, _ = classify([apt("ZZDS")], [apt("ZZDS", cat="MVFR", t=_at(1))], memory=mem)
+    c = only(changes, "metar_category")
+    assert (c.tier, c.to_value, c.new_alert) == ("alert", "MVFR", False)
+
+
+def test_wind_hovering_pings_only_when_worse_than_already_alerted():
+    winds = ["amber", "green", "amber", "red", "amber", "red"]
+    pings, _ = _pings([apt("ZZDS")], [apt("ZZDS", wind=w, t=_at(i)) for i, w in enumerate(winds)])
+    assert pings == [("metar_wind", "amber"), ("metar_wind", "red")]
+
+
+def test_convective_cleared_and_back_does_not_ping_again():
+    raws = {
+        "TCU": "METAR ZZDS 020700Z 05010KT 9999 FEW030TCU 20/15 Q1020",
+        "CB": "METAR ZZDS 020700Z 05010KT 9999 FEW030CB 20/15 Q1020",
+        "-": "",
+    }
+    seq = ["TCU", "CB", "-", "TCU", "CB"]
+    pings, _ = _pings([apt("ZZDS")], [apt("ZZDS", raws[k], t=_at(i)) for i, k in enumerate(seq)])
+    assert pings == [("metar_convective", "TCU"), ("metar_convective", "CB")]
+
+
+def test_significant_weather_pings_once_per_phenomenon_for_the_flight():
+    seq = [["FZRA"], [], ["FZRA"], ["FZRA", "GR"], ["GR"]]
+    pings, mem = _pings([apt("ZZDS")], [apt("ZZDS", wx=w, t=_at(i)) for i, w in enumerate(seq)])
+    assert pings == [("metar_weather", "FZRA"), ("metar_weather", "FZRA, GR")]
+    assert mem.alerted == {"wx:ZZDS": "FZRA, GR"}
+
+
+def test_taf_at_eta_pings_only_when_worse_than_already_alerted():
+    tafs = ["IFR", "MVFR", "IFR", "LIFR"]
+    pings, _ = _pings([apt("ZZDS", taf="VFR")], [apt("ZZDS", taf=f, t=_at(i)) for i, f in enumerate(tafs)])
+    assert pings == [("taf_category", "IFR"), ("taf_category", "LIFR")]
+
+
+def test_memory_from_before_722_is_a_valid_worst():
+    """A flight in the air at deploy carries the last alerted value per key:
+    it does not re-ping a value already alerted, nor a lesser one."""
+    mem = ClassifierMemory(alerted={"metar:ZZDS": "IFR", "wind:ZZDS": "red", "wx:ZZDS": "FZRA"})
+    latest = apt("ZZDS", cat="MVFR", wind="amber", wx=["FZRA"], t=_at(0))
+    changes, mem = classify([apt("ZZDS")], [latest], memory=mem)
+    assert {c.kind for c in changes} == {"metar_category", "metar_wind", "metar_weather"}
+    assert not any(c.new_alert for c in changes)
+    worse, _ = classify([apt("ZZDS")], [apt("ZZDS", cat="LIFR", t=_at(1))], memory=mem)
+    assert only(worse, "metar_category").new_alert is True
+
+
+def test_worst_alerted_memory_is_per_airport():
+    base = [apt("ZZDS"), apt("ZZDP")]
+    _, mem = classify(base, [apt("ZZDS", cat="IFR", t=_at(0))])
+    latest = [apt("ZZDS", cat="IFR", t=_at(1)), apt("ZZDP", cat="IFR", t=_at(1))]
+    changes, _ = classify(base, latest, memory=mem)
+    assert {c.icao: c.new_alert for c in changes} == {"ZZDS": False, "ZZDP": True}
+
+
 def test_old_pack_baseline_without_cloud_types_reads_the_raw_report():
     """A pack written before §36 has metar_raw and metar_weather but nothing
     else new: a CB already in its report is not a new CB."""

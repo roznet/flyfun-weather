@@ -638,9 +638,12 @@ class LiveLayer(BaseModel):
     # get a banner.
     last_refresh_delta: RefreshDelta | None = None
 
-    # Last-alerted memory: change key -> the ``to_value`` last alerted. A
-    # change alerts again only when its value moves; a key that returns to the
-    # briefing's state is dropped so a later recurrence alerts afresh.
+    # Alert memory: change key -> what has alerted. Airport rows keep the
+    # worst value alerted (significant weather: every phenomenon alerted) for
+    # the flight and alert again only above it (§45, #722). Other rows keep
+    # the ``to_value`` last alerted and alert again when it moves; such a key
+    # that returns to the briefing's state is dropped so a recurrence alerts
+    # afresh.
     alerted: dict[str, str] = Field(default_factory=dict)
     # Route SIGMETs seen recently, so a reissue reads as a replacement (#682).
     sigmet_traces: list[LiveSigmetTrace] = Field(default_factory=list)
