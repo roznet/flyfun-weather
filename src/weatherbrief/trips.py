@@ -189,9 +189,10 @@ def _grib_horizon_days() -> int:
         return 7
 
 
-def _airport_ends(leg: TripLegInput) -> tuple[str | None, str | None]:
-    wps = leg.waypoints or [
-        w.upper() for w in leg.route_name.split("_") if w
+def airport_ends(waypoints: list[str], route_name: str) -> tuple[str | None, str | None]:
+    """A flight's first and last airport, from its waypoints or its route name."""
+    wps = waypoints or [
+        w.upper() for w in route_name.split("_") if w
     ]
     if not wps:
         return None, None
@@ -200,8 +201,30 @@ def _airport_ends(leg: TripLegInput) -> tuple[str | None, str | None]:
     return wps[0], wps[-1]
 
 
+def chain_label(ends: list[tuple[str | None, str | None]]) -> str:
+    """"EGTF → LSGS → LFAT → EGTF" from each leg's (origin, destination), in order.
+
+    The one definition: the summary's ``chain_label`` and the per-flight trip
+    badge (which has no summary) both read it, so they cannot disagree.
+    """
+    labels: list[str] = []
+    prev_dest: str | None = None
+    for index, (origin, destination) in enumerate(ends):
+        # Append this leg's origin whenever it is not already the previous
+        # leg's destination. Emitting it only for leg 0 produced a route string
+        # that was simply wrong on a broken chain — the label silently dropped
+        # the airport the pilot actually departs from, at the same moment
+        # `continuity_warnings` was reporting that very gap.
+        if origin and (index == 0 or prev_dest != origin):
+            labels.append(origin)
+        if destination:
+            labels.append(destination)
+        prev_dest = destination
+    return " → ".join(labels)
+
+
 def _leg_label(leg: TripLegInput) -> str:
-    origin, dest = _airport_ends(leg)
+    origin, dest = airport_ends(leg.waypoints, leg.route_name)
     if origin and dest:
         return f"{origin} → {dest}"
     return leg.route_name or leg.flight_id
@@ -421,7 +444,7 @@ def summarize_trip(
     built: list[TripLeg] = []
     previous_end: datetime | None = None
     for leg in ordered:
-        origin, destination = _airport_ends(leg)
+        origin, destination = airport_ends(leg.waypoints, leg.route_name)
         gap = None
         same_sortie = False
         if previous_end is not None:
@@ -488,18 +511,8 @@ def summarize_trip(
             )
 
     # Chain identity + continuity, both derived.
-    labels: list[str] = []
     for index, leg in enumerate(built):
         prev = built[index - 1] if index > 0 else None
-        # Append this leg's origin whenever it is not already the previous
-        # leg's destination. Emitting it only for leg 0 produced a route string
-        # that was simply wrong on a broken chain — the label silently dropped
-        # the airport the pilot actually departs from, at the same moment
-        # `continuity_warnings` was reporting that very gap.
-        if leg.origin and (prev is None or prev.destination != leg.origin):
-            labels.append(leg.origin)
-        if leg.destination:
-            labels.append(leg.destination)
         if prev is not None:
             if prev.destination and leg.origin and prev.destination != leg.origin:
                 summary.continuity_warnings.append(
@@ -510,7 +523,7 @@ def summarize_trip(
                         departs=leg.origin,
                     )
                 )
-    summary.chain_label = " → ".join(labels)
+    summary.chain_label = chain_label([(leg.origin, leg.destination) for leg in built])
     summary.is_round_trip = bool(
         built and built[0].origin and built[-1].destination
         and built[0].origin == built[-1].destination

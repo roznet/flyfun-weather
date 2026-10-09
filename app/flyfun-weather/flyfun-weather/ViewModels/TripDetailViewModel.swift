@@ -269,8 +269,9 @@ final class TripDetailViewModel {
     }
 
     func rename(to name: String) async {
+        // Empty is a real answer: it clears the pilot's name and the trip goes
+        // back to being titled by its chain (#728).
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
         await mutate(UpdateTripRequest(name: trimmed),
                      fallback: "Couldn’t rename this trip.")
     }

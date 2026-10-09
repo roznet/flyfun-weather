@@ -51,7 +51,7 @@ struct TripDetailView: View {
             }
         }
         .navigationTitle(viewModel?.trip?.displayName ?? "Trip")
-        .navigationSubtitle(viewModel?.trip?.summary.chainLabel ?? "")
+        .navigationSubtitle(viewModel?.trip?.headerSubtitle ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .task {

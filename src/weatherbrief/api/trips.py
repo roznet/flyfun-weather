@@ -16,6 +16,7 @@ page, the flights list, the notification coalescer and the AI guardrail.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Literal
@@ -36,7 +37,13 @@ from weatherbrief.storage.flights import (
     unsubscribe_flight,
 )
 from weatherbrief.storage.debriefs import bulk_get_debriefs
-from weatherbrief.trips import TripLegInput, TripSummary, summarize_trip
+from weatherbrief.trips import (
+    TripLegInput,
+    TripSummary,
+    airport_ends,
+    chain_label,
+    summarize_trip,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,8 @@ class TripLegRef(BaseModel):
     """
 
     id: str
+    #: What to call the trip: the pilot's name, else the derived chain and
+    #: dates. Never empty — clients print it as-is ("Leg 2 of 3 in trip …").
     name: str
     position: int  # 1-based index in departure-time order
     total: int
@@ -82,7 +91,14 @@ class TripResponse(BaseModel):
 
     id: str
     user_id: str
+    #: The pilot's own name for the trip; ``""`` until they give it one. Kept
+    #: apart from ``display_name`` so a client can title a group with the name
+    #: and the chain beneath it without printing the chain twice (#728).
     name: str
+    #: What to call the trip: ``name``, else the derived chain and date span
+    #: ("EGTF → LSGS → EGTF, 20–22 Feb"), computed per read so it follows the
+    #: legs as they are added, moved or removed. Never empty.
+    display_name: str = ""
     notes: str | None = None
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
@@ -259,10 +275,18 @@ def ai_summary_key(legs: list[TripLegInput]) -> str:
 
 def derive_trip_name(summary: TripSummary) -> str:
     """Default name from the chain and its date span: "EGTF → LSGS → EGTF, 20–22 Feb"."""
-    if not summary.legs:
+    return _derived_name(
+        summary.chain_label, [leg.departure_time for leg in summary.legs],
+    )
+
+
+def _derived_name(chain: str, departures: list[datetime]) -> str:
+    """The unnamed trip's label. Never stored (#728): computed on every read, so
+    it follows the chain as legs are added, moved or removed."""
+    if not departures:
         return "New trip"
-    first = summary.legs[0].departure_time
-    last = summary.legs[-1].departure_time
+    first = departures[0]
+    last = departures[-1]
     # ``%-d`` is a glibc extension; build the day number by hand so the name
     # derivation can't differ by platform.
     def _day_month(dt) -> str:
@@ -274,8 +298,12 @@ def derive_trip_name(summary: TripSummary) -> str:
         span = f"{first.day}–{_day_month(last)}"
     else:
         span = f"{_day_month(first)}–{_day_month(last)}"
-    chain = summary.chain_label or "Trip"
-    return f"{chain}, {span}"[:200]
+    return f"{chain or 'Trip'}, {span}"[:200]
+
+
+def trip_display_name(name: str, summary: TripSummary) -> str:
+    """The pilot's name for the trip, else the derived one."""
+    return name or derive_trip_name(summary)
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +465,7 @@ def _trip_to_response(
             id=trip.id,
             user_id=trip.user_id,
             name=trip.name,
+            display_name=trip_display_name(trip.name, summary),
             created_at=trip.created_at.isoformat(),
             flight_ids=flight_ids,
             summary=summary,
@@ -468,6 +497,7 @@ def _trip_to_response(
         id=trip.id,
         user_id=trip.user_id,
         name=trip.name,
+        display_name=trip_display_name(trip.name, summary),
         notes=trip.notes,
         auto_refresh=trip.auto_refresh,
         auto_refresh_hour=trip.auto_refresh_hour,
@@ -490,6 +520,45 @@ def _trip_to_response(
     )
 
 
+def _legs_by_trip(db: Session, trip_ids: list[str]) -> dict[str, list]:
+    """``trip_id -> member rows`` in departure order — one query for every trip.
+
+    Each row carries what a badge needs and no more: id for the position, the
+    route for the chain, the departure for the date span.
+    """
+    if not trip_ids:
+        return {}
+    rows = db.execute(
+        select(
+            FlightRow.id, FlightRow.trip_id, FlightRow.waypoints_json,
+            FlightRow.route_name, FlightRow.departure_time,
+        )
+        .where(FlightRow.trip_id.in_(trip_ids))
+        .order_by(FlightRow.departure_time.asc())
+    ).all()
+    by_trip: dict[str, list] = {}
+    for row in rows:
+        by_trip.setdefault(row.trip_id, []).append(row)
+    return by_trip
+
+
+def _ref_label(name: str | None, legs: list) -> str:
+    """The badge's name for a trip: the pilot's, else the same derived name the
+    trip page shows — from the member rows, since a badge has no summary."""
+    if name:
+        return name
+    chain = chain_label([
+        airport_ends(json.loads(leg.waypoints_json or "[]"), leg.route_name or "")
+        for leg in legs
+    ])
+    return _derived_name(chain, [leg.departure_time for leg in legs])
+
+
+def trip_label(db: Session, trip_id: str, name: str | None) -> str:
+    """What to call one trip without building its summary — for notifications."""
+    return _ref_label(name, _legs_by_trip(db, [trip_id]).get(trip_id, []))
+
+
 def trip_ref_for(db: Session, trip_id: str, flight_id: str) -> TripLegRef | None:
     """The ``trip`` block for one flight — for the single-flight endpoints.
 
@@ -500,16 +569,13 @@ def trip_ref_for(db: Session, trip_id: str, flight_id: str) -> TripLegRef | None
     row = db.get(FlightTripRow, trip_id)
     if row is None:
         return None
-    member_ids = db.execute(
-        select(FlightRow.id)
-        .where(FlightRow.trip_id == trip_id)
-        .order_by(FlightRow.departure_time.asc())
-    ).scalars().all()
+    legs = _legs_by_trip(db, [trip_id]).get(trip_id, [])
+    member_ids = [leg.id for leg in legs]
     if flight_id not in member_ids:
         return None
     return TripLegRef(
         id=trip_id,
-        name=row.name or "",
+        name=_ref_label(row.name, legs),
         position=member_ids.index(flight_id) + 1,
         total=len(member_ids),
         auto_refresh=row.auto_refresh,
@@ -532,24 +598,16 @@ def bulk_trip_refs(db: Session, user_id: str) -> dict[str, TripLegRef]:
         return {}
     names = {trip_id: name for trip_id, name, _ in trip_rows}
     auto = {trip_id: bool(flag) for trip_id, _, flag in trip_rows}
-    members = db.execute(
-        select(FlightRow.id, FlightRow.trip_id)
-        .where(FlightRow.trip_id.in_(list(names)))
-        .order_by(FlightRow.departure_time.asc())
-    ).all()
-
-    by_trip: dict[str, list[str]] = {}
-    for flight_id, trip_id in members:
-        by_trip.setdefault(trip_id, []).append(flight_id)
 
     refs: dict[str, TripLegRef] = {}
-    for trip_id, flight_ids in by_trip.items():
-        for index, flight_id in enumerate(flight_ids, start=1):
-            refs[flight_id] = TripLegRef(
+    for trip_id, legs in _legs_by_trip(db, list(names)).items():
+        label = _ref_label(names.get(trip_id), legs)
+        for index, leg in enumerate(legs, start=1):
+            refs[leg.id] = TripLegRef(
                 id=trip_id,
-                name=names.get(trip_id) or "",
+                name=label,
                 position=index,
-                total=len(flight_ids),
+                total=len(legs),
                 auto_refresh=auto.get(trip_id, False),
             )
     return refs
@@ -589,27 +647,20 @@ def shared_trip_refs(db: Session, flight_ids: list[str]) -> dict[str, TripLegRef
     shareable = trip_storage.shareable_trip_ids(db, list(names))
     if not shareable:
         return {}
-    members = db.execute(
-        select(FlightRow.id, FlightRow.trip_id)
-        .where(FlightRow.trip_id.in_(sorted(shareable)))
-        .order_by(FlightRow.departure_time.asc())
-    ).all()
-
-    by_trip: dict[str, list[str]] = {}
-    for flight_id, trip_id in members:
-        by_trip.setdefault(trip_id, []).append(flight_id)
-
     wanted = set(flight_ids)
     refs: dict[str, TripLegRef] = {}
-    for trip_id, member_ids in by_trip.items():
-        for index, flight_id in enumerate(member_ids, start=1):
-            if flight_id not in wanted:
+    for trip_id, legs in _legs_by_trip(db, sorted(shareable)).items():
+        # Safe to derive from every leg: the gate above passed only trips
+        # whose legs are all public, so the chain names nothing private.
+        label = _ref_label(names.get(trip_id), legs)
+        for index, leg in enumerate(legs, start=1):
+            if leg.id not in wanted:
                 continue
-            refs[flight_id] = TripLegRef(
+            refs[leg.id] = TripLegRef(
                 id=trip_id,
-                name=names.get(trip_id) or "",
+                name=label,
                 position=index,
-                total=len(member_ids),
+                total=len(legs),
                 # The owner's switch, and only they can flip it. Reporting it
                 # on a leg the viewer merely follows would read as a control.
                 auto_refresh=False,
@@ -673,21 +724,16 @@ def create_trip(
             detail=f"A trip can hold at most {MAX_TRIP_LEGS} legs.",
         )
 
-    trip = trip_storage.create_trip(db, user_id, req.name or "")
+    trip = trip_storage.create_trip(db, user_id, (req.name or "").strip())
     trip_storage.set_leg_trip(db, flight_ids, user_id, trip.id)
     # A leg can leave a previous trip empty on the way in — but the trip we just
     # created is exempt. Without that, `flight_ids: []` creates a row and then
     # deletes it one line later, and the handler goes on to return a 201 for a
     # trip that no longer exists (or 404s mid-request while auto-naming it).
     trip_storage.prune_empty_trips(db, user_id, keep=trip.id)
-
-    if not req.name:
-        summary, _members, _inputs = build_trip_summary(db, trip)
-        row = _owned_trip_row(db, trip.id, user_id)
-        row.name = derive_trip_name(summary)
-        db.flush()
-        trip = trip_storage.load_trip(db, trip.id, user_id)
-
+    # An unnamed trip is stored unnamed: ``display_name`` derives its label on
+    # every read. Persisting the derived text (as before #728) froze it at
+    # creation and made "has the pilot named this?" unanswerable.
     db.commit()
     return _trip_to_response(db, trip)
 

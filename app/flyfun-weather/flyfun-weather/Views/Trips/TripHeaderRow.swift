@@ -35,10 +35,12 @@ struct TripHeaderRow: View {
                 }
             }
 
-            Text(trip.summary.chainLabel)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if let chain = trip.headerSubtitle {
+                Text(chain)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             HStack(spacing: Theme.spacingS) {
                 if let range = dateRange {

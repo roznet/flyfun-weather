@@ -127,8 +127,9 @@ class TestTripCrud:
         assert r.status_code == 201, r.text
         body = r.json()
         assert body["summary"]["chain_label"] == "EGTF → LSGS → LFAT → EGTF"
-        # Derived default: the chain plus its date span.
-        assert body["name"].startswith("EGTF → LSGS → LFAT → EGTF, ")
+        # Stored unnamed; the label is derived on read: the chain + date span.
+        assert body["name"] == ""
+        assert body["display_name"].startswith("EGTF → LSGS → LFAT → EGTF, ")
         assert len(body["flight_ids"]) == 3
 
     def test_a_one_leg_trip_is_valid(self, client, chain):
@@ -277,6 +278,59 @@ class TestTripCrud:
             f"{sorted(registered - covered)}"
         )
 
+
+
+class TestTripNaming:
+    """``name`` is only what the pilot typed; ``display_name`` and the leg
+    badge's ``trip.name`` are never empty (#728)."""
+
+    def test_a_named_trip_displays_its_name(self, client, chain):
+        r = client.post(
+            "/api/trips",
+            json={"name": "  Alpine tour ", "flight_ids": [f.id for f in chain]},
+        )
+        body = r.json()
+        assert body["name"] == "Alpine tour"
+        assert body["display_name"] == "Alpine tour"
+
+    def test_the_derived_label_follows_the_legs(self, client, chain):
+        trip = client.post("/api/trips", json={"flight_ids": [chain[0].id]}).json()
+        assert trip["display_name"].startswith("EGTF → LSGS, ")
+        r = client.post(
+            f"/api/trips/{trip['id']}/legs",
+            json={"flight_ids": [chain[1].id, chain[2].id]},
+        )
+        assert r.status_code == 200, r.text
+        body = client.get(f"/api/trips/{trip['id']}").json()
+        assert body["name"] == ""
+        assert body["display_name"].startswith("EGTF → LSGS → LFAT → EGTF, ")
+
+    def test_clearing_the_name_reverts_to_the_derived_label(self, client, chain):
+        trip = client.post(
+            "/api/trips", json={"name": "Alpine tour", "flight_ids": [chain[0].id]},
+        ).json()
+        body = client.patch(f"/api/trips/{trip['id']}", json={"name": "  "}).json()
+        assert body["name"] == ""
+        assert body["display_name"].startswith("EGTF → LSGS, ")
+
+    def test_the_leg_badge_names_an_unnamed_trip_like_the_trip_page(
+        self, client, chain,
+    ):
+        trip = client.post(
+            "/api/trips", json={"flight_ids": [f.id for f in chain]},
+        ).json()
+        flights = client.get("/api/flights").json()
+        refs = {f["trip"]["name"] for f in flights if f["trip"]}
+        assert refs == {trip["display_name"]}
+        one = client.get(f"/api/flights/{chain[1].id}").json()
+        assert one["trip"]["name"] == trip["display_name"]
+
+    def test_the_leg_badge_carries_the_pilots_name(self, client, chain):
+        client.post(
+            "/api/trips", json={"name": "Alpine tour", "flight_ids": [chain[0].id]},
+        )
+        flights = client.get("/api/flights").json()
+        assert [f["trip"]["name"] for f in flights if f["trip"]] == ["Alpine tour"]
 
 class TestTripOnFlightResponse:
     def test_flights_list_carries_the_trip_block(self, client, chain):
