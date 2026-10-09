@@ -404,7 +404,9 @@ logs `Live glance failed` and leaves both null for that tick.
   `storm_ids`, the SIGMET key or `icao` (keeps `live.json`'s change rows and the
   history unchanged).
 - **Agents**: `summarize_live` adds `glance` (`as_of`, `headline`, `lines`
-  of `{phase, text}`), word for word what the apps show; `LIVE_NOTE` says so.
+  of `{phase, text}`) and `highlight` (`{text, written_at}` or null, #697),
+  word for word what the apps show; `LIVE_NOTE` and the MCP instructions say
+  to quote the highlight with its written time.
 - **Size**: ~17 KB per `live.json` on a 280 NM route (LELL→LEMI), overwritten
   each tick.
 - **iOS** (built and UI-tested on a Mac, PR #695): DTOs in
@@ -493,7 +495,7 @@ logs `Live glance failed` and leaves both null for that tick.
     "Since this briefing" also stays a page-level banner on web
     (`refresh-delta-banner`) rather than a section in the group.
 
-## Observed highlight (#697) — written, not displayed
+## Observed highlight (#697)
 
 One or two sentences above the nutshell saying what deserves attention on the
 route ahead, written by Claude Haiku 5.5 (#715; Haiku 4.5 before) from a facts
@@ -501,12 +503,44 @@ block the code computes.
 **Code does the weather, the model phrases it**: no analysis by the model, so a
 highlight can never say something the tick did not already know.
 
-**Not shown anywhere yet** (owner, 2026-10-07). It is generated for every live
-flight and logged so real flight days can be reviewed and the prompt
-calibrated before any client renders it. Deliberately also out of the agent
-`live` block — `summarize_live` names the glance fields it exposes, and a
-pinned test keeps it that way, because an agent quoting it would be a
-user-facing surface by the back door.
+Written but hidden 2026-10-07 → 10-09 while the first flight days were
+reviewed; **displayed since 2026-10-09** (owner: start showing and adjust, no
+further calibration gate, no What's New entry).
+
+### Display and feedback (#697 slices 1–3)
+
+- **Reading order, both clients:** alert-tier nutshell lines (and on iOS the
+  alert-tier change rows) first, never folded; then the highlight at body
+  size, one gray caption "Experimental, still being calibrated. Thanks for
+  flagging issues. · written HH:MMZ" (the written time stays: a carried-forward
+  line can be older than the layer), and 👍/👎; then the ribbon. No highlight
+  (before the first generation, a rejected state, after arrival): the nutshell
+  `headline` in its slot, no caption, no thumbs. Never styled as an alert.
+- **iOS** (`ObservedHighlightView.swift`): a "Details" fold below the ribbon,
+  collapsed by default and remembered (`@AppStorage("observedDetailsExpanded")`),
+  holds the headline (when the highlight took its slot), the other nutshell
+  lines, the map button and the other "Since this briefing" rows
+  (`LiveChangesView(excludesAlerts:)`). A plain button, not `DisclosureGroup`,
+  so the toggle exposes `expanded`/`collapsed` to the XCUI helper.
+- **Web** (`nutshellHtml`): alert lines, highlight, then headline and the
+  other lines **unfolded** (documented divergence: the desktop has room).
+  Alert change rows stay in the page-level "Since this briefing" banner.
+- **Rating:** `POST /api/feedback` with `target="live_highlight"`,
+  `category="highlight_rating"`, and `context` = the four `/live` fields
+  (`facts_hash`, `generated_at`, `model`, `text`) verbatim; the server keeps
+  only those keys as bounded strings, in `feedback.context` (TEXT holding
+  JSON, migration 100 — repo convention, not `sa.JSON`). The text is stored
+  because the line is regenerated; `facts_hash` keys back into
+  `live_highlights.jsonl`. Digest-rating limiters, no LangSmith mirror (no
+  trace id). Admin `kind=ratings` covers both rating categories and shows the
+  rated line; the admin email quotes it. Dedup is session-only, keyed
+  `flight|facts_hash` on both clients.
+- **Fixtures:** the suite has no API key, so the replayed ticks serve
+  `highlight: null`. `IOS_HIGHLIGHT_TICKS` (tests/live_scenario_replay.py)
+  exports one extra `<scenario>_<HHMM>_highlight.json` with a fixed,
+  hand-written line that passes `check_grounding` against its tick (pinned);
+  the drift test applies the same injection. Web vitest, Playwright and the
+  XCUI journey render both the null fallback and the highlight.
 
 ### Model choice (#715)
 
@@ -804,11 +838,10 @@ positive above.
 - Prompt, facts block and check live in `tasks/live_highlight.py` — the code
   the tick runs. `scripts/live_highlight_experiment.py` imports them, so the
   replay harness cannot drift from production.
-- **Client parity**: `LiveGlance.highlight` exists on the Python model only.
-  Swift and the web ignore unknown keys and the field is intentionally
-  undisplayed, so there is no decode risk today. When a client starts showing
-  it, run `/sync-ios-web` and add the field to `web/ts/types` and
-  `Models/API/LiveGlance.swift` as optional.
+- **Client parity**: `LiveHighlight` is mirrored in `web/ts/store/types.ts`
+  and `Models/API/LiveGlance.swift` (optional; `gate`/`latency_ms` are not
+  decoded). The highlight block is a `SYNC —` pair (`highlightHtml` ↔
+  `ObservedHighlightCard`); the iOS Details fold is the documented divergence.
 - One **process-wide Anthropic client**, built lazily under a lock
   (`_anthropic_client`). The fan-out opens up to `_HIGHLIGHT_WORKERS` threads
   and a client per call meant a new HTTP connection pool per flight per tick;

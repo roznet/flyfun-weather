@@ -27,8 +27,13 @@ grounding check and a per-flight review log — **written but displayed nowhere*
 to calibrate the prompt before any client shows it, which also makes the #696
 dependency moot for now). As-built in `live-observation-layer.md`. It needs
 #695 deployed to produce anything: the facts come from `glance` + `ribbon`.
-Next: review the logged highlights, then the "Details" fold — the highlight now
-has a place to go on both clients. Builds on `designs/live-observation-layer.md`.
+Slice 6 (#697 display, 2026-10-09): the highlight is shown on iOS and web above
+the ribbon, alert lines above it, with an experimental caption, its written
+time and a 👍/👎 recorded as `highlight_rating` feedback; iOS folds the
+headline, other lines and other change rows under "Details" (collapsed,
+remembered), web leaves them unfolded; the agent `live` block quotes it.
+As-built in `live-observation-layer.md` ("Display and feedback").
+Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise
 
