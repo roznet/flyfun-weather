@@ -248,6 +248,9 @@ def tier_outlines(det: TierDetection, grid: GridSpec, step: int,
     bad[sorted(suspect_labels)] = True
     good = ~bad
     good[0] = False
+    # Two traces cannot split a ring between them: a suspect region is a whole
+    # 8-connected label, and two labels never touch (they would be one), so no
+    # boundary is shared between the ``good`` and ``bad`` masks.
     rest = outlines(det, grid, 0, ny, 0, nx, step, keep=good)
     own = outlines(det, grid, 0, ny, 0, nx, step, keep=bad)
     return rest + own, list(range(len(rest), len(rest) + len(own)))
