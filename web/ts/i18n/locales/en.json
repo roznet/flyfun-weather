@@ -926,6 +926,8 @@
   "page.flights.title": "My Flights",
   "page.flights.newFlight": "New Flight",
   "page.flights.waypoints": "Waypoints (airports, navaids, fixes)",
+  "page.flights.description": "Description (optional)",
+  "page.flights.descriptionPlaceholder": "e.g. Family visit, Alps trip",
   "page.flights.aircraft": "Aircraft",
   "page.flights.profile": "Profile",
   "page.flights.date": "Date",

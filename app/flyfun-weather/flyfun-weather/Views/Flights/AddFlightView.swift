@@ -469,7 +469,7 @@ struct AddFlightView: View {
         } header: {
             Text("Description")
         } footer: {
-            Text("Optional. Searchable from the flights list filter on the web.")
+            Text("Optional, e.g. the purpose of the flight.")
         }
     }
 

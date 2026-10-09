@@ -26,6 +26,7 @@ struct FlightCardView: View, Equatable {
             && lhs.flight.id == rhs.flight.id
             && lhs.flight.shortTitle == rhs.flight.shortTitle
             && lhs.flight.waypoints == rhs.flight.waypoints
+            && lhs.flight.description == rhs.flight.description
             && lhs.flight.departureTime == rhs.flight.departureTime
             && lhs.flight.cruiseAltitudeFt == rhs.flight.cruiseAltitudeFt
             && lhs.flight.aircraft == rhs.flight.aircraft

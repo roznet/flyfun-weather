@@ -763,6 +763,8 @@
   "page.flights.title": "Meine Flüge",
   "page.flights.newFlight": "Neuer Flug",
   "page.flights.waypoints": "Wegpunkte (Flugplätze, Navaids, Fixes)",
+  "page.flights.description": "Beschreibung (optional)",
+  "page.flights.descriptionPlaceholder": "z. B. Familienbesuch, Alpenreise",
   "page.flights.aircraft": "Flugzeug",
   "page.flights.profile": "Profil",
   "page.flights.date": "Datum",

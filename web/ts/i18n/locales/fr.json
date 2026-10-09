@@ -763,6 +763,8 @@
   "page.flights.title": "Mes vols",
   "page.flights.newFlight": "Nouveau vol",
   "page.flights.waypoints": "Points de passage (aérodromes, navaids, fixes)",
+  "page.flights.description": "Description (facultatif)",
+  "page.flights.descriptionPlaceholder": "ex. Visite familiale, voyage dans les Alpes",
   "page.flights.aircraft": "Aéronef",
   "page.flights.profile": "Profil",
   "page.flights.date": "Date",
