@@ -332,6 +332,57 @@ test.describe('Observed nutshell + route ribbon', () => {
       .toHaveText('En route');
   });
 
+  test('hovering a mark shows what it is: airport METAR/TAF, rain band, cell (#742)', async ({ page }) => {
+    // The same /live response carries the airports the ribbon's stations join.
+    const layer = liveLayer() as Record<string, any>;
+    layer.route_observations = {
+      corridor_nm: 20, fetch_time: NOW, airports_found: 1, airports_with_metar: 1,
+      airports_with_taf: 1, comparisons: [], worst_metar_category: 'MVFR',
+      worst_taf_category: 'IFR', has_conflicts: false, phenomena_along_route: [],
+      airports: [{
+        icao: 'EGLF', name: 'Farnborough', metar_raw: 'EGLF 120550Z 24012KT 9999 BKN018CB 14/10 Q1012',
+        taf_raw: 'TAF EGLF 120500Z 1206/1306 24012KT 9999 BKN020 PROB30 TEMPO 1210/1214 BKN008',
+        metar_time: NOW, metar_flight_category: 'MVFR', has_metar: true, has_taf: true,
+      }],
+    };
+    await page.unroute(`**/api/flights/${FLIGHT_ID}/live`);
+    await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: layer }));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const svg = page.locator('.ribbon-svg');
+    await expect(svg).toBeVisible();
+    const tip = page.locator('[data-testid="ribbon-tip"]');
+    await expect(tip).toBeHidden();
+
+    // The destination disc: name, categories, the raw reports.
+    await page.locator('[data-ribbon-station="1"]').hover();
+    await expect(tip).toBeVisible();
+    await expect(tip).toContainText('EGLF');
+    await expect(tip).toContainText('Farnborough');
+    await expect(tip).toContainText('Destination');
+    await expect(tip).toContainText('PROB30 IFR');
+    await expect(tip).toContainText('EGLF 120550Z 24012KT');
+    await expect(tip).toContainText('TAF EGLF 120500Z');
+    await tip.screenshot({ path: 'test-results/ribbon-tip-airport.png' });
+
+    // The rain area right of course at 50 NM: its span and side.
+    const box = (await svg.boundingBox())!;
+    const xAt = (nm: number) => box.x + 20 + (nm / 100) * (box.width - 40);
+    const yAt = (cross: number) => box.y + 100 + (cross / 30) * 60;
+    await page.mouse.move(xAt(50), yAt(14));
+    await expect(tip).toContainText('Rain area');
+    await expect(tip).toContainText('40–90 NM');
+    await expect(tip).toContainText('4–26 NM right of course');
+
+    // The core over the cell: the cell's own summary.
+    await page.mouse.move(xAt(60), yAt(12));
+    await expect(tip).toContainText('Very heavy cell');
+    await expect(tip).toContainText('moving away 11 kt');
+
+    // Leaving the drawing hides it; a click still opens the detail.
+    await page.mouse.move(box.x + box.width / 2, box.y - 60);
+    await expect(tip).toBeHidden();
+  });
+
   test('a cell opens its detail, with the estimate kept in its own block', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
     await page.locator(`[data-ribbon-storm="${STORM_ID}"]`).click();

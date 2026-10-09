@@ -452,6 +452,16 @@ logs `Live glance failed` and leaves both null for that tick.
   the overlay is not already on a radar product, so a deliberate rain-rate
   choice survives). `route` is always drawn, `lightning` rides with the
   overlay, and `metar` / `sigmets` have no toggleable layer here.
+  - **Hover tooltips (#742, web only):** with a mouse, each ribbon mark says
+    what it is. An airport shows its name, role, METAR category now, TAF at
+    ETA and the raw METAR / TAF, joined by ICAO to the same response's
+    `route_observations.airports` (else the snapshot's). A cell shows
+    strength, position, motion, lightning and top. The rain or core band
+    under the pointer shows its span, side, distance and motion (a core with
+    a `storm_id` shows its cell). SIGMETs and radar stretches are covered too.
+    The content and `bandAt` (the inverse of `bandRects`) are pure in
+    `ribbon-tooltip.ts`. Touch keeps its tap. There is no iOS counterpart and
+    nothing to mirror.
   - **Deliberate, not a gap:** like iOS, the web honours only part of the
     focus contract — it ignores `time` and draws no SIGMET polygons. There is
     no SIGMET polygon layer on the route map and no frame stepper for `time`
