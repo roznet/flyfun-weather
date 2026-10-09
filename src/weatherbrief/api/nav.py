@@ -27,7 +27,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from flyfun_common.db import current_user_id
+
+from weatherbrief.api.deps import current_user_id_short
 
 router = APIRouter(prefix="/nav", tags=["nav"])
 
@@ -100,7 +101,10 @@ def ensure_slim_db(nav_db_path: str) -> tuple[Path, str]:
 @router.get("/airports-db")
 def download_airports_db(
     request: Request,
-    user_id: str = Depends(current_user_id),  # gate only; not used in the body
+    # Gate only. Not the get_db-backed current_user_id: FileResponse streams the
+    # slim DB to a phone after the handler returns, and that session
+    # would stay checked out for the whole transfer (#719).
+    user_id: str = Depends(current_user_id_short),
 ):
     """Stream the slim airports SQLite, honoring ``If-None-Match`` (ETag)."""
     nav_db_path = getattr(request.app.state, "db_path", "") or ""

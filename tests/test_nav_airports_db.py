@@ -10,9 +10,10 @@ import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
-from flyfun_common.db import DEV_USER_ID, current_user_id
+from flyfun_common.db import DEV_USER_ID
 
 from weatherbrief.api.app import create_app
+from weatherbrief.api.deps import current_user_id_short
 
 
 def _make_nav_db(path: str) -> None:
@@ -57,7 +58,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
     monkeypatch.setenv("AIRPORTS_DB", str(nav_db))
     app = create_app()
-    app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
+    app.dependency_overrides[current_user_id_short] = lambda: DEV_USER_ID
     # Default raise_server_exceptions=True so a bug in nav.py surfaces as a
     # traceback rather than a swallowed 500 the status assertions would miss.
     return TestClient(app)
