@@ -6943,40 +6943,91 @@ html {
   color: var(--text);
 }
 
-/* Map legend */
+/* Map legend (#731): one grid row per channel — label, metric picker, scale.
+   Swatches and labels share one column template (set inline per metric) so
+   each label sits under its own swatch. */
 .map-legend {
   margin-top: 0.4rem;
 }
 
-.map-legend-bar {
-  display: flex;
+.map-legend-grid {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 260px);
+  /* Don't stretch the auto tracks across the pane: label, picker and scale
+     read as one unit, not three columns spread edge to edge. */
+  justify-content: start;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.72rem;
-  color: var(--text-muted);
+  column-gap: 0.5rem;
+  row-gap: 0.35rem;
+  font-size: 0.78rem;
 }
 
-.map-legend-gradient {
-  display: flex;
-  height: 12px;
-  border-radius: 2px;
-  overflow: hidden;
-  flex: 1;
-  max-width: 200px;
-  border: 1px solid var(--border);
-}
-
-.map-legend-stop {
-  flex: 1;
+.map-legend-scale {
   min-width: 0;
 }
 
+.map-legend-swatches,
 .map-legend-labels {
+  display: grid;
+}
+
+.map-legend-swatches {
+  height: 16px;
+  align-items: center;
+}
+
+.map-legend-scale-color .map-legend-swatches {
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.map-legend-stop {
+  height: 100%;
+  min-width: 0;
+}
+
+/* Width row: a neutral bar per stop whose thickness tracks the route line's
+   weight for that value. Grey on purpose — the colour channel owns hue. */
+.map-legend-width-cell {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  height: 100%;
+}
+
+.map-legend-width-bar {
+  width: 100%;
+  background: var(--text-muted);
+  opacity: 0.7;
+}
+
+.map-legend-labels {
+  margin-top: 1px;
   font-size: 0.68rem;
+  line-height: 1.2;
   color: var(--text-muted);
-  max-width: 200px;
+}
+
+.map-legend-labels span {
+  text-align: center;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Phone width: the scale drops under its picker, full width. */
+@media (max-width: 700px) {
+  .map-legend-grid {
+    grid-template-columns: auto 1fr;
+    justify-content: stretch;
+  }
+  .map-legend-scale {
+    grid-column: 1 / -1;
+  }
+  .map-legend-grid .map-control-select {
+    min-width: 0;
+    max-width: 100%;
+  }
 }
 
 /* Altitude slider */

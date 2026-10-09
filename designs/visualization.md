@@ -660,7 +660,7 @@ Leaflet-based geographic visualization showing weather metrics as colored route 
 | `interaction.ts` | Hover (highlight + tooltip + sync), click (select point), event attach/detach |
 | `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
 | `forecast-overlay.ts` | Pure helpers for the airport forecast overlay (#424): day/hour snapping, deep-link building. No DOM/Leaflet, so it is unit-testable |
-| `legend.ts` | DOM gradient bar with color stops and labels |
+| `legend.ts` | Legend grid: one row per channel (Color, Width) holding that channel's metric picker and its scale (#731) |
 
 ### Overlays on top of the segments
 
@@ -697,6 +697,8 @@ Two optional overlays live in `renderer.ts` beside the route segments:
 | cloud-at-level | Cloud at FL | Yes | Gray 0-100% |
 
 **Width variation**: Route map segments now vary in width as well as color. Each metric defines a `getWidth(point)` function. Width communicates a secondary dimension (e.g., nwp-ceiling uses inverted width so low ceilings appear thick/dangerous).
+
+**Legend (#731)**: the Color/Width `<select>`s live in the legend rows, not in `renderMapControls` (which keeps only the overlay controls: fronts, airport forecast, observed). The picker is the row's title, so the metric is named once. Swatches and stop labels share one `repeat(N, 1fr)` column template, so each label is centred under its swatch whatever the label lengths. The Width row draws neutral grey bars whose height is `widthBarPx(getWidth(stop.value))`, i.e. thickness, never colour, since the width channel only changes the line's weight. Inverted-width metrics (ceiling, temperature) therefore read thick-first. Width "none" keeps the picker and drops the strip; width equal to the colour metric still shows the strip (a different channel, not a repeat). `mapLegendHtml()` is pure, for unit tests under vitest's node environment.
 
 Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAltitude()`) to find the relevant value at the slider's flight level.
 
