@@ -384,6 +384,18 @@ final class flyfun_weatherUITests: XCTestCase {
     /// section below the fold is not merely off-screen — it is absent from the
     /// accessibility tree entirely, and `waitForExistence` on it fails no matter
     /// how long it waits. Swipe until it materializes.
+    /// Swipe `element` into view, then tap it once the scroll has stopped:
+    /// a tap that lands while a swipe is still decelerating only stops the
+    /// scroll, so the control never sees it (#748: "More" stayed collapsed).
+    @MainActor
+    private func tapAfterScrolling(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
+        if !element.isHittable {
+            if up { app.swipeUp() } else { app.swipeDown() }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        element.tap()
+    }
+
     @MainActor
     private func scrollToFormRow(_ app: XCUIApplication, _ element: XCUIElement, maxSwipes: Int = 8) {
         var swipes = 0
@@ -650,8 +662,7 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertFalse(app.buttons["map.observedMenu"].firstMatch.exists, "a mark must not navigate on its own")
         let more = app.descendants(matching: .any)["stormMore"].firstMatch
         let moreButton = more.exists ? more : app.buttons["More"].firstMatch
-        if !moreButton.isHittable { app.swipeUp() }
-        moreButton.tap()
+        tapAfterScrolling(app, moreButton)
         let estimate = app.staticTexts["Estimate at current motion"].firstMatch
         let estimateCaps = app.staticTexts["ESTIMATE AT CURRENT MOTION"].firstMatch
         XCTAssertTrue(estimate.waitForExistence(timeout: Self.uiTimeout) || estimateCaps.exists,
@@ -660,8 +671,7 @@ final class flyfun_weatherUITests: XCTestCase {
                       "the estimate keeps its footnote")
         attachScreenshot(app, "Observed-StormCard")
         let showOnMap = app.buttons["stormShowOnMap"].firstMatch
-        if !showOnMap.isHittable { app.swipeUp() }
-        showOnMap.tap()
+        tapAfterScrolling(app, showOnMap)
         XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "Show on map should land on the Map tab with the observed controls")
         attachScreenshot(app, "Observed-StormOnMap")
@@ -670,8 +680,7 @@ final class flyfun_weatherUITests: XCTestCase {
         switchToBriefingTab(app, "Observed")
         let airport = app.descendants(matching: .any)["ribbonStation-LFMD-departure"].firstMatch
         XCTAssertTrue(airport.waitForExistence(timeout: Self.uiTimeout), "the departure should be on the ribbon")
-        if !airport.isHittable { app.swipeDown() }
-        airport.tap()
+        tapAfterScrolling(app, airport, up: false)
         let card = app.descendants(matching: .any)["ribbonInspector"].firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "tapping an airport should open its card")
         let raw = app.descendants(matching: .any)["ribbonInspectorRaw-METAR"].firstMatch
@@ -680,8 +689,7 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ribbonInspectorIcao"].firstMatch.exists, "the ICAO should open the map too")
         attachScreenshot(app, "Observed-AirportCard")
         let airportMap = app.buttons["ribbonInspectorShowOnMap"].firstMatch
-        if !airportMap.isHittable { app.swipeUp() }
-        airportMap.tap()
+        tapAfterScrolling(app, airportMap)
         XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the airport card's Show on map should open the map")
 

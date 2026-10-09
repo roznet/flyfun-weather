@@ -443,6 +443,9 @@ logs `Live glance failed` and leaves both null for that tick.
     shows the web tooltip's rows from the mirrored rules, the raw METAR/TAF
     (airports joined by ICAO to `/live`'s `route_observations`, else the
     snapshot's), "Show on map" + a tappable ICAO (the only ways to the map).
+    A rain area or core has no focus of its own: its "Show on map" frames
+    the radar stretch under its middle (`bandFocus`, the last stretch past
+    the end), as the pre-card weather-zone tap did.
     `StormDetailSheet` is gone: its extra sections (trend numbers, off-track
     history, backing stations, the labelled estimate + footnote) sit under
     the cell card's "More" (`stormMore`), keeping `stormDetail` /
