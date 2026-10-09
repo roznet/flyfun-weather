@@ -154,6 +154,9 @@ function renderOtherLlm(o: OtherLlmSpend | null): void {
         <thead><tr>${head}</tr></thead>
         <tbody>${rows.slice(0, OTHER_LLM_MAX_ROWS).join('')}</tbody>
       </table>
+      ${rows.length > OTHER_LLM_MAX_ROWS
+        ? `<p class="muted" style="font-size:0.8rem;">Showing ${OTHER_LLM_MAX_ROWS} of ${rows.length} rows; the totals above cover all of them.</p>`
+        : ''}
     </div>`;
 
   const dayRows = o.by_day.map((d) => `

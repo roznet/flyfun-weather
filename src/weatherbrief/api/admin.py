@@ -510,7 +510,12 @@ def get_user_costs(
         # every figure above so the per-briefing numbers stay comparable (#741).
         "other_llm": {
             "total_usd": other_total["total_usd"],
-            "this_month_usd": other_llm_spend(db, month_start, user_id)["total_usd"],
+            # From the all-time days rather than a second scan: days are UTC,
+            # as `month_start` is.
+            "this_month_usd": round(sum(
+                d["cost_usd"] for d in other_total["by_day"]
+                if d["date"] >= month_start.date().isoformat()
+            ), 4),
             "calls": other_total["calls"],
             "by_category": other_total["by_category"],
         },
