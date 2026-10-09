@@ -91,6 +91,17 @@ and ChatGPT cannot drift.
 | `getAlternates` | `GET /agent/v1/flights/{id}/alternates` | `get_alternates` |
 | `getAirportWeather` | `GET /agent/v1/airport-weather` | `get_airport_weather` |
 
+**Known divergence — route input (#745).** MCP `create_flight` takes a single
+`route` string (filed Field-15 or a plain waypoint list, airports included), not a
+`waypoints` list: one input so the calling LLM never has to choose between two,
+or strip airways/SIDs/speed groups itself. The MCP client calls
+`/api/flights/interpret-route` first, creates the flight with the `interpreted`
+waypoints plus `raw_route` (as the web Save flow does), and returns
+`interpreted`/`skipped`/`off_route` so the agent can report dropped points;
+fewer than two resolved points → error, nothing created. `createFlight` still
+takes `waypoints` (its OpenAPI schema is pasted into the GPT builder, a separate
+contract); moving it to the same shape is a follow-up.
+
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,
 including the "drill in before answering / cross-check is not a downgrade signal"
 guidance, so the GPT behaves like the Claude connector. The same guardrails are
