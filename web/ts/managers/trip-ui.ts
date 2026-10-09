@@ -355,7 +355,7 @@ export function renderControls(trip: TripResponse, handlers: ControlHandlers): v
   el.querySelector('.btn-trip-rename')?.addEventListener('click', () => {
     // An empty answer clears the name and the trip goes back to its chain
     // (#728); only Cancel (null) leaves it as it was.
-    const name = prompt(t('trips.btnRename'), trip.name);
+    const name = prompt(t('trips.renamePrompt'), trip.name);
     if (name != null && name.trim() !== trip.name) handlers.onRename(name.trim());
   });
   el.querySelector('.btn-trip-delete')?.addEventListener('click', () => {

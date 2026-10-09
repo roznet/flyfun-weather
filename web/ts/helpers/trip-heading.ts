@@ -19,6 +19,6 @@ export function tripHeading(
   const chain = trip.summary.chain_label;
   // A trip with no airports yet (created empty, legs added later) has no
   // chain; fall back to the server's derived label rather than a blank title.
-  if (!name) return { title: chain || trip.display_name || 'Trip', subtitle: null };
+  if (!name) return { title: chain || trip.display_name || 'New trip', subtitle: null };
   return { title: name, subtitle: chain && chain !== name ? chain : null };
 }

@@ -43,7 +43,8 @@ decidable"* — never a colour for the trip.
 
 Two things are deliberately **not** stored:
 
-- **Leg position.** Chain order derives from `departure_time`. `/move` changes
+- **Leg position.** Chain order derives from `departure_time` (ties broken by
+  flight id, in `summarize_trip` and every member query alike). `/move` changes
   departure times and recreates the row, so a stored position would be an
   invariant to repair on every move; deriving it means a move that reorders the
   chain needs no fixup at all.

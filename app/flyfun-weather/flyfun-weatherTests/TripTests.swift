@@ -598,7 +598,7 @@ struct TripDTOTests {
             name: "",
             summary: TripSummary(tripId: "trip-empty", name: "", legs: [], chainLabel: "")
         )
-        #expect(trip.displayName == "Trip")
+        #expect(trip.displayName == "New trip")
     }
 
     /// Both per-flight refresh paths refuse a claimed leg, and the app must tell

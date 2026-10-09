@@ -439,7 +439,9 @@ def summarize_trip(
     ``departure_time`` (which is why no position is stored).
     """
     now = now or datetime.now(timezone.utc)
-    ordered = sorted(legs, key=lambda leg: leg.departure_time)
+    # ``flight_id`` breaks a departure-time tie the same way the SQL member
+    # queries do, so the badge label and the trip page cannot disagree.
+    ordered = sorted(legs, key=lambda leg: (leg.departure_time, leg.flight_id))
 
     built: list[TripLeg] = []
     previous_end: datetime | None = None

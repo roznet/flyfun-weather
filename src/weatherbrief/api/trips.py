@@ -534,7 +534,7 @@ def _legs_by_trip(db: Session, trip_ids: list[str]) -> dict[str, list]:
             FlightRow.route_name, FlightRow.departure_time,
         )
         .where(FlightRow.trip_id.in_(trip_ids))
-        .order_by(FlightRow.departure_time.asc())
+        .order_by(FlightRow.departure_time.asc(), FlightRow.id.asc())
     ).all()
     by_trip: dict[str, list] = {}
     for row in rows:

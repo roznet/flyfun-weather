@@ -31,7 +31,7 @@ describe('tripHeading', () => {
 
   it('never titles an unnamed trip with no chain blank', () => {
     expect(tripHeading({ ...trip('', ''), display_name: 'New trip' }).title).toBe('New trip');
-    expect(tripHeading(trip('', '')).title).toBe('Trip');
+    expect(tripHeading(trip('', '')).title).toBe('New trip');
   });
 
   it('drops the subtitle when there is no chain', () => {

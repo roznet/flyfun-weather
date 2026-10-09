@@ -1141,6 +1141,7 @@
   "trips.refreshLegTitle": "Refresh only this leg — the rest of the trip is left alone.",
   "trips.btnEdit": "Edit",
   "trips.btnRename": "Rename",
+  "trips.renamePrompt": "Trip name (leave empty to use the route)",
   "trips.btnDelete": "Delete trip",
   "trips.deleteConfirm": "Delete this trip? The flights and their briefings are kept — only the grouping goes.",
   "trips.autoRefresh": "Auto-refresh the whole trip",

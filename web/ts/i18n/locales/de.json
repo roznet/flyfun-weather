@@ -978,6 +978,7 @@
   "trips.refreshLegTitle": "Nur diese Etappe aktualisieren — der Rest der Reise bleibt unberührt.",
   "trips.btnEdit": "Bearbeiten",
   "trips.btnRename": "Umbenennen",
+  "trips.renamePrompt": "Name der Reise (leer lassen, um die Route zu verwenden)",
   "trips.btnDelete": "Reise löschen",
   "trips.deleteConfirm": "Diese Reise löschen? Die Flüge und ihre Briefings bleiben erhalten — nur die Gruppierung entfällt.",
   "trips.autoRefresh": "Ganze Reise automatisch aktualisieren",

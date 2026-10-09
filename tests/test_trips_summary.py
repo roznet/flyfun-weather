@@ -48,6 +48,16 @@ class TestChainDerivation:
         summary = summarize_trip("t", legs, now=NOW)
         assert [l.flight_id for l in summary.legs] == ["a", "b", "c"]
 
+    def test_a_departure_tie_breaks_on_flight_id(self):
+        """Same order as the SQL member queries (departure, then id), so the
+        badge label built from rows matches the trip page's chain."""
+        legs = [
+            leg("b", ["LSGS", "EGTF"], days=4),
+            leg("a", ["EGTF", "LSGS"], days=4),
+        ]
+        summary = summarize_trip("t", legs, now=NOW)
+        assert [l.flight_id for l in summary.legs] == ["a", "b"]
+
     def test_chain_label_and_round_trip(self):
         legs = [
             leg("a", ["EGTF", "LSGS"], days=4, days_out=4, assessment="GREEN"),

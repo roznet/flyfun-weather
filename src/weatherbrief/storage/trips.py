@@ -296,7 +296,7 @@ def trip_members(session: Session, trip_id: str) -> list[Flight]:
     rows = session.execute(
         select(FlightRow)
         .where(FlightRow.trip_id == trip_id)
-        .order_by(FlightRow.departure_time.asc())
+        .order_by(FlightRow.departure_time.asc(), FlightRow.id.asc())
     ).scalars().all()
     return [_row_to_flight(r) for r in rows]
 

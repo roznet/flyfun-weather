@@ -315,8 +315,9 @@ nonisolated struct TripResponse: Codable, Sendable, Equatable, Identifiable {
     /// only what the pilot typed — empty until they rename the trip (#728).
     var displayName: String {
         if !name.isEmpty { return name }
-        // A trip with no airports yet (created empty) has no chain either.
-        return summary.chainLabel.isEmpty ? "Trip" : summary.chainLabel
+        // A trip with no airports yet (created empty) has no chain either; the
+        // server's derived label for it is "New trip", which the web shows too.
+        return summary.chainLabel.isEmpty ? "New trip" : summary.chainLabel
     }
 
     /// The chain under a pilot-named trip; nil when the title already is the

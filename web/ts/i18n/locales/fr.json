@@ -978,6 +978,7 @@
   "trips.refreshLegTitle": "Actualiser uniquement cette étape — le reste du voyage n'est pas touché.",
   "trips.btnEdit": "Modifier",
   "trips.btnRename": "Renommer",
+  "trips.renamePrompt": "Nom du voyage (laisser vide pour utiliser la route)",
   "trips.btnDelete": "Supprimer le voyage",
   "trips.deleteConfirm": "Supprimer ce voyage ? Les vols et leurs briefings sont conservés — seul le regroupement disparaît.",
   "trips.autoRefresh": "Actualiser automatiquement tout le voyage",

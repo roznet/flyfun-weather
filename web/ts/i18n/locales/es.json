@@ -978,6 +978,7 @@
   "trips.refreshLegTitle": "Actualizar solo este tramo — el resto del viaje no se toca.",
   "trips.btnEdit": "Editar",
   "trips.btnRename": "Renombrar",
+  "trips.renamePrompt": "Nombre del viaje (déjalo vacío para usar la ruta)",
   "trips.btnDelete": "Eliminar viaje",
   "trips.deleteConfirm": "¿Eliminar este viaje? Los vuelos y sus briefings se conservan — solo desaparece la agrupación.",
   "trips.autoRefresh": "Actualizar automáticamente todo el viaje",
