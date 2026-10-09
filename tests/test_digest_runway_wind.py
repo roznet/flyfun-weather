@@ -64,3 +64,37 @@ def test_other_advisories_are_not_rewritten():
     detail = "RW27 \u219318 \u21906"  # not a real detail, just proves the gate
     text = _format_route_advisories_context(_manifest("turbulence", detail))
     assert detail in text
+
+
+class TestRoundTripWithTheEncoder:
+    """Encode with ``_format_wind_detail`` and decode: pins the shared format."""
+
+    @staticmethod
+    def _detail(wind_dir: float, headwind: float, crosswind: float) -> str:
+        from weatherbrief.analysis.advisories.airport_wind import _format_wind_detail
+        from weatherbrief.models.airport_conditions import (
+            AirportModelCondition, FlightCategory, RunwayWind,
+        )
+
+        cond = AirportModelCondition(
+            model="ecmwf", flight_category=FlightCategory.VFR,
+            wind_direction_deg=wind_dir, wind_speed_kt=15.0, wind_gust_kt=None,
+            best_runway=RunwayWind(runway_id="27", heading_deg=270.0,
+                                   crosswind_kt=crosswind, headwind_kt=headwind),
+        )
+        return _format_wind_detail(cond, "27")
+
+    def test_every_head_tail_and_side_combination_decodes(self):
+        cases = [
+            # (wind from, headwind_kt, expected words)
+            (300.0, 12.0, "headwind 12 kt, crosswind 7 kt from the right"),
+            (240.0, 12.0, "headwind 12 kt, crosswind 7 kt from the left"),
+            # Facing west on RW27: 120° is behind-left, 060° behind-right.
+            (120.0, -12.0, "tailwind 12 kt, crosswind 7 kt from the left"),
+            (60.0, -12.0, "tailwind 12 kt, crosswind 7 kt from the right"),
+        ]
+        for wind_dir, headwind, words in cases:
+            detail = self._detail(wind_dir, headwind, 7.0)
+            decoded = spell_out_runway_wind(detail)
+            assert f"RW27 {words}" in decoded, (wind_dir, detail, decoded)
+            assert not any(ch in decoded for ch in "←↑→↓")

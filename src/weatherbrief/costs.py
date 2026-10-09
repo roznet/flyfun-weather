@@ -189,6 +189,9 @@ MODEL_TOKEN_RATES_PER_1K: dict[str, tuple[float, float]] = {
     # MODEL_LONG_PROMPT_RATES_PER_1K (#715).
     "claude-haiku-5-5": (0.0001, 0.0005),
     "claude-sonnet-4-6": (0.003, 0.015),
+    # Thinking is billed as output, and the API reports it inside
+    # ``usage.output_tokens`` (there is no separate thinking count), so the
+    # output rate prices a 5.x digest with adaptive thinking in full (#717).
     "claude-sonnet-5-5": (0.002, 0.010),
 }
 

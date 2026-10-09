@@ -35,6 +35,7 @@ from extract_digest_eval import load_snapshot_from_pack  # noqa: E402
 from weatherbrief.digest.llm_config import (  # noqa: E402
     LLMConfig,
     create_chat_model,
+    with_structured,
     load_digest_config,
 )
 from weatherbrief.digest.llm_digest import (  # noqa: E402
@@ -95,7 +96,7 @@ def build_ctx(rec: dict) -> tuple[str, list[str]]:
 
 
 def run_model(llmcfg: LLMConfig, system_prompt: str, ctx: str) -> LongRangeDigest:
-    llm = create_chat_model(llmcfg).with_structured_output(LongRangeDigest)
+    llm = with_structured(create_chat_model(llmcfg), LongRangeDigest, llmcfg)
     return llm.invoke(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": ctx}]
     )

@@ -15,7 +15,5 @@
   "prompts": {
     "briefer": "prompts/briefer_v4.md"
   },
-  "cache_locales": [
-    "en"
-  ]
+  "cache_locales": ["en"]
 }

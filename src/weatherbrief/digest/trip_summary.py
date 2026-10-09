@@ -272,17 +272,19 @@ def check_guardrail(
 def generate(summary: TripSummary) -> tuple[TripParagraph | None, dict]:
     """Call the model. Returns ``(parsed_or_None, token_usage)``. Never raises.
 
-    Structured output via ``with_structured_output(..., include_raw=True)`` —
+    Structured output via ``with_structured(..., include_raw=True)`` —
     the same shape ``digest/llm_digest.py`` uses — because the raw message is
     where the token usage lives, and the cost has to be recorded even when the
     parse or the guardrail later rejects the content.
     """
     try:
-        from weatherbrief.digest.llm_config import create_chat_model, load_digest_config
+        from weatherbrief.digest.llm_config import (
+            create_chat_model, load_digest_config, with_structured,
+        )
 
         config = load_digest_config()
         model = create_chat_model(config.trip)
-        structured = model.with_structured_output(TripParagraph, include_raw=True)
+        structured = with_structured(model, TripParagraph, config.trip, include_raw=True)
         system = config.load_prompt("trip")
         raw_result = structured.invoke([
             {"role": "system", "content": system},

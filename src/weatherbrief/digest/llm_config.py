@@ -8,6 +8,8 @@ from pathlib import Path
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 _CONFIGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs" / "weather_digest"
@@ -54,7 +56,7 @@ class LLMConfig(BaseModel):
     thinking: dict | None = None
     # ``output_config.effort`` (low | medium | high | xhigh | max); unset keeps
     # the model default.
-    effort: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     # Output cap, thinking included. Unset keeps LangChain's per-model default,
     # which for a model its profile table does not know yet (claude-sonnet-5-5)
     # is only 4096 — too tight once adaptive thinking shares the budget.
@@ -62,7 +64,7 @@ class LLMConfig(BaseModel):
     # How ``with_structured_output`` gets the schema back. ``function_calling``
     # forces a tool call, which Sonnet 5.5 / Opus 5.5 reject with a 400;
     # ``json_schema`` uses native structured outputs (``output_config.format``).
-    structured_output: str = "function_calling"
+    structured_output: Literal["function_calling", "json_schema"] = "function_calling"
 
 
 class PromptsConfig(BaseModel):
