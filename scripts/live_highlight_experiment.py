@@ -34,6 +34,7 @@ from weatherbrief.tasks.live_highlight import (  # noqa: E402
     SYSTEM,
     THINKING,
     check_grounding,
+    review_flags,
     facts,
 )
 
@@ -116,6 +117,9 @@ def main() -> None:
         # about what the feature would do.
         reason = check_grounding(text, f)
         print(f"  grounding: {'ok' if reason is None else 'REJECTED — ' + reason}")
+        flags = review_flags(text, f) if reason is None else []
+        if flags:
+            print(f"  flags: {'; '.join(flags)}")
         if reason is not None:
             rejected += 1
     if client is not None:

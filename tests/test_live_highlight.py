@@ -47,6 +47,12 @@ def _facts_with(**over) -> dict:
     return f
 
 
+def _flag(text: str, f: dict) -> str | None:
+    """The first review flag, or None — the old reject reason, now logged only."""
+    flags = lh.review_flags(text, f)
+    return flags[0] if flags else None
+
+
 # --- Grounding: figures and codes -------------------------------------------
 
 
@@ -95,7 +101,7 @@ def test_rejects_a_condition_moved_to_the_wrong_airport():
             "other_airports_ahead_all_VFR": 3},
     )
     # Every token is in the facts; the attribution is not.
-    reason = lh.check_grounding("LEMI reporting LIFR with 800 m visibility.", f)
+    reason = _flag("LEMI reporting LIFR with 800 m visibility.", f)
     assert reason is not None and "LEMI" in reason and "LIFR" in reason
 
 
@@ -106,7 +112,7 @@ def test_accepts_the_same_condition_at_its_own_airport():
                          "metar_now": "LIFR at 08:50Z, visibility 800 m"}],
             "other_airports_ahead_all_VFR": 3},
     )
-    assert lh.check_grounding("LECH LIFR with 800 m visibility mid-route.", f) is None
+    assert _flag("LECH LIFR with 800 m visibility mid-route.", f) is None
 
 
 def test_accepts_a_paraphrase_of_a_metar_code():
@@ -117,13 +123,13 @@ def test_accepts_a_paraphrase_of_a_metar_code():
                          "metar_now": "IFR at 08:50Z, TSRA"}],
             "other_airports_ahead_all_VFR": 3},
     )
-    assert lh.check_grounding("Thunderstorms reported at LECH mid-route.", f) is None
+    assert _flag("Thunderstorms reported at LECH mid-route.", f) is None
 
 
 def test_skips_binding_on_a_negative_clause():
     """"no cell near LEMI" claims nothing about LEMI's own conditions."""
     f = _facts_with()
-    assert lh.check_grounding("No cells within 30 NM of LEMI.", f) is None
+    assert _flag("No cells within 30 NM of LEMI.", f) is None
 
 
 def test_a_sigmet_span_may_name_the_airport_at_its_edge():
@@ -135,10 +141,10 @@ def test_a_sigmet_span_may_name_the_airport_at_its_edge():
         sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 3", "covers_route_nm": [235, 276],
                         "new_since_briefing": True}],
     )
-    assert lh.check_grounding(
+    assert _flag(
         "Two new SIGMETs: embedded thunderstorms from 235 NM to destination (LEMI).", f) is None
     # The guard is narrow: without the SIGMET framing the same claim is caught.
-    assert lh.check_grounding("LEMI reporting thunderstorms.", f) is not None
+    assert _flag("LEMI reporting thunderstorms.", f) is not None
 
 
 # --- Grounding: voice rules -------------------------------------------------
@@ -152,7 +158,7 @@ def test_a_sigmet_span_may_name_the_airport_at_its_edge():
 def test_rejects_verdict_words(text):
     f = _facts_with(cells_ahead={"count": 1, "with_lightning": 1, "nearest_to_track": [
         {"at_route_nm": 180, "off_track_nm": 4, "side": "left", "lightning_flashes": 12}]})
-    reason = lh.check_grounding(text, f)
+    reason = _flag(text, f)
     assert reason is not None and "verdict" in reason
 
 
@@ -160,10 +166,10 @@ def test_thunderstorm_needs_lightning_in_the_facts():
     """§41: a radar core is a "cell"; the word thunderstorm needs lightning."""
     f = _facts_with(cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
         {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]})
-    reason = lh.check_grounding("Thunderstorm 4 NM left of track at 180 NM.", f)
+    reason = _flag("Thunderstorm 4 NM left of track at 180 NM.", f)
     assert reason is not None and "lightning" in reason
     # The same tick, worded as a cell, is fine.
-    assert lh.check_grounding("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
+    assert _flag("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
 
 
 def test_a_stations_TS_does_not_make_a_radar_core_a_thunderstorm():
@@ -179,12 +185,12 @@ def test_a_stations_TS_does_not_make_a_radar_core_a_thunderstorm():
         cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
             {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
     )
-    reason = lh.check_grounding("Thunderstorm 4 NM left of track at 180 NM.", f)
+    reason = _flag("Thunderstorm 4 NM left of track at 180 NM.", f)
     assert reason is not None and "only a station reports TS" in reason
     # The same facts, said about the station that actually reports it: fine.
-    assert lh.check_grounding("LECH reporting thunderstorms mid-route.", f) is None
+    assert _flag("LECH reporting thunderstorms mid-route.", f) is None
     # ...and the core, correctly called a cell: fine.
-    assert lh.check_grounding("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
+    assert _flag("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
 
 
 def test_a_TS_sigmet_licenses_a_positional_thunderstorm():
@@ -194,13 +200,13 @@ def test_a_TS_sigmet_licenses_a_positional_thunderstorm():
         cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
             {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
     )
-    assert lh.check_grounding("SIGMET embedded thunderstorms from 10 NM to destination.", f) is None
+    assert _flag("SIGMET embedded thunderstorms from 10 NM to destination.", f) is None
 
 
 def test_thunderstorm_allowed_when_a_cell_has_flashes():
     f = _facts_with(cells_ahead={"count": 1, "with_lightning": 1, "nearest_to_track": [
         {"at_route_nm": 180, "off_track_nm": 4, "side": "left", "lightning_flashes": 12}]})
-    assert lh.check_grounding("Thunderstorm with lightning 4 NM left of track at 180 NM.", f) is None
+    assert _flag("Thunderstorm with lightning 4 NM left of track at 180 NM.", f) is None
 
 
 def test_rejects_over_length():
@@ -216,15 +222,16 @@ def test_rejects_empty():
 
 def test_max_words_is_the_agreed_ceiling():
     """30 → 40 (owner, 2026-10-07, #697) → 60 with the move to Haiku 5.5
-    (owner, 2026-10-08, #715). The prompt must state the same hard limit."""
-    assert lh.MAX_WORDS == 60
+    (owner, 2026-10-08, #715) → 70 when the meaning rules became flags
+    (owner, 2026-10-09). The prompt must state the same hard limit."""
+    assert lh.MAX_WORDS == 70
     assert f"{lh.MAX_WORDS} words is a hard limit" in lh.SYSTEM
 
 
 def test_a_line_under_the_ceiling_passes_and_one_over_fails():
     f = _facts_with()
-    assert lh.check_grounding(" ".join(["VFR"] * 55), f) is None
-    assert "too long" in lh.check_grounding(" ".join(["VFR"] * 61), f)
+    assert lh.check_grounding(" ".join(["VFR"] * 65), f) is None
+    assert "too long" in lh.check_grounding(" ".join(["VFR"] * 71), f)
 
 
 # --- Grounding: #715 false positives ----------------------------------------
@@ -235,17 +242,17 @@ def test_a_stated_absence_of_lightning_is_not_a_thunderstorm():
     claiming a thunderstorm, and the rule used to reject it."""
     f = _facts_with(cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
         {"peak_dBZ": 40, "at_route_nm": 92, "off_track_nm": 3, "side": "right"}]})
-    assert lh.check_grounding("Cell 3 NM right of track at 92 NM (no lightning).", f) is None
-    assert lh.check_grounding("Cell 3 NM right of track at 92 NM, without thunderstorms.", f) is None
+    assert _flag("Cell 3 NM right of track at 92 NM (no lightning).", f) is None
+    assert _flag("Cell 3 NM right of track at 92 NM, without thunderstorms.", f) is None
     # The claim itself is still caught, even next to a negation.
-    reason = lh.check_grounding("Thunderstorm 3 NM right of track at 92 NM, no lightning seen yet.", f)
+    reason = _flag("Thunderstorm 3 NM right of track at 92 NM, no lightning seen yet.", f)
     assert reason is not None and "lightning" in reason
 
 
 def test_low_ifr_spelled_out_binds_as_lifr():
     f = _facts_with(destination={"icao": "KGKY", "metar_now": "LIFR at 11:53Z", "taf_at_eta": "LIFR"})
-    assert lh.check_grounding("Low IFR at destination KGKY now and at ETA.", f) is None
-    reason = lh.check_grounding("KGKY reporting IFR.", f)
+    assert _flag("Low IFR at destination KGKY now and at ETA.", f) is None
+    reason = _flag("KGKY reporting IFR.", f)
     assert reason is not None and "IFR" in reason
 
 
@@ -257,9 +264,9 @@ def test_an_airport_anchoring_a_distance_is_not_bound():
         departure={"icao": "EGBJ", "metar_now": "VFR at 06:20Z"},
         rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[85, 125]]},
     )
-    assert lh.check_grounding("Rain lies over the track 85-125 NM from EGBJ.", f) is None
+    assert _flag("Rain lies over the track 85-125 NM from EGBJ.", f) is None
     # The same airport as the subject is still bound.
-    reason = lh.check_grounding("EGBJ reporting rain.", f)
+    reason = _flag("EGBJ reporting rain.", f)
     assert reason is not None and "EGBJ" in reason
 
 
@@ -273,11 +280,11 @@ def test_before_after_and_of_still_bind_the_airport(text):
     before/after/of the airport can be the subject, and LFMD is VFR here."""
     f = _facts_with(destination={"icao": "LFMD", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
                     rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[5, 20]]})
-    reason = lh.check_grounding(text, f)
+    reason = _flag(text, f)
     assert reason is not None and "LFMD not given as" in reason
     # The same claim anchored with "from" is a position, not LFMD's weather.
     anchored = text.replace(" before ", " from ").replace(" of ", " from ").replace(" after ", " from ")
-    assert lh.check_grounding(anchored, f) is None
+    assert _flag(anchored, f) is None
 
 
 @pytest.mark.parametrize("text", [
@@ -302,7 +309,7 @@ def _lfac_facts() -> dict:
 
 
 def test_monitor_is_advice():
-    reason = lh.check_grounding("Monitor the destination TAF.", _lfac_facts())
+    reason = _flag("Monitor the destination TAF.", _lfac_facts())
     assert reason is not None and reason.startswith("advice word")
 
 
@@ -310,10 +317,60 @@ def test_watch_pointing_at_an_airport_is_allowed():
     """Owner, 2026-10-08: "Watch LFAC, MVFR…" points at the thing, it is not
     advice. 9 of 22 rejections on the #715 replay were this word, and banning it
     in the prompt made the model write "Watch-free note:" around it."""
-    assert lh.check_grounding(
+    assert _flag(
         "Quiet route ahead. Watch LFAC, MVFR at 11:00Z, 130 NM along and 19 NM left of track.",
         _lfac_facts()) is None
     assert "watch" not in lh.SYSTEM.lower()
+
+
+# --- Grounding: what rejects and what only flags (owner, 2026-10-09) -------
+
+
+def _egjj_facts() -> dict:
+    """The EGKR→EGJJ 09:29Z block from the first Haiku 5.5 prod day."""
+    return _facts_with(
+        route="EGKR to EGJJ, 144 NM",
+        destination={"icao": "EGJJ", "metar_now": "IFR (low ceiling), drizzle",
+                     "taf_at_eta": "IFR, TEMPO LIFR FG"},
+        airports_along_route_ahead={"notable": [
+            {"icao": "EGJA", "role": "alternate", "where": "120 NM along, 17 NM right of track",
+             "metar_now": "IFR (low ceiling)", "taf_at_eta": "at 10:25Z: LIFR"},
+            {"icao": "EGJB", "role": "alternate", "where": "142 NM along, 21 NM right of track",
+             "metar_now": "LIFR (low ceiling)", "taf_at_eta": "at 10:43Z: LIFR"}],
+            "other_airports_ahead": "none"},
+        rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself": ["from 125 NM to 144 NM"]},
+    )
+
+
+@pytest.mark.parametrize("text", [
+    # Correct lines the old meaning rules rejected on 2026-10-09; each cost the
+    # pilot that tick's highlight.
+    "Rain lies over the track from 125 NM to the destination EGJJ, where the TAF is IFR with TEMPO LIFR.",
+    "Alternates EGJA and EGJB are IFR and LIFR; EGJJ is IFR in drizzle.",
+    "EGJA may go LIFR at 10:25Z.",
+])
+def test_meaning_rules_never_reject(text):
+    assert lh.check_grounding(text, _egjj_facts()) is None
+
+
+def test_the_meaning_rules_still_flag_what_they_flagged():
+    f = _egjj_facts()
+    assert lh.review_flags("EGJA may go LIFR at 10:25Z.", f) == ["verdict word: go"]
+    # A real misattribution, still visible in the log.
+    assert lh.review_flags("EGJB is VFR at 10:43Z.", f) == ["EGJB not given as VFR in the facts"]
+
+
+def test_mechanical_rules_still_reject():
+    f = _egjj_facts()
+    assert "ICAO not in facts" in lh.check_grounding("EGLL is IFR.", f)
+    assert "figure not in facts" in lh.check_grounding("Rain from 99 NM to EGJJ.", f)
+    assert "not a highlight" in lh.check_grounding("EGJJ IFR.\n\nHighlight (under 35 words): EGJJ IFR.", f)
+
+
+def test_the_prompt_keeps_now_and_eta_categories_apart():
+    """The real misses on 2026-10-09 were categories: LIFR said as IFR, an
+    airport MVFR now and LIFR at ETA said as "IFR or LIFR"."""
+    assert "keep \"now\" and \"at ETA\" apart" in lh.SYSTEM
 
 
 # --- Facts ------------------------------------------------------------------
@@ -679,8 +736,10 @@ def test_an_airport_condition_is_named_without_its_figures():
 def test_the_facts_still_bind_for_the_grounding_check():
     """The new wording must still license the words the model will use."""
     f = lh.facts(_busy())
-    assert lh.check_grounding("ZZDS IFR with showers and a gusty wind.", f) is None
-    assert lh.check_grounding("Cells near the track ahead, one with lightning: thunderstorm risk.", f) is None
+    for text in ("ZZDS IFR with showers and a gusty wind.",
+                 "Cells near the track ahead, one with lightning: thunderstorm risk."):
+        assert lh.check_grounding(text, f) is None
+        assert lh.review_flags(text, f) == []
 
 
 def test_no_highlight_after_planned_arrival(monkeypatch, tmp_path):
@@ -865,6 +924,35 @@ def test_a_rejected_line_is_logged_with_its_text(monkeypatch, tmp_path):
     assert rec["text"] == "LFMD is IFR."
     assert rec["facts"]["route"].startswith("LELL")
     assert "LFMD" in rec["reason"]
+
+
+def test_a_flagged_line_is_written_with_its_flags(monkeypatch, tmp_path):
+    """Owner, 2026-10-09: the meaning rules flag, they do not reject. The
+    line reaches the pilot and the review log says what to look at."""
+    import weatherbrief.tasks.live_layer as live_layer
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg(
+        destination={"icao": "LEMI", "metar_now": "VFR", "taf_at_eta": "VFR"}))
+    monkeypatch.setattr(lh, "generate", lambda *a, **k: ("LEMI is IFR now.", {"model": "claude-haiku-5-5"}, 900))
+    monkeypatch.setattr(live_layer, "patch_highlight", lambda *a, **k: True)
+    out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
+    assert out.outcome == "written" and out.text == "LEMI is IFR now."
+    rec = json.loads((tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()[0])
+    assert rec["outcome"] == "written"
+    assert rec["flags"] == ["LEMI not given as IFR in the facts"]
+
+
+def test_an_unflagged_written_line_carries_no_flags_key(monkeypatch, tmp_path):
+    import weatherbrief.tasks.live_layer as live_layer
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    monkeypatch.setattr(lh, "generate", lambda *a, **k: ("Quiet route ahead.", {"model": "claude-haiku-5-5"}, 900))
+    monkeypatch.setattr(live_layer, "patch_highlight", lambda *a, **k: True)
+    assert lh.ensure_highlight(tmp_path, _Layer(glance=_glance())).outcome == "written"
+    rec = json.loads((tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()[0])
+    assert "flags" not in rec
 
 
 def test_a_rejected_facts_state_is_retried_once_then_given_up(monkeypatch, tmp_path):

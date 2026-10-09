@@ -496,7 +496,7 @@ user-facing surface by the back door.
 
 ### Model choice (#715)
 
-**Haiku 5.5, thinking off, effort `low`, `MAX_WORDS` 60, `MAX_TOKENS` 300.**
+**Haiku 5.5, thinking off, effort `low`, `MAX_WORDS` 60 (70 since 2026-10-09), `MAX_TOKENS` 300.**
 Chosen on an A/B of the first flight day's 311 logged facts blocks
 (2026-10-08, offline replay through this prompt and checker):
 
@@ -614,40 +614,59 @@ Remaining known trigger on busy convective flights: rain edges crossing
 ### Grounding check
 
 `check_grounding` is the only thing between a model sentence and a cockpit
-screen, so it rejects on five rules and falls back to the nutshell `headline`.
-First, the reply must be a highlight at all: a line break or drafting words
-("corrected", "instructions", "the facts", "wait", "highlight") reject it
-(#715: with thinking off, Haiku 5.5 wrote "Wait, that contains 'watch'…
-Corrected highlight: …", and once "at the times in the facts").
+screen. Since 2026-10-09 (owner) it **rejects only on mechanical rules** and
+falls back to the nutshell `headline`; the rules that judge meaning moved to
+`review_flags`, which logs `flags` on the written attempt and never blocks it.
 
-1. **ICAOs** — every aerodrome code must appear in the facts.
-2. **Figures** — every number must appear in the facts. The prompt therefore
-   forbids the model working out spans of its own: it first wrote "the last 41
-   NM" for a SIGMET covering 235–276 NM, which is true but unverifiable, and
-   the rule rejected it. One prompt line ("give every figure exactly as the
-   facts give it") took the replay set from 2 rejections in 5 to 0 in 10.
-3. **Place binding** — in a clause naming exactly one airport, every *airport
-   condition* claimed must be one the facts give for that airport. This is the
-   rule a plain "appears somewhere in the facts" check misses: moving LECH's
-   LIFR onto LEMI passes rules 1 and 2 and fails here. Conditions are matched
-   through a surface-form map, so the facts' `TSRA` supports the model's
-   "thunderstorm".
-4. **Verdict words** — never go/no-go (`feedback_not_go_nogo`). "monitor"
-   rejects under its own reason, `advice word`. **"watch" is allowed**
+Why: on the first Haiku 5.5 prod day (2026-10-09, 338 attempts) 17 of 28
+rejections were the meaning rules misreading a correct line — "Alternates
+EGJA and EGJB are IFR and LIFR" (read respectively), "rain from 125 NM to
+the destination EGJJ" (an airport ending a span), "may go MVFR" (a verb, not a
+verdict), a TAF's "TSRA forecast at LIPH". Each rejection cost the pilot that
+tick's highlight (EGKR→EGJJ lost 5 of 8 en-route ticks approaching a LIFR
+destination), and the same rules let wrong categories through ("EGJB expected
+IFR" against LIFR). Flags keep the signal for the review; prompt tweaks fix
+what they find. Rescored on that day: 28 → 5 rejected, the 5 being the
+drafting leaks.
+
+**Rejects** (`check_grounding`):
+- **Drafting text** — a line break or drafting words ("corrected",
+  "instructions", "the facts", "wait", "highlight") (#715: with thinking off,
+  Haiku 5.5 wrote "Wait, that contains 'watch'… Corrected highlight: …", and
+  on the prod day "Highlight (word count under 35):"). Every leak seen had a
+  blank line.
+- **Length** — over `MAX_WORDS` (70; the prompt asks for 35).
+- **ICAOs** — every aerodrome code must appear in the facts.
+- **Figures** — every number must appear in the facts. The prompt therefore
+  forbids the model working out spans of its own: it first wrote "the last 41
+  NM" for a SIGMET covering 235–276 NM, which is true but unverifiable, and
+  the rule rejected it. One prompt line ("give every figure exactly as the
+  facts give it") took the replay set from 2 rejections in 5 to 0 in 10.
+
+**Flags only** (`review_flags`, logged as `flags` and as `LIVE_HIGHLIGHT_FLAGGED`):
+1. **Place binding** — in a clause naming exactly one airport, every *airport
+   condition* claimed must be one the facts give for that airport (moving
+   LECH's LIFR onto LEMI passes the ICAO and figure rules). Conditions are
+   matched through a surface-form map, so the facts' `TSRA` supports the
+   model's "thunderstorm".
+2. **Verdict words** — never go/no-go (`feedback_not_go_nogo`). "monitor"
+   flags under its own reason, `advice word`. **"watch" is allowed**
    (owner, 2026-10-08): "Watch LFAC, MVFR…" points at the airport rather than
-   telling the pilot what to do. Banning it was 9 of the 22 rejections on the
-   #715 replay, and naming it in the prompt made Haiku 5.5 write around it
-   ("Watch-free note: …"), one of which passed every rule. Advice words are
-   checker-only, never named in the prompt.
-5. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell".
+   telling the pilot what to do. Naming it in the prompt made Haiku 5.5 write
+   around it ("Watch-free note: …"), so advice words are never named there.
+3. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell".
+
+The category misses the flags could not catch are a prompt line instead: give
+each airport's category exactly as the facts give it, and keep "now" and "at
+ETA" apart.
 
 Gotcha that cost a test: `\b[A-Z]{4}\b` matches `LIFR` and `TSRA` as if they
 were ICAO codes. Unfiltered, the binding rule saw two "ICAOs" in "LEMI
 reporting LIFR" and skipped the clause — the exact misattribution it exists to
 catch. `_NOT_ICAO` holds the colliding weather codes.
 
-**Accepted limits**, all deliberate — each lets a wrong line through rather
-than reject a right one, and the review log is the backstop:
+**Accepted limits of the flag rules**, all deliberate — each misses a wrong
+line rather than flag a right one:
 
 - A clause naming **two** airports is not bound (ambiguous attribution).
 - A clause hedged with "no" / "better" is skipped: the rule cannot read a

@@ -59,10 +59,12 @@ EFFORT = "low"
 #: free — but two would let a flapping API hold a tick's worth of threads.
 REQUEST_TIMEOUT_S = 5.0
 MAX_RETRIES = 1
-#: Hard ceiling (owner, 2026-10-08, #715; was 40 on Haiku 4.5). The prompt
-#: asks for 35 so the model aims below it. On the A/B, Haiku 5.5's overruns of
-#: 40 were almost all 41-50 words; 50 and 60 rejected the same 9 %.
-MAX_WORDS = 60
+#: Hard ceiling (owner, 2026-10-08, #715; was 40 on Haiku 4.5; 60 → 70 on
+#: 2026-10-09 when only the mechanical rules kept rejecting). The prompt asks
+#: for 35 so the model aims below it. On the A/B, Haiku 5.5's overruns of 40
+#: were almost all 41-50 words; 50 and 60 rejected the same 9 %. The first prod
+#: day lost a clean 62-word line to the old 60.
+MAX_WORDS = 70
 #: Billed generations per facts state before giving up on it.
 #:
 #: The tick retries any flight with no stored highlight, and a rejection stores
@@ -73,7 +75,7 @@ MAX_WORDS = 60
 #: cost that flight its highlight until the weather moved. Two attempts gives
 #: a bad draw a second chance and caps a systematic failure at twice the price.
 MAX_ATTEMPTS_PER_FACTS = 2
-#: 60 words is ~110 output tokens on Haiku 5.5's tokenizer (~30 % more tokens
+#: 70 words is ~130 output tokens on Haiku 5.5's tokenizer (~30 % more tokens
 #: than 4.5's for the same text); 300 leaves room without paying for a runaway,
 #: which the post-check rejects anyway.
 MAX_TOKENS = 300
@@ -84,7 +86,7 @@ You get FACTS about one flight at one moment: where the flight is, the departure
 
 Write a highlight of at most two short sentences, 35 words in total at most, that tells the pilot what deserves their attention along the route ahead, most important first. Do not repeat the route or the airports' names as a title.
 
-60 words is a hard limit: a longer highlight is discarded and the pilot sees nothing. When the facts hold more than fits, leave the least important item out entirely rather than shortening every clause — one item said properly beats three said in fragments.
+70 words is a hard limit: a longer highlight is discarded and the pilot sees nothing. When the facts hold more than fits, leave the least important item out entirely rather than shortening every clause — one item said properly beats three said in fragments.
 
 What leads, in this order:
 1. Hazards on the track ahead: an active SIGMET covering the route (always mention it, with where it covers), cells within 10 NM of the track (lightning and closing ones first), rain lying over the track.
@@ -100,6 +102,7 @@ Rules:
 - Plain cockpit words. Places as distance along the route ("mid-route", "near LFMD") or ICAO codes. Times in Z.
 - Give every distance, time and figure exactly as the facts give it. Do not round it, convert it, or work out a span, total or difference of your own: say "from 235 NM to the destination" when the facts say 235, never "the last 41 NM".
 - Keep every condition at the place the facts give it. A route airport's METAR is that airport's, never the destination's.
+- Give each airport's flight category exactly as the facts give it, and keep "now" and "at ETA" apart: an airport MVFR now and LIFR at ETA is "MVFR now, LIFR at ETA", never "IFR or LIFR"; LIFR is never "IFR".
 - Airports along the route matter when they show something notable (non-VFR, showers, thunderstorms, a worse TAF at your time); don't list VFR ones.
 - "Cell" for a radar core; say "thunderstorm" only when the facts give lightning for it.
 - Say how weather moves relative to the route when the facts give it (crossing it, moving away, closing).
@@ -812,33 +815,24 @@ def _facts_for_icao(f: dict, icao: str) -> str:
 
 
 def check_grounding(text: str, f: dict) -> str | None:
-    """Reject a highlight that is not carried by the facts.
+    """Reject a highlight that must never reach a pilot.
 
-    Returns ``None`` when it passes, else a short reason. Before the rules,
-    the line must be one paragraph of highlight, not the model's drafting
-    (#715: with thinking off it sometimes narrates its own corrections). Five
-    rules, each one a failure seen in the experiment or a voice rule from the
-    issue:
+    Returns ``None`` when it passes, else a short reason. Only mechanical rules
+    reject (owner, 2026-10-09): the line must be one paragraph of highlight,
+    not the model's drafting (#715), within ``MAX_WORDS``, and every code and
+    figure in it must be in the facts:
 
     1. **ICAOs** — every 4-letter code must appear in the facts.
     2. **Figures** — every number must appear in the facts. Catches an invented
        distance, time or dBZ, which is the one error a pilot cannot spot.
-    3. **Place binding** — in a clause naming exactly one airport, every
-       *airport condition* claimed must be one the facts give for that airport.
-       This is the rule the plain "appears somewhere in the facts" check misses:
-       moving LECH's LIFR onto LFMD passes rule 1 and 2 and fails here.
-    4. **Verdict words** — the product never says go/no-go.
-    5. **"Thunderstorm" needs lightning** — §41: a radar core is a "cell"; only
-       observed lightning or a TS hazard earns the word.
 
-    Known limits, accepted deliberately: a clause naming two airports is not
-    bound (ambiguous attribution); a clause hedged with "no"/"better" is
-    skipped (rule 3 cannot read a negation); an aerodrome that only anchors a
-    distance ("NM from/past/beyond EGBJ") is not bound to the clause's weather;
-    a stated absence ("no lightning") does not count as saying thunderstorm
-    (rule 5). Each lets a wrong line through rather than reject a right one —
-    the replay set and the review log are the backstop, and every rejection is
-    logged with its text so a false one is visible rather than silent.
+    The rules that judge *meaning* (place binding, verdict words, the
+    thunderstorm word) are :func:`review_flags`: they flag, they do not reject.
+    On the first Haiku 5.5 prod day 17 of 28 rejections were theirs and false
+    (a correct "EGJA and EGJB are IFR and LIFR", "may go MVFR", a TAF's TSRA),
+    each one cost the pilot that tick's highlight, and they still let wrong
+    lines through. The review log carries the flags; prompt tweaks fix what
+    they find.
     """
     text = (text or "").strip()
     if not text:
@@ -863,14 +857,43 @@ def check_grounding(text: str, f: dict) -> str | None:
     if invented:
         return f"figure not in facts: {', '.join(invented)}"
 
+    return None
+
+
+def review_flags(text: str, f: dict) -> list[str]:
+    """What a reviewer should look at in a highlight that was written anyway.
+
+    Logged on the attempt as ``flags``; never blocks the line. Three rules,
+    each a voice rule or a failure seen in the experiment:
+
+    - **Place binding** — in a clause naming exactly one airport, every
+      *airport condition* claimed must be one the facts give for that airport
+      (moving LECH's LIFR onto LEMI, #697 lesson 1).
+    - **Verdict / advice words** — the product never says go/no-go.
+    - **"Thunderstorm" needs lightning** — §41: a radar core is a "cell"; only
+      observed lightning or a TS hazard earns the word.
+
+    Known false positives, the reason these flag rather than reject: a list
+    read respectively ("EGJA and EGJB are IFR and LIFR") is skipped only when
+    it names two airports in one clause; an airport ending a span ("rain from
+    125 NM to EGJJ") binds the span's weather to it; "go MVFR" reads as a
+    verdict; a TAF's TSRA "forecast at LIPH" in a clause with a figure reads as
+    a positional thunderstorm.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    flags: list[str] = []
+    blob = json.dumps(f, default=str)
+
     said = set(_words(text))
     asserted = set(_words(_NEGATED_TS_RE.sub(" ", text)))
     verdict = sorted(said & VERDICT_WORDS)
     if verdict:
-        return f"verdict word: {', '.join(verdict)}"
+        flags.append(f"verdict word: {', '.join(verdict)}")
     advice = sorted(said & ADVICE_WORDS)
     if advice:
-        return f"advice word: {', '.join(advice)}"
+        flags.append(f"advice word: {', '.join(advice)}")
 
     if asserted & AIRPORT_CONDITIONS["thunderstorm"]:
         # Two sources can license the word, and they license different claims
@@ -878,28 +901,26 @@ def check_grounding(text: str, f: dict) -> str | None:
         # TS hazard earns "thunderstorm").
         observed = "lightning_flashes" in blob or bool(re.search(r"\bTS\b|TSRA|VCTS|TSGR", blob))
         if not observed:
-            return "says thunderstorm without lightning in the facts"
-        # An *airport* reporting TSRA does not make the cell at 180 NM a
-        # thunderstorm. A clause that says thunderstorm about a position
-        # rather than an aerodrome needs the cells or a SIGMET to carry it —
-        # otherwise the station's TS has been moved onto a radar core, which
-        # the place-binding rule below cannot see because there is no ICAO in
-        # the clause to bind to.
-        from_cells = "lightning_flashes" in blob
-        from_sigmet = any(
-            re.search(r"\bTS\b|TSRA|TSGR", str(s.get("what") or ""))
-            for s in (f.get("sigmets_ahead") or [])
-            if isinstance(s, dict)
-        )
-        if not (from_cells or from_sigmet):
-            for clause in _CLAUSE_RE.split(_NEGATED_TS_RE.sub(" ", text)):
-                words_here = set(_words(clause))
-                if not (words_here & AIRPORT_CONDITIONS["thunderstorm"]):
-                    continue
-                if _icaos(clause):
-                    continue  # about an aerodrome: rule 3 binds it
-                if _NUM_RE.search(clause):
-                    return "says thunderstorm at a position, but only a station reports TS"
+            flags.append("says thunderstorm without lightning in the facts")
+        else:
+            # An *airport* reporting TSRA does not make the cell at 180 NM a
+            # thunderstorm. A clause that says thunderstorm about a position
+            # rather than an aerodrome needs the cells or a SIGMET to carry it.
+            from_cells = "lightning_flashes" in blob
+            from_sigmet = any(
+                re.search(r"\bTS\b|TSRA|TSGR", str(s.get("what") or ""))
+                for s in (f.get("sigmets_ahead") or [])
+                if isinstance(s, dict)
+            )
+            if not (from_cells or from_sigmet):
+                for clause in _CLAUSE_RE.split(_NEGATED_TS_RE.sub(" ", text)):
+                    if not (set(_words(clause)) & AIRPORT_CONDITIONS["thunderstorm"]):
+                        continue
+                    if _icaos(clause):
+                        continue  # about an aerodrome: the binding rule reads it
+                    if _NUM_RE.search(clause):
+                        flags.append("says thunderstorm at a position, but only a station reports TS")
+                        break
 
     for clause in _CLAUSE_RE.split(text):
         icaos = _icaos(clause) - set(_ANCHOR_ICAO_RE.findall(clause))
@@ -914,9 +935,11 @@ def check_grounding(text: str, f: dict) -> str | None:
         supported = _conditions_in(_facts_for_icao(f, icao))
         wrong = sorted(claimed - supported)
         if wrong:
-            return f"{icao} not given as {', '.join(wrong)} in the facts"
+            flag = f"{icao} not given as {', '.join(wrong)} in the facts"
+            if flag not in flags:
+                flags.append(flag)
 
-    return None
+    return flags
 
 
 # --- Model call -------------------------------------------------------------
@@ -1250,6 +1273,11 @@ def ensure_highlight(
                                   "cost_usd": call_cost(usage)})
         return HighlightOutcome("rejected", text=text, usage=usage, reason=reason)
 
+    flags = review_flags(text, f)
+    if flags:
+        logger.info("LIVE_HIGHLIGHT_FLAGGED flight=%s flags=%s text=%r",
+                    layer.flight_id, "; ".join(flags), text)
+
     written = patch_highlight(
         flight_dir,
         LiveHighlight(text=text, model=model, facts_hash=digest, gate=gate,
@@ -1259,7 +1287,7 @@ def ensure_highlight(
     )
     _log_attempt(flight_dir, {**base, "outcome": "written" if written else "superseded",
                               "text": text, "usage": usage, "latency_ms": latency_ms,
-                              "cost_usd": call_cost(usage)})
+                              "cost_usd": call_cost(usage)} | ({"flags": flags} if flags else {}))
     return HighlightOutcome("written" if written else "superseded", text=text, usage=usage)
 
 
