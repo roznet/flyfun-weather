@@ -2,8 +2,9 @@
  *
  *  There is no query syntax. A filter string is split on whitespace into
  *  tokens, and a flight matches when *every* token is a case-insensitive
- *  **prefix** of some route waypoint, of some word in the route name, or of
- *  some word in the flight's free-text description (#587):
+ *  **prefix** of some route waypoint, of some word in the route name, of some
+ *  word in the flight's free-text description (#587), or of some word in the
+ *  name of the trip it belongs to (#738):
  *
  *    "LFMD"       -> every flight touching Cannes (endpoint or intermediate)
  *    "LFMD EGTF"  -> only flights touching both, in either direction
@@ -25,18 +26,21 @@ export function parseQuery(q: string | null | undefined): string[] {
   return q.split(/\s+/).filter((tok) => tok.length > 0).map((tok) => tok.toUpperCase());
 }
 
-/** Every token must prefix-match a waypoint, a route-name word or a
- *  description word. `tokens` must already be uppercased by `parseQuery`. */
+/** Every token must prefix-match a waypoint, a route-name word, a description
+ *  word or a trip-name word. `tripName` is the member flight's `trip.name`: the
+ *  pilot's name for the trip, else the derived chain + dates. `tokens` must
+ *  already be uppercased by `parseQuery`. */
 export function matchesQuery(
   waypoints: string[] | undefined,
   routeName: string | undefined,
   tokens: string[],
   description?: string | null,
+  tripName?: string | null,
 ): boolean {
   if (tokens.length === 0) return true;
 
   const haystack = (waypoints ?? []).filter(Boolean).map((w) => w.toUpperCase());
-  for (const word of `${routeName ?? ''} ${description ?? ''}`.split(/\s+/)) {
+  for (const word of `${routeName ?? ''} ${description ?? ''} ${tripName ?? ''}`.split(/\s+/)) {
     if (word) haystack.push(word.toUpperCase());
   }
   if (haystack.length === 0) return false;

@@ -865,7 +865,10 @@ def list_all_flights(
     if search_tokens:
         past = [
             p for p in past
-            if _search_matches(p.waypoints, p.route_name, search_tokens, p.description)
+            if _search_matches(
+                p.waypoints, p.route_name, search_tokens, p.description,
+                p.trip.name if p.trip else None,
+            )
         ]
 
     response.headers["X-Past-Total"] = str(len(past))

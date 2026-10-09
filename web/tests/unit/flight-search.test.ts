@@ -96,6 +96,20 @@ describe('matchesQuery', () => {
     expect(d('family', [])).toBe(true);
   });
 
+  it('matches words in the trip name (#738)', () => {
+    const t = (q: string, wps = WPS, trip: string | null = 'Alpine tour') =>
+      matchesQuery(wps, '', parseQuery(q), null, trip);
+    expect(t('alpine')).toBe(true);
+    expect(t('tou')).toBe(true);
+    expect(t('LFMD alpine')).toBe(true);
+    expect(t('LFAT alpine')).toBe(false);
+    expect(t('pine')).toBe(false);
+    expect(t('alpine', [])).toBe(true);
+    // A flight with no trip is unaffected.
+    expect(t('alpine', WPS, null)).toBe(false);
+    expect(t('LFMD', WPS, null)).toBe(true);
+  });
+
   it('never matches with an empty haystack', () => {
     expect(m('LFMD', [], '')).toBe(false);
     expect(matchesQuery(undefined, undefined, parseQuery('LFMD'))).toBe(false);

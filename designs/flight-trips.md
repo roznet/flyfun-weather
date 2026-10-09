@@ -411,6 +411,17 @@ same rule on `/trip.html` and iOS). The name is what makes a group of legs read
 as *a trip* — pilot feedback in #728. Clearing the name in Rename reverts to
 the chain.
 
+**The list filter matches the trip name too (#738).** `matches` /
+`matchesQuery` take the leg's `TripLegRef.name` as one more word source, so a
+word of the trip's name finds its legs: upcoming legs inside their card, past
+legs as individual badged rows (no grouping of past legs). The ref name is the
+pilot's or, when unnamed, the derived chain + dates, so on an unnamed trip a
+date word ("Oct") or a day number also matches. Accepted rather than adding a
+"named?" bit to the ref: the chain words duplicate waypoints already matched,
+and a stray date hit only widens a filter the pilot is typing into. Prefix
+matching stays the only "wildcard"; a `*` syntax would be a separate decision
+for all fields at once.
+
 Expansion state is a `Set<string>` in `localStorage`, mirroring the existing
 `pastExpanded` / `recentExpanded` pattern. **Collapsed by default**: the
 collapsed card already carries the binding-leg chip, so auto-expanding a red trip
