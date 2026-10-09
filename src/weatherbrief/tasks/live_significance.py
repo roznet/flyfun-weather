@@ -542,7 +542,7 @@ def _airport_changes(
         if tier is None:
             continue
         out.append(LiveChange(
-            key=f"taf:{a.icao}",
+            key=f"{_AIRPORT_KEY_PREFIX['taf_category']}:{a.icao}",
             kind="taf_category", source="TAF", direction=direction, tier=tier, role=role,
             icao=a.icao,
             from_value=base.taf_flight_category_at_eta, to_value=a.taf_flight_category_at_eta,
@@ -1575,7 +1575,11 @@ _AIRPORT_ALERT_RANKS: dict[str, dict[str, int]] = {
     }.items()
 }
 _AIRPORT_ALERT_KINDS = frozenset(_AIRPORT_ALERT_RANKS) | {"metar_weather"}
-_AIRPORT_ALERT_PREFIXES = tuple(f"{p}:" for p in (*_KEY_PREFIX.values(), "taf"))
+#: Every airport alert kind's key prefix. Derived from the kinds, so a kind
+#: added to the set without a prefix fails at import rather than letting the
+#: forget sweep keep (or drop) keys it was not meant to.
+_AIRPORT_KEY_PREFIX = {**_KEY_PREFIX, "taf_category": "taf"}
+_AIRPORT_ALERT_PREFIXES = tuple(sorted(f"{_AIRPORT_KEY_PREFIX[k]}:" for k in _AIRPORT_ALERT_KINDS))
 
 
 def _airport_alert(kind: str, prior: str | None, value: str) -> tuple[bool, str]:
@@ -1593,7 +1597,9 @@ def _airport_alert(kind: str, prior: str | None, value: str) -> tuple[bool, str]
     ranks = _AIRPORT_ALERT_RANKS[kind]
     rank = ranks.get(value.upper())
     if rank is None:
-        # Not a value this kind orders (never expected): the pre-#722 rule.
+        # Not a value this kind orders (never expected): the pre-#722 rule,
+        # logged so a new upstream value is seen rather than quietly louder.
+        logger.warning("live alerts: unranked %s value %r, alerting on change", kind, value)
         return prior != value, value
     if prior is not None and ranks.get(prior.upper(), -1) >= rank:
         return False, prior
