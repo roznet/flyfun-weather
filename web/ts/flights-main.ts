@@ -263,6 +263,9 @@ function translateStaticElements(): void {
   set('h1', 'page.flights.title');
   set('.create-panel h3', 'page.flights.newFlight');
   set('label[for="input-waypoints"]', 'page.flights.waypoints');
+  set('label[for="input-description"]', 'page.flights.description');
+  const descInput = document.getElementById('input-description') as HTMLInputElement | null;
+  if (descInput) descInput.placeholder = t('page.flights.descriptionPlaceholder');
   // Aircraft + profile labels each carry an (i) info button child; re-setting
   // textContent would wipe it, so relabel the text node and re-append the button.
   translateLabelWithInfoBtn('input-aircraft', 'page.flights.aircraft', '.aircraft-info-btn',
