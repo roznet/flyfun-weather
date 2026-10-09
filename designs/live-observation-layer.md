@@ -319,7 +319,7 @@ Rule in meteorology-decisions §41. Pieces:
 - **History**: one `estimate` record per storm per cell frame (a ↻ on the same
   frame adds none; ≤ 25 per tick, ~300 B each): storm id and cell ids, frame
   time, position, motion, geometry and the estimate. `score-estimates`
-  (`scripts/replay_live_history.py`, live-review skill) joins them with later
+  (`scripts/replay_live_history.py`, prod-briefings-review skill) joins them with later
   frames. Growth: ~10 storms × ~30 ticks ≈ 100 KB on a showery flight, gone
   with the live files (T1, 30 days).
 - **Replay**: `scripts/replay_live_history.py replay … --cells DIR` (promoted

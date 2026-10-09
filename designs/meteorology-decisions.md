@@ -5325,7 +5325,7 @@ briefing" was LECM 6 replacing the briefed LECM 4; the Observed tab read
 §39 made an en-route station's CB/TCU a highlight and said the alert should come
 from the radar cells the home node tracks. This is that rule. Decisions recorded
 by the owner on the issue (2026-10-06); every number is provisional and to be
-tuned on replays (`scripts/replay_live_history.py`, live-review skill) before it
+tuned on replays (`scripts/replay_live_history.py`, prod-briefings-review skill) before it
 is trusted.
 
 ### The rule
