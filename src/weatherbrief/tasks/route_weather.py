@@ -717,7 +717,10 @@ def run_route_sigmets(
             tick shares one fetch across flights.
 
     Returns:
-        RouteSigmets listing route-relevant SIGMETs, sorted by enroute distance.
+        RouteSigmets listing route-relevant SIGMETs, sorted by enroute
+        distance. ``fetch_ok`` False when the source's base query failed (the
+        list is then empty, not "none"); ``queried_at`` says how far the
+        lookahead got (#686).
     """
     from euro_aip.briefing.weather.route_sigmet import RouteSigmetService
 
@@ -777,6 +780,8 @@ def run_route_sigmets(
         time_window_to=win_to,
         route_firs=list(result.route_firs),
         sigmets=sigmets,
+        fetch_ok=result.fetch_ok,
+        queried_at=list(result.queried_at) if result.queried_at is not None else None,
     )
 
 
@@ -891,6 +896,11 @@ def run_realtime_refresh(
             airports_db_path=db_path,
             source=sigmet_source,
         )
+        if not new_sigmets.fetch_ok:
+            # An empty list from a failed fetch is not "no SIGMETs": keep the
+            # stored ones, as for a raised failure (#686).
+            logger.warning("Route SIGMET refresh failed (source down): keeping stored SIGMETs")
+            new_sigmets = None
     except SigmetSourceUnavailable:
         logger.debug("Route SIGMET refresh skipped: source already reported down")
     except Exception:

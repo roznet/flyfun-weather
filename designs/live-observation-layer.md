@@ -16,7 +16,9 @@
 Meteorology choices (what counts as significant, tiers) are in
 [meteorology-decisions.md §34](meteorology-decisions.md), amended by §35–41
 (§37, #682: CB/TCU read off the observed part only, SIGMET reissues as
-replacements, categorical radar/lightning values; §38, #683: pending SIGMETs;
+replacements, categorical radar/lightning values; §38, #683: pending SIGMETs
+(§45, #686: a failed fetch is no fetch, a covered missing pending SIGMET is
+"cancelled");
 §39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts;
 §40, #689: a SIGMET starting after arrival is a highlight, a plain reissue
 of a briefed SIGMET is direction `updated`;
@@ -853,12 +855,24 @@ What the code relies on:
   message changes when it starts: `change_identity` ignores the message, so
   no second alert and no new trail event.
 - A failed lookahead query (euro_aip stops the lookahead and keeps the rest)
-  drops pending SIGMETs for one tick. So a baseline SIGMET missing before its
+  drops pending SIGMETs beyond it for one tick. So a baseline SIGMET missing before its
   start is not "gone", and `_pending_key` keeps the alert memory of a missing
   SIGMET whose trace is still before its start. Both rely on the trace
   (`ClassifierMemory.sigmets`) holding `valid_from`.
+- **Fetch status (#686, §45).** `RouteSigmets.fetch_ok` / `queried_at` come
+  from euro_aip `fetch_isigmet_result`. A failed base query never reaches the
+  layer: `run_realtime_refresh` turns it into `None` (stored SIGMETs kept),
+  `SharedSigmetSource` raises `SigmetSourceUnavailable`, and
+  `classify_changes` skips a `fetch_ok=False` block anyway.
+- **Cancelled (#686, §45).** `_cancelled_traces`: a trace last seen pending,
+  missing, not superseded, and `isigmet_covers(latest.queried_at, …)` gets
+  `cancelled_at` and a `sigmet_cancelled` highlight row; `_pending_key` then
+  releases its memory. Briefing SIGMETs have no trace in `_trace_sigmets`
+  once missing, so `_cancelled_traces` builds one (or takes it from `seen`)
+  and keeps it in the memory while it is cancelled; `gone` skips them.
 - `LiveChange.observed_at` for a pending SIGMET is in the future; clients
-  show no age for it.
+  show no age for it. For a cancelled row it is when the cancellation was
+  seen.
 - **After arrival (#689).** `classify_changes(arrival_at=…)` (the planned
   landing, `live_layer.planned_arrival`; both writers pass it). A row whose
   SIGMETs all start after arrival + `SIGMET_AFTER_ARRIVAL_MARGIN` (30 min)

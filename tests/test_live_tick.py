@@ -91,28 +91,34 @@ def test_shared_report_source_serves_only_requested_and_dedups():
     assert src.fetch_weather(["zzaa"]) == [a]
 
 
+def _fetched(reports=(), base_ok=True):
+    from euro_aip.briefing.weather.sigmet import IsigmetFetch
+
+    return IsigmetFetch(reports=list(reports), base_ok=base_ok, queried_at=[NOW] if base_ok else [])
+
+
 def test_shared_sigmet_source_fetches_once():
     upstream = MagicMock()
-    upstream.fetch_isigmet.return_value = ["s"]
+    upstream.fetch_isigmet_result.return_value = _fetched(["s"])
     src = SharedSigmetSource(upstream)
     assert src.fetch_isigmet(region="eur") == ["s"]
-    assert src.fetch_isigmet(region="eur") == ["s"]
-    upstream.fetch_isigmet.assert_called_once()
+    assert src.fetch_isigmet_result(region="eur").reports == ["s"]
+    upstream.fetch_isigmet_result.assert_called_once()
 
 
 def test_shared_sigmet_source_forwards_the_lookahead_only_when_set():
     from datetime import timedelta
 
     upstream = MagicMock()
-    upstream.fetch_isigmet.return_value = []
+    upstream.fetch_isigmet_result.return_value = _fetched()
     src = SharedSigmetSource(upstream)
     src.fetch_isigmet(region="eur")
-    assert "lookahead" not in upstream.fetch_isigmet.call_args.kwargs
+    assert "lookahead" not in upstream.fetch_isigmet_result.call_args.kwargs
     src.fetch_isigmet(region="eur", lookahead=timedelta(hours=4))
-    assert upstream.fetch_isigmet.call_args.kwargs["lookahead"] == timedelta(hours=4)
+    assert upstream.fetch_isigmet_result.call_args.kwargs["lookahead"] == timedelta(hours=4)
     # Cached per lookahead, so one fetch serves every flight of the tick.
     src.fetch_isigmet(region="eur", lookahead=timedelta(hours=4))
-    assert upstream.fetch_isigmet.call_count == 2
+    assert upstream.fetch_isigmet_result.call_count == 2
 
 
 def test_top_up_fetches_only_airports_verification_did_not_cover():
@@ -258,9 +264,21 @@ def test_failed_top_up_skips_the_flight_instead_of_blanking_it(db_session, dev_u
 
 def test_shared_sigmet_source_caches_failure():
     upstream = MagicMock()
-    upstream.fetch_isigmet.side_effect = RuntimeError("down")
+    upstream.fetch_isigmet_result.side_effect = RuntimeError("down")
     src = SharedSigmetSource(upstream)
     for _ in range(3):
         with pytest.raises(SigmetSourceUnavailable):
             src.fetch_isigmet(region="eur")
-    upstream.fetch_isigmet.assert_called_once()
+    upstream.fetch_isigmet_result.assert_called_once()
+
+
+def test_shared_sigmet_source_failed_base_query_is_unavailable():
+    # euro_aip reports a failed base query instead of raising (#686): its
+    # empty list must not reach the flights as "no SIGMETs".
+    upstream = MagicMock()
+    upstream.fetch_isigmet_result.return_value = _fetched(base_ok=False)
+    src = SharedSigmetSource(upstream)
+    for _ in range(2):
+        with pytest.raises(SigmetSourceUnavailable):
+            src.fetch_isigmet_result(region="eur")
+    upstream.fetch_isigmet_result.assert_called_once()

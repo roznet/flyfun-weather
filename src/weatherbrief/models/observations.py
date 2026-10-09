@@ -187,6 +187,14 @@ class RouteSigmets(BaseModel):
     time_window_to: datetime | None = None
     route_firs: list[str] = Field(default_factory=list)
     sigmets: list[SigmetAlongRoute] = Field(default_factory=list)
+    # The SIGMET source's base query succeeded (#686). False: ``sigmets`` is
+    # empty because the fetch failed, not because none are listed.
+    fetch_ok: bool = True
+    # When the source was successfully queried (now, then each lookahead step
+    # up to the first failure), so a missing pending SIGMET can be told
+    # cancelled from out of reach (euro_aip ``isigmet_covers``). None: unknown
+    # (older packs, sources that do not report it).
+    queried_at: list[datetime] | None = None
 
     @computed_field
     @property

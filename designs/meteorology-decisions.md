@@ -5183,7 +5183,9 @@ refresh and the live tick.
   lookahead query drops pending SIGMETs for a tick. A briefing SIGMET missing
   before its start gets no row; a pending SIGMET that alerted keeps its alert
   memory while missing before its start, so its return does not alert twice.
-  A pending SIGMET cancelled before its start therefore disappears silently.
+  A pending SIGMET cancelled before its start therefore disappeared silently;
+  **amended by §45**: when the fetch's queries would have listed it, it is
+  reported "cancelled".
 - **Clients**: the SIGMET tables tag a pending row "from HH:MMZ"; a change row
   whose time (the SIGMET's start) is in the future shows no age.
 - **"SEV SIGMET along the route", not "in effect"** (web banner, PDF, text
@@ -5861,3 +5863,62 @@ baseline wiped the memory, so the next relapse alerted as new.
 skips airport keys), `models/live.py` (`LiveLayer.alerted`), tests in
 `tests/test_live_airport_rules.py` ("Worst-alerted memory") and
 `tests/test_live_significance.py`.
+
+---
+
+## 46. A failed SIGMET fetch is not "none listed"; a pending SIGMET missing from a fetch that would have listed it is "cancelled"
+
+**Date:** 2026-10-09 · **Issue:** #686 · **Amends:** §38
+
+euro_aip's `fetch_isigmet` returned `[]` for a failed base query, and the live
+layer read it as "no SIGMETs": every briefing SIGMET "no longer active", then a
+re-alert on the next good tick. And §38 kept a missing pending SIGMET's memory
+(it may be beyond a failed lookahead step), so one cancelled before its start
+vanished without a word to a pilot it had alerted. Prod, 2026-10-01..06: one
+lookahead timeout, no base failure. Rare, but a silent cancellation is the
+kind of miss a push notification makes costly.
+
+### Choices
+
+- **A failed fetch is no fetch.** euro_aip 0.21 `fetch_isigmet_result` reports
+  `base_ok` and the time of every successful query (`queried_at`).
+  `RouteSigmets.fetch_ok` False → the refresh keeps the stored SIGMETs, the
+  live tick's shared source raises `SigmetSourceUnavailable`, and the
+  classifier skips the SIGMET dimension (memory kept), as for a raised failure.
+- **Cancelled = last seen pending + missing + covered.** Covered: a successful
+  query falls inside the SIGMET's validity by ≥ 30 min on each side
+  (euro_aip `ISIGMET_COVER_MARGIN`). AWC's handling of `date` (rounding,
+  caching) is unverified, and a false "cancelled" is worse than a late one: it
+  is good news that is wrong. With the 4 h lookahead the margin costs nothing
+  for a SIGMET starting within 3.5 h; one valid < 1 h is never covered.
+- **Row**: "SIGMET LFMM T01: EMBD TS from 10:50Z cancelled", kind
+  `sigmet_cancelled`, direction better, **highlight** (good news never alerts,
+  §35). Keyed on the SIGMET alone, so a lone SIGMET's later "no longer
+  active" would be the same change. Its alert memory is dropped.
+- **Broader than "was alerted"**: the briefing's pending SIGMETs and those that
+  had only a highlight row (after arrival, §40) get the row too; the pilot saw
+  them either way.
+- **Sticky**: `LiveSigmetTrace.cancelled_at` is set once, so a later tick whose
+  lookahead fails short does not take the row back. It lasts while the trace
+  is kept (validity end + 60 min). Listed again → flag cleared, and it alerts
+  afresh (memory went with the cancellation): the louder reading.
+- **Replaced, not cancelled**: a listed reissue of it or of its chain (§37)
+  suppresses the row.
+- **Missing beyond a failed step, or from a source without query times** (older
+  packs, test sources): §38 as before, memory kept, no row.
+
+### Not changed
+
+- **The briefing build** still stores a failed fetch's empty list as the
+  baseline (now with `fetch_ok: false`): a briefing then shows no SIGMETs, and
+  the live layer alerts them as new. Treating it as "no baseline" would seed
+  the baseline from the first live tick and alert nothing. Follow-up.
+- A SIGMET first seen live, already valid, that disappears early still has no
+  row (rows are "since the briefing").
+
+### Real-world validation needed
+
+- How often "Live SIGMET … cancelled before it was seen valid" (info log)
+  fires, and whether AWC still lists such a SIGMET later (a feed glitch, which
+  would re-alert).
+

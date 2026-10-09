@@ -151,6 +151,10 @@ class LiveSigmetTrace(BaseModel):
     # never flips between ticks.
     reissue_worse: bool = False
     last_seen: datetime
+    # Cancelled (#686): last seen before its start, then missing from a fetch
+    # whose queries would have listed it (euro_aip ``isigmet_covers``). Set
+    # once, so its row stays until the trace is dropped.
+    cancelled_at: datetime | None = None
 
 
 FocusKind = Literal["storm", "sigmet", "station", "segment"]

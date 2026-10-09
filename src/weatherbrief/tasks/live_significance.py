@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from euro_aip.briefing.weather.sigmet import isigmet_covers
 from euro_aip.utils.geometry import (
     bbox_intersects,
     bbox_of_ring,
@@ -811,6 +812,8 @@ def _trace_sigmets(
                 "base_ft": s.base_ft,
                 "top_ft": s.top_ft,
                 "min_distance_nm": s.min_distance_nm,
+                # Listed again: not cancelled after all (#686).
+                "cancelled_at": None,
             })
         else:
             preds = [p for p in candidates.values() if _reissue_of(s, p)]
@@ -874,6 +877,11 @@ def _sigmet_changes(
     stays "worse" (#689). A row whose SIGMETs all start after
     ``arrival_at`` + :data:`SIGMET_AFTER_ARRIVAL_MARGIN` is a highlight and
     does not mark its chain as alerted (#689).
+
+    A SIGMET last seen before its start and missing from a fetch whose
+    queries would have listed it is "cancelled" (#686,
+    :func:`_cancelled_traces`): a highlight row instead of silence, and no
+    "no longer active" row for it.
     """
     now = now or datetime.now(timezone.utc)
     traces = _trace_sigmets(baseline, latest, destination, seen or {}, now)
@@ -883,6 +891,11 @@ def _sigmet_changes(
     # SIGMETs a listed reissue replaces, directly or up its chain.
     superseded = {t.replaces_key for t in latest_traces if t.replaces_key}
     replaced_chains = {t.chain for t in latest_traces if t.replaces_key}
+
+    cancelled = _cancelled_traces(
+        traces, baseline, latest, seen or {}, superseded, replaced_chains, destination, now,
+    )
+    cancelled_keys = {t.key for t in cancelled}
 
     def _live(s: SigmetAlongRoute) -> bool:
         return _sigmet_key_str(s) not in superseded
@@ -906,6 +919,7 @@ def _sigmet_changes(
         s for k, s in base_by_key.items()
         if k not in latest_keys and not _pending(s, now)
         and _sigmet_key_str(s) not in superseded and _sigmet_key_str(s) not in replaced_chains
+        and _sigmet_key_str(s) not in cancelled_keys
     ]
 
     out: list[LiveChange] = []
@@ -968,7 +982,85 @@ def _sigmet_changes(
             observed_at=g[0].valid_to,
             message=f"SIGMET {_group_label(g)} no longer active", destination=destination,
         ))
+    for t in cancelled:
+        hazard = " ".join(p for p in (t.qualifier, t.hazard) if p) or "SIGMET"
+        start = f" from {t.valid_from:%H:%MZ}" if t.valid_from is not None else ""
+        out.append(LiveChange(
+            # Its own key, as a lone SIGMET's "no longer active" row: the
+            # same change if that row follows once the trace is dropped.
+            key=t.key,
+            kind="sigmet_cancelled",
+            source="SIGMET",
+            direction="better",
+            tier="highlight",
+            role="destination" if t.at_destination else "route",
+            from_value=hazard,
+            to_value=None,
+            observed_at=t.cancelled_at,
+            message=f"SIGMET {t.label}: {hazard}{start} cancelled"
+            + (" (at destination)" if t.at_destination else ""),
+        ))
     return out, quiet, traces
+
+
+def _cancelled_traces(
+    traces: dict[str, LiveSigmetTrace],
+    baseline: RouteSigmets,
+    latest: RouteSigmets,
+    seen: dict[str, LiveSigmetTrace],
+    superseded: set[str],
+    replaced_chains: set[str],
+    destination: tuple[float, float] | None,
+    now: datetime,
+) -> list[LiveSigmetTrace]:
+    """The SIGMETs to report cancelled this tick (#686), recorded in ``traces``.
+
+    A SIGMET is cancelled when it was last seen before its start (pending),
+    is missing from ``latest``, and ``latest``'s queries would have listed it
+    (euro_aip :func:`isigmet_covers`: a successful query well inside its
+    validity). Missing beyond a failed lookahead step, or from a fetch that
+    does not say when it queried, it is not: the memory is kept as before
+    (§38). A listed reissue of it, or of its chain, means it was replaced, not
+    cancelled. Both the briefing's pending SIGMETs and the ones first seen
+    live count.
+
+    Once set, ``cancelled_at`` holds while the trace is kept (until its
+    validity ended more than :data:`SIGMET_REISSUE_WINDOW` ago), so a later
+    tick whose lookahead fails short of it does not take the row back.
+    """
+    listed = {_sigmet_key_str(s) for s in latest.sigmets}
+    pool = dict(traces)
+    # _trace_sigmets keeps no trace for a briefing SIGMET that is missing.
+    for s in baseline.sigmets:
+        k = _sigmet_key_str(s)
+        if k in listed or k in pool:
+            continue
+        t = seen.get(k)
+        if t is None:
+            t = _trace(s, now, destination=destination, chain_in_baseline=True)
+            # An older pack may hold a naive fetch time: UTC, as everywhere.
+            fetched = baseline.fetch_time
+            t.last_seen = fetched if fetched.tzinfo else fetched.replace(tzinfo=timezone.utc)
+        pool[k] = t
+    out: list[LiveSigmetTrace] = []
+    for k, t in pool.items():
+        if k in listed or k in superseded or t.chain in replaced_chains:
+            continue
+        if t.cancelled_at is None:
+            pending_when_seen = t.valid_from is not None and t.valid_from > t.last_seen
+            if not (
+                pending_when_seen and latest.fetch_ok
+                and isigmet_covers(latest.queried_at, t.valid_from, t.valid_to)
+            ):
+                continue
+            t = t.model_copy(update={"cancelled_at": now})
+            logger.info("Live SIGMET %s cancelled before it was seen valid", t.label)
+        # Covered, so valid_to is known: the row lasts as long as the trace.
+        if not _reissuable(t, now):
+            continue
+        traces[k] = t
+        out.append(t)
+    return out
 
 
 def _short_label(t: LiveSigmetTrace) -> str:
@@ -1462,6 +1554,9 @@ def classify_changes(
     quiet: set[str] = set()
     sigmet_traces = dict(memory.sigmets)
     new_sigmets: list[str] | None = None
+    if latest_sigmets is not None and not latest_sigmets.fetch_ok:
+        # A failed fetch's empty list is not "no SIGMETs" (#686).
+        latest_sigmets = None
     if baseline_sigmets is not None and latest_sigmets is not None:
         sigmet_rows, quiet, sigmet_traces = _sigmet_changes(
             baseline_sigmets, latest_sigmets, destination, memory.sigmets, now, arrival_at,
@@ -1629,12 +1724,13 @@ def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
 
 
 def _pending_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:
-    """A SIGMET change key with a member last seen as not yet valid (#683)."""
+    """A SIGMET change key with a member last seen as not yet valid (#683),
+    unless that member is known cancelled (#686): its memory then goes."""
     if not key.startswith("sigmet:"):
         return False
     for part in key.split("+"):
         t = traces.get(part)
-        if t is not None and t.valid_from is not None and t.valid_from > now:
+        if t is not None and t.valid_from is not None and t.valid_from > now and t.cancelled_at is None:
             return True
     return False
 

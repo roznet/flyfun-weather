@@ -839,6 +839,164 @@ def test_pending_alert_memory_clears_once_it_should_have_started():
     assert "sigmet:LFMM|T01" not in memory.alerted
 
 
+# --- #686: a failed fetch is not "none listed"; pending SIGMET cancelled ----
+
+
+def _queried(at, lookahead_h=4.0):
+    """The query times of a fetch at ``at`` whose lookahead got
+    ``lookahead_h`` hours ahead (30-min steps, as euro_aip)."""
+    return [at + timedelta(minutes=30 * k) for k in range(int(lookahead_h * 2) + 1)]
+
+
+def _fetch_ticks(ticks, baseline=(), full=False):
+    """Classify ``(time, latest SIGMETs, lookahead_h)`` ticks, memory carried
+    over. ``lookahead_h`` None is a fetch whose base query failed."""
+    memory = ClassifierMemory()
+    out = []
+    for at, latest, lookahead_h in ticks:
+        failed = lookahead_h is None
+        changes, memory = classify_changes(
+            baseline_obs=None, latest_obs=None,
+            baseline_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=ticks[0][0] - timedelta(hours=1),
+                                          sigmets=list(baseline)),
+            latest_sigmets=RouteSigmets(
+                corridor_nm=50.0, fetch_time=at, sigmets=list(latest), fetch_ok=not failed,
+                queried_at=[] if failed else _queried(at, lookahead_h),
+            ),
+            memory=memory, now=at,
+        )
+        out.append((at.strftime("%H%M"), changes if full else _rows(changes.changes)))
+    return out, memory
+
+
+def test_failed_fetch_is_no_sigmet_change_and_no_re_alert():
+    """A base-query failure lists nothing. Read as "none", the briefing's
+    SIGMET would be "no longer active" and the new one would alert again on
+    the next good tick. It is skipped instead, memory kept."""
+    limm = _real_sigmet("LIMM", "4", 4, "041030/041330",
+                        "N4400 E00800 - N4500 E00800 - N4500 E00900 - N4400 E00800")
+    ticks, _ = _fetch_ticks([
+        (_at(4, "1100"), [LFMM_T01, limm], 4),
+        (_at(4, "1110"), [], None),
+        (_at(4, "1120"), [LFMM_T01, limm], 4),
+    ], baseline=[LFMM_T01])
+    assert ticks == [
+        ("1100", [("alert", True, "New SIGMET LIMM 4: EMBD TS")]),
+        ("1110", []),
+        ("1120", [("alert", False, "New SIGMET LIMM 4: EMBD TS")]),
+    ]
+
+
+def test_failed_fetch_leaves_new_sigmets_unknown():
+    ticks, _ = _fetch_ticks([(_at(4, "1110"), [], None)], baseline=[LFMM_T01], full=True)
+    assert ticks[0][1].new_sigmets is None
+
+
+def test_alerted_pending_sigmet_missing_from_a_covering_fetch_is_cancelled():
+    """LFMM T01 (10:50-12:30) alerted while pending. At 10:30 the lookahead
+    reached 14:30, so a query fell well inside its validity, and it was not
+    listed: one "cancelled" highlight, its alert memory gone. The row stays
+    on later ticks, and does not turn into "no longer active"."""
+    ticks, memory = _fetch_ticks([
+        (_at(4, "1020"), [LFMM_T01], 4),
+        (_at(4, "1030"), [], 4),
+        (_at(4, "1040"), [], 0.5),  # lookahead short of it: the row holds
+        (_at(4, "1100"), [], 4),
+    ])
+    cancelled = ("highlight", False, "SIGMET LFMM T01: EMBD TS from 10:50Z cancelled")
+    assert ticks == [
+        ("1020", [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+        ("1030", [cancelled]),
+        ("1040", [cancelled]),
+        ("1100", [cancelled]),
+    ]
+    assert "sigmet:LFMM|T01" not in memory.alerted
+
+
+def test_cancelled_row_shape():
+    ticks, _ = _fetch_ticks([
+        (_at(4, "1020"), [LFMM_T01], 4),
+        (_at(4, "1030"), [], 4),
+    ], full=True)
+    [row] = ticks[1][1].changes
+    assert (row.key, row.kind, row.direction, row.tier, row.from_value, row.to_value) == (
+        "sigmet:LFMM|T01", "sigmet_cancelled", "better", "highlight", "EMBD TS", None,
+    )
+    assert row.observed_at == _at(4, "1030")
+
+
+def test_pending_sigmet_beyond_a_failed_lookahead_behaves_as_before():
+    """The lookahead stopped at 11:00 (a failed step): no query fell 30 min
+    inside T01's validity, so its absence says nothing. No row, memory kept
+    (§38), and its return does not alert twice."""
+    ticks, _ = _fetch_ticks([
+        (_at(4, "1020"), [LFMM_T01], 4),
+        (_at(4, "1030"), [], 0.5),
+        (_at(4, "1040"), [LFMM_T01], 4),
+    ])
+    assert ticks == [
+        ("1020", [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+        ("1030", []),
+        ("1040", [("alert", False, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]),
+    ]
+
+
+def test_briefing_pending_sigmet_cancelled_says_so():
+    """The briefing listed T01 before its start; a covering fetch no longer
+    does: "cancelled", not silence and later "no longer active"."""
+    ticks, _ = _fetch_ticks([
+        (_at(4, "1030"), [], 4),
+        (_at(4, "1100"), [], 4),
+    ], baseline=[LFMM_T01])
+    cancelled = ("highlight", False, "SIGMET LFMM T01: EMBD TS from 10:50Z cancelled")
+    assert ticks == [("1030", [cancelled]), ("1100", [cancelled])]
+
+
+def test_briefing_with_a_naive_fetch_time_still_classifies():
+    """Older packs may store a naive fetch time; a missing briefing SIGMET
+    without a validity end must not break the tick."""
+    no_end = _sig("7", fir="LIMM", valid_from=_at(4, "1300"))
+    changes, _ = classify_changes(
+        baseline_obs=None, latest_obs=None,
+        baseline_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=datetime(2026, 10, 4, 9, 0),
+                                      sigmets=[no_end, LFMM_T01]),
+        latest_sigmets=RouteSigmets(corridor_nm=50.0, fetch_time=_at(4, "1030"), sigmets=[],
+                                    queried_at=_queried(_at(4, "1030"))),
+        now=_at(4, "1030"),
+    )
+    assert [c.message for c in changes.changes] == ["SIGMET LFMM T01: EMBD TS from 10:50Z cancelled"]
+
+
+def test_replaced_pending_sigmet_is_not_cancelled():
+    """T02 listed as T01's reissue: T01 was replaced, not cancelled."""
+    ticks, _ = _fetch_ticks([
+        (_at(4, "1020"), [LFMM_T01], 4),
+        (_at(4, "1030"), [LFMM_T02], 4),
+    ])
+    assert [m for _, _, m in ticks[1][1]] == ["SIGMET LFMM T02 replaces T01 from 12:30Z: EMBD TS"]
+
+
+def test_cancelled_sigmet_listed_again_alerts_again():
+    """Its alert memory went with the cancellation, so a return (the feed
+    lists it again) alerts afresh: the louder reading."""
+    ticks, memory = _fetch_ticks([
+        (_at(4, "1020"), [LFMM_T01], 4),
+        (_at(4, "1030"), [], 4),
+        (_at(4, "1040"), [LFMM_T01], 4),
+    ])
+    assert ticks[2][1] == [("alert", True, "New SIGMET LFMM T01: EMBD TS from 10:50Z")]
+    assert memory.sigmets["sigmet:LFMM|T01"].cancelled_at is None
+
+
+def test_fetch_without_query_times_never_cancels():
+    """Older packs and sources that do not report query times: as before."""
+    ticks = _sigmet_ticks([
+        (_at(4, "1020"), [LFMM_T01]),
+        (_at(4, "1030"), []),
+    ])
+    assert ticks[1][1] == []
+
+
 # --- #689: after arrival, reissue direction, one NEW rule ---------------------
 
 
