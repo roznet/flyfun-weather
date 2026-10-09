@@ -12,6 +12,7 @@
 
 import Testing
 import Foundation
+import CoreGraphics
 @testable import flyfun_weather
 
 private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
