@@ -803,7 +803,6 @@ final class flyfun_weatherUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    @MainActor
     /// Open the Observed tab's "Details" fold (#697) unless it already is:
     /// the expanded state is remembered across launches, so read the toggle's
     /// value before tapping rather than toggling blind.
@@ -821,6 +820,7 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertEqual(toggle.value as? String, "expanded", "tapping Details should open it")
     }
 
+    @MainActor
     private func attachScreenshot(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name

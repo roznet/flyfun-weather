@@ -112,6 +112,9 @@ class FeedbackRequest(BaseModel):
             return self
         if self.category != "highlight_rating":
             raise ValueError("target 'live_highlight' requires category 'highlight_rating'")
+        if self.sentiment is None:
+            # A rating without a thumb would be an unrated row.
+            raise ValueError("a highlight rating requires a sentiment")
         if not isinstance(self.context, dict):
             raise ValueError("target 'live_highlight' requires a context")
         clean: dict[str, str] = {}

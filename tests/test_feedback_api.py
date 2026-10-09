@@ -495,6 +495,7 @@ def test_highlight_rating_drops_unknown_context_keys(client, app_db):
     _highlight_rating(context=dict(_HL_CONTEXT, text="x" * 1001)),
     _highlight_rating(context=dict(_HL_CONTEXT, facts_hash=12)),
     _highlight_rating(category="digest_rating"),                         # wrong category
+    _highlight_rating(sentiment=None, comment="no thumb"),               # no sentiment
     {"category": "digest_rating", "comment": "", "sentiment": "up",      # context on a digest
      "target": "digest", "context": dict(_HL_CONTEXT)},
 ])
