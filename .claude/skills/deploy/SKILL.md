@@ -242,17 +242,19 @@ For each node:
    ssh <NODE_SSH> "pgrep -fl 'weatherbrief.verify standalone' || echo idle"
    ```
 
-2. **⚠️ Migrations gate — check BEFORE pulling.** A node pulled past a migration hard-fails
-   every cycle and produces no artifact at all (§D3 — including why neither a pull nor
-   `alembic upgrade head` fixes it, and the two cheap remedies).
+2. **Check the node DB is under Alembic.** Nodes are stamped (§D3), so `alembic current`
+   prints a revision. If it prints nothing, the DB was rebuilt unstamped: follow §D3 before
+   pulling past any migration.
    ```bash
-   git diff --name-only <NODE_HEAD>..<LOCAL_SHA> -- alembic/versions/
+   ssh <NODE_SSH> "cd <NODE_REPO> && <NODE_VENV>/bin/alembic current 2>/dev/null | tail -1"
    ```
-   **If non-empty, do NOT pull until the schema change is applied by hand.**
 
-3. **Fast-forward only**, so a node with local edits fails loudly instead of silently merging:
+3. **Fast-forward only, then migrate in the same command**, so a node with local edits fails
+   loudly instead of silently merging, and no cycle starts between the pull and the upgrade
+   (each cycle's `create_all` would create a new table first and the migration's
+   `create_table` would then fail — §D3):
    ```bash
-   ssh <NODE_SSH> "cd <NODE_REPO> && git checkout <node.branch> && git pull --ff-only"
+   ssh <NODE_SSH> "cd <NODE_REPO> && git checkout <node.branch> && git pull --ff-only && <NODE_VENV>/bin/alembic upgrade head"
    ```
 
 4. **Reinstall dependencies only if they changed:**
@@ -262,8 +264,8 @@ For each node:
    ssh <NODE_SSH> "cd <NODE_REPO> && <NODE_VENV>/bin/pip install -q -e '.[dev]'"
    ```
 
-5. **Report per node**: SHA before → after, deps reinstalled yes/no, migrations needing
-   attention, or the reason it was skipped.
+5. **Report per node**: SHA before → after, deps reinstalled yes/no, alembic revision after (or the problem), or
+   the reason it was skipped.
 
 **A node failure never fails the deploy** — production is already live. But never report a
 deploy as fully complete while a configured node was skipped: say production is deployed *and*

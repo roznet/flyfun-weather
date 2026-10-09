@@ -56,30 +56,35 @@ The two anchors used everywhere in the skill:
 Alembic diffs, changed-path checks for Playwright, and the deployed-commit list all use these,
 never `HEAD`.
 
-## §D3 — Compute-node migrations hard-fail every cycle
+## §D3 — Compute-node DBs are stamped; pull and migrate together
 
-**A node pulled past a migration produces no artifact at all.** This is not graceful
-degradation.
-
-It happened once: a node was pulled past the migration adding
+**A node whose DB is behind the code produces no artifact at all.** This is not graceful
+degradation. It happened once: a node was pulled past the migration adding
 `airport_forecast_snapshots.region`, and every subsequent cycle died with
 `sqlite3.OperationalError: table airport_forecast_snapshots has no column named region`.
 
-Why a pull cannot fix it: nodes run `ENVIRONMENT=development`, so their SQLite is built by
-`create_all`, which creates missing *tables* but **never ALTERs an existing one**. New code
-arrives writing a column the table doesn't have. And `alembic upgrade head` isn't the answer
-either — these DBs have no `alembic_version` row, so alembic would try to replay every
-migration against tables that already exist.
+Nodes run `ENVIRONMENT=development`, so every cycle calls `create_all`
+(`verify/__main__.py` `_init_db`). That creates missing *tables* but **never ALTERs an
+existing one** — a pull alone never adds a column.
 
-The fix is a human decision, and both options are cheap because **a node's DB is disposable**
-(recomputed every cycle, pruned at 10 days; the artifacts are the real output):
+Until 2026-10-09 the node DBs had no `alembic_version` row, so the fix was a hand-written
+`ALTER TABLE` per migration. On 2026-10-09 the mac mini's DB was brought to 100 by hand
+(`flights.description`, `feedback.context`) and then **`alembic stamp head`**, so it now
+upgrades like any other DB. The procedure is the skill's: pull and `alembic upgrade head` in
+**one ssh command while the node is idle**. If a cycle ran in between, its `create_all` would
+build a new table first and the migration's `create_table` would fail.
 
-- hand-write the equivalent `ALTER TABLE` — metadata-only for an additive column with a
-  default, measured at 0.012 s on a 352 MB table; or
-- delete the node's scratch DB and let the next cycle rebuild it with the current schema.
+`alembic check` on a node is not clean, and that is fine: it reports the same kind of
+model-vs-migration drift (index uniqueness, FK `ondelete`, stray indexes) that the alembic-built
+local dev DB also reports. Columns and tables match; only constraint details differ, on tables
+that are empty on a node.
 
-Report the migration, apply the fix, *then* pull. Never report a node as updated when a
-migration between the two SHAs went unapplied.
+If a node DB ever turns up unstamped again (`alembic current` prints nothing — e.g. someone
+deleted it and a cycle rebuilt it with `create_all`), it is at the code's head schema the moment
+it is rebuilt: `alembic stamp head` right after that rebuild, **before** pulling anything newer.
+If it is already behind, either hand-apply the missing `ALTER TABLE`s then stamp, or delete it
+and let the next cycle rebuild it. **A node's DB is disposable** — snapshots are recomputed
+every cycle and pruned at 10 days; the artifacts are the real output, and user tables are empty.
 
 ## §D4 — Unreachable nodes are expected, not faults
 
