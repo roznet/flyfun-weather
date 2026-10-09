@@ -213,18 +213,3 @@ def find_fronts_in_regions(
         }
 
     return results
-
-
-def find_route_zones(waypoints: list[tuple[float, float]]) -> list[str]:
-    """Given route waypoints [(lat, lon), ...], return ordered unique zone list."""
-    route_zones: list[str] = []
-    for lat, lon in waypoints:
-        for zone_name, bounds in ZONES.items():
-            if (
-                bounds["lat"][0] <= lat <= bounds["lat"][1]
-                and bounds["lon"][0] <= lon <= bounds["lon"][1]
-            ):
-                if not route_zones or route_zones[-1] != zone_name:
-                    route_zones.append(zone_name)
-                break
-    return route_zones

@@ -129,7 +129,6 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 - **`find_fronts_in_regions()`**: Aggregates grid detections to zone scale
   - Threshold: ≥8% coverage AND ≥32 absolute points (4× the old 8-point floor, preserving the same fraction-of-minimum-zone threshold at the 4× denser grid)
   - Computes dominant front type (vote), max intensity, mean orientation (circular mean with axial doubling)
-- **`find_route_zones(waypoints)`**: Maps arbitrary route waypoints to zone sequence
 
 ### Anomaly Filtering (`tracking.py`)
 Two-pass, per-channel approach that automatically filters persistent orographic/thermal gradients:

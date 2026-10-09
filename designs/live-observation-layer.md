@@ -740,8 +740,8 @@ flight delete takes it with the layer.
 flight generates roughly one record per facts state — ~6 for a 1.5 h flight,
 ~10 for 3.5 h — so **11–18 kB per flight**, or 25–40 kB in the worst case where
 every state is rejected twice and the rest of the window logs markers. Nothing
-prunes it: it is **kept until the flight is deleted**, which `remove_live`
-does. A `call_failed` record carries **no** facts block: there is no text to
+prunes it: it is **kept until the flight is deleted**, which `storage.flights._live_files`
+handles. A `call_failed` record carries **no** facts block: there is no text to
 judge against them, and a timeout retries every tick by design (it costs
 nothing and is right to retry), so with the block attached a sustained outage
 wrote ~1.8 kB per flight per tick for as long as it lasted. At these sizes a cap would be more machinery than it saves; revisit if

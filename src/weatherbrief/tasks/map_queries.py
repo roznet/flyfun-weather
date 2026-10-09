@@ -15,7 +15,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from weatherbrief.analysis.airport_consensus import (
-    best_ceiling as _shared_best_ceiling,
     consensus as _shared_consensus,
     enrich_wind as _shared_enrich_wind,
     flight_category as _shared_flight_category,
@@ -205,13 +204,6 @@ def _row_to_snapshot_dict(snap: AirportForecastSnapshotRow) -> dict[str, Any]:
     return {field: getattr(snap, field, None) for field in _SNAPSHOT_DICT_FIELDS}
 
 
-def _best_ceiling(
-    snap: AirportForecastSnapshotRow, field_elevation_ft: float | None = None,
-) -> float | None:
-    """Pick the best ceiling estimate from a snapshot (row→dict adapter)."""
-    return _shared_best_ceiling(
-        _row_to_snapshot_dict(snap), field_elevation_ft=field_elevation_ft,
-    )
 
 
 def _flight_category(

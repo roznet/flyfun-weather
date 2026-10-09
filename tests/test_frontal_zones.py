@@ -7,7 +7,6 @@ from weatherbrief.frontal.zones import (
     ZONES,
     ROUTE_TEMPLATES,
     find_fronts_in_regions,
-    find_route_zones,
     _orientation_label,
     _MIN_FRONTAL_FRACTION,
     _MIN_FRONTAL_POINTS,
@@ -184,32 +183,3 @@ class TestOrientationLabel:
         label = _orientation_label(orientation, mask)
         assert label == "N-S"
 
-
-class TestFindRouteZones:
-    def test_egtf_to_lsgs(self):
-        """EGTF (51.3N, -0.8W) to LSGS (46.2N, 7.3E) crosses known zones."""
-        waypoints = [
-            (51.3, -0.8),  # EGTF — Southern England
-            (49.0, 2.5),   # Over northern France
-            (47.0, 4.0),   # Southern France border
-            (46.2, 7.3),   # LSGS — Alps region
-        ]
-        zones = find_route_zones(waypoints)
-        assert "uk_south" in zones
-        assert "north_france" in zones
-
-    def test_no_duplicate_consecutive(self):
-        """Multiple waypoints in same zone should not duplicate."""
-        waypoints = [
-            (50.0, 0.0),   # uk_south
-            (50.5, 0.5),   # still uk_south
-            (49.0, 3.0),   # north_france
-        ]
-        zones = find_route_zones(waypoints)
-        # Should not have consecutive duplicates
-        for i in range(1, len(zones)):
-            assert zones[i] != zones[i - 1]
-
-    def test_empty_waypoints(self):
-        zones = find_route_zones([])
-        assert zones == []

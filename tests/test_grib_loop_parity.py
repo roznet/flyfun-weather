@@ -33,6 +33,10 @@ from weatherbrief.fetch.grib.icon_eu_levels import (
     interpolate_columns_to_pressure_levels,
 )
 
+# #704 is deployed, so the oracle has done its job; the ICON cases alone cost
+# ~2 min. Run on demand (pytest -m slow) when touching these loops again.
+pytestmark = pytest.mark.slow
+
 
 # ---------------------------------------------------------------------------
 # Oracles: the pre-#704 code, verbatim (globals qualified with ``dec.``)

@@ -274,7 +274,7 @@ class TestGetForecastMapData:
 
 
 class TestFlightCategoryDerivation:
-    """Test _flight_category and _best_ceiling helpers."""
+    """Test the _flight_category helper."""
 
     def test_vfr_high_ceiling(self):
         from weatherbrief.tasks.map_queries import _flight_category
@@ -302,12 +302,11 @@ class TestFlightCategoryDerivation:
 
     def test_lcl_is_not_a_ceiling(self):
         # Clear sky with only an LCL → no ceiling → VFR on the forecast map.
-        from weatherbrief.tasks.map_queries import _best_ceiling, _flight_category
+        from weatherbrief.tasks.map_queries import _flight_category
         snap = SimpleNamespace(
             sounding_ceiling_ft=None, nwp_ceiling_ft=None,
             cloud_base_ft=None, lcl_ft=700.0, visibility_m=9999.0,
         )
-        assert _best_ceiling(snap) is None
         assert _flight_category(snap) == "VFR"
 
 

@@ -54,11 +54,6 @@ _INDEX_LIGHT = 10.0
 _INDEX_MODERATE = 30.0
 _INDEX_SEVERE = 80.0
 
-# LWC-based icing severity thresholds (g/m³) — aviation meteorology literature
-_LWC_LIGHT = 0.0       # Any measurable LWC with icing-range temp
-_LWC_MODERATE = 0.1     # g/m³
-_LWC_SEVERE = 0.6       # g/m³
-
 # Water vapor: Rv = 461.5 J/(kg·K), reference ρv at 20°C saturation ≈ 17.3 g/m³
 _RV = 461.5
 _RHO_V_20SAT = 17.3e-3  # kg/m³
@@ -152,20 +147,6 @@ def _index_to_risk(index: float) -> IcingRisk:
     if index >= _INDEX_MODERATE:
         return IcingRisk.MODERATE
     if index >= _INDEX_LIGHT:
-        return IcingRisk.LIGHT
-    return IcingRisk.NONE
-
-
-def _lwc_to_icing_severity(lwc_g_m3: float) -> IcingRisk:
-    """Map cloud liquid water content (g/m³) to icing severity.
-
-    Based on aviation meteorology literature thresholds.
-    """
-    if lwc_g_m3 >= _LWC_SEVERE:
-        return IcingRisk.SEVERE
-    if lwc_g_m3 >= _LWC_MODERATE:
-        return IcingRisk.MODERATE
-    if lwc_g_m3 > _LWC_LIGHT:
         return IcingRisk.LIGHT
     return IcingRisk.NONE
 

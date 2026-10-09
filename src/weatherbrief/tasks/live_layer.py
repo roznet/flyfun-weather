@@ -232,15 +232,6 @@ def load_live_history(flight_dir: Path | str) -> list[dict]:
     return out
 
 
-def remove_live(flight_dir: Path | str) -> None:
-    """Delete a flight's live files (flight delete / move)."""
-    for name in LIVE_FILES:
-        try:
-            (Path(flight_dir) / name).unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Could not remove %s/%s", flight_dir, name, exc_info=True)
-
-
 # --- Write ------------------------------------------------------------------
 
 

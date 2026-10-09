@@ -1136,13 +1136,14 @@ def test_patch_refuses_a_different_pack(tmp_path):
     assert patch_highlight(tmp_path, _highlight(), pack_timestamp="2026-10-02T06:00:00+00:00", as_of=as_of) is False
 
 
-def test_highlight_log_is_removed_with_the_layer(tmp_path):
-    """Otherwise a deleted flight leaves its highlights (and their facts) behind."""
-    from weatherbrief.tasks.live_layer import LIVE_HIGHLIGHT_LOG, remove_live
+def test_highlight_log_is_removed_with_the_layer():
+    """Otherwise a deleted flight leaves its highlights (and their facts) behind.
 
-    (tmp_path / LIVE_HIGHLIGHT_LOG).write_text("{}\n")
-    remove_live(tmp_path)
-    assert not (tmp_path / LIVE_HIGHLIGHT_LOG).exists()
+    Flight delete removes exactly ``LIVE_FILES`` (``storage.flights._live_files``).
+    """
+    from weatherbrief.tasks.live_layer import LIVE_FILES, LIVE_HIGHLIGHT_LOG
+
+    assert LIVE_HIGHLIGHT_LOG in LIVE_FILES
 
 
 def test_highlight_stays_out_of_the_agent_block():

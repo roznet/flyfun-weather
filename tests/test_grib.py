@@ -31,7 +31,6 @@ from weatherbrief.fetch.grib.grib_fetch import (
 )
 from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
 from weatherbrief.analysis.sounding.icing import (
-    _lwc_to_icing_severity,
     assess_icing_zones_ogimet_dd,
 )
 from weatherbrief.models import (
@@ -185,18 +184,6 @@ def test_cache_key_format():
     ck = cache_key(6, "CLWMR")
     assert ck == "f006_CLWMR.grib2"
 
-
-# --- LWC-based icing severity tests ---
-
-
-def test_lwc_severity_thresholds():
-    """LWC-to-severity mapping follows literature thresholds."""
-    assert _lwc_to_icing_severity(0.0) == IcingRisk.NONE
-    assert _lwc_to_icing_severity(0.05) == IcingRisk.LIGHT
-    assert _lwc_to_icing_severity(0.1) == IcingRisk.MODERATE
-    assert _lwc_to_icing_severity(0.3) == IcingRisk.MODERATE
-    assert _lwc_to_icing_severity(0.6) == IcingRisk.SEVERE
-    assert _lwc_to_icing_severity(1.0) == IcingRisk.SEVERE
 
 
 def test_ogimet_dd_in_cloud_layer():
