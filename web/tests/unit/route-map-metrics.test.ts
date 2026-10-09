@@ -212,6 +212,19 @@ describe('nwp-ceiling', () => {
     expect(wLow).toBeCloseTo(25, 1);
     expect(wHigh).toBeCloseTo(3, 1);
   });
+
+  it('legend shows one distinct colour per category (#735)', () => {
+    const colors = m().legendStops!.map((s) => s.color);
+    expect(colors).toHaveLength(4);
+    expect(new Set(colors).size).toBe(colors.length);
+  });
+
+  it('every colour the map can draw appears in the legend (#735)', () => {
+    const legend = new Set(m().legendStops!.map((s) => s.color));
+    for (let ft = 0; ft <= 10000; ft += 50) {
+      expect(legend).toContain(m().getColor(ft));
+    }
+  });
 });
 
 describe('headwind-only / tailwind-only', () => {

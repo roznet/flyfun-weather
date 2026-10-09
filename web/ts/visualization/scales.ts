@@ -176,11 +176,13 @@ export function freezingLevelMapColor(ft: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** NWP ceiling (ft) → METAR-category-like coloring. */
+/**
+ * NWP ceiling (ft) → METAR-category coloring, one colour per category so the
+ * legend can show every colour the map draws. Mirrors iOS `MapColors.ceiling`.
+ */
 export function ceilingMapColor(ft: number | null): string {
   if (ft === null) return '#22c55e';
-  if (ft < 200) return '#8e24aa';   // LIFR — purple
-  if (ft < 500) return '#dc3545';   // LIFR — red
+  if (ft < 500) return '#8e24aa';   // LIFR — purple
   if (ft < 1000) return '#dc3545';  // IFR — red
   if (ft < 3000) return '#f59e0b';  // MVFR — amber
   return '#22c55e';                  // VFR — green

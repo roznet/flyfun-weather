@@ -127,9 +127,9 @@ describe('ceilingMapColor', () => {
 
   it('uses METAR category boundaries', () => {
     // Category boundaries are exactly the kind of off-by-one bug worth pinning.
-    expect(ceilingMapColor(199)).toBe('#8e24aa');     // LIFR-purple < 200
-    expect(ceilingMapColor(200)).toBe('#dc3545');     // LIFR-red 200..499
-    expect(ceilingMapColor(499)).toBe('#dc3545');
+    expect(ceilingMapColor(0)).toBe('#8e24aa');       // LIFR-purple < 500
+    expect(ceilingMapColor(199)).toBe('#8e24aa');
+    expect(ceilingMapColor(499)).toBe('#8e24aa');
     expect(ceilingMapColor(500)).toBe('#dc3545');     // IFR-red 500..999
     expect(ceilingMapColor(999)).toBe('#dc3545');
     expect(ceilingMapColor(1000)).toBe('#f59e0b');    // MVFR-amber 1000..2999
