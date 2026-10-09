@@ -1015,6 +1015,8 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
                 ]
                 # An aggregate no model matches (a floor, e.g. DD convective)
                 # has no minority to name; keep the plain outlier list.
+                # A tie (2 vs 2) is not a minority either: half the models do
+                # see the aggregate, so "outlier" still reads true.
                 if agreeing and len(outliers) > len(agreeing):
                     verb = "sees" if len(agreeing) == 1 else "see"
                     lines.append(
