@@ -1944,6 +1944,10 @@ does not count as the "independent" RED. Deferred (needs its own re-validation).
 > are carried through verbatim — this was a caching change, not a meteorological
 > one. `openai.json` is still on v2, so check which prompt a given provider run
 > used before attributing a colour to this decision.
+>
+> **Superseded in part 2026-10-09 (§44, #717).** `briefer_v4` keeps this colour rule but
+> requires the text to name any waypoint where a model scheme fires before calling the
+> convection uncorroborated.
 
 ---
 
@@ -5684,3 +5688,87 @@ diverged, not the integrator. Speed: 19.0 → 1.2 ms per profile (~15x).
 
 - MetPy is upgraded: rerun `tests/test_parcel_kernel.py`; if MetPy changed an
   algorithm (it is the reference), port the change.
+
+## 44. The briefer runs on Sonnet 5.5, and briefer_v4 tightens how it reads the evidence (#717)
+
+**Date:** 2026-10-09. **Issue:** #717. **Status:** `default.json` → `claude-sonnet-5-5`
+(adaptive thinking, `effort: low`) on `briefer_v4.md`; `sonnet46.json` is the previous
+production briefer, kept for rollback and A/B. The deterministic advisories are unchanged —
+this is the LLM's colour synthesis and prose only.
+
+### Context
+
+Sonnet 4.6 (T=0, `briefer_v3`) took ~32 s and ~$0.05 per digest and, against the SME-labelled
+corpus, never said GREEN and gave RED nearly four times as often as the labels. Sonnet 5.5 is
+cheaper per token but uses a new tokenizer (~30% more tokens), turns thinking on by default,
+and rejects `temperature` and a forced tool call — so the switch is a config/plumbing change
+plus a prompt review, not a model-string swap.
+
+### The decision
+
+- **Model:** Sonnet 5.5, adaptive thinking at `effort: low`, native JSON-schema structured
+  output, `max_tokens` 16000. Thinking off (`between_tools`) was tested and rejected: lower
+  label agreement, rating moves in both directions, more verdict language, invented terrain.
+- **`briefer_v4` = v3 plus five rules**, each traced to an observed 5.5 failure:
+  1. *Convective fallback (no Character advisory)* — colour rule unchanged from §16 (convection
+     alone → AMBER, trigger uncertain), but the text must name every waypoint where a model
+     scheme fires, the destination above all, and must never call the convection "not
+     corroborated" while one does. (5.5 wrote "GFS 0–2% at most waypoints" over a 57% /
+     38,962 ft GFS signal at the destination.)
+  2. *One model is not the ensemble, in either direction* — a RED from one outlier model while
+     the aggregate is not RED is a caveat; an aggregate RED with one optimistic outlier stays
+     the majority view. Lead time and poor agreement never lower a colour on their own.
+  3. *Read PILOT CAPABILITY first* — with VFR + IFR, a RED that only concerns VFR flight does
+     not make the flight RED; grade on whether IFR works. IFR capability does not help at an
+     airport with no published instrument approach.
+  4. *Same-day observations worse than the models* can raise the colour on their own; a VFR
+     TAF at ETA does not clear it while a TEMPO/BECMG/PROB group sits at or below cruise or VFR
+     minima; for a VFR-only pilot an observed MVFR end with bases at or below cruise is at
+     least AMBER.
+  5. *Voice* — `assessment_reason` names the weather driver, never the grading machinery; no
+     first person.
+- **Context:** airport-wind components reach the LLM in words ("headwind 18 kt, crosswind
+  6 kt from the right") instead of `↓18 ←6` — 5.5 read the `↓` figure as crosswind in 4 of 15
+  briefings. The arrows stay in the UI.
+
+### Validation
+
+Three tests, all with exact production contexts unless noted (details and tables in #717):
+
+| setup | SME corpus, 66 calls (exact / rebuilt) | recent prod, 87 packs: same rating as 4.6 | $/digest | time |
+|---|---|---|---|---|
+| 4.6 + v3 (prod) | 53% (36% / 78%) | — | $0.049 | 32 s |
+| 5.5 + v3 | 59% (54% / 67%) | 72/87 (6 stricter, 9 looser) | $0.036 | 9 s |
+| 5.5 + v4 first draft | 53% (38% / 74%) | 72/87 (2 stricter, 13 looser) | $0.036 | 9 s |
+| **5.5 + v4 final** | **62% (54% / 74%)** | **74/87 (2 stricter, 11 looser); 👍 32/34** | **$0.036** | **9 s** |
+
+- Text review (13 exact-context briefings): 5.5 preferred 10–1, about half the ungrounded
+  claims, ~40% shorter (padding, not content).
+- The 15 v3 disagreements on recent prod were judged case by case: 5.5 better supported 8,
+  4.6 better 3, both 4; the three 4.6 wins are what rules 2–4 fix.
+- The first v4 draft regressed the corpus (38% on exact contexts): it made a firing scheme at
+  any waypoint "corroborate" the convection and so dropped the §16 AMBER fallback, turning the
+  EDDS–EDKL 2026-06-21 isolated-storm day (debrief: "isolated and easily to circumnavigate")
+  RED. Rule 1 was narrowed to the text only.
+
+### Known residual
+
+- An aggregate-RED destination (LIFR at D-6, GFS + UKMO against ECMWF) still came out AMBER
+  "low confidence at D-6" despite rule 2. Left as is: a six-day AMBER that names the
+  destination as the problem is defensible and the flight is re-briefed nearer the day.
+- The briefer remains more cautious than the SME labels on isolated-convection days (no
+  GREEN on the corpus); this is prompt calibration, independent of the model.
+
+### Rejected options
+
+- **Thinking off** (`between_tools`): see above.
+- **Changing the airport-wind display format:** the arrows are compact and fine for pilots;
+  only the LLM misread them, so the decoding sits in the prompt builder.
+
+### Files
+
+`configs/weather_digest/{default,sonnet46}.json`, `configs/weather_digest/prompts/briefer_v4.md`,
+`digest/llm_config.py` (`temperature` optional, `thinking`, `effort`, `max_tokens`,
+`structured_output`, `with_structured`), `digest/prompt_builder.py` +
+`analysis/advisories/airport_wind.py` (`spell_out_runway_wind`), eval tooling
+`scripts/{run_digest_eval,replay_prod_digests,export_digest_replay}.py`.

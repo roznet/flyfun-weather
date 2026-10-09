@@ -22,7 +22,7 @@ from typing_extensions import TypedDict
 
 from weatherbrief.costs import DIGEST_CACHE_TTL, cache_write_multiplier_for
 from weatherbrief.digest.exceptions import classify_llm_exception
-from weatherbrief.digest.llm_config import DigestConfig, LLMConfig, create_llm
+from weatherbrief.digest.llm_config import DigestConfig, LLMConfig, create_llm, with_structured
 from weatherbrief.digest.outlook import OUTLOOK_ICONS, OUTLOOK_LABELS
 from weatherbrief.digest.prompt_builder import build_digest_context
 from weatherbrief.fetch.freshness.registry import (
@@ -237,7 +237,7 @@ def briefer_node(state: DigestState) -> dict:
         llm_config = config.longrange if longrange else config.llm
         llm = create_llm(config, longrange=longrange)
         schema = LongRangeDigest if longrange else WeatherDigest
-        structured_llm = llm.with_structured_output(schema, include_raw=True)
+        structured_llm = with_structured(llm, schema, llm_config, include_raw=True)
         locale = state.get("locale")
         guidance_key = state.get("guidance_key")
         prompt_key = "briefer_longrange" if longrange else "briefer"

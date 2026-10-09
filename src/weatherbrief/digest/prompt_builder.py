@@ -9,6 +9,7 @@ from weatherbrief.analysis.advisories.altitude_table import (
     diff_altitude_rows,
     row_for_altitude,
 )
+from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level
@@ -965,6 +966,8 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
         name = name_map.get(result.advisory_id, result.advisory_id)
         status_tag = result.aggregate_status.value.upper()
         detail = result.aggregate_detail
+        if result.advisory_id == "airport_wind" and detail:
+            detail = spell_out_runway_wind(detail)
 
         lines.append(f"[{status_tag}] {name}: {detail}")
 

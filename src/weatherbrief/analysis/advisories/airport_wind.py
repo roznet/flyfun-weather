@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
@@ -37,6 +38,29 @@ def _format_wind_detail(cond: AirportModelCondition, rwy_id: str, locale: str | 
     xw_val = f"{rwy.crosswind_kt:.0f}"
 
     return f"{wind_text} RW{rwy_id} {hw_arrow}{hw_val} {xw_arrow}{xw_val}"
+
+
+_RUNWAY_WIND_RE = re.compile(r"RW(\S+) ([\u2193\u2191])(\d+) ([\u2190\u2192])(\d+)")
+
+
+def spell_out_runway_wind(text: str) -> str:
+    """Rewrite the compact ``RW24 ↓11 →5`` runway components into words.
+
+    The arrow form is the display format (web, iOS, email) and stays there. An
+    LLM reading it is another matter: the Sonnet 5.5 eval (#717) reported the
+    ``↓`` headwind figure as the crosswind in 4 of 15 briefings ("about 18 kt
+    crosswind" for ``RW27 ↓18 ←6``). Decoding here, next to the encoder in
+    :func:`_format_wind_detail`, keeps the two from drifting apart.
+
+    ``↓``/``↑`` = head/tailwind; ``←`` = crosswind from the right (it drifts
+    the aircraft left), ``→`` = from the left.
+    """
+    def _words(m: re.Match) -> str:
+        along = "headwind" if m.group(2) == "\u2193" else "tailwind"
+        side = "right" if m.group(4) == "\u2190" else "left"
+        return (f"RW{m.group(1)} {along} {m.group(3)} kt, "
+                f"crosswind {m.group(5)} kt from the {side}")
+    return _RUNWAY_WIND_RE.sub(_words, text)
 
 
 def _wind_status(

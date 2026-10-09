@@ -57,9 +57,10 @@ prompt = config.load_prompt("briefer", locale="fr", guidance_key="balanced")  # 
 
 - JSON configs in `configs/weather_digest/{name}.json`
 - Resolution: explicit name → `WEATHERBRIEF_DIGEST_CONFIG` env → `"default"`
-- `create_llm()` uses LangChain `init_chat_model(model, model_provider, temperature)` — no custom provider logic
+- `create_llm()` uses LangChain `init_chat_model(model, model_provider, **knobs)` — no custom provider logic. `LLMConfig`'s optional knobs (`temperature`, `thinking`, `effort`, `max_tokens`) are passed **only when set**, so a config that omits them sends exactly the request it always did; `temperature: null` omits it (the 5.x models 400 on any non-default sampling value). `with_structured(llm, schema, llm_config)` applies the config's `structured_output` method — `function_calling` (forced tool call, the LangChain default) or `json_schema` (native `output_config.format`); Sonnet/Opus 5.5 400 on a forced tool call, so they need `json_schema`. The briefer and `run_digest_eval.py` both go through it.
+- **Briefer model (#717, 2026-10-09):** `default.json` runs `claude-sonnet-5-5`, adaptive thinking at `effort: low`, `json_schema`, `max_tokens: 16000` (LangChain's fallback for a model its profile table doesn't know is 4096, too tight with thinking sharing the budget), prompt `briefer_v4`. `sonnet46.json` keeps the previous production setup (Sonnet 4.6, T=0, `briefer_v3`, function calling) for rollback and as the A/B baseline. Thinking-off (`between_tools`) was evaluated and rejected. Eval record: issue #717 and `meteorology-decisions.md` §44.
 - `load_prompt()` injects locale content (from `prompts/locales/{locale}.md` frontmatter + body, replacing `{locale}` and vocabulary tokens) and the `{guidance}` placeholder (from `digest_guidance/{key}.md`). `load_prompt_parts()` is the cache-aware variant: it splits the rendered prompt at `{guidance}` into `(head, tail)` — byte-identical to `load_prompt()` when concatenated — so the breakpoint can sit on the head. `render_prompt()` renders text a caller already holds (eval `--prompt` override)
-- `DigestConfig` also carries separate `longrange` and `translator` LLMConfigs (both default `claude-haiku-4-5-20251001`), used by the long-range regime and DWD translation respectively.
+- `DigestConfig` also carries separate `longrange`, `translator` and `trip` LLMConfigs (both default `claude-haiku-4-5-20251001`), used by the long-range regime and DWD translation respectively.
 
 ### Context Assembly (`digest/prompt_builder.py`)
 
@@ -212,7 +213,7 @@ For Europe routes, the digest pipeline also fetches DWD German weather text, tra
 
 ### System Prompt
 
-`default.json` points `briefer` at `configs/weather_digest/prompts/briefer_v3.md` (the guidance-at-the-end layout that makes the cached head preset-independent); `openai.json` is still on `briefer_v2.md`. The `DigestConfig.prompts.briefer` code default is `briefer_v1.md`, but the JSON always overrides it. The prompt sets an aviation weather briefer persona addressing a competent pilot (do NOT over-simplify), instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
+`default.json` points `briefer` at `configs/weather_digest/prompts/briefer_v4.md` — v3's guidance-at-the-end layout (cached head preset-independent) plus the #717 rules for Sonnet 5.5: name any firing model scheme before calling convection uncorroborated, a single-model RED is a caveat, read PILOT CAPABILITY before grading, same-day observations worse than the models can raise the colour, no rule plumbing in `assessment_reason`, no first person (`sonnet46.json` stays on v3); `openai.json` is still on `briefer_v2.md`. The `DigestConfig.prompts.briefer` code default is `briefer_v1.md`, but the JSON always overrides it. The prompt sets an aviation weather briefer persona addressing a competent pilot (do NOT over-simplify), instructs the LLM to handle both NWS AFD (English — synthesize synoptic/aviation sections) and DWD text (German — translate), use aviation terminology, be direct about uncertainty. Avoids exposing internal section names (e.g. "ALTITUDE OPTIONS") in prose and renders numbered `watch_items` as a list. `briefer_longrange_v1.md` is the trimmed long-range counterpart (outlook tendency + model-agreement framing; see *Long-Range Outlook*).
 
 The prompt contains a `{guidance}` placeholder that is replaced at runtime with a guidance preset. This controls how the LLM interprets advisory severity when producing the GREEN/AMBER/RED assessment.
 
@@ -285,7 +286,8 @@ which is what the allowlist exists to stop.
 
 - LLM providers need API keys in environment (loaded via `.env` by `python-dotenv`)
 - Text forecasts are region-dependent: NWS AFD (English) for US routes, DWD (German) for European routes — prompt handles both
-- `with_structured_output()` behavior varies by provider (tool-calling vs JSON mode)
+- `with_structured_output()` behavior varies by provider (tool-calling vs JSON mode) — and by model: pick it per config with `structured_output`, never call `with_structured_output` directly for the briefer
+- **Airport wind reaches the LLM in words, not arrows.** The advisory detail `RW27 ↓18 ←6` is the display format (web/iOS/email); `_format_route_advisories_context` rewrites it via `spell_out_runway_wind` (`analysis/advisories/airport_wind.py`, next to the encoder) to "headwind 18 kt, crosswind 6 kt from the right" — Sonnet 5.5 read the `↓` figure as crosswind in 4/15 eval briefings. Persisted `digest_context.txt` from before #717 still has arrows; the eval runners decode them on load
 - `DigestState` uses `total=False` TypedDict — all keys optional, access via `.get()`
 - `matplotlib.use("agg")` must be called before `import matplotlib.pyplot` in skewt.py
 

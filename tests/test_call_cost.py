@@ -27,7 +27,7 @@ class TestTokenRates:
 
     def test_an_unpriced_model_is_rejected_not_guessed(self):
         with pytest.raises(ValueError, match="Unpriced model"):
-            token_rates_for("claude-sonnet-4-6")
+            token_rates_for("claude-opus-4-1")
 
     def test_a_family_does_not_match_a_longer_version(self):
         # "claude-haiku-4-5" must not silently price a "claude-haiku-4-50".

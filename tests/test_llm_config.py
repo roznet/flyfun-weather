@@ -24,8 +24,27 @@ def test_default_config_loads():
     assert config.name == "default"
     assert config.version == "1.0"
     assert config.llm.provider == "anthropic"
+    # Sonnet 5.5 at effort low since #717: no sampling params (it 400s on any
+    # non-default temperature) and native structured output (it 400s on the
+    # forced tool call LangChain's default method sends).
+    assert config.llm.model == "claude-sonnet-5-5"
+    assert config.llm.temperature is None
+    assert config.llm.thinking == {"type": "adaptive"}
+    assert config.llm.effort == "low"
+    assert config.llm.structured_output == "json_schema"
+    assert config.llm.max_tokens and config.llm.max_tokens >= 8000
+    assert config.prompts.briefer == "prompts/briefer_v4.md"
+
+
+def test_sonnet46_rollback_config_is_the_pre_717_default():
+    """``sonnet46`` keeps the previous production briefer for rollback / A-B."""
+    config = load_digest_config("sonnet46")
+
     assert config.llm.model == "claude-sonnet-4-6"
     assert config.llm.temperature == 0.0
+    assert config.llm.thinking is None and config.llm.effort is None
+    assert config.llm.structured_output == "function_calling"
+    assert config.prompts.briefer == "prompts/briefer_v3.md"
 
 
 def test_openai_config_loads():
@@ -169,3 +188,45 @@ class TestLoadPromptParts:
         marker = load_guidance_text("conservative").strip().splitlines()[0].strip()
         assert marker in tail
         assert marker not in head
+
+
+class TestCreateChatModel:
+    """Optional knobs reach ``init_chat_model`` only when set."""
+
+    def _kwargs(self, llm_config):
+        from weatherbrief.digest.llm_config import create_chat_model
+        with patch("weatherbrief.digest.llm_config.init_chat_model") as init:
+            create_chat_model(llm_config)
+        return init.call_args.kwargs
+
+    def test_a_plain_config_sends_exactly_what_it_always_did(self):
+        kwargs = self._kwargs(LLMConfig(model="claude-haiku-4-5-20251001"))
+        assert kwargs == {
+            "model": "claude-haiku-4-5-20251001",
+            "model_provider": "anthropic",
+            "temperature": 0.0,
+        }
+
+    def test_a_null_temperature_is_omitted_not_sent_as_none(self):
+        kwargs = self._kwargs(LLMConfig(model="claude-sonnet-5-5", temperature=None))
+        assert "temperature" not in kwargs
+
+    def test_thinking_effort_and_max_tokens_pass_through(self):
+        kwargs = self._kwargs(LLMConfig(
+            model="claude-sonnet-5-5", temperature=None,
+            thinking={"type": "adaptive"}, effort="low", max_tokens=16000,
+        ))
+        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["effort"] == "low"
+        assert kwargs["max_tokens"] == 16000
+
+
+def test_with_structured_uses_the_configured_method():
+    from unittest.mock import MagicMock
+    from weatherbrief.digest.llm_config import with_structured
+
+    llm = MagicMock()
+    with_structured(llm, dict, LLMConfig(structured_output="json_schema"), include_raw=True)
+    llm.with_structured_output.assert_called_once_with(
+        dict, method="json_schema", include_raw=True,
+    )

@@ -188,6 +188,8 @@ MODEL_TOKEN_RATES_PER_1K: dict[str, tuple[float, float]] = {
     # Prompts of 100k input tokens or fewer; longer ones take the tier in
     # MODEL_LONG_PROMPT_RATES_PER_1K (#715).
     "claude-haiku-5-5": (0.0001, 0.0005),
+    "claude-sonnet-4-6": (0.003, 0.015),
+    "claude-sonnet-5-5": (0.002, 0.010),
 }
 
 # Models whose whole call bills at a higher rate once the prompt exceeds a
