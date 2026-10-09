@@ -248,6 +248,7 @@ class LiveTick:
         from weatherbrief.airports import _load_airport_model, route_navpoints
         from weatherbrief.models.analysis import RouteConfig
         from weatherbrief.storage.flights import _resolve_artifact_path, list_packs
+        from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE
         from weatherbrief.tasks.route_weather import run_realtime_refresh
 
         t0 = time.monotonic()
@@ -271,6 +272,8 @@ class LiveTick:
                     continue
                 latest = packs[0]
                 pack_dir = Path(_resolve_artifact_path(latest.artifact_path))
+                if (pack_dir.parent / LIVE_FROZEN_FILE).exists():
+                    continue
                 briefing = json.loads((pack_dir / "briefing.json").read_text())
                 route = RouteConfig.model_validate(briefing["route"])
                 corridor = (briefing.get("route_observations") or {}).get("corridor_nm", 30.0)

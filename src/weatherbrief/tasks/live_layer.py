@@ -59,7 +59,11 @@ LIVE_HISTORY_FILE = "live_history.jsonl"
 #: two spellings of a filename drift, and the one that drifts is the one that
 #: stops being cleaned up. Safe at module level: ``live_highlight`` imports
 #: nothing from this module except inside its functions.
-LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG)
+#: A flight dir holding this file is skipped by the live tick: a prod layer
+#: imported for local review (``scripts/ops/import_live_flight.py``) stays as
+#: prod wrote it. In ``LIVE_FILES`` so a flight delete takes it too.
+LIVE_FROZEN_FILE = "live_frozen"
+LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG, LIVE_FROZEN_FILE)
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()

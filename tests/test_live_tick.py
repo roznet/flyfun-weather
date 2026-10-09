@@ -193,6 +193,29 @@ def test_run_refreshes_each_flight_from_one_shared_fetch(db_session, dev_user, t
     assert mock_refresh.call_args.args[0] == pack_dir
 
 
+def test_run_leaves_a_frozen_flight_alone(db_session, dev_user, tmp_path):
+    """A prod layer imported for local review (import_live_flight.py) keeps
+    prod's text: the tick neither refreshes it nor fetches for it."""
+    from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE
+
+    pack_dir = _write_pack(tmp_path)
+    (pack_dir.parent / LIVE_FROZEN_FILE).write_text("imported\n")
+    _flight(db_session, dev_user, "zz-soon", NOW + timedelta(hours=1), artifact_path=str(pack_dir))
+    upstream = MagicMock()
+    tick = LiveTick(upstream=upstream, sigmet_upstream=MagicMock())
+
+    with patch(
+        "weatherbrief.airports._load_airport_model", return_value=MagicMock(),
+    ), patch(
+        "weatherbrief.tasks.route_weather.run_realtime_refresh",
+    ) as mock_refresh:
+        result = tick.run(db_session, "/fake/db", now=NOW)
+
+    assert result["updated"] == 0
+    mock_refresh.assert_not_called()
+    upstream.fetch_weather.assert_not_called()
+
+
 def test_scheduler_runs_tick_even_when_verification_fails(monkeypatch):
     from weatherbrief import scheduler
 

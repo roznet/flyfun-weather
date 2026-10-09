@@ -784,6 +784,17 @@ positive above.
   (which is also how the test suite runs the whole tick without calling
   anything — `conftest` deletes the key so a developer's shell cannot bill the
   suite).
+- **Reviewing real layers locally**: `scripts/ops/import_live_flight.py --list`
+  / `--live` / `FLIGHT…` copies prod flights (rows exported from the
+  container, flight dir rsynced) into the dev DB under the same id, owned by
+  the dev-login user. The flight dir gets `live_frozen` (`LIVE_FROZEN_FILE`,
+  in `LIVE_FILES`), which the tick skips, so a running devserver neither
+  overwrites prod's layer nor pays for a local highlight; a ↻ press still
+  refreshes it. Import **while the flight is live**: none is written after
+  planned arrival and `live_history.jsonl` keeps reports, not layers
+  (`--highlight-at HH:MMZ` patches an earlier written line onto a finished
+  flight's final layer, text only). Web fetches `/live` only inside the window
+  or for a `days_out == 0` pack; iOS has no window check.
 - **Cost** ~$0.00024 per call on Haiku 5.5 (~$0.0016 on 4.5), through the
   shared ledger (`action=live_highlight`, priced by `compute_call_cost`, never
   the per-briefing `compute_cost`). A `max_tokens` stop is rejected as
