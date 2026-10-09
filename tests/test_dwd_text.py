@@ -249,6 +249,53 @@ class TestExtractDayBlocksKurzfrist:
         assert "Langwellentrog" in freitag.text
 
 
+# Morning Kurzfrist issued on a Sunday that heads today's block with the day
+# name instead of "Aktuell" — the shape of the real 2026-06-21 issue that was
+# labelled 2026-06-28 in D-0 digests.
+KURZFRIST_SAME_WEEKDAY = """\
+SXEU31 DWAV 210600
+
+S Y N O P T I S C H E   Ü B E R S I C H T   K U R Z F R I S T
+ausgegeben am Sonntag, den 21.06.2026 um 06 UTC
+
+
+SCHLAGZEILE:
+Gewitterlage.
+
+Synoptische Entwicklung bis Montag 06 UTC
+----------------------------------------------------------------
+Sonntag ... Das Höhenhoch über dem westlichen Mittelmeer besitzt einen Keil.
+
+Montag ... Eine Kaltfront erreicht den Nordwesten.
+
+Modellvergleich und -einschätzung
+----------------------------------------------------------------
+Die Modelle sind ähnlich.
+"""
+
+
+class TestSameWeekdayAsIssue:
+    def test_kurzfrist_issue_weekday_is_the_issue_date(self):
+        blocks = extract_day_blocks(KURZFRIST_SAME_WEEKDAY, "kurzfrist")
+        days = {b.day_name_de: b.date_iso for b in blocks}
+        assert days["Sonntag"] == date(2026, 6, 21)
+        assert days["Montag"] == date(2026, 6, 22)
+
+    def test_d0_flight_gets_todays_block_with_todays_date(self):
+        blocks = extract_day_blocks(KURZFRIST_SAME_WEEKDAY, "kurzfrist")
+        picked = filter_blocks_for_flight(blocks, date(2026, 6, 21))
+        assert [b.date_iso for b in picked] == [date(2026, 6, 21)]
+        assert "Höhenhoch" in picked[0].text
+
+    def test_mittelfrist_issue_weekday_is_still_next_week(self):
+        # The Mittelfrist starts days out: a "Mittwoch" in a Wednesday issue
+        # is next Wednesday.
+        text = KURZFRIST_SAME_WEEKDAY.replace("K U R Z F R I S T", "M I T T E L F R I S T")
+        blocks = extract_day_blocks(text, "mittelfrist")
+        days = {b.day_name_de: b.date_iso for b in blocks}
+        assert days["Sonntag"] == date(2026, 6, 28)
+
+
 class TestFilterBlocksForFlight:
     def _all_blocks(self):
         return (

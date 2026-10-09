@@ -103,29 +103,33 @@ def parse_issue_date(text: str) -> date | None:
     return date(year, month, day)
 
 
-def _next_weekday(reference: date, weekday: int) -> date:
-    """Find the next occurrence of `weekday` strictly after `reference`.
+def _next_weekday(reference: date, weekday: int, *, allow_same_day: bool = False) -> date:
+    """Find the next occurrence of `weekday` after `reference`.
 
-    DWD forecasts refer to upcoming days, so even if the issue date is a
-    Wednesday and the text says "Mittwoch", it means next Wednesday.
-    Exception: Kurzfrist "Aktuell" block uses the issue date itself.
+    With ``allow_same_day`` the issue date itself counts: the Kurzfrist covers
+    ~2-3 days from issue, so a morning issue on a Sunday that opens with
+    "Sonntag ..." is describing *today* (it uses that heading as well as
+    "Aktuell"). The Mittelfrist starts days out, so there a weekday equal to
+    the issue weekday is next week's.
     """
     days_ahead = (weekday - reference.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7  # always the *next* occurrence, not today
+    if days_ahead == 0 and not allow_same_day:
+        days_ahead = 7
     return reference + timedelta(days=days_ahead)
 
 
-def _resolve_day_date(day_name_de: str, issue_date: date) -> date | None:
+def _resolve_day_date(
+    day_name_de: str, issue_date: date, *, allow_same_day: bool = False,
+) -> date | None:
     """Map a German day name to a concrete date relative to the issue date.
 
-    DWD forecasts always refer to upcoming days, so we find the next
-    occurrence of that weekday on or after the issue date.
+    DWD forecasts refer to upcoming days; ``allow_same_day`` (Kurzfrist) lets
+    the issue weekday mean the issue date — see :func:`_next_weekday`.
     """
     weekday = _DE_DAYS.get(day_name_de)
     if weekday is None:
         return None
-    return _next_weekday(issue_date, weekday)
+    return _next_weekday(issue_date, weekday, allow_same_day=allow_same_day)
 
 
 def _extract_synoptic_body(text: str) -> str:
@@ -233,7 +237,13 @@ def extract_day_blocks(text: str, source: str) -> list[DWDDayBlock]:
         if day_name == "Aktuell":
             day_date = issue_date
         elif issue_date:
-            day_date = _resolve_day_date(day_name, issue_date)
+            # Same-weekday-as-issue means today in the Kurzfrist. Mapping it
+            # to next week labelled the flight-day text +7 days; the flight
+            # filter then fell back to that block, so D-0 briefings carried the
+            # right synoptic text under a date a week out (#717 eval).
+            day_date = _resolve_day_date(
+                day_name, issue_date, allow_same_day=(source == "kurzfrist"),
+            )
             # If we've already seen this date (e.g. duplicate day name after
             # _next_weekday wraps), bump forward a week
             if day_date and day_date in seen_dates:
