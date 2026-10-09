@@ -295,6 +295,32 @@ class TestFlightsAPI:
         assert data["raw_route"] is None
         assert data["parser_version"] is None
 
+    def test_create_flight_with_description(self, client):
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "description": "  Family visit  ",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        assert resp.json()["description"] == "Family visit"
+
+    def test_create_flight_blank_description_stored_as_null(self, client):
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "description": "   ",
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 201
+        assert resp.json()["description"] is None
+
+    def test_create_flight_description_too_long_rejected(self, client):
+        resp = client.post("/api/flights", json={
+            "waypoints": ["EGTK", "LFPB", "LSGS"],
+            "description": "x" * 501,
+            "departure_time": _FUTURE_DEPARTURE_ISO,
+        })
+        assert resp.status_code == 422
+
     def test_create_flight_with_inline_coord_waypoint(self, client):
         """Validator accepts ICAO inline coords alongside named codes."""
         resp = client.post("/api/flights", json={
@@ -2476,3 +2502,37 @@ class TestLiveLayerEndpoint:
         assert not (pack_dir.parent / "live.json").exists()
         assert not (pack_dir.parent / "live_meta.json").exists()
         assert not (pack_dir.parent / "live_history.jsonl").exists()
+
+
+class TestFlightDescription:
+    """Free-text description (#587) on PATCH and move."""
+
+    def test_patch_sets_and_clears_without_invalidating(self, client, make_flight_with_raw):
+        flight = make_flight_with_raw()
+        resp = client.patch(f"/api/flights/{flight['id']}", json={"description": "Alps trip"})
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Alps trip"
+        assert resp.json()["invalidation"] == "none"
+
+        # Omitted = no change
+        resp = client.patch(f"/api/flights/{flight['id']}", json={"cruise_altitude_ft": 9000})
+        assert resp.json()["description"] == "Alps trip"
+
+        # "" clears
+        resp = client.patch(f"/api/flights/{flight['id']}", json={"description": ""})
+        assert resp.json()["description"] is None
+
+    def test_move_inherits_or_replaces(self, client, make_flight_with_raw):
+        flight = make_flight_with_raw()
+        client.patch(f"/api/flights/{flight['id']}", json={"description": "Alps trip"})
+        later = (datetime.fromisoformat(flight["departure_time"]) + timedelta(days=1)).isoformat()
+        resp = client.post(f"/api/flights/{flight['id']}/move", json={"departure_time": later})
+        assert resp.status_code in (200, 201)
+        moved = resp.json()
+        assert moved["description"] == "Alps trip"
+
+        later2 = (datetime.fromisoformat(later) + timedelta(days=1)).isoformat()
+        resp = client.post(f"/api/flights/{moved['id']}/move", json={
+            "departure_time": later2, "description": "Ski week",
+        })
+        assert resp.json()["description"] == "Ski week"

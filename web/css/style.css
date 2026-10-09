@@ -9327,3 +9327,10 @@ button.glance-line:hover {
 .storm-actions {
   margin-top: 0.75rem;
 }
+
+.flight-description {
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--text-muted, #666);
+  overflow-wrap: anywhere;
+}

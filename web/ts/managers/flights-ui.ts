@@ -456,6 +456,10 @@ function renderFlightCard(
        </div>`
     : '';
 
+  const descriptionLine = f.description
+    ? `<div class="flight-description">${escapeHtml(f.description)}</div>`
+    : '';
+
   const checkedAttr = selected ? ' checked' : '';
   const selectedClass = selected ? ' selected' : '';
 
@@ -496,6 +500,7 @@ function renderFlightCard(
           </div>
           ${ownerLine}
           ${routeLine}
+          ${descriptionLine}
           <div class="flight-status">
             ${refreshBadge}${packInfo}
           </div>
@@ -599,7 +604,7 @@ export function renderFlightList(
   const upcomingTokens = parseQuery(upcomingQuery);
   const upcomingTotal = future.length + recent.length;
   const keep = (f: FlightResponse) =>
-    matchesQuery(f.waypoints, f.route_name, upcomingTokens);
+    matchesQuery(f.waypoints, f.route_name, upcomingTokens, f.description);
   const futureShown = upcomingTokens.length > 0 ? future.filter(keep) : future;
   const recentShown = upcomingTokens.length > 0 ? recent.filter(keep) : recent;
   renderUpcomingFilter(filters, upcomingTotal, futureShown.length + recentShown.length);

@@ -9,6 +9,9 @@ nonisolated struct CreateFlightRequest: Encodable {
     /// `waypoints` so a future parser improvement can re-derive the route.
     /// Send only what the pilot actually typed — see `FlightResponse.rawRoute`.
     var rawRoute: String? = nil
+    /// Free-text purpose / description (#587). Create: nil when blank. Update /
+    /// move: nil = unchanged (inherit), "" clears.
+    var description: String? = nil
     var cruiseAltitudeFt: Int?
     var flightCeilingFt: Int?
     var flightDurationHours: Double?
@@ -37,6 +40,9 @@ nonisolated struct UpdateFlightRequest: Encodable {
     /// untouched route's stored value would take the first branch and falsely
     /// claim the current parser derived these waypoints.
     var rawRoute: String? = nil
+    /// Free-text purpose / description (#587). Create: nil when blank. Update /
+    /// move: nil = unchanged (inherit), "" clears.
+    var description: String? = nil
     var departureTime: String? = nil
     var cruiseAltitudeFt: Int? = nil
     var flightCeilingFt: Int? = nil
@@ -73,6 +79,9 @@ nonisolated struct MoveFlightRequest: Encodable {
     /// stored `raw_route`/`parser_version`, while sending it re-stamps the
     /// parser version and so defeats its role as a re-derive marker.
     var rawRoute: String? = nil
+    /// Free-text purpose / description (#587). Create: nil when blank. Update /
+    /// move: nil = unchanged (inherit), "" clears.
+    var description: String? = nil
 }
 
 /// How much of the briefing an edit invalidated, returned alongside the updated

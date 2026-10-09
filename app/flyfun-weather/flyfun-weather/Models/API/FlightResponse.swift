@@ -80,6 +80,8 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
     /// re-derive marker. `var … = nil` so it decodes AND keeps the synthesized
     /// memberwise init's existing call sites unchanged.
     var rawRoute: String? = nil
+    /// Pilot's free-text description (#587). Owner-only (nil for subscribers).
+    var description: String? = nil
 
     /// Trip membership (#602): which trip this leg belongs to, and where it sits
     /// in the chain. `nil` for an ungrouped flight and on older servers.

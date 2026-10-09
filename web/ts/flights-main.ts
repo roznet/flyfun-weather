@@ -922,6 +922,7 @@ async function init(): Promise<void> {
           profileId: !isNaN(profileId!) ? profileId : undefined,
           aircraftId: !isNaN(aircraftId!) ? aircraftId : undefined,
           rawRoute: wpRaw,
+          description: (document.getElementById('input-description') as HTMLInputElement | null)?.value.trim() || undefined,
           flexibility,
         });
         // Pass flight_id via context (top-level field) so server-side

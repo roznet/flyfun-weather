@@ -26,7 +26,12 @@ from flyfun_common.autorouter import (
 from flyfun_common.db import current_user_id, get_db
 from flyfun_common.db.models import UserRow
 from weatherbrief.airports import RejectedWaypoint
-from weatherbrief.db.models import BriefingPackRow, FlightRow, FlightSubscriptionRow
+from weatherbrief.db.models import (
+    FLIGHT_DESCRIPTION_MAX_LEN,
+    BriefingPackRow,
+    FlightRow,
+    FlightSubscriptionRow,
+)
 from weatherbrief.fetch.variables import (
     MAX_BOOKING_LEAD_DAYS,
     coverage_start_date,
@@ -93,6 +98,8 @@ class CreateFlightRequest(BaseModel):
     """
 
     route_name: str = Field("", max_length=256)  # optional preset name
+    # Free-text purpose / description (#587). Blank collapses to NULL.
+    description: str | None = Field(default=None, max_length=FLIGHT_DESCRIPTION_MAX_LEN)
     waypoints: list[str] = Field(default_factory=list, max_length=MAX_ROUTE_WAYPOINTS)  # ICAO codes, navaids, or fixes
     # Original Field-15 input the pilot typed, when the client captured one
     # (web Save flow). The server stores it verbatim alongside ``waypoints``
@@ -213,6 +220,9 @@ class FlightResponse(BaseModel):
     aircraft_id: int | None = None
     aircraft: AircraftInfo | None = None
     route_name: str
+    # Pilot's free-text description (#587). Owner-only: a subscriber gets None,
+    # since it is personal ("visit mum") rather than part of the briefing.
+    description: str | None = None
     waypoints: list[str] = []
     departure_time: str
     alt_departure_time: str | None = None
@@ -570,6 +580,7 @@ def _flight_to_response(
         aircraft_id=flight.aircraft_id,
         aircraft=aircraft,
         route_name=flight.route_name,
+        description=flight.description if effective_role == "owner" else None,
         waypoints=flight.waypoints,
         departure_time=flight.departure_time.isoformat(),
         alt_departure_time=flight.alt_departure_time.isoformat() if flight.alt_departure_time else None,
@@ -852,7 +863,10 @@ def list_all_flights(
     # counted towards ``_compute_recent_section`` above.
     search_tokens = parse_query(past_q)
     if search_tokens:
-        past = [p for p in past if _search_matches(p.waypoints, p.route_name, search_tokens)]
+        past = [
+            p for p in past
+            if _search_matches(p.waypoints, p.route_name, search_tokens, p.description)
+        ]
 
     response.headers["X-Past-Total"] = str(len(past))
     if past_limit is not None:
@@ -870,6 +884,13 @@ def _bulk_debriefs_for_owned(
     """One query for all owned-flight debriefs in a list response."""
     owned_ids = [f.id for f, role, _ in paired if role == "owner" and f.user_id == viewer_id]
     return bulk_get_debriefs(db, owned_ids)
+
+
+def _clean_description(value: str | None) -> str | None:
+    """Strip a submitted description; blank or whitespace-only becomes NULL."""
+    if value is None:
+        return None
+    return value.strip() or None
 
 
 @router.post("", response_model=FlightResponse, status_code=201)
@@ -992,6 +1013,7 @@ def create_flight(
         profile_id=req.profile_id,
         aircraft_id=req.aircraft_id,
         route_name=route_name,
+        description=_clean_description(req.description),
         waypoints=waypoints,
         departure_time=departure_time,
         cruise_altitude_ft=cruise_altitude_ft,
@@ -1417,6 +1439,8 @@ class MoveFlightRequest(BaseModel):
     # change without a raw_route in the body, the new flight clears
     # the (now-stale) stored value rather than carrying it forward.
     raw_route: str | None = Field(default=None, max_length=4000)
+    # Description (#587): None inherits the source's, "" clears.
+    description: str | None = Field(default=None, max_length=FLIGHT_DESCRIPTION_MAX_LEN)
     # Trip membership survives a move by default (#602). A move *is the same
     # leg, rescheduled* — the Sunday return slipping to Monday is still this
     # trip's return — so dropping it out of the trip would be a silent data
@@ -1632,6 +1656,10 @@ def move_flight(
         profile_id=source.profile_id,
         aircraft_id=source.aircraft_id,
         route_name=new_route_name,
+        description=(
+            source.description if req.description is None
+            else _clean_description(req.description)
+        ),
         waypoints=new_waypoints,
         departure_time=new_departure_time,
         cruise_altitude_ft=new_alt,
@@ -1994,6 +2022,8 @@ class UpdateFlightRequest(BaseModel):
     flexibility: Literal["none", "alternate", "same_day", "prev_day", "next_day"] | None = None
     # Per-flight briefing-notification override; None = no change.
     notify_override: Literal["default", "notify", "mute"] | None = None
+    # Free-text description (#587); None = no change, "" clears.
+    description: str | None = Field(default=None, max_length=FLIGHT_DESCRIPTION_MAX_LEN)
     cruise_altitude_ft: int | None = None
     flight_ceiling_ft: int | None = None
     flight_duration_hours: float | None = None
@@ -2209,6 +2239,10 @@ def update_flight(
 
     if req.notify_override is not None:
         row.notify_override = req.notify_override
+
+    # Description is metadata: no briefing invalidation.
+    if req.description is not None:
+        row.description = _clean_description(req.description)
 
     db.flush()
     updated = load_flight(db, flight_id)

@@ -61,6 +61,9 @@ export interface FlightResponse {
   aircraft_id: number | null;
   aircraft: AircraftInfo | null;
   route_name: string;
+  // Pilot's free-text description (#587). Owner-only; null when none given
+  // and always null on a subscriber's view.
+  description?: string | null;
   waypoints: string[];
   departure_time: string;
   alt_departure_time: string | null;
@@ -253,6 +256,8 @@ export interface DebriefStats {
 
 export interface CreateFlightRequest {
   route_name?: string;
+  /** Free-text description (#587); blank is stored as null. */
+  description?: string;
   waypoints: string[];
   departure_time: string;     // ISO 8601 datetime with timezone
   cruise_altitude_ft?: number;

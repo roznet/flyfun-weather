@@ -2,8 +2,8 @@
 
 The rule is deliberately tiny — there is no query syntax. A filter string is
 split on whitespace into tokens, and a flight matches when *every* token is a
-case-insensitive **prefix** of some route waypoint or of some word in the
-flight's route name:
+case-insensitive **prefix** of some route waypoint, of some word in the
+flight's route name, or of some word in its free-text description (#587):
 
     "LFMD"        -> every flight touching Cannes (endpoint or intermediate)
     "LFMD EGTF"   -> only flights touching both, in either direction
@@ -45,8 +45,10 @@ def matches(
     waypoints: Sequence[str] | None,
     route_name: str | None,
     tokens: Iterable[str],
+    description: str | None = None,
 ) -> bool:
-    """True when every token prefix-matches a waypoint or a route-name word.
+    """True when every token prefix-matches a waypoint, a route-name word or a
+    description word.
 
     ``tokens`` must already be uppercased by :func:`parse_query`. An empty
     token list matches everything.
@@ -57,6 +59,7 @@ def matches(
 
     haystack = [w.upper() for w in (waypoints or []) if w]
     haystack.extend(word.upper() for word in (route_name or "").split() if word)
+    haystack.extend(word.upper() for word in (description or "").split() if word)
     if not haystack:
         return False
 

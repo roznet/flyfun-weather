@@ -189,6 +189,12 @@ export function renderFlightInfo(
     container.innerHTML = `
       <div class="flight-info-grid editing">
         <div class="info-row">
+          <span class="info-label">Description</span>
+          <span class="info-value">
+            <input type="text" id="edit-description" class="edit-input" maxlength="500" value="${escapeHtml(flight.description ?? '')}" placeholder="e.g. Family visit" style="width:100%;">
+          </span>
+        </div>
+        <div class="info-row">
           <span class="info-label">Route</span>
           <span class="info-value">
             <div style="display:flex;gap:0.5rem;align-items:stretch;">
@@ -382,6 +388,10 @@ export function renderFlightInfo(
 
     container.innerHTML = `
       <div class="flight-info-grid">
+        ${flight.description ? `<div class="info-row">
+          <span class="info-label">Description</span>
+          <span class="info-value">${escapeHtml(flight.description)}</span>
+        </div>` : ''}
         <div class="info-row">
           <span class="info-label">Route</span>
           <span class="info-value" style="font-family:monospace;">${routeDisplay}</span>

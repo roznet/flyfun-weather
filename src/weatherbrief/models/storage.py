@@ -41,6 +41,9 @@ class Flight(BaseModel):
     # Chain order derives from ``departure_time``, so there is no position here.
     trip_id: str | None = None
     route_name: str  # user-assigned name or derived from waypoints
+    # Free-text purpose / description (#587), e.g. "Family visit". NULL when
+    # none given. Searchable from the flights-list filter.
+    description: str | None = None
     waypoints: list[str] = Field(default_factory=list)  # airports, navaids, or fixes
     departure_time: datetime  # aware UTC datetime
     cruise_altitude_ft: int = 8000
