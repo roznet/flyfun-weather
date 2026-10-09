@@ -164,6 +164,18 @@ def _format_blocks_for_translation(blocks: list[DWDDayBlock]) -> str:
     return "\n\n".join(parts)
 
 
+def _strip_trailing_decoration(section: str) -> str:
+    """Drop trailing lines that are only markdown decoration (``---``, ``##``).
+
+    Line-based rather than one regex: a nested-quantifier pattern over runs of
+    ``-``/``#`` backtracks exponentially on a long rule that is not at the end.
+    """
+    lines = section.strip().splitlines()
+    while lines and not lines[-1].strip(" \t#-"):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
 def _split_translation(
     blocks: list[DWDDayBlock],
     english: str,
@@ -172,14 +184,21 @@ def _split_translation(
 
     Looks for the same === day headers used in the input.
     Falls back to returning the full text for each block if splitting fails.
+
+    The model sometimes dresses the reply up as markdown: a title before the
+    first header (``# SYNOPTIC EXTRACTION ...``), ``## `` in front of each
+    header, ``---`` rules between days.  Text before the first header is not a
+    day and is dropped; the decoration around each header is trimmed so it does
+    not bleed into the neighbouring day.
     """
     result: list[tuple[DWDDayBlock, str]] = []
 
     # Try to split on the header markers
     import re
-    sections = re.split(r"===\s*.+?\s*===\n?", english)
-    # First element is empty (before first header), rest map to blocks
-    sections = [s.strip() for s in sections if s.strip()]
+    parts = re.split(r"===\s*.+?\s*===\n?", english)
+    # parts[0] is whatever preceded the first header; the rest map to blocks
+    sections = [_strip_trailing_decoration(s) for s in parts[1:]]
+    sections = [s for s in sections if s]
 
     if len(sections) == len(blocks):
         for block, section in zip(blocks, sections):
