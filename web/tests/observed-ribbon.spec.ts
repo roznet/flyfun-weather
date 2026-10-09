@@ -55,7 +55,15 @@ const STORM_ID = 'core35-a';
 /** A box around the route, as the server's `LiveFocus` carries it. */
 const BBOX: [number, number, number, number] = [-0.9, 51.0, -0.3, 51.5];
 
-function liveLayer() {
+/** The highlight (#697) a test may add to the glance. Fictional, grounded. */
+const HIGHLIGHT = {
+  text: 'Cells 25–40 NM east of track, all moving away; EGLF VFR.',
+  model: 'fixture',
+  facts_hash: 'fixture-hash-1',
+  generated_at: '2026-06-12T05:50:00Z',
+};
+
+function liveLayer(highlight: typeof HIGHLIGHT | null = null) {
   const focus = (kind: string, id: string, layers: string[]) =>
     ({ kind, id, bbox: BBOX, layers, time: null });
   return {
@@ -74,6 +82,7 @@ function liveLayer() {
       as_of: NOW,
       headline: 'Observed · as briefed, departure improving',
       comparison: 'as_briefed',
+      highlight,
       lines: [
         {
           phase: 'departure', icao: 'EGTF', alert: false, passed: false,
@@ -209,29 +218,33 @@ async function mockBriefingApi(page: Page) {
 test.describe('Observed nutshell + route ribbon', () => {
   test.beforeEach(async ({ page }) => { await mockBriefingApi(page); });
 
-  test('shows the server\'s nutshell lines verbatim, in flight order', async ({ page }) => {
+  test('shows the server\'s nutshell lines verbatim, alert lines first', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
     const card = page.locator('[data-testid="observed-nutshell"]');
     await expect(card).toBeVisible();
     await expect(page.locator('[data-testid="glance-headline"]'))
       .toContainText('as briefed, departure improving');
+    // No highlight served: the headline holds its slot, with no caption.
+    await expect(page.locator('[data-testid="glance-highlight"]')).toHaveCount(0);
 
-    // Every word is the server's — no re-wording, no re-ordering.
+    // Every word is the server's — no re-wording. The alert-tier line comes
+    // first (#697: alerts are never below the highlight), the rest in flight
+    // order.
     const lines = page.locator('.glance-line');
     await expect(lines).toHaveCount(3);
-    await expect(lines.nth(0)).toContainText('EGTF VFR');
-    await expect(lines.nth(0)).toContainText('moving away 11 kt');
-    await expect(lines.nth(1)).toContainText('Cells 25–40 NM east');
+    await expect(lines.nth(0)).toContainText('Cells 25–40 NM east');
+    await expect(lines.nth(1)).toContainText('EGTF VFR');
+    await expect(lines.nth(1)).toContainText('moving away 11 kt');
     await expect(lines.nth(2)).toContainText('EGLF VFR');
 
     await expect(page.locator('[data-testid="glance-line-departure"] .glance-phase')).toHaveText('Departure');
     await expect(page.locator('[data-testid="glance-line-enroute"] .glance-phase')).toHaveText('En route');
 
     // The alert tier is a styling hint on the phase the server flagged.
-    await expect(lines.nth(1)).toHaveClass(/glance-line-alert/);
-    await expect(lines.nth(0)).not.toHaveClass(/glance-line-alert/);
+    await expect(lines.nth(0)).toHaveClass(/glance-line-alert/);
+    await expect(lines.nth(1)).not.toHaveClass(/glance-line-alert/);
     // A source it could not read is named, never rendered as "clear".
-    await expect(lines.nth(1)).toContainText('lightning unavailable');
+    await expect(lines.nth(0)).toContainText('lightning unavailable');
     await page.locator('#observed-glance-wrapper').scrollIntoViewIfNeeded();
     await page.locator('#observed-glance-wrapper').screenshot({ path: 'test-results/observed-nutshell.png' });
   });
@@ -347,5 +360,40 @@ test.describe('Observed nutshell + route ribbon', () => {
     await page.locator('[data-testid="glance-line-enroute"]').click();
     await expect(page.locator('.leaflet-container')).toBeVisible();
     await expect(page.locator('#map-observed-cells')).toBeChecked();
+  });
+
+  test('the highlight sits under the alert line, with its caption and a 👍/👎 that posts the rated line', async ({ page }) => {
+    await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveLayer(HIGHLIGHT) }));
+    let posted: Record<string, unknown> | null = null;
+    await page.route('**/api/feedback', (r) => {
+      posted = r.request().postDataJSON();
+      return r.fulfill({ json: { id: 1, status: 'ok' } });
+    });
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const block = page.locator('[data-testid="glance-highlight"]');
+    await expect(block).toBeVisible();
+    await expect(block).toContainText(HIGHLIGHT.text);
+    await expect(block).toContainText('Experimental, still being calibrated');
+    await expect(block).toContainText('written 05:50Z');
+
+    // Reading order: the alert line, the highlight, then the headline.
+    const order = await page.locator('[data-testid="observed-nutshell"] > *').evaluateAll(
+      (els) => els.map((e) => (e as HTMLElement).dataset.testid ?? e.className));
+    expect(order.indexOf('glance-lines glance-lines-alert')).toBe(0);
+    expect(order.indexOf('glance-highlight')).toBe(1);
+    expect(order.indexOf('glance-headline')).toBe(2);
+
+    await block.locator('[data-hl-thumb="down"]').click();
+    await block.locator('[data-hl-comment]').fill('The cells were west, not east.');
+    await block.locator('[data-hl-send]').click();
+    await expect(block).toContainText('Thanks');
+    expect(posted).toMatchObject({
+      category: 'highlight_rating',
+      target: 'live_highlight',
+      sentiment: 'down',
+      comment: 'The cells were west, not east.',
+      context: HIGHLIGHT,
+    });
+    await page.locator('#observed-glance-wrapper').screenshot({ path: 'test-results/observed-highlight.png' });
   });
 });

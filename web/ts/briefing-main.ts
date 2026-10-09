@@ -21,7 +21,7 @@ import { SKEWT_OVERLAYS } from './visualization/skewt/overlay-bands';
 import { getVariableById } from './visualization/skewt/variable-panel';
 import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper';
 import { hideMetricInfo, initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
-import { mountNutshell } from './visualization/observed/nutshell-view';
+import { highlightRatingKey, mountNutshell } from './visualization/observed/nutshell-view';
 import { mountRibbon, stormDetailHtml } from './visualization/observed/ribbon-view';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
@@ -2264,6 +2264,10 @@ async function init(): Promise<void> {
     });
   }
 
+  /** Highlights already thumb-rated in this page view, keyed flight|facts_hash
+   *  (session-only, as for digests): a 10-min poll re-renders the card. */
+  const ratedHighlights = new Set<string>();
+
   function renderObservedLive(state: BriefingState): void {
     const glance = state.live?.glance ?? null;
     const ribbon = state.live?.ribbon ?? null;
@@ -2275,10 +2279,32 @@ async function init(): Promise<void> {
     const hasGlance = !!glance && (glance.lines ?? []).length > 0;
     if (glanceWrapper) glanceWrapper.style.display = hasGlance ? '' : 'none';
     if (hasGlance && glanceEl && glance) {
+      const live = state.live!;
+      const ratedKey = glance.highlight ? highlightRatingKey(live.flight_id, glance.highlight) : null;
       mountNutshell(glanceEl, glance, !!state.snapshot?.observed_conditions, {
         onFocus: (focus) => focusMapOn(focus),
         onShowMap: () => focusMapOn(null, ['radar', 'cells']),
-      });
+        // #697: a 👍/👎 on the highlight, with the rated line as its context
+        // (the line is regenerated as the weather changes).
+        onRateHighlight: async (highlight, sentiment, comment, contactOk) => {
+          await api.submitFeedback({
+            flight_id: live.flight_id,
+            pack_timestamp: live.pack_timestamp,
+            category: 'highlight_rating',
+            comment,
+            sentiment,
+            target: 'live_highlight',
+            contact_ok: contactOk,
+            context: {
+              facts_hash: highlight.facts_hash,
+              generated_at: highlight.generated_at,
+              model: highlight.model,
+              text: highlight.text,
+            },
+          });
+          ratedHighlights.add(highlightRatingKey(live.flight_id, highlight));
+        },
+      }, { highlightRated: ratedKey != null && ratedHighlights.has(ratedKey) });
       // Fill the "N min ago" the card leaves empty; the poll re-ages it after.
       ui.refreshLiveAges();
     }

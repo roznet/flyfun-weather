@@ -1000,8 +1000,10 @@ export interface FeedbackRequest {
   category: string;
   comment: string;
   sentiment?: 'up' | 'down' | null;
-  target?: 'digest' | 'general' | null;
+  target?: 'digest' | 'general' | 'live_highlight' | null;
   contact_ok?: boolean;
+  /** Only with target 'live_highlight': the rated line, verbatim from /live. */
+  context?: { facts_hash: string; generated_at: string; model: string; text: string };
 }
 
 export async function submitFeedback(req: FeedbackRequest): Promise<{ id: number; status: string }> {
