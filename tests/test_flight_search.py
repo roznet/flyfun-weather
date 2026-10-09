@@ -78,6 +78,15 @@ class TestMatches:
         assert matches([], "Alps trip", parse_query("trip"))
         assert not matches([], "Alps trip", parse_query("pyrenees"))
 
+    def test_description_words_match(self):
+        # #587: the free-text description is searchable alongside the route.
+        assert matches(self.WPS, "", parse_query("family"), "Family visit")
+        assert matches(self.WPS, "", parse_query("vis"), "Family visit")
+        assert matches(self.WPS, "", parse_query("LFMD family"), "Family visit")
+        assert not matches(self.WPS, "", parse_query("LFAT family"), "Family visit")
+        assert not matches(self.WPS, "", parse_query("ily"), "Family visit")
+        assert matches([], "", parse_query("family"), "Family visit")
+
     def test_no_haystack_never_matches(self):
         assert not matches([], "", parse_query("LFMD"))
         assert not matches(None, None, parse_query("LFMD"))
@@ -171,6 +180,15 @@ class TestPastQueryEndpoint:
         assert resp.status_code == 200
         past = _sections(resp.json())["past"]
         assert [f["waypoints"] for f in past] == [["LESB", "LFMD"]]
+
+    def test_past_filter_matches_description(self, client, app_db):
+        f = _save(app_db, waypoints=["LESB", "LFMD"], days_offset=-90, idx=1)
+        _save(app_db, waypoints=["EGTF", "LFAT"], days_offset=-91, idx=2)
+        assert client.patch(f"/api/flights/{f.id}", json={"description": "Family visit"}).status_code == 200
+
+        resp = client.get("/api/flights?past_q=family")
+        past = _sections(resp.json())["past"]
+        assert [p["waypoints"] for p in past] == [["LESB", "LFMD"]]
 
     def test_past_total_header_reports_matches(self, client, app_db):
         for i in range(4):

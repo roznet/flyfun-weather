@@ -7,6 +7,8 @@ import OSLog
 final class AddFlightViewModel {
     // Form fields
     var waypointsText: String = ""
+    /// Free-text purpose / description (#587). Optional; blank is stored as null.
+    var descriptionText: String = ""
     /// TZ-aware departure time. `departureDate` below bridges to its instant so
     /// the rest of the VM keeps working with a plain `Date`.
     let departureTime: DepartureTimeModel
@@ -210,6 +212,7 @@ final class AddFlightViewModel {
         self.altDepartureTime = DepartureTimeModel(instant: altInstant)
         if let flight {
             waypointsText = Self.baselineRouteInput(for: flight)
+            descriptionText = flight.description ?? ""
             cruiseAltitudeFt = flight.cruiseAltitudeFt
             flightCeilingFt = flight.flightCeilingFt
             // Clamped so the pickers can represent it: otherwise editing either
@@ -222,6 +225,20 @@ final class AddFlightViewModel {
     }
 
     var isEditing: Bool { editingFlight != nil }
+
+    /// Description for a request creating a flight: trimmed, nil when blank.
+    var descriptionForCreate: String? {
+        let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Description for a PATCH / move: nil when unchanged (server keeps or
+    /// inherits it), "" when the pilot cleared it.
+    var descriptionPayload: String? {
+        let original = editingFlight?.description ?? ""
+        let trimmed = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == original ? nil : trimmed
+    }
 
     var navigationTitle: String { isEditing ? "Edit Flight" : "New Flight" }
 
@@ -991,6 +1008,7 @@ final class AddFlightViewModel {
             waypoints: waypoints,
             departureTime: Self.iso8601(departureDate),
             rawRoute: rawRoutePayload,
+            description: descriptionForCreate,
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
@@ -1040,7 +1058,8 @@ final class AddFlightViewModel {
             // Only when the pilot actually retyped the route: an untouched route
             // must keep the source flight's stored Field-15 annotation and its
             // `parser_version` re-derive marker (mirrors the web `moveBtn`).
-            rawRoute: rawRoutePayload
+            rawRoute: rawRoutePayload,
+            description: descriptionPayload
         )
 
         do {
@@ -1073,6 +1092,7 @@ final class AddFlightViewModel {
             waypoints: waypointsPayload,
             departureTime: Self.iso8601(departureDate),
             rawRoute: rawRoutePayload,
+            description: descriptionForCreate,
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,
             flightDurationHours: flightDurationHours,
@@ -1249,6 +1269,7 @@ final class AddFlightViewModel {
             // edited route omitting it instead would CLEAR the flight's Field-15
             // annotation, which is what every iOS route edit used to do.
             rawRoute: rawRoutePayload,
+            description: descriptionPayload,
             departureTime: Self.iso8601(departureDate),
             cruiseAltitudeFt: cruiseAltitudeFt,
             flightCeilingFt: flightCeilingFt,

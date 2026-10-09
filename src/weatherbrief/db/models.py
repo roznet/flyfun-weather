@@ -40,6 +40,10 @@ from weatherbrief.analytics.models import (  # noqa: F401
 )
 
 
+#: Max length of ``flights.description`` (#587); mirrored by the API validators.
+FLIGHT_DESCRIPTION_MAX_LEN = 500
+
+
 class UserAircraftRow(Base):
     __tablename__ = "user_aircraft"
 
@@ -177,6 +181,10 @@ class FlightRow(Base):
         nullable=True, index=True,
     )
     route_name: Mapped[str] = mapped_column(String(256), default="")
+    # Free-text purpose / description the pilot gives the flight (#587).
+    description: Mapped[str | None] = mapped_column(
+        String(FLIGHT_DESCRIPTION_MAX_LEN), nullable=True
+    )
     waypoints_json: Mapped[str] = mapped_column(Text, default="[]")
     departure_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cruise_altitude_ft: Mapped[int] = mapped_column(Integer, default=8000)

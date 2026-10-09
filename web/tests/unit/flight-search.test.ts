@@ -86,6 +86,16 @@ describe('matchesQuery', () => {
     expect(m('pyrenees', [], 'Alps trip')).toBe(false);
   });
 
+  it('matches words in the description (#587)', () => {
+    const d = (q: string, wps = WPS) => matchesQuery(wps, '', parseQuery(q), 'Family visit');
+    expect(d('family')).toBe(true);
+    expect(d('vis')).toBe(true);
+    expect(d('LFMD family')).toBe(true);
+    expect(d('LFAT family')).toBe(false);
+    expect(d('ily')).toBe(false);
+    expect(d('family', [])).toBe(true);
+  });
+
   it('never matches with an empty haystack', () => {
     expect(m('LFMD', [], '')).toBe(false);
     expect(matchesQuery(undefined, undefined, parseQuery('LFMD'))).toBe(false);

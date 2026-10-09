@@ -105,6 +105,13 @@ struct FlightCardView: View, Equatable {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
+            if let description = flight.description, !description.isEmpty {
+                Text(description)
+                    .font(.subheadline)
+                    .italic()
+                    .lineLimit(2)
+            }
+
             HStack(spacing: 8) {
                 if let date = flight.departureDate {
                     Label(

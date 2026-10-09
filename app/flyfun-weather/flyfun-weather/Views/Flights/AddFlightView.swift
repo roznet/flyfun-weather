@@ -60,6 +60,7 @@ struct AddFlightView: View {
                 profileSection
                 aircraftSection
                 waypointsSection
+                descriptionSection
                 departureSection
                 flexibilitySection
                 altitudeSection
@@ -457,6 +458,18 @@ struct AddFlightView: View {
             }
         } header: {
             Text("Aircraft")
+        }
+    }
+
+    private var descriptionSection: some View {
+        Section {
+            TextField("e.g. Family visit", text: $viewModel.descriptionText, axis: .vertical)
+                .lineLimit(1...3)
+                .accessibilityIdentifier("descriptionField")
+        } header: {
+            Text("Description")
+        } footer: {
+            Text("Optional. Searchable from the flights list filter on the web.")
         }
     }
 

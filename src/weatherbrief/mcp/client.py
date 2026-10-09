@@ -70,11 +70,14 @@ class WeatherbriefClient:
         departure_time: str,
         cruise_altitude_ft: int | None = None,
         flight_duration_hours: float | None = None,
+        description: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "waypoints": waypoints,
             "departure_time": departure_time,
         }
+        if description:
+            body["description"] = description
         if cruise_altitude_ft is not None:
             body["cruise_altitude_ft"] = cruise_altitude_ft
         if flight_duration_hours is not None:

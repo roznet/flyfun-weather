@@ -362,6 +362,13 @@ def create_flight(
         int | None,
         Field(description="Cruise altitude in feet (default: from user profile, typically 8000)"),
     ] = None,
+    description: Annotated[
+        str | None,
+        Field(
+            description="Optional free-text purpose of the flight, e.g. 'Family visit'. Max 500 characters.",
+            max_length=500,
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Create a new flight and automatically trigger a weather briefing.
 
@@ -381,6 +388,7 @@ def create_flight(
                 departure_time=departure_time,
                 cruise_altitude_ft=cruise_altitude_ft,
                 flight_duration_hours=flight_duration_hours,
+                description=description,
             )
         except httpx.HTTPStatusError as e:
             return _error_result(f"Failed to create flight: {e.response.text}", e.response.status_code)
@@ -426,6 +434,7 @@ def create_flight(
         "flight": {
             "id": flight_id,
             "route_name": flight.get("route_name"),
+            "description": flight.get("description"),
             "waypoints": flight.get("waypoints", []),
             "departure_time": flight.get("departure_time"),
             "cruise_altitude_ft": flight.get("cruise_altitude_ft"),

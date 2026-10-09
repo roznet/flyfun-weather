@@ -109,6 +109,8 @@ export interface MoveFlightRequest {
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;
   raw_route?: string;
+  /** Free-text description (#587); omit to inherit the source's, "" clears. */
+  description?: string;
   /** Keep the moved leg in its trip (#602). Defaults to true server-side — a
    *  move is the same leg rescheduled, so membership follows it unless the
    *  pilot explicitly unticks "Keep in trip". */
@@ -138,6 +140,8 @@ export interface UpdateFlightRequest {
   flexibility?: 'none' | 'alternate' | 'same_day' | 'prev_day' | 'next_day';
   // Per-flight briefing-notification override; omit for no change.
   notify_override?: 'default' | 'notify' | 'mute';
+  // Free-text description (#587); omit for no change, "" clears.
+  description?: string;
   cruise_altitude_ft?: number;
   flight_ceiling_ft?: number;
   flight_duration_hours?: number;

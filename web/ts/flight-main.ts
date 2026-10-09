@@ -17,6 +17,11 @@ import { flaggedTagsFromAdvisories } from './components/debrief-taxonomy';
 import { initInfoPopup } from './components/info-popup';
 import type { ConditionTagId } from './store/types';
 
+/** Trimmed value of the edit-panel description input ("" when blank or absent). */
+function editedDescription(): string {
+  return (document.getElementById('edit-description') as HTMLInputElement | null)?.value.trim() ?? '';
+}
+
 async function init(): Promise<void> {
   await initI18n();
   // Auth check
@@ -350,6 +355,8 @@ async function init(): Promise<void> {
         flight_duration_hours: duration,
         ...(newWaypoints ? { waypoints: newWaypoints } : {}),
         ...(newRawRoute ? { raw_route: newRawRoute } : {}),
+        // Metadata only — always sent; "" clears.
+        description: editedDescription(),
       });
 
       if (newWaypoints) store.getState().loadWaypoints();
@@ -419,6 +426,7 @@ async function init(): Promise<void> {
         // the same leg, rescheduled).
         const newFlight = await moveFlight(flight.id, {
           ...payload,
+          description: editedDescription(),
           // A move is the same leg rescheduled, so membership follows by default.
           ...(flight.trip ? { keep_in_trip: keepInTrip(true) } : {}),
         });
@@ -450,6 +458,7 @@ async function init(): Promise<void> {
           // therefore starts with NULL raw_route on a copy-without-edit
           // — annotation is lost, but the re-derive marker stays honest.
           raw_route: payload.raw_route,
+          description: editedDescription() || undefined,
           // Duplicate does NOT inherit the trip unless the pilot ticks the
           // box: a duplicate is a new thing, and inheriting would quietly
           // grow the trip with a leg that is not part of it.
