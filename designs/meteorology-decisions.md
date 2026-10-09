@@ -4926,7 +4926,8 @@ alert tier push delivery (#638) will consume. Neither touches a grade.
   candidates (`ALERT_ALTERNATES`); everything else is `highlight`. An alert carries
   `new_alert` once per value (last-alerted memory on the live layer; a key that
   returns to the baseline is forgotten so a recurrence alerts afresh; a failed
-  fetch keeps the memory).
+  fetch keeps the memory). *Airport rows superseded by §45: they alert only
+  when worse than already alerted, and the memory survives a return.*
 
 ### Rejected
 
@@ -5063,9 +5064,10 @@ landing).
 
 ### Real-world validation needed
 
-- Convective flicker at a station reporting TS → VCTS → CB every SPECI: each
+- ~~Convective flicker at a station reporting TS → VCTS → CB every SPECI: each
   step up re-alerts once per value (TS→CB→TS alerts twice). Watch it before push
-  (#638) consumes the alert tier.
+  (#638) consumes the alert tier.~~ Watched (2026-10-08/09: ~27 % of alert pings
+  were repeats); closed by §45.
 - A SIGMET merged across FIRs keeps its alert when a partner issues late or one
   lapses (the alert memory follows any shared member SIGMET), so one phenomenon
   alerts once.
@@ -5796,3 +5798,66 @@ Three tests, all with exact production contexts unless noted (details and tables
 `structured_output`, `with_structured`), `digest/prompt_builder.py` +
 `analysis/advisories/airport_wind.py` (`spell_out_runway_wind`), eval tooling
 `scripts/{run_digest_eval,replay_prod_digests,export_digest_replay}.py`.
+
+---
+
+## 45. An airport re-alerts only when worse than it already alerted (#722)
+
+**Date:** 2026-10-09 · **Issue:** #722 · **Supersedes:** the airport part of §34/§35's
+"alert once per value, forget on return"; closes §36's "watch before push" item.
+
+### Context
+
+The 2026-10-08/09 live review (38 flights, 73 alert pings, every alert true on its raw
+report) found ~20 pings (27 %) re-announcing something already alerted, each from one
+airport hovering around a threshold: EDLN's METAR VFR→MVFR→IFR→MVFR→IFR→MVFR (5 pings),
+EGTK's wind green/amber/red (5 per flight), EDDC's TCU→CB→TCU (10 pings). Harmless as
+panel rows; as a push (#638) it is five buzzes for one ceiling hovering around 1,000 ft.
+Two mechanisms caused it: any new value re-alerted, in either direction (IFR→MVFR is a
+new value, so an improving destination pinged), and a single report back at the
+baseline wiped the memory, so the next relapse alerted as new.
+
+### The decision
+
+- **Airport rows** (METAR category, TAF-at-ETA category, convective, wind, significant
+  weather) **ping only when worse than the worst already alerted for that key on this
+  flight.** Severity: `_CATEGORY_RANK` for METAR/TAF category, `_WIND_RANK` for wind,
+  the convective label's level (TCU < CB < TS/VCTS) for convective.
+- **Significant weather has no order:** it pings once per phenomenon (FZRA, GR, +SHRA…)
+  per flight; the memory holds the union alerted.
+- **The mark survives the return to baseline** for the rest of the flight (no re-arm).
+  It is reset only where the whole alert memory is: a new pack (the layer starts over).
+- **Only the ping changes.** Every row still shows, with its current value and tier; a
+  relapse or a step down from the worst is an alert-tier row with `new_alert` false.
+- **Unchanged:** storms (§41, once per phenomenon / stretch), SIGMETs (#682/#683/#689,
+  chain memory and the forget sweep), radar/lightning rings, the tiers, and §35's no
+  hysteresis for *showing* a change.
+- **Compatibility:** the memory stays `dict[str, str]`. A memory written before holds
+  the last alerted value per key, which is a valid "worst" to start from, so a flight in
+  the air at deploy does not re-ping (pinned by a test).
+
+### Simulated effect (from the issue, not re-run here)
+
+73 → 58 pings on the 10-08/09 window, only repeats dropped: EDLN 5→2 (MVFR, IFR), EGTK
+5→3 per flight, EDDC→EDDS 10→7, EGTE/EGGP 2→1.
+
+### Rejected
+
+- **Re-arm after N min at baseline (e.g. 60).** Would re-ping EDDC's TCU 90 min after the
+  last one. Flights are a few hours, the pilot already has the worst value and the row
+  stays visible. Revisit with the replay if v1 feels too quiet.
+- **Hysteresis on showing the row.** §35 stands: the pilot sees each flip; only the
+  buzz is rationed.
+
+### Revisit when
+
+- A long flight (or a long ground hold) sees a destination clear for hours and then
+  deteriorate to a value it already alerted: that relapse does not ping. If that case
+  shows up in reviews, add the re-arm above.
+
+### Files
+
+`tasks/live_significance.py` (`_airport_alert`, `_AIRPORT_ALERT_RANKS`, the forget sweep
+skips airport keys), `models/live.py` (`LiveLayer.alerted`), tests in
+`tests/test_live_airport_rules.py` ("Worst-alerted memory") and
+`tests/test_live_significance.py`.

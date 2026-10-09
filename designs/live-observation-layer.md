@@ -20,7 +20,9 @@ replacements, categorical radar/lightning values; §38, #683: pending SIGMETs;
 §39: en route, a station's CB/TCU is a highlight, TS/VCTS still alerts;
 §40, #689: a SIGMET starting after arrival is a highlight, a plain reissue
 of a briefed SIGMET is direction `updated`;
-§41, #688: en-route convective alerts from radar storms, see below).
+§41, #688: en-route convective alerts from radar storms, see below;
+§45, #722: an airport row pings only when worse than the worst it already
+alerted on this flight, a memory that survives a return to baseline).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing
@@ -60,6 +62,15 @@ DATA_DIR/packs/{user}/{flight}/
 - **One lock per flight** around read → classify → write (the alert memory is
   read-modify-write); writes are temp file + `os.replace`. Single uvicorn worker,
   so a `threading.Lock` suffices.
+- **Alert memory** (`LiveLayer.alerted`, `dict[str, str]`, reset with the
+  layer on a new pack) decides `new_alert` (the future push), never which rows
+  show. Three families: airport keys (`metar:` / `taf:` / `conv:` / `wind:` /
+  `wx:`) hold the worst value alerted (the phenomena alerted, for `wx:`) and
+  are never forgotten during the flight (§45, `_airport_alert`); storm keys
+  (`storm-alerted:` / `storm-span:`, §41); SIGMET and radar/lightning keys
+  hold the last value and are dropped once the row is gone (unless pending, `_pending_key`). Changing
+  a family's stored format must keep an existing `live.json` loadable without
+  re-alerting a flight in the air.
 - **`live_meta.json`** exists so list endpoints can report `live_updated_at`
   without parsing a payload that carries the full observed-conditions block.
 - **Lifetime:** one file per flight, overwritten each tick. Removed with the flight
