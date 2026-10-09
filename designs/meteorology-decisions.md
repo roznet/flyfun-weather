@@ -5184,7 +5184,7 @@ refresh and the live tick.
   before its start gets no row; a pending SIGMET that alerted keeps its alert
   memory while missing before its start, so its return does not alert twice.
   A pending SIGMET cancelled before its start therefore disappeared silently;
-  **amended by §45**: when the fetch's queries would have listed it, it is
+  **amended by §46**: when the fetch's queries would have listed it, it is
   reported "cancelled".
 - **Clients**: the SIGMET tables tag a pending row "from HH:MMZ"; a change row
   whose time (the SIGMET's start) is in the future shows no age.
