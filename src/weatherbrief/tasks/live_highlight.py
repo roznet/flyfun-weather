@@ -13,9 +13,9 @@ earlier, a model failure can never roll back a tick, and the ↻ press returns
 without waiting for a model call (measured on prod 2026-10-07: p50 1.04 s,
 p95 1.19 s on the busiest real tick, against a 3–5 s ↻ refresh).
 
-**Written but not displayed** (owner, 2026-10-07). Every live flight's
-highlight is generated and logged so real flight days can be reviewed and the
-prompt calibrated; no client renders it yet. The review log
+**Displayed since 2026-10-09** above the nutshell on iOS and web, with an
+experimental caption and a 👍/👎 (``highlight_rating`` feedback carrying the
+rated line); the agent ``live`` block quotes it. The review log
 (``live_highlights.jsonl``) keeps the facts alongside the text, because a line
 that reads wrong is otherwise ambiguous between the model's phrasing and the
 facts block feeding it.
