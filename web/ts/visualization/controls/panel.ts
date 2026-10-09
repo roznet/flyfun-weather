@@ -20,7 +20,6 @@ import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMetric } from '../../helpers/metrics-helper';
-import { getMapMetricOptions, MAP_METRIC_NONE } from '../route-map/metrics';
 import { OBSERVED_OVERLAY_OPTIONS } from '../route-map/observed-overlay-geometry';
 import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
@@ -790,8 +789,6 @@ export interface RouteGraphControlCallbacks {
 }
 
 export interface MapControlCallbacks {
-  onColorMetricChange: (metricId: string) => void;
-  onWidthMetricChange: (metricId: string) => void;
   /** Toggle the experimental Hewson front overlay (#196). */
   onFrontsToggle?: (visible: boolean) => void;
   /** Toggle the airport forecast overlay (#424). */
@@ -1152,7 +1149,7 @@ export function renderRouteGraphControls(
   }
 }
 
-/** Render map-specific controls (color + width metric dropdowns) into the map controls container. */
+/** Render the map's overlay controls (fronts, airport forecast, observed layer) into the map controls container. */
 export function renderMapControls(
   container: HTMLElement,
   settings: VizSettings,
@@ -1161,30 +1158,9 @@ export function renderMapControls(
   forecastOverlay?: MapForecastOverlayControls,
   observed?: ObservedAvailability,
 ): void {
-  const colorOptions = getMapMetricOptions(false);
-  const widthOptions = getMapMetricOptions(true);
-
+  // The Color/Width metric pickers live in the legend rows (route-map/legend.ts,
+  // #731), beside the scale they choose, not here.
   let html = '<div class="map-controls">';
-
-  html += '<label class="map-control-label">';
-  html += `<span class="viz-toggle-label">${t('viz.color')}</span>`;
-  html += '<select id="map-color-metric" class="map-control-select">';
-  for (const opt of colorOptions) {
-    const selected = opt.id === settings.mapColorMetric ? ' selected' : '';
-    html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
-  }
-  html += '</select>';
-  html += '</label>';
-
-  html += '<label class="map-control-label">';
-  html += `<span class="viz-toggle-label">${t('viz.width')}</span>`;
-  html += '<select id="map-width-metric" class="map-control-select">';
-  for (const opt of widthOptions) {
-    const selected = opt.id === settings.mapWidthMetric ? ' selected' : '';
-    html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
-  }
-  html += '</select>';
-  html += '</label>';
 
   // Experimental Hewson front overlay — only surfaced when front data exists
   // for this briefing (i.e. the "Auto Front Detection" pref was on).
@@ -1311,7 +1287,6 @@ export function renderMapControls(
     });
   }
 
-  // Wire metric dropdowns
   const observedOpacity = container.querySelector('#map-observed-opacity') as HTMLInputElement | null;
   if (observedOpacity && callbacks.onObservedOpacityChange) {
     const readout = container.querySelector('#map-observed-opacity-value') as HTMLElement | null;
@@ -1339,19 +1314,6 @@ export function renderMapControls(
   if (observedSelect && callbacks.onObservedOverlayChange) {
     observedSelect.addEventListener('change', () => {
       callbacks.onObservedOverlayChange!(observedSelect.value);
-    });
-  }
-
-  const colorSelect = container.querySelector('#map-color-metric') as HTMLSelectElement | null;
-  if (colorSelect) {
-    colorSelect.addEventListener('change', () => {
-      callbacks.onColorMetricChange(colorSelect.value);
-    });
-  }
-  const widthSelect = container.querySelector('#map-width-metric') as HTMLSelectElement | null;
-  if (widthSelect) {
-    widthSelect.addEventListener('change', () => {
-      callbacks.onWidthMetricChange(widthSelect.value);
     });
   }
 }

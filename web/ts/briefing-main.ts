@@ -2052,8 +2052,6 @@ async function init(): Promise<void> {
       // Map controls
       if (mapControlsContainer) {
         renderMapControls(mapControlsContainer, state.vizSettings, {
-          onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
-          onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
           onFrontsToggle: (visible) => store.getState().setMapFrontsVisible(visible),
           onForecastOverlayToggle: (visible) => store.getState().setMapForecastOverlayVisible(visible),
           onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
@@ -2074,7 +2072,15 @@ async function init(): Promise<void> {
 
       // Legend
       if (mapLegendContainer) {
-        renderMapLegend(mapLegendContainer, colorMetric, widthMetric);
+        renderMapLegend(mapLegendContainer, {
+          colorMetricId: state.vizSettings.mapColorMetric,
+          widthMetricId: widthId,
+          colorMetric,
+          widthMetric,
+        }, {
+          onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
+          onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
+        });
       }
 
       // Altitude slider
