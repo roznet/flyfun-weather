@@ -509,21 +509,24 @@ further calibration gate, no What's New entry).
 
 ### Display and feedback (#697 slices 1–3)
 
-- **Reading order, both clients:** alert-tier nutshell lines (and on iOS the
-  alert-tier change rows) first, never folded; then the highlight at body
-  size, one gray caption "Experimental, still being calibrated. Thanks for
-  flagging issues. · written HH:MMZ" (the written time stays: a carried-forward
-  line can be older than the layer), and 👍/👎; then the ribbon. No highlight
-  (before the first generation, a rejected state, after arrival): the nutshell
-  `headline` in its slot, no caption, no thumbs. Never styled as an alert.
+- **Reading order, both clients:** the highlight first, at body size, with
+  one gray caption "Experimental, still being calibrated. Thanks for flagging
+  issues. · written HH:MMZ" (the written time stays: a carried-forward line
+  can be older than the layer) and 👍/👎; then the alert-tier nutshell lines
+  (and on iOS the alert-tier change rows), never folded; then the ribbon. The
+  owner moved the highlight above the alerts on 2026-10-09 after seeing it on
+  real flights (the plan had alerts on top). No highlight (before the first
+  generation, a rejected state, after arrival): the nutshell `headline` in its
+  slot, no caption, no thumbs. Never styled as an alert.
 - **iOS** (`ObservedHighlightView.swift`): a "Details" fold below the ribbon,
   collapsed by default and remembered (`@AppStorage("observedDetailsExpanded")`),
   holds the headline (when the highlight took its slot), the other nutshell
   lines, the map button and the other "Since this briefing" rows
   (`LiveChangesView(excludesAlerts:)`). A plain button, not `DisclosureGroup`,
   so the toggle exposes `expanded`/`collapsed` to the XCUI helper.
-- **Web** (`nutshellHtml`): alert lines, highlight, then headline and the
-  other lines **unfolded** (documented divergence: the desktop has room).
+- **Web** (`nutshellHtml`): the highlight (or the headline), alert lines, then
+  the headline and the other lines **unfolded** (documented divergence: the
+  desktop has room).
   Alert change rows stay in the page-level "Since this briefing" banner.
 - **Rating:** `POST /api/feedback` with `target="live_highlight"`,
   `category="highlight_rating"`, and `context` = the four `/live` fields

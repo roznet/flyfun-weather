@@ -1260,7 +1260,7 @@ final class flyfun_weatherUITests: XCTestCase {
                 switchToBriefingTab(app, "Observed")
 
                 // #697: the nutshell lines and the non-alert change rows live
-                // under the Details fold; alert ones stay above the highlight.
+                // under the Details fold; alert ones stay just under the highlight.
                 openObservedDetails(app)
                 let section = app.descendants(matching: .any)["liveChangesSection"]
                 XCTAssertTrue(section.waitForExistence(timeout: Self.uiTimeout),
@@ -1471,11 +1471,11 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(app.buttons["highlightThumb-up"].firstMatch.exists, "the highlight should offer 👍")
         XCTAssertTrue(app.buttons["highlightThumb-down"].firstMatch.exists, "the highlight should offer 👎")
 
-        // Alerts above the highlight, never folded: every alert-tier line
+        // Alerts just under the highlight, never folded: every alert-tier line
         // and change row is on screen without opening Details.
         let alerts = app.descendants(matching: .any)["observedAlerts"].firstMatch
-        XCTAssertTrue(alerts.exists, "the alert block should render above the highlight")
-        XCTAssertLessThan(alerts.frame.minY, card.frame.minY, "alerts sit above the highlight")
+        XCTAssertTrue(alerts.exists, "the alert block should render under the highlight")
+        XCTAssertGreaterThan(alerts.frame.minY, card.frame.minY, "the highlight comes first, alerts under it")
         for line in (glance["lines"] as? [[String: Any]]) ?? [] where line["alert"] as? Bool == true {
             let phase = line["phase"] as? String ?? ""
             XCTAssertTrue(app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch.exists,

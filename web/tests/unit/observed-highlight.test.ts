@@ -36,7 +36,7 @@ describe('observed highlight', () => {
     expect(highlightFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(highlightFiles)('%s: alert lines, then the highlight, then the rest', (name) => {
+  it.each(highlightFiles)('%s: the highlight, then the alert lines, then the rest', (name) => {
     const glance = load(name).glance!;
     const hl = glance.highlight!;
     expect(hl.text).toBeTruthy();
@@ -48,11 +48,14 @@ describe('observed highlight', () => {
     for (const line of glance.lines) {
       const lineAt = at(line.text);
       expect(lineAt).toBeGreaterThan(-1);
-      if (line.alert) expect(lineAt).toBeLessThan(highlightAt);
-      else expect(lineAt).toBeGreaterThan(highlightAt);
+      expect(lineAt).toBeGreaterThan(highlightAt);
     }
-    // The headline stays (it carries the observation time), under the highlight.
+    // The headline stays (it carries the observation time), under the
+    // highlight and the alert lines.
     expect(at(glance.headline)).toBeGreaterThan(highlightAt);
+    for (const line of glance.lines.filter((l) => l.alert)) {
+      expect(at(glance.headline)).toBeGreaterThan(at(line.text));
+    }
     // Caption with the written time, and the thumbs.
     expect(html).toContain('Experimental, still being calibrated. Thanks for flagging issues.');
     expect(html).toContain('written 08:20Z');

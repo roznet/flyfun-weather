@@ -2,10 +2,10 @@ import SwiftUI
 
 // The top of the Observed tab once the server sends a nutshell (#697):
 //
-//   1. alerts      — alert-tier nutshell lines and alert-tier change rows,
-//                    never folded;
-//   2. highlight   — the model-written line, its caption and 👍/👎; the
+//   1. highlight   — the model-written line, its caption and 👍/👎; the
 //                    nutshell headline stands in its place when there is none;
+//   2. alerts      — alert-tier nutshell lines and alert-tier change rows,
+//                    never folded;
 //   3. ribbon      — (RouteRibbonCard, unchanged);
 //   4. Details     — collapsed by default and remembered: the headline, the
 //                    other nutshell lines, the other change rows.

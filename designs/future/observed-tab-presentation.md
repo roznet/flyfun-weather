@@ -28,7 +28,7 @@ to calibrate the prompt before any client shows it, which also makes the #696
 dependency moot for now). As-built in `live-observation-layer.md`. It needs
 #695 deployed to produce anything: the facts come from `glance` + `ribbon`.
 Slice 6 (#697 display, 2026-10-09): the highlight is shown on iOS and web above
-the ribbon, alert lines above it, with an experimental caption, its written
+the ribbon and first, alert lines under it, with an experimental caption, its written
 time and a 👍/👎 recorded as `highlight_rating` feedback; iOS folds the
 headline, other lines and other change rows under "Details" (collapsed,
 remembered), web leaves them unfolded; the agent `live` block quotes it.

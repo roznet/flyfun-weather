@@ -7,11 +7,12 @@
  * (#697). Documented divergence: iOS folds the headline and the non-alert
  * lines under "Details"; the web leaves them unfolded (the desktop has room).
  *
- * Reading order (#697): alert-tier lines first, then the model-written
- * highlight with its "experimental · written HH:MMZ" caption and 👍/👎, then
- * the headline and the other lines. With no highlight (before the first
- * generation, a rejected one, after arrival) the headline takes its slot,
- * with no caption and no thumbs. The highlight is never styled as an alert.
+ * Reading order (#697): the model-written highlight first, with its
+ * "experimental · written HH:MMZ" caption and 👍/👎, then the alert-tier
+ * lines, then the headline and the other lines. With no highlight (before the
+ * first generation, a rejected one, after arrival) the headline takes its
+ * slot, with no caption and no thumbs. The highlight is never styled as an
+ * alert.
  *
  * The headline comparing with the briefing, then one line per phase
  * (departure / en route / arrival). **Every word is the server's**
@@ -129,12 +130,13 @@ export function nutshellHtml(
     ? `<span class="glance-asof" data-live-age="${escapeHtml(glance.as_of)}"></span>`
     : '';
   const highlight = glance.highlight ?? null;
+  const headline = `<div class="glance-headline" data-testid="glance-headline">`
+    + `${escapeHtml(glance.headline ?? '')}${asOf}</div>`;
   return '<div class="glance-card" data-testid="observed-nutshell">'
+    + (highlight ? highlightHtml(highlight, opts) : headline)
     + (alertLines ? `<div class="glance-lines glance-lines-alert">${alertLines}</div>` : '')
-    + (highlight ? highlightHtml(highlight, opts) : '')
     // Kept under the highlight too: it carries the observation time and age.
-    + `<div class="glance-headline" data-testid="glance-headline">`
-    + `${escapeHtml(glance.headline ?? '')}${asOf}</div>`
+    + (highlight ? headline : '')
     + (otherLines ? `<div class="glance-lines">${otherLines}</div>` : '')
     + (showMapButton
       ? '<button type="button" class="btn-secondary glance-map-btn" data-glance-showmap>'

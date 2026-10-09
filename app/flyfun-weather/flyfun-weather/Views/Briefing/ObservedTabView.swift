@@ -4,9 +4,9 @@ import SwiftUI
 /// order a pilot reads it in the cockpit — on the day, and in the aircraft,
 /// this is the screen the app is opened for (planning happens on a computer).
 ///
-/// 1. **At a glance** (#697) — alert-tier nutshell lines and change rows
-///    (never folded), the model-written highlight (or the nutshell headline
-///    in its place), the route ribbon, then a **Details** fold (collapsed by
+/// 1. **At a glance** (#697) — the model-written highlight (or the nutshell
+///    headline in its place), alert-tier nutshell lines and change rows
+///    (never folded), the route ribbon, then a **Details** fold (collapsed by
 ///    default, remembered) with the headline, the other nutshell lines (#690)
 ///    and the other "Since this briefing" rows (#637). A layer without a
 ///    nutshell (older server, a tick that could not build it) falls back to
@@ -29,8 +29,8 @@ struct ObservedTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 if let glance = nutshell {
                     VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-                        ObservedAlertsCard(viewModel: viewModel, glance: glance, changes: viewModel.liveChanges)
                         ObservedHighlightCard(viewModel: viewModel, glance: glance)
+                        ObservedAlertsCard(viewModel: viewModel, glance: glance, changes: viewModel.liveChanges)
                     }
                     .spyAnchor("glance")
                     if let ribbon = viewModel.liveLayerForPack?.ribbon {
