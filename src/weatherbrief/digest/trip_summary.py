@@ -216,7 +216,7 @@ _GO_NOGO_PATTERNS = [
     # in "the weather is going to move" are description, not a recommendation.
     # The lookbehinds spare a countdown ("two days to go", which Haiku 5.5
     # writes) while "good to go" stays a verdict.
-    r"(?<!days to )(?<!day to )(?<!hours to )"
+    r"(?<!days to )(?<!day to )(?<!hours to )(?<!weeks to )(?<!week to )"
     r"\bgo\b(?!\s+(?:to|through|into|from|down|up|via|around|over)\b)",
     r"\bavoid(?:ed|ing|s)?\b",
     r"\bshould (?:not )?fly\b",

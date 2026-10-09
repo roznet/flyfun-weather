@@ -188,10 +188,13 @@ class TestGuardrail:
         text = f"Sunday's LSGS to EGTF is red. {phrase}"
         assert check_guardrail(text, summary, worst_leg_id="b") is None
 
-    def test_a_countdown_is_not_a_verdict(self, summary):
+    @pytest.mark.parametrize("countdown", [
         # Haiku 5.5 wrote "with two days to go" on the A/B; the bare-"go" rule
         # rejected a correct paragraph for it.
-        text = "Friday's EGTF to LSGS is green with two days to go."
+        "two days to go", "a day to go", "36 hours to go", "a week to go",
+    ])
+    def test_a_countdown_is_not_a_verdict(self, summary, countdown):
+        text = f"Friday's EGTF to LSGS is green with {countdown}."
         assert check_guardrail(text, summary, worst_leg_id="b") is None
 
     @pytest.mark.parametrize("phrase", [
