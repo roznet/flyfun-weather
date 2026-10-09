@@ -12,6 +12,8 @@ from weatherbrief.api.admin import require_admin
 from weatherbrief.api.app import create_app
 from weatherbrief.api import throttle
 from weatherbrief.db.models import FeedbackRow
+# Captured before the autouse _no_email fixture stubs the module attribute.
+from weatherbrief.notify.admin_email import send_feedback_notification as _real_send_feedback_notification
 
 
 @pytest.fixture
@@ -433,3 +435,120 @@ def test_admin_list_includes_client(client):
     entry = next(e for e in entries if e["id"] == fb_id)
     assert entry["client"] == "ios"
     assert entry["user_agent"] == IOS_AGENT
+
+
+# ---------------------------------------------------------------------------
+# Live-highlight ratings (#697)
+# ---------------------------------------------------------------------------
+
+_HL_CONTEXT = {
+    "facts_hash": "hash-9f3e",
+    "generated_at": "2026-10-09T09:40:00+00:00",
+    "model": "claude-haiku-5-5",
+    "text": "SIGMET TS from 40 to 90 NM; ZZDS MVFR, ceiling 1,200 ft.",
+}
+
+
+def _highlight_rating(**overrides) -> dict:
+    body = {
+        "flight_id": "zzaa_zzdd-2026-10-09-abcd",
+        "pack_timestamp": "2026-10-09T06:00:00+00:00",
+        "category": "highlight_rating",
+        "comment": "",
+        "sentiment": "down",
+        "target": "live_highlight",
+        "context": dict(_HL_CONTEXT),
+    }
+    body.update(overrides)
+    return body
+
+
+def test_highlight_rating_records_the_rated_line(client, app_db):
+    resp = client.post("/api/feedback", json=_highlight_rating(comment="Cell was abeam, not ahead."))
+    assert resp.status_code == 200, resp.text
+    row = _get_row(app_db, resp.json()["id"])
+    assert row.category == "highlight_rating"
+    assert row.target == "live_highlight"
+    assert row.sentiment == "down"
+    import json as _json
+    assert _json.loads(row.context) == _HL_CONTEXT
+
+
+def test_highlight_rating_bare_thumb_succeeds(client, app_db):
+    resp = client.post("/api/feedback", json=_highlight_rating(sentiment="up"))
+    assert resp.status_code == 200, resp.text
+    assert _get_row(app_db, resp.json()["id"]).comment == ""
+
+
+def test_highlight_rating_drops_unknown_context_keys(client, app_db):
+    ctx = dict(_HL_CONTEXT, gate={"x": 1}, extra="nope")
+    resp = client.post("/api/feedback", json=_highlight_rating(context=ctx))
+    assert resp.status_code == 200, resp.text
+    import json as _json
+    assert set(_json.loads(_get_row(app_db, resp.json()["id"]).context)) == set(_HL_CONTEXT)
+
+
+@pytest.mark.parametrize("body", [
+    _highlight_rating(context=None),                                     # no context
+    _highlight_rating(context={k: v for k, v in _HL_CONTEXT.items() if k != "text"}),
+    _highlight_rating(context=dict(_HL_CONTEXT, text="")),
+    _highlight_rating(context=dict(_HL_CONTEXT, text="x" * 1001)),
+    _highlight_rating(context=dict(_HL_CONTEXT, facts_hash=12)),
+    _highlight_rating(category="digest_rating"),                         # wrong category
+    {"category": "digest_rating", "comment": "", "sentiment": "up",      # context on a digest
+     "target": "digest", "context": dict(_HL_CONTEXT)},
+])
+def test_highlight_rating_invalid_context_rejected(client, body):
+    assert client.post("/api/feedback", json=body).status_code == 422
+
+
+def test_highlight_rating_skips_langsmith(client, monkeypatch):
+    """No trace id for a highlight: the digest's LangSmith mirror never runs."""
+    from weatherbrief.digest import langsmith_feedback
+    calls = []
+    monkeypatch.setattr(langsmith_feedback, "push_digest_thumb_feedback",
+                        lambda **kw: calls.append(kw))
+    assert client.post("/api/feedback", json=_highlight_rating()).status_code == 200
+    assert calls == []
+
+
+def test_admin_ratings_include_highlight_ratings_with_context(client):
+    digest = client.post("/api/feedback", json={
+        "category": "digest_rating", "comment": "", "sentiment": "up", "target": "digest",
+    }).json()["id"]
+    hl = client.post("/api/feedback", json=_highlight_rating()).json()["id"]
+    form = client.post("/api/feedback", json={
+        "category": "data_issue", "comment": "Wind looked wrong.",
+    }).json()["id"]
+
+    ratings = {e["id"]: e for e in client.get("/api/feedback/admin?kind=ratings").json()}
+    assert {digest, hl} <= set(ratings)
+    assert form not in ratings
+    assert ratings[hl]["target"] == "live_highlight"
+    assert ratings[hl]["context"] == _HL_CONTEXT
+    assert ratings[digest]["context"] is None
+
+    feedback_ids = {e["id"] for e in client.get("/api/feedback/admin?kind=feedback").json()}
+    assert hl not in feedback_ids and digest not in feedback_ids
+
+
+def test_highlight_rating_email_quotes_the_line(monkeypatch):
+    from weatherbrief.notify import admin_email
+    sent = []
+    monkeypatch.setattr(admin_email, "get_admin_emails", lambda: ["admin@example.com"])
+    monkeypatch.setattr("flyfun_common.auth.is_dev_mode", lambda: False)
+    monkeypatch.setattr(admin_email.SmtpConfig, "from_env",
+                        classmethod(lambda cls: type("C", (), {"from_address": "x@example.com"})()))
+    monkeypatch.setattr(admin_email, "send_message", lambda msg, cfg: sent.append(msg))
+    _real_send_feedback_notification(
+        user_email="pilot@example.com", user_name="Test Pilot", flight_id="zzaa_zzdd-2026-10-09-abcd",
+        pack_timestamp="", category="highlight_rating", comment="", base_url="https://x",
+        sentiment="down", client="ios", rated_text="ZZDS MVFR <now>",
+    )
+    assert len(sent) == 1
+    msg = sent[0]
+    assert "Live highlight rating" in msg["Subject"]
+    plain = msg.get_payload()[0].get_payload(decode=True).decode()
+    html_part = msg.get_payload()[1].get_payload(decode=True).decode()
+    assert "Rated line:\nZZDS MVFR <now>" in plain
+    assert "ZZDS MVFR &lt;now&gt;" in html_part

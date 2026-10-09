@@ -167,6 +167,27 @@ IOS_TICKS = {
 IOS_SCENARIOS = (
     Path(__file__).parent.parent / "app" / "flyfun-weather" / "flyfun-weatherUITests" / "LiveScenarios"
 )
+#: One tick per scenario also exported with a highlight (#697), as
+#: ``<name>_<HHMM>_highlight.json``: the suite has no API key, so the replay
+#: itself always serves ``highlight: null``. The line is fixed, written by hand
+#: (not by the model) and passes ``live_highlight.check_grounding`` against
+#: that tick's facts (pinned in tests/test_live_scenarios.py). Written ten
+#: minutes before the tick, so clients show a "written" time older than the
+#: layer, as a carried-forward line is.
+IOS_HIGHLIGHT_TICKS = {
+    "2026-10-02_lell_lemi": (
+        "08:30",
+        {
+            "text": (
+                "New EMBD TS SIGMETs LECB 3 and LECM 3 from 235 NM to LEMI, valid from 08:35Z; "
+                "EMBD TS SIGMET LECB 2 covers 10 to 276 NM. LECH, 126 NM along, now LIFR."
+            ),
+            "model": "fixture",
+            "facts_hash": "fixture-lell-lemi-0830",
+            "generated_at": "2026-10-02T08:20:00Z",
+        },
+    ),
+}
 
 
 def live_response(tick: Tick) -> dict:
@@ -195,12 +216,30 @@ def live_response(tick: Tick) -> dict:
     ).model_dump(mode="json")
 
 
+def with_fixture_highlight(body: dict, highlight: dict) -> dict:
+    """``body`` (a ``/live`` response) with ``glance.highlight`` set the way
+    ``get_live_layer`` serves one: every field, the gate stripped."""
+    from weatherbrief.models.live import LiveHighlight
+
+    out = json.loads(json.dumps(body))
+    out["glance"]["highlight"] = LiveHighlight(**highlight).model_dump(mode="json")
+    return out
+
+
 def ios_tick_files(name: str, ticks: list[Tick], at: list[str]) -> dict[Path, str]:
     """``LiveScenarios/<name>_<HHMM>.json`` contents for the chosen ticks
-    (flat names: the test bundle copies resources without their folders)."""
+    (flat names: the test bundle copies resources without their folders),
+    plus ``<name>_<HHMM>_highlight.json`` for :data:`IOS_HIGHLIGHT_TICKS`."""
     by_hhmm = {t.at.strftime("%H:%M"): t for t in ticks}
-    return {
+    files = {
         IOS_SCENARIOS / f"{name}_{hhmm.replace(':', '')}.json":
             json.dumps(live_response(by_hhmm[hhmm]), indent=1, sort_keys=True) + "\n"
         for hhmm in at
     }
+    if name in IOS_HIGHLIGHT_TICKS:
+        hhmm, highlight = IOS_HIGHLIGHT_TICKS[name]
+        body = with_fixture_highlight(live_response(by_hhmm[hhmm]), highlight)
+        files[IOS_SCENARIOS / f"{name}_{hhmm.replace(':', '')}_highlight.json"] = (
+            json.dumps(body, indent=1, sort_keys=True) + "\n"
+        )
+    return files

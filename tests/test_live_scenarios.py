@@ -8,12 +8,13 @@ a pilot would have seen. A rule change that moves it shows up here as a diff
 to review, not as a silent behaviour change.
 """
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from live_scenario_replay import IOS_TICKS, ios_tick_files, load_scenario, replay, timeline
+from live_scenario_replay import IOS_SCENARIOS, IOS_TICKS, ios_tick_files, load_scenario, replay, timeline
 
 LELL_LEMI = "2026-10-02_lell_lemi"
 
@@ -158,3 +159,24 @@ def test_ios_live_fixtures_match_the_server(name, tmp_path):
     for path, text in files.items():
         assert path.exists(), f"missing {path} — run scripts/export_live_scenario_ios.py"
         assert path.read_text() == text, f"{path.name} is stale — run scripts/export_live_scenario_ios.py"
+
+
+def test_fixture_highlight_is_grounded_in_its_tick():
+    """The hand-written highlight in the ``_highlight`` fixture must pass the
+    same grounding check a model-written one does, against its own tick's
+    facts: a client test rendering an ungrounded line would be testing a
+    state the server can never serve."""
+    from live_scenario_replay import IOS_HIGHLIGHT_TICKS
+
+    from weatherbrief.tasks import live_highlight as lh
+
+    for name, (hhmm, highlight) in IOS_HIGHLIGHT_TICKS.items():
+        path = IOS_SCENARIOS / f"{name}_{hhmm.replace(':', '')}_highlight.json"
+        body = json.loads(path.read_text())
+        assert body["glance"]["highlight"]["text"] == highlight["text"]
+        assert body["glance"]["highlight"]["gate"] is None
+        text = highlight["text"]
+        facts = lh.facts(body)
+        assert lh.check_grounding(text, facts) is None
+        assert lh.review_flags(text, facts) == []
+        assert len(text.split()) <= lh.MAX_WORDS

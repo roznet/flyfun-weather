@@ -145,7 +145,10 @@ mcp = FastMCP(
         "advisories and grade were written at the briefing time "
         "(live.digest_written_at), before these observations: say so rather "
         "than reconciling them, and never re-grade an advisory from live data "
-        "— the live layer annotates, it does not re-grade.\n\n"
+        "— the live layer annotates, it does not re-grade. live.highlight "
+        "(when present) is the one-line summary the app shows above the "
+        "nutshell: quote it like the nutshell, and say it was written at "
+        "live.highlight.written_at.\n\n"
         "When the user questions, doubts, or wants to understand an advisory "
         "(e.g. 'why is convective red when it looks like blue sky?'), call "
         "get_advisory_detail (and get_digest_context for the deepest context) "
@@ -477,7 +480,9 @@ def get_briefing(
     newest METARs and route SIGMETs and the significant changes since the
     briefing, alert tier first. The digest was written before them
     (``live.digest_written_at``) — lead with live alerts and say the digest
-    predates them; they never change a grade. ``live_unavailable: true`` means
+    predates them; they never change a grade. ``live.highlight`` (text and
+    ``written_at``, or null) is the one-line summary the app shows: quote it
+    like the nutshell, with its written time. ``live_unavailable: true`` means
     the live data could not be fetched, not that there is none.
 
     Status values:

@@ -333,10 +333,10 @@ class LiveHighlight(BaseModel):
     a fresh attempt. Readers
     fall back to :attr:`LiveGlance.headline`.
 
-    **Not displayed yet** (owner, 2026-10-07): written to the layer so real
-    flight days can be reviewed and the prompt calibrated before any client
-    shows it. Deliberately absent from the agent ``live`` block for the same
-    reason — ``summarize_live`` names the glance fields it exposes.
+    Displayed (owner, 2026-10-09) above the nutshell on iOS and web, with an
+    "experimental" caption, its written time and a 👍/👎 rated as feedback
+    ``target="live_highlight"``; the agent ``live`` block quotes ``text`` and
+    ``generated_at`` (as ``written_at``) only. ``gate`` is never served.
     """
 
     text: str

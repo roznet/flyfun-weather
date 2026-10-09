@@ -203,6 +203,7 @@ CATEGORY_LABELS = {
     "incorrect_interpretation": "Briefing Incorrect Interpretation",
     "other": "Other Bug/Issue",
     "digest_rating": "Digest Rating",
+    "highlight_rating": "Live highlight rating",
 }
 
 CLIENT_LABELS = {"ios": "iOS app", "web": "Web", "other": "Other"}
@@ -218,13 +219,16 @@ def send_feedback_notification(
     base_url: str,
     sentiment: str | None = None,
     client: str | None = None,
+    rated_text: str | None = None,
 ) -> None:
     """Notify admins when a user submits feedback.
 
     ``sentiment`` ('up'/'down') marks a quick digest thumb rating; it gives
     the email a distinct subject so thumb ratings are easy to recognise and
     filter apart from detailed feedback. ``client`` ('ios'/'web'/'other') says
-    which surface it came from; the row is omitted when unknown. In dev mode
+    which surface it came from; the row is omitted when unknown.
+    ``rated_text`` is the line a live-highlight rating is about (#697), quoted
+    above the comment since the highlight is regenerated later. In dev mode
     (no ADMIN_EMAILS set), logs instead.
     """
     from flyfun_common.auth import is_dev_mode
@@ -257,10 +261,19 @@ def send_feedback_notification(
     else:
         briefing_url = f"{base_url}/briefing.html?flight={flight_id}"
 
+    rated_block = (
+        '<p style="margin:0 0 4px;color:#6c757d;">Rated line</p>'
+        '<blockquote style="margin:0 0 16px;padding:8px 12px;border-left:3px solid #dee2e6;">'
+        f"{html.escape(rated_text)}</blockquote>\n  "
+        if rated_text
+        else ""
+    )
+
     if sentiment in ("up", "down"):
         thumb = "👍" if sentiment == "up" else "👎"
-        subject = f"[FlyFun Weather] {thumb} Digest rating"
-        heading = f"{thumb} Digest Rating"
+        rating_label = "Live highlight rating" if category == "highlight_rating" else "Digest rating"
+        subject = f"[FlyFun Weather] {thumb} {rating_label}"
+        heading = f"{thumb} {rating_label}"
     else:
         subject = f"[FlyFun Weather] Feedback: {category_label}"
         heading = "User Feedback"
@@ -274,7 +287,7 @@ def send_feedback_notification(
     {client_row}
     <tr><td style="padding:4px 12px 4px 0;color:#6c757d;">Flight</td><td style="font-family:monospace;font-size:12px;">{html.escape(flight_id)}</td></tr>
   </table>
-  <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:16px;">
+  {rated_block}<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:16px;">
     {html.escape(comment).replace(chr(10), '<br>')}
   </div>
   <p>
@@ -291,7 +304,8 @@ def send_feedback_notification(
         f"Category: {category_label}\n"
         + (f"Client: {client_label}\n" if client_label else "")
         + f"Flight: {flight_id}\n\n"
-        f"Comment:\n{comment}\n\n"
+        + (f"Rated line:\n{rated_text}\n\n" if rated_text else "")
+        + f"Comment:\n{comment}\n\n"
         f"Briefing: {briefing_url}\n"
         f"Admin page: {base_url}/admin.html\n"
     )
