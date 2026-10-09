@@ -93,6 +93,26 @@ cost_per_user     = total / num_users        # distinct briefing users in window
 
 `ProgramCostReport` (frozen dataclass) → `program_report_to_dict()` for the API.
 
+### Other LLM spend (non-briefing ledger categories, #741)
+
+Per-call LLM features write their own ledger rows priced by `compute_call_cost`
+(not `compute_cost`): `category="live_highlight"` (reference_id = flight id) and
+`category="trip_summary"` (reference_id = trip id). `credits.other_llm_spend(db,
+since, user_id)` aggregates every category except `briefing`/`topup` into
+`{total_usd, calls, by_category, by_day (UTC, newest first), by_user}`.
+
+- **Admin-only, shown apart.** The endpoint attaches it as `other_llm` *next to*
+  the program report dict and the per-user costs response; it never enters
+  `ProgramCostReport`, `_cost_since`, `_briefing_ledger_rows` or the donations
+  helpers. Reason: the program report drives donation economics, and a
+  "per briefing" figure inflated by highlight ticks would be wrong; also we
+  don't attribute an experimental feature's cost to pilots. Flip this by
+  summing `other_llm` into the variable side, knowing it moves every
+  pilot-facing per-briefing number.
+- **Gap left open:** the pilot's own `recent_transactions` list
+  (`get_recent_transactions`) has no category filter, so highlight rows already
+  appear there while the pilot's totals exclude them.
+
 ## DB Schema
 
 ### cost_ledger (shared, in flyfun-common)
@@ -204,8 +224,8 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 | `/api/admin/cost-config` | GET | Admin | Current active config |
 | `/api/admin/cost-config` | PUT | Admin | Create new config version (auto-sums subscriptions) |
 | `/api/admin/cost-config/history` | GET | Admin | All config versions |
-| `/api/admin/cost-report` | GET | Admin | Program-wide report (`?window=7d\|30d`): fixed/variable/total + per-briefing/per-user |
-| `/api/admin/users/{id}/costs` | GET | Admin | Per-user cost detail |
+| `/api/admin/cost-report` | GET | Admin | Program-wide report (`?window=7d\|30d`): fixed/variable/total + per-briefing/per-user, plus `other_llm` over the same window |
+| `/api/admin/users/{id}/costs` | GET | Admin | Per-user cost detail, plus `other_llm` (all-time + this month, by category) |
 | `/api/transparency` | GET | None | Public pricing structure |
 
 ### GET /api/user/credits response
@@ -227,8 +247,8 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 
 - **adapters/credits-adapter.ts**: `fetchCostSummary()`, `fetchTransparency()` — typed API client
 - **adapters/admin-adapter.ts**: `fetchCostReport()`, `fetchCostConfig()`, `fetchCostConfigHistory()`, `updateCostConfig()` — program report + rate-card editing
-- **user-costs-main.ts**: Admin per-user cost dashboard with stacked bar chart, transaction ledger with expandable USD breakdowns. Prompt-cache saving is shown as a line under the bar and a cell in the expanded breakdown — never a bar segment, since it is not a cost component
-- **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history). A "Cache saved" card + note sentence appear only when the window has the figure (`cache_saving_usd != null`)
+- **user-costs-main.ts**: Admin per-user cost dashboard ("Other LLM" month/total cards beside the briefing ones) with stacked bar chart, transaction ledger with expandable USD breakdowns. Prompt-cache saving is shown as a line under the bar and a cell in the expanded breakdown — never a bar segment, since it is not a cost component
+- **admin-cost-view.ts**: Admin "Cost" tab — program report (7d/30d toggle, summary cards, fixed-line table) + rate-card editor (itemized subscription rows with live subtotal, versioned save, config history). A "Cache saved" card + note sentence appear only when the window has the figure (`cache_saving_usd != null`). An "Other LLM spend" section under the report renders `other_llm` (category cards, collapsible by-day and by-user tables, 4-decimal USD)
 - **cost-summary.html / cost-summary-main.ts**: Program cost (what it costs to run the service, fixed breakdown + composition bar + per-briefing/per-user economics) plus the viewer's own usage. Admin-gated now via `is_admin`; designed to move into a Settings tab + add a donation link + a public program endpoint later.
 
 ## Donations (Stripe)
@@ -588,7 +608,7 @@ there are no donations or `active_users == 0`.
 - `detail_json` holds the full CostBreakdown; `metadata_json` is for lightweight context. Don't mix them.
 - Adding a `CostBreakdown` field is migration-free but only reaches *new* rows. Readers must treat a missing key as unknown, never as `0.0` — see `cache_saving_usd` above.
 - Never hardcode a prompt-cache TTL. It lives in `costs.DIGEST_CACHE_TTL`, and the rate card's write multiplier is derived from it.
-- `reference_id` stores `briefing_usage_id` as a string — admin queries cast it to int for the JOIN.
+- `reference_id` stores `briefing_usage_id` as a string for **briefing** rows only — admin queries cast it to int for the JOIN, so the join is gated on `category == "briefing"`. Other categories carry a flight or trip id, and SQLite/MySQL casts keep leading digits (`"7zz-…"` → 7), which once attached a different briefing's flight to a highlight row.
 - The program report sums variable cost by parsing each briefing's `detail_json` in Python (dialect-agnostic) rather than SQL JSON extraction; bounded by briefings-per-window so it's cheap.
 - `/api/admin/cost-report` returns `null` (not 404) when no active config exists — the frontend renders an empty state.
 

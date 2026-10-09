@@ -7,7 +7,7 @@ import {
   type UserCostTransaction,
   type UserCostBreakdown,
 } from './adapters/admin-adapter';
-import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt, signedUsd4 } from './utils';
+import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, formatTime, formatAlt, signedUsd4, usd4 } from './utils';
 import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 
@@ -102,7 +102,20 @@ function renderSummaryCards(data: UserCostsResponse): void {
     <div class="summary-card"><div class="value">$${s.cost_this_week_usd.toFixed(2)}</div><div class="label">This Week</div></div>
     <div class="summary-card"><div class="value">$${s.cost_this_month_usd.toFixed(2)}</div><div class="label">This Month</div></div>
     <div class="summary-card"><div class="value">$${s.total_cost_usd.toFixed(2)}</div><div class="label">Total Cost</div></div>
-    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Total Briefings</div></div>`;
+    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Total Briefings</div></div>${otherLlmCards(data)}`;
+}
+
+/** Non-briefing LLM calls (live highlight, trip summary): their own cards,
+ *  never folded into the briefing figures above (#741). Four decimals — one
+ *  highlight call is a fraction of a cent. */
+function otherLlmCards(data: UserCostsResponse): string {
+  const o = data.other_llm;
+  if (!o) return '';
+  const split = o.by_category.map(c => `${c.category}: ${usd4(c.cost_usd)} (${c.calls} calls)`).join('\n');
+  const title = escapeHtml(split || 'No non-briefing LLM calls');
+  return `
+    <div class="summary-card" title="${title}"><div class="value">${usd4(o.this_month_usd)}</div><div class="label">Other LLM (month)</div></div>
+    <div class="summary-card" title="${title}"><div class="value">${usd4(o.total_usd)}</div><div class="label">Other LLM (total, ${o.calls} calls)</div></div>`;
 }
 
 function renderRecentFlights(data: UserCostsResponse): void {

@@ -539,6 +539,87 @@ def build_program_report(db: Session, window_days: int) -> ProgramCostReport | N
     )
 
 
+#: Ledger categories that are not per-call LLM spend: the per-briefing charge
+#: (reported by the program report itself) and the retired zero-cost topups.
+#: Everything else under ``SERVICE`` is a feature priced by
+#: ``compute_call_cost`` — ``live_highlight``, ``trip_summary`` — and is shown
+#: to admins only (#741). Pilot totals and per-briefing figures stay
+#: briefing-only: an experimental feature must not inflate them.
+_NOT_OTHER_LLM = ("briefing", "topup")
+
+
+def other_llm_spend(
+    db: Session, since: datetime | None = None, user_id: str | None = None,
+) -> dict:
+    """Admin view of non-briefing LLM spend in the ledger, per category/day/user.
+
+    ``since=None`` is all time; ``user_id`` narrows to one account (``by_user``
+    then has that single row). Days are UTC. Aggregated in Python rather than
+    with a SQL date function so SQLite (dev) and MySQL (prod) agree; the volume
+    is a few hundred rows a day at most.
+
+    Never folded into ``ProgramCostReport``: that report also drives the
+    donation economics, whose per-briefing figures must stay briefing-only.
+    """
+    q = db.query(
+        CostLedgerRow.category, CostLedgerRow.cost,
+        CostLedgerRow.created_at, CostLedgerRow.user_id,
+    ).filter(
+        CostLedgerRow.service == SERVICE,
+        CostLedgerRow.category.isnot(None),
+        CostLedgerRow.category.notin_(_NOT_OTHER_LLM),
+    )
+    if since is not None:
+        q = q.filter(CostLedgerRow.created_at >= since)
+    if user_id is not None:
+        q = q.filter(CostLedgerRow.user_id == user_id)
+
+    by_cat: dict[str, list] = {}
+    by_day: dict[tuple[str, str], list] = {}
+    by_user: dict[str, list] = {}
+    total = 0.0
+    calls = 0
+    for category, cost, created_at, uid in q.all():
+        c = float(cost or 0.0)
+        total += c
+        calls += 1
+        for bucket, key in (
+            (by_cat, category),
+            (by_day, (created_at.date().isoformat() if created_at else "", category)),
+            (by_user, uid),
+        ):
+            agg = bucket.setdefault(key, [0.0, 0])
+            agg[0] += c
+            agg[1] += 1
+
+    emails = {}
+    if by_user:
+        emails = dict(
+            db.query(UserRow.id, UserRow.email).filter(UserRow.id.in_(list(by_user))).all()
+        )
+
+    return {
+        "total_usd": round(total, 4),
+        "calls": calls,
+        "by_category": [
+            {"category": k, "cost_usd": round(v[0], 4), "calls": v[1]}
+            for k, v in sorted(by_cat.items(), key=lambda kv: -kv[1][0])
+        ],
+        # Newest day first, then category name, so a table reads top-down.
+        "by_day": [
+            {"date": d, "category": cat, "cost_usd": round(v[0], 4), "calls": v[1]}
+            for (d, cat), v in sorted(
+                sorted(by_day.items(), key=lambda kv: kv[0][1]),
+                key=lambda kv: kv[0][0], reverse=True,
+            )
+        ],
+        "by_user": [
+            {"user_id": k, "email": emails.get(k), "cost_usd": round(v[0], 4), "calls": v[1]}
+            for k, v in sorted(by_user.items(), key=lambda kv: -kv[1][0])
+        ],
+    }
+
+
 @report_router.get("")
 def get_cost_report(
     window: str = "30d",
@@ -556,7 +637,13 @@ def get_cost_report(
     report = build_program_report(db, window_days)
     if report is None:
         return None
-    return program_report_to_dict(report)
+    out = program_report_to_dict(report)
+    # Alongside, not inside, the report: its totals feed the per-briefing
+    # economics, which stay briefing-only (#741).
+    out["other_llm"] = other_llm_spend(
+        db, since=datetime.now(timezone.utc) - timedelta(days=window_days),
+    )
+    return out
 
 
 # ---------------------------------------------------------------------------

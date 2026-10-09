@@ -165,12 +165,38 @@ export interface UserCostBreakdown {
   cache_saving_usd?: number;
 }
 
+/** Non-briefing LLM calls (live highlight, trip summary) — admin-only, kept
+ *  out of every briefing figure so per-briefing numbers stay comparable (#741). */
+export interface OtherLlmCategory {
+  category: string;
+  cost_usd: number;
+  calls: number;
+}
+
+export interface OtherLlmSpend {
+  total_usd: number;
+  calls: number;
+  by_category: OtherLlmCategory[];
+  /** Newest UTC day first. */
+  by_day: Array<OtherLlmCategory & { date: string }>;
+  /** Biggest spender first; email null when the account row is gone. */
+  by_user: Array<{ user_id: string; email: string | null; cost_usd: number; calls: number }>;
+}
+
+export interface UserCostOtherLlm {
+  total_usd: number;
+  this_month_usd: number;
+  calls: number;
+  by_category: OtherLlmCategory[];
+}
+
 export interface UserCostsResponse {
   user: UserCostUser;
   summary: UserCostSummary;
   transactions: UserCostTransaction[];
   recent_flights: UserCostFlight[];
   cost_breakdown: UserCostBreakdown;
+  other_llm?: UserCostOtherLlm;
 }
 
 export async function fetchUserCosts(userId: string, limit = 50): Promise<UserCostsResponse> {
@@ -225,6 +251,8 @@ export interface CostReport {
   cost_per_briefing_usd: number;
   cost_per_user_usd: number;
   config_id: number;
+  /** Outside every figure above (those drive per-briefing economics). */
+  other_llm?: OtherLlmSpend;
 }
 
 export async function fetchCostReport(window: '7d' | '30d' = '30d'): Promise<CostReport | null> {
