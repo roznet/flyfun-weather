@@ -166,8 +166,9 @@ def submit_feedback(
 ):
     """Submit feedback for a specific briefing pack."""
     # Lightweight thumb ratings (digest, live highlight) get their own, looser
-    # limiters — a pilot may legitimately rate several briefings in a session, which the verbose
-    # form's 1/min burst would block. The form keeps the stricter limits.
+    # limiters — a pilot may legitimately rate several briefings in a session,
+    # which the verbose form's 1/min burst would block. The form keeps the
+    # stricter limits.
     if body.category in RATING_CATEGORIES:
         digest_rating_burst_limiter.check(user_id)
         digest_rating_daily_limiter.check(user_id)
