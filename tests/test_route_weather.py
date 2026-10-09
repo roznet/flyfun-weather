@@ -458,6 +458,45 @@ class TestRunRealtimeRefresh:
         meta = json.loads((pack_dir.parent / "live_meta.json").read_text())
         assert meta["pack_dir_name"] == pack_dir.name
 
+    def test_failed_sigmet_fetch_keeps_the_stored_sigmets(self, tmp_path, two_wp_route):
+        """#686: a fetch whose base query failed comes back empty with
+        ``fetch_ok`` False. That is not "no SIGMETs": the layer keeps the
+        last good list, so nothing reads as "no longer active"."""
+        from weatherbrief.tasks.live_layer import live_for_pack
+        from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+        pack_dir = tmp_path / "flight-1" / "2026-05-20T07-00-00p00-00"
+        pack_dir.mkdir(parents=True)
+        self._write_pack(pack_dir, two_wp_route)
+        fresh = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime(2026, 5, 20, 9),
+            airports_found=0, airports_with_metar=0, airports_with_taf=0, airports=[],
+        )
+        good = RouteSigmets(
+            corridor_nm=50.0, fetch_time=datetime(2026, 5, 20, 9),
+            sigmets=[SigmetAlongRoute(fir_id="LFFF", hazard="TURB")],
+        )
+        failed = RouteSigmets(
+            corridor_nm=50.0, fetch_time=datetime(2026, 5, 20, 9, 5), sigmets=[], fetch_ok=False,
+        )
+        for sigmets in (good, failed):
+            with patch(
+                "weatherbrief.tasks.route_weather.run_route_weather", return_value=fresh,
+            ), patch(
+                "weatherbrief.tasks.route_weather.run_route_sigmets", return_value=sigmets,
+            ), patch(
+                "weatherbrief.airports.get_runway_ends", return_value={},
+            ):
+                result = run_realtime_refresh(
+                    pack_dir, "/fake/db",
+                    flight_id="flight-1", pack_timestamp="2026-05-20T07:00:00+00:00",
+                )
+
+        assert result.sigmets is None
+        layer = live_for_pack(pack_dir)
+        assert layer.route_sigmets.count == 1
+        assert layer.route_sigmets.fetch_ok is True
+
     def test_persist_false_writes_nothing(self, tmp_path, two_wp_route):
         """Refreshing an older pack returns data but leaves the store alone."""
         from weatherbrief.tasks.route_weather import run_realtime_refresh
@@ -591,7 +630,10 @@ def test_run_route_sigmets_maps_result(two_wp_route):
         sigmet=sig, matched_firs=["LFFF"],
         min_distance_nm=0.0, enroute_distance_from_nm=40.0, enroute_distance_to_nm=90.0,
     )
-    fake_result = SimpleNamespace(route_firs=["LFFF", "EGTT"], sigmets=[route_sig])
+    queried = [datetime(2026, 5, 20, 8, 30, tzinfo=timezone.utc)]
+    fake_result = SimpleNamespace(
+        route_firs=["LFFF", "EGTT"], sigmets=[route_sig], fetch_ok=True, queried_at=queried,
+    )
 
     fake_service = MagicMock()
     fake_service.fetch_route_sigmets.return_value = fake_result
@@ -614,6 +656,8 @@ def test_run_route_sigmets_maps_result(two_wp_route):
     assert out.hazards == ["TURB"]
     assert out.has_severe is True
     assert out.route_firs == ["LFFF", "EGTT"]
+    # The fetch status rides along for the live layer (#686).
+    assert out.fetch_ok is True and out.queried_at == queried
     s = out.sigmets[0]
     assert s.fir_id == "LFFF"
     assert s.hazard == "TURB"
@@ -636,7 +680,7 @@ def test_run_route_sigmets_empty(two_wp_route):
 
     from weatherbrief.tasks.route_weather import run_route_sigmets
 
-    fake_result = SimpleNamespace(route_firs=[], sigmets=[])
+    fake_result = SimpleNamespace(route_firs=[], sigmets=[], fetch_ok=True, queried_at=None)
     fake_service = MagicMock()
     fake_service.fetch_route_sigmets.return_value = fake_result
 
@@ -908,7 +952,9 @@ def test_run_route_sigmets_passes_navaids_with_coordinates(navaid_route):
     from weatherbrief.tasks.route_weather import run_route_sigmets
 
     fake_service = MagicMock()
-    fake_service.fetch_route_sigmets.return_value = SimpleNamespace(route_firs=[], sigmets=[])
+    fake_service.fetch_route_sigmets.return_value = SimpleNamespace(
+        route_firs=[], sigmets=[], fetch_ok=True, queried_at=None,
+    )
     with patch(
         "euro_aip.briefing.weather.route_sigmet.RouteSigmetService",
         return_value=fake_service,

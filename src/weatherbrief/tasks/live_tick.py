@@ -155,14 +155,16 @@ class SharedSigmetSource:
     A failure is logged once and cached; every flight then gets a
     :class:`SigmetSourceUnavailable`, which the refresh skips quietly. An
     unhealthy upstream costs one call and one traceback per tick, not one per
-    flight (each flight keeps its stored SIGMETs).
+    flight (each flight keeps its stored SIGMETs). A failed base query that
+    euro_aip reports rather than raises (``IsigmetFetch.base_ok`` False, #686)
+    is a failure too: its empty list would read as every SIGMET gone.
     """
 
     def __init__(self, upstream=None) -> None:
         self._upstream = upstream
-        self._cache: dict[tuple, list | BaseException] = {}
+        self._cache: dict[tuple, object] = {}
 
-    def fetch_isigmet(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
+    def fetch_isigmet_result(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
         key = (region, hazard, level, date, lookahead)
         if key not in self._cache:
             try:
@@ -173,9 +175,12 @@ class SharedSigmetSource:
                 # The lookahead (#683) only when asked for, so an upstream
                 # written without it keeps working.
                 extra = {"lookahead": lookahead} if lookahead is not None else {}
-                self._cache[key] = self._upstream.fetch_isigmet(
+                fetched = self._upstream.fetch_isigmet_result(
                     region=region, hazard=hazard, level=level, date=date, **extra,
                 )
+                if not fetched.base_ok:
+                    raise RuntimeError("isigmet base query failed")
+                self._cache[key] = fetched
             except Exception as exc:
                 logger.warning(
                     "Live tick SIGMET fetch failed — flights keep stored SIGMETs this tick",
@@ -186,6 +191,11 @@ class SharedSigmetSource:
         if isinstance(cached, BaseException):
             raise SigmetSourceUnavailable(str(cached)) from cached
         return cached
+
+    def fetch_isigmet(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
+        return self.fetch_isigmet_result(
+            region=region, hazard=hazard, level=level, date=date, lookahead=lookahead,
+        ).reports
 
 
 # --- The tick ----------------------------------------------------------------
