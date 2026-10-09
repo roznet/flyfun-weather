@@ -197,12 +197,14 @@ class TripParagraph(BaseModel):
             "is gradeable."
         ),
     )
-    paragraph: str = Field(description="Two to four sentences of plain prose.")
+    paragraph: str = Field(
+        description="Two or three sentences of plain prose, at most 70 words.",
+    )
 
 
 #: Vocabulary that turns a description into a recommendation. Whole-word
 #: matched, case-insensitive, and deliberately a superset of what
-#: ``prompts/trip_v1.md`` forbids — the guardrail exists for the case where the
+#: ``prompts/trip_v2.md`` forbids — the guardrail exists for the case where the
 #: model ignores the instruction, so anything the prompt bans must appear here.
 #: Kept blunt: a false positive costs a fallback to the deterministic sentence,
 #: which is the safe direction.
@@ -212,6 +214,9 @@ _GO_NOGO_PATTERNS = [
     # Bare "go" as a verdict, which the prompt forbids by name. Guarded with a
     # lookahead so ordinary uses survive — "going", "goes", and the infinitive
     # in "the weather is going to move" are description, not a recommendation.
+    # The lookbehinds spare a countdown ("two days to go", which Haiku 5.5
+    # writes) while "good to go" stays a verdict.
+    r"(?<!days to )(?<!day to )(?<!hours to )"
     r"\bgo\b(?!\s+(?:to|through|into|from|down|up|via|around|over)\b)",
     r"\bavoid(?:ed|ing|s)?\b",
     r"\bshould (?:not )?fly\b",
@@ -229,6 +234,22 @@ _GO_NOGO_PATTERNS = [
     r"\byou should\b",
 ]
 _GO_NOGO_RE = re.compile("|".join(_GO_NOGO_PATTERNS), re.IGNORECASE)
+
+#: The model talking about its own input or drafting instead of the trip. With
+#: thinking off, Haiku 5.5 once wrote "... wait, it is two days out" into the
+#: paragraph, and on ``trip_v1.md`` it echoed pipeline words ("deterministic",
+#: "binding", "gradeable") that ``trip_v2.md`` now bans by name — so, as with
+#: the vocabulary list, the guard is a superset of the prompt. A line break
+#: rejects too: the paragraph is one paragraph, and every self-correction leak
+#: on the live highlight's replay (#715) had one.
+_META_RE = re.compile(
+    r"\n|\b(?:wait|corrected|let me|I'll|instructions?|deterministic|binding"
+    r"|gradeable|worst_leg_id)\b",
+    re.IGNORECASE,
+)
+#: A raw enum value copied from the input (``TRENDING_SETTLED``). Case-sensitive
+#: on purpose: the prompt asks for plain words ("trending settled").
+_RAW_ENUM_RE = re.compile(r"\b[A-Z]+_[A-Z_]+\b")
 
 
 def check_guardrail(
@@ -251,6 +272,10 @@ def check_guardrail(
     match = _GO_NOGO_RE.search(text)
     if match:
         return f"go/no-go vocabulary: {match.group(0)!r}"
+
+    match = _META_RE.search(text) or _RAW_ENUM_RE.search(text)
+    if match:
+        return f"meta or raw input: {match.group(0)!r}"
 
     if worst_leg_id is None:
         return None

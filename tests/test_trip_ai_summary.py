@@ -162,7 +162,7 @@ class TestGuardrail:
         "You should cancel Sunday's leg.",
         "Sunday's leg is unsafe.",
         "We recommend watching Sunday's leg.",
-        # Every one of these is a word `trip_v1.md` explicitly forbids, and each
+        # Every one of these is a word the trip prompt explicitly forbids, and each
         # slipped through the old compound-only patterns.
         "Avoid Sunday's leg.",
         "Friday's leg looks safe.",
@@ -187,6 +187,34 @@ class TestGuardrail:
         # would silently disable the summary on perfectly descriptive prose.
         text = f"Sunday's LSGS to EGTF is red. {phrase}"
         assert check_guardrail(text, summary, worst_leg_id="b") is None
+
+    def test_a_countdown_is_not_a_verdict(self, summary):
+        # Haiku 5.5 wrote "with two days to go" on the A/B; the bare-"go" rule
+        # rejected a correct paragraph for it.
+        text = "Friday's EGTF to LSGS is green with two days to go."
+        assert check_guardrail(text, summary, worst_leg_id="b") is None
+
+    @pytest.mark.parametrize("phrase", [
+        # Haiku 5.5 with thinking off, correcting itself in the output.
+        "It is six days out... wait, it is two days out.",
+        # Pipeline words trip_v1 let through and trip_v2 bans by name.
+        "Sunday's leg is the binding one.",
+        "The deterministic summary is that the trip is complete.",
+        "No leg is gradeable yet.",
+        "The return shows a TRENDING_SETTLED outlook.",
+        "Sunday's leg is red.\n\nNote: I followed the instructions.",
+    ])
+    def test_meta_and_raw_input_are_rejected(self, summary, phrase):
+        assert check_guardrail(phrase, summary, worst_leg_id="b") is not None
+
+    def test_the_configured_prompt_bans_what_the_meta_guard_rejects(self):
+        # The guard is a superset of the prompt; pin that the prompt actually
+        # names the pipeline words, so a v3 cannot silently drop the ban.
+        from weatherbrief.digest.llm_config import load_digest_config
+
+        prompt = load_digest_config().load_prompt("trip")
+        for word in ("deterministic", "binding", "gradeable", "TRENDING_SETTLED"):
+            assert word in prompt
 
     def test_vocabulary_is_checked_even_without_a_declared_leg(self, summary):
         assert check_guardrail("Avoid this trip.", summary) is not None
