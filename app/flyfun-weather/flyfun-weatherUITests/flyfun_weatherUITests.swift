@@ -594,6 +594,7 @@ final class flyfun_weatherUITests: XCTestCase {
     @MainActor
     func testObservedNutshellRibbonAndTapToMap() throws {
         let focus = #"{"kind": "storm", "id": "core35-zz", "bbox": [5.3, 43.4, 5.7, 43.8], "layers": ["route", "radar", "cells", "lightning"]}"#
+        let stationFocus = #"{"kind": "station", "id": "LFMD", "bbox": [6.8, 43.4, 7.1, 43.7], "layers": ["route", "metar"]}"#
         let live = """
         {"flight_id": "fixture-1", "pack_timestamp": "2099-06-30T06:00:00+00:00",
          "live_updated_at": "2099-06-30T08:10:00Z",
@@ -612,7 +613,10 @@ final class flyfun_weatherUITests: XCTestCase {
            "waypoints": [{"icao": "LFMD", "along_nm": 0.0}, {"icao": "LFML", "along_nm": 80.0}],
            "segments": [{"index": 0, "from_nm": 0.0, "to_nm": 40.0, "radar_status": "measured"},
                         {"index": 1, "from_nm": 40.0, "to_nm": 80.0, "radar_status": "measured", "radar_max_dbz": 48.0}],
-           "stations": [], "sigmets": []},
+           "stations": [{"icao": "LFMD", "role": "departure", "along_nm": 0.0, "metar_category": "VFR",
+             "metar_time": "2099-06-30T08:00:00Z", "focus": \(stationFocus)}], "sigmets": []},
+         "route_observations": {"airports": [{"icao": "LFMD", "name": "Cannes Mandelieu", "has_metar": true,
+           "metar_raw": "LFMD 300800Z 09005KT CAVOK 22/14 Q1015", "metar_flight_category": "VFR"}]},
          "storms": {"status": "available", "corridor_nm": 30.0, "route_nm": 80.0, "storms": [
            {"id": "core35-zz", "lat": 43.6, "lon": 5.5, "peak_dbz": 48.0, "intensity": "heavy", "flashes": 0,
             "trend": "developing", "along_nm": 40.0, "offtrack_nm": 6.0, "cross_nm": 6.0, "side": "right",
@@ -635,27 +639,51 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["observedRibbon"].firstMatch.exists, "the route ribbon should render")
         attachScreenshot(app, "Observed-Nutshell")
 
-        // A storm on the ribbon opens its detail; the estimate is labelled.
+        // #747: a cell on the ribbon opens the inspector card under it (no
+        // sheet); the rest of the old detail, estimate included, is under More.
         let storm = app.descendants(matching: .any)["ribbonStorm-core35-zz"].firstMatch
         XCTAssertTrue(storm.waitForExistence(timeout: Self.uiTimeout), "the storm should be on the ribbon")
         storm.tap()
         let detail = app.descendants(matching: .any)["stormDetail"].firstMatch
-        XCTAssertTrue(detail.waitForExistence(timeout: Self.uiTimeout), "tapping a storm should open its detail")
-        // The sheet opens at the medium detent and is a lazy List: the estimate
-        // section below the fold is not built (absent from the a11y tree) until
-        // the sheet is expanded.
+        XCTAssertTrue(detail.waitForExistence(timeout: Self.uiTimeout), "tapping a cell should open its card")
+        XCTAssertTrue(app.staticTexts["Heavy cell"].firstMatch.exists, "the card should name the cell")
+        XCTAssertFalse(app.buttons["map.observedMenu"].firstMatch.exists, "a mark must not navigate on its own")
+        let more = app.descendants(matching: .any)["stormMore"].firstMatch
+        let moreButton = more.exists ? more : app.buttons["More"].firstMatch
+        if !moreButton.isHittable { app.swipeUp() }
+        moreButton.tap()
         let estimate = app.staticTexts["Estimate at current motion"].firstMatch
         let estimateCaps = app.staticTexts["ESTIMATE AT CURRENT MOTION"].firstMatch
-        if !estimate.exists && !estimateCaps.exists { detail.swipeUp() }
         XCTAssertTrue(estimate.waitForExistence(timeout: Self.uiTimeout) || estimateCaps.exists,
-                      "the estimate should sit under its own label")
-        attachScreenshot(app, "Observed-StormDetail")
+                      "the estimate should sit under its own label, under More")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "A projection, not an observation")).firstMatch.exists,
+                      "the estimate keeps its footnote")
+        attachScreenshot(app, "Observed-StormCard")
         let showOnMap = app.buttons["stormShowOnMap"].firstMatch
         if !showOnMap.isHittable { app.swipeUp() }
         showOnMap.tap()
         XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "Show on map should land on the Map tab with the observed controls")
         attachScreenshot(app, "Observed-StormOnMap")
+
+        // An airport: the card quotes its raw METAR, and Show on map opens the map.
+        switchToBriefingTab(app, "Observed")
+        let airport = app.descendants(matching: .any)["ribbonStation-LFMD"].firstMatch
+        XCTAssertTrue(airport.waitForExistence(timeout: Self.uiTimeout), "the departure should be on the ribbon")
+        if !airport.isHittable { app.swipeDown() }
+        airport.tap()
+        let card = app.descendants(matching: .any)["ribbonInspector"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: Self.uiTimeout), "tapping an airport should open its card")
+        let raw = app.descendants(matching: .any)["ribbonInspectorRaw-METAR"].firstMatch
+        XCTAssertTrue(raw.exists, "the airport card should quote the raw METAR")
+        XCTAssertTrue(raw.label.contains("LFMD 300800Z"), "got \(raw.label)")
+        XCTAssertTrue(app.buttons["ribbonInspectorIcao"].firstMatch.exists, "the ICAO should open the map too")
+        attachScreenshot(app, "Observed-AirportCard")
+        let airportMap = app.buttons["ribbonInspectorShowOnMap"].firstMatch
+        if !airportMap.isHittable { app.swipeUp() }
+        airportMap.tap()
+        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "the airport card's Show on map should open the map")
 
         // A nutshell line opens the map too.
         switchToBriefingTab(app, "Observed")

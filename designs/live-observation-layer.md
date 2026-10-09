@@ -420,12 +420,10 @@ logs `Live glance failed` and leaves both null for that tick.
   now, ring = TAF at ETA, dashed for PROB/TEMPO), and between rows and line
   the weather bands at their off-track distance (rain pale, cores by peak)
   with one arrow per moving band rotated by `motion_rel_deg`; SIGMETs a thin
-  band on top; `RouteRibbonLegend` underneath. A storm's core is its tap
-  target (`ribbonStorm-<id>`, the sheet); elsewhere a tap frames the map on
-  that segment. Without `weather` the radar strip hugs the line and storms
-  are points, `StormDetailSheet` (observed facts, 30-min trend and
-  off-track history, the estimate in its own "Estimate at current motion"
-  section). They replace `ObservedGlanceCard` only when `glance` is present,
+  band on top; `RouteRibbonLegend` underneath. Without `weather` the radar
+  strip hugs the line and storms are points. **Tapping a mark opens the
+  inspector card under the ribbon (#747)**, never the map directly — see the
+  bullet below. They replace `ObservedGlanceCard` only when `glance` is present,
   and only for the pack on screen (`BriefingViewModel.liveLayerForPack`). A ↻
   response has no glance: the last one for the same pack is kept until the
   next `/live`. Tap-to-map: `FocusIntent.mapFocus` → `RouteMapView` turns on the
@@ -434,6 +432,30 @@ logs `Live glance failed` and leaves both null for that tick.
   polygons yet, so a SIGMET focus only frames its area; `metar` layers and the
   focus `time` are ignored too (newest frame). The applied focus is cleared
   (`onFocusApplied`) so a recreated map never re-frames a stale one.
+  - **Inspector card (#747, iOS).** One tap gesture over the whole drawing;
+    `RouteRibbonInspectorRules.hits` picks the marks within 22 pt (generous,
+    for turbulence; no long-press): marks *under* the finger first, top paint
+    layer winning (station > cell > SIGMET > core > rain > radar stretch), so
+    a disc inside a rain area picks the disc; then the others nearest first.
+    Two or more → chips at the card's top. A core with a `storm_id` whose
+    cell is listed *is* that cell (as on the web); `bandAt` / `bandBinRects`
+    are the same rects the Canvas fills. The card (`RibbonInspectorCard`)
+    shows the web tooltip's rows from the mirrored rules, the raw METAR/TAF
+    (airports joined by ICAO to `/live`'s `route_observations`, else the
+    snapshot's), "Show on map" + a tappable ICAO (the only ways to the map).
+    `StormDetailSheet` is gone: its extra sections (trend numbers, off-track
+    history, backing stations, the labelled estimate + footnote) sit under
+    the cell card's "More" (`stormMore`), keeping `stormDetail` /
+    `stormEstimate` / `stormShowOnMap`. Selection is a `RibbonMarkKey`
+    (ICAO, storm id, band id, SIGMET id, segment index) kept across `/live`
+    refreshes; `RibbonInspection.pruned` drops chips whose mark vanished and
+    closes the card when the selected one did. ✕, the same mark again or bare
+    ribbon closes it. Regular width: rows left, raw reports right. Each mark
+    is an accessibility element (`ribbonStation-<icao>`, `ribbonStorm-<id>`,
+    `ribbonBand-<id>`, `ribbonSigmet-<id>`, `ribbonSegment-<n>`) whose
+    activation selects it; the card's content is announced. Choices: hover
+    stays web-only and the web keeps its click-to-map; the card keeps
+    "Cloud top: unavailable" (under More) that the tooltip omits.
 - **Web**: two new collapsible sections, `observed-glance` ("At a glance") and
   `observed-ribbon` ("Along the route"), first in the sidebar's Observations
   group so the page reads in the iOS Observed tab's order: glance → ribbon →
@@ -460,8 +482,10 @@ logs `Live glance failed` and leaves both null for that tick.
     under the pointer shows its span, side, distance and motion (a core with
     a `storm_id` shows its cell). SIGMETs and radar stretches are covered too.
     The content and `bandAt` (the inverse of `bandRects`) are pure in
-    `ribbon-tooltip.ts`. Touch keeps its tap. There is no iOS counterpart and
-    nothing to mirror.
+    `ribbon-tooltip.ts`. Touch keeps its tap. The iOS tap card (#747) says
+    the same, from the mirrored `RouteRibbonInspectorRules.swift` (SYNC
+    header both sides; `ribbon-tooltip.test.ts` ↔
+    `RouteRibbonInspectorRulesTests.swift`).
   - **Deliberate, not a gap:** like iOS, the web honours only part of the
     focus contract — it ignores `time` and draws no SIGMET polygons. There is
     no SIGMET polygon layer on the route map and no frame stepper for `time`

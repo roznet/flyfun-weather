@@ -128,10 +128,12 @@ Those rules were deliberately extracted into one comparable pair — neither is
 
 **Paired only down to the label fns.** The derived geometry — `bandRects`,
 `bandAnchor`, `ribbonArrows`, `stormTargets`, `stationPoint`, `segmentFocusAt`
-— is **web-only** in the shared module. On iOS the equivalents are private
-methods on `RouteRibbonView` (`anchor`, `arrows`, `stormTargets`,
-`stationPoint`, `segmentFocus`), because they return SwiftUI/CoreGraphics
-types. Don't report their absence from `RouteRibbonRules.swift` as drift —
+— is **web-only** in the shared module. On iOS the equivalents live in
+`RouteRibbonInspectorRules.swift` (`bandBinRects`, `anchor`, `stationPoint`,
+shared by the drawing and the tap hit test since #747) or as private methods
+on `RouteRibbonView` (`arrows`, `stormTargets`); iOS has no `segmentFocusAt`
+any more, a tap opens the inspector card instead of the map. Don't report their
+absence from `RouteRibbonRules.swift` as drift —
 compare the *rules they encode* (which band gets an arrow, where a station
 sits) rather than expecting matching symbols. `roundHalfAway` has no Swift
 counterpart by design: Swift's `Double.rounded()` is already half-away-from-zero,
@@ -148,6 +150,17 @@ Check, in this order of consequence:
    Collapsing them makes absent data and good news identical.
 3. **The label strings**, which are also the accessible names. These are
    asserted verbatim on both sides — see below.
+
+**The picked-mark wording is a second pair (#747).** What a mark says when it
+is picked — the web's hover tooltip, the iOS tap card — is
+`web/ts/visualization/observed/ribbon-tooltip.ts` ↔
+`app/flyfun-weather/flyfun-weather/Views/Briefing/RouteRibbonInspectorRules.swift`
+(symbol map in the Swift header; `bandAt` is ported exactly). The tests are
+`web/tests/unit/ribbon-tooltip.test.ts` ↔ `RouteRibbonInspectorRulesTests.swift`.
+Deliberate differences, do not re-flag: the web returns escaped HTML, iOS
+plain rows; the web's "Click for detail" hint has no iOS row; iOS-only types
+(`RibbonMarkKey`, `targets`, `hits`, `RibbonInspection`) are the tap hit test
+and selection, which the web does with DOM pointer events.
 
 **The tests are the mechanism.** `web/tests/unit/ribbon-core.test.ts` and
 `app/flyfun-weather/flyfun-weatherTests/RouteRibbonRulesTests.swift` run the
