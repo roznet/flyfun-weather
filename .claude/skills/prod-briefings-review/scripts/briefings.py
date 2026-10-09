@@ -22,20 +22,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
 import statistics
 import sys
+import tarfile
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-PACKS_ROOT = "/app/data/packs"
+PACKS_ROOT = os.path.join(os.environ.get("DATA_DIR", "/app/data"), "packs")
 ORDER = {"green": 0, "amber": 1, "red": 2}
 
 # Mechanical-check patterns. Kept here (not in the skill text) so the record's
 # counts stay comparable run to run.
-FIRST_PERSON = re.compile(r"\b(?i:our|we|unser\w*|wir)\b|\bI\b")
+# A bare "I" also matches "CAT I" / "Category I"; count it only before a verb.
+FIRST_PERSON = re.compile(r"\b(?i:our|we|unser\w*|wir)\b|\bI(?: am| have| would| think| expect| believe|'m|'ve|'d)\b")
 CONSENSUS = re.compile(
     r"all (two |three |four |five )?models|across (the )?models|the models (all )?show|"
     r"every model|modellübergreifend|alle Modelle", re.I)
@@ -112,9 +115,14 @@ def cmd_health(a):
         WHERE timestamp >= :s AND timestamp < :e AND llm_digest = 1 GROUP BY llm_model"""), w).fetchall()
     for m, n, u in models:
         print(f"  model {m}: {n} digests, {u} users")
-    costs = [json.loads(d).get("token_cost_usd", 0) for (d,) in db.execute(text("""
+    costs = []
+    for (d,) in db.execute(text("""
         SELECT detail_json FROM cost_ledger WHERE service = 'flyfun-weather' AND action = 'briefing'
-          AND created_at >= :s AND created_at < :e AND detail_json IS NOT NULL"""), w)]
+          AND created_at >= :s AND created_at < :e AND detail_json IS NOT NULL"""), w):
+        try:
+            costs.append(float(json.loads(d).get("token_cost_usd") or 0))
+        except (ValueError, TypeError, AttributeError):
+            continue  # one odd ledger row must not cost the rest of the report
     if costs:
         print(f"token cost per briefing: median ${statistics.median(costs):.4f}, "
               f"max ${max(costs):.4f}, total ${sum(costs):.2f} over {len(costs)}")
@@ -372,7 +380,6 @@ def cmd_sample(a):
 
 
 def cmd_export(a):
-    import tarfile
     picks = json.load(open(a.picks))
     with tarfile.open(a.out, "w:gz") as t:
         for p in picks:
@@ -386,7 +393,6 @@ def cmd_export(a):
             data = json.dumps(card, indent=1, default=str).encode()
             info = tarfile.TarInfo(f"{p['id']}/card.json")
             info.size = len(data)
-            import io
             t.addfile(info, io.BytesIO(data))
     print(f"exported {len(picks)} packs -> {a.out}")
 
@@ -448,11 +454,18 @@ def cmd_record(a):
                 raise SystemExit(f"pack {e['pack_id']}: finding needs weakness + major/minor: {f}")
     os.makedirs(os.path.dirname(os.path.abspath(a.record)), exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with open(a.record, "a") as fh:
-        for e in entries:
-            fh.write(json.dumps({**e, "server_head": a.server_head, "recorded_at": stamp},
-                                ensure_ascii=False) + "\n")
-    print(f"recorded {len(entries)} packs -> {a.record}")
+    # One row per (day, pack): a re-run, or a tail pack promoted to a full
+    # review, replaces its earlier row instead of counting twice in tally.
+    new = {(e["day"], e["pack_id"]): {**e, "server_head": a.server_head, "recorded_at": stamp}
+           for e in entries}
+    kept = [r for r in _read_record(a.record) if (r["day"], r["pack_id"]) not in new]
+    replaced = len(_read_record(a.record)) - len(kept)
+    tmp = a.record + ".tmp"
+    with open(tmp, "w") as fh:
+        for r in kept + list(new.values()):
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, a.record)
+    print(f"recorded {len(new)} packs ({replaced} replaced) -> {a.record}")
 
 
 def cmd_tally(a):

@@ -258,7 +258,8 @@ Per day, `--n` is a ceiling (default 12) and the packs come ranked:
 
 Those are the **core**. The rest of the ceiling is the **tail**, in gain order. A flight in
 `seen.json` (reviewed in the last 7 days) pays a penalty, so it comes back only when it alone
-carries something. Busy days give about 11 core packs, quiet ones about 8.
+carries something; within one multi-day run, a flight picked on an earlier day is penalised
+the same way. Busy days give about 11 core packs, quiet ones about 8.
 
 ### C3. Full review of the core
 
@@ -291,6 +292,9 @@ Write one entry per reviewed pack (core and tail) to `$W/findings.json`:
 python3 $S/briefings.py record $RECORD $W/findings.json --server-head $SERVER_HEAD
 python3 $S/briefings.py tally $RECORD --since <a week or two back>
 ```
+
+Recording a `(day, pack_id)` again replaces its earlier row, so re-running C5 or recording a
+promoted tail pack never double-counts.
 
 `--server-head` is the SHA that wrote the digests: use the pre-deploy SHA for days before a
 deploy inside the window. The tally (majors by weakness per day) is how a prompt change is
