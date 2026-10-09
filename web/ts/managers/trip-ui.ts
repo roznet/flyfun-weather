@@ -21,6 +21,7 @@ import { $, escapeHtml, formatDate } from '../utils';
 import { t, getDateLocale } from '../i18n/i18n';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { legRefreshButton, tripRunMessage } from '../helpers/trip-leg-refresh';
+import { tripHeading } from '../helpers/trip-heading';
 
 /** The badge for one leg — traffic light, soft outlook, or a neutral state. */
 function legBadge(leg: TripLeg): string {
@@ -352,8 +353,10 @@ export function renderControls(trip: TripResponse, handlers: ControlHandlers): v
     handlers.onToggleAutoRefresh((ev.target as HTMLInputElement).checked);
   });
   el.querySelector('.btn-trip-rename')?.addEventListener('click', () => {
+    // An empty answer clears the name and the trip goes back to its chain
+    // (#728); only Cancel (null) leaves it as it was.
     const name = prompt(t('trips.btnRename'), trip.name);
-    if (name != null && name.trim()) handlers.onRename(name.trim());
+    if (name != null && name.trim() !== trip.name) handlers.onRename(name.trim());
   });
   el.querySelector('.btn-trip-delete')?.addEventListener('click', () => {
     // The confirm spells out that the flights survive — this deletes a
@@ -365,11 +368,12 @@ export function renderControls(trip: TripResponse, handlers: ControlHandlers): v
 export function renderHeader(trip: TripResponse): void {
   const el = $('trip-header');
   if (!el) return;
+  const heading = tripHeading(trip);
   el.innerHTML = `
-    <h1 class="trip-title">${escapeHtml(trip.name || trip.summary.chain_label)}</h1>
-    <div class="trip-subtitle">${escapeHtml(trip.summary.chain_label)}</div>
+    <h1 class="trip-title">${escapeHtml(heading.title)}</h1>
+    ${heading.subtitle ? `<div class="trip-subtitle">${escapeHtml(heading.subtitle)}</div>` : ''}
   `;
-  document.title = `Flyfun Weather — ${trip.name || trip.summary.chain_label}`;
+  document.title = `Flyfun Weather — ${trip.display_name || heading.title}`;
 }
 
 export function renderError(message: string | null): void {

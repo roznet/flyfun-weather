@@ -29,10 +29,11 @@ decidable"* — never a colour for the trip.
 | `weatherbrief/trips.py` | `summarize_trip`, `TripLegInput`, `TripSummary`, `TripLeg`, `SORTIE_GAP_HOURS` — the pure deterministic summary |
 | `web/ts/helpers/assessment-badges.ts` | `assessmentClass`, `outlookClass` — shared by the flights list and the trip page so their badge colours cannot drift |
 | `weatherbrief/storage/trips.py` | `create_trip`, `trip_members`, `set_leg_trip`, `delete_trip`, `prune_empty_trips`, `read_refresh_state`, `write_refresh_state`, `shareable_trip_ids`, `is_shareable`, `load_trip_row_for_viewer`, `ensure_share_code`, `lookup_trip_id_by_share_code` |
-| `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `shared_trip_refs`, `trip_ref_for`, `viewer_trip_ref_for`, `ai_summary_key`, `derive_trip_name` |
+| `weatherbrief/api/trips.py` | the `/api/trips` router, `build_leg_inputs`, `build_trip_summary`, `bulk_trip_refs`, `shared_trip_refs`, `trip_ref_for`, `viewer_trip_ref_for`, `ai_summary_key`, `derive_trip_name`, `trip_display_name`, `trip_label` |
 | `weatherbrief/api/trip_refresh.py` | `start`, `kick`, `status`, `active_run_for_flight`, `record_leg_notice`, `open_scheduler_run`, `note_leg_done`, `run_trip_refresh_resume` |
 | `weatherbrief/digest/trip_summary.py` | `ensure_trip_ai_summary`, `check_guardrail`, `build_context`, `legs_allow_ai` |
 | `web/ts/helpers/trip-selection.ts` | `buildTripSelection` — the selection-bar rule, pure |
+| `web/ts/helpers/trip-heading.ts` | `tripHeading` — name-first title + chain subtitle; iOS twin `TripResponse.headerSubtitle` |
 | `web/ts/managers/trip-ui.ts`, `web/ts/trip-main.ts` | the `/trip.html` page |
 
 ## Data model
@@ -52,6 +53,15 @@ Two things are deliberately **not** stored:
 
 `SET NULL` rather than cascade: deleting a trip must never delete flights. The
 flights own the packs, and the packs cost real money.
+
+- **A derived name.** `flight_trips.name` is only what the pilot typed, `""`
+  until they rename (#728; migration 098 cleared the derived names stored
+  before). `TripResponse.display_name` is `name` else `derive_trip_name`
+  (chain + date span), computed per read so it follows the legs; the leg badge's
+  `TripLegRef.name` and the trip notification title use the same fallback
+  (`_ref_label`, from member rows — no summary needed) and are never empty.
+  Storing the derived text froze it at creation and made "has the pilot named
+  this?" unanswerable, so a name-first header printed the chain twice.
 
 One trip per leg is enforced by the shape of the column. Allowing many would
 make "which legs are still needed" ambiguous, and the pilot question has no
@@ -394,6 +404,12 @@ without it a flown outbound leg is indistinguishable from an ungrouped flight. T
 from the server's leg total, so it stays honest either way, and `/trip.html`
 shows the whole chain including flown legs.
 
+The card is **titled with the pilot's name** when the trip has one, the chain
+beneath it; an unnamed trip is titled with its chain alone (`tripHeading`, the
+same rule on `/trip.html` and iOS). The name is what makes a group of legs read
+as *a trip* — pilot feedback in #728. Clearing the name in Rename reverts to
+the chain.
+
 Expansion state is a `Set<string>` in `localStorage`, mirroring the existing
 `pastExpanded` / `recentExpanded` pattern. **Collapsed by default**: the
 collapsed card already carries the binding-leg chip, so auto-expanding a red trip
@@ -524,7 +540,7 @@ practice legs default to public, so a trip is shareable unless the owner
 deliberately closed one.
 
 The corollary: **a trip with any private leg 404s for a viewer, and says
-nothing else.** The trip's *name* is derived from the chain
+nothing else.** An unnamed trip's label is derived from the chain
 ("EGTF → LSGS → LFAT → EGTF"), so acknowledging it at all would leak the route
 of the leg that was just made private. An empty trip is not shareable either —
 there is nothing to read, and a bare name is not a briefing.

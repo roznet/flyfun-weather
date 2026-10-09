@@ -6,6 +6,7 @@ import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
 import { tripCardRefresh } from '../helpers/trip-refresh-indicator';
+import { tripHeading } from '../helpers/trip-heading';
 import { actionGroupStart, selectionBarButtons } from '../helpers/selection-bar-order';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { t, getDateLocale } from '../i18n/i18n';
@@ -356,6 +357,7 @@ function renderTripCard(
     const spinner = indicator.status === 'refreshing' ? '<span class="dots-spinner"></span>' : '';
     refreshing = `<span class="badge badge-refreshing">${escapeHtml(label)}${spinner}</span>`;
   }
+  const heading = tripHeading(trip);
   const cards = members.map(f =>
     renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), matchTokens),
   ).join('');
@@ -365,7 +367,8 @@ function renderTripCard(
       <div class="trip-card-header">
         <button type="button" class="trip-toggle" data-trip-toggle="${escapeHtml(trip.id)}"
                 aria-expanded="${expanded ? 'true' : 'false'}">
-          <span class="trip-chain">${escapeHtml(summary.chain_label || trip.name)}</span>
+          <span class="trip-chain">${escapeHtml(heading.title)}</span>
+          ${heading.subtitle ? `<span class="trip-chain-sub">${escapeHtml(heading.subtitle)}</span>` : ''}
           <span class="trip-dates">${escapeHtml(dates)}</span>
           <span class="trip-count">${escapeHtml(ahead)}</span>
         </button>

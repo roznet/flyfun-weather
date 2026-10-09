@@ -832,7 +832,7 @@ def _finish(db: Session, trip_id: str, user_id: str, run_id: str | None = None) 
         if row is None:
             return
         state = trip_storage.read_refresh_state(row)
-        trip_name = row.name or "Trip"
+        trip_name = row.name
         # Keep the finished results visible for the status poll; only the run
         # marker and the pending list go, so the UI can render the final
         # "2 of 3 legs had new data" line before it next reloads.
@@ -907,6 +907,10 @@ def _send_coalesced(
 
     prefs = load_notify_prefs(db, user_id)
     lines = _leg_lines(state)
+    if not trip_name:
+        # Unnamed trips are stored unnamed (#728); title the notice with the
+        # same derived label the trip page shows rather than a bare "Trip".
+        trip_name = _derived_name_for(db, trip_id)
     badge = max((n.get("badge") or 0) for n in qualifying)
 
     # Headline the binding leg, not a count: "which leg decides this trip" is
@@ -945,6 +949,17 @@ def _send_coalesced(
             logger.debug("Trip %s: email not configured", trip_id)
         except Exception:
             logger.warning("Trip %s: email failed", trip_id, exc_info=True)
+
+
+def _derived_name_for(db: Session, trip_id: str) -> str:
+    """The unnamed trip's derived label ("EGTF → LSGS → EGTF, 20–22 Feb")."""
+    try:
+        from weatherbrief.api.trips import trip_label
+
+        return trip_label(db, trip_id, "")
+    except Exception:
+        logger.warning("Trip %s: name derivation failed", trip_id, exc_info=True)
+        return "Trip"
 
 
 def _headline_for(db: Session, trip_id: str) -> str | None:

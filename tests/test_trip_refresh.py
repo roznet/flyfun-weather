@@ -885,14 +885,20 @@ class TestLegNoticesBelongToTheirRun:
         state = trip_storage.read_refresh_state(session.get(FlightTripRow, trip_with_legs.id))
         assert state["notices"]["leg1"]["qualified"] is True
 
-    def _drive_coalesced(self, session, trip_id, monkeypatch, notices, legs):
+    def _drive_coalesced(
+        self, session, trip_id, monkeypatch, notices, legs, trip_name="Sion",
+        titles: list[str] | None = None,
+    ):
         """Run `_send_coalesced` with delivery captured at its real seams."""
         sent: list[str] = []
         import weatherbrief.notify.push as push_mod
 
-        monkeypatch.setattr(
-            push_mod, "send_trip_push", lambda *a, **k: sent.append("push"),
-        )
+        def _push(*a, **k):
+            sent.append("push")
+            if titles is not None:
+                titles.append(k["title"])
+
+        monkeypatch.setattr(push_mod, "send_trip_push", _push)
         monkeypatch.setattr(
             trip_refresh, "_headline_for", lambda *a, **k: "headline",
         )
@@ -901,7 +907,7 @@ class TestLegNoticesBelongToTheirRun:
             lambda *a, **k: {"notify_push": True, "notify_email": False},
         )
         trip_refresh._send_coalesced(
-            session, trip_id, "Sion",
+            session, trip_id, trip_name,
             {"legs": legs, "results": {}, "notices": notices},
             DEV_USER_ID,
         )
@@ -917,6 +923,19 @@ class TestLegNoticesBelongToTheirRun:
             legs=["leg1"],
         )
         assert sent == ["push"]
+
+    def test_an_unnamed_trip_is_titled_with_its_derived_label(
+        self, session, trip_with_legs, monkeypatch,
+    ):
+        """Unnamed trips are stored unnamed (#728); the push must not say "Trip"."""
+        titles: list[str] = []
+        self._drive_coalesced(
+            session, trip_with_legs.id, monkeypatch,
+            notices={"leg1": {"label": "leg1", "qualified": True, "badge": 1}},
+            legs=["leg1"], trip_name="", titles=titles,
+        )
+        assert len(titles) == 1
+        assert " → " in titles[0] and titles[0] != "Trip", titles
 
     def test_a_stray_notice_cannot_trigger_the_coalesced_push(
         self, session, trip_with_legs, monkeypatch,

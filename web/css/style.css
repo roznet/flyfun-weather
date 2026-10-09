@@ -8852,6 +8852,17 @@ body.resizing-rail {
   text-overflow: ellipsis;
 }
 
+/* The chain under a pilot-named trip (#728): the name is the title, the
+   route is context. Absent for an unnamed trip, whose title is the chain. */
+.trip-chain-sub {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .trip-dates,
 .trip-count {
   color: var(--text-muted);

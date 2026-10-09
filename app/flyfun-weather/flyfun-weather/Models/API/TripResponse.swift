@@ -311,9 +311,18 @@ nonisolated struct TripResponse: Codable, Sendable, Equatable, Identifiable {
     /// decoder): a server predating sharing only ever returned your own trips.
     var isOwned: Bool { role == .owner }
 
-    /// Display title: the trip's name, falling back to the chain when a trip was
-    /// created before its default name was derived.
+    /// Display title: the pilot's name for the trip, else its chain. `name` is
+    /// only what the pilot typed — empty until they rename the trip (#728).
     var displayName: String { name.isEmpty ? summary.chainLabel : name }
+
+    /// The chain under a pilot-named trip; nil when the title already is the
+    /// chain, so it is never printed twice. Mirrors the web's
+    /// `helpers/trip-heading.ts::tripHeading` — the two must agree.
+    var headerSubtitle: String? {
+        let chain = summary.chainLabel
+        guard !name.isEmpty, !chain.isEmpty, chain != name else { return nil }
+        return chain
+    }
 
     var notifyOverrideMode: FlightNotifyOverride {
         FlightNotifyOverride(rawValue: notifyOverride) ?? .default

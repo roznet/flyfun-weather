@@ -571,12 +571,23 @@ struct TripDTOTests {
         #expect(trip.summary.bindingLeg == nil)
     }
 
-    /// The server can return an empty name for a trip created before its default
-    /// was derived; the row must not render a blank title.
+    /// An unnamed trip arrives with an empty name (#728 — the server no longer
+    /// stores a derived one); the row must not render a blank title.
     @Test("An empty trip name falls back to the chain label")
     func displayNameFallsBack() {
         let trip = TripFixture.trip(name: "", legs: [TripFixture.leg(id: "a")])
         #expect(trip.displayName == "EGTF → LSGS → EGTF")
+    }
+
+    /// The pilot's name titles the group with the chain beneath it; an unnamed
+    /// trip shows the chain once (#728). Same rule as web `tripHeading`.
+    @Test("The chain sits under a named trip and is never printed twice")
+    func headerSubtitle() {
+        let leg = TripFixture.leg(id: "a")
+        #expect(TripFixture.trip(name: "Alps weekend", legs: [leg]).headerSubtitle
+                == "EGTF → LSGS → EGTF")
+        #expect(TripFixture.trip(name: "", legs: [leg]).headerSubtitle == nil)
+        #expect(TripFixture.trip(name: "EGTF → LSGS → EGTF", legs: [leg]).headerSubtitle == nil)
     }
 
     /// Both per-flight refresh paths refuse a claimed leg, and the app must tell
