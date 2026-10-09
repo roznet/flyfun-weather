@@ -7,8 +7,9 @@
  *  colour ramp there matched nothing on the map. */
 
 import type { MapMetric } from './metrics';
-import { getMapMetricOptions } from './metrics';
+import { getMapMetricOptions, ROUTE_WEIGHT_MAX } from './metrics';
 import { t } from '../../i18n/i18n';
+import { escapeHtml } from '../../utils';
 
 export interface MapLegendCallbacks {
   onColorMetricChange: (metricId: string) => void;
@@ -24,8 +25,9 @@ export interface MapLegendSelection {
   widthMetric: MapMetric | null;
 }
 
-/** Route-line weights run 3–25 px; scale so the thickest bar fits the row. */
-const WIDTH_BAR_SCALE = 0.6;
+/** Thickest bar (px), for the thickest route line; fits the 16px CSS row. */
+const WIDTH_BAR_MAX_PX = 15;
+const WIDTH_BAR_SCALE = WIDTH_BAR_MAX_PX / ROUTE_WEIGHT_MAX;
 const WIDTH_BAR_MIN_PX = 2;
 
 /** Bar height (px) for a route-line weight, as drawn in the width strip. */
@@ -64,11 +66,11 @@ function legendRow(
   selectedId: string,
   scaleHtml: string,
 ): string {
-  let html = `<label class="viz-toggle-label map-legend-channel" for="map-${channel}-metric">${label}</label>`;
+  let html = `<label class="viz-toggle-label map-legend-channel" for="map-${channel}-metric">${escapeHtml(label)}</label>`;
   html += `<select id="map-${channel}-metric" class="map-control-select">`;
   for (const opt of options) {
     const selected = opt.id === selectedId ? ' selected' : '';
-    html += `<option value="${opt.id}"${selected}>${opt.label}</option>`;
+    html += `<option value="${escapeHtml(opt.id)}"${selected}>${escapeHtml(opt.label)}</option>`;
   }
   html += '</select>';
   // Always emit the cell so the grid keeps its shape when a row has no scale.
@@ -86,19 +88,19 @@ function scaleHtml(metric: MapMetric, swatch: (stop: MapMetric['legendStops'][nu
   for (const stop of stops) html += swatch(stop);
   html += '</div>';
   html += `<div class="map-legend-labels" style="${cols}">`;
-  for (const stop of stops) html += `<span>${stop.label}</span>`;
+  for (const stop of stops) html += `<span>${escapeHtml(stop.label)}</span>`;
   html += '</div>';
   return html;
 }
 
 function colorScaleHtml(metric: MapMetric): string {
   return scaleHtml(metric, (stop) =>
-    `<div class="map-legend-stop" style="background:${stop.color}" title="${stop.label}"></div>`);
+    `<div class="map-legend-stop" style="background:${stop.color}" title="${escapeHtml(stop.label)}"></div>`);
 }
 
 function widthScaleHtml(metric: MapMetric): string {
   return scaleHtml(metric, (stop) => {
     const h = widthBarPx(metric.getWidth(stop.value));
-    return `<div class="map-legend-width-cell" title="${stop.label}"><div class="map-legend-width-bar" style="height:${h}px"></div></div>`;
+    return `<div class="map-legend-width-cell" title="${escapeHtml(stop.label)}"><div class="map-legend-width-bar" style="height:${h}px"></div></div>`;
   });
 }

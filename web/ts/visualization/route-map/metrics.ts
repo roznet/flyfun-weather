@@ -105,6 +105,11 @@ function tempAtAltitude(p: VizPoint, altFt: number): number | null {
   return null;
 }
 
+/** Route-line weight range (px) every `getWidth` maps into; the legend's
+ *  width strip scales from the same bounds. */
+export const ROUTE_WEIGHT_MIN = 3;
+export const ROUTE_WEIGHT_MAX = 25;
+
 // --- Default width (uniform) for metrics without meaningful width variation ---
 const DEFAULT_WIDTH = 15;
 const defaultWidth = () => DEFAULT_WIDTH;
@@ -118,7 +123,7 @@ const cloudCoverTotal: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.cloudCoverTotalPct,
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, 3, 25),
+  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: [
     { value: 0, label: 'Clear', color: cloudCoverMapColor(0) },
@@ -136,7 +141,7 @@ const cloudCoverLow: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.cloudCoverLowPct,
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, 3, 25),
+  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: cloudCoverTotal.legendStops,
 };
@@ -150,7 +155,7 @@ const convectiveRisk: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
   getColor: (v) => riskMapColor(CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 4, 3, 25),
+  getWidth: (v) => linearWidth(v, 4, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none',
   legendStops: [
     { value: 0, label: 'None', color: riskMapColor('none') },
@@ -168,7 +173,7 @@ const headwindOnly: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => Math.max(0, p.headwindKt),
   getColor: (v) => headwindMapColor(v),
-  getWidth: (v) => linearWidth(v, 30, 3, 25),
+  getWidth: (v) => linearWidth(v, 30, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)} kt HW`,
   legendStops: [
     { value: 0, label: 'Calm', color: headwindMapColor(0) },
@@ -185,7 +190,7 @@ const tailwindOnly: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => Math.max(0, -p.headwindKt),
   getColor: (v) => headwindMapColor(-v),
-  getWidth: (v) => linearWidth(v, 30, 3, 25),
+  getWidth: (v) => linearWidth(v, 30, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)} kt TW`,
   legendStops: [
     { value: 0, label: 'Calm', color: headwindMapColor(0) },
@@ -202,7 +207,7 @@ const cape: MapMetric = {
   altitudeDependent: false,
   getValue: (p) => p.capeSurfaceJkg,
   getColor: (v) => capeMapColor(v),
-  getWidth: (v) => linearWidth(v, 2000, 3, 25),
+  getWidth: (v) => linearWidth(v, 2000, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)} J/kg`,
   legendStops: [
     { value: 0, label: '0', color: capeMapColor(0) },
@@ -222,7 +227,8 @@ const nwpCeiling: MapMetric = {
   // Inverted: low ceiling = thick (danger), high ceiling = thin
   getWidth: (v) => {
     const clamped = Math.max(0, Math.min(5000, v));
-    return 25 - (clamped / 5000) * 22; // 25px at 0ft → 3px at 5000ft
+    // ROUTE_WEIGHT_MAX at 0ft → ROUTE_WEIGHT_MIN at 5000ft
+    return ROUTE_WEIGHT_MAX - (clamped / 5000) * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN);
   },
   formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
   legendStops: [
@@ -242,9 +248,9 @@ const tempAtLevel: MapMetric = {
   getColor: (v) => temperatureMapColor(v),
   // Thick when cold (icing territory), thin when warm
   getWidth: (v) => {
-    // 5°C → 3px, -20°C → 25px
+    // 5°C → thinnest, -20°C → thickest
     const clamped = Math.max(-20, Math.min(5, v));
-    return 3 + (5 - clamped) / 25 * 22;
+    return ROUTE_WEIGHT_MIN + (5 - clamped) / 25 * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN);
   },
   formatValue: (v) => `${v.toFixed(1)}°C`,
   legendStops: [
@@ -266,7 +272,7 @@ const modelAgreement: MapMetric = {
     if (v >= 1) return agreementMapColor('moderate');
     return agreementMapColor('good');
   },
-  getWidth: (v) => linearWidth(v, 2, 3, 25),
+  getWidth: (v) => linearWidth(v, 2, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => {
     if (v >= 2) return t('map.formatPoor');
     if (v >= 1) return t('map.formatModerate');
@@ -288,7 +294,7 @@ const icingRiskAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.icingZones, altFt ?? 0)] ?? 0,
   getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 3, 3, 25),
+  getWidth: (v) => linearWidth(v, 3, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
   legendStops: [
     { value: 0, label: 'None', color: riskMapColor('none') },
@@ -320,7 +326,7 @@ const sfipAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => sfipAtAlt(p.sfipZones, altFt ?? 0),
   getColor: (v) => riskMapColor(sfipRisk(v)),
-  getWidth: (v) => linearWidth(v, 100, 3, 25),
+  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `SFIP ${Math.round(v)} (${sfipRisk(v)})`,
   legendStops: [
     { value: 0, label: `None (<${SFIP_LIGHT})`, color: riskMapColor('none') },
@@ -337,7 +343,7 @@ const catRiskAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.catLayers, altFt ?? 0)] ?? 0,
   getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 3, 3, 25),
+  getWidth: (v) => linearWidth(v, 3, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
   legendStops: icingRiskAtLevel.legendStops,
 };
@@ -349,7 +355,7 @@ const cloudAtLevel: MapMetric = {
   altitudeDependent: true,
   getValue: (p, altFt) => cloudAtAlt(p.cloudLayers, altFt ?? 0),
   getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, 3, 25),
+  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
   formatValue: (v) => `${Math.round(v)}%`,
   legendStops: cloudCoverTotal.legendStops,
 };

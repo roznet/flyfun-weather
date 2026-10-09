@@ -76,6 +76,12 @@ describe('mapLegendHtml', () => {
     expect(heights[0]).toBeGreaterThan(heights[heights.length - 1]);
   });
 
+  it('escapes stop labels (the ceiling legend carries "<")', () => {
+    const s = scale(legend('nwp-ceiling', MAP_METRIC_NONE), 'color');
+    expect(s).toContain('<span>LIFR &lt;500</span>');
+    expect(s).not.toContain('LIFR <500');
+  });
+
   it('width "none" keeps the picker but draws no scale', () => {
     const html = legend('cape', MAP_METRIC_NONE);
     expect(html).toMatch(/<option value="none" selected>/);
