@@ -277,14 +277,14 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
           "sigmets": [{"id": "s1", "from_nm": 20, "to_nm": 40}]
         """)
         let t = I.targets(ribbon: r, storms: [], corridorNm: 30, width: width)
-        let dep = try #require(t.first { $0.key == .station("ZZAA") })
+        let dep = try #require(t.first { $0.key == .station("ZZAA", role: "departure") })
         #expect(dep.rect.midX == RouteRibbonRules.inset && dep.rect.midY == RouteRibbonRules.trackY)
-        let mid = try #require(t.first { $0.key == .station("ZZBB") })
+        let mid = try #require(t.first { $0.key == .station("ZZBB", role: "route") })
         #expect(mid.rect.midX == RouteRibbonRules.x(50, routeNm: 100, width: width))
         #expect(mid.rect.midY == RouteRibbonRules.leftRowY)
         let sigmet = try #require(t.first { $0.key == .sigmet("s1") })
         #expect(sigmet.rect.midY == RouteRibbonRules.sigmetY)
-        #expect(I.hits(at: CGPoint(x: RouteRibbonRules.inset, y: RouteRibbonRules.trackY), in: t).first == .station("ZZAA"))
+        #expect(I.hits(at: CGPoint(x: RouteRibbonRules.inset, y: RouteRibbonRules.trackY), in: t).first == .station("ZZAA", role: "departure"))
     }
 
     @Test func withoutTheCellsFeedTheRadarStretchesAreMarks() throws {
@@ -327,6 +327,62 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
         """)
         // A station without a position, a SIGMET without a span and a band
         // without bins are not drawn, so they cannot be selected.
-        #expect(I.availableKeys(ribbon: r, storms: [], corridorNm: 30) == [.band("b1"), .station("ZZAA"), .sigmet("s1")])
+        #expect(I.availableKeys(ribbon: r, storms: []) == [.band("b1"), .station("ZZAA", role: "departure"), .sigmet("s1")])
+    }
+
+    /// `availableKeys` reads the models, `targets` the geometry: the same
+    /// marks either way, with and without the cells feed.
+    @Test func availableKeysAreTheTargetsKeys() throws {
+        let storm = try decode(LiveStorm.self, #"{"id": "c1", "along_nm": 40, "cross_nm": 5}"#)
+        let lanes = """
+          "stations": [{"icao": "ZZAA", "role": "departure"}, {"icao": "ZZBB", "role": "route", "along_nm": 30},
+                       {"icao": "ZZXX", "role": "route"}, {"icao": "ZZAA", "role": "destination"}],
+          "sigmets": [{"id": "s1", "from_nm": 20, "to_nm": 40}, {"id": "s2"}],
+          "segments": [{"index": 0, "from_nm": 0, "to_nm": 50}, {"index": 1, "from_nm": 50, "to_nm": 100}]
+        """
+        let withBands = try ribbon("""
+        , "weather": [{"id": "rain1", "tier": "rain", "storm_id": "c1", "profile": [[40, 2, 12]]},
+                      {"id": "core1", "tier": "core", "storm_id": "c1", "profile": [[40, 4, 8]]},
+                      {"id": "core2", "tier": "core", "storm_id": "gone", "profile": [[60, -8, -2]]},
+                      {"id": "empty", "tier": "rain", "profile": []}],
+        \(lanes)
+        """)
+        let radarOnly = try decode(LiveRibbon.self, "{\"route_nm\": 100, \"weather_status\": \"unavailable\", \(lanes)}")
+        for r in [withBands, radarOnly] {
+            for storms in [[storm], []] {
+                let fromGeometry = Set(I.targets(ribbon: r, storms: storms, corridorNm: 30, width: width).map(\.key))
+                #expect(I.availableKeys(ribbon: r, storms: storms) == fromGeometry)
+            }
+        }
+    }
+
+    /// A round trip: the departure and the destination are the same airport,
+    /// two discs, two cards — each picks and resolves its own.
+    @Test func aRoundTripKeepsDepartureAndDestinationApart() throws {
+        let r = try ribbon("""
+        , "weather": [],
+          "stations": [{"icao": "ZZAA", "role": "departure", "eta": "2026-10-02T08:00:00Z"},
+                       {"icao": "ZZAA", "role": "destination", "eta": "2026-10-02T10:00:00Z", "taf_category_at_eta": "IFR"}]
+        """)
+        let t = I.targets(ribbon: r, storms: [], corridorNm: 30, width: width)
+        let arrival = CGPoint(x: width - RouteRibbonRules.inset, y: RouteRibbonRules.trackY)
+        let key = try #require(I.hits(at: arrival, in: t).first)
+        #expect(key == .station("ZZAA", role: "destination"))
+        #expect(key.identifier == "ribbonStation-ZZAA-destination")
+        guard case .station(let st, _) = try #require(I.resolve(key, ribbon: r, storms: [], airports: nil)) else {
+            Issue.record("expected a station"); return
+        }
+        #expect(st.role == "destination")
+        #expect(I.stationContent(st, airport: nil).rows.contains(RibbonCardRow(label: "TAF at 10:00Z", value: "IFR")))
+        #expect(I.availableKeys(ribbon: r, storms: []).count == 2)
+    }
+
+    @Test func theAnnouncementLeavesOutTheRawReports() throws {
+        let st = try station(#"{"icao": "ZZAA", "role": "destination", "metar_category": "VFR"}"#)
+        let apt = try airport(#"{"icao": "ZZAA", "metar_raw": "ZZAA 091200Z 18005KT CAVOK", "taf_raw": "TAF ZZAA 0906/1006"}"#)
+        let c = I.stationContent(st, airport: apt)
+        #expect(c.spoken.contains("METAR now: VFR"))
+        #expect(!c.spoken.contains("CAVOK"))
+        #expect(!c.spoken.contains("TAF ZZAA"))
     }
 }

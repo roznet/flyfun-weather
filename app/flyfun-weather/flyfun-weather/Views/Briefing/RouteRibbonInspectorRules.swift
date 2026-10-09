@@ -44,7 +44,15 @@ nonisolated struct RibbonCardContent: Equatable, Sendable {
     var rows: [RibbonCardRow] = []
     var raws: [RibbonCardRow] = []
 
-    /// Everything, for tests and the VoiceOver announcement.
+    /// What VoiceOver announces when the card opens: the decoded rows, not
+    /// the raw METAR / TAF (those stay on the card, read on demand).
+    var spoken: String {
+        ([title, subtitle ?? ""] + rows.map { "\($0.label): \($0.value)" })
+            .filter { !$0.isEmpty }
+            .joined(separator: ". ")
+    }
+
+    /// Everything, for tests.
     var text: String {
         ([title, subtitle ?? ""] + rows.flatMap { [$0.label, $0.value] } + raws.flatMap { [$0.label, $0.value] })
             .filter { !$0.isEmpty }
@@ -53,8 +61,10 @@ nonisolated struct RibbonCardContent: Equatable, Sendable {
 }
 
 /// A mark's identity across `/live` refreshes: what the selection is kept by.
+/// A station is its ICAO *and* role: on a round trip the departure and the
+/// destination are the same airport at two ETAs, two discs, two cards.
 nonisolated enum RibbonMarkKey: Hashable, Sendable {
-    case station(String)
+    case station(String, role: String? = nil)
     case storm(String)
     case band(String)
     case sigmet(String)
@@ -63,7 +73,7 @@ nonisolated enum RibbonMarkKey: Hashable, Sendable {
     /// The accessibility identifier of the mark on the ribbon.
     var identifier: String {
         switch self {
-        case .station(let icao): "ribbonStation-\(icao)"
+        case .station(let icao, let role): role.map { "ribbonStation-\(icao)-\($0)" } ?? "ribbonStation-\(icao)"
         case .storm(let id): "ribbonStorm-\(id)"
         case .band(let id): "ribbonBand-\(id)"
         case .sigmet(let id): "ribbonSigmet-\(id)"
@@ -92,6 +102,11 @@ nonisolated struct RibbonInspection: Equatable, Sendable {
         guard available.contains(selected) else { return nil }
         return RibbonInspection(candidates: candidates.filter { available.contains($0) }, selected: selected)
     }
+}
+
+nonisolated extension RibbonStation {
+    /// The station's selection key (ICAO + role).
+    var markKey: RibbonMarkKey { .station(icao, role: role) }
 }
 
 /// A resolved mark: the model behind a key, for the card.
@@ -289,8 +304,9 @@ enum RouteRibbonInspectorRules {
         _ key: RibbonMarkKey, ribbon: LiveRibbon, storms: [LiveStorm], airports: [AirportObservation]?
     ) -> RibbonMark? {
         switch key {
-        case .station(let icao):
-            return (ribbon.stations ?? []).first { $0.icao == icao }.map { .station($0, airport(for: $0, in: airports)) }
+        case .station(let icao, let role):
+            return (ribbon.stations ?? []).first { $0.icao == icao && $0.role == role }
+                .map { .station($0, airport(for: $0, in: airports)) }
         case .storm(let id):
             return storms.first { $0.id == id }.map { .storm($0) }
         case .band(let id):
@@ -359,6 +375,26 @@ enum RouteRibbonInspectorRules {
 
     // MARK: Hit test
 
+    /// The cell a band belongs to, when it is a core outlining a cell in
+    /// `stormIds`: that band is drawn as the cell and picked as the cell.
+    /// The one place this rule lives (targets, available keys, the view's
+    /// accessibility elements).
+    static func cellId(of band: RibbonWeather, in stormIds: Set<String>) -> String? {
+        guard band.isCore, let sid = band.stormId, stormIds.contains(sid) else { return nil }
+        return sid
+    }
+
+    /// The cell whose spot sits on this band's anchor: any band (rain or
+    /// core) carrying a listed `storm_id`.
+    private static func anchoredCell(of band: RibbonWeather, in stormIds: Set<String>) -> String? {
+        guard let sid = band.stormId, stormIds.contains(sid) else { return nil }
+        return sid
+    }
+
+    private static func hasBins(_ band: RibbonWeather) -> Bool {
+        (band.profile ?? []).contains { $0.count == 3 }
+    }
+
     /// Paint order of the drawing, bottom to top.
     private enum Layer: Int { case segment = 0, rain, core, sigmet, storm, station }
 
@@ -374,7 +410,7 @@ enum RouteRibbonInspectorRules {
 
         if ribbon.weatherAvailable {
             for (band, rect) in bandBinRects(ribbon, corridor: corridor, width: width) {
-                if band.isCore, let sid = band.stormId, stormIds.contains(sid) {
+                if let sid = cellId(of: band, in: stormIds) {
                     out.append(.init(key: .storm(sid), rect: rect, z: Layer.core.rawValue))
                 } else {
                     out.append(.init(key: .band(band.id), rect: rect,
@@ -384,7 +420,7 @@ enum RouteRibbonInspectorRules {
             // The cell's own spot: the anchor of its first band.
             var seen = Set<String>()
             for band in ribbon.weather ?? [] {
-                guard let sid = band.stormId, stormIds.contains(sid), !seen.contains(sid),
+                guard let sid = anchoredCell(of: band, in: stormIds), !seen.contains(sid),
                       let at = anchor(band, routeNm: routeNm, corridor: corridor, width: width) else { continue }
                 seen.insert(sid)
                 out.append(.init(key: .storm(sid), rect: CGRect(x: at.x - 6, y: at.y - 6, width: 12, height: 12),
@@ -421,16 +457,34 @@ enum RouteRibbonInspectorRules {
             guard let at = stationPoint(st, routeNm: routeNm, width: width) else { continue }
             // The disc and its TAF ring.
             let d = R.stationMarkSize(st) + 6
-            out.append(.init(key: .station(st.icao), rect: CGRect(x: at.x - d / 2, y: at.y - d / 2, width: d, height: d),
+            out.append(.init(key: st.markKey, rect: CGRect(x: at.x - d / 2, y: at.y - d / 2, width: d, height: d),
                              z: Layer.station.rawValue))
         }
         return out
     }
 
-    /// Every mark a refreshed layer still draws: what a selection survives on.
-    static func availableKeys(ribbon: LiveRibbon, storms: [LiveStorm], corridorNm: Double) -> Set<RibbonMarkKey> {
-        // The set does not depend on the width; any positive one will do.
-        Set(targets(ribbon: ribbon, storms: storms, corridorNm: corridorNm, width: 500).map(\.key))
+    /// Every mark a refreshed layer still draws: what a selection survives
+    /// on. The same marks as `targets`, from the models alone (no geometry);
+    /// a test holds the two equal.
+    static func availableKeys(ribbon: LiveRibbon, storms: [LiveStorm]) -> Set<RibbonMarkKey> {
+        let stormIds = Set(storms.map(\.id))
+        var keys = Set<RibbonMarkKey>()
+        if ribbon.weatherAvailable {
+            for band in ribbon.weather ?? [] where hasBins(band) {
+                keys.insert(cellId(of: band, in: stormIds).map { .storm($0) } ?? .band(band.id))
+                if let sid = anchoredCell(of: band, in: stormIds) { keys.insert(.storm(sid)) }
+            }
+        } else {
+            for seg in ribbon.segments ?? [] { keys.insert(.segment(seg.index)) }
+            for storm in storms where storm.alongNm != nil { keys.insert(.storm(storm.id)) }
+        }
+        for s in ribbon.sigmets ?? [] where s.fromNm != nil && s.toNm != nil { keys.insert(.sigmet(s.id)) }
+        for st in ribbon.stations ?? [] where isEnd(st) || st.alongNm != nil { keys.insert(st.markKey) }
+        return keys
+    }
+
+    private static func isEnd(_ st: RibbonStation) -> Bool {
+        st.role == "departure" || st.role == "destination"
     }
 
     /// The marks a tap picks, best first: those drawn under the finger (top

@@ -447,13 +447,17 @@ logs `Live glance failed` and leaves both null for that tick.
     history, backing stations, the labelled estimate + footnote) sit under
     the cell card's "More" (`stormMore`), keeping `stormDetail` /
     `stormEstimate` / `stormShowOnMap`. Selection is a `RibbonMarkKey`
-    (ICAO, storm id, band id, SIGMET id, segment index) kept across `/live`
+    (ICAO + role, so a round trip's departure and destination stay two
+    marks; storm id, band id, SIGMET id, segment index) kept across `/live`
     refreshes; `RibbonInspection.pruned` drops chips whose mark vanished and
     closes the card when the selected one did. ✕, the same mark again or bare
     ribbon closes it. Regular width: rows left, raw reports right. Each mark
-    is an accessibility element (`ribbonStation-<icao>`, `ribbonStorm-<id>`,
+    is an accessibility element (`ribbonStation-<icao>-<role>`, `ribbonStorm-<id>`,
     `ribbonBand-<id>`, `ribbonSigmet-<id>`, `ribbonSegment-<n>`) whose
-    activation selects it; the card's content is announced. Choices: hover
+    activation selects it; the card's rows (not the raw reports) are
+    announced. The "core of a listed cell is that cell" rule lives once
+    (`cellId`), and `availableKeys` reads the models, held equal to
+    `targets` by a test. Choices: hover
     stays web-only and the web keeps its click-to-map; the card keeps
     "Cloud top: unavailable" (under More) that the tooltip omits.
 - **Web**: two new collapsible sections, `observed-glance` ("At a glance") and

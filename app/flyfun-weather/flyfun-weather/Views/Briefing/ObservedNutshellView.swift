@@ -198,7 +198,7 @@ struct RouteRibbonCard: View {
         .onChange(of: inspection?.selected) { _, key in
             // VoiceOver: say what the card now shows.
             guard let key, let mark = resolve(key) else { return }
-            AccessibilityNotification.Announcement(I.content(mark).text).post()
+            AccessibilityNotification.Announcement(I.content(mark).spoken).post()
         }
     }
 
@@ -215,7 +215,7 @@ struct RouteRibbonCard: View {
     }
 
     private var availableKeys: Set<RibbonMarkKey> {
-        I.availableKeys(ribbon: ribbon, storms: shownStorms, corridorNm: corridorNm)
+        I.availableKeys(ribbon: ribbon, storms: shownStorms)
     }
 
     private func resolve(_ key: RibbonMarkKey) -> RibbonMark? {
@@ -288,7 +288,7 @@ struct RouteRibbonView: View {
                 } else {
                     ForEach(storms) { storm in stormMark(storm, width) }
                 }
-                ForEach(ribbon.stations ?? []) { st in stationMark(st, width) }
+                ForEach(ribbon.stations ?? [], id: \.markKey) { st in stationMark(st, width) }
                 if let flown = ribbon.flownNm, flown > 0 {
                     aircraftMark(x: x(flown, width))
                 }
@@ -389,7 +389,7 @@ struct RouteRibbonView: View {
     private func bandAnchors(_ width: CGFloat) -> [BandAnchor] {
         let stormIds = Set(storms.map(\.id))
         return (ribbon.weather ?? []).compactMap { band in
-            if band.isCore, let sid = band.stormId, stormIds.contains(sid) { return nil }
+            if I.cellId(of: band, in: stormIds) != nil { return nil }
             return anchor(band, width).map { BandAnchor(band: band, at: $0) }
         }
     }
@@ -534,13 +534,13 @@ struct RouteRibbonView: View {
         if let at = I.stationPoint(st, routeNm: routeNm, width: width) {
             let size = R.stationMarkSize(st)
             let mark = ZStack {
-                if isSelected(.station(st.icao)) {
+                if isSelected(st.markKey) {
                     Circle().stroke(Theme.primary, lineWidth: 2.5).frame(width: size + 14, height: size + 14)
                 }
                 Self.airportCircle(st, size: size)
             }
             .frame(minWidth: 24, minHeight: 24)
-            accessibleMark(mark, key: .station(st.icao), label: R.stationLabel(st), at: at, width: width)
+            accessibleMark(mark, key: st.markKey, label: R.stationLabel(st), at: at, width: width)
                 .position(at)
         }
     }

@@ -668,7 +668,7 @@ final class flyfun_weatherUITests: XCTestCase {
 
         // An airport: the card quotes its raw METAR, and Show on map opens the map.
         switchToBriefingTab(app, "Observed")
-        let airport = app.descendants(matching: .any)["ribbonStation-LFMD"].firstMatch
+        let airport = app.descendants(matching: .any)["ribbonStation-LFMD-departure"].firstMatch
         XCTAssertTrue(airport.waitForExistence(timeout: Self.uiTimeout), "the departure should be on the ribbon")
         if !airport.isHittable { app.swipeDown() }
         airport.tap()
