@@ -2152,11 +2152,13 @@
   "altitude_low_ft": null,
   "corridor_nm": 50.0,
   "count": 3,
+  "fetch_ok": true,
   "fetch_time": "2026-10-02T08:30:00Z",
   "has_severe": false,
   "hazards": [
    "TS"
   ],
+  "queried_at": null,
   "route_firs": [],
   "sigmets": [
    {

@@ -41,6 +41,7 @@ EURO_AIP_MODULES: tuple[str, ...] = (
     "euro_aip.briefing.weather.parser",
     "euro_aip.briefing.weather.route_sigmet",
     "euro_aip.briefing.weather.route_weather",
+    "euro_aip.briefing.weather.sigmet",
     "euro_aip.borders",
     "euro_aip.models.field15",
     "euro_aip.models.navpoint",
