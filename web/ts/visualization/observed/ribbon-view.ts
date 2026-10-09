@@ -489,12 +489,21 @@ export function mountRibbon(
     hideTip();
   };
   // The page scrolls under a still mouse: re-read what is under it now, so
-  // the fixed tooltip neither floats off its mark nor vanishes from one.
+  // the fixed tooltip neither floats off its mark nor misses one that
+  // scrolled under the pointer. Listened in the capture phase: `scroll` does
+  // not bubble, and the split layout scrolls a container, not the window.
   const onScroll = () => {
-    if (!pointer || tip.hidden) return;
+    if (!pointer) return;
     const under = document.elementFromPoint(pointer.x, pointer.y);
     if (under && el.contains(under)) showAt(under, pointer.x, pointer.y);
     else hideTip();
+  };
+  // Keyboard parity: a focused mark shows its tooltip beside it, so the raw
+  // METAR / TAF is reachable without a mouse.
+  const onFocusIn = (ev: FocusEvent) => {
+    if (!(ev.target instanceof Element)) return;
+    const r = ev.target.getBoundingClientRect();
+    showAt(ev.target, r.right, r.top + r.height / 2);
   };
 
   const focusFor = (token: string): LiveFocus | null => {
@@ -547,7 +556,9 @@ export function mountRibbon(
   el.addEventListener('keydown', onKey);
   el.addEventListener('pointermove', onMove);
   el.addEventListener('pointerleave', onLeave);
-  window.addEventListener('scroll', onScroll, { passive: true });
+  el.addEventListener('focusin', onFocusIn);
+  el.addEventListener('focusout', hideTip);
+  window.addEventListener('scroll', onScroll, { passive: true, capture: true });
   draw();
 
   let observer: ResizeObserver | null = null;
@@ -569,7 +580,9 @@ export function mountRibbon(
     el.removeEventListener('keydown', onKey);
     el.removeEventListener('pointermove', onMove);
     el.removeEventListener('pointerleave', onLeave);
-    window.removeEventListener('scroll', onScroll);
+    el.removeEventListener('focusin', onFocusIn);
+    el.removeEventListener('focusout', hideTip);
+    window.removeEventListener('scroll', onScroll, { capture: true });
     tip.remove();
   };
 }
