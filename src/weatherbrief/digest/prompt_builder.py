@@ -1005,7 +1005,24 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
                         )
                     else:
                         parts.append(f"{m.model} sees {m_status}")
-                lines.append(f"  (outlier: {'; '.join(parts)})")
+                # A worst-of aggregate can be one model against the rest:
+                # labelling the rest "outlier" then names the majority as the
+                # dissenters, and the briefer wrote GFS-only LIFR up as
+                # "across models". Say whose view the aggregate is instead.
+                agreeing = [
+                    m.model for m in result.per_model
+                    if m.status.value.upper() == status_tag
+                ]
+                # An aggregate no model matches (a floor, e.g. DD convective)
+                # has no minority to name; keep the plain outlier list.
+                if agreeing and len(outliers) > len(agreeing):
+                    verb = "sees" if len(agreeing) == 1 else "see"
+                    lines.append(
+                        f"  (minority view — only {', '.join(agreeing)} "
+                        f"{verb} {status_tag}; {'; '.join(parts)})"
+                    )
+                else:
+                    lines.append(f"  (outlier: {'; '.join(parts)})")
 
     if len(lines) == 1:
         lines.append("No route advisories available.")

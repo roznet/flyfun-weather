@@ -33,7 +33,7 @@ def test_default_config_loads():
     assert config.llm.effort == "low"
     assert config.llm.structured_output == "json_schema"
     assert config.llm.max_tokens and config.llm.max_tokens >= 8000
-    assert config.prompts.briefer == "prompts/briefer_v4.md"
+    assert config.prompts.briefer == "prompts/briefer_v5.md"
 
 
 def test_sonnet46_rollback_config_is_the_pre_717_default():

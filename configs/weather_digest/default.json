@@ -13,7 +13,7 @@
     "max_tokens": 16000
   },
   "prompts": {
-    "briefer": "prompts/briefer_v4.md"
+    "briefer": "prompts/briefer_v5.md"
   },
   "cache_locales": ["en"]
 }
