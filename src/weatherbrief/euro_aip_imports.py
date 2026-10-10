@@ -51,6 +51,7 @@ EURO_AIP_MODULES: tuple[str, ...] = (
     "euro_aip.utils.country_mapper",
     "euro_aip.utils.dms_parser",
     "euro_aip.utils.geometry",
+    "euro_aip.utils.runway_classifier",
     "euro_aip.utils.solar",
 )
 

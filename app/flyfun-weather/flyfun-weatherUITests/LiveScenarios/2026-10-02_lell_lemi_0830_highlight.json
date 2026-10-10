@@ -1718,8 +1718,11 @@
     "metar_wind_dir": 360,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 3,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1738,7 +1741,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 8.24,
@@ -1768,8 +1773,11 @@
     "metar_wind_dir": 60,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 13,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1788,7 +1796,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 16.05,
@@ -1820,8 +1830,11 @@
     "metar_wind_dir": 20,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 8,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1840,7 +1853,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 14.18,
@@ -1870,8 +1885,11 @@
     "metar_wind_dir": 30,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 6,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Castell\u00f3n-Costa Azahar Airport",
     "nearest_waypoint_icao": "DIKUT",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1890,7 +1908,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 0.09,
@@ -1920,8 +1940,11 @@
     "metar_wind_dir": 30,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 7,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1940,7 +1963,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 17.48,
@@ -1970,8 +1995,11 @@
     "metar_wind_dir": 60,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 11,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1990,7 +2018,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 7.3,
@@ -2020,8 +2050,11 @@
     "metar_wind_dir": 60,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 11,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -2040,7 +2073,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 14.69,
@@ -2070,8 +2105,11 @@
     "metar_wind_dir": 50,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 14,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -2090,7 +2128,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    },
    {
     "distance_from_route_nm": 0.0,
@@ -2120,8 +2160,11 @@
     "metar_wind_dir": 40,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 10,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
+    "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -2140,7 +2183,9 @@
     "taf_wind_advisory": null,
     "taf_wind_dir": null,
     "taf_wind_gust_kt": null,
-    "taf_wind_speed_kt": null
+    "taf_wind_speed_kt": null,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null
    }
   ],
   "airports_found": 21,
