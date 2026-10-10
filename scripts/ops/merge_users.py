@@ -27,6 +27,8 @@ What a merge does, in one DB transaction:
 - unique keys that include ``user_id`` keep the survivor's row on a clash.
   ``user_preferences`` is filled instead: survivor values win, empty ones
   take the absorbed account's (GRAMET credentials, app prefs per key);
+- a table with an ``is_default`` column keeps one default per user: when the
+  survivor has one, the absorbed rows arrive non-default;
 - a subscription the survivor now holds to its own flight is dropped;
 - pack directories move from ``packs/{from}/`` to ``packs/{into}/`` and the
   stored ``artifact_path`` / ``pack_path`` values follow;
@@ -190,6 +192,17 @@ def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list
                             and_(true(), *(table.c[c] == v for c, v in zip(others, row)))
                         )
                     ).rowcount
+        # One default per user (flight_profiles, user_aircraft) is a rule the
+        # code relies on, not a constraint the DB enforces: the survivor's
+        # default wins, the absorbed rows come across as non-default.
+        undefaulted = 0
+        if "is_default" in table.c and db.execute(
+            select(table.c.user_id).where(table.c.user_id == dst, table.c.is_default.is_(True))
+        ).first():
+            undefaulted = db.execute(
+                update(table).where(table.c.user_id == src, table.c.is_default.is_(True))
+                .values(is_default=False)
+            ).rowcount
         moved = db.execute(
             update(table).where(table.c.user_id == src).values(user_id=dst)
         ).rowcount
@@ -197,6 +210,8 @@ def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list
             report.append(
                 f"  {name}: {moved} moved"
                 + (f", {dropped} dropped (survivor already has that key)" if dropped else "")
+                + (f", {undefaulted} no longer default (survivor's default kept)"
+                   if undefaulted else "")
             )
 
     subs, flights = meta.tables.get("flight_subscriptions"), meta.tables.get("flights")

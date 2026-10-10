@@ -14,8 +14,10 @@ from weatherbrief.db.models import (
     Base,
     BriefingPackRow,
     FlightBriefingSeenRow,
+    FlightProfileRow,
     FlightRow,
     FlightSubscriptionRow,
+    UserAircraftRow,
     UserPreferencesRow,
     UserRow,
 )
@@ -135,6 +137,26 @@ def test_apply_moves_everything(db, two_accounts):
     for pack in db.query(BriefingPackRow).all():
         assert f"/packs/{DST}/" in pack.artifact_path
         assert Path(pack.artifact_path, "briefing.json").exists()
+
+
+def test_survivor_keeps_the_only_default(db, two_accounts):
+    """Both accounts seeded a default profile; ensure_default_profile needs one."""
+    for uid in (SRC, DST):
+        db.add(FlightProfileRow(user_id=uid, name="IFR FIKI", is_default=True,
+                                system_template_key="ifr_fiki"))
+        db.add(FlightProfileRow(user_id=uid, name="VFR Only", system_template_key="vfr_only"))
+    # Only the absorbed account has an aircraft: its default carries over.
+    db.add(UserAircraftRow(user_id=SRC, icao_type="SR22", is_default=True))
+    db.commit()
+
+    report = mu.merge(db, SRC, DST, two_accounts, apply=True)
+    db.expire_all()
+
+    assert any("flight_profiles: 2 moved, 1 no longer default" in line for line in report)
+    defaults = db.query(FlightProfileRow).filter_by(user_id=DST, is_default=True).all()
+    assert len(defaults) == 1
+    assert _count(db, FlightProfileRow, user_id=DST) == 4
+    assert _count(db, UserAircraftRow, user_id=DST, is_default=True) == 1
 
 
 def test_existing_target_dir_refuses_before_any_change(db, two_accounts):
