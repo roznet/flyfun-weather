@@ -483,3 +483,40 @@ def send_live_alert_push(
         db, devices, payload, push_type="alert", priority=10,
         user_id=user_id, extra_headers=headers,
     )
+
+
+def send_flight_day_push(
+    db: Session,
+    user_id: str,
+    flight: Flight,
+    pack: BriefingPackMeta,
+    *,
+    headline: str | None,
+    grade: str | None,
+    badge: int | None = None,
+) -> int:
+    """The flight-day brief's alert (#753): "Flight day · 09:00Z EGTK → LFAT" /
+    "AMBER · LFAT METAR: VFR → IFR".
+
+    ``type: "flight_day"`` is the payload contract shared with the live-alert
+    pushes (#754): the app opens the flight's Observed tab on a tap. Sent
+    through the unchanged ``_dispatch``; no extra APNs headers.
+    """
+    devices = _load_devices(db, user_id)
+    if not devices:
+        return 0
+    dep = flight.departure_time.astimezone(timezone.utc).strftime("%H:%MZ")
+    body = " · ".join(p for p in (grade, headline) if p) or "Observed conditions and forecast"
+    aps: dict = {
+        "alert": {"title": f"Flight day · {dep} {_route_title(flight)}", "body": body},
+        "sound": "default",
+    }
+    if badge is not None:
+        aps["badge"] = badge
+    payload = {
+        "aps": aps,
+        "flight_id": flight.id,
+        "type": "flight_day",
+        "timestamp": pack.fetch_timestamp.isoformat(),
+    }
+    return _dispatch(db, devices, payload, push_type="alert", priority=10, user_id=user_id)

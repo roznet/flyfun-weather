@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.auth import is_dev_mode
 from weatherbrief.api.security import audit_pack_access
-from weatherbrief.db.models import BriefingUsageRow, FlightTripRow
+from weatherbrief.db.models import BriefingUsageRow
 from weatherbrief.connectors.views import (
     advisory_detail as _advisory_detail,
     convective_detail as _convective_detail,
@@ -2088,7 +2088,10 @@ def _notify_refresh_complete(
         return
     try:
         from weatherbrief.api import trip_refresh
-        from weatherbrief.notify.dispatch import notify_briefing_refresh
+        from weatherbrief.notify.dispatch import (
+            effective_notify_override,
+            notify_briefing_refresh,
+        )
 
         present = refresh_registry.is_watched(flight.id)
 
@@ -2099,13 +2102,9 @@ def _notify_refresh_complete(
         # which sends one notification when the chain lands.
         active = trip_refresh.active_run_for_flight(db, flight.id)
         active_run_id = active[0].refresh_id if active is not None else None
-        override = None
-        if flight.trip_id:
-            trip_row = db.get(FlightTripRow, flight.trip_id)
-            if trip_row is not None and flight.notify_override == "default":
-                # Precedence: an explicit per-flight override wins, else the
-                # trip's, else the account scope.
-                override = trip_row.notify_override
+        # Precedence: an explicit per-flight override wins, else the trip's,
+        # else the account scope.
+        override = effective_notify_override(db, flight)
 
         outcome = notify_briefing_refresh(
             db, flight, meta, Path(pack_path),

@@ -133,7 +133,7 @@ The `min(…, n_eligible)` cap handles small selections: 2 models selected → D
 
 **Wiring:**
 - Both manual-refresh endpoints (`refresh_briefing`, `refresh_briefing_stream`): `full` → run the pipeline (unchanged); `realtime` → run `tasks/route_weather.run_realtime_refresh` and return updated observations; `none` → 200 / SSE-complete no-op carrying `reason` + `eta_useful`.
-- Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip.
+- Auto-refresh scheduler (`scheduler._auto_refresh_one`): same **full/none** policy, but **no** realtime fallback — live METAR/TAF is the verification loop's job. So a non-`full` decision means skip. Exception in effect, not in the gate: at the T-2h **preflight** slot a skip is followed by an observed-only flight-day brief (`scheduler._flight_day_brief`, #753), which runs `run_realtime_refresh` on the latest pack — so the preflight attempt always produces a brief, full refresh or not.
 - `force=true` (admin) still bypasses the gate entirely.
 
 **The gate knows about model runs, not about the flight (issue #552).** `decide_refresh` is a pure function of *model-run* freshness, so it cannot see that the flight's own parameters changed. Right after a departure-time, duration, altitude or route edit no new run exists → `n_updated == 0` → `mode != "full"` → both endpoints return the **old pack** as `complete`, while the `PATCH` that preceded it has just answered `refetch_needed`. The client then reports "Briefing regenerated" over a briefing computed for the previous departure time (and `force=true` is admin-gated, so nothing could work around it).

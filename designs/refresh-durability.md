@@ -87,7 +87,7 @@ running the pipeline — and both callers (the auto-refresh cycle and the resume
 pass) use it to close the row honestly. A gated skip is the *routine* outcome
 for a flight that already has a recent pack, so folding it into `succeeded`
 would have the table claim briefings that were never produced — exactly the
-record this feature exists to make trustworthy. Practically, `skipped` rows
+record this feature exists to make trustworthy. At the T-2h preflight slot a skip still sends the flight-day brief (#753); its row says so in `last_error` ("…; observed-only flight-day brief"). Practically, `skipped` rows
 will dominate the table (bounded at roughly one per flight per day, since
 `last_auto_refresh_at` is bumped either way), which sharpens the pruning
 follow-on below.
