@@ -968,6 +968,9 @@ final class BriefingViewModel {
             let layer = try await repository.liveLayer(flightId: flight.id, source: source)
             adoptLiveLayer(layer, timestamp: timestamp)
         } catch {
+            // Keep the push tag for the next attempt, so the tap is still
+            // counted as a push open (#754).
+            if liveFetchSource == nil { liveFetchSource = source }
             Self.logger.debug("Live layer fetch failed, keeping current observations: \(error)")
         }
     }

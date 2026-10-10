@@ -89,6 +89,11 @@ class PushDecision:
     rearmed: set[str] = field(default_factory=set)
     # (what was pushed, the clear line) for each clear due this tick.
     clears: list[tuple[LivePushedAlert, str]] = field(default_factory=list)
+    # Keys among ``alerts`` re-sent because an earlier push of them failed.
+    retried: set[str] = field(default_factory=set)
+    # Clears due for alerts recorded in shadow mode, now that sending is on:
+    # the pilot never got the alert, so its clear is dropped, not pushed.
+    silent_clears: list[str] = field(default_factory=list)
     # The memory with this tick's sustain counters advanced and SIGMET keys
     # followed through reissues, before this tick's pushes are applied.
     state: LivePushState = field(default_factory=LivePushState)
@@ -190,23 +195,30 @@ def decide(
     now: datetime,
     layer: LiveLayer | None = None,
     is_pending=None,
+    sending: bool = False,
 ) -> PushDecision:
     """This tick's pushes from its committed changes and the push memory.
 
     ``is_pending(key)`` says a SIGMET key is pending (issued, not yet valid)
     and so not cleared by its absence (a failed lookahead query, #683).
+    ``sending`` is whether this push will really go out (not shadow mode).
     """
     state = state.model_copy(deep=True) if state is not None else LivePushState()
     rows = changes.changes
     alert_rows = [c for c in rows if c.tier == "alert"]
     out = PushDecision(state=state)
 
+    # A failed push is retried only while it would not have expired yet.
+    state.retry = {k: t for k, t in state.retry.items() if now < t + PUSH_TTL}
     for c in alert_rows:
         if c.new_alert:
             out.alerts.append(c)
         elif c.kind != "storm" and _rearmed_key(c.key, state.rearmed) is not None:
             out.alerts.append(c)
             out.rearmed.add(c.key)
+        elif c.key in state.retry:
+            out.alerts.append(c)
+            out.retried.add(c.key)
 
     for key, pushed in list(state.active.items()):
         row = _match(key, alert_rows, sigmet_kinds=("sigmet_issued",))
@@ -228,29 +240,43 @@ def decide(
             continue
         pushed.clear_ticks += 1
         if pushed.clear_ticks >= CLEAR_SUSTAIN_TICKS:
+            if sending and pushed.shadow:
+                out.silent_clears.append(key)
+                continue
             here = _match(key, rows, sigmet_kinds=("sigmet_cancelled",))
             out.clears.append((pushed, clear_line(pushed, here, now=now, layer=layer)))
     return out
 
 
-def next_state(decision: PushDecision, *, pushed: bool, now: datetime) -> LivePushState:
+def next_state(
+    decision: PushDecision, *, pushed: bool, now: datetime,
+    failed: bool = False, shadow: bool = False,
+) -> LivePushState:
     """The memory after this tick: ``pushed`` when the push reached a device
-    (or would have, in shadow mode). A skipped or failed push leaves its alerts untracked and its
-    rearmed keys armed; its clears still leave ``active`` so unmuting does
-    not release a burst of stale clears."""
+    (or would have, in shadow mode; ``shadow`` marks what it records). A
+    skipped or failed push leaves its alerts untracked and its rearmed keys
+    armed; its clears still leave ``active`` so unmuting does not release a
+    burst of stale clears. A ``failed`` push's alerts are kept for retry."""
     state = decision.state.model_copy(deep=True)
+    for key in decision.silent_clears:
+        state.active.pop(key, None)
     for p, _ in decision.clears:
         state.active.pop(p.key, None)
         if pushed:
             state.rearmed[p.key] = now
             state.clears_pushed += 1
     if not pushed:
+        if failed:
+            for c in decision.alerts:
+                state.retry.setdefault(c.key, now)
         return state
     for c in decision.alerts:
+        state.retry.pop(c.key, None)
         if c.kind != "storm":
             state.active[c.key] = LivePushedAlert(
                 key=c.key, kind=c.kind, role=c.role, icao=c.icao,
                 to_value=c.to_value, message=c.message, pushed_at=now,
+                shadow=shadow,
             )
         armed = _rearmed_key(c.key, state.rearmed)
         if armed is not None:
@@ -401,9 +427,11 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
     from weatherbrief.tasks.live_significance import pending_sigmet_key
 
     traces = {t.key: t for t in layer.sigmet_traces}
+    sending = send_enabled()
     decision = decide(
         layer.changes, layer.push_state, now=now, layer=layer,
         is_pending=lambda k: pending_sigmet_key(k, traces, now),
+        sending=sending,
     )
     outcome = "none"
     pushed = False
@@ -420,18 +448,23 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
         else:
             pushed = True
             logger.info(
-                "LIVE_PUSH_WOULD_SEND flight=%s user=%s alerts=%s cleared=%s rearmed=%s devices=%d",
+                "LIVE_PUSH_WOULD_SEND flight=%s user=%s alerts=%s cleared=%s rearmed=%s retried=%s devices=%d",
                 flight_row.id, flight_row.user_id, alert_keys, cleared_keys,
-                sorted(decision.rearmed), len(devices),
+                sorted(decision.rearmed), sorted(decision.retried), len(devices),
             )
             outcome = "shadow"
-            if send_enabled():
+            if sending:
                 outcome = _send(db, flight_row, layer, decision, devices, now)
                 # Only a push that reached a device advances the memory: an
                 # undelivered alert must not later read as "cleared", nor
-                # use up a re-arm. Its new_alert is spent either way.
+                # use up a re-arm. Its new_alert is spent, so a failed alert
+                # is kept for retry on the next ticks (within PUSH_TTL).
                 pushed = outcome == "sent"
-    new_state = next_state(decision, pushed=pushed, now=now)
+    if decision.silent_clears:
+        logger.info("LIVE_PUSH_CLEAR_DROPPED flight=%s keys=%s reason=recorded_in_shadow",
+                    flight_row.id, decision.silent_clears)
+    new_state = next_state(decision, pushed=pushed, now=now,
+                           failed=outcome == "failed", shadow=not sending)
     if new_state != (layer.push_state or LivePushState()):
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, patch_push_state
 

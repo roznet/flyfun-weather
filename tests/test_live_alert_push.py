@@ -516,3 +516,59 @@ def test_nothing_new_makes_no_db_query(db_session, eligible, tmp_path):
     with patch.object(live_alerts, "skip_reason") as sr:
         assert notify_live_alerts(db_session, eligible, layer, pack_dir=pack_dir) == "none"
     sr.assert_not_called()
+
+
+# --- Review follow-ups: failed-push retry, shadow -> sending ---------------------
+
+
+def test_failed_push_is_retried_while_still_an_alert():
+    row = _change("metar:ZZDS", kind="metar_category", role="destination", new=True,
+                  icao="ZZDS", to_value="IFR")
+    d = decide(LiveChanges(computed_at=T0, changes=[row], evaluated=["metar:ZZDS"]), None, now=T0)
+    state = next_state(d, pushed=False, failed=True, now=T0)
+    assert state.retry == {"metar:ZZDS": T0} and state.active == {}
+    # Next tick: new_alert is spent (§45 keeps it quiet), but the row is still alert-tier.
+    again = row.model_copy(update={"new_alert": False})
+    d = decide(LiveChanges(computed_at=T0, changes=[again], evaluated=["metar:ZZDS"]),
+               state, now=T0 + TICK)
+    assert alerted(d) == ["metar:ZZDS"] and d.retried == {"metar:ZZDS"}
+    state = next_state(d, pushed=True, now=T0 + TICK)
+    assert state.retry == {} and "metar:ZZDS" in state.active
+
+
+def test_failed_push_retry_expires_with_the_push():
+    row = _change("metar:ZZDS", kind="metar_category", role="destination", icao="ZZDS",
+                  to_value="IFR")
+    state = LivePushState(retry={"metar:ZZDS": T0})
+    late = T0 + live_alerts.PUSH_TTL
+    d = decide(LiveChanges(computed_at=late, changes=[row], evaluated=["metar:ZZDS"]),
+               state, now=late)
+    assert d.empty and d.state.retry == {}
+
+
+def test_skipped_push_is_not_retried():
+    row = _change("metar:ZZDS", kind="metar_category", role="destination", new=True)
+    d = decide(LiveChanges(computed_at=T0, changes=[row], evaluated=["metar:ZZDS"]), None, now=T0)
+    assert next_state(d, pushed=False, now=T0).retry == {}
+
+
+def test_clear_of_a_shadow_alert_is_dropped_once_sending():
+    """Flipping WB_LIVE_PUSH_SEND mid-flight must not push "Cleared" for an
+    alert the pilot never received."""
+    state = _active("metar:ZZDS", kind="metar_category", icao="ZZDS", to_value="IFR", shadow=True)
+    state.active["metar:ZZDS"].clear_ticks = CLEAR_SUSTAIN_TICKS - 1
+    changes = LiveChanges(computed_at=T0, changes=[], evaluated=["metar:ZZDS"])
+    d = decide(changes, state, now=T0, sending=True)
+    assert d.clears == [] and d.silent_clears == ["metar:ZZDS"]
+    after = next_state(d, pushed=False, now=T0)
+    assert after.active == {} and after.rearmed == {}
+    # Still in shadow mode, the same clear is measured as usual.
+    d = decide(changes, state, now=T0, sending=False)
+    assert cleared(d) == ["metar:ZZDS"]
+
+
+def test_shadow_flag_follows_the_mode():
+    row = _change("metar:ZZDS", kind="metar_category", role="destination", new=True)
+    d = decide(LiveChanges(computed_at=T0, changes=[row], evaluated=["metar:ZZDS"]), None, now=T0)
+    assert next_state(d, pushed=True, now=T0, shadow=True).active["metar:ZZDS"].shadow
+    assert not next_state(d, pushed=True, now=T0, shadow=False).active["metar:ZZDS"].shadow

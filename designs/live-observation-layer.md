@@ -1043,8 +1043,11 @@ flights' tick rows; the account export includes `live_deliveries`.
 ## Live-alert push (#754)
 
 The tick's one consumer of `new_alert`: `notify/live_alerts.py`, called per
-committed flight from `LiveTick._push_alerts`, after the commits and before
-the highlights (the text is deterministic, it does not wait on a model).
+committed flight from `LiveTick._push_alerts`, after the commits. It runs on
+its own thread and DB session (flight rows re-read there) alongside the
+highlights: the text is deterministic so it does not wait on a model, and a
+slow APNs host does not hold up the highlights. Joined before the tick's
+commit.
 
 - **Only a commit that wrote** pushes: `CommitTrace.layer` is the in-memory
   layer it committed (its changes still carry `evaluated`, never dumped). A
@@ -1057,10 +1060,19 @@ the highlights (the text is deterministic, it does not wait on a model).
   checks only the pack (a ↻ commit in between leaves it valid). Carried by
   `commit_live_update`'s copy of the prior layer, reset by a new pack.
 - **Decision** (`decide` → `next_state`, pure): alerts = `new_alert` rows,
-  plus rows for a re-armed key (§47); clears = active keys with no alert-tier
-  row for 2 evaluated ticks. Storms push, never clear. A skipped push (pref
-  off, muted…) or one that reached no device tracks nothing but still drops due clears, so unmuting does
-  not release stale ones.
+  plus rows for a re-armed key (§47), plus rows whose earlier push failed;
+  clears = active keys with no alert-tier row for 2 evaluated ticks. Storms
+  push, never clear. A skipped push (pref off, muted…) tracks nothing but
+  still drops due clears, so unmuting does not release stale ones.
+- **A failed push is retried.** One that raised or reached no device has
+  spent its `new_alert`, so its keys go to `push_state.retry` (first failed
+  attempt) and are re-sent on later ticks while still alert-tier rows, until
+  `PUSH_TTL` (30 min) after that attempt, when the push would have expired
+  anyway. A skipped push is not retried.
+- **Shadow → sending.** Each `active` entry records whether it was written in
+  shadow mode. Once sending is on, a due clear of a shadow entry is dropped
+  (`LIVE_PUSH_CLEAR_DROPPED … reason=recorded_in_shadow`), never pushed: the
+  pilot never had that alert. So `WB_LIVE_PUSH_SEND` can be flipped mid-flight.
 - **Shadow mode** until `WB_LIVE_PUSH_SEND=1`: decisions logged
   (`LIVE_PUSH_WOULD_SEND` / `LIVE_PUSH_SKIPPED reason=…`), memory advanced as
   if sent. `LIVE_PUSH_SENT` and `LIVE_PUSH_OPENED` (the tap's

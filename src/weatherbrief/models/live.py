@@ -631,6 +631,9 @@ class LivePushedAlert(BaseModel):
     # Consecutive evaluated ticks on which the key has not been an alert-tier
     # row. A clear is pushed when it reaches ``live_alerts.CLEAR_SUSTAIN_TICKS``.
     clear_ticks: int = 0
+    # Recorded in shadow mode, so never actually on the pilot's phone: once
+    # sending is on, its clear is dropped silently rather than pushed.
+    shadow: bool = False
 
 
 class LivePushState(BaseModel):
@@ -644,6 +647,11 @@ class LivePushState(BaseModel):
     # Keys whose clear was pushed -> when. A later alert-tier row for such a
     # key pushes again even though §45's memory keeps it quiet on screen.
     rearmed: dict[str, datetime] = Field(default_factory=dict)
+    # Alerts whose push failed (APNs error, no device reached) -> the first
+    # failed attempt. Their ``new_alert`` is spent, so they are re-sent on
+    # later ticks while still alert-tier rows, within ``PUSH_TTL`` of that
+    # attempt (the push would have expired by then anyway).
+    retry: dict[str, datetime] = Field(default_factory=dict)
     # Shadow-mode measurement (owner review): how often each fired.
     alerts_pushed: int = 0
     clears_pushed: int = 0

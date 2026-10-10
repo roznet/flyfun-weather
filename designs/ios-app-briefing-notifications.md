@@ -426,6 +426,12 @@ decline (which before #753 sent nothing, as the skip wrote
 `last_auto_refresh_at` and consumed the slot) now gives an observed-only brief
 on the latest pack. A *raised* pipeline failure sends nothing and retries next
 cycle, unchanged, so a failing refresh cannot send a brief every 10 minutes.
+A brief that *itself* raises leaves the slot open for `_BRIEF_MAX_RETRIES` (2)
+more cycles (outcome `failed`, "retrying next cycle"), then the slot is marked
+done, so a brief that went out before failing cannot repeat until departure.
+The counter is in-process; a restart resets it. When the observed refresh is
+skipped (no airports DB, frozen layer) a warning says so, as the email then
+shows the stored layer.
 An earlier explicit D-0 `auto_refresh_hour` refresh keeps the normal email.
 
 **Fresh observed layer, no alert.** `_flight_day_brief` runs

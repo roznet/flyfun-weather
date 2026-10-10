@@ -98,6 +98,7 @@ def cycle(monkeypatch):
     monkeypatch.setattr(scheduler_mod, "_auto_refresh_one", fake_refresh)
     monkeypatch.setattr(scheduler_mod, "_flight_day_brief", fake_brief)
     monkeypatch.setattr(scheduler_mod, "SessionLocal", MagicMock())
+    monkeypatch.setattr(scheduler_mod, "_brief_failures", {})
     monkeypatch.setattr(
         trip_refresh, "open_scheduler_run",
         lambda db, rows: calls["opened"].append([r.id for r in rows]),
@@ -167,15 +168,22 @@ def test_pipeline_failure_sends_nothing_and_is_retried(cycle):
     assert calls["outcomes"]["zz-leg"][0] == "failed"
 
 
-def test_a_failing_brief_still_consumes_the_slot(cycle, monkeypatch):
-    """Otherwise a brief that went out before failing would repeat every cycle."""
+def test_a_failing_brief_is_retried_then_consumes_the_slot(cycle, monkeypatch):
+    """A failed brief leaves the slot open for a bounded number of cycles, then
+    marks it done: a brief that went out before failing cannot repeat every
+    cycle until departure."""
     def boom(*a, **k):
         raise RuntimeError("commit failed after send")
 
     monkeypatch.setattr(scheduler_mod, "_flight_day_brief", boom)
     cycle.gate["ran"] = False
-    calls = cycle([_row()], _utc(2026, 3, 1, 7, 5))
+    for _ in range(scheduler_mod._BRIEF_MAX_RETRIES):
+        calls = cycle([_row()], _utc(2026, 3, 1, 7, 5))
+        status, detail = calls["outcomes"]["zz-leg"]
+        assert status == "failed" and "retrying" in detail
+    calls = cycle([_row()], _utc(2026, 3, 1, 7, 25))
     assert calls["outcomes"]["zz-leg"][0] == "skipped"
+    assert scheduler_mod._brief_failures == {}
 
 
 def test_preflight_legs_stay_out_of_trip_coalescing(cycle):

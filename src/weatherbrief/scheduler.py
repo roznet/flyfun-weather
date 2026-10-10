@@ -215,8 +215,29 @@ async def process_auto_refreshes(app_state) -> None:
                             refreshed=ran,
                             present=refresh_registry.is_watched(row.id),
                         )
+                        _brief_failures.pop(row.id, None)
                     except Exception:
-                        logger.error("Flight-day brief failed for %s", row.id, exc_info=True)
+                        failures = _brief_failures.get(row.id, 0) + 1
+                        _brief_failures[row.id] = failures
+                        if failures <= _BRIEF_MAX_RETRIES:
+                            # Leave the slot open: the next cycle (10 min)
+                            # re-runs the gate (a no-op after a full run) and
+                            # the brief. Bounded, so a brief that went out
+                            # before failing cannot repeat every cycle.
+                            logger.error(
+                                "Flight-day brief failed for %s (attempt %d), retrying next cycle",
+                                row.id, failures, exc_info=True,
+                            )
+                            refresh_registry.mark_outcome(
+                                row.id, "failed", "flight-day brief failed; retrying next cycle",
+                            )
+                            leg_outcome = "failed"
+                            continue
+                        logger.error(
+                            "Flight-day brief failed for %s (attempt %d), giving up",
+                            row.id, failures, exc_info=True,
+                        )
+                        _brief_failures.pop(row.id, None)
                 # Record the refresh timestamp
                 mark_db = SessionLocal()
                 try:
@@ -480,6 +501,12 @@ def _next_due_at(
         return regular
 
     return min(regular, preflight)
+
+
+#: Flight-day brief failures per flight in this process: the preflight slot
+#: stays open for this many retries (one per cycle), then is marked done.
+_BRIEF_MAX_RETRIES = 2
+_brief_failures: dict[str, int] = {}
 
 
 def _is_preflight_slot(row: FlightRow, now_utc: datetime) -> bool:
@@ -752,7 +779,14 @@ def _flight_day_brief(
         flight_dir = flight_dir_for_pack(pack_dir)
 
         db_path = getattr(app_state, "db_path", "")
-        if db_path and not (flight_dir / LIVE_FROZEN_FILE).exists():
+        frozen = (flight_dir / LIVE_FROZEN_FILE).exists()
+        if not db_path or frozen:
+            # Traceable when "Observed now" is stale or empty in the email.
+            logger.warning(
+                "Flight-day brief: observed refresh skipped for %s (%s); sending from the stored layer",
+                flight_row.id, "live layer frozen" if frozen else "AIRPORTS_DB not configured",
+            )
+        else:
             from weatherbrief.tasks.route_weather import run_realtime_refresh
 
             try:

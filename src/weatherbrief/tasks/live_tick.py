@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -356,10 +357,23 @@ class LiveTick:
             except Exception:
                 logger.warning("Live tick: refresh failed for flight %s", flight.id, exc_info=True)
 
-        # Before the highlights: the push text is deterministic, so it need
-        # not wait on a model call (#754).
-        pushed = self._push_alerts(db, pushes)
-        highlights = self._highlights(db, committed)
+        # Alongside the highlights, not before them: the push text is
+        # deterministic so it need not wait on a model call (#754), and a slow
+        # APNs host must not hold up every flight's highlight either. Its own
+        # thread and session (a Session is not thread-safe); joined before the
+        # commit below.
+        push_result: dict[str, int] = {}
+        push_thread = threading.Thread(
+            target=self._push_alerts_own_session,
+            args=(db.get_bind(), [(f.id, d, l) for f, d, l in pushes], push_result),
+            name="live-push", daemon=True,
+        )
+        push_thread.start()
+        try:
+            highlights = self._highlights(db, committed)
+        finally:
+            push_thread.join()
+        pushed = push_result.get("pushed", 0)
         highlighted = sum(1 for h in highlights.values() if h.outcome == "written")
         # The highlight cost rows (charge_highlight) are committed on their own,
         # before the latency rows: a failed latency insert must not roll the
@@ -388,6 +402,20 @@ class LiveTick:
         )
         return {"flights": len(flights), "updated": updated, "fetched": fetched,
                 "highlighted": highlighted, "pushed": pushed}
+
+    def _push_alerts_own_session(self, bind, pushes: list[tuple[str, Path, object]], out: dict) -> None:
+        """``_push_alerts`` on its own session, for the push thread: each
+        flight row is re-read there, never shared with the tick's session."""
+        try:
+            with Session(bind=bind) as own:
+                rows = []
+                for flight_id, pack_dir, layer in pushes:
+                    row = own.get(FlightRow, flight_id)
+                    if row is not None:
+                        rows.append((row, pack_dir, layer))
+                out["pushed"] = self._push_alerts(own, rows)
+        except Exception:
+            logger.warning("Live tick: push phase failed", exc_info=True)
 
     def _push_alerts(self, db: Session, pushes: list[tuple[FlightRow, Path, object]]) -> int:
         """The live-alert push sink (#754), one call per committed flight.

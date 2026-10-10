@@ -5151,7 +5151,7 @@ def get_live_summary(
 def get_live_layer(
     flight_id: str,
     request: Request,
-    source: str | None = Query(default=None, max_length=16),
+    source: Literal["push"] | None = Query(default=None),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
