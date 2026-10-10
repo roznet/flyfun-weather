@@ -124,7 +124,7 @@ are now fully controllable on both clients, with the semantics tightened:
 | Device token table + migration | `db/models.py::DeviceTokenRow` (`token`, `environment` `String(16)`, `user_id`); migration `032_pireps_and_device_tokens.py` | Table already created & migrated — just add the endpoint |
 | GDPR handling | `api/account_export.py` (token **excluded as a credential**, not exported) + `api/app.py` account-deletion purges rows | Delete/export already correct — nothing to add |
 | Single post-commit notify sink | `api/packs.py::_notify_refresh_complete` — called by each refresh path (scheduler, sync `_finalize_refresh`, streaming) *after* it commits the pack | Emit the push **once** here → covers auto, in-app, and Siri/MCP refreshes in one place, after commit so we never notify about a pack that rolls back |
-| Email precedent | `scheduler.py::_try_send_email` (auto-refresh only, ~L452) | Mirror as `notify/push.py`; but hook the shared finalize, since push must ALSO cover manual/Siri (email doesn't) |
+| Email | `notify/email.py::send_briefing_email`, sent by `notify/dispatch.py::_send_email` (the scheduler's old `_try_send_email` is gone) | Push mirrors it in `notify/push.py`; both channels fire from the shared post-commit sink for every refresh path |
 | Change detection | `compute_refresh_delta` / worsened-conditions banner (`metar-taf-route-weather`) | Craft the body ("now AMBER — conditions worsened") + gate noisy sends |
 | Model-update-aware defer | `scheduler.py` issue #192 email-timing logic | Push inherits the same defer window — do not notify before/twice |
 
@@ -409,3 +409,72 @@ ignore `type`: a tap opens the briefing, and the once-per-open flight-day
 default (`reconcileTabs`) lands on Observed inside the window. Settings: "Live
 alerts on flight day" under Push, only with a device (web: Account ›
 Notifications, same rule).
+
+## Flight-day brief (#753)
+
+For auto-refresh flights the **T-2h preflight** auto-refresh sends a flight-day
+brief instead of the ordinary refresh notification: observed conditions first,
+then what changed since the last briefing, then the forecast. It is the
+baseline the live-alert pushes (#754) report changes against.
+
+**Always sent at that slot.** `scheduler._is_preflight_slot` picks the due
+flights whose `flight_start − 2h` has passed with no auto-refresh since. For
+them `_auto_refresh_one(notify=False)` runs as usual (gate `full` → full
+refresh, anything else → skip) and then `_flight_day_brief` sends, whatever the
+gate said. So a full run there gives **one** notification, not two, and a gate
+decline (which before #753 sent nothing, as the skip wrote
+`last_auto_refresh_at` and consumed the slot) now gives an observed-only brief
+on the latest pack. A *raised* pipeline failure sends nothing and retries next
+cycle, unchanged, so a failing refresh cannot send a brief every 10 minutes.
+An earlier explicit D-0 `auto_refresh_hour` refresh keeps the normal email.
+
+**Fresh observed layer, no alert.** `_flight_day_brief` runs
+`run_realtime_refresh` on the latest pack (so `live.json` is anchored to the
+pack the email describes; a new pack resets the layer) and `ensure_highlight`,
+directly, never through `LiveTick`, which is the only place #754 pushes from.
+Each step degrades on its own: a failed refresh sends from the stored layer; no
+highlight just drops its line.
+
+**Gate** (`notify/dispatch.py::notify_flight_day`): `notify_qualifies` with
+`change_only=False`, so **change-only is ignored** but `mute`, scope `off`
+(with a `default` override), trip override precedence
+(`effective_notify_override`) and **presence** still hold. UNAVAILABLE (#392)
+only keeps the grade out of the subject and push and leaves the badge alone;
+the observed part still sends. The badge advances to the pack's timestamp, so
+an observed-only brief on a pack already opened does not re-light it.
+
+**Trips.** Preflight legs are left out of `trip_refresh.open_scheduler_run`,
+so each leg gets its own brief at its own T-2h; trip-mates pulled in at the
+same moment keep the coalesced trip notification.
+
+**Email** (`notify/email.py::send_flight_day_email`, plain + HTML in the same
+order). Subject `Today 09:00Z EGTK → LFAT · AMBER · <headline>`, the headline
+being the top alert-tier change message (none → grade only).
+
+1. *Observed now* — from `live_summary` (= `summarize_live`), word for word:
+   glance headline, highlight ("Experimental · written HH:MMZ"), alert-tier
+   change messages, the departure / en-route / arrival glance lines (TAF at
+   ETA, storms, SIGMETs live there), departure and destination raw METARs, the
+   route SIGMET list. Nothing re-derived.
+2. *Since the last briefing* — `flight_day_since`: grade and advisory status
+   changes against the prior pack (both directions; `detect_change` words only
+   a worsening), or "No model update since the HH:MMZ briefing."
+3. *Forecast assessment* — the ordinary email's banner, airport cards, digest
+   sections, labelled "Forecast written HH:MMZ (D-N)"; advisory table amber/red
+   only, with an "all advisories" link.
+4. *During the flight* — with a registered device "Live alerts will be pushed
+   to your iPhone/iPad until arrival +1h", without one the app note. Live
+   alerts are never emailed.
+
+The link is the briefing URL with `#observed-glance-wrapper`; the web page has
+no "open on tab" parameter, so it may land at the top while the section loads.
+Sample renders: `WB_EMAIL_SAMPLES_DIR=/tmp/fd pytest tests/test_email.py -k samples`.
+
+**Push** (`notify/push.py::send_flight_day_push`): "Flight day · 09:00Z EGTK →
+LFAT" / "AMBER · <headline>", payload `{flight_id, type: "flight_day",
+timestamp}`; the app (#754) opens the Observed tab on tap.
+
+**Also fixed here:** the ordinary email's plain body read digest keys `winds` /
+`icing` that `WeatherDigest` no longer has, and the HTML left out the
+short-range `trend`. Both now read `_SHORT_RANGE_SECTIONS` /
+`_LONG_RANGE_SECTIONS`, which must track `digest/llm_digest.py`.

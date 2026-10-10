@@ -204,7 +204,8 @@ Background scheduler (`scheduler.py`) polls every 10 minutes for flights with `a
 - Checks data freshness before refreshing (skips if models unchanged)
 - Uses `RefreshRegistry` to prevent concurrent refreshes
 - Notifies via the shared `_notify_refresh_complete` sink (email + push, per user prefs) — the scheduler no longer sends mail itself
-- Records `last_auto_refresh_at` timestamp after each refresh
+- **The T-2h preflight slot always produces a brief (#753).** `_is_preflight_slot` marks a due flight whose `flight_start − 2h` has passed with no auto-refresh since; for it the ordinary notification is suppressed (`_auto_refresh_one(notify=False)`) and `_flight_day_brief` sends the observed-first **flight-day brief** whether the gate ran a full refresh or declined. Before #753 a gate decline there sent nothing, because `last_auto_refresh_at` (written on a skip too) consumed the slot. A raised pipeline failure still sends nothing and retries next cycle, as before. Preflight legs are kept out of the trip coalescing window. See [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md#flight-day-brief-753).
+- Records `last_auto_refresh_at` timestamp after each refresh (a gate skip included)
 
 **Integration**: started as an `asyncio.Task` from the FastAPI app lifespan (30s startup delay).
 

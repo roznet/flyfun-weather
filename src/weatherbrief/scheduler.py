@@ -160,12 +160,21 @@ async def process_auto_refreshes(app_state) -> None:
             return
         logger.info("Auto-refresh: %d flight(s) due", len(due))
 
+        # Legs at their own T-2h preflight slot get the flight-day brief
+        # (#753) instead of the ordinary refresh notification.
+        now_utc = datetime.now(timezone.utc)
+        preflight_ids = {row.id for row in due if _is_preflight_slot(row, now_utc)}
+
         # Open one coalescing window per multi-leg trip in this cycle, so a trip
         # whose three legs all come due sends one push rather than three. The
-        # loop below stays exactly as sequential as it was.
+        # loop below stays exactly as sequential as it was. A preflight leg
+        # stays out of it: each leg's flight-day brief is its own (leg 2's T-2h
+        # normally falls after leg 1 has landed), never folded into a trip push.
         from weatherbrief.api import trip_refresh
 
-        trip_refresh.open_scheduler_run(db, due)
+        trip_refresh.open_scheduler_run(
+            db, [row for row in due if row.id not in preflight_ids],
+        )
 
         for row in due:
             from weatherbrief.api.packs import refresh_registry
@@ -185,11 +194,29 @@ async def process_auto_refreshes(app_state) -> None:
                     trip_refresh.note_leg_done(db, row.trip_id, row.id, "busy")
                 continue
 
+            preflight = row.id in preflight_ids
             try:
                 refresh_registry.set_refreshing(row.id)
                 ran = await asyncio.to_thread(
-                    _auto_refresh_one, row, app_state, row.user_id
+                    _auto_refresh_one, row, app_state, row.user_id,
+                    notify=not preflight,
                 )
+                if preflight:
+                    # Sent whether or not the gate let a full run through: the
+                    # T-2h brief is the point, not news of a model update. A
+                    # pipeline failure raises past this, so the slot is retried
+                    # next cycle exactly as before and the brief goes then.
+                    # The brief's own failure must not reach the ``except``
+                    # below: the slot would stay open and a brief that went
+                    # out before the failure would go out again every cycle.
+                    try:
+                        await asyncio.to_thread(
+                            _flight_day_brief, row, app_state, row.user_id,
+                            refreshed=ran,
+                            present=refresh_registry.is_watched(row.id),
+                        )
+                    except Exception:
+                        logger.error("Flight-day brief failed for %s", row.id, exc_info=True)
                 # Record the refresh timestamp
                 mark_db = SessionLocal()
                 try:
@@ -204,7 +231,10 @@ async def process_auto_refreshes(app_state) -> None:
                 # to tell them apart to be worth anything (#499).
                 refresh_registry.mark_outcome(
                     row.id, "succeeded" if ran else "skipped",
-                    None if ran else "refresh gate declined a full run",
+                    None if ran else (
+                        "refresh gate declined a full run; observed-only flight-day brief"
+                        if preflight else "refresh gate declined a full run"
+                    ),
                 )
                 leg_outcome = "succeeded" if ran else "skipped"
                 logger.info(
@@ -452,6 +482,29 @@ def _next_due_at(
     return min(regular, preflight)
 
 
+def _is_preflight_slot(row: FlightRow, now_utc: datetime) -> bool:
+    """Is this due flight being refreshed for its T-2h preflight slot (#753)?
+
+    True once ``flight_start − PREFLIGHT_LEAD_HOURS`` has passed and no
+    auto-refresh has run since — the same condition under which
+    ``_next_due_at`` still offers the preflight term. A regular slot that
+    happens to be due at the same moment is served by this one run, so the
+    brief wins. A trip-mate pulled in by ``_with_trip_mates`` is not at its
+    own preflight (it would be due on its own if it were), so it keeps the
+    ordinary notification.
+    """
+    flight_start = _flight_start_dt(row)
+    if flight_start is None or now_utc >= flight_start:
+        return False
+    preflight = flight_start - timedelta(hours=_PREFLIGHT_LEAD_HOURS)
+    if now_utc < preflight:
+        return False
+    last = row.last_auto_refresh_at
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return last is None or last < preflight
+
+
 def _defer_regular_for_model_update(
     regular: datetime,
     flight_start_dt: datetime,
@@ -537,8 +590,13 @@ def _auto_refresh_one(
     user_id: str,
     *,
     triggered_by: str = "scheduler",
+    notify: bool = True,
 ) -> bool:
     """Run the briefing pipeline for a single flight (called in a thread).
+
+    ``notify=False`` skips the ordinary refresh notification: the preflight
+    slot sends the flight-day brief in its place (#753), so a full run there
+    produces one notification, not two.
 
     ``triggered_by`` is the usage attribution recorded on the briefing —
     ``"scheduler"`` for the auto-refresh loop, ``"resume"`` when the boot-time
@@ -639,11 +697,103 @@ def _auto_refresh_one(
         # I/O. A scheduled refresh normally has no one watching, so presence
         # (read inside the sink) is false and it notifies — unless a user happens
         # to be on that flight's briefing polling status as it lands.
-        _notify_refresh_complete(
-            db, flight, meta, pack_path, user_id=user_id,
-        )
+        if notify:
+            _notify_refresh_complete(
+                db, flight, meta, pack_path, user_id=user_id,
+            )
         return True
 
+    finally:
+        db.close()
+
+
+def _flight_day_brief(
+    flight_row: FlightRow,
+    app_state,
+    user_id: str,
+    *,
+    refreshed: bool,
+    present: bool = False,
+) -> bool:
+    """Send the T-2h flight-day brief for one flight (#753; called in a thread).
+
+    Runs after the preflight slot's ``_auto_refresh_one``, whatever it
+    decided: on the latest pack (the one it just built, or the existing one
+    when the gate declined), the observed layer is refreshed so ``live.json``
+    is anchored to the pack the email describes — a new pack resets the live
+    layer, and the email must not describe the old one — then the Observed
+    highlight is written if it is due, then the brief goes out.
+
+    Uses ``run_realtime_refresh`` and ``ensure_highlight`` directly, never
+    ``LiveTick``: the live-alert push (#754) fires only from the tick, so this
+    refresh never pushes an alert. Each step degrades on its own: a failed
+    observed refresh sends the brief from whatever live layer is stored, a
+    missing highlight just omits its line. Returns True when a channel was
+    attempted.
+    """
+    from weatherbrief.api.packs import _profile_cloud_source
+    from weatherbrief.notify.dispatch import effective_notify_override, notify_flight_day
+    from weatherbrief.storage.flights import (
+        _resolve_artifact_path, _row_to_flight, ensure_utc, list_packs,
+    )
+    from weatherbrief.tasks.live_layer import (
+        LIVE_FROZEN_FILE, flight_dir_for_pack, live_for_pack, live_summary,
+    )
+
+    db = SessionLocal()
+    try:
+        flight = _row_to_flight(flight_row)
+        packs = list_packs(db, flight_row.id)
+        if not packs or not packs[0].artifact_path:
+            logger.info("Flight-day brief: no pack for %s, nothing to send", flight_row.id)
+            return False
+        latest = packs[0]
+        pack_dir = Path(_resolve_artifact_path(latest.artifact_path))
+        flight_dir = flight_dir_for_pack(pack_dir)
+
+        db_path = getattr(app_state, "db_path", "")
+        if db_path and not (flight_dir / LIVE_FROZEN_FILE).exists():
+            from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+            try:
+                run_realtime_refresh(
+                    pack_dir, db_path,
+                    cloud_source=_profile_cloud_source(db, flight_row, user_id),
+                    flight_id=flight_row.id,
+                    pack_timestamp=ensure_utc(latest.fetch_timestamp).isoformat(),
+                )
+            except Exception:
+                logger.warning(
+                    "Flight-day brief: observed refresh failed for %s", flight_row.id,
+                    exc_info=True,
+                )
+
+            try:
+                from weatherbrief.tasks.live_highlight import (
+                    charge_highlight, ensure_highlight, highlight_enabled,
+                )
+
+                layer = live_for_pack(pack_dir)
+                if highlight_enabled() and layer is not None:
+                    outcome = ensure_highlight(flight_dir, layer)
+                    charge_highlight(db, user_id, flight_row.id, outcome.usage)
+                    db.commit()
+            except Exception:
+                logger.warning(
+                    "Flight-day brief: highlight failed for %s", flight_row.id, exc_info=True,
+                )
+                db.rollback()
+
+        sent = notify_flight_day(
+            db, flight, latest, pack_dir,
+            user_id=user_id,
+            refreshed=refreshed,
+            live=live_summary(pack_dir),
+            present=present,
+            override=effective_notify_override(db, flight),
+        )
+        db.commit()
+        return sent
     finally:
         db.close()
 

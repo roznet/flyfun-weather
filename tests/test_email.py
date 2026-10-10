@@ -262,3 +262,320 @@ class TestSendBriefingEmail:
             assert "text/plain" in subtypes
             assert "text/html" in subtypes
             assert "application/pdf" not in subtypes
+
+
+# ---------------------------------------------------------------------------
+# Digest sections (#753 small fixes)
+# ---------------------------------------------------------------------------
+
+
+class TestDigestSections:
+    def test_plain_body_reads_only_current_digest_keys(self, sample_flight, sample_pack):
+        """`winds` / `icing` are gone from WeatherDigest; `trend` is there."""
+        digest = {
+            "assessment": "GREEN", "synoptic": "High.", "specific_concerns": "None.",
+            "trend": "Improving.", "watch_items": "Fog.",
+            # A stale key a broken template would still print:
+            "winds": "SHOULD NOT APPEAR",
+        }
+        text = _build_plain_body(sample_flight, sample_pack, digest, None, "")
+        assert "Trend: Improving." in text
+        assert "SHOULD NOT APPEAR" not in text
+        assert "Winds:" not in text and "Icing:" not in text
+
+    def test_html_body_shows_short_range_trend(self, sample_flight, sample_pack, sample_digest):
+        body = _build_html_body(sample_flight, sample_pack, sample_digest, None, "")
+        assert "Trend:" in body and "Stable." in body
+
+
+# ---------------------------------------------------------------------------
+# Flight-day brief (#753)
+# ---------------------------------------------------------------------------
+
+from weatherbrief.notify.email import (  # noqa: E402
+    FLIGHT_DAY_APP_NOTE,
+    FLIGHT_DAY_PUSH_NOTE,
+    AdvisoryStatusChange,
+    FlightDaySince,
+    build_flight_day_html,
+    build_flight_day_plain,
+    flight_day_subject,
+    send_flight_day_email,
+)
+
+_FD_DEP = datetime(2026, 2, 21, 9, tzinfo=timezone.utc)
+_FD_NOW = datetime(2026, 2, 21, 7, 2, tzinfo=timezone.utc)
+
+
+def _fd_flight():
+    return Flight(
+        id="zz-flightday",
+        route_name="egtk_lfat",
+        waypoints=["EGTK", "LFAT"],
+        departure_time=_FD_DEP,
+        cruise_altitude_ft=5500,
+        flight_duration_hours=1.5,
+        created_at=datetime(2026, 2, 19, tzinfo=timezone.utc),
+    )
+
+
+def _fd_pack(assessment: str):
+    return BriefingPackMeta(
+        flight_id="zz-flightday",
+        fetch_timestamp=datetime(2026, 2, 21, 6, 40, tzinfo=timezone.utc),
+        days_out=0,
+        assessment=assessment,
+        assessment_reason={
+            "GREEN": "VMC throughout",
+            "AMBER": "Low cloud at destination around ETA",
+            "RED": "Embedded CB on the route",
+            "UNAVAILABLE": None,
+        }[assessment],
+    )
+
+
+def _fd_digest(assessment: str) -> dict:
+    return {
+        "assessment": assessment,
+        "assessment_reason": "x",
+        "synoptic": "Weak front clearing east through the morning.",
+        "specific_concerns": "Stratus at LFAT until mid-morning.",
+        "trend": "Improving after 10Z.",
+        "watch_items": "LFAT TAF amendments.",
+    }
+
+
+def _fd_advisories(assessment: str) -> dict:
+    vmc = {"GREEN": "green", "AMBER": "amber", "RED": "red", "UNAVAILABLE": "unavailable"}[assessment]
+    return {
+        "advisories": [
+            {"advisory_id": "icing_escape", "aggregate_status": "green",
+             "aggregate_detail": "Freezing level above cruise"},
+            {"advisory_id": "vmc_cruise", "aggregate_status": vmc,
+             "aggregate_detail": "Cloud along 30% of route"},
+        ],
+        "catalog": [
+            {"id": "icing_escape", "name": "Icing Escape"},
+            {"id": "vmc_cruise", "name": "VMC at Cruise"},
+        ],
+    }
+
+
+def _fd_live(*, alerts: bool, highlight: bool = True) -> dict:
+    """A live block built by the real ``summarize_live`` from a layer, so the
+    template is tested against the shape it gets in production."""
+    from weatherbrief.models.live import (
+        LiveChange, LiveChanges, LiveGlance, LiveGlanceLine, LiveHighlight, LiveLayer,
+    )
+    from weatherbrief.models.observations import (
+        AirportObservation, RouteObservations, RouteSigmets, SigmetAlongRoute,
+    )
+    from weatherbrief.tasks.live_layer import summarize_live
+
+    changes = []
+    if alerts:
+        changes.append(LiveChange(
+            key="metar:LFAT", kind="metar_category", source="METAR", direction="worse",
+            tier="alert", role="destination", icao="LFAT", from_value="VFR", to_value="IFR",
+            observed_at=_FD_NOW, message="LFAT METAR: VFR → IFR",
+        ))
+    changes.append(LiveChange(
+        key="radar:R1", kind="radar", source="RADAR", direction="worse", tier="highlight",
+        role="route", message="Heavy radar echo within 10 NM of route",
+    ))
+    airports = [
+        AirportObservation(
+            icao="EGTK", distance_from_route_nm=0, nearest_waypoint_icao="EGTK",
+            metar_raw="EGTK 210650Z 24008KT 9999 SCT030 08/04 Q1018",
+            metar_time=datetime(2026, 2, 21, 6, 50, tzinfo=timezone.utc),
+            metar_flight_category="VFR",
+        ),
+        AirportObservation(
+            icao="LFAT", distance_from_route_nm=0, nearest_waypoint_icao="LFAT",
+            metar_raw="LFAT 210700Z 20006KT 3000 BR OVC004 07/06 Q1016",
+            metar_time=datetime(2026, 2, 21, 7, 0, tzinfo=timezone.utc),
+            metar_flight_category="IFR" if alerts else "VFR",
+        ),
+    ]
+    glance = LiveGlance(
+        as_of=_FD_NOW,
+        headline="Observed 07:02Z · 1 worse since the briefing (arrival)" if alerts
+        else "Observed 07:02Z · as briefed",
+        comparison="worse" if alerts else "as_briefed",
+        lines=[
+            LiveGlanceLine(phase="departure", icao="EGTK", text="VFR 06:50Z · no storms near · no lightning"),
+            LiveGlanceLine(phase="enroute", text="No storms ahead · SIGMET LFFF 3: SEV TURB"),
+            LiveGlanceLine(phase="arrival", icao="LFAT", text="IFR now · TAF at ETA MVFR · no storms"),
+        ],
+        highlight=LiveHighlight(
+            text="LFAT has dropped to IFR in mist; the TAF lifts it to MVFR by your ETA.",
+            model="m", facts_hash="h", generated_at=datetime(2026, 2, 21, 7, 3, tzinfo=timezone.utc),
+        ) if highlight else None,
+    )
+    layer = LiveLayer(
+        flight_id="zz-flightday", pack_timestamp="2026-02-21T06:40:00+00:00",
+        pack_dir_name="p", live_updated_at=_FD_NOW,
+        route_observations=RouteObservations(
+            corridor_nm=30, fetch_time=_FD_NOW, airports_found=2, airports_with_metar=2,
+            airports_with_taf=1, airports=airports,
+        ),
+        route_sigmets=RouteSigmets(
+            corridor_nm=50, fetch_time=_FD_NOW,
+            sigmets=[SigmetAlongRoute(
+                fir_id="LFFF", hazard="TURB", qualifier="SEV",
+                valid_from=datetime(2026, 2, 21, 6, tzinfo=timezone.utc),
+                valid_to=datetime(2026, 2, 21, 10, tzinfo=timezone.utc),
+            )],
+        ),
+        glance=glance,
+        changes=LiveChanges(computed_at=_FD_NOW, changes=changes),
+    )
+    briefing = {"route": {"waypoints": [{"icao": "EGTK"}, {"icao": "LFAT"}]}}
+    return summarize_live(layer, briefing)
+
+
+def _fd_since(refreshed: bool, assessment: str) -> FlightDaySince:
+    if not refreshed:
+        return FlightDaySince(
+            refreshed=False, briefing_at=datetime(2026, 2, 21, 6, 40, tzinfo=timezone.utc),
+            assessment=assessment,
+        )
+    return FlightDaySince(
+        refreshed=True, briefing_at=datetime(2026, 2, 21, 6, 40, tzinfo=timezone.utc),
+        prior_briefing_at=datetime(2026, 2, 20, 18, 5, tzinfo=timezone.utc),
+        prior_assessment="GREEN", assessment=assessment,
+        advisory_changes=[AdvisoryStatusChange(name="VMC at Cruise", from_status="green", to_status="amber")],
+    )
+
+
+_LINK = "https://weather.example.com/briefing.html?flight=zz-flightday#observed-glance-wrapper"
+
+
+@pytest.fixture
+def flight_day_samples(request, tmp_path):
+    """Render the flight-day email for green/amber/red × with/without live
+    alerts (HTML + text) so the format can be reviewed without sending.
+
+    Written to ``$WB_EMAIL_SAMPLES_DIR`` when set (e.g.
+    ``WB_EMAIL_SAMPLES_DIR=/tmp/fd pytest tests/test_email.py -k samples``),
+    else to the test's tmp dir.
+    """
+    import os
+
+    out = Path(os.environ.get("WB_EMAIL_SAMPLES_DIR") or tmp_path)
+    out.mkdir(parents=True, exist_ok=True)
+    samples = {}
+    for grade in ("GREEN", "AMBER", "RED"):
+        for alerts in (False, True):
+            live = _fd_live(alerts=alerts)
+            args = (_fd_flight(), _fd_pack(grade), _fd_digest(grade), _fd_advisories(grade))
+            kwargs = dict(
+                live=live, since=_fd_since(grade != "GREEN", grade),
+                has_device=alerts, briefing_link=_LINK,
+            )
+            name = f"flight_day_{grade.lower()}_{'alerts' if alerts else 'quiet'}"
+            html_body = build_flight_day_html(*args, **kwargs)
+            text_body = build_flight_day_plain(*args, **kwargs)
+            subject = flight_day_subject(_fd_flight(), _fd_pack(grade), live)
+            (out / f"{name}.html").write_text(html_body)
+            (out / f"{name}.txt").write_text(f"Subject: {subject}\n\n{text_body}")
+            samples[(grade, alerts)] = (subject, html_body, text_body)
+    return samples
+
+
+class TestFlightDayEmail:
+    def test_samples_render_all_four_sections_in_order(self, flight_day_samples):
+        assert len(flight_day_samples) == 6
+        for (grade, alerts), (subject, html_body, text_body) in flight_day_samples.items():
+            heads = ["Observed now", "Since the last briefing", "Forecast assessment", "During the flight"]
+            positions = [html_body.index(h) for h in heads]
+            assert positions == sorted(positions), (grade, alerts)
+            plain_heads = ["OBSERVED NOW", "SINCE THE LAST BRIEFING", "FORECAST ASSESSMENT", "DURING THE FLIGHT"]
+            plain_pos = [text_body.index(h) for h in plain_heads]
+            assert plain_pos == sorted(plain_pos), (grade, alerts)
+            assert grade in subject
+            assert subject.startswith("Today 09:00Z EGTK → LFAT")
+
+    def test_subject_leads_with_alert_when_there_is_one(self, flight_day_samples):
+        subject, _, _ = flight_day_samples[("AMBER", True)]
+        assert subject == "Today 09:00Z EGTK → LFAT · AMBER · LFAT METAR: VFR → IFR"
+        quiet, _, _ = flight_day_samples[("AMBER", False)]
+        assert quiet == "Today 09:00Z EGTK → LFAT · AMBER"
+
+    def test_observed_section_quotes_the_live_block(self, flight_day_samples):
+        _, html_body, text_body = flight_day_samples[("RED", True)]
+        for body in (html_body, text_body):
+            assert "LFAT has dropped to IFR in mist" in body
+            assert "Experimental" in body and "07:03Z" in body
+            assert "LFAT METAR: VFR → IFR" in body           # alert-tier row
+            assert "Heavy radar echo" not in body            # highlight-tier row is not an alert
+            assert "TAF at ETA MVFR" in body                 # arrival glance line
+            assert "LFAT 210700Z 20006KT 3000 BR OVC004" in body  # raw METAR
+            assert "LFFF" in body                            # route SIGMET
+
+    def test_advisory_table_keeps_only_amber_and_red(self, flight_day_samples):
+        _, html_body, _ = flight_day_samples[("AMBER", False)]
+        assert "VMC at Cruise" in html_body
+        assert "Icing Escape" not in html_body
+        assert "all advisories" in html_body
+        _, green_html, green_text = flight_day_samples[("GREEN", False)]
+        assert "All advisories GREEN" in green_html and "All advisories GREEN" in green_text
+
+    def test_since_section(self, flight_day_samples):
+        _, _, quiet = flight_day_samples[("GREEN", False)]
+        assert "No model update since the 06:40Z briefing." in quiet
+        _, _, changed = flight_day_samples[("AMBER", False)]
+        assert "Grade: GREEN → AMBER" in changed
+        assert "VMC at Cruise: GREEN → AMBER" in changed
+        assert "previous 20 Feb 18:05Z" in changed
+
+    def test_forecast_is_labelled_with_its_written_time(self, flight_day_samples):
+        _, html_body, text_body = flight_day_samples[("RED", False)]
+        assert "Forecast written 06:40Z (D-0)" in html_body
+        assert "written 06:40Z, D-0" in text_body
+        assert "Trend:" in html_body
+
+    def test_device_note(self, flight_day_samples):
+        _, with_device, _ = flight_day_samples[("GREEN", True)]
+        assert FLIGHT_DAY_PUSH_NOTE in with_device
+        _, without, text_without = flight_day_samples[("GREEN", False)]
+        assert FLIGHT_DAY_APP_NOTE in without and FLIGHT_DAY_APP_NOTE in text_without
+
+    def test_no_highlight_omits_its_line(self):
+        live = _fd_live(alerts=True, highlight=False)
+        args = (_fd_flight(), _fd_pack("AMBER"), _fd_digest("AMBER"), _fd_advisories("AMBER"))
+        kwargs = dict(live=live, since=_fd_since(False, "AMBER"), has_device=False, briefing_link="")
+        for body in (build_flight_day_html(*args, **kwargs), build_flight_day_plain(*args, **kwargs)):
+            assert "Experimental" not in body
+            assert "LFAT METAR: VFR → IFR" in body
+
+    def test_no_live_layer_still_renders(self):
+        args = (_fd_flight(), _fd_pack("GREEN"), _fd_digest("GREEN"), None)
+        kwargs = dict(live=None, since=_fd_since(False, "GREEN"), has_device=False, briefing_link="")
+        html_body = build_flight_day_html(*args, **kwargs)
+        assert "No live observations for this flight yet." in html_body
+        assert "Forecast assessment" in html_body
+
+    def test_unavailable_grade_is_not_headlined(self):
+        live = _fd_live(alerts=True)
+        subject = flight_day_subject(_fd_flight(), _fd_pack("UNAVAILABLE"), live)
+        assert "UNAVAILABLE" not in subject
+        assert subject == "Today 09:00Z EGTK → LFAT · LFAT METAR: VFR → IFR"
+
+    def test_send_attaches_both_parts(self, tmp_path, smtp_config):
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "digest.json").write_text(json.dumps(_fd_digest("AMBER")))
+        (pack / "route_advisories.json").write_text(json.dumps(_fd_advisories("AMBER")))
+        with patch("weatherbrief.notify.email.send_message") as mock_send:
+            send_flight_day_email(
+                ["pilot@example.com"], _fd_flight(), _fd_pack("AMBER"), pack,
+                live=_fd_live(alerts=True), since=_fd_since(True, "AMBER"), has_device=True,
+                base_url="https://weather.example.com", smtp_config=smtp_config,
+            )
+        msg = mock_send.call_args.args[0]
+        assert msg["Subject"].startswith("Today 09:00Z")
+        parts = [p.get_content_type() for p in msg.get_payload()]
+        assert parts == ["text/plain", "text/html"]
+        html_part = msg.get_payload()[1].get_payload(decode=True).decode()
+        assert "briefing.html?flight=zz-flightday#observed-glance-wrapper" in html_part

@@ -20,18 +20,16 @@ base decision for both channels:
         if change_only and not changed:  stop
     → advance the badge
 
-The **per-channel trigger rule** then layers on top of a qualifying refresh
-(ios-app-briefing-notifications.md → cross-cutting semantics #5):
+The single WHEN decision is that gate AND not *present* — the user was not
+watching this refresh finish (``refresh_registry.is_watched``, read by the
+caller; the same signal for web and iOS, #371). It gates the badge and both
+channels alike. HOW is then pure user preference: email if ``notify_email``,
+push if ``notify_push``, whoever or whatever triggered the refresh
+(``triggered_by`` / ``?source=`` is usage attribution only).
 
-    push  → fires on every qualifying refresh (the foregrounded client
-            self-suppresses the banner, so "am I looking?" needs no server signal)
-    email → fires only for a *non-user-present* refresh (scheduler / Siri / MCP /
-            background), NEVER for the user's own in-app manual refresh — email
-            can't self-suppress, and the user is already looking at the result.
-
-Which refreshes are "user-present" is decided by ``triggered_by``: only a plain
-in-app manual refresh is ``"user"``; Siri and MCP report their own source so
-they still email (closing the Siri refresh-intent loop).
+The T-2h preflight auto-refresh is the exception: it sends the **flight-day
+brief** (``notify_flight_day``, #753) instead of the ordinary notification,
+whether or not a new pack was built, with ``notify_change_only`` ignored.
 
 Everything is best-effort: a notification must NEVER break a refresh, so the
 whole thing is wrapped and each channel is guarded independently.
@@ -101,6 +99,18 @@ def notify_qualifies(
     if change_only and not changed:
         return False
     return True
+
+
+def effective_notify_override(db: Session, flight: Flight) -> str | None:
+    """The per-flight override to apply, with trip precedence: an explicit
+    per-flight override wins, else the trip's, else None (the caller falls
+    back to ``flight.notify_override``, i.e. the account scope)."""
+    if not flight.trip_id or flight.notify_override != "default":
+        return None
+    from weatherbrief.db.models import FlightTripRow
+
+    trip_row = db.get(FlightTripRow, flight.trip_id)
+    return trip_row.notify_override if trip_row is not None else None
 
 
 def _prior_pack(
@@ -322,3 +332,200 @@ def notify_briefing_refresh(
     except Exception:
         logger.warning("notify: dispatch failed for %s", getattr(flight, "id", "?"), exc_info=True)
     return outcome
+
+
+# ---------------------------------------------------------------------------
+# Flight-day brief (#753)
+# ---------------------------------------------------------------------------
+
+
+def _advisory_statuses(pack_dir: Path | None) -> tuple[dict[str, str], dict[str, str]]:
+    """``({advisory_id: aggregate_status}, {advisory_id: name})`` of a pack;
+    empty when it has no advisories file."""
+    if pack_dir is None:
+        return {}, {}
+    path = Path(pack_dir) / "route_advisories.json"
+    if not path.exists():
+        return {}, {}
+    import json
+
+    data = json.loads(path.read_text())
+    names = {e["id"]: e.get("name", e["id"]) for e in data.get("catalog", []) if "id" in e}
+    statuses = {
+        r["advisory_id"]: r.get("aggregate_status", "")
+        for r in data.get("advisories", []) if "advisory_id" in r
+    }
+    return statuses, names
+
+
+def flight_day_since(
+    db: Session,
+    flight_id: str,
+    meta: BriefingPackMeta,
+    pack_dir: Path,
+    *,
+    refreshed: bool,
+):
+    """The "Since the last briefing" section: the grade and advisory statuses
+    of the pack this preflight run built, against the pack it replaced.
+
+    Read from the same prior pack ``detect_change`` uses, but both directions
+    are reported (``detect_change`` only words a worsening). Without a new
+    pack there is nothing to compare: the email says so instead.
+    """
+    from weatherbrief.notify.email import AdvisoryStatusChange, FlightDaySince
+
+    since = FlightDaySince(
+        refreshed=refreshed, briefing_at=meta.fetch_timestamp, assessment=meta.assessment,
+    )
+    if not refreshed:
+        return since
+    prior = _prior_pack(db, flight_id, meta.fetch_timestamp)
+    if prior is None:
+        return since
+    since.prior_briefing_at = prior.fetch_timestamp
+    since.prior_assessment = prior.assessment
+    try:
+        from weatherbrief.storage.flights import _resolve_artifact_path
+
+        now_status, names = _advisory_statuses(pack_dir)
+        old_status, old_names = _advisory_statuses(
+            Path(_resolve_artifact_path(prior.artifact_path)) if prior.artifact_path else None
+        )
+        if old_status:
+            for adv_id, status in now_status.items():
+                was = old_status.get(adv_id)
+                if was != status:
+                    since.advisory_changes.append(AdvisoryStatusChange(
+                        name=names.get(adv_id) or old_names.get(adv_id) or adv_id,
+                        from_status=was, to_status=status,
+                    ))
+    except Exception:
+        # The grade line still stands; only the advisory list is lost.
+        logger.warning("notify: advisory diff failed for %s", flight_id, exc_info=True)
+    return since
+
+
+def notify_flight_day(
+    db: Session,
+    flight: Flight,
+    meta: BriefingPackMeta,
+    pack_dir: Path,
+    *,
+    user_id: str,
+    refreshed: bool,
+    live: dict | None,
+    present: bool = False,
+    override: str | None = None,
+) -> bool:
+    """Send the flight-day brief for the T-2h preflight slot (#753).
+
+    Called by the scheduler for every preflight attempt of an auto-refresh
+    flight, whether or not a new pack was built (``refreshed``), and in place
+    of the ordinary refresh notification. ``live`` is the live layer's
+    ``summarize_live`` block for ``meta``'s pack, refreshed just before.
+
+    The gate differs from :func:`notify_briefing_refresh` on purpose:
+
+    - ``notify_change_only`` is **ignored**: the brief is the point, not a
+      change report. Scope "off" and the per-flight override still hold
+      (``mute`` silences; ``notify`` always sends).
+    - ``present`` (someone watching the refresh finish) still suppresses.
+    - UNAVAILABLE (#392) only drops the grade from the subject and push, and
+      keeps the badge still: the observed section is worth sending even when
+      the forecast could not be assessed.
+
+    Returns True when at least one channel was attempted. Never raises. The
+    caller commits (the badge write rides its session).
+    """
+    try:
+        from weatherbrief.api.preferences import load_notify_prefs
+        from weatherbrief.notify.badge import compute_badge_count, record_notify_qualifying
+
+        prefs = load_notify_prefs(db, user_id)
+        if present or not notify_qualifies(
+            notify_override=override or flight.notify_override,
+            scope=prefs["notify_scope"],
+            change_only=False,
+            changed=True,
+        ):
+            logger.info("notify: flight-day brief for %s not sent (gate)", flight.id)
+            return False
+
+        badge: int | None = None
+        if (meta.assessment or "").upper() != ASSESSMENT_UNAVAILABLE:
+            # Lights the badge only when this pack is newer than the last one
+            # the pilot opened: an observed-only brief on a pack they have
+            # already read leaves it as it is.
+            record_notify_qualifying(db, user_id, flight.id, meta.fetch_timestamp)
+            badge = compute_badge_count(db, user_id)
+
+        since = flight_day_since(db, flight.id, meta, pack_dir, refreshed=refreshed)
+        from weatherbrief.notify.push import count_user_devices
+
+        has_device = count_user_devices(db, user_id) > 0
+
+        sent = False
+        if prefs["notify_email"]:
+            _send_flight_day_email(
+                db, user_id, flight, meta, pack_dir,
+                live=live, since=since, has_device=has_device,
+            )
+            sent = True
+        if prefs["notify_push"]:
+            _send_flight_day_push(db, user_id, flight, meta, live=live, badge=badge)
+            sent = True
+        return sent
+    except Exception:
+        logger.warning(
+            "notify: flight-day dispatch failed for %s", getattr(flight, "id", "?"), exc_info=True,
+        )
+        return False
+
+
+def _send_flight_day_email(
+    db: Session, user_id: str, flight: Flight, meta: BriefingPackMeta, pack_dir: Path,
+    *, live: dict | None, since, has_device: bool,
+) -> None:
+    """Guarded like :func:`_send_email`: logs and skips on any failure."""
+    try:
+        from weatherbrief.notify.email import SmtpConfig, send_flight_day_email
+
+        SmtpConfig.from_env()
+    except (ValueError, ImportError):
+        logger.debug("notify: email not configured, skipping flight-day for %s", flight.id)
+        return
+
+    from flyfun_common.db.models import UserRow
+    from weatherbrief.privacy import mask_email
+
+    user = db.query(UserRow).filter(UserRow.id == user_id).first()
+    if not user or not user.email:
+        return
+    try:
+        send_flight_day_email(
+            [user.email], flight, meta, pack_dir,
+            live=live, since=since, has_device=has_device, base_url=_base_url(),
+        )
+        logger.info("notify: flight-day email sent for %s to %s", flight.id, mask_email(user.email))
+    except Exception:
+        logger.warning("notify: flight-day email failed for %s", flight.id, exc_info=True)
+
+
+def _send_flight_day_push(
+    db: Session, user_id: str, flight: Flight, meta: BriefingPackMeta,
+    *, live: dict | None, badge: int | None,
+) -> None:
+    """Guarded like :func:`_send_push`."""
+    try:
+        from weatherbrief.notify.email import flight_day_grade, flight_day_headline
+        from weatherbrief.notify.push import send_flight_day_push
+
+        n = send_flight_day_push(
+            db, user_id, flight, meta,
+            headline=flight_day_headline(live), grade=flight_day_grade(meta), badge=badge,
+        )
+        if n:
+            logger.info("notify: flight-day push sent for %s to %d device(s)", flight.id, n)
+    except Exception:
+        logger.warning("notify: flight-day push failed for %s", flight.id, exc_info=True)
