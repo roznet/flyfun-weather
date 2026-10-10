@@ -350,6 +350,14 @@ class LiveTick:
 
         highlights = self._highlights(db, committed)
         highlighted = sum(1 for h in highlights.values() if h.outcome == "written")
+        # The highlight cost rows (charge_highlight) are committed on their own,
+        # before the latency rows: a failed latency insert must not roll the
+        # ledger back with it.
+        try:
+            db.commit()
+        except Exception:
+            logger.warning("Live tick: highlight cost rows not committed", exc_info=True)
+            db.rollback()
 
         tick_ms = int((time.monotonic() - t0) * 1000)
         rows = [r for r in timing_rows if r is not None]

@@ -913,7 +913,9 @@ def get_metrics(
 
 @router.get("/live-latency")
 def get_live_latency(
-    days: int = Query(30, ge=1, le=180),
+    # Rows are aggregated in Python (~700 tick rows a day): 90 days keeps an
+    # admin request bounded.
+    days: int = Query(30, ge=1, le=90),
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ):

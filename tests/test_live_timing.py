@@ -380,3 +380,30 @@ def test_a_failed_latency_row_does_not_break_the_tick(db_session, dev_user, tmp_
     result, _ = _run_tick(db_session, write_fails=True)
     assert result["updated"] == 1
     assert db_session.execute(select(LiveTickTimingRow)).scalars().all() == []
+
+
+def test_highlight_cost_survives_a_failed_latency_insert(db_session, dev_user, tmp_path):
+    """Review of #752: the ledger rows are committed before, and apart from,
+    the latency insert, so its rollback cannot take them."""
+    from sqlalchemy.orm import Session
+
+    from weatherbrief.db.models import CostLedgerRow
+    from weatherbrief.tasks.live_highlight import DEFAULT_MODEL, HighlightOutcome
+
+    _add_tick_flight(db_session, dev_user, _write_tick_pack(tmp_path))
+    usage = {"model": DEFAULT_MODEL, "input_tokens": 1200, "output_tokens": 40}
+    real_add_all = Session.add_all
+
+    def add_all(self, rows, *a, **kw):
+        if any(isinstance(r, LiveTickTimingRow) for r in rows):
+            raise RuntimeError("latency table missing")
+        return real_add_all(self, rows, *a, **kw)
+
+    with patch.object(Session, "add_all", add_all):
+        result, _ = _run_tick(db_session, highlight=HighlightOutcome("written", text="ok", usage=usage,
+                                                                     latency_ms=800))
+    assert result["highlighted"] == 1
+    db_session.rollback()  # anything not committed is gone
+    assert db_session.execute(select(LiveTickTimingRow)).scalars().all() == []
+    [cost] = db_session.execute(select(CostLedgerRow).where(CostLedgerRow.action == "live_highlight")).scalars().all()
+    assert cost.reference_id == "zz-flight"
