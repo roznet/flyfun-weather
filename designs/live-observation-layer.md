@@ -1005,7 +1005,9 @@ because the delivery join is an equality on `live_updated_at`):
   (the MCP server) and ChatGPT `getBriefing` (both `agent`). iPadOS is not told
   apart (the app sends URLSession's default agent). Dedupe: an in-process cache
   of the newest version per key, falling back to the table, plus the unique
-  constraint for a concurrent poll. `delivered_via = push` and `push_sent_at`
+  constraint for a concurrent poll. The cache assumes the single uvicorn
+  worker prod runs (refresh-durability.md); with several, each worker would
+  pay its own table read, and the constraint would still hold one row. `delivered_via = push` and `push_sent_at`
   are reserved for alert pushes (not built).
 
 **Derived, never stored.** `latency_report` computes per-day p50/p95/max per
@@ -1015,6 +1017,10 @@ available → delivered (per platform), report → delivered (METAR, SIGMET,
 alerts, per platform: the earliest delivery on that flight serving a version
 at or after the tick), cells built → droplet, cells frame → available, tick
 duration (once per tick). Negative spans are dropped and counted.
+"Available → delivered" is labelled "(poll)": with a 5-min iOS poll it
+measures mostly the poll cadence, not server work; push would shorten it.
+The admin endpoint caps the window at 90 days (rows are aggregated in
+Python).
 
 **Cells times.** The node's build time is the display file's mtime, which
 `rsync -t` (`cells/push.py`) carries to the inbox; ingest keeps it in memory
@@ -1023,10 +1029,11 @@ file, which must stay byte-for-byte reproducible by a replay. After a restart
 it is null until new frames arrive (the tick reads frames < 25 min old).
 
 **Never fails the caller.** Rows are written in a savepoint and every writer
-catches and logs. `write_tick_rows` commits the tick's session, which also
-commits `charge_highlight`'s ledger rows: before #751 nothing committed that
-session after the tick, so tick-written highlight costs were flushed and
-dropped. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
+catches and logs. The tick now commits its session right after the highlight
+pass, so `charge_highlight`'s ledger rows land on their own before the
+latency insert (whose failure must not roll them back): before #751 nothing
+committed that session after the tick, so tick-written highlight costs were
+flushed and dropped. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
 analytics rollup. Account deletion removes the user's deliveries and their
 flights' tick rows; the account export includes `live_deliveries`.
 

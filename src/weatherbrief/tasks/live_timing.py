@@ -209,7 +209,9 @@ def write_tick_rows(db: Session, rows: list[LiveTickTimingRow]) -> int:
     """Insert and commit the tick's rows. Never raises; returns rows written.
 
     In a savepoint, so a failed insert (a missing table on a deploy that
-    skipped the migration, a bad value) rolls back only itself.
+    skipped the migration, a bad value) rolls back only itself. The caller
+    commits its own pending work first (the tick's highlight cost rows), so
+    the rollback here never takes anything but these rows with it.
     """
     if not rows:
         return 0
@@ -365,7 +367,8 @@ HOPS: dict[str, str] = {
     "report_to_fetched": "Report time → fetched",
     "fetched_to_available": "Fetched → available",
     "available_to_highlight": "Available → highlight written",
-    "available_to_delivered": "Available → delivered",
+    # Dominated by the client's poll interval (iOS: 5 min), not server work.
+    "available_to_delivered": "Available → delivered (poll)",
     "end_to_end": "Report time → delivered",
     "cells_computed_to_received": "Cells frame built → droplet",
     "cells_frame_to_available": "Cells frame time → available",
