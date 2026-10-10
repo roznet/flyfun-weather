@@ -5036,7 +5036,20 @@ def send_email(
                 detail="No email address on file. Update your profile to send emails.",
             )
         recipients = [user.email]
-        send_briefing_email(recipients, flight, meta, pack_dir, base_url=base_url)
+        from weatherbrief.notify.dispatch import (
+            flight_day_email_applies,
+            send_flight_day_email_on_request,
+        )
+
+        if flight_day_email_applies(flight, meta):
+            # Flight day: the same observed-first email the T-2h brief sends
+            # (#753), so pressing Email while watching gets that brief.
+            send_flight_day_email_on_request(
+                db, flight, meta, pack_dir,
+                recipients=recipients, recipient_user_id=user_id, base_url=base_url,
+            )
+        else:
+            send_briefing_email(recipients, flight, meta, pack_dir, base_url=base_url)
         return {"status": "sent", "recipients": recipients}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

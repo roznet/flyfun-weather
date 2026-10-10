@@ -441,3 +441,61 @@ def test_since_first_briefing_has_no_prior(db_session, dev_user, tmp_path):
     _add_pack(db_session, _utc(2026, 7, 10, 9, 40), "AMBER", artifact_path=str(new))
     since = dispatch_mod.flight_day_since(db_session, "zz-f1", _meta(), new, refreshed=True)
     assert since.prior_briefing_at is None and since.advisory_changes == []
+
+
+# ---------------------------------------------------------------------------
+# The Email button on flight day
+# ---------------------------------------------------------------------------
+
+
+def _fd(departure=_utc(2026, 7, 10, 12), duration=1.5):
+    return Flight(
+        id="zz-f1", user_id=DEV_USER_ID, route_name="EGTK-LFAT", waypoints=["EGTK", "LFAT"],
+        departure_time=departure, flight_duration_hours=duration, created_at=_utc(2026, 7, 1),
+    )
+
+
+class TestFlightDayEmailApplies:
+    def test_d0_before_departure(self):
+        assert dispatch_mod.flight_day_email_applies(_fd(), _meta(), _utc(2026, 7, 10, 9))
+
+    def test_d0_until_arrival_plus_window(self, monkeypatch):
+        monkeypatch.setenv("WB_LIVE_WINDOW_AFTER_H", "1")
+        # departure 12Z + 1.5 h + 1 h → 14:30Z
+        assert dispatch_mod.flight_day_email_applies(_fd(), _meta(), _utc(2026, 7, 10, 14, 29))
+        assert not dispatch_mod.flight_day_email_applies(_fd(), _meta(), _utc(2026, 7, 10, 14, 30))
+
+    def test_not_before_d0(self):
+        meta = BriefingPackMeta(
+            flight_id="zz-f1", fetch_timestamp=_utc(2026, 7, 9, 9), days_out=1, assessment="GREEN",
+        )
+        assert not dispatch_mod.flight_day_email_applies(_fd(), meta, _utc(2026, 7, 9, 9))
+
+
+def test_email_button_sends_the_flight_day_format(db_session, dev_user, tmp_path):
+    _add_flight(db_session)
+    db_session.add(DeviceTokenRow(token="zz-token", environment="sandbox", user_id=DEV_USER_ID))
+    db_session.flush()
+    with patch("weatherbrief.notify.email.send_flight_day_email") as mock_send, \
+         patch("weatherbrief.tasks.live_layer.live_summary", return_value={"changes": []}):
+        dispatch_mod.send_flight_day_email_on_request(
+            db_session, _fd(), _meta(), tmp_path,
+            recipients=["pilot@example.com"], recipient_user_id=DEV_USER_ID,
+            base_url="https://weather.example.com",
+        )
+    kwargs = mock_send.call_args.kwargs
+    assert mock_send.call_args.args[0] == ["pilot@example.com"]
+    assert kwargs["has_device"] is True
+    assert kwargs["live"] == {"changes": []}
+    assert kwargs["since"].refreshed is True
+
+
+def test_since_dates_a_naive_prior_from_sqlite():
+    from weatherbrief.notify.email import FlightDaySince, _since_lines
+
+    since = FlightDaySince(
+        refreshed=True, briefing_at=_utc(2026, 7, 10, 0, 30),
+        prior_briefing_at=datetime(2026, 7, 9, 23, 50),  # naive, as SQLite returns it
+        prior_assessment="GREEN", assessment="GREEN",
+    )
+    assert "previous 09 Jul 23:50Z" in _since_lines(since)[0]

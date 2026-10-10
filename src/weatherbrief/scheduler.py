@@ -745,7 +745,7 @@ def _flight_day_brief(
         flight = _row_to_flight(flight_row)
         packs = list_packs(db, flight_row.id)
         if not packs or not packs[0].artifact_path:
-            logger.info("Flight-day brief: no pack for %s, nothing to send", flight_row.id)
+            logger.warning("Flight-day brief: no pack for %s, nothing to send", flight_row.id)
             return False
         latest = packs[0]
         pack_dir = Path(_resolve_artifact_path(latest.artifact_path))

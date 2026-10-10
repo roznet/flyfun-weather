@@ -630,6 +630,11 @@ class FlightDaySince(BaseModel):
     advisory_changes: list[AdvisoryStatusChange] = []
 
 
+def _utc(value: datetime) -> datetime:
+    """Aware UTC; a naive value (SQLite drops the zone) is read as UTC."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def _hhmmz(value) -> str:
     """"09:05Z" from a datetime or an ISO string; "" when unparseable."""
     if value is None:
@@ -684,8 +689,9 @@ def _since_lines(since: FlightDaySince) -> list[str]:
     if since.prior_briefing_at is None:
         return [f"First briefing for this flight, built {_hhmmz(since.briefing_at)}."]
     previous = _hhmmz(since.prior_briefing_at)
-    if since.prior_briefing_at.date() != since.briefing_at.date():
-        previous = f"{since.prior_briefing_at.strftime('%d %b')} {previous}"
+    prior_day, this_day = _utc(since.prior_briefing_at), _utc(since.briefing_at)
+    if prior_day.date() != this_day.date():
+        previous = f"{prior_day.strftime('%d %b')} {previous}"
     lines = [f"New briefing built {_hhmmz(since.briefing_at)} (previous {previous})."]
     before, after = since.prior_assessment, since.assessment
     if before and after and before.upper() != after.upper():
