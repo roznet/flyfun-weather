@@ -103,7 +103,7 @@ For each airport with a METAR:
    - `CONFLICTING`: 2+ categories apart (e.g., VFR↔IFR)
 4. Compute visibility and wind deltas for detail annotation
 
-**Model ceiling**: When `route_analyses` are provided, the model ceiling is derived via `reconcile_ceiling(sounding, hourly, field_elevation_ft=..., model=...)` (same path the advisory system uses — sounding ceiling reconciled against NWP cloud diagnostics) on the nearest `RoutePointAnalysis`'s per-model sounding, then fed to `classify_flight_category(ceiling_ft, visibility_sm)`. This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
+**Model ceiling**: When `route_analyses` are provided, the model ceiling is derived via `reconcile_ceiling(sounding, hourly, field_elevation_ft=..., model=...)` (same path the advisory system uses — sounding ceiling reconciled against NWP cloud diagnostics) on the nearest `RoutePointAnalysis`'s per-model sounding, then fed to `classify_flight_category(ceiling_ft, visibility_m=)` (metres, unrounded; VFR from 8000 m, meteorology-decisions §48). This allows ceiling-driven IFR comparisons. Falls back to visibility-only when route analyses are unavailable.
 
 **Ceiling datum (#441 finding #3)**: the reconciled ceiling is asked for in **AGL**, because the METAR flight category it is compared against is AGL. That needs a field elevation, so the pipeline passes `airport_elevations` (from `airports.get_airport_elevations`) alongside `runway_data` into `run_observation_comparison`. The elevation is keyed on the **observed airport** (`obs.icao`), not the nearest waypoint — the METAR reports above its own field. A missing elevation degrades to the MSL/unknown-datum behaviour of `reconcile_ceiling`, it does not raise.
 

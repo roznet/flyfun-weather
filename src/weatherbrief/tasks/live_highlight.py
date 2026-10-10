@@ -221,9 +221,9 @@ def _category_drivers(obs) -> list[str]:
     if not cat or cat == "VFR":
         return []
     out = []
-    if obs.metar_ceiling_ft is not None and classify_flight_category(obs.metar_ceiling_ft, None).value == cat:
+    if obs.metar_ceiling_ft is not None and classify_flight_category(obs.metar_ceiling_ft).value == cat:
         out.append("low ceiling")
-    if obs.metar_visibility_m is not None and classify_flight_category(None, obs.metar_visibility_m / 1609.344).value == cat:
+    if obs.metar_visibility_m is not None and classify_flight_category(None, visibility_m=obs.metar_visibility_m).value == cat:
         out.append("low visibility")
     return out
 
