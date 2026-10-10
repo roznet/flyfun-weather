@@ -33,7 +33,6 @@ from weatherbrief.analysis.comparison import (
 )
 from weatherbrief.analysis.wind import compute_wind_components
 from weatherbrief.models.airport_conditions import FlightCategory, RunwayEnd
-from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 # Ceiling estimate priority: min(sounding_ceiling_ft, nwp_ceiling_ft) when
 # either primary is present (conservative, matching
@@ -84,13 +83,11 @@ def flight_category(
 ) -> str:
     """Derive flight category from a snapshot dict.
 
-    Visibility is always converted from metres to statute miles before
-    classification (the map and alternates must agree on units).
+    Visibility is classified in metres, like every other model-side
+    category (the map and alternates must agree on units).
     """
     ceiling = best_ceiling(snap, field_elevation_ft=field_elevation_ft)
-    vis_m = snap.get("visibility_m")
-    vis_sm = vis_m / _M_PER_SM if vis_m is not None else None
-    return classify_flight_category(ceiling, vis_sm).value
+    return classify_flight_category(ceiling, visibility_m=snap.get("visibility_m")).value
 
 
 def snap_to_dict(

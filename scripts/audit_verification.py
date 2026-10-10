@@ -36,7 +36,6 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
 _AWC_URL = "https://aviationweather.gov/api/data/metar"
-_M_PER_SM = 1609.34
 _CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 
 
@@ -75,8 +74,7 @@ def _parse_metar_vis(raw: str) -> int | None:
 
 def _classify_from_raw(ceil_ft: int | None, vis_m: int | None) -> str:
     """Classify flight category from ceiling and visibility."""
-    vis_sm = vis_m / _M_PER_SM if vis_m is not None else None
-    return classify_flight_category(ceil_ft, vis_sm).value
+    return classify_flight_category(ceil_ft, visibility_m=vis_m).value
 
 
 def _fetch_awc_metars(icaos: list[str], hours: int = 24) -> dict[str, list[dict]]:

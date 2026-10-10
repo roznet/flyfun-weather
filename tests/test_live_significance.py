@@ -253,6 +253,34 @@ def test_taf_appearing_or_lapsing_is_not_a_crossing():
     assert changes.changes == []
 
 
+
+def _taf_category_at_eta(raw, issued, eta):
+    from euro_aip.briefing.weather.models import WeatherReport
+
+    from weatherbrief.models.observations import AirportObservation
+    from weatherbrief.tasks.route_weather import _apply_taf_at_eta
+
+    obs = AirportObservation(icao="EGJB", distance_from_route_nm=0.0, nearest_waypoint_icao="EGJB", has_taf=True)
+    _apply_taf_at_eta(obs, WeatherReport.from_taf(raw, reference=issued), eta)
+    return obs.taf_flight_category_at_eta
+
+
+def test_metric_tempo_8000_is_not_an_mvfr_crossing():
+    """EGJB 2026-10-10 (#757): TEMPO 8000 m read as MVFR through 4.97 SM and alerted 8 flights."""
+    issued, eta = datetime(2026, 10, 10, 5, tzinfo=timezone.utc), datetime(2026, 10, 10, 10, tzinfo=timezone.utc)
+    raw = "TAF EGJB 100455Z 1006/1015 30013KT 9999 SCT020 PROB30 TEMPO 1006/1015 31015G25KT 8000 SHRA"
+    cat = _taf_category_at_eta(raw, issued, eta)
+    assert cat == "VFR"
+    changes, _ = _classify(_obs([_apt("EGJB", taf="VFR")]), _obs([_apt("EGJB", taf=cat)]))
+    assert changes.changes == []
+
+    # 7000 m is still marginal, and still a crossing.
+    cat = _taf_category_at_eta(raw.replace(" 8000 ", " 7000 "), issued, eta)
+    assert cat == "MVFR"
+    changes, _ = _classify(_obs([_apt("EGJB", taf="VFR")]), _obs([_apt("EGJB", taf=cat)]))
+    assert [c.kind for c in changes.changes] == ["taf_category"]
+
+
 # --- SIGMETs ----------------------------------------------------------------
 
 

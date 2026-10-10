@@ -5973,3 +5973,56 @@ Shadow mode (`WB_LIVE_PUSH_SEND` unset) logs every decision
 if sent; `push_state` also counts `alerts_pushed` / `clears_pushed` /
 `rearms_fired`. Review 2–3 flight days: how often a pushed alert clears, how
 often the re-arm fires, and whether 2 ticks is enough.
+
+## 48. Metric visibility of 8000 m or more is VFR; SM reports keep the FAA 5 SM
+
+**Date:** 2026-10-10 · **Issue:** #757 · **Owner decision** (the issue asked for
+"§47"; §47 was taken by #754 the same day)
+
+### Context
+
+The 2026-10-10 prod review found "EGJB TAF at ETA: VFR → MVFR" alerted on 8
+flights from `9999 SCT020 PROB30 TEMPO … 8000 SHRA`. Reading the TEMPO at ETA
+(§32) is right; the MVFR came only from the unit: 8000 m = 4.97 SM, inside the
+FAA MVFR band (3–5 SM). The FAA edge, 5 SM, is 8047 m, so the conversion alone
+made the most common European "good but not 10 km" figure marginal.
+
+### The decision
+
+- **Observed (euro_aip `WeatherAnalyzer.flight_category`):** a report written in
+  metres with visibility ≥ 8000 m (`METRIC_VFR_VISIBILITY_M`) is VFR. A report
+  written in SM keeps the FAA edge: `5SM` is MVFR, `6SM` VFR. The parser records
+  the unit (`WeatherReport.visibility_unit`); it cannot be inferred from
+  `visibility_meters` being present, because the parser fills both distances for
+  every report (`5SM` → 8046 m, which would have read VFR).
+- **Model side (`classify_flight_category`):** visibility is classified in
+  metres, unrounded: VFR ≥ 8000 m, IFR < 3 SM (4828 m), LIFR < 1 SM (1609 m).
+  Model visibility is always metric, so a model 8 km and an observed 8000 m land
+  in the same category and the `METAR vs model` comparison does not start
+  disagreeing at the edge. The argument is keyword-only (`visibility_m=`) so a
+  statute-mile call fails instead of reading 5 as 5 m.
+- **Forecast map visibility layer** (`map-metrics-catalog.json`): the VFR colour
+  starts at 8000 m (stop `4.97098` SM), legend "≥ 8 km".
+- **LIFR/IFR edges are unchanged** (1 and 3 SM). Only the VFR/MVFR edge moves.
+
+### Side effects worth knowing
+
+- The model side used to classify a value rounded to 0.1 SM (airport
+  conditions, METAR-vs-model, scoring) while consensus/map/alternates used the
+  unrounded one. All now read unrounded metres, so a model 4800 m (2.98 SM,
+  rounded to 3.0) moves from MVFR to IFR, and 1580 m from IFR to LIFR, matching
+  what the same METAR reads. These bands are ±80 m wide.
+- METAR categories stored before the change (verification rows, a briefing's
+  baseline) keep the old MVFR for 8000–8046 m. A live tick after deploy against
+  such a baseline can show a one-off "MVFR → VFR" improvement row (not an
+  alert). Scoring history has a small discontinuity at the edge.
+- The Flight Category **advisory** is not changed: it compares the 0.1 SM
+  rounded visibility against its own `amber_vis_sm` (default 5), so 8000 m
+  (rounds to 5.0) was already green; the edge there is ~7967 m.
+
+### Rejected
+
+- **Nudging the SM threshold** (e.g. `< 4.97`): would also make US `5SM`
+  reports VFR, breaking FAA semantics for the US regime.
+- **"Has `visibility_meters` ⇒ metric"** (as the issue first suggested): every
+  parsed report has it, see above.

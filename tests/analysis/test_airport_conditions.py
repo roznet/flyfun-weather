@@ -61,53 +61,65 @@ class TestFormatWindString:
 class TestFlightCategoryClassification:
 
     def test_vfr_good_conditions(self):
-        assert classify_flight_category(5000, 10.0) == FlightCategory.VFR
+        assert classify_flight_category(5000, visibility_m=16000) == FlightCategory.VFR
 
     def test_vfr_no_data(self):
-        assert classify_flight_category(None, None) == FlightCategory.VFR
+        assert classify_flight_category(None) == FlightCategory.VFR
 
     def test_mvfr_low_ceiling(self):
-        assert classify_flight_category(2500, 10.0) == FlightCategory.MVFR
+        assert classify_flight_category(2500, visibility_m=16000) == FlightCategory.MVFR
 
     def test_mvfr_low_visibility(self):
-        assert classify_flight_category(5000, 4.0) == FlightCategory.MVFR
+        assert classify_flight_category(5000, visibility_m=6000) == FlightCategory.MVFR
 
     def test_ifr_low_ceiling(self):
-        assert classify_flight_category(800, 10.0) == FlightCategory.IFR
+        assert classify_flight_category(800, visibility_m=16000) == FlightCategory.IFR
 
     def test_ifr_low_visibility(self):
-        assert classify_flight_category(5000, 2.0) == FlightCategory.IFR
+        assert classify_flight_category(5000, visibility_m=3000) == FlightCategory.IFR
 
     def test_lifr_very_low_ceiling(self):
-        assert classify_flight_category(300, 10.0) == FlightCategory.LIFR
+        assert classify_flight_category(300, visibility_m=16000) == FlightCategory.LIFR
 
     def test_lifr_very_low_visibility(self):
-        assert classify_flight_category(5000, 0.5) == FlightCategory.LIFR
+        assert classify_flight_category(5000, visibility_m=800) == FlightCategory.LIFR
 
     def test_worst_of_ceiling_and_visibility(self):
         # Ceiling is MVFR but visibility is IFR — result should be IFR
-        assert classify_flight_category(2000, 2.0) == FlightCategory.IFR
+        assert classify_flight_category(2000, visibility_m=3000) == FlightCategory.IFR
 
     def test_ceiling_only_no_visibility(self):
-        assert classify_flight_category(800, None) == FlightCategory.IFR
+        assert classify_flight_category(800) == FlightCategory.IFR
 
     def test_visibility_only_no_ceiling(self):
-        assert classify_flight_category(None, 4.0) == FlightCategory.MVFR
+        assert classify_flight_category(None, visibility_m=6000) == FlightCategory.MVFR
 
     def test_boundary_vfr_ceiling(self):
-        assert classify_flight_category(3000, 10.0) == FlightCategory.VFR
+        assert classify_flight_category(3000, visibility_m=16000) == FlightCategory.VFR
 
     def test_boundary_mvfr_ceiling(self):
-        assert classify_flight_category(2999, 10.0) == FlightCategory.MVFR
+        assert classify_flight_category(2999, visibility_m=16000) == FlightCategory.MVFR
 
     def test_boundary_ifr_ceiling(self):
-        assert classify_flight_category(999, 10.0) == FlightCategory.IFR
+        assert classify_flight_category(999, visibility_m=16000) == FlightCategory.IFR
 
-    def test_boundary_vfr_visibility(self):
-        assert classify_flight_category(5000, 5.0) == FlightCategory.VFR
+    def test_boundary_vfr_visibility_8000m(self):
+        """8.0 km is VFR, 7.9 km MVFR: the metric edge, not 5 SM (§48, #757)."""
+        assert classify_flight_category(5000, visibility_m=8000) == FlightCategory.VFR
+        assert classify_flight_category(5000, visibility_m=7900) == FlightCategory.MVFR
+        assert classify_flight_category(5000, visibility_m=7999.9) == FlightCategory.MVFR
 
-    def test_boundary_mvfr_visibility(self):
-        assert classify_flight_category(5000, 4.9) == FlightCategory.MVFR
+    def test_boundary_ifr_visibility_unchanged(self):
+        """The IFR and LIFR edges stay the FAA 3 SM and 1 SM."""
+        assert classify_flight_category(5000, visibility_m=4900) == FlightCategory.MVFR
+        assert classify_flight_category(5000, visibility_m=4800) == FlightCategory.IFR
+        assert classify_flight_category(5000, visibility_m=1650) == FlightCategory.IFR
+        assert classify_flight_category(5000, visibility_m=1600) == FlightCategory.LIFR
+
+    def test_statute_miles_positional_is_rejected(self):
+        """Visibility is keyword-only metres, so an old SM call fails loudly."""
+        with pytest.raises(TypeError):
+            classify_flight_category(5000, 4.0)
 
 
 # --- compute_runway_winds ---
