@@ -732,6 +732,72 @@ export interface AirportObservation {
   metar_previous_flight_category?: string | null;
   metar_previous_time?: string | null;
   taf_issue_time?: string | null;
+  /** #758 — the METAR / TAF-at-ETA dddVddd range; absent on older packs. */
+  metar_wind_variable_from?: number | null;
+  metar_wind_variable_to?: number | null;
+  taf_wind_variable_from?: number | null;
+  taf_wind_variable_to?: number | null;
+  /** #758 — runways and the winds on them, for the runway + wind widget.
+   *  Absent on older packs; null when the airport has no runway data. */
+  runway_wind?: RunwayWindPicture | null;
+}
+
+// --- Runway + wind picture (#758; server: models/runway_wind.py) -----------
+// Everything is TRUE north: runway headings are euro_aip heading_degT and
+// METAR/TAF winds are true. Idents are as painted. No magnetic variation is
+// applied anywhere, on purpose.
+
+export interface RunwayEndInfo {
+  ident: string;
+  heading_true: number;
+}
+
+export interface RunwayInfo {
+  id: string;
+  length_ft: number | null;
+  surface: string | null;
+  hard: boolean | null;
+  ends: RunwayEndInfo[];
+}
+
+export interface WindSample {
+  source: 'metar' | 'taf' | 'model';
+  time: string | null;
+  /** Null when VRB. Calm keeps the reported 000 — read `calm` first. */
+  direction_true: number | null;
+  speed_kt: number | null;
+  gust_kt: number | null;
+  variable: boolean;
+  variable_from: number | null;
+  variable_to: number | null;
+  calm: boolean;
+}
+
+export interface EndComponents {
+  ident: string;
+  /** Negative = tailwind. */
+  headwind_kt: number;
+  /** Signed, positive = from the right. */
+  crosswind_kt: number;
+  side: 'left' | 'right' | '';
+  gust_headwind_kt: number | null;
+  gust_crosswind_kt: number | null;
+  /** Worst case over the variable range and the gust. */
+  max_crosswind_kt: number;
+}
+
+export interface WindAtAirport {
+  wind: WindSample;
+  ends: EndComponents[];
+  /** The METAR/TAF table's best runway and its tier — same picker. */
+  best_end: string | null;
+  advisory: string | null;
+}
+
+export interface RunwayWindPicture {
+  icao: string;
+  runways: RunwayInfo[];
+  winds: WindAtAirport[];
 }
 
 export interface ObservationComparison {

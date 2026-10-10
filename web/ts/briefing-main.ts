@@ -23,6 +23,8 @@ import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper
 import { hideMetricInfo, initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { highlightRatingKey, mountNutshell } from './visualization/observed/nutshell-view';
 import { mountRibbon, stormDetailHtml } from './visualization/observed/ribbon-view';
+import { runwayWindPair } from './visualization/runway-wind/runway-wind-core';
+import { runwayWindPairHtml } from './visualization/runway-wind/runway-wind-view';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import type { LayerGroup, VizRouteData } from './visualization/types';
@@ -2268,6 +2270,7 @@ async function init(): Promise<void> {
    *  (session-only, as for digests): a 10-min poll re-renders the card. */
   const ratedHighlights = new Set<string>();
 
+  let lastRunwayWindHtml: string | null = null;
   function renderObservedLive(state: BriefingState): void {
     const glance = state.live?.glance ?? null;
     const ribbon = state.live?.ribbon ?? null;
@@ -2277,7 +2280,26 @@ async function init(): Promise<void> {
     const ribbonEl = document.getElementById('observed-ribbon-section');
 
     const hasGlance = !!glance && (glance.lines ?? []).length > 0;
-    if (glanceWrapper) glanceWrapper.style.display = hasGlance ? '' : 'none';
+    // #758: departure + destination runway/wind dials. Flight day only (the
+    // live layer exists); its own tick's airports, else the pack's.
+    const flightWaypoints = state.flight?.waypoints ?? [];
+    const windDials = state.live
+      ? runwayWindPair(
+        state.live.route_observations?.airports ?? state.snapshot?.route_observations?.airports,
+        flightWaypoints[0], flightWaypoints.length > 1 ? flightWaypoints[flightWaypoints.length - 1] : null,
+      )
+      : [];
+    if (glanceWrapper) glanceWrapper.style.display = hasGlance || windDials.length ? '' : 'none';
+    if (glanceEl && !hasGlance) glanceEl.innerHTML = '';
+    const windEl = document.getElementById('observed-runway-wind');
+    if (windEl) {
+      const html = runwayWindPairHtml(windDials);
+      // Unchanged tick: keep the DOM, so an open "All runways" stays open.
+      if (lastRunwayWindHtml !== html) {
+        windEl.innerHTML = html;
+        lastRunwayWindHtml = html;
+      }
+    }
     if (hasGlance && glanceEl && glance) {
       const live = state.live!;
       const ratedKey = glance.highlight ? highlightRatingKey(live.flight_id, glance.highlight) : null;

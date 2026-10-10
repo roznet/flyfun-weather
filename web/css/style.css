@@ -9531,3 +9531,150 @@ button.glance-line:hover {
   color: var(--text-muted, #666);
   overflow-wrap: anywhere;
 }
+
+/* --- Runway + wind dials (#758) --- */
+
+.rw-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.rw-dial {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.rw-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.rw-role {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.rw-icao {
+  font-weight: 700;
+}
+
+.rw-wind {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.rw-plot {
+  display: flex;
+  justify-content: center;
+}
+
+.rw-svg {
+  display: block;
+  width: 100%;
+}
+
+.rw-svg.rw-regular { max-width: 170px; }
+.rw-svg.rw-compact { max-width: 96px; }
+.rw-svg.rw-inline { max-width: 34px; }
+
+.rw-rim {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.2;
+}
+
+.rw-north,
+.rw-label,
+.rw-mark-label {
+  text-anchor: middle;
+  dominant-baseline: central;
+  fill: var(--text-muted);
+}
+
+.rw-north { font-size: 6px; font-weight: 600; }
+.rw-label { font-size: 6.5px; }
+.rw-label-best { fill: var(--text); font-weight: 700; }
+.rw-mark-label { font-size: 7px; fill: var(--text); }
+.rw-missing { fill: var(--text-muted); font-style: italic; }
+
+.rw-bar {
+  stroke: var(--text);
+  stroke-opacity: 0.55;
+  stroke-width: 4.5;
+  stroke-linecap: butt;
+}
+
+.rw-bar-soft {
+  stroke-dasharray: 3 2;
+}
+
+.rw-arrow .rw-shaft,
+.rw-arrow .rw-gust {
+  stroke: var(--primary);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.rw-arrow .rw-gust {
+  stroke-width: 1.2;
+  stroke-dasharray: 2 1.5;
+}
+
+.rw-arrow .rw-head { fill: var(--primary); }
+
+.rw-ghost .rw-shaft,
+.rw-ghost .rw-gust {
+  stroke: var(--text-muted);
+  stroke-width: 1.2;
+}
+
+.rw-ghost .rw-head {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1;
+}
+
+.rw-arc {
+  fill: none;
+  stroke: var(--primary);
+  stroke-opacity: 0.55;
+  stroke-width: 3;
+}
+
+.rw-vrb {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2.5;
+}
+
+.rw-calm { fill: var(--primary); }
+
+.rw-line {
+  font-size: 0.8rem;
+  margin-top: 0.2rem;
+}
+
+.rw-line-ghost { color: var(--text-muted); font-size: 0.75rem; }
+.rw-tone-amber { color: var(--amber); font-weight: 600; }
+.rw-tone-red { color: var(--red); font-weight: 600; }
+
+.rw-details {
+  font-size: 0.75rem;
+  margin-top: 0.3rem;
+}
+
+.rw-details summary { cursor: pointer; color: var(--text-muted); }
+.rw-details ul { margin: 0.25rem 0 0; padding-left: 1rem; }
+.rw-note { color: var(--text-muted); margin: 0.3rem 0 0; }
