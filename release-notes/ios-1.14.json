@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-10",
+    "title": "iOS 1.14 — Observed tab highlight and route ribbon",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Observed tab, reorganised: on flight day a one-line highlight sums up what's changed since your briefing, with any alerts right under it and everything else under Details. Rate the highlight with a thumbs up or down.\n- Route ribbon: a picture of your route with radar rain, cells, SIGMETs and airports along it. Tap any mark for a card with its details, the raw METAR/TAF, and a Show on map button.\n- En-route cell alerts: radar cells developing near your track now raise an alert, and each cell shows how close it would come to you if it keeps its current speed and heading.\n- Clearer live SIGMETs: you're warned about SIGMETs issued but not yet valid, reissues no longer alert twice, and a failed SIGMET check no longer reads as \"none listed\".\n- Flight descriptions: give a flight a description and find it again from the flight list search, which now matches trip names too.\n- Trips are titled with your own trip name.\n- Sharper weather digests, written by a newer model, with worst cases from a single model labelled as a minority view."
+  }
+]
