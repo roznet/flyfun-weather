@@ -15,6 +15,7 @@ from timezonefinder import TimezoneFinder
 from weatherbrief.fetch.route_walk import walk_route
 from weatherbrief.models import AirportApproaches, RunwayApproach, RunwayEnd, Waypoint
 from weatherbrief.models.airport_conditions import SOURCE_USER_DECLARED
+from weatherbrief.models.runway_wind import RunwayEndInfo, RunwayInfo
 
 if TYPE_CHECKING:
     from euro_aip.briefing.models.route import Route
@@ -309,8 +310,60 @@ def _identify(code: str, model) -> dict[str, str | None]:
     return {"name": code, "kind": str(kind) if kind else None}
 
 
+def get_runways(icao_codes: list[str], db_path: str) -> dict[str, list[RunwayInfo]]:
+    """Get the open runways of given airports, with the ends that have a heading.
+
+    Closed runways are dropped, and so is an end without a true heading (and
+    a runway left with no end at all). Headings are euro_aip ``heading_degT``,
+    true; idents are as painted.
+
+    Args:
+        icao_codes: ICAO codes to look up.
+        db_path: Path to the euro_aip SQLite database.
+
+    Returns:
+        Dict mapping ICAO code to list of RunwayInfo (empty when unknown).
+    """
+    from euro_aip.utils.runway_classifier import is_hard_surface
+
+    model = _load_airport_model(db_path)
+
+    result: dict[str, list[RunwayInfo]] = {}
+    for icao in icao_codes:
+        airport = model.airports.get(icao)
+        if airport is None:
+            result[icao] = []
+            continue
+
+        runways: list[RunwayInfo] = []
+        for rwy in airport.runways:
+            if rwy.closed:
+                continue
+            ends: list[RunwayEndInfo] = []
+            if rwy.le_ident and rwy.le_heading_degT is not None:
+                ends.append(RunwayEndInfo(ident=rwy.le_ident, heading_true=rwy.le_heading_degT))
+            if rwy.he_ident and rwy.he_heading_degT is not None:
+                ends.append(RunwayEndInfo(ident=rwy.he_ident, heading_true=rwy.he_heading_degT))
+            if not ends:
+                continue
+            runways.append(RunwayInfo(
+                id="/".join(i for i in (rwy.le_ident, rwy.he_ident) if i),
+                length_ft=round(rwy.length_ft) if rwy.length_ft else None,
+                surface=rwy.surface or None,
+                hard=is_hard_surface(rwy.surface) if rwy.surface else None,
+                ends=ends,
+            ))
+
+        result[icao] = runways
+
+    return result
+
+
 def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[RunwayEnd]]:
     """Get all runway end options for given airports.
+
+    A projection of :func:`get_runways`, so the wind-best-runway pick and the
+    runway + wind picture (#758) see the same ends in the same order.
 
     Args:
         icao_codes: ICAO codes to look up.
@@ -319,27 +372,12 @@ def get_runway_ends(icao_codes: list[str], db_path: str) -> dict[str, list[Runwa
     Returns:
         Dict mapping ICAO code to list of RunwayEnd objects.
     """
-    model = _load_airport_model(db_path)
+    from weatherbrief.analysis.runway_wind import runway_ends_of
 
-    result: dict[str, list[RunwayEnd]] = {}
-    for icao in icao_codes:
-        airport = model.airports.get(icao)
-        if airport is None:
-            result[icao] = []
-            continue
-
-        ends: list[RunwayEnd] = []
-        for rwy in airport.runways:
-            if rwy.closed:
-                continue
-            if rwy.le_ident and rwy.le_heading_degT is not None:
-                ends.append(RunwayEnd(id=rwy.le_ident, heading_deg=rwy.le_heading_degT))
-            if rwy.he_ident and rwy.he_heading_degT is not None:
-                ends.append(RunwayEnd(id=rwy.he_ident, heading_deg=rwy.he_heading_degT))
-
-        result[icao] = ends
-
-    return result
+    return {
+        icao: runway_ends_of(runways)
+        for icao, runways in get_runways(icao_codes, db_path).items()
+    }
 
 
 # ICAO names a circling-only approach with a single trailing letter ("RNP A",

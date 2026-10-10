@@ -239,6 +239,7 @@ def run_route_weather(
     )
 
     airports: list[AirportObservation] = []
+    etas: list[datetime] = []  # each airport's ETA, for the TAF wind sample
     metar_categories: list[str] = []
     taf_categories: list[str] = []
     all_phenomena: list[str] = []
@@ -284,6 +285,8 @@ def run_route_weather(
             obs.metar_wind_dir = metar.wind_direction
             obs.metar_wind_speed_kt = metar.wind_speed
             obs.metar_wind_gust_kt = metar.wind_gust
+            obs.metar_wind_variable_from = metar.wind_variable_from
+            obs.metar_wind_variable_to = metar.wind_variable_to
             obs.metar_weather = list(metar.weather_conditions)
             obs.metar_temperature_c = metar.temperature
             obs.metar_dewpoint_c = metar.dewpoint
@@ -300,21 +303,25 @@ def run_route_weather(
                 taf_categories.append(obs.taf_flight_category_at_eta)
 
         airports.append(obs)
+        etas.append(airport_time)
 
     # De-duplicate phenomena
     unique_phenomena = sorted(set(all_phenomena))
 
     # Compute runway-relative wind advisories for METAR and TAF
     try:
-        from weatherbrief.airports import get_runway_ends as _get_runway_ends
+        from weatherbrief.airports import get_runways as _get_runways
+        from weatherbrief.analysis.runway_wind import runway_ends_of
 
         obs_icaos = list({a.icao for a in airports})
-        runway_data = _get_runway_ends(obs_icaos, airports_db_path)
+        runway_info = _get_runways(obs_icaos, airports_db_path)
 
-        for obs in airports:
-            rwy_ends = runway_data.get(obs.icao, [])
+        for obs, eta in zip(airports, etas):
+            runways = runway_info.get(obs.icao, [])
+            rwy_ends = runway_ends_of(runways)
             if not rwy_ends:
                 continue
+            _attach_runway_wind(obs, runways, eta)
 
             # METAR wind advisory
             adv, rwy_id, xw, hw = compute_wind_advisory(
@@ -352,6 +359,17 @@ def run_route_weather(
         worst_taf_category=_worst_category(taf_categories),
         phenomena_along_route=unique_phenomena,
     )
+
+
+def _attach_runway_wind(obs: AirportObservation, runways, eta: datetime | None) -> None:
+    """Attach the runway + wind picture (#758). A failure costs the picture,
+    never the airport's advisories or the rest of the corridor."""
+    from weatherbrief.analysis.runway_wind import picture_for_observation
+
+    try:
+        obs.runway_wind = picture_for_observation(obs, runways, eta)
+    except Exception:
+        logger.warning("Failed to build the runway wind picture for %s", obs.icao, exc_info=True)
 
 
 def _apply_metar_history(obs: AirportObservation, raw) -> None:
@@ -417,6 +435,8 @@ def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
     obs.taf_wind_dir = reading.wind_dir
     obs.taf_wind_speed_kt = reading.wind_speed_kt
     obs.taf_wind_gust_kt = reading.wind_gust_kt
+    obs.taf_wind_variable_from = reading.wind_variable_from
+    obs.taf_wind_variable_to = reading.wind_variable_to
 
     obs.taf_applicable_lines = _applicable_taf_lines(taf, eta)
 
