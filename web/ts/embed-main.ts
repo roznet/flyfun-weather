@@ -8,7 +8,9 @@
  * layers on) or `{type: 'wb-embed:point', index}` / `{type: 'wb-embed:model',
  * model}`; the embed answers `{type: 'wb-embed:ready', models, layers}` once
  * the data is drawn. Read-only: it shows what the viewer could already open
- * on the briefing page, under the same auth.
+ * on the briefing page, under the same auth. A parent should also handle
+ * `wb-frame:auth-required` (utils.redirectToLogin, on a 401); the embed never
+ * calls renderUserInfo, so it sends `wb-embed:ready`, not `wb-frame:ready`.
  */
 
 import {
@@ -40,7 +42,13 @@ const renderer = new CrossSectionRenderer(container);
 let data: EmbedData | null = null;
 let model = params.get('model') ?? '';
 let enabled = layersFromList(params.get('layers'));
-let point = Number(params.get('point') ?? -1);
+let point = pointIndex(params.get('point'));
+
+/** A route-point index, or -1 (none) for anything that isn't a number. */
+function pointIndex(v: unknown): number {
+  const n = Number(v ?? -1);
+  return Number.isFinite(n) ? n : -1;
+}
 
 /** Exactly the listed layers on; null (no list) keeps the briefing defaults. */
 function layersFromList(list: string | string[] | null): Record<string, boolean> {
@@ -70,10 +78,11 @@ function post(msg: object): void {
 }
 
 window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window.parent) return; // only the framing page drives the view
   const msg = ev.data;
   if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
   if (msg.type === 'wb-embed:layers') enabled = layersFromList(msg.layers ?? null);
-  else if (msg.type === 'wb-embed:point') point = Number(msg.index ?? -1);
+  else if (msg.type === 'wb-embed:point') point = pointIndex(msg.index);
   else if (msg.type === 'wb-embed:model' && data?.manifest.models.includes(msg.model)) model = msg.model;
   else return;
   draw();
