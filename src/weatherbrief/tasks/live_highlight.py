@@ -657,9 +657,10 @@ def gate_changes(previous: dict, current: dict) -> list[str]:
 # --- Grounding --------------------------------------------------------------
 
 #: Words the product voice never uses: the highlight points at the thing, the
-#: pilot decides (``feedback_not_go_nogo``, meteorology-decisions §41).
+#: pilot decides (``feedback_not_go_nogo``, meteorology-decisions §41). Not
+#: "go": every hit in the 2026-10-08..10 audit was "may go MVFR" (11 of 12).
 VERDICT_WORDS = frozenset(
-    "safe unsafe safely dangerous hazardous go no-go nogo avoid divert diverting "
+    "safe unsafe safely dangerous hazardous no-go nogo avoid divert diverting "
     "recommend recommended should must advise advisable unflyable "
     "caution careful suggest suggested consider".split()
 )
@@ -672,54 +673,14 @@ VERDICT_WORDS = frozenset(
 #: instruction, and no replay line used it.
 ADVICE_WORDS = frozenset("monitor monitoring".split())
 
-#: Conditions an *airport* can be in, each with the surface forms the facts and
-#: the model may use for it. Used only to bind a condition to the place the
-#: model attributed it to — the failure that motivated the check was a route
-#: airport's LIFR appearing on the destination (#697, lesson 1).
-#:
-#: Deliberately airport-scoped. Route-level words (cell, rain, SIGMET) are
-#: checked by the global rules below, not bound to a place: "no cell within
-#: 20 NM of LFMD" is a true statement about LFMD that mentions no condition of
-#: LFMD's, and binding it would reject good output.
-AIRPORT_CONDITIONS: dict[str, frozenset[str]] = {
-    "LIFR": frozenset({"lifr"}),
-    "IFR": frozenset({"ifr"}),
-    "MVFR": frozenset({"mvfr"}),
-    "VFR": frozenset({"vfr"}),
-    "thunderstorm": frozenset({"ts", "tsra", "+tsra", "-tsra", "vcts", "tsgr",
-                               "thunderstorm", "thunderstorms", "lightning"}),
-    "convection": frozenset({"cb", "tcu", "cumulonimbus", "towering"}),
-    "rain": frozenset({"ra", "-ra", "+ra", "shra", "-shra", "+shra", "vcsh", "dz", "-dz",
-                       "rain", "showers", "shower", "drizzle"}),
-    "snow": frozenset({"sn", "-sn", "+sn", "shsn", "snow", "sleet", "gs", "gr", "hail"}),
-    "obscuration": frozenset({"fg", "bcfg", "mifg", "br", "hz", "fu", "fog", "mist", "haze", "smoke"}),
-    # "wind" because the facts give an airport's wind as its advisory band
-    # ("wind advisory amber"), never a gust figure (#706).
-    "gusts": frozenset({"gusts", "gusting", "gust", "wind"}),
-    "ceiling": frozenset({"ceiling", "overcast", "broken"}),
-    "visibility": frozenset({"visibility", "vis"}),
-}
-
-#: A clause carrying one of these is not making a bindable claim about an
-#: aerodrome's own conditions, so the place-binding rule skips it rather than
-#: guess:
-#:
-#: - a negative or comparative ("no cell near LFMD", "LFMD better than
-#:   briefed") — the rule cannot read a negation;
-#: - a **SIGMET**, which describes a region and names an aerodrome only as the
-#:   edge of it. Measured: "embedded thunderstorms from 235 NM to destination
-#:   (LEMI)" is accurate — the span ends at LEMI, LEMI itself is VFR — and the
-#:   rule rejected it until "sigmet" was listed here.
-_HEDGES = frozenset(
-    "no none not never without nothing clear quiet improving improved better "
-    "easing clearing lifting sigmet sigmets".split()
-)
+#: The words that claim a thunderstorm (§41: a radar core is a "cell"; only
+#: observed lightning or a TS hazard earns the word).
+_THUNDERSTORM_WORDS = frozenset({"ts", "tsra", "+tsra", "-tsra", "vcts", "tsgr",
+                                 "thunderstorm", "thunderstorms", "lightning"})
 
 #: Four-letter upper-case words that are *not* ICAO codes. Without this,
-#: ``LIFR`` reads as an airport: rule 1 then rejects it as an unknown aerodrome,
-#: and worse, the place-binding rule sees two "ICAOs" in "LEMI reporting LIFR"
-#: and skips the clause — which is exactly the misattribution it exists to
-#: catch. Weather codes, cloud groups and SIGMET qualifiers all collide.
+#: ``LIFR`` reads as an airport and the ICAO rule rejects it as an unknown
+#: aerodrome. Weather codes, cloud groups and SIGMET qualifiers all collide.
 _NOT_ICAO = frozenset(
     """LIFR MVFR TSRA VCTS TSGR SHRA SHSN BCFG MIFG DRSN BLSN FZRA FZDZ FZFG
     EMBD ISOL OCNL FRQT SQLN LYRS BKNL OVCL CAVU NOSIG METR TEMP PROB BECM
@@ -742,14 +703,7 @@ _META_RE = re.compile(
 #: rule read as the word itself (7 of 9 thunderstorm rejections on the #715 A/B).
 _NEGATED_TS_RE = re.compile(
     r"\b(?:no|without|nor)\s+(?:lightning|thunderstorms?|ts)\b", re.IGNORECASE)
-#: An aerodrome named only as the reference point of a distance — "85-125 NM
-#: from EGBJ", "10 NM past LFMD" — is not the subject of the clause's weather.
-#: Binding "rain" to it rejected correct lines on the #715 A/B. Deliberately
-#: only from/past/beyond: "IFR 20 NM before LFMD" or "TSRA 10 NM of LFMD" can
-#: be a condition placed on LFMD, and the binding rule must still see it.
-_ANCHOR_ICAO_RE = re.compile(r"\bNM\b[^,;.]*?\b(?:from|past|beyond)\s+([A-Z]{4})\b")
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
-_CLAUSE_RE = re.compile(r"[;,.]|\band\b|\bbut\b|\bwhile\b|\bwith\b")
 
 
 def _icaos(text: str) -> set[str]:
@@ -773,66 +727,20 @@ def _words(text: str) -> list[str]:
     return out
 
 
-def _conditions_in(text: str) -> set[str]:
-    """Which airport conditions a piece of text claims.
-
-    "Low IFR" is LIFR spelled out (Haiku 5.5 writes it); read word by word it
-    claimed plain IFR at an LIFR airport and failed the binding (#715)."""
-    toks = set(_words(re.sub(r"\blow\s+ifr\b", "lifr", text, flags=re.IGNORECASE)))
-    return {name for name, forms in AIRPORT_CONDITIONS.items() if toks & forms}
-
-
-def _facts_for_icao(f: dict, icao: str) -> str:
-    """Everything the facts say about one ICAO, as text.
-
-    Walks the whole block rather than the known shapes: an ICAO turns up as a
-    departure, a destination, a route airport, an alternate and inside a change
-    row's ``where``, and a binding check that missed one of those would reject
-    a correct highlight.
-    """
-    found: list[str] = []
-
-    def walk(node) -> None:
-        if isinstance(node, dict):
-            blob = json.dumps(node, default=str)
-            if icao in blob:
-                # The entry that names it directly, not an ancestor holding
-                # every airport: recurse first and keep the narrowest.
-                children = [v for v in node.values() if isinstance(v, (dict, list))]
-                if not any(icao in json.dumps(c, default=str) for c in children):
-                    found.append(blob)
-                    return
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-        elif isinstance(node, str) and icao in node:
-            found.append(node)
-
-    walk(f)
-    return " ".join(found)
-
-
 def check_grounding(text: str, f: dict) -> str | None:
     """Reject a highlight that must never reach a pilot.
 
-    Returns ``None`` when it passes, else a short reason. Only mechanical rules
-    reject (owner, 2026-10-09): the line must be one paragraph of highlight,
-    not the model's drafting (#715), within ``MAX_WORDS``, and every code and
-    figure in it must be in the facts:
+    Returns ``None`` when it passes, else a short reason. Only rules that
+    judge the *shape* of the reply reject (owner, 2026-10-10): the line must be
+    one paragraph of highlight, not the model's drafting (#715), within
+    ``MAX_WORDS``, and every ICAO in it must be in the facts.
 
-    1. **ICAOs** — every 4-letter code must appear in the facts.
-    2. **Figures** — every number must appear in the facts. Catches an invented
-       distance, time or dBZ, which is the one error a pilot cannot spot.
-
-    The rules that judge *meaning* (place binding, verdict words, the
-    thunderstorm word) are :func:`review_flags`: they flag, they do not reject.
-    On the first Haiku 5.5 prod day 17 of 28 rejections were theirs and false
-    (a correct "EGJA and EGJB are IFR and LIFR", "may go MVFR", a TAF's TSRA),
-    each one cost the pilot that tick's highlight, and they still let wrong
-    lines through. The review log carries the flags; prompt tweaks fix what
-    they find.
+    Measured on 1,224 prod attempts (2026-10-08..10): drafting text 2/2 real,
+    the length cap caught 5 drafting leaks and no good line, the ICAO rule 1/1
+    (EBRD written for EHRD). The figure rule rejected 7 correct lines for 1
+    real catch, mostly span widths the model derives ("the final 3 NM" of a
+    129-132 NM stretch), and each false reject cost the pilot that tick's
+    highlight; it is a flag in :func:`review_flags` now.
     """
     text = (text or "").strip()
     if not text:
@@ -847,15 +755,9 @@ def check_grounding(text: str, f: dict) -> str | None:
         return f"not a highlight (drafting text: {meta.group(0).strip() or 'line break'!r})"
 
     blob = json.dumps(f, default=str)
-
     unknown = sorted({c for c in _icaos(text) if c not in blob})
     if unknown:
         return f"ICAO not in facts: {', '.join(unknown)}"
-
-    fact_numbers = set(_NUM_RE.findall(blob))
-    invented = sorted({n for n in _NUM_RE.findall(text) if n not in fact_numbers})
-    if invented:
-        return f"figure not in facts: {', '.join(invented)}"
 
     return None
 
@@ -863,22 +765,21 @@ def check_grounding(text: str, f: dict) -> str | None:
 def review_flags(text: str, f: dict) -> list[str]:
     """What a reviewer should look at in a highlight that was written anyway.
 
-    Logged on the attempt as ``flags``; never blocks the line. Three rules,
-    each a voice rule or a failure seen in the experiment:
+    Logged on the attempt as ``flags``; never blocks the line. Kept to the
+    rules that paid off in the 2026-10-08..10 audit (owner, 2026-10-10):
 
-    - **Place binding** — in a clause naming exactly one airport, every
-      *airport condition* claimed must be one the facts give for that airport
-      (moving LECH's LIFR onto LEMI, #697 lesson 1).
-    - **Verdict / advice words** — the product never says go/no-go.
-    - **"Thunderstorm" needs lightning** — §41: a radar core is a "cell"; only
-      observed lightning or a TS hazard earns the word.
+    - **Verdict / advice words**: the product never says go/no-go ("depart
+      with caution" was a real catch).
+    - **"Thunderstorm" needs lightning**: §41, 4 of 4 real.
+    - **Figures**: a number the facts do not carry (an invented time is the
+      one error a pilot cannot spot), flagged rather than rejected because the
+      model's derived span widths trip it.
 
-    Known false positives, the reason these flag rather than reject: a list
-    read respectively ("EGJA and EGJB are IFR and LIFR") is skipped only when
-    it names two airports in one clause; an airport ending a span ("rain from
-    125 NM to EGJJ") binds the span's weather to it; "go MVFR" reads as a
-    verdict; a TAF's TSRA "forecast at LIPH" in a clause with a figure reads as
-    a positional thunderstorm.
+    Dropped as noise: place binding (2 real of 33: "rain from 125 NM to EGJJ"
+    binds the span's rain to EGJJ, lists read respectively) and "thunderstorm
+    at a position" (0 of 16: every hit quoted an airport's TAF TSRA). When
+    they rejected, they also pushed the model into worse wording (a TAF's
+    TSRA rewritten as "showers").
     """
     text = (text or "").strip()
     if not text:
@@ -887,7 +788,6 @@ def review_flags(text: str, f: dict) -> list[str]:
     blob = json.dumps(f, default=str)
 
     said = set(_words(text))
-    asserted = set(_words(_NEGATED_TS_RE.sub(" ", text)))
     verdict = sorted(said & VERDICT_WORDS)
     if verdict:
         flags.append(f"verdict word: {', '.join(verdict)}")
@@ -895,49 +795,16 @@ def review_flags(text: str, f: dict) -> list[str]:
     if advice:
         flags.append(f"advice word: {', '.join(advice)}")
 
-    if asserted & AIRPORT_CONDITIONS["thunderstorm"]:
-        # Two sources can license the word, and they license different claims
-        # (§41: a radar core is a "cell"; only observed electrification or a
-        # TS hazard earns "thunderstorm").
+    asserted = set(_words(_NEGATED_TS_RE.sub(" ", text)))
+    if asserted & _THUNDERSTORM_WORDS:
         observed = "lightning_flashes" in blob or bool(re.search(r"\bTS\b|TSRA|VCTS|TSGR", blob))
         if not observed:
             flags.append("says thunderstorm without lightning in the facts")
-        else:
-            # An *airport* reporting TSRA does not make the cell at 180 NM a
-            # thunderstorm. A clause that says thunderstorm about a position
-            # rather than an aerodrome needs the cells or a SIGMET to carry it.
-            from_cells = "lightning_flashes" in blob
-            from_sigmet = any(
-                re.search(r"\bTS\b|TSRA|TSGR", str(s.get("what") or ""))
-                for s in (f.get("sigmets_ahead") or [])
-                if isinstance(s, dict)
-            )
-            if not (from_cells or from_sigmet):
-                for clause in _CLAUSE_RE.split(_NEGATED_TS_RE.sub(" ", text)):
-                    if not (set(_words(clause)) & AIRPORT_CONDITIONS["thunderstorm"]):
-                        continue
-                    if _icaos(clause):
-                        continue  # about an aerodrome: the binding rule reads it
-                    if _NUM_RE.search(clause):
-                        flags.append("says thunderstorm at a position, but only a station reports TS")
-                        break
 
-    for clause in _CLAUSE_RE.split(text):
-        icaos = _icaos(clause) - set(_ANCHOR_ICAO_RE.findall(clause))
-        if len(icaos) != 1:
-            continue
-        if set(_words(clause)) & _HEDGES:
-            continue
-        icao = icaos.pop()
-        claimed = _conditions_in(clause)
-        if not claimed:
-            continue
-        supported = _conditions_in(_facts_for_icao(f, icao))
-        wrong = sorted(claimed - supported)
-        if wrong:
-            flag = f"{icao} not given as {', '.join(wrong)} in the facts"
-            if flag not in flags:
-                flags.append(flag)
+    fact_numbers = set(_NUM_RE.findall(blob))
+    invented = sorted({n for n in _NUM_RE.findall(text) if n not in fact_numbers})
+    if invented:
+        flags.append(f"figure not in facts: {', '.join(invented)}")
 
     return flags
 

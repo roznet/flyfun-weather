@@ -66,85 +66,27 @@ def test_rejects_an_invented_icao():
     assert "LFMD" in lh.check_grounding("LFMD showing IFR at arrival.", f)
 
 
-def test_rejects_an_invented_figure():
-    """The one error a pilot cannot catch: a distance or time that is not real."""
+def test_flags_an_invented_figure_without_rejecting_it():
+    """The one error a pilot cannot catch is a distance or time that is not
+    real, but the rule also trips on spans the model derives (2026-10-10
+    audit: 1 real catch, 7 false rejections), so it flags."""
     f = _facts_with(cells_ahead={"count": 1, "nearest_to_track": [
         {"peak_dBZ": 48, "at_route_nm": 180, "off_track_nm": 6, "side": "right"}]})
-    reason = lh.check_grounding("Cell 48 dBZ at 234 NM, 6 NM right of track.", f)
-    assert "234" in reason
+    text = "Cell 48 dBZ at 234 NM, 6 NM right of track."
+    assert lh.check_grounding(text, f) is None
+    assert _flag(text, f) == "figure not in facts: 234"
 
 
-def test_accepts_figures_the_facts_carry():
+def test_figures_the_facts_carry_are_not_flagged():
     f = _facts_with(cells_ahead={"count": 1, "nearest_to_track": [
         {"peak_dBZ": 48, "at_route_nm": 180, "off_track_nm": 6, "side": "right"}]})
-    assert lh.check_grounding("Cell at 180 NM, 6 NM right of track, peak 48 dBZ.", f) is None
+    assert _flag("Cell at 180 NM, 6 NM right of track, peak 48 dBZ.", f) is None
 
 
-def test_accepts_a_time_from_the_facts():
+def test_a_time_from_the_facts_is_not_flagged():
     f = _facts_with(cells_ahead={"count": 1, "nearest_to_track": [
         {"at_route_nm": 180, "off_track_nm": 4, "side": "left", "abeam_at": "09:47Z"}]})
-    assert lh.check_grounding("Cell 4 NM left of track, abeam 09:47Z.", f) is None
-
-
-# --- Grounding: place binding (#697 lesson 1) -------------------------------
-# The failure this check exists for: a route airport's condition moved onto the
-# destination. Both codes and both conditions appear *somewhere* in the facts,
-# so the plain "is it in the facts" rule passes it.
-
-
-def test_rejects_a_condition_moved_to_the_wrong_airport():
-    f = _facts_with(
-        destination={"icao": "LEMI", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
-        airports_along_route_ahead={
-            "notable": [{"icao": "LECH", "role": "route", "where": "150 NM along, on track",
-                         "metar_now": "LIFR at 08:50Z, visibility 800 m"}],
-            "other_airports_ahead_all_VFR": 3},
-    )
-    # Every token is in the facts; the attribution is not.
-    reason = _flag("LEMI reporting LIFR with 800 m visibility.", f)
-    assert reason is not None and "LEMI" in reason and "LIFR" in reason
-
-
-def test_accepts_the_same_condition_at_its_own_airport():
-    f = _facts_with(
-        airports_along_route_ahead={
-            "notable": [{"icao": "LECH", "role": "route", "where": "150 NM along, on track",
-                         "metar_now": "LIFR at 08:50Z, visibility 800 m"}],
-            "other_airports_ahead_all_VFR": 3},
-    )
-    assert _flag("LECH LIFR with 800 m visibility mid-route.", f) is None
-
-
-def test_accepts_a_paraphrase_of_a_metar_code():
-    """The facts say TSRA; the model may say thunderstorm. Same condition."""
-    f = _facts_with(
-        airports_along_route_ahead={
-            "notable": [{"icao": "LECH", "role": "route", "where": "150 NM along, on track",
-                         "metar_now": "IFR at 08:50Z, TSRA"}],
-            "other_airports_ahead_all_VFR": 3},
-    )
-    assert _flag("Thunderstorms reported at LECH mid-route.", f) is None
-
-
-def test_skips_binding_on_a_negative_clause():
-    """"no cell near LEMI" claims nothing about LEMI's own conditions."""
-    f = _facts_with()
-    assert _flag("No cells within 30 NM of LEMI.", f) is None
-
-
-def test_a_sigmet_span_may_name_the_airport_at_its_edge():
-    """Measured false positive: the model named LEMI as the *end of a SIGMET
-    span*, not as an airport reporting thunderstorms. The span does reach
-    LEMI and LEMI itself is VFR, so the line is accurate."""
-    f = _facts_with(
-        destination={"icao": "LEMI", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
-        sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 3", "covers_route_nm": [235, 276],
-                        "new_since_briefing": True}],
-    )
-    assert _flag(
-        "Two new SIGMETs: embedded thunderstorms from 235 NM to destination (LEMI).", f) is None
-    # The guard is narrow: without the SIGMET framing the same claim is caught.
-    assert _flag("LEMI reporting thunderstorms.", f) is not None
+    assert _flag("Cell 4 NM left of track, abeam 09:47Z.", f) is None
 
 
 # --- Grounding: voice rules -------------------------------------------------
@@ -170,37 +112,6 @@ def test_thunderstorm_needs_lightning_in_the_facts():
     assert reason is not None and "lightning" in reason
     # The same tick, worded as a cell, is fine.
     assert _flag("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
-
-
-def test_a_stations_TS_does_not_make_a_radar_core_a_thunderstorm():
-    """§41. An airport reporting TSRA licenses "thunderstorm at LECH"; it does
-    not license "thunderstorm at 180 NM" about a core with no lightning. The
-    place-binding rule cannot catch this one — there is no ICAO in the clause
-    to bind to."""
-    f = _facts_with(
-        airports_along_route_ahead={
-            "notable": [{"icao": "LECH", "role": "route", "where": "150 NM along, on track",
-                         "metar_now": "IFR at 08:50Z, TSRA"}],
-            "other_airports_ahead_all_VFR": 2},
-        cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
-            {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
-    )
-    reason = _flag("Thunderstorm 4 NM left of track at 180 NM.", f)
-    assert reason is not None and "only a station reports TS" in reason
-    # The same facts, said about the station that actually reports it: fine.
-    assert _flag("LECH reporting thunderstorms mid-route.", f) is None
-    # ...and the core, correctly called a cell: fine.
-    assert _flag("Cell 4 NM left of track at 180 NM, peak 52 dBZ.", f) is None
-
-
-def test_a_TS_sigmet_licenses_a_positional_thunderstorm():
-    """A SIGMET for embedded TS over the route does carry the word."""
-    f = _facts_with(
-        sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2", "covers_route_nm": [10, 276]}],
-        cells_ahead={"count": 1, "with_lightning": 0, "nearest_to_track": [
-            {"peak_dBZ": 52, "at_route_nm": 180, "off_track_nm": 4, "side": "left"}]},
-    )
-    assert _flag("SIGMET embedded thunderstorms from 10 NM to destination.", f) is None
 
 
 def test_thunderstorm_allowed_when_a_cell_has_flashes():
@@ -247,44 +158,6 @@ def test_a_stated_absence_of_lightning_is_not_a_thunderstorm():
     # The claim itself is still caught, even next to a negation.
     reason = _flag("Thunderstorm 3 NM right of track at 92 NM, no lightning seen yet.", f)
     assert reason is not None and "lightning" in reason
-
-
-def test_low_ifr_spelled_out_binds_as_lifr():
-    f = _facts_with(destination={"icao": "KGKY", "metar_now": "LIFR at 11:53Z", "taf_at_eta": "LIFR"})
-    assert _flag("Low IFR at destination KGKY now and at ETA.", f) is None
-    reason = _flag("KGKY reporting IFR.", f)
-    assert reason is not None and "IFR" in reason
-
-
-def test_an_airport_anchoring_a_distance_is_not_bound():
-    """"85-125 NM from EGBJ" places the rain on the route; it says nothing about
-    EGBJ's own weather."""
-    f = _facts_with(
-        route="EGBJ to EGNS, 159 NM",
-        departure={"icao": "EGBJ", "metar_now": "VFR at 06:20Z"},
-        rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[85, 125]]},
-    )
-    assert _flag("Rain lies over the track 85-125 NM from EGBJ.", f) is None
-    # The same airport as the subject is still bound.
-    reason = _flag("EGBJ reporting rain.", f)
-    assert reason is not None and "EGBJ" in reason
-
-
-@pytest.mark.parametrize("text", [
-    "IFR 20 NM before LFMD.",
-    "Fog 10 NM of LFMD.",
-    "Showers 5 NM after LFMD.",
-])
-def test_before_after_and_of_still_bind_the_airport(text):
-    """Review on PR #716: only from/past/beyond mark a distance anchor. With
-    before/after/of the airport can be the subject, and LFMD is VFR here."""
-    f = _facts_with(destination={"icao": "LFMD", "metar_now": "VFR at 08:50Z", "taf_at_eta": "VFR"},
-                    rain_ahead={"stretches_where_radar_rain_lies_over_the_track_itself_nm": [[5, 20]]})
-    reason = _flag(text, f)
-    assert reason is not None and "LFMD not given as" in reason
-    # The same claim anchored with "from" is a position, not LFMD's weather.
-    anchored = text.replace(" before ", " from ").replace(" of ", " from ").replace(" after ", " from ")
-    assert _flag(anchored, f) is None
 
 
 @pytest.mark.parametrize("text", [
@@ -353,17 +226,31 @@ def test_meaning_rules_never_reject(text):
     assert lh.check_grounding(text, _egjj_facts()) is None
 
 
-def test_the_meaning_rules_still_flag_what_they_flagged():
-    f = _egjj_facts()
-    assert lh.review_flags("EGJA may go LIFR at 10:25Z.", f) == ["verdict word: go"]
-    # A real misattribution, still visible in the log.
-    assert lh.review_flags("EGJB is VFR at 10:43Z.", f) == ["EGJB not given as VFR in the facts"]
+@pytest.mark.parametrize("text", [
+    # Correct lines the dropped rules flagged in the 2026-10-08..10 audit.
+    "Rain lies over the track from 125 NM to the destination EGJJ, where the TAF is IFR with TEMPO LIFR.",
+    "Alternates EGJA and EGJB are IFR and LIFR; EGJJ is IFR in drizzle.",
+    "EGJA may go LIFR at 10:25Z.",
+])
+def test_correct_lines_are_not_flagged(text):
+    assert lh.review_flags(text, _egjj_facts()) == []
+
+
+def test_a_tafs_thunderstorm_quoted_with_a_figure_is_not_flagged():
+    """0 of 16 "thunderstorm at a position" flags were real: every one quoted
+    an airport's TAF ("PROB30 IFR TSRA CB at ETA")."""
+    f = _facts_with(destination={"icao": "EDWI", "metar_now": "VFR",
+                                 "taf_at_eta": "MVFR, PROB30 TEMPO IFR TSRA CB"})
+    assert _flag("Destination EDWI: VFR now, MVFR, PROB30 IFR TSRA CB at ETA.", f) is None
+
+
+def test_caution_is_still_a_verdict_word():
+    assert _flag("Depart EGJJ with caution.", _egjj_facts()) == "verdict word: caution"
 
 
 def test_mechanical_rules_still_reject():
     f = _egjj_facts()
     assert "ICAO not in facts" in lh.check_grounding("EGLL is IFR.", f)
-    assert "figure not in facts" in lh.check_grounding("Rain from 99 NM to EGJJ.", f)
     assert "not a highlight" in lh.check_grounding("EGJJ IFR.\n\nHighlight (under 35 words): EGJJ IFR.", f)
 
 
@@ -934,13 +821,13 @@ def test_a_flagged_line_is_written_with_its_flags(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg(
         destination={"icao": "LEMI", "metar_now": "VFR", "taf_at_eta": "VFR"}))
-    monkeypatch.setattr(lh, "generate", lambda *a, **k: ("LEMI is IFR now.", {"model": "claude-haiku-5-5"}, 900))
+    monkeypatch.setattr(lh, "generate", lambda *a, **k: ("LEMI VFR, safe to continue.", {"model": "claude-haiku-5-5"}, 900))
     monkeypatch.setattr(live_layer, "patch_highlight", lambda *a, **k: True)
     out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
-    assert out.outcome == "written" and out.text == "LEMI is IFR now."
+    assert out.outcome == "written" and out.text == "LEMI VFR, safe to continue."
     rec = json.loads((tmp_path / lh.LIVE_HIGHLIGHT_LOG).read_text().splitlines()[0])
     assert rec["outcome"] == "written"
-    assert rec["flags"] == ["LEMI not given as IFR in the facts"]
+    assert rec["flags"] == ["verdict word: safe"]
 
 
 def test_an_unflagged_written_line_carries_no_flags_key(monkeypatch, tmp_path):
