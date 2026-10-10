@@ -581,7 +581,7 @@ Every derived value must use **the same function the advisory pipeline uses**. T
 |-------------|-------------------|----------|--------|
 | Model ceiling | `reconcile_ceiling(sounding, hourly)` | `analysis/airport_conditions.py` | `SoundingAnalysis` + `HourlyForecast` → min of sounding & NWP ceiling |
 | Model visibility | `hourly.visibility_m / 1609.34` (→ statute miles) | `analysis/airport_conditions.py` | Direct from model, converted to SM like advisories do |
-| Model flight category | `classify_flight_category(ceiling_ft, visibility_sm)` | `analysis/airport_conditions.py` | Standard VFR/MVFR/IFR/LIFR thresholds |
+| Model flight category | `classify_flight_category(ceiling_ft, visibility_m=)` | `analysis/airport_conditions.py` | FAA ceiling + 1/3 SM edges; VFR from 8000 m (meteorology-decisions §48) |
 | Model wind advisory | `compute_wind_advisory(dir, speed, gust, runway_ends)` | `tasks/route_weather.py` | Same thresholds: xw ≥15kt amber, ≥25kt red; gust ≥25/35kt |
 | Model gust | `hourly.wind_gusts_10m_kt` (stored raw + delta + flag) | `tasks/verification_gust.py` | `forecast_shows_gust()` applies the METAR ~10 kt criterion to the forecast |
 | Model precipitation | `hourly.precipitation_mm > 0 or hourly.snowfall_cm > 0` | `analysis/sounding/precipitation.py` (`assess_precipitation`) | Same check as `assess_precipitation()` |

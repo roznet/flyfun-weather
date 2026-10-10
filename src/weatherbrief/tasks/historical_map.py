@@ -49,7 +49,6 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
 )
 from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS, all_sample_hours
-from weatherbrief.units import M_PER_SM
 
 logger = logging.getLogger(__name__)
 
@@ -364,10 +363,9 @@ def metar_to_dict(row: dict[str, Any], at: datetime) -> dict[str, Any]:
     """
     vis_m = row.get("visibility_m")
     ceiling = row.get("ceiling_ft")
-    vis_sm = vis_m / M_PER_SM if vis_m is not None else None
     obs_time = row["observation_time"]
     return {
-        "flight_category": classify_flight_category(ceiling, vis_sm).value,
+        "flight_category": classify_flight_category(ceiling, visibility_m=vis_m).value,
         "ceiling_ft": ceiling,
         "visibility_m": vis_m,
         "wind_speed_kt": row.get("wind_speed_kt"),

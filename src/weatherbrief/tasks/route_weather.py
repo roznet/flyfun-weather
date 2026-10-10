@@ -11,7 +11,6 @@ from pathlib import Path
 
 from weatherbrief.models.analysis import RouteConfig, WaypointForecast
 from weatherbrief.models.airport_conditions import RunwayEnd
-from weatherbrief.units import M_PER_SM as _M_PER_SM
 from weatherbrief.models.observations import (
     AirportObservation,
     ObservationComparison,
@@ -554,8 +553,7 @@ def run_observation_comparison(
                 model=model_name,
             )
 
-        vis_sm = round(hourly.visibility_m / _M_PER_SM, 1) if hourly.visibility_m is not None else None
-        model_fc = classify_flight_category(ceiling_ft=ceiling_ft, visibility_sm=vis_sm)
+        model_fc = classify_flight_category(ceiling_ft, visibility_m=hourly.visibility_m)
 
         obs_cat = obs.metar_flight_category.upper()
         m_cat = model_fc.value.upper()

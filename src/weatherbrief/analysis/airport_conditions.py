@@ -24,9 +24,13 @@ from weatherbrief.models.airport_conditions import (
 # Visibility conversion: meters to statute miles (single source of truth in units.py)
 from weatherbrief.units import M_PER_SM as _M_PER_SM
 
-# Standard aviation flight category thresholds (ceiling ft / visibility SM)
+# Flight category thresholds: ceiling in ft; visibility in metres. LIFR/IFR
+# are the FAA 1 / 3 SM. The VFR edge is 8000 m, not 5 SM (8047 m): model
+# visibility is metric, and 8000 m is not marginal in Europe
+# (meteorology-decisions §48, #757). Same number as euro_aip's
+# METRIC_VFR_VISIBILITY_M, so a model 8 km and an observed 8000 m agree.
 _CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR = 500, 1000, 3000
-_VIS_LIFR, _VIS_IFR, _VIS_MVFR = 1, 3, 5
+_VIS_LIFR_M, _VIS_IFR_M, _VIS_MVFR_M = 1 * _M_PER_SM, 3 * _M_PER_SM, 8000
 
 
 # A gust is only shown when it exceeds the sustained wind by at least this many
@@ -61,15 +65,19 @@ def format_wind_string(
 
 def classify_flight_category(
     ceiling_ft: float | None,
-    visibility_sm: float | None,
+    *,
+    visibility_m: float | None = None,
 ) -> FlightCategory:
-    """Classify flight category from ceiling and visibility.
+    """Classify flight category from ceiling and visibility (metres).
 
-    Standard aviation thresholds:
-    - LIFR: ceiling < 500ft OR vis < 1sm
-    - IFR:  ceiling 500-1000ft OR vis 1-3sm
-    - MVFR: ceiling 1000-3000ft OR vis 3-5sm
-    - VFR:  ceiling >= 3000ft AND vis >= 5sm
+    Thresholds:
+    - LIFR: ceiling < 500ft OR vis < 1 SM (1609 m)
+    - IFR:  ceiling 500-1000ft OR vis 1-3 SM (4828 m)
+    - MVFR: ceiling 1000-3000ft OR vis 3 SM-8000 m
+    - VFR:  ceiling >= 3000ft AND vis >= 8000 m
+
+    Visibility is taken in metres, unrounded, so the 8000 m edge is exact
+    (§48); keyword-only so an old statute-mile positional call fails loudly.
 
     When visibility is unavailable, classify from ceiling alone.
     When ceiling is unavailable, classify from visibility alone.
@@ -85,12 +93,12 @@ def classify_flight_category(
             cat_from_ceil = FlightCategory.MVFR
 
     cat_from_vis = FlightCategory.VFR
-    if visibility_sm is not None:
-        if visibility_sm < _VIS_LIFR:
+    if visibility_m is not None:
+        if visibility_m < _VIS_LIFR_M:
             cat_from_vis = FlightCategory.LIFR
-        elif visibility_sm < _VIS_IFR:
+        elif visibility_m < _VIS_IFR_M:
             cat_from_vis = FlightCategory.IFR
-        elif visibility_sm < _VIS_MVFR:
+        elif visibility_m < _VIS_MVFR_M:
             cat_from_vis = FlightCategory.MVFR
 
     return FlightCategory.worst([cat_from_ceil, cat_from_vis])
@@ -296,7 +304,9 @@ def _compute_for_airport(
             qnh_hpa = hourly.pressure_msl_hpa
 
         # Flight category
-        flight_category = classify_flight_category(ceiling_ft, visibility_sm)
+        flight_category = classify_flight_category(
+            ceiling_ft, visibility_m=hourly.visibility_m if hourly else None,
+        )
 
         # Runway crosswind
         all_runways: list[RunwayWind] = []

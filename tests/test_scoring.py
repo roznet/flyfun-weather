@@ -415,8 +415,8 @@ class TestScoreModelVsMetar:
         # 10 - 350 should wrap to +20, not -340
         assert result.wind_dir_delta_deg == pytest.approx(20.0)
 
-    def test_visibility_conversion_to_statute_miles(self):
-        """Category classification should use statute miles."""
+    def test_visibility_classified_in_metres(self):
+        """Category classification takes the model visibility in metres (§48)."""
         obs_row = self._make_obs_row(visibility_m=8000)
         hourly = self._make_hourly(visibility_m=6000)
 
@@ -439,10 +439,8 @@ class TestScoreModelVsMetar:
                 model_init_time=NOW - timedelta(hours=6),
                 days_out=0,
             )
-            # classify_flight_category should be called with statute miles
-            call_args = mock_cat.call_args
-            _, vis_sm = call_args[0]
-            assert vis_sm == pytest.approx(6000 / 1609.34, abs=0.1)
+            # classify_flight_category is called with the model's metres
+            assert mock_cat.call_args.kwargs["visibility_m"] == 6000
 
 
 # ---------------------------------------------------------------------------

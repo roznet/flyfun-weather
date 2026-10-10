@@ -99,6 +99,14 @@ describe('getForecastColor', () => {
     expect(getForecastColor(apt, 'ceiling_ft', 'gfs')).toBe('#ef4444');
   });
 
+  it('colours 8000 m visibility VFR, 7900 m MVFR (metric edge, #757)', () => {
+    const at = (visibility_m: number) =>
+      getForecastColor(makeAirport({ gfs: { visibility_m } }), 'visibility_m', 'gfs');
+    expect(at(8000)).toBe('#22c55e');
+    expect(at(7900)).toBe('#3b82f6');
+    expect(at(4000)).toBe('#ef4444');
+  });
+
   it('applies wind-speed thresholds (25–35 kt → red)', () => {
     const apt = makeAirport({ gfs: { wind_speed_kt: 30 } });
     expect(getForecastColor(apt, 'wind_speed_kt', 'gfs')).toBe('#ef4444');
