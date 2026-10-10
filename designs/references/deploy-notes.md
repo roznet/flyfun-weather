@@ -174,24 +174,25 @@ Two GitHub gotchas:
 
 ## §D7 — Standalone cycle timing around a deploy
 
-A deploy restarts the container, killing any in-progress cycle.
+A deploy restarts the container, killing any in-progress cycle. `deploy.py preflight` reads
+the state from `docker logs -t --since 26h`, using only the standalone loop's own lines
+(`scheduler.py`):
 
-Interpreting the log check:
+- `Standalone <kind> cycle: launching subprocess` with no later end line — a cycle is **in
+  progress**. Warn and let the user choose.
+- `Standalone verification cycle complete` / `… cycle failed` — the last cycle ended.
+- `Standalone verification: sleeping Ns until next verification hour` — idle; the next
+  cycle is due N s **after that line's timestamp**. Under 5 min away → warn.
+- None of these in the window — the log could not be read (the loop logs a sleeping line
+  before every sleep), so it is "could not tell", never "idle".
 
-- `sleeping Xs until next sample hour` — the loop is idle. Parse the sleep duration to
-  estimate when the next cycle fires; more than 5 minutes away is safe to deploy.
-- `Light cycle` / `Full cycle` lines with no subsequent `sleeping` or `Recorded` line — a cycle
-  is likely **in progress**. Warn and let the user choose.
-- No standalone lines in the last 10 minutes — between cycles, safe.
+Other loops log `sleeping` too (`METAR ingest:`, `Forecast fetch:`, `Hewson precompute:`) —
+never read those as the standalone loop. The older `Light cycle` / `Full cycle` wording is
+gone from the logs (it survives only in `weatherbrief.verify` CLI help).
 
-Durations: a fetch-only cycle (3 models × ~619 airports × 7 chunks) takes ~20–25 min; lighter
-cycles a few minutes. To poll for completion, wait for either
-`weatherbrief.scheduler:Standalone forecast cycle:` or
-`weatherbrief.scheduler:Verification cycle:`. Do **not** poll only for `standalone.*sleeping` —
-that pattern doesn't fire from this loop.
-
-If a cycle was interrupted, re-triggering it is safe alongside the loop; the loop's next
-scheduled cycle proceeds normally.
+Durations: a fetch-only cycle (3 models × ~619 airports × 7 chunks) takes ~20–25 min; a light
+cycle under a minute. If a cycle was interrupted, re-triggering it is safe alongside the loop:
+`ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.verify standalone"`.
 
 ## §D8 — Test scope rules
 

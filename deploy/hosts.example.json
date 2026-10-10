@@ -38,6 +38,8 @@
     "                    (mDNS .local names, private IPs). hosts.py and the deploy",
     "                    skill report an unreachable lan_only node as 'could not",
     "                    tell', not as down -- expected when away from that network.",
+    "  daemons           optional: launchd labels of long-running services from this",
+    "                    checkout; `deploy.py nodes` reminds to restart them after an update",
     "  notes             anything a human needs before touching the box"
   ],
   "server": {

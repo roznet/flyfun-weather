@@ -7,6 +7,7 @@ Every ops script reports a list of checks, each one of:
     problem  verified wrong (a path that is missing, the wrong host answered)
     unknown  could not tell (ssh failed, unexpected output) -- never read as ok
     skip     not applicable here (an optional setting left unset); informational
+    warn     verified, worth a look, but not blocking (disk at 81 %, a node behind)
 
 and exits 0 = all ok, 1 = at least one problem, 2 = no problem but at least one
 unknown. "Nothing found" is never reported as ok: a check that cannot see its
@@ -33,7 +34,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-OK, PROBLEM, UNKNOWN, SKIP = "ok", "problem", "unknown", "skip"
+OK, PROBLEM, UNKNOWN, SKIP, WARN = "ok", "problem", "unknown", "skip", "warn"
 
 
 @dataclass

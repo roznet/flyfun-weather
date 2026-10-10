@@ -6,45 +6,50 @@ disable-model-invocation: true
 
 # Deploy weatherbrief to production
 
-Resolve every host and path **once, up front**, and use the printed values wherever this
-skill says `<NAME>`:
+`scripts/ops/deploy.py` does the mechanics; this skill keeps the gates and the judgement.
+Background for anything off the happy path: `designs/references/deploy-notes.md` (§D1–§D11);
+hosts and paths come from `deploy/hosts.json` via `scripts/ops/hosts.py`. Every command reports
+`ok / problem / unknown / warn / skip` with evidence; exit 0 ok (warnings allowed), 1 a problem,
+2 could not tell. Each Bash call is a fresh shell: carry `SERVER_SHA` / `LOCAL_SHA` / `SINCE`
+as literal values into later commands.
+
+## Pre-flight
 
 ```bash
-python3 scripts/ops/hosts.py all
+python3 scripts/ops/deploy.py preflight
 ```
 
-It reads `deploy/hosts.json` and checks each path on the host itself (meaning of each value
-and the traps behind them: `designs/references/deployment-paths.md`). Exit 1 or a `problem`
-line on the **server** → stop and report it; the deploy needs those values. A node line that
-is `unknown` or `problem` does not block — it feeds the compute-node section below.
+One call, read-only. It fetches origin and compares **the server's commit → `origin/main`**
+(never the local working tree, §D2), and reports:
+- the commits and changed areas, and which **test suites** this change needs (it does not
+  run them — next section);
+- the checkout: **behind `origin/main` is a problem** (tests and the rehearsal would check
+  old code — pull first); unpushed local commits are a warning (they don't deploy);
+- alembic: single head at `origin/main` (§D9), the server's revision, pending migrations,
+  and the **MySQL rehearsal** of them from the server's revision (§D11);
+- disk, nav.db local vs server, the **standalone cycle** state (§D7), each node's drift.
 
-Background for anything that deviates from the happy path is in
-`designs/references/deploy-notes.md` (§D1–§D11). Read the section a step points you at; the
-procedure below is complete on its own for a normal deploy.
+Its last lines are `SERVER_SHA=` and `LOCAL_SHA=`: use those two everywhere below.
 
-## Pre-flight checks
+How to read it:
+- `range … nothing to deploy` → say so and stop.
+- `range` problem (server not an ancestor of `origin/main`) → stop and ask: hotfix or rollback.
+- **MySQL rehearsal** `problem` → **stop the deploy**: that is the failure production would hit;
+  fix the migration. `unknown` (no local MySQL / `~/.my.cnf`) → not a failure, but say the gap
+  in the summary and read the migration by eye.
+- `disk /` warn (≥80 %) → offer `docker builder prune -a -f`, ask before running it.
+- `nav.db` warn (local newer) → offer the copy (below).
+- `standalone cycle` warn (running, or due within 5 min) → *"A standalone verification cycle
+  appears to be running. Deploying now will interrupt it. Wait or proceed?"* `unknown` → say
+  the log couldn't be read; ask.
+- A node warn never blocks (unreachable `lan_only` = expected away from home; "WRONG MACHINE"
+  = never update through it). Name it in the summary (§D4).
 
-> **What "to deploy" means** — a deploy ships `origin/main` to the server, so the comparison
-> is **server's commit → `origin/main`**, never local working tree → `origin/main`. The two
-> anchors used throughout:
-> - `LOCAL_SHA` = `git rev-parse origin/main` (after fetch) — what we will deploy
-> - `SERVER_SHA` = `ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && git rev-parse HEAD"` — what runs now
->
-> Use these everywhere a comparison is needed. Two traps this avoids are in §D2.
+## Run tests
 
-1. `git fetch origin` so `origin/main` is current
-2. Ensure we are on `main` (`git branch --show-current`)
-3. Capture `SERVER_SHA` and `LOCAL_SHA`
-4. Show what will deploy: `git log --oneline ${SERVER_SHA}..${LOCAL_SHA}`
-   - If empty → server is already up to date; say so and stop.
-5. Show uncommitted local changes (`git status --short`) — **just list them**, do not block.
-   Ask only if they look related to work that should be in this deploy.
-6. **Run tests** (below)
-7. **Check for pending Alembic migrations** (below)
-8. **Check airport database freshness** (below)
-9. **Check standalone verification cycle timing** (below)
-10. **Check compute-node drift** (below) — read-only, never blocks
-11. **STOP and get explicit confirmation** — the hard gate below. A turn boundary, not a step.
+Run each suite preflight listed, once, `timeout: 600000`, no `| tail` (root `CLAUDE.md`):
+pytest always (a failure **stops the deploy**), vitest when `web/` changed (hard gate),
+Playwright when web/api/models/configs changed (warn only). Scope rules: §D8.
 
 ## Confirmation gate (HARD STOP — read every time)
 
@@ -52,9 +57,9 @@ This gate has already caught a real incident: a deploy narrated as complete whil
 confirmation was *cancelled* and production never changed. §D1 has the full account. The rules
 are literal:
 
-1. **Confirmation is its own turn.** Post ALL pre-flight results (commit list, pytest, vitest,
-   Playwright, alembic head count + pending migrations, disk, airport-DB freshness,
-   standalone-cycle status, compute-node drift) and ask the user to confirm. Then **end the
+1. **Confirmation is its own turn.** Post the preflight report (commits, migrations +
+   rehearsal, disk, nav.db, standalone cycle, node drift) plus the test results, and ask the
+   user to confirm. Then **end the
    turn.** Do NOT call any deploy command (`git push`, `git pull`, `docker compose`,
    `alembic upgrade`, issue-closing `gh`) in the same message — not in parallel, not after,
    not "optimistically".
@@ -69,207 +74,17 @@ are literal:
 5. **One deploy command at a time, never in a parallel batch**, so a sibling error can't
    cancel it and each result is read before the next.
 
-## Run tests
+## Copy nav.db (only when preflight says local is newer, and the user agreed)
 
-Scope rules and rationale: §D8. Pytest discipline (run once, `timeout: 600000`, don't pipe
-through `tail`) is in the root `CLAUDE.md`.
-
-```bash
-source venv/bin/activate && python -m pytest tests/ --ignore=tests/test_llm_digest.py -q
-```
-
-If any test fails, **stop the deploy** and report the failures.
-
-Check what changed since the last deploy:
-
-```bash
-git diff ${SERVER_SHA}..${LOCAL_SHA} --name-only
-```
-
-**Vitest — if `web/` changed.** Hard gate; a failure is a real bug.
-
-```bash
-cd web && npm test
-```
-
-**Playwright — if `web/`, `src/weatherbrief/api/`, `src/weatherbrief/models/` or `configs/`
-changed.** Warn on failure but don't block.
-
-```bash
-cd web && npx playwright test --reporter=line
-```
-
-## Check for Alembic migrations
-
-```bash
-git diff ${SERVER_SHA}..${LOCAL_SHA} -- alembic/versions/
-```
-
-Do **not** use `HEAD` — it may include local commits that won't reach the server. If migration
-files changed, **warn prominently** that migrations must run after deploy.
-
-Also verify a single head (§D9 explains the two-heads case):
-
-```bash
-source venv/bin/activate && alembic heads | grep -c '(head)'
-```
-
-Must print `1`.
-
-### Rehearse the migration on real MySQL (§D11)
-
-**Dev is SQLite, prod is MySQL, and the test suite only ever exercises SQLite** — so a
-migration can pass everything locally and still be impossible to run in production. That is
-not hypothetical: migration 094 gave a TEXT column a `server_default`, which MySQL rejects
-(error 1101), and it took the briefing pages down because the code shipped alongside it
-already expected the columns the failed migration never created.
-
-If migration files changed, rehearse them against a real MySQL. The helper builds a throwaway
-database, brings it to the revision **production is currently at**, seeds a row into each
-table the pending migrations touch, and runs them for real:
-
-```bash
-source venv/bin/activate
-python .claude/skills/deploy/mysql_migration_check.py --from-rev "$(
-  ssh <SERVER_SSH> "docker exec weatherbrief alembic current 2>/dev/null" | tail -1 | awk '{print $1}'
-)"
-```
-
-Pass `--from-rev` the server's *current* revision, not `head` — the point is to replay exactly
-the step production is about to take.
-
-- **Exit 0 / `PASS`** — the pending migrations run on MySQL. Proceed.
-- **Exit 1 / `FAIL`** — **stop the deploy.** This is the failure production would hit. Fix the
-  migration, don't work around the check.
-- **`SKIP`** — no local MySQL or no `~/.my.cnf`. Not a failure; the check simply isn't
-  available on this machine. Say so in the pre-flight summary so the gap is visible, and take
-  extra care reading the migration by eye.
-
-Credentials are read from `~/.my.cnf` at run time and never written anywhere; the scratch
-database is dropped on the way out, including when the check fails.
-
-## Disk usage check
-
-```bash
-ssh <SERVER_SSH> "df -h /"
-```
-
-At **80 % or higher**, warn and offer `docker builder prune -a -f` (ask before running it,
-re-check `df -h /` after).
-
-## Check airport database freshness
-
-The airport/navaid database (`nav.db`, built by the `euro_aip` submodule inside `rzflight`) is
-copied to the server when updated. Both dev and prod point `AIRPORTS_DB` at `nav.db`. Compare
-`model_metadata` timestamps to detect staleness.
-
-**Local** (`<LOCAL_AIRPORTS_DB>` from `hosts.py`, `${WORKING_DIR}` already expanded):
-
-```bash
-sqlite3 "<LOCAL_AIRPORTS_DB>" "SELECT key, updated_at FROM model_metadata WHERE key='statistics';"
-```
-
-**Remote** via docker exec (the container has `AIRPORTS_DB` pointing at the right file):
-
-```bash
-ssh <SERVER_SSH> 'docker exec weatherbrief python3 -c "
-import sqlite3, os
-conn = sqlite3.connect(os.environ[\"AIRPORTS_DB\"])
-for row in conn.execute(\"SELECT key, updated_at FROM model_metadata WHERE key=\\\"statistics\\\"\"):
-    print(row[1])
-conn.close()
-"'
-```
-
-If local is newer, **offer to copy**. `AIRPORTS_DB` in the server `.env` is the container
-path; `<HOST_AIRPORTS_DB>` is the host-side file `scp` needs:
+`AIRPORTS_DB` in the server `.env` is a container path; `hosts.py server` gives the host file
+`<HOST_AIRPORTS_DB>` (translated through the container's mounts) and `hosts.py local` the
+`<LOCAL_AIRPORTS_DB>`:
 
 ```bash
 scp "<LOCAL_AIRPORTS_DB>" <SERVER_SSH>:"<HOST_AIRPORTS_DB>"
-ssh <SERVER_SSH> "sudo chown 2000:2000 <HOST_AIRPORTS_DB>"   # container runs as UID 2000
-ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && docker compose restart"                  # reload the cached model
+ssh <SERVER_SSH> "sudo chown 2000:2000 <HOST_AIRPORTS_DB>"   # hand this one to the user (sudo)
+ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && docker compose restart"
 ```
-
-If timestamps match or remote is newer, report "Airport DB is up to date" and move on.
-
-## Check standalone verification cycle timing
-
-A deploy restarts the container, killing any in-progress cycle. Interpretation and durations:
-§D7.
-
-```bash
-ssh <SERVER_SSH> 'docker logs --since 10m weatherbrief 2>&1 | grep -iE "standalone|sleeping|Light cycle|Full cycle|phase"'
-```
-
-If a cycle appears to be running, warn: *"A standalone verification cycle appears to be
-running. Deploying now will interrupt it. Wait a few minutes or proceed?"* If one was
-interrupted, offer to re-trigger after the container is healthy:
-
-```bash
-ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.verify standalone"
-```
-
-## Check compute-node drift
-
-Some deployments run the heavy standalone forecast cycle on **off-box compute nodes** that
-emit a snapshot artifact for the droplet to ingest. Those nodes run this same repo and drift
-out of step silently — one sat 64 commits behind for a week because nothing surfaced it.
-
-Inventory is the `nodes` list in `deploy/hosts.json`; no nodes = skip this section silently.
-The up-front `hosts.py all` already reached each node: its `repo` line carries the node's
-branch and SHA (`<NODE_HEAD>`), and its `hostname` line proves the ssh name reached the right
-machine.
-
-Include a row per node in the pre-flight summary: name, SHA, branch, and commits behind
-`LOCAL_SHA` (`git rev-list --count <NODE_HEAD>..<LOCAL_SHA>`).
-
-**Unreachable nodes never block the deploy** — `hosts.py` reports an unreachable `lan_only`
-node as `unknown` ("not known to be down"), which is expected from another network, not a
-fault. Quote its ssh error rather than guessing why, and warn explicitly in the confirmation
-summary. A `hostname` **problem** means the ssh name reaches the wrong machine: never update
-through it. Full guidance and suggested wording: §D4.
-
-## Update compute nodes (after a successful deploy)
-
-Only after production is deployed and healthy. Order matters: prod first, then nodes, so a
-node is never running ahead of the box that ingests its output.
-
-For each node:
-
-1. **Don't pull while a cycle is running.** A cycle takes ~10–15 min and `git pull` would swap
-   code under it. Skip the node and say so — never kill a cycle to deploy.
-   ```bash
-   ssh <NODE_SSH> "pgrep -fl 'weatherbrief.verify standalone' || echo idle"
-   ```
-
-2. **Check the node DB is under Alembic.** Nodes are stamped (§D3), so `alembic current`
-   prints a revision. If it prints nothing, the DB was rebuilt unstamped: follow §D3 before
-   pulling past any migration.
-   ```bash
-   ssh <NODE_SSH> "cd <NODE_REPO> && <NODE_VENV>/bin/alembic current 2>/dev/null | tail -1"
-   ```
-
-3. **Fast-forward only, then migrate in the same command**, so a node with local edits fails
-   loudly instead of silently merging, and no cycle starts between the pull and the upgrade
-   (each cycle's `create_all` would create a new table first and the migration's
-   `create_table` would then fail — §D3):
-   ```bash
-   ssh <NODE_SSH> "cd <NODE_REPO> && git checkout <node.branch> && git pull --ff-only && <NODE_VENV>/bin/alembic upgrade head"
-   ```
-
-4. **Reinstall dependencies only if they changed:**
-   ```bash
-   git diff --name-only <NODE_HEAD>..<LOCAL_SHA> -- pyproject.toml
-   # if non-empty:
-   ssh <NODE_SSH> "cd <NODE_REPO> && <NODE_VENV>/bin/pip install -q -e '.[dev]'"
-   ```
-
-5. **Report per node**: SHA before → after, deps reinstalled yes/no, alembic revision after (or the problem), or
-   the reason it was skipped.
-
-**A node failure never fails the deploy** — production is already live. But never report a
-deploy as fully complete while a configured node was skipped: say production is deployed *and*
-name the nodes left behind.
 
 ## Deploy steps
 
@@ -279,74 +94,59 @@ name the nodes left behind.
 > before moving on.
 
 1. Only push if there are local commits ahead of `origin/main` AND the user confirmed they
-   belong in this deploy. In the common case (local in sync), skip entirely.
+   belong in this deploy (preflight's `unpushed` line). Normally skip.
+2. Note the time, then rebuild — `SINCE` is what proves the image is new in step 4:
    ```bash
-   git log --oneline origin/main..HEAD   # if non-empty, ask before pushing
-   git push origin main
-   ```
-2. SSH and deploy:
-   ```bash
+   date -u +%Y-%m-%dT%H:%M:%SZ        # SINCE
    ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && git checkout main && git pull && docker compose up -d --build"
    ```
-   The explicit `git checkout main` is a no-op normally, but it is what returns the server to
-   `main` after a `prod-prev` rollback (§D5). Container logs go to journald, so they survive
-   the rebuild — `journalctl CONTAINER_NAME=weatherbrief --until="<rebuild-time>" --since="-1h"`
-   to inspect the prior container.
-3. **If migrations were detected in pre-flight**, run them now:
+   `git checkout main` is what returns the server to `main` after a `prod-prev` rollback (§D5).
+   Logs survive the rebuild in journald (`journalctl CONTAINER_NAME=weatherbrief`).
+3. **If preflight listed migrations**, run them now:
    ```bash
    ssh <SERVER_SSH> "docker exec weatherbrief alembic upgrade head"
    ```
-   The rebuild has already landed at this point, so a migration failure here is an **outage**,
-   not a safe abort: the new code is serving against the old schema. If it fails, treat it as
-   live — see §D11 — and either apply the schema by hand or roll back.
-
-   Then prove the schema and the code agree, by querying **a table the migration touched**:
+   The rebuild has landed, so a failure here is an **outage**, not a safe abort: new code
+   against the old schema. Treat it as live (§D11): apply the schema by hand or roll back.
+4. **Verify the new code is live** — not just a healthy container on the right SHA, which
+   is exactly what lied on 2026-08-26:
    ```bash
-   ssh <SERVER_SSH> "docker exec weatherbrief python -c \"
-   from weatherbrief.db.models import BriefingPackRow
-   from flyfun_common.db import SessionLocal, get_engine
-   get_engine()   # binds the session; SessionLocal() alone is unbound here
-   db = SessionLocal()
-   try:
-       db.query(BriefingPackRow).limit(1).all(); print('ORM OK')
-   finally:
-       db.close()
-   \""
+   python3 scripts/ops/deploy.py verify $SERVER_SHA $LOCAL_SHA --since $SINCE
    ```
-   `/health` returns 200 even when the app's main table is unreadable, so it cannot stand in
-   for this (§D11).
-4. Verify the health check:
+   Server HEAD, container health, the running image is the current build *and* newer than
+   `SINCE`, sha256 of the changed files inside the container vs `origin/main`, alembic at
+   `origin/main`'s head, an ORM read of `briefing_packs` (`/health` is 200 even when that
+   table is unreadable), public `/health`. Any problem → the deploy is not done: diagnose
+   (`docker compose build weatherbrief && docker compose up -d` fixes a build the Docker
+   upgrade race killed), never move on.
+5. **Compute nodes** (prod first, then nodes, so a node never runs ahead of the box that
+   ingests its output):
    ```bash
-   ssh <SERVER_SSH> "docker inspect --format='{{.State.Health.Status}}' weatherbrief"
+   python3 scripts/ops/deploy.py nodes $LOCAL_SHA              # dry run: what it would do
+   python3 scripts/ops/deploy.py nodes $LOCAL_SHA --execute
    ```
-5. Confirm the endpoint responds:
-   ```bash
-   curl -s -o /dev/null -w '%{http_code}' https://weather.flyfun.aero/health
-   ```
-6. **Update compute nodes**, if `deploy/hosts.json` lists any — see above.
+   Per node: skipped if unreachable, on the wrong machine, a cycle is running (never pull
+   under one), or its DB isn't alembic-stamped (§D3); otherwise checkout, `pull --ff-only`
+   and `alembic upgrade head` **in one command** (no cycle can start between them, §D3), pip
+   only if `pyproject.toml` changed, then it **checks the node reached `origin/main`** and its
+   alembic head. A `daemon` warn (e.g. the mini's `aero.flyfun.observed-cells`) keeps running
+   the old code: hand the user the printed `sudo launchctl kickstart -k …`. A node failure
+   never fails the deploy — but never report it complete while a node was skipped: say
+   production is deployed *and* name the nodes left behind.
 
 ## Track the deployed version (prod / prod-prev branches)
 
-Two long-lived branches point at what's deployed, so a bad deploy rolls back fast:
-
-- `prod` → the commit now running in production (`LOCAL_SHA`)
-- `prod-prev` → the commit running *before* this deploy (`SERVER_SHA`)
-
-Why branches and not tags, and why no force is needed on a normal deploy: §D5.
-
-Run this **only after the health check returns 200** — a failed deploy must not move `prod`:
+`prod` → what now runs (`LOCAL_SHA`), `prod-prev` → what ran before (`SERVER_SHA`), so a bad
+deploy rolls back fast. Why branches and not tags: §D5.
 
 ```bash
-if [ "${SERVER_SHA}" != "${LOCAL_SHA}" ]; then
-  git branch -f prod-prev ${SERVER_SHA}   # previous prod — what we just replaced
-fi
-git branch -f prod ${LOCAL_SHA}           # new prod — what we just deployed
-
-git push origin prod prod-prev            # fast-forward on a normal deploy
+python3 scripts/ops/deploy.py mark-prod $SERVER_SHA $LOCAL_SHA --since $SINCE             # dry run
+python3 scripts/ops/deploy.py mark-prod $SERVER_SHA $LOCAL_SHA --since $SINCE --execute
 ```
 
-If the push is rejected as non-fast-forward — which only happens on a **rollback deploy** —
-re-run with a lease: `git push --force-with-lease origin prod prod-prev`.
+It re-runs the whole `verify` first and moves nothing unless it passes — a failed deploy
+must not move `prod`. It pushes explicit refspecs (no local branch involved). A
+non-fast-forward means a **rollback deploy**: rerun with `--rollback` (`--force-with-lease`).
 
 ### Reverting to the previous version
 
@@ -367,7 +167,7 @@ auto-close gotchas: §D6.
 Runs **only after** the health check returns 200.
 
 ```bash
-python3 scripts/ops/notify_deploy_issues.py ${SERVER_SHA} ${LOCAL_SHA}
+python3 scripts/ops/notify_deploy_issues.py $SERVER_SHA $LOCAL_SHA
 ```
 
 It walks the deployed commits to their PRs, reads each PR body for an explicit keyword
