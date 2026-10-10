@@ -357,3 +357,55 @@ keeping:
   `Views/SettingsView.swift`, `Views/Briefing/BriefingContainerView.swift`
 - Change detection: `compute_refresh_delta` (see [metar-taf-route-weather](./metar-taf-route-weather.md))
 </content>
+
+## Live-alert push (#754)
+
+A second push stream, separate from briefing updates: on flight day, the live
+layer's alerts (and their clearing) for auto-refresh flights. Push only, never
+email. Server: `notify/live_alerts.py`; the decision and memory are in
+live-observation-layer.md → "Live-alert push", the cleared/re-arm rule in
+meteorology-decisions §47.
+
+- **Gate** (`skip_reason`, all must hold): a tick, not a ↻ press; the flight's
+  or its trip's `auto_refresh`; the bell not Mute (the flight's, else its
+  trip's, as for briefing pushes); `notify_live_alerts` (account pref, default
+  **on**, the opt-out); `notify_push` on and ≥1 device. `notify_scope` /
+  `notify_change_only` do **not** apply. The pref is a content toggle, not a
+  channel: the channel invariant (#371) ignores it.
+- **One push per flight per tick.** Title "EGTF → LFAT · 2 changes" (or
+  "· live alert" / "· alert cleared"); body one line per change, alerts
+  first: the row's deterministic message, its role, and its report time
+  ("LFAT METAR: IFR → LIFR (destination) · SPECI 10:20Z"), so a late delivery
+  reads as dated. Clears start "Cleared: ". Never the model highlight.
+- **APNs**: `apns-priority: 10`, `apns-expiration` = min(sent + 30 min, end of
+  the live window): APNs keeps only the newest pending push per device, so a
+  phone offline for a leg lands to nothing stale. No `apns-collapse-id`: each
+  push stays its own Notification Center entry. No badge (the badge counts
+  unseen briefings). In `aps`: `thread-id` = flight id (groups a flight's
+  pushes) and `interruption-level` `time-sensitive` for alerts, `active` for
+  clears-only. `thread-id` and `interruption-level` are payload keys, not
+  headers. Time Sensitive needs the
+  `com.apple.developer.usernotifications.time-sensitive` entitlement, **not
+  added yet** (it also needs the capability on the App ID); until then iOS
+  delivers these as `active`.
+- **Custom data**: `{flight_id, type: "live_alert" | "live_clear", keys, tick_at}`
+  (`type: "flight_day"` is #753's, handled by the same client code).
+- `_send_one` / `_dispatch` take optional `extra_headers` (they cannot
+  override the four standard headers); `send_live_alert_push` sets the expiry.
+- **Ledger**: a sent push writes a `live_delivery` row (`delivered_via=push`,
+  `push_sent_at`, platform `ios`).
+- **Shadow mode** until `WB_LIVE_PUSH_SEND=1` (only the APNs call is gated).
+
+**iOS.** `PushSupport.pendingNavigation` maps the three flight-day types to
+`PendingNavigation.briefingObserved(flightId:)`; the flight list routes it
+like `.briefing` and leaves `AppState.requestObservedTab`, which the briefing
+screen takes (`takeObservedRequest`) on open, or via `onChange` when already
+open, and `BriefingViewModel.openObservedFromPush` selects Observed (now or
+once offered) and tags the next `/live` fetch `?source=push`. Foreground:
+`PushSupport.foregroundPresentation` shows banner + sound for flight-day
+types unless `AppState.visibleObservedFlightId` is that flight (then only the
+usual `signalExternalSync`); briefing pushes stay suppressed. Old builds
+ignore `type`: a tap opens the briefing, and the once-per-open flight-day
+default (`reconcileTabs`) lands on Observed inside the window. Settings: "Live
+alerts on flight day" under Push, only with a device (web: Account ›
+Notifications, same rule).

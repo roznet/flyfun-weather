@@ -65,6 +65,9 @@ export interface PreferencesResponse {
   notify_push: boolean;
   notify_scope: 'auto' | 'all' | 'off';
   notify_change_only: boolean;
+  // Live alerts on flight day (#754): push only, auto-refresh flights in their
+  // live window. A content toggle, not a channel (default on).
+  notify_live_alerts: boolean;
   // One-time fail-safe notice: email was auto-re-enabled after the user's last
   // push device was removed while email was off (dismiss with notify_decay_notice=false).
   notify_decay_notice: boolean;
@@ -100,6 +103,7 @@ export interface PreferencesUpdate {
   notify_push?: boolean;
   notify_scope?: 'auto' | 'all' | 'off';
   notify_change_only?: boolean;
+  notify_live_alerts?: boolean;
   notify_decay_notice?: boolean; // only meaningful as false, to dismiss the notice
   // Sent as the raw text of the settings field; the server splits on
   // commas/whitespace, uppercases and dedupes. Deliberately not normalized here

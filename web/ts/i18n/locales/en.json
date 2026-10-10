@@ -130,6 +130,8 @@
   "settings.notify.updates.hintOff": "Never notify — unless a flight is set to Always on its own bell menu.",
   "settings.notify.push.hint": "Deliver briefing updates as a push to your iOS devices.",
   "settings.notify.push.hintNoDevice": "Install the FlyFun iOS app to enable push.",
+  "settings.notify.liveAlerts": "Live alerts on flight day (iPhone/iPad)",
+  "settings.notify.liveAlerts.hint": "Auto-refresh flights, from 3 h before departure to 1 h after arrival: a push when an alert appears (departure, destination, alternates, route SIGMETs, storms ahead) and when one we pushed clears. Needs Push on. Never by email.",
   "settings.notify.email.hint": "Deliver briefing updates by email.",
   "settings.notify.email.hintLocked": "Your only channel — set Briefing updates to Off to stop.",
   "settings.notify.title": "Notifications",

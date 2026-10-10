@@ -505,9 +505,16 @@ def _airport_changes(
     *,
     departed: bool,
     flown_nm: float | None,
+    evaluated: set[str] | None = None,
 ) -> list[LiveChange]:
     """METAR and TAF-at-ETA changes at every airport still relevant, filtered
-    and tiered by :data:`AIRPORT_POLICY`. No confirmation wait (§35)."""
+    and tiered by :data:`AIRPORT_POLICY`. No confirmation wait (§35).
+
+    ``evaluated`` (optional) collects the change keys whose state was read
+    this tick: a relevant airport's METAR keys with a usable report, and its
+    TAF key when both sides have a reading at ETA. A key missing from it was
+    not looked at (airport passed, departure after take-off, no report),
+    which is not the same as "no longer changed" (#754's cleared pushes)."""
     out: list[LiveChange] = []
     base_by_icao = {a.icao: a for a in baseline.airports}
     for a in latest.airports:
@@ -519,6 +526,8 @@ def _airport_changes(
             continue
         candidates, unk = _airport_metar_changes(base, a, role)
         unknown |= unk
+        if evaluated is not None:
+            evaluated |= {f"{p}:{a.icao}" for p in _KEY_PREFIX.values()} - unk
         source = "SPECI" if (a.metar_report_type or "").upper() == "SPECI" else "METAR"
         for kind, direction, from_v, to_v, message in candidates:
             tier = airport_tier(role, kind, direction, to_v)
@@ -536,7 +545,11 @@ def _airport_changes(
         # must have a reading valid at ETA — a TAF appearing or lapsing is not
         # a crossing.
         b, l_ = category_rank(base.taf_flight_category_at_eta), category_rank(a.taf_flight_category_at_eta)
-        if b is None or l_ is None or b == l_:
+        if b is None or l_ is None:
+            continue
+        if evaluated is not None:
+            evaluated.add(f"{_AIRPORT_KEY_PREFIX['taf_category']}:{a.icao}")
+        if b == l_:
             continue
         direction = "worse" if l_ > b else "better"
         tier = airport_tier(role, "taf_category", direction)
@@ -1547,6 +1560,8 @@ def classify_changes(
     departed = departure_at is not None and now >= departure_at
     unknown: set[str] = set()
     changes: list[LiveChange] = []
+    # Full airport keys whose state was read this tick (see _airport_changes).
+    evaluated_keys: set[str] = set()
 
     # Key prefixes whose dimension was actually evaluated this tick. Memory for
     # a dimension that was skipped (fetch failed) is kept, so a failed tick
@@ -1555,6 +1570,7 @@ def classify_changes(
     if baseline_obs is not None and latest_obs is not None:
         changes += _airport_changes(
             baseline_obs, latest_obs, roles, unknown, departed=departed, flown_nm=flown_nm,
+            evaluated=evaluated_keys,
         )
         evaluated |= {"metar:", "taf:", "conv:", "wx:", "wind:"}
     quiet: set[str] = set()
@@ -1657,6 +1673,9 @@ def classify_changes(
         computed_at=now or datetime.now(timezone.utc),
         changes=changes,
         new_sigmets=new_sigmets,
+        # The SIGMET dimension as a prefix (its keys are not known up front);
+        # storms and the radar rings are left out: they never clear (#754).
+        evaluated=sorted(evaluated_keys | ({"sigmet:"} & evaluated)),
     )
     return result, ClassifierMemory(alerted=alerted, sigmets=sigmet_traces)
 
@@ -1727,6 +1746,12 @@ def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
         if span[0] <= hi + pad and span[1] >= lo - pad:
             return True
     return False
+
+
+def pending_sigmet_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:
+    """Public name of :func:`_pending_key`, for the push path (#754): a
+    pending SIGMET missing from a fetch is not cleared either."""
+    return _pending_key(key, traces, now)
 
 
 def _pending_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:

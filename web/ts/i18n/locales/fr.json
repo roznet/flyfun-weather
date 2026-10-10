@@ -130,6 +130,8 @@
   "settings.notify.updates.hintOff": "Ne jamais avertir — sauf si un vol est réglé sur Toujours dans son menu cloche.",
   "settings.notify.push.hint": "Recevoir les mises à jour de briefing en notification push sur vos appareils iOS.",
   "settings.notify.push.hintNoDevice": "Installez l'app FlyFun iOS pour activer les notifications push.",
+  "settings.notify.liveAlerts": "Alertes en direct le jour du vol (iPhone/iPad)",
+  "settings.notify.liveAlerts.hint": "Vols en actualisation automatique, de 3 h avant le départ à 1 h après l'arrivée : une notification quand une alerte apparaît (départ, destination, dégagements, SIGMET sur la route, orages devant) et quand une alerte notifiée disparaît. Nécessite Push. Jamais par e-mail.",
   "settings.notify.email.hint": "Recevoir les mises à jour de briefing par e-mail.",
   "settings.notify.email.hintLocked": "Votre seul canal — réglez Mises à jour du briefing sur Désactivé pour arrêter.",
   "settings.notify.title": "Notifications",

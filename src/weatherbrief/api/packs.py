@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func as sa_func
@@ -5139,6 +5139,7 @@ def get_live_summary(
 def get_live_layer(
     flight_id: str,
     request: Request,
+    source: str | None = Query(default=None, max_length=16),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -5149,9 +5150,14 @@ def get_live_layer(
     briefing. Readable by anyone who can view the flight; cheap — no fetch,
     just the stored layer. When nothing live exists for the latest pack yet,
     every block is null and clients keep the pack's own observations.
+
+    ``?source=push`` marks the fetch a live-alert push tap made (#754): one
+    ``LIVE_PUSH_OPENED`` log line, so opens can be counted against pushes.
     """
     _load_flight_or_404(db, flight_id, viewer_id=user_id)
     audit_pack_access(user_id, flight_id, "get_live", request)
+    if source == "push":
+        logger.info("LIVE_PUSH_OPENED flight=%s user=%s", flight_id, user_id)
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")

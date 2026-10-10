@@ -307,8 +307,12 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// newest observations it ever saw. The caller still checks the layer's
     /// `packTimestamp` against the pack on screen before applying it.
     func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        try await liveLayer(flightId: flightId, source: nil)
+    }
+
+    func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse {
         do {
-            let layer = try await online.liveLayer(flightId: flightId)
+            let layer = try await online.liveLayer(flightId: flightId, source: source)
             await storeLiveLayer(layer, flightId: flightId)
             return layer
         } catch {

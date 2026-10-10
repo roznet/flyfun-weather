@@ -46,6 +46,11 @@ final class UserPreferencesStore {
         await put(NotifyPushUpdateRequest(notifyPush: enabled), field: "notify_push", client: client)
     }
 
+    /// Enable/disable flight-day live-alert pushes (#754), then refresh the cache.
+    func updateNotifyLiveAlerts(_ enabled: Bool, using client: APIClient) async {
+        await put(NotifyLiveAlertsUpdateRequest(notifyLiveAlerts: enabled), field: "notify_live_alerts", client: client)
+    }
+
     /// Enable/disable the email channel server-side, then refresh the cache.
     func updateNotifyEmail(_ enabled: Bool, using client: APIClient) async {
         await put(NotifyEmailUpdateRequest(notifyEmail: enabled), field: "notify_email", client: client)

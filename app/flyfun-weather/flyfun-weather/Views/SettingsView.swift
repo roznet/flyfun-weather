@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var pushBusy = false
     @State private var notifyBusy = false
     @State private var flightOrderBusy = false
+    @State private var liveAlertsBusy = false
     @State private var autorouterBusy = false
     @State private var autorouterError: String?
     @State private var autorouterLinker = AutorouterLinker()
@@ -79,11 +80,24 @@ struct SettingsView: View {
                         set: { setPush($0) }
                     ))
                     .disabled(pushBusy || appState.apiClient == nil)
+
+                    // Live alerts (#754): a content toggle on the push channel,
+                    // shown only with a device — outside the channel invariant.
+                    if notifyPrefs.hasPushDevice {
+                        Toggle("Live alerts on flight day", isOn: Binding(
+                            get: { notifyPrefs.liveAlertsEnabled },
+                            set: { setLiveAlerts($0) }
+                        ))
+                        .disabled(liveAlertsBusy || appState.apiClient == nil)
+                    }
                 } header: {
                     Text("Notifications")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("“Assessment changes” notifies when an update changes your flight's assessment — the GREEN/AMBER/RED headline or early outlook. Push is suppressed while you're looking at the app.")
+                        if notifyPrefs.hasPushDevice {
+                            Text("Live alerts: on auto-refresh flights, from 3 h before departure to 1 h after arrival, a push when an alert appears and when one clears. Needs Push on; never by email.")
+                        }
                         if emailLocked {
                             Text("Email is your only channel — set Briefing updates to Off to stop, or enable Push.")
                         }
@@ -381,6 +395,15 @@ struct SettingsView: View {
     /// Change the upcoming-flights ordering (#536). Server-backed: the PUT
     /// returns the full fresh preferences, which the store adopts as its cache,
     /// so the flight list reorders as soon as the round-trip lands.
+    private func setLiveAlerts(_ enabled: Bool) {
+        guard let client = appState.apiClient else { return }
+        liveAlertsBusy = true
+        Task {
+            await appState.userPreferences.updateNotifyLiveAlerts(enabled, using: client)
+            liveAlertsBusy = false
+        }
+    }
+
     private func setFlightOrder(_ order: FlightOrder) {
         guard let client = appState.apiClient else { return }
         flightOrderBusy = true

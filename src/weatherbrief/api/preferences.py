@@ -132,6 +132,10 @@ class PreferencesResponse(BaseModel):
     notify_push: bool = False
     notify_scope: NotifyScope = "auto"
     notify_change_only: bool = True
+    # Live alerts on flight day (#754): push only, auto-refresh flights inside
+    # their live window. A content toggle on the push channel, not a channel:
+    # the channel invariant ignores it. Default on (the opt-out).
+    notify_live_alerts: bool = True
     # One-time fail-safe notice: set when the user's last push device was
     # unregistered while email was off, so email was auto-re-enabled to keep at
     # least one working channel (the channel invariant, decay branch). The
@@ -178,6 +182,7 @@ class PreferencesUpdate(BaseModel):
     notify_push: bool | None = None
     notify_scope: NotifyScope | None = None
     notify_change_only: bool | None = None
+    notify_live_alerts: bool | None = None
     notify_decay_notice: bool | None = None  # only meaningful as false, to dismiss
     # Accepts the raw free-form text the settings field holds ("EGTF, EGSX
     # EGLK") as well as a JSON array, and canonicalizes either on the way in —
@@ -308,6 +313,7 @@ def _parse_notify_prefs(raw: str) -> dict:
         "notify_push": bool(data.get("notify_push", False)),
         "notify_scope": scope,
         "notify_change_only": bool(data.get("notify_change_only", True)),
+        "notify_live_alerts": bool(data.get("notify_live_alerts", True)),
     }
 
 
@@ -455,6 +461,8 @@ def update_preferences(
         data["notify_scope"] = body.notify_scope
     if body.notify_change_only is not None:
         data["notify_change_only"] = body.notify_change_only
+    if body.notify_live_alerts is not None:
+        data["notify_live_alerts"] = body.notify_live_alerts
     if body.notify_decay_notice is False:
         # Only a dismissal is honored — the server owns *setting* the notice (the
         # decay path); a client can't raise it, only acknowledge it.
@@ -771,7 +779,8 @@ def load_notify_prefs(db: Session, user_id: str) -> dict:
     """Return the user's briefing-notification preferences.
 
     Keys: ``notify_email``, ``notify_push`` (channels), ``notify_scope``
-    (auto | all | off), ``notify_change_only``. Defaults preserve today's
+    (auto | all | off), ``notify_change_only``, and ``notify_live_alerts``
+    (flight-day live pushes, #754; default on). Defaults preserve today's
     behaviour (email on, scope auto, change-only on, push off) on a missing row
     or blob. Read by the refresh-finalize notification dispatch.
     """

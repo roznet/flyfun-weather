@@ -2036,8 +2036,8 @@ class LiveDeliveryRow(Base):
     ``committed_at`` equals ``served_live_updated_at`` (a ↻ press commits a
     version no tick row describes; those deliveries have no tick to join).
 
-    ``delivered_via`` is ``poll`` today; ``push`` (with ``push_sent_at``) is
-    reserved for alert pushes on auto-refresh flights, not built yet.
+    ``delivered_via`` is ``poll``, or ``push`` (with ``push_sent_at``) for a
+    live-alert push on an auto-refresh flight (#754, ``notify/live_alerts.py``).
     """
 
     __tablename__ = "live_delivery"

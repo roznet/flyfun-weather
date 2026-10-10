@@ -697,8 +697,11 @@ struct FlightListView: View {
                     shareResolveError = error.localizedDescription
                 }
             }
-        case .briefing(let flightId):
+        case .briefing(let flightId), .briefingObserved(let flightId):
             guard let vm = viewModel, case .loaded(let flights) = vm.state else { return }
+            // A flight-day push tap (#754): the briefing screen opens on Observed.
+            // Requested before routing so a freshly created screen sees it.
+            if case .briefingObserved = nav { appState.requestObservedTab(flightId: flightId) }
             if let match = flights.first(where: { $0.id == flightId }) {
                 selection = .flight(match)
                 appState.clearPendingNavigation()

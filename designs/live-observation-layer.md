@@ -24,7 +24,8 @@ replacements, categorical radar/lightning values; §38, #683: pending SIGMETs
 of a briefed SIGMET is direction `updated`;
 §41, #688: en-route convective alerts from radar storms, see below;
 §45, #722: an airport row pings only when worse than the worst it already
-alerted on this flight, a memory that survives a return to baseline).
+alerted on this flight, a memory that survives a return to baseline;
+§47, #754: the push path pushes a clear and re-arms the key, see below).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
 
 ## Testing
@@ -65,7 +66,7 @@ DATA_DIR/packs/{user}/{flight}/
   read-modify-write); writes are temp file + `os.replace`. Single uvicorn worker,
   so a `threading.Lock` suffices.
 - **Alert memory** (`LiveLayer.alerted`, `dict[str, str]`, reset with the
-  layer on a new pack) decides `new_alert` (the future push), never which rows
+  layer on a new pack) decides `new_alert` (what the push consumes), never which rows
   show. Three families: airport keys (`metar:` / `taf:` / `conv:` / `wind:` /
   `wx:`) hold the worst value alerted (the phenomena alerted, for `wx:`) and
   are never forgotten during the flight (§45, `_airport_alert`); storm keys
@@ -212,7 +213,7 @@ Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
 2. **The live-window tick** (`tasks/live_tick.py`), every verification cycle
    (10 min), for flights in `departure − 3 h … departure + duration + 1 h`
    (`WB_LIVE_WINDOW_BEFORE_H` / `WB_LIVE_WINDOW_AFTER_H`). Every flight with a
-   pack, not only auto-refresh flights.
+   pack, not only auto-refresh flights. Only this writer pushes (below).
 
 `None` blocks keep the stored value (a SIGMET fetch failing must not blank the
 SIGMETs); each block has its own `*_updated_at`.
@@ -1009,7 +1010,8 @@ because the delivery join is an equality on `live_updated_at`):
   constraint for a concurrent poll. The cache assumes the single uvicorn
   worker prod runs (refresh-durability.md); with several, each worker would
   pay its own table read, and the constraint would still hold one row. `delivered_via = push` and `push_sent_at`
-  are reserved for alert pushes (not built).
+  are written for each live-alert push sent (#754, below); a later poll of
+  the same version is then not a second delivery.
 
 **Derived, never stored.** `latency_report` computes per-day p50/p95/max per
 hop in Python over the window (~700 tick rows a day): report → fetched,
@@ -1037,6 +1039,34 @@ committed that session after the tick, so tick-written highlight costs were
 flushed and dropped. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
 analytics rollup. Account deletion removes the user's deliveries and their
 flights' tick rows; the account export includes `live_deliveries`.
+
+## Live-alert push (#754)
+
+The tick's one consumer of `new_alert`: `notify/live_alerts.py`, called per
+committed flight from `LiveTick._push_alerts`, after the commits and before
+the highlights (the text is deterministic, it does not wait on a model).
+
+- **Only a commit that wrote** pushes: `CommitTrace.layer` is the in-memory
+  layer it committed (its changes still carry `evaluated`, never dumped). A
+  refused commit has none; its stored `new_alert` belongs to the other writer.
+  A ↻ press never pushes (the pilot is looking; #751 records the poll).
+- **Memory**: `LiveLayer.push_state` (`LivePushState`): `active` (pushed, not
+  yet cleared, with a sustain counter), `rearmed` (keys whose clear was
+  pushed), and three counters for shadow review. Written by
+  `live_layer.patch_push_state`, a small write under the commit lock that
+  checks only the pack (a ↻ commit in between leaves it valid). Carried by
+  `commit_live_update`'s copy of the prior layer, reset by a new pack.
+- **Decision** (`decide` → `next_state`, pure): alerts = `new_alert` rows,
+  plus rows for a re-armed key (§47); clears = active keys with no alert-tier
+  row for 2 evaluated ticks. Storms push, never clear. A skipped push (pref
+  off, muted…) tracks nothing but still drops due clears, so unmuting does
+  not release stale ones.
+- **Shadow mode** until `WB_LIVE_PUSH_SEND=1`: decisions logged
+  (`LIVE_PUSH_WOULD_SEND` / `LIVE_PUSH_SKIPPED reason=…`), memory advanced as
+  if sent. `LIVE_PUSH_SENT` and `LIVE_PUSH_OPENED` (the tap's
+  `/live?source=push`) once sending.
+- Eligibility, payload and APNs headers: ios-app-briefing-notifications.md
+  → "Live-alert push (#754)".
 
 ## Gotchas
 
@@ -1068,6 +1098,7 @@ flights' tick rows; the account export includes `live_deliveries`.
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
 - `tasks/live_timing.py` — `build_tick_row`, `write_tick_rows`, `record_delivery`, `latency_report`, `purge_old` (#751); `live_layer.CommitTrace`
+- `notify/live_alerts.py` — `notify_live_alerts`, `decide`, `next_state`, `skip_reason`, `build_payload`, `push_expiry` (#754); `live_layer.patch_push_state`; tests `tests/test_live_alert_push.py`
 - Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_live_highlight.py` (grounding rules, carry-forward, refused patch, API failure), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`), `tests/test_live_timing.py` (#751 latency rows, dedupe, end-to-end join)
 
 ## Clients

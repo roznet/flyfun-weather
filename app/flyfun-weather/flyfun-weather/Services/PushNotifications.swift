@@ -36,6 +36,10 @@ enum PushSupport {
     ///
     /// A silent badge-sync push carries neither. The trip check goes first so a
     /// future payload that carried both could not be mis-routed to a leg.
+    ///
+    /// A flight-day push (``observedPushTypes``) opens the Observed tab. Builds
+    /// that predate the `type` field read it as a plain briefing tap, which the
+    /// flight-day default already lands on Observed inside the live window.
     static func pendingNavigation(from userInfo: [AnyHashable: Any]) -> PendingNavigation? {
         if let tripId = userInfo["trip_id"] as? String, !tripId.isEmpty {
             return .trip(id: tripId)
@@ -43,7 +47,35 @@ enum PushSupport {
         guard let flightId = userInfo["flight_id"] as? String, !flightId.isEmpty else {
             return nil
         }
+        if isObservedPush(userInfo) {
+            return .briefingObserved(flightId: flightId)
+        }
         return .briefing(flightId: flightId)
+    }
+
+    /// Payload `type`s about what is happening now on flight day: live alerts
+    /// and their clearing (#754), and the flight-day brief (#753).
+    static let observedPushTypes: Set<String> = ["live_alert", "live_clear", "flight_day"]
+
+    static func isObservedPush(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard let type = userInfo["type"] as? String else { return false }
+        return observedPushTypes.contains(type)
+    }
+
+    /// Foreground presentation for a push. Briefing-refresh pushes stay
+    /// suppressed in the app (the badge and the re-sync are enough). A
+    /// flight-day push is time-critical, so it shows a banner and sound,
+    /// unless that flight's Observed tab is already on screen — then the open
+    /// view is nudged to re-sync instead.
+    static func foregroundPresentation(
+        for userInfo: [AnyHashable: Any],
+        visibleObservedFlightId: String?
+    ) -> UNNotificationPresentationOptions {
+        guard isObservedPush(userInfo),
+              let flightId = userInfo["flight_id"] as? String, !flightId.isEmpty,
+              flightId != visibleObservedFlightId
+        else { return [] }
+        return [.banner, .list, .sound]
     }
 }
 
@@ -110,6 +142,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// Foreground presentation. In-app suppression (design): a user watching the
     /// app shouldn't also get a banner — just keep the badge accurate. So while
     /// foregrounded we present nothing visible and reconcile the badge instead.
+    /// Flight-day pushes (#754) are the exception: a banner unless that flight's
+    /// Observed tab is on screen (`PushSupport.foregroundPresentation`).
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -121,7 +155,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             // suppressed banner still results in fresh content on screen.
             AppState.current?.signalExternalSync(flightId: PushSupport.pendingNavigation(from: userInfo)?.flightId)
         }
-        return []
+        let visible = await MainActor.run { AppState.current?.visibleObservedFlightId }
+        return PushSupport.foregroundPresentation(for: userInfo, visibleObservedFlightId: visible)
     }
 
     /// Notification tapped → deep-link to the updated briefing via the shared

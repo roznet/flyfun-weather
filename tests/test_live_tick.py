@@ -183,7 +183,7 @@ def test_run_refreshes_each_flight_from_one_shared_fetch(db_session, dev_user, t
 
     # ``highlighted`` is 0 here: no ANTHROPIC_API_KEY in the suite, so #697's
     # highlight pass is off and the tick is otherwise unchanged.
-    assert result == {"flights": 1, "updated": 1, "fetched": 3, "highlighted": 0}
+    assert result == {"flights": 1, "updated": 1, "fetched": 3, "highlighted": 0, "pushed": 0}
     # One batched upstream fetch for every airport the corridor needs.
     upstream.fetch_weather.assert_called_once_with(["ZZAA", "ZZBB", "ZZMID"], metar_hours=3)
     kwargs = mock_refresh.call_args.kwargs

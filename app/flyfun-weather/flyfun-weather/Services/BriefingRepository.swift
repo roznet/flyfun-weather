@@ -76,6 +76,9 @@ protocol BriefingRepository: Sendable {
     /// caching layer is network-first and keeps the last layer on disk so an
     /// offline cockpit still shows the newest observations it ever saw.
     func liveLayer(flightId: String) async throws -> LiveLayerResponse
+    /// The same, tagged with where the fetch came from (`"push"`: a flight-day
+    /// push tap, #754). Defaults to the untagged fetch.
+    func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse
     // Flight sharing (#446) — all online-only.
     /// Resolve a share code (`/s/{code}`) to its flight for the preview-before-
     /// subscribe on-ramp. Throws `APIError.notFound` (404) for an unknown/invalid
@@ -175,6 +178,12 @@ extension BriefingRepository {
     /// that don't name a source stay unchanged; Siri passes `.siri` explicitly.
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await refreshStream(flightId: flightId, source: .manual)
+    }
+
+    /// Repositories with no notion of a fetch source (fixtures, test fakes)
+    /// serve the tagged fetch as the plain one.
+    func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse {
+        try await liveLayer(flightId: flightId)
     }
 }
 
@@ -301,8 +310,17 @@ final class OnlineBriefingRepository: BriefingRepository {
     }
 
     func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        try await liveLayer(flightId: flightId, source: nil)
+    }
+
+    func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse {
+        // `?source=push` lets the server count opens of live-alert pushes
+        // (#754): a one-off fetch, so it may show in the request log.
+        if let source {
+            return try await client.requestURL("/api/flights/\(flightId)/live?source=\(Self.queryValueEncoded(source))")
+        }
         // Polled every 5 min on flight day — keep it out of the request log.
-        try await client.request("/api/flights/\(flightId)/live", quietLog: true)
+        return try await client.request("/api/flights/\(flightId)/live", quietLog: true)
     }
 
     func flightByShareCode(_ code: String) async throws -> FlightResponse {
