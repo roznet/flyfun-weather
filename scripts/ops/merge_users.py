@@ -27,6 +27,8 @@ What a merge does, in one DB transaction:
 - unique keys that include ``user_id`` keep the survivor's row on a clash.
   ``user_preferences`` is filled instead: survivor values win, empty ones
   take the absorbed account's (GRAMET credentials, app prefs per key);
+- system template profiles are kept once: where both accounts hold the same
+  template, the absorbed copy's flights move to the survivor's and it goes;
 - a table with an ``is_default`` column keeps one default per user: when the
   survivor has one, the absorbed rows arrive non-default;
 - a subscription the survivor now holds to its own flight is dropped;
@@ -135,6 +137,42 @@ def _merge_preferences(db, meta, src: str, dst: str, report: list[str]) -> None:
         report.append(f"  user_preferences: filled {sorted(fill)} from the absorbed account")
 
 
+def _merge_template_profiles(db, meta, src: str, dst: str, report: list[str]) -> None:
+    """Keep one copy of each system template profile: the survivor's.
+
+    Every account is seeded with the same templates (VFR Only, IFR
+    Conservative, IFR FIKI), so a merge would list each twice. The absorbed
+    copy's flights move to the survivor's copy of that template, then it goes.
+    """
+    from sqlalchemy import delete, select, update
+
+    profiles, flights = meta.tables.get("flight_profiles"), meta.tables.get("flights")
+    if profiles is None or "system_template_key" not in profiles.c:
+        return
+    keep = dict(db.execute(
+        select(profiles.c.system_template_key, profiles.c.id).where(
+            profiles.c.user_id == dst, profiles.c.system_template_key.is_not(None))
+    ).all())
+    moved = dropped = 0
+    for key, old_id in db.execute(
+        select(profiles.c.system_template_key, profiles.c.id).where(
+            profiles.c.user_id == src, profiles.c.system_template_key.is_not(None))
+    ).all():
+        new_id = keep.get(key)
+        if new_id is None:
+            continue  # the survivor lacks this template: the plain re-point moves it
+        if flights is not None and "profile_id" in flights.c:
+            moved += db.execute(
+                update(flights).where(flights.c.profile_id == old_id).values(profile_id=new_id)
+            ).rowcount
+        dropped += db.execute(delete(profiles).where(profiles.c.id == old_id)).rowcount
+    if dropped:
+        report.append(
+            f"  flight_profiles: {dropped} duplicate template(s) dropped,"
+            f" {moved} flight(s) moved to the survivor's copy"
+        )
+
+
 def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list[str]:
     """Merge user ``src`` into ``dst``. Commits only when ``apply``."""
     from sqlalchemy import MetaData, and_, delete, inspect, select, true, update
@@ -156,6 +194,7 @@ def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list
     meta.reflect(bind=conn, only=tables + [t for t, _ in PATH_COLUMNS if insp.has_table(t)])
 
     _merge_preferences(db, meta, src, dst, report)
+    _merge_template_profiles(db, meta, src, dst, report)
 
     for name in sorted(tables):
         table = meta.tables[name]

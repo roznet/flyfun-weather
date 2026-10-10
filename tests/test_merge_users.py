@@ -141,10 +141,10 @@ def test_apply_moves_everything(db, two_accounts):
 
 def test_survivor_keeps_the_only_default(db, two_accounts):
     """Both accounts seeded a default profile; ensure_default_profile needs one."""
+    # Custom profiles: templates are collapsed first (see the next test).
     for uid in (SRC, DST):
-        db.add(FlightProfileRow(user_id=uid, name="IFR FIKI", is_default=True,
-                                system_template_key="ifr_fiki"))
-        db.add(FlightProfileRow(user_id=uid, name="VFR Only", system_template_key="vfr_only"))
+        db.add(FlightProfileRow(user_id=uid, name=f"SR22 {uid}", is_default=True))
+        db.add(FlightProfileRow(user_id=uid, name=f"Local {uid}"))
     # Only the absorbed account has an aircraft: its default carries over.
     db.add(UserAircraftRow(user_id=SRC, icao_type="SR22", is_default=True))
     db.commit()
@@ -157,6 +157,33 @@ def test_survivor_keeps_the_only_default(db, two_accounts):
     assert len(defaults) == 1
     assert _count(db, FlightProfileRow, user_id=DST) == 4
     assert _count(db, UserAircraftRow, user_id=DST, is_default=True) == 1
+
+
+def test_template_profiles_kept_once_and_flights_follow(db, two_accounts):
+    ids = {}
+    for uid in (SRC, DST):
+        for key in ("vfr_only", "ifr_fiki"):
+            row = FlightProfileRow(user_id=uid, name=key, system_template_key=key,
+                                   is_default=key == "ifr_fiki")
+            db.add(row)
+            db.flush()
+            ids[uid, key] = row.id
+    custom = FlightProfileRow(user_id=SRC, name="My SR22")
+    db.add(custom)
+    db.flush()
+    db.get(FlightRow, "src-f0").profile_id = ids[SRC, "ifr_fiki"]
+    db.get(FlightRow, "src-f1").profile_id = custom.id
+    db.commit()
+
+    report = mu.merge(db, SRC, DST, two_accounts, apply=True)
+    db.expire_all()
+
+    assert any("2 duplicate template(s) dropped, 1 flight(s) moved" in line for line in report)
+    names = sorted(p.name for p in db.query(FlightProfileRow).filter_by(user_id=DST))
+    assert names == ["My SR22", "ifr_fiki", "vfr_only"]
+    assert db.get(FlightRow, "src-f0").profile_id == ids[DST, "ifr_fiki"]
+    assert db.get(FlightRow, "src-f1").profile_id == custom.id
+    assert _count(db, FlightProfileRow, user_id=DST, is_default=True) == 1
 
 
 def test_existing_target_dir_refuses_before_any_change(db, two_accounts):
