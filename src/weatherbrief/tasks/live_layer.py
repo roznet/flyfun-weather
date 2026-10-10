@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +65,25 @@ LIVE_HISTORY_FILE = "live_history.jsonl"
 #: prod wrote it. In ``LIVE_FILES`` so a flight delete takes it too.
 LIVE_FROZEN_FILE = "live_frozen"
 LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG, LIVE_FROZEN_FILE)
+
+
+
+@dataclass
+class CommitTrace:
+    """What one :func:`commit_live_update` did, for the latency rows (#751).
+
+    Filled only by a commit that wrote: ``committed_at`` stays None when the
+    write was refused as stale. ``records`` is what the tick appended to the
+    history (empty when nothing was new, or the history write failed). The
+    ``cells_*`` times describe the display file the storms came from.
+    """
+
+    committed_at: datetime | None = None
+    records: list[dict] = field(default_factory=list)
+    cells_frame_at: datetime | None = None
+    cells_computed_at: datetime | None = None
+    cells_received_at: datetime | None = None
+
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -660,6 +680,7 @@ def _record_history(
     flight_dir: Path,
     stored: LiveLayer | None,
     layer: LiveLayer,
+    trace: CommitTrace | None = None,
     **kwargs,
 ) -> None:
     """Append this tick to the history. Never raises: a history problem must
@@ -669,7 +690,10 @@ def _record_history(
         # A history only starting (first write, or a flight already live
         # when #643 shipped) shows nothing yet: everything on screen is
         # recorded as appearing now.
-        _append_history(flight_dir, _history_records(history, _shown_from_history(history, stored), layer, **kwargs))
+        records = _history_records(history, _shown_from_history(history, stored), layer, **kwargs)
+        _append_history(flight_dir, records)
+        if trace is not None:
+            trace.records = records
     except Exception:
         logger.warning("Live history write failed for %s — tick kept", flight_dir, exc_info=True)
 
@@ -686,12 +710,16 @@ def commit_live_update(
     pack_timestamp: str | None = None,
     now: datetime | None = None,
     cells: CellFrames | None = None,
+    trace: CommitTrace | None = None,
 ) -> LiveLayer | None:
     """Fold one refresh into the flight's live layer and persist it.
 
     ``cells`` is the cells feed as of this tick (#688): the radar storms are
     rebuilt from it every tick. None reads as a dark feed (the classifier's
     station and radar-ring fallback).
+
+    ``trace`` (optional) is filled with what the commit did, for the live
+    tick's latency row (#751).
 
     ``None`` blocks keep the stored value (a SIGMET fetch failing this tick
     must not blank the SIGMETs). Returns the stored layer, or None when the
@@ -805,8 +833,14 @@ def commit_live_update(
             "pack_timestamp": layer.pack_timestamp,
             "live_updated_at": now.isoformat(),
         }))
+        if trace is not None:
+            trace.committed_at = now
+            if cells is not None and cells.newest is not None and layer.storms is not None:
+                trace.cells_frame_at = layer.storms.frame_time
+                trace.cells_computed_at = cells.computed_at
+                trace.cells_received_at = cells.received_at
         _record_history(
-            flight_dir, stored, layer, briefing_data=briefing_data,
+            flight_dir, stored, layer, trace, briefing_data=briefing_data,
             observations=observations, sigmets=sigmets, now=now,
         )
         return layer

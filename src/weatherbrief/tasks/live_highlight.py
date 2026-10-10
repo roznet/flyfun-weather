@@ -1155,6 +1155,8 @@ class HighlightOutcome:
     text: str | None = None
     usage: dict | None = None
     reason: str | None = None
+    # The model call's own latency, when one returned (#751's tick row).
+    latency_ms: int | None = None
 
     @property
     def written(self) -> bool:
@@ -1241,7 +1243,8 @@ def ensure_highlight(
         _log_attempt(flight_dir, {**base, "outcome": "rejected", "reason": str(exc), "text": "",
                                   "usage": exc.usage, "latency_ms": exc.latency_ms,
                                   "cost_usd": call_cost(exc.usage)})
-        return HighlightOutcome("rejected", text="", usage=exc.usage, reason=str(exc))
+        return HighlightOutcome("rejected", text="", usage=exc.usage, reason=str(exc),
+                                latency_ms=exc.latency_ms)
     except Exception as exc:
         # Expected failure mode (timeout, rate limit, outage). One line, not a
         # traceback per tick: the highlight is optional and the tick is intact.
@@ -1271,7 +1274,7 @@ def ensure_highlight(
         _log_attempt(flight_dir, {**base, "outcome": "rejected", "reason": reason,
                                   "text": text, "usage": usage, "latency_ms": latency_ms,
                                   "cost_usd": call_cost(usage)})
-        return HighlightOutcome("rejected", text=text, usage=usage, reason=reason)
+        return HighlightOutcome("rejected", text=text, usage=usage, reason=reason, latency_ms=latency_ms)
 
     flags = review_flags(text, f)
     if flags:
@@ -1288,7 +1291,8 @@ def ensure_highlight(
     _log_attempt(flight_dir, {**base, "outcome": "written" if written else "superseded",
                               "text": text, "usage": usage, "latency_ms": latency_ms,
                               "cost_usd": call_cost(usage)} | ({"flags": flags} if flags else {}))
-    return HighlightOutcome("written" if written else "superseded", text=text, usage=usage)
+    return HighlightOutcome("written" if written else "superseded", text=text, usage=usage,
+                            latency_ms=latency_ms)
 
 
 def charge_highlight(db, user_id: str | None, flight_id: str, usage: dict | None) -> None:

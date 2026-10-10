@@ -797,6 +797,7 @@ def run_realtime_refresh(
     pack_timestamp: str | None = None,
     report_source=None,
     sigmet_source=None,
+    trace=None,
 ) -> RealtimeRefreshResult:
     """Re-fetch METAR/TAF + route SIGMETs, recompute the obs-vs-model
     comparison from a pack's *stored* forecasts, re-sample observed conditions,
@@ -813,7 +814,9 @@ def run_realtime_refresh(
     against the baseline and returned but nothing is written.
 
     ``report_source`` / ``sigmet_source`` let the live tick serve every flight
-    from one shared fetch instead of one network call per flight.
+    from one shared fetch instead of one network call per flight. ``trace``
+    (a ``live_layer.CommitTrace``) is filled by the commit, for the tick's
+    latency row (#751).
 
     Raises :class:`FileNotFoundError` if the pack has no briefing data on disk.
     """
@@ -939,6 +942,7 @@ def run_realtime_refresh(
             flight_id=flight_id,
             pack_timestamp=pack_timestamp,
             cells=load_cell_frames(datetime.now(timezone.utc)),
+            trace=trace,
         )
         if layer is None:
             # Refused as stale (a newer pack or a newer write): report what is

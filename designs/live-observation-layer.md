@@ -968,6 +968,68 @@ What the code relies on:
   SIGMETs all start after arrival + `SIGMET_AFTER_ARRIVAL_MARGIN` (30 min)
   is highlight and leaves `chain_alerted` false.
 
+## Observed latency (#751)
+
+How long a report takes from the time printed on it to a pilot's screen, per
+hop, tracked over time. Code: `tasks/live_timing.py`; admin view: the
+Performance tab (`GET /admin/live-latency`, `web/ts/admin-latency-view.ts`).
+
+**Definitions (agreed on the issue).**
+- *Report time* is the time on the report: METAR/SPECI obs, TAF issue, SIGMET
+  valid-from, radar/cells frame valid time. When a provider published it is
+  unknown and not estimated.
+- *Fetched*: when the tick's shared fetch got that airport (`LiveTick._fetched_at`,
+  stamped in `sink`/`_top_up`), not the block's `fetch_time`, which is when the
+  refresh assembled the block from the cache, later. SIGMETs:
+  `SharedSigmetSource.fetched_at`.
+- *Available*: the tick that first carries the item committed `live.json`
+  (`committed_at` = the `live_updated_at` it wrote). The highlight is its own
+  hop after that.
+- *Delivered*: the first time a client receives a `live_updated_at` at or after
+  that tick. Today the next `/live` poll (iOS every 5 min while open).
+
+**Two tables, no foreign keys** (migration 102, every datetime `DATETIME(6)`
+because the delivery join is an equality on `live_updated_at`):
+- `live_tick_timing`: one row per flight per tick, written after
+  `_highlights` so the highlight columns (`gated` = carried forward, no call;
+  else `HighlightOutcome.outcome`) land in the same insert. `commit_live_update`
+  fills a `CommitTrace` (committed version, the history records it appended,
+  the cells frame's built/ingested times); a refused (stale) commit writes no
+  row. `new_items_json` lists what the tick showed first: each report from
+  *this* tick's fetch (a pack switch also records the briefing's own reports,
+  which are not new) and each alert-tier `appeared` event, anchored on its
+  evidence time. Only the tick writes rows: a ↻ press commits versions no row
+  describes (deliveries of those count as `untracked`).
+- `live_delivery`: one row per (flight, user, platform, version), on `/live`
+  (platform from the User-Agent: `ios` / `web` / `other`), `/live/summary`
+  (the MCP server) and ChatGPT `getBriefing` (both `agent`). iPadOS is not told
+  apart (the app sends URLSession's default agent). Dedupe: an in-process cache
+  of the newest version per key, falling back to the table, plus the unique
+  constraint for a concurrent poll. `delivered_via = push` and `push_sent_at`
+  are reserved for alert pushes (not built).
+
+**Derived, never stored.** `latency_report` computes per-day p50/p95/max per
+hop in Python over the window (~700 tick rows a day): report → fetched,
+fetched → available (both per kind), available → highlight (written only),
+available → delivered (per platform), report → delivered (METAR, SIGMET,
+alerts, per platform: the earliest delivery on that flight serving a version
+at or after the tick), cells built → droplet, cells frame → available, tick
+duration (once per tick). Negative spans are dropped and counted.
+
+**Cells times.** The node's build time is the display file's mtime, which
+`rsync -t` (`cells/push.py`) carries to the inbox; ingest keeps it in memory
+(`cells_display.computed_at`). It is deliberately not written into the display
+file, which must stay byte-for-byte reproducible by a replay. After a restart
+it is null until new frames arrive (the tick reads frames < 25 min old).
+
+**Never fails the caller.** Rows are written in a savepoint and every writer
+catches and logs. `write_tick_rows` commits the tick's session, which also
+commits `charge_highlight`'s ledger rows: before #751 nothing committed that
+session after the tick, so tick-written highlight costs were flushed and
+dropped. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
+analytics rollup. Account deletion removes the user's deliveries and their
+flights' tick rows; the account export includes `live_deliveries`.
+
 ## Gotchas
 
 - **Packs written before #637** were patched in place, so their "baseline" is
@@ -997,7 +1059,8 @@ What the code relies on:
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
-- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_live_highlight.py` (grounding rules, carry-forward, refused patch, API failure), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`)
+- `tasks/live_timing.py` — `build_tick_row`, `write_tick_rows`, `record_delivery`, `latency_report`, `purge_old` (#751); `live_layer.CommitTrace`
+- Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_live_highlight.py` (grounding rules, carry-forward, refused patch, API failure), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`), `tests/test_live_timing.py` (#751 latency rows, dedupe, end-to-end join)
 
 ## Clients
 

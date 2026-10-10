@@ -911,6 +911,18 @@ def get_metrics(
     }
 
 
+@router.get("/live-latency")
+def get_live_latency(
+    days: int = Query(30, ge=1, le=180),
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Observed latency (#751): daily p50/p95/max per hop, report time to device."""
+    from weatherbrief.tasks.live_timing import latency_report
+
+    return latency_report(db, days=days)
+
+
 @router.delete("/agents/{user_id}/tokens/{token_id}")
 def revoke_agent_token(
     request: Request,

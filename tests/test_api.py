@@ -2421,6 +2421,38 @@ class TestLiveLayerEndpoint:
         assert snap["live_updated_at"] is not None
         assert json.loads((pack_dir / "briefing.json").read_text()) == {"route": {}}
 
+    def test_live_records_one_delivery_per_new_version(self, client, app_db, sample_flight, tmp_path):
+        """#751: a poll that receives a version this client already got
+        writes nothing; the platform comes from the User-Agent."""
+        from sqlalchemy import select
+
+        from weatherbrief.db.models import LiveDeliveryRow
+        from weatherbrief.tasks import live_timing
+
+        live_timing._reset_cache()
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        layer = self._commit(pack_dir)
+        ios = {"User-Agent": "flyfun-weather/412 CFNetwork/1568 Darwin/24.0.0"}
+        for _ in range(2):
+            assert client.get(f"/api/flights/{sample_flight.id}/live", headers=ios).status_code == 200
+        client.get(f"/api/flights/{sample_flight.id}/live", headers={"User-Agent": "Mozilla/5.0"})
+
+        session = app_db()
+        rows = session.execute(select(LiveDeliveryRow)).scalars().all()
+        session.close()
+        assert sorted(r.platform for r in rows) == ["ios", "web"]
+        assert {r.served_live_updated_at for r in rows} == {layer.live_updated_at}
+
+    def test_live_survives_a_failed_delivery_write(self, client, app_db, sample_flight, tmp_path, monkeypatch):
+        from weatherbrief.tasks import live_timing
+
+        live_timing._reset_cache()
+        pack_dir = _write_pack_artifacts(app_db, sample_flight, tmp_path)
+        self._commit(pack_dir)
+        monkeypatch.setattr(live_timing, "LiveDeliveryRow", MagicMock(side_effect=RuntimeError("boom")))
+        resp = client.get(f"/api/flights/{sample_flight.id}/live")
+        assert resp.status_code == 200 and resp.json()["route_observations"] is not None
+
     def test_live_serves_the_highlight_without_its_gate(self, client, app_db, sample_flight, tmp_path):
         """#706: the gate is the server's regeneration baseline — kept in
         live.json, never sent to clients."""

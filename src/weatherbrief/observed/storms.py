@@ -75,13 +75,17 @@ class CellFrames:
 
     ``newest`` is the display file used (None unless ``status`` is
     ``available``); ``earlier`` the frames for the storms' history, oldest
-    first.
+    first. ``received_at`` is when the droplet ingested ``newest`` and
+    ``computed_at`` when the home node wrote it (#751; None if ingested before
+    the last restart).
     """
 
     status: str  # available | stale | disabled | unavailable
     newest: dict[str, Any] | None = None
     earlier: list[dict[str, Any]] = field(default_factory=list)
     unavailable_since: datetime | None = None
+    received_at: datetime | None = None
+    computed_at: datetime | None = None
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -100,7 +104,12 @@ def load_cell_frames(now: datetime, store=None) -> CellFrames:
     is used, and only when cell ingest is enabled. Never raises: a read
     failure is an unavailable feed, which the classifier words as such.
     """
-    from weatherbrief.observed.cells_display import STALE_AFTER, DisplayStore, cells_ingest_enabled
+    from weatherbrief.observed.cells_display import (
+        STALE_AFTER,
+        DisplayStore,
+        cells_ingest_enabled,
+        computed_at,
+    )
 
     try:
         if store is None:
@@ -126,7 +135,8 @@ def load_cell_frames(now: datetime, store=None) -> CellFrames:
             frame = store.read(best.stamp, best.revision)
             if frame is not None:
                 earlier.append(frame)
-        return CellFrames("available", newest=data, earlier=earlier)
+        return CellFrames("available", newest=data, earlier=earlier, received_at=newest.received_at,
+                          computed_at=computed_at(newest.stamp, newest.revision))
     except Exception:
         logger.warning("Cell frames unreadable — storms unavailable this tick", exc_info=True)
         return CellFrames("unavailable")

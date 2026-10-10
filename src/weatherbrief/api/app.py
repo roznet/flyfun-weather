@@ -94,6 +94,14 @@ def _on_delete_user(user_id: str, db):
     user_pack_dir = _data_dir() / "packs" / safe_path_component(user_id)
     _rmtree(user_pack_dir)
 
+    # Observed-latency rows (#751) carry no FK: the user's deliveries, and
+    # the tick rows of their flights, before the flights go.
+    from weatherbrief.tasks.live_timing import delete_for_user as delete_live_latency
+
+    delete_live_latency(db, user_id, [
+        fid for (fid,) in db.query(FlightRow.id).filter(FlightRow.user_id == user_id).all()
+    ])
+
     # Delete DB rows — FlightRow cascade-deletes BriefingPackRow
     db.query(FlightRow).filter(FlightRow.user_id == user_id).delete(
         synchronize_session=False

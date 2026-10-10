@@ -1965,3 +1965,98 @@ class ModelDeliveryLogRow(Base):
     # the provider's own record, an HTTP Last-Modified is the origin file's.
     # Different systematic biases; pooling them silently would be wrong.
     observed_via: Mapped[str] = mapped_column(String(24), nullable=False)
+
+
+class LiveTickTimingRow(Base):
+    """One flight's pass through one live tick (#751): when each hop happened.
+
+    The hops of an observation's way to the pilot's screen, as far as one tick
+    sees them: the report's own time (METAR obs, TAF issue, SIGMET valid-from,
+    radar/cells frame), when we fetched it, when the tick committed the layer
+    (``committed_at`` is the ``live_updated_at`` it wrote, which is what a
+    ``/live`` poll serves), and when the highlight landed. The last hop, the
+    device, is :class:`LiveDeliveryRow`.
+
+    Durations are derived at read time (``tasks/live_timing.latency_report``),
+    never stored. ``new_items_json`` lists what this tick showed for the first
+    time (each report with its own time and fetch time, each alert-tier
+    ``appeared`` event with its evidence time), so the per-item end-to-end
+    chain needs no per-pack history scrape.
+
+    No foreign keys, like ``briefing_refresh_jobs``: account deletion removes
+    a user's rows explicitly (``api/app._on_delete_user``), and the retention
+    purge bounds the table (``LIVE_LATENCY_RETENTION_DAYS``, 180 d).
+    """
+
+    __tablename__ = "live_tick_timing"
+    __table_args__ = (
+        Index("ix_live_tick_timing_committed_at", "committed_at"),
+        Index("ix_live_tick_timing_flight_committed", "flight_id", "committed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    flight_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    pack_timestamp: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # fsp=6: committed_at is joined by equality against the served
+    # live_updated_at, which carries microseconds.
+    tick_started_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
+    tick_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flight_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Newest report of each kind in this tick's blocks, and when we fetched it.
+    metar_observed_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    metar_fetched_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    taf_issued_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    taf_fetched_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    sigmet_issued_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    sigmet_fetched_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    # Radar field the observed block sampled; the cells frame the storms came
+    # from, when the home node built it and when the droplet ingested it.
+    radar_frame_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    cells_frame_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    cells_computed_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    cells_received_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    # written | rejected | call_failed | superseded | skipped | gated (unchanged
+    # facts, carried forward) | null (highlights off).
+    highlight_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    highlight_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    highlight_written_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+    highlight_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_reports: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    new_alerts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    new_items_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LiveDeliveryRow(Base):
+    """A client receiving a new live version of a flight (#751).
+
+    One row per (flight, user, platform) per ``live_updated_at``: the first
+    time that client got that version, not every poll. Delivery delay is
+    ``requested_at - committed_at`` of the :class:`LiveTickTimingRow` whose
+    ``committed_at`` equals ``served_live_updated_at`` (a ↻ press commits a
+    version no tick row describes; those deliveries have no tick to join).
+
+    ``delivered_via`` is ``poll`` today; ``push`` (with ``push_sent_at``) is
+    reserved for alert pushes on auto-refresh flights, not built yet.
+    """
+
+    __tablename__ = "live_delivery"
+    __table_args__ = (
+        UniqueConstraint(
+            "flight_id", "user_id", "platform", "served_live_updated_at",
+            name="uq_live_delivery_version",
+        ),
+        Index("ix_live_delivery_requested_at", "requested_at"),
+        Index("ix_live_delivery_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    flight_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # ios | web | agent | other (api/client_info.py). iPadOS is not told
+    # apart: the app's default URLSession agent is the same on both.
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    served_live_updated_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
+    delivered_via: Mapped[str] = mapped_column(String(8), nullable=False, default="poll")
+    push_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
