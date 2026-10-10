@@ -278,6 +278,33 @@ tick — the timestamps say how old it is.
 Not overlaid (build-time, correctly the briefing's view): the LLM digest, the text
 digest, alternate requirement.
 
+## Flight progress (#759, #760)
+
+Every "where is the aircraft" question the live layer asks goes through one
+object, `analysis/flight_progress.FlightProgress` (beside `RouteTrack`): distance
+flown, departed / arrived, the ETA at a point along the route, the arrival time,
+the position at a time. `live_layer.flight_progress(route, departure, now)` builds
+it once per tick and every consumer reads it: the classifier's `departure_at` /
+`arrival_at` / `flown_nm`, `build_storms` (abeam ETA, ahead, the estimate's 4-D
+track), `build_glance` (ribbon ETAs, passed lines, the "ahead" segment), the
+read-time trails (`progress.at(t)` rebuilds what a past tick measured against),
+the ↻ path's fallback classification, and `replay_live_history.py score-estimates`.
+
+- **Source today: the plan only** (`source = "plan"`): on-time departure, constant
+  speed over `flight_duration_hours`. The refactor (#760 PR 1) was checked
+  byte-identical against the code it replaced: the LELL→LEMI scenario, with and
+  without synthetic storms on the route, every tick's `/live` body incl. trails.
+- **Observed sources replace the plan inside the object** (#760 manual take-off /
+  landed, #761 app GPS, #762 ADS-B; fusion rules in #759). Consumers must not
+  compute schedule arithmetic of their own; add what they need to `FlightProgress`.
+- `timed` = a departure and a duration (flown distance, departed, arrival).
+  ETAs and positions also need a non-zero route: a local flight (same airport at
+  both ends) has an arrival time but no ETAs, and `flown_nm` 0.
+- Still on the plan outside this object, to move with the observed sources:
+  TAF-at-ETA (`route_weather.run_route_weather`, computed at fetch time from the
+  planned departure), and the live window itself (`live_tick.in_live_window`,
+  `notify/live_alerts`, `api/packs` window bound).
+
 ## Radar storms (#688)
 
 Rule in meteorology-decisions §41. Pieces:
@@ -307,8 +334,8 @@ Rule in meteorology-decisions §41. Pieces:
   (`analysis/route_geometry.RouteTrack`, local equirectangular per segment) at
   the member nearest the track: `along_nm`, `offtrack_nm`, signed `cross_nm`,
   `side`, or `end` + compass from the airport past the route's ends;
-  `abeam_eta` from the planned schedule (on-time departure, constant speed,
-  like `flown_nm`); `relative_motion` = the velocity's component toward the
+  `abeam_eta` from the flight's `FlightProgress` (the plan today, like
+  `flown_nm`); `relative_motion` = the velocity's component toward the
   nearest track point (`PARALLEL_KT` 3 kt; `stationary` under 1 kt;
   `unknown` unless motion is `available`); `history` = off-track at the
   earlier frames; `estimate` = closest approach to the 4-D track at current
@@ -964,8 +991,8 @@ What the code relies on:
 - `LiveChange.observed_at` for a pending SIGMET is in the future; clients
   show no age for it. For a cancelled row it is when the cancellation was
   seen.
-- **After arrival (#689).** `classify_changes(arrival_at=…)` (the planned
-  landing, `live_layer.planned_arrival`; both writers pass it). A row whose
+- **After arrival (#689).** `classify_changes(arrival_at=…)` (the landing,
+  `FlightProgress.arrival`, the planned one today; both writers pass it). A row whose
   SIGMETs all start after arrival + `SIGMET_AFTER_ARRIVAL_MARGIN` (30 min)
   is highlight and leaves `chain_alerted` false.
 
@@ -1106,6 +1133,7 @@ commit.
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
+- `analysis/flight_progress.py` — `FlightProgress` (#759); `live_layer.flight_progress` builds it per tick; tests `tests/test_flight_progress.py`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
