@@ -140,6 +140,17 @@ def test_dropped_waypoints_are_reported(patch_client):
     assert client.create_kwargs["waypoints"] == ["EGTK", "LSGS"]
     assert res["route"]["skipped"] == ["ZZQX"]
     assert res["route"]["off_route"] == ["LFMN"]
+    assert "ZZQX" in res["warning"] and "LFMN" in res["warning"]
+
+
+def test_clean_route_has_no_warning(patch_client):
+    patch_client(_flight())
+    res = server.create_flight(
+        route="EGTK LSGS",
+        departure_time="2026-07-08T09:00:00+00:00",
+        flight_duration_hours=2.0,
+    )
+    assert "warning" not in res
 
 
 def test_unresolvable_route_creates_nothing(patch_client):
@@ -172,5 +183,17 @@ def test_interpret_http_error_is_returned(patch_client):
         flight_duration_hours=2.0,
     )
     assert res["http_status"] == 500
+    assert "interpret" in res["error"]
+    assert client.create_kwargs is None
+
+
+def test_interpret_connection_error_is_returned(patch_client):
+    request = httpx.Request("POST", "http://test/api/flights/interpret-route")
+    client = patch_client(_flight(), httpx.ConnectError("refused", request=request))
+    res = server.create_flight(
+        route="EGTK LSGS",
+        departure_time="2026-07-08T09:00:00+00:00",
+        flight_duration_hours=2.0,
+    )
     assert "interpret" in res["error"]
     assert client.create_kwargs is None

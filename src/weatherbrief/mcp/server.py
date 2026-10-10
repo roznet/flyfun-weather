@@ -410,6 +410,8 @@ def create_flight(
             interpretation = client.interpret_route(route)
         except httpx.HTTPStatusError as e:
             return _error_result(f"Failed to interpret route: {e.response.text}", e.response.status_code)
+        except httpx.RequestError as e:
+            return _error_result(f"Failed to interpret route: could not reach the server ({e})")
 
         route_summary = {
             "interpreted": interpretation.get("interpreted", []),
@@ -476,7 +478,7 @@ def create_flight(
                 else:
                     refresh_status = {"status": "failed", "message": e.response.text}
 
-    return {
+    result: dict[str, Any] = {
         "flight": {
             "id": flight_id,
             "route_name": flight.get("route_name"),
@@ -491,6 +493,15 @@ def create_flight(
         "route": route_summary,
         "briefing": refresh_status,
     }
+    # Top-level so the agent relays it rather than leaving it buried in `route`.
+    dropped = route_summary["skipped"] + route_summary["off_route"]
+    if dropped:
+        result["warning"] = (
+            f"Flight created without these route points: {', '.join(dropped)}. "
+            "Tell the pilot, and check 'route.skipped' (not recognised) and "
+            "'route.off_route' (too far off the direct leg)."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

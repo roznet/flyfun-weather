@@ -97,10 +97,11 @@ and ChatGPT cannot drift.
 or strip airways/SIDs/speed groups itself. The MCP client calls
 `/api/flights/interpret-route` first, creates the flight with the `interpreted`
 waypoints plus `raw_route` (as the web Save flow does), and returns
-`interpreted`/`skipped`/`off_route` so the agent can report dropped points;
-fewer than two resolved points → error, nothing created. `createFlight` still
-takes `waypoints` (its OpenAPI schema is pasted into the GPT builder, a separate
-contract); moving it to the same shape is a follow-up.
+`interpreted`/`skipped`/`off_route` plus a top-level `warning` when anything was
+dropped, so the agent relays it to the pilot; fewer than two resolved points →
+error, nothing created. `createFlight` still takes `waypoints` (its OpenAPI schema
+is pasted into the GPT builder, a separate contract); moving it to the same shape
+is #749.
 
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,
 including the "drill in before answering / cross-check is not a downgrade signal"
