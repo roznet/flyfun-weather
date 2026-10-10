@@ -191,6 +191,11 @@ class FlightRow(Base):
     flight_ceiling_ft: Mapped[int] = mapped_column(Integer, default=18000)
     flight_duration_hours: Mapped[float] = mapped_column(default=0.0)
     private: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Exempt from every retention tier (tasks/retention.py): flights a talk or
+    # write-up links to must keep their full packs. scripts/ops/pin_flight.py.
+    retention_pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
     auto_refresh: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_refresh_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alt_departure_time: Mapped[datetime | None] = mapped_column(

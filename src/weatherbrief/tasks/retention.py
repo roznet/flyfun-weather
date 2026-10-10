@@ -10,6 +10,9 @@ window.  FlightRow is kept for route history.
 
 Inactive users (no login or briefing usage within a threshold) get a shorter
 T2 window so stale data doesn't linger.
+
+Exemptions: PIREP-linked packs and pinned flights (``FlightRow.retention_pinned``,
+e.g. flights a talk links to) skip every tier; debriefed flights skip T2 only.
 """
 
 from __future__ import annotations
@@ -108,14 +111,19 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 
     # Query all packs joined to their flight (for departure_time + user_id).
     stmt = (
-        select(BriefingPackRow, FlightRow.departure_time, FlightRow.user_id)
+        select(
+            BriefingPackRow, FlightRow.departure_time, FlightRow.user_id,
+            FlightRow.retention_pinned,
+        )
         .join(FlightRow, BriefingPackRow.flight_id == FlightRow.id)
     )
     rows = db.execute(stmt).all()
 
-    for pack, departure_time, user_id in rows:
+    for pack, departure_time, user_id, pinned in rows:
         if pack.id in pirep_pack_ids:
             continue  # exempt: linked PIREP needs full forecast data
+        if pinned:
+            continue  # exempt: pinned flight keeps its full packs and live layer
         if departure_time is None:
             continue
 

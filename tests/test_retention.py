@@ -448,6 +448,58 @@ class TestRunRetention:
         assert stats.errors == 0
 
 
+class TestPinnedExemption:
+    """Pinned flights (e.g. linked from a talk) skip every tier."""
+
+    def test_t2_age_pinned_keeps_everything(self, db_session, dev_user, tmp_path):
+        pack_dir = _make_pack_dir(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=400).retention_pinned = True
+        pack = _insert_pack(db_session, "flight-1", pack_dir)
+        pack_id = pack.id
+
+        config = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=90)
+        stats = run_retention(db_session, config)
+
+        assert stats.packs_t1 == 0
+        assert stats.packs_t2 == 0
+        db_session.expire_all()
+        assert db_session.get(BriefingPackRow, pack_id).has_skewt is True
+        assert (pack_dir / "cross_section.json").exists()
+        assert (pack_dir / "skewt").is_dir()
+
+    def test_t1_age_pinned_keeps_heavy_and_live(self, db_session, dev_user, tmp_path):
+        from weatherbrief.tasks.live_layer import LIVE_FILE, LIVE_META_FILE
+
+        pack_dir = _make_pack_dir(tmp_path)
+        live = tmp_path / LIVE_FILE
+        live.write_text("{}")
+        (tmp_path / LIVE_META_FILE).write_text('{"pack_dir_name": "pack"}')
+        _insert_flight(db_session, dev_user, departure_days_ago=40).retention_pinned = True
+        _insert_pack(db_session, "flight-1", pack_dir)
+
+        stats = run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert stats.bytes_freed == 0
+        assert (pack_dir / "cross_section.json").exists()
+        assert live.exists()
+
+    def test_unpinned_neighbour_still_stripped(self, db_session, dev_user, tmp_path):
+        (tmp_path / "p1").mkdir()
+        (tmp_path / "p2").mkdir()
+        pinned_dir = _make_pack_dir(tmp_path / "p1")
+        other_dir = _make_pack_dir(tmp_path / "p2")
+        _insert_flight(db_session, dev_user, flight_id="pinned", departure_days_ago=40).retention_pinned = True
+        _insert_flight(db_session, dev_user, flight_id="other", departure_days_ago=40)
+        _insert_pack(db_session, "pinned", pinned_dir)
+        _insert_pack(db_session, "other", other_dir)
+
+        stats = run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert stats.packs_t1 == 1
+        assert (pinned_dir / "cross_section.json").exists()
+        assert not (other_dir / "cross_section.json").exists()
+
+
 class TestDebriefExemption:
     """Flights with a debrief skip T2 entirely; T1 still applies."""
 

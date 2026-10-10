@@ -177,6 +177,7 @@ def import_one(db, exp: dict, user_id: str, data_dir: Path, *, overwrite: bool,
 
     flight = Flight.model_validate(exp["flight"]).model_copy(update={
         "user_id": user_id, "share_code": None, "profile_id": None, "aircraft_id": None,
+        "trip_id": None,  # prod trip rows are not imported (FK)
         "auto_refresh": False, "auto_refresh_hour": None, "last_auto_refresh_at": None,
         "private": True,
     })
