@@ -998,7 +998,8 @@ because the delivery join is an equality on `live_updated_at`):
   row. `new_items_json` lists what the tick showed first: each report from
   *this* tick's fetch (a pack switch also records the briefing's own reports,
   which are not new) and each alert-tier `appeared` event, anchored on its
-  evidence time. Only the tick writes rows: a ↻ press commits versions no row
+  evidence time (one with none is counted as `end_to_end:alert:no_evidence_time`
+  under "Not counted", not timed from its commit). Only the tick writes rows: a ↻ press commits versions no row
   describes (deliveries of those count as `untracked`).
 - `live_delivery`: one row per (flight, user, platform, version), on `/live`
   (platform from the User-Agent: `ios` / `web` / `other`), `/live/summary`

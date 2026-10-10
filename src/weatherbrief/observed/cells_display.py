@@ -385,6 +385,9 @@ class IngestResult:
 # written into the display file, which stays deterministic so a replay
 # reproduces it byte for byte. In memory only: the live tick reads the newest
 # frame (< 25 min old), so a restart costs at most that long without it.
+# Process-local: valid only while the ingest and the live tick run in the same
+# process (the single scheduler worker today). Moved apart, `cells_computed_at`
+# goes silently null and `cells_computed_to_received` stops accumulating.
 _COMPUTED_AT: dict[tuple[str, int], datetime] = {}
 _COMPUTED_AT_SIZE = 2048
 

@@ -219,6 +219,24 @@ def test_failed_delivery_write_never_raises(db_session):
     assert record_delivery(db, flight_id="f", user_id="u", platform="ios", served=NOW) is False
 
 
+def test_delivery_write_leaves_the_callers_session_alone(db_session, dev_user, monkeypatch):
+    """Review on #752: the write used to commit / roll back the request's own
+    session, so a failure could drop the caller's pending work."""
+    pending = LiveDeliveryRow(flight_id="other", user_id=dev_user, platform="web",
+                              served_live_updated_at=NOW, requested_at=NOW, delivered_via="poll")
+    db_session.add(pending)
+    # A success commits only its own row: the caller's object is still pending.
+    assert record_delivery(db_session, flight_id="f", user_id=dev_user, platform="ios", served=NOW)
+    assert pending in db_session.new
+    # A failure leaves it pending too, and the caller can still commit it.
+    monkeypatch.setattr(live_timing, "Session", MagicMock(side_effect=RuntimeError("db down")))
+    assert record_delivery(db_session, flight_id="f", user_id=dev_user, platform="ios",
+                           served=NOW + timedelta(minutes=10)) is False
+    assert pending in db_session.new
+    db_session.commit()
+    assert {r.flight_id for r in db_session.execute(select(LiveDeliveryRow)).scalars()} == {"f", "other"}
+
+
 def test_platform_of_user_agent_classes():
     assert [live_timing.platform_of(c) for c in ("ios", "web", "other", None)] == ["ios", "web", "other", "other"]
 
@@ -269,6 +287,22 @@ def test_end_to_end_metar_seen_at_tick_n_delivered_at_the_next_poll(db_session, 
     assert hops["tick"]["n"] == 2
     assert report["counts"]["dropped"] == {"available_to_delivered:untracked": 1}
     assert report["daily"][0]["day"] == "2026-10-01"
+
+
+def test_alert_without_evidence_time_is_counted_not_mixed_in(db_session, dev_user):
+    """Review on #752: an alert with no evidence time measured only commit →
+    delivery inside the report-time series, understating it."""
+    _tick(db_session, committed=NOW, started=NOW, items=[
+        {"kind": "alert", "report_at": (NOW - timedelta(minutes=8)).isoformat()},
+        {"kind": "alert", "report_at": None},
+    ], outcome="gated")
+    record_delivery(db_session, flight_id="f", user_id=dev_user, platform="ios", served=NOW,
+                    now=NOW + timedelta(minutes=2))
+    report = latency_report(db_session, now=NOW + timedelta(hours=1))
+    hops = {h["key"]: h for h in report["hops"]}
+    assert hops["end_to_end:alert:ios"]["n"] == 1
+    assert hops["end_to_end:alert:ios"]["p50"] == 600.0
+    assert report["counts"]["dropped"] == {"end_to_end:alert:no_evidence_time": 1}
 
 
 def test_rejected_highlight_is_not_a_written_hop(db_session):

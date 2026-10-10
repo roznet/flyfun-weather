@@ -272,8 +272,9 @@ def record_delivery(
     """Record that this client received ``served`` (a ``live_updated_at``),
     if it is newer than anything it got before for this flight.
 
-    Returns True when a row was written. Never raises, and commits only its
-    own row (in a savepoint): a ``/live`` read has nothing else pending.
+    Returns True when a row was written. Never raises. Writes through its own
+    short-lived session on ``db``'s engine: it never commits or rolls back
+    the caller's session, whose pending work (if any) stays the caller's.
     """
     if served is None or not user_id:
         return False
@@ -283,38 +284,35 @@ def record_delivery(
             last = _LAST_SERVED.get(key)
         if last is not None and served <= last:
             return False
-        if last is None:
-            last = db.execute(
-                select(func.max(LiveDeliveryRow.served_live_updated_at)).where(
-                    LiveDeliveryRow.flight_id == flight_id,
-                    LiveDeliveryRow.user_id == user_id,
-                    LiveDeliveryRow.platform == platform,
-                )
-            ).scalar()
-            if last is not None and served <= last:
-                _remember(key, last)
+        with Session(bind=db.get_bind()) as own:
+            if last is None:
+                last = own.execute(
+                    select(func.max(LiveDeliveryRow.served_live_updated_at)).where(
+                        LiveDeliveryRow.flight_id == flight_id,
+                        LiveDeliveryRow.user_id == user_id,
+                        LiveDeliveryRow.platform == platform,
+                    )
+                ).scalar()
+                if last is not None and served <= last:
+                    _remember(key, last)
+                    return False
+            own.add(LiveDeliveryRow(
+                flight_id=flight_id, user_id=user_id, platform=platform,
+                served_live_updated_at=served,
+                requested_at=now or datetime.now(timezone.utc),
+                delivered_via=via,
+            ))
+            try:
+                own.commit()
+            except IntegrityError:
+                # A concurrent poll of the same client recorded it first.
+                own.rollback()
+                _remember(key, served)
                 return False
-        try:
-            with db.begin_nested():
-                db.add(LiveDeliveryRow(
-                    flight_id=flight_id, user_id=user_id, platform=platform,
-                    served_live_updated_at=served,
-                    requested_at=now or datetime.now(timezone.utc),
-                    delivered_via=via,
-                ))
-        except IntegrityError:
-            # A concurrent poll of the same client recorded it first.
-            _remember(key, served)
-            return False
-        db.commit()
         _remember(key, served)
         return True
     except Exception:
         logger.warning("Live delivery not recorded for %s — request kept", flight_id, exc_info=True)
-        try:
-            db.rollback()
-        except Exception:
-            pass
         return False
 
 
@@ -473,8 +471,10 @@ def latency_report(db: Session, *, days: int = 30, now: datetime | None = None) 
                 add(day, f"report_to_fetched:{kind}", _ms(report_at, fetched))
                 add(day, f"fetched_to_available:{kind}", _ms(fetched, t.committed_at))
             if kind == "alert" and report_at is None:
-                # No evidence time: the chain starts at the event itself.
-                report_at = t.committed_at
+                # No evidence time: commit → delivery only, which would
+                # understate the series. Counted, not mixed in.
+                dropped["end_to_end:alert:no_evidence_time"] += 1
+                continue
             if kind in E2E_KINDS:
                 for platform, first in firsts.items():
                     if first is not None:
