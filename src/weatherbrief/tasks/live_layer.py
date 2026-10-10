@@ -76,9 +76,12 @@ class CommitTrace:
     write was refused as stale. ``records`` is what the tick appended to the
     history (empty when nothing was new, or the history write failed). The
     ``cells_*`` times describe the display file the storms came from.
+    ``layer`` is the layer as committed, in memory: its changes still carry
+    the never-dumped fields (``evaluated``) the live-alert push reads (#754).
     """
 
     committed_at: datetime | None = None
+    layer: LiveLayer | None = None
     records: list[dict] = field(default_factory=list)
     cells_frame_at: datetime | None = None
     cells_computed_at: datetime | None = None
@@ -835,6 +838,7 @@ def commit_live_update(
         }))
         if trace is not None:
             trace.committed_at = now
+            trace.layer = layer
             if cells is not None and cells.newest is not None and layer.storms is not None:
                 trace.cells_frame_at = layer.storms.frame_time
                 trace.cells_computed_at = cells.computed_at
@@ -876,6 +880,24 @@ def patch_highlight(
             # A newer tick committed: its own highlight is on the way.
             return False
         layer.glance.highlight = highlight
+        _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
+        return True
+
+
+def patch_push_state(flight_dir: Path | str, state, *, pack_timestamp: str) -> bool:
+    """Store the live-alert push memory on the layer (#754). True if written.
+
+    Like :func:`patch_highlight`, a small write under the commit lock after
+    the tick's commit. It only checks the pack: a ↻ press that committed in
+    between leaves the push memory valid (the press never pushes), but a new
+    pack has reset the layer and its memory with it.
+    """
+    flight_dir = Path(flight_dir)
+    with _lock_for(flight_dir):
+        layer = load_live(flight_dir)
+        if layer is None or layer.pack_timestamp != pack_timestamp:
+            return False
+        layer.push_state = state
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
         return True
 

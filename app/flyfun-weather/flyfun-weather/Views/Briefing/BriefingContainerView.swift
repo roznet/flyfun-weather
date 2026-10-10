@@ -215,6 +215,12 @@ struct BriefingContainerView: View {
                 networkMonitor: appState.networkMonitor
             )
             viewModel = vm
+            // A flight-day push tap (#754) opened this screen: land on Observed,
+            // and tag the first live fetch as push-opened. Before the load, so
+            // that fetch carries it.
+            if appState.takeObservedRequest(flightId: flight.id) {
+                vm.openObservedFromPush()
+            }
             await vm.loadBriefing()
             // D-0 live observations (#637): keep the layer moving while the
             // briefing stays open (no-op outside the live window). Started
@@ -248,6 +254,18 @@ struct BriefingContainerView: View {
             // trigger — adopt the newest online pack seamlessly.
             Task { await viewModel?.syncLatestPack() }
         }
+        .onChange(of: appState.requestedObservedFlightId) {
+            // A flight-day push tapped while this briefing is already open
+            // (#754): switch to Observed and fetch the live layer now.
+            guard let vm = viewModel, appState.takeObservedRequest(flightId: flight.id) else { return }
+            vm.openObservedFromPush()
+            Task { await vm.syncLatestPack(forceLive: true) }
+        }
+        .onChange(of: viewModel?.selectedTab, initial: true) {
+            // Whether this flight's Observed tab is on screen, for the
+            // flight-day push banner rule (#754).
+            appState.setObservedVisible(viewModel?.selectedTab == .observed, flightId: flight.id)
+        }
         .onDisappear {
             // Stop the timing-scenario poll when the briefing leaves the screen —
             // it runs in a detached Task (not the `.task` above), so it would
@@ -256,6 +274,7 @@ struct BriefingContainerView: View {
             // via `.task` and restarts polling.
             viewModel?.stopTimeOptionsPolling()
             viewModel?.stopLivePolling()
+            appState.setObservedVisible(false, flightId: flight.id)
         }
     }
 

@@ -12,6 +12,9 @@ Two payload shapes:
 - **background** — a silent ``content-available`` badge sync so a read on the
   web drops the app badge (``send_silent_badge_push``).
 
+Live alerts on flight day (#754, ``send_live_alert_push``) are an alert push
+of their own: no badge, grouped per flight, with an expiry.
+
 Routing is per **token**, from the ``environment`` the client reported at
 register time (a TestFlight/App-Store build → ``production``; an Xcode debug
 build → ``sandbox``). A single ``.p8`` token-auth key serves both hosts. On a
@@ -189,15 +192,19 @@ def _send_one(
     *,
     push_type: str,
     priority: int,
+    extra_headers: dict[str, str] | None = None,
 ) -> ApnsResult:
     """POST a single notification to APNs for one device token.
 
     ``push_type`` is ``alert`` or ``background``; ``priority`` 10 for alerts,
     5 for silent background pushes (Apple requires 5 for ``content-available``).
+    ``extra_headers`` adds optional APNs headers (e.g. ``apns-expiration``);
+    it cannot override the four above.
     """
     host = _APNS_HOSTS.get(environment, _APNS_HOSTS["production"])
     url = f"{host}/3/device/{token}"
     headers = {
+        **(extra_headers or {}),
         "authorization": f"bearer {_provider_token(config)}",
         "apns-topic": config.bundle_id,
         "apns-push-type": push_type,
@@ -241,6 +248,7 @@ def _dispatch(
     priority: int,
     config: ApnsConfig | None = None,
     user_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> int:
     """Send ``payload`` to each ``(token, environment)`` device; prune dead ones.
 
@@ -270,6 +278,7 @@ def _dispatch(
                     result = _send_one(
                         client, config, token, environment, payload,
                         push_type=push_type, priority=priority,
+                        extra_headers=extra_headers,
                     )
                 except Exception:
                     logger.warning("APNs send raised for a device", exc_info=True)
@@ -447,3 +456,30 @@ def send_silent_badge_push(db: Session, user_id: str, badge: int) -> int:
         return 0
     payload = {"aps": {"content-available": 1, "badge": badge}}
     return _dispatch(db, devices, payload, push_type="background", priority=5, user_id=user_id)
+
+
+def send_live_alert_push(
+    db: Session,
+    user_id: str,
+    payload: dict,
+    *,
+    expires_at: datetime,
+    devices: list[tuple[str, str]] | None = None,
+) -> int:
+    """Send one flight-day live-alert push (#754) to all the user's devices.
+
+    The payload is built by ``notify/live_alerts.py`` (one push per flight per
+    tick). ``apns-expiration`` = ``expires_at``: APNs keeps only the newest
+    pending push per app and device, and drops it after this, so a phone
+    offline for a whole leg lands to nothing stale. No ``apns-collapse-id``:
+    each push stays its own entry in Notification Center. Best-effort, like
+    every sender here; returns the number of devices reached.
+    """
+    devices = devices if devices is not None else _load_devices(db, user_id)
+    if not devices:
+        return 0
+    headers = {"apns-expiration": str(int(expires_at.timestamp()))}
+    return _dispatch(
+        db, devices, payload, push_type="alert", priority=10,
+        user_id=user_id, extra_headers=headers,
+    )

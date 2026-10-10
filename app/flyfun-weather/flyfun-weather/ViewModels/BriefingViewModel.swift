@@ -187,6 +187,12 @@ final class BriefingViewModel {
     /// The flight-day default (open on Observed) is applied once per open, so
     /// a pilot who switches back to Advisory is never pulled away again.
     @ObservationIgnored private var flightDayDefaultApplied = false
+    /// A flight-day push tap asked for Observed (#754); applied by
+    /// `reconcileTabs` as soon as the tab is offered.
+    @ObservationIgnored private var observedRequested = false
+    /// Sent as `?source=push` on the next live fetch (#754), then cleared, so
+    /// the server can count push opens.
+    @ObservationIgnored private var liveFetchSource: String?
     /// Default to ECMWF (#8, iOS feedback). The effective choice is reconciled
     /// against the models a given flight actually carries via `preferredModel`;
     /// a user's explicit pick is remembered across flights/launches (#9).
@@ -327,11 +333,27 @@ final class BriefingViewModel {
     /// selection off Advisory is left alone.
     func reconcileTabs(now: Date = Date()) {
         if !tabs.contains(selectedTab) { selectedTab = .advisory }
+        if observedRequested, showsObservedTab {
+            // An explicit push tap wins over the once-per-open default, and
+            // counts as it.
+            observedRequested = false
+            flightDayDefaultApplied = true
+            selectedTab = .observed
+            return
+        }
         guard !flightDayDefaultApplied, showsObservedTab else { return }
         flightDayDefaultApplied = true
         if selectedTab == .advisory, flight.isInLiveObservationWindow(now: now) {
             selectedTab = .observed
         }
+    }
+
+    /// A flight-day push was tapped for this flight (#754): open Observed (now,
+    /// or once the tab is offered) and tag the next live fetch as push-opened.
+    func openObservedFromPush() {
+        observedRequested = true
+        liveFetchSource = "push"
+        reconcileTabs()
     }
 
     // MARK: - Initial load
@@ -940,8 +962,10 @@ final class BriefingViewModel {
         if let networkMonitor, !networkMonitor.isConnected { return }
         isFetchingLive = true
         defer { isFetchingLive = false }
+        let source = liveFetchSource
+        liveFetchSource = nil
         do {
-            let layer = try await repository.liveLayer(flightId: flight.id)
+            let layer = try await repository.liveLayer(flightId: flight.id, source: source)
             adoptLiveLayer(layer, timestamp: timestamp)
         } catch {
             Self.logger.debug("Live layer fetch failed, keeping current observations: \(error)")

@@ -68,6 +68,34 @@ final class AppState {
     /// the same seam `onOpenURL` relies on. Observable so `FlightListView` routes
     /// when it changes.
     var pendingNavigation: PendingNavigation?
+
+    /// The flight whose Observed tab is on screen, if any (#754): a flight-day
+    /// push for it shows no foreground banner, the open view just re-syncs.
+    /// Set by the briefing screen through `setObservedVisible`.
+    private(set) var visibleObservedFlightId: String?
+
+    /// A flight-day push tap asked for this flight's Observed tab (#754). The
+    /// briefing screen for that flight consumes it (`takeObservedRequest`).
+    private(set) var requestedObservedFlightId: String?
+
+    func setObservedVisible(_ visible: Bool, flightId: String) {
+        if visible {
+            visibleObservedFlightId = flightId
+        } else if visibleObservedFlightId == flightId {
+            visibleObservedFlightId = nil
+        }
+    }
+
+    func requestObservedTab(flightId: String) {
+        requestedObservedFlightId = flightId
+    }
+
+    /// True (and cleared) when an Observed request is pending for `flightId`.
+    func takeObservedRequest(flightId: String) -> Bool {
+        guard requestedObservedFlightId == flightId else { return false }
+        requestedObservedFlightId = nil
+        return true
+    }
     /// (i)-popup help content (metrics + advisories). Seeded from disk cache or
     /// the bundled baseline at init; refreshed opportunistically when online.
     let helpCatalog = HelpCatalogStore()

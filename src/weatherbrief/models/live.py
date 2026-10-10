@@ -587,6 +587,11 @@ class LiveChanges(BaseModel):
     # change rows (a reissue of a briefed SIGMET is not new). None = not
     # computed (no SIGMET baseline, or a layer written before the field).
     new_sigmets: list[str] | None = None
+    # What this tick actually read (#754): full airport change keys
+    # ("metar:LFAT") and dimension prefixes ("sigmet:"). The cleared-push
+    # sustain rule counts only ticks where a key was evaluated. In memory
+    # only: never dumped, so None on anything read back from disk.
+    evaluated: list[str] | None = Field(default=None, exclude=True)
 
     @computed_field
     @property
@@ -610,6 +615,39 @@ TRAIL_EXCLUDE: dict = {
     "recently_cleared": True,
     "changes": {"__all__": {"trail", "cleared_at"}},
 }
+
+
+class LivePushedAlert(BaseModel):
+    """An alert-tier change pushed to the pilot and not yet pushed as cleared
+    (#754). What the clear push needs to say, plus its sustain counter."""
+
+    key: str
+    kind: ChangeKind
+    role: ChangeRole
+    icao: str | None = None
+    to_value: str | None = None
+    message: str
+    pushed_at: datetime
+    # Consecutive evaluated ticks on which the key has not been an alert-tier
+    # row. A clear is pushed when it reaches ``live_alerts.CLEAR_SUSTAIN_TICKS``.
+    clear_ticks: int = 0
+
+
+class LivePushState(BaseModel):
+    """The live-alert push stream's memory for one flight (#754), next to the
+    classifier's ``alerted``. Written only by the server tick, after its
+    commit (``live_layer.patch_push_state``); reset with the layer by a new
+    pack. In shadow mode it advances as if each decision had been sent."""
+
+    # Pushed and still active, by change key.
+    active: dict[str, LivePushedAlert] = Field(default_factory=dict)
+    # Keys whose clear was pushed -> when. A later alert-tier row for such a
+    # key pushes again even though §45's memory keeps it quiet on screen.
+    rearmed: dict[str, datetime] = Field(default_factory=dict)
+    # Shadow-mode measurement (owner review): how often each fired.
+    alerts_pushed: int = 0
+    clears_pushed: int = 0
+    rearms_fired: int = 0
 
 
 class LiveLayer(BaseModel):
@@ -651,6 +689,9 @@ class LiveLayer(BaseModel):
     alerted: dict[str, str] = Field(default_factory=dict)
     # Route SIGMETs seen recently, so a reissue reads as a replacement (#682).
     sigmet_traces: list[LiveSigmetTrace] = Field(default_factory=list)
+    # Live-alert push memory (#754): what was pushed and not yet cleared, and
+    # which keys a pushed clear re-armed. None until the first push decision.
+    push_state: LivePushState | None = None
 
     # Starting point for blocks the pack lacks. Observations and SIGMETs are
     # only fetched for a D-0 briefing, so a flight briefed the day before has

@@ -9,6 +9,10 @@ nonisolated enum PendingNavigation: Equatable, Sendable {
     case flightList
     /// Open a specific flight's briefing by id.
     case briefing(flightId: String)
+    /// Open a flight's briefing on its Observed tab (#754): the tap target of a
+    /// flight-day push (`live_alert` / `live_clear` / `flight_day`). Explicit,
+    /// so it applies even after the once-per-open flight-day default has run.
+    case briefingObserved(flightId: String)
     /// Open the forecast map, optionally in a shared `fc.*` state (#420). A map
     /// link shared from desktop opens the phone on the same day/hour/metric/airport.
     case forecastMap(MapDeepLink)
@@ -33,8 +37,10 @@ nonisolated enum PendingNavigation: Equatable, Sendable {
 
     /// The target flight id, when this navigation names one.
     var flightId: String? {
-        if case .briefing(let id) = self { return id }
-        return nil
+        switch self {
+        case .briefing(let id), .briefingObserved(let id): return id
+        default: return nil
+        }
     }
 
     /// The target trip id, when this navigation names one.
@@ -138,6 +144,7 @@ struct PendingNavigationStore {
         switch nav {
         case .flightList: "flightList"
         case .briefing(let id): "briefing:\(id)"
+        case .briefingObserved(let id): "briefingObserved:\(id)"
         case .forecastMap(let dl): "forecastMap:" + encodeMap(dl)
         case .historicalMap(let dl): "historicalMap:" + encodeHistorical(dl)
         case .share(let code): "share:\(code)"
@@ -148,6 +155,10 @@ struct PendingNavigationStore {
 
     private static func decode(_ raw: String) -> PendingNavigation? {
         if raw == "flightList" { return .flightList }
+        if raw.hasPrefix("briefingObserved:") {
+            let id = String(raw.dropFirst("briefingObserved:".count))
+            return id.isEmpty ? nil : .briefingObserved(flightId: id)
+        }
         if raw.hasPrefix("briefing:") {
             let id = String(raw.dropFirst("briefing:".count))
             return id.isEmpty ? nil : .briefing(flightId: id)

@@ -21,6 +21,10 @@ So a tick costs at most two METAR/TAF batches and one SIGMET call, whatever
 the number of flights. Observed radar/lightning/tops are re-sampled from local
 frames as usual (no network).
 
+After the commits, each committed flight's new alerts (and pushed alerts that
+cleared) go to the live-alert push (#754, ``notify/live_alerts.py``); only this
+writer pushes, never a ↻ press.
+
 The tick never runs the model pipeline or an LLM and never changes a grade.
 Disabled with ``DISABLE_LIVE_LAYER=1``; also off whenever the verification
 loop is (``DISABLE_VERIFICATION=1``) since it rides that loop.
@@ -320,6 +324,7 @@ class LiveTick:
 
         updated = 0
         committed: list[tuple[FlightRow, Path]] = []
+        pushes: list[tuple[FlightRow, Path, object]] = []
         timing_rows = []
         for flight, latest, pack_dir in plans:
             try:
@@ -337,6 +342,9 @@ class LiveTick:
                 )
                 updated += 1
                 committed.append((flight, pack_dir))
+                # Only a commit that wrote owns its new_alert flags: a refused
+                # one (stale, or a ↻ landed first) leaves trace.layer None.
+                pushes.append((flight, pack_dir, trace.layer))
                 timing_rows.append(self._timing_row(
                     build_tick_row, flight, pack_timestamp, tick_started_at,
                     int((time.monotonic() - f0) * 1000), trace, result,
@@ -348,6 +356,9 @@ class LiveTick:
             except Exception:
                 logger.warning("Live tick: refresh failed for flight %s", flight.id, exc_info=True)
 
+        # Before the highlights: the push text is deterministic, so it need
+        # not wait on a model call (#754).
+        pushed = self._push_alerts(db, pushes)
         highlights = self._highlights(db, committed)
         highlighted = sum(1 for h in highlights.values() if h.outcome == "written")
         # The highlight cost rows (charge_highlight) are committed on their own,
@@ -376,7 +387,19 @@ class LiveTick:
             len(flights), updated, highlighted, fetched, tick_ms,
         )
         return {"flights": len(flights), "updated": updated, "fetched": fetched,
-                "highlighted": highlighted}
+                "highlighted": highlighted, "pushed": pushed}
+
+    def _push_alerts(self, db: Session, pushes: list[tuple[FlightRow, Path, object]]) -> int:
+        """The live-alert push sink (#754), one call per committed flight.
+        Returns how many flights got (or, in shadow mode, would have got) a
+        push. Never raises: a push is not worth a tick."""
+        from weatherbrief.notify.live_alerts import notify_live_alerts
+
+        count = 0
+        for flight, pack_dir, layer in pushes:
+            outcome = notify_live_alerts(db, flight, layer, pack_dir=pack_dir, trigger="tick")
+            count += outcome in ("sent", "shadow")
+        return count
 
     def _timing_row(self, build, flight, pack_timestamp, tick_started_at, flight_ms, trace, result):
         """This flight's ``live_tick_timing`` row (#751), or None. Never raises:

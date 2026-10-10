@@ -14,6 +14,12 @@ nonisolated struct NotifyPushUpdateRequest: Encodable, Sendable {
     let notifyPush: Bool   // -> "notify_push"
 }
 
+/// Body for `PUT /api/user/preferences` when toggling flight-day live alerts
+/// (#754) — a content toggle on the push channel, not a channel.
+nonisolated struct NotifyLiveAlertsUpdateRequest: Encodable, Sendable {
+    let notifyLiveAlerts: Bool   // -> "notify_live_alerts"
+}
+
 /// Body for `PUT /api/user/preferences` when toggling the email channel.
 nonisolated struct NotifyEmailUpdateRequest: Encodable, Sendable {
     let notifyEmail: Bool   // -> "notify_email"

@@ -25,6 +25,9 @@ nonisolated struct PreferencesResponse: Codable, Sendable {
     // Whether an Autorouter token is stored (#625). Optional for the same
     // cached-decode reason as `flightOrder`.
     let hasAutorouterCreds: Bool?
+    // Live alerts on flight day (#754): push only, auto-refresh flights in
+    // their live window. Optional for the cached-decode reason above.
+    let notifyLiveAlerts: Bool?
 
     var pushEnabled: Bool { notifyPush ?? false }
     var emailEnabled: Bool { notifyEmail ?? true }
@@ -34,6 +37,8 @@ nonisolated struct PreferencesResponse: Codable, Sendable {
     var deviceCount: Int { pushDeviceCount ?? 0 }
     var hasPushDevice: Bool { deviceCount > 0 }
     var autorouterLinked: Bool { hasAutorouterCreds ?? false }
+    /// Live alerts default on (the server's opt-out default).
+    var liveAlertsEnabled: Bool { notifyLiveAlerts ?? true }
     /// Upcoming-flights ordering, defaulting to today's behaviour on an older
     /// server (or an unknown value written by a future one).
     var flightOrderPreference: FlightOrder { FlightOrder(rawValue: flightOrder ?? "") ?? .furthestFirst }
@@ -51,7 +56,7 @@ nonisolated struct PreferencesResponse: Codable, Sendable {
         pirepCanView: false, pirepCanPublish: false,
         notifyEmail: nil, notifyPush: nil, notifyScope: nil, notifyChangeOnly: nil,
         notifyDecayNotice: nil, pushDeviceCount: nil, flightOrder: nil,
-        hasAutorouterCreds: nil
+        hasAutorouterCreds: nil, notifyLiveAlerts: nil
     )
 }
 

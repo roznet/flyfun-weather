@@ -9,6 +9,7 @@
 
 import Foundation
 import Testing
+import UserNotifications
 @testable import flyfun_weather
 
 @Suite("PushSupport")
@@ -48,6 +49,46 @@ struct PushSupportTests {
 
     @Test func pendingNavigationNilForWrongType() {
         #expect(PushSupport.pendingNavigation(from: ["flight_id": 42]) == nil)
+    }
+
+    // MARK: - Flight-day pushes (#754)
+
+    @Test(arguments: ["live_alert", "live_clear", "flight_day"])
+    func flightDayPushOpensObserved(type: String) {
+        let userInfo: [AnyHashable: Any] = [
+            "flight_id": "zz-test-flight", "type": type,
+            "keys": ["metar:LFAT"], "tick_at": "2026-10-10T10:20:00Z",
+        ]
+        #expect(PushSupport.pendingNavigation(from: userInfo) == .briefingObserved(flightId: "zz-test-flight"))
+        #expect(PushSupport.pendingNavigation(from: userInfo)?.flightId == "zz-test-flight")
+    }
+
+    @Test func unknownTypeStaysAPlainBriefingTap() {
+        let userInfo: [AnyHashable: Any] = ["flight_id": "zz-test-flight", "type": "something_new"]
+        #expect(PushSupport.pendingNavigation(from: userInfo) == .briefing(flightId: "zz-test-flight"))
+    }
+
+    @Test func liveAlertShowsBannerInForeground() {
+        let userInfo: [AnyHashable: Any] = ["flight_id": "zz-a", "type": "live_alert"]
+        let options = PushSupport.foregroundPresentation(for: userInfo, visibleObservedFlightId: nil)
+        #expect(options.contains(.banner))
+        #expect(options.contains(.sound))
+    }
+
+    @Test func liveAlertShowsBannerWhenAnotherFlightIsObserved() {
+        let userInfo: [AnyHashable: Any] = ["flight_id": "zz-a", "type": "live_clear"]
+        let options = PushSupport.foregroundPresentation(for: userInfo, visibleObservedFlightId: "zz-b")
+        #expect(options.contains(.banner))
+    }
+
+    @Test func liveAlertSilentWhenItsObservedTabIsOnScreen() {
+        let userInfo: [AnyHashable: Any] = ["flight_id": "zz-a", "type": "live_alert"]
+        #expect(PushSupport.foregroundPresentation(for: userInfo, visibleObservedFlightId: "zz-a").isEmpty)
+    }
+
+    @Test func briefingPushStaysSuppressedInForeground() {
+        let userInfo: [AnyHashable: Any] = ["flight_id": "zz-a", "timestamp": "2026-10-10T10:00:00Z"]
+        #expect(PushSupport.foregroundPresentation(for: userInfo, visibleObservedFlightId: nil).isEmpty)
     }
 
     @Test func environmentIsSandboxUnderDebug() {

@@ -960,6 +960,16 @@ function renderNotificationSettings(prefs: PreferencesResponse): void {
     if (key) opt.textContent = t(key);
   }
 
+  // Live alerts (#754): a content toggle on the push channel, shown only with
+  // a device (the push row carries the install hint otherwise). Outside the
+  // channel invariant: it never counts as a channel.
+  const liveRow = document.getElementById('notify-live-row');
+  const liveToggle = document.getElementById('toggle-notify-live-alerts') as HTMLInputElement | null;
+  if (liveRow) liveRow.style.display = hasDevice ? '' : 'none';
+  setText('notify-live-label', 'settings.notify.liveAlerts');
+  setText('notify-live-hint', 'settings.notify.liveAlerts.hint');
+  if (liveToggle) liveToggle.checked = prefs.notify_live_alerts ?? true;
+
   updatesSel.value = foldBriefingUpdates(prefs.notify_scope ?? 'auto', prefs.notify_change_only ?? true);
   emailToggle.checked = prefs.notify_email ?? true;
   pushToggle.checked = (prefs.notify_push ?? false) && hasDevice;
@@ -1760,6 +1770,11 @@ async function handleSave(): Promise<void> {
       accountUpdate.notify_email = notifyEmailEl.checked;
       // Push can only be on with a registered device (toggle is disabled otherwise).
       accountUpdate.notify_push = notifyPushEl.checked && !notifyPushEl.disabled;
+    }
+    const notifyLiveEl = document.getElementById('toggle-notify-live-alerts') as HTMLInputElement | null;
+    const notifyLiveRow = document.getElementById('notify-live-row');
+    if (notifyLiveEl && notifyLiveRow && notifyLiveRow.style.display !== 'none') {
+      accountUpdate.notify_live_alerts = notifyLiveEl.checked;
     }
     // Dismiss the one-time decay notice once the user has seen the section.
     const decayRow = document.getElementById('notify-decay-notice');

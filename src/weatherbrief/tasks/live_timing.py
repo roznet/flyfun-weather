@@ -268,9 +268,14 @@ def record_delivery(
     served: datetime | None,
     now: datetime | None = None,
     via: str = "poll",
+    push_sent_at: datetime | None = None,
 ) -> bool:
     """Record that this client received ``served`` (a ``live_updated_at``),
     if it is newer than anything it got before for this flight.
+
+    ``via="push"`` with ``push_sent_at`` is the live-alert push (#754): the
+    version reached the device by APNs, so the poll that follows the tap is
+    not a second delivery.
 
     Returns True when a row was written. Never raises. Writes through its own
     short-lived session on ``db``'s engine: it never commits or rolls back
@@ -301,6 +306,7 @@ def record_delivery(
                 served_live_updated_at=served,
                 requested_at=now or datetime.now(timezone.utc),
                 delivered_via=via,
+                push_sent_at=push_sent_at,
             ))
             try:
                 own.commit()

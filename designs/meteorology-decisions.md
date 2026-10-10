@@ -5922,3 +5922,54 @@ kind of miss a push notification makes costly.
   fires, and whether AWC still lists such a SIGMET later (a feed glitch, which
   would re-alert).
 
+
+## 47. A pushed alert that clears is pushed as cleared, and re-arms its key for the push path
+
+**Date:** 2026-10-10 · **Issue:** #754 · **Amends:** §45 (push path only)
+
+Live alerts now reach the phone (`notify/live_alerts.py`). The owner wants a
+push when an alert we pushed has cleared ("these are important to know"). §45
+keeps each airport's worst alerted level for the whole flight and never
+re-arms: after "LFAT no longer IFR", a return to IFR would stay quiet and
+leave the pilot believing it is clear.
+
+### Choices
+
+- **Cleared** = a key we pushed is no longer an alert-tier row on a tick that
+  evaluated its source: `LiveChanges.evaluated` (in memory only) lists the
+  airport keys actually read (a relevant airport with a usable report; its TAF
+  key only with a reading at ETA on both sides) and `"sigmet:"` when the SIGMET
+  fetch counted. A departure after take-off, a passed airport, a failed fetch
+  or a SPECI-less gap is "not read", never "clear".
+- **Sustain: 2 consecutive evaluated ticks** (~20 min) before the clear is
+  pushed (`CLEAR_SUSTAIN_TICKS`). Unevaluated ticks neither count nor reset;
+  a return to alert tier resets. Stops VFR↔MVFR flicker ping-ponging.
+- **A pushed clear re-arms the key, for the push path only.** The next
+  alert-tier row for it pushes even though `new_alert` is False (§45). The
+  classifier, `alerted`, `new_alert` and every screen are unchanged; the
+  re-arm lives in `LiveLayer.push_state.rearmed`, reset with the layer.
+- **SIGMETs follow their chain.** A reissue or a late partner FIR changes the
+  row key (`a+b`); any `sigmet_issued` row (any tier, incl. an `updated`
+  reissue of a briefed chain) sharing a member SIGMET keeps it active. A
+  pending SIGMET missing from a fetch (§38) is not cleared. A cancelled or
+  "no longer active" row supplies the clear text.
+- **Storms push new alerts, never a clear**: "the storm passed" has no clean
+  definition yet, and a storm's alert memory is per lineage/stretch (§41).
+- **Text is the deterministic row message**, never the model highlight. An
+  airport back to its briefed state has no row, so: "ZZDS METAR no longer IFR".
+
+### Rejected
+
+- **Clearing §45's memory on a pushed clear**: would re-alert on screen too,
+  changing the in-app behaviour the owner calibrated in #722.
+- **One tick**: a category bouncing across a boundary from one METAR to the
+  next would push alert, clear, alert. 2 ticks is the owner's number (#754),
+  not measured; shadow mode measures it.
+
+### Real-world validation needed
+
+Shadow mode (`WB_LIVE_PUSH_SEND` unset) logs every decision
+(`LIVE_PUSH_WOULD_SEND … cleared=[…] rearmed=[…]`) and advances the memory as
+if sent; `push_state` also counts `alerts_pushed` / `clears_pushed` /
+`rearms_fired`. Review 2–3 flight days: how often a pushed alert clears, how
+often the re-arm fires, and whether 2 ticks is enough.

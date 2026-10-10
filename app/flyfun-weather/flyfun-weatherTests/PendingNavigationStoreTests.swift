@@ -55,6 +55,7 @@ struct PendingNavigationStoreTests {
         let targets: [PendingNavigation] = [
             .flightList,
             .briefing(flightId: "abc"),
+            .briefingObserved(flightId: "abc"),
             .share(code: "aB3xy7Q9"),
             .trip(id: "trip-1"),
             // "tripShare:" also starts with "trip", so the decoder has to test
