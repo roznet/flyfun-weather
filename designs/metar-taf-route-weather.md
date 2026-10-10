@@ -70,6 +70,8 @@ surfaces rather than being swallowed as a fetch failure.
 - TAF highlighting: `taf_applicable_lines: list[int]` — line indices for base + applicable BECMG/TEMPO groups (empty when the TAF is not valid at ETA)
 - ETA: `eta_hour_offset: int | None` — rounded hours after departure (from enroute distance interpolation)
 - Metadata: ICAO, distance from route, enroute distance, nearest waypoint
+- Variable range (#758): `metar_wind_variable_from/_to`, `taf_wind_variable_from/_to` (the `dddVddd`; the TAF one from the same group as the TAF wind). VRB = speed with no direction; calm = 0 kt — no separate flags on the observation, they live on the picture's `WindSample`
+- `runway_wind: RunwayWindPicture | None` (#758) — see *Runway + wind picture* below
 
 `ObservationComparison` stores the obs-vs-model result:
 - `category_match`: `CONFIRMING` / `SIGNIFICANT` / `CONFLICTING`
@@ -91,6 +93,41 @@ Added to `ForecastSnapshot` as `route_observations: RouteObservations | None`.
 4. Extract structured fields into `AirportObservation`, including `eta_hour_offset` (rounded hours)
 5. For TAFs, `_apply_taf_at_eta` reads the TAF at the interpolated ETA (not departure) through `analysis/taf_reading.read_taf_at` (euro_aip `WeatherAnalyzer.taf_conditions_at`; shared with the historical map, #629, so both read a TAF identically): nothing when the TAF's validity does not contain the ETA; otherwise prevailing (main body + completed BECMG / started FM, worse-of while a BECMG is in transition), the worst TEMPO/PROB group laid over prevailing, and significant weather. Reasoning in [meteorology-decisions.md §32](meteorology-decisions.md). `airports_with_taf` / `worst_taf_category` count only TAFs valid at ETA
 6. Map each airport to nearest waypoint via cumulative great-circle distance
+
+### Runway + wind picture (#758)
+
+`models/runway_wind.py` + `analysis/runway_wind.py` — the data behind the
+runway + wind dials (web *At a glance*, iOS Observed tab). The server builds it
+so clients only draw: `RunwayWindPicture{icao, runways: [RunwayInfo{id,
+length_ft, surface, hard, ends:[{ident, heading_true}]}], winds:
+[WindAtAirport{wind: WindSample, ends: [EndComponents], best_end, advisory}]}`.
+
+- **Runways:** `airports.get_runways()` (open runways, ends with a true
+  heading; `hard` = euro_aip `is_hard_surface`, the classification behind
+  `has_hard_runway`). `get_runway_ends()` is now a projection of it
+  (`runway_ends_of`), so every consumer sees the same ends in the same order.
+- **Components:** euro_aip `WeatherAnalyzer.wind_components` per end (signed
+  crosswind, side, gust components, worst case over the variable range and
+  gust) via a minimal `WeatherReport`. No trig in weatherbrief.
+- **Best end + tier:** `compute_wind_advisory()` — the same call that fills
+  `metar_best_runway_id` / `metar_wind_advisory`. One picker; pinned by the
+  invariant test in `tests/test_runway_wind.py` over every wind in the shared
+  live scenarios × several layouts. This is why a calm `WindSample` keeps the
+  reported `direction_true` 000: the table picks with it.
+- **Samples:** METAR (obs time) and TAF at the airport's ETA (only when the TAF
+  is valid at ETA). Missing wind = no sample, never "calm". A `model` source is
+  reserved for the forecast-card follow-up.
+- **Built in `run_route_weather`** for every corridor airport with runways
+  (`_attach_runway_wind`; a failure costs the picture, not the advisories), so
+  it rides the pack and every `/live` tick with no new endpoint. **Size:**
+  ~1.2 KB (one runway) to ~1.9 KB (two) per airport, i.e. tens of KB on a
+  20-airport corridor in each `briefing.json`, `live.json` and `/live` body.
+  Not recorded in `live_history.jsonl`. Pinned (< 2.5 KB) by a test so growth
+  is a visible choice.
+- **True north throughout:** `heading_degT` and METAR/TAF winds are true;
+  idents are the painted (magnetic) numbers. No variation is applied, on purpose.
+- euro_aip ≥ (next release) also makes a VRB wind's worst case its gust
+  (`VRB05G20` → 20); until the pin moves, VRB `max_crosswind_kt` is the speed.
 
 ### Comparison (`run_observation_comparison`)
 
@@ -214,6 +251,7 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | Three-tier classification (no MINOR_DELTA) | Implemented as CONFIRMING/SIGNIFICANT/CONFLICTING; MINOR_DELTA was dropped for simplicity |
 | Sounding ceiling for model category | `reconcile_ceiling()` on the route analyses' per-model sounding when available (AGL, via the airport's field elevation), falling back to visibility-only |
 | Runway crosswind advisory | `compute_wind_advisory()` evaluates all runway ends, picks best runway; `green`/`amber`/`red` thresholds |
+| Runway + wind picture on every corridor airport, server-built (#758) | Clients draw, never derive, so web/iOS/agents agree; any later placement (table row, alternates) needs no server change. Cost: ~1–2 KB per airport per payload |
 | Clients read structured TAF-at-ETA fields, not `taf_at_eta_line()` (#613) | The web UI is localised (en/fr/de/es) and renders categories as badges; a server-built English string would bypass both. `taf_at_eta_line()` stays the single text form for the LLM and text digests, and `readTafAtEta` / `tafAtEta` mirror its rules (SYNC comments on all three) |
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
@@ -229,6 +267,8 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | `DatabaseStorage.load_model()` (via `weatherbrief.airports._load_airport_model`, cached) | `euro_aip.storage.database_storage` |
 | `classify_flight_category()`, `reconcile_ceiling()`, `compute_runway_winds()` | `weatherbrief.analysis.airport_conditions` |
 | `get_runway_ends()`, `get_airport_elevations()` (comparison inputs) | `weatherbrief.airports` |
+| `WeatherAnalyzer.wind_components()`, `WeatherReport` (runway + wind picture) | `euro_aip.briefing.weather.analysis` / `.models` |
+| `is_hard_surface()` (`RunwayInfo.hard`) | `euro_aip.utils.runway_classifier` |
 
 ## Pipeline Options
 

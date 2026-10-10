@@ -6,7 +6,8 @@ import SwiftUI
 ///
 /// 1. **At a glance** (#697) — the model-written highlight (or the nutshell
 ///    headline in its place), alert-tier nutshell lines and change rows
-///    (never folded), the route ribbon, then a **Details** fold (collapsed by
+///    (never folded), the departure / destination runway + wind dials (#758),
+///    the route ribbon, then a **Details** fold (collapsed by
 ///    default, remembered) with the headline, the other nutshell lines (#690)
 ///    and the other "Since this briefing" rows (#637). A layer without a
 ///    nutshell (older server, a tick that could not build it) falls back to
@@ -33,6 +34,10 @@ struct ObservedTabView: View {
                         ObservedAlertsCard(viewModel: viewModel, glance: glance, changes: viewModel.liveChanges)
                     }
                     .spyAnchor("glance")
+                    if !runwayWindDials.isEmpty {
+                        RunwayWindPairCard(dials: runwayWindDials)
+                            .spyAnchor("winds")
+                    }
                     if let ribbon = viewModel.liveLayerForPack?.ribbon {
                         RouteRibbonCard(viewModel: viewModel, ribbon: ribbon, storms: viewModel.liveLayerForPack?.storms)
                             .spyAnchor("ribbon")
@@ -41,6 +46,10 @@ struct ObservedTabView: View {
                                         changes: viewModel.liveChanges, baseline: viewModel.liveBaselineDate)
                         .spyAnchor("details")
                 } else {
+                    if !runwayWindDials.isEmpty {
+                        RunwayWindPairCard(dials: runwayWindDials)
+                            .spyAnchor("winds")
+                    }
                     ObservedGlanceCard(viewModel: viewModel)
                         .spyAnchor("glance")
                     if let liveChanges = viewModel.liveChanges {
@@ -90,6 +99,19 @@ struct ObservedTabView: View {
 
     private var observedConditions: ObservedConditions? { snapshot?.observedConditions }
 
+    /// Departure + destination runway/wind dials (#758). Flight day only (a
+    /// live layer exists); the snapshot's airports, which the live layer
+    /// patches each tick. Empty on an older server — the tab is as before.
+    private var runwayWindDials: [RunwayWindRules.Dial] {
+        guard viewModel.liveLayerForPack != nil else { return [] }
+        let waypoints = viewModel.flight.waypoints
+        return RunwayWindRules.pair(
+            airports: snapshot?.routeObservations?.airports,
+            departure: waypoints.first,
+            destination: waypoints.count > 1 ? waypoints.last : nil
+        )
+    }
+
     /// Cells are offered wherever the radar is (web: the route map's Cells
     /// toggle appears with the observed layers).
     private var showsCells: Bool { observedConditions?.hasAnyField ?? false }
@@ -108,7 +130,11 @@ struct ObservedTabView: View {
     }
 
     private var spySections: [SpySection] {
-        var sections = [SpySection("glance", "Now")]
+        // The fallback draws the winds above the glance card.
+        var sections = nutshell == nil && !runwayWindDials.isEmpty
+            ? [SpySection("winds", "Winds"), SpySection("glance", "Now")]
+            : [SpySection("glance", "Now")]
+        if nutshell != nil, !runwayWindDials.isEmpty { sections.append(SpySection("winds", "Winds")) }
         if nutshell != nil {
             if viewModel.liveLayerForPack?.ribbon != nil { sections.append(SpySection("ribbon", "Route")) }
             sections.append(SpySection("details", "Details"))

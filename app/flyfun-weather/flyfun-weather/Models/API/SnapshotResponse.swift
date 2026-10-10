@@ -227,6 +227,15 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let metarPreviousTime: String?
     let tafIssueTime: String?
 
+    // Runway + wind widget (#758) — all optional; absent on older packs.
+    let metarWindVariableFrom: Int?
+    let metarWindVariableTo: Int?
+    let tafWindVariableFrom: Int?
+    let tafWindVariableTo: Int?
+    /// Runways and the METAR / TAF-at-ETA winds on them; nil when the airport
+    /// has no runway data or the pack predates #758.
+    let runwayWind: RunwayWindPicture?
+
     var id: String { icao }
 
     /// The TAF read at this airport's ETA, for the observations table and the
