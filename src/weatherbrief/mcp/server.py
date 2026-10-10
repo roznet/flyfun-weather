@@ -354,11 +354,12 @@ def create_flight(
         str,
         Field(
             description=(
-                "The route as one string, from departure to destination, either "
-                "as filed (ICAO Field-15: SIDs, airways, DCT, speed/level groups "
-                "are fine) or as a plain list of waypoints. Always include the "
-                "departure and destination ICAO codes, even when the filed route "
-                "omits them. E.g. 'EGTK DCT LFPB' or "
+                "The route as one string. The first token must be the departure "
+                "airport ICAO and the last token the destination airport ICAO; "
+                "in between, the route either as filed (ICAO Field-15: SIDs, "
+                "airways, DCT, speed/level groups are fine) or as a plain list of "
+                "waypoints. A filed Field-15 route omits the airports, so add them "
+                "at the start and end. E.g. 'EGTK DCT LFPB' or "
                 "'EGTK SAPRE1D SAPRE/N0190F180 L615 DJL LSGS'."
             ),
             min_length=1,
