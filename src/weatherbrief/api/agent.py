@@ -343,6 +343,12 @@ def get_briefing(
     from weatherbrief.tasks.live_layer import live_summary
 
     result["live"] = live_summary(pack_dir)
+    if result["live"] is not None:
+        from weatherbrief.tasks.live_timing import record_delivery_for_pack
+
+        # ChatGPT reads the live block in-process: an agent delivery (#751).
+        record_delivery_for_pack(db, flight_id=flight_id, user_id=user_id, platform="agent",
+                                 pack_dir=pack_dir)
 
     return result
 

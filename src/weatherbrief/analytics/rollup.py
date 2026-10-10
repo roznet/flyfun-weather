@@ -404,10 +404,21 @@ def run_rollup_and_retention(db: Session) -> dict:
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
     counts = rollup_day(db, yesterday)
     purged = purge_old_events(db)
+    # Observed-latency rows (#751) ride the same daily pass: 180 d by default
+    # (LIVE_LATENCY_RETENTION_DAYS), on their own clock.
+    from weatherbrief.tasks.live_timing import purge_old as purge_live_latency
+
+    try:
+        with db.begin_nested():
+            latency_purged = purge_live_latency(db)
+    except Exception:
+        logger.warning("Live latency purge failed — rollup kept", exc_info=True)
+        latency_purged = 0
     logger.info(
         "analytics rollup: day=%s events=%d features=%d briefings=%d "
-        "xsection_config=%d purged=%d",
+        "xsection_config=%d purged=%d live_latency_purged=%d",
         yesterday, counts["events"], counts["features"], counts["briefings"],
-        counts["xsection_config"], purged,
+        counts["xsection_config"], purged, latency_purged,
     )
-    return {"day": yesterday.isoformat(), "purged": purged, **counts}
+    return {"day": yesterday.isoformat(), "purged": purged,
+            "live_latency_purged": latency_purged, **counts}

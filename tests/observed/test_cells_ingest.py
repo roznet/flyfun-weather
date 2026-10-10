@@ -81,6 +81,24 @@ def test_ingest_moves_valid_files_into_the_store(tmp_path):
     assert store.path(frame_stamp(t)).read_bytes() == raw  # stored as pushed
 
 
+def test_ingest_keeps_the_node_write_time_rsync_carried(tmp_path):
+    """#751: ``rsync -t`` keeps the node's mtime on the inbox file; ingest
+    records it as when the frame was built, and the stored file's own mtime
+    becomes the droplet's receipt time."""
+    from weatherbrief.observed.storms import load_cell_frames
+
+    inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
+    t = NOW - timedelta(minutes=10)
+    built = t + timedelta(minutes=5, seconds=12)
+    src = _drop(inbox, t)
+    os.utime(src, (built.timestamp(), built.timestamp()))
+    cd.ingest(inbox, store, now=NOW)
+    assert cd.computed_at(frame_stamp(t)) == built
+    frames = load_cell_frames(NOW, store=store)
+    assert frames.computed_at == built
+    assert frames.received_at == store.list()[0].received_at > built
+
+
 def test_ingest_sets_bad_files_aside_and_keeps_going(tmp_path):
     inbox, store = tmp_path / "inbox", cd.DisplayStore(tmp_path / "store")
     bad_t, good_t = NOW - timedelta(minutes=15), NOW - timedelta(minutes=10)

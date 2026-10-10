@@ -45,6 +45,7 @@ from weatherbrief.db.models import (
     FlightRow,
     FlightSubscriptionRow,
     FlightTripRow,
+    LiveDeliveryRow,
     PirepRow,
     UserAircraftRow,
 )
@@ -100,6 +101,7 @@ _USER_SECTIONS: dict[str, type] = {
     "device_registrations": DeviceTokenRow,
     "api_tokens": ApiTokenRow,
     "connected_apps": OAuthRefreshTokenRow,
+    "live_deliveries": LiveDeliveryRow,
 }
 
 # Tables with a ``user_id`` column that are deliberately not exported.

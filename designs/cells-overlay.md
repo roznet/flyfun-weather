@@ -68,7 +68,11 @@ pile up there until it is upgraded.
 **Retention 24 h, by valid time** (agreed on the issue, 2026-10-04):
 ~150 KB × 288 ≈ 43 MB.  Longer than radar's 3 h, so a future loop over past
 overlays is not cut short.  `received_at` is the store file's mtime (the
-ingest time).
+ingest time). The inbox file's mtime, which `rsync -t` carries over from the
+node, is when the node wrote the frame: ingest keeps it in memory as
+`computed_at(stamp, revision)` for the live tick's latency row (#751, see
+live-observation-layer.md). Not stored in the display file, which a replay
+must reproduce byte for byte.
 
 **Stale after 25 min of the overlay's own age** (`STALE_AFTER`) — a
 departure from the issue's "~15 min".  Set when the node published ~5–15 min

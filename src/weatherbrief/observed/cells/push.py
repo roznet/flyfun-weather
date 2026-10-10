@@ -16,6 +16,8 @@ file, and re-listing or re-sending the whole directory each minute would grow
 with the archive.  The droplet purges its own copy at 24 h, so an
 rsync of the directory would also re-send every purged file.
 
+``-t`` is load-bearing: the droplet reads the carried-over mtime as when the
+node wrote the frame (#751, ``cells_display.computed_at``).
 Plain ``rsync -t`` with explicit files: no ``--mkpath``/``--chmod`` (macOS
 ships an old rsync or openrsync).  The files are written 0644 on purpose.
 

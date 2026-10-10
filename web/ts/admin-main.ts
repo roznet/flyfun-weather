@@ -15,6 +15,7 @@ import { initTheme } from './theme';
 import { initI18n } from './i18n/i18n';
 import { initUsageAnalyticsTab } from './admin-usage-view';
 import { initCostTab } from './admin-cost-view';
+import { loadLiveLatency } from './admin-latency-view';
 
 let currentPeriod: AdminPeriod = '30d';
 
@@ -913,6 +914,8 @@ function fmtSec(v: number | null): string {
 async function loadPerformance(): Promise<void> {
   const container = document.getElementById('perf-content')!;
   container.innerHTML = '<p class="muted" style="text-align:center;padding:2rem;">Loading metrics...</p>';
+  const latency = document.getElementById('live-latency-content');
+  if (latency) void loadLiveLatency(latency);
   try {
     const m = await fetchAdminMetrics();
     container.innerHTML = renderPerformance(m);

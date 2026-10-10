@@ -407,6 +407,33 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
   return apiFetch<AdminMetrics>('/admin/metrics');
 }
 
+// --- Observed latency (#751) ---
+
+/** Seconds; null when the hop has no samples. */
+export interface LatencyStat {
+  n: number;
+  p50: number | null;
+  p95: number | null;
+  max: number | null;
+}
+
+export interface LatencyHop extends LatencyStat {
+  key: string;
+  label: string;
+}
+
+export interface LiveLatencyReport {
+  days: number;
+  generated_at: string;
+  hops: LatencyHop[];
+  daily: Array<{ day: string; hops: Record<string, LatencyStat> }>;
+  counts: { tick_rows: number; ticks: number; deliveries: number; dropped: Record<string, number> };
+}
+
+export async function fetchLiveLatency(days = 30): Promise<LiveLatencyReport> {
+  return apiFetch<LiveLatencyReport>(`/admin/live-latency?days=${days}`);
+}
+
 // --- API Usage ---
 
 export interface ApiUsageBucket {

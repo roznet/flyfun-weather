@@ -5125,7 +5125,14 @@ def get_live_summary(
     except HTTPException as e:
         logger.warning("Live summary: pack %s of flight %s unresolved (%s)", pack_ts, flight_id, e.detail)
         pack_dir = None
-    return {"flight_id": flight_id, "pack_timestamp": pack_ts, "live": live_summary(pack_dir)}
+    live = live_summary(pack_dir)
+    if live is not None:
+        from weatherbrief.tasks.live_timing import record_delivery_for_pack
+
+        # The MCP server is this endpoint's caller: an agent delivery (#751).
+        record_delivery_for_pack(db, flight_id=flight_id, user_id=user_id, platform="agent",
+                                 pack_dir=pack_dir)
+    return {"flight_id": flight_id, "pack_timestamp": pack_ts, "live": live}
 
 
 @live_router.get("/{flight_id}/live", response_model=LiveLayerResponse)
@@ -5161,6 +5168,13 @@ def get_live_layer(
         layer = live_for_pack(pack_dir)
     if layer is None:
         return LiveLayerResponse(flight_id=flight_id, pack_timestamp=pack_ts)
+
+    from weatherbrief.api.client_info import request_client
+    from weatherbrief.tasks.live_timing import platform_of, record_delivery
+
+    # The device hop (#751): one row per new version this client receives.
+    record_delivery(db, flight_id=flight_id, user_id=user_id,
+                    platform=platform_of(request_client(request)[0]), served=layer.live_updated_at)
     # Trails are computed here, at read time, from the history (#669):
     # live.json is written before the history, so a stored trail would lag.
     return LiveLayerResponse(

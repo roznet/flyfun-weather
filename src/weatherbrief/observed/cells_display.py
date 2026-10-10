@@ -380,6 +380,26 @@ class IngestResult:
     duplicates: int = 0
 
 
+# When the home node wrote each ingested revision (#751): the inbox file's
+# mtime, which ``rsync -t`` (``cells/push.py``) carries over from the node. Not
+# written into the display file, which stays deterministic so a replay
+# reproduces it byte for byte. In memory only: the live tick reads the newest
+# frame (< 25 min old), so a restart costs at most that long without it.
+_COMPUTED_AT: dict[tuple[str, int], datetime] = {}
+_COMPUTED_AT_SIZE = 2048
+
+
+def computed_at(stamp: str, revision: int = 0) -> datetime | None:
+    """When the node wrote this revision, if ingested since the last restart."""
+    return _COMPUTED_AT.get((stamp, revision))
+
+
+def _note_computed_at(stamp: str, revision: int, mtime: float) -> None:
+    _COMPUTED_AT[(stamp, revision)] = datetime.fromtimestamp(mtime, tz=timezone.utc)
+    while len(_COMPUTED_AT) > _COMPUTED_AT_SIZE:
+        _COMPUTED_AT.pop(next(iter(_COMPUTED_AT)))
+
+
 def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
            retention: timedelta = RETENTION) -> IngestResult:
     """Move every valid display file from ``inbox`` into ``store``.
@@ -404,6 +424,7 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
                 path.unlink()
                 result.expired += 1
                 continue
+            node_mtime = path.stat().st_mtime
             raw = path.read_bytes()
             validate(raw, stamp, revision)
         except InvalidDisplay as exc:
@@ -439,6 +460,7 @@ def ingest(inbox: Path, store: DisplayStore, now: datetime | None = None,
             continue
         try:
             store.write(stamp, raw, revision)  # received_at = now (the file's mtime)
+            _note_computed_at(stamp, revision, node_mtime)
             path.unlink()
         except OSError:
             logger.warning("Could not store cell display %s", path.name, exc_info=True)

@@ -33,6 +33,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -167,6 +168,8 @@ class SharedSigmetSource:
     def __init__(self, upstream=None) -> None:
         self._upstream = upstream
         self._cache: dict[tuple, IsigmetFetch | BaseException] = {}
+        #: When the first successful fetch returned (#751's fetch hop).
+        self.fetched_at: datetime | None = None
 
     def fetch_isigmet_result(self, region: str = "eur", hazard=None, level=None, date=None, lookahead=None):
         key = (region, hazard, level, date, lookahead)
@@ -185,6 +188,8 @@ class SharedSigmetSource:
                 if not fetched.base_ok:
                     raise RuntimeError("isigmet base query failed")
                 self._cache[key] = fetched
+                if self.fetched_at is None:
+                    self.fetched_at = datetime.now(timezone.utc)
             except Exception as exc:
                 logger.warning(
                     "Live tick SIGMET fetch failed — flights keep stored SIGMETs this tick",
@@ -205,6 +210,18 @@ class SharedSigmetSource:
 # --- The tick ----------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class HighlightTiming:
+    """One flight's highlight pass, for its latency row (#751). ``outcome``
+    is ``HighlightOutcome.outcome``, or ``gated`` when the highlight was
+    carried forward (nothing significant changed, no call made)."""
+
+    outcome: str
+    requested_at: datetime | None = None
+    written_at: datetime | None = None
+    latency_ms: int | None = None
+
+
 class LiveTick:
     """One live-window pass. Create per cycle; hand :meth:`sink` to the
     verification fetch, then call :meth:`run`."""
@@ -212,6 +229,10 @@ class LiveTick:
     def __init__(self, *, upstream=None, sigmet_upstream=None) -> None:
         self._reports: dict[str, list] = {}
         self._covered: set[str] = set()
+        # When each airport's reports reached us: verification's fetch or the
+        # top-up (#751's fetch hop; the block's own fetch_time is later, when
+        # the refresh assembled it from this cache).
+        self._fetched_at: dict[str, datetime] = {}
         self._upstream = upstream
         self._sigmets = SharedSigmetSource(sigmet_upstream)
 
@@ -219,6 +240,7 @@ class LiveTick:
         """Verification's fetch reports each airport here (possibly empty)."""
         key = icao.upper()
         self._covered.add(key)
+        self._fetched_at.setdefault(key, datetime.now(timezone.utc))
         self._reports.setdefault(key, []).extend(reports)
 
     def _top_up(self, icaos: set[str]) -> int:
@@ -236,8 +258,11 @@ class LiveTick:
             except Exception:
                 logger.warning("Live tick METAR/TAF fetch failed for %d airport(s)", len(chunk), exc_info=True)
                 continue
+            fetched_at = datetime.now(timezone.utc)
             for r in reports:
                 self._reports.setdefault(r.icao.upper(), []).append(r)
+            for icao in chunk:
+                self._fetched_at.setdefault(icao, fetched_at)
             self._covered.update(chunk)
         return len(missing)
 
@@ -248,10 +273,12 @@ class LiveTick:
         from weatherbrief.airports import _load_airport_model, route_navpoints
         from weatherbrief.models.analysis import RouteConfig
         from weatherbrief.storage.flights import _resolve_artifact_path, list_packs
-        from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE
+        from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE, CommitTrace
+        from weatherbrief.tasks.live_timing import build_tick_row, write_tick_rows
         from weatherbrief.tasks.route_weather import run_realtime_refresh
 
         t0 = time.monotonic()
+        tick_started_at = datetime.now(timezone.utc)
         flights = find_live_flights(db, now)
         if not flights:
             return {"flights": 0, "updated": 0, "fetched": 0}
@@ -293,18 +320,27 @@ class LiveTick:
 
         updated = 0
         committed: list[tuple[FlightRow, Path]] = []
+        timing_rows = []
         for flight, latest, pack_dir in plans:
             try:
-                run_realtime_refresh(
+                trace = CommitTrace()
+                f0 = time.monotonic()
+                pack_timestamp = _as_utc(latest.fetch_timestamp).isoformat()
+                result = run_realtime_refresh(
                     pack_dir, airports_db_path,
                     cloud_source=_cloud_source(db, flight),
                     flight_id=flight.id,
-                    pack_timestamp=_as_utc(latest.fetch_timestamp).isoformat(),
+                    pack_timestamp=pack_timestamp,
                     report_source=source,
                     sigmet_source=self._sigmets,
+                    trace=trace,
                 )
                 updated += 1
                 committed.append((flight, pack_dir))
+                timing_rows.append(self._timing_row(
+                    build_tick_row, flight, pack_timestamp, tick_started_at,
+                    int((time.monotonic() - f0) * 1000), trace, result,
+                ))
             except UncoveredAirportsError as exc:
                 # The shared fetch failed for this flight's airports: keep its
                 # stored observations rather than blanking them.
@@ -312,17 +348,53 @@ class LiveTick:
             except Exception:
                 logger.warning("Live tick: refresh failed for flight %s", flight.id, exc_info=True)
 
-        highlighted = self._highlights(db, committed)
+        highlights = self._highlights(db, committed)
+        highlighted = sum(1 for h in highlights.values() if h.outcome == "written")
+
+        tick_ms = int((time.monotonic() - t0) * 1000)
+        rows = [r for r in timing_rows if r is not None]
+        for row in rows:
+            row.tick_ms = tick_ms
+            h = highlights.get(row.flight_id)
+            if h is not None:
+                row.highlight_outcome = h.outcome
+                row.highlight_requested_at = h.requested_at
+                row.highlight_written_at = h.written_at
+                row.highlight_latency_ms = h.latency_ms
+        write_tick_rows(db, rows)
 
         logger.info(
             "Live tick: %d flight(s) in window, %d updated, %d highlighted, %d airport(s) topped up, %d ms",
-            len(flights), updated, highlighted, fetched, int((time.monotonic() - t0) * 1000),
+            len(flights), updated, highlighted, fetched, tick_ms,
         )
         return {"flights": len(flights), "updated": updated, "fetched": fetched,
                 "highlighted": highlighted}
 
-    def _highlights(self, db: Session, committed: list[tuple[FlightRow, Path]]) -> int:
+    def _timing_row(self, build, flight, pack_timestamp, tick_started_at, flight_ms, trace, result):
+        """This flight's ``live_tick_timing`` row (#751), or None. Never raises:
+        a latency row is not worth a flight's refresh."""
+        try:
+            return build(
+                flight_id=flight.id,
+                pack_timestamp=pack_timestamp,
+                tick_started_at=tick_started_at,
+                flight_ms=flight_ms,
+                trace=trace,
+                observations=result.observations,
+                sigmets=result.sigmets,
+                observed=result.observed,
+                fetched_at=self._fetched_at,
+                sigmet_fetched_at=self._sigmets.fetched_at,
+            )
+        except Exception:
+            logger.warning("Live tick: latency row failed for flight %s", flight.id, exc_info=True)
+            return None
+
+    def _highlights(self, db: Session, committed: list[tuple[FlightRow, Path]]) -> dict[str, HighlightTiming]:
         """Write each committed flight's Observed highlight (#697).
+
+        Returns each committed flight's :class:`HighlightTiming` (#751), empty
+        when highlights are off.
 
         Runs after every layer is committed, so the deterministic blocks were
         servable ~1 s before this starts and a model failure cannot roll a tick
@@ -342,8 +414,9 @@ class LiveTick:
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, live_for_pack
 
         if not committed or not highlight_enabled():
-            return 0
+            return {}
 
+        timings: dict[str, HighlightTiming] = {}
         work = []
         for flight, pack_dir in committed:
             # Read back what was stored rather than trust an in-memory layer:
@@ -351,26 +424,37 @@ class LiveTick:
             layer = live_for_pack(pack_dir)
             if layer is not None and layer.glance is not None and layer.glance.highlight is None:
                 work.append((flight, flight_dir_for_pack(pack_dir), layer))
+            elif layer is not None and layer.glance is not None:
+                # Carried forward: the #706 gate saw nothing significant change.
+                timings[flight.id] = HighlightTiming("gated")
+            else:
+                timings[flight.id] = HighlightTiming("skipped")
         if not work:
-            return 0
+            return timings
 
-        def run(item) -> tuple[FlightRow, HighlightOutcome]:
+        def run(item) -> tuple[FlightRow, HighlightOutcome, datetime, datetime]:
             flight, flight_dir, layer = item
+            requested_at = datetime.now(timezone.utc)
             try:
-                return flight, ensure_highlight(flight_dir, layer)
+                outcome = ensure_highlight(flight_dir, layer)
             except Exception:
                 # ensure_highlight already swallows its own failures; this is
                 # the belt-and-braces one thread death would otherwise hide.
                 logger.warning("Live tick: highlight failed for flight %s", flight.id, exc_info=True)
-                return flight, HighlightOutcome("skipped")
+                outcome = HighlightOutcome("skipped")
+            return flight, outcome, requested_at, datetime.now(timezone.utc)
 
         with ThreadPoolExecutor(max_workers=min(len(work), _HIGHLIGHT_WORKERS)) as pool:
             results = list(pool.map(run, work))
 
         # Back on the tick's own thread: a Session is not thread-safe.
-        for flight, outcome in results:
+        for flight, outcome, requested_at, done_at in results:
             charge_highlight(db, flight.user_id, flight.id, outcome.usage)
-        return sum(1 for _flight, outcome in results if outcome.written)
+            timings[flight.id] = HighlightTiming(
+                outcome.outcome, requested_at,
+                done_at if outcome.written else None, outcome.latency_ms,
+            )
+        return timings
 
 
 def _cloud_source(db: Session, flight: FlightRow) -> str | None:
