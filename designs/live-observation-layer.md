@@ -537,6 +537,28 @@ logs `Live glance failed` and leaves both null for that tick.
     "Since this briefing" also stays a page-level banner on web
     (`refresh-delta-banner`) rather than a section in the group.
 
+### Runway + wind dials (#758)
+
+Departure + destination dials in the glance section: web `#observed-runway-wind`
+inside `#observed-glance-wrapper` (shown when glance lines **or** a dial
+exist), iOS `RunwayWindPairCard` above the ribbon (or above
+`ObservedGlanceCard` in the fallback), spy anchor `winds`. Flight day only:
+both require the live layer. Data is `AirportObservation.runway_wind` from the
+live tick's airports (else the pack's), see
+[metar-taf-route-weather.md](metar-taf-route-weather.md). The departure shows
+the METAR; the destination adds the TAF at ETA as an outline "ghost" arrow and
+a second line. No picture on either airport (older server) → no dials at all.
+
+Pure rules mirrored `runway-wind-core.ts` ↔ `RunwayWindRules.swift`
+(`/sync-ios-web` §5b); renderers `runway-wind-view.ts` (SVG, viewBox 0–100) and
+`RunwayWindView.swift` (Canvas). Schematic, not a chart: north-up at true
+heading, through the centre, parallels side by side by L/C/R, length ∝ runway
+(floor 40 %, unknown = full). The arrow starts at the upwind rim and points
+downwind; length on a fixed 35 kt scale with a floor. The crosswind figure is
+toned by the server's advisory (amber/red); no new threshold. Sizes `compact`
+/ `regular` / `inline` (inline unused in v1). The web re-renders only when the
+HTML changed, so an open "All runways" survives an unchanged poll.
+
 ## Observed highlight (#697)
 
 One or two sentences above the nutshell saying what deserves attention on the
