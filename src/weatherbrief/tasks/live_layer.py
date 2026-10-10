@@ -30,9 +30,10 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
+from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     TRAIL_EXCLUDE,
@@ -262,52 +263,31 @@ def load_live_history(flight_dir: Path | str) -> list[dict]:
 # --- Write ------------------------------------------------------------------
 
 
-def _flown_nm(route: RouteConfig, departure: datetime | None, now: datetime) -> float | None:
-    """Distance flown at ``now`` assuming departure on time and constant speed.
-
-    Before departure this is 0 (everything is ahead); None when the route has
-    no duration to interpolate on.
-    """
-    if departure is None or not route.flight_duration_hours:
+def flight_progress(
+    route: RouteConfig | None, departure: datetime | None, now: datetime,
+) -> FlightProgress | None:
+    """Where the flight is as of ``now`` (#759): the one progress object every
+    live consumer measures against. None without a route. Today the plan
+    only (on-time departure, constant speed)."""
+    if route is None:
         return None
-    from weatherbrief.tasks.route_weather import _compute_route_distances
-
-    dists = _compute_route_distances(route)
-    total = dists[-1] if dists else 0.0
-    frac = (now - departure).total_seconds() / 3600.0 / route.flight_duration_hours
-    return max(0.0, min(1.0, frac)) * total
-
-
-def planned_arrival(route: RouteConfig | None, departure: datetime | None) -> datetime | None:
-    """Departure + ``flight_duration_hours``: the planned landing, or None
-    when either is unknown (#689)."""
-    if route is None or departure is None or not route.flight_duration_hours:
-        return None
-    return departure + timedelta(hours=route.flight_duration_hours)
+    return FlightProgress.from_route(route, departure, now)
 
 
 def _build_storms(
     cells: CellFrames | None,
     route: RouteConfig | None,
-    departure: datetime | None,
-    briefing_data: dict,
-    now: datetime,
+    progress: FlightProgress | None,
 ) -> LiveStorms:
     """The radar storms against the route for this tick (#688). Never raises:
     a failure is an unavailable feed, which falls back to the station rows."""
-    from weatherbrief.observed.storms import STORM_CORRIDOR_NM, Schedule, build_storms
+    from weatherbrief.observed.storms import STORM_CORRIDOR_NM, build_storms
 
-    if route is None:
+    if route is None or progress is None:
         return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
     try:
-        from weatherbrief.analysis.route_geometry import RouteTrack
-
-        schedule = Schedule(RouteTrack.from_route(route), departure, route.flight_duration_hours)
         ends = (route.waypoints[0].icao, route.waypoints[-1].icao)
-        return build_storms(
-            cells or CellFrames("unavailable"), schedule,
-            flown_nm=_flown_nm(route, departure, now), now=now, end_icaos=ends,
-        )
+        return build_storms(cells or CellFrames("unavailable"), progress, end_icaos=ends)
     except Exception:
         logger.warning("Storm geometry failed — storms unavailable this tick", exc_info=True)
         return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
@@ -316,22 +296,21 @@ def _build_storms(
 def _build_glance(
     layer: LiveLayer,
     route: RouteConfig | None,
-    departure: datetime | None,
+    progress: FlightProgress | None,
     briefing_data: dict,
-    now: datetime,
     cells: CellFrames | None = None,
 ) -> tuple[LiveGlance | None, LiveRibbon | None]:
     """The Observed tab's nutshell and ribbon for this tick (#690), and the
     storms' map focus. Never raises: a failure leaves both blocks null (the
     clients then show the details only) and the tick carries on."""
-    if route is None:
+    if route is None or progress is None:
         return None, None
     try:
         from weatherbrief.tasks.live_glance import build_glance
 
         return build_glance(
-            layer, route, departure, alternate_icaos=_alternate_icaos(briefing_data),
-            cell_frame=cells.newest if cells is not None else None, now=now,
+            layer, route, progress, alternate_icaos=_alternate_icaos(briefing_data),
+            cell_frame=cells.newest if cells is not None else None,
         )
     except Exception:
         # One distinctive line to alert on: a systematic failure blanks the
@@ -793,7 +772,8 @@ def commit_live_update(
         base_obs, base_sigmets, base_observed, seeded = _seed_missing_baselines(
             layer, base_obs, base_sigmets, base_observed, now,
         )
-        layer.storms = _build_storms(cells, route, departure, briefing_data, now)
+        progress = flight_progress(route, departure, now)
+        layer.storms = _build_storms(cells, route, progress)
         memory = ClassifierMemory(
             alerted=dict(prior.alerted) if prior else {},
             sigmets={t.key: t for t in prior.sigmet_traces} if prior else {},
@@ -807,10 +787,10 @@ def commit_live_update(
             latest_observed=layer.observed_conditions,
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
             destination=route_destination(route),
-            departure_at=departure,
-            arrival_at=planned_arrival(route, departure),
+            departure_at=progress.departed_at if progress is not None else None,
+            arrival_at=progress.arrival if progress is not None else None,
             baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
-            flown_nm=_flown_nm(route, departure, now) if route is not None else None,
+            flown_nm=progress.flown_nm if progress is not None else None,
             memory=memory,
             now=now,
             storms=layer.storms,
@@ -818,7 +798,7 @@ def commit_live_update(
         if seeded:
             changes.baseline_source = "live_start"
         layer.changes = changes
-        layer.glance, layer.ribbon = _build_glance(layer, route, departure, briefing_data, now, cells)
+        layer.glance, layer.ribbon = _build_glance(layer, route, progress, briefing_data, cells)
         # The glance is rebuilt wholesale, so #697's highlight has to be
         # carried over here or every tick loses it and pays for a new one.
         # Pure computation — the model call happens after this commit returns.

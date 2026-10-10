@@ -133,11 +133,12 @@ def replay(root: Path, out_root: Path, observed_path: Path | None, cells_dir: Pa
 BUCKETS = ((0, 30), (30, 60), (60, 10_000))
 
 
-def _schedule_for(d: Path, recs: list[dict], tick_at: str):
-    from weatherbrief.analysis.route_geometry import RouteTrack
+def _progress_for(d: Path, recs: list[dict], tick_at: str):
+    """The flight's progress (#759) as of the estimate's tick, from the pack
+    briefing that tick read."""
     from weatherbrief.models.analysis import RouteConfig
-    from weatherbrief.observed.storms import Schedule
     from weatherbrief.tasks.artifacts import parse_target_time
+    from weatherbrief.tasks.live_layer import flight_progress
 
     packs = [r for r in recs if r["type"] == "pack" and r["tick_at"] <= tick_at]
     if not packs:
@@ -147,7 +148,7 @@ def _schedule_for(d: Path, recs: list[dict], tick_at: str):
         return None
     briefing = json.loads(path.read_text())
     route = RouteConfig.model_validate(briefing["route"])
-    return Schedule(RouteTrack.from_route(route), parse_target_time(briefing), route.flight_duration_hours)
+    return flight_progress(route, parse_target_time(briefing), datetime.fromisoformat(tick_at))
 
 
 def _frames(cells_dir: Path) -> list[tuple[datetime, dict[str, dict]]]:
@@ -163,9 +164,9 @@ def _frames(cells_dir: Path) -> list[tuple[datetime, dict[str, dict]]]:
     return out
 
 
-def observed_cpa(est: dict, schedule, frames) -> tuple[float, datetime] | None:
+def observed_cpa(est: dict, progress, frames) -> tuple[float, datetime] | None:
     """Closest observed approach of the storm (any of its cell ids) to the
-    planned aircraft position, over the frames from the estimate's frame up to
+    aircraft position (the flight's progress), over the frames from the estimate's frame up to
     its estimated closest approach + 30 min. None when the storm is no longer
     tracked by the estimated time (lost lineage)."""
     from euro_aip.utils.geometry import haversine_nm
@@ -184,7 +185,7 @@ def observed_cpa(est: dict, schedule, frames) -> tuple[float, datetime] | None:
         last_seen = t
         if t < datetime.fromisoformat(est["tick_at"]):
             continue
-        a = schedule.position(t)
+        a = progress.position(t)
         d = min(haversine_nm(a[0], a[1], c["lat"], c["lon"]) for c in cells)
         if best is None or d < best[0]:
             best = (d, t)
@@ -204,17 +205,17 @@ def score_estimates(root: Path, cells_dir: Path, only: list[str]) -> dict:
             continue
         for est in (r for r in recs if r["type"] == "estimate"):
             bucket = next(b for b in BUCKETS if b[0] <= est["horizon_min"] < b[1])
-            schedule = _schedule_for(d, recs, est["tick_at"])
-            if schedule is None or not schedule.timed:
+            progress = _progress_for(d, recs, est["tick_at"])
+            if progress is None or not progress.timed or progress.total_nm <= 0:
                 continue
-            obs = observed_cpa(est, schedule, frames)
+            obs = observed_cpa(est, progress, frames)
             if obs is None:
                 lost[bucket] += 1
                 continue
             frame_time = datetime.fromisoformat(est["frame_time"])
             tick = datetime.fromisoformat(est["tick_at"])
             # Persistence: the same storm, unmoved, against the same 4-D track.
-            still = estimate(est["lat"], est["lon"], 0.0, 0.0, frame_time, schedule, tick, None)
+            still = estimate(est["lat"], est["lon"], 0.0, 0.0, frame_time, progress, tick, None)
             rows[bucket].append({
                 "flight": d.name, "storm": est["storm_id"],
                 "cpa_err_nm": abs(est["cpa_nm"] - obs[0]),
