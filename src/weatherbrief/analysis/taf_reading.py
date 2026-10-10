@@ -46,6 +46,8 @@ class TafReading:
     wind_dir: int | None = None
     wind_speed_kt: int | None = None
     wind_gust_kt: int | None = None
+    wind_variable_from: int | None = None  # dddVddd of the same group
+    wind_variable_to: int | None = None
     significant_weather: list[str] = field(default_factory=list)
 
 
@@ -91,4 +93,6 @@ def read_taf_at(taf: Any, check_time: datetime) -> TafReading | None:
     reading.wind_dir = wind.wind_direction
     reading.wind_speed_kt = wind.wind_speed
     reading.wind_gust_kt = wind.wind_gust
+    reading.wind_variable_from = wind.wind_variable_from
+    reading.wind_variable_to = wind.wind_variable_to
     return reading
