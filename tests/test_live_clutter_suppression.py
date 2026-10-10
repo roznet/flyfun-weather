@@ -19,7 +19,7 @@ import pytest
 from weatherbrief.observed.cells_display import CELLS_CLUTTER_SUPPRESS_ENV
 from weatherbrief.observed.route_bands import build_weather_bands
 from weatherbrief.observed.storms import operational_cells
-from .test_live_storms import DEP, SCHEDULE, TRACK, at_nm, cell, frame, storms_at
+from .test_live_storms import DEP, TRACK, at_nm, cell, frame, storms_at
 
 
 @pytest.fixture

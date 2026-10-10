@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from test_live_storms import DEP, NM_LAT, NM_LON, ROUTE, at_nm, cell, frame, storms_at
 
+from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.models.live import LiveChange, LiveChanges, LiveLayer, LiveStorms
 from weatherbrief.models.observations import (
     AirportObservation,
@@ -137,7 +138,7 @@ def _layer(*, storms=None, sigmets=None, observations=None, observed=None, chang
 
 
 def _glance(layer, now=NOW):
-    return build_glance(layer, ROUTE, DEP, now=now)
+    return build_glance(layer, ROUTE, FlightProgress.from_route(ROUTE, DEP, now))
 
 
 # --- Nutshell -------------------------------------------------------------------
@@ -392,12 +393,12 @@ def test_ribbon_carries_the_weather_bands_only_while_the_feed_is_available():
     layer = _layer()
     f = frame(NOW - timedelta(minutes=5), [])
     f["outlines"] = {"rain20": [box(40, 60, -20, -10)]}
-    _, ribbon = build_glance(layer, ROUTE, DEP, cell_frame=f, now=NOW)
+    _, ribbon = build_glance(layer, ROUTE, FlightProgress.from_route(ROUTE, DEP, NOW), cell_frame=f)
     assert ribbon.weather_status == "available" and ribbon.weather_corridor_nm == 30.0
     assert [b.tier for b in ribbon.weather] == ["rain"] and ribbon.weather_bin_nm == 5.0
 
     dark = _layer(storms=LiveStorms(status="unavailable", corridor_nm=30.0))
-    _, ribbon = build_glance(dark, ROUTE, DEP, cell_frame=f, now=NOW)
+    _, ribbon = build_glance(dark, ROUTE, FlightProgress.from_route(ROUTE, DEP, NOW), cell_frame=f)
     assert ribbon.weather_status == "unavailable" and ribbon.weather == []
 
 

@@ -23,7 +23,8 @@ from weatherbrief.models.observed import (
     ObservedStationRef,
     ObservedStationSamples,
 )
-from weatherbrief.observed.storms import CellFrames, Schedule, build_storms, group_storms, load_cell_frames
+from weatherbrief.analysis.flight_progress import FlightProgress
+from weatherbrief.observed.storms import CellFrames, build_storms, group_storms, load_cell_frames
 from weatherbrief.tasks.live_significance import classify_changes
 
 DEP = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
@@ -34,7 +35,6 @@ ROUTE = RouteConfig(
     flight_duration_hours=1.5,
 )
 TRACK = RouteTrack.from_route(ROUTE)
-SCHEDULE = Schedule(TRACK, DEP, 1.5)
 NM_LAT = 1.0 / 60.0  # degrees of latitude per NM
 NM_LON = 1.0 / (60.0 * 0.6427876)  # degrees of longitude per NM at 50 N
 
@@ -69,9 +69,12 @@ def frame(t, cells):
 
 def storms_at(now, cells, *, earlier=(), flown=None):
     frames = CellFrames("available", newest=frame(now - timedelta(minutes=5), cells), earlier=list(earlier))
-    if flown is None:
-        flown = max(0.0, (now - DEP).total_seconds() / 3600 / 1.5) * TRACK.total_nm
-    return build_storms(frames, SCHEDULE, flown_nm=flown, now=now, end_icaos=("ZZDP", "ZZDS"))
+    dep = DEP
+    if flown is not None:
+        # The departure that puts the aircraft ``flown`` NM down the track at ``now``.
+        dep = now - timedelta(hours=flown / TRACK.total_nm * 1.5)
+    progress = FlightProgress(TRACK, dep, 1.5, now)
+    return build_storms(frames, progress, end_icaos=("ZZDP", "ZZDS"))
 
 
 def rows(storms, *, now, latest_obs=None, observed=None, departure_at=DEP):

@@ -47,6 +47,7 @@ from functools import lru_cache
 from itertools import groupby
 from pathlib import Path
 
+from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     LiveChange,
@@ -81,8 +82,9 @@ class _Span:
 
 @dataclass
 class _Context:
-    route: RouteConfig | None = None
-    departure: datetime | None = None
+    # The flight's progress (#759); ``progress.at(t)`` is what a tick at ``t``
+    # measured against. None without a route.
+    progress: FlightProgress | None = None
     # ICAO -> [(tick_at, observed_at/issued_at, record)] in history order.
     metars: dict[str, list[tuple[datetime, datetime | None, dict]]] = field(default_factory=dict)
     tafs: dict[str, list[tuple[datetime, datetime | None]]] = field(default_factory=dict)
@@ -138,14 +140,14 @@ def _newer_report(c: LiveChange, at: datetime, ctx: _Context) -> bool:
 
 def _still_relevant(c: LiveChange, at: datetime, ctx: _Context) -> bool:
     """The airport could still matter at ``at`` (the classifier's own rule)."""
-    from weatherbrief.tasks.live_layer import _flown_nm
     from weatherbrief.tasks.live_significance import airport_relevant
 
     if not c.icao or c.role not in ("departure", "route"):
         return True
-    departed = ctx.departure is not None and at >= ctx.departure
-    flown = _flown_nm(ctx.route, ctx.departure, at) if ctx.route is not None else None
-    return airport_relevant(c.role, c.enroute_distance_nm, departed=departed, flown_nm=flown)
+    if ctx.progress is None:
+        return airport_relevant(c.role, c.enroute_distance_nm, departed=False, flown_nm=None)
+    then = ctx.progress.at(at)
+    return airport_relevant(c.role, c.enroute_distance_nm, departed=then.departed, flown_nm=then.flown_nm)
 
 
 def _clear_reason(c: LiveChange, at: datetime, pack_tick: bool, ctx: _Context) -> str:
@@ -293,7 +295,9 @@ def change_trails(
     told from a clear on the weather; without them every airport is taken as
     still relevant.
     """
-    ctx = _Context(route=route, departure=departure)
+    from weatherbrief.tasks.live_layer import flight_progress
+
+    ctx = _Context(progress=flight_progress(route, departure, now))
     history = _upto(history, now)
     _index_reports(history, ctx)
     spans = _spans(history, ctx)

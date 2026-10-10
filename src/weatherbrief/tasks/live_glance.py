@@ -10,8 +10,8 @@ Rules that hold everywhere here:
 
 - **Observations only.** Observed motion is shown ("moving away 11 kt"); the
   closest-approach estimate (``LiveStorm.estimate``) never appears in a line.
-  Planned ETAs (on-time departure, constant speed) are the plan, not a
-  projection, and are shown.
+  ETAs from the flight's progress (today the plan: on-time departure,
+  constant speed) are the flight, not a projection, and are shown.
 - **Missing is "unavailable", never "clear".** A dark cells feed, a missing
   METAR, a SIGMET fetch that never ran: each is said, and listed in
   ``LiveGlanceLine.unavailable``.
@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 from euro_aip.utils.geometry import haversine_nm
 
+from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
@@ -138,49 +139,20 @@ def _bbox(points: list[tuple[float, float]], pad_nm: float = FOCUS_PAD_NM) -> tu
     )
 
 
-class _Plan:
-    """The route and the planned schedule the tick measured against."""
+class _Flight:
+    """The route's ends and the flight's progress the tick measured against
+    (``progress.as_of`` is the tick time)."""
 
-    def __init__(self, route: RouteConfig, departure: datetime | None, now: datetime):
+    def __init__(self, route: RouteConfig, progress: FlightProgress):
         self.route = route
-        self.track = RouteTrack.from_route(route)
+        self.progress = progress
+        self.track = progress.track
         self.total_nm = self.track.total_nm
-        self.departure = departure
-        self.duration_h = route.flight_duration_hours or 0.0
-        self.now = now
+        self.now = progress.as_of
         self.dep_icao = route.waypoints[0].icao.upper()
         self.dest_icao = route.waypoints[-1].icao.upper()
         self.dep_pos = (route.waypoints[0].lat, route.waypoints[0].lon)
         self.dest_pos = (route.waypoints[-1].lat, route.waypoints[-1].lon)
-
-    @property
-    def timed(self) -> bool:
-        return self.departure is not None and self.duration_h > 0 and self.total_nm > 0
-
-    def eta(self, along_nm: float | None) -> datetime | None:
-        if not self.timed or along_nm is None:
-            return None
-        frac = max(0.0, min(1.0, along_nm / self.total_nm))
-        return self.departure + timedelta(hours=frac * self.duration_h)
-
-    @property
-    def arrival(self) -> datetime | None:
-        return self.departure + timedelta(hours=self.duration_h) if self.timed else None
-
-    @property
-    def flown_nm(self) -> float | None:
-        if not self.timed:
-            return None
-        frac = (self.now - self.departure).total_seconds() / 3600.0 / self.duration_h
-        return max(0.0, min(1.0, frac)) * self.total_nm
-
-    @property
-    def departed(self) -> bool:
-        return self.departure is not None and self.now >= self.departure
-
-    @property
-    def arrived(self) -> bool:
-        return self.arrival is not None and self.now >= self.arrival
 
     def route_points(self, lo_nm: float, hi_nm: float) -> list[tuple[float, float]]:
         """The track between two along-route distances, ends included."""
@@ -221,14 +193,14 @@ def _station_focus(icao: str, lat: float, lon: float, metar_time: datetime | Non
                      layers=list(_STATION_LAYERS), time=metar_time)
 
 
-def _segment_focus(index: int, plan: _Plan, lo: float, hi: float, time: datetime | None) -> LiveFocus:
-    return LiveFocus(kind="segment", id=f"seg:{index}", bbox=_bbox(plan.route_points(lo, hi)),
+def _segment_focus(index: int, flight: _Flight, lo: float, hi: float, time: datetime | None) -> LiveFocus:
+    return LiveFocus(kind="segment", id=f"seg:{index}", bbox=_bbox(flight.route_points(lo, hi)),
                      layers=list(_SEGMENT_LAYERS), time=time)
 
 
-def _terminal_focus(plan: _Plan, phase: str) -> LiveFocus:
+def _terminal_focus(flight: _Flight, phase: str) -> LiveFocus:
     """A departure / arrival line opens the map on the airport's disc."""
-    icao, (lat, lon) = (plan.dep_icao, plan.dep_pos) if phase == "departure" else (plan.dest_icao, plan.dest_pos)
+    icao, (lat, lon) = (flight.dep_icao, flight.dep_pos) if phase == "departure" else (flight.dest_icao, flight.dest_pos)
     return LiveFocus(kind="station", id=icao, bbox=_bbox([(lat, lon)], pad_nm=TERMINAL_NM),
                      layers=list(_SEGMENT_LAYERS), time=None)
 
@@ -377,18 +349,18 @@ def _terminal_storms(
             False, [s for _, s in near + beyond])
 
 
-def _enroute_storms(storms: LiveStorms | None, plan: _Plan) -> tuple[str, bool, list[LiveStorm]]:
+def _enroute_storms(storms: LiveStorms | None, flight: _Flight) -> tuple[str, bool, list[LiveStorm]]:
     """Storms ahead between the terminal discs, counted as storms."""
     if storms is None or storms.status != "available":
         return _storms_unavailable(storms), True, []
-    if plan.arrived:
+    if flight.progress.arrived:
         # A tick after the planned landing: nothing is ahead any more.
         return "flight arrived at plan, no route ahead", False, []
 
     def terminal(st: LiveStorm) -> bool:
         return (
-            haversine_nm(plan.dep_pos[0], plan.dep_pos[1], st.lat, st.lon) <= TERMINAL_NM
-            or haversine_nm(plan.dest_pos[0], plan.dest_pos[1], st.lat, st.lon) <= TERMINAL_NM
+            haversine_nm(flight.dep_pos[0], flight.dep_pos[1], st.lat, st.lon) <= TERMINAL_NM
+            or haversine_nm(flight.dest_pos[0], flight.dest_pos[1], st.lat, st.lon) <= TERMINAL_NM
         )
 
     ahead = [st for st in storms.storms if st.ahead and st.end is None and not terminal(st)]
@@ -418,7 +390,7 @@ def _enroute_storms(storms: LiveStorms | None, plan: _Plan) -> tuple[str, bool, 
 
 
 def _sigmet_clause(
-    layer: LiveLayer, plan: _Plan, ribbon_sigmets: list[RibbonSigmet], stale: bool,
+    layer: LiveLayer, flight: _Flight, ribbon_sigmets: list[RibbonSigmet], stale: bool,
 ) -> tuple[str, bool, list[str]]:
     if layer.route_sigmets is None:
         return "SIGMETs unavailable", True, []
@@ -432,12 +404,12 @@ def _sigmet_clause(
         hazard = " ".join(p for p in (s.qualifier, s.hazard) if p) or "SIGMET"
         name = s.label.split(":")[0]
         if s.from_nm is not None and s.to_nm is not None:
-            if s.from_nm <= 1.0 and s.to_nm >= plan.total_nm - 1.0:
+            if s.from_nm <= 1.0 and s.to_nm >= flight.total_nm - 1.0:
                 span = "covers the whole route"
             elif s.from_nm <= 1.0:
                 span = f"covers first {s.to_nm:.0f} NM"
-            elif s.to_nm >= plan.total_nm - 1.0:
-                span = f"covers last {plan.total_nm - s.from_nm:.0f} NM"
+            elif s.to_nm >= flight.total_nm - 1.0:
+                span = f"covers last {flight.total_nm - s.from_nm:.0f} NM"
             else:
                 span = f"covers {_range(s.from_nm, s.to_nm)} NM"
         elif s.min_distance_nm is not None:
@@ -533,7 +505,7 @@ def _sigmet_motion(s: SigmetAlongRoute, track: RouteTrack) -> str:
     return "toward" if closing > 0 else "away"
 
 
-def _ribbon_sigmets(layer: LiveLayer, plan: _Plan) -> list[RibbonSigmet]:
+def _ribbon_sigmets(layer: LiveLayer, flight: _Flight) -> list[RibbonSigmet]:
     from weatherbrief.tasks.live_significance import _sigmet_key_str, _sigmet_label
 
     if layer.route_sigmets is None:
@@ -555,15 +527,15 @@ def _ribbon_sigmets(layer: LiveLayer, plan: _Plan) -> list[RibbonSigmet]:
             to_nm=round(s.enroute_distance_to_nm, 1) if s.enroute_distance_to_nm is not None else None,
             min_distance_nm=round(s.min_distance_nm, 1) if s.min_distance_nm is not None else None,
             valid_from=s.valid_from, valid_to=s.valid_to,
-            pending=s.valid_from is not None and s.valid_from > plan.now,
+            pending=s.valid_from is not None and s.valid_from > flight.now,
             new=(key in new_keys) if new_keys is not None else None,
-            motion=_sigmet_motion(s, plan.track),
-            focus=_sigmet_focus(key, s, plan.now),
+            motion=_sigmet_motion(s, flight.track),
+            focus=_sigmet_focus(key, s, flight.now),
         ))
     return out
 
 
-def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]) -> list[RibbonStation]:
+def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeRole]) -> list[RibbonStation]:
     obs = layer.route_observations
     if obs is None:
         return []
@@ -574,7 +546,7 @@ def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]
         icao = a.icao.upper()
         along, cross = a.enroute_distance_nm, None
         if a.lat is not None and a.lon is not None:
-            proj = plan.track.project(a.lat, a.lon)
+            proj = flight.track.project(a.lat, a.lon)
             cross = round(proj.cross_nm, 1)
             if along is None:
                 along = proj.along_nm
@@ -582,12 +554,12 @@ def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]
         if role == "departure":
             along, cross = 0.0, 0.0
         elif role == "destination":
-            along, cross = plan.total_nm, 0.0
+            along, cross = flight.total_nm, 0.0
         taf_ok = a.taf_valid_at_eta is not False
         out.append(RibbonStation(
             icao=icao, role=role,
             along_nm=round(along, 1) if along is not None else None, cross_nm=cross,
-            eta=plan.eta(along),
+            eta=flight.progress.eta(along),
             metar_category=a.metar_flight_category, metar_time=a.metar_time,
             convective=_convective(a) if (a.has_metar or a.metar_raw) else [],
             taf_category_at_eta=(a.taf_prevailing_category_at_eta or a.taf_flight_category_at_eta) if taf_ok else None,
@@ -601,10 +573,10 @@ def _ribbon_stations(layer: LiveLayer, plan: _Plan, roles: dict[str, ChangeRole]
 
 
 def _ribbon_segments(
-    layer: LiveLayer, plan: _Plan, sigmets: list[RibbonSigmet],
+    layer: LiveLayer, flight: _Flight, sigmets: list[RibbonSigmet],
 ) -> tuple[list[RibbonSegment], float, datetime | None]:
-    n = max(1, min(RIBBON_MAX_SEGMENTS, round(plan.total_nm / RIBBON_SEGMENT_NM)))
-    seg = plan.total_nm / n
+    n = max(1, min(RIBBON_MAX_SEGMENTS, round(flight.total_nm / RIBBON_SEGMENT_NM)))
+    seg = flight.total_nm / n
     observed = layer.observed_conditions
     along = _station_along(observed)
     refl = observed.reflectivity if observed is not None else None
@@ -639,7 +611,7 @@ def _ribbon_segments(
         cls = classify_dbz(peak) if peak is not None else None
         out.append(RibbonSegment(
             index=i, from_nm=round(lo, 1), to_nm=round(hi, 1),
-            eta_from=plan.eta(lo), eta_to=plan.eta(hi),
+            eta_from=flight.progress.eta(lo), eta_to=flight.progress.eta(hi),
             radar_max_dbz=peak, radar_intensity=intensity_label(cls) if cls is not None else None,
             radar_status=status, lightning=lightning,
             sigmet_ids=[
@@ -647,7 +619,7 @@ def _ribbon_segments(
                 if s.from_nm is not None and s.to_nm is not None and s.from_nm <= hi and s.to_nm >= lo
             ],
             storm_ids=[st.id for st in storms if lo <= st.along_nm < hi or (last and st.along_nm >= hi)],
-            focus=_segment_focus(i, plan, lo, hi, radar_time),
+            focus=_segment_focus(i, flight, lo, hi, radar_time),
         ))
     return out, round(seg, 1), radar_time
 
@@ -658,40 +630,40 @@ def _ribbon_segments(
 def build_glance(
     layer: LiveLayer,
     route: RouteConfig,
-    departure: datetime | None,
+    progress: FlightProgress,
     *,
     alternate_icaos: list[str] | None = None,
     cell_frame: dict | None = None,
-    now: datetime,
 ) -> tuple[LiveGlance, LiveRibbon]:
     """The nutshell and the ribbon for this tick, and ``focus`` on every
     storm of ``layer.storms`` (set in place, last, so a failure part-way
-    leaves the storms untouched). ``now`` is the tick time: the glance's
-    "as of". ``cell_frame`` is the cells feed's newest display file, the
+    leaves the storms untouched). ``progress`` is where the flight is;
+    its ``as_of`` is the tick time, the glance's "as of". ``cell_frame`` is the cells feed's newest display file, the
     source of the ribbon's rain/core bands (used only while ``layer.storms``
     says the feed is available)."""
     from weatherbrief.observed.route_bands import BIN_NM, build_weather_bands
     from weatherbrief.tasks.live_significance import airport_roles
 
-    plan = _Plan(route, departure, now)
+    now = progress.as_of
+    flight = _Flight(route, progress)
     roles = airport_roles([wp.icao for wp in route.waypoints], alternate_icaos)
 
     storms = layer.storms
     focus_by_storm: dict[str, LiveFocus] = {}
     if storms is not None and storms.status == "available":
-        focus_by_storm = {st.id: storm_focus(st, plan.track, storms.frame_time) for st in storms.storms}
+        focus_by_storm = {st.id: storm_focus(st, flight.track, storms.frame_time) for st in storms.storms}
 
-    sigmets = _ribbon_sigmets(layer, plan)
-    stations = _ribbon_stations(layer, plan, roles)
-    segments, seg_nm, radar_time = _ribbon_segments(layer, plan, sigmets)
+    sigmets = _ribbon_sigmets(layer, flight)
+    stations = _ribbon_stations(layer, flight, roles)
+    segments, seg_nm, radar_time = _ribbon_segments(layer, flight, sigmets)
     ribbon = LiveRibbon(
-        route_nm=round(plan.total_nm, 1),
-        flown_nm=round(plan.flown_nm, 1) if plan.flown_nm is not None else None,
-        departure_at=plan.departure, arrival_at=plan.arrival,
+        route_nm=round(flight.total_nm, 1),
+        flown_nm=round(flight.progress.flown_nm, 1) if flight.progress.flown_nm is not None else None,
+        departure_at=flight.progress.planned_departure, arrival_at=flight.progress.arrival,
         segment_nm=seg_nm, radar_radius_nm=RIBBON_RADAR_RADIUS_NM, radar_time=radar_time,
         waypoints=[
-            RibbonWaypoint(icao=wp.icao, along_nm=round(d, 1), eta=plan.eta(d))
-            for wp, d in zip(route.waypoints, plan.track.distances)
+            RibbonWaypoint(icao=wp.icao, along_nm=round(d, 1), eta=flight.progress.eta(d))
+            for wp, d in zip(route.waypoints, flight.track.distances)
         ],
         segments=segments, stations=stations, sigmets=sigmets,
         weather_status=storms.status if storms is not None else None,
@@ -700,7 +672,7 @@ def build_glance(
     )
     if storms is not None and storms.status == "available":
         ribbon.weather = build_weather_bands(
-            cell_frame, plan.track, storms.storms, corridor_nm=storms.corridor_nm,
+            cell_frame, flight.track, storms.storms, corridor_nm=storms.corridor_nm,
         )
 
     by_icao = {
@@ -717,8 +689,8 @@ def build_glance(
 
     lines: list[LiveGlanceLine] = []
     for phase, icao, pos, along in (
-        ("departure", plan.dep_icao, plan.dep_pos, 0.0),
-        ("arrival", plan.dest_icao, plan.dest_pos, plan.total_nm),
+        ("departure", flight.dep_icao, flight.dep_pos, 0.0),
+        ("arrival", flight.dest_icao, flight.dest_pos, flight.total_nm),
     ):
         clauses: list[str] = []
         unavailable: list[str] = []
@@ -751,17 +723,17 @@ def build_glance(
         lines.append(LiveGlanceLine(
             phase=phase, icao=icao, text=" · ".join(clauses),
             alert=phase in alert_phases,
-            passed=plan.departed if phase == "departure" else plan.arrived,
-            unavailable=unavailable, sources=sources, focus=_terminal_focus(plan, phase),
+            passed=flight.progress.departed if phase == "departure" else flight.progress.arrived,
+            unavailable=unavailable, sources=sources, focus=_terminal_focus(flight, phase),
         ))
 
     clauses, unavailable, sources = [], [], []
-    text, missing, ahead = _enroute_storms(storms, plan)
+    text, missing, ahead = _enroute_storms(storms, flight)
     clauses.append(text)
     sources += [f"storm:{st.id}" for st in ahead]
     if missing:
         unavailable.append("storms")
-    text, missing, ids = _sigmet_clause(layer, plan, sigmets, sig_stale)
+    text, missing, ids = _sigmet_clause(layer, flight, sigmets, sig_stale)
     clauses.append(text)
     sources += ids
     if missing:
@@ -771,14 +743,14 @@ def build_glance(
         nearest = min(ahead, key=lambda st: st.offtrack_nm)
         enroute_focus = focus_by_storm.get(nearest.id)
     elif segments:
-        lo = plan.flown_nm or 0.0
+        lo = flight.progress.flown_nm or 0.0
         enroute_focus = LiveFocus(
-            kind="segment", id="seg:ahead", bbox=_bbox(plan.route_points(lo, plan.total_nm)),
+            kind="segment", id="seg:ahead", bbox=_bbox(flight.route_points(lo, flight.total_nm)),
             layers=list(_SEGMENT_LAYERS), time=radar_time,
         )
     lines.insert(1, LiveGlanceLine(
         phase="enroute", text=" · ".join(clauses), alert="enroute" in alert_phases,
-        passed=plan.arrived, unavailable=unavailable, sources=sources, focus=enroute_focus,
+        passed=flight.progress.arrived, unavailable=unavailable, sources=sources, focus=enroute_focus,
     ))
 
     headline, comparison = _headline(layer.changes, now)

@@ -8,7 +8,8 @@ newest display file into :class:`~weatherbrief.models.live.LiveStorms`:
   cells inside it (the node's ``within``), or a ``core41`` on its own. Rain
   areas without a core are not storms;
 - **route geometry** per storm: distance off track, which side, the point
-  abeam and the planned time there, ahead or passed;
+  abeam and the ETA there (the flight's :class:`FlightProgress`), ahead or
+  passed;
 - **observed motion against the track**: the velocity's component toward
   the track (closing / moving away / parallel), and the off-track distance at
   the frames of the last 30 min;
@@ -34,7 +35,7 @@ from typing import Any
 
 from euro_aip.utils.geometry import haversine_nm
 
-from weatherbrief.analysis.route_geometry import RouteTrack
+from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.models.live import LiveStorm, LiveStorms, StormEstimate, StormTrackPoint
 from weatherbrief.observed.cells.levels import suspect
 from weatherbrief.observed.cells_display import clutter_suppress_enabled
@@ -57,8 +58,8 @@ _HISTORY_SLACK = timedelta(minutes=3)
 STORMS_MAX = 40
 #: Below this component toward/away from the track the motion reads "parallel".
 PARALLEL_KT = 3.0
-#: The estimate looks no further than this past the frame (the planned
-#: arrival usually ends it sooner).
+#: The estimate looks no further than this past the frame (the arrival
+#: usually ends it sooner).
 ESTIMATE_MAX_MINUTES = 180
 _ESTIMATE_STEP_MIN = 1.0
 
@@ -227,32 +228,6 @@ def _move(lat: float, lon: float, toward_deg: float, nm: float) -> tuple[float, 
     return lat + dlat, lon + dlon
 
 
-@dataclass
-class Schedule:
-    """The planned 4-D track: on-time departure, constant speed."""
-
-    track: RouteTrack
-    departure: datetime | None
-    duration_h: float
-
-    @property
-    def timed(self) -> bool:
-        return self.departure is not None and self.duration_h > 0 and self.track.total_nm > 0
-
-    def eta(self, along_nm: float) -> datetime | None:
-        if not self.timed:
-            return None
-        frac = max(0.0, min(1.0, along_nm / self.track.total_nm))
-        return self.departure + timedelta(hours=frac * self.duration_h)
-
-    def arrival(self) -> datetime | None:
-        return self.departure + timedelta(hours=self.duration_h) if self.timed else None
-
-    def position(self, t: datetime) -> tuple[float, float]:
-        frac = (t - self.departure).total_seconds() / 3600.0 / self.duration_h
-        return self.track.position_at(max(0.0, min(1.0, frac)) * self.track.total_nm)
-
-
 def _closing_kt(proj, lat: float, lon: float, speed_kt: float, toward_deg: float) -> float:
     """Component of the velocity toward the track (+ closing), kt.
 
@@ -273,18 +248,18 @@ def _relative_motion(closing_kt: float) -> str:
 
 def estimate(
     lat: float, lon: float, speed_kt: float, toward_deg: float, frame_time: datetime,
-    schedule: Schedule, now: datetime, abeam_eta: datetime | None,
+    progress: FlightProgress, now: datetime, abeam_eta: datetime | None,
 ) -> StormEstimate | None:
-    """Closest approach to the planned 4-D track at current motion.
+    """Closest approach to the aircraft's 4-D track (``progress``) at current motion.
 
-    Sampled every minute from ``now`` to the planned arrival (at most
+    Sampled every minute from ``now`` to the arrival (at most
     :data:`ESTIMATE_MAX_MINUTES` past the frame). None without a timed
-    schedule or once the flight has arrived.
+    flight on a route of non-zero length, or once the flight has arrived.
     """
-    if not schedule.timed:
+    if not progress.timed or progress.total_nm <= 0:
         return None
     start = max(now, frame_time)
-    end = min(schedule.arrival(), frame_time + timedelta(minutes=ESTIMATE_MAX_MINUTES))
+    end = min(progress.arrival, frame_time + timedelta(minutes=ESTIMATE_MAX_MINUTES))
     if end < start:
         return None
 
@@ -294,7 +269,7 @@ def estimate(
     best: tuple[float, datetime] | None = None
     t = start
     while t <= end:
-        a = schedule.position(t)
+        a = progress.position(t)
         s = storm_at(t)
         d = haversine_nm(a[0], a[1], s[0], s[1])
         if best is None or d < best[0]:
@@ -304,7 +279,7 @@ def estimate(
     at_eta = None
     if abeam_eta is not None and abeam_eta >= frame_time:
         s = storm_at(abeam_eta)
-        at_eta = round(schedule.track.project(*s).offtrack_nm, 1)
+        at_eta = round(progress.track.project(*s).offtrack_nm, 1)
     return StormEstimate(
         cpa_nm=round(best[0], 1),
         cpa_time=best[1],
@@ -332,11 +307,14 @@ def _storm_motion(group: list[dict]) -> dict:
 
 
 def build_storm(
-    group: list[dict], frame_time: datetime, schedule: Schedule, *,
-    flown_nm: float | None, now: datetime, history_frames: list[tuple[datetime, dict[str, dict]]],
+    group: list[dict], frame_time: datetime, progress: FlightProgress, *,
+    history_frames: list[tuple[datetime, dict[str, dict]]],
     end_icaos: tuple[str | None, str | None] = (None, None),
 ) -> LiveStorm:
-    track = schedule.track
+    """One storm against the track, as of ``progress.as_of``."""
+    track = progress.track
+    now = progress.as_of
+    flown_nm = progress.flown_nm
     # Position: the member nearest the track (a big core35's centroid can sit
     # well off its strongest core).
     projected = [(track.project(c["lat"], c["lon"]), c) for c in group]
@@ -357,7 +335,7 @@ def build_storm(
         closing = round(_closing_kt(proj, ref["lat"], ref["lon"], speed, toward), 1)
         relative = _relative_motion(closing)
 
-    abeam = schedule.eta(proj.along_nm)
+    abeam = progress.eta(proj.along_nm)
     end_icao = end_bearing = None
     if proj.end is not None:
         end_icao = end_icaos[0] if proj.end == "departure" else end_icaos[1]
@@ -376,7 +354,7 @@ def build_storm(
     # Only a storm still ahead: one already passed has no closest approach
     # worth scoring, and each estimate costs up to ESTIMATE_MAX_MINUTES samples.
     if ahead and available and speed is not None and toward is not None:
-        est = estimate(ref["lat"], ref["lon"], speed, toward, frame_time, schedule, now, abeam)
+        est = estimate(ref["lat"], ref["lon"], speed, toward, frame_time, progress, now, abeam)
 
     intensity = classify_dbz(peak)
     return LiveStorm(
@@ -414,12 +392,13 @@ def build_storm(
 
 
 def build_storms(
-    frames: CellFrames, schedule: Schedule, *, flown_nm: float | None, now: datetime,
+    frames: CellFrames, progress: FlightProgress, *,
     end_icaos: tuple[str | None, str | None] = (None, None),
     corridor_nm: float = STORM_CORRIDOR_NM,
 ) -> LiveStorms:
     """The storms within ``corridor_nm`` of the track at the newest frame,
-    nearest along-track first."""
+    nearest along-track first, measured against ``progress`` (where the
+    aircraft is as of its ``as_of``, the tick time)."""
     if frames.status != "available" or frames.newest is None:
         return LiveStorms(status=frames.status, unavailable_since=frames.unavailable_since,
                           corridor_nm=corridor_nm)
@@ -432,13 +411,13 @@ def build_storms(
             history.append((at, {c["id"]: c for c in operational_cells(frame.get("cells") or [])
                                  if "id" in c}))
     storms: list[LiveStorm] = []
-    track = schedule.track
+    track = progress.track
     for group in group_storms(operational_cells(data.get("cells") or [])):
         # The corridor first: the full storm (history, estimate) only for the
         # few near the route, not the hundreds of cores across Europe.
         if min(track.project(c["lat"], c["lon"]).offtrack_nm for c in group) > corridor_nm:
             continue
-        storms.append(build_storm(group, frame_time, schedule, flown_nm=flown_nm, now=now,
+        storms.append(build_storm(group, frame_time, progress,
                                   history_frames=history, end_icaos=end_icaos))
     storms = sorted(storms, key=lambda s: s.offtrack_nm)[:STORMS_MAX]
     storms.sort(key=lambda s: (s.along_nm, s.offtrack_nm))
