@@ -12,6 +12,11 @@ windows of ``tasks/retention.py``. For flights a talk or write-up links to
 Prod by default (runs inside the weatherbrief container over ssh); ``--local``
 writes the dev DB named by ``.env``. Prints one line per flight and the
 pinned list. A pin does not stop a deliberate delete by the owner.
+
+**Pin before T1.** A pin keeps what is still there; packs already stripped by
+T1 (30 days after departure: cross_section.json, Skew-T, GRAMET gone) stay
+stripped — the script warns with how many. Restore those from a backup copy
+of the pack dirs if needed.
 """
 from __future__ import annotations
 
@@ -31,9 +36,16 @@ SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 # argv[1]: JSON {"ids": [...], "pin": bool} or "list". Prints one JSON document.
 PIN_SCRIPT = r'''
 import json, sys
+from pathlib import Path
 from sqlalchemy import select
 from weatherbrief.db import SessionLocal, init_shared_db
 from weatherbrief.db.models import FlightRow
+from weatherbrief.storage.flights import _resolve_artifact_path
+
+def stripped(row):
+    # Packs whose heavy artifacts T1 already removed (no cross_section.json).
+    dirs = [Path(_resolve_artifact_path(p.artifact_path)) for p in row.packs if p.artifact_path]
+    return sum(1 for d in dirs if not (d / "cross_section.json").exists()), len(dirs)
 
 init_shared_db()
 db = SessionLocal()
@@ -47,7 +59,8 @@ if sys.argv[1] != "list":
             continue
         before = bool(row.retention_pinned)
         row.retention_pinned = req["pin"]
-        changed.append({"id": fid, "was": before, "now": req["pin"]})
+        gone, total = stripped(row) if req["pin"] else (0, 0)
+        changed.append({"id": fid, "was": before, "now": req["pin"], "stripped": gone, "packs": total})
     db.commit()
 pinned = db.execute(select(FlightRow.id).where(FlightRow.retention_pinned.is_(True))
                     .order_by(FlightRow.departure_time)).scalars().all()
@@ -92,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             state = "pinned" if c["now"] else "unpinned"
             print(f"ok       {c['id']}  ({state}{', unchanged' if c['was'] == c['now'] else ''})")
+            if c.get("stripped"):
+                print(f"warning  {c['id']}  {c['stripped']}/{c['packs']} pack(s) already stripped by T1 "
+                      "(no cross-section/Skew-T data) — a pin cannot bring them back")
     print(f"{len(doc['pinned'])} pinned on {where}:")
     for fid in doc["pinned"]:
         print(f"  {fid}")

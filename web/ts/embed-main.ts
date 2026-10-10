@@ -23,7 +23,7 @@ import { initI18n } from './i18n/i18n';
 import { extractVizData } from './visualization/data-extract';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import { getAllLayers, getDefaultEnabled } from './visualization/cross-section/layer-registry';
-import { setActiveTheme, type ThemeId } from './visualization/cross-section/theme';
+import { setActiveTheme, THEMES, type ThemeId } from './visualization/cross-section/theme';
 
 interface EmbedData {
   manifest: RouteAnalysesManifest;
@@ -36,7 +36,8 @@ interface EmbedData {
 const params = new URLSearchParams(location.search);
 const container = document.getElementById('embed-xsection')!;
 const status = document.getElementById('embed-status')!;
-if (params.get('theme')) setActiveTheme(params.get('theme') as ThemeId);
+const theme = params.get('theme');
+if (theme && theme in THEMES) setActiveTheme(theme as ThemeId);
 const renderer = new CrossSectionRenderer(container);
 
 let data: EmbedData | null = null;
@@ -46,7 +47,8 @@ let point = pointIndex(params.get('point'));
 
 /** A route-point index, or -1 (none) for anything that isn't a number. */
 function pointIndex(v: unknown): number {
-  const n = Number(v ?? -1);
+  if (v == null || v === '') return -1;
+  const n = Number(v);
   return Number.isFinite(n) ? n : -1;
 }
 
@@ -73,12 +75,16 @@ function draw(): void {
   renderer.render();
 }
 
+/** To the framing page. '*' on purpose: the messages carry only model and
+ *  layer ids or an error string, and frame-ancestors already limits who can
+ *  frame this page (as utils.ts's wb-frame:* messages). */
 function post(msg: object): void {
   if (window.parent !== window) window.parent.postMessage(msg, '*');
 }
 
 window.addEventListener('message', (ev: MessageEvent) => {
-  if (ev.source !== window.parent) return; // only the framing page drives the view
+  // Only a framing page drives the view (unframed, parent === window).
+  if (window.parent === window || ev.source !== window.parent) return;
   const msg = ev.data;
   if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
   if (msg.type === 'wb-embed:layers') enabled = layersFromList(msg.layers ?? null);
