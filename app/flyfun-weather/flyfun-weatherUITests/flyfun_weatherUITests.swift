@@ -387,9 +387,19 @@ final class flyfun_weatherUITests: XCTestCase {
     /// Swipe `element` into view, then tap it once the scroll has stopped:
     /// a tap that lands while a swipe is still decelerating only stops the
     /// scroll, so the control never sees it (#748: "More" stayed collapsed).
+    /// An element behind the iPhone's bottom tab bar still reports hittable,
+    /// but its tap lands on the bar. A fling overshoots it under the sticky
+    /// section chips at the top, so drag it a third of the screen instead.
     @MainActor
     private func tapAfterScrolling(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true) {
-        if !element.isHittable {
+        let tabBar = app.tabBars.firstMatch
+        let underTabBar = tabBar.exists && tabBar.frame.minY > app.frame.midY
+            && element.frame.midY > tabBar.frame.minY
+        if underTabBar {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+            Thread.sleep(forTimeInterval: 1.0)
+        } else if !element.isHittable {
             if up { app.swipeUp() } else { app.swipeDown() }
             Thread.sleep(forTimeInterval: 1.0)
         }
