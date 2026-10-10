@@ -1662,7 +1662,7 @@ def classify_changes(
         if k.startswith(_AIRPORT_ALERT_PREFIXES):
             continue  # kept for the flight (§45)
         if k not in live_alert_keys and k not in unknown and any(k.startswith(p) for p in evaluated):
-            if _pending_key(k, sigmet_traces, now):
+            if pending_sigmet_key(k, sigmet_traces, now):
                 # Missing from this fetch before it ever became valid (a failed
                 # lookahead query): kept, so its return does not alert twice.
                 continue
@@ -1749,14 +1749,10 @@ def _span_alerted(span: tuple[float, float], alerted: dict[str, str]) -> bool:
 
 
 def pending_sigmet_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:
-    """Public name of :func:`_pending_key`, for the push path (#754): a
-    pending SIGMET missing from a fetch is not cleared either."""
-    return _pending_key(key, traces, now)
-
-
-def _pending_key(key: str, traces: dict[str, LiveSigmetTrace], now: datetime) -> bool:
     """A SIGMET change key with a member last seen as not yet valid (#683),
-    unless that member is known cancelled (#686): its memory then goes."""
+    unless that member is known cancelled (#686): its memory then goes.
+    Public: the live-alert push reads it too (#754): a pending SIGMET missing
+    from a fetch is not cleared either."""
     if not key.startswith("sigmet:"):
         return False
     for part in key.split("+"):
