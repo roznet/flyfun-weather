@@ -2569,7 +2569,7 @@ html {
 /* --- Login page --- */
 
 .login-panel {
-  max-width: 400px;
+  max-width: 500px;
   margin: 12vh auto 0;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2622,12 +2622,37 @@ html {
   color: var(--primary);
 }
 
+/* "Learn more" pill under the feature bullets → public help page */
+.login-learn-more {
+  margin: -0.75rem 0 1.5rem;
+  text-align: left;
+}
+
+.btn-learn-more {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.btn-learn-more:hover {
+  background: var(--bg);
+  text-decoration: none;
+}
+
 /* Reassurance line under the sign-in buttons */
 .login-reassure {
   margin: 1rem 0 0;
   font-size: 0.78rem;
   color: var(--text-muted);
   line-height: 1.45;
+}
+
+.login-open-source {
+  margin-top: 0.5rem;
 }
 
 .login-panel h1 {
