@@ -529,3 +529,59 @@ def _send_flight_day_push(
             logger.info("notify: flight-day push sent for %s to %d device(s)", flight.id, n)
     except Exception:
         logger.warning("notify: flight-day push failed for %s", flight.id, exc_info=True)
+
+
+def flight_day_email_applies(
+    flight: Flight, meta: BriefingPackMeta, now: datetime | None = None,
+) -> bool:
+    """Should the briefing's Email button send the flight-day format?
+
+    Yes for a D-0 pack until the end of the live window (planned arrival +
+    ``WB_LIVE_WINDOW_AFTER_H``): from then on there is nothing observed left
+    to lead with, so the ordinary briefing email is the right one.
+    """
+    if meta.days_out != 0 or flight.departure_time is None:
+        return False
+    from datetime import timedelta
+
+    from weatherbrief.tasks.live_tick import live_window_hours
+
+    now = now or datetime.now(timezone.utc)
+    departure = flight.departure_time
+    if departure.tzinfo is None:
+        departure = departure.replace(tzinfo=timezone.utc)
+    _, after_h = live_window_hours()
+    end = departure + timedelta(hours=(flight.flight_duration_hours or 0.0) + after_h)
+    return now < end
+
+
+def send_flight_day_email_on_request(
+    db: Session,
+    flight: Flight,
+    meta: BriefingPackMeta,
+    pack_dir: Path,
+    *,
+    recipients: list[str],
+    recipient_user_id: str,
+    base_url: str,
+) -> None:
+    """The Email button's flight-day send: the same email the T-2h brief
+    sends, built from the pack and its stored live layer (no observed
+    refresh, no LLM call — the live tick keeps the layer fresh on flight day).
+
+    No gate: the user asked for it. "Since the last briefing" compares this
+    pack with the one before it. The device note follows the recipient's own
+    devices. Raises like :func:`send_flight_day_email` so the endpoint can
+    report a failure.
+    """
+    from weatherbrief.notify.email import send_flight_day_email
+    from weatherbrief.notify.push import count_user_devices
+    from weatherbrief.tasks.live_layer import live_summary
+
+    send_flight_day_email(
+        recipients, flight, meta, pack_dir,
+        live=live_summary(pack_dir),
+        since=flight_day_since(db, flight.id, meta, pack_dir, refreshed=True),
+        has_device=count_user_devices(db, recipient_user_id) > 0,
+        base_url=base_url,
+    )

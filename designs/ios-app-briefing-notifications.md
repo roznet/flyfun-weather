@@ -470,6 +470,14 @@ The link is the briefing URL with `#observed-glance-wrapper`; the web page has
 no "open on tab" parameter, so it may land at the top while the section loads.
 Sample renders: `WB_EMAIL_SAMPLES_DIR=/tmp/fd pytest tests/test_email.py -k samples`.
 
+**Email button on flight day.** `POST …/packs/{ts}/email` sends this same
+format (`send_flight_day_email_on_request`) when `flight_day_email_applies`:
+a D-0 pack, until planned arrival + `WB_LIVE_WINDOW_AFTER_H`. It is the answer
+to "I watched the refresh, so presence suppressed the brief, but I want the
+email": press Email. Built from the stored live layer (the tick keeps it
+fresh), no gate, "since" against the previous pack, device note from the
+recipient's own devices. Outside that window the ordinary briefing email.
+
 **Push** (`notify/push.py::send_flight_day_push`): "Flight day · 09:00Z EGTK →
 LFAT" / "AMBER · <headline>", payload `{flight_id, type: "flight_day",
 timestamp}`; the app (#754) opens the Observed tab on tap.
