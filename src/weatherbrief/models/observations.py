@@ -7,6 +7,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, computed_field
 
 from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.models.runway_wind import RunwayWindPicture
 
 
 class AirportObservation(BaseModel):
@@ -30,6 +31,10 @@ class AirportObservation(BaseModel):
     metar_wind_dir: int | None = None
     metar_wind_speed_kt: int | None = None
     metar_wind_gust_kt: int | None = None
+    # The METAR's dddVddd variable range (#758). A VRB wind is a speed with
+    # no direction; calm is 0 kt. None on packs built before #758.
+    metar_wind_variable_from: int | None = None
+    metar_wind_variable_to: int | None = None
     metar_weather: list[str] = Field(default_factory=list)
     metar_temperature_c: int | None = None
     metar_dewpoint_c: int | None = None
@@ -67,6 +72,8 @@ class AirportObservation(BaseModel):
     taf_wind_dir: int | None = None
     taf_wind_speed_kt: int | None = None
     taf_wind_gust_kt: int | None = None
+    taf_wind_variable_from: int | None = None  # #758, as metar_wind_variable_*
+    taf_wind_variable_to: int | None = None
     taf_applicable_lines: list[int] = Field(default_factory=list)
     metar_wind_advisory: str | None = None
     metar_best_runway_id: str | None = None
@@ -79,6 +86,12 @@ class AirportObservation(BaseModel):
     has_metar: bool = False
     has_taf: bool = False
     eta_hour_offset: int | None = None  # rounded hours after departure
+    # Runways + the METAR and TAF-at-ETA winds on them (#758), for the
+    # runway + wind widget. Built for every corridor airport so any future
+    # placement (table row, alternate) needs no server change. None when the
+    # airport has no runway data, the computation failed, or on packs built
+    # before #758.
+    runway_wind: RunwayWindPicture | None = None
 
     def taf_at_eta_line(self) -> str:
         """One-line TAF reading at ETA, shared by the LLM context and the text digest.

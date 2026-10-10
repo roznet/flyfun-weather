@@ -187,6 +187,26 @@ same exported `/live` ticks the iOS UI test feeds the app
 consumers must still pass — re-run `scripts/export_live_scenario_ios.py` and
 `pytest tests/test_live_scenarios.py` first.
 
+### 5b. Runway + wind widget rules — a mirrored pure pair (#758)
+
+The departure/destination runway + wind dials draw from the server's
+`RunwayWindPicture` (components, best end and advisory are server-computed, so
+those cannot drift). What is hand-copied is the geometry and the words:
+
+| Platform | File |
+|---|---|
+| Web | `web/ts/visualization/runway-wind/runway-wind-core.ts` (renderer: `runway-wind-view.ts`) |
+| iOS | `app/flyfun-weather/flyfun-weather/Views/Shared/RunwayWindRules.swift` (renderer: `RunwayWindView.swift`) — header carries the symbol map |
+
+Tests: `web/tests/unit/runway-wind-core.test.ts` ↔
+`app/flyfun-weather/flyfun-weatherTests/RunwayWindRulesTests.swift`, same
+inputs, same coordinates and strings, case for case. Check first the constants
+(`RIM_R`, `BAR_*`, `PARALLEL_*`, `LABEL_*`, `ARROW_*`), then the bearing
+convention (north up, y down, arrow drawn from the upwind rim, idents on the
+approach side), then the strings. Known divergence, do not re-flag: the
+all-ends list is a `<details>` on web and a tap-to-expand on iOS (same
+`endLine` strings).
+
 ### 6. API DTO contracts
 
 iOS `Models/API/*Response.swift` Codable types mirror backend JSON. A server
