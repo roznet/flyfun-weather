@@ -33,7 +33,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import Path as PathParam
 from fastapi import Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -148,10 +148,20 @@ def _freshness_dict(db: Session, user_id: str, flight_id: str) -> dict[str, Any]
 class CreateFlightInput(BaseModel):
     """A new flight to plan a briefing for."""
 
-    waypoints: list[str] = Field(
+    # One route string, same contract as the MCP ``create_flight`` tool (#745,
+    # #749). Length cap matches ``InterpretRouteRequest``, which it is fed to.
+    route: str = Field(
         ...,
-        min_length=2,
-        description="Route waypoints as ICAO codes or navaid names, e.g. ['LFBO', 'LFML']. Minimum 2.",
+        min_length=1,
+        max_length=2000,
+        description=(
+            "The route as one string. First token: departure airport ICAO; last "
+            "token: destination airport ICAO. In between, the route as filed "
+            "(ICAO Field-15: SIDs, airways, DCT, speed/level groups are fine) or "
+            "a plain list of waypoints. A filed Field-15 route omits the "
+            "airports, so add them at the start and end. E.g. 'EGTK DCT LFPB' or "
+            "'EGTK SAPRE1D SAPRE/N0190F180 L615 DJL LSGS'."
+        ),
     )
     departure_time: str = Field(
         ...,
@@ -225,18 +235,61 @@ async def create_flight(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Create a new flight and automatically trigger a weather briefing.
+    """Create a flight from one route string and start its briefing (~2 min).
 
-    The briefing generation takes ~2 minutes. The response includes the flight
-    details and a processing status. Call get_briefing after a couple of minutes
-    to retrieve the results.
+    The route is interpreted like the web form: airways, SIDs and speed/level
+    groups are dropped, far off-route points rejected. If the response has a
+    `warning`, tell the pilot which points were dropped.
     """
-    req = flights_api.CreateFlightRequest(
-        waypoints=body.waypoints,
-        departure_time=body.departure_time,
-        flight_duration_hours=body.flight_duration_hours,
-        cruise_altitude_ft=body.cruise_altitude_ft,
+    # Interpret in-process, as the MCP tool does over HTTP (and the web Save
+    # flow): only resolved waypoints reach create, the original string is kept
+    # as raw_route. Every Depends()-defaulted param is passed explicitly — see
+    # the out-of-band route-handler note in designs/chatgpt-connector.md.
+    interpretation = flights_api.interpret_route(
+        req=flights_api.InterpretRouteRequest(raw_route=body.route),
+        request=request,
+        user_id=user_id,
     )
+    route_summary = {
+        "interpreted": list(interpretation.interpreted),
+        "skipped": list(interpretation.skipped),
+        "off_route": list(interpretation.off_route),
+    }
+    waypoints = route_summary["interpreted"]
+    if len(waypoints) < 2:
+        # Nothing is created: the agent gets the summary to fix the codes.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": (
+                    "The route did not resolve to at least a departure and a "
+                    "destination. Include both ICAO codes in the route string and "
+                    "check the codes listed under 'skipped' and 'off_route'."
+                ),
+                "route": route_summary,
+            },
+        )
+
+    try:
+        req = flights_api.CreateFlightRequest(
+            waypoints=waypoints,
+            raw_route=body.route,
+            departure_time=body.departure_time,
+            flight_duration_hours=body.flight_duration_hours,
+            cruise_altitude_ft=body.cruise_altitude_ft,
+        )
+    except ValidationError as e:
+        # Built in-process, so a bad departure_time or an over-long resolved
+        # route would otherwise escape as a 500 rather than the 422 the REST
+        # endpoint gives.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "Invalid flight",
+                "errors": e.errors(include_url=False, include_context=False),
+                "route": route_summary,
+            },
+        ) from e
     flight = flights_api.create_flight(req=req, request=request, user_id=user_id, db=db)
     flight_id = flight.id
 
@@ -260,7 +313,7 @@ async def create_flight(
         else:
             refresh_status = {"status": "failed", "message": str(e.detail)}
 
-    return {
+    result: dict[str, Any] = {
         "flight": {
             "id": flight_id,
             "route_name": flight.route_name,
@@ -270,8 +323,19 @@ async def create_flight(
             "flight_duration_hours": flight.flight_duration_hours,
             "web_url": _flight_web_url(flight_id),
         },
+        "route": route_summary,
         "briefing": refresh_status,
     }
+    # Top-level so the GPT relays it rather than leaving it buried in `route`;
+    # same wording as the MCP tool.
+    dropped = route_summary["skipped"] + route_summary["off_route"]
+    if dropped:
+        result["warning"] = (
+            f"Flight created without these route points: {', '.join(dropped)}. "
+            "Tell the pilot, and check 'route.skipped' (not recognised) and "
+            "'route.off_route' (too far off the direct leg)."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

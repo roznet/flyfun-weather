@@ -91,17 +91,21 @@ and ChatGPT cannot drift.
 | `getAlternates` | `GET /agent/v1/flights/{id}/alternates` | `get_alternates` |
 | `getAirportWeather` | `GET /agent/v1/airport-weather` | `get_airport_weather` |
 
-**Known divergence — route input (#745).** MCP `create_flight` takes a single
-`route` string (filed Field-15 or a plain waypoint list, airports included), not a
-`waypoints` list: one input so the calling LLM never has to choose between two,
-or strip airways/SIDs/speed groups itself. The MCP client calls
-`/api/flights/interpret-route` first, creates the flight with the `interpreted`
-waypoints plus `raw_route` (as the web Save flow does), and returns
-`interpreted`/`skipped`/`off_route` plus a top-level `warning` when anything was
-dropped, so the agent relays it to the pilot; fewer than two resolved points →
-error, nothing created. `createFlight` still takes `waypoints` (its OpenAPI schema
-is pasted into the GPT builder, a separate contract); moving it to the same shape
-is #749.
+**Route input (#745, #749).** Both `createFlight` and MCP `create_flight` take a
+single `route` string (filed Field-15 or a plain waypoint list, airports included,
+≤2000 chars), not a `waypoints` list: one input so the calling LLM never has to
+choose between two, or strip airways/SIDs/speed groups itself. Each interprets it
+first (MCP over HTTP via `/api/flights/interpret-route`; `createFlight` by calling
+the `interpret_route` handler in-process), creates the flight with the
+`interpreted` waypoints plus `raw_route` (as the web Save flow does), and returns
+`route` = `interpreted`/`skipped`/`off_route` plus a top-level `warning` when
+anything was dropped, so the agent relays it to the pilot. Fewer than two resolved
+points → error with the `route` summary, nothing created (MCP: an error result;
+`createFlight`: HTTP 422 with `detail.error` + `detail.route`). Changing
+`CreateFlightInput` changes the pasted contract: the GPT Action must be
+**re-imported** in the builder (the schema itself is served live, nothing to
+regenerate). Remaining gaps: `createFlight` has no `description` field and
+doesn't return the pending-coverage status the MCP tool does.
 
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,
 including the "drill in before answering / cross-check is not a downgrade signal"
@@ -206,7 +210,10 @@ scoped `claude.ai`/`claude.com` CORS allowlist).
 - `tests/test_agent_endpoints.py` — `TestClient` smoke tests for the part unique
   to `api.agent`: the in-process route wiring the shaper/MCP suites don't reach.
   Covers `getBriefing` (happy path, `none` envelope, alternates hook present),
-  `getAlternates` (happy path + `none` when not computed), `listFlights` (all
+  `getAlternates` (happy path + `none` when not computed), `createFlight` (route
+  string → interpreted waypoints + `raw_route`, dropped points in `route` and
+  `warning`, unresolvable route → 422 with nothing created, bad departure time →
+  422 not 500), `listFlights` (all
   sections, and the Query-sentinel regression), the ownership gate (a private
   flight owned by another user 404s on `getBriefing` / `getDigestContext` /
   `getAlternates`), the flight-day `live` block (null without a layer, equal

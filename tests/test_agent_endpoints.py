@@ -475,3 +475,103 @@ def test_agent_operation_descriptions_fit_gpt_limit(client):
     for path in schema["paths"].values():
         for op in path.values():
             assert len(op.get("description", "")) <= 300, (op["operationId"], len(op["description"]))
+
+
+# ---------------------------------------------------------------------------
+# createFlight: one route string, interpreted in-process (#749, mirrors the
+# MCP cases in test_mcp_create_flight.py)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def create_env(client, monkeypatch):
+    """Real RouteResolver over the mock airport set; briefing refresh stubbed."""
+    from airport_mocks import TEST_AIRPORTS, mock_model
+
+    from weatherbrief.api import packs as packs_api
+
+    monkeypatch.setattr(
+        "weatherbrief.airports._load_airport_model",
+        lambda *a, **k: mock_model(TEST_AIRPORTS),
+    )
+    client.app.state.db_path = "/fake/db"
+    refresh_calls: list[str] = []
+
+    async def _fake_refresh(*, flight_id, **kwargs):
+        refresh_calls.append(flight_id)
+        return {"status": "processing"}
+
+    monkeypatch.setattr(packs_api, "refresh_briefing", _fake_refresh)
+    return refresh_calls
+
+
+def _create(client, route: str):
+    return client.post("/agent/v1/flights", json={
+        "route": route,
+        "departure_time": _DEP.isoformat(),
+        "flight_duration_hours": 1.5,
+    })
+
+
+def _stored(app_db, flight_id: str) -> Flight:
+    from weatherbrief.storage.flights import load_flight
+
+    session = app_db()
+    try:
+        return load_flight(session, flight_id)
+    finally:
+        session.close()
+
+
+def test_create_flight_from_route_string(client, app_db, create_env):
+    resp = _create(client, "EGTK DCT LFPB")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["flight"]["waypoints"] == ["EGTK", "LFPB"]
+    assert data["route"] == {"interpreted": ["EGTK", "LFPB"], "skipped": [], "off_route": []}
+    assert "warning" not in data
+    assert data["briefing"]["status"] == "processing"
+    assert create_env == [data["flight"]["id"]]
+
+    stored = _stored(app_db, data["flight"]["id"])
+    assert stored.waypoints == ["EGTK", "LFPB"]
+    assert stored.raw_route == "EGTK DCT LFPB"
+
+
+def test_create_flight_reports_dropped_points(client, app_db, create_env):
+    """Unknown (skipped) and off-leg (off_route) points are listed and warned."""
+    resp = _create(client, "EGBJ ZZQX 4629N01541E LFOV")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["flight"]["waypoints"] == ["EGBJ", "LFOV"]
+    assert data["route"]["skipped"] == ["ZZQX"]
+    assert data["route"]["off_route"] == ["4629N01541E"]
+    assert "ZZQX" in data["warning"] and "4629N01541E" in data["warning"]
+
+
+def test_create_flight_unresolvable_route_creates_nothing(client, app_db, create_env):
+    resp = _create(client, "EGTK ZZQX")
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["route"]["interpreted"] == ["EGTK"]
+    assert detail["route"]["skipped"] == ["ZZQX"]
+    assert "departure and a destination" in detail["error"]
+    assert create_env == []
+    assert client.get("/agent/v1/flights").json()["flights"] == []
+
+
+def test_create_flight_bad_departure_time_is_422_not_500(client, app_db, create_env):
+    resp = client.post("/agent/v1/flights", json={
+        "route": "EGTK LFPB",
+        "departure_time": "tomorrow morning",
+        "flight_duration_hours": 1.5,
+    })
+    assert resp.status_code == 422, resp.text
+    assert create_env == []
+
+
+def test_create_flight_schema_takes_route_not_waypoints(client):
+    """The GPT Action contract: one ``route`` string (re-import after changing)."""
+    schema = client.get("/agent/v1/openapi.json").json()
+    props = schema["components"]["schemas"]["CreateFlightInput"]["properties"]
+    assert "route" in props and "waypoints" not in props
+    assert props["route"]["maxLength"] == 2000
