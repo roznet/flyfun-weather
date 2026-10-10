@@ -381,7 +381,9 @@ def test_lell_lemi_inputs_rebuilt_from_history(lell_lemi_history):
     rebuilt = _builder().inputs_from_history(flight_dir)
 
     def strip(m, keys):
-        return {k: m.get(k) for k in keys if k != "source"}
+        # flight_category is derived, not parsed: the fixture froze the old
+        # rule, where a metric 8000 m was MVFR (meteorology-decisions §48).
+        return {k: m.get(k) for k in keys if k not in ("source", "flight_category")}
 
     by_key = {(m["icao"], m["observation_time"]): m for m in original["metars"]}
     assert rebuilt["metars"]

@@ -25,7 +25,6 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
-from weatherbrief.units import M_PER_SM as _M_PER_SM
 
 logger = logging.getLogger(__name__)
 
@@ -170,21 +169,9 @@ def _score_model_vs_metar(
         sounding, hourly, field_elevation_ft=field_elevation_ft, model=model,
     )
 
-    # Visibility in statute miles — same conversion as advisory
-    model_vis_sm = (
-        round(hourly.visibility_m / _M_PER_SM, 1)
-        if hourly.visibility_m is not None
-        else None
-    )
-    obs_vis_sm = (
-        round(obs_row.visibility_m / _M_PER_SM, 1)
-        if obs_row.visibility_m is not None
-        else None
-    )
-
     # Flight category — model uses same derivation as advisory pipeline;
     # observation uses the METAR-reported category (ground truth).
-    model_cat = classify_flight_category(model_ceiling, model_vis_sm)
+    model_cat = classify_flight_category(model_ceiling, visibility_m=hourly.visibility_m)
 
     # Wind advisory — same function + thresholds
     model_adv, _, _, _ = compute_wind_advisory(
