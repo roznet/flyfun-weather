@@ -28,6 +28,10 @@ export function escapeHtml(text: string): string {
 // --- Shared user info rendering ---
 
 export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
+  // Framed (talks.flyfun.aero live slides): every page lands here once auth
+  // succeeded, so this is the "real page, not a login/error page" signal the
+  // parent waits for before revealing the frame. Carries no data.
+  if (window.parent !== window) window.parent.postMessage({ type: 'wb-frame:ready' }, '*');
   const container = document.getElementById('user-info');
   if (!container) return;
 
@@ -560,6 +564,10 @@ export const STATUS_DISMISS_MS = 3000;
  *  the server can bounce the user back after OAuth. Skips `next` when already
  *  on root or the login page itself. */
 export function redirectToLogin(): void {
+  // Framed (talks.flyfun.aero live slides): tell the parent first so it can
+  // fall back to its snapshot instead of showing a login page in the frame.
+  // No data in the message, so any parent origin may hear it.
+  if (window.parent !== window) window.parent.postMessage({ type: 'wb-frame:auth-required' }, '*');
   const path = location.pathname;
   if (path === '/' || path === '/login.html') {
     location.href = '/login.html';

@@ -233,6 +233,10 @@ source of truth, no server-side copy of the mapping), and focuses the requested 
 (`view=skewt` scrolls to the Skew-T). The MCP `get_advisory_detail` builds this link in
 its `web_url` (`_advisory_web_url`), pointing convective at the highest-CAPE peak point.
 
+### Embed page (`/embed.html`)
+
+`web/ts/embed-main.ts` mounts one `CrossSectionRenderer` full-bleed with no app chrome, for pages that frame a view (the talks site, help pages): `?flight=&pack=&model=&layers=a,b,c&point=&theme=`. `layers` is exact (only those on; absent = briefing defaults). A parent drives it over `postMessage` — `wb-embed:layers` / `wb-embed:point` / `wb-embed:model` in, `wb-embed:ready` (models, layer ids) out — so a slide can build a section layer by layer without reloading. It reads the same pack endpoints as the briefing (same auth, read-only), passes the flight's ceiling to `extractVizData`, and leaves the advisory highlight off.
+
 ## Advisory Highlights (#373)
 
 When a user clicks an advisory chip (or opens an `?advisory=` deep-link), the

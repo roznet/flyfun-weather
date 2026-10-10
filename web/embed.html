@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Cross-section</title>
+  <!-- Frameable cross-section for talks / help pages; see ts/embed-main.ts. -->
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+    #embed-xsection { position: absolute; inset: 0; }
+    #embed-status {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); font: 14px system-ui, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="embed-xsection"></div>
+  <div id="embed-status">Loading…</div>
+  <script src="/dist/embed.js"></script>
+</body>
+</html>
