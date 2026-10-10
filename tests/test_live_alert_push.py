@@ -486,6 +486,30 @@ def test_send_mode_dispatches_once_with_expiry_and_records_delivery(
     assert rows[0].platform == "ios"
 
 
+def test_failed_send_does_not_advance_the_memory(db_session, eligible, tmp_path, monkeypatch, caplog):
+    """An undelivered alert must not later read as "cleared" (review, #756)."""
+    from weatherbrief.tasks.live_layer import load_live
+
+    monkeypatch.setenv(live_alerts.SEND_ENV, "1")
+    pack_dir, layer = _stored_layer(tmp_path, _alert_changes())
+    with patch("weatherbrief.notify.push._dispatch", return_value=0), caplog.at_level(logging.INFO):
+        outcome = notify_live_alerts(db_session, eligible, layer, pack_dir=pack_dir, now=DEP)
+    assert outcome == "failed"
+    assert "reason=no_device_reached" in caplog.text
+    stored = load_live(pack_dir.parent)
+    assert stored.push_state is None or "metar:ZZDS" not in stored.push_state.active
+    assert db_session.query(LiveDeliveryRow).count() == 0
+
+
+def test_send_exception_is_logged_apart(db_session, eligible, tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv(live_alerts.SEND_ENV, "1")
+    pack_dir, layer = _stored_layer(tmp_path, _alert_changes())
+    with patch("weatherbrief.notify.push.send_live_alert_push", side_effect=RuntimeError("boom")), \
+            caplog.at_level(logging.INFO):
+        outcome = notify_live_alerts(db_session, eligible, layer, pack_dir=pack_dir, now=DEP)
+    assert outcome == "failed" and "reason=exception" in caplog.text
+
+
 def test_nothing_new_makes_no_db_query(db_session, eligible, tmp_path):
     changes = LiveChanges(computed_at=T0, changes=[], evaluated=["metar:ZZDS"])
     pack_dir, layer = _stored_layer(tmp_path, changes)

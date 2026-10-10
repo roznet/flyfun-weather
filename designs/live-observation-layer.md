@@ -71,7 +71,7 @@ DATA_DIR/packs/{user}/{flight}/
   `wx:`) hold the worst value alerted (the phenomena alerted, for `wx:`) and
   are never forgotten during the flight (§45, `_airport_alert`); storm keys
   (`storm-alerted:` / `storm-span:`, §41); SIGMET and radar/lightning keys
-  hold the last value and are dropped once the row is gone (unless pending, `_pending_key`). Changing
+  hold the last value and are dropped once the row is gone (unless pending, `pending_sigmet_key`). Changing
   a family's stored format must keep an existing `live.json` loadable without
   re-alerting a flight in the air.
 - **`live_meta.json`** exists so list endpoints can report `live_updated_at`
@@ -947,7 +947,7 @@ What the code relies on:
   no second alert and no new trail event.
 - A failed lookahead query (euro_aip stops the lookahead and keeps the rest)
   drops pending SIGMETs beyond it for one tick. So a baseline SIGMET missing before its
-  start is not "gone", and `_pending_key` keeps the alert memory of a missing
+  start is not "gone", and `pending_sigmet_key` keeps the alert memory of a missing
   SIGMET whose trace is still before its start. Both rely on the trace
   (`ClassifierMemory.sigmets`) holding `valid_from`.
 - **Fetch status (#686, §46).** `RouteSigmets.fetch_ok` / `queried_at` come
@@ -957,7 +957,7 @@ What the code relies on:
   `classify_changes` skips a `fetch_ok=False` block anyway.
 - **Cancelled (#686, §46).** `_cancelled_traces`: a trace last seen pending,
   missing, not superseded, and `isigmet_covers(latest.queried_at, …)` gets
-  `cancelled_at` and a `sigmet_cancelled` highlight row; `_pending_key` then
+  `cancelled_at` and a `sigmet_cancelled` highlight row; `pending_sigmet_key` then
   releases its memory. Briefing SIGMETs have no trace in `_trace_sigmets`
   once missing, so `_cancelled_traces` builds one (or takes it from `seen`)
   and keeps it in the memory while it is cancelled; `gone` skips them.
@@ -1059,7 +1059,7 @@ the highlights (the text is deterministic, it does not wait on a model).
 - **Decision** (`decide` → `next_state`, pure): alerts = `new_alert` rows,
   plus rows for a re-armed key (§47); clears = active keys with no alert-tier
   row for 2 evaluated ticks. Storms push, never clear. A skipped push (pref
-  off, muted…) tracks nothing but still drops due clears, so unmuting does
+  off, muted…) or one that reached no device tracks nothing but still drops due clears, so unmuting does
   not release stale ones.
 - **Shadow mode** until `WB_LIVE_PUSH_SEND=1`: decisions logged
   (`LIVE_PUSH_WOULD_SEND` / `LIVE_PUSH_SKIPPED reason=…`), memory advanced as

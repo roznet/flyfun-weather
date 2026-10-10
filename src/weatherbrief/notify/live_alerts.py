@@ -234,8 +234,8 @@ def decide(
 
 
 def next_state(decision: PushDecision, *, pushed: bool, now: datetime) -> LivePushState:
-    """The memory after this tick: ``pushed`` when the push went out (or would
-    have, in shadow mode). A skipped push leaves its alerts untracked and its
+    """The memory after this tick: ``pushed`` when the push reached a device
+    (or would have, in shadow mode). A skipped or failed push leaves its alerts untracked and its
     rearmed keys armed; its clears still leave ``active`` so unmuting does
     not release a burst of stale clears."""
     state = decision.state.model_copy(deep=True)
@@ -308,11 +308,12 @@ def build_payload(flight_row, decision: PushDecision, *, tick_at: datetime) -> d
 
 def push_expiry(flight_row, now: datetime) -> datetime:
     """min(now + 30 min, end of the live window); never before now."""
-    from weatherbrief.tasks.live_tick import _as_utc, live_window_hours
+    from weatherbrief.storage.flights import ensure_utc
+    from weatherbrief.tasks.live_tick import live_window_hours
 
     _, after_h = live_window_hours()
     window_end = (
-        _as_utc(flight_row.departure_time)
+        ensure_utc(flight_row.departure_time)
         + timedelta(hours=(flight_row.flight_duration_hours or 0) + after_h)
     )
     return max(now, min(now + PUSH_TTL, window_end))
@@ -426,6 +427,10 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
             outcome = "shadow"
             if send_enabled():
                 outcome = _send(db, flight_row, layer, decision, devices, now)
+                # Only a push that reached a device advances the memory: an
+                # undelivered alert must not later read as "cleared", nor
+                # use up a re-arm. Its new_alert is spent either way.
+                pushed = outcome == "sent"
     new_state = next_state(decision, pushed=pushed, now=now)
     if new_state != (layer.push_state or LivePushState()):
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, patch_push_state
@@ -442,10 +447,16 @@ def _send(db, flight_row, layer, decision, devices, now) -> str:
     from weatherbrief.tasks.live_timing import record_delivery
 
     payload = build_payload(flight_row, decision, tick_at=layer.live_updated_at or now)
-    sent = send_live_alert_push(
-        db, flight_row.user_id, payload,
-        expires_at=push_expiry(flight_row, now), devices=devices,
-    )
+    try:
+        sent = send_live_alert_push(
+            db, flight_row.user_id, payload,
+            expires_at=push_expiry(flight_row, now), devices=devices,
+        )
+    except Exception:
+        # The sender swallows its own failures; this is the one that escaped.
+        logger.warning("LIVE_PUSH_FAILED flight=%s user=%s reason=exception",
+                       flight_row.id, flight_row.user_id, exc_info=True)
+        return "failed"
     try:
         # Dead tokens pruned while sending are the caller's session's work.
         db.commit()
@@ -453,13 +464,19 @@ def _send(db, flight_row, layer, decision, devices, now) -> str:
         logger.warning("Live push: device prune not committed", exc_info=True)
         db.rollback()
     sent_at = datetime.now(timezone.utc)
+    if not sent:
+        # APNs not configured, every token dead, or every device rejected
+        # (the sender logs each); distinct from an exception above.
+        logger.warning("LIVE_PUSH_FAILED flight=%s user=%s reason=no_device_reached devices=0/%d",
+                       flight_row.id, flight_row.user_id, len(devices))
+        return "failed"
     logger.info("LIVE_PUSH_SENT flight=%s user=%s devices=%d/%d",
                 flight_row.id, flight_row.user_id, sent, len(devices))
-    if sent and layer.live_updated_at is not None:
+    if layer.live_updated_at is not None:
         # The device hop (#751): this version reached the phone by push. A
         # poll of the same version afterwards is not a second delivery.
         record_delivery(
             db, flight_id=flight_row.id, user_id=flight_row.user_id, platform="ios",
             served=layer.live_updated_at, now=sent_at, via="push", push_sent_at=sent_at,
         )
-    return "sent" if sent else "failed"
+    return "sent"
