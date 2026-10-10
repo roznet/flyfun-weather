@@ -182,8 +182,11 @@ def _split_translation(
 ) -> list[tuple[DWDDayBlock, str]]:
     """Split a combined English translation back into per-block texts.
 
-    Looks for the same === day headers used in the input.
-    Falls back to returning the full text for each block if splitting fails.
+    Looks for the same === day headers used in the input.  When the headers
+    do not line up one-to-one (the model may split one German day in two, or
+    merge two), returns a single entry spanning all the days with the whole
+    text: it keeps its own day headers, and repeating it under every block
+    put the full forecast in the briefer's context N times.
 
     The model sometimes dresses the reply up as markdown: a title before the
     first header (``# SYNOPTIC EXTRACTION ...``), ``## `` in front of each
@@ -204,12 +207,17 @@ def _split_translation(
         for block, section in zip(blocks, sections):
             result.append((block, section))
     else:
-        # Splitting didn't work cleanly — return full text for all blocks
         logger.warning(
-            "Translation split mismatch: %d sections vs %d blocks",
+            "Translation split mismatch: %d sections vs %d blocks; kept as one entry",
             len(sections), len(blocks),
         )
-        for block in blocks:
-            result.append((block, english))
+        first, last = blocks[0], blocks[-1]
+        span = first if len(blocks) == 1 else DWDDayBlock(
+            day_name_de=f"{first.day_name_de} – {last.day_name_de}",
+            date_iso=first.date_iso,
+            text="\n\n".join(b.text for b in blocks),
+            source=first.source if all(b.source == first.source for b in blocks) else last.source,
+        )
+        result.append((span, english.strip()))
 
     return result

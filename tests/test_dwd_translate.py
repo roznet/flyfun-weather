@@ -51,13 +51,30 @@ def test_markdown_title_and_decoration_do_not_break_the_split(caplog):
     ]
 
 
-def test_missing_day_still_falls_back_to_full_text():
+def test_missing_day_keeps_the_text_once():
     english = (
         "=== Freitag (2026-10-09) ===\nLow over Iceland.\n\n"
         "=== Samstag (2026-10-10) ===\nCold front at 5E."
     )
     out = _split_translation(BLOCKS, english)
-    assert [text for _, text in out] == [english] * 3
+    assert [text for _, text in out] == [english]
+    assert out[0][0].day_name_de == "Freitag – Sonntag"
+    assert out[0][0].date_iso == date(2026, 10, 9)
+
+
+def test_day_split_in_two_keeps_the_text_once():
+    # Prod 2026-10-10 (pack 9542): two German blocks came back as three days,
+    # and the whole translation was pasted under both blocks.
+    blocks = BLOCKS[:2]
+    english = (
+        "## === Current (2026-10-09) ===\nLow over Iceland.\n\n"
+        "## === Saturday (2026-10-10) ===\nCold front at 5E.\n\n"
+        "## === Saturday Night into Sunday (2026-10-10/11) ===\nRidge builds.\n"
+    )
+    out = _split_translation(blocks, english)
+    assert len(out) == 1
+    assert out[0][1].count("Ridge builds.") == 1
+    assert out[0][0].text == "...\n\n..."
 
 
 def test_long_markdown_rule_inside_a_day_is_kept_and_fast():
