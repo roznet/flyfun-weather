@@ -172,7 +172,8 @@ export function segmentTooltipHtml(seg: LiveRibbonSegment): string {
 
 /** The band drawn under a point of the drawing (px in the SVG's own
  *  coordinates), cores before rain since they paint on top. Uses the same
- *  per-bin rects as `bandRects`, so the hover matches what is seen. */
+ *  per-bin rects as `bandRects`, so the hover matches what is seen.
+ *  SYNC: `RouteRibbonInspectorRules.bandAt` (iOS) ports this, same order. */
 export function bandAt(
   ribbon: LiveRibbon,
   px: number,

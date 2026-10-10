@@ -252,8 +252,9 @@ struct RouteRibbonCard: View {
 /// Without the cells feed, the radar strip hugs the line instead.
 ///
 /// One tap gesture covers the whole drawing: the tap is hit-tested against
-/// every mark (`RouteRibbonInspectorRules.hits`, nearest within 22 pt, the
-/// mark under the finger first) and the result handed to `onTap`. Each mark
+/// every mark (`RouteRibbonInspectorRules.hits`: the marks under the finger
+/// first, top paint layer winning, then the others within 22 pt, nearest
+/// first) and the result handed to `onTap`. Each mark
 /// is also an accessibility element whose activation selects it.
 struct RouteRibbonView: View {
     let ribbon: LiveRibbon

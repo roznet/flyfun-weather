@@ -392,12 +392,12 @@ enum RouteRibbonInspectorRules {
     /// The one place this rule lives (targets, available keys, the view's
     /// accessibility elements).
     static func cellId(of band: RibbonWeather, in stormIds: Set<String>) -> String? {
-        guard band.isCore, let sid = band.stormId, stormIds.contains(sid) else { return nil }
-        return sid
+        band.isCore ? anchoredCell(of: band, in: stormIds) : nil
     }
 
     /// The cell whose spot sits on this band's anchor: any band (rain or
-    /// core) carrying a listed `storm_id`.
+    /// core) carrying a listed `storm_id`. A rain band keeps its own card and
+    /// the cell's spot on top of it; a core *is* the cell (`cellId`).
     private static func anchoredCell(of band: RibbonWeather, in stormIds: Set<String>) -> String? {
         guard let sid = band.stormId, stormIds.contains(sid) else { return nil }
         return sid
