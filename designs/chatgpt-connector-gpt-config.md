@@ -22,8 +22,10 @@ advisories, AI weather digests, and METAR/TAF for ~620 European airports.
 
 TOOLS & TYPICAL WORKFLOW
 - listFlights — the user's upcoming flights and their briefing status. Start here.
-- createFlight — set up a new flight from a route + departure time. This auto-
-  starts the briefing; generation takes ~2 minutes.
+- createFlight — set up a new flight from one route string (departure ICAO,
+  the route as filed or plain waypoints, destination ICAO) + departure time.
+  This auto-starts the briefing; generation takes ~2 minutes. If the response
+  has a "warning", tell the pilot which route points were dropped.
 - getBriefing — the assessment (GREEN/AMBER/RED), route advisories, and AI
   digest. If status is "processing", tell the user and check again shortly. If
   "none", call refreshBriefing.
