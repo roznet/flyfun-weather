@@ -414,3 +414,29 @@ def test_a_cell_past_the_route_end_beyond_the_terminal_disc_is_named():
     near = cell("core35-n", "core35", along=154 + 8, cross=0, peak=45.0)
     glance, _ = _glance(_layer(storms=storms_at(NOW, [past, near])))
     assert "nearest cell 8 NM E (45 dBZ), nearly stationary now, +1 at 25 NM E" in glance.lines[2].text
+
+
+def test_local_flight_lines_pass_on_the_planned_schedule():
+    """#764: a zero-length route (same airport at both ends) now gets the
+    planned arrival and flown_nm 0 rather than null, so the lines still pass."""
+    from weatherbrief.models.analysis import RouteConfig, Waypoint
+
+    local = RouteConfig(
+        name="ZZLC-ZZLC",
+        waypoints=[Waypoint(icao="ZZLC", name="ZZLC", lat=50.0, lon=0.0),
+                   Waypoint(icao="ZZLC", name="ZZLC", lat=50.0, lon=0.0)],
+        flight_duration_hours=1.0,
+    )
+    layer = _layer(storms=storms_at(NOW, []), observations=_obs(_airport("ZZLC", 0.0)))
+
+    def glance(minutes):
+        return build_glance(layer, local, FlightProgress.from_route(local, DEP, DEP + timedelta(minutes=minutes)))
+
+    before, ribbon = glance(-10)
+    assert [ln.passed for ln in before.lines] == [False, False, False]
+    assert ribbon.flown_nm == 0.0 and ribbon.arrival_at == DEP + timedelta(hours=1)
+    during, _ = glance(30)
+    assert [ln.passed for ln in during.lines] == [True, False, False]
+    after, _ = glance(90)
+    assert [ln.passed for ln in after.lines] == [True, True, True]
+    assert after.lines[1].text.startswith("flight arrived at plan")

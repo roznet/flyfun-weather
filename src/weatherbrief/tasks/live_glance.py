@@ -146,13 +146,22 @@ class _Flight:
     def __init__(self, route: RouteConfig, progress: FlightProgress):
         self.route = route
         self.progress = progress
-        self.track = progress.track
-        self.total_nm = self.track.total_nm
-        self.now = progress.as_of
         self.dep_icao = route.waypoints[0].icao.upper()
         self.dest_icao = route.waypoints[-1].icao.upper()
         self.dep_pos = (route.waypoints[0].lat, route.waypoints[0].lon)
         self.dest_pos = (route.waypoints[-1].lat, route.waypoints[-1].lon)
+
+    @property
+    def track(self) -> RouteTrack:
+        return self.progress.track
+
+    @property
+    def total_nm(self) -> float:
+        return self.progress.total_nm
+
+    @property
+    def now(self) -> datetime:
+        return self.progress.as_of
 
     def route_points(self, lo_nm: float, hi_nm: float) -> list[tuple[float, float]]:
         """The track between two along-route distances, ends included."""
@@ -638,9 +647,10 @@ def build_glance(
     """The nutshell and the ribbon for this tick, and ``focus`` on every
     storm of ``layer.storms`` (set in place, last, so a failure part-way
     leaves the storms untouched). ``progress`` is where the flight is;
-    its ``as_of`` is the tick time, the glance's "as of". ``cell_frame`` is the cells feed's newest display file, the
-    source of the ribbon's rain/core bands (used only while ``layer.storms``
-    says the feed is available)."""
+    its ``as_of`` is the tick time, the glance's "as of". ``cell_frame`` is
+    the cells feed's newest display file, the source of the ribbon's
+    rain/core bands (used only while ``layer.storms`` says the feed is
+    available)."""
     from weatherbrief.observed.route_bands import BIN_NM, build_weather_bands
     from weatherbrief.tasks.live_significance import airport_roles
 
@@ -659,6 +669,8 @@ def build_glance(
     ribbon = LiveRibbon(
         route_nm=round(flight.total_nm, 1),
         flown_nm=round(flight.progress.flown_nm, 1) if flight.progress.flown_nm is not None else None,
+        # The *planned* departure on purpose, not ``progress.departed_at``: an
+        # observed take-off (#760 PR 2) goes in a progress block, not here.
         departure_at=flight.progress.planned_departure, arrival_at=flight.progress.arrival,
         segment_nm=seg_nm, radar_radius_nm=RIBBON_RADAR_RADIUS_NM, radar_time=radar_time,
         waypoints=[

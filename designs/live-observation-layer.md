@@ -297,6 +297,11 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
 - **Observed sources replace the plan inside the object** (#760 manual take-off /
   landed, #761 app GPS, #762 ADS-B; fusion rules in #759). Consumers must not
   compute schedule arithmetic of their own; add what they need to `FlightProgress`.
+  Inside the object, every computation (`timed`, `arrival`, `flown_at`, `eta`)
+  measures from `departed_at`, the effective departure. Only `departed_at` reads
+  `planned_departure`, so one source swap moves them all. The ribbon's
+  `departure_at` deliberately stays the planned departure. An observed take-off
+  goes in the progress block instead.
 - `timed` = a departure and a duration (flown distance, departed, arrival).
   ETAs and positions also need a non-zero route: a local flight (same airport at
   both ends) has an arrival time but no ETAs, and `flown_nm` 0.

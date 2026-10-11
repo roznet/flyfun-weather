@@ -85,6 +85,8 @@ class _Context:
     # The flight's progress (#759); ``progress.at(t)`` is what a tick at ``t``
     # measured against. None without a route.
     progress: FlightProgress | None = None
+    # The briefing's departure, for "departed" when there is no route.
+    departure: datetime | None = None
     # ICAO -> [(tick_at, observed_at/issued_at, record)] in history order.
     metars: dict[str, list[tuple[datetime, datetime | None, dict]]] = field(default_factory=dict)
     tafs: dict[str, list[tuple[datetime, datetime | None]]] = field(default_factory=dict)
@@ -145,7 +147,8 @@ def _still_relevant(c: LiveChange, at: datetime, ctx: _Context) -> bool:
     if not c.icao or c.role not in ("departure", "route"):
         return True
     if ctx.progress is None:
-        return airport_relevant(c.role, c.enroute_distance_nm, departed=False, flown_nm=None)
+        departed = ctx.departure is not None and at >= ctx.departure
+        return airport_relevant(c.role, c.enroute_distance_nm, departed=departed, flown_nm=None)
     then = ctx.progress.at(at)
     return airport_relevant(c.role, c.enroute_distance_nm, departed=then.departed, flown_nm=then.flown_nm)
 
@@ -295,9 +298,8 @@ def change_trails(
     told from a clear on the weather; without them every airport is taken as
     still relevant.
     """
-    from weatherbrief.tasks.live_layer import flight_progress
-
-    ctx = _Context(progress=flight_progress(route, departure, now))
+    progress = FlightProgress.from_route(route, departure, now) if route is not None else None
+    ctx = _Context(progress=progress, departure=departure)
     history = _upto(history, now)
     _index_reports(history, ctx)
     spans = _spans(history, ctx)

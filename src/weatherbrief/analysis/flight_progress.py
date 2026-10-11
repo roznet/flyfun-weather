@@ -57,10 +57,13 @@ class FlightProgress:
     @property
     def timed(self) -> bool:
         """A departure time and a duration to measure progress with."""
-        return self.planned_departure is not None and self.duration_h > 0
+        return self.departed_at is not None and self.duration_h > 0
 
     @property
     def departed_at(self) -> datetime | None:
+        """The effective departure every schedule computation measures from:
+        the plan today, the observed take-off once #759 lands. Read this,
+        never ``planned_departure``, so a better source moves them all."""
         return self.planned_departure
 
     @property
@@ -72,7 +75,7 @@ class FlightProgress:
         """When the flight lands (the planned arrival for the plan source)."""
         if not self.timed:
             return None
-        return self.planned_departure + timedelta(hours=self.duration_h)
+        return self.departed_at + timedelta(hours=self.duration_h)
 
     @property
     def arrived(self) -> bool:
@@ -85,7 +88,7 @@ class FlightProgress:
         arrival, None when the flight is not timed."""
         if not self.timed:
             return None
-        frac = (t - self.planned_departure).total_seconds() / 3600.0 / self.duration_h
+        frac = (t - self.departed_at).total_seconds() / 3600.0 / self.duration_h
         return max(0.0, min(1.0, frac)) * self.total_nm
 
     @property
@@ -98,7 +101,7 @@ class FlightProgress:
         if not self.timed or along_nm is None or self.total_nm <= 0:
             return None
         frac = max(0.0, min(1.0, along_nm / self.total_nm))
-        return self.planned_departure + timedelta(hours=frac * self.duration_h)
+        return self.departed_at + timedelta(hours=frac * self.duration_h)
 
     def position(self, t: datetime) -> tuple[float, float] | None:
         """(lat, lon) of the aircraft at ``t``, None when not timed."""
