@@ -2270,6 +2270,9 @@ async function init(): Promise<void> {
    *  (session-only, as for digests): a 10-min poll re-renders the card. */
   const ratedHighlights = new Set<string>();
 
+  // #758 dials are hidden until the card carries more than the two dials;
+  // the data still ships on every corridor airport. Flip to bring them back.
+  const SHOW_RUNWAY_WIND_DIALS = false;
   let lastRunwayWindHtml: string | null = null;
   function renderObservedLive(state: BriefingState): void {
     const glance = state.live?.glance ?? null;
@@ -2283,7 +2286,7 @@ async function init(): Promise<void> {
     // #758: departure + destination runway/wind dials. Flight day only (the
     // live layer exists); its own tick's airports, else the pack's.
     const flightWaypoints = state.flight?.waypoints ?? [];
-    const windDials = state.live
+    const windDials = SHOW_RUNWAY_WIND_DIALS && state.live
       ? runwayWindPair(
         state.live.route_observations?.airports ?? state.snapshot?.route_observations?.airports,
         flightWaypoints[0], flightWaypoints.length > 1 ? flightWaypoints[flightWaypoints.length - 1] : null,
