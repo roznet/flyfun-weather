@@ -2056,12 +2056,13 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
 
   // One row per source with its OWN valid time: the four streams are minutes
   // apart and none of them is an instant, so there is no combined "as of".
-  const fields = [
-    observed.reflectivity,
-    observed.rain_rate,
-    observed.cloud_tops,
-    observed.lightning,
-  ].filter((f) => f != null);
+  const kinds = [
+    ['reflectivity', observed.reflectivity],
+    ['rain_rate', observed.rain_rate],
+    ['cloud_tops', observed.cloud_tops],
+    ['lightning', observed.lightning],
+  ] as const;
+  const fields = kinds.map(([, f]) => f).filter((f) => f != null);
   // Attribution is a licence obligation (CC BY for OPERA), so it stays — but as
   // named links rather than the wall of raw URLs it used to print. The producer
   // varies per frame (one sampled frame was built by Météo-France, not EUMETNET
@@ -2077,14 +2078,28 @@ export function renderObservedConditions(snapshot: ForecastSnapshot | null): voi
       + `<span class="observed-source-age">${age}${escapeHtml(rolling)}</span></span>`;
   });
 
+  // Folded to one line — corridor and each stream's age, the part that changes
+  // what the cards mean — with the licence rows behind ⓘ (like the map's
+  // observed badge). Ages re-age in place via `data-live-age-short`.
+  const chips = kinds
+    .filter(([, f]) => f != null)
+    .map(([kind, f]) => `<span class="observed-chip">${escapeHtml(t(`observed.short.${kind}`))} `
+      + `<span data-live-age-short="${escapeHtml(f!.valid_time)}">${escapeHtml(liveAgeShort(f!.valid_time))}</span></span>`);
+  const summaryLine = [
+    `<span class="observed-corridor">${escapeHtml(t('observed.corridor'))} ${Math.round(observed.corridor_nm)} NM</span>`,
+    ...chips,
+  ].join('<span class="observed-sep">·</span>');
   const sourcesHtml = `
-    <div class="observed-now-sources">
-      <span class="observed-corridor">${escapeHtml(t('observed.corridor'))} ${Math.round(observed.corridor_nm)} NM</span>
+    <details class="observed-now-sources">
+      <summary title="${escapeHtml(t('observed.sources'))}">${summaryLine}<span class="observed-sources-info" aria-hidden="true">ⓘ</span></summary>
       <span class="observed-sources-list">${present.join('') || '—'}</span>
-    </div>
+    </details>
   `;
 
+  // Re-rendered on every store change: an opened source panel stays open.
+  const sourcesOpen = !!el.querySelector('.observed-now-sources[open]');
   el.innerHTML = `${summaryHtml}${sourcesHtml}`;
+  if (sourcesOpen) el.querySelector('.observed-now-sources')?.setAttribute('open', '');
 }
 
 /** "10:20Z" — a frame's own valid time, per source. Never a shared clock. */
@@ -2223,6 +2238,16 @@ function liveAgeText(iso: string | null | undefined, now: number = Date.now()): 
   if (min < 1) return t('live.justNow');
   if (min < 60) return t('live.minAgo', { n: min });
   return t('live.hAgo', { h: Math.floor(min / 60), m: String(min % 60).padStart(2, '0') });
+}
+
+/** "12 min" / "1 h 05" — {@link liveAgeText} without the "ago", for a chip. */
+function liveAgeShort(iso: string | null | undefined, now: number = Date.now()): string {
+  if (isoToMs(iso) > now) return '';
+  const min = minutesAgo(iso, now);
+  if (min == null) return '';
+  if (min < 1) return t('live.justNow');
+  if (min < 60) return t('live.minShort', { n: min });
+  return t('live.hShort', { h: Math.floor(min / 60), m: String(min % 60).padStart(2, '0') });
 }
 
 /** "Observed as of HH:MMZ (N min ago)", stale-tinted past 30 min. Carries the
@@ -2366,6 +2391,9 @@ export function refreshLiveAges(now: number = Date.now()): void {
   });
   document.querySelectorAll<HTMLElement>('[data-live-age]').forEach((node) => {
     node.textContent = liveAgeText(node.dataset.liveAge, now);
+  });
+  document.querySelectorAll<HTMLElement>('[data-live-age-short]').forEach((node) => {
+    node.textContent = liveAgeShort(node.dataset.liveAgeShort, now);
   });
 }
 

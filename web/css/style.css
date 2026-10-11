@@ -7207,16 +7207,23 @@ html {
 }
 
 .observed-now-sources {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.35rem 0.75rem;
   margin-top: 0.6rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--border);
   font-size: 0.7rem;
   color: var(--text-muted, #6b7280);
 }
+
+.observed-now-sources summary {
+  list-style: none;
+  cursor: pointer;
+  width: fit-content;
+  font-variant-numeric: tabular-nums;
+}
+.observed-now-sources summary::-webkit-details-marker { display: none; }
+.observed-now-sources[open] summary { margin-bottom: 0.35rem; }
+.observed-sep { margin: 0 0.35em; opacity: 0.55; }
+.observed-sources-info { margin-left: 0.45em; opacity: 0.6; }
 
 .observed-corridor { font-weight: 600; }
 
