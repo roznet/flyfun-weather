@@ -1517,7 +1517,132 @@
     "metar_wind_variable_to": null,
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LEBL",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 19.0,
+         "ident": "02"
+        },
+        {
+         "heading_true": 199.0,
+         "ident": "20"
+        }
+       ],
+       "hard": true,
+       "id": "02/20",
+       "length_ft": 8294,
+       "surface": "ASP"
+      },
+      {
+       "ends": [
+        {
+         "heading_true": 66.0,
+         "ident": "06L"
+        },
+        {
+         "heading_true": 246.0,
+         "ident": "24R"
+        }
+       ],
+       "hard": true,
+       "id": "06L/24R",
+       "length_ft": 10997,
+       "surface": "ASP"
+      },
+      {
+       "ends": [
+        {
+         "heading_true": 66.0,
+         "ident": "06R"
+        },
+        {
+         "heading_true": 246.0,
+         "ident": "24L"
+        }
+       ],
+       "hard": true,
+       "id": "06R/24L",
+       "length_ft": 8727,
+       "surface": "ASP"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "06L",
+       "ends": [
+        {
+         "crosswind_kt": 6.7,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 11.1,
+         "ident": "02",
+         "max_crosswind_kt": 6.7,
+         "side": "right"
+        },
+        {
+         "crosswind_kt": -6.7,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -11.1,
+         "ident": "20",
+         "max_crosswind_kt": 6.7,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": -3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 12.5,
+         "ident": "06L",
+         "max_crosswind_kt": 3.6,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -12.5,
+         "ident": "24R",
+         "max_crosswind_kt": 3.6,
+         "side": "right"
+        },
+        {
+         "crosswind_kt": -3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 12.5,
+         "ident": "06R",
+         "max_crosswind_kt": 3.6,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -12.5,
+         "ident": "24L",
+         "max_crosswind_kt": 3.6,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 50,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 13,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1574,7 +1699,64 @@
     "metar_wind_variable_to": null,
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LERS",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 68.9,
+         "ident": "07"
+        },
+        {
+         "heading_true": 249.0,
+         "ident": "25"
+        }
+       ],
+       "hard": true,
+       "id": "07/25",
+       "length_ft": 8054,
+       "surface": "ASP"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "07",
+       "ends": [
+        {
+         "crosswind_kt": -4.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 3.9,
+         "ident": "07",
+         "max_crosswind_kt": 4.5,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 4.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -3.9,
+         "ident": "25",
+         "max_crosswind_kt": 4.5,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 20,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 6,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1627,11 +1809,68 @@
     "metar_wind_dir": 50,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 9,
-    "metar_wind_variable_from": null,
-    "metar_wind_variable_to": null,
+    "metar_wind_variable_from": 20,
+    "metar_wind_variable_to": 80,
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LEVC",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 116.3,
+         "ident": "12"
+        },
+        {
+         "heading_true": 296.3,
+         "ident": "30"
+        }
+       ],
+       "hard": true,
+       "id": "12/30",
+       "length_ft": 8858,
+       "surface": "ASP"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "12",
+       "ends": [
+        {
+         "crosswind_kt": -8.2,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 3.6,
+         "ident": "12",
+         "max_crosswind_kt": 9.0,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 8.2,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -3.6,
+         "ident": "30",
+         "max_crosswind_kt": 9.0,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 50,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 9,
+        "time": "2026-10-02T05:09:00Z",
+        "variable": false,
+        "variable_from": 20,
+        "variable_to": 80
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1682,11 +1921,68 @@
     "metar_wind_dir": 20,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 5,
-    "metar_wind_variable_from": null,
-    "metar_wind_variable_to": null,
+    "metar_wind_variable_from": 340,
+    "metar_wind_variable_to": 60,
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LEAL",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 99.7,
+         "ident": "10"
+        },
+        {
+         "heading_true": 279.7,
+         "ident": "28"
+        }
+       ],
+       "hard": true,
+       "id": "10/28",
+       "length_ft": 9842,
+       "surface": "ASP"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "10",
+       "ends": [
+        {
+         "crosswind_kt": -4.9,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 0.9,
+         "ident": "10",
+         "max_crosswind_kt": 5.0,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 4.9,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -0.9,
+         "ident": "28",
+         "max_crosswind_kt": 5.0,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 20,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 5,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": 340,
+        "variable_to": 60
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1737,11 +2033,68 @@
     "metar_wind_dir": 360,
     "metar_wind_gust_kt": null,
     "metar_wind_speed_kt": 4,
-    "metar_wind_variable_from": null,
-    "metar_wind_variable_to": null,
+    "metar_wind_variable_from": 340,
+    "metar_wind_variable_to": 60,
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LERI",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 64.9,
+         "ident": "07"
+        },
+        {
+         "heading_true": 244.9,
+         "ident": "25"
+        }
+       ],
+       "hard": true,
+       "id": "07/25",
+       "length_ft": 3077,
+       "surface": "ASP"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "07",
+       "ends": [
+        {
+         "crosswind_kt": -3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 1.7,
+         "ident": "07",
+         "max_crosswind_kt": 3.984164261643078,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 3.6,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -1.7,
+         "ident": "25",
+         "max_crosswind_kt": 3.984164261643078,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 360,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 4,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": 340,
+        "variable_to": 60
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1796,7 +2149,98 @@
     "metar_wind_variable_to": null,
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LELC",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 46.1,
+         "ident": "05L"
+        },
+        {
+         "heading_true": 226.1,
+         "ident": "23R"
+        }
+       ],
+       "hard": true,
+       "id": "05L/23R",
+       "length_ft": 5174,
+       "surface": "ASPH"
+      },
+      {
+       "ends": [
+        {
+         "heading_true": 45.8,
+         "ident": "05R"
+        },
+        {
+         "heading_true": 225.8,
+         "ident": "23L"
+        }
+       ],
+       "hard": true,
+       "id": "05R/23L",
+       "length_ft": 7612,
+       "surface": "ASPH"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "05L",
+       "ends": [
+        {
+         "crosswind_kt": -3.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 7.2,
+         "ident": "05L",
+         "max_crosswind_kt": 3.5,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 3.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -7.2,
+         "ident": "23R",
+         "max_crosswind_kt": 3.5,
+         "side": "right"
+        },
+        {
+         "crosswind_kt": -3.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 7.2,
+         "ident": "05R",
+         "max_crosswind_kt": 3.5,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 3.5,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -7.2,
+         "ident": "23L",
+         "max_crosswind_kt": 3.5,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 20,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 8,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
@@ -1851,7 +2295,64 @@
     "metar_wind_variable_to": null,
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
-    "runway_wind": null,
+    "runway_wind": {
+     "icao": "LEMI",
+     "runways": [
+      {
+       "ends": [
+        {
+         "heading_true": 46.0,
+         "ident": "05"
+        },
+        {
+         "heading_true": 226.0,
+         "ident": "23"
+        }
+       ],
+       "hard": true,
+       "id": "05/23",
+       "length_ft": 9842,
+       "surface": "ASPH"
+      }
+     ],
+     "winds": [
+      {
+       "advisory": "green",
+       "best_end": "05",
+       "ends": [
+        {
+         "crosswind_kt": -4.4,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": 9.0,
+         "ident": "05",
+         "max_crosswind_kt": 4.4,
+         "side": "left"
+        },
+        {
+         "crosswind_kt": 4.4,
+         "gust_crosswind_kt": null,
+         "gust_headwind_kt": null,
+         "headwind_kt": -9.0,
+         "ident": "23",
+         "max_crosswind_kt": 4.4,
+         "side": "right"
+        }
+       ],
+       "wind": {
+        "calm": false,
+        "direction_true": 20,
+        "gust_kt": null,
+        "source": "metar",
+        "speed_kt": 10,
+        "time": "2026-10-02T05:00:00Z",
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null
+       }
+      }
+     ]
+    },
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
     "taf_crosswind_kt": null,
