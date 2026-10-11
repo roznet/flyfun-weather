@@ -126,8 +126,8 @@ length_ft, surface, hard, ends:[{ident, heading_true}]}], winds:
   is a visible choice.
 - **True north throughout:** `heading_degT` and METAR/TAF winds are true;
   idents are the painted (magnetic) numbers. No variation is applied, on purpose.
-- euro_aip ≥ (next release) also makes a VRB wind's worst case its gust
-  (`VRB05G20` → 20); until the pin moves, VRB `max_crosswind_kt` is the speed.
+- Since euro_aip 0.22.0 (the pin), a VRB wind's worst case is its gust
+  (`VRB05G20` → 20 for `max_crosswind_kt`).
 
 ### Comparison (`run_observation_comparison`)
 
