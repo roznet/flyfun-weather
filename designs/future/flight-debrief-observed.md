@@ -1,6 +1,7 @@
 # Flight debrief: what was observed, what you reported
 
-Status: brainstorm agreed 2026-10-06, split into slices A–C 2026-10-08; nothing built. Replaces the standalone PIREP
+Status: brainstorm agreed 2026-10-06, split into slices A–C 2026-10-08, slice A reshaped
+2026-10-11 (per-tick snapshots, recap on request, replay, web first); nothing built. Replaces the standalone PIREP
 direction (`designs/pireps.md` as-built, `future/pirep-plan.md` M2/M3): pilot reports
 stop being their own feature and become part of the flight debrief. Builds on
 `designs/debrief.md`, `designs/live-observation-layer.md` and
@@ -35,9 +36,9 @@ only you could see. Reports fill exactly the gaps the observations leave.
 
 - **The debrief is the home of pilot reports.** The PIREPs tab, the "Add PIREP"
   flight-list action and the long report form go away (§9).
-- **The observed recap is automatic** and useful with zero reports: built on the
-  server from the live layer, remapped to the time of the flight, frozen when the live
-  window closes.
+- **The observed recap is automatic** and useful with zero reports: computed on the
+  server from per-tick snapshots of the live layer, remapped to the time of the flight
+  (§5). It covers cancelled flights too, on the planned times.
 - **In-flight reports are one-tap bookmarks**; detail is added afterwards in the
   debrief, on the ground.
 - **Reports are private by default.** Sharing with other pilots is an opt-in, later
@@ -47,9 +48,13 @@ only you could see. Reports fill exactly the gaps the observations leave.
   (§12). The honest pitch today is "see how the forecast compared with what you met".
 - **Everything derived is computed server-side** and shared by web, iOS and the
   agent tools, as for the Observed tab.
-- **Actual-track sources (avionics logs, phone GPS, ADS-B) are an optional later
-  phase** (§10). Phase 1 works on the planned schedule plus the pilot's actual times
-  and bookmark positions.
+- **Where the aircraft was comes from `FlightProgress`** (#759): the plan today;
+  manual takeoff/landed, app GPS, ADS-B and bookmark fixes inside the object as they
+  land. The debrief has no time fields of its own. Avionics logs stay an optional
+  later phase (§10).
+- **Web first** (2026-10-11): the debrief, recap and replay UI is built and reviewed
+  on the web; iOS keeps the in-flight bookmark capture and gets the debrief UI after
+  the web one works.
 
 ## 3. What exists to reuse
 
@@ -57,7 +62,8 @@ only you could see. Reports fill exactly the gaps the observations leave.
 |---|---|---|
 | Per-flight live history, append-only | `live_history.jsonl`, `tasks/live_layer.py::load_live_history` | Raw METAR/TAF/SIGMET once each, change events, radar/lightning evidence, storm `estimate` records with geometry — the recap's main input |
 | Route geometry | `analysis/route_geometry.py::RouteTrack.project` → `TrackProjection` | Off-track distance, side, along-route position for observations *and* reports |
-| Live-window tick | `tasks/live_tick.py` (dep − 3 h … arr + 1 h) | Where the compact per-tick observed record is written, and where the window-close freeze hooks in |
+| Live-window tick | `tasks/live_tick.py` (dep − 3 h … arr + 1 h), `commit_live_update` | Where the per-tick display snapshot is written (§5.1) |
+| Flight progress | `analysis/flight_progress.FlightProgress`, `live_layer.flight_progress`, `progress.at(t)` | The recap's time base; observed sources (#759) plug in inside it |
 | Debrief | `flight_debriefs`, `debriefs/taxonomy.py`, `DebriefCard` (iOS Advisory tab), `debrief-form.ts` | Outcomes get pre-filled from the recap; the recap and reports are shown with the debrief |
 | Report storage + offline queue | `PirepRow`, `api/pireps.py`, iOS `PirepOfflineStore`, client UUID dedupe | Bookmarks are `PirepRow`s; offline queue unchanged |
 | Retention exemption | `tasks/retention.py`: packs linked to a report skip all tiers | The forecast the pilot flew with survives with the report |
@@ -65,8 +71,8 @@ only you could see. Reports fill exactly the gaps the observations leave.
 ## 4. The debrief, in layers
 
 One route timeline (x = distance along route labelled with times): the Observed tab's
-route ribbon (`LiveRibbon`, #690) after the fact, with the same renderers on iOS and
-web, each segment shown as it was when the aircraft was there. Three rows:
+route ribbon (`LiveRibbon`, #690) after the fact, with the same renderers, each segment
+shown as it was when the aircraft was there. Three rows:
 
 1. **Forecast:** what the briefing the pilot flew on said, at each point and time
    (advisories, cloud bands, icing / turbulence layers at the flown altitude).
@@ -75,6 +81,25 @@ web, each segment shown as it was when the aircraft was there. Three rows:
    tops, SIGMETs in force; arrival METAR, and TAF at arrival time.
 3. **Reported:** the pilot's bookmarks, with their detail once added (§6).
 
+Plus alert markers on the time axis: when the app raised, worsened, improved or cleared
+an alert (the history `change` records). Whether it was pushed is the pilot's setting
+and not part of the review.
+
+**Two more views over the same snapshots (2026-10-11, web first, #769):**
+
+- **Single-tick replay.** Tap a segment, a route point or a tick chip, and the whole
+  Observed section (Haiku highlight, nutshell and alert rows, ribbon, cards, sources)
+  re-renders as it stood at that tick, under "Viewing HH:MMZ · Back to live / recap".
+  Available during the flight too. The route map's imagery stays live (past frames are
+  not kept on the droplet).
+- **Distance × time grid (experiment).** The ribbon stacked once per tick, the flight
+  drawn as its diagonal: the diagonal is the recap; the rest shows whether it was
+  already there, built or moved after the aircraft passed, and what an hour later
+  would have met. Behind a "Show over time" toggle, directly on wide screens; kept
+  only if it reads well on real flights.
+
+The forecast row comes from a pack the pilot picks in the web sidebar, defaulting to
+the newest pack before departure.
 Under the timeline:
 
 - **The debrief outcomes, pre-filled from the evidence.** Today every queried category
@@ -91,55 +116,56 @@ nutshell style, then the timeline, then details per source.
 
 ## 5. Observed recap (server)
 
-### 5.1 Inputs, and the one missing record
+Revised 2026-10-11 (#711 is the spec; this section is the summary).
 
-The history already holds raw reports, change events, evidence and storm estimates.
-It does **not** hold what the radar / lightning / tops looked like along the route on
-a quiet tick: evidence is written only when a change appears or moves
-(`EVIDENCE_PEAK_DBZ` / `EVIDENCE_SPAN_NM`). A recap needs the quiet ticks too ("no
-echo along the route" is a result).
+### 5.1 Per-tick display snapshot
 
-The route ribbon (#690, `LiveRibbon`) already computes that summary every tick:
-each `RibbonSegment` carries the strongest echo, its `radar_status` (`measured` /
-`no_coverage` / `no_sample`, so "nothing detected" stays distinct from "could not
-see"), lightning, the SIGMET ids and storm ids abeam it, and `LiveRibbon.weather` the
-rain/core bands beside the route. So the missing record is a compact copy of the
-ribbon per tick: one `ribbon` history record with `radar_time` and the segments'
-lane values (no `focus`, no profiles), plus satellite tops per segment, which the
-ribbon doesn't carry yet. Tens of bytes per segment, ~37 ticks per flight.
+`live.json` is overwritten every tick, and `live_history.jsonl` keeps raw reports,
+change events, evidence and storm estimates, but not the quiet ticks ("no echo along
+the route" is a result) nor what the page showed. Each tick appends the blocks the
+Observed section renders to `live_snapshots.jsonl.gz`:
+
+- `glance` (with the highlight), `ribbon` (with `weather`), `storms`, `changes`,
+  `route_sigmets`;
+- the `observed_conditions` summary and source metadata, not the per-point sample
+  arrays (those feed only the map and cross-section overlays).
+
+The station lane / METAR table is rebuilt from the history `report` records. Measured:
+~6 KB gzipped per tick, ~200 KB per flight; a full `live.json` copy would be ~23 KB per
+tick. This replaces the earlier compact `ribbon` record, and keeps storms and the
+rain/core bands, so the recap draws the normal ribbon.
 
 ### 5.2 Remapping to the flight's time
 
-For each segment the recap picks the tick nearest the time the aircraft was there.
-Phase 1 time base, best first:
+For each segment the recap picks the snapshot whose **radar frame valid time** is
+nearest the time the aircraft was there (not the tick time: they differ by 6–15 min,
+more than a segment at cruise speed). The time base is read through `FlightProgress`
+only: the plan today; #760 manual takeoff/landed, #761 app GPS, #762 ADS-B and #712
+bookmark fixes inside the object as they land. The recap names its base (`planned` /
+`partial` / `observed`). A cancelled flight uses the plan and says so.
 
-1. The pilot's actual off-block / landing times (two optional fields on the debrief),
-   with the planned profile stretched between them.
-2. Bookmark positions and times as anchors (a bookmark is a GPS fix with a time).
-3. The planned schedule (departure + profile ETAs), as the live layer uses today.
+### 5.3 Computed on request, stored as inputs
 
-The recap states which base it used. Phase 2 (§10) adds a real track.
-
-### 5.3 Freeze and storage
-
-- **Freeze at live-window close** (arrival + 1 h) in the tick, recomputed when the
-  pilot edits the actual times or adds a bookmark.
-- **Durable, small storage.** Today `live.json` and `live_history.jsonl` are purged at
-  retention T1 (30 days after departure, `retention._purge_live_layer`), even for
-  debriefed flights. So the recap is written where retention keeps it: a
-  `flight_recaps` row (JSON column), or a `recap.json` beside the packs outside
-  `LIVE_FILES`. Proposal: a DB row, like `flight_debriefs`.
-- **Keep the history of debriefed / reported flights.** It is tens to ~100 KB per
-  flight and is the only input for recomputing a recap under better rules later.
-  Exempt `live_history.jsonl` from T1 when the flight has a debrief or a report; still
-  purge `live.json`.
+- **No frozen recap.** It is computed per request from about 35 snapshot lines, so a
+  corrected takeoff or a new fix applies automatically. No `flight_recaps` table.
+- **Forecast lane:** each pack writes a per-segment summary when built (each
+  advisory's `highlights.ribbon` bands per model, a few KB), so any pack stays
+  selectable after T1 strips the pack. `?pack=` picks one, defaulting to the newest
+  before departure. Its advisories are at that pack's planned ETAs; the gap is shown,
+  and re-evaluating at actual times is later work. What the lane shows is settled on
+  real flights (#769).
+- **Retention:** snapshots, history and pack summaries are kept 90 days after
+  departure for every flight with a live window (cancelled ones included) and forever
+  for debriefed, reported or pinned flights. `live.json` and `live_highlights.jsonl`
+  (the admin calibration log) are still purged at T1.
 
 ### 5.4 Coverage
 
-- A recap exists only for flights that had a live window with a pack (every flight
-  with a pack, not only auto-refresh ones). A flight created afterwards, or one whose
-  live layer was off, has none: the debrief says so rather than showing an empty
-  timeline as "nothing observed".
+- A recap exists only for flights that had a live window with a pack. A flight
+  created afterwards, or one whose live layer was off, has none: the debrief says so
+  rather than showing an empty timeline as "nothing observed".
+- Flights flown before snapshots exist are not backfilled; `replay_live_history.py`
+  stays a dev tool for investigating an old flight.
 - Later (not phase 1): rebuild a missing recap from the archives (radar frames on the
   NAS for 12 months, airport observations in the Parquet archive).
 - Outside OPERA / MTG coverage (US flights) the recap is METAR/TAF/SIGMET only; each
@@ -155,12 +181,13 @@ one-tap buttons:
 `Icing` · `Bumpy` · `In cloud` · `Tops here` · `Note`
 
 One tap stores time, GPS position, GPS altitude and the kind, queued offline as
-today. No severity, no type, no typing in the air. A small "Marked: icing 14:32Z"
+today. The GPS fix is also posted to `FlightProgress` as a `fix` event (#759), so a
+bookmark helps place the flight on the recap. No severity, no type, no typing in the air. A small "Marked: icing 14:32Z"
 confirmation with undo. `Note` may later take dictation; a typed note is fine for v1.
 
 ### 6.2 Enrich afterwards
 
-In the debrief each bookmark opens an edit card with the current form's fields
+In the debrief (web first; iOS after the web debrief works) each bookmark opens an edit card with the current form's fields
 (intensity, icing type, tops value and `tops_basis`, ceiling, wind, temperature,
 remarks), pre-filled where the evidence allows (altitude from GPS, tops from the
 satellite at that point offered as a suggestion, never filled silently). Reports can
@@ -198,8 +225,8 @@ All hazard columns are already nullable, so a bookmark fits. Proposed additions
 
 For each report, the forecast at its position, altitude and time from the pack the
 pilot flew with: icing / turbulence layer and intensity, cloud base / tops, freezing
-level, temperature, wind. Stored compactly in the recap when the report is enriched or
-the recap is frozen, because `cross_section.json` of a debriefed flight is stripped at
+level, temperature, wind. Computed when the report is enriched (or added after the
+flight) and stored compactly on the report, because `cross_section.json` of a debriefed flight is stripped at
 T1 (`debrief.md` § Retention coupling). Packs linked to a report keep their full
 exemption (`pireps.md`), so a later recompute stays possible, but the debrief must not
 depend on it.
@@ -281,23 +308,27 @@ Notes:
 
 ## 13. Slices
 
-Three slices, tracked under one umbrella issue; the optional phases get issues only
-when wanted.
+Tracked under umbrella #710; the optional phases get issues only when wanted.
+Reorganised 2026-10-11.
 
-- **A. Observed recap** (independent, useful with zero reports): `ribbon` history
-  record in the tick (+ tops per segment), freeze at window close, `flight_recaps`
-  storage, `live_history.jsonl` exempt from T1 for debriefed/reported flights, recap
-  served by the API and the agent tools; after the live window the Observed tab shows
-  the recap on iOS and web, and the debrief card links to it.
-- **B. Bookmarks + reports in the debrief** (parallel with A): `PirepRow` additions,
-  `PATCH`, gates and limits split by visibility, bookmark row on the Observed tab,
-  edit card and after-the-flight reports in the debrief, actual off-block / landing
-  times; remove the PIREP surfaces (§9).
-- **C. Evidence-backed debrief + My reports** (needs A and B): outcome proposals from
-  the recap and reports with the proposal recorded beside the label, forecast at the
-  report point (§7), "My reports" with filters and the stats panel additions (§8).
-- Optional, no issue yet: **phase 2, actual track** (§10: flightlogstats upload first,
-  then phone GPS, OpenSky last) and **phase 3, sharing** (§11).
+- **A1. Observed recap, server** (#711): per-tick snapshots, recap on request with the
+  `FlightProgress` time base, forecast lane with per-pack summaries, `/live/ticks`,
+  `/live/at`, `/recap?pack=`, agent recap block, 90-day / kept-forever retention.
+- **A2. Web** (#769, needs A1): recap ribbon, single-tick replay with back to live,
+  alert markers, sidebar pack picker, distance × time grid prototype; a review pass on
+  real flights settles the grid, the forecast lane's content and where the debrief
+  form lives.
+- **B. Bookmarks + reports** (#712, parallel with A): `PirepRow` additions, `PATCH`,
+  gates and limits split by visibility, iOS bookmark row, bookmark as progress fix,
+  web debrief report list and edit card, "Reported" row on the web recap; remove the
+  PIREP surfaces (§9). No actual-time fields (#760 owns takeoff/landed).
+- **C. Evidence-backed debrief + My reports** (#713, needs A and B): outcome proposals
+  from the recap (observed and forecast lanes) and reports with the proposal recorded
+  beside the label, forecast at the report point stored on the report at enrich time
+  (§7), "My reports" with filters and the web stats panel additions (§8).
+- Later, no issue yet: **iOS debrief / recap / replay UI**, after A2 works on the web.
+- Optional, no issue yet: **phase 2, actual track** (§10: flightlogstats upload first;
+  phone GPS and ADS-B are now #761/#762 under #759) and **phase 3, sharing** (§11).
 
 ## 14. Decisions taken and open questions
 
@@ -307,11 +338,27 @@ Decided 2026-10-08:
   In cloud · Tops here · Note); "pirep" stays internal.
 - **Recap on iOS**: after the live window the Observed tab turns into the recap (the
   place the pilot watched it live); the Advisory-tab `DebriefCard` links to it.
+  Deferred 2026-10-11 until the web debrief works.
+
+Decided 2026-10-11 (#711, #769, #712, #713):
+
+- Per-tick display snapshots; recap computed on request; no `flight_recaps` table.
+- Time base from `FlightProgress` (#759); no debrief time fields; bookmarks are fixes.
+- Cancelled flights get a planned-time recap.
+- Single-tick replay, during the flight too; distance × time grid as an experiment.
+- Forecast lane in slice A with a sidebar pack picker; alert markers, no push record.
+- Retention: 90 days for every live-window flight, forever when debriefed, reported or
+  pinned.
+- Web first for the debrief UI; no LLM debrief paragraph for now; satellite tops per
+  segment deferred.
 
 Open:
 
 - **Opt-in GPS track** (phase 2): yes/no, and whether phone GPS is collected at all
   without avionics.
-- **Recap storage**: DB row (proposed) vs file beside the packs.
+- ~~Recap storage~~: none, computed on request (2026-10-11).
+- **Forecast lane content** (advisories, consensus vs per model, one row or several):
+  settled in #769's review pass.
+- **Where the web debrief form lives**: flight page or next to the recap (#769).
 - **Proposal-vs-label recording**: one field per category (`proposed`, `source`) in
   `outcomes_json`, or a separate column.
