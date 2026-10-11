@@ -33,7 +33,8 @@ What a merge does, in one DB transaction:
   survivor has one, the absorbed rows arrive non-default;
 - a subscription the survivor now holds to its own flight is dropped;
 - pack directories move from ``packs/{from}/`` to ``packs/{into}/`` and the
-  stored ``artifact_path`` / ``pack_path`` values follow;
+  stored ``artifact_path`` / ``pack_path`` values follow, and each pack whose
+  integrity HMAC verified before the move is re-signed (the path is in it);
 - the absorbed user row is deleted, so its sessions get 401 and those
   devices sign in again. Its Google/Apple sign-in then lands on a new empty
   account unless flyfun-common's email linking applies (gmail/Workspace for
@@ -173,6 +174,31 @@ def _merge_template_profiles(db, meta, src: str, dst: str, report: list[str]) ->
         )
 
 
+def _packs_signed_ok(db, ids: list[int]) -> set[int]:
+    """Pack ids whose integrity HMAC verifies, read before their path changes."""
+    from sqlalchemy import select
+
+    from weatherbrief.db.models import BriefingPackRow
+    from weatherbrief.storage.flights import _verify_pack_hmac
+
+    rows = db.execute(select(BriefingPackRow).where(BriefingPackRow.id.in_(ids))).scalars()
+    return {r.id for r in rows if r.integrity_hmac and _verify_pack_hmac(r)}
+
+
+def _resign_packs(db, ids: set[int]) -> None:
+    """Re-sign packs after ``artifact_path`` moved: the path is in the HMAC."""
+    from sqlalchemy import select
+
+    from weatherbrief.db.models import BriefingPackRow
+    from weatherbrief.storage.flights import _compute_pack_hmac
+
+    stmt = (select(BriefingPackRow).where(BriefingPackRow.id.in_(ids))
+            .execution_options(populate_existing=True))
+    for row in db.execute(stmt).scalars():
+        row.integrity_hmac = _compute_pack_hmac(row)
+    db.flush()
+
+
 def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list[str]:
     """Merge user ``src`` into ``dst``. Commits only when ``apply``."""
     from sqlalchemy import MetaData, and_, delete, inspect, select, true, update
@@ -271,6 +297,9 @@ def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list
         rows = db.execute(
             select(table.c.id, table.c[col]).where(table.c[col].contains(old))
         ).all()
+        # Only a pack that verified before the move is re-signed: one already
+        # failing keeps failing rather than being laundered by the merge.
+        signed = _packs_signed_ok(db, [r[0] for r in rows]) if name == "briefing_packs" else set()
         for row_id, path in rows:
             db.execute(
                 update(table).where(table.c.id == row_id)
@@ -278,6 +307,9 @@ def merge(db, src: str, dst: str, data_dir: Path | None, *, apply: bool) -> list
             )
         if rows:
             report.append(f"  {name}.{col}: {len(rows)} paths rewritten")
+        if signed:
+            _resign_packs(db, signed)
+            report.append(f"  {name}: {len(signed)} integrity HMACs re-signed")
 
     users = MetaData()
     users.reflect(bind=conn, only=["users"])

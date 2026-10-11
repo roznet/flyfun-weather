@@ -21,6 +21,7 @@ from weatherbrief.db.models import (
     UserPreferencesRow,
     UserRow,
 )
+from weatherbrief.storage.flights import _compute_pack_hmac, _verify_pack_hmac
 
 _SPEC = importlib.util.spec_from_file_location(
     "merge_users", Path(__file__).resolve().parents[1] / "scripts/ops/merge_users.py"
@@ -60,8 +61,11 @@ def _flight(db, fid, uid, data_dir: Path):
     pack_dir = data_dir / "packs" / uid / fid / "2026-10-10T06-00-00p00-00"
     pack_dir.mkdir(parents=True)
     (pack_dir / "briefing.json").write_text("{}")
-    db.add(BriefingPackRow(flight_id=fid, days_out=2, artifact_path=str(pack_dir),
-                           fetch_timestamp=datetime(2026, 10, 10, 6, tzinfo=timezone.utc)))
+    pack = BriefingPackRow(flight_id=fid, days_out=2, artifact_path=str(pack_dir),
+                           fetch_timestamp=datetime(2026, 10, 10, 6, tzinfo=timezone.utc))
+    db.add(pack)
+    db.flush()  # sign what is stored, column defaults included
+    pack.integrity_hmac = _compute_pack_hmac(pack)
 
 
 @pytest.fixture
@@ -137,6 +141,19 @@ def test_apply_moves_everything(db, two_accounts):
     for pack in db.query(BriefingPackRow).all():
         assert f"/packs/{DST}/" in pack.artifact_path
         assert Path(pack.artifact_path, "briefing.json").exists()
+
+
+def test_moved_packs_are_re_signed_but_a_failing_one_stays_failing(db, two_accounts):
+    tampered = db.query(BriefingPackRow).filter_by(flight_id="src-f2").one()
+    tampered.integrity_hmac = "0" * 64
+    db.commit()
+
+    report = mu.merge(db, SRC, DST, two_accounts, apply=True)
+    db.expire_all()
+
+    assert any("2 integrity HMACs re-signed" in line for line in report)
+    for pack in db.query(BriefingPackRow).all():
+        assert _verify_pack_hmac(pack) is (pack.flight_id != "src-f2")
 
 
 def test_survivor_keeps_the_only_default(db, two_accounts):
