@@ -104,8 +104,11 @@ points → error with the `route` summary, nothing created (MCP: an error result
 `createFlight`: HTTP 422 with `detail.error` + `detail.route`). Changing
 `CreateFlightInput` changes the pasted contract: the GPT Action must be
 **re-imported** in the builder (the schema itself is served live, nothing to
-regenerate). Remaining gaps: `createFlight` has no `description` field and
-doesn't return the pending-coverage status the MCP tool does.
+regenerate). Both also take the optional `description` and, for a flight saved
+beyond the forecast horizon, skip the refresh and return `briefing.status` =
+`pending_coverage` with `available_date` / `full_briefing_date`. `createFlight`
+runs the sync `interpret_route` / `create_flight` handlers via
+`asyncio.to_thread` so the route resolution doesn't block the event loop.
 
 The operation **descriptions** (docstrings) mirror the MCP tool docstrings,
 including the "drill in before answering / cross-check is not a downgrade signal"
@@ -213,7 +216,8 @@ scoped `claude.ai`/`claude.com` CORS allowlist).
   `getAlternates` (happy path + `none` when not computed), `createFlight` (route
   string → interpreted waypoints + `raw_route`, dropped points in `route` and
   `warning`, unresolvable route → 422 with nothing created, bad departure time →
-  422 not 500), `listFlights` (all
+  422 not 500, `description` stored, beyond-horizon → `pending_coverage` with no
+  refresh), `listFlights` (all
   sections, and the Query-sentinel regression), the ownership gate (a private
   flight owned by another user 404s on `getBriefing` / `getDigestContext` /
   `getAlternates`), the flight-day `live` block (null without a layer, equal

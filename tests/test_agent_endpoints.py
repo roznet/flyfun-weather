@@ -575,3 +575,32 @@ def test_create_flight_schema_takes_route_not_waypoints(client):
     props = schema["components"]["schemas"]["CreateFlightInput"]["properties"]
     assert "route" in props and "waypoints" not in props
     assert props["route"]["maxLength"] == 2000
+
+
+def test_create_flight_stores_description(client, app_db, create_env):
+    resp = client.post("/agent/v1/flights", json={
+        "route": "EGTK DCT LFPB",
+        "departure_time": _DEP.isoformat(),
+        "flight_duration_hours": 1.5,
+        "description": "Family visit",
+    })
+    assert resp.status_code == 200, resp.text
+    assert _stored(app_db, resp.json()["flight"]["id"]).description == "Family visit"
+
+
+def test_create_flight_beyond_horizon_is_pending_not_refreshed(
+    client, app_db, create_env, monkeypatch,
+):
+    """Mirrors MCP: a pending-coverage flight reports when briefing starts."""
+    from weatherbrief.api import flights as flights_api
+
+    monkeypatch.setattr(flights_api, "_compute_coverage", lambda dep: flights_api.CoveragePending(
+        available_date="2099-01-01", full_briefing_date="2099-01-03", days_until_available=9,
+    ))
+    resp = _create(client, "EGTK DCT LFPB")
+    assert resp.status_code == 200, resp.text
+    briefing = resp.json()["briefing"]
+    assert briefing["status"] == "pending_coverage"
+    assert briefing["available_date"] == "2099-01-01"
+    assert briefing["full_briefing_date"] == "2099-01-03"
+    assert create_env == []

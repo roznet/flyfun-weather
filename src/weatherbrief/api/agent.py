@@ -24,6 +24,7 @@ same OAuth-bearer / api-token stack as the rest of the app, using the existing
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -41,6 +42,7 @@ from weatherbrief.api import flights as flights_api
 from weatherbrief.api import maps as maps_api
 from weatherbrief.api import packs as packs_api
 from weatherbrief.connectors import views
+from weatherbrief.db.models import FLIGHT_DESCRIPTION_MAX_LEN
 
 WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
 
@@ -174,6 +176,11 @@ class CreateFlightInput(BaseModel):
         None,
         description="Cruise altitude in feet (default: from user profile, typically 8000).",
     )
+    description: str | None = Field(
+        None,
+        max_length=FLIGHT_DESCRIPTION_MAX_LEN,
+        description="Optional free-text purpose of the flight, e.g. 'Family visit'.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +252,10 @@ async def create_flight(
     # flow): only resolved waypoints reach create, the original string is kept
     # as raw_route. Every Depends()-defaulted param is passed explicitly — see
     # the out-of-band route-handler note in designs/chatgpt-connector.md.
-    interpretation = flights_api.interpret_route(
+    # Both handlers are sync (airport DB lookups, route resolution), so they
+    # run off the event loop.
+    interpretation = await asyncio.to_thread(
+        flights_api.interpret_route,
         req=flights_api.InterpretRouteRequest(raw_route=body.route),
         request=request,
         user_id=user_id,
@@ -277,6 +287,7 @@ async def create_flight(
             departure_time=body.departure_time,
             flight_duration_hours=body.flight_duration_hours,
             cruise_altitude_ft=body.cruise_altitude_ft,
+            description=body.description,
         )
     except ValidationError as e:
         # Built in-process, so a bad departure_time or an over-long resolved
@@ -290,28 +301,47 @@ async def create_flight(
                 "route": route_summary,
             },
         ) from e
-    flight = flights_api.create_flight(req=req, request=request, user_id=user_id, db=db)
+    flight = await asyncio.to_thread(
+        flights_api.create_flight, req=req, request=request, user_id=user_id, db=db,
+    )
     flight_id = flight.id
 
     # Auto-trigger the briefing refresh, mirroring the MCP tool's status mapping.
     refresh_status: dict[str, Any]
-    try:
-        await packs_api.refresh_briefing(
-            flight_id=flight_id, request=request, force=False, as_of_date=None,
-            user_id=user_id, db=db,
-        )
+    coverage = flight.coverage
+    if coverage is not None:
+        # Saved beyond the forecast horizon: no model reaches the date yet, so a
+        # refresh would be a no-op. Same pending_coverage block as the MCP tool.
+        available = coverage.available_date
         refresh_status = {
-            "status": "processing",
-            "estimated_seconds": 120,
-            "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
+            "status": "pending_coverage",
+            "available_date": available,
+            "full_briefing_date": coverage.full_briefing_date,
+            "message": (
+                f"Flight saved. No weather model reaches the departure date yet — "
+                f"forecast coverage begins {available}. The briefing generates "
+                f"automatically once the flight is within range; call get_briefing "
+                f"on or after {available}."
+            ),
         }
-    except HTTPException as e:
-        if e.status_code == 409:
-            refresh_status = {"status": "already_in_progress"}
-        elif e.status_code == 429:
-            refresh_status = {"status": "rate_limited", "message": str(e.detail)}
-        else:
-            refresh_status = {"status": "failed", "message": str(e.detail)}
+    else:
+        try:
+            await packs_api.refresh_briefing(
+                flight_id=flight_id, request=request, force=False, as_of_date=None,
+                user_id=user_id, db=db,
+            )
+            refresh_status = {
+                "status": "processing",
+                "estimated_seconds": 120,
+                "message": "Briefing is being generated. Call get_briefing in ~2 minutes.",
+            }
+        except HTTPException as e:
+            if e.status_code == 409:
+                refresh_status = {"status": "already_in_progress"}
+            elif e.status_code == 429:
+                refresh_status = {"status": "rate_limited", "message": str(e.detail)}
+            else:
+                refresh_status = {"status": "failed", "message": str(e.detail)}
 
     result: dict[str, Any] = {
         "flight": {
