@@ -201,6 +201,9 @@ def _read_lines(path: Path) -> list[str]:
             out += text.decode(errors="replace").splitlines()
             pos = len(raw) - len(d.unused_data)
             continue
+        # The header bytes can also occur inside a damaged member's deflate
+        # payload: a false resync costs a few more garbled lines, which the
+        # JSON parse in load_snapshots skips.
         nxt = raw.find(_GZIP_HEADER, pos + 1)
         logger.warning("Damaged snapshot member in %s at byte %d — skipped", path, pos)
         if nxt < 0:
@@ -376,13 +379,13 @@ def find_tick(snapshots: list[dict], tick: datetime) -> dict | None:
     """The snapshot committed at ``tick``, else the last one before it (a
     client mapping a route point to a time asks for "as of"). None when the
     flight has no snapshot at or before ``tick``."""
-    best = None
+    best, best_t = None, None
     for s in snapshots:
         t = parse_utc(s.get("tick_at"))
         if t is None or t > tick:
             continue
-        if best is None or t >= parse_utc(best.get("tick_at")):
-            best = s
+        if best_t is None or t >= best_t:
+            best, best_t = s, t
     return best
 
 

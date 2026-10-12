@@ -88,6 +88,11 @@ DATA_DIR/packs/{user}/{flight}/
   `live_meta.json` to find the owning pack: that check ran per pack and turned a
   later pass into a no-op once T1 had deleted the meta file. A flight move does
   not carry packs or live files: they are deleted with the old flight.
+- **Reached only through pack rows (accepted).** Retention finds a flight's
+  directory from its pack rows, so the live pass purges the kept files in the same
+  run where T2 drops those rows (`_t2_due`, shared with the pack loop). Pack rows
+  removed any other way (a manual DB delete) leave the live files unreachable;
+  deleting a flight cleans them up through `_live_files`, so there is no orphan sweep.
 
 ## History (`live_history.jsonl`, #643)
 
