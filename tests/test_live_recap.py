@@ -405,3 +405,37 @@ def test_summary_only_after_departure():
     assert s["status"] == "ok" and s["segments_observed"] == 4
     assert s["max_radar"]["dbz"] == 50
     assert s["time_base"] == "planned"
+
+
+def test_partial_member_mid_file_loses_only_itself(tmp_path, lell_lemi):
+    """A crash mid-append leaves a cut-short member; the next append lands
+    right after it. Later ticks must still read (review on #773)."""
+    _, ticks = lell_lemi
+    path = tmp_path / LIVE_SNAPSHOTS_FILE
+    append_snapshot(tmp_path, ticks[0].layer, tick_at=ticks[0].at)
+    path.write_bytes(path.read_bytes() + gzip.compress(b'{"type":"tick","tick_at":"x"}\n' * 50)[:-20])
+    append_snapshot(tmp_path, ticks[1].layer, tick_at=ticks[1].at)
+    append_snapshot(tmp_path, ticks[2].layer, tick_at=ticks[2].at)
+    assert [s["tick_at"] for s in load_snapshots(tmp_path)] == [t.at.isoformat() for t in ticks[:3]]
+
+
+def test_failed_append_is_rolled_back(tmp_path, lell_lemi, monkeypatch):
+    from weatherbrief.tasks import live_snapshots
+
+    _, ticks = lell_lemi
+    append_snapshot(tmp_path, ticks[0].layer, tick_at=ticks[0].at)
+    size = (tmp_path / LIVE_SNAPSHOTS_FILE).stat().st_size
+
+    def boom(data, compresslevel=6):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(live_snapshots.gzip, "compress", boom)
+    assert not append_snapshot(tmp_path, ticks[1].layer, tick_at=ticks[1].at)
+    assert (tmp_path / LIVE_SNAPSHOTS_FILE).stat().st_size == size
+
+
+def test_tick_view_without_pack_name_does_not_read_the_flight_dir(lell_lemi):
+    flight_dir, _ = lell_lemi
+    snap = dict(load_snapshots(flight_dir)[3], pack_dir_name=None)
+    view = tick_view(flight_dir, snap)
+    assert view["changes"] is not None

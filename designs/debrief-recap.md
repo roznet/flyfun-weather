@@ -35,9 +35,11 @@ time, window, attribution; `stations: []`), plus `tick_at`, pack, `radar_time`
 `flown_nm`, departed/arrival).
 
 Choices:
-- **One gzip member per append**, decompressed member by member on read: a
-  cut-short write loses only its own line. Reading `gzip.open` in one go would
-  lose everything after a corrupt member *and* raise.
+- **One gzip member per append**, decompressed member by member on read. A
+  failed write is truncated back; a write cut short by a crash leaves a partial
+  member that the next append lands right after, so the reader resyncs on the
+  next gzip header (`_GZIP_HEADER`) and loses only that member. Reading
+  `gzip.open` in one go would lose everything after it *and* raise.
 - **Highlight as a second record.** The Haiku line is generated after the
   commit (`patch_highlight`); a `{"type": "highlight", "tick_at"}` line is
   merged into that tick's glance on read. Until then the tick carries the

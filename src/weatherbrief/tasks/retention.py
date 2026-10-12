@@ -226,6 +226,9 @@ def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_fligh
             names = list(LIVE_FILES_T1)
             if flight_id not in kept:
                 t2_days = config.t2_inactive_days if f["user_id"] in inactive_user_ids else config.t2_active_days
+                # Whether the pack loop below deletes this flight's pack rows
+                # (the same T2 test, debriefed exempt). Kept flights never get
+                # here, whatever makes them kept.
                 packs_go = age_days >= t2_days and flight_id not in debriefed_flight_ids
                 if age_days >= config.live_days or packs_go:
                     names += LIVE_FILES_KEPT
