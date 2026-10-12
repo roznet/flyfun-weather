@@ -168,10 +168,17 @@ struct RunwayWindDialView: View {
                         .foregroundStyle(Theme.text)
                     Spacer(minLength: 0)
                     if let primary = dial.primary, size == .regular {
-                        Text(R.windLabel(primary.wind))
+                        // #767: a proxy station's wind names the station.
+                        Text([dial.metarStation, R.windLabel(primary.wind)].compactMap { $0 }.joined(separator: " "))
                             .font(.caption)
                             .foregroundStyle(Theme.textMuted)
                     }
+                }
+                if let caption = dial.proxyCaption {
+                    Text(caption)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                        .accessibilityIdentifier("runwayWindProxy\(dial.role)")
                 }
                 RunwayWindCanvas(dial: dial, size: size)
                     .frame(maxWidth: size == .regular ? 170 : 96)

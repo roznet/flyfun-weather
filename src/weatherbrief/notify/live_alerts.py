@@ -160,10 +160,10 @@ def alert_line(c: LiveChange) -> str:
 def _airport_metar_time(layer: LiveLayer | None, icao: str | None) -> datetime | None:
     if layer is None or icao is None or layer.route_observations is None:
         return None
-    for a in layer.route_observations.airports:
-        if a.icao.upper() == icao.upper():
-            return a.metar_time
-    return None
+    # A proxied terminal's METAR time is its station's (#767).
+    term = layer.route_observations.terminal(icao)
+    row = term.metar_row if term is not None else None
+    return row.metar_time if row is not None else None
 
 
 def clear_line(pushed: LivePushedAlert, row: LiveChange | None, *, now: datetime,
@@ -181,7 +181,11 @@ def clear_line(pushed: LivePushedAlert, row: LiveChange | None, *, now: datetime
         return f"Cleared: {text}" + (f" · {row.source} {when}" if when else f" · as of {_hhmm(now)}")
     prefix = pushed.key.split(":", 1)[0]
     if pushed.icao and prefix in _CLEAR_LABEL and pushed.to_value:
-        text = f"{pushed.icao} {_CLEAR_LABEL[prefix]} no longer {pushed.to_value}{role}"
+        name = pushed.icao
+        term = layer.route_observations.terminal(pushed.icao) if layer is not None and layer.route_observations is not None else None
+        if term is not None and term.proxied:
+            name = term.label  # "EGTF (via EGLL)" (#767)
+        text = f"{name} {_CLEAR_LABEL[prefix]} no longer {pushed.to_value}{role}"
         metar_at = _airport_metar_time(layer, pushed.icao) if prefix != "taf" else None
         when = f"METAR {_hhmm(metar_at)}" if metar_at is not None else f"as of {_hhmm(now)}"
         return f"Cleared: {text} · {when}"

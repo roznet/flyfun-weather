@@ -129,6 +129,40 @@ length_ft, surface, hard, ends:[{ident, heading_true}]}], winds:
 - Since euro_aip 0.22.0 (the pin), a VRB wind's worst case is its gust
   (`VRB05G20` → 20 for `max_crosswind_kt`).
 
+### Observation proxy (#767)
+
+A departure/destination with no METAR (or no TAF) of its own reads a nearby
+corridor station's: EGTF → EGLL, EGLK → EGLF. Rules and rationale:
+[meteorology-decisions.md §49](meteorology-decisions.md). Shape:
+
+- **Resolver** `analysis/obs_proxy.py`: `resolve_obs_proxy` (one field, one
+  kind; pinned → curated → automatic nearest), `apply_obs_proxies` (sets the
+  field row's `metar_proxy` / `taf_proxy: ObsProxy{icao, distance_nm,
+  bearing_deg, elevation_diff_ft, source}`), `pins_from`, `load_overrides`
+  (`configs/obs_proxy.json`). Candidates are corridor rows only, so nothing new
+  is fetched and the live tick's `needed` set already covers them (a proxy is
+  ≤ 15 NM, inside any corridor ≥ 15 NM).
+- **Wired** at the end of `run_route_weather` (`_apply_terminal_proxies`, never
+  raises), which then rebuilds the field's `runway_wind` with the station's
+  winds over the **field's** runways. `run_realtime_refresh` passes the previous
+  pick (`_previous_proxies`: the live layer's, else the briefing's) as
+  `pinned_proxies`.
+- **One accessor**: `RouteObservations.terminal(icao)` → `TerminalObservation`
+  (`metar_row` / `taf_row` = the rows the reports live on, `label` "EGTF (via
+  EGLL)", `caption`, `proxy_note`, and `effective()` = the field row with the
+  station's report fields laid in and wind advisories recomputed on the field's
+  runways). `effective()` is for policy only (it carries the station's raw text
+  so convective tags read the same); never display its `metar_raw` as the
+  field's. Every terminal consumer goes through it: significance, glance and
+  ribbon, highlight facts, `live_summary` / email, push "cleared" lines,
+  alternate-required (destination TAF, `_PROXY_TAF_CAVEAT`), both digests
+  (`format_utils.terminal_proxy_lines`, rows marked DEPARTURE/DESTINATION).
+- `AirportObservation.proxy_caption` (computed, serialized): the one gray line
+  web and iOS show under the glance line, the dial and the airport tile.
+- **Not yet proxied** (follow-ups): the HTML report and the iOS Advisory-tab
+  observations table show the field as before (no row); the web table names the
+  stand-in above the table.
+
 ### Comparison (`run_observation_comparison`)
 
 For each airport with a METAR:
@@ -256,6 +290,7 @@ Table after airport conditions with columns: ICAO, Distance, ETA, METAR Cat, TAF
 | TAF line highlighting | `_applicable_taf_lines()` identifies base + BECMG/TEMPO groups active at target time for UI highlighting |
 | Per-airport time interpolation | TAF matching and model comparison use `enroute_distance / total_distance * flight_duration` to estimate when the flight passes each airport; falls back to departure time when `flight_duration_hours == 0` |
 | Graceful failure (try/except in pipeline) | Network failures shouldn't block the NWP-based briefing |
+| Proxy provenance on the field row, reports stay on the station's (#767) | The station's report is never relabelled; one accessor (`terminal`) composes them, so a proxied terminal is never blank on one surface and filled on another |
 
 ## Euro_aip Dependencies
 

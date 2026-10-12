@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from weatherbrief.analysis.airport_conditions import format_wind_string
-from weatherbrief.digest.format_utils import format_flight_level
+from weatherbrief.digest.format_utils import format_flight_level, terminal_proxy_lines, terminal_roles
 from weatherbrief.models import (
     AgreementLevel,
     ALT_AXIS_LABELS,
@@ -68,7 +68,7 @@ def format_digest(
 
     # METAR/TAF observations (D-0 only)
     if snapshot.route_observations:
-        lines.extend(_format_route_observations(snapshot.route_observations))
+        lines.extend(_format_route_observations(snapshot.route_observations, terminal_roles(snapshot)))
 
     # Observed conditions (D-0 only, #574) — the deterministic summary the
     # server computed, rendered verbatim so the text digest, the PDF and the
@@ -334,7 +334,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
     return lines
 
 
-def _format_route_observations(obs: RouteObservations) -> list[str]:
+def _format_route_observations(obs: RouteObservations, terminals: dict[str, str] | None = None) -> list[str]:
     """Format METAR/TAF observations for plain-text digest."""
     lines: list[str] = ["--- METAR/TAF Observations ---"]
     lines.append(
@@ -348,6 +348,8 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
         lines.append(f"  Phenomena: {', '.join(obs.phenomena_along_route)}")
     if obs.has_conflicts:
         lines.append("  ** Obs/model conflicts detected **")
+    terminals = terminals or {}
+    lines.extend(f"  {line}" for line in terminal_proxy_lines(obs, terminals))
     lines.append("")
 
     for apt in obs.airports:
@@ -356,7 +358,8 @@ def _format_route_observations(obs: RouteObservations) -> list[str]:
         cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""
         dist_str = f"{apt.distance_from_route_nm:.0f}nm"
         eta_str = f", ETA +{apt.eta_hour_offset}h" if apt.eta_hour_offset is not None else ""
-        lines.append(f"  {apt.icao}{cat_str} ({dist_str} from route{eta_str})")
+        role = f" {terminals[apt.icao.upper()].lower()}" if apt.icao.upper() in terminals else ""
+        lines.append(f"  {apt.icao}{cat_str}{role} ({dist_str} from route{eta_str})")
         if apt.metar_raw:
             lines.append(f"    METAR: {apt.metar_raw}")
         if apt.has_taf:

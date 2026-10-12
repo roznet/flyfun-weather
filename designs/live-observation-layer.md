@@ -27,6 +27,12 @@ of a briefed SIGMET is direction `updated`;
 alerted on this flight, a memory that survives a return to baseline;
 §47, #754: the push path pushes a clear and re-arms the key, see below).
 The per-role rules live in one table, `live_significance.AIRPORT_POLICY`.
+A departure/destination with no METAR/TAF of its own is classified on its
+proxy station (#767, meteorology-decisions §49): `_terminal_pair` compares the
+station read now with the *same* station in the baseline (so a proxy switch is
+never a row), messages read "EGTF (via EGLL) METAR: …", keys stay
+`metar:EGTF`, and the station's own route rows are dropped while it serves.
+The glance line carries `proxy_caption`, the ribbon station `via`.
 
 ## Testing
 
@@ -287,7 +293,9 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
 - `sigmets_live_unchecked: true` — only while the layer has had no good
   SIGMET fetch (`route_sigmets` unset): `sigmets_total: 0` is "not checked".
 - `airports` — departure, destination and the top alternates only (the
-  classifier's `airport_roles`), when the corridor fetch has a METAR for them.
+  classifier's `airport_roles`), when the corridor fetch has a METAR for them;
+  a proxied terminal (#767) lists the station's report under the field's ICAO
+  with `metar_station`, `proxy` and `proxy_caption`.
 
 Deliberately not in it: observed radar/lightning/tops arrays and
 `cross_section.json` (never exposed, #278). The layer outlives the live window

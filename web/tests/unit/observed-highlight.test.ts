@@ -93,6 +93,15 @@ describe('observed highlight', () => {
     expect(html).not.toContain('data-hl-thumb');
   });
 
+  it('shows a proxied terminal\'s caption in gray under its line (#767)', () => {
+    const glance = load(highlightFiles[0]).glance!;
+    const lines = glance.lines.map((ln) => ln.phase === 'departure'
+      ? { ...ln, proxy_caption: 'using ZZPX as proxy · 8 NM NE' } : ln);
+    const html = nutshellHtml({ ...glance, lines }, false);
+    expect(html).toContain('<span class="glance-proxy">using ZZPX as proxy · 8 NM NE</span>');
+    expect(html.match(/glance-proxy/g)).toHaveLength(1);
+  });
+
   it('escapes the server text', () => {
     const html = highlightHtml({
       text: 'ZZAA <b>LIFR</b> & gusts', model: 'fixture', facts_hash: 'h', generated_at: '2026-10-09T09:05:00Z',

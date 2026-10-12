@@ -740,6 +740,25 @@ export interface AirportObservation {
   /** #758 — runways and the winds on them, for the runway + wind widget.
    *  Absent on older packs; null when the airport has no runway data. */
   runway_wind?: RunwayWindPicture | null;
+  /** #767 — a nearby station standing in for a field with no METAR / no TAF
+   *  of its own. The station's report stays on its own row. Absent on older
+   *  packs; null when the field reports itself. */
+  metar_proxy?: ObsProxy | null;
+  taf_proxy?: ObsProxy | null;
+  /** #767 — server-built gray line for a proxied field ("using EGLL as proxy ·
+   *  8 NM NE"); null otherwise. */
+  proxy_caption?: string | null;
+}
+
+/** #767 (server: models/observations.py ObsProxy). */
+export interface ObsProxy {
+  icao: string;
+  distance_nm: number;
+  /** True bearing field → station. */
+  bearing_deg?: number | null;
+  /** Station minus field elevation (ft). */
+  elevation_diff_ft?: number | null;
+  source?: 'auto' | 'override' | string;
 }
 
 // --- Runway + wind picture (#758; server: models/runway_wind.py) -----------
@@ -1277,6 +1296,9 @@ export interface LiveGlanceLine {
   /** What the line summarises: "metar:LPPR", "storm:<id>", "sigmet:LECM|6". */
   sources?: string[];
   focus?: LiveFocus | null;
+  /** #767 — the terminal reads a nearby station: "using EGLL as proxy · 8 NM
+   *  NE". Shown as a gray line under the text; null otherwise. */
+  proxy_caption?: string | null;
 }
 
 /** The Observed section's top block (#690): one "as of", one comparison line,
@@ -1347,6 +1369,8 @@ export interface RibbonStation {
   taf_temporary_category?: string | null;
   taf_weather?: string[];
   focus?: LiveFocus | null;
+  /** #767 — a departure/destination read through these proxy stations. */
+  via?: string[] | null;
 }
 
 /** A route SIGMET on the SIGMET band. */

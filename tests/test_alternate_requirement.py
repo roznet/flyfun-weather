@@ -574,8 +574,9 @@ class TestWiringSmoke:
 # --- Candidate TAF path (D-0): reuse route-corridor TAFs, fetch the gaps ------
 
 def _obs(airports):
-    """Minimal route_observations stand-in: only .airports is read."""
-    return SimpleNamespace(airports=airports)
+    """Minimal route_observations stand-in: ``.airports`` for the candidates,
+    and a ``terminal`` accessor (#767) that finds no destination row."""
+    return SimpleNamespace(airports=airports, terminal=lambda icao, **_: None)
 
 
 class TestCandidateTafQualification:

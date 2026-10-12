@@ -372,6 +372,12 @@ export interface RunwayWindDial {
   primary: WindAtAirport | null;
   /** The TAF at ETA for the destination; never for the departure ("now"). */
   ghost: WindAtAirport | null;
+  /** #767 — the station the METAR wind comes from when the field has none
+   *  of its own (the picture lays its wind over the field's runways); null
+   *  for the field's own METAR. */
+  metarStation: string | null;
+  /** #767 — the server's gray caption ("using EGLL as proxy · 8 NM NE"). */
+  proxyCaption: string | null;
 }
 
 /** The departure + destination dials, or [] when neither airport has a
@@ -385,13 +391,16 @@ export function runwayWindPair(
   const dials: RunwayWindDial[] = [];
   const add = (role: 'DEP' | 'ARR', icao: string | null | undefined) => {
     if (!icao) return;
-    const picture = find(icao)?.runway_wind ?? null;
+    const airport = find(icao);
+    const picture = airport?.runway_wind ?? null;
     dials.push({
       role,
       icao: icao.toUpperCase(),
       picture,
       primary: windOf(picture, 'metar'),
       ghost: role === 'ARR' ? windOf(picture, 'taf') : null,
+      metarStation: airport?.metar_proxy?.icao ?? null,
+      proxyCaption: airport?.proxy_caption ?? null,
     });
   };
   add('DEP', departure);

@@ -94,6 +94,9 @@ nonisolated struct LiveGlanceLine: Codable, Sendable, Identifiable {
     let unavailable: [String]?
     let sources: [String]?
     let focus: LiveFocus?
+    /// #767: the terminal reads a nearby station ("using EGLL as proxy ·
+    /// 8 NM NE"); shown in gray under the text. Nil otherwise.
+    let proxyCaption: String?
 
     var id: String { phase ?? (text ?? "") }
 
@@ -273,6 +276,8 @@ nonisolated struct RibbonStation: Codable, Sendable, Identifiable {
     let tafTemporaryCategory: String?
     let tafWeather: [String]?
     let focus: LiveFocus?
+    /// #767: a departure/destination read through these proxy stations.
+    let via: [String]?
 
     var id: String { icao }
 }

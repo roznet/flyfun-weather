@@ -204,6 +204,7 @@ def run_route_weather(
     airports_db_path: str,
     *,
     source=None,
+    pinned_proxies: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> RouteObservations:
     """Fetch METAR/TAF for airports along a route via euro_aip RouteWeatherService.
 
@@ -215,6 +216,8 @@ def run_route_weather(
         source: Optional euro_aip weather source (``fetch_weather``). The
             live tick passes a cache-backed one so every flight is served from
             one shared fetch; default is aviationweather.gov.
+        pinned_proxies: The previous observation-proxy pick per terminal
+            (#767, ``obs_proxy.pins_from``), kept while it still qualifies.
 
     Returns:
         RouteObservations with per-airport METAR/TAF data.
@@ -346,7 +349,7 @@ def run_route_weather(
     except Exception:
         logger.warning("Failed to compute observation wind advisories", exc_info=True)
 
-    return RouteObservations(
+    route_obs = RouteObservations(
         corridor_nm=corridor_nm,
         fetch_time=datetime.now(timezone.utc),
         airports_found=len(airports),
@@ -358,6 +361,57 @@ def run_route_weather(
         worst_taf_category=_worst_category(taf_categories),
         phenomena_along_route=unique_phenomena,
     )
+    _apply_terminal_proxies(
+        route_obs, route, airports_db_path, dict(zip((a.icao for a in airports), etas)),
+        pinned_proxies,
+    )
+    return route_obs
+
+
+def _apply_terminal_proxies(
+    route_obs: RouteObservations,
+    route: RouteConfig,
+    airports_db_path: str,
+    eta_by_icao: dict[str, datetime],
+    pinned: dict[str, tuple[str | None, str | None]] | None,
+) -> None:
+    """Pick a proxy station for a departure/destination with no METAR/TAF of
+    its own (#767), then lay the station's winds over the field's runways for
+    the dials. Never raises: a failure leaves the field unproxied, as before."""
+    if not route.waypoints:
+        return
+    try:
+        from weatherbrief.airports import get_airport_elevations
+        from weatherbrief.analysis.obs_proxy import apply_obs_proxies, load_overrides
+
+        terminals = [route.waypoints[0].icao, route.waypoints[-1].icao]
+        bare = [
+            i for i in terminals
+            if (f := route_obs.airport(i)) is not None and not (f.has_metar and f.has_taf)
+        ]
+        if not bare:
+            return
+        elevations = get_airport_elevations([a.icao for a in route_obs.airports], airports_db_path)
+        proxied = apply_obs_proxies(
+            route_obs, bare, elevations=elevations, now=datetime.now(timezone.utc),
+            overrides=load_overrides(), pinned=pinned,
+        )
+    except Exception:
+        logger.warning("Observation proxy resolution failed", exc_info=True)
+        return
+    from weatherbrief.analysis.runway_wind import picture_for_observation
+
+    for icao in proxied:
+        term = route_obs.terminal(icao)
+        field = term.field if term is not None else None
+        if field is None or field.runway_wind is None:
+            continue
+        try:
+            field.runway_wind = picture_for_observation(
+                term.effective(), field.runway_wind.runways, eta_by_icao.get(field.icao),
+            )
+        except Exception:
+            logger.warning("Failed to build the proxied wind picture for %s", icao, exc_info=True)
 
 
 def _attach_runway_wind(obs: AirportObservation, runways, eta: datetime | None) -> None:
@@ -803,6 +857,25 @@ def run_route_sigmets(
     )
 
 
+def _previous_proxies(pack_dir: Path, stored_obs: dict | None) -> dict:
+    """The observation-proxy pick to keep (#767): the live layer's newest,
+    else the briefing's. Never raises."""
+    from weatherbrief.analysis.obs_proxy import pins_from
+
+    try:
+        from weatherbrief.tasks.live_layer import live_for_pack
+
+        layer = live_for_pack(pack_dir)
+        if layer is not None and layer.route_observations is not None:
+            return pins_from(layer.route_observations)
+    except Exception:
+        logger.debug("No live layer to pin observation proxies from", exc_info=True)
+    try:
+        return pins_from(RouteObservations.model_validate(stored_obs)) if stored_obs else {}
+    except Exception:
+        return {}
+
+
 def run_realtime_refresh(
     pack_dir: Path,
     db_path: str,
@@ -864,13 +937,16 @@ def run_realtime_refresh(
     if stored_sigmets:
         sigmet_corridor_nm = stored_sigmets.get("corridor_nm", default_sigmet_corridor_nm)
 
-    # Fetch fresh METAR/TAF along the route corridor.
+    # Fetch fresh METAR/TAF along the route corridor, keeping each terminal's
+    # observation proxy where it still qualifies (#767): the live layer's last
+    # pick, else the briefing's.
     new_obs = run_route_weather(
         route=route,
         target_time=target_dt,
         corridor_nm=corridor_nm,
         airports_db_path=db_path,
         source=report_source,
+        pinned_proxies=_previous_proxies(pack_dir, stored_obs),
     )
 
     # Compare observations against the pack's *stored* forecasts.

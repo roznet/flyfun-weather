@@ -64,6 +64,11 @@ _NWP_CAVEAT = (
     "The destination trigger uses an NWP model estimate (no TAF covers the ETA "
     "window yet), not an aviation forecast product."
 )
+#: A destination with no TAF of its own reads its proxy station's (#767).
+_PROXY_TAF_CAVEAT = (
+    "{dest} publishes no TAF: the destination trigger reads {station}'s TAF "
+    "({where} from {dest}), not a forecast for the field itself."
+)
 _RELAXED_CAVEAT = (
     "Published-approach data is missing for some candidates; approach-class "
     "estimates are degraded and treated as VFR-only."
@@ -396,13 +401,14 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
     eta = alternates.eta or now
 
     # 1. Destination TAF (only present on D-0 via run_route_weather).
+    # A destination with no TAF of its own reads its proxy station's (#767).
     taf_raw = None
+    taf_proxy = None
     obs = getattr(snapshot, "route_observations", None)
-    if obs is not None:
-        for a in obs.airports:
-            if a.icao == dest_icao and a.taf_raw:
-                taf_raw = a.taf_raw
-                break
+    term = obs.terminal(dest_icao) if obs is not None else None
+    if term is not None and term.taf_row is not None and term.taf_row.taf_raw:
+        taf_raw = term.taf_row.taf_raw
+        taf_proxy = term.taf_proxy
 
     # 2. Destination window (TAF preferred, else NWP-consensus fallback).
     window, conditionals = _build_destination_window(
@@ -419,6 +425,10 @@ def run_alternate_requirement(snapshot, airports_db_path: str, *, now: datetime 
     caveats = list(_CAVEATS)
     if window.source == "nwp":
         caveats.append(_NWP_CAVEAT)
+    elif taf_proxy is not None:
+        caveats.append(_PROXY_TAF_CAVEAT.format(
+            dest=dest_icao, station=taf_proxy.icao, where=taf_proxy.where,
+        ))
     if alternates.approach_filter_relaxed:
         caveats.append(_RELAXED_CAVEAT)
 

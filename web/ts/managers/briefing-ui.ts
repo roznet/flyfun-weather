@@ -1276,6 +1276,13 @@ export function renderRouteObservations(
     ? `<div class="obs-conflict-banner">${t('observations.conflictsDetected')}</div>`
     : '';
 
+  // #767: a departure/destination with no METAR/TAF of its own reads a nearby
+  // station's; its row has no report, so name the stand-in above the table.
+  const proxyHtml = obs.airports
+    .filter((apt) => apt.proxy_caption)
+    .map((apt) => `<p class="obs-proxy">${escapeHtml(apt.icao)}: ${escapeHtml(apt.proxy_caption!)}</p>`)
+    .join('');
+
   // Table rows — only airports with METAR or TAF
   const rows = obs.airports
     .filter((apt) => apt.has_metar || apt.has_taf)
@@ -1313,7 +1320,7 @@ export function renderRouteObservations(
 
   el.innerHTML = `
     ${summaryHtml}
-    ${conflictHtml}
+    ${conflictHtml}${proxyHtml}
     <div class="table-scroll">
       <table class="band-table obs-table">
         <thead>

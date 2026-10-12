@@ -133,8 +133,11 @@ export function runwayWindDialHtml(dial: RunwayWindDial, size: RunwayWindSize): 
   const primary = dial.primary;
   const head = `<div class="rw-head"><span class="rw-role">${dial.role}</span> `
     + `<span class="rw-icao">${escapeHtml(dial.icao)}</span>`
-    + (primary ? `<span class="rw-wind">METAR ${escapeHtml(formatHhmmZ(primary.wind.time))} ${escapeHtml(windLabel(primary.wind))}</span>` : '')
-    + `</div>`;
+    + (primary ? `<span class="rw-wind">METAR ${dial.metarStation ? `${escapeHtml(dial.metarStation)} ` : ''}`
+      + `${escapeHtml(formatHhmmZ(primary.wind.time))} ${escapeHtml(windLabel(primary.wind))}</span>` : '')
+    + `</div>`
+    // #767: the field has no METAR/TAF of its own — say whose wind this is.
+    + (dial.proxyCaption ? `<div class="rw-proxy">${escapeHtml(dial.proxyCaption)}</div>` : '');
   const lines = [lineHtml(componentsLine(primary, missing), primary, 'rw-line', 'primary')];
   if (size === 'regular' && dial.ghost) {
     lines.push(lineHtml(ghostLine(dial.ghost), dial.ghost, 'rw-line rw-line-ghost', 'ghost'));

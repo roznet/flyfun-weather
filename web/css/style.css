@@ -9252,6 +9252,15 @@ button.glance-line:hover {
   color: var(--amber);
 }
 
+/* #767: a terminal read through a nearby station ("using EGLL as proxy"). */
+.glance-proxy,
+.rw-proxy,
+.obs-proxy {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 .glance-chevron {
   align-self: center;
   color: var(--text-muted);
