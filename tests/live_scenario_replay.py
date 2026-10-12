@@ -23,7 +23,7 @@ from weatherbrief.models.observations import (
     RouteSigmets,
     SigmetAlongRoute,
 )
-from weatherbrief.tasks.live_layer import change_identity, commit_live_update
+from weatherbrief.tasks.live_layer import _append_history, change_identity, commit_live_update
 
 SCENARIOS = Path(__file__).parent / "fixtures" / "live_scenarios"
 
@@ -98,6 +98,17 @@ def _briefing(scenario: dict, pack_index: int) -> dict:
     return briefing
 
 
+def feed_progress_events(flight_dir: Path, records: list[dict], at: datetime, fed: set[int]) -> None:
+    """Append the pilot's take-off / landed records (#760) recorded by ``at``
+    to the replayed flight's history, once each (``fed`` holds their
+    indices): the tick at ``at`` then reads them as production would."""
+    due = [(i, r) for i, r in enumerate(records) if i not in fed and _dt(r["tick_at"]) <= at]
+    if due:
+        flight_dir.mkdir(parents=True, exist_ok=True)
+        _append_history(flight_dir, [r for _, r in due])
+        fed.update(i for i, _ in due)
+
+
 def replay(scenario: dict, flight_dir: Path, transform=None) -> list[Tick]:
     """Commit every tick of the live window; return what each one showed.
 
@@ -105,7 +116,8 @@ def replay(scenario: dict, flight_dir: Path, transform=None) -> list[Tick]:
     corridor fetch before it is committed, and each pack's baseline
     (``previous`` None) — a scenario variant, e.g. a terminal withheld and
     read through a proxy station (#767). ``previous`` is the last tick's
-    committed observations."""
+    committed observations. ``inputs.progress_events`` (optional, #760) are
+    fed in as they fall due."""
     inputs = scenario["inputs"]
     packs = []
     for i, p in enumerate(inputs["packs"]):
@@ -124,8 +136,10 @@ def replay(scenario: dict, flight_dir: Path, transform=None) -> list[Tick]:
     step = timedelta(minutes=window["tick_minutes"])
     ticks: list[Tick] = []
     shown: dict[tuple, LiveChange] = {}
+    fed: set[int] = set()
     while at <= end:
         _, ts, pack_dir, briefing = [p for p in packs if p[0] <= at][-1]
+        feed_progress_events(flight_dir, inputs.get("progress_events", []), at, fed)
         observations = observations_at(scenario, at)
         if transform is not None:
             previous = ticks[-1].layer.route_observations if ticks else None
@@ -224,6 +238,7 @@ def live_response(tick: Tick) -> dict:
         storms=layer.storms,
         glance=layer.glance,
         ribbon=layer.ribbon,
+        progress=layer.progress,
         # With the trails as of this tick (#669), as /live serves them.
         changes=trails_for_pack(tick.pack_dir, layer.changes, now=tick.at, briefing_data=tick.briefing),
         last_refresh_delta=layer.last_refresh_delta,

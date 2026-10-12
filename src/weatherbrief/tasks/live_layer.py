@@ -28,12 +28,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from weatherbrief.analysis.flight_progress import FlightProgress
+from weatherbrief.analysis.flight_progress import (
+    HISTORY_TYPE as PROGRESS_HISTORY_TYPE,
+)
+from weatherbrief.analysis.flight_progress import (
+    FlightProgress,
+    ProgressEvent,
+    progress_events,
+)
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     TRAIL_EXCLUDE,
@@ -42,6 +50,8 @@ from weatherbrief.models.live import (
     LiveEvidencePoint,
     LiveGlance,
     LiveLayer,
+    LiveLayerResponse,
+    LiveProgress,
     LiveRibbon,
     LiveStorms,
 )
@@ -204,12 +214,14 @@ def live_updated_at_iso(artifact_path: str | None) -> str | None:
         return None
 
 
-def overlay_live(briefing_data: dict, layer: LiveLayer | None) -> dict:
+def overlay_live(briefing_data: dict, layer: LiveLayer | None, position_sharing: str = "full") -> dict:
     """Briefing JSON with the live blocks laid over the pack's own.
 
     Keeps clients that only read the snapshot (older app versions, the HTML
     report) on the newest observations, the way the in-place patch used to.
-    The on-disk ``briefing.json`` is never touched.
+    The on-disk ``briefing.json`` is never touched. ``position_sharing`` is
+    the reader's (:func:`sharing_for_viewer`): with ``none`` the change and
+    delta messages lose their estimated times, as on ``/live`` (#760).
     """
     if layer is None:
         return briefing_data
@@ -227,6 +239,14 @@ def overlay_live(briefing_data: dict, layer: LiveLayer | None) -> dict:
         out["live_changes"] = layer.changes.model_dump(mode="json", exclude=TRAIL_EXCLUDE)
     if layer.live_updated_at is not None:
         out["live_updated_at"] = layer.live_updated_at.isoformat()
+    if position_sharing == "none":
+        live = out.get("live_changes") or {}
+        for c in (live.get("changes") or []) + (live.get("recently_cleared") or []):
+            if isinstance(c.get("message"), str):
+                c["message"] = strip_eta_text(c["message"])
+        delta = out.get("last_refresh_delta")
+        if layer.last_refresh_delta is not None and isinstance(delta, dict):
+            delta["messages"] = [strip_eta_text(m) for m in delta.get("messages") or []]
     return out
 
 
@@ -271,15 +291,79 @@ def load_live_history(flight_dir: Path | str) -> list[dict]:
 # --- Write ------------------------------------------------------------------
 
 
+def load_progress_events(flight_dir: Path | str) -> tuple[ProgressEvent, ...]:
+    """The flight's take-off / landed / fix events (#760), from its history.
+
+    Cheaper than :func:`load_live_history` for callers that need nothing
+    else (the live tick's window check): only lines that can be progress
+    records are parsed. Never raises.
+    """
+    path = Path(flight_dir) / LIVE_HISTORY_FILE
+    try:
+        if not path.exists():
+            return ()
+        marker = f'"type":"{PROGRESS_HISTORY_TYPE}"'
+        records = []
+        for line in path.read_text().splitlines():
+            if marker not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+        return progress_events(records)
+    except Exception:
+        logger.warning("Unreadable progress events in %s — plan only", path, exc_info=True)
+        return ()
+
+
+def record_progress_event(flight_dir: Path | str, event: ProgressEvent) -> None:
+    """Append a progress event to the flight's history (#760), under the same
+    lock as the tick's commit so the two appends never interleave. The next
+    tick picks it up; nothing is refetched or recomputed here. Raises on a
+    write failure: the caller (the endpoint) must not report success."""
+    flight_dir = Path(flight_dir)
+    with _lock_for(flight_dir):
+        flight_dir.mkdir(parents=True, exist_ok=True)
+        _append_history(flight_dir, [event.history_record()])
+
+
 def flight_progress(
     route: RouteConfig | None, departure: datetime | None, now: datetime,
+    events: tuple[ProgressEvent, ...] = (),
 ) -> FlightProgress | None:
     """Where the flight is as of ``now`` (#759): the one progress object every
-    live consumer measures against. None without a route. Today the plan
-    only (on-time departure, constant speed)."""
+    live consumer measures against. None without a route. The plan
+    (on-time departure, constant speed), corrected by the flight's manual
+    take-off / landed ``events`` (#760)."""
     if route is None:
         return None
-    return FlightProgress.from_route(route, departure, now)
+    return FlightProgress.from_route(route, departure, now, events)
+
+
+def progress_block(progress: FlightProgress | None) -> LiveProgress | None:
+    """The ``progress`` block clients and agents get (#760). None without a
+    route. Rounded like the ribbon (0.1 NM, ~10 m)."""
+    if progress is None:
+        return None
+    flown = progress.flown_nm
+    pos = progress.position(progress.as_of) if progress.total_nm > 0 else None
+    delay = progress.delay_min
+    return LiveProgress(
+        source=progress.source,
+        as_of=progress.as_of,
+        along_nm=round(flown, 1) if flown is not None else None,
+        route_nm=round(progress.total_nm, 1),
+        lat=round(pos[0], 4) if pos is not None else None,
+        lon=round(pos[1], 4) if pos is not None else None,
+        estimated=True,
+        departed_at=progress.takeoff_at,
+        eta_destination=progress.arrival,
+        landed_at=progress.landed_at,
+        delay_min=round(delay) if delay is not None else None,
+    )
 
 
 def _build_storms(
@@ -550,7 +634,9 @@ ESTIMATES_PER_TICK = 25
 def _estimate_records(base: dict, history: list[dict], layer: LiveLayer) -> list[dict]:
     """One ``estimate`` record per storm with an estimate (#688 addendum):
     closest approach at current motion, for ``review.py score-estimates``.
-    Once per storm per cell frame: a ↻ on the same frame adds nothing."""
+    Once per storm per cell frame: a ↻ on the same frame adds nothing.
+    ``progress_source`` says which schedule the 4-D track came from (#760),
+    so the scoring can split plan-only estimates from corrected ones."""
     storms = layer.storms
     if storms is None or storms.status != "available" or storms.frame_time is None:
         return []
@@ -567,6 +653,7 @@ def _estimate_records(base: dict, history: list[dict], layer: LiveLayer) -> list
             "speed_kt": st.speed_kt, "toward_deg": st.toward_deg,
             "along_nm": st.along_nm, "offtrack_nm": st.offtrack_nm, "cross_nm": st.cross_nm,
             "minutes_to_abeam": st.minutes_to_abeam,
+            "progress_source": layer.progress.source if layer.progress is not None else None,
             **st.estimate.model_dump(mode="json"),
         })
         if len(out) >= ESTIMATES_PER_TICK:
@@ -671,12 +758,15 @@ def _record_history(
     stored: LiveLayer | None,
     layer: LiveLayer,
     trace: CommitTrace | None = None,
+    history: list[dict] | None = None,
     **kwargs,
 ) -> None:
     """Append this tick to the history. Never raises: a history problem must
-    not fail the tick or the ↻ press."""
+    not fail the tick or the ↻ press. ``history`` is the file as the commit
+    already read it (under the same lock), else it is read here."""
     try:
-        history = load_live_history(flight_dir)
+        if history is None:
+            history = load_live_history(flight_dir)
         # A history only starting (first write, or a flight already live
         # when #643 shipped) shows nothing yet: everything on screen is
         # recorded as appearing now.
@@ -780,7 +870,11 @@ def commit_live_update(
         base_obs, base_sigmets, base_observed, seeded = _seed_missing_baselines(
             layer, base_obs, base_sigmets, base_observed, now,
         )
-        progress = flight_progress(route, departure, now)
+        # Read once under the lock: the progress events (#760) and the diff
+        # the history append needs both come from it.
+        history = load_live_history(flight_dir)
+        progress = flight_progress(route, departure, now, progress_events(history))
+        layer.progress = progress_block(progress)
         layer.storms = _build_storms(cells, route, progress)
         memory = ClassifierMemory(
             alerted=dict(prior.alerted) if prior else {},
@@ -832,7 +926,7 @@ def commit_live_update(
                 trace.cells_computed_at = cells.computed_at
                 trace.cells_received_at = cells.received_at
         _record_history(
-            flight_dir, stored, layer, trace, briefing_data=briefing_data,
+            flight_dir, stored, layer, trace, history, briefing_data=briefing_data,
             observations=observations, sigmets=sigmets, now=now,
         )
         # What the Observed section shows as of this tick (#711), for replay
@@ -895,6 +989,104 @@ def patch_push_state(flight_dir: Path | str, state, *, pack_timestamp: str) -> b
         return True
 
 
+# --- Position sharing (#759, #760) -------------------------------------------
+
+#: Per-flight ``position_sharing`` values: what a viewer who is not the owner
+#: sees of where the flight is. The owner always gets ``full``.
+#:
+#: - ``full``: everything, the progress position included.
+#: - ``along_route`` (default): progress along the route (``along_nm``), ETAs
+#:   and abeam times, but no lat/lon of the progress block. Reveals position
+#:   to within the route's cross-track error, so help text says "progress
+#:   along the route", never "private".
+#: - ``none``: no progress block, no ETAs (ribbon, storms, change and glance
+#:   wording) and no storm estimate. Rows still drop passed airports, so
+#:   coarse progress stays inferable (accepted in #759).
+POSITION_SHARING_VALUES = ("none", "along_route", "full")
+DEFAULT_POSITION_SHARING = "along_route"
+
+#: Estimated times the live wording carries: the storm rows' ", abeam ~10:20Z"
+#: / ", arrival ~…" / ", reached ~10:20Z–10:40Z" and the glance's
+#: "… at 80 NM ~10:20Z". Only ETAs use the "~" form.
+_ETA_TEXT = re.compile(r"(?:, (?:abeam|arrival|reached))? ~\d{2}:\d{2}Z(?:–\d{2}:\d{2}Z)?")
+
+
+def sharing_for_viewer(owner_id: str | None, viewer_id: str | None, position_sharing: str | None) -> str:
+    """What ``viewer_id`` may see of the owner's progress: ``full`` for the
+    owner, else the flight's setting (an unknown value reads as the default)."""
+    if viewer_id is not None and viewer_id == owner_id:
+        return "full"
+    return position_sharing if position_sharing in POSITION_SHARING_VALUES else DEFAULT_POSITION_SHARING
+
+
+def strip_eta_text(text: str) -> str:
+    """``text`` without its estimated times (``position_sharing=none``)."""
+    return _ETA_TEXT.sub("", text)
+
+
+def redact_progress(progress: LiveProgress | None, sharing: str) -> LiveProgress | None:
+    if progress is None or sharing == "full":
+        return progress
+    if sharing == "none":
+        return None
+    return progress.model_copy(update={"lat": None, "lon": None})
+
+
+def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
+    """The ``/live`` body as a viewer with ``sharing`` may see it (the one
+    helper for ``/live`` and the share pages, which read it)."""
+    if sharing == "full":
+        return resp
+    out = resp.model_copy(deep=True)
+    out.progress = redact_progress(out.progress, sharing)
+    if sharing != "none":
+        return out
+    if out.storms is not None:
+        for st in out.storms.storms:
+            st.abeam_eta = st.minutes_to_abeam = st.estimate = None
+    if out.ribbon is not None:
+        r = out.ribbon
+        r.flown_nm = r.arrival_at = None
+        for wp in r.waypoints:
+            wp.eta = None
+        for seg in r.segments:
+            seg.eta_from = seg.eta_to = None
+        for st in r.stations:
+            st.eta = None
+    if out.glance is not None:
+        for ln in out.glance.lines:
+            ln.text = strip_eta_text(ln.text)
+        if out.glance.highlight is not None:
+            out.glance.highlight.text = strip_eta_text(out.glance.highlight.text)
+    if out.changes is not None:
+        for c in out.changes.changes + (out.changes.recently_cleared or []):
+            c.message = strip_eta_text(c.message)
+    if out.last_refresh_delta is not None:
+        out.last_refresh_delta.messages = [strip_eta_text(m) for m in out.last_refresh_delta.messages]
+    return out
+
+
+def redact_summary(summary: dict | None, sharing: str) -> dict | None:
+    """:func:`summarize_live`'s block as a viewer with ``sharing`` may see it
+    (the agent ``live`` block and the flight-day email)."""
+    if summary is None or sharing == "full":
+        return summary
+    out = json.loads(json.dumps(summary))
+    progress = out.get("progress")
+    if sharing == "none":
+        out["progress"] = None
+        for ln in (out.get("glance") or {}).get("lines") or []:
+            ln["text"] = strip_eta_text(ln["text"])
+        if out.get("highlight"):
+            out["highlight"]["text"] = strip_eta_text(out["highlight"]["text"])
+        for c in (out.get("changes") or []) + (out.get("recently_cleared") or []):
+            if isinstance(c.get("message"), str):
+                c["message"] = strip_eta_text(c["message"])
+    elif progress:
+        progress["lat"] = progress["lon"] = None
+    return out
+
+
 # --- Agent summary (#641) ---------------------------------------------------
 
 #: Guardrail the agents see inside the ``live`` block (MCP ``get_briefing`` and
@@ -910,7 +1102,11 @@ LIVE_NOTE = (
     "them as the overview. highlight is the one-line summary the app shows "
     "above them (null when there is none): quote it like the glance lines, and "
     "say it was written at its written_at, which can be older than "
-    "live_updated_at. times_today of 2 or "
+    "live_updated_at. progress is where the layer places the flight: source "
+    "'plan' is the planned schedule, 'plan+takeoff' the plan corrected by "
+    "the pilot's recorded take-off or landing (departed_at / landed_at are "
+    "those entries; null means not recorded, not 'not departed'); null when "
+    "the owner does not share it. times_today of 2 or "
     "more means the change has come and gone today (bouncing, not building); "
     "recently_cleared lists what cleared in the last hour. "
     "sigmets_at_briefing_unavailable: true means the SIGMET source did not "
@@ -994,6 +1190,9 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
             }
             if layer.glance is not None and layer.glance.highlight is not None else None
         ),
+        # Where the tick placed the flight (#760); redacted for non-owners
+        # by :func:`redact_summary`.
+        "progress": layer.progress.model_dump(mode="json") if layer.progress is not None else None,
     }
 
     items = list(changes.changes) if changes else []
@@ -1086,10 +1285,13 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     return out
 
 
-def live_summary(pack_dir: Path | str | None) -> dict | None:
+def live_summary(pack_dir: Path | str | None, *, position_sharing: str = "full") -> dict | None:
     """:func:`summarize_live` for this pack's live layer, or None when the
     flight has none for this pack (never invented). Never raises: a live-layer
-    problem must not fail a briefing read."""
+    problem must not fail a briefing read.
+
+    ``position_sharing`` is what the reader may see (:func:`sharing_for_viewer`);
+    ``full`` for the owner's own channels."""
     if not pack_dir:
         return None
     try:
@@ -1102,9 +1304,9 @@ def live_summary(pack_dir: Path | str | None) -> dict | None:
         if layer is None or layer.live_updated_at is None:
             return None
         briefing = load_briefing(pack_dir) or {}
-        return summarize_live(
+        return redact_summary(summarize_live(
             layer, briefing, trails_for_pack(pack_dir, layer.changes, briefing_data=briefing),
-        )
+        ), position_sharing)
     except Exception:
         logger.warning("Live summary failed for %s", pack_dir, exc_info=True)
         return None

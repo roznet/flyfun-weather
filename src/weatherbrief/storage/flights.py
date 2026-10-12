@@ -113,6 +113,7 @@ def _flight_to_row(flight: Flight, user_id: str) -> FlightRow:
         flexibility=flight.flexibility,
         notify_override=flight.notify_override,
         private=flight.private,
+        position_sharing=flight.position_sharing,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         last_auto_refresh_at=flight.last_auto_refresh_at,
@@ -141,6 +142,9 @@ def _row_to_flight(row: FlightRow) -> Flight:
         flexibility=row.flexibility or "none",
         notify_override=row.notify_override or "default",
         private=row.private,
+        position_sharing=(
+            row.position_sharing if row.position_sharing in ("none", "along_route", "full") else "along_route"
+        ),
         auto_refresh=row.auto_refresh,
         auto_refresh_hour=row.auto_refresh_hour,
         last_auto_refresh_at=row.last_auto_refresh_at,
@@ -483,6 +487,7 @@ def save_flight(session: Session, flight: Flight, user_id: str) -> None:
         existing.flexibility = flight.flexibility
         existing.notify_override = flight.notify_override
         existing.private = flight.private
+        existing.position_sharing = flight.position_sharing
         existing.auto_refresh = flight.auto_refresh
         existing.auto_refresh_hour = flight.auto_refresh_hour
         existing.last_auto_refresh_at = flight.last_auto_refresh_at

@@ -436,7 +436,13 @@ def get_briefing(
     # since the briefing. Null when the pack has none — never invented.
     from weatherbrief.tasks.live_layer import live_summary
 
-    result["live"] = live_summary(pack_dir)
+    from weatherbrief.tasks.live_layer import sharing_for_viewer
+
+    flight = flights_api._load_flight_or_404(db, flight_id, viewer_id=user_id)
+    # A shared flight's viewer sees its progress per the owner's setting (#760).
+    result["live"] = live_summary(pack_dir, position_sharing=sharing_for_viewer(
+        flight.user_id, user_id, flight.position_sharing,
+    ))
     if result["live"] is not None:
         from weatherbrief.tasks.live_timing import record_delivery_for_pack
 

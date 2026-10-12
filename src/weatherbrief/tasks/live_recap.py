@@ -406,9 +406,10 @@ def flight_dir_of(packs: list[tuple[datetime, Path | None]]) -> Path | None:
 
 def flight_progress_for(packs: list[tuple[datetime, Path | None]], as_of: datetime):
     """The flight's ``FlightProgress`` from its newest readable pack (the
-    route and departure the live layer last measured against)."""
+    route and departure the live layer last measured against, corrected by
+    the flight's manual entries)."""
     from weatherbrief.tasks.artifacts import load_briefing
-    from weatherbrief.tasks.live_layer import flight_progress
+    from weatherbrief.tasks.live_layer import flight_progress, load_progress_events
     from weatherbrief.tasks.live_trail import route_context
 
     for _, pack_dir in packs:
@@ -416,7 +417,9 @@ def flight_progress_for(packs: list[tuple[datetime, Path | None]], as_of: dateti
             continue
         route, departure = route_context(load_briefing(pack_dir) or {})
         if route is not None:
-            return flight_progress(route, departure, as_of)
+            # With the pilot's take-off / landed entries (#760): the recap
+            # places the aircraft where the live layer did.
+            return flight_progress(route, departure, as_of, load_progress_events(pack_dir.parent))
     return None
 
 

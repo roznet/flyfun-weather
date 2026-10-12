@@ -4,6 +4,8 @@ Every verification cycle (10 min), each flight inside its live window —
 ``departure - WB_LIVE_WINDOW_BEFORE_H`` (3 h) to ``departure + duration +
 WB_LIVE_WINDOW_AFTER_H`` (1 h) — gets its live layer refreshed through the same
 seam a D-0 ↻ press uses (:func:`run_realtime_refresh`), without that press.
+The end moves with the flight's manual entries (#760, :func:`live_window_end`):
+a late take-off pushes it back, a recorded landing closes it.
 
 **Fetch once.** The tick never calls aviationweather.gov per flight:
 
@@ -85,17 +87,58 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
+#: A take-off entry is accepted up to this long after the planned departure
+#: (#760). A later one is a different flight day: the pilot should move the
+#: flight's departure time (which re-briefs it) rather than drag a stale pack
+#: along. It also bounds how far a take-off can push the window back.
+MAX_TAKEOFF_DELAY_H = 6.0
+#: After a recorded landing the window stays open this long past the moment
+#: the landing became known, so one tick (10 min cadence) commits the landed
+#: state (no highlight, glance passed) before the flight leaves the window.
+LANDED_GRACE = timedelta(minutes=15)
+
+
+def live_window_end(
+    departure: datetime, duration_h: float | None, after_h: float,
+    events: tuple = (), now: datetime | None = None,
+) -> datetime:
+    """When the live window closes (#760), as known at ``now``.
+
+    The effective arrival (the planned one, shifted by a manual take-off) +
+    ``after_h``; once a landing is recorded, ``LANDED_GRACE`` after the later
+    of the landing and the moment it was entered.
+    """
+    from weatherbrief.analysis.flight_progress import EVENT_LANDED, FlightProgress
+
+    dep = _as_utc(departure)
+    progress = FlightProgress.schedule(dep, duration_h, now or datetime.now(timezone.utc), events)
+    if progress.landed_at is not None:
+        known = progress.latest_event(EVENT_LANDED).recorded_at
+        return max(progress.landed_at, known) + LANDED_GRACE
+    arrival = progress.arrival or progress.departed_at or dep
+    return arrival + timedelta(hours=after_h)
+
+
 def in_live_window(
     departure: datetime, duration_h: float | None, now: datetime,
-    before_h: float, after_h: float,
+    before_h: float, after_h: float, events: tuple = (),
 ) -> bool:
     dep = _as_utc(departure)
-    end = dep + timedelta(hours=duration_h or 0)
-    return dep - timedelta(hours=before_h) <= now <= end + timedelta(hours=after_h)
+    if now < dep - timedelta(hours=before_h):
+        return False
+    return now <= live_window_end(dep, duration_h, after_h, events, now)
 
 
 def find_live_flights(db: Session, now: datetime | None = None) -> list[FlightRow]:
-    """Flights with at least one pack whose live window contains ``now``."""
+    """Flights with at least one pack whose live window contains ``now``.
+
+    The planned window, widened by ``MAX_TAKEOFF_DELAY_H``, picks the
+    candidates; only those read their progress events (#760) for the real
+    end, so finished flights never touch the disk.
+    """
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
     now = now or datetime.now(timezone.utc)
     before_h, after_h = live_window_hours()
     stmt = (
@@ -104,11 +147,23 @@ def find_live_flights(db: Session, now: datetime | None = None) -> list[FlightRo
         .where(FlightRow.departure_time <= now + timedelta(hours=before_h))
         .distinct()
     )
-    return [
-        row for row in db.execute(stmt).scalars().all()
-        if row.departure_time is not None
-        and in_live_window(row.departure_time, row.flight_duration_hours, now, before_h, after_h)
-    ]
+    out = []
+    for row in db.execute(stmt).scalars().all():
+        if row.departure_time is None or not in_live_window(
+            row.departure_time, row.flight_duration_hours, now, before_h, after_h + MAX_TAKEOFF_DELAY_H,
+        ):
+            continue
+        # The entries live beside the packs, where the endpoint wrote them.
+        artifact = db.execute(
+            select(BriefingPackRow.artifact_path)
+            .where(BriefingPackRow.flight_id == row.id, BriefingPackRow.artifact_path.is_not(None))
+            .order_by(BriefingPackRow.fetch_timestamp.desc())
+            .limit(1)
+        ).scalar()
+        events = load_progress_events(flight_dir_for_pack(_resolve_artifact_path(artifact))) if artifact else ()
+        if in_live_window(row.departure_time, row.flight_duration_hours, now, before_h, after_h, events):
+            out.append(row)
+    return out
 
 
 # --- Shared report sources ---------------------------------------------------

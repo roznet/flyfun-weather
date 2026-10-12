@@ -665,6 +665,43 @@ class LivePushState(BaseModel):
     rearms_fired: int = 0
 
 
+class LiveProgress(BaseModel):
+    """Where the live layer places the flight, and from what (#759, #760).
+
+    ``analysis/flight_progress.FlightProgress`` as of the tick, for clients
+    to draw the "position used" marker at ``along_nm`` and caption it with
+    ``source``. ``departed_at`` / ``landed_at`` are **observed** entries only
+    (None on the plan, whatever the clock says), so a client never shows
+    "Landed" from a schedule. ``eta_destination`` is the effective arrival
+    (the plan, shifted by a take-off, or the landing itself).
+
+    The fix fields (``fix_at``, ``fix_age_min``, ``off_route``) stay empty
+    until a position source exists (#761 app GPS, #762 ADS-B). ``estimated``
+    is True whenever the position is extrapolated rather than a fresh fix,
+    which is always the case for the plan and manual sources.
+
+    Redacted for non-owner viewers per the flight's ``position_sharing``
+    (``live_layer.redact_live``).
+    """
+
+    # "plan" | "plan+takeoff" (later: "app", "adsb").
+    source: str
+    as_of: datetime
+    along_nm: float | None = None
+    route_nm: float | None = None
+    lat: float | None = None
+    lon: float | None = None
+    fix_at: datetime | None = None
+    fix_age_min: float | None = None
+    estimated: bool = True
+    off_route: bool = False
+    departed_at: datetime | None = None
+    eta_destination: datetime | None = None
+    landed_at: datetime | None = None
+    # Observed take-off minus planned departure, minutes (+ = late).
+    delay_min: float | None = None
+
+
 class LiveLayer(BaseModel):
     """The per-flight live store (``live.json``)."""
 
@@ -688,6 +725,8 @@ class LiveLayer(BaseModel):
     # tick from the blocks above (``tasks/live_glance.py``).
     glance: LiveGlance | None = None
     ribbon: LiveRibbon | None = None
+    # Where the tick placed the flight and from what source (#760).
+    progress: LiveProgress | None = None
 
     changes: LiveChanges | None = None
     # Worsening-only view of ``changes``, kept so clients that predate the
@@ -739,6 +778,7 @@ class LiveLayerResponse(BaseModel):
     storms: LiveStorms | None = None
     glance: LiveGlance | None = None
     ribbon: LiveRibbon | None = None
+    progress: LiveProgress | None = None
     changes: LiveChanges | None = None
     last_refresh_delta: RefreshDelta | None = None
 

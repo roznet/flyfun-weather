@@ -47,7 +47,7 @@ from functools import lru_cache
 from itertools import groupby
 from pathlib import Path
 
-from weatherbrief.analysis.flight_progress import FlightProgress
+from weatherbrief.analysis.flight_progress import FlightProgress, progress_events
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     LiveChange,
@@ -298,7 +298,12 @@ def change_trails(
     told from a clear on the weather; without them every airport is taken as
     still relevant.
     """
-    progress = FlightProgress.from_route(route, departure, now) if route is not None else None
+    # With the take-off / landed events (#760): ``progress.at(t)`` then
+    # counts only those recorded by ``t``, as the tick at ``t`` did.
+    progress = (
+        FlightProgress.from_route(route, departure, now, progress_events(history))
+        if route is not None else None
+    )
     ctx = _Context(progress=progress, departure=departure)
     history = _upto(history, now)
     _index_reports(history, ctx)

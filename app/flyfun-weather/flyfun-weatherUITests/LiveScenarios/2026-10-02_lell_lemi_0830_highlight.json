@@ -361,6 +361,22 @@
  "observed_conditions": null,
  "observed_updated_at": null,
  "pack_timestamp": "2099-06-30T06:00:00+00:00",
+ "progress": {
+  "along_nm": 68.9,
+  "as_of": "2026-10-02T08:30:00Z",
+  "delay_min": null,
+  "departed_at": null,
+  "estimated": true,
+  "eta_destination": "2026-10-02T10:00:00Z",
+  "fix_age_min": null,
+  "fix_at": null,
+  "landed_at": null,
+  "lat": 40.6714,
+  "lon": 1.0848,
+  "off_route": false,
+  "route_nm": 275.6,
+  "source": "plan"
+ },
  "ribbon": {
   "arrival_at": "2026-10-02T10:00:00Z",
   "departure_at": "2026-10-02T08:00:00Z",

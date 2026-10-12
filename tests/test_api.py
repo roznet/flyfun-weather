@@ -2536,6 +2536,141 @@ class TestLiveLayerEndpoint:
         assert not (pack_dir.parent / "live_history.jsonl").exists()
 
 
+class TestLiveProgress:
+    """``POST /flights/{id}/live/progress`` and position sharing (#760)."""
+
+    ROUTE = {
+        "name": "ZZDP-ZZDS", "flight_duration_hours": 2.0,
+        "waypoints": [{"icao": "ZZDP", "name": "ZZDP", "lat": 50.0, "lon": 0.0},
+                      {"icao": "ZZDS", "name": "ZZDS", "lat": 50.0, "lon": 4.0}],
+    }
+
+    def _flight(self, app_db, *, owner_id=DEV_USER_ID, departure=None, sharing="along_route"):
+        """A flight departing 30 min ago (2 h), with one pack on disk."""
+        session = app_db()
+        if session.get(UserRow, owner_id) is None:
+            session.add(UserRow(id=owner_id, provider="local", provider_sub=owner_id,
+                                email=f"{owner_id}@example.com", approved=True))
+            session.flush()
+        departure = departure or (_NOW - timedelta(minutes=30)).replace(microsecond=0)
+        flight = Flight(
+            id=_make_flight_id("zzdp_zzds", departure.strftime("%Y-%m-%d"), user=owner_id),
+            user_id=owner_id, route_name="zzdp_zzds", waypoints=["ZZDP", "ZZDS"],
+            departure_time=departure, flight_duration_hours=2.0, position_sharing=sharing,
+            created_at=_NOW - timedelta(days=1),
+        )
+        save_flight(session, flight, owner_id)
+        fetch_timestamp = departure - timedelta(hours=2)
+        pack_dir = pack_dir_for(owner_id, flight.id, fetch_timestamp)
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / "briefing.json").write_text(json.dumps({
+            "route": self.ROUTE, "departure_time": departure.isoformat(), "days_out": 0,
+        }))
+        save_pack_meta(session, BriefingPackMeta(
+            flight_id=flight.id, fetch_timestamp=fetch_timestamp, days_out=0, artifact_path=str(pack_dir),
+        ))
+        session.commit()
+        session.close()
+        return flight, pack_dir
+
+    def _commit(self, pack_dir):
+        from weatherbrief.models.observations import RouteObservations
+        from weatherbrief.tasks.live_layer import commit_live_update
+
+        return commit_live_update(
+            pack_dir, briefing_data=json.loads((pack_dir / "briefing.json").read_text()),
+            observations=RouteObservations(corridor_nm=30.0, fetch_time=_NOW, airports_found=0,
+                                           airports_with_metar=0, airports_with_taf=0),
+            sigmets=None, observed=None, started_at=datetime.now(timezone.utc),
+        )
+
+    def _post(self, client, flight, **body):
+        return client.post(f"/api/flights/{flight.id}/live/progress", json=body)
+
+    def test_owner_records_a_takeoff(self, client, app_db):
+        flight, pack_dir = self._flight(app_db)
+        at = flight.departure_time + timedelta(minutes=20)
+        resp = self._post(client, flight, event="takeoff", at=at.isoformat())
+        assert resp.status_code == 200, resp.text
+        progress = resp.json()["progress"]
+        assert progress["source"] == "plan+takeoff" and progress["delay_min"] == 20
+        assert datetime.fromisoformat(progress["departed_at"]) == at
+        # The next tick measures from it.
+        layer = self._commit(pack_dir)
+        assert layer.progress.departed_at == at
+        assert layer.ribbon.arrival_at == at + timedelta(hours=2)
+
+    def test_edit_replaces_and_clear_withdraws(self, client, app_db):
+        flight, pack_dir = self._flight(app_db)
+        self._post(client, flight, event="takeoff", at=(flight.departure_time + timedelta(minutes=20)).isoformat())
+        resp = self._post(client, flight, event="takeoff", at=(flight.departure_time + timedelta(minutes=10)).isoformat())
+        assert resp.json()["progress"]["delay_min"] == 10
+        resp = self._post(client, flight, event="takeoff", clear=True)
+        assert resp.status_code == 200 and resp.json()["progress"]["source"] == "plan"
+
+    def test_entries_are_validated(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        future = (_NOW + timedelta(minutes=30)).isoformat()
+        assert self._post(client, flight, event="takeoff", at=future).status_code == 422
+        too_early = (flight.departure_time - timedelta(hours=4)).isoformat()
+        assert self._post(client, flight, event="takeoff", at=too_early).status_code == 422
+        before_departure = (flight.departure_time - timedelta(minutes=5)).isoformat()
+        assert self._post(client, flight, event="landed", at=before_departure).status_code == 422
+        # Too late for a take-off: the flight's departure time is what to change.
+        old, _ = self._flight(app_db, departure=(_NOW - timedelta(hours=7)).replace(microsecond=0))
+        assert self._post(client, old, event="takeoff").status_code == 422
+        assert self._post(client, flight, event="bogus").status_code == 422
+
+    def test_landed_defaults_to_now(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        resp = self._post(client, flight, event="landed")
+        assert resp.status_code == 200
+        progress = resp.json()["progress"]
+        assert progress["landed_at"] is not None and progress["along_nm"] == progress["route_nm"]
+
+    def test_only_the_owner_may_record(self, client, app_db):
+        flight, pack_dir = self._flight(app_db, owner_id="owner-user")
+        assert self._post(client, flight, event="takeoff").status_code == 404
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        assert load_progress_events(flight_dir_for_pack(pack_dir)) == ()
+
+    @pytest.mark.parametrize("sharing", ["none", "along_route", "full"])
+    def test_viewer_gets_what_the_owner_shares(self, client, app_db, sharing):
+        flight, pack_dir = self._flight(app_db, owner_id="owner-user", sharing=sharing)
+        self._commit(pack_dir)
+        live = client.get(f"/api/flights/{flight.id}/live").json()
+        summary = client.get(f"/api/flights/{flight.id}/live/summary").json()["live"]
+        if sharing == "none":
+            assert live["progress"] is None and summary["progress"] is None
+            assert live["ribbon"]["flown_nm"] is None
+            assert all(wp["eta"] is None for wp in live["ribbon"]["waypoints"])
+        elif sharing == "along_route":
+            assert live["progress"]["along_nm"] is not None and live["progress"]["lat"] is None
+            assert summary["progress"]["lat"] is None
+            assert live["ribbon"]["waypoints"][0]["eta"] is not None
+        else:
+            assert live["progress"]["lat"] is not None and summary["progress"]["lat"] is not None
+
+    def test_owner_always_gets_everything(self, client, app_db):
+        flight, pack_dir = self._flight(app_db, sharing="none")
+        self._commit(pack_dir)
+        live = client.get(f"/api/flights/{flight.id}/live").json()
+        assert live["progress"]["lat"] is not None
+        assert live["ribbon"]["waypoints"][0]["eta"] is not None
+
+    def test_position_sharing_setting_is_owner_only(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        resp = client.patch(f"/api/flights/{flight.id}/position-sharing", json={"position_sharing": "none"})
+        assert resp.status_code == 200 and resp.json()["position_sharing"] == "none"
+        assert client.get(f"/api/flights/{flight.id}").json()["position_sharing"] == "none"
+        assert client.patch(f"/api/flights/{flight.id}/position-sharing",
+                            json={"position_sharing": "everyone"}).status_code == 422
+        other, _ = self._flight(app_db, owner_id="owner-user")
+        assert client.patch(f"/api/flights/{other.id}/position-sharing",
+                            json={"position_sharing": "full"}).status_code == 404
+
+
 class TestFlightDescription:
     """Free-text description (#587) on PATCH and move."""
 
