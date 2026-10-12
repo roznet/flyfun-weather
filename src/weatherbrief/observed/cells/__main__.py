@@ -178,11 +178,16 @@ def _clutter(args) -> int:
         return 0
     print(f"{report['frames']} frames, policy {DEFAULT_POLICY.policy_version}")
     print(f"{'tier':<8}{'cells':>8}{'suspect':>9}{'confirmed':>11}{'flagged %':>11}"
-          f"{'weather':>9}{'lost':>6}")
+          f"{'suppressed %':>14}{'weather':>9}{'lost':>6}")
     for tier, row in report["tiers"].items():
         print(f"{tier:<8}{row['cells']:>8}{row['suspect']:>9}{row['confirmed']:>11}"
               f"{(row['flagged_pct'] if row['flagged_pct'] is not None else 0):>11.2f}"
+              f"{(row['suppressed_pct'] if row['suppressed_pct'] is not None else 0):>14.2f}"
               f"{row['label_weather']:>9}{row['weather_lost']:>6}")
+    tr = report["tracks"]
+    print(f"\nlineages with lightning or a cloud top: {tr['weather_tracks']}; flagged on another "
+          f"frame {tr['storms_flagged']}, suppressed {tr['storms_suppressed']} "
+          f"{tr['storms_suppressed_ids'][:5] or ''}")
     print("\nwhy flagged:", ", ".join(f"{k} {v}" for k, v in report["reasons"].items()) or "—")
     print("features unknown:", ", ".join(f"{k} {v}" for k, v in report["unknown_features"].items()) or "—")
     delta = report["peak_minus_robust_db"]
@@ -191,6 +196,30 @@ def _clutter(args) -> int:
         print("\nflagged despite lightning or a cloud top — a veto leak, not a calibration result:")
         for row in report["weather_lost_examples"]:
             print("   ", row)
+    return 0
+
+
+def _clutter_sites(args) -> int:
+    """Rebuild the site memory (#768) from catalogues, or show what it holds."""
+    from collections import Counter
+
+    from . import clutter_sites
+
+    root = args.root or cells_root()
+    policy = DEFAULT_POLICY.clutter
+    today = datetime.now(timezone.utc).date()
+    per_site: Counter = Counter()
+    for back in range(args.days, 0, -1):
+        day = today - timedelta(days=back)
+        path = clutter_sites.day_path(root, day)
+        rows = (clutter_sites.rebuild_day(root, day, policy) if args.rebuild
+                else clutter_sites.read_day(path))
+        sites = {s for v in rows.values() for s in v}
+        per_site.update(sites)
+        print(f"{day}  {len(rows):>4} frames  {len(sites):>5} flagged sites")
+    recurring = sum(1 for n in per_site.values() if n >= policy.suppress_min_site_days)
+    print(f"\n{len(per_site)} sites flagged on any day; {recurring} on >= "
+          f"{policy.suppress_min_site_days} days (a flag there today would be suppressed)")
     return 0
 
 
@@ -225,6 +254,12 @@ def main(argv: list[str] | None = None) -> int:
     cl.add_argument("--jsonl", type=Path, help="also write one row per assessed cell here")
     cl.add_argument("--json", action="store_true", help="print the report as JSON")
 
+    cs = sub.add_parser("clutter-sites", help="the clutter site memory per day (#768)")
+    cs.add_argument("--rebuild", action="store_true",
+                    help="re-derive each day from its catalogues (the seed: run it before restarting the loop on #768)")
+    cs.add_argument("--days", type=int, default=DEFAULT_POLICY.clutter.site_window_days)
+    cs.add_argument("--root", type=Path, help="analysis root instead of WB_CELLS_ROOT")
+
     sc = sub.add_parser("scores", help="median self-scores per tier, lead and motion variant (#662)")
     sc.add_argument("--from", dest="start", required=True, type=_utc)
     sc.add_argument("--to", dest="end", required=True, type=_utc)
@@ -248,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         return _scores(args)
     if args.command == "clutter":
         return _clutter(args)
+    if args.command == "clutter-sites":
+        return _clutter_sites(args)
     root = cells_root()
     lookback = catchup_lookback()
 

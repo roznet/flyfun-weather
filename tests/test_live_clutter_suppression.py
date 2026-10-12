@@ -27,8 +27,12 @@ def suppressing(monkeypatch):
     monkeypatch.setenv(CELLS_CLUTTER_SUPPRESS_ENV, "1")
 
 
-def flagged(c, level="confirmed", score=6.0):
-    """``cell`` marked by the node, with the reasons it would really carry."""
+def flagged(c, level="confirmed", score=6.0, site_days=3):
+    """``cell`` marked by the node, with the reasons it would really carry.
+
+    By default at a site flagged on three earlier days, so the node set
+    ``suppress`` (#768); ``site_days=None`` is a pre-#768 display file.
+    """
     c["clutter"] = {
         "level": level,
         "score": score,
@@ -37,6 +41,9 @@ def flagged(c, level="confirmed", score=6.0):
                     {"feature": "rain_ratio", "value": 1.0, "points": 2.0,
                      "note": "the core is the whole rain area"}],
     }
+    if site_days is not None:
+        c["clutter"]["site_days"] = site_days
+        c["clutter"]["suppress"] = level != "clear" and site_days >= 2
     return c
 
 
@@ -74,6 +81,26 @@ def test_the_gate_drops_both_levels(suppressing):
     ]
     kept = {c["id"] for c in operational_cells(cells)}
     assert kept == {"core41-c", "core41-d"}
+
+
+def test_a_flag_at_a_new_site_is_still_a_storm(suppressing):
+    """#768: a newborn isolated storm looks like clutter on its first frame;
+    only a site flagged on earlier days lets the droplet hide it."""
+    cells = [
+        flagged(cell("core41-new", along=60.0), site_days=0),
+        flagged(cell("core41-once", along=70.0), site_days=1),
+        flagged(cell("core41-site", along=80.0), site_days=2),
+    ]
+    assert {c["id"] for c in operational_cells(cells)} == {"core41-new", "core41-once"}
+    layer = storms_at(DEP + timedelta(minutes=30),
+                      [flagged(cell("core41-a", along=60.0, peak=57.0), site_days=0)])
+    assert [s.id for s in layer.storms] == ["core41-a"]
+
+
+def test_a_pre_768_display_file_hides_nothing(suppressing):
+    """A flag without the node's ``suppress`` decision is evidence only."""
+    cells = [flagged(cell("core41-a"), site_days=None), cell("core41-b", along=80.0)]
+    assert operational_cells(cells) == cells
 
 
 def test_a_suspect_echo_is_not_a_storm(suppressing):

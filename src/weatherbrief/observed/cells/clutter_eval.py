@@ -32,6 +32,13 @@ is doing something other than what we think.
 `sites()` groups the flags by fixed ground position across days — the positive
 evidence, and the reason the HAC recurrence map was not built (see §42).
 
+**Per-frame recall cannot fail, so it is not the whole check (#768).**  A flag
+and lightning on the *same* frame are impossible by construction (veto).  The
+leak that matters is across a lineage: a newborn storm flagged on its first
+frames, its lightning arriving minutes later.  `summarise` therefore also
+counts lineages that carried the weather label at any point and were flagged
+— and, the number the droplet acts on, *suppressed* — at any other.
+
 Nothing here writes to the archive.
 """
 
@@ -83,6 +90,8 @@ def frame_rows(catalogue: dict) -> list[dict]:
             "motion_status": (cell.get("motion") or {}).get("status"),
             "level": block.get("level"),
             "score": block.get("score"),
+            "suppress": block.get("suppress") is True,
+            "site_days": block.get("site_days"),
             "reasons": [r.get("feature") for r in block.get("reasons") or []],
             "unknown": block.get("unknown") or [],
             "features": block.get("features") or {},
@@ -137,6 +146,8 @@ def summarise(rows: list[dict]) -> dict:
         counts["cells"] += 1
         counts[row["level"]] += 1
         counts[f"label_{row['label']}"] += 1
+        if row.get("suppress"):
+            counts["suppressed"] += 1
         if row["level"] in (SUSPECT, CONFIRMED):
             counts["flagged"] += 1
             reasons.update(row["reasons"])
@@ -161,6 +172,8 @@ def summarise(rows: list[dict]) -> dict:
             "confirmed": counts[CONFIRMED],
             "flagged": counts["flagged"],
             "flagged_pct": pct(counts["flagged"], total),
+            "suppressed": counts["suppressed"],
+            "suppressed_pct": pct(counts["suppressed"], total),
             "label_weather": counts["label_weather"],
             # The bound the issue sets, and it must be zero: lightning and a
             # cloud top are vetoes, so a flagged cell carrying either is a leak.
@@ -179,6 +192,37 @@ def summarise(rows: list[dict]) -> dict:
             "max": round(delta[-1], 2) if delta else None,
         },
         "weather_lost_examples": lost[:20],
+        "tracks": track_leaks(rows),
+    }
+
+
+def track_leaks(rows: list[dict]) -> dict:
+    """Lineages that were weather at some point and flagged / suppressed at another.
+
+    A lineage id restarts on a split or merge, so this undercounts a storm
+    whose flagged frames sit on an earlier id — it is a floor, not a total.
+    """
+    weather = {row["id"] for row in rows if row["label"] == "weather"}
+    flagged: Counter = Counter()
+    suppressed: Counter = Counter()
+    for row in rows:
+        if row["id"] not in weather:
+            continue
+        if row["level"] in (SUSPECT, CONFIRMED):
+            flagged[row["id"]] += 1
+        if row.get("suppress"):
+            suppressed[row["id"]] += 1
+    flagged_ids = {row["id"] for row in rows if row["level"] in (SUSPECT, CONFIRMED)}
+    suppressed_ids = {row["id"] for row in rows if row.get("suppress")}
+    return {
+        "weather_tracks": len(weather),
+        "flagged_tracks": len(flagged_ids),
+        "suppressed_tracks": len(suppressed_ids),
+        "storms_flagged": len(flagged),
+        "storm_frames_flagged": sum(flagged.values()),
+        "storms_suppressed": len(suppressed),
+        "storm_frames_suppressed": sum(suppressed.values()),
+        "storms_suppressed_ids": sorted(suppressed)[:20],
     }
 
 

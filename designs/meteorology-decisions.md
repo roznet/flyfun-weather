@@ -5442,7 +5442,8 @@ beyond 30 min, and 42 % / 79 % / 89 % of storms gone before the 0–30 / 30–60
 ## 42. A radar echo is not a storm until it looks like weather: the isolation test (#696)
 
 **Date:** 2026-10-07. **Issue:** #696. **Status:** measured and recorded on
-every core; **acting on it is off by default** (`WB_CELLS_CLUTTER_SUPPRESS`).
+every core; **acting on it is off by default** (`WB_CELLS_CLUTTER_SUPPRESS`),
+and since #768 it acts only on flags at a recurring site (`suppress`, below).
 
 ### Context
 
@@ -5629,6 +5630,54 @@ at 65.4 N 20.6–20.9 E are one extended Swedish source split by the 0.1° grid.
 This is the recurrence evidence the HAC map would have produced, derived from
 the flags themselves across spans sharing nothing but geography, and it is why
 the map stays unbuilt.
+
+### A flag is evidence; hiding it needs recurrence (#768, 2026-10-11)
+
+The per-frame gate above cannot fail by construction — lightning is a veto, so
+a flagged frame never carries it. Reading the four-day live shadow run
+(2026-10-08 → 10-11, 1,015 frames, ~750k cores, 1.07 % / 1.94 % flagged) **per
+lineage** showed the leak it hides:
+
+| flagged lineages | count | flagged frames |
+|---|---:|---:|
+| at sites flagged on ≥ 2 days, never lightning | 3,562 | 6,870 (68 %) |
+| at single-day sites, never lightning (p50 life 1 frame) | 2,819 | 3,203 |
+| **carried lightning on another frame** | **42** | 58 |
+
+35 of the 42 were flagged on their first frames, a median **10 min before
+their first lightning**, peaks 62–81 dBZ (many in the Peloponnese); 7 were
+flagged on a frame *after* lightning. A newborn isolated storm **is** bare air
+around a core on its first frame — that is what isolated convection looks
+like — so no per-frame threshold separates it: the `ring_rain ≤ 0.30` gate
+floated on 10-09 freed 37/60 then and only 11/42 here. Rejected.
+
+**Decision:** the node keeps a site memory (`cells/clutter_sites.py`) and sets
+`suppress` on a flagged cell only when its 0.1° site was flagged on **≥ 2
+distinct earlier UTC days within 14 days**; the droplet's single gate reads
+`suppress`, not the level. Measured causally on the same run (a site counts
+only from days before the frame):
+
+| rule | flags hidden (after day 0) | storm frames hidden |
+|---|---:|---:|
+| flag alone (the #696 gate) | 100 % | 58 (42 storms) |
+| site flagged on ≥ 1 earlier day | 68 % | 11 (6 storms) |
+| **site flagged on ≥ 2 earlier days** | **41 %** | **1 (1 storm)** |
+
+- **Why 2, not 1:** diurnal orographic convection also returns to the same
+  ground on consecutive afternoons — the six storms ≥ 1 day hid were exactly
+  that. Two earlier days had only two eligible days of history in this span,
+  so 41 % / 1 is indicative; re-read it from a longer corpus.
+- **Why earlier days only:** the frame's own day would let a storm's first
+  frames convict its later ones. Causal also means a replay reproduces it.
+- **Cost of the choice:** clutter at a site seen for the first time — 45 % of
+  flags, single-day sites — is shown as a storm until it recurs. The asymmetry
+  is deliberate: a phantom cell for two days is a nuisance; a hidden newborn
+  storm is the failure this layer exists to prevent.
+- **Window 14 days, exact 0.1° bucket** — the bucket `clutter_eval.sites`
+  validated; adjacent-bucket tolerance would catch a wandering centroid but
+  widens the area a real storm can be hidden in. Both are policy numbers.
+- The `rain20` skirt (#702) follows the same decision: a ring is marked only
+  when every core in it is *suppressed*, not merely flagged.
 
 ### Real-world validation needed
 

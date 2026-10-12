@@ -22,7 +22,7 @@ Layout of the staging tree and the NAS copy (``…/weather/observed-archive/``):
 
     opera_dbzh/2026/20261004.tar        frames + sidecars, uncompressed (already compressed payloads)
     opera_rate/…  eumetsat_li/…
-    cells/2026/20261004.tar.gz          catalogues/<day>/*, scores/<day>.jsonl, runs/<day>.jsonl,
+    cells/2026/20261004.tar.gz          catalogues/<day>/*, {scores,runs,clutter_sites}/<day>.jsonl,
                                         display/<day>T*.json.gz (#656)
     manifest/20261004.json              counts, bytes, sha256, members, gaps, versions, event class
     keep-days.json                      (NAS only) days pinned by hand: {"20260827": "reason"}
@@ -162,6 +162,12 @@ def _frame_files(root: Path, source: str, day: date) -> list[Path]:
     )
 
 
+#: The analysis subdirectories holding one ``<day>.jsonl`` each.  The clutter
+#: site memory (#768) is rebuildable from the catalogues, but it travels with
+#: them so a restored day carries the same memory the live loop read.
+_DAY_JSONL = ("scores", "runs", "clutter_sites")
+
+
 def _cells_files(root: Path, day: date) -> list[Path]:
     cells = cells_dir(root)
     d = day_str(day)
@@ -169,7 +175,7 @@ def _cells_files(root: Path, day: date) -> list[Path]:
     cat_dir = cells / "catalogues" / d
     if cat_dir.is_dir():
         out += sorted(p for p in cat_dir.iterdir() if p.is_file() and not p.name.startswith(".tmp-"))
-    for sub in ("scores", "runs"):
+    for sub in _DAY_JSONL:
         p = cells / sub / f"{d}.jsonl"
         if p.is_file():
             out.append(p)
@@ -195,7 +201,7 @@ def hot_days(root: Path) -> set[date]:
     cat_root = cells_dir(root) / "catalogues"
     if cat_root.is_dir():
         days |= {parse_day(p.name) for p in cat_root.iterdir() if p.is_dir() and _DAY_RE.match(p.name)}
-    for sub in ("scores", "runs"):
+    for sub in _DAY_JSONL:
         directory = cells_dir(root) / sub
         if directory.is_dir():
             days |= {parse_day(p.stem) for p in directory.glob("*.jsonl") if _DAY_RE.match(p.stem)}

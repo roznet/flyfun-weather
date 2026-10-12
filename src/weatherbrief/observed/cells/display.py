@@ -25,12 +25,14 @@ Contents (``DISPLAY_SCHEMA``):
   carry ``rate_as_of``;
 * **clutter** — on a cell with non-meteorological-echo evidence (#696): its
   ``level`` (``suspect``/``confirmed``), ``score`` and the ``reasons`` that
-  fired.  Absent on a clear cell, so clean frames keep the pre-#696 shape.
+  fired, plus ``site_days`` and ``suppress`` (#768) — the earlier days its
+  site was flagged on, and whether the droplet may hide it.  Absent on a
+  clear cell, so clean frames keep the pre-#696 shape.
   ``robust_peak_dbz`` (the 3x3-median peak) rides along on every assessed
   cell; nothing displays or alerts on it yet;
 * **suspect_outlines** — ``{tier: [index, ...]}`` into that tier's outlines,
-  for the rings of an *unassessed* tier (``rain20``) that are a suspect
-  echo's own skirt rather than weather (#702, see :func:`suspect_regions`).
+  for the rings of an *unassessed* tier (``rain20``) that are a suppressed
+  echo's own skirt rather than weather (#702, #768, see :func:`suspect_regions`).
   The rings stay in ``outlines`` so every map keeps drawing them; the
   droplet's route products skip them when suppression is on.  Absent on a
   frame with none;
@@ -60,7 +62,7 @@ from .advect import MotionField, project_centroid
 from .catalogue import encode, r
 from .clutter import assessable
 from .detect import TierDetection, distance_km, initial_bearing_deg
-from .levels import suspect
+from .levels import suppressed
 from .policy import CellPolicy
 
 DISPLAY_SCHEMA = "observed-cells-display/1"
@@ -175,7 +177,8 @@ def suspect_regions(catalogue_cells: list[dict], detections: dict[str, TierDetec
 
     * it contains at least one core (a plain rain area has none, and is
       never touched);
-    * **every** core in it is suspect (one genuine core makes it weather);
+    * **every** core in it is suppressed — flagged *and* at a recurring site
+      (#768); one core the droplet keeps makes the ring weather;
     * it is no bigger than ``rain_ratio_thin`` times those cores' own area —
       the same "barely any rain around the core" boundary the per-core score
       uses (``ClutterPolicy``), measured here over the region.  A genuine rain
@@ -186,7 +189,7 @@ def suspect_regions(catalogue_cells: list[dict], detections: dict[str, TierDetec
     the region; a core-tier blob below that tier's minimum area is no cell and
     is not counted either way.
     """
-    flagged = {(c["tier"], c["label"]) for c in catalogue_cells if "label" in c and suspect(c)}
+    flagged = {(c["tier"], c["label"]) for c in catalogue_cells if "label" in c and suppressed(c)}
     if not flagged:
         return {}
     assessed = [t for t in policy.tiers if t.name in detections and assessable(t, policy.clutter)]
@@ -303,7 +306,8 @@ def display_cell(cell: dict, grid: GridSpec, *, variant: str = "raw", field: Mot
     # that dims a cell has to be able to say why.
     clutter = cell.get("clutter")
     if clutter and clutter.get("level") != "clear":
-        out["clutter"] = {k: clutter[k] for k in ("level", "score", "reasons") if k in clutter}
+        out["clutter"] = {k: clutter[k] for k in ("level", "score", "reasons", "site_days", "suppress")
+                          if k in clutter}
     # Robust peak alongside the single-pixel one; nothing reads it yet.
     robust = (clutter or {}).get("features", {}).get("robust_peak_dbz")
     if robust is not None:

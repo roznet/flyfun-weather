@@ -9,7 +9,7 @@ hold over regimes it has not seen. This is that check, as one command, with
 Why it replays rather than reading the archive directly: `cells clutter` reads
 the `clutter` block off catalogues, and every catalogue written before #696 is
 `cells-1`/`cells-2` and has none. So a historical day must be re-analysed under
-`cells-3` first. Raw frames are therefore the binding retention — 48 h on the
+`cells-3` or later first. Raw frames are therefore the binding retention — 48 h on the
 Mac mini, 12 months of frame tars on the NAS — not the 90 days of catalogues.
 
 Usage
@@ -37,6 +37,10 @@ get replayed separately::
 
 Gates
 -----
+* **WARN** (#768) if a lineage that carried lightning or a cloud top on some
+  frame was *suppressed* on another — the newborn-storm leak a per-frame check
+  cannot see. Flagged-but-not-suppressed storms are printed, not warned on:
+  that is the evidence the site memory exists to absorb.
 * **FAIL** if any flagged cell carried observed lightning or a cloud top. Those
   are vetoes, so a non-zero count is a leak in the code, not a calibration
   result.
@@ -144,10 +148,11 @@ def print_report(summary: dict, *, max_flag_pct: float) -> list[str]:
 
     print(f"\n{summary['frames']} frames analysed under {DEFAULT_POLICY.policy_version}")
     print(f"{'tier':<8}{'cells':>8}{'suspect':>9}{'confirmed':>11}{'flagged %':>11}"
-          f"{'weather':>9}{'lost':>6}")
+          f"{'suppressed %':>14}{'weather':>9}{'lost':>6}")
     for tier, row in summary["tiers"].items():
         print(f"{tier:<8}{row['cells']:>8}{row['suspect']:>9}{row['confirmed']:>11}"
-              f"{(row['flagged_pct'] or 0):>11.2f}{row['label_weather']:>9}{row['weather_lost']:>6}")
+              f"{(row['flagged_pct'] or 0):>11.2f}{(row['suppressed_pct'] or 0):>14.2f}"
+              f"{row['label_weather']:>9}{row['weather_lost']:>6}")
         if row["weather_lost"]:
             fails.append(f"{tier}: {row['weather_lost']} flagged cells carried lightning or a "
                          f"cloud top — a veto leak, not a calibration result")
@@ -157,6 +162,16 @@ def print_report(summary: dict, *, max_flag_pct: float) -> list[str]:
         if not row["label_weather"]:
             warns.append(f"{tier}: no cell in this span carried lightning or a cloud top, so "
                          f"genuine-core retention is untested here (collect LI frames too)")
+
+    tr = summary["tracks"]
+    print(f"\nlineages: {tr['flagged_tracks']} flagged, {tr['suppressed_tracks']} suppressed; "
+          f"of {tr['weather_tracks']} with lightning or a cloud top at some point, "
+          f"{tr['storms_flagged']} were flagged ({tr['storm_frames_flagged']} frames) and "
+          f"{tr['storms_suppressed']} suppressed ({tr['storm_frames_suppressed']} frames)")
+    if tr["storms_suppressed"]:
+        warns.append(f"{tr['storms_suppressed']} lineage(s) that carried lightning or a cloud top "
+                     f"were suppressed on other frames — the droplet would have hidden a storm: "
+                     f"{', '.join(tr['storms_suppressed_ids'][:5])}")
 
     print("\nwhy flagged:", ", ".join(f"{k} {v}" for k, v in summary["reasons"].items()) or "—")
     print("features unknown:", ", ".join(f"{k} {v}" for k, v in summary["unknown_features"].items()) or "—")
