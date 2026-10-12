@@ -189,6 +189,15 @@ class SigmetAlongRoute(BaseModel):
     coords: list[tuple[float, float]] = Field(default_factory=list)
 
 
+#: What every surface says for a block whose fetch failed (#734): the empty
+#: list means "not checked", never "none". Web (i18n ``sigmets.unavailable``)
+#: and iOS (``RouteSigmetsView``) carry their own copy of this wording.
+SIGMETS_UNAVAILABLE_TEXT = (
+    'SIGMETs unavailable at briefing time (source did not respond). '
+    'Not checked, not "none": check SIGMETs before departure.'
+)
+
+
 class RouteSigmets(BaseModel):
     """SIGMETs affecting the route corridor (D-0 real-time info)."""
 

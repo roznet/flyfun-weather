@@ -861,6 +861,11 @@ export interface RouteSigmets {
   time_window_to: string | null;
   route_firs: string[];
   sigmets: SigmetAlongRoute[];
+  /** False: the source did not respond, so `sigmets` is empty because nothing
+   *  was checked, not because none are listed (#686, #734). Absent on older packs. */
+  fetch_ok?: boolean;
+  /** When the source was successfully queried (#686). */
+  queried_at?: string[] | null;
   hazards: string[];
   has_severe: boolean;
   count: number;

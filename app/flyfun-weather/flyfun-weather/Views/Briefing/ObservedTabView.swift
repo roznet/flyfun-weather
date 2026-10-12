@@ -126,7 +126,7 @@ struct ObservedTabView: View {
     }
 
     private var hasSigmets: Bool {
-        !(snapshot?.routeSigmets?.matched.isEmpty ?? true)
+        snapshot?.routeSigmets?.showsSection ?? false
     }
 
     private var spySections: [SpySection] {

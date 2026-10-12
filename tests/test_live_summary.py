@@ -139,6 +139,22 @@ def test_sigmet_fields():
     }
 
 
+def test_failed_briefing_sigmet_fetch_is_flagged():
+    """#734: the briefing's SIGMET fetch failed, so its (and the digest's)
+    silence on SIGMETs is "not checked"; set only when true."""
+    failed = {**BRIEFING, "route_sigmets": {
+        "corridor_nm": 50.0, "fetch_time": NOW.isoformat(), "sigmets": [], "fetch_ok": False,
+    }}
+    assert summarize_live(_layer([]), failed)["sigmets_at_briefing_unavailable"] is True
+    assert "sigmets_at_briefing_unavailable" in LIVE_NOTE
+
+    good = {**BRIEFING, "route_sigmets": {
+        "corridor_nm": 50.0, "fetch_time": NOW.isoformat(), "sigmets": [],
+    }}
+    for briefing in (good, BRIEFING):
+        assert "sigmets_at_briefing_unavailable" not in summarize_live(_layer([]), briefing)
+
+
 def test_airports_only_departure_destination_alternates_in_role_order():
     airports = [
         _airport("ZZMD"),                   # en-route: excluded

@@ -260,8 +260,11 @@
   {% endif %}
   {% endif %}
 
-  <!-- Route SIGMETs -->
-  {% if route_sigmets and route_sigmets.sigmets %}
+  <!-- Route SIGMETs. A failed fetch is "not checked", not "none" (#734). -->
+  {% if route_sigmets and route_sigmets.fetch_ok is sameas false %}
+  <h2>SIGMETs Along Route</h2>
+  <div class="assessment assessment-amber" style="margin-top:0.4em;">{{ sigmets_unavailable_text }}</div>
+  {% elif route_sigmets and route_sigmets.sigmets %}
   <h2>SIGMETs Along Route</h2>
   <p class="header-meta">
     {{ route_sigmets.count }} SIGMET(s) within {{ route_sigmets.corridor_nm|int }}nm corridor

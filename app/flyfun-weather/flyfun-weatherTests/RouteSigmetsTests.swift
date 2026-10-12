@@ -151,6 +151,53 @@ import Foundation
         #expect(block.severe == false)
     }
 
+    /// #734: a failed fetch at briefing time is "not checked", never "none":
+    /// the section shows the notice instead of hiding like a quiet route.
+    @Test func failedFetchReadsUnavailableAndShowsTheSection() throws {
+        let failed = """
+        { "corridor_nm": 50.0, "fetch_time": "2026-07-17T05:46:41Z",
+          "route_firs": ["ZZZZ"], "sigmets": [], "fetch_ok": false,
+          "count": 0, "hazards": [], "has_severe": false }
+        """
+        let block = try JSONDecoder.weatherBrief.decode(RouteSigmets.self, from: Data(failed.utf8))
+        #expect(block.unavailable)
+        #expect(block.showsSection)
+        #expect(RouteSigmets.unavailableText.hasPrefix("SIGMETs unavailable at briefing time"))
+    }
+
+    /// A good empty fetch, and an older pack without `fetch_ok`, render as before:
+    /// nothing to show.
+    @Test func goodOrOlderEmptyBlockStaysHidden() throws {
+        for json in [
+            """
+            { "corridor_nm": 50.0, "fetch_time": "2026-07-17T05:46:41Z", "sigmets": [], "fetch_ok": true }
+            """,
+            """
+            { "corridor_nm": 50.0, "fetch_time": "2026-07-17T05:46:41Z", "sigmets": [] }
+            """,
+        ] {
+            let block = try JSONDecoder.weatherBrief.decode(RouteSigmets.self, from: Data(json.utf8))
+            #expect(!block.unavailable)
+            #expect(!block.showsSection)
+        }
+    }
+
+    /// The Observed tab is offered for the notice alone, so it is not lost.
+    @Test func failedFetchOffersTheObservedTab() throws {
+        let snapshotJSON = """
+        {
+          "route": { "name": "ZZAA ZZBB", "waypoints": [], "cruise_altitude_ft": 5000,
+                     "flight_ceiling_ft": 10000, "flight_duration_hours": 1.0 },
+          "target_date": "2026-07-17", "days_out": 0,
+          "route_sigmets": { "corridor_nm": 50.0, "fetch_time": "2026-07-17T05:46:41Z",
+                             "sigmets": [], "fetch_ok": false }
+        }
+        """
+        let snap = try JSONDecoder.weatherBrief.decode(SnapshotResponse.self, from: Data(snapshotJSON.utf8))
+        #expect(snap.routeSigmets?.unavailable == true)
+        #expect(BriefingViewModel.hasObservedContent(snap))
+    }
+
     /// The whole snapshot decodes with the SIGMET block attached — the field has
     /// to be wired onto `SnapshotResponse`, not just exist as a type.
     @Test func snapshotCarriesTheSigmetBlock() throws {

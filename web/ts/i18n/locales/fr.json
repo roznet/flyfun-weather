@@ -203,6 +203,7 @@
   "sigmets.hazards": " — Phénomènes : ",
   "sigmets.off": "hors route",
   "sigmets.severeBanner": "SIGMET sévère (SEV) sur la route",
+  "sigmets.unavailable": "SIGMET indisponibles lors de la création du briefing (la source n'a pas répondu). Non vérifiés, pas « aucun » : consultez les SIGMET avant le départ.",
   "sigmets.showDetails": "Afficher les détails du SIGMET",
   "sigmets.info": "Info SIGMET",
   "sigmets.pendingFrom": "à partir de {time}",

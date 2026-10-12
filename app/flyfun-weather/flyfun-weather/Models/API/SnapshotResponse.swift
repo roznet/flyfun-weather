@@ -363,6 +363,10 @@ nonisolated struct RouteSigmets: Codable, Sendable {
     /// Every FIR the route crosses — context for "no SIGMETs" as much as for hits.
     let routeFirs: [String]?
     let sigmets: [SigmetAlongRoute]?
+    /// False: the source did not respond, so `sigmets` is empty because nothing
+    /// was checked, not because none are listed (#686, #734). Absent on older
+    /// packs, which read as a good fetch.
+    let fetchOk: Bool?
 
     // Server-computed fields (pydantic `computed_field`). Optional, and each has
     // a local fallback below: a pack written before they existed — or any future
@@ -373,6 +377,18 @@ nonisolated struct RouteSigmets: Codable, Sendable {
     let hasSevere: Bool?
 
     var matched: [SigmetAlongRoute] { sigmets ?? [] }
+
+    /// The fetch failed at briefing time (#734): "not checked", never "none".
+    var unavailable: Bool { fetchOk == false }
+
+    /// Whether the Area Hazards section has something to say: a matched
+    /// SIGMET, or that SIGMETs could not be checked.
+    var showsSection: Bool { unavailable || !matched.isEmpty }
+
+    /// Mirrors `models/observations.py::SIGMETS_UNAVAILABLE_TEXT` and the web's
+    /// `sigmets.unavailable` (en).
+    static let unavailableText =
+        "SIGMETs unavailable at briefing time (source did not respond). Not checked, not \"none\": check SIGMETs before departure."
 
     var sigmetCount: Int { count ?? matched.count }
 

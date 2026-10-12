@@ -272,6 +272,7 @@
   "sigmets.hazards": " — Hazards: ",
   "sigmets.off": "off route",
   "sigmets.severeBanner": "Severe (SEV) SIGMET along the route",
+  "sigmets.unavailable": "SIGMETs unavailable at briefing time (source did not respond). Not checked, not \"none\": check SIGMETs before departure.",
   "sigmets.showDetails": "Show SIGMET details",
   "sigmets.info": "SIGMET info",
   "sigmets.pendingFrom": "from {time}",

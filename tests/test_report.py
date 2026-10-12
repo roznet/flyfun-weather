@@ -149,6 +149,31 @@ class TestRenderHtml:
         assert "8000 ft" in html
         assert "D-2" in html
 
+    def _with_sigmets(self, pack_dir, block):
+        path = pack_dir / "briefing.json"
+        briefing = json.loads(path.read_text())
+        briefing["route_sigmets"] = block
+        path.write_text(json.dumps(briefing))
+
+    def test_failed_sigmet_fetch_reads_unavailable(self, pack_dir, sample_flight, sample_pack):
+        """#734: a failed fetch's empty list is "not checked", not hidden."""
+        self._with_sigmets(pack_dir, {
+            "corridor_nm": 50.0, "fetch_time": "2026-02-21T07:00:00Z",
+            "sigmets": [], "fetch_ok": False,
+        })
+        html = render_html(pack_dir, sample_flight, sample_pack)
+        assert "SIGMETs Along Route" in html
+        assert "SIGMETs unavailable at briefing time (source did not respond)" in html
+
+    def test_older_pack_without_fetch_ok_renders_as_today(self, pack_dir, sample_flight, sample_pack):
+        """No ``fetch_ok`` key (older packs) and nothing matched: no section."""
+        self._with_sigmets(pack_dir, {
+            "corridor_nm": 50.0, "fetch_time": "2026-02-21T07:00:00Z", "sigmets": [],
+        })
+        html = render_html(pack_dir, sample_flight, sample_pack)
+        assert "SIGMETs Along Route" not in html
+        assert "SIGMETs unavailable" not in html
+
 
 class TestRenderPdf:
     def test_renders_pdf_bytes(self, pack_dir, sample_flight, sample_pack):

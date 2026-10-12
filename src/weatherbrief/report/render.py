@@ -9,7 +9,7 @@ from pathlib import Path
 
 from jinja2 import Environment, PackageLoader
 
-from weatherbrief.models import BriefingPackMeta, Flight
+from weatherbrief.models import SIGMETS_UNAVAILABLE_TEXT, BriefingPackMeta, Flight
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,7 @@ def _build_template_context(
         "airport_conditions": airport_conditions,
         "route_observations": route_observations,
         "route_sigmets": route_sigmets,
+        "sigmets_unavailable_text": SIGMETS_UNAVAILABLE_TEXT,
         "observed_conditions": observed_conditions,
         "observed_attributions": _observed_attributions(observed_conditions),
     }
