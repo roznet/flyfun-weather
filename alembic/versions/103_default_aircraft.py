@@ -65,10 +65,15 @@ def upgrade() -> None:
             "is the sole pending revision (else use scripts/aircraft_backfill_dryrun.py)."
         )
 
-    with op.batch_alter_table("user_aircraft") as batch_op:
-        batch_op.add_column(
-            sa.Column("is_placeholder", sa.Boolean(), nullable=False, server_default=sa.false())
-        )
+    # Idempotent: MySQL commits the ALTER implicitly, so if anything below
+    # raises, the column survives the rollback while the revision stays
+    # unstamped — the re-run must not trip over it.
+    columns = {c["name"] for c in sa.inspect(conn).get_columns("user_aircraft")}
+    if "is_placeholder" not in columns:
+        with op.batch_alter_table("user_aircraft") as batch_op:
+            batch_op.add_column(
+                sa.Column("is_placeholder", sa.Boolean(), nullable=False, server_default=sa.false())
+            )
 
     apply_plan(conn, plan)
 
@@ -77,7 +82,8 @@ def upgrade() -> None:
     if drift:
         raise RuntimeError(
             f"[103] {len(drift)} flights resolve a cruise IAS other than planned "
-            f"(e.g. {drift[:5]}) — rolling back."
+            f"(e.g. {drift[:5]}) — rolling back the data (on MySQL the "
+            f"is_placeholder column stays; a re-run skips adding it)."
         )
 
 

@@ -15,6 +15,7 @@ from weatherbrief.storage.aircraft import (
     ensure_default_aircraft,
     get_aircraft,
     list_aircraft,
+    locked_user_aircraft,
     only_placeholder,
     replace_placeholder,
     update_aircraft,
@@ -180,8 +181,10 @@ def list_user_aircraft(
     Never empty: a user without a default aircraft gets one here (#777) —
     an existing aircraft promoted, or a placeholder synthesised.
     """
-    ensure_default_aircraft(db, user_id)
-    rows = list_aircraft(db, user_id)
+    default = ensure_default_aircraft(db, user_id)
+    # `or`: on MySQL this plain read can predate a placeholder a concurrent
+    # request committed, which ensure_default_aircraft's locking read found.
+    rows = list_aircraft(db, user_id) or [default]
     return [_row_to_response(r) for r in rows]
 
 
@@ -198,7 +201,7 @@ def add_aircraft(
     flights are re-pointed to it, and the placeholder is deleted. Done here
     so web, iOS and the onboarding wizard all behave the same.
     """
-    placeholder = only_placeholder(db, user_id)
+    placeholder = only_placeholder(db, user_id)  # takes the user's aircraft lock
     row = create_aircraft(
         db,
         user_id,
@@ -268,7 +271,7 @@ def remove_aircraft(
     row = get_aircraft(db, aircraft_id)
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail="Aircraft not found")
-    if len(list_aircraft(db, user_id)) <= 1:
+    if len(locked_user_aircraft(db, user_id)) <= 1:
         raise HTTPException(
             status_code=409,
             detail="You can't delete your only aircraft. Edit it instead, or add another aircraft first.",

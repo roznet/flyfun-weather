@@ -215,3 +215,14 @@ def test_downgrade_removes_placeholders_and_column(conn):
     assert _aircraft_count(conn) == 5
     cols = [c["name"] for c in sa.inspect(conn).get_columns("user_aircraft")]
     assert "is_placeholder" not in cols
+
+
+def test_rerun_after_column_survived_a_failed_run(conn):
+    """MySQL keeps the ALTER when the data step raises; the re-run must not
+    trip over the existing column."""
+    with conn.begin_nested():
+        conn.execute(sa.text(
+            "ALTER TABLE user_aircraft ADD COLUMN is_placeholder BOOLEAN NOT NULL DEFAULT 0"
+        ))
+    _run(conn, _load_migration().upgrade)
+    assert sum(bool(r["is_placeholder"]) for r in _aircraft(conn, "bare")) == 1

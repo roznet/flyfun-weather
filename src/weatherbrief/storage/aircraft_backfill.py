@@ -146,7 +146,9 @@ def plan_backfill(conn) -> BackfillPlan:
         by_user.setdefault(ac.user_id, []).append(ac)
     default_of: dict[str, _Aircraft] = {}
     for uid in users:
-        owned = sorted(by_user.get(uid, []), key=lambda a: (str(a.created_at), a.id))
+        # Same order as the runtime (ensure/get_default_aircraft): created_at
+        # as the DB returns it, then id for ties.
+        owned = sorted(by_user.get(uid, []), key=lambda a: (a.created_at is None, a.created_at or 0, a.id))
         defaults = [a for a in owned if a.is_default]
         if defaults:
             default_of[uid] = defaults[0]
