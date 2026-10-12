@@ -155,6 +155,16 @@ def test_failed_briefing_sigmet_fetch_is_flagged():
         assert "sigmets_at_briefing_unavailable" not in summarize_live(_layer([]), briefing)
 
 
+def test_sigmets_live_unchecked_only_before_a_good_live_fetch():
+    """No good live SIGMET fetch yet: ``sigmets_total`` 0 is "not checked"."""
+    never = _layer([]).model_copy(update={"route_sigmets": None, "sigmets_updated_at": None})
+    out = summarize_live(never, BRIEFING)
+    assert out["sigmets_live_unchecked"] is True
+    assert out["sigmets_total"] == 0
+    assert "sigmets_live_unchecked" in LIVE_NOTE
+    assert "sigmets_live_unchecked" not in summarize_live(_layer([]), BRIEFING)
+
+
 def test_airports_only_departure_destination_alternates_in_role_order():
     airports = [
         _airport("ZZMD"),                   # en-route: excluded

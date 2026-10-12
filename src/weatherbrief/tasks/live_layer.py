@@ -902,7 +902,8 @@ LIVE_NOTE = (
     "recently_cleared lists what cleared in the last hour. "
     "sigmets_at_briefing_unavailable: true means the SIGMET source did not "
     "respond when the briefing was built: the digest's silence on SIGMETs is "
-    "'not checked', not 'none'."
+    "'not checked', not 'none'. sigmets_live_unchecked: true means no live "
+    "SIGMET fetch has succeeded yet: sigmets_total 0 is 'not checked', not 'none'."
 )
 
 #: Size limits — the block rides on every get_briefing call. SIGMETs on a
@@ -1018,6 +1019,9 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     # checked". Only set when true, like the MCP's live_unavailable.
     if (briefing_data.get("route_sigmets") or {}).get("fetch_ok") is False:
         out["sigmets_at_briefing_unavailable"] = True
+    # No good live fetch yet: the empty list is "not checked" here too.
+    if layer.route_sigmets is None:
+        out["sigmets_live_unchecked"] = True
     out["sigmets"] = [
         {
             # Same "FIR seq: QUAL HAZARD" label the change messages use, so a

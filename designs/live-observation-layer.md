@@ -270,6 +270,8 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
 - `sigmets_at_briefing_unavailable: true` — only when the briefing's own
   SIGMET fetch failed (#734): the digest's silence on SIGMETs is "not checked".
   Not shown with `live: null` (no layer yet); the digest says it there.
+- `sigmets_live_unchecked: true` — only while the layer has had no good
+  SIGMET fetch (`route_sigmets` unset): `sigmets_total: 0` is "not checked".
 - `airports` — departure, destination and the top alternates only (the
   classifier's `airport_roles`), when the corridor fetch has a METAR for them.
 
@@ -995,7 +997,8 @@ What the code relies on:
   (`RouteSigmets.unavailable` / `showsSection`, which also offers the Observed
   tab), the text digest and the HTML/PDF report show
   `SIGMETS_UNAVAILABLE_TEXT` (`models/observations.py`, three hand-kept copies:
-  Python, web i18n `sigmets.unavailable`, iOS `RouteSigmets.unavailableText`);
+  Python, web i18n `sigmets.unavailable`, iOS `RouteSigmets.unavailableText`,
+  pinned equal by `tests/test_route_weather.py`);
   the LLM prompt gets a "NOT CHECKED" section; the agent `live` block carries
   `sigmets_at_briefing_unavailable: true`. The notice goes once a good fetch
   lands: the live tick / ↻ never store a failed block, and `overlay_live` (and

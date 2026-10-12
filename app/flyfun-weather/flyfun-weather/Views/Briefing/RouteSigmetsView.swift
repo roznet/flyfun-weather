@@ -38,7 +38,7 @@ struct RouteSigmetsView: View {
     }
 
     var body: some View {
-        if let block = sigmets, block.unavailable {
+        if sigmets?.unavailable == true {
             VStack(alignment: .leading, spacing: Theme.spacingM) {
                 Text("Area Hazards")
                     .font(.headline)

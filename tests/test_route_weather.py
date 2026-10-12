@@ -387,6 +387,20 @@ def test_text_digest_failed_sigmet_fetch_says_unavailable():
     assert "SIGMET(s) intersecting route" not in text
 
 
+def test_sigmets_unavailable_wording_matches_web_and_ios():
+    """#734: the notice has hand-kept copies on web (en i18n) and iOS; pin them."""
+    import json
+    from pathlib import Path
+
+    from weatherbrief.models import SIGMETS_UNAVAILABLE_TEXT
+
+    root = Path(__file__).resolve().parent.parent
+    en = json.loads((root / "web/ts/i18n/locales/en.json").read_text())
+    assert en["sigmets.unavailable"] == SIGMETS_UNAVAILABLE_TEXT
+    swift = (root / "app/flyfun-weather/flyfun-weather/Models/API/SnapshotResponse.swift").read_text()
+    assert json.dumps(SIGMETS_UNAVAILABLE_TEXT) in swift
+
+
 def test_text_digest_good_empty_sigmet_fetch_has_no_section():
     from weatherbrief.digest.text import format_digest
 
