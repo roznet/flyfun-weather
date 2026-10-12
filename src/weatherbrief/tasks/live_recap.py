@@ -428,9 +428,14 @@ def _match_pack(packs, pack_ts: str) -> tuple[datetime, Path | None]:
     raise KeyError(pack_ts)
 
 
-def recap_for_flight(db, flight_id: str, *, pack_ts: str | None = None, now: datetime | None = None) -> dict:
+def recap_for_flight(
+    db, flight_id: str, *, pack_ts: str | None = None, now: datetime | None = None,
+    packs: list[tuple[datetime, Path | None]] | None = None, progress=None,
+) -> dict:
     """The recap of ``flight_id`` with the forecast row from ``pack_ts`` (or
-    the default pack). Raises ``KeyError`` for a ``pack_ts`` the flight lacks."""
+    the default pack). Raises ``KeyError`` for a ``pack_ts`` the flight lacks.
+    ``packs`` / ``progress`` skip resolving them again when the caller has
+    them (:func:`recap_summary`)."""
     from datetime import timezone
 
     from weatherbrief.debriefs.taxonomy import Decision
@@ -439,11 +444,13 @@ def recap_for_flight(db, flight_id: str, *, pack_ts: str | None = None, now: dat
     from weatherbrief.tasks.live_snapshots import load_snapshots
 
     now = now or datetime.now(timezone.utc)
-    packs = flight_packs(db, flight_id)
+    packs = packs if packs is not None else flight_packs(db, flight_id)
     flight_dir = flight_dir_of(packs)
     debrief = get_debrief(db, flight_id)
     cancelled = debrief is not None and debrief.decision == Decision.CANCELLED
-    progress = flight_progress_for(packs, now)
+    progress = progress if progress is not None else flight_progress_for(packs, now)
+    # Also applied inside build_recap (the pure entry point); needed here
+    # first because the default forecast pack is chosen from this departure.
     if cancelled and progress is not None:
         progress = progress.planned()
 
@@ -482,7 +489,7 @@ def recap_summary(db, flight_id: str) -> dict | None:
             return None
         if not has_snapshots(flight_dir) and not (flight_dir / LIVE_HISTORY_FILE).exists():
             return None
-        return summarize_recap(recap_for_flight(db, flight_id, now=now))
+        return summarize_recap(recap_for_flight(db, flight_id, now=now, packs=packs, progress=progress))
     except Exception:
         logger.warning("Recap summary failed for %s", flight_id, exc_info=True)
         return None

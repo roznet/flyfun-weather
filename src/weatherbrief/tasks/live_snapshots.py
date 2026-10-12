@@ -139,9 +139,16 @@ def _append(flight_dir: Path, records: list[dict]) -> bool:
             logger.warning("LIVE_SNAPSHOTS_CAPPED %s at %d bytes — no more ticks recorded", path, size)
         return False
     data = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records).encode()
-    # One gzip member per append: a cut-short write loses at most this one.
+    # One gzip member per append. A failed write is rolled back to the old
+    # size; a write cut short by a crash leaves a partial member, which the
+    # reader skips by resyncing on the next member's header (_read_lines).
     with open(path, "ab") as f:
-        f.write(gzip.compress(data, compresslevel=6))
+        try:
+            f.write(gzip.compress(data, compresslevel=6))
+            f.flush()
+        except Exception:
+            f.truncate(size)
+            raise
     return True
 
 
@@ -169,26 +176,36 @@ def append_highlight(flight_dir: Path | str, highlight, *, tick_at: datetime) ->
         return False
 
 
+#: Start of every gzip member this module writes (magic + deflate).
+_GZIP_HEADER = b"\x1f\x8b\x08"
+
+
 def _read_lines(path: Path) -> list[str]:
     """Every complete line of every intact gzip member, in order.
 
-    A member cut short (a write interrupted) ends the read there, with the
-    lines before it kept: members are decompressed one at a time.
+    Members are decompressed one at a time. A corrupt or cut-short member (a
+    write interrupted by a crash) is skipped: the read resyncs on the next
+    gzip header, so only that member's lines are lost, never the later ticks.
     """
     raw = path.read_bytes()
     out: list[str] = []
-    while raw:
+    pos = 0
+    while pos < len(raw):
         d = zlib.decompressobj(wbits=31)
         try:
-            text = d.decompress(raw)
+            text = d.decompress(raw[pos:])
+            ok = d.eof
         except zlib.error:
-            logger.warning("Corrupt member in %s — later snapshots skipped", path)
+            ok = False
+        if ok:
+            out += text.decode(errors="replace").splitlines()
+            pos = len(raw) - len(d.unused_data)
+            continue
+        nxt = raw.find(_GZIP_HEADER, pos + 1)
+        logger.warning("Damaged snapshot member in %s at byte %d — skipped", path, pos)
+        if nxt < 0:
             break
-        if not d.eof:
-            logger.warning("Truncated member in %s — its snapshots skipped", path)
-            break
-        out += text.decode(errors="replace").splitlines()
-        raw = d.unused_data
+        pos = nxt
     return out
 
 
@@ -374,8 +391,10 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
 
     flight_dir = Path(flight_dir)
     tick_at = _dt(snapshot.get("tick_at"))
-    pack_dir = flight_dir / (snapshot.get("pack_dir_name") or "")
-    briefing = (load_briefing(pack_dir) if pack_dir.is_dir() else None) or {}
+    name = snapshot.get("pack_dir_name")
+    # No name would make this the flight dir itself: never read a briefing there.
+    pack_dir = flight_dir / name if name else None
+    briefing = (load_briefing(pack_dir) if pack_dir is not None and pack_dir.is_dir() else None) or {}
     route, departure = route_context(briefing)
     progress = flight_progress(route, departure, tick_at) if tick_at is not None else None
     history = history if history is not None else load_live_history(flight_dir)
@@ -398,7 +417,10 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
         "glance": snapshot.get("glance"),
         "ribbon": snapshot.get("ribbon"),
         # Trails as /live served them at that tick (#669): the history up to it.
-        "changes": trails_for_pack(pack_dir, changes, now=tick_at, briefing_data=briefing),
+        "changes": (
+            trails_for_pack(pack_dir, changes, now=tick_at, briefing_data=briefing)
+            if pack_dir is not None else changes
+        ),
         "last_refresh_delta": snapshot.get("last_refresh_delta"),
         "tick_at": snapshot.get("tick_at"),
         "radar_time": snapshot.get("radar_time"),
