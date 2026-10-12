@@ -1,7 +1,7 @@
 import Foundation
 
 /// A flight profile from `GET /api/user/profiles`. A profile presets the flight
-/// parameters (cruise altitude, ceiling, speed) and the weather-model choices.
+/// parameters (cruise altitude, ceiling) and the weather-model choices.
 /// The create/edit form only needs identity + the flight parameters; the decoder
 /// ignores the many other settings keys (model selection, methods, advisories).
 nonisolated struct ProfileResponse: Codable, Identifiable, Hashable, Sendable {
@@ -16,7 +16,6 @@ nonisolated struct ProfileResponse: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct ProfileSettings: Codable, Hashable, Sendable {
     let cruiseAltitudeFt: Int?
     let flightCeilingFt: Int?
-    let speedKt: Int?
 }
 
 nonisolated extension [ProfileResponse] {

@@ -10,7 +10,7 @@ import {
   type WaypointInfo,
 } from './adapters/api-adapter';
 import type { FlightResponse } from './store/types';
-import { fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
+import { aircraftLabel, fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { confirmZeroDuration } from './components/duration-confirm';
 import { fetchModelCatalog, fetchBookingConfig, fetchPreferences } from './adapters/preferences-adapter';
@@ -27,6 +27,7 @@ import { initI18n, t } from './i18n/i18n';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { maybeShowFlexibilityExplainer } from './components/flexibility-explainer';
 import { iasToTasISA, resolveCruiseSpeedIAS } from './utils/atmo';
+import { applyCeilingWarning, parseCeilingInput } from './utils/ceiling-warning';
 import {
   splitDurationCeil, combineDuration,
   buildDurationHourOptions, buildDurationMinuteOptions,
@@ -141,13 +142,21 @@ function getSelectedAircraft(): AircraftResponse | undefined {
   return loadedAircraft.find(a => a.id === id);
 }
 
-/** Cruise IAS for the current form selection — aircraft first, profile fallback.
- *  The precedence rule itself lives in resolveCruiseSpeedIAS (unit-tested); this
- *  is just the DOM wiring. */
+/** Cruise IAS for the current form selection — from the selected aircraft
+ *  only (#777: profiles carry no speed). The rule itself lives in
+ *  resolveCruiseSpeedIAS (unit-tested); this is just the DOM wiring. */
 function getCruiseSpeedIAS(): number | undefined {
-  return resolveCruiseSpeedIAS(
-    getSelectedAircraft()?.cruise_speed_kt,
-    getSelectedProfile()?.settings?.speed_kt,
+  return resolveCruiseSpeedIAS(getSelectedAircraft()?.cruise_speed_kt);
+}
+
+/** Re-check the ceiling field against the selected aircraft's service ceiling
+ *  and show/hide the warning under it (#777 §4). Warn only — never clamps. */
+function updateCeilingWarning(): void {
+  const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement | null;
+  applyCeilingWarning(
+    document.getElementById('input-ceiling-warning'),
+    parseCeilingInput(ceilInput?.value),
+    getSelectedAircraft(),
   );
 }
 
@@ -203,8 +212,7 @@ function setDurationControls(decimalHours: number): void {
 }
 
 /** Auto-calculate the duration field from the cached route distance and the
- *  resolved cruise speed (aircraft IAS first, then flight-default profile —
- *  see getCruiseSpeedIAS), unless the user has edited it manually. The speed is
+ *  selected aircraft's cruise speed (see getCruiseSpeedIAS), unless the user has edited it manually. The speed is
  *  cruise IAS; we convert it to TAS at the selected cruise altitude (ISA
  *  standard atmosphere) so distance ÷ TAS = still-air duration. The estimate is
  *  rounded UP to the next 15-minute unit when populating the dropdowns. */
@@ -845,9 +853,14 @@ async function init(): Promise<void> {
       const defaultProfile = loadedProfiles.find(p => p.is_default) || loadedProfiles[0];
       if (defaultProfile) {
         await showWelcomeWizard(defaultProfile, modelCatalog, loadedProfiles);
-        // Reload profiles after wizard may have updated the default profile
-        loadedProfiles = await fetchProfiles();
+        // Reload profiles and aircraft: the wizard may have updated the default
+        // profile and created the pilot's aircraft (replacing the placeholder).
+        [loadedProfiles, loadedAircraft] = await Promise.all([
+          fetchProfiles(),
+          fetchAircraft().catch(() => loadedAircraft),
+        ]);
         populateProfileSelector(loadedProfiles);
+        populateAircraftSelector(loadedAircraft);
       }
     } catch (err) {
       console.error('Welcome wizard error:', err);
@@ -1024,10 +1037,15 @@ async function init(): Promise<void> {
         ceilInput.value = String(profile.settings.flight_ceiling_ft);
       }
     }
-    // Recalculate duration with new profile's speed
+    // The profile's cruise altitude changes TAS, so re-estimate the duration.
     durationManuallyEdited = false;
     fetchRouteAndUpdateUI();
+    // The profile may have changed the ceiling — re-check it against the aircraft.
+    updateCeilingWarning();
   });
+
+  // Re-check the ceiling warning as the pilot edits the ceiling.
+  document.getElementById('input-ceiling')?.addEventListener('input', updateCeilingWarning);
 
   // --- Wire "Paste FPL" button ---
   const pasteFplBtn = document.getElementById('btn-paste-fpl');
@@ -1091,6 +1109,7 @@ function populateProfileSelector(profiles: ProfileResponse[]): void {
       ceilInput.value = String(defaultProfile.settings.flight_ceiling_ft);
     }
   }
+  updateCeilingWarning();
 }
 
 function populateAircraftSelector(aircraft: AircraftResponse[]): void {
@@ -1117,31 +1136,25 @@ function populateAircraftSelector(aircraft: AircraftResponse[]): void {
 
   if (formGroup) formGroup.style.display = '';
 
-  select.innerHTML = '<option value="">None</option>' + aircraft.map(ac => {
-    const label = ac.tail_number
-      ? `${ac.tail_number} — ${ac.type_name}`
-      : ac.type_name;
-    const nickname = ac.nickname ? ` (${ac.nickname})` : '';
+  // No "None" option: the server attaches the default aircraft to every flight
+  // created without one (#777), so "None" would mislabel what actually happens.
+  select.innerHTML = aircraft.map(ac => {
     const defaultTag = ac.is_default ? ' *' : '';
     const selected = ac.is_default ? ' selected' : '';
-    return `<option value="${ac.id}"${selected}>${escapeHtml(label + nickname + defaultTag)}</option>`;
+    return `<option value="${ac.id}"${selected}>${escapeHtml(aircraftLabel(ac) + defaultTag)}</option>`;
   }).join('');
 
-  // When aircraft changes, re-resolve the cruise speed (getCruiseSpeedIAS now
-  // prefers the aircraft) and re-estimate duration. Done on every change —
-  // including switching to "None" or a speedless aircraft — so the estimate
-  // falls back to the flight-default profile speed. Pull the aircraft ceiling
-  // when one is set.
-  select.addEventListener('change', () => {
-    const acId = parseInt(select.value, 10);
-    const ac = aircraft.find(a => a.id === acId);
+  // When the aircraft changes, re-resolve the cruise speed (it comes from the
+  // aircraft) and re-estimate duration, and re-check the ceiling warning. The
+  // aircraft's service ceiling is never copied into the ceiling field (#777):
+  // the flight ceiling is the pilot's intent (from the profile), the service
+  // ceiling only drives the warning.
+  select.onchange = () => {
     durationManuallyEdited = false;
     fetchRouteAndUpdateUI();
-    if (ac?.ceiling_ft) {
-      const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
-      if (ceilInput) ceilInput.value = String(ac.ceiling_ft);
-    }
-  });
+    updateCeilingWarning();
+  };
+  updateCeilingWarning();
 }
 
 function navigateToFlight(flightId: string): void {

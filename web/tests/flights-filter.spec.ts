@@ -46,7 +46,7 @@ async function stubPage(page: Page): Promise<void> {
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', route => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', route => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/user/preferences', route => route.fulfill({ json: {} }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/debriefs/stats', route => route.fulfill({ json: null }));

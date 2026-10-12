@@ -59,6 +59,12 @@ class UserAircraftRow(Base):
     cruise_speed_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ceiling_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Synthesised by ensure_default_aircraft / migration 103 for a user who
+    # never set one up (#777). Cleared by any PUT; a POST while it is the
+    # user's only aircraft replaces it.
+    is_placeholder: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

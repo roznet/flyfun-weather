@@ -34,8 +34,8 @@
       <!-- Aircraft tab -->
       <div id="tab-aircraft" class="tab-panel">
         <div class="section">
-          <h3>My Aircraft</h3>
-          <p class="muted section-hint">Manage your aircraft. Selecting an aircraft when creating a flight pre-fills speed, ceiling, and flight rules.</p>
+          <h3 id="aircraft-list-title">My Aircraft</h3>
+          <p id="aircraft-list-hint" class="muted section-hint">Manage your aircraft. The selected aircraft's cruise speed sets the flight duration estimate, and you are warned when a flight's ceiling is above its service ceiling.</p>
           <div id="aircraft-list"></div>
           <button type="button" id="btn-add-aircraft" class="btn btn-primary btn-sm" style="margin-top:0.75rem">+ Add Aircraft</button>
         </div>
@@ -75,13 +75,13 @@
           </div>
           <div class="form-row model-checkboxes">
             <label class="checkbox-label">
-              <input type="checkbox" id="ac-ifr"> IFR capable
+              <input type="checkbox" id="ac-ifr"> <span id="ac-ifr-label">IFR capable</span>
             </label>
             <label class="checkbox-label">
-              <input type="checkbox" id="ac-fiki"> FIKI equipped
+              <input type="checkbox" id="ac-fiki"> <span id="ac-fiki-label">FIKI equipped</span>
             </label>
             <label class="checkbox-label">
-              <input type="checkbox" id="ac-default"> Default aircraft
+              <input type="checkbox" id="ac-default"> <span id="ac-default-label">Default aircraft</span>
             </label>
           </div>
           <div class="form-row" style="margin-top:0.75rem; gap:0.5rem">
@@ -431,13 +431,10 @@
               <label for="input-ceiling">Flight Ceiling (ft)</label>
               <input type="number" id="input-ceiling" value="18000" min="1000" max="45000" step="500" class="input-narrow">
             </div>
-            <div class="form-group">
-              <label for="input-speed">Cruise Speed (IAS in kt)
-                <button class="metric-info-btn cruise-speed-info-btn" type="button" title="About cruise speed (IAS)" aria-label="About cruise speed (IAS)">i</button>
-              </label>
-              <input type="number" id="input-speed" placeholder="e.g. 120" min="10" max="500" step="1" class="input-narrow">
-            </div>
           </div>
+          <!-- This profile's ceiling vs the default aircraft's service ceiling (#777). -->
+          <p id="input-ceiling-warning" class="ceiling-warning" role="status" hidden></p>
+          <p id="flight-defaults-speed-note" class="muted section-hint">Cruise speed now comes from your aircraft (Aircraft tab).</p>
         </div>
 
         <div class="section">

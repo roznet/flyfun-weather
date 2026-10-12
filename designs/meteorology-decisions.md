@@ -3977,7 +3977,7 @@ consolidate.
 ### Stage 4 — time as a display axis
 
 `RouteExtent.minutes` is `nm` at `ctx.cruise_groundspeed_kt` — cruise TAS
-(`resolve_cruise_tas`: aircraft/profile speed → the flight's own planned speed →
+(`resolve_cruise_tas`: aircraft speed — profile fallback removed in #777 → the flight's own planned speed →
 a generic light-GA fallback) less the route-average headwind, taken from the
 per-point wind components the pack already carries. No new wind lookups, and the
 same numbers the headwind advisory reports.

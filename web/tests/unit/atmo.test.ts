@@ -42,29 +42,22 @@ describe('iasToTasISA', () => {
 });
 
 describe('resolveCruiseSpeedIAS', () => {
-  it('prefers the aircraft speed when both are set', () => {
-    expect(resolveCruiseSpeedIAS(140, 110)).toBe(140);
+  it('uses the aircraft speed', () => {
+    expect(resolveCruiseSpeedIAS(140)).toBe(140);
   });
 
-  it('falls back to the profile speed when no aircraft speed', () => {
-    expect(resolveCruiseSpeedIAS(null, 110)).toBe(110);
-    expect(resolveCruiseSpeedIAS(undefined, 110)).toBe(110);
+  it('returns undefined when the aircraft has no speed', () => {
+    expect(resolveCruiseSpeedIAS(null)).toBeUndefined();
+    expect(resolveCruiseSpeedIAS(undefined)).toBeUndefined();
   });
 
-  it('falls back to the profile speed when the aircraft speed is 0 or negative', () => {
-    // A 0/negative aircraft speed is not a usable cruise speed — skip it.
-    expect(resolveCruiseSpeedIAS(0, 110)).toBe(110);
-    expect(resolveCruiseSpeedIAS(-5, 110)).toBe(110);
+  it('treats a 0 or negative aircraft speed as unusable', () => {
+    expect(resolveCruiseSpeedIAS(0)).toBeUndefined();
+    expect(resolveCruiseSpeedIAS(-5)).toBeUndefined();
   });
 
-  it('uses the aircraft speed when the profile has none', () => {
-    expect(resolveCruiseSpeedIAS(140, null)).toBe(140);
-    expect(resolveCruiseSpeedIAS(140, undefined)).toBe(140);
-  });
-
-  it('returns undefined when neither yields a usable value', () => {
-    expect(resolveCruiseSpeedIAS(null, null)).toBeUndefined();
-    expect(resolveCruiseSpeedIAS(undefined, undefined)).toBeUndefined();
-    expect(resolveCruiseSpeedIAS(0, 0)).toBeUndefined();
+  it('takes the aircraft speed only — there is no profile fallback (#777)', () => {
+    // The function is single-argument: a profile speed can no longer be passed.
+    expect(resolveCruiseSpeedIAS.length).toBe(1);
   });
 });

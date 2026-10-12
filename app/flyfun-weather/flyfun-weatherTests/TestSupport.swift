@@ -209,7 +209,20 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func unlinkAutorouter() async throws {}
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { throw MockError.notStubbed("searchAircraftTypes") }
-    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw MockError.notStubbed("createAircraft") }
+    var createAircraftResult: Result<AircraftResponse, Error> = .failure(MockError.notStubbed("createAircraft"))
+    private(set) var lastCreateAircraftRequest: CreateAircraftRequest?
+    func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
+        lastCreateAircraftRequest = request
+        return try createAircraftResult.get()
+    }
+    var updateAircraftResult: Result<AircraftResponse, Error> = .failure(MockError.notStubbed("updateAircraft"))
+    private(set) var lastUpdateAircraftId: Int?
+    private(set) var lastUpdateAircraftRequest: UpdateAircraftRequest?
+    func updateAircraft(id: Int, request: UpdateAircraftRequest) async throws -> AircraftResponse {
+        lastUpdateAircraftId = id
+        lastUpdateAircraftRequest = request
+        return try updateAircraftResult.get()
+    }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
     /// Awaited *inside* `packs` before it returns — lets a test hold the pack
     /// count suspended and observe the copy the editor shows meanwhile.
@@ -362,6 +375,34 @@ func makeFlight(
         ownerDisplayName: ownerDisplayName,
         rawRoute: rawRoute,
         isSubscribed: isSubscribed
+    )
+}
+
+/// Build a saved-aircraft fixture for the flight form's picker (#777).
+func makeAircraft(
+    id: Int = 1,
+    icaoType: String = "C172",
+    typeName: String = "Cessna 172",
+    tailNumber: String? = nil,
+    nickname: String? = nil,
+    cruiseSpeedKt: Int? = 110,
+    ceilingFt: Int? = 14000,
+    isDefault: Bool = false,
+    isPlaceholder: Bool = false
+) -> AircraftResponse {
+    AircraftResponse(
+        id: id,
+        icaoType: icaoType,
+        typeName: typeName,
+        tailNumber: tailNumber,
+        nickname: nickname,
+        isIfr: false,
+        isFiki: false,
+        cruiseSpeedKt: cruiseSpeedKt,
+        ceilingFt: ceilingFt,
+        isDefault: isDefault,
+        createdAt: "2026-06-20T09:00:00Z",
+        isPlaceholder: isPlaceholder
     )
 }
 

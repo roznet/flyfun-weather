@@ -420,25 +420,36 @@ struct AddFlightView: View {
 
     private var aircraftSection: some View {
         Section {
+            // The server always has a default aircraft, so an empty list only
+            // means the load failed (or an older server).
             if viewModel.aircraftOptions.isEmpty && !viewModel.isLoadingAircraft {
                 Label("No saved aircraft", systemImage: "airplane")
                     .foregroundStyle(.secondary)
             } else {
-                Picker("Aircraft", selection: Binding(
-                    get: { viewModel.selectedAircraftId ?? 0 },
-                    set: { viewModel.selectedAircraftId = $0 == 0 ? nil : $0 }
-                )) {
-                    Text("No aircraft").tag(0)
+                // No "No aircraft" row (#777): a flight without one gets the
+                // account default server-side, so offering it would mislead.
+                Picker("Aircraft", selection: $viewModel.selectedAircraftId) {
                     ForEach(viewModel.aircraftOptions) { aircraft in
-                        Text(aircraft.pickerTitle).tag(aircraft.id)
+                        Text(aircraft.pickerTitle).tag(Optional(aircraft.id))
                     }
                 }
                 .pickerStyle(.menu)
+                .accessibilityIdentifier("aircraftPicker")
 
                 if let aircraft = viewModel.selectedAircraft {
-                    Text(aircraft.detailText)
+                    HStack {
+                        Text(aircraft.detailText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(viewModel.editAircraftButtonTitle) {
+                            viewModel.prepareEditAircraftForm(aircraft)
+                            showAircraftSheet = true
+                        }
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("editAircraftButton")
+                    }
                 }
             }
 
@@ -773,6 +784,14 @@ struct AddFlightView: View {
             Text("Ceiling \(viewModel.flightCeilingFt) ft")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // Warn, never clamp (#777 §4): the pilot may want the sweep above
+            // what the aircraft can reach.
+            if let warning = viewModel.ceilingWarning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("ceilingWarning")
+            }
         } header: {
             Text("Cruise Altitude")
         } footer: {
@@ -895,7 +914,9 @@ private struct FplPasteSheet: View {
 
 // MARK: - Aircraft Sheet
 
-/// Inline aircraft create flow with search-as-you-type ICAO-type suggestions.
+/// Inline aircraft create / edit flow with search-as-you-type ICAO-type
+/// suggestions. Edits when the view model was prepared with
+/// `prepareEditAircraftForm` (PUT), adds otherwise (POST).
 private struct AircraftFormSheet: View {
     @Bindable var viewModel: AddFlightViewModel
     let onDone: () -> Void
@@ -947,7 +968,7 @@ private struct AircraftFormSheet: View {
                     TextField("Nickname", text: $viewModel.newAircraftNickname)
                     TextField("Cruise speed (kt)", text: $viewModel.newAircraftCruiseSpeedKt)
                         .keyboardType(.numberPad)
-                    TextField("Ceiling (ft)", text: $viewModel.newAircraftCeilingFt)
+                    TextField("Service ceiling (ft)", text: $viewModel.newAircraftCeilingFt)
                         .keyboardType(.numberPad)
                 } header: {
                     Text("Details")
@@ -957,6 +978,9 @@ private struct AircraftFormSheet: View {
                     Toggle("IFR equipped", isOn: $viewModel.newAircraftIsIfr)
                     Toggle("FIKI", isOn: $viewModel.newAircraftIsFiki)
                     Toggle("Make default", isOn: $viewModel.newAircraftIsDefault)
+                        // Already the default: un-defaulting happens by making
+                        // another aircraft the default.
+                        .disabled(viewModel.editingAircraft?.isDefault == true)
                 }
 
                 if let error = viewModel.aircraftFormError {
@@ -966,7 +990,7 @@ private struct AircraftFormSheet: View {
                     }
                 }
             }
-            .navigationTitle("Add Aircraft")
+            .navigationTitle(viewModel.aircraftFormTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -975,7 +999,7 @@ private struct AircraftFormSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Task {
-                            if await viewModel.createAircraft() {
+                            if await viewModel.saveAircraft() {
                                 onDone()
                             }
                         }

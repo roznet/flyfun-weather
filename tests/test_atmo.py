@@ -36,16 +36,14 @@ class TestIasToTasIsa:
 
 
 class TestResolveCruiseSpeedIas:
-    def test_aircraft_preferred(self):
-        assert resolve_cruise_speed_ias(150, 110) == 150
+    """Speed comes only from the aircraft (#777) — no profile fallback."""
 
-    def test_falls_back_to_profile_when_aircraft_missing(self):
-        assert resolve_cruise_speed_ias(None, 110) == 110
+    def test_aircraft_speed_used(self):
+        assert resolve_cruise_speed_ias(150) == 150.0
 
-    def test_skips_nonpositive_aircraft(self):
-        assert resolve_cruise_speed_ias(0, 110) == 110
-        assert resolve_cruise_speed_ias(-5, 110) == 110
+    def test_none_when_aircraft_has_no_speed(self):
+        assert resolve_cruise_speed_ias(None) is None
 
-    def test_none_when_neither_usable(self):
-        assert resolve_cruise_speed_ias(None, None) is None
-        assert resolve_cruise_speed_ias(0, 0) is None
+    def test_nonpositive_is_unusable(self):
+        assert resolve_cruise_speed_ias(0) is None
+        assert resolve_cruise_speed_ias(-5) is None

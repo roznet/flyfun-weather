@@ -8,7 +8,7 @@ async function mockFlightsPage(page: Page, opts: { linked: boolean }) {
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', route => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', route => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route(/\/api\/flights(\?.*)?$/, route => route.fulfill({ json: [] }));
   await page.route('**/api/user/preferences', route => {

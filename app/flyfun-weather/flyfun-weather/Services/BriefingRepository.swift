@@ -55,6 +55,9 @@ protocol BriefingRepository: Sendable {
     func usageSummary() async throws -> UsageSummaryResponse
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse]
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse
+    /// Partial update of a saved aircraft (`PUT /api/aircraft/{id}`). The server
+    /// clears `is_placeholder` on any PUT. Online-only.
+    func updateAircraft(id: Int, request: UpdateAircraftRequest) async throws -> AircraftResponse
     func parseFpl(_ text: String) async throws -> ParseFplResponse
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse
@@ -259,6 +262,11 @@ final class OnlineBriefingRepository: BriefingRepository {
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
         let body = try JSONEncoder.weatherBrief.encode(request)
         return try await client.request("/api/aircraft", method: "POST", body: body)
+    }
+
+    func updateAircraft(id: Int, request: UpdateAircraftRequest) async throws -> AircraftResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/aircraft/\(id)", method: "PUT", body: body)
     }
 
     func parseFpl(_ text: String) async throws -> ParseFplResponse {

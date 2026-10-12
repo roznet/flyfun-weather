@@ -193,7 +193,6 @@ FlightProfile(
     settings={
         "cruise_altitude_ft": 8000,
         "flight_ceiling_ft": 18000,
-        "speed_kt": 120,
         "models": ["gfs", "ecmwf", "icon"],
         "advisory_models": ["gfs", "ecmwf"],
         "gramet_enabled": True,
@@ -213,6 +212,7 @@ FlightProfile(
 - One default profile per user (auto-created on first access, migrating legacy settings out of `UserPreferencesRow.app_prefs_json`)
 - Settings applied dynamically at briefing refresh time — not stored on Flight
 - Flexible JSON allows adding new settings without migrations
+- No cruise speed: speed belongs to the aircraft (#777, see multi-user-deployment.md)
 - `system_template_key` (optional) marks a profile cloned from a built-in system template; `created_at`/`updated_at` are aware-UTC timestamps
 
 ### Flight
@@ -230,7 +230,7 @@ Flight(
     flight_ceiling_ft=18000,
     flight_duration_hours=4.5,
     profile_id=1,  # optional FK → FlightProfile, SET NULL on delete
-    aircraft_id=3,  # optional FK → UserAircraftRow, SET NULL on delete
+    aircraft_id=3,  # FK → UserAircraftRow, SET NULL on delete; NULL reads as the owner's default aircraft (#777)
     created_at=datetime(...),
 )
 # Backward-compat computed fields (auto-derived from departure_time):

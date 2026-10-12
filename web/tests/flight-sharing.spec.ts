@@ -36,7 +36,7 @@ async function mockBaseAuth(page: Page) {
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', (route: Route) => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/flights/route-distance', (route: Route) => route.fulfill({
     json: { total_distance_nm: 20, waypoints: [

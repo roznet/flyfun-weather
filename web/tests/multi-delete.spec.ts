@@ -26,7 +26,7 @@ test('multi-select + bulk-delete flow', async ({ page }) => {
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', route => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', route => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/flights/*/packs/latest', route => route.fulfill({ status: 404, body: '' }));
 
@@ -93,7 +93,7 @@ test('clear-selection hides bar without deleting', async ({ page }) => {
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', route => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', route => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/flights/*/packs/latest', route => route.fulfill({ status: 404, body: '' }));
   await page.route(/\/api\/flights(\?.*)?$/, route => route.fulfill({ json: flights }));
