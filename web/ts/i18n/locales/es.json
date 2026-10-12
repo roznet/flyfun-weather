@@ -203,6 +203,7 @@
   "sigmets.hazards": " — Fenómenos: ",
   "sigmets.off": "fuera de ruta",
   "sigmets.severeBanner": "SIGMET severo (SEV) en la ruta",
+  "sigmets.unavailable": "SIGMET no disponibles al generar el briefing (la fuente no respondió). No comprobados, no «ninguno»: consulte los SIGMET antes de salir.",
   "sigmets.showDetails": "Mostrar detalles del SIGMET",
   "sigmets.info": "Info SIGMET",
   "sigmets.pendingFrom": "desde {time}",

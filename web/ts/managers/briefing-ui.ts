@@ -137,6 +137,7 @@ export function renderHeader(
 // --- Stale-pack banner ---
 
 import { computeStalePackBanner } from '../helpers/stale-pack-banner';
+import { sigmetSectionState } from '../helpers/route-sigmets';
 import { readTafAtEta, shortTemporaryLabel, type TafAtEta } from '../helpers/taf-at-eta';
 import { autoRefreshControl, hourPatchValue } from '../helpers/auto-refresh-control';
 import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel, temsiValidityOffset } from '../utils/temsi';
@@ -2141,7 +2142,15 @@ export function renderRouteSigmets(snapshot: ForecastSnapshot | null): void {
   if (!el) return;
 
   const sig = snapshot?.route_sigmets;
-  if (!sig || sig.sigmets.length === 0) {
+  const state = sigmetSectionState(sig);
+  // A failed fetch at build time is "not checked", never "none" (#734).
+  if (state === 'unavailable') {
+    if (wrapper) wrapper.style.display = '';
+    el.innerHTML = `<div class="obs-conflict-banner">${escapeHtml(t('sigmets.unavailable'))}</div>`;
+    el.onclick = null;
+    return;
+  }
+  if (!sig || state === 'hidden') {
     if (wrapper) wrapper.style.display = 'none';
     return;
   }

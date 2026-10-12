@@ -355,6 +355,63 @@ def test_text_digest_includes_observations():
     assert "VFR" in text
 
 
+def _snapshot_with_sigmets(sigmets):
+    from weatherbrief.models import ForecastSnapshot
+
+    return ForecastSnapshot(
+        route=RouteConfig(
+            name="test",
+            waypoints=[
+                Waypoint(icao="ZZAA", name="Alpha", lat=51.3, lon=-0.5),
+                Waypoint(icao="ZZBB", name="Bravo", lat=49.3, lon=3.6),
+            ],
+        ),
+        target_date="2024-06-01",
+        fetch_date="2024-06-01",
+        days_out=0,
+        route_sigmets=sigmets,
+    )
+
+
+def test_text_digest_failed_sigmet_fetch_says_unavailable():
+    """#734: a failed fetch is "not checked", never an absent (quiet) section."""
+    from weatherbrief.digest.text import format_digest
+    from weatherbrief.models import SIGMETS_UNAVAILABLE_TEXT
+
+    snap = _snapshot_with_sigmets(RouteSigmets(
+        corridor_nm=50.0, fetch_time=datetime(2024, 6, 1, 10, 0), sigmets=[], fetch_ok=False,
+    ))
+    text = format_digest(snap, datetime(2024, 6, 1, 10, 0))
+    assert "--- SIGMETs Along Route ---" in text
+    assert SIGMETS_UNAVAILABLE_TEXT in text
+    assert "SIGMET(s) intersecting route" not in text
+
+
+def test_text_digest_good_empty_sigmet_fetch_has_no_section():
+    from weatherbrief.digest.text import format_digest
+
+    snap = _snapshot_with_sigmets(RouteSigmets(
+        corridor_nm=50.0, fetch_time=datetime(2024, 6, 1, 10, 0), sigmets=[],
+    ))
+    text = format_digest(snap, datetime(2024, 6, 1, 10, 0))
+    assert "SIGMETs Along Route" not in text
+
+
+def test_failed_sigmet_fetch_survives_serialization():
+    """``fetch_ok`` False rides in briefing.json (web, iOS and the agent read it
+    there); a block written before the field reads as a good fetch."""
+    from weatherbrief.models import ForecastSnapshot
+
+    snap = _snapshot_with_sigmets(RouteSigmets(
+        corridor_nm=50.0, fetch_time=datetime(2024, 6, 1, 10, 0), sigmets=[], fetch_ok=False,
+    ))
+    dumped = snap.model_dump(mode="json")
+    assert dumped["route_sigmets"]["fetch_ok"] is False
+    assert ForecastSnapshot.model_validate(dumped).route_sigmets.fetch_ok is False
+    del dumped["route_sigmets"]["fetch_ok"]
+    assert ForecastSnapshot.model_validate(dumped).route_sigmets.fetch_ok is True
+
+
 def test_text_digest_no_observations_when_none():
     """Text digest omits METAR/TAF section when no observations."""
     from weatherbrief.models import ForecastSnapshot

@@ -203,6 +203,7 @@
   "sigmets.hazards": " — Gefahren: ",
   "sigmets.off": "abseits der Route",
   "sigmets.severeBanner": "Schweres (SEV) SIGMET auf der Route",
+  "sigmets.unavailable": "SIGMETs bei Erstellung des Briefings nicht verfügbar (Quelle hat nicht geantwortet). Nicht geprüft, nicht „keine“: SIGMETs vor dem Abflug prüfen.",
   "sigmets.showDetails": "SIGMET-Details anzeigen",
   "sigmets.info": "SIGMET-Info",
   "sigmets.pendingFrom": "ab {time}",

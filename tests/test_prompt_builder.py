@@ -534,3 +534,35 @@ def test_sigmet_no_departure_omits_activity_tag():
     assert "Flight window:" not in ctx
     assert "INACTIVE" not in ctx
     assert "ACTIVE during flight" not in ctx
+
+
+# --- SIGMETs not checked at build time (#734) ---------------------------------
+
+
+def test_failed_sigmet_fetch_says_not_checked(sample_snapshot):
+    """An empty list from a failed fetch is "not checked": the section says so
+    and tells the briefer not to imply there are none."""
+    from weatherbrief.models import RouteSigmets
+
+    dep = datetime(2026, 2, 17, 9, 0, 0)
+    snap = sample_snapshot.model_copy(update={
+        "route_sigmets": RouteSigmets(corridor_nm=50, fetch_time=dep, sigmets=[], fetch_ok=False),
+    })
+    context = build_digest_context(snap, dep)
+    assert "=== SIGMETs ALONG ROUTE ===\nNOT CHECKED: the SIGMET source did not respond" in context
+    assert "Do NOT say or imply there are no SIGMETs" in context
+    assert "SIGMET(s) intersecting route" not in context
+
+
+def test_good_empty_sigmet_fetch_adds_no_section(sample_snapshot):
+    """A good fetch with nothing matched (and older packs, fetch_ok defaulting
+    True) is unchanged: no SIGMET section."""
+    from weatherbrief.models import RouteSigmets
+
+    dep = datetime(2026, 2, 17, 9, 0, 0)
+    for block in (
+        RouteSigmets(corridor_nm=50, fetch_time=dep, sigmets=[]),
+        RouteSigmets.model_validate({"corridor_nm": 50, "fetch_time": dep.isoformat(), "sigmets": []}),
+    ):
+        context = build_digest_context(sample_snapshot.model_copy(update={"route_sigmets": block}), dep)
+        assert "SIGMETs ALONG ROUTE" not in context

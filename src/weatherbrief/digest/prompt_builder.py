@@ -300,7 +300,11 @@ def _append_shared_sections(
         sections.append(_format_observed_context(snapshot.observed_conditions))
 
     # --- Route SIGMETs (D-0 only) ---
-    if snapshot.route_sigmets and snapshot.route_sigmets.count:
+    # A failed fetch is "not checked", never "none" (#734): say so, so the
+    # briefer does not read the missing section as a quiet route.
+    if snapshot.route_sigmets and not snapshot.route_sigmets.fetch_ok:
+        sections.append(_format_sigmets_unavailable_context())
+    elif snapshot.route_sigmets and snapshot.route_sigmets.count:
         dep = snapshot.departure_time
         arr = (
             dep + timedelta(hours=snapshot.route.flight_duration_hours)
@@ -781,6 +785,18 @@ def _format_sigmets_context(
             lines.append(f"    {s.raw_text}")
 
     return "\n".join(lines)
+
+
+def _format_sigmets_unavailable_context() -> str:
+    """The SIGMET section when the source did not respond at build time (#734)."""
+    return "\n".join([
+        "=== SIGMETs ALONG ROUTE ===",
+        "NOT CHECKED: the SIGMET source did not respond when this briefing was "
+        "built, so whether any SIGMET affects the route is UNKNOWN. Do NOT say "
+        "or imply there are no SIGMETs; say "
+        "they could not be checked and that the pilot must check them before "
+        "departure.",
+    ])
 
 
 def _format_alternates_context(alt: RouteAlternates) -> str:

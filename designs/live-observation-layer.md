@@ -267,6 +267,9 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
 - `sigmets` — every current route SIGMET (cap 20, `sigmets_total`), with the
   same `label` the change messages use ("LECB 3: EMBD TS") so an agent can tie
   them, and `new_since_briefing` when known (#689); no polygon, no raw text.
+- `sigmets_at_briefing_unavailable: true` — only when the briefing's own
+  SIGMET fetch failed (#734): the digest's silence on SIGMETs is "not checked".
+  Not shown with `live: null` (no layer yet); the digest says it there.
 - `airports` — departure, destination and the top alternates only (the
   classifier's `airport_roles`), when the corridor fetch has a METAR for them.
 
@@ -986,6 +989,18 @@ What the code relies on:
   layer: `run_realtime_refresh` turns it into `None` (stored SIGMETs kept),
   `SharedSigmetSource` raises `SigmetSourceUnavailable`, and
   `classify_changes` skips a `fetch_ok=False` block anyway.
+- **Failed at build time (#734).** The pipeline still stores the empty
+  `fetch_ok=False` block as the baseline (§46, "Not changed"); only what is
+  shown changed. Web (`helpers/route-sigmets.ts::sigmetSectionState`), iOS
+  (`RouteSigmets.unavailable` / `showsSection`, which also offers the Observed
+  tab), the text digest and the HTML/PDF report show
+  `SIGMETS_UNAVAILABLE_TEXT` (`models/observations.py`, three hand-kept copies:
+  Python, web i18n `sigmets.unavailable`, iOS `RouteSigmets.unavailableText`);
+  the LLM prompt gets a "NOT CHECKED" section; the agent `live` block carries
+  `sigmets_at_briefing_unavailable: true`. The notice goes once a good fetch
+  lands: the live tick / ↻ never store a failed block, and `overlay_live` (and
+  the clients' patch) replace `route_sigmets` with the live one. The digest
+  keeps saying "not checked" (build-time, not overlaid).
 - **Cancelled (#686, §46).** `_cancelled_traces`: a trace last seen pending,
   missing, not superseded, and `isigmet_covers(latest.queried_at, …)` gets
   `cancelled_at` and a `sigmet_cancelled` highlight row; `pending_sigmet_key` then

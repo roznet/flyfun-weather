@@ -899,7 +899,10 @@ LIVE_NOTE = (
     "say it was written at its written_at, which can be older than "
     "live_updated_at. times_today of 2 or "
     "more means the change has come and gone today (bouncing, not building); "
-    "recently_cleared lists what cleared in the last hour."
+    "recently_cleared lists what cleared in the last hour. "
+    "sigmets_at_briefing_unavailable: true means the SIGMET source did not "
+    "respond when the briefing was built: the digest's silence on SIGMETs is "
+    "'not checked', not 'none'."
 )
 
 #: Size limits — the block rides on every get_briefing call. SIGMETs on a
@@ -1011,6 +1014,10 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     sigmets = list(layer.route_sigmets.sigmets) if layer.route_sigmets else []
     new_keys = set(changes.new_sigmets) if changes and changes.new_sigmets is not None else None
     out["sigmets_total"] = len(sigmets)
+    # The briefing's own SIGMET fetch failed (#734): its empty list is "not
+    # checked". Only set when true, like the MCP's live_unavailable.
+    if (briefing_data.get("route_sigmets") or {}).get("fetch_ok") is False:
+        out["sigmets_at_briefing_unavailable"] = True
     out["sigmets"] = [
         {
             # Same "FIR seq: QUAL HAZARD" label the change messages use, so a

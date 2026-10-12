@@ -288,7 +288,7 @@ final class BriefingViewModel {
     nonisolated static func hasObservedContent(_ snapshot: SnapshotResponse) -> Bool {
         snapshot.liveChanges != nil
             || !(snapshot.routeObservations?.reportingAirports.isEmpty ?? true)
-            || !(snapshot.routeSigmets?.matched.isEmpty ?? true)
+            || (snapshot.routeSigmets?.showsSection ?? false)
             || (snapshot.observedConditions?.hasAnyField ?? false)
     }
 

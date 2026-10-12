@@ -17,6 +17,7 @@ from weatherbrief.models import (
     RouteAlternates,
     RouteObservations,
     RouteSigmets,
+    SIGMETS_UNAVAILABLE_TEXT,
     SoundingAnalysis,
     VerticalMotionClass,
     WaypointAnalysis,
@@ -75,8 +76,10 @@ def format_digest(
     if snapshot.observed_conditions and snapshot.observed_conditions.has_any_field:
         lines.extend(_format_observed_conditions(snapshot.observed_conditions))
 
-    # Route SIGMETs (D-0 only)
-    if snapshot.route_sigmets and snapshot.route_sigmets.count:
+    # Route SIGMETs (D-0 only). A failed fetch is "not checked", not "none" (#734).
+    if snapshot.route_sigmets and not snapshot.route_sigmets.fetch_ok:
+        lines.extend(["--- SIGMETs Along Route ---", f"  {SIGMETS_UNAVAILABLE_TEXT}", ""])
+    elif snapshot.route_sigmets and snapshot.route_sigmets.count:
         lines.extend(_format_route_sigmets(snapshot.route_sigmets))
 
     # Weather-based alternates (D-2 inward, opt-in)

@@ -5912,7 +5912,10 @@ kind of miss a push notification makes costly.
 - **The briefing build** still stores a failed fetch's empty list as the
   baseline (now with `fetch_ok: false`): a briefing then shows no SIGMETs, and
   the live layer alerts them as new. Treating it as "no baseline" would seed
-  the baseline from the first live tick and alert nothing. Follow-up.
+  the baseline from the first live tick and alert nothing. Since #734 the
+  baseline is unchanged but every surface (web, iOS, digest prompt, text
+  digest, report, agent `live` block) says "SIGMETs unavailable at briefing
+  time" instead of showing none (live-observation-layer.md, Pending SIGMETs).
 - A SIGMET first seen live, already valid, that disappears early still has no
   row (rows are "since the briefing").
 

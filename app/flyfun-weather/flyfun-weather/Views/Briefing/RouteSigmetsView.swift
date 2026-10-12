@@ -15,7 +15,8 @@ import SwiftUI
 /// while "MOV NE 30kt" only refines the timing). Regular width shows it inline.
 ///
 /// Rendered only when the pack carries at least one matched SIGMET, which the
-/// pipeline populates on D-0 only.
+/// pipeline populates on D-0 only, or when the fetch failed at briefing time:
+/// then a notice says SIGMETs were not checked (#734), never an empty table.
 ///
 /// SYNC: `web/ts/managers/briefing-ui.ts::renderRouteSigmets`.
 struct RouteSigmetsView: View {
@@ -37,7 +38,16 @@ struct RouteSigmetsView: View {
     }
 
     var body: some View {
-        if let block = sigmets, !block.matched.isEmpty {
+        if let block = sigmets, block.unavailable {
+            VStack(alignment: .leading, spacing: Theme.spacingM) {
+                Text("Area Hazards")
+                    .font(.headline)
+                    .foregroundStyle(Theme.text)
+                unavailableBanner
+            }
+            .padding(.horizontal, Theme.cardPadding)
+            .accessibilityIdentifier("sigmetsSection")
+        } else if let block = sigmets, !block.matched.isEmpty {
             VStack(alignment: .leading, spacing: Theme.spacingM) {
                 header(block)
                 summary(block)
@@ -100,6 +110,17 @@ struct RouteSigmetsView: View {
             parts.append("\(SigmetAlongRoute.level(block.altitudeLowFt ?? 0))–\(SigmetAlongRoute.level(high))")
         }
         return parts.joined(separator: " · ")
+    }
+
+    private var unavailableBanner: some View {
+        Label(RouteSigmets.unavailableText, systemImage: "questionmark.circle")
+            .font(.caption)
+            .foregroundStyle(Theme.amber)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(Theme.spacingS)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.amber.opacity(Theme.tableRowHighlightOpacity), in: RoundedRectangle(cornerRadius: 10))
+            .accessibilityIdentifier("sigmetsUnavailable")
     }
 
     private var severeBanner: some View {
