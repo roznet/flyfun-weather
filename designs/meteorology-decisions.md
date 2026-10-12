@@ -6026,3 +6026,54 @@ made the most common European "good but not 10 km" figure marginal.
   reports VFR, breaking FAA semantics for the US regime.
 - **"Has `visibility_meters` ⇒ metric"** (as the issue first suggested): every
   parsed report has it, see above.
+
+## 49. A terminal with no METAR/TAF reads a nearby station's, gated on distance and elevation (#767)
+
+**Date:** 2026-10-12 · **Code:** `analysis/obs_proxy.py`, `RouteObservations.terminal`
+
+### Context
+
+EGTF (Fairoaks) and EGLK (Blackbushe) publish no METAR or TAF; pilots there read
+EGLL and EGLF. The app showed the terminal blank ("METAR unavailable", no terminal
+alerts, NWP-only alternate-required) although the station was already in the
+corridor fetch as a route airport.
+
+### Decision (agreed on the issue)
+
+- METAR proxy ≤ **10 NM**, TAF proxy ≤ **15 NM**, automatic pick only when
+  |Δ elevation| ≤ **100 ft** (unknown elevation fails). Ceilings are AGL above
+  the reporting station, so a station at another height misreads the field's
+  cloud base: EGTF→EGLF (Δ 158 ft) is never automatic.
+- METAR and TAF chosen **independently**; a METAR proxy whose latest METAR is
+  older than **90 min** is skipped (EGLF overnight); a TAF proxy needs a TAF
+  valid at ETA.
+- **Curated overrides** (`configs/obs_proxy.json`, seed `EGLK → EGLF`) skip the
+  distance/elevation gates and **replace** the automatic pick for that field and
+  kind: EGVO (6.5 NM, Δ 80 ft) passes both gates for EGLK but reports
+  irregularly, so with EGLF closed EGLK reads "unavailable", not Odiham. A
+  per-kind entry (`{"metar": [...]}`) leaves the other kind automatic.
+- A field that publishes a TAF, even one not valid at ETA, gets **no TAF
+  proxy**: "no TAF for ETA" stays the honest answer there.
+- **Full terminal alerting** on the proxy, wind included (the station's wind on
+  the **field's** runways), labelled "EGTF (via EGLL)", keyed on the field
+  (`metar:EGTF`). The station is not reported again as a route airport.
+- **Stable for the flight**: the live tick keeps the previous pick while it
+  still qualifies. A switch (stale station) is **not a change**: the classifier
+  compares the station read now with the same station in the baseline, so both
+  sides move together; with no baseline row for it, the METAR keys are unknown.
+- **No ceiling correction** by the elevation difference (the issue's open
+  point). Within the 100 ft gate the shift is at most one 100 ft step, the
+  category edges (500/1000/3000 ft) are rarely that close, and a corrected
+  figure would be one no report states. The raw report is never touched.
+- Never relabelled: the station's report stays on its own row under its own
+  ICAO (raw text, history, verification, highlight grounding).
+
+### Rejected
+
+- **Copying the station's report onto the field's row**: every consumer would
+  have been right by accident, and wrong where the ICAO matters (raw text,
+  verification, the highlight's grounding check).
+- **The 200 NM nearest-watchlist rule** (`api/maps.py::_resolve_airports`): far
+  too loose to stand in for a field's own report.
+- **Automatic fallback after a curated list**: would bring EGVO back for EGLK
+  every night.

@@ -268,6 +268,21 @@ describe('the departure / destination pair', () => {
     expect(missingWindLabel(dials[1])).toBe('No METAR');
   });
 
+  it('names the proxy station and shows its caption (#767)', () => {
+    const field = {
+      icao: 'ZZAA', runway_wind: picture('ZZAA', [metar]),
+      metar_proxy: { icao: 'ZZPX', distance_nm: 8.2, bearing_deg: 28 },
+      proxy_caption: 'using ZZPX as proxy · 8 NM NE',
+    } as unknown as AirportObservation;
+    const dials = runwayWindPair([field, obs('ZZBB', picture('ZZBB', [metar]))], 'ZZAA', 'ZZBB');
+    expect(dials[0].metarStation).toBe('ZZPX');
+    expect(dials[0].proxyCaption).toBe('using ZZPX as proxy · 8 NM NE');
+    expect(dials[1].metarStation).toBeNull();
+    const html = runwayWindPairHtml(dials);
+    expect(html).toContain('METAR ZZPX ');
+    expect(html).toContain('<div class="rw-proxy">using ZZPX as proxy · 8 NM NE</div>');
+  });
+
   it('is empty when no airport has a picture (older server)', () => {
     expect(runwayWindPair([obs('ZZAA', undefined)], 'ZZAA', 'ZZBB')).toEqual([]);
     expect(runwayWindPair(null, 'ZZAA', 'ZZBB')).toEqual([]);

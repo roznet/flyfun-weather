@@ -316,6 +316,33 @@ MAX_NOTABLE_AIRPORTS = 12
 PASSED_MARGIN_NM = 5
 
 
+def _terminal_dict(live: dict, obs_by_icao: dict, icao: str) -> tuple[dict, dict]:
+    """A terminal's row as the facts read it, and where its reports come from.
+
+    A field with no METAR/TAF of its own reads its proxy station's (#767),
+    through the same accessor as the glance and the classifier; the facts
+    then say so ("metar_from": "EGLL, 8 NM NE — EGTF has no METAR"), which
+    also puts the station's ICAO in the facts the grounding check reads.
+    """
+    row = obs_by_icao.get(icao, {})
+    if not (row.get("metar_proxy") or row.get("taf_proxy")):
+        return row, {}
+    from weatherbrief.models.observations import RouteObservations
+
+    try:
+        term = RouteObservations.model_validate(live.get("route_observations")).terminal(icao)
+    except ValidationError:
+        logger.warning("Live highlight: unreadable observations for proxy %s", icao, exc_info=True)
+        return row, {}
+    if term is None:
+        return row, {}
+    via = {}
+    for kind, proxy in (("metar", term.metar_proxy), ("taf", term.taf_proxy)):
+        if proxy is not None:
+            via[f"{kind}_from"] = f"{proxy.icao}, {proxy.where} ({icao} has no {kind.upper()})"
+    return term.effective().model_dump(mode="json"), via
+
+
 def _airports_along(live: dict, flown: float) -> tuple[dict, dict]:
     """The facts' route-airport block, and the gate's view of it.
 
@@ -488,8 +515,9 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
     obs_by_icao = {x["icao"]: x for x in ((live.get("route_observations") or {}).get("airports") or [])}
     for role, icao in (("departure", dep), ("destination", dest)):
         s = stations.get(role) or {}
-        obs = obs_by_icao.get(icao, {})
+        obs, via = _terminal_dict(live, obs_by_icao, icao)
         a = {"icao": icao, "metar_now": _metar_words(obs) if obs.get("has_metar") else (s.get("metar_category") or "unavailable")}
+        a.update(via)
         if s.get("convective"):
             a["reported_convection"] = s["convective"]
         if role == "destination":

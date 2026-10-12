@@ -109,6 +109,8 @@ function lineHtml(line: LiveGlanceLine, index: number): string {
     + '<span class="glance-body">'
     + `<span class="glance-phase">${escapeHtml(phaseLabel(line.phase))}</span>`
     + `<span class="glance-text">${escapeHtml(line.text ?? '')}</span>${missing}`
+    // #767: a terminal read through a nearby station says which, in gray.
+    + (line.proxy_caption ? `<span class="glance-proxy">${escapeHtml(line.proxy_caption)}</span>` : '')
     + '</span>'
     + (tappable ? '<span class="glance-chevron" aria-hidden="true">▸</span>' : '')
     + `</${tappable ? 'button' : 'div'}>`;

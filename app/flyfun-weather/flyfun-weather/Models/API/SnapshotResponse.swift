@@ -156,6 +156,19 @@ nonisolated struct RouteObservations: Codable, Sendable {
     }
 }
 
+/// A station standing in for a field's METAR or TAF (#767). Mirrors
+/// `models/observations.py::ObsProxy`.
+nonisolated struct ObsProxy: Codable, Sendable, Equatable {
+    let icao: String
+    let distanceNm: Double?
+    /// True bearing field → station.
+    let bearingDeg: Int?
+    /// Station minus field elevation (ft).
+    let elevationDiffFt: Int?
+    /// auto / override.
+    let source: String?
+}
+
 nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let icao: String
     let name: String?
@@ -235,6 +248,13 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     /// Runways and the METAR / TAF-at-ETA winds on them; nil when the airport
     /// has no runway data or the pack predates #758.
     let runwayWind: RunwayWindPicture?
+    /// #767: a nearby station standing in for a field with no METAR / no TAF
+    /// of its own (its report stays on its own row), and the server-built
+    /// gray line for it ("using EGLL as proxy · 8 NM NE"). Nil when the field
+    /// reports itself, and on older packs.
+    let metarProxy: ObsProxy?
+    let tafProxy: ObsProxy?
+    let proxyCaption: String?
 
     var id: String { icao }
 

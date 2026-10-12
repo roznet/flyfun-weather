@@ -742,7 +742,12 @@ def _sigmet_text(s: dict) -> str:
 def _metar_text(a: dict) -> str:
     cat = f" ({a['flight_category']})" if a.get("flight_category") else ""
     when = f" {_hhmmz(a.get('metar_time'))}" if a.get("metar_time") else ""
-    return f"{a.get('icao', '')}{when}{cat}: {a.get('metar_raw', '')}"
+    # A proxied terminal (#767) names both: the field, and the station the
+    # report is from — never the station's report as the field's own.
+    name = a.get("icao", "")
+    if a.get("metar_station") and a["metar_station"] != name:
+        name = f"{name} (via {a['metar_station']})"
+    return f"{name}{when}{cat}: {a.get('metar_raw', '')}"
 
 
 def _flight_day_link(base_url: str, flight_id: str) -> str:

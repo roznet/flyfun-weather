@@ -103,6 +103,7 @@
     "icao": "LELL",
     "passed": false,
     "phase": "departure",
+    "proxy_caption": null,
     "sources": [
      "metar:LELL"
     ],
@@ -135,6 +136,7 @@
     "icao": null,
     "passed": false,
     "phase": "enroute",
+    "proxy_caption": null,
     "sources": [
      "sigmet:LECB|2"
     ],
@@ -166,6 +168,7 @@
     "icao": "LEMI",
     "passed": false,
     "phase": "arrival",
+    "proxy_caption": null,
     "sources": [
      "metar:LEMI"
     ],
@@ -1182,7 +1185,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 13.5,
@@ -1211,7 +1215,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 47.8,
@@ -1240,7 +1245,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 169.9,
@@ -1272,7 +1278,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 242.5,
@@ -1301,7 +1308,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 268.7,
@@ -1330,7 +1338,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 274.0,
@@ -1359,7 +1368,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    },
    {
     "along_nm": 275.6,
@@ -1388,7 +1398,8 @@
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
     "taf_temporary_type": null,
-    "taf_weather": []
+    "taf_weather": [],
+    "via": null
    }
   ],
   "waypoints": [
@@ -1447,6 +1458,7 @@
     "metar_headwind_kt": null,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1026.0,
     "metar_raw": "METAR LELL 020500Z AUTO VRB02KT CAVOK 20/15 Q1026",
     "metar_report_type": "METAR",
@@ -1462,6 +1474,7 @@
     "metar_wind_variable_to": null,
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
+    "proxy_caption": null,
     "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
@@ -1470,6 +1483,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -1502,6 +1516,7 @@
     "metar_headwind_kt": 12.5,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1025.0,
     "metar_raw": "METAR LEBL 020500Z 05013KT 9999 FEW044 23/17 Q1025 NOSIG",
     "metar_report_type": "METAR",
@@ -1517,6 +1532,7 @@
     "metar_wind_variable_to": null,
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LEBL",
      "runways": [
@@ -1650,6 +1666,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -1682,6 +1699,7 @@
     "metar_headwind_kt": 3.9,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1025.0,
     "metar_raw": "METAR LERS 020500Z 02006KT 9999 -RA FEW020 SCT027 BKN041 20/18 Q1025",
     "metar_report_type": "METAR",
@@ -1699,6 +1717,7 @@
     "metar_wind_variable_to": null,
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LERS",
      "runways": [
@@ -1764,6 +1783,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -1796,6 +1816,7 @@
     "metar_headwind_kt": 3.6,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T05:00:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1024.0,
     "metar_raw": "SPECI LEVC 020509Z 05009KT 020V080 9999 TS FEW015CB FEW023 SCT030 BKN035 21/19 Q1024 BECMG 3000 SHRA TSRA FEW015CB",
     "metar_report_type": "SPECI",
@@ -1813,6 +1834,7 @@
     "metar_wind_variable_to": 80,
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LEVC",
      "runways": [
@@ -1878,6 +1900,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -1910,6 +1933,7 @@
     "metar_headwind_kt": 0.9,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1021.0,
     "metar_raw": "METAR LEAL 020500Z 02005KT 340V060 9999 FEW025 SCT045 26/19 Q1021 NOSIG",
     "metar_report_type": "METAR",
@@ -1925,6 +1949,7 @@
     "metar_wind_variable_to": 60,
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LEAL",
      "runways": [
@@ -1990,6 +2015,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -2022,6 +2048,7 @@
     "metar_headwind_kt": 1.7,
     "metar_previous_flight_category": null,
     "metar_previous_time": null,
+    "metar_proxy": null,
     "metar_qnh": 1022.0,
     "metar_raw": "METAR LERI 020500Z 36004KT 340V060 9999 SCT020 23/18 Q1022 NOSIG",
     "metar_report_type": "METAR",
@@ -2037,6 +2064,7 @@
     "metar_wind_variable_to": 60,
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LERI",
      "runways": [
@@ -2102,6 +2130,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -2134,6 +2163,7 @@
     "metar_headwind_kt": 7.2,
     "metar_previous_flight_category": "MVFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1021.0,
     "metar_raw": "METAR LELC 020500Z 02008KT 9999 FEW015 24/22 Q1021 NOSIG",
     "metar_report_type": "METAR",
@@ -2149,6 +2179,7 @@
     "metar_wind_variable_to": null,
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LELC",
      "runways": [
@@ -2248,6 +2279,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,
@@ -2280,6 +2312,7 @@
     "metar_headwind_kt": 9.0,
     "metar_previous_flight_category": "VFR",
     "metar_previous_time": "2026-10-02T04:30:00Z",
+    "metar_proxy": null,
     "metar_qnh": 1022.0,
     "metar_raw": "METAR LEMI 020500Z 02010KT CAVOK 23/21 Q1022",
     "metar_report_type": "METAR",
@@ -2295,6 +2328,7 @@
     "metar_wind_variable_to": null,
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
+    "proxy_caption": null,
     "runway_wind": {
      "icao": "LEMI",
      "runways": [
@@ -2360,6 +2394,7 @@
     "taf_headwind_kt": null,
     "taf_issue_time": null,
     "taf_prevailing_category_at_eta": null,
+    "taf_proxy": null,
     "taf_raw": null,
     "taf_significant_weather": [],
     "taf_temporary_category_at_eta": null,

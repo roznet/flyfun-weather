@@ -98,14 +98,24 @@ def _briefing(scenario: dict, pack_index: int) -> dict:
     return briefing
 
 
-def replay(scenario: dict, flight_dir: Path) -> list[Tick]:
-    """Commit every tick of the live window; return what each one showed."""
+def replay(scenario: dict, flight_dir: Path, transform=None) -> list[Tick]:
+    """Commit every tick of the live window; return what each one showed.
+
+    ``transform(observations, at, previous)`` (optional) rewrites each
+    corridor fetch before it is committed, and each pack's baseline
+    (``previous`` None) — a scenario variant, e.g. a terminal withheld and
+    read through a proxy station (#767). ``previous`` is the last tick's
+    committed observations."""
     inputs = scenario["inputs"]
     packs = []
     for i, p in enumerate(inputs["packs"]):
         pack_dir = flight_dir / p["timestamp"].replace(":", "-")
         pack_dir.mkdir(parents=True, exist_ok=True)
         briefing = _briefing(scenario, i)
+        if transform is not None and briefing.get("route_observations"):
+            base = RouteObservations.model_validate(briefing["route_observations"])
+            base = transform(base, _dt(p["timestamp"]), None)
+            briefing["route_observations"] = base.model_dump(mode="json")
         (pack_dir / "briefing.json").write_text(json.dumps(briefing))
         packs.append((_dt(p["active_from"]), p["timestamp"], pack_dir, briefing))
 
@@ -116,9 +126,13 @@ def replay(scenario: dict, flight_dir: Path) -> list[Tick]:
     shown: dict[tuple, LiveChange] = {}
     while at <= end:
         _, ts, pack_dir, briefing = [p for p in packs if p[0] <= at][-1]
+        observations = observations_at(scenario, at)
+        if transform is not None:
+            previous = ticks[-1].layer.route_observations if ticks else None
+            observations = transform(observations, at, previous)
         layer = commit_live_update(
             pack_dir, briefing_data=briefing,
-            observations=observations_at(scenario, at), sigmets=sigmets_at(scenario, at),
+            observations=observations, sigmets=sigmets_at(scenario, at),
             observed=None, started_at=at, pack_timestamp=ts, now=at,
         )
         assert layer is not None, f"tick {at} refused"

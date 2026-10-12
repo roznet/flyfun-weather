@@ -421,12 +421,16 @@ def _airport_metar_changes(
     base: AirportObservation,
     a: AirportObservation,
     role: ChangeRole,
+    label: str | None = None,
 ) -> tuple[list[tuple[str, str, str | None, str | None, str]], set[str]]:
     """(kind, direction, from, to, message) candidates for one airport, plus the
-    change keys whose state is unknown this tick (no usable report)."""
-    icao = a.icao
+    change keys whose state is unknown this tick (no usable report).
+    ``label`` names the airport in messages ("EGTF (via EGLL)" for a proxied
+    terminal, #767); keys always use the field's ICAO."""
+    key_icao = a.icao
+    icao = label or a.icao
     if not _has_report(a):
-        return [], {f"{p}:{icao}" for p in ("metar", "conv", "wx", "wind")}
+        return [], {f"{p}:{key_icao}" for p in ("metar", "conv", "wx", "wind")}
     if not _newer(base, a):
         return [], set()
     out: list[tuple[str, str, str | None, str | None, str]] = []
@@ -437,7 +441,7 @@ def _airport_metar_changes(
     # Flight category
     b, l_ = category_rank(base.metar_flight_category), category_rank(a.metar_flight_category)
     if b is None or l_ is None:
-        unknown.add(f"metar:{icao}")
+        unknown.add(f"metar:{key_icao}")
     elif l_ != b and _category_matters(role, b, l_):
         out.append((
             "metar_category", "worse" if l_ > b else "better",
@@ -479,7 +483,7 @@ def _airport_metar_changes(
         # "no change", so say so at debug level.
         logger.debug("Live wind not evaluated for %s: baseline=%s latest=%s",
                      icao, base.metar_wind_advisory, a.metar_wind_advisory)
-        unknown.add(f"wind:{icao}")
+        unknown.add(f"wind:{key_icao}")
     elif lwr != bwr:
         out.append((
             "metar_wind", "worse" if lwr > bwr else "better",
@@ -517,14 +521,26 @@ def _airport_changes(
     which is not the same as "no longer changed" (#754's cleared pushes)."""
     out: list[LiveChange] = []
     base_by_icao = {a.icao: a for a in baseline.airports}
+    # A station standing in for a terminal (#767) is reported once, at the
+    # terminal's tier, not again as a route airport.
+    serving = _proxy_stations(latest, roles)
     for a in latest.airports:
         base = base_by_icao.get(a.icao)
         if base is None:
             continue
         role = roles.get(a.icao.upper(), "route")
+        if role == "route" and a.icao.upper() in serving:
+            continue
         if not airport_relevant(role, a.enroute_distance_nm, departed=departed, flown_nm=flown_nm):
             continue
-        candidates, unk = _airport_metar_changes(base, a, role)
+        label = None
+        metar_known = True
+        if role in ("departure", "destination"):
+            a, base, label, metar_known = _terminal_pair(baseline, latest, a, base)
+        if metar_known:
+            candidates, unk = _airport_metar_changes(base, a, role, label)
+        else:
+            candidates, unk = [], {f"{p}:{a.icao}" for p in _KEY_PREFIX.values()}
         unknown |= unk
         if evaluated is not None:
             evaluated |= {f"{p}:{a.icao}" for p in _KEY_PREFIX.values()} - unk
@@ -562,11 +578,51 @@ def _airport_changes(
             from_value=base.taf_flight_category_at_eta, to_value=a.taf_flight_category_at_eta,
             observed_at=a.taf_issue_time, enroute_distance_nm=a.enroute_distance_nm,
             message=(
-                f"{a.icao} TAF at ETA: {base.taf_flight_category_at_eta}"
+                f"{label or a.icao} TAF at ETA: {base.taf_flight_category_at_eta}"
                 f" → {a.taf_flight_category_at_eta}"
             ),
         ))
     return out
+
+
+def _proxy_stations(latest: RouteObservations, roles: dict[str, ChangeRole]) -> set[str]:
+    """ICAOs currently standing in for a departure/destination (#767)."""
+    out: set[str] = set()
+    for icao, role in roles.items():
+        if role not in ("departure", "destination"):
+            continue
+        field = latest.airport(icao)
+        for proxy in (field.metar_proxy, field.taf_proxy) if field is not None else ():
+            if proxy is not None:
+                out.add(proxy.icao.upper())
+    return out
+
+
+def _terminal_pair(
+    baseline: RouteObservations,
+    latest: RouteObservations,
+    a: AirportObservation,
+    base: AirportObservation,
+) -> tuple[AirportObservation, AirportObservation, str | None, bool]:
+    """The (latest, baseline, label, metar_known) a terminal is compared on.
+
+    A field with its own reports on both sides compares as before. A proxied
+    one (#767) compares the station it reads *now* with the same station in
+    the baseline: a proxy switch (stale station, a field that stopped
+    reporting) moves both sides together, so it is never itself a change.
+    ``metar_known`` is False when the baseline lacks that station's row:
+    there is nothing to compare the METAR with (the TAF needs no guard, both
+    sides must have a reading at ETA anyway).
+    """
+    if not (a.metar_proxy or a.taf_proxy or base.metar_proxy or base.taf_proxy):
+        return a, base, None, True
+    lt = latest.terminal(a.icao)
+    metar_station = lt.metar_proxy.icao if lt.metar_proxy else a.icao
+    taf_station = lt.taf_proxy.icao if lt.taf_proxy else a.icao
+    bt = baseline.terminal(a.icao, metar_station=metar_station, taf_station=taf_station)
+    metar_known = bt is not None and bt.metar_row is not None
+    label = lt.label if lt.proxied else None
+    return lt.effective(), (bt.effective() if bt is not None else base), label, metar_known
 
 
 # --- SIGMET -----------------------------------------------------------------

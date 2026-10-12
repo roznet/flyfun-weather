@@ -10,6 +10,36 @@ from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.models.runway_wind import RunwayWindPicture
 
 
+_COMPASS8 = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+class ObsProxy(BaseModel):
+    """A nearby station standing in for a field with no METAR or TAF (#767).
+
+    Set on the *field's* row (``AirportObservation.metar_proxy`` /
+    ``taf_proxy``); the station's own row keeps its report under its own ICAO.
+    Chosen by ``analysis/obs_proxy.resolve_obs_proxy``.
+    """
+
+    icao: str
+    distance_nm: float
+    # True bearing from the field to the station, so "8 NM NE" reads from
+    # where the pilot is.
+    bearing_deg: int | None = None
+    # Station elevation minus field elevation (ft). None when either is unknown
+    # (only a curated override can pick such a station).
+    elevation_diff_ft: int | None = None
+    source: str = "auto"  # "auto" | "override"
+
+    @property
+    def where(self) -> str:
+        """"8 NM NE" (distance rounded, 8-point compass)."""
+        text = f"{self.distance_nm:.0f} NM"
+        if self.bearing_deg is not None:
+            text += f" {_COMPASS8[int(((self.bearing_deg % 360) + 22.5) // 45) % 8]}"
+        return text
+
+
 class AirportObservation(BaseModel):
     """METAR/TAF data for one airport along the route."""
 
@@ -92,6 +122,37 @@ class AirportObservation(BaseModel):
     # airport has no runway data, the computation failed, or on packs built
     # before #758.
     runway_wind: RunwayWindPicture | None = None
+    # Stand-in stations when this field has no METAR / no TAF of its own
+    # (#767). Provenance only: the station's report stays on its own row, and
+    # ``RouteObservations.terminal`` is how a consumer reads it for the field.
+    # ``runway_wind`` then lays the station's winds over *this* field's
+    # runways. None for a field with its own report, and on older packs.
+    metar_proxy: ObsProxy | None = None
+    taf_proxy: ObsProxy | None = None
+
+    @computed_field
+    @property
+    def proxy_caption(self) -> str | None:
+        """The gray line clients show under a proxied terminal (#767):
+        "using EGLL as proxy · 8 NM NE", or "METAR EGLF (4 NM N) · TAF EGLL
+        (12 NM NE)" when the two differ ("TAF EGLK" for the field's own,
+        "TAF none" for neither). Server-built so web, iOS and the agents show
+        one string. None when the field reports itself."""
+        m, t = self.metar_proxy, self.taf_proxy
+        if m is None and t is None:
+            return None
+        if m is not None and t is not None and m.icao == t.icao:
+            return f"using {m.icao} as proxy · {m.where}"
+
+        def name(proxy: ObsProxy | None, own: bool) -> str:
+            if proxy is not None:
+                return f"{proxy.icao} ({proxy.where})"
+            return self.icao if own else "none"
+
+        return (
+            f"METAR {name(m, self.has_metar or bool(self.metar_raw))}"
+            f" · TAF {name(t, self.has_taf or bool(self.taf_raw))}"
+        )
 
     def taf_at_eta_line(self) -> str:
         """One-line TAF reading at ETA, shared by the LLM context and the text digest.
@@ -158,6 +219,190 @@ class RouteObservations(BaseModel):
     worst_taf_category: str | None = None
     has_conflicts: bool = False
     phenomena_along_route: list[str] = Field(default_factory=list)
+
+    def airport(self, icao: str | None) -> AirportObservation | None:
+        """The row filed under ``icao`` (case-insensitive), or None."""
+        if not icao:
+            return None
+        icao = icao.upper()
+        return next((a for a in self.airports if a.icao.upper() == icao), None)
+
+    def terminal(
+        self,
+        icao: str | None,
+        *,
+        metar_station: str | None = None,
+        taf_station: str | None = None,
+    ) -> "TerminalObservation | None":
+        """The weather a terminal (departure, destination) is flown on (#767).
+
+        The field's own METAR/TAF, or its proxy's when ``metar_proxy`` /
+        ``taf_proxy`` names one. Every terminal consumer reads through this
+        instead of looking the field up by ICAO, so a proxied field is never
+        blank on one surface and filled on another. ``metar_station`` /
+        ``taf_station`` force the station read (the significance classifier
+        compares a station with *itself* across a proxy switch). None when the
+        field is not in the corridor list at all.
+        """
+        field = self.airport(icao)
+        if field is None:
+            return None
+        metar_proxy, taf_proxy = field.metar_proxy, field.taf_proxy
+        if metar_station is not None and metar_station.upper() != field.icao.upper():
+            if metar_proxy is None or metar_proxy.icao.upper() != metar_station.upper():
+                metar_proxy = ObsProxy(icao=metar_station.upper(), distance_nm=0.0)
+        elif metar_station is not None:
+            metar_proxy = None
+        if taf_station is not None and taf_station.upper() != field.icao.upper():
+            if taf_proxy is None or taf_proxy.icao.upper() != taf_station.upper():
+                taf_proxy = ObsProxy(icao=taf_station.upper(), distance_nm=0.0)
+        elif taf_station is not None:
+            taf_proxy = None
+        metar_row = self.airport(metar_proxy.icao) if metar_proxy else field
+        taf_row = self.airport(taf_proxy.icao) if taf_proxy else field
+        return TerminalObservation(
+            field=field,
+            metar_row=metar_row,
+            taf_row=taf_row,
+            metar_proxy=metar_proxy,
+            taf_proxy=taf_proxy,
+        )
+
+
+_METAR_ADVISORY = ("metar_wind_advisory", "metar_best_runway_id", "metar_crosswind_kt", "metar_headwind_kt")
+_TAF_ADVISORY = ("taf_wind_advisory", "taf_best_runway_id", "taf_crosswind_kt", "taf_headwind_kt")
+# Provenance stays the field's, never the station's.
+_PROVENANCE = ("metar_proxy", "taf_proxy")
+
+
+class TerminalObservation(BaseModel):
+    """A terminal's effective METAR/TAF and where each comes from (#767).
+
+    Not serialized: built on demand by :meth:`RouteObservations.terminal`.
+    ``metar_row`` / ``taf_row`` are the rows the reports live on (the field
+    itself, or the proxy station's own row; None when that station is not in
+    the corridor list this time).
+    """
+
+    field: AirportObservation
+    metar_row: AirportObservation | None = None
+    taf_row: AirportObservation | None = None
+    metar_proxy: ObsProxy | None = None
+    taf_proxy: ObsProxy | None = None
+
+    @property
+    def icao(self) -> str:
+        return self.field.icao
+
+    @property
+    def proxied(self) -> bool:
+        return self.metar_proxy is not None or self.taf_proxy is not None
+
+    @property
+    def metar_station(self) -> str | None:
+        """ICAO the METAR comes from, None when there is no METAR."""
+        row = self.metar_row
+        if row is None or not (row.has_metar or row.metar_raw):
+            return None
+        return row.icao
+
+    @property
+    def taf_station(self) -> str | None:
+        row = self.taf_row
+        if row is None or not (row.has_taf or row.taf_raw):
+            return None
+        return row.icao
+
+    @property
+    def label(self) -> str:
+        """"EGTF (via EGLL)" — the field, and the station when it is proxied.
+        Every message about a proxied terminal names both (#767 decision 8)."""
+        via = []
+        for proxy in (self.metar_proxy, self.taf_proxy):
+            if proxy is not None and proxy.icao not in via:
+                via.append(proxy.icao)
+        return f"{self.icao} (via {', '.join(via)})" if via else self.icao
+
+    @property
+    def caption(self) -> str | None:
+        """The gray line under the terminal (``AirportObservation.proxy_caption``)."""
+        return self.field.proxy_caption
+
+    @property
+    def proxy_note(self) -> str | None:
+        """For the digests: "EGTF has no METAR or TAF; EGLL (8 NM NE,
+        elevation +3 ft) used as proxy". None when unproxied."""
+        m, t = self.metar_proxy, self.taf_proxy
+        if m is None and t is None:
+            return None
+
+        def station(p: ObsProxy) -> str:
+            elev = (
+                f", elevation {p.elevation_diff_ft:+d} ft" if p.elevation_diff_ft is not None else ""
+            )
+            return f"{p.icao} ({p.where}{elev})"
+
+        if m is not None and t is not None and m.icao == t.icao:
+            return f"{self.icao} has no METAR or TAF; {station(m)} used as proxy"
+        notes = []
+        if m is not None:
+            notes.append(f"{self.icao} has no METAR; {station(m)} used as METAR proxy")
+        if t is not None:
+            notes.append(f"{self.icao} has no TAF; {station(t)} used as TAF proxy")
+        return "; ".join(notes)
+
+    def effective(self) -> AirportObservation:
+        """The field's row with the station's METAR and TAF fields laid in.
+
+        For *policy* only (significance, glance categories): it carries the
+        station's raw text so convective tags read the same, so never render
+        its ``metar_raw`` as the field's — show the station's own row. The
+        wind advisories are recomputed on the **field's** runways (the
+        picture on ``field.runway_wind``), since that is where the pilot lands.
+        """
+        if not self.proxied:
+            return self.field
+        update: dict = {}
+        if self.metar_proxy is not None:
+            update.update(_fields(self.metar_row, "metar_", _METAR_ADVISORY))
+            update["has_metar"] = bool(self.metar_row and self.metar_row.has_metar)
+            update.update(_field_advisory(self.field, update, "metar"))
+        if self.taf_proxy is not None:
+            update.update(_fields(self.taf_row, "taf_", _TAF_ADVISORY))
+            update["has_taf"] = bool(self.taf_row and self.taf_row.has_taf)
+            update.update(_field_advisory(self.field, update, "taf"))
+        return self.field.model_copy(update=update)
+
+
+def _fields(row: AirportObservation | None, prefix: str, skip: tuple[str, ...]) -> dict:
+    """``row``'s report fields (``metar_*`` / ``taf_*``), or all empty."""
+    blank = AirportObservation(icao="", distance_from_route_nm=0.0, nearest_waypoint_icao="")
+    src = row if row is not None else blank
+    return {
+        name: getattr(src, name)
+        for name in AirportObservation.model_fields
+        if name.startswith(prefix) and name not in skip and name not in _PROVENANCE
+    }
+
+
+def _field_advisory(field: AirportObservation, report: dict, kind: str) -> dict:
+    """The ``kind`` (metar/taf) wind advisory of ``report``'s wind on the
+    field's runways, or all None when the field has no runway data."""
+    keys = _METAR_ADVISORY if kind == "metar" else _TAF_ADVISORY
+    empty = dict.fromkeys(keys)
+    runways = field.runway_wind.runways if field.runway_wind is not None else []
+    if not runways:
+        return empty
+    from weatherbrief.analysis.runway_wind import runway_ends_of
+    from weatherbrief.tasks.route_weather import compute_wind_advisory
+
+    adv, rwy, xw, hw = compute_wind_advisory(
+        report.get(f"{kind}_wind_dir"), report.get(f"{kind}_wind_speed_kt"),
+        report.get(f"{kind}_wind_gust_kt"), runway_ends_of(runways),
+    )
+    if adv is None:
+        return empty
+    return dict(zip(keys, (adv, rwy, xw, hw)))
 
 
 class SigmetAlongRoute(BaseModel):

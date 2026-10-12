@@ -315,6 +315,10 @@ class LiveGlanceLine(BaseModel):
     # "sigmet:LECM|6". The map focus for each is on the ribbon / storm list.
     sources: list[str] = Field(default_factory=list)
     focus: LiveFocus | None = None
+    # The terminal reads a nearby station's METAR/TAF (#767): "using EGLL as
+    # proxy · 8 NM NE", or "METAR EGLF (4 NM N) · TAF EGLL (…)". Clients show
+    # it as a gray line under the text. None when the field reports itself.
+    proxy_caption: str | None = None
 
 
 class LiveHighlight(BaseModel):
@@ -421,6 +425,9 @@ class RibbonStation(BaseModel):
     taf_temporary_category: str | None = None
     taf_weather: list[str] = Field(default_factory=list)
     focus: LiveFocus | None = None
+    # A departure/destination read through a proxy station (#767): the
+    # station(s) its METAR/TAF come from ("EGLL"). None otherwise.
+    via: list[str] | None = None
 
 
 class RibbonSigmet(BaseModel):

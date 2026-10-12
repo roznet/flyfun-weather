@@ -12,7 +12,7 @@ from weatherbrief.analysis.advisories.altitude_table import (
 from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.analysis.sounding.convective import convective_cross_check
-from weatherbrief.digest.format_utils import format_flight_level
+from weatherbrief.digest.format_utils import format_flight_level, terminal_proxy_lines, terminal_roles
 from weatherbrief.units import format_visibility
 from weatherbrief.models import (
     ALT_AXIS_LABELS,
@@ -289,7 +289,9 @@ def _append_shared_sections(
 
     # --- METAR/TAF observations (D-0 only) ---
     if snapshot.route_observations:
-        sections.append(_format_observations_context(snapshot.route_observations))
+        sections.append(_format_observations_context(
+            snapshot.route_observations, terminal_roles(snapshot),
+        ))
 
     # --- Observed conditions (D-0 only, #574) ---
     # The deterministic summary is handed over verbatim. It is NOT re-derived
@@ -655,8 +657,11 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
     return lines
 
 
-def _format_observations_context(obs: RouteObservations) -> str:
-    """Format METAR/TAF observations into a compact LLM context section."""
+def _format_observations_context(obs: RouteObservations, terminals: dict[str, str] | None = None) -> str:
+    """Format METAR/TAF observations into a compact LLM context section.
+    ``terminals`` (ICAO -> DEPARTURE/DESTINATION) marks those rows and states
+    any observation proxy (#767)."""
+    terminals = terminals or {}
     lines: list[str] = ["=== METAR/TAF OBSERVATIONS ==="]
     lines.append(
         f"Corridor: {obs.corridor_nm}nm | "
@@ -672,13 +677,15 @@ def _format_observations_context(obs: RouteObservations) -> str:
         lines.append(f"Phenomena along route: {', '.join(obs.phenomena_along_route)}")
     if obs.has_conflicts:
         lines.append("** CONFLICTS between observations and model predictions **")
+    lines.extend(terminal_proxy_lines(obs, terminals))
 
     for apt in obs.airports:
         if not apt.has_metar and not apt.has_taf:
             continue
         dist_str = f"{apt.distance_from_route_nm:.0f}nm from route"
         eta_str = f", ETA +{apt.eta_hour_offset}h" if apt.eta_hour_offset is not None else ""
-        parts = [f"{apt.icao} ({dist_str}{eta_str}, near {apt.nearest_waypoint_icao})"]
+        role = f" {terminals[apt.icao.upper()]}" if apt.icao.upper() in terminals else ""
+        parts = [f"{apt.icao}{role} ({dist_str}{eta_str}, near {apt.nearest_waypoint_icao})"]
 
         if apt.has_metar:
             cat_str = f" [{apt.metar_flight_category}]" if apt.metar_flight_category else ""

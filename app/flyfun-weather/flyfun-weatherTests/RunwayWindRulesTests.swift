@@ -251,6 +251,27 @@ private func obs(_ icao: String, _ picture: RunwayWindPicture?) throws -> Airpor
         #expect(R.missingWindLabel(dials[1]) == "No METAR")
     }
 
+    /// SYNC: web/tests/unit/runway-wind-core.test.ts "names the proxy station
+    /// and shows its caption (#767)".
+    @Test func namesTheProxyStationAndShowsItsCaption() throws {
+        let metar = wind(sample(), [end()])
+        let data = try JSONEncoder.weatherBrief.encode(picture("ZZAA", [metar]))
+        let json: [String: Any] = [
+            "icao": "ZZAA",
+            "runway_wind": try JSONSerialization.jsonObject(with: data),
+            "metar_proxy": ["icao": "ZZPX", "distance_nm": 8.2, "bearing_deg": 28] as [String: Any],
+            "proxy_caption": "using ZZPX as proxy · 8 NM NE",
+        ]
+        let field = try JSONDecoder.weatherBrief.decode(
+            AirportObservation.self, from: JSONSerialization.data(withJSONObject: json))
+        let dials = R.pair(airports: [field, try obs("ZZBB", picture("ZZBB", [metar]))],
+                           departure: "ZZAA", destination: "ZZBB")
+        #expect(dials[0].metarStation == "ZZPX")
+        #expect(dials[0].proxyCaption == "using ZZPX as proxy · 8 NM NE")
+        #expect(dials[1].metarStation == nil)
+        #expect(dials[1].proxyCaption == nil)
+    }
+
     @Test func isEmptyWhenNoAirportHasAPictureOlderServer() throws {
         #expect(R.pair(airports: [try obs("ZZAA", nil)], departure: "ZZAA", destination: "ZZBB").isEmpty)
         #expect(R.pair(airports: nil, departure: "ZZAA", destination: "ZZBB").isEmpty)
@@ -278,5 +299,6 @@ private func obs(_ icao: String, _ picture: RunwayWindPicture?) throws -> Airpor
         #expect(o.runwayWind?.winds.first?.bestEnd == "27")
         let old = try JSONDecoder.weatherBrief.decode(AirportObservation.self, from: Data(#"{"icao": "ZZAA"}"#.utf8))
         #expect(old.runwayWind == nil)
+        #expect(old.metarProxy == nil && old.proxyCaption == nil)
     }
 }

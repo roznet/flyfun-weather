@@ -390,6 +390,11 @@ nonisolated enum RunwayWindRules {
         let primary: WindAtAirport?
         /// The TAF at ETA for the destination; never for the departure ("now").
         let ghost: WindAtAirport?
+        /// #767: the station the METAR wind comes from when the field has none
+        /// of its own (laid over the field's runways); nil for its own METAR.
+        var metarStation: String? = nil
+        /// #767: the server's gray caption ("using EGLL as proxy · 8 NM NE").
+        var proxyCaption: String? = nil
 
         var id: String { role }
     }
@@ -403,11 +408,14 @@ nonisolated enum RunwayWindRules {
         var dials: [Dial] = []
         func add(_ role: String, _ icao: String?) {
             guard let icao, !icao.isEmpty else { return }
-            let picture = find(icao)?.runwayWind
+            let airport = find(icao)
+            let picture = airport?.runwayWind
             dials.append(Dial(
                 role: role, icao: icao.uppercased(), picture: picture,
                 primary: wind(of: picture, source: "metar"),
-                ghost: role == "ARR" ? wind(of: picture, source: "taf") : nil
+                ghost: role == "ARR" ? wind(of: picture, source: "taf") : nil,
+                metarStation: airport?.metarProxy?.icao,
+                proxyCaption: airport?.proxyCaption
             ))
         }
         add("DEP", departure)

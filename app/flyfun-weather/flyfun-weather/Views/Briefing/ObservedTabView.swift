@@ -208,8 +208,14 @@ struct ObservedGlanceCard: View {
 
     /// One airport: ICAO, its METAR category in large type, and the METAR's age.
     private func airportTile(role: String, icao: String, now: Date) -> some View {
-        let obs = snapshot?.routeObservations?.airports?.first { $0.icao == icao }
+        let airports = snapshot?.routeObservations?.airports
+        let field = airports?.first { $0.icao == icao }
+        // #767: a field with no METAR of its own reads its proxy station's,
+        // named as such; the station's report keeps its own ICAO.
+        let station = field?.metarProxy?.icao
+        let obs = station.flatMap { s in airports?.first { $0.icao == s } } ?? field
         let metarTime = obs?.metarTime.flatMap(Date.parseISO8601)
+        let stationPrefix = station.map { "\($0) " } ?? ""
         return VStack(alignment: .leading, spacing: 4) {
             Text(role.uppercased())
                 .font(.caption2.weight(.semibold))
@@ -224,12 +230,17 @@ struct ObservedGlanceCard: View {
             }
             if let metarTime {
                 let stale = now.timeIntervalSince(metarTime) > LiveTime.staleAfter
-                Text("METAR \(LiveTime.zulu(metarTime)) · \(LiveTime.ageLabel(from: metarTime, now: now))")
+                Text("METAR \(stationPrefix)\(LiveTime.zulu(metarTime)) · \(LiveTime.ageLabel(from: metarTime, now: now))")
                     .font(.caption)
                     .foregroundStyle(stale ? Color.orange : Theme.textMuted)
             } else {
                 Text("No METAR")
                     .font(.caption)
+                    .foregroundStyle(Theme.textMuted)
+            }
+            if let caption = field?.proxyCaption {
+                Text(caption)
+                    .font(.caption2)
                     .foregroundStyle(Theme.textMuted)
             }
         }

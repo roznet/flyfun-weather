@@ -97,6 +97,13 @@ struct ObservedNutshellLineRow: View {
                     .foregroundStyle(Theme.text)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                // #767: the terminal reads a nearby station; the server says which.
+                if let caption = line.proxyCaption {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
             if line.focus != nil {

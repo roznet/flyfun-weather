@@ -1037,21 +1037,27 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
         if isinstance(wp, dict)
     ]
     roles = airport_roles([i for i in route_icaos if i], _alternate_icaos(briefing_data))
-    by_icao = {
-        a.icao.upper(): a for a in (layer.route_observations.airports if layer.route_observations else [])
-    }
+    route_obs = layer.route_observations
     airports = []
     for icao, role in sorted(roles.items(), key=lambda kv: _ROLE_ORDER.get(kv[1], 9)):
-        obs = by_icao.get(icao)
+        # A terminal with no METAR of its own reads its proxy station's
+        # (#767): listed under the field, the report under the station's ICAO.
+        term = route_obs.terminal(icao) if route_obs is not None else None
+        obs = term.metar_row if term is not None else None
         if obs is None or not (obs.has_metar or obs.metar_raw):
             continue
-        airports.append({
-            "icao": obs.icao,
+        entry = {
+            "icao": term.icao,
             "role": role,
             "metar_time": _iso(obs.metar_time),
             "flight_category": obs.metar_flight_category,
             "metar_raw": obs.metar_raw,
-        })
+        }
+        if term.metar_proxy is not None:
+            entry["metar_station"] = obs.icao
+            entry["proxy"] = term.metar_proxy.model_dump(mode="json")
+            entry["proxy_caption"] = term.caption
+        airports.append(entry)
     out["airports"] = airports
     return out
 

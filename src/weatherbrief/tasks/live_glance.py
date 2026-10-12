@@ -276,13 +276,17 @@ def _convective(obs: AirportObservation) -> list[str]:
     return sorted(convective_tags(obs), key=_CONVECTIVE_ORDER.index)
 
 
-def _metar_clause(icao: str, obs: AirportObservation | None, now: datetime) -> tuple[str, bool, list[str]]:
-    """"LPPR VFR TS" (category + observed convection), or unavailable."""
+def _metar_clause(
+    icao: str, obs: AirportObservation | None, now: datetime, label: str | None = None,
+) -> tuple[str, bool, list[str]]:
+    """"LPPR VFR TS" (category + observed convection), or unavailable.
+    ``label`` names a proxied terminal ("EGTF (via EGLL)", #767)."""
+    name = label or icao
     if obs is None or not (obs.has_metar or obs.metar_raw):
-        return f"{icao} METAR unavailable", True, []
+        return f"{name} METAR unavailable", True, []
     cat = obs.metar_flight_category or "category unknown"
     tags = _convective(obs)
-    text = f"{icao} {cat}" + (f" {' '.join(tags)}" if tags else "")
+    text = f"{name} {cat}" + (f" {' '.join(tags)}" if tags else "")
     if obs.metar_time is not None and now - obs.metar_time > OLD_METAR:
         text += f" (METAR {_hhmm(obs.metar_time)})"
     return text, False, [f"metar:{icao}"]
@@ -549,7 +553,21 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
     if obs is None:
         return []
     out = []
+    # A proxied terminal (#767) carries its station's reports at the
+    # terminal's place; the station is not listed again as a route airport.
+    serving: set[str] = set()
+    for t_icao, t_role in roles.items():
+        field = obs.airport(t_icao) if t_role in ("departure", "destination") else None
+        for proxy in (field.metar_proxy, field.taf_proxy) if field is not None else ():
+            if proxy is not None:
+                serving.add(proxy.icao.upper())
     for a in obs.airports:
+        via = None
+        if roles.get(a.icao.upper()) in ("departure", "destination") and (a.metar_proxy or a.taf_proxy):
+            via = sorted({p.icao for p in (a.metar_proxy, a.taf_proxy) if p is not None})
+            a = obs.terminal(a.icao).effective()
+        elif roles.get(a.icao.upper(), "route") == "route" and a.icao.upper() in serving:
+            continue
         if not (a.has_metar or a.metar_raw or a.has_taf or a.taf_raw):
             continue
         icao = a.icao.upper()
@@ -576,6 +594,7 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
             taf_temporary_category=a.taf_temporary_category_at_eta if taf_ok else None,
             taf_weather=list(a.taf_significant_weather) if taf_ok else [],
             focus=_station_focus(icao, a.lat, a.lon, a.metar_time) if a.lat is not None and a.lon is not None else None,
+            via=via,
         ))
     out.sort(key=lambda s: (s.along_nm if s.along_nm is not None else math.inf))
     return out
@@ -687,9 +706,7 @@ def build_glance(
             cell_frame, flight.track, storms.storms, corridor_nm=storms.corridor_nm,
         )
 
-    by_icao = {
-        a.icao.upper(): a for a in (layer.route_observations.airports if layer.route_observations else [])
-    }
+    route_obs = layer.route_observations
     obs_stale = (
         layer.observations_updated_at is not None and now - layer.observations_updated_at > STALE_BLOCK
     )
@@ -707,8 +724,12 @@ def build_glance(
         clauses: list[str] = []
         unavailable: list[str] = []
         sources: list[str] = []
-        obs = by_icao.get(icao)
-        text, missing, src = _metar_clause(icao, obs, now)
+        # Through the terminal accessor: a field with no METAR/TAF of its own
+        # reads its proxy station's, labelled as such (#767).
+        term = route_obs.terminal(icao) if route_obs is not None else None
+        obs = term.effective() if term is not None else None
+        label = term.label if term is not None and term.proxied else None
+        text, missing, src = _metar_clause(icao, obs, now, label)
         if obs_stale and not missing:
             text += f" (METARs as of {_hhmm(layer.observations_updated_at)})"
         clauses.append(text)
@@ -737,6 +758,7 @@ def build_glance(
             alert=phase in alert_phases,
             passed=flight.progress.departed if phase == "departure" else flight.progress.arrived,
             unavailable=unavailable, sources=sources, focus=_terminal_focus(flight, phase),
+            proxy_caption=term.caption if term is not None else None,
         ))
 
     clauses, unavailable, sources = [], [], []

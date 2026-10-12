@@ -1,0 +1,6 @@
+{
+  "_comment": "Curated observation proxies (#767), read by src/weatherbrief/analysis/obs_proxy.py. Field ICAO -> stations tried in order, for both METAR and TAF (a list), or per kind ({\"metar\": [...], \"taf\": [...]}; a kind left out uses the automatic pick: <= 10 NM METAR / <= 15 NM TAF, |elevation diff| <= 100 ft). An override replaces the automatic pick: it skips the distance and elevation gates, still needs a METAR <= 90 min old or a TAF valid at ETA, and nothing else is tried when none qualifies.",
+  "overrides": {
+    "EGLK": ["EGLF"]
+  }
+}
