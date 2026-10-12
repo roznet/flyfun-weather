@@ -145,13 +145,10 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
         age_days = (now - dep).days
 
         inactive = user_id in inactive_user_ids
-        t2_days = config.t2_inactive_days if inactive else config.t2_active_days
-        is_debriefed = pack.flight_id in debriefed_flight_ids
-
         try:
             pack_dir = Path(pack.artifact_path) if pack.artifact_path else None
 
-            if age_days >= t2_days and not is_debriefed:
+            if _t2_due(age_days, inactive, pack.flight_id in debriefed_flight_ids, config):
                 freed = _purge_full_pack(pack, pack_dir, config.dry_run)
                 stats.packs_t2 += 1
                 stats.bytes_freed += freed
@@ -179,6 +176,13 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 # ---------------------------------------------------------------------------
 # Tier helpers
 # ---------------------------------------------------------------------------
+
+
+def _t2_due(age_days: int, inactive: bool, debriefed: bool, config: RetentionConfig) -> bool:
+    """The T2 test, shared by the pack loop and the live pass so they agree
+    on when a flight's pack rows (the only route to its live files) go."""
+    t2_days = config.t2_inactive_days if inactive else config.t2_active_days
+    return age_days >= t2_days and not debriefed
 
 
 def kept_flight_ids(db: Session, debriefed_flight_ids: set[str] | None = None) -> set[str]:
@@ -225,11 +229,11 @@ def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_fligh
         try:
             names = list(LIVE_FILES_T1)
             if flight_id not in kept:
-                t2_days = config.t2_inactive_days if f["user_id"] in inactive_user_ids else config.t2_active_days
-                # Whether the pack loop below deletes this flight's pack rows
-                # (the same T2 test, debriefed exempt). Kept flights never get
-                # here, whatever makes them kept.
-                packs_go = age_days >= t2_days and flight_id not in debriefed_flight_ids
+                # Whether the pack loop below deletes this flight's pack rows.
+                # Kept flights never get here, whatever makes them kept.
+                packs_go = _t2_due(
+                    age_days, f["user_id"] in inactive_user_ids, flight_id in debriefed_flight_ids, config,
+                )
                 if age_days >= config.live_days or packs_go:
                     names += LIVE_FILES_KEPT
             freed += _purge_live_files(f["flight_dir"], names, config.dry_run)

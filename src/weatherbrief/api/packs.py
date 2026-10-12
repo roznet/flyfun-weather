@@ -5291,7 +5291,7 @@ def get_recap(
     audit_pack_access(user_id, flight_id, "get_recap", request)
     from weatherbrief.tasks.live_recap import recap_for_flight
 
-    _live_flight_dir(db, flight_id)
+    # No packs is "no_live_window", as /recap/summary and get_briefing say.
     try:
         return recap_for_flight(db, flight_id, pack_ts=pack)
     except KeyError:

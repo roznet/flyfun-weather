@@ -718,3 +718,19 @@ def test_recap_without_recording_says_so(client, app_db):
     # Agents get nothing rather than an empty "clear".
     assert client.get(f"/api/flights/{flight.id}/recap/summary").json()["recap"] is None
     assert client.get(f"/agent/v1/flights/{flight.id}/briefing").json()["recap"] is None
+
+
+def test_recap_capped_and_no_packs(client, app_db, monkeypatch):
+    from weatherbrief.tasks import live_snapshots
+
+    flight = _seed_flight(app_db, suffix="recapcap")
+    # No packs: the same "no observations" answer as /recap/summary, not a 404.
+    empty = client.get(f"/api/flights/{flight.id}/recap")
+    assert empty.status_code == 200 and empty.json()["status"] == "no_live_window"
+
+    ts = _seed_pack(app_db, flight)
+    _commit_live(flight, ts)
+    assert client.get(f"/api/flights/{flight.id}/recap").json()["capped"] is False
+    monkeypatch.setattr(live_snapshots, "SNAPSHOT_MAX_BYTES", 1)
+    recap = client.get(f"/api/flights/{flight.id}/recap").json()
+    assert recap["capped"] is True and "size cap" in recap["message"]
