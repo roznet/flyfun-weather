@@ -707,14 +707,17 @@ class TestAircraftAPI:
         assert r2.json()["nickname"] == "My Skyhawk"
 
     def test_delete_aircraft(self, client):
+        # The last aircraft can't be deleted (#777), so delete one of two.
         r = client.post("/api/aircraft", json={"icao_type": "C172"})
         ac_id = r.json()["id"]
+        client.post("/api/aircraft", json={"icao_type": "SR22"})
 
         r2 = client.delete(f"/api/aircraft/{ac_id}")
         assert r2.status_code == 204
 
         r3 = client.get("/api/aircraft")
-        assert len(r3.json()) == 0
+        assert [a["icao_type"] for a in r3.json()] == ["SR22"]
+        assert r3.json()[0]["is_default"] is True
 
     def test_cannot_access_other_users_aircraft(self, client, app_db):
         session = app_db()
