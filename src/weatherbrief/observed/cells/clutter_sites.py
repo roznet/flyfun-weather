@@ -32,6 +32,7 @@ the memory reads the level, and #768 did not change how the level is made.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,19 @@ from .levels import suspect
 from .policy import ClutterPolicy
 
 SITES_DIR = "clutter_sites"
+
+logger = logging.getLogger(__name__)
+
+
+def stamp_key(valid_time: datetime | str) -> str:
+    """One spelling per frame for both writers (``record`` and ``rebuild_day``).
+
+    The completeness check counts distinct frames, so ``Z`` and ``+00:00``
+    spellings of one instant must not become two rows (#770 review).
+    """
+    if isinstance(valid_time, str):
+        valid_time = datetime.fromisoformat(valid_time.replace("Z", "+00:00"))
+    return valid_time.isoformat()
 
 
 def site_key(lat: float, lon: float, precision_deg: float) -> str:
@@ -68,7 +82,7 @@ def record(root: Path, valid_time: datetime, cells: list[dict], policy: ClutterP
     """Append this frame's flagged sites to its day file (last line per stamp wins)."""
     path = day_path(root, valid_time.date())
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = {"valid_time": valid_time.isoformat(), "sites": flagged_sites(cells, policy)}
+    line = {"valid_time": stamp_key(valid_time), "sites": flagged_sites(cells, policy)}
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(line, sort_keys=True) + "\n")
 
@@ -85,8 +99,12 @@ def read_day(path: Path) -> dict[str, list[str]]:
             row = json.loads(text)
         except json.JSONDecodeError:
             continue  # a crash mid-append; the stamp's catalogue rebuilds it
-        if isinstance(row, dict) and isinstance(row.get("sites"), list):
-            out[str(row.get("valid_time"))] = [str(s) for s in row["sites"]]
+        if isinstance(row, dict) and isinstance(row.get("sites"), list) and row.get("valid_time"):
+            try:
+                key = stamp_key(str(row["valid_time"]))
+            except ValueError:
+                continue
+            out[key] = [str(s) for s in row["sites"]]
     return out
 
 
@@ -104,7 +122,7 @@ def rebuild_day(root: Path, day: date, policy: ClutterPolicy) -> dict[str, list[
         cat = read_catalogue(path)
         if cat is None or not cat.get("valid_time"):
             continue
-        rows[str(cat["valid_time"])] = flagged_sites(cat.get("cells") or [], policy)
+        rows[stamp_key(str(cat["valid_time"]))] = flagged_sites(cat.get("cells") or [], policy)
     target = day_path(root, day)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".tmp-{target.name}")
@@ -135,6 +153,8 @@ class SiteMemory:
         rows = read_day(day_path(root, day))
         catalogues = _day_catalogues(root, day)
         if len(rows) < len(catalogues):
+            logger.info("clutter sites %s: day file holds %d of %d frames, rebuilt from catalogues",
+                        f"{day:%Y%m%d}", len(rows), len(catalogues))
             rows = rebuild_day(root, day, policy)
         sites = frozenset(s for v in rows.values() for s in v)
         day_end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=valid_time.tzinfo)

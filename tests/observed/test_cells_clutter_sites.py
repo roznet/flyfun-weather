@@ -128,6 +128,23 @@ def test_a_short_day_file_is_rebuilt(tmp_path):
     assert days_for(tmp_path) == 1
 
 
+def test_z_and_offset_spellings_are_one_frame(tmp_path):
+    """A catalogue written as ``…Z`` and a line as ``…+00:00`` are the same frame,
+    so a complete day is not mistaken for a short one, nor a short one hidden."""
+    day = T - timedelta(days=1)
+    morning, afternoon = day.replace(hour=6), day.replace(hour=15)
+    for when, level in ((morning, "suspect"), (afternoon, "clear")):
+        write_catalogue(catalogue_path(tmp_path, when),
+                        {"valid_time": when.isoformat().replace("+00:00", "Z"), "cells": [core(level)]})
+    path = clutter_sites.day_path(tmp_path, day.date())
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"valid_time": afternoon.isoformat().replace("+00:00", "Z"), "sites": []}) + "\n")
+    flag_on(tmp_path, afternoon, [core("clear")])
+    assert len(clutter_sites.read_day(path)) == 1  # one frame, two spellings
+    assert days_for(tmp_path) == 1  # still short (morning missing) -> rebuilt
+    assert set(clutter_sites.read_day(path)) == {morning.isoformat(), afternoon.isoformat()}
+
+
 def test_a_settled_day_is_cached_and_an_open_one_is_reread(tmp_path):
     memory = clutter_sites.SiteMemory(settle_after=timedelta(minutes=30))
     yesterday_late = T.replace(hour=23, minute=55) - timedelta(days=1)

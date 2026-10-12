@@ -384,9 +384,12 @@ have no `suppress` and hide nothing. Gotchas:
 
 - **Last line per stamp wins**: the lightning amend appends a fresh line for
   its frame, so a late flash that clears the flag clears the site too.
-  `rescore` carries `site_days` over for a cell still flagged.
+  `rescore` carries `site_days` over for a cell still flagged. The amend only
+  touches catalogues under the current `policy_version`, so a `cells-3` cell
+  (no `site_days`) is never re-scored into one without `suppress`.
 - **A day file is derived data.** Missing or shorter than the day's catalogues
-  → rebuilt from them (any `policy_version` with a clutter block — #768
+  (counted in distinct frames, `stamp_key` normalising `Z`/`+00:00`) → rebuilt
+  from them, logged at INFO (any `policy_version` with a clutter block — #768
   changed the decision, not the level). That is also the seed:
   `cells clutter-sites --rebuild` before the first `cells-4` start (~2.3 s a
   day of catalogues on the mini; the loop would otherwise do it on its first
