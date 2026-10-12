@@ -7,6 +7,7 @@ import json
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from flyfun_common.db.models import UserRow
 from weatherbrief.db.models import FlightProfileRow, FlightRow, PirepRow, UserAircraftRow
 
 
@@ -36,6 +37,7 @@ def create_aircraft(session: Session, user_id: str, **kwargs) -> UserAircraftRow
     row = UserAircraftRow(user_id=user_id, **kwargs)
     session.add(row)
     session.flush()
+    _forget_default(session, user_id)
     return row
 
 
@@ -47,13 +49,16 @@ def update_aircraft(session: Session, row: UserAircraftRow, **kwargs) -> UserAir
     for key, value in kwargs.items():
         setattr(row, key, value)
     session.flush()
+    _forget_default(session, row.user_id)
     return row
 
 
 def delete_aircraft(session: Session, row: UserAircraftRow) -> None:
     """Delete an aircraft."""
+    user_id = row.user_id
     session.delete(row)
     session.flush()
+    _forget_default(session, user_id)
 
 
 def _clear_default(session: Session, user_id: str) -> None:
@@ -64,6 +69,38 @@ def _clear_default(session: Session, user_id: str) -> None:
     )
     for row in session.execute(stmt).scalars().all():
         row.is_default = False
+    _forget_default(session, user_id)
+
+
+def lock_user_aircraft(session: Session, user_id: str) -> None:
+    """Serialise changes to one user's aircraft set for this transaction.
+
+    Row lock on the user (``SELECT … FOR UPDATE``; a no-op on SQLite, whose
+    writers are serialised anyway). Taken by every check-then-act on the set —
+    synthesising the placeholder, replacing it, the last-aircraft delete guard
+    — so two concurrent requests (web + iOS opened together, a double-fired
+    request) can't both create a placeholder or both delete "the other one".
+    """
+    session.execute(select(UserRow.id).where(UserRow.id == user_id).with_for_update())
+
+
+def locked_user_aircraft(session: Session, user_id: str) -> list[UserAircraftRow]:
+    """The user's aircraft, oldest first, read under :func:`lock_user_aircraft`.
+
+    A *locking* read on purpose: on MySQL (REPEATABLE READ) a plain SELECT
+    after the lock would still see the transaction's first snapshot and miss a
+    placeholder another request has just committed.
+    """
+    lock_user_aircraft(session, user_id)
+    return list(
+        session.execute(
+            select(UserAircraftRow)
+            .where(UserAircraftRow.user_id == user_id)
+            .order_by(UserAircraftRow.created_at, UserAircraftRow.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalars().all()
+    )
 
 
 # --- Default aircraft (#777) ---------------------------------------------
@@ -145,19 +182,28 @@ def ensure_default_aircraft(session: Session, user_id: str) -> UserAircraftRow:
     - has none → a placeholder is created from the default profile
       (:func:`placeholder_fields`)
 
-    Mirrors ``ensure_default_profile`` in ``storage/flights.py``.
+    Mirrors ``ensure_default_profile`` in ``storage/flights.py``. The common
+    case (exactly one default) is a plain read; anything else re-reads under
+    :func:`lock_user_aircraft`, and extra defaults are cleared (oldest kept).
     """
-    rows = list(
+    defaults = list(
         session.execute(
             select(UserAircraftRow)
-            .where(UserAircraftRow.user_id == user_id)
-            .order_by(UserAircraftRow.created_at, UserAircraftRow.id)
+            .where(UserAircraftRow.user_id == user_id, UserAircraftRow.is_default.is_(True))
+            .limit(2)
         ).scalars().all()
     )
+    if len(defaults) == 1:
+        return defaults[0]
+
+    _forget_default(session, user_id)
+    rows = locked_user_aircraft(session, user_id)
     defaults = [r for r in rows if r.is_default]
     if defaults:
+        for extra in defaults[1:]:
+            extra.is_default = False
+        session.flush()
         return defaults[0]
-    _forget_default(session, user_id)
     if rows:
         rows[0].is_default = True
         session.flush()
@@ -207,12 +253,12 @@ def _default_profile_settings(session: Session, user_id: str) -> dict:
 
 
 def only_placeholder(session: Session, user_id: str) -> UserAircraftRow | None:
-    """The placeholder when it is the user's only aircraft, else None."""
-    rows = list(
-        session.execute(
-            select(UserAircraftRow).where(UserAircraftRow.user_id == user_id).limit(2)
-        ).scalars().all()
-    )
+    """The placeholder when it is the user's only aircraft, else None.
+
+    Takes the user's aircraft lock (:func:`locked_user_aircraft`), held until
+    the caller's transaction ends.
+    """
+    rows = locked_user_aircraft(session, user_id)
     if len(rows) == 1 and rows[0].is_placeholder:
         return rows[0]
     return None

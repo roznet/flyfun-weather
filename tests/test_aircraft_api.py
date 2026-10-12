@@ -383,3 +383,24 @@ class TestCruiseIasResolution:
                    aircraft_id=aid)
         assert _resolve_cruise_ias_kt(s, f) is None
         s.close()
+
+
+class TestReviewFollowUps:
+    def test_extra_defaults_collapse_to_oldest(self, app_db):
+        first = _add_aircraft(app_db, icao_type="C172", is_default=True)
+        _add_aircraft(app_db, icao_type="SR22", is_default=True)
+        s = app_db()
+        assert ensure_default_aircraft(s, DEV_USER_ID).id == first
+        s.commit()
+        s.close()
+        assert [r.is_default for r in _rows(app_db)] == [True, False]
+
+    def test_default_memo_follows_default_changes(self, app_db):
+        from weatherbrief.storage.aircraft import create_aircraft, get_default_aircraft
+
+        first = _add_aircraft(app_db, icao_type="C172", is_default=True)
+        s = app_db()
+        assert get_default_aircraft(s, DEV_USER_ID).id == first
+        new = create_aircraft(s, DEV_USER_ID, icao_type="SR22", is_default=True)
+        assert get_default_aircraft(s, DEV_USER_ID).id == new.id
+        s.close()
