@@ -540,6 +540,9 @@ def _airport_changes(
         if metar_known:
             candidates, unk = _airport_metar_changes(base, a, role, label)
         else:
+            # Proxy station absent from the baseline (e.g. after a switch):
+            # nothing to compare, not a missing report.
+            logger.debug("No baseline METAR row for %s's station %s; keys unknown", label or a.icao, a.icao)
             candidates, unk = [], {f"{p}:{a.icao}" for p in _KEY_PREFIX.values()}
         unknown |= unk
         if evaluated is not None:

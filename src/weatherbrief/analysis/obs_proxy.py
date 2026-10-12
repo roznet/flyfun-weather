@@ -69,7 +69,8 @@ def load_overrides(path: str | None = None) -> Overrides:
 
     A plain list (or string) applies to both kinds. A missing or unreadable
     file means no overrides (the automatic pick still runs); it is logged,
-    never raised.
+    never raised. Cached per process: an edit to the file takes effect on the
+    next restart.
     """
     p = Path(path) if path else _OVERRIDES_PATH
     try:
@@ -225,7 +226,14 @@ def apply_obs_proxies(
         )
         if field.metar_proxy is not None or field.taf_proxy is not None:
             changed.append(field.icao)
-            logger.info(
+            picked = (
+                field.metar_proxy.icao if field.metar_proxy else None,
+                field.taf_proxy.icao if field.taf_proxy else None,
+            )
+            # INFO only when the pick is new or switched; a pinned repeat on
+            # every live tick is DEBUG.
+            logger.log(
+                logging.DEBUG if picked == (pin_m, pin_t) else logging.INFO,
                 "Observation proxy for %s: METAR %s, TAF %s", field.icao,
                 field.metar_proxy.icao if field.metar_proxy else "-",
                 field.taf_proxy.icao if field.taf_proxy else "-",
