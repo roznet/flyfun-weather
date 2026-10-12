@@ -365,10 +365,36 @@ re-score *identical* to what a replay computes from the raw frame rather than
 merely close. That is what keeps "an amended catalogue equals its replay byte
 for byte" true.
 
-**No rolling state.** Every feature is per-frame and pixel-keyed, so a replay
-reproduces the evidence exactly and a cell id that restarts (the reference core
-dropped below minimum area at 00:15Z and took a new id while the echo under it
-never moved) cannot hide anything.
+**No rolling state in the evidence.** Every feature is per-frame and
+pixel-keyed, so a replay reproduces the evidence exactly and a cell id that
+restarts (the reference core dropped below minimum area at 00:15Z and took a
+new id while the echo under it never moved) cannot hide anything.
+
+**The decision has rolling state, keyed by ground, not lineage (#768).** A
+newborn isolated storm is a bare core on its first frames, so the level alone
+flagged 42 storms in the four-day shadow run. `clutter_sites.py` remembers,
+per UTC day, the 0.1° sites that carried a flagged cell
+(`cells/clutter_sites/<day>.jsonl`, one line per frame, ~40 KB/day, archived
+and pruned with `scores`/`runs`); a flagged cell gets `site_days` (distinct
+*earlier* days in a 14-day window) and `suppress` (≥ 2). Two predicates in
+`levels.py` keep the questions apart: `suspect()` is the evidence (review
+map, harness, the memory itself), `suppressed()` is what the droplet's
+`operational_cells` and the #702 rain-skirt marking act on. Old display files
+have no `suppress` and hide nothing. Gotchas:
+
+- **Last line per stamp wins**: the lightning amend appends a fresh line for
+  its frame, so a late flash that clears the flag clears the site too.
+  `rescore` carries `site_days` over for a cell still flagged.
+- **A day file is derived data.** Missing or shorter than the day's catalogues
+  → rebuilt from them (any `policy_version` with a clutter block — #768
+  changed the decision, not the level). That is also the seed:
+  `cells clutter-sites --rebuild` before the first `cells-4` start (~2.3 s a
+  day of catalogues on the mini; the loop would otherwise do it on its first
+  frame).
+- **A day settles** `LI_AMEND_WINDOW` after its end, judged on the frame's
+  valid time, and is cached in-process from then on.
+- **A replay starts with whatever history its own root holds**, so its first
+  days suppress less than the live loop did; pool or seed when comparing.
 
 **Off switch:** `ClutterPolicy.enabled`. It is a policy number, so a run with
 it off carries its own `policy_version` — which is right: those catalogues

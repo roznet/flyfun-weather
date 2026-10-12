@@ -164,6 +164,23 @@ class ClutterPolicy:
     suspect_score: float = 3.0
     confirmed_score: float = 5.0
 
+    # --- Acting on it: site recurrence (#768) ---------------------------------
+    # The level is evidence; whether the droplet may hide a flagged cell is a
+    # second question with its own evidence.  Over the live shadow run
+    # 2026-10-08 -> 10-11 (1,015 frames), 42 lineages that later carried
+    # lightning had been flagged — 35 of them on their first frames, a newborn
+    # isolated storm is bare by construction.  Clutter comes back to the same
+    # ground; a newborn storm does not.  A flagged cell is ``suppress``ed only
+    # when its site was flagged on at least ``suppress_min_site_days`` distinct
+    # *earlier* UTC days within the window: that kept 41 % of the flags and
+    # hid 1 of 58 storm frames, where >= 1 earlier day hid 11 (6 storms —
+    # diurnal orographic convection also returns to the same ground).
+    # The site is the centroid on a ``site_precision_deg`` grid, the bucket the
+    # recurrence report (clutter_eval.sites) validated on.
+    site_precision_deg: float = 0.1
+    site_window_days: int = 14
+    suppress_min_site_days: int = 2
+
 
 @dataclass(frozen=True)
 class CellPolicy:
@@ -250,7 +267,7 @@ class CellPolicy:
     # decision and is off by default (WB_CELLS_CLUTTER_SUPPRESS).
     clutter: ClutterPolicy = field(default_factory=ClutterPolicy)
 
-    name: str = "cells-3"
+    name: str = "cells-4"
 
     def __post_init__(self) -> None:
         if self.display_motion not in MOTION_VARIANTS:

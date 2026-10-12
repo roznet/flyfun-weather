@@ -10,6 +10,7 @@ droplet's ``DATA_DIR/observed`` so relative paths agree everywhere::
     cells/display/<stamp>.json.gz            map file for the droplet (#656)
     cells/scores/<day>.jsonl                 self-scoring rows (scoring.py)
     cells/runs/<day>.jsonl                   one row per processed frame + gaps
+    cells/clutter_sites/<day>.jsonl          flagged sites per frame (#768, clutter_sites.py)
     cells/state.json                         last tick, last sweep
 
 The collector is the shared one (``observed.collect``) pointed at an archive
@@ -69,6 +70,7 @@ from .catalogue import (
 )
 from .display import LIGHTNING_PENDING, LIGHTNING_PENDING_REASON, build_display, write_display
 from .clutter import assess as assess_clutter, assessable, rescore as rescore_clutter
+from . import clutter_sites
 from .detect import TierDetection, detect, footprint_runs, initial_bearing_deg, distance_km
 from .lineage import PreviousCell, link, trend, trim_history
 from .motion import FlowField, cell_motion, estimate_flow
@@ -231,9 +233,13 @@ class Workspace:
     root: Path
     frames_root: Path | None = None
     frames: FrameStore = field(init=False)
+    sites: clutter_sites.SiteMemory = field(init=False)
 
     def __post_init__(self) -> None:
         self.root = Path(self.root)
+        # Earlier days settle once their last frames' lightning can no longer
+        # be amended in (#768).
+        self.sites = clutter_sites.SiteMemory(settle_after=LI_AMEND_WINDOW)
         # Frames sit at the root, one directory per source — the same layout as
         # the droplet's DATA_DIR/observed — and the analysis under cells/.
         self.frames = FrameStore(Path(self.frames_root or self.root), retain_all=True)
@@ -681,6 +687,14 @@ def process_frame(
             if evidence[k] is not None:
                 cells_out[-1]["clutter"] = evidence[k].as_dict()
 
+    # Whether the droplet may act on a flag (#768): only where the same site
+    # was flagged on earlier days.  Earlier days only, so it is settled before
+    # this frame and a replay over the same catalogues reproduces it.
+    if clutter_on:
+        sites = clutter_sites.flagged_sites(cells_out, policy.clutter)
+        clutter_sites.annotate(
+            cells_out, ws.sites.site_days(ws.root, valid_time, sites, policy.clutter), policy.clutter)
+
     covered = ~np.asarray(frame.nodata)
     catalogue = {
         "schema": SCHEMA,
@@ -704,6 +718,10 @@ def process_frame(
         "cells": cells_out,
     }
     size = write_catalogue(catalogue_path(ws.root, valid_time), catalogue)
+    if clutter_on:
+        # After the catalogue: a crash in between leaves the day file short,
+        # and a short day file is rebuilt from the catalogues.
+        clutter_sites.record(ws.root, valid_time, cells_out, policy.clutter)
     cache.set_flashes(valid_time, policy, catalogue)
 
     # The map file for the droplet (#656).  Like scoring, a failure here is
@@ -873,6 +891,10 @@ def amend_frame(ws: Workspace, t: datetime, cat: dict, policy: CellPolicy, cache
     display_bytes = write_display(display_path(ws.root, t, revision),
                                   build_display(cat, detections, grid, policy, revision))
     write_catalogue(catalogue_path(ws.root, t), cat)
+    if policy.clutter.enabled:
+        # A late flash can clear a flag; the frame's fresh line supersedes the
+        # one written at analysis (last line per stamp wins).
+        clutter_sites.record(ws.root, t, cat["cells"], policy.clutter)
     cache.set_flashes(t, policy, cat)
     if li is None:
         return None

@@ -55,7 +55,8 @@ Two published approaches were weighed first (see
    merely *pending* (#666) is not an observation of zero flashes.
 4. **Nothing is deleted.**  The level and its reasons ride along with the
    cell; acting on them is the droplet's decision, off by default
-   (``WB_CELLS_CLUTTER_SUPPRESS``).
+   (``WB_CELLS_CLUTTER_SUPPRESS``), and only for cells whose site was also
+   flagged on earlier days (``suppress``, ``clutter_sites.py``, #768).
 
 The French contribution to the composite arrives on a **2 km** grid, duplicated
 2x2 onto the 1 km composite, so every small French cell has hard 1 km edges by
@@ -533,4 +534,11 @@ def rescore(cell: dict, policy: ClutterPolicy) -> dict | None:
         flashes=cell.get("flashes"),
         top_fl=cell.get("top_fl"),
     )
-    return evidence.as_dict()
+    revised = evidence.as_dict()
+    # The site memory (#768) reads earlier days only, so the amend has nothing
+    # new to learn about it: a cell still flagged keeps the count it was
+    # published with, and one the late flash cleared drops it with the flag.
+    if revised["level"] in FLAGGED and "site_days" in stored:
+        revised["site_days"] = stored["site_days"]
+        revised["suppress"] = stored["site_days"] >= policy.suppress_min_site_days
+    return revised

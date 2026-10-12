@@ -5,7 +5,9 @@ suppression on a phantom core could still leave its bare rain skirt on the
 ribbon.  The node knows which cores it suspects and marks the rain rings that
 are nothing but their skirt (``suspect_outlines``); the droplet skips those.
 These tests pin the node's rule; the droplet side is in
-``tests/test_live_clutter_suppression.py``.
+``tests/test_live_clutter_suppression.py``.  Since #768 a core takes its skirt
+with it only when it is ``suppress``ed — flagged *and* at a site flagged on
+earlier days — so the runner scene seeds that memory.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
-from weatherbrief.observed.cells import DEFAULT_POLICY
+from weatherbrief.observed.cells import DEFAULT_POLICY, clutter_sites
 from weatherbrief.observed.cells.catalogue import catalogue_path, display_path, read_catalogue
 from weatherbrief.observed.cells.display import outline_step, outlines, suspect_regions, tier_outlines
 from weatherbrief.observed.cells.runner import FrameCache, Workspace, analyse_tick
@@ -39,10 +41,13 @@ def _scene() -> np.ndarray:
     return field
 
 
-@pytest.fixture(scope="module")
-def processed(tmp_path_factory):
-    """The scene through the real runner, so the clutter level is the node's own."""
-    root = tmp_path_factory.mktemp("suspect-outlines")
+def _run(root, seed_sites=()):
+    """The scene through the real runner; ``seed_sites`` flagged on two earlier days."""
+    for back in (1, 2):
+        day = T0 - timedelta(days=back)
+        path = clutter_sites.day_path(root, day.date())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"valid_time": day.isoformat(), "sites": sorted(seed_sites)}) + "\n")
     write_dbzh(FrameStore(root, retain_all=True), T0, _scene())
     ws = Workspace(root)
     assert analyse_tick(ws, T0 + timedelta(minutes=1), timedelta(hours=1), DEFAULT_POLICY,
@@ -50,6 +55,20 @@ def processed(tmp_path_factory):
     catalogue = read_catalogue(catalogue_path(root, T0))
     display = json.loads(gzip.decompress(display_path(root, T0).read_bytes()))
     return catalogue, display
+
+
+@pytest.fixture(scope="module")
+def first_seen(tmp_path_factory):
+    """The scene on a site's first day: flagged, but nothing earlier to recur on."""
+    return _run(tmp_path_factory.mktemp("suspect-outlines-new"))
+
+
+@pytest.fixture(scope="module")
+def processed(tmp_path_factory, first_seen):
+    """The same scene where the flagged sites were also flagged on two earlier days."""
+    sites = clutter_sites.flagged_sites(first_seen[0]["cells"], DEFAULT_POLICY.clutter)
+    assert sites
+    return _run(tmp_path_factory.mktemp("suspect-outlines"), sites)
 
 
 def _rings_around(display, tier, lat, lon) -> list[int]:
@@ -63,6 +82,23 @@ def test_the_clutter_blocks_own_rain_ring_is_marked(processed):
     assert marked
     assert set(_rings_around(display, "rain20", phantom["lat"], phantom["lon"])) <= set(marked)
     assert _rings_around(display, "rain20", phantom["lat"], phantom["lon"])
+
+
+def test_a_first_seen_site_is_flagged_but_keeps_its_ring(first_seen):
+    """#768: the evidence is the same on the first day; only the decision waits."""
+    catalogue, display = first_seen
+    phantom = [c for c in catalogue["cells"] if c.get("clutter", {}).get("level") not in (None, "clear")]
+    assert phantom
+    assert all(c["clutter"]["site_days"] == 0 and c["clutter"]["suppress"] is False for c in phantom)
+    assert "suspect_outlines" not in display
+    shown = [c for c in display["cells"] if c.get("clutter")]
+    assert shown and all(c["clutter"]["suppress"] is False for c in shown)
+
+
+def test_a_recurring_site_is_suppressed(processed):
+    catalogue, _ = processed
+    phantom = [c for c in catalogue["cells"] if c.get("clutter", {}).get("level") not in (None, "clear")]
+    assert phantom and all(c["clutter"]["site_days"] == 2 and c["clutter"]["suppress"] for c in phantom)
 
 
 def test_genuine_rain_and_a_plain_rain_area_are_not_marked(processed):
@@ -94,14 +130,19 @@ def test_a_clean_frame_has_no_marks_and_the_same_trace():
 # --- The rule, with the levels set by hand --------------------------------------
 
 
-def _catalogue_cells(dets, flagged_tiers=("core35", "core41"), clear_labels=()):
-    """Catalogue-shaped cells for every detection; cores flagged unless listed clear."""
+def _catalogue_cells(dets, flagged_tiers=("core35", "core41"), clear_labels=(), suppress=True):
+    """Catalogue-shaped cells for every detection; cores flagged unless listed clear.
+
+    Flagged at a recurring site (``suppress``) by default: since #768 only a
+    suppressed core takes its rain skirt with it.
+    """
     out = []
     for name, det in dets.items():
         for cell in det.cells:
             c = {"tier": name, "label": cell.label}
             if name in flagged_tiers and (name, cell.label) not in clear_labels:
-                c["clutter"] = {"level": "suspect"}
+                c["clutter"] = {"level": "suspect", "site_days": 2 if suppress else 0,
+                                "suppress": suppress}
             out.append(c)
     return out
 
@@ -141,3 +182,5 @@ def test_nothing_is_marked_without_a_suspect_core():
     _, dets = _detections(field)
     assert suspect_regions(_catalogue_cells(dets, flagged_tiers=()), dets, DEFAULT_POLICY) == {}
     assert suspect_regions(_catalogue_cells(dets), dets, DEFAULT_POLICY) == {"rain20": {1}}
+    # Flagged but at a new site (#768): evidence only, the ring stays.
+    assert suspect_regions(_catalogue_cells(dets, suppress=False), dets, DEFAULT_POLICY) == {}

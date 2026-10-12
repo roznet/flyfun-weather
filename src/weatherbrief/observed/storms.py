@@ -37,7 +37,7 @@ from euro_aip.utils.geometry import haversine_nm
 
 from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.models.live import LiveStorm, LiveStorms, StormEstimate, StormTrackPoint
-from weatherbrief.observed.cells.levels import suspect
+from weatherbrief.observed.cells.levels import suppressed
 from weatherbrief.observed.cells_display import clutter_suppress_enabled
 from weatherbrief.observed.intensity import classify_dbz, intensity_label
 
@@ -156,7 +156,8 @@ def operational_cells(cells: list[dict]) -> list[dict]:
 
     With ``WB_CELLS_CLUTTER_SUPPRESS`` off — the default — this is every cell,
     so the suspect block is annotation and nothing more.  With it on, cells the
-    node marked suspect or confirmed are dropped **here**, before grouping, so
+    node marked ``suppress`` — flagged *and* at a site flagged on earlier days
+    (#768); a flag alone is not enough — are dropped **here**, before grouping, so
     one gate covers storms, the §41 alert rows, the glance and the ribbon
     bands rather than each re-deciding.
 
@@ -166,7 +167,7 @@ def operational_cells(cells: list[dict]) -> list[dict]:
     """
     if not clutter_suppress_enabled():
         return list(cells)
-    kept = [c for c in cells if not suspect(c)]
+    kept = [c for c in cells if not suppressed(c)]
     dropped = len(cells) - len(kept)
     if dropped:
         # DEBUG, not INFO: this runs for the newest frame and again for every

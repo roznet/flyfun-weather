@@ -16,6 +16,10 @@ the package's ``__init__`` lazy is the only thing that would change it.
 
 ``clear`` means "no evidence of clutter", **not** "this is weather": most cells
 are clear because nothing was measured against them.
+
+Two predicates, two questions: :func:`suspect` is the evidence (the review
+map, the harness, the site memory); :func:`suppressed` is the decision the
+route products act on (#768).
 """
 
 from __future__ import annotations
@@ -37,3 +41,16 @@ def suspect(cell: dict) -> bool:
     never suspect.
     """
     return ((cell.get("clutter") or {}).get("level")) in FLAGGED
+
+
+def suppressed(cell: dict) -> bool:
+    """Whether the droplet may hide this cell when suppression is on (#768).
+
+    Stricter than :func:`suspect`: the node sets ``suppress`` only on a
+    flagged cell whose site was also flagged on enough earlier days
+    (``clutter_sites``), because a newborn isolated storm looks exactly like
+    clutter on its first frame and recurrence is what tells them apart.  A
+    display file from before #768 carries no ``suppress`` and hides nothing.
+    """
+    block = cell.get("clutter") or {}
+    return block.get("level") in FLAGGED and block.get("suppress") is True
