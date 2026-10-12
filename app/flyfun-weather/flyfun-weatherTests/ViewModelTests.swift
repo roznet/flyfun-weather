@@ -546,6 +546,185 @@ import MapKit
         #expect(vm.canSaveAircraft == false)
     }
 
+    // MARK: Aircraft — always-a-default, edit, placeholder (#777)
+
+    /// The picker has no "No aircraft" row any more, so a new flight must open
+    /// on a real aircraft: the account default.
+    @Test func newFlightPreselectsTheDefaultAircraft() async {
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([
+            makeAircraft(id: 1, typeName: "Alpha"),
+            makeAircraft(id: 2, typeName: "Zulu", isDefault: true),
+        ])
+        let vm = AddFlightViewModel(repository: repo)
+        await vm.loadAircraft()
+        #expect(vm.selectedAircraftId == 2)
+        #expect(vm.aircraftOptions.first?.id == 2)   // default sorts first
+    }
+
+    /// Editing an older flight stored without an aircraft shows the default it
+    /// resolves to — not a "No aircraft" selection — without that counting as
+    /// an edit, and a save never sends the old `0` "detach" sentinel.
+    @Test func editingFlightWithoutAircraftShowsDefaultAndNeverSendsZero() async throws {
+        let flight = makeFlight(aircraftId: nil, cruiseAltitudeFt: 8000)
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([makeAircraft(id: 4, isDefault: true)])
+        repo.updateFlightResult = .success(try makeUpdateResponse(flight: flight))
+        let vm = AddFlightViewModel(repository: repo, flight: flight)
+        await vm.loadAircraft()
+        #expect(vm.selectedAircraftId == 4)
+        #expect(vm.hasChanges == false)
+
+        vm.cruiseAltitudeFt = 9000
+        _ = await vm.saveEditedFlight(regenerate: false)
+        let req = try #require(repo.lastUpdateRequest)
+        #expect(req.aircraftId == nil)               // omitted, not 0
+
+        // Picking another aircraft on such a flight is a real change.
+        let vm2 = AddFlightViewModel(repository: repo, flight: flight)
+        await vm2.loadAircraft()
+        vm2.selectedAircraftId = 9
+        #expect(vm2.hasChanges)
+    }
+
+    @Test func editAircraftPrefillsTheFormAndPuts() async throws {
+        let original = makeAircraft(id: 3, icaoType: "PA28", typeName: "Piper PA-28",
+                                    tailNumber: "N123", nickname: "Archie",
+                                    cruiseSpeedKt: 105, ceilingFt: 12000, isDefault: true)
+        let updated = makeAircraft(id: 3, icaoType: "PA28", typeName: "Piper PA-28",
+                                   tailNumber: "N123", nickname: "Archie",
+                                   cruiseSpeedKt: 115, ceilingFt: 14000, isDefault: true)
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([original])
+        let vm = AddFlightViewModel(repository: repo)
+        await vm.loadAircraft()
+        #expect(vm.selectedAircraftId == 3)
+        #expect(vm.editAircraftButtonTitle == "Edit")
+
+        vm.prepareEditAircraftForm(original)
+        #expect(vm.isEditingAircraft)
+        #expect(vm.aircraftFormTitle == "Edit Aircraft")
+        #expect(vm.newAircraftIcaoType == "PA28")
+        #expect(vm.newAircraftTailNumber == "N123")
+        #expect(vm.newAircraftNickname == "Archie")
+        #expect(vm.newAircraftCruiseSpeedKt == "105")
+        #expect(vm.newAircraftCeilingFt == "12000")
+        #expect(vm.newAircraftIsDefault)
+        #expect(vm.canSaveAircraft)
+
+        vm.newAircraftCruiseSpeedKt = "115"
+        vm.newAircraftCeilingFt = "14000"
+        repo.updateAircraftResult = .success(updated)
+        repo.aircraftResult = .success([updated])
+        #expect(await vm.saveAircraft())
+
+        #expect(repo.lastUpdateAircraftId == 3)
+        let req = try #require(repo.lastUpdateAircraftRequest)
+        #expect(req.icaoType == "PA28")
+        #expect(req.cruiseSpeedKt == 115)
+        #expect(req.ceilingFt == 14000)
+        #expect(req.tailNumber == "N123")
+        #expect(req.isDefault == nil)                // already default: not re-sent
+        #expect(repo.lastCreateAircraftRequest == nil)   // a PUT, not a POST
+        // Options refreshed, selection kept.
+        #expect(vm.selectedAircraftId == 3)
+        #expect(vm.selectedAircraft?.cruiseSpeedKt == 115)
+    }
+
+    @Test func placeholderOffersSetUpAndLeavesItsTypeBlank() async throws {
+        let placeholder = makeAircraft(id: 8, icaoType: "ZZZZ", typeName: "Unknown",
+                                       nickname: "My aircraft", cruiseSpeedKt: 120,
+                                       ceilingFt: nil, isDefault: true, isPlaceholder: true)
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([placeholder])
+        let vm = AddFlightViewModel(repository: repo)
+        await vm.loadAircraft()
+        #expect(vm.editAircraftButtonTitle == "Set up your aircraft")
+
+        vm.prepareEditAircraftForm(placeholder)
+        #expect(vm.aircraftFormTitle == "Set Up Your Aircraft")
+        #expect(vm.newAircraftIcaoType == "")
+        #expect(vm.canSaveAircraft)                  // blank type = keep stored
+
+        repo.updateAircraftResult = .success(placeholder)
+        #expect(await vm.saveAircraft())
+        let req = try #require(repo.lastUpdateAircraftRequest)
+        #expect(req.icaoType == nil)
+        #expect(req.nickname == "My aircraft")
+    }
+
+    @Test func makeDefaultToggleDefaultsOnOnlyOverAPlaceholderOrNothing() async {
+        let repo = MockBriefingRepository()
+        let vm = AddFlightViewModel(repository: repo)
+
+        // Only aircraft is the server's placeholder → on.
+        repo.aircraftResult = .success([makeAircraft(id: 1, isDefault: true, isPlaceholder: true)])
+        await vm.loadAircraft()
+        vm.prepareNewAircraftForm()
+        #expect(vm.isEditingAircraft == false)
+        #expect(vm.aircraftFormTitle == "Add Aircraft")
+        #expect(vm.newAircraftIsDefault)
+
+        // One real aircraft → off.
+        repo.aircraftResult = .success([makeAircraft(id: 2, isDefault: true)])
+        await vm.loadAircraft()
+        vm.prepareNewAircraftForm()
+        #expect(vm.newAircraftIsDefault == false)
+
+        // No aircraft at all (failed/old server) → on, as before.
+        let empty = AddFlightViewModel(repository: MockBriefingRepository())
+        empty.prepareNewAircraftForm()
+        #expect(empty.newAircraftIsDefault)
+    }
+
+    @Test func ceilingWarningShowsOnlyAboveTheServiceCeiling() async {
+        let nbsp = "\u{00A0}"
+        let n123 = makeAircraft(tailNumber: "N123", nickname: "Archie", ceilingFt: 18000)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 25000, aircraft: n123)
+                == "Ceiling 25\(nbsp)000 ft is above N123's service ceiling (18\(nbsp)000 ft).")
+        // At or below the service ceiling → none.
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 18000, aircraft: n123) == nil)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 10000, aircraft: n123) == nil)
+        // No service ceiling, or no aircraft → none.
+        #expect(AddFlightViewModel.ceilingWarning(
+            ceilingFt: 25000, aircraft: makeAircraft(ceilingFt: nil)) == nil)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 25000, aircraft: nil) == nil)
+        // Name falls back nickname → type name.
+        let archie = makeAircraft(tailNumber: nil, nickname: "Archie", ceilingFt: 14000)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 15000, aircraft: archie)?
+                .contains("Archie's service ceiling") == true)
+        let typeOnly = makeAircraft(typeName: "Cessna 172", ceilingFt: 14000)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 15000, aircraft: typeOnly)?
+                .contains("Cessna 172's service ceiling") == true)
+
+        // Wired to the form: warns, and never clamps the ceiling.
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([makeAircraft(id: 1, tailNumber: "N123",
+                                                     ceilingFt: 18000, isDefault: true)])
+        let vm = AddFlightViewModel(repository: repo)
+        await vm.loadAircraft()
+        vm.flightCeilingFt = 25000
+        #expect(vm.ceilingWarning != nil)
+        #expect(vm.flightCeilingFt == 25000)
+        vm.flightCeilingFt = 15000
+        #expect(vm.ceilingWarning == nil)
+    }
+
+    @Test func aircraftDecodesPlaceholderFlagTolerantOfAbsence() throws {
+        let base = #""id": 1, "icao_type": "ZZZZ", "type_name": "Unknown", "tail_number": null, "nickname": "My aircraft", "is_ifr": true, "is_fiki": false, "cruise_speed_kt": 120, "ceiling_ft": null, "is_default": true, "created_at": "2026-10-12T00:00:00Z""#
+        let old = try JSONDecoder.weatherBrief.decode(AircraftResponse.self, from: Data("{\(base)}".utf8))
+        #expect(old.isPlaceholder == false)
+        let current = try JSONDecoder.weatherBrief.decode(
+            AircraftResponse.self, from: Data("{\(base), \"is_placeholder\": true}".utf8))
+        #expect(current.isPlaceholder)
+    }
+
+    @Test func groupedFeetUsesNoBreakSpaceThousands() {
+        #expect(AddFlightViewModel.groupedFeet(999) == "999")
+        #expect(AddFlightViewModel.groupedFeet(1000) == "1\u{00A0}000")
+        #expect(AddFlightViewModel.groupedFeet(125000) == "125\u{00A0}000")
+    }
+
     // MARK: Pack count (#558 item 4) — the "discards N briefing(s)" copy
 
     /// Before the count lands the copy must not claim a number, and above all

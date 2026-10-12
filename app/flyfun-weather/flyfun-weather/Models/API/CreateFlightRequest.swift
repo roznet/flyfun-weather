@@ -146,6 +146,10 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     let ceilingFt: Int?
     let isDefault: Bool
     let createdAt: String
+    /// Synthesised by the server ("My aircraft", type `ZZZZ`) so every user has
+    /// a default aircraft; cleared by any `PUT`. The form offers "Set up your
+    /// aircraft" for it. Absent from older servers, so it decodes as `false`.
+    var isPlaceholder: Bool = false
 
     var displayName: String {
         if let nickname, !nickname.isEmpty { return nickname }
@@ -163,6 +167,38 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     var pickerTitle: String {
         displayName == typeName ? displayName : "\(displayName) - \(typeName)"
     }
+
+    /// How the ceiling warning names the aircraft: tail number, else nickname,
+    /// else type name ("N123's service ceiling").
+    var warningName: String {
+        if let tailNumber, !tailNumber.isEmpty { return tailNumber }
+        if let nickname, !nickname.isEmpty { return nickname }
+        return typeName
+    }
+}
+
+nonisolated extension AircraftResponse {
+    enum CodingKeys: String, CodingKey {
+        case id, icaoType, typeName, tailNumber, nickname, isIfr, isFiki
+        case cruiseSpeedKt, ceilingFt, isDefault, createdAt, isPlaceholder
+    }
+
+    /// Tolerates a server that predates `is_placeholder` (#777).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        icaoType = try c.decode(String.self, forKey: .icaoType)
+        typeName = try c.decode(String.self, forKey: .typeName)
+        tailNumber = try c.decodeIfPresent(String.self, forKey: .tailNumber)
+        nickname = try c.decodeIfPresent(String.self, forKey: .nickname)
+        isIfr = try c.decode(Bool.self, forKey: .isIfr)
+        isFiki = try c.decode(Bool.self, forKey: .isFiki)
+        cruiseSpeedKt = try c.decodeIfPresent(Int.self, forKey: .cruiseSpeedKt)
+        ceilingFt = try c.decodeIfPresent(Int.self, forKey: .ceilingFt)
+        isDefault = try c.decode(Bool.self, forKey: .isDefault)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        isPlaceholder = try c.decodeIfPresent(Bool.self, forKey: .isPlaceholder) ?? false
+    }
 }
 
 /// Request body for POST /api/aircraft.
@@ -175,6 +211,20 @@ nonisolated struct CreateAircraftRequest: Encodable {
     var cruiseSpeedKt: Int? = nil
     var ceilingFt: Int? = nil
     var isDefault: Bool = false
+}
+
+/// Request body for PUT /api/aircraft/{id}. Partial: a nil field is omitted
+/// and left unchanged by the server; an empty `tailNumber` / `nickname` clears
+/// it. Any PUT also clears the server's `is_placeholder` flag.
+nonisolated struct UpdateAircraftRequest: Encodable {
+    var icaoType: String? = nil
+    var tailNumber: String? = nil
+    var nickname: String? = nil
+    var isIfr: Bool? = nil
+    var isFiki: Bool? = nil
+    var cruiseSpeedKt: Int? = nil
+    var ceilingFt: Int? = nil
+    var isDefault: Bool? = nil
 }
 
 /// Request body for parsing an ICAO flight plan string.

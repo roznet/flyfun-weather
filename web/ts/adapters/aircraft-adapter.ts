@@ -20,7 +20,19 @@ export interface AircraftResponse {
   cruise_speed_kt: number | null;
   ceiling_ft: number | null;
   is_default: boolean;
+  /** True only on the "My aircraft" stand-in the server synthesises so every
+   *  user always has a default aircraft (#777). Any PUT clears it; a POST while
+   *  it is the user's only aircraft replaces it server-side. */
+  is_placeholder: boolean;
   created_at: string;
+}
+
+/** Display label for an aircraft in a picker: "TAIL — Type (nickname)".
+ *  A placeholder carries a meaningless type (ZZZZ), so it shows its nickname. */
+export function aircraftLabel(ac: AircraftResponse): string {
+  if (ac.is_placeholder) return ac.nickname || ac.type_name;
+  const base = ac.tail_number ? `${ac.tail_number} — ${ac.type_name}` : ac.type_name;
+  return ac.nickname ? `${base} (${ac.nickname})` : base;
 }
 
 export interface CreateAircraftRequest {

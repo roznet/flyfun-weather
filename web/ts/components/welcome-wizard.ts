@@ -4,13 +4,24 @@
  * Four steps:
  *   1. Welcome  — brief intro to Flyfun Weather
  *   2. Profile  — select a default profile from system templates
- *   3. Aircraft — flight rules, cruise altitude, ceiling, speed (pre-filled from selected profile)
+ *   3. Aircraft — two groups (#777):
+ *        "Your aircraft"      → POST /aircraft (name, ICAO type, cruise speed,
+ *                               service ceiling) as the default aircraft; the
+ *                               server replaces the synthesised placeholder.
+ *        "Your usual mission" → the selected profile (flight rules, cruise
+ *                               altitude, ceiling, models).
  *   4. Tour     — quick overview of key features
  *
  * On completion, marks the selected profile as default and saves setup_completed.
  */
 
 import { updateProfile, fetchSystemTemplates, type ProfileResponse, type ProfileSettings, type SystemTemplate } from '../adapters/profiles-adapter';
+import {
+  createAircraft, fetchAircraft, updateAircraft,
+  type AircraftResponse, type CreateAircraftRequest,
+} from '../adapters/aircraft-adapter';
+import { attachAircraftTypeTypeahead } from './aircraft-type-typeahead';
+import { applyCeilingWarning, parseCeilingInput } from '../utils/ceiling-warning';
 import { completeSetup } from '../adapters/preferences-adapter';
 import { escapeHtml, initModelCatalog, allModelKeys, defaultModelKeys, modelLabel } from '../utils';
 import type { ModelCatalogEntry } from '../utils';
@@ -29,6 +40,15 @@ let currentStep = 0;
 let allProfiles: ProfileResponse[] = [];
 let selectedProfileId: number | null = null;
 let systemTemplates: SystemTemplate[] = [];
+/** The pilot's real aircraft once the wizard has saved it (or a real default
+ *  that already existed). Later saves PUT it instead of POSTing a second one. */
+let wizardAircraft: AircraftResponse | null = null;
+/** True when wizardAircraft is a real aircraft the pilot had before the wizard:
+ *  we then don't touch its IFR flag (that's the pilot's earlier answer). */
+let aircraftPreExisted = false;
+/** Field values of the aircraft group, kept across Back/Next re-renders. */
+interface AircraftDraft { name: string; icao: string; typeName: string; speed: string; ceiling: string }
+let aircraftDraft: AircraftDraft = { name: '', icao: '', typeName: '', speed: '', ceiling: '' };
 
 /** Show the welcome wizard. Returns a promise that resolves when the user finishes. */
 export async function showWelcomeWizard(
@@ -41,12 +61,17 @@ export async function showWelcomeWizard(
   initModelCatalog(modelCatalog);
   currentStep = 0;
 
-  // Load system template descriptions
-  try {
-    systemTemplates = await fetchSystemTemplates();
-  } catch {
-    systemTemplates = [];
-  }
+  // Load system template descriptions and the user's aircraft (the server
+  // always returns at least the synthesised "My aircraft" placeholder).
+  const [templates, aircraft] = await Promise.all([
+    fetchSystemTemplates().catch(() => [] as SystemTemplate[]),
+    fetchAircraft().catch(() => [] as AircraftResponse[]),
+  ]);
+  systemTemplates = templates;
+  const def = aircraft.find(a => a.is_default) ?? null;
+  wizardAircraft = def && !def.is_placeholder ? def : null;
+  aircraftPreExisted = wizardAircraft != null;
+  aircraftDraft = draftFromAircraft(def);
 
   return new Promise<void>((resolve) => {
     createWizardDOM(resolve);
@@ -143,11 +168,12 @@ function wireStepHandlers(): void {
       });
   });
 
-  backBtn?.addEventListener('click', async () => {
+  backBtn?.addEventListener('click', () => {
     if (currentStep > 0) {
-      if (STEPS[currentStep] === 'tour') {
-        await collectAndSaveAircraftSettings();
-      }
+      // Leaving the aircraft step backwards keeps what was typed (not saved
+      // until Next). The aircraft step itself saved on Next, so going back
+      // from the tour step has nothing to collect.
+      if (STEPS[currentStep] === 'aircraft') readAircraftDraft();
       currentStep--;
       renderStep();
     }
@@ -158,6 +184,7 @@ function wireStepHandlers(): void {
       await applyProfileSelection();
     }
     if (STEPS[currentStep] === 'aircraft') {
+      if (!validateAircraftStep()) return;
       await collectAndSaveAircraftSettings();
     }
     currentStep++;
@@ -165,6 +192,71 @@ function wireStepHandlers(): void {
   });
 
   finishBtn?.addEventListener('click', () => handleFinish());
+
+  if (STEPS[currentStep] === 'aircraft') wireAircraftStep();
+}
+
+/** Typeahead on the ICAO type + live ceiling-vs-service-ceiling warning. */
+function wireAircraftStep(): void {
+  if (!wizardEl) return;
+  const icaoInput = wizardEl.querySelector('#wiz-ac-icao') as HTMLInputElement | null;
+  const dropdown = wizardEl.querySelector('#wiz-ac-type-suggestions') as HTMLElement | null;
+  const typeLabel = wizardEl.querySelector('#wiz-ac-type-label') as HTMLElement | null;
+  if (icaoInput && dropdown) {
+    attachAircraftTypeTypeahead(icaoInput, dropdown, (type) => {
+      aircraftDraft.typeName = `${type.manufacturer} ${type.model}`;
+      if (typeLabel) typeLabel.textContent = aircraftDraft.typeName;
+      setIcaoError(false);
+      updateWizardCeilingWarning();
+    });
+    icaoInput.addEventListener('input', () => {
+      // A hand-typed code no longer matches the picked type's name.
+      aircraftDraft.typeName = '';
+      if (typeLabel) typeLabel.textContent = '';
+      if (icaoInput.value.trim()) setIcaoError(false);
+    });
+  }
+  for (const id of ['#wiz-ac-ceiling', '#wiz-ceiling', '#wiz-ac-name', '#wiz-ac-icao']) {
+    wizardEl.querySelector(id)?.addEventListener('input', updateWizardCeilingWarning);
+  }
+  updateWizardCeilingWarning();
+}
+
+/** The two ceilings sit in separate groups; warn when the mission ceiling is
+ *  above the aircraft's service ceiling (warn only, never clamps). */
+function updateWizardCeilingWarning(): void {
+  if (!wizardEl) return;
+  readAircraftDraft();
+  const missionCeiling = parseCeilingInput((wizardEl.querySelector('#wiz-ceiling') as HTMLInputElement | null)?.value);
+  const icao = aircraftDraft.icao.toUpperCase();
+  applyCeilingWarning(
+    wizardEl.querySelector('#wiz-ceiling-warning') as HTMLElement | null,
+    missionCeiling,
+    {
+      tail_number: wizardAircraft?.tail_number ?? null,
+      nickname: aircraftDraft.name || null,
+      type_name: aircraftDraft.typeName || icao || t('wizard.yourAircraft'),
+      ceiling_ft: parseCeilingInput(aircraftDraft.ceiling),
+    },
+  );
+}
+
+function setIcaoError(show: boolean): void {
+  const err = wizardEl?.querySelector('#wiz-ac-icao-error') as HTMLElement | null;
+  if (err) err.hidden = !show;
+  (wizardEl?.querySelector('#wiz-ac-icao') as HTMLInputElement | null)
+    ?.classList.toggle('input-error', show);
+}
+
+/** The ICAO type is required: the server needs one to create the aircraft,
+ *  and leaving it empty would leave the placeholder in place. "ZZZZ" (the ICAO
+ *  code for a type without a designator) is the documented escape. */
+function validateAircraftStep(): boolean {
+  readAircraftDraft();
+  if (aircraftDraft.icao) return true;
+  setIcaoError(true);
+  (wizardEl?.querySelector('#wiz-ac-icao') as HTMLInputElement | null)?.focus();
+  return false;
 }
 
 function renderWelcomeStep(): string {
@@ -253,8 +345,8 @@ function renderAircraftStep(): string {
   const settings = profile?.settings;
   const altitude = settings?.cruise_altitude_ft ?? DEFAULT_CRUISE_ALT_FT;
   const ceiling = settings?.flight_ceiling_ft ?? DEFAULT_CEILING_FT;
-  const speed = settings?.speed_kt ?? '';
   const rules = settings?.flight_rules ?? 'vfr_ifr';
+  const d = aircraftDraft;
 
   const defaults = settings?.models ?? defaultModelKeys();
   const modelHtml = allModelKeys().map(m => {
@@ -267,41 +359,101 @@ function renderAircraftStep(): string {
     <div class="wizard-step wizard-aircraft">
       <h2>${t('wizard.aircraftTitle')}</h2>
       <p class="wizard-subtitle">${t('wizard.aircraftSubtitle')}</p>
-      <p class="wizard-hint">${t('wizard.aircraftHint')}</p>
 
       <div class="wizard-form">
-        <div class="wizard-form-row">
-          <div class="wizard-form-group">
-            <label for="wiz-flight-rules">${t('wizard.flightRules')}</label>
-            <select id="wiz-flight-rules" class="input-select">
-              <option value="vfr_ifr"${rules === 'vfr_ifr' ? ' selected' : ''}>${t('wizard.vfrIfr')}</option>
-              <option value="vfr_only"${rules === 'vfr_only' ? ' selected' : ''}>${t('wizard.vfrOnly')}</option>
-            </select>
+        <fieldset class="wizard-group">
+          <legend>${t('wizard.aircraftGroup')}</legend>
+          <p class="muted wizard-group-hint">${t('wizard.aircraftGroupHint')}</p>
+          <div class="wizard-form-row">
+            <div class="wizard-form-group">
+              <label for="wiz-ac-name">${t('wizard.aircraftName')}</label>
+              <input type="text" id="wiz-ac-name" value="${escapeHtml(d.name)}" placeholder="${escapeHtml(t('wizard.aircraftNamePlaceholder'))}" maxlength="50">
+            </div>
+            <div class="wizard-form-group wizard-typeahead">
+              <label for="wiz-ac-icao">${t('wizard.icaoType')}</label>
+              <input type="text" id="wiz-ac-icao" value="${escapeHtml(d.icao)}" placeholder="${escapeHtml(t('wizard.icaoTypePlaceholder'))}" maxlength="4" autocomplete="off" required>
+              <div id="wiz-ac-type-suggestions" class="autocomplete-dropdown" style="display:none"></div>
+              <span id="wiz-ac-type-label" class="muted wizard-type-label">${escapeHtml(d.typeName)}</span>
+              <span id="wiz-ac-icao-error" class="wizard-field-error" hidden>${t('wizard.icaoTypeRequired')}</span>
+            </div>
           </div>
-        </div>
-        <div class="wizard-form-row">
-          <div class="wizard-form-group">
-            <label for="wiz-altitude">${t('wizard.cruiseAltitude')}</label>
-            <input type="number" id="wiz-altitude" value="${altitude}" min="1000" max="45000" step="500">
+          <div class="wizard-form-row">
+            <div class="wizard-form-group">
+              <label for="wiz-ac-speed">${t('wizard.speed')}</label>
+              <input type="number" id="wiz-ac-speed" value="${escapeHtml(d.speed)}" placeholder="${escapeHtml(t('wizard.speedPlaceholder'))}" min="10" max="500" step="1">
+            </div>
+            <div class="wizard-form-group">
+              <label for="wiz-ac-ceiling">${t('wizard.serviceCeiling')}</label>
+              <input type="number" id="wiz-ac-ceiling" value="${escapeHtml(d.ceiling)}" placeholder="${escapeHtml(t('wizard.serviceCeilingPlaceholder'))}" min="1000" max="60000" step="500">
+            </div>
           </div>
-          <div class="wizard-form-group">
-            <label for="wiz-ceiling">${t('wizard.flightCeiling')}</label>
-            <input type="number" id="wiz-ceiling" value="${ceiling}" min="1000" max="45000" step="500">
-          </div>
-          <div class="wizard-form-group">
-            <label for="wiz-speed">${t('wizard.speed')}</label>
-            <input type="number" id="wiz-speed" value="${speed}" placeholder="${t('wizard.speedPlaceholder')}" min="10" max="500" step="1">
-          </div>
-        </div>
+        </fieldset>
 
-        <div class="wizard-models-section">
-          <label>${t('wizard.forecastModels')}</label>
-          <p class="muted wizard-model-hint">${t('wizard.modelHint')}</p>
-          <div class="wizard-model-checkboxes">${modelHtml}</div>
-        </div>
+        <fieldset class="wizard-group">
+          <legend>${t('wizard.missionGroup')}</legend>
+          <p class="muted wizard-group-hint">${t('wizard.missionGroupHint')}</p>
+          <div class="wizard-form-row">
+            <div class="wizard-form-group">
+              <label for="wiz-flight-rules">${t('wizard.flightRules')}</label>
+              <select id="wiz-flight-rules" class="input-select">
+                <option value="vfr_ifr"${rules === 'vfr_ifr' ? ' selected' : ''}>${t('wizard.vfrIfr')}</option>
+                <option value="vfr_only"${rules === 'vfr_only' ? ' selected' : ''}>${t('wizard.vfrOnly')}</option>
+              </select>
+            </div>
+          </div>
+          <div class="wizard-form-row">
+            <div class="wizard-form-group">
+              <label for="wiz-altitude">${t('wizard.cruiseAltitude')}</label>
+              <input type="number" id="wiz-altitude" value="${altitude}" min="1000" max="45000" step="500">
+            </div>
+            <div class="wizard-form-group">
+              <label for="wiz-ceiling">${t('wizard.flightCeiling')}</label>
+              <input type="number" id="wiz-ceiling" value="${ceiling}" min="1000" max="45000" step="500">
+            </div>
+          </div>
+          <p id="wiz-ceiling-warning" class="ceiling-warning" role="status" hidden></p>
+
+          <div class="wizard-models-section">
+            <label>${t('wizard.forecastModels')}</label>
+            <p class="muted wizard-model-hint">${t('wizard.modelHint')}</p>
+            <div class="wizard-model-checkboxes">${modelHtml}</div>
+          </div>
+        </fieldset>
       </div>
+      <p class="wizard-hint">${t('wizard.aircraftHint')}</p>
     </div>
   `;
+}
+
+/** Seed the aircraft group from the user's default aircraft. A placeholder
+ *  only contributes its speed (carried over from the old profile speed); its
+ *  "My aircraft" name and ZZZZ type are stand-ins, not the pilot's answers. */
+function draftFromAircraft(ac: AircraftResponse | null): AircraftDraft {
+  if (!ac) return { name: '', icao: '', typeName: '', speed: '', ceiling: '' };
+  const speed = ac.cruise_speed_kt != null ? String(ac.cruise_speed_kt) : '';
+  if (ac.is_placeholder) return { name: '', icao: '', typeName: '', speed, ceiling: '' };
+  return {
+    name: ac.nickname ?? '',
+    icao: ac.icao_type,
+    typeName: ac.type_name !== ac.icao_type ? ac.type_name : '',
+    speed,
+    ceiling: ac.ceiling_ft != null ? String(ac.ceiling_ft) : '',
+  };
+}
+
+/** Copy the aircraft group's inputs into aircraftDraft (no-op off the step). */
+function readAircraftDraft(): void {
+  if (!wizardEl) return;
+  const val = (id: string) => (wizardEl!.querySelector(id) as HTMLInputElement | null)?.value?.trim();
+  const icao = val('#wiz-ac-icao');
+  if (icao === undefined) return;  // aircraft step not rendered
+  aircraftDraft = {
+    ...aircraftDraft,
+    name: val('#wiz-ac-name') ?? '',
+    icao: icao.toUpperCase(),
+    speed: val('#wiz-ac-speed') ?? '',
+    ceiling: val('#wiz-ac-ceiling') ?? '',
+  };
 }
 
 function renderTourStep(): string {
@@ -403,16 +555,15 @@ async function applyProfileSelection(): Promise<void> {
   }
 }
 
-/** Collect aircraft settings from the form and save to the selected profile. */
+/** Save the aircraft step: the aircraft group to the default aircraft
+ *  (POST, or PUT once the wizard has one), the mission group to the selected
+ *  profile. Only called while the aircraft step is rendered. */
 async function collectAndSaveAircraftSettings(): Promise<void> {
   if (!wizardEl) return;
   const profile = getSelectedProfile();
-  if (!profile) return;
 
   const altitude = parseInt((wizardEl.querySelector('#wiz-altitude') as HTMLInputElement)?.value || String(DEFAULT_CRUISE_ALT_FT), 10);
   const ceiling = parseInt((wizardEl.querySelector('#wiz-ceiling') as HTMLInputElement)?.value || String(DEFAULT_CEILING_FT), 10);
-  const speedRaw = (wizardEl.querySelector('#wiz-speed') as HTMLInputElement)?.value?.trim();
-  const speed = speedRaw ? parseInt(speedRaw, 10) : null;
   const rules = (wizardEl.querySelector('#wiz-flight-rules') as HTMLSelectElement)?.value || 'vfr_ifr';
 
   const models: string[] = [];
@@ -420,10 +571,14 @@ async function collectAndSaveAircraftSettings(): Promise<void> {
     if (cb.checked) models.push(cb.dataset.model!);
   }
 
+  readAircraftDraft();
+  await saveWizardAircraft(rules);
+
+  if (!profile) return;
+  // Profile = the mission. No speed: it lives on the aircraft (#777).
   const settings: Partial<ProfileSettings> = {
     cruise_altitude_ft: isNaN(altitude) ? null : altitude,
     flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
-    speed_kt: speed != null && !isNaN(speed) ? speed : null,
     flight_rules: rules,
     models: models.length > 0 ? models : null,
   };
@@ -432,6 +587,32 @@ async function collectAndSaveAircraftSettings(): Promise<void> {
     await updateProfile(profile.id, { settings });
   } catch (err) {
     console.error('Failed to save wizard profile settings:', err);
+  }
+}
+
+/** POST the pilot's aircraft as the default (the server replaces the
+ *  synthesised placeholder and re-points its flights), or PUT it when the
+ *  wizard already holds a real one (Back → Next, or a pre-existing default). */
+async function saveWizardAircraft(rules: string): Promise<void> {
+  const d = aircraftDraft;
+  if (!d.icao) return;  // validated before we get here
+  const speed = parseInt(d.speed, 10);
+  const ceiling = parseInt(d.ceiling, 10);
+  const req: CreateAircraftRequest = {
+    icao_type: d.icao,
+    nickname: d.name || null,
+    cruise_speed_kt: Number.isFinite(speed) && speed > 0 ? speed : null,
+    ceiling_ft: Number.isFinite(ceiling) && ceiling > 0 ? ceiling : null,
+    // Mirrors the placeholder rule: IFR-capable unless the pilot flies VFR only.
+    ...(aircraftPreExisted ? {} : { is_ifr: rules !== 'vfr_only' }),
+    is_default: true,
+  };
+  try {
+    wizardAircraft = wizardAircraft
+      ? await updateAircraft(wizardAircraft.id, req)
+      : await createAircraft(req);
+  } catch (err) {
+    console.error('Failed to save wizard aircraft:', err);
   }
 }
 

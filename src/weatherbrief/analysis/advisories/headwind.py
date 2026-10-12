@@ -16,8 +16,8 @@ with level — often the actual decision being made), falling back to the
 precomputed cruise wind components on packs without cross-section winds.
 
 The trip-time estimate needs a cruise TAS, resolved per flight (no user knob):
-the aircraft cruise speed (IAS, aircraft→profile via
-``weatherbrief.atmo.resolve_cruise_speed_ias``) converted to TAS at the
+the aircraft cruise speed (IAS, the flight's aircraft or else the owner's
+default aircraft, via ``weatherbrief.atmo.resolve_cruise_speed_ias``) converted to TAS at the
 evaluated cruise altitude — so the minutes reflect the actual aeroplane and the
 altitude table shows TAS rising with height; failing that, the flight's own
 planned speed (distance ÷ duration); failing that, a generic fallback so the

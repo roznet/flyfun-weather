@@ -36,7 +36,7 @@ async function mockBriefingApi(page: Page, flightPayload: Record<string, unknown
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', (route: Route) => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/stats', (route: Route) => route.fulfill({ json: { avg_refresh_seconds: 60 } }));
   await page.route(`**/api/flights/${FLIGHT_ID}`, (route: Route) => {
@@ -100,7 +100,7 @@ test('subscribed non-owner can toggle Unsubscribe -> Subscribe -> Unsubscribe', 
     json: { id: 'u1', email: 't@e.com', name: 'T', approved: true, is_admin: false, setup_completed: true },
   }));
   await page.route('**/api/user/profiles', (route: Route) => route.fulfill({ json: [] }));
-  await page.route('**/api/user/aircraft', (route: Route) => route.fulfill({ json: [] }));
+  await page.route('**/api/aircraft', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', (route: Route) => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/stats', (route: Route) => route.fulfill({ json: { avg_refresh_seconds: 60 } }));
   await page.route(`**/api/flights/${FLIGHT_ID}`, (route: Route) => {

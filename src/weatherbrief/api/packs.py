@@ -1398,39 +1398,29 @@ def _build_route_config(flight, db_path):
     )
 
 
-def _resolve_cruise_ias_kt(db, flight, profile_speed_kt=None):
+def _resolve_cruise_ias_kt(db, flight):
     """Resolve the flight's cruise IAS (kt) for the headwind advisory's TAS.
 
-    Reuses the app precedence (``weatherbrief.atmo.resolve_cruise_speed_ias``):
-    the selected aircraft's cruise speed first, then the flight-default profile
-    speed. *profile_speed_kt* lets callers that already loaded the profile skip
-    a reload; otherwise it's looked up. Returns ``None`` when nothing usable is
-    known (no DB, speedless aircraft + profile), and the advisory keeps its
-    generic default.
+    Speed comes only from the aircraft (#777): the flight's own, else — for a
+    NULL ``aircraft_id`` — the owner's default aircraft
+    (``resolve_flight_aircraft``). Returns ``None`` when nothing usable is
+    known (no DB, speedless aircraft), and the advisory keeps its generic
+    default.
     """
     from weatherbrief.atmo import resolve_cruise_speed_ias
 
     aircraft_speed = None
-    if db is not None and getattr(flight, "aircraft_id", None) is not None:
+    if db is not None:
         try:
-            from weatherbrief.db.models import UserAircraftRow
+            from weatherbrief.storage.aircraft import resolve_flight_aircraft
 
-            ac = db.query(UserAircraftRow).filter(UserAircraftRow.id == flight.aircraft_id).first()
+            ac = resolve_flight_aircraft(db, flight)
             if ac is not None:
                 aircraft_speed = ac.cruise_speed_kt
         except Exception:
             logger.debug("cruise IAS: aircraft lookup failed", exc_info=True)
 
-    if profile_speed_kt is None and db is not None and getattr(flight, "profile_id", None) is not None:
-        try:
-            from weatherbrief.api.profiles import load_profile_context
-
-            pctx = load_profile_context(db, flight.profile_id, flight.user_id)
-            profile_speed_kt = pctx.settings.get("speed_kt")
-        except Exception:
-            logger.debug("cruise IAS: profile lookup failed", exc_info=True)
-
-    return resolve_cruise_speed_ias(aircraft_speed, profile_speed_kt)
+    return resolve_cruise_speed_ias(aircraft_speed)
 
 
 def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
@@ -1592,9 +1582,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     options.units_region = resolve_units_region(units_region, detected)
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
-    options.cruise_speed_ias_kt = _resolve_cruise_ias_kt(
-        db, flight, profile_speed_kt=profile_settings.get("speed_kt"),
-    )
+    options.cruise_speed_ias_kt = _resolve_cruise_ias_kt(db, flight)
     if digest_guidance:
         options.guidance_key = digest_guidance
 

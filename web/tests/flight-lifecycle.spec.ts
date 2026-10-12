@@ -90,7 +90,6 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
           settings: {
             cruise_altitude_ft: 8000,
             flight_ceiling_ft: 18000,
-            speed_kt: null,
             models: ['ecmwf', 'gfs', 'icon', 'ukmo', 'meteofrance'],
             advisory_models: ['ecmwf', 'gfs', 'icon', 'ukmo', 'meteofrance'],
             gramet_enabled: true,
@@ -327,8 +326,26 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
   );
 
   // --- Mock aircraft list ---
-  await page.route('**/api/user/aircraft', route =>
-    route.fulfill({ json: [] }),
+  // The server always returns at least one aircraft with exactly one default:
+  // for a new user, the synthesised "My aircraft" placeholder (#777). Its null
+  // service ceiling means no ceiling warning on the flight form.
+  await page.route('**/api/aircraft', route =>
+    route.fulfill({
+      json: [{
+        id: 1,
+        icao_type: 'ZZZZ',
+        type_name: 'ZZZZ',
+        tail_number: null,
+        nickname: 'My aircraft',
+        is_ifr: true,
+        is_fiki: false,
+        cruise_speed_kt: null,
+        ceiling_ft: null,
+        is_default: true,
+        is_placeholder: true,
+        created_at: '2026-01-01T00:00:00',
+      }],
+    }),
   );
 
   // --- Mock DWD overview and skewt (non-critical) ---

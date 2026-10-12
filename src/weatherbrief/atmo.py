@@ -31,18 +31,15 @@ def ias_to_tas_isa(ias_kt: float, alt_ft: float) -> float:
     return ias_kt / math.sqrt(density_ratio)
 
 
-def resolve_cruise_speed_ias(
-    aircraft_speed_kt: float | None,
-    profile_speed_kt: float | None,
-) -> float | None:
-    """Resolve the cruise IAS (kt) to use, applying the app's precedence: the
-    selected aircraft's cruise speed first, then the flight-default profile's
-    speed. Both inputs are cruise IAS. Nullish or non-positive candidates
-    (unset / 0 / negative) are skipped, so a speedless aircraft falls back to
-    the profile. Returns ``None`` if neither yields a usable value. Mirror of
-    ``resolveCruiseSpeedIAS`` in ``atmo.ts``.
+def resolve_cruise_speed_ias(aircraft_speed_kt: float | None) -> float | None:
+    """Resolve the cruise IAS (kt) to use: the flight's aircraft's cruise speed.
+
+    Speed belongs to the aircraft alone (#777) — profiles no longer carry one,
+    and a flight with no aircraft resolves to the owner's default aircraft
+    before it gets here. Nullish or non-positive values (unset / 0 /
+    negative) yield ``None``, and callers keep their generic default. Mirror
+    of ``resolveCruiseSpeedIAS`` in ``atmo.ts``.
     """
-    for candidate in (aircraft_speed_kt, profile_speed_kt):
-        if candidate is not None and candidate > 0:
-            return float(candidate)
+    if aircraft_speed_kt is not None and aircraft_speed_kt > 0:
+        return float(aircraft_speed_kt)
     return None

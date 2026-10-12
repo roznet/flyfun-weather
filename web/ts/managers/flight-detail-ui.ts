@@ -2,7 +2,8 @@
 
 import type { ConditionTagId, DebriefResponse, FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
-import type { AircraftResponse } from '../adapters/aircraft-adapter';
+import { aircraftLabel, type AircraftResponse } from '../adapters/aircraft-adapter';
+import { applyCeilingWarning, parseCeilingInput } from '../utils/ceiling-warning';
 import type { ProfileResponse } from '../adapters/profiles-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, flightTitle, flightRouteCompact, isFlightPast } from '../utils';
 import { getDateLocale, t } from '../i18n/i18n';
@@ -149,14 +150,13 @@ export function renderFlightInfo(
       return `<option value="${p.id}"${sel}>${escapeHtml(p.name)}</option>`;
     }).join('');
 
-    // Build aircraft options
-    const aircraftOptions = '<option value="">None</option>' + aircraft.map(ac => {
-      const label = ac.tail_number
-        ? `${ac.tail_number} — ${ac.type_name}`
-        : ac.type_name;
-      const nickname = ac.nickname ? ` (${ac.nickname})` : '';
-      const sel = ac.id === flight.aircraft_id ? ' selected' : '';
-      return `<option value="${ac.id}"${sel}>${escapeHtml(label + nickname)}</option>`;
+    // Build aircraft options. No "None": a flight without an aircraft resolves
+    // to the user's default aircraft server-side (#777), so preselect that.
+    const selectedAircraftId = flight.aircraft_id
+      ?? aircraft.find(a => a.is_default)?.id ?? null;
+    const aircraftOptions = aircraft.map(ac => {
+      const sel = ac.id === selectedAircraftId ? ' selected' : '';
+      return `<option value="${ac.id}"${sel}>${escapeHtml(aircraftLabel(ac))}</option>`;
     }).join('');
 
     // Trip membership control (#602). Rendered only when the source flight is
@@ -261,6 +261,7 @@ export function renderFlightInfo(
           <span class="info-label">Ceiling</span>
           <span class="info-value">
             <input type="number" id="edit-ceiling" class="edit-input" value="${flight.flight_ceiling_ft}" min="1000" max="45000" step="500" style="width:80px"> ft
+            <span id="edit-ceiling-warning" class="ceiling-warning" role="status" hidden></span>
           </span>
         </div>
         <div class="info-row">
@@ -315,7 +316,25 @@ export function renderFlightInfo(
           ceilInput.value = String(profile.settings.flight_ceiling_ft);
         }
       }
+      updateEditCeilingWarning();
     });
+
+    // Ceiling above the selected aircraft's service ceiling (#777): warn only,
+    // re-checked when the aircraft, profile or ceiling changes. Picking an
+    // aircraft never changes the ceiling field.
+    const updateEditCeilingWarning = (): void => {
+      const acSelect = document.getElementById('edit-aircraft') as HTMLSelectElement | null;
+      const acId = acSelect?.value ? parseInt(acSelect.value, 10) : null;
+      const ceilInput = document.getElementById('edit-ceiling') as HTMLInputElement | null;
+      applyCeilingWarning(
+        document.getElementById('edit-ceiling-warning'),
+        parseCeilingInput(ceilInput?.value),
+        aircraft.find(a => a.id === acId),
+      );
+    };
+    document.getElementById('edit-aircraft')?.addEventListener('change', updateEditCeilingWarning);
+    document.getElementById('edit-ceiling')?.addEventListener('input', updateEditCeilingWarning);
+    updateEditCeilingWarning();
   } else {
     // Flexibility display: the mode, plus the alternate time (with delta)
     // when that's the mode.

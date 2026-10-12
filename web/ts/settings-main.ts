@@ -42,10 +42,10 @@ import {
   createAircraft,
   updateAircraft,
   deleteAircraft,
-  searchAircraftTypes,
   type AircraftResponse,
-  type AircraftType,
 } from './adapters/aircraft-adapter';
+import { attachAircraftTypeTypeahead } from './components/aircraft-type-typeahead';
+import { applyCeilingWarning, parseCeilingInput } from './utils/ceiling-warning';
 import {
   fetchTokens,
   createToken,
@@ -202,11 +202,10 @@ function populateProfileForm(profile: ProfileResponse): void {
   const flightRulesSelect = document.getElementById('input-flight-rules') as HTMLSelectElement;
   const altInput = document.getElementById('input-altitude') as HTMLInputElement;
   const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement;
-  const speedInput = document.getElementById('input-speed') as HTMLInputElement;
   if (flightRulesSelect) flightRulesSelect.value = s.flight_rules ?? 'vfr_ifr';
   if (altInput) altInput.value = String(s.cruise_altitude_ft ?? 8000);
   if (ceilInput) ceilInput.value = String(s.flight_ceiling_ft ?? 18000);
-  if (speedInput) speedInput.value = s.speed_kt != null ? String(s.speed_kt) : '';
+  updateProfileCeilingWarning();
 
   // Models
   const selectedModels = s.models || defaultModelKeys();
@@ -445,8 +444,30 @@ function translateStaticElements(): void {
   set('label[for="input-flight-rules"]', 'page.settings.flightRules');
   set('label[for="input-altitude"]', 'page.settings.cruiseAltitude');
   set('label[for="input-ceiling"]', 'page.settings.flightCeiling');
+  set('#flight-defaults-speed-note', 'page.settings.speedFromAircraft');
+  // Aircraft tab (#777 §4: labels moved to i18n; the aircraft ceiling is
+  // always "Service Ceiling").
+  set('.tab-btn[data-tab="aircraft"]', 'page.settings.tabAircraft');
+  set('#aircraft-list-title', 'page.settings.aircraft.title');
+  set('#aircraft-list-hint', 'page.settings.aircraft.hint');
+  set('#btn-add-aircraft', 'page.settings.aircraft.add');
+  set('label[for="ac-icao-type"]', 'page.settings.aircraft.icaoType');
+  set('label[for="ac-tail"]', 'page.settings.aircraft.tail');
+  set('label[for="ac-nickname"]', 'page.settings.aircraft.nickname');
+  set('label[for="ac-ceiling"]', 'page.settings.aircraft.serviceCeiling');
+  set('#ac-ifr-label', 'page.settings.aircraft.ifr');
+  set('#ac-fiki-label', 'page.settings.aircraft.fiki');
+  set('#ac-default-label', 'page.settings.aircraft.default');
+  set('#btn-save-aircraft', 'page.settings.aircraft.save');
+  set('#btn-cancel-aircraft', 'page.settings.aircraft.cancel');
+  const icaoInput = document.getElementById('ac-icao-type') as HTMLInputElement | null;
+  if (icaoInput) icaoInput.placeholder = t('page.settings.aircraft.icaoTypePlaceholder');
+  const tailInput = document.getElementById('ac-tail') as HTMLInputElement | null;
+  if (tailInput) tailInput.placeholder = t('page.settings.aircraft.tailPlaceholder');
+  const nickInput = document.getElementById('ac-nickname') as HTMLInputElement | null;
+  if (nickInput) nickInput.placeholder = t('page.settings.aircraft.nicknamePlaceholder');
   // Speed label carries an (i) info button child — set the text but keep the button.
-  const speedLabel = document.querySelector('label[for="input-speed"]');
+  const speedLabel = document.querySelector('label[for="ac-speed"]');
   if (speedLabel) {
     const speedInfoBtn = speedLabel.querySelector('.cruise-speed-info-btn');
     speedLabel.textContent = t('page.settings.speed') + ' ';
@@ -656,7 +677,7 @@ async function init(): Promise<void> {
     await handleSave();
   });
 
-  // Cruise speed (IAS) info popup — wired on both the aircraft and flight-default speed labels
+  // Cruise speed (IAS) info popup — on the aircraft speed label
   document.querySelectorAll('.cruise-speed-info-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1660,8 +1681,6 @@ async function handleSave(): Promise<void> {
   // Collect profile settings from the form
   const altitude = parseInt((document.getElementById('input-altitude') as HTMLInputElement).value, 10);
   const ceiling = parseInt((document.getElementById('input-ceiling') as HTMLInputElement).value, 10);
-  const speedRaw = (document.getElementById('input-speed') as HTMLInputElement).value.trim();
-  const speed = speedRaw ? parseInt(speedRaw, 10) : null;
 
   const models: string[] = [];
   for (const m of allModelKeys()) {
@@ -1697,7 +1716,6 @@ async function handleSave(): Promise<void> {
   const profileSettings: Partial<ProfileSettings> = {
     cruise_altitude_ft: isNaN(altitude) ? null : altitude,
     flight_ceiling_ft: isNaN(ceiling) ? null : ceiling,
-    speed_kt: speed != null && !isNaN(speed) ? speed : null,
     models,
     flight_rules: flightRules,
     gramet_enabled: grametEnabled,
@@ -1942,41 +1960,55 @@ function renderUsageBar(label: string, used: number, limit: number | null): stri
 function initAircraftTab(): Promise<void> {
   // Load aircraft list. Returned so deep-links (?aircraft=<id>) can await it
   // before trying to open the target aircraft's edit form.
-  const loaded = fetchAircraft()
-    .then(list => {
-      aircraftList = list;
-      renderAircraftList();
-    })
-    .catch(() => { /* aircraft section stays empty */ });
+  const loaded = reloadAircraftList();
 
   document.getElementById('btn-add-aircraft')?.addEventListener('click', () => {
     editingAircraftId = null;
-    showAircraftForm('Add Aircraft');
+    showAircraftForm(t('page.settings.aircraft.addTitle'));
     clearAircraftForm();
   });
   document.getElementById('btn-save-aircraft')?.addEventListener('click', saveAircraftForm);
   document.getElementById('btn-cancel-aircraft')?.addEventListener('click', hideAircraftForm);
 
   // ICAO type autocomplete
-  const icaoInput = document.getElementById('ac-icao-type') as HTMLInputElement;
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  icaoInput?.addEventListener('input', () => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      const q = icaoInput.value.trim();
-      if (q.length >= 1) {
-        searchAircraftTypes(q).then(showTypeSuggestions).catch(() => hideTypeSuggestions());
-      } else {
-        hideTypeSuggestions();
-      }
-    }, 200);
-  });
-  icaoInput?.addEventListener('blur', () => {
-    // Delay hiding to allow click on suggestion
-    setTimeout(hideTypeSuggestions, 200);
-  });
+  const icaoInput = document.getElementById('ac-icao-type') as HTMLInputElement | null;
+  const dropdown = document.getElementById('ac-type-suggestions');
+  if (icaoInput && dropdown) {
+    attachAircraftTypeTypeahead(icaoInput, dropdown, (type) => {
+      const label = document.getElementById('ac-type-label');
+      if (label) label.textContent = `${type.manufacturer} ${type.model}`;
+    });
+  }
+
+  // Re-check the Flight Defaults ceiling warning as the pilot edits the ceiling.
+  document.getElementById('input-ceiling')?.addEventListener('input', updateProfileCeilingWarning);
 
   return loaded;
+}
+
+/** Re-fetch the aircraft list from the server. The server owns the invariants
+ *  (exactly one default, placeholder replacement, default promotion on delete),
+ *  so after any change we reload rather than patch the local list. */
+async function reloadAircraftList(): Promise<void> {
+  try {
+    aircraftList = await fetchAircraft();
+  } catch {
+    /* aircraft section keeps its previous content */
+    return;
+  }
+  renderAircraftList();
+  updateProfileCeilingWarning();
+}
+
+/** Flight Defaults: warn when the active profile's ceiling is above the
+ *  DEFAULT aircraft's service ceiling (#777 §4). Warn only — never clamps. */
+function updateProfileCeilingWarning(): void {
+  const ceilInput = document.getElementById('input-ceiling') as HTMLInputElement | null;
+  applyCeilingWarning(
+    document.getElementById('input-ceiling-warning'),
+    parseCeilingInput(ceilInput?.value),
+    aircraftList.find(a => a.is_default),
+  );
 }
 
 function renderAircraftList(): void {
@@ -1984,35 +2016,46 @@ function renderAircraftList(): void {
   if (!container) return;
 
   if (aircraftList.length === 0) {
-    container.innerHTML = '<p class="muted">No aircraft added yet.</p>';
+    container.innerHTML = `<p class="muted">${escapeHtml(t('page.settings.aircraft.none'))}</p>`;
     return;
   }
 
   container.innerHTML = aircraftList.map(ac => {
     const badges: string[] = [];
-    if (ac.is_default) badges.push('<span class="badge badge-green">Default</span>');
+    if (ac.is_default) badges.push(`<span class="badge badge-green">${escapeHtml(t('page.settings.aircraft.defaultBadge'))}</span>`);
     if (ac.is_ifr) badges.push('<span class="badge badge-none">IFR</span>');
     if (ac.is_fiki) badges.push('<span class="badge badge-none">FIKI</span>');
 
     const details: string[] = [];
     if (ac.cruise_speed_kt) details.push(`${ac.cruise_speed_kt} kt`);
-    if (ac.ceiling_ft) details.push(`FL${Math.round(ac.ceiling_ft / 100)}`);
+    if (ac.ceiling_ft) {
+      details.push(t('page.settings.aircraft.serviceCeilingDetail', { fl: Math.round(ac.ceiling_ft / 100) }));
+    }
 
-    const tailDisplay = ac.tail_number ? `<strong>${escapeHtml(ac.tail_number)}</strong> — ` : '';
-    const nicknameDisplay = ac.nickname ? ` <span class="muted">(${escapeHtml(ac.nickname)})</span>` : '';
+    // A placeholder's type (ZZZZ) means nothing — show its name and a nudge.
+    const identity = ac.is_placeholder
+      ? escapeHtml(ac.nickname || ac.type_name)
+      : `${ac.tail_number ? `<strong>${escapeHtml(ac.tail_number)}</strong> — ` : ''}${escapeHtml(ac.type_name)}${ac.nickname ? ` <span class="muted">(${escapeHtml(ac.nickname)})</span>` : ''}`;
+    const placeholderHint = ac.is_placeholder
+      ? `<div class="aircraft-placeholder-hint">${escapeHtml(t('page.settings.aircraft.placeholderHint'))}</div>`
+      : '';
+    const editLabel = ac.is_placeholder
+      ? t('page.settings.aircraft.setUp')
+      : t('page.settings.aircraft.edit');
 
     return `
       <div class="aircraft-card" data-id="${ac.id}">
         <div class="aircraft-card-main">
           <div class="aircraft-card-info">
-            ${tailDisplay}${escapeHtml(ac.type_name)}${nicknameDisplay}
+            ${identity}
             ${badges.join(' ')}
           </div>
           <div class="aircraft-card-details muted">${details.join(' · ')}</div>
+          ${placeholderHint}
         </div>
         <div class="aircraft-card-actions">
-          <button type="button" class="btn btn-secondary btn-sm ac-edit-btn" data-id="${ac.id}">Edit</button>
-          <button type="button" class="btn btn-danger btn-sm ac-delete-btn" data-id="${ac.id}">Delete</button>
+          <button type="button" class="btn btn-secondary btn-sm ac-edit-btn" data-id="${ac.id}">${escapeHtml(editLabel)}</button>
+          <button type="button" class="btn btn-danger btn-sm ac-delete-btn" data-id="${ac.id}">${escapeHtml(t('page.settings.aircraft.delete'))}</button>
         </div>
       </div>`;
   }).join('');
@@ -2028,14 +2071,26 @@ function renderAircraftList(): void {
     btn.addEventListener('click', async () => {
       const id = Number(btn.dataset.id);
       const ac = aircraftList.find(a => a.id === id);
-      if (!ac || !confirm(`Delete ${ac.tail_number || ac.type_name}?`)) return;
+      if (!ac) return;
+      const name = ac.tail_number || ac.nickname || ac.type_name;
+      if (!confirm(t('page.settings.aircraft.confirmDelete', { name }))) return;
       try {
         await deleteAircraft(id);
-        aircraftList = aircraftList.filter(a => a.id !== id);
-        renderAircraftList();
-        showStatus('Aircraft deleted');
+        if (editingAircraftId === id) hideAircraftForm();
+        // Deleting the default promotes another aircraft server-side — reload.
+        await reloadAircraftList();
+        showStatus(t('page.settings.aircraft.deleted'));
       } catch (err) {
-        showStatus(`Failed to delete: ${err}`, true);
+        // 409: the server refuses to delete the last aircraft and says why.
+        const e = err as Error & { status?: number; detail?: unknown };
+        if (e.status === 409) {
+          const detail = typeof e.detail === 'string' && e.detail
+            ? e.detail
+            : t('page.settings.aircraft.lastAircraft');
+          showStatus(detail, true);
+        } else {
+          showStatus(t('page.settings.aircraft.deleteFailed', { error: String(err) }), true);
+        }
       }
     });
   }
@@ -2043,9 +2098,14 @@ function renderAircraftList(): void {
 
 function editAircraft(ac: AircraftResponse): void {
   editingAircraftId = ac.id;
-  showAircraftForm('Edit Aircraft');
+  showAircraftForm(ac.is_placeholder
+    ? t('page.settings.aircraft.setUpTitle')
+    : t('page.settings.aircraft.editTitle'));
 
-  (document.getElementById('ac-icao-type') as HTMLInputElement).value = ac.icao_type;
+  // A placeholder's ZZZZ type and "My aircraft" name are stand-ins: start the
+  // pilot on an empty type so the typeahead is the obvious next step. Saving
+  // (any PUT) clears the placeholder flag server-side.
+  (document.getElementById('ac-icao-type') as HTMLInputElement).value = ac.is_placeholder ? '' : ac.icao_type;
   (document.getElementById('ac-tail') as HTMLInputElement).value = ac.tail_number || '';
   (document.getElementById('ac-nickname') as HTMLInputElement).value = ac.nickname || '';
   (document.getElementById('ac-speed') as HTMLInputElement).value = ac.cruise_speed_kt?.toString() || '';
@@ -2055,7 +2115,10 @@ function editAircraft(ac: AircraftResponse): void {
   (document.getElementById('ac-default') as HTMLInputElement).checked = ac.is_default;
 
   const label = document.getElementById('ac-type-label');
-  if (label) label.textContent = ac.type_name;
+  if (label) {
+    if (ac.is_placeholder) label.innerHTML = '&nbsp;';
+    else label.textContent = ac.type_name;
+  }
 }
 
 function showAircraftForm(title: string): void {
@@ -2079,7 +2142,10 @@ function clearAircraftForm(): void {
   (document.getElementById('ac-ceiling') as HTMLInputElement).value = '';
   (document.getElementById('ac-ifr') as HTMLInputElement).checked = false;
   (document.getElementById('ac-fiki') as HTMLInputElement).checked = false;
-  (document.getElementById('ac-default') as HTMLInputElement).checked = false;
+  // The server replaces a lone placeholder with the new aircraft and makes it
+  // the default either way; reflect that in the form.
+  const onlyPlaceholder = aircraftList.length > 0 && aircraftList.every(a => a.is_placeholder);
+  (document.getElementById('ac-default') as HTMLInputElement).checked = onlyPlaceholder;
   const label = document.getElementById('ac-type-label');
   if (label) label.innerHTML = '&nbsp;';
 }
@@ -2087,7 +2153,7 @@ function clearAircraftForm(): void {
 async function saveAircraftForm(): Promise<void> {
   const icaoType = (document.getElementById('ac-icao-type') as HTMLInputElement).value.trim().toUpperCase();
   if (!icaoType) {
-    showStatus('ICAO type is required', true);
+    showStatus(t('page.settings.aircraft.icaoRequired'), true);
     return;
   }
 
@@ -2104,59 +2170,19 @@ async function saveAircraftForm(): Promise<void> {
 
   try {
     if (editingAircraftId) {
-      const updated = await updateAircraft(editingAircraftId, data);
-      aircraftList = aircraftList.map(a => a.id === updated.id ? updated : a);
-      // If this became default, clear default from others
-      if (updated.is_default) {
-        aircraftList = aircraftList.map(a => a.id === updated.id ? a : { ...a, is_default: false });
-      }
-      showStatus('Aircraft updated');
+      await updateAircraft(editingAircraftId, data);
+      showStatus(t('page.settings.aircraft.updated'));
     } else {
-      const created = await createAircraft(data);
-      if (created.is_default) {
-        aircraftList = aircraftList.map(a => ({ ...a, is_default: false }));
-      }
-      aircraftList.push(created);
-      showStatus('Aircraft added');
+      await createAircraft(data);
+      showStatus(t('page.settings.aircraft.added'));
     }
-    renderAircraftList();
     hideAircraftForm();
+    // Reload: a POST may have replaced the placeholder, and default changes
+    // ripple to the other aircraft.
+    await reloadAircraftList();
   } catch (err) {
-    showStatus(`Failed to save: ${err}`, true);
+    showStatus(t('page.settings.aircraft.saveFailed', { error: String(err) }), true);
   }
-}
-
-function showTypeSuggestions(types: AircraftType[]): void {
-  const dropdown = document.getElementById('ac-type-suggestions');
-  if (!dropdown || types.length === 0) {
-    hideTypeSuggestions();
-    return;
-  }
-
-  dropdown.innerHTML = types.slice(0, 10).map(t =>
-    `<div class="autocomplete-item" data-icao="${escapeHtml(t.icao)}">
-      <strong>${escapeHtml(t.icao)}</strong> — ${escapeHtml(t.manufacturer)} ${escapeHtml(t.model)}
-      ${t.category ? `<span class="muted">(${escapeHtml(t.category)})</span>` : ''}
-    </div>`
-  ).join('');
-  dropdown.style.display = 'block';
-
-  for (const item of dropdown.querySelectorAll<HTMLElement>('.autocomplete-item')) {
-    item.addEventListener('mousedown', (e) => {
-      e.preventDefault(); // prevent blur
-      const icao = item.dataset.icao || '';
-      (document.getElementById('ac-icao-type') as HTMLInputElement).value = icao;
-      const type = types.find(t => t.icao === icao);
-      const label = document.getElementById('ac-type-label');
-      if (label && type) label.textContent = `${type.manufacturer} ${type.model}`;
-      hideTypeSuggestions();
-    });
-  }
-}
-
-function hideTypeSuggestions(): void {
-  const dropdown = document.getElementById('ac-type-suggestions');
-  if (dropdown) dropdown.style.display = 'none';
 }
 
 // --- MCP token management ---

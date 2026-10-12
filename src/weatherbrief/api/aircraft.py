@@ -12,8 +12,11 @@ from flyfun_common.db import current_user_id, get_db
 from weatherbrief.storage.aircraft import (
     create_aircraft,
     delete_aircraft,
+    ensure_default_aircraft,
     get_aircraft,
     list_aircraft,
+    only_placeholder,
+    replace_placeholder,
     update_aircraft,
 )
 from weatherbrief.storage.aircraft_types import get_aircraft_type, search_aircraft_types
@@ -52,6 +55,9 @@ class AircraftResponse(BaseModel):
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool = False
+    # Synthesised for a user who never set an aircraft up (#777): clients show
+    # "Set up your aircraft". Cleared by any PUT.
+    is_placeholder: bool = False
     created_at: str
 
 
@@ -73,6 +79,7 @@ def _row_to_response(row, *, include_tail: bool = True) -> AircraftResponse:
         cruise_speed_kt=row.cruise_speed_kt,
         ceiling_ft=row.ceiling_ft,
         is_default=row.is_default,
+        is_placeholder=bool(row.is_placeholder),
         created_at=row.created_at.isoformat(),
     )
 
@@ -168,7 +175,12 @@ def list_user_aircraft(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """List all aircraft for the current user."""
+    """List all aircraft for the current user.
+
+    Never empty: a user without a default aircraft gets one here (#777) —
+    an existing aircraft promoted, or a placeholder synthesised.
+    """
+    ensure_default_aircraft(db, user_id)
     rows = list_aircraft(db, user_id)
     return [_row_to_response(r) for r in rows]
 
@@ -179,7 +191,14 @@ def add_aircraft(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Add an aircraft to the user's list."""
+    """Add an aircraft to the user's list.
+
+    When the user's only aircraft is the synthesised placeholder, the new
+    aircraft *replaces* it (#777): it becomes the default, the placeholder's
+    flights are re-pointed to it, and the placeholder is deleted. Done here
+    so web, iOS and the onboarding wizard all behave the same.
+    """
+    placeholder = only_placeholder(db, user_id)
     row = create_aircraft(
         db,
         user_id,
@@ -192,6 +211,11 @@ def add_aircraft(
         ceiling_ft=req.ceiling_ft,
         is_default=req.is_default,
     )
+    if placeholder is not None:
+        replace_placeholder(db, placeholder, row)
+    else:
+        ensure_default_aircraft(db, user_id)
+    db.refresh(row)
     return _row_to_response(row)
 
 
@@ -202,7 +226,13 @@ def edit_aircraft(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Update an aircraft."""
+    """Update an aircraft.
+
+    Any PUT clears ``is_placeholder``: the pilot has reviewed the aircraft,
+    even if they keep the ZZZZ type. Unsetting the default flag on the
+    default aircraft is a no-op — there is always exactly one default; make
+    another aircraft default instead.
+    """
     row = get_aircraft(db, aircraft_id)
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail="Aircraft not found")
@@ -214,8 +244,11 @@ def edit_aircraft(
     if req.nickname is not None:
         updates["nickname"] = req.nickname
 
-    if updates:
-        row = update_aircraft(db, row, **updates)
+    if updates.get("is_default") is False and row.is_default:
+        updates.pop("is_default")
+    updates["is_placeholder"] = False
+    row = update_aircraft(db, row, **updates)
+    ensure_default_aircraft(db, user_id)
     return _row_to_response(row)
 
 
@@ -225,8 +258,20 @@ def remove_aircraft(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Remove an aircraft from the user's list."""
+    """Remove an aircraft from the user's list.
+
+    The last aircraft can't be deleted (409): every user always has a default
+    aircraft (#777). Deleting the default promotes the oldest remaining one.
+    Flights that pointed at it fall back to NULL (FK ``SET NULL``) and so
+    resolve to the default on read.
+    """
     row = get_aircraft(db, aircraft_id)
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail="Aircraft not found")
+    if len(list_aircraft(db, user_id)) <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="You can't delete your only aircraft. Edit it instead, or add another aircraft first.",
+        )
     delete_aircraft(db, row)
+    ensure_default_aircraft(db, user_id)

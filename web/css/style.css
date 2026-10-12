@@ -7471,6 +7471,51 @@ html {
   margin-top: 0.5rem;
 }
 
+/* Aircraft step groups (#777): "Your aircraft" vs "Your usual mission", so the
+   service ceiling and the mission ceiling are never side by side unexplained. */
+.wizard-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem 0.75rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.wizard-group > legend {
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+
+.wizard-group-hint {
+  font-size: 0.8rem;
+  margin: -0.25rem 0 0;
+}
+
+.wizard-typeahead {
+  position: relative;
+}
+
+.wizard-type-label {
+  font-size: 0.75rem;
+  min-height: 1em;
+}
+
+.wizard-field-error {
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+.wizard-field-error[hidden] {
+  display: none;
+}
+
+.wizard-form-group input.input-error {
+  border-color: var(--danger);
+}
+
 .wizard-models-section > label {
   font-size: 0.85rem;
   font-weight: 600;
@@ -8002,6 +8047,30 @@ html {
   display: flex;
   gap: 0.35rem;
   flex-shrink: 0;
+}
+
+/* --- Ceiling above the aircraft's service ceiling (#777) --- */
+
+.ceiling-warning {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--amber);
+  margin: 0.35rem 0 0;
+}
+
+.ceiling-warning[hidden] {
+  display: none;
+}
+
+.ceiling-warning::before {
+  content: "\26A0\FE0E  ";
+}
+
+/* Placeholder aircraft ("My aircraft") — nudge to set it up (#777). */
+.aircraft-placeholder-hint {
+  font-size: 0.85em;
+  margin-top: 0.2rem;
+  color: var(--amber);
 }
 
 /* --- Autocomplete dropdown --- */

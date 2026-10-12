@@ -193,6 +193,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.createAircraft(request)
     }
 
+    func updateAircraft(id: Int, request: UpdateAircraftRequest) async throws -> AircraftResponse {
+        try await online.updateAircraft(id: id, request: request)
+    }
+
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         try await online.parseFpl(text)
     }

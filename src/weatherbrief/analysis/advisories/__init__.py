@@ -42,12 +42,13 @@ class RouteContext:
     total_distance_nm: float
     airport_conditions: AirportConditions | None = None
     locale: str | None = None
-    # Resolved cruise IAS (kt) for this flight — aircraft cruise speed, falling
-    # back to the flight-default profile speed (see weatherbrief.atmo
-    # .resolve_cruise_speed_ias). Used by the headwind advisory to derive a
-    # realistic cruise TAS (converted at cruise_altitude_ft) for the trip-time
-    # estimate. None when no usable aircraft/profile speed is known — the
-    # advisory then falls back to flight_duration_hours.
+    # Resolved cruise IAS (kt) for this flight — the flight's aircraft's cruise
+    # speed, else the owner's default aircraft's (see weatherbrief.atmo
+    # .resolve_cruise_speed_ias; profiles carry no speed since #777). Used by
+    # the headwind advisory to derive a realistic cruise TAS (converted at
+    # cruise_altitude_ft) for the trip-time estimate. None when the aircraft
+    # has no usable speed — the advisory then falls back to
+    # flight_duration_hours.
     cruise_speed_ias_kt: float | None = None
     # The flight's planned still-air duration (h). Used by the headwind advisory
     # as a cruise-TAS fallback (distance ÷ duration) when no aircraft/profile

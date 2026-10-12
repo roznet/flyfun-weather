@@ -39,6 +39,7 @@ from weatherbrief.fetch.variables import (
 )
 from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.notify.badge import unseen_flight_ids
+from weatherbrief.storage.aircraft import ensure_default_aircraft, resolve_flight_aircraft
 from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.api.flight_search import MAX_QUERY_LEN, matches as _search_matches, parse_query
@@ -468,7 +469,6 @@ def flight_to_exchange(
     """
     from euro_aip.briefing.models.flight_exchange import FlightExchange
     from weatherbrief.airports import resolve_route
-    from weatherbrief.db.models import UserAircraftRow
 
     route = resolve_route(flight.waypoints, db_path)
 
@@ -480,12 +480,11 @@ def flight_to_exchange(
     route.cruise_altitude_ft = flight.cruise_altitude_ft
 
     registration = None
-    if flight.aircraft_id is not None:
-        ac = db.get(UserAircraftRow, flight.aircraft_id)
-        if ac is not None:
-            route.aircraft_type = ac.icao_type
-            if ac.user_id == viewer_id:
-                registration = ac.tail_number
+    ac = resolve_flight_aircraft(db, flight)
+    if ac is not None:
+        route.aircraft_type = ac.icao_type
+        if ac.user_id == viewer_id:
+            registration = ac.tail_number
 
     return FlightExchange(
         route=route,
@@ -528,9 +527,14 @@ def _flight_to_response(
     # against it, and with viewer_id=None we would silently classify the
     # owner's own flights as "subscriber". All current callers pass it; the
     # required signature keeps it that way.
+    # A NULL aircraft_id (pre-#777 flights, the edit "clear" sentinel) resolves
+    # to the owner's default aircraft, like a NULL profile_id resolves to the
+    # default profile. Reported as the flight's aircraft_id too, so clients
+    # preselect the aircraft the briefing actually used.
     aircraft = None
-    if flight.aircraft_id:
-        aircraft = _resolve_aircraft_info(db, flight.aircraft_id, viewer_id=viewer_id)
+    ac_row = resolve_flight_aircraft(db, flight)
+    if ac_row is not None:
+        aircraft = _resolve_aircraft_info(db, ac_row.id, viewer_id=viewer_id)
 
     effective_role = role if role is not None else ("owner" if flight.user_id == viewer_id else "subscriber")
 
@@ -578,7 +582,7 @@ def _flight_to_response(
         id=flight.id,
         user_id=flight.user_id,
         profile_id=flight.profile_id,
-        aircraft_id=flight.aircraft_id,
+        aircraft_id=ac_row.id if ac_row is not None else flight.aircraft_id,
         aircraft=aircraft,
         route_name=flight.route_name,
         description=flight.description if effective_role == "owner" else None,
@@ -1015,7 +1019,9 @@ def create_flight(
         id=flight_id,
         user_id=user_id,
         profile_id=req.profile_id,
-        aircraft_id=req.aircraft_id,
+        # Every flight flies an aircraft (#777): callers that never send one
+        # (MCP, the ChatGPT agent, older clients) get the user's default.
+        aircraft_id=req.aircraft_id or ensure_default_aircraft(db, user_id).id,
         route_name=route_name,
         description=_clean_description(req.description),
         waypoints=waypoints,
@@ -2018,7 +2024,12 @@ class UpdateFlightRequest(BaseModel):
     """Request body for updating editable flight parameters."""
 
     profile_id: int | None = None  # switch aircraft profile (applies its altitude/ceiling)
-    aircraft_id: int | None = None  # switch aircraft (applies speed/ceiling defaults)
+    # Switch aircraft. Changes only which aircraft (and so which cruise speed)
+    # the flight uses — never its altitude or ceiling, which stay the
+    # profile's / the pilot's choice (#777). 0 is a legacy "clear" sentinel
+    # still sent by older iOS builds: the flight then resolves to the
+    # owner's default aircraft.
+    aircraft_id: int | None = None
     departure_time: str | None = None  # ISO 8601 (time-of-day change only; date must match)
     alt_departure_time: str | None = None  # ISO 8601 or "" to clear
     # Timing-scenario Flexibility mode; None = no change. "alternate" grades
