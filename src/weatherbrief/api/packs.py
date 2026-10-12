@@ -60,7 +60,7 @@ from weatherbrief.storage.sounding_profiles import (
     read_sounding_sidecar,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
-from weatherbrief.models.live import LiveChanges, LiveLayerResponse, LiveTickResponse
+from weatherbrief.models.live import LiveChanges, LiveLayerResponse, LiveProgress, LiveTickResponse
 from weatherbrief.tasks.live_layer import live_updated_at_iso
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
@@ -3023,19 +3023,21 @@ def get_snapshot(
 ):
     """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
     audit_pack_access(user_id, flight_id, "get_snapshot", request)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
     # The pack is immutable; when the flight's live layer (#637) belongs to
     # this pack, serve the newest observations over it, as the in-place patch
     # used to — clients that only read the snapshot keep working.
     from weatherbrief.tasks.artifacts import load_briefing
-    from weatherbrief.tasks.live_layer import live_for_pack, overlay_live
+    from weatherbrief.tasks.live_layer import live_for_pack, overlay_live, sharing_for_viewer
 
     layer = live_for_pack(pack_dir)
     if layer is not None:
         data = load_briefing(pack_dir)
         if data is not None:
+            sharing = sharing_for_viewer(flight.user_id, user_id, flight.position_sharing)
             return JSONResponse(
-                content=json_mod.loads(json_mod.dumps(overlay_live(data, layer), default=str))
+                content=json_mod.loads(json_mod.dumps(overlay_live(data, layer, sharing), default=str))
             )
     # Prefer briefing.json, fall back to legacy snapshot.json for old packs
     briefing_path = pack_dir / "briefing.json"
@@ -4360,12 +4362,14 @@ def get_bundle(
     # Same live overlay as GET .../snapshot, so a download carries the newest
     # observations at download time (#637).
     if isinstance(bundle.get("snapshot"), dict):
-        from weatherbrief.tasks.live_layer import live_for_pack, overlay_live
+        from weatherbrief.tasks.live_layer import live_for_pack, overlay_live, sharing_for_viewer
 
         layer = live_for_pack(pack_dir)
         if layer is not None:
+            owner = _load_flight_or_404(db, flight_id, viewer_id=user_id)
+            sharing = sharing_for_viewer(owner.user_id, user_id, owner.position_sharing)
             bundle["snapshot"] = json.loads(
-                json.dumps(overlay_live(bundle["snapshot"], layer), default=str)
+                json.dumps(overlay_live(bundle["snapshot"], layer, sharing), default=str)
             )
 
     # Sounding profiles for every (point, model) combination. Prefer the
@@ -5106,7 +5110,7 @@ def get_live_summary(
     The ChatGPT action calls the helper in-process. ``live`` is null when
     nothing live exists for that pack.
     """
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     audit_pack_access(user_id, flight_id, "get_live_summary", request)
     if pack_timestamp:
         pack_ts = pack_timestamp
@@ -5116,7 +5120,7 @@ def get_live_summary(
             raise HTTPException(status_code=404, detail="No packs yet for this flight")
         pack_ts = ensure_utc(packs[0].fetch_timestamp).isoformat()
 
-    from weatherbrief.tasks.live_layer import live_summary
+    from weatherbrief.tasks.live_layer import live_summary, sharing_for_viewer
 
     # Same pack-dir resolution as the ChatGPT action, so both agents read the
     # same layer.
@@ -5125,7 +5129,9 @@ def get_live_summary(
     except HTTPException as e:
         logger.warning("Live summary: pack %s of flight %s unresolved (%s)", pack_ts, flight_id, e.detail)
         pack_dir = None
-    live = live_summary(pack_dir)
+    live = live_summary(pack_dir, position_sharing=sharing_for_viewer(
+        flight.user_id, user_id, flight.position_sharing,
+    ))
     if live is not None:
         from weatherbrief.tasks.live_timing import record_delivery_for_pack
 
@@ -5154,7 +5160,7 @@ def get_live_layer(
     ``?source=push`` marks the fetch a live-alert push tap made (#754): one
     ``LIVE_PUSH_OPENED`` log line, so opens can be counted against pushes.
     """
-    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     audit_pack_access(user_id, flight_id, "get_live", request)
     if source == "push":
         logger.info("LIVE_PUSH_OPENED flight=%s user=%s", flight_id, user_id)
@@ -5165,7 +5171,7 @@ def get_live_layer(
     pack_ts = ensure_utc(latest.fetch_timestamp).isoformat()
 
     from weatherbrief.storage.flights import _resolve_artifact_path
-    from weatherbrief.tasks.live_layer import live_for_pack
+    from weatherbrief.tasks.live_layer import live_for_pack, redact_live, sharing_for_viewer
     from weatherbrief.tasks.live_trail import trails_for_pack
 
     layer = None
@@ -5183,7 +5189,9 @@ def get_live_layer(
                     platform=platform_of(request_client(request)[0]), served=layer.live_updated_at)
     # Trails are computed here, at read time, from the history (#669):
     # live.json is written before the history, so a stored trail would lag.
-    return LiveLayerResponse(
+    # A viewer who is not the owner (a shared link, a follower) gets the
+    # progress the owner shares (#760); the share pages read this endpoint.
+    return redact_live(LiveLayerResponse(
         flight_id=flight_id,
         pack_timestamp=pack_ts,
         live_updated_at=layer.live_updated_at,
@@ -5199,9 +5207,113 @@ def get_live_layer(
         glance=(layer.glance.model_copy(update={"highlight": layer.glance.highlight.model_copy(update={"gate": None})})
                 if layer.glance and layer.glance.highlight else layer.glance),
         ribbon=layer.ribbon,
+        progress=layer.progress,
         changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,
+    ), sharing_for_viewer(flight.user_id, user_id, flight.position_sharing))
+
+
+class LiveProgressRequest(BaseModel):
+    """``POST /flights/{id}/live/progress`` (#760)."""
+
+    event: Literal["takeoff", "landed"]
+    # When it happened; now when omitted. Ignored with ``clear``.
+    at: datetime | None = None
+    # Withdraw the entry of this kind (a mistaken press): back to the plan.
+    clear: bool = False
+
+
+class LiveProgressResult(BaseModel):
+    flight_id: str
+    # The progress the next tick will use, as of now (owner view).
+    progress: LiveProgress | None = None
+
+
+#: A take-off / landing time may run ahead of the server clock by this much
+#: (a phone clock a little fast); beyond it, an entry is in the future.
+_PROGRESS_CLOCK_SKEW = timedelta(minutes=5)
+
+
+@live_router.post("/{flight_id}/live/progress", response_model=LiveProgressResult)
+def post_live_progress(
+    flight_id: str,
+    req: LiveProgressRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Record the pilot's take-off or landing (#760), owner only.
+
+    Appended to the flight's live history; a later entry of the same kind
+    replaces the earlier one, ``clear`` withdraws it. No refetch and no
+    recompute: the next live tick (10 min) measures everything from it. The
+    response is the progress the tick will use, so the client can confirm.
+
+    A take-off is accepted from the start of the live window to
+    ``MAX_TAKEOFF_DELAY_H`` after the planned departure; a landing must come
+    after the (effective) departure. Neither may be in the future.
+    """
+    from weatherbrief.analysis.flight_progress import FlightProgress, ProgressEvent
+    from weatherbrief.models.analysis import RouteConfig
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.tasks.live_layer import (
+        flight_dir_for_pack,
+        load_progress_events,
+        progress_block,
+        record_progress_event,
     )
+    from weatherbrief.tasks.live_tick import MAX_TAKEOFF_DELAY_H, live_window_hours
+
+    flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    audit_pack_access(user_id, flight_id, "post_live_progress", request)
+    packs = list_packs(db, flight_id)
+    if not packs or not packs[0].artifact_path:
+        raise HTTPException(status_code=404, detail="No packs yet for this flight")
+    pack_dir = Path(_resolve_artifact_path(packs[0].artifact_path))
+    flight_dir = flight_dir_for_pack(pack_dir)
+
+    now = datetime.now(timezone.utc)
+    planned = ensure_utc(flight.departure_time)
+    at = None if req.clear else ensure_utc(req.at) if req.at is not None else now
+    events = load_progress_events(flight_dir)
+    if at is not None:
+        if at > now + _PROGRESS_CLOCK_SKEW:
+            raise HTTPException(status_code=422, detail=f"{req.event} time is in the future")
+        before_h, _ = live_window_hours()
+        if req.event == "takeoff" and not (
+            planned - timedelta(hours=before_h) <= at <= planned + timedelta(hours=MAX_TAKEOFF_DELAY_H)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(f"take-off must be within {before_h:g} h before to {MAX_TAKEOFF_DELAY_H:g} h "
+                        "after the planned departure; change the flight's departure time instead"),
+            )
+        if req.event == "landed":
+            dep = FlightProgress.schedule(planned, flight.flight_duration_hours, now, events).departed_at
+            if dep is not None and at <= dep:
+                raise HTTPException(
+                    status_code=422,
+                    detail="landing must be after the departure (record the take-off first)",
+                )
+    event = ProgressEvent(kind=req.event, at=at, recorded_at=now)
+    try:
+        record_progress_event(flight_dir, event)
+    except OSError:
+        logger.exception("Live progress write failed for flight %s", flight_id)
+        raise HTTPException(status_code=500, detail="Could not record the entry")
+    logger.info("LIVE_PROGRESS flight=%s event=%s at=%s clear=%s", flight_id, req.event,
+                at.isoformat() if at else None, req.clear)
+
+    progress = None
+    briefing = load_briefing(pack_dir) or {}
+    try:
+        route = RouteConfig.model_validate(briefing["route"])
+        departure = _parse_target_time(briefing)
+        progress = progress_block(FlightProgress.from_route(route, departure, now, (*events, event)))
+    except Exception:
+        logger.warning("Live progress: no route to measure %s against", flight_id, exc_info=True)
+    return LiveProgressResult(flight_id=flight_id, progress=progress)
 
 
 # ---------------------------------------------------------------------------

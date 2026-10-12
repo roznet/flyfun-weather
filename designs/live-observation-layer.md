@@ -113,6 +113,8 @@ Every record has `type`, `tick_at`, `pack_timestamp`:
 | `report` | a METAR/SPECI (ICAO + obs time + raw, so a COR at the same time is kept), TAF (ICAO + issue time) or SIGMET (FIR + raw text) the first time it is seen | `raw`; SIGMETs also the structured `SigmetAlongRoute` minus raw text (nothing parses raw SIGMET text back); `seen_at` only when ≠ `tick_at` |
 | `event` | a change `appeared` / `cleared` vs what the history last recorded as shown, identity `change_identity` = (key, direction, to_value, tier) | the change (nulls dropped; `new_alert` on appear; a clear carries the last message shown) |
 | `evidence` | right after a radar/lightning `appeared` event, and again while it lasts when the peak moves ≥ 5 dBZ or a span end ≥ 10 NM (`EVIDENCE_PEAK_DBZ` / `EVIDENCE_SPAN_NM`, #682) | the triggering route points (`LiveEvidencePoint`: station, along-route NM, inner ring, flash count or peak dBZ + valid/total px), frame time |
+| `estimate` | a storm with a closest-approach estimate, once per storm per cell frame (#688) | the estimate, plus `progress_source` (#760): the schedule its 4-D track came from |
+| `progress` | the owner's `POST …/live/progress` (#760), not a tick; no `pack_timestamp` | `event` (`takeoff` / `landed`, later `fix`), `at` (null = withdrawn), `source` (`manual`); `tick_at` = when the server learned it |
 
 Choices:
 - **Not full `live.json` snapshots** (60–400 KB × ~37 ticks, mostly the observed
@@ -233,7 +235,13 @@ Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
 2. **The live-window tick** (`tasks/live_tick.py`), every verification cycle
    (10 min), for flights in `departure − 3 h … departure + duration + 1 h`
    (`WB_LIVE_WINDOW_BEFORE_H` / `WB_LIVE_WINDOW_AFTER_H`). Every flight with a
-   pack, not only auto-refresh flights. Only this writer pushes (below).
+   pack, not only auto-refresh flights. Only this writer pushes (below). The
+   end follows the manual entries (`live_window_end`, #760): the effective
+   arrival + 1 h, or `LANDED_GRACE` (15 min) after a recorded landing became
+   known (one tick commits the landed state, then the flight leaves).
+   `find_live_flights` picks candidates by the planned window widened by
+   `MAX_TAKEOFF_DELAY_H` (6 h) and reads only their progress records.
+   `push_expiry` uses the same end.
 
 `None` blocks keep the stored value (a SIGMET fetch failing must not blank the
 SIGMETs); each block has its own `*_updated_at`.
@@ -265,7 +273,7 @@ the tick; a failing tick never fails the cycle.
 
 | Surface | What it gets |
 |---|---|
-| `GET /api/flights/{id}/live` | `LiveLayerResponse`: the blocks + `*_updated_at` + `changes` (with read-time `trail` / `recently_cleared`, #669) + `last_refresh_delta`. 200 with nulls when nothing live exists for the latest pack. |
+| `GET /api/flights/{id}/live` | `LiveLayerResponse`: the blocks + `*_updated_at` + `progress` (#760) + `changes` (with read-time `trail` / `recently_cleared`, #669) + `last_refresh_delta`. 200 with nulls when nothing live exists for the latest pack. Redacted for non-owners (position sharing, below). |
 | Pack meta (`/packs`, `/packs/latest`, `/packs/{ts}`, SSE `complete.pack`) and flight list `latest_briefing` | `live_updated_at` — the sync signal. A realtime refresh keeps `fetch_timestamp`, so clients cannot rely on it alone. |
 | `GET …/snapshot`, `/bundle`, HTML/PDF report | The pack's `briefing.json` **overlaid** with its live layer (`overlay_live`), plus `live_updated_at` / `live_changes` keys. Keeps older app versions on the newest data, as the in-place patch used to. |
 | Realtime refresh responses | `live_updated_at` + `changes` (with trails) alongside the existing `observations`/`sigmets`/`delta`/`observed`. |
@@ -296,6 +304,8 @@ times, `baseline_at` / `baseline_source`, the three counts, then:
   classifier's `airport_roles`), when the corridor fetch has a METAR for them;
   a proxied terminal (#767) lists the station's report under the field's ICAO
   with `metar_station`, `proxy` and `proxy_caption`.
+- `progress` — the layer's progress block (#760), redacted per the reader's
+  position sharing; `LIVE_NOTE` says what `source` and the nulls mean.
 
 Deliberately not in it: observed radar/lightning/tops arrays and
 `cross_section.json` (never exposed, #278). The layer outlives the live window
@@ -317,13 +327,48 @@ track), `build_glance` (ribbon ETAs, passed lines, the "ahead" segment), the
 read-time trails (`progress.at(t)` rebuilds what a past tick measured against),
 the ↻ path's fallback classification, and `replay_live_history.py score-estimates`.
 
-- **Source today: the plan only** (`source = "plan"`): on-time departure, constant
-  speed over `flight_duration_hours`. The refactor (#760 PR 1) was checked
-  byte-identical against the code it replaced: the LELL→LEMI scenario, with and
-  without synthetic storms on the route, every tick's `/live` body incl. trails.
-- **Observed sources replace the plan inside the object** (#760 manual take-off /
-  landed, #761 app GPS, #762 ADS-B; fusion rules in #759). Consumers must not
-  compute schedule arithmetic of their own; add what they need to `FlightProgress`.
+- **Sources**: the plan (`source = "plan"`: on-time departure, constant speed
+  over `flight_duration_hours`), corrected by the owner's manual take-off /
+  landed entries (`plan+takeoff`, #760 PR 2). The plan-only refactor (#760 PR 1)
+  was checked byte-identical against the code it replaced (LELL→LEMI, with and
+  without synthetic storms, every tick's `/live` body incl. trails); with no
+  entries the arithmetic is still the same float-hours code, so a flight without
+  entries is unchanged to the bit (the iOS tick fixtures only gained `progress`).
+- **Manual entries** (`ProgressEvent`, history records of `type: progress`):
+  a take-off replaces the planned departure (`departed_at`), a landing replaces
+  the arrival, and with both the speed is the one flown. Within a kind the entry
+  recorded last wins (an edit); `at: null` withdraws it. A landing not after the
+  departure is ignored. **No "late = not departed" rule yet**: without an entry
+  the plan says departed at the planned time, because a missing press is not
+  evidence of being on the ground (#759's rule needs an automatic source, #761).
+- **As of a time**: an entry counts only from its `tick_at` (when the server
+  learned it), so `progress.at(t)` (read-time trails) rebuilds exactly what the
+  tick at `t` knew and an entry never rewrites what was already shown.
+- **`fix` records** are parsed and carried but not fused (#761 adds the rules).
+- **Who writes**: `POST /flights/{id}/live/progress` `{event, at?, clear?}`,
+  owner only (there are no editors today), appended under the commit lock by
+  `record_progress_event`. No refetch and no recompute; the next tick (10 min)
+  measures from it; the response is the progress block as of now so the client
+  can confirm. Validation: not in the future (5 min skew), a take-off within
+  `departure − 3 h … + MAX_TAKEOFF_DELAY_H` (6 h; later = change the flight's
+  departure time), a landing after the effective departure.
+- **The `progress` block** (`LiveProgress`, on `LiveLayer`, `/live`, the agent
+  block): `source`, `as_of`, `along_nm` / `route_nm`, `lat` / `lon` (the route
+  position), `departed_at` / `landed_at` **observed only** (null on the plan,
+  so no client shows "Landed" from a schedule), `eta_destination` (effective
+  arrival), `delay_min` (take-off − planned). `estimated` is always true and the
+  fix fields empty until #761.
+- **Everything moves with it**: classifier cut-offs (`departure_at`,
+  `arrival_at` = the landing), ribbon ETAs / `flown_nm` / `arrival_at`, glance
+  passed flags, storm `abeam_eta` and estimates, trails, TAF-at-ETA (the ↻ path
+  passes the effective departure as `run_route_weather`'s `target_time`, which
+  only places airport ETAs; observation-vs-model comparison and SIGMET windows
+  stay on the plan), the live window and push expiry. A landing puts `flown_nm`
+  at the route's end, so the highlight gate reads "arrived" and generates
+  nothing. A shifted ETA can itself make a TAF-at-ETA row appear (the baseline
+  was read at the planned ETA): that is the TAF at the actual ETA, intended.
+- Consumers must not compute schedule arithmetic of their own; add what they
+  need to `FlightProgress` (`FlightProgress.schedule` for times without a route).
   Inside the object, every computation (`timed`, `arrival`, `flown_at`, `eta`)
   measures from `departed_at`, the effective departure. Only `departed_at` reads
   `planned_departure`, so one source swap moves them all. The ribbon's
@@ -332,10 +377,34 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
 - `timed` = a departure and a duration (flown distance, departed, arrival).
   ETAs and positions also need a non-zero route: a local flight (same airport at
   both ends) has an arrival time but no ETAs, and `flown_nm` 0.
-- Still on the plan outside this object, to move with the observed sources:
-  TAF-at-ETA (`route_weather.run_route_weather`, computed at fetch time from the
-  planned departure), and the live window itself (`live_tick.in_live_window`,
-  `notify/live_alerts`, `api/packs` window bound).
+- Still on the plan: the flight-day email choice
+  (`dispatch.flight_day_email_applies`, planned arrival + 1 h) and the refresh
+  classification (`api/packs._classify_refresh_time`, 3 h grace); the ribbon's
+  `departure_at` (deliberately). The highlight facts still word the phase as
+  "arrival planned …" (the times are right, the word is not).
+
+### Position sharing (#759, #760)
+
+`flights.position_sharing` (`none` / `along_route` default / `full`, migration
+103, owner-only `PATCH /flights/{id}/position-sharing`). The owner always gets
+`full`; anyone else (a share link, a follower, a viewer emailing themselves the
+flight-day brief, an agent reading a shared flight) gets the owner's setting
+via `live_layer.sharing_for_viewer`. One helper per shape:
+`redact_live` (`/live`, which the share pages read), `redact_summary` (the
+agent block, `/live/summary`, the on-request flight-day email) and
+`overlay_live(…, position_sharing)` (the snapshot / bundle overlay, whose
+`live_changes` and `last_refresh_delta` messages carry the same times).
+- `along_route`: drops the progress block's `lat` / `lon` only. Position is
+  still known to within the route's cross-track error: help text must say
+  "progress along the route", not "private".
+- `none`: no progress block; ribbon `flown_nm` / `arrival_at` / every ETA,
+  storm `abeam_eta` / `minutes_to_abeam` / `estimate` nulled; the "~HH:MMZ"
+  estimate times stripped from glance lines, change, cleared and delta messages
+  and the highlight (`strip_eta_text`; only ETAs use the "~" form). Accepted
+  leaks (#759): rows still drop passed airports and glance lines carry
+  `passed`, so coarse progress is inferable; a model-written highlight that
+  words a time without "~" is not caught.
+- Redaction fails closed: `live_summary` returns null on any error.
 
 ## Radar storms (#688)
 
@@ -1177,10 +1246,10 @@ commit.
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
-- `analysis/flight_progress.py` — `FlightProgress` (#759); `live_layer.flight_progress` builds it per tick; tests `tests/test_flight_progress.py`
+- `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `progress_events` (#759, #760); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_api.py::TestLiveProgress`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
-- `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`), overlay in snapshot/bundle
+- `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`
 - `tasks/live_timing.py` — `build_tick_row`, `write_tick_rows`, `record_delivery`, `latency_report`, `purge_old` (#751); `live_layer.CommitTrace`
 - `notify/live_alerts.py` — `notify_live_alerts`, `decide`, `next_state`, `skip_reason`, `build_payload`, `push_expiry` (#754); `live_layer.patch_push_state`; tests `tests/test_live_alert_push.py`
 - Tests: `tests/test_live_layer.py`, `tests/test_live_significance.py`, `tests/test_live_tick.py`, `tests/test_api.py::TestLiveLayerEndpoint`, `tests/test_live_summary.py` (agent block, incl. the 08:30 LELL→LEMI tick), `tests/test_live_trail.py` (trail rules, LFBZ→LFMD day, LELL→LEMI replay), `tests/test_live_storms.py` (storm geometry, §41 tiers, backing/fallback, estimate log and scoring), `tests/test_live_glance.py` (nutshell, ribbon, focus; an LPPR→LPPT-like synthetic day), `tests/test_live_highlight.py` (grounding rules, carry-forward, refused patch, API failure), `tests/test_mcp_live.py`, `tests/test_agent_endpoints.py` (live block + `/live/summary`), `tests/test_live_timing.py` (#751 latency rows, dedupe, end-to-end join)

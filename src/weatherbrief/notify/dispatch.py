@@ -576,11 +576,15 @@ def send_flight_day_email_on_request(
     """
     from weatherbrief.notify.email import send_flight_day_email
     from weatherbrief.notify.push import count_user_devices
-    from weatherbrief.tasks.live_layer import live_summary
+    from weatherbrief.tasks.live_layer import live_summary, sharing_for_viewer
 
     send_flight_day_email(
         recipients, flight, meta, pack_dir,
-        live=live_summary(pack_dir),
+        # Any viewer may email a shared flight to themselves: its progress
+        # follows the owner's position sharing (#760).
+        live=live_summary(pack_dir, position_sharing=sharing_for_viewer(
+            flight.user_id, recipient_user_id, flight.position_sharing,
+        )),
         since=flight_day_since(db, flight.id, meta, pack_dir, refreshed=True),
         has_device=count_user_devices(db, recipient_user_id) > 0,
         base_url=base_url,

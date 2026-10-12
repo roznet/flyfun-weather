@@ -50,6 +50,8 @@ class Flight(BaseModel):
     flight_ceiling_ft: int = 18000
     flight_duration_hours: float = 0.0
     private: bool = False
+    # What a non-owner viewer sees of the live progress (#760).
+    position_sharing: Literal["none", "along_route", "full"] = "along_route"
     alt_departure_time: datetime | None = None  # the "Alternate time" flexibility value
     # Timing-scenario flexibility (timing-scenario-plan.md): how much departure
     # flexibility the pilot has, and therefore what the scenario job grades.

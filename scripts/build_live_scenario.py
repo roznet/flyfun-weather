@@ -149,7 +149,10 @@ def inputs_from_history(flight_dir: Path, *, tick_minutes: int = 10) -> dict:
     on the report's time so the day-of-month resolves to the right month);
     SIGMETs come from their recorded structured fields, issued when first
     seen. Each pack becomes active at the tick that first recorded it. The
-    window runs from the first recorded tick to the last live update.
+    window runs from the first recorded tick to the last live update. The
+    pilot's take-off / landed entries (#760) are kept as their history
+    records (``progress_events``); the replay feeds each one in before the
+    first tick after it was recorded.
     """
     from euro_aip.briefing.weather.parser import WeatherParser
 
@@ -186,7 +189,7 @@ def inputs_from_history(flight_dir: Path, *, tick_minutes: int = 10) -> dict:
         metars.append(rep.to_dict())
     metars.sort(key=lambda m: (m["icao"], m["observation_time"] or ""))
 
-    ticks = [_dt(r["tick_at"]) for r in history if r.get("tick_at")]
+    ticks = [_dt(r["tick_at"]) for r in history if r.get("tick_at") and r.get("type") != "progress"]
     meta = load_live_meta(flight_dir) or {}
     if meta.get("live_updated_at"):
         ticks.append(_dt(meta["live_updated_at"]))
@@ -208,6 +211,7 @@ def inputs_from_history(flight_dir: Path, *, tick_minutes: int = 10) -> dict:
         ],
         "metars": metars,
         "sigmets": sigmets,
+        "progress_events": [r for r in history if r.get("type") == "progress"],
     }
 
 

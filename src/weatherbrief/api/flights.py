@@ -239,6 +239,8 @@ class FlightResponse(BaseModel):
     flight_ceiling_ft: int
     flight_duration_hours: float
     private: bool = False
+    # What non-owner viewers see of the live progress (#760).
+    position_sharing: Literal["none", "along_route", "full"] = "along_route"
     auto_refresh: bool = False
     auto_refresh_hour: int | None = None
     created_at: str
@@ -597,6 +599,7 @@ def _flight_to_response(
         flight_ceiling_ft=flight.flight_ceiling_ft,
         flight_duration_hours=flight.flight_duration_hours,
         private=flight.private,
+        position_sharing=flight.position_sharing,
         auto_refresh=flight.auto_refresh,
         auto_refresh_hour=flight.auto_refresh_hour,
         created_at=flight.created_at.isoformat(),
@@ -1676,6 +1679,7 @@ def move_flight(
         flight_ceiling_ft=new_ceil,
         flight_duration_hours=new_dur,
         private=source.private,
+        position_sharing=source.position_sharing,
         alt_departure_time=new_alt_departure_time,
         flexibility=new_flexibility,
         notify_override=source.notify_override,
@@ -2015,6 +2019,28 @@ def update_privacy(
     """Toggle flight visibility. Only the flight owner can change this."""
     row = _load_owned_row(db, flight_id, user_id)
     row.private = req.private
+    db.flush()
+    updated = load_flight(db, flight_id)
+    return _flight_to_response(updated, db, viewer_id=user_id)
+
+
+class UpdatePositionSharingRequest(BaseModel):
+    """Request body for the flight's live position sharing (#760)."""
+
+    position_sharing: Literal["none", "along_route", "full"]
+
+
+@router.patch("/{flight_id}/position-sharing", response_model=FlightResponse)
+def update_position_sharing(
+    flight_id: str,
+    req: UpdatePositionSharingRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """What viewers of a shared flight see of its live progress (owner only).
+    The owner always sees everything."""
+    row = _load_owned_row(db, flight_id, user_id)
+    row.position_sharing = req.position_sharing
     db.flush()
     updated = load_flight(db, flight_id)
     return _flight_to_response(updated, db, viewer_id=user_id)

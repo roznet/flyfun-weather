@@ -927,6 +927,14 @@ def run_realtime_refresh(
     route = RouteConfig.model_validate(briefing_data["route"])
     target_dt = parse_target_time(briefing_data)
 
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, flight_progress, load_progress_events
+
+    # The flight's manual take-off / landed entries (#760): TAF-at-ETA is read
+    # at the ETAs they give. With none, the effective departure is the plan.
+    events = load_progress_events(flight_dir_for_pack(pack_dir))
+    progress_now = flight_progress(route, target_dt, started_at, events)
+    eta_departure = (progress_now.departed_at if progress_now is not None else None) or target_dt
+
     corridor_nm = default_corridor_nm
     stored_obs = briefing_data.get("route_observations")
     if stored_obs:
@@ -939,10 +947,12 @@ def run_realtime_refresh(
 
     # Fetch fresh METAR/TAF along the route corridor, keeping each terminal's
     # observation proxy where it still qualifies (#767): the live layer's last
-    # pick, else the briefing's.
+    # pick, else the briefing's. ``target_time`` here only places the
+    # airports' ETAs (TAF at ETA, the TAF wind sample): the effective
+    # departure, so a late take-off moves them (#760).
     new_obs = run_route_weather(
         route=route,
-        target_time=target_dt,
+        target_time=eta_departure,
         corridor_nm=corridor_nm,
         airports_db_path=db_path,
         source=report_source,
@@ -1051,7 +1061,7 @@ def run_realtime_refresh(
         delta = layer.last_refresh_delta
     else:
         # Not persisted (an older pack): classify against the baseline only.
-        from weatherbrief.tasks.live_layer import _baseline_blocks, flight_progress, route_destination
+        from weatherbrief.tasks.live_layer import _baseline_blocks, route_destination
         from weatherbrief.tasks.live_significance import (
             airport_roles,
             classify_changes,
@@ -1059,7 +1069,7 @@ def run_realtime_refresh(
         )
 
         base_obs, base_sigmets, base_observed = _baseline_blocks(briefing_data)
-        progress = flight_progress(route, target_dt, datetime.now(timezone.utc))
+        progress = flight_progress(route, target_dt, datetime.now(timezone.utc), events)
         changes, _ = classify_changes(
             baseline_obs=base_obs,
             latest_obs=new_obs,

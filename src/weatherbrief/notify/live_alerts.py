@@ -336,15 +336,15 @@ def build_payload(flight_row, decision: PushDecision, *, tick_at: datetime) -> d
     }
 
 
-def push_expiry(flight_row, now: datetime) -> datetime:
-    """min(now + 30 min, end of the live window); never before now."""
+def push_expiry(flight_row, now: datetime, events: tuple = ()) -> datetime:
+    """min(now + 30 min, end of the live window); never before now. The
+    window end follows the flight's take-off / landed entries (#760)."""
     from weatherbrief.storage.flights import ensure_utc
-    from weatherbrief.tasks.live_tick import live_window_hours
+    from weatherbrief.tasks.live_tick import live_window_end, live_window_hours
 
     _, after_h = live_window_hours()
-    window_end = (
-        ensure_utc(flight_row.departure_time)
-        + timedelta(hours=(flight_row.flight_duration_hours or 0) + after_h)
+    window_end = live_window_end(
+        ensure_utc(flight_row.departure_time), flight_row.flight_duration_hours, after_h, events, now,
     )
     return max(now, min(now + PUSH_TTL, window_end))
 
@@ -458,7 +458,7 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
             )
             outcome = "shadow"
             if sending:
-                outcome = _send(db, flight_row, layer, decision, devices, now)
+                outcome = _send(db, flight_row, layer, decision, devices, now, pack_dir)
                 # Only a push that reached a device advances the memory: an
                 # undelivered alert must not later read as "cleared", nor
                 # use up a re-arm. Its new_alert is spent, so a failed alert
@@ -479,15 +479,17 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
     return outcome
 
 
-def _send(db, flight_row, layer, decision, devices, now) -> str:
+def _send(db, flight_row, layer, decision, devices, now, pack_dir=None) -> str:
     from weatherbrief.notify.push import send_live_alert_push
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
     from weatherbrief.tasks.live_timing import record_delivery
 
+    events = load_progress_events(flight_dir_for_pack(Path(pack_dir))) if pack_dir else ()
     payload = build_payload(flight_row, decision, tick_at=layer.live_updated_at or now)
     try:
         sent = send_live_alert_push(
             db, flight_row.user_id, payload,
-            expires_at=push_expiry(flight_row, now), devices=devices,
+            expires_at=push_expiry(flight_row, now, events), devices=devices,
         )
     except Exception:
         # The sender swallows its own failures; this is the one that escaped.

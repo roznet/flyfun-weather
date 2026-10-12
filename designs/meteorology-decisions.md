@@ -6129,3 +6129,32 @@ corridor fetch as a route airport.
   too loose to stand in for a field's own report.
 - **Automatic fallback after a curated list**: would bring EGVO back for EGLK
   every night.
+
+## 50. On flight day a TAF is read at the ETA the pilot's take-off gives, not the plan's
+
+**Date:** 2026-10-12 · **Issue:** #760 (PR 2 of 3) · **Agent decision, unattended;
+owner to confirm**
+
+### Context
+
+Until #760 every live TAF-at-ETA (§32) was read at `planned departure +
+fraction × planned duration`. A pilot who took off 40 min late was told what the
+destination TAF said for 40 min before they would get there.
+
+### The decision
+
+- Once the owner records a take-off (`POST /flights/{id}/live/progress`), the
+  live layer's ↻ path and tick read every corridor airport's TAF at the ETA
+  measured from that take-off (`run_route_weather(target_time=effective
+  departure)`). Without an entry nothing changes: the plan, as before.
+- The **baseline is not re-read**: the briefing's TAF-at-ETA stays at the
+  planned ETA. So a shift can by itself raise a `taf_category` row ("LEMI TAF
+  at ETA: VFR → MVFR") when the TAF changes between the planned and the actual
+  ETA. That row is true for the flight as flown, so it is kept; it is a
+  highlight/alert by the usual §32/§45 rules, nothing new.
+- Only the ETA moves. The obs-vs-model comparison (forecast hours from the
+  pack), the SIGMET time window and the planned duration stay on the plan; a
+  recorded landing ends the window rather than rescaling ETAs.
+- No "late means still on the ground" rule: without an entry the flight is
+  taken as departed at the planned time (#759's rule waits for an automatic
+  source, #761), because a missing button press is not evidence.

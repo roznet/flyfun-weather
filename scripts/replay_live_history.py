@@ -73,7 +73,7 @@ def as_of_store(cells_dir: Path):
 def replay(root: Path, out_root: Path, observed_path: Path | None, cells_dir: Path | None,
            only: list[str], airports_db: str) -> None:
     import build_live_scenario as bls
-    from live_scenario_replay import observations_at, sigmets_at
+    from live_scenario_replay import feed_progress_events, observations_at, sigmets_at
 
     from weatherbrief.models.observed import ObservedConditions
     from weatherbrief.observed.storms import load_cell_frames
@@ -106,11 +106,17 @@ def replay(root: Path, out_root: Path, observed_path: Path | None, cells_dir: Pa
                 (pack_dir / "briefing.json").write_text(json.dumps(briefing))
                 packs.append((datetime.fromisoformat(p["active_from"]), p["timestamp"], pack_dir, briefing))
             by_tick = observed.get(d.name, {})
-            for at in sorted({datetime.fromisoformat(r["tick_at"]) for r in load_live_history(d) if r.get("tick_at")}):
+            fed: set[int] = set()
+            # A take-off / landed entry (#760) is not a tick: it is fed into
+            # the replayed history before the first tick after it.
+            ticks = {datetime.fromisoformat(r["tick_at"]) for r in load_live_history(d)
+                     if r.get("tick_at") and r.get("type") != "progress"}
+            for at in sorted(ticks):
                 active = [p for p in packs if p[0] <= at]
                 if not active:
                     continue
                 _, ts, pack_dir, briefing = active[-1]
+                feed_progress_events(pack_dir.parent, inputs.get("progress_events", []), at, fed)
                 obs = by_tick.get(at.isoformat())
                 cells = None
                 if store is not None:
@@ -138,6 +144,7 @@ def _progress_for(d: Path, recs: list[dict], tick_at: str):
     briefing that tick read."""
     from weatherbrief.models.analysis import RouteConfig
     from weatherbrief.tasks.artifacts import parse_target_time
+    from weatherbrief.analysis.flight_progress import progress_events
     from weatherbrief.tasks.live_layer import flight_progress
 
     packs = [r for r in recs if r["type"] == "pack" and r["tick_at"] <= tick_at]
@@ -148,7 +155,10 @@ def _progress_for(d: Path, recs: list[dict], tick_at: str):
         return None
     briefing = json.loads(path.read_text())
     route = RouteConfig.model_validate(briefing["route"])
-    return flight_progress(route, parse_target_time(briefing), datetime.fromisoformat(tick_at))
+    # With the take-off / landed entries known at that tick (#760), as the
+    # tick measured its estimate against.
+    return flight_progress(route, parse_target_time(briefing), datetime.fromisoformat(tick_at),
+                           progress_events(recs))
 
 
 def _frames(cells_dir: Path) -> list[tuple[datetime, dict[str, dict]]]:
@@ -221,6 +231,9 @@ def score_estimates(root: Path, cells_dir: Path, only: list[str]) -> dict:
                 "cpa_err_nm": abs(est["cpa_nm"] - obs[0]),
                 "time_err_min": abs((datetime.fromisoformat(est["cpa_time"]) - obs[1]).total_seconds()) / 60,
                 "persist_err_nm": abs(still.cpa_nm - obs[0]) if still else None,
+                # The schedule the estimate's track came from (#760); records
+                # written before it were all on the plan.
+                "source": est.get("progress_source") or "plan",
             })
     report = {}
     for b in BUCKETS:
@@ -232,6 +245,11 @@ def score_estimates(root: Path, cells_dir: Path, only: list[str]) -> dict:
             "median_cpa_err_nm": round(statistics.median(x["cpa_err_nm"] for x in xs), 1) if xs else None,
             "median_time_err_min": round(statistics.median(x["time_err_min"] for x in xs), 1) if xs else None,
             "median_persist_err_nm": round(statistics.median(persist), 1) if persist else None,
+            "by_source": {
+                src: {"n": len(ys), "median_cpa_err_nm": round(statistics.median(y["cpa_err_nm"] for y in ys), 1)}
+                for src in sorted({x["source"] for x in xs})
+                for ys in [[x for x in xs if x["source"] == src]]
+            },
         }
     return report
 

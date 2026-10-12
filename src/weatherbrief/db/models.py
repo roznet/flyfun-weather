@@ -197,6 +197,11 @@ class FlightRow(Base):
     flight_ceiling_ft: Mapped[int] = mapped_column(Integer, default=18000)
     flight_duration_hours: Mapped[float] = mapped_column(default=0.0)
     private: Mapped[bool] = mapped_column(Boolean, default=False)
+    # What a non-owner viewer sees of the live progress (#760):
+    # none | along_route | full (tasks/live_layer.POSITION_SHARING_VALUES).
+    position_sharing: Mapped[str] = mapped_column(
+        String(16), default="along_route", server_default="along_route"
+    )
     # Exempt from every retention tier (tasks/retention.py): flights a talk or
     # write-up links to must keep their full packs. scripts/ops/pin_flight.py.
     retention_pinned: Mapped[bool] = mapped_column(
