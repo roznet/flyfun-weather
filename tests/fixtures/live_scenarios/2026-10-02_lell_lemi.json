@@ -6055,7 +6055,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6167,7 +6170,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6279,7 +6285,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6391,7 +6400,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6503,7 +6515,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6615,7 +6630,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6727,7 +6745,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6839,7 +6860,10 @@
         "advisory": "amber"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -6951,7 +6975,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7063,7 +7090,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7175,7 +7205,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7287,7 +7320,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7399,7 +7435,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7511,7 +7550,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7623,7 +7665,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEAL",
@@ -7735,7 +7780,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LEBL": [
@@ -7917,7 +7965,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8097,7 +8148,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8277,7 +8331,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8457,7 +8514,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8637,7 +8697,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8817,7 +8880,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -8997,7 +9063,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -9177,7 +9246,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -9357,7 +9429,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -9537,7 +9612,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -9717,7 +9795,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -9897,7 +9978,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -10077,7 +10161,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -10259,7 +10346,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -10441,7 +10531,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEBL",
@@ -10623,7 +10716,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LECH": [
@@ -10737,7 +10833,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -10849,7 +10948,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -10964,7 +11066,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11076,7 +11181,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11188,7 +11296,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11300,7 +11411,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11412,7 +11526,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11524,7 +11641,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11639,7 +11759,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11754,7 +11877,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LECH",
@@ -11868,7 +11994,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LELC": [
@@ -12016,7 +12145,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12162,7 +12294,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12308,7 +12443,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12454,7 +12592,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12600,7 +12741,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12746,7 +12890,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -12892,7 +13039,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13038,7 +13188,10 @@
         "advisory": "amber"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13184,7 +13337,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13330,7 +13486,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13476,7 +13635,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13622,7 +13784,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13768,7 +13933,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -13914,7 +14082,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -14060,7 +14231,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -14206,7 +14380,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -14352,7 +14529,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELC",
@@ -14500,7 +14680,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LELL": [
@@ -14557,7 +14740,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14612,7 +14798,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14667,7 +14856,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14722,7 +14914,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14777,7 +14972,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14832,7 +15030,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14887,7 +15088,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14942,7 +15146,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -14997,7 +15204,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15052,7 +15262,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15107,7 +15320,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15162,7 +15378,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15217,7 +15436,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15272,7 +15494,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15329,7 +15554,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15386,7 +15614,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LELL",
@@ -15443,7 +15674,10 @@
      "has_metar": true,
      "has_taf": false,
      "eta_hour_offset": 0,
-     "runway_wind": null
+     "runway_wind": null,
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LEMI": [
@@ -15557,7 +15791,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -15669,7 +15906,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -15781,7 +16021,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -15893,7 +16136,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16005,7 +16251,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16117,7 +16366,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16229,7 +16481,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16341,7 +16596,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16453,7 +16711,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16565,7 +16826,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16677,7 +16941,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16789,7 +17056,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -16901,7 +17171,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -17013,7 +17286,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -17125,7 +17401,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEMI",
@@ -17237,7 +17516,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LERI": [
@@ -17351,7 +17633,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -17463,7 +17748,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -17575,7 +17863,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -17687,7 +17978,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -17799,7 +18093,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -17911,7 +18208,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -18023,7 +18323,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -18135,7 +18438,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -18247,7 +18553,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -18359,7 +18668,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERI",
@@ -18471,7 +18783,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LERS": [
@@ -18585,7 +18900,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -18699,7 +19017,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -18811,7 +19132,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -18925,7 +19249,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19039,7 +19366,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19153,7 +19483,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19267,7 +19600,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19381,7 +19717,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19495,7 +19834,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19609,7 +19951,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19723,7 +20068,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19837,7 +20185,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -19951,7 +20302,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -20065,7 +20419,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -20179,7 +20536,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LERS",
@@ -20293,7 +20653,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ],
    "LEVC": [
@@ -20407,7 +20770,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -20519,7 +20885,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -20631,7 +21000,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -20745,7 +21117,10 @@
         "advisory": null
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -20859,7 +21234,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -20971,7 +21349,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21085,7 +21466,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21200,7 +21584,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21316,7 +21703,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21432,7 +21822,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21547,7 +21940,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21662,7 +22058,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21777,7 +22176,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -21892,7 +22294,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22006,7 +22411,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22120,7 +22528,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22236,7 +22647,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22351,7 +22765,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22466,7 +22883,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22578,7 +22998,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22690,7 +23113,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22802,7 +23228,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -22914,7 +23343,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     },
     {
      "icao": "LEVC",
@@ -23026,7 +23458,10 @@
         "advisory": "green"
        }
       ]
-     }
+     },
+     "metar_proxy": null,
+     "taf_proxy": null,
+     "proxy_caption": null
     }
    ]
   },
@@ -23093,7 +23528,10 @@
        "has_metar": true,
        "has_taf": false,
        "eta_hour_offset": 0,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEBL",
@@ -23273,7 +23711,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEMS",
@@ -23328,7 +23769,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 0,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEIG",
@@ -23383,7 +23827,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 0,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LECF",
@@ -23438,7 +23885,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 0,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LERS",
@@ -23552,7 +24002,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LECH",
@@ -23667,7 +24120,10 @@
           "advisory": null
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LECN",
@@ -23722,7 +24178,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 1,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEVY",
@@ -23777,7 +24236,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 1,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEVC",
@@ -23892,7 +24354,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LERE",
@@ -23947,7 +24412,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 1,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LELM",
@@ -24002,7 +24470,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 2,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEMU",
@@ -24078,7 +24549,10 @@
          }
         ],
         "winds": []
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEAL",
@@ -24190,7 +24664,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LERI",
@@ -24302,7 +24779,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LELG",
@@ -24357,7 +24837,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 2,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEMP",
@@ -24412,7 +24895,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 2,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LELC",
@@ -24558,7 +25044,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LEMI",
@@ -24670,7 +25159,10 @@
           "advisory": "green"
          }
         ]
-       }
+       },
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LELH",
@@ -24725,7 +25217,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 2,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       },
       {
        "icao": "LETX",
@@ -24780,7 +25275,10 @@
        "has_metar": false,
        "has_taf": false,
        "eta_hour_offset": 2,
-       "runway_wind": null
+       "runway_wind": null,
+       "metar_proxy": null,
+       "taf_proxy": null,
+       "proxy_caption": null
       }
      ],
      "comparisons": [],
