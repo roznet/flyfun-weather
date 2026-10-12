@@ -33,7 +33,7 @@ import gzip
 import json
 import logging
 import zlib
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from weatherbrief.models.live import TRAIL_EXCLUDE, LiveLayer
@@ -245,23 +245,29 @@ def has_snapshots(flight_dir: Path | str) -> bool:
     return (Path(flight_dir) / LIVE_SNAPSHOTS_FILE).exists()
 
 
+def snapshots_capped(flight_dir: Path | str) -> bool:
+    """The file reached ``SNAPSHOT_MAX_BYTES``: ticks after it were not
+    recorded, so a recap must not read the rest as "not reached"."""
+    path = Path(flight_dir) / LIVE_SNAPSHOTS_FILE
+    return path.exists() and path.stat().st_size >= SNAPSHOT_MAX_BYTES
+
+
 # --- The METAR/TAF rows as of a tick ------------------------------------------
 
 
-def _dt(value) -> datetime | None:
+def parse_utc(value) -> datetime | None:
+    """An ISO string from a snapshot or history record as aware UTC, or None."""
     if not isinstance(value, str) or not value:
         return None
     try:
         dt = datetime.fromisoformat(value)
     except ValueError:
         return None
-    from datetime import timezone
-
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 def _seen_by(rec: dict, at: datetime) -> bool:
-    t = _dt(rec.get("tick_at"))
+    t = parse_utc(rec.get("tick_at"))
     return t is not None and t <= at
 
 
@@ -282,7 +288,7 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
     from weatherbrief.tasks.route_weather import _apply_taf_at_eta, _worst_category
 
     block = snapshot.get("observations")
-    at = _dt(snapshot.get("tick_at"))
+    at = parse_utc(snapshot.get("tick_at"))
     if not block or at is None:
         return None
     metars: dict[str, list[dict]] = {}
@@ -309,10 +315,10 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
         if reports:
             latest = reports[-1]
             rep = WeatherParser.parse_metar(latest["raw"], source="live_history",
-                                            reference=_dt(latest.get("observed_at")))
+                                            reference=parse_utc(latest.get("observed_at")))
             obs.has_metar = True
             obs.metar_raw = latest["raw"]
-            obs.metar_time = _dt(latest.get("observed_at"))
+            obs.metar_time = parse_utc(latest.get("observed_at"))
             obs.metar_report_type = latest.get("report_type")
             obs.metar_flight_category = latest.get("flight_category") or (
                 rep.flight_category.value if rep is not None and rep.flight_category is not None else None
@@ -332,15 +338,15 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
             earlier = [r for r in reports[:-1] if (r.get("observed_at") or "") < (latest.get("observed_at") or "")]
             if earlier:
                 obs.metar_previous_flight_category = earlier[-1].get("flight_category")
-                obs.metar_previous_time = _dt(earlier[-1].get("observed_at"))
+                obs.metar_previous_time = parse_utc(earlier[-1].get("observed_at"))
         taf_rec = tafs.get(icao)
         if taf_rec is not None:
             obs.has_taf = True
             obs.taf_raw = taf_rec["raw"]
-            obs.taf_issue_time = _dt(taf_rec.get("issued_at"))
+            obs.taf_issue_time = parse_utc(taf_rec.get("issued_at"))
             eta = progress.eta(obs.enroute_distance_nm) if progress is not None else None
             taf = WeatherParser.parse_taf(taf_rec["raw"], source="live_history",
-                                          reference=_dt(taf_rec.get("issued_at")) or at)
+                                          reference=parse_utc(taf_rec.get("issued_at")) or at)
             if taf is not None and eta is not None:
                 try:
                     _apply_taf_at_eta(obs, taf, eta)
@@ -352,7 +358,7 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
     taf_cats = [a.taf_flight_category_at_eta for a in airports if a.taf_flight_category_at_eta]
     return RouteObservations(
         corridor_nm=block.get("corridor_nm") or 0.0,
-        fetch_time=_dt(block.get("fetch_time")) or at,
+        fetch_time=parse_utc(block.get("fetch_time")) or at,
         airports_found=len(airports),
         airports_with_metar=sum(1 for a in airports if a.has_metar),
         airports_with_taf=sum(1 for a in airports if a.has_taf and a.taf_valid_at_eta),
@@ -372,10 +378,10 @@ def find_tick(snapshots: list[dict], tick: datetime) -> dict | None:
     flight has no snapshot at or before ``tick``."""
     best = None
     for s in snapshots:
-        t = _dt(s.get("tick_at"))
+        t = parse_utc(s.get("tick_at"))
         if t is None or t > tick:
             continue
-        if best is None or t >= _dt(best.get("tick_at")):
+        if best is None or t >= parse_utc(best.get("tick_at")):
             best = s
     return best
 
@@ -390,7 +396,7 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     from weatherbrief.tasks.live_trail import route_context, trails_for_pack
 
     flight_dir = Path(flight_dir)
-    tick_at = _dt(snapshot.get("tick_at"))
+    tick_at = parse_utc(snapshot.get("tick_at"))
     name = snapshot.get("pack_dir_name")
     # No name would make this the flight dir itself: never read a briefing there.
     pack_dir = flight_dir / name if name else None
@@ -403,7 +409,11 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     except Exception:
         logger.warning("METAR/TAF rebuild failed for %s at %s", flight_dir, tick_at, exc_info=True)
         observations = None
-    changes = LiveChanges.model_validate(snapshot["changes"]) if snapshot.get("changes") else None
+    try:
+        changes = LiveChanges.model_validate(snapshot["changes"]) if snapshot.get("changes") else None
+    except Exception:
+        logger.warning("Snapshot changes unreadable for %s at %s — served without", flight_dir, tick_at)
+        changes = None
     return {
         "pack_timestamp": snapshot.get("pack_timestamp"),
         "live_updated_at": snapshot.get("live_updated_at"),

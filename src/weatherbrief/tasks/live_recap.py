@@ -25,10 +25,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from weatherbrief.tasks.live_snapshots import _dt
+from weatherbrief.tasks.live_snapshots import parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def forecast_block(pack_ts: datetime, pack_dir: Path | None, *, chosen_by: str) 
 
 
 def _key_time(snap: dict) -> datetime | None:
-    return _dt(snap.get("radar_time")) or _dt(snap.get("tick_at"))
+    return parse_utc(snap.get("radar_time")) or parse_utc(snap.get("tick_at"))
 
 
 def _segment_at(ribbon: dict, along: float) -> dict | None:
@@ -257,7 +257,7 @@ def alert_markers(history: list[dict], progress) -> list[dict]:
         if r.get("type") != "event":
             continue
         c = r.get("change") or {}
-        at = _dt(r.get("tick_at"))
+        at = parse_utc(r.get("tick_at"))
         flown = progress.flown_at(at) if (progress is not None and at is not None) else None
         out.append({
             "at": r.get("tick_at"),
@@ -421,7 +421,7 @@ def flight_progress_for(packs: list[tuple[datetime, Path | None]], as_of: dateti
 
 
 def _match_pack(packs, pack_ts: str) -> tuple[datetime, Path | None]:
-    want = _dt(pack_ts)
+    want = parse_utc(pack_ts)
     for p in packs:
         if want is not None and p[0] == want:
             return p
@@ -436,12 +436,10 @@ def recap_for_flight(
     the default pack). Raises ``KeyError`` for a ``pack_ts`` the flight lacks.
     ``packs`` / ``progress`` skip resolving them again when the caller has
     them (:func:`recap_summary`)."""
-    from datetime import timezone
-
     from weatherbrief.debriefs.taxonomy import Decision
     from weatherbrief.storage.debriefs import get_debrief
     from weatherbrief.tasks.live_layer import load_live_history
-    from weatherbrief.tasks.live_snapshots import load_snapshots
+    from weatherbrief.tasks.live_snapshots import load_snapshots, snapshots_capped
 
     now = now or datetime.now(timezone.utc)
     packs = packs if packs is not None else flight_packs(db, flight_id)
@@ -464,6 +462,14 @@ def recap_for_flight(
     snapshots = load_snapshots(flight_dir) if flight_dir is not None else []
     history = load_live_history(flight_dir) if flight_dir is not None else []
     recap = build_recap(snapshots, history, progress, cancelled=cancelled, forecast=forecast)
+    # Ticks past the size cap were not recorded: "not_reached" after the last
+    # snapshot then means "not recorded", and the recap says so.
+    recap["capped"] = flight_dir is not None and snapshots_capped(flight_dir)
+    if recap["capped"]:
+        recap["message"] = " ".join(filter(None, [
+            recap.get("message"),
+            "Recording stopped at the size cap after the last tick; later segments were not recorded.",
+        ]))
     recap["flight_id"] = flight_id
     recap["packs"] = [ts.isoformat() for ts, _ in packs]
     return recap
@@ -473,8 +479,6 @@ def recap_summary(db, flight_id: str) -> dict | None:
     """:func:`summarize_recap` for the flight, or None. Never raises: a recap
     problem must not fail a briefing read. Only once the flight's (planned or
     observed) departure has passed: before it there is no diagonal yet."""
-    from datetime import timezone
-
     from weatherbrief.tasks.live_layer import LIVE_HISTORY_FILE
     from weatherbrief.tasks.live_snapshots import has_snapshots
 

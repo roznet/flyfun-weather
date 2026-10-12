@@ -53,8 +53,12 @@ Choices:
   the dials are hidden, #758).
 - **Size**: the LELL→LEMI replay (busy SIGMET morning, no radar) is ~4.3 KB a
   tick, 158 KB for 37 ticks; owner measured ~6 KB a tick with radar and cells.
-  `SNAPSHOT_MAX_BYTES` = 1.5 MB stops appends (logged `LIVE_SNAPSHOTS_CAPPED`);
-  a test keeps the replay under 6 KB a tick.
+  `SNAPSHOT_MAX_BYTES` = 1.5 MB stops appends (logged `LIVE_SNAPSHOTS_CAPPED`)
+  and the recap carries `capped: true` with a message, so the unrecorded tail is
+  not read as "not reached"; a test keeps the replay under 6 KB a tick.
+- **A snapshot the models no longer accept** (a later schema change) degrades:
+  `tick_view` serves it without its changes rather than a 500. `v` is written
+  but not yet read.
 - **Not backfilled.** Flights flown before #711 read `not_recorded`.
   `scripts/replay_live_history.py` stays a dev tool.
 

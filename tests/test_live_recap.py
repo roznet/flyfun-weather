@@ -439,3 +439,9 @@ def test_tick_view_without_pack_name_does_not_read_the_flight_dir(lell_lemi):
     snap = dict(load_snapshots(flight_dir)[3], pack_dir_name=None)
     view = tick_view(flight_dir, snap)
     assert view["changes"] is not None
+
+
+def test_tick_view_degrades_on_a_snapshot_the_models_no_longer_accept(lell_lemi):
+    flight_dir, _ = lell_lemi
+    snap = dict(load_snapshots(flight_dir)[3], changes={"changes": [{"key": "x"}]})
+    assert tick_view(flight_dir, snap)["changes"] is None
