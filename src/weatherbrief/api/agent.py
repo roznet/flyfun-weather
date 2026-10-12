@@ -444,6 +444,12 @@ def get_briefing(
         record_delivery_for_pack(db, flight_id=flight_id, user_id=user_id, platform="agent",
                                  pack_dir=pack_dir)
 
+    # After departure (#711): what was observed along the route at the time the
+    # aircraft was there. Null before departure or when nothing was recorded.
+    from weatherbrief.tasks.live_recap import recap_summary
+
+    result["recap"] = recap_summary(db, flight_id)
+
     return result
 
 

@@ -60,7 +60,7 @@ from weatherbrief.storage.sounding_profiles import (
     read_sounding_sidecar,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
-from weatherbrief.models.live import LiveChanges, LiveLayerResponse
+from weatherbrief.models.live import LiveChanges, LiveLayerResponse, LiveTickResponse
 from weatherbrief.tasks.live_layer import live_updated_at_iso
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
@@ -5214,3 +5214,102 @@ def get_live_layer(
         changes=trails_for_pack(pack_dir, layer.changes),
         last_refresh_delta=layer.last_refresh_delta,
     )
+
+
+# ---------------------------------------------------------------------------
+# Debrief: replay and observed recap (#711)
+# ---------------------------------------------------------------------------
+
+
+def _live_flight_dir(db: Session, flight_id: str):
+    """The flight's directory for its live files, 404 without a pack."""
+    from weatherbrief.tasks.live_recap import flight_dir_of, flight_packs
+
+    packs = flight_packs(db, flight_id)
+    if not packs:
+        raise HTTPException(status_code=404, detail="No packs yet for this flight")
+    return flight_dir_of(packs)
+
+
+@live_router.get("/{flight_id}/live/ticks")
+def get_live_ticks(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The recorded ticks of the flight's live window, oldest first: each
+    one's time, radar frame valid time, pack and planned position (flown NM).
+    Empty when nothing was recorded (no live window, or flown before per-tick
+    snapshots existed)."""
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    audit_pack_access(user_id, flight_id, "get_live_ticks", request)
+    from weatherbrief.tasks.live_snapshots import load_snapshots, tick_index
+
+    flight_dir = _live_flight_dir(db, flight_id)
+    snapshots = load_snapshots(flight_dir) if flight_dir is not None else []
+    return {"flight_id": flight_id, "ticks": tick_index(snapshots)}
+
+
+@live_router.get("/{flight_id}/live/at", response_model=LiveTickResponse)
+def get_live_at(
+    flight_id: str,
+    request: Request,
+    tick: datetime = Query(..., description="ISO time of a recorded tick; the last tick at or before it is served"),
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """The Observed section as it stood at a recorded tick, in the ``/live``
+    shape (single-tick replay). 404 when no tick was recorded at or before
+    ``tick``."""
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    audit_pack_access(user_id, flight_id, "get_live_at", request)
+    from weatherbrief.tasks.live_snapshots import find_tick, load_snapshots, tick_view
+
+    flight_dir = _live_flight_dir(db, flight_id)
+    snapshots = load_snapshots(flight_dir) if flight_dir is not None else []
+    snap = find_tick(snapshots, ensure_utc(tick))
+    if snap is None:
+        raise HTTPException(status_code=404, detail="No observations recorded at or before this time")
+    return LiveTickResponse(flight_id=flight_id, **tick_view(flight_dir, snap))
+
+
+@live_router.get("/{flight_id}/recap")
+def get_recap(
+    flight_id: str,
+    request: Request,
+    pack: str | None = Query(default=None, description="Pack timestamp for the forecast row"),
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The debrief's observed recap, computed on request: per ribbon segment
+    the observation nearest the time the aircraft was there, the alert
+    markers, and the forecast row of ``pack`` (default: the newest pack before
+    departure). ``status`` says when there is nothing to show and why
+    (``no_live_window`` / ``not_recorded`` / ``untimed``)."""
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    audit_pack_access(user_id, flight_id, "get_recap", request)
+    from weatherbrief.tasks.live_recap import recap_for_flight
+
+    _live_flight_dir(db, flight_id)
+    try:
+        return recap_for_flight(db, flight_id, pack_ts=pack)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Pack not found")
+
+
+@live_router.get("/{flight_id}/recap/summary")
+def get_recap_summary(
+    flight_id: str,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The compact recap agents get next to ``live`` in ``get_briefing``
+    (``live_recap.recap_summary``); ``recap`` is null before departure or
+    when nothing was recorded."""
+    _load_flight_or_404(db, flight_id, viewer_id=user_id)
+    audit_pack_access(user_id, flight_id, "get_recap_summary", request)
+    from weatherbrief.tasks.live_recap import recap_summary
+
+    return {"flight_id": flight_id, "recap": recap_summary(db, flight_id)}

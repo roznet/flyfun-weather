@@ -604,3 +604,117 @@ def test_create_flight_beyond_horizon_is_pending_not_refreshed(
     assert briefing["available_date"] == "2099-01-01"
     assert briefing["full_briefing_date"] == "2099-01-03"
     assert create_env == []
+
+
+# --- Debrief replay and recap (#711) -------------------------------------------
+
+
+def _seed_pack_at(app_db, flight: Flight, fetched: datetime) -> str:
+    session = app_db()
+    meta = BriefingPackMeta(
+        flight_id=flight.id, fetch_timestamp=fetched, days_out=1,
+        has_gramet=False, has_skewt=False, has_digest=True, assessment="GREEN",
+    )
+    save_pack_meta(session, meta)
+    session.commit()
+    session.close()
+    return meta.fetch_timestamp.isoformat()
+
+
+def _lane(pack_dir: Path, status: str) -> None:
+    (pack_dir / "forecast_lane.json").write_text(json.dumps({
+        "v": 1, "route_nm": 400.0, "models": ["gfs"], "aggregation": "worst",
+        "advisories": [{"advisory_id": "icing", "aggregate_status": status, "representative_model": "gfs",
+                        "per_model": [{"model": "gfs", "status": status, "ribbon": [[0, 400, status]]}]}],
+    }))
+
+
+def test_live_ticks_and_live_at(client, app_db):
+    flight = _seed_flight(app_db, suffix="ticks")
+    ts = _seed_pack(app_db, flight)
+
+    assert client.get(f"/api/flights/{flight.id}/live/ticks").json()["ticks"] == []
+    _commit_live(flight, ts)
+
+    ticks = client.get(f"/api/flights/{flight.id}/live/ticks").json()["ticks"]
+    assert len(ticks) == 1 and ticks[0]["pack_timestamp"] == ts
+    resp = client.get(f"/api/flights/{flight.id}/live/at", params={"tick": ticks[0]["tick_at"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    from weatherbrief.tasks.live_layer import load_live
+
+    live = load_live(_pack_dir(flight, ts).parent).model_dump(mode="json")
+    for key in ("route_sigmets", "glance", "ribbon", "storms", "live_updated_at"):
+        assert body[key] == live[key], key
+    assert body["changes"]["changes"][0]["message"] == live["changes"]["changes"][0]["message"]
+    assert datetime.fromisoformat(body["tick_at"]) == datetime.fromisoformat(ticks[0]["tick_at"])
+
+    before = (_NOW - timedelta(hours=2)).isoformat()
+    assert client.get(f"/api/flights/{flight.id}/live/at", params={"tick": before}).status_code == 404
+
+
+def test_replay_endpoints_follow_flight_visibility(client, app_db):
+    flight = _seed_flight(app_db, owner=_OTHER_USER, private=True, suffix="tickspriv")
+    _seed_pack(app_db, flight, owner=_OTHER_USER)
+    for path in ("live/ticks", "recap", "recap/summary"):
+        assert client.get(f"/api/flights/{flight.id}/{path}").status_code == 404, path
+    resp = client.get(f"/api/flights/{flight.id}/live/at", params={"tick": _NOW.isoformat()})
+    assert resp.status_code == 404
+
+
+def test_recap_pack_picker_and_stripped_pack(client, app_db):
+    flight = _seed_flight(app_db, suffix="recap")
+    old = _seed_pack_at(app_db, flight, _NOW - timedelta(hours=20))
+    new = _seed_pack(app_db, flight)
+    after = _seed_pack_at(app_db, flight, _DEP + timedelta(minutes=30))
+    _commit_live(flight, new)
+    _lane(_pack_dir(flight, old), "red")
+    _lane(_pack_dir(flight, new), "green")
+    # The older pack as T1 leaves it: no cross-section, no forecasts.
+    assert not (_pack_dir(flight, old) / "cross_section.json").exists()
+    briefing = json.loads((_pack_dir(flight, new) / "briefing.json").read_text())
+    (_pack_dir(flight, after) / "briefing.json").write_text(json.dumps(briefing))
+
+    recap = client.get(f"/api/flights/{flight.id}/recap").json()
+    assert recap["status"] == "ok" and recap["time_base"] == "planned"
+    assert recap["cancelled"] is False
+    # Default: the newest pack before departure, not the one after it.
+    assert recap["forecast"]["pack_timestamp"] == new and recap["forecast"]["chosen_by"] == "default"
+    assert recap["forecast"]["planned_departure"] == _DEP.isoformat()
+    assert recap["forecast"]["advisories"][0]["aggregate_status"] == "green"
+    assert set(recap["packs"]) == {old, new, after}
+
+    picked = client.get(f"/api/flights/{flight.id}/recap", params={"pack": old}).json()
+    assert picked["forecast"]["pack_timestamp"] == old and picked["forecast"]["chosen_by"] == "request"
+    assert picked["forecast"]["advisories"][0]["aggregate_status"] == "red"
+    assert picked["segments"] == recap["segments"]
+
+    missing = client.get(f"/api/flights/{flight.id}/recap", params={"pack": "2020-01-01T00:00:00+00:00"})
+    assert missing.status_code == 404
+
+
+def test_recap_of_cancelled_flight_is_planned(client, app_db):
+    from weatherbrief.debriefs.taxonomy import Decision
+    from weatherbrief.storage.debriefs import upsert_debrief
+
+    flight = _seed_flight(app_db, suffix="recapcnl")
+    ts = _seed_pack(app_db, flight)
+    _commit_live(flight, ts)
+    session = app_db()
+    upsert_debrief(session, flight_id=flight.id, decision=Decision.CANCELLED)
+    session.commit()
+    session.close()
+
+    recap = client.get(f"/api/flights/{flight.id}/recap").json()
+    assert recap["cancelled"] is True and recap["time_base"] == "planned"
+
+
+def test_recap_without_recording_says_so(client, app_db):
+    flight = _seed_flight(app_db, suffix="recapnone")
+    _pack_dir(flight, _seed_pack(app_db, flight))
+    recap = client.get(f"/api/flights/{flight.id}/recap").json()
+    assert recap["status"] == "no_live_window"
+    assert recap["segments"] == [] and "no live window" in recap["message"]
+    # Agents get nothing rather than an empty "clear".
+    assert client.get(f"/api/flights/{flight.id}/recap/summary").json()["recap"] is None
+    assert client.get(f"/agent/v1/flights/{flight.id}/briefing").json()["recap"] is None

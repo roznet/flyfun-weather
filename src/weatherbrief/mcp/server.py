@@ -541,6 +541,12 @@ def get_briefing(
     like the nutshell, with its written time. ``live_unavailable: true`` means
     the live data could not be fetched, not that there is none.
 
+    ``recap`` (null before departure or when nothing was recorded): what the
+    instruments observed along the route at the time the aircraft was there,
+    on the times ``recap.time_base`` names (``planned`` = the flight plan, not
+    a recorded track), with the alerts raised over the flight day. Radar
+    unavailable is not clear.
+
     Status values:
     - ready: briefing available with fresh data
     - stale: briefing exists but weather models have updated since
@@ -645,6 +651,13 @@ def get_briefing(
             logger.warning("Live summary unavailable for %s", flight_id, exc_info=True)
             result["live"] = None
             result["live_unavailable"] = True
+        # After departure (#711): the observed recap, same helper as the
+        # ChatGPT action. Null before departure or when nothing was recorded.
+        try:
+            result["recap"] = client.get_recap_summary(flight_id)
+        except (httpx.HTTPError, ValueError):
+            logger.warning("Recap summary unavailable for %s", flight_id, exc_info=True)
+            result["recap"] = None
 
     return result
 

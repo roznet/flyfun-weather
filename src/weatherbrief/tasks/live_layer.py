@@ -49,6 +49,7 @@ from weatherbrief.models.observations import RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.storms import CellFrames
 from weatherbrief.tasks.live_highlight import LIVE_HIGHLIGHT_LOG
+from weatherbrief.tasks.live_snapshots import LIVE_SNAPSHOTS_FILE, append_highlight, append_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,14 @@ LIVE_HISTORY_FILE = "live_history.jsonl"
 #: imported for local review (``scripts/ops/import_live_flight.py``) stays as
 #: prod wrote it. In ``LIVE_FILES`` so a flight delete takes it too.
 LIVE_FROZEN_FILE = "live_frozen"
-LIVE_FILES = (LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG, LIVE_FROZEN_FILE)
+LIVE_FILES = (
+    LIVE_FILE, LIVE_META_FILE, LIVE_HISTORY_FILE, LIVE_HIGHLIGHT_LOG, LIVE_FROZEN_FILE, LIVE_SNAPSHOTS_FILE,
+)
+#: Retention (#711): the flight-day state and the admin calibration log go at
+#: T1; the rest (history, per-tick snapshots, and the meta file the purge reads
+#: to find the layer's pack) at the 90-day pass unless the flight is kept.
+LIVE_FILES_T1 = (LIVE_FILE, LIVE_HIGHLIGHT_LOG, LIVE_FROZEN_FILE)
+LIVE_FILES_KEPT = tuple(n for n in LIVE_FILES if n not in LIVE_FILES_T1)
 
 
 
@@ -827,6 +835,9 @@ def commit_live_update(
             flight_dir, stored, layer, trace, briefing_data=briefing_data,
             observations=observations, sigmets=sigmets, now=now,
         )
+        # What the Observed section shows as of this tick (#711), for replay
+        # and the debrief recap.
+        append_snapshot(flight_dir, layer, tick_at=now, progress=progress)
         return layer
 
 
@@ -861,6 +872,8 @@ def patch_highlight(
             return False
         layer.glance.highlight = highlight
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
+        if layer.live_updated_at is not None:
+            append_highlight(flight_dir, highlight, tick_at=layer.live_updated_at)
         return True
 
 

@@ -1,7 +1,8 @@
 # Flight debrief: what was observed, what you reported
 
 Status: brainstorm agreed 2026-10-06, split into slices A–C 2026-10-08, slice A reshaped
-2026-10-11 (per-tick snapshots, recap on request, replay, web first); nothing built. Replaces the standalone PIREP
+2026-10-11 (per-tick snapshots, recap on request, replay, web first); slice A1 (server)
+built 2026-10-12, as-built in `designs/debrief-recap.md`; A2 onwards not built. Replaces the standalone PIREP
 direction (`designs/pireps.md` as-built, `future/pirep-plan.md` M2/M3): pilot reports
 stop being their own feature and become part of the flight debrief. Builds on
 `designs/debrief.md`, `designs/live-observation-layer.md` and
@@ -116,7 +117,8 @@ nutshell style, then the timeline, then details per source.
 
 ## 5. Observed recap (server)
 
-Revised 2026-10-11 (#711 is the spec; this section is the summary).
+Revised 2026-10-11 (#711 is the spec; this section is the summary). Built: see
+`designs/debrief-recap.md` for the as-built and its departures from this plan.
 
 ### 5.1 Per-tick display snapshot
 

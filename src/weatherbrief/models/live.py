@@ -734,3 +734,17 @@ class LiveLayerResponse(BaseModel):
     ribbon: LiveRibbon | None = None
     changes: LiveChanges | None = None
     last_refresh_delta: RefreshDelta | None = None
+
+
+class LiveTickResponse(LiveLayerResponse):
+    """``GET /api/flights/{id}/live/at?tick=`` (#711): the Observed section as
+    it stood at one recorded tick, in the ``/live`` shape. ``route_observations``
+    is rebuilt from the history's raw reports (no runway/wind picture); the
+    rest is the tick's stored snapshot, with the change trails as of then."""
+
+    tick_at: datetime
+    # The radar frame the ribbon was binned from (None without radar).
+    radar_time: datetime | None = None
+    # The ``FlightProgress`` state the tick used: source, flown_nm,
+    # departed_at, arrival_at.
+    progress: dict | None = None

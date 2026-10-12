@@ -51,7 +51,8 @@ DATA_DIR/packs/{user}/{flight}/
 ├── {pack_ts}/briefing.json   ← immutable: what the assessment saw (the baseline)
 ├── live.json                 ← LiveLayer (models/live.py)
 ├── live_meta.json            ← {pack_dir_name, pack_timestamp, live_updated_at}
-└── live_history.jsonl        ← append-only timeline of the flight day (#643)
+├── live_history.jsonl        ← append-only timeline of the flight day (#643)
+└── live_snapshots.jsonl.gz   ← per-tick display snapshot, for replay + recap (#711, debrief-recap.md)
 ```
 
 - **Why not keep patching `briefing.json`** (the pre-#637 behaviour): the patch
@@ -77,10 +78,16 @@ DATA_DIR/packs/{user}/{flight}/
 - **`live_meta.json`** exists so list endpoints can report `live_updated_at`
   without parsing a payload that carries the full observed-conditions block.
 - **Lifetime:** one file per flight, overwritten each tick. Removed with the flight
-  (`storage/flights.py::_live_files` joins the deferred cleanup list) and at
-  retention T1 (`retention._purge_live_layer`, 30 days post-departure). Every
-  site uses `live_layer.LIVE_FILES`, so the history goes with them. A flight
-  move does not carry packs or live files: they are deleted with the old flight.
+  (`storage/flights.py::_live_files` joins the deferred cleanup list; every
+  site uses `live_layer.LIVE_FILES`). Retention runs once per flight
+  (`retention._live_retention`, #711): `LIVE_FILES_T1` (`live.json`, the
+  highlight log, `live_frozen`) at T1 (30 days post-departure); `LIVE_FILES_KEPT`
+  (history, snapshots, `live_meta.json`) at `RETENTION_LIVE_DAYS` (90), never for
+  a kept flight (`retention.kept_flight_ids`: debriefed). Pinned flights and
+  flights with a PIREP-linked pack keep all of them. The purge no longer reads
+  `live_meta.json` to find the owning pack: that check ran per pack and turned a
+  later pass into a no-op once T1 had deleted the meta file. A flight move does
+  not carry packs or live files: they are deleted with the old flight.
 
 ## History (`live_history.jsonl`, #643)
 
@@ -99,6 +106,8 @@ Every record has `type`, `tick_at`, `pack_timestamp`:
 Choices:
 - **Not full `live.json` snapshots** (60–400 KB × ~37 ticks, mostly the observed
   block). Replaying a morning's radar under other thresholds is out of scope.
+  The *display* blocks per tick are kept since #711, in their own file
+  (`live_snapshots.jsonl.gz`, see `debrief-recap.md`), not in the history.
 - **One timeline across packs.** Events diff against the changes the history
   last recorded as on screen (appeared, not yet cleared; each in the stored
   layer's latest form and order) even when the pack switched, so a rebuild shows as clears/appears at
@@ -119,8 +128,8 @@ Choices:
   writes, at that tick's time. A truncated last line is skipped on read
   and the next append starts on a fresh line.
 - **Size**: LELL→LEMI (busiest flight of 2026-10-02, no TAFs in the replay)
-  ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. No retention beyond
-  the live files' own (T1).
+  ≈ 50 KB, mostly METAR raw text; a test caps it at 100 KB. Kept 90 days, or
+  forever for a kept flight (#711), with the snapshots.
 
 Radar/lightning `to_value` is categorical since #682 (`heavy` / `present`;
 the peak and span are in the message), so the identity holds while the echo
@@ -373,7 +382,7 @@ Rule in meteorology-decisions §41. Pieces:
   time, position, motion, geometry and the estimate. `score-estimates`
   (`scripts/replay_live_history.py`, prod-briefings-review skill) joins them with later
   frames. Growth: ~10 storms × ~30 ticks ≈ 100 KB on a showery flight, gone
-  with the live files (T1, 30 days).
+  with the history (90 days, never for a kept flight; #711).
 - **Replay**: `scripts/replay_live_history.py replay … --cells DIR` (promoted
   from the skill) reads display files as of each tick by their mtime (= when
   the node wrote them; `on_mini.py cells` keeps it).

@@ -13,6 +13,11 @@ T2 window so stale data doesn't linger.
 
 Exemptions: PIREP-linked packs and pinned flights (``FlightRow.retention_pinned``,
 e.g. flights a talk links to) skip every tier; debriefed flights skip T2 only.
+
+Live layer (per flight, beside the packs; #637, #711): ``live.json`` and the
+highlight log go at T1. The history, the per-tick snapshots and the meta file
+stay ``live_days`` (90) after departure, and forever for a *kept* flight
+(:func:`kept_flight_ids`), so the debrief recap and replay keep working.
 """
 
 from __future__ import annotations
@@ -55,6 +60,8 @@ class RetentionConfig:
     t2_active_days: int = 180
     t2_inactive_days: int = 90
     inactive_threshold_days: int = 30
+    # Live history + per-tick snapshots of a flight that is not kept (#711).
+    live_days: int = 90
     dry_run: bool = False
 
     @classmethod
@@ -65,6 +72,7 @@ class RetentionConfig:
             t2_active_days=int(os.environ.get("RETENTION_T2_ACTIVE_DAYS", "180")),
             t2_inactive_days=int(os.environ.get("RETENTION_T2_INACTIVE_DAYS", "90")),
             inactive_threshold_days=int(os.environ.get("RETENTION_INACTIVE_DAYS", "30")),
+            live_days=int(os.environ.get("RETENTION_LIVE_DAYS", "90")),
             dry_run=os.environ.get("RETENTION_DRY_RUN", "0") == "1",
         )
 
@@ -119,6 +127,12 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
     )
     rows = db.execute(stmt).all()
 
+    # The live layer is per flight, not per pack: one pass per flight, before
+    # the pack loop can delete the rows that lead to it.
+    stats.bytes_freed += _live_retention(
+        db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats,
+    )
+
     for pack, departure_time, user_id, pinned in rows:
         if pack.id in pirep_pack_ids:
             continue  # exempt: linked PIREP needs full forecast data
@@ -146,10 +160,6 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
                 if freed > 0:
                     stats.packs_t1 += 1
                     stats.bytes_freed += freed
-            if age_days >= config.t1_days:
-                # The flight's live observation layer (#637) is flight-day
-                # state; past T1 it has no reader worth its disk.
-                stats.bytes_freed += _purge_live_layer(pack_dir, config.dry_run)
         except Exception:
             logger.error("Retention error for pack %s (flight %s)", pack.id, pack.flight_id, exc_info=True)
             stats.errors += 1
@@ -171,26 +181,75 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
 # ---------------------------------------------------------------------------
 
 
-def _purge_live_layer(pack_dir: Path | None, dry_run: bool) -> int:
-    """Remove the flight's live-layer files when they belong to this pack.
+def kept_flight_ids(db: Session, debriefed_flight_ids: set[str] | None = None) -> set[str]:
+    """Flights whose live history and per-tick snapshots are kept forever
+    (#711): the one predicate. A1: the flight has a debrief. #712 adds "or has
+    a report". Pinned flights and PIREP-linked packs skip retention altogether
+    and need no entry here."""
+    return set(debriefed_flight_ids if debriefed_flight_ids is not None else list_debriefed_flight_ids(db))
 
-    The layer sits in the flight directory (one per flight, overwritten each
-    tick; its history appended to, tens of KB per flight day), so it is
-    bounded per flight but would otherwise live as long as the flight row.
-    Returns bytes freed.
+
+def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats) -> int:
+    """Apply the live-layer tiers once per flight. Returns bytes freed.
+
+    - T1: ``live.json``, the highlight log and the frozen marker.
+    - ``live_days`` after departure, unless the flight is kept: the rest
+      (history, snapshots, meta). Also when the flight's packs reach T2 this
+      run (a shorter T2 than ``live_days``): the pack rows are the only way
+      back to the flight directory, so the files would otherwise be orphaned.
+
+    A flight is skipped when pinned or when any of its packs is PIREP-linked
+    (those packs skip every tier; the report's flight keeps its live record).
     """
-    if pack_dir is None:
-        return 0
-    from weatherbrief.tasks.live_layer import LIVE_FILES, load_live_meta
+    from weatherbrief.tasks.live_layer import LIVE_FILES_KEPT, LIVE_FILES_T1
 
-    flight_dir = pack_dir.parent
-    meta = load_live_meta(flight_dir)
-    if not meta or meta.get("pack_dir_name") != pack_dir.name:
-        return 0
+    kept = kept_flight_ids(db, debriefed_flight_ids)
+    flights: dict[str, dict] = {}
+    for pack, departure_time, user_id, pinned in rows:
+        f = flights.setdefault(pack.flight_id, {
+            "departure": departure_time, "user_id": user_id, "skip": bool(pinned), "flight_dir": None,
+        })
+        if pack.id in pirep_pack_ids:
+            f["skip"] = True
+        if f["flight_dir"] is None and pack.artifact_path:
+            f["flight_dir"] = Path(pack.artifact_path).parent
+
     freed = 0
-    for name in LIVE_FILES:
+    for flight_id, f in flights.items():
+        if f["skip"] or f["departure"] is None or f["flight_dir"] is None:
+            continue
+        dep = f["departure"] if f["departure"].tzinfo else f["departure"].replace(tzinfo=timezone.utc)
+        age_days = (now - dep).days
+        if age_days < config.t1_days:
+            continue
+        try:
+            names = list(LIVE_FILES_T1)
+            if flight_id not in kept:
+                t2_days = config.t2_inactive_days if f["user_id"] in inactive_user_ids else config.t2_active_days
+                packs_go = age_days >= t2_days and flight_id not in debriefed_flight_ids
+                if age_days >= config.live_days or packs_go:
+                    names += LIVE_FILES_KEPT
+            freed += _purge_live_files(f["flight_dir"], names, config.dry_run)
+        except Exception:
+            logger.error("Live retention error for flight %s", flight_id, exc_info=True)
+            stats.errors += 1
+    return freed
+
+
+def _purge_live_files(flight_dir: Path, names, dry_run: bool) -> int:
+    """Remove these live files (or directories) from the flight directory.
+    Returns bytes freed; an already-purged flight costs a few stat calls."""
+    freed = 0
+    for name in names:
         p = flight_dir / name
-        if p.exists():
+        if p.is_dir():
+            size = _dir_size(p)
+            if dry_run:
+                logger.info("DRY-RUN: would rmtree %s", p)
+            else:
+                shutil.rmtree(p)
+            freed += size
+        elif p.exists():
             freed += p.stat().st_size
             if dry_run:
                 logger.info("DRY-RUN: would delete %s", p)

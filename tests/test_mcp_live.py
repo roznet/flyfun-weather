@@ -25,9 +25,11 @@ _LIVE = {
 
 
 class FakeClient:
-    def __init__(self, live=None, live_error=None):
+    def __init__(self, live=None, live_error=None, recap=None, recap_error=None):
         self._live = live
         self._live_error = live_error
+        self._recap = recap
+        self._recap_error = recap_error
 
     def __enter__(self):
         return self
@@ -65,6 +67,11 @@ class FakeClient:
         if self._live_error is not None:
             raise self._live_error
         return self._live
+
+    def get_recap_summary(self, flight_id):
+        if self._recap_error is not None:
+            raise self._recap_error
+        return self._recap
 
 
 @pytest.fixture
@@ -129,3 +136,22 @@ def test_trail_facts_passed_through(patch_client):
     res = server.get_briefing("flight-1")
     assert res["live"]["changes"][0]["times_today"] == 2
     assert res["live"]["recently_cleared"] == live["recently_cleared"]
+
+
+# --- Observed recap (#711) ----------------------------------------------------
+
+
+def test_recap_block_passed_through(patch_client):
+    recap = {"status": "ok", "time_base": "planned", "alerts": []}
+    patch_client(recap=recap)
+    res = server.get_briefing("flight-1")
+    assert res["recap"] == recap
+
+
+def test_recap_failure_does_not_fail_briefing(patch_client):
+    req = httpx.Request("GET", "http://x/api/flights/flight-1/recap/summary")
+    err = httpx.HTTPStatusError("boom", request=req, response=httpx.Response(500, request=req))
+    patch_client(live=_LIVE, recap_error=err)
+    res = server.get_briefing("flight-1")
+    assert res["recap"] is None
+    assert res["live"] == _LIVE
