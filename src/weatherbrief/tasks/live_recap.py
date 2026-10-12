@@ -50,7 +50,9 @@ RECAP_NOTE = (
 )
 
 STATUS_MESSAGES = {
-    "no_live_window": "No observations recorded: this flight had no live window.",
+    # Also what a flight reads once retention removed its live record: the two
+    # cannot be told apart, so the message does not claim which.
+    "no_live_window": "No observations recorded for this flight (no live window, or removed by retention).",
     "not_recorded": "Observations were not recorded for this flight (flown before per-tick recording started).",
     "untimed": "No departure time or duration to place the flight along the route.",
 }

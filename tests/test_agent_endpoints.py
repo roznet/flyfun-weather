@@ -714,7 +714,7 @@ def test_recap_without_recording_says_so(client, app_db):
     _pack_dir(flight, _seed_pack(app_db, flight))
     recap = client.get(f"/api/flights/{flight.id}/recap").json()
     assert recap["status"] == "no_live_window"
-    assert recap["segments"] == [] and "no live window" in recap["message"]
+    assert recap["segments"] == [] and "No observations recorded" in recap["message"]
     # Agents get nothing rather than an empty "clear".
     assert client.get(f"/api/flights/{flight.id}/recap/summary").json()["recap"] is None
     assert client.get(f"/agent/v1/flights/{flight.id}/briefing").json()["recap"] is None

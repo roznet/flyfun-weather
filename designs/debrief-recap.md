@@ -86,7 +86,8 @@ on the next read.
   `departed_at`, `time_base`). The recap's progress is built from the newest
   readable pack's route and departure. Cancelled (debrief `cancelled`):
   `progress.planned()`, labelled `planned`.
-- **Status**: `ok`, `no_live_window` (no snapshots, no history), `not_recorded`
+- **Status**: `ok`, `no_live_window` (no snapshots, no history: never live, or
+  purged by retention; the message does not guess which), `not_recorded`
   (history but no snapshots: flown before #711), `untimed`.
 - **Alert markers**: every history `event` record (`raised` / `cleared`, tier,
   direction, message), placed with `progress.flown_at(tick_at)`. No push record.
