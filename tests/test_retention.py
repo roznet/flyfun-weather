@@ -1025,3 +1025,121 @@ class TestRotateSnapshotInbox:
         assert not old.exists()
         assert fresh.exists()
         assert unrelated.exists()
+
+
+# ---------------------------------------------------------------------------
+# Live layer (#711): T1 / 90-day / kept
+# ---------------------------------------------------------------------------
+
+
+def _live_files(flight_dir: Path) -> dict[str, Path]:
+    from weatherbrief.tasks.live_layer import LIVE_FILES
+
+    out = {}
+    for name in LIVE_FILES:
+        p = flight_dir / name
+        p.write_text("x" * 100)
+        out[name] = p
+    return out
+
+
+def _remaining(files: dict[str, Path]) -> set[str]:
+    return {n for n, p in files.items() if p.exists()}
+
+
+_KEPT_SET = {"live_meta.json", "live_history.jsonl", "live_snapshots.jsonl.gz"}
+
+
+class TestLiveRetention:
+
+    def test_t1_purges_live_json_and_highlight_log_only(self, db_session, dev_user, tmp_path):
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=40)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert _remaining(files) == _KEPT_SET
+
+    def test_before_t1_nothing_goes(self, db_session, dev_user, tmp_path):
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=10)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert _remaining(files) == set(files)
+
+    def test_90_days_purges_the_rest(self, db_session, dev_user, tmp_path):
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=95)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        run_retention(db_session, RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=180))
+
+        assert _remaining(files) == set()
+
+    def test_debriefed_flight_keeps_everything_but_the_t1_files(self, db_session, dev_user, tmp_path):
+        from weatherbrief.db.models import FlightDebriefRow
+
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=400)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+        db_session.add(FlightDebriefRow(flight_id="flight-1", decision="flown",
+                                        created_at=_now(), updated_at=_now()))
+        db_session.flush()
+
+        run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert _remaining(files) == _KEPT_SET
+
+    def test_pinned_flight_keeps_every_live_file(self, db_session, dev_user, tmp_path):
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=400).retention_pinned = True
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        run_retention(db_session, RetentionConfig(t1_days=30))
+
+        assert _remaining(files) == set(files)
+
+    def test_multi_pack_flight_is_purged_at_90_days_after_t1(self, db_session, dev_user, tmp_path):
+        """The old purge read live_meta.json to find the owning pack and
+        deleted it at T1, so a later pass on a flight with several packs was a
+        no-op. One pass per flight now: the second run still finds the files."""
+        (tmp_path / "p0").mkdir()
+        (tmp_path / "p1").mkdir()
+        flight = _insert_flight(db_session, dev_user, departure_days_ago=40)
+        _insert_pack(db_session, "flight-1", tmp_path / "p0")
+        _insert_pack(db_session, "flight-1", tmp_path / "p1")
+        files = _live_files(tmp_path)
+        (tmp_path / "live_meta.json").write_text('{"pack_dir_name": "p1"}')
+
+        cfg = RetentionConfig(t1_days=30, t2_active_days=180, t2_inactive_days=180)
+        run_retention(db_session, cfg)
+        assert _remaining(files) == _KEPT_SET
+
+        flight.departure_time = _now() - timedelta(days=95)
+        db_session.flush()
+        run_retention(db_session, cfg)
+        assert _remaining(files) == set()
+
+    def test_pack_t2_before_live_days_takes_the_live_files_too(self, db_session, dev_user, tmp_path):
+        """A T2 shorter than live_days deletes the pack rows, the only way back
+        to the flight dir: the live files go with them rather than orphaned."""
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=70)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        run_retention(db_session, RetentionConfig(t1_days=30, t2_active_days=60, t2_inactive_days=60))
+
+        assert _remaining(files) == set()
+
+    def test_dry_run_deletes_nothing(self, db_session, dev_user, tmp_path):
+        files = _live_files(tmp_path)
+        _insert_flight(db_session, dev_user, departure_days_ago=95)
+        _insert_pack(db_session, "flight-1", _make_pack_dir(tmp_path))
+
+        stats = run_retention(db_session, RetentionConfig(t1_days=30, dry_run=True))
+
+        assert _remaining(files) == set(files)
+        assert stats.bytes_freed > 0

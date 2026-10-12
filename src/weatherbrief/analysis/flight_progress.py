@@ -27,6 +27,12 @@ from weatherbrief.models.analysis import RouteConfig
 #: The only source until #759's observed sources land.
 SOURCE_PLAN = "plan"
 
+#: What a consumer that reports times (the debrief recap, #711) says it used:
+#: the plan throughout, observed events throughout, or observed in part.
+TIME_BASE_PLANNED = "planned"
+TIME_BASE_PARTIAL = "partial"
+TIME_BASE_OBSERVED = "observed"
+
 
 @dataclass(frozen=True)
 class FlightProgress:
@@ -47,6 +53,19 @@ class FlightProgress:
         """The same flight's progress as of another time (read-time trails
         rebuild what each past tick knew)."""
         return replace(self, as_of=as_of)
+
+    def planned(self) -> FlightProgress:
+        """The same flight on its plan only, ignoring observed events: what a
+        cancelled flight's recap uses (#711). Identical today; #759's observed
+        sources must drop their events here."""
+        return replace(self, source=SOURCE_PLAN)
+
+    @property
+    def time_base(self) -> str:
+        """``planned`` / ``partial`` / ``observed``: which times the schedule
+        below comes from. Always ``planned`` until #759's sources land, which
+        report ``partial`` when only some events (e.g. take-off) are observed."""
+        return TIME_BASE_PLANNED if self.source == SOURCE_PLAN else TIME_BASE_OBSERVED
 
     # --- Schedule --------------------------------------------------------------
 

@@ -196,16 +196,12 @@ def test_corrupt_live_file_is_ignored(tmp_path):
     assert load_briefing_with_live(pack)["route_observations"] is not None
 
 
-def test_retention_purges_live_layer(tmp_path):
-    from weatherbrief.tasks.retention import _purge_live_layer
+def test_live_retention_sets_partition_live_files():
+    """Retention (#711) purges every live file in one of two sets: the T1 set
+    (flight-day state, the highlight log) or the kept set (history,
+    snapshots, meta). A file in neither would never be purged."""
+    from weatherbrief.tasks.live_layer import LIVE_FILES, LIVE_FILES_KEPT, LIVE_FILES_T1
 
-    pack, briefing = _pack(tmp_path, "p1")
-    _commit(pack, briefing, _obs("VFR", NOW), ts="2026-10-01T07:00:00+00:00")
-    other, _ = _pack(tmp_path, "p0")
-    assert _purge_live_layer(other, dry_run=False) == 0  # not this pack's layer
-    assert _purge_live_layer(pack, dry_run=True) > 0
-    assert (pack.parent / "live.json").exists()
-    assert (pack.parent / "live_history.jsonl").exists()
-    assert _purge_live_layer(pack, dry_run=False) > 0
-    assert not (pack.parent / "live.json").exists()
-    assert not (pack.parent / "live_history.jsonl").exists()
+    assert set(LIVE_FILES_T1) | set(LIVE_FILES_KEPT) == set(LIVE_FILES)
+    assert not set(LIVE_FILES_T1) & set(LIVE_FILES_KEPT)
+    assert set(LIVE_FILES_T1) == {"live.json", "live_highlights.jsonl", "live_frozen"}

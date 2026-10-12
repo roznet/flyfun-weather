@@ -167,6 +167,10 @@ retrospective calibration can ask both "what did the system say at time
 T?" and "did the prediction get better with newer model runs?". PIREP
 exemption (full T1+T2 skip) is unchanged.
 
+A debrief also keeps the flight's live history and per-tick snapshots forever
+(`retention.kept_flight_ids`, #711): the observed recap and replay read them.
+`live.json` and the highlight log still go at T1 (`debrief-recap.md`).
+
 ## UI layout
 
 Flights list page (`web/index.html`, entry `flights-main.ts`):

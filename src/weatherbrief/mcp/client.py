@@ -155,6 +155,15 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def get_recap_summary(self, flight_id: str) -> dict | None:
+        """The compact observed recap (#711), or None before departure."""
+        try:
+            return self._get(f"/flights/{flight_id}/recap/summary").get("recap")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     def get_digest_json(self, flight_id: str, timestamp: str) -> dict | None:
         try:
             return self._get(f"/flights/{flight_id}/packs/{timestamp}/digest/json")

@@ -217,6 +217,11 @@ def save_advisory_artifacts(
     pack_dir.mkdir(parents=True, exist_ok=True)
     adv_path = pack_dir / "route_advisories.json"
     adv_path.write_text(manifest.model_dump_json(indent=2))
+    # The debrief recap's forecast row (#711): a few KB, read on each click
+    # of the pack picker instead of the full manifest.
+    from weatherbrief.tasks.live_recap import write_forecast_lane
+
+    write_forecast_lane(pack_dir, manifest)
 
 
 def save_altitude_table_artifacts(
