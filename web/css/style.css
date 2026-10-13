@@ -8875,6 +8875,9 @@ body.resizing-rail {
     border-bottom: 1px solid var(--border);
     padding-bottom: 0.75rem;
   }
+  /* Focused: the section comes first and the (non-sticky) rail after it, so a
+     rail that grows as data lands cannot push the section off-screen. */
+  .briefing-shell[data-focus] .briefing-main { order: -1; }
 }
 
 /* Flight trips (#602) ------------------------------------------------------

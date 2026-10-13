@@ -187,6 +187,79 @@ test.describe('Briefing sidebar layout', () => {
     await expect(page.locator('.rail-focus-bar')).toBeHidden();
   });
 
+  test('?section= opens focused, expands a collapsed section, honours view=', async ({ page }) => {
+    // The user collapsed the Skew-T on an earlier visit (seeded once, so the
+    // reload below reads back whatever the focused visit left behind).
+    await page.addInitScript(() => {
+      if (localStorage.getItem('wb_collapsedSections') === null) {
+        localStorage.setItem('wb_collapsedSections', JSON.stringify(['skewt']));
+      }
+    });
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}&section=skewt&view=skewt-compare`);
+
+    const shell = page.locator('.briefing-shell');
+    await expect(shell).toHaveAttribute('data-focus', 'skewt');
+    const skewt = page.locator('[data-section="skewt"]');
+    await expect(skewt).toBeVisible();
+    await expect(skewt).not.toHaveClass(/collapsed/);
+    await expect(page.locator('[data-section="synopsis"]')).toBeHidden();
+    // view= still picks the Skew-T mode.
+    await expect(page.locator('#skewt-view-compare')).toHaveClass(/active/);
+    const box = await page.locator('#skewt-canvas-container').boundingBox();
+    expect(box && box.width > 100 && box.height > 100).toBe(true);
+
+    // Focus is not persisted: the same page without the param is unfocused,
+    // and the user's collapsed choice is untouched.
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await expect(page.locator('.briefing-shell')).toBeVisible();
+    await expect(page.locator('.briefing-shell')).not.toHaveAttribute('data-focus', /.+/);
+    expect(await page.evaluate(() => localStorage.getItem('wb_collapsedSections'))).toBe('["skewt"]');
+  });
+
+  test('an unknown ?section= is ignored', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}&section=nope`);
+    await expect(page.locator('.rail-nav .rail-nav-title')).toHaveText('Sections');
+    await expect(page.locator('.briefing-shell')).not.toHaveAttribute('data-focus', /.+/);
+  });
+
+  test('a framing page switches the section with wb-frame:section', async ({ page }) => {
+    // A same-origin host page that frames the briefing.
+    await page.route('**/frame-host-test.html', (route) => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><iframe id="f" style="width:1200px;height:800px"
+               src="/briefing.html?flight=${FLIGHT_ID}"></iframe>`,
+    }));
+    await page.goto('/frame-host-test.html');
+    const frame = page.frameLocator('#f');
+    const shell = frame.locator('.briefing-shell');
+    await expect(frame.locator('.rail-nav .rail-nav-title')).toHaveText('Sections');
+
+    const post = (msg: unknown) => page.evaluate((m) => {
+      (document.getElementById('f') as HTMLIFrameElement).contentWindow!.postMessage(m, '*');
+    }, msg);
+
+    await post({ type: 'wb-frame:section', section: 'synopsis' });
+    await expect(shell).toHaveAttribute('data-focus', 'synopsis');
+    await expect(frame.locator('[data-section="advisories"]')).toBeHidden();
+
+    await post({ type: 'wb-frame:section', section: 'advisories' });
+    await expect(shell).toHaveAttribute('data-focus', 'advisories');
+
+    // Unknown keys are ignored: the focus stays where it was.
+    await post({ type: 'wb-frame:section', section: 'nope' });
+    await page.waitForTimeout(100);
+    await expect(shell).toHaveAttribute('data-focus', 'advisories');
+
+    // Only the parent may drive it: a message the frame posts to itself is ignored.
+    const inner = page.frames().find((f) => f.url().includes('/briefing.html'))!;
+    await inner.evaluate(() => window.postMessage({ type: 'wb-frame:section', section: 'synopsis' }, '*'));
+    await page.waitForTimeout(100);
+    await expect(shell).toHaveAttribute('data-focus', 'advisories');
+
+    await post({ type: 'wb-frame:section', section: null });
+    await expect(shell).not.toHaveAttribute('data-focus', /.+/);
+  });
+
   test('a stale ?layout=classic link still gets the sidebar shell', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}&layout=classic`);
     await expect(page.locator('.container.layout-sidebar')).toBeVisible();
