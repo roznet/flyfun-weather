@@ -8864,6 +8864,14 @@ body.resizing-rail {
 .briefing-shell[data-focus="cross-section"] .viz-canvas-container { height: min(62vh, 660px) !important; }
 .briefing-shell[data-focus="cross-section"] .map-container { height: min(62vh, 660px) !important; }
 
+/* ?chrome=none (a framing page): no site header, rail or resizer; the main
+   pane takes the full width. */
+body[data-chrome="none"] .page-header,
+body[data-chrome="none"] .briefing-rail,
+body[data-chrome="none"] .briefing-resizer { display: none !important; }
+body[data-chrome="none"] .briefing-shell { grid-template-columns: minmax(0, 1fr); }
+body[data-chrome="none"] .container.layout-sidebar { max-width: none; }
+
 /* Responsive: collapse to a single column on narrow viewports */
 @media (max-width: 980px) {
   .briefing-shell { grid-template-columns: 1fr; }

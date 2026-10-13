@@ -66,6 +66,11 @@ export function parseSectionParam(params: URLSearchParams): string | null {
   return isFocusableSection(raw) ? raw : null;
 }
 
+/** `?chrome=none`: a framing page wants the content only, no site header or rail. */
+export function parseChromeParam(params: URLSearchParams): boolean {
+  return params.get('chrome')?.trim() === 'none';
+}
+
 export const FRAME_SECTION_MESSAGE = 'wb-frame:section';
 
 /**
@@ -549,6 +554,8 @@ export function focusedSection(): string | null {
  * The message can only change which section is shown.
  */
 export function initSectionFocus(params: URLSearchParams): void {
+  // The stale/error banners sit outside the rail and main pane, so they stay.
+  if (parseChromeParam(params)) document.body.dataset.chrome = 'none';
   const key = parseSectionParam(params);
   if (key) focusSection(key);
   if (window.parent === window) return;

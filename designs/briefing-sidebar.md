@@ -80,6 +80,13 @@ rendering later cannot push the section off-screen, and nothing waits for data
 - `?section=<key>` — applied by `initSectionFocus(params)`, called from
   `briefing-main.ts` right after `initBriefingLayout()`. The page opens with
   only that section in the main pane (and the window at the top).
+- `?chrome=none` (`parseChromeParam`) — sets `body[data-chrome="none"]`: the
+  site header, the rail (with its briefing header, freshness and controls) and
+  the resizer are hidden and the main pane takes the full width, so a framed
+  section looks like an embed. CSS only, read once on load, never persisted.
+  The stale-pack and error banners sit outside both panes and stay visible.
+  With the rail gone the "✕ Exit focus" button goes too; the framer drives
+  focus by message.
 - `{type: 'wb-frame:section', section: '<key>' | null}` posted by the parent
   (only when framed, and only when `ev.source === window.parent`) switches the
   focused section without a reload; `section: null` exits focus.

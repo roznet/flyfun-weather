@@ -5,6 +5,7 @@ import {
   FOCUSABLE_SECTIONS,
   NAV_GROUPS,
   isFocusableSection,
+  parseChromeParam,
   parseSectionMessage,
   parseSectionParam,
 } from '../../ts/managers/sidebar-layout';
@@ -81,5 +82,15 @@ describe('parseSectionMessage', () => {
     expect(parseSectionMessage('wb-frame:section')).toBeNull();
     expect(parseSectionMessage(null)).toBeNull();
     expect(parseSectionMessage(undefined)).toBeNull();
+  });
+});
+
+describe('parseChromeParam', () => {
+  it('is on only for chrome=none', () => {
+    expect(parseChromeParam(new URLSearchParams('chrome=none'))).toBe(true);
+    expect(parseChromeParam(new URLSearchParams('chrome= none '))).toBe(true);
+    expect(parseChromeParam(new URLSearchParams(''))).toBe(false);
+    expect(parseChromeParam(new URLSearchParams('chrome=full'))).toBe(false);
+    expect(parseChromeParam(new URLSearchParams('chrome=None'))).toBe(false);
   });
 });

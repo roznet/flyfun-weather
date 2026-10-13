@@ -216,6 +216,22 @@ test.describe('Briefing sidebar layout', () => {
     expect(await page.evaluate(() => localStorage.getItem('wb_collapsedSections'))).toBe('["skewt"]');
   });
 
+  test('?chrome=none hides the site header and rail, keeps the section', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}&section=observations&chrome=none`);
+    await expect(page.locator('body')).toHaveAttribute('data-chrome', 'none');
+    await expect(page.locator('.briefing-shell')).toHaveAttribute('data-focus', 'observations');
+    await expect(page.locator('.page-header')).toBeHidden();
+    await expect(page.locator('.briefing-rail')).toBeHidden();
+    const section = page.locator('[data-section="observations"]');
+    await expect(section).toBeVisible();
+    // The main pane takes the full width, not the space left by the rail.
+    const [box, vw] = await Promise.all([
+      page.locator('.briefing-main').boundingBox(),
+      page.evaluate(() => window.innerWidth),
+    ]);
+    expect(box && box.width > vw * 0.9).toBe(true);
+  });
+
   test('an unknown ?section= is ignored', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}&section=nope`);
     await expect(page.locator('.rail-nav .rail-nav-title')).toHaveText('Sections');
