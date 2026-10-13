@@ -62,7 +62,58 @@ renders.
   `localStorage['wb_rail_width']`; double-click resets. Hidden below 980 px,
   where the shell collapses to a single column and the rail stops being sticky.
 - **Focus mode**: `enterFocus`/`exitFocus` set `data-focus`/`data-focus-target`
-  on the shell so CSS hides all but the chosen section in the main pane.
+  on the shell so CSS hides all but the chosen section in the main pane. It
+  expands a collapsed section (class only — the persisted
+  `wb_collapsedSections` is untouched) and dispatches a window `resize` so
+  Leaflet re-measures; the Skew-T and cross-section canvases have their own
+  `ResizeObserver`s, so a section that is still `display:none` when focused
+  renders at the right size once its data lands. Below 980 px a focused main
+  pane is ordered before the rail, so the section is first on the page.
+
+## Focusing a section from a link or a framing page
+
+For pages that show one section of a briefing (e.g. a presentation that frames
+it), the exported API wraps focus mode — no scrolling to a target, so content
+rendering later cannot push the section off-screen, and nothing waits for data
+(the sections exist statically in `briefing.html`):
+
+- `?section=<key>` — applied by `initSectionFocus(params)`, called from
+  `briefing-main.ts` right after `initBriefingLayout()`. The page opens with
+  only that section in the main pane (and the window at the top).
+- `{type: 'wb-frame:section', section: '<key>' | null}` posted by the parent
+  (only when framed, and only when `ev.source === window.parent`) switches the
+  focused section without a reload; `section: null` exits focus.
+- Valid keys are `FOCUSABLE_SECTIONS`: every `NAV_GROUPS` key plus
+  `advisories`. Anything else (unknown key, wrong type, missing field) is
+  ignored — by both the param and the message — so neither can do more than
+  change which section is shown. A known section that has no content for this
+  briefing (still `display:none`) focuses to an empty pane; the framer picks
+  sections that exist.
+- `focusSection(key)` / `exitSectionFocus()` / `focusedSection()` are the
+  in-page API; the rail's "✕ Exit focus" still works when framed.
+- **Never persisted**: focus is module state only, so a focus set by a link or
+  a frame does not follow the user into normal browsing.
+- **`view=` is unchanged** (decision): `?view=skewt|skewt-compare|skewt-static|cross-section`
+  (visualization.md, deep-link) still opens the full page and scrolls once —
+  the MCP emits `view=skewt` links for pilots, who should land in the whole
+  briefing, not a focus they did not ask for. `section=` is the robust path for
+  framers. Combined (`?section=skewt&view=skewt-compare`), `view=` picks the
+  Skew-T mode and its scroll is skipped while a section is focused.
+
+### Frame protocol (all `wb-frame:*` messages)
+
+The briefing (and every app page) may be framed only by the hosts allowed in
+`frame-ancestors` (multi-user-deployment.md). Outgoing messages carry no data,
+so they are posted to `'*'`; incoming ones are honoured only from
+`window.parent`.
+
+| Message | Direction | Sent / handled in | Meaning |
+|---|---|---|---|
+| `wb-frame:ready` | page → parent | `utils.renderUserInfo` | auth succeeded, a real page (not login/error) is up |
+| `wb-frame:auth-required` | page → parent | `utils.redirectToLogin` | a 401; the parent shows its own sign-in prompt |
+| `wb-frame:section` | parent → briefing | `sidebar-layout.initSectionFocus` | `{section: key}` focus that section, `{section: null}` exit focus |
+
+`/embed.html` has its own `wb-embed:*` messages (visualization.md, embed page).
 
 ## Key choices
 
@@ -97,7 +148,11 @@ renders.
 
 ## References
 - `web/ts/managers/sidebar-layout.ts` (whole feature)
-- `web/ts/briefing-main.ts` — `initBriefingLayout()` call
+- `web/ts/briefing-main.ts` — `initBriefingLayout()` + `initSectionFocus(params)`
+  calls; `applyDeepLink()` skips its `view=` scroll while focused
+- `web/tests/unit/briefing-section-focus.test.ts` (param/message parsing, key
+  validation), `web/tests/briefing.spec.ts` (sidebar layout: `?section=`,
+  `wb-frame:section`)
 - `web/css/style.css` — `.layout-sidebar`, `.briefing-shell`, `.briefing-rail`,
   `.rail-summary`, `.rail-nav`, focus-mode rules
 - Sections tagged with `data-section`: `web/briefing.html` (the nav/scroll-spy

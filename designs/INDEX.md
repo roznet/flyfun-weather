@@ -112,8 +112,8 @@ Key exports: `get_forecast_map_data`, `assemble_map_airports`, `get_historical_m
 → Full doc: forecast-page.md
 
 ### briefing-sidebar
-The briefing page layout (the only one; classic was removed): fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode. Main-pane section order matches `NAV_GROUPS` (unit-tested). The rail owns no data — it derives its summary from already-rendered DOM and builds its nav from the `NAV_GROUPS` whitelist of `data-section` keys, so it adds/removes without touching other managers.
-Key exports: `initBriefingLayout`, `getBriefingLayout`, `BriefingLayout`
+The briefing page layout (the only one; classic was removed): fixed left rail (route identity, derived glance summary, scroll-spy nav, freshness, controls) + scrollable main pane, resizable, with per-section focus mode. Main-pane section order matches `NAV_GROUPS` (unit-tested). The rail owns no data — it derives its summary from already-rendered DOM and builds its nav from the `NAV_GROUPS` whitelist of `data-section` keys, so it adds/removes without touching other managers. `?section=<key>` opens the page focused on one section and a framing page switches it with the `wb-frame:section` message (in-memory only, never persisted); the doc also lists the whole `wb-frame:*` protocol.
+Key exports: `initBriefingLayout`, `initSectionFocus`, `focusSection`, `exitSectionFocus`, `focusedSection`, `FOCUSABLE_SECTIONS`, `parseSectionParam`, `parseSectionMessage`, `NAV_GROUPS`
 → Full doc: briefing-sidebar.md
 
 ## Output & D-0 weather

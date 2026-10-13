@@ -42,7 +42,44 @@ const NAV_LABELS: Record<string, string> = {
   'gramet': 'GRAMET',
   'sounding': 'Sounding analysis',
   'comparison': 'Model comparison',
+  // Not in the nav (surfaced via the glance summary) but focusable from outside.
+  'advisories': 'Route advisories',
 };
+
+/**
+ * Sections a framing page or a `?section=` link may focus: every nav section,
+ * plus the advisories (not in the nav, but a self-contained section). Each is a
+ * direct child of the main pane, which the focus-mode CSS requires.
+ */
+export const FOCUSABLE_SECTIONS: readonly string[] = [
+  ...NAV_GROUPS.flatMap((g) => g.keys),
+  'advisories',
+];
+
+export function isFocusableSection(key: unknown): key is string {
+  return typeof key === 'string' && FOCUSABLE_SECTIONS.includes(key);
+}
+
+/** `?section=<key>` → the key, or null when absent or not a focusable section. */
+export function parseSectionParam(params: URLSearchParams): string | null {
+  const raw = params.get('section')?.trim();
+  return isFocusableSection(raw) ? raw : null;
+}
+
+export const FRAME_SECTION_MESSAGE = 'wb-frame:section';
+
+/**
+ * A framing page's `{type: 'wb-frame:section', section: '<key>' | null}`.
+ * Returns `{section: key}` to focus, `{section: null}` to exit focus, or null
+ * to ignore (another message, a missing field, or an unknown key).
+ */
+export function parseSectionMessage(data: unknown): { section: string | null } | null {
+  if (!data || typeof data !== 'object') return null;
+  const msg = data as { type?: unknown; section?: unknown };
+  if (msg.type !== FRAME_SECTION_MESSAGE) return null;
+  if (msg.section === null) return { section: null };
+  return isFocusableSection(msg.section) ? { section: msg.section } : null;
+}
 
 function sectionEl(key: string): HTMLElement | null {
   return document.querySelector(`[data-section="${key}"]`) as HTMLElement | null;
@@ -62,6 +99,8 @@ function debounce(fn: () => void, ms: number): () => void {
 }
 
 let focusKey: string | null = null;
+// The shell built by initBriefingLayout(), for the exported focus API.
+let layoutShell: HTMLElement | null = null;
 
 function enterFocus(shell: HTMLElement, key: string): void {
   const el = sectionEl(key);
@@ -303,6 +342,7 @@ export function initBriefingLayout(): void {
   const main = document.createElement('main');
   main.className = 'briefing-main';
   shell.append(rail, main);
+  layoutShell = shell;
 
   // Draggable divider so the rail width can be tuned (clamped, persisted).
   shell.appendChild(buildResizer(shell));
@@ -477,4 +517,46 @@ function buildSummary(container: HTMLElement): void {
     watch.appendChild(clear);
   }
   container.appendChild(watch);
+}
+
+/**
+ * Focus the main pane on one section, as the nav's ⛶ does, and scroll to the
+ * top so it is in view whatever renders later. In-memory only: nothing is
+ * persisted, so a focus set by a link or a framing page never follows the user
+ * into normal browsing. Returns false (and changes nothing) for an unknown key,
+ * a section not in this page, or before initBriefingLayout().
+ */
+export function focusSection(key: string): boolean {
+  if (!layoutShell || !isFocusableSection(key) || !sectionEl(key)) return false;
+  enterFocus(layoutShell, key);
+  window.scrollTo({ top: 0 });
+  return true;
+}
+
+export function exitSectionFocus(): void {
+  if (layoutShell && focusKey) exitFocus(layoutShell);
+}
+
+/** The focused section key, or null when the whole briefing is shown. */
+export function focusedSection(): string | null {
+  return focusKey;
+}
+
+/**
+ * Call once after initBriefingLayout(): applies `?section=` and, when framed,
+ * lets the parent switch the focused section with `wb-frame:section` messages
+ * (only from window.parent; anything else, or an unknown key, is ignored).
+ * The message can only change which section is shown.
+ */
+export function initSectionFocus(params: URLSearchParams): void {
+  const key = parseSectionParam(params);
+  if (key) focusSection(key);
+  if (window.parent === window) return;
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (ev.source !== window.parent) return;
+    const msg = parseSectionMessage(ev.data);
+    if (!msg) return;
+    if (msg.section) focusSection(msg.section);
+    else exitSectionFocus();
+  });
 }

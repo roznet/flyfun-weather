@@ -77,7 +77,7 @@ import { SkewTCompareRenderer, type CompareModelDataset as SkewtCompareModelData
 import { getActiveTheme } from './visualization/cross-section/theme';
 import { startBriefingTour, maybeAutoStartBriefingTour } from './tour/briefing-tour';
 import { maybeOfferTour } from './tour/tour-offer';
-import { initBriefingLayout } from './managers/sidebar-layout';
+import { initBriefingLayout, initSectionFocus, focusedSection } from './managers/sidebar-layout';
 
 
 // --- Cross-section config snapshot (analytics, #232) -----------------------
@@ -747,13 +747,18 @@ async function init(): Promise<void> {
     // ?view=skewt-compare&advisory=… link shades the cross-section but leaves the
     // compare/static Skew-T generic. The MCP only ever emits view=skewt, so this
     // affects only a hand-shared compare/static link — acceptable for now.
+    //
+    // `view=` keeps its one-shot scroll (shared/MCP links open the full page);
+    // with `?section=` (sidebar-layout initSectionFocus) the page is already
+    // focused on one section, so the view only picks the mode — no scroll.
     const view = params.get('view');
+    const scroll = focusedSection() === null;
     if (view === 'skewt' || view === 'skewt-compare' || view === 'skewt-static') {
       setSkewtViewMode(view === 'skewt-compare' ? 'compare' : view === 'skewt-static' ? 'static' : 'dynamic');
-      document.querySelector('[data-section="skewt"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (scroll) document.querySelector('[data-section="skewt"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } else if (view === 'cross-section' || presetId || advisoryId) {
       if (store.getState().vizSettings.layout === 'map') store.getState().setLayout('split');
-      document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (scroll) document.getElementById('viz-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
 
@@ -2906,6 +2911,10 @@ async function init(): Promise<void> {
   // Reparents header/freshness/controls into a rail and adds a scroll-spy
   // section nav + focus mode.
   initBriefingLayout();
+  // `?section=<key>` opens focused on one section, and a framing page can
+  // switch it with `wb-frame:section` messages. Sections exist statically in
+  // briefing.html, so this needs no data; renderers fill them in later.
+  initSectionFocus(params);
 
   // --- Wire image lightbox ---
   const lightbox = document.getElementById('lightbox');
