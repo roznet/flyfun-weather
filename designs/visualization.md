@@ -232,8 +232,9 @@ layers per-advisory extras (e.g. FIKI warm-nose lines) onto a shared preset.
 source of truth, no server-side copy of the mapping), and focuses the requested surface
 (`view=skewt` scrolls to the Skew-T, once). To show one section robustly — e.g. a page
 that frames the briefing — use `?section=<data-section key>` instead, which opens in focus
-mode (briefing-sidebar.md); with both, `view=` only picks the Skew-T mode. The MCP `get_advisory_detail` builds this link in
-its `web_url` (`_advisory_web_url`), pointing convective at the highest-CAPE peak point.
+mode (briefing-sidebar.md); with both, `view=` only picks the Skew-T mode. The MCP
+`get_advisory_detail` builds this link in its `web_url` (`_advisory_web_url`), pointing
+convective at the highest-CAPE peak point.
 
 ### Embed page (`/embed.html`)
 
