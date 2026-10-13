@@ -72,6 +72,16 @@ def test_heads_at_reads_git_not_the_working_tree():
     assert len(heads) == 1 and next(iter(heads)).isdigit()
 
 
+def test_verify_skips_files_dockerignore_keeps_out_of_the_image():
+    # 2026-10-13: web/tests changes read as STALE in the container, where they never are.
+    specs = deploy._dockerignored_pathspecs()
+    assert ":(exclude)web/tests" in specs
+    assert not any(s.endswith(("src", "web", "web/ts")) for s in specs)
+    files = deploy.git("diff", "--name-only", "7b5bf7af..f2e13ccf", "--",
+                       *deploy.VERIFY_PATHS, *specs).stdout.split()
+    assert files and not any(f.startswith("web/tests/") for f in files)
+
+
 def test_test_plan_by_changed_area():
     names = lambda changed: [n for n, _ in deploy.test_plan(changed)]  # noqa: E731
     assert names(["src/weatherbrief/x.py"]) == ["pytest"]

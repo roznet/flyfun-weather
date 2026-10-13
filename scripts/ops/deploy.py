@@ -51,6 +51,17 @@ DISK_WARN_PCT = 80
 CYCLE_SOON_S = 300
 # Copied to /app/<path> by the Dockerfile (web/dist is built in the image, not in git).
 VERIFY_PATHS = ("src/", "configs/", "alembic/", "web/")
+
+
+def _dockerignored_pathspecs() -> list[str]:
+    """`.dockerignore` entries under VERIFY_PATHS (e.g. web/tests) as git exclude
+    pathspecs: those files are never in the image, so verify must not expect them."""
+    try:
+        lines = (REPO / ".dockerignore").read_text().splitlines()
+    except OSError:
+        return []
+    return [f":(exclude){ln.strip().rstrip('/')}" for ln in lines
+            if ln.strip().startswith(VERIFY_PATHS) and not any(c in ln for c in "*?![")]
 PLAYWRIGHT_PATHS = ("web/", "src/weatherbrief/api/", "src/weatherbrief/models/", "configs/")
 # The standalone loop's own lines (scheduler.py run_standalone_verification_loop):
 # "Standalone <kind> cycle: launching subprocess" ... "Standalone verification cycle
@@ -336,7 +347,7 @@ def cmd_verify(a) -> Report:
     ssh, ctr = v["SERVER_SSH"], v["SERVER_CONTAINER"]
     q = shlex.quote
     changed = [p for p in git("diff", "--name-only", f"{a.server_sha}..{a.local_sha}", "--",
-                              *VERIFY_PATHS).stdout.split()
+                              *VERIFY_PATHS, *_dockerignored_pathspecs()).stdout.split()
                if git("cat-file", "-e", f"{a.local_sha}:{p}").returncode == 0][:5]
     hashes = " ".join(q("/app/" + p) for p in changed)
     script = f"""cd {q(v['SERVER_PROJECT_DIR'])} || exit 3
