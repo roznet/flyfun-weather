@@ -81,6 +81,7 @@ def _build_template_context(
     pack_dir: Path,
     flight: Flight,
     pack: BriefingPackMeta,
+    position_sharing: str,
 ) -> dict:
     """Assemble the Jinja2 template context from on-disk artifacts."""
     # Digest (structured JSON)
@@ -92,7 +93,9 @@ def _build_template_context(
 
     # Newest observations when this pack owns the flight's live layer (#637),
     # matching what the briefing page shows.
-    briefing = load_briefing_with_live(pack_dir)
+    # Redacted per the reader's position sharing (#760): the report is open
+    # to any viewer of a shared flight.
+    briefing = load_briefing_with_live(pack_dir, position_sharing=position_sharing)
     forecasts_data = load_forecasts(pack_dir)
 
     # GRAMET image — try PNG first (embeddable in HTML <img>), then convert PDF
@@ -228,15 +231,18 @@ def render_html(
     pack_dir: Path,
     flight: Flight,
     pack: BriefingPackMeta,
+    *,
+    position_sharing: str,
 ) -> str:
     """Render a self-contained HTML briefing report.
 
     Loads artifacts from pack_dir, encodes images as base64 data URIs,
-    renders the Jinja2 template.
+    renders the Jinja2 template. ``position_sharing`` is the reader's
+    (``live_layer.sharing_for_viewer``): what the live overlay may show.
     """
     env = _get_template_env()
     template = env.get_template("briefing.html")
-    ctx = _build_template_context(pack_dir, flight, pack)
+    ctx = _build_template_context(pack_dir, flight, pack, position_sharing)
     return template.render(**ctx)
 
 
@@ -244,9 +250,11 @@ def render_pdf(
     pack_dir: Path,
     flight: Flight,
     pack: BriefingPackMeta,
+    *,
+    position_sharing: str,
 ) -> bytes:
     """Render PDF from HTML via WeasyPrint."""
     import weasyprint
 
-    html = render_html(pack_dir, flight, pack)
+    html = render_html(pack_dir, flight, pack, position_sharing=position_sharing)
     return weasyprint.HTML(string=html).write_pdf()

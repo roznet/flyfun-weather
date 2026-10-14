@@ -217,14 +217,15 @@ def live_updated_at_iso(artifact_path: str | None) -> str | None:
         return None
 
 
-def overlay_live(briefing_data: dict, layer: LiveLayer | None, position_sharing: str = "full") -> dict:
+def overlay_live(briefing_data: dict, layer: LiveLayer | None, position_sharing: str) -> dict:
     """Briefing JSON with the live blocks laid over the pack's own.
 
     Keeps clients that only read the snapshot (older app versions, the HTML
     report) on the newest observations, the way the in-place patch used to.
     The on-disk ``briefing.json`` is never touched. ``position_sharing`` is
-    the reader's (:func:`sharing_for_viewer`): with ``none`` the change and
-    delta messages lose their estimated times, as on ``/live`` (#760).
+    the reader's (:func:`sharing_for_viewer`), required so no caller can
+    forget it: with ``none`` the change and delta messages lose their
+    estimated times, as on ``/live`` (#760).
     """
     if layer is None:
         return briefing_data
@@ -253,15 +254,16 @@ def overlay_live(briefing_data: dict, layer: LiveLayer | None, position_sharing:
     return out
 
 
-def load_briefing_with_live(pack_dir: Path | str) -> dict | None:
-    """``load_briefing`` plus this pack's live layer, if any."""
+def load_briefing_with_live(pack_dir: Path | str, *, position_sharing: str) -> dict | None:
+    """``load_briefing`` plus this pack's live layer, if any, as a reader
+    with ``position_sharing`` may see it (:func:`overlay_live`)."""
     from weatherbrief.tasks.artifacts import load_briefing
 
     pack_dir = Path(pack_dir)
     data = load_briefing(pack_dir)
     if data is None:
         return None
-    return overlay_live(data, live_for_pack(pack_dir))
+    return overlay_live(data, live_for_pack(pack_dir), position_sharing)
 
 
 def load_live_history(flight_dir: Path | str) -> list[dict]:
@@ -324,15 +326,22 @@ def load_progress_events(flight_dir: Path | str) -> tuple[ProgressEvent, ...]:
         return ()
 
 
-def record_progress_event(flight_dir: Path | str, event: ProgressEvent) -> None:
+def record_progress_event(flight_dir: Path | str, event: ProgressEvent, check=None):
     """Append a progress event to the flight's history (#760), under the same
     lock as the tick's commit so the two appends never interleave. The next
     tick picks it up; nothing is refetched or recomputed here. Raises on a
-    write failure: the caller (the endpoint) must not report success."""
+    write failure: the caller (the endpoint) must not report success.
+
+    ``check(events)`` (optional) is called under the lock with the entries
+    already recorded, before the append: it may raise to refuse the entry,
+    and its return value is returned. Two concurrent posts then cannot both
+    pass a check that only one of them may satisfy."""
     flight_dir = Path(flight_dir)
     with _lock_for(flight_dir):
+        result = check(load_progress_events(flight_dir)) if check is not None else None
         flight_dir.mkdir(parents=True, exist_ok=True)
         _append_history(flight_dir, [event.history_record()])
+        return result
 
 
 def flight_progress(
@@ -1290,13 +1299,14 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
     return out
 
 
-def live_summary(pack_dir: Path | str | None, *, position_sharing: str = "full") -> dict | None:
+def live_summary(pack_dir: Path | str | None, *, position_sharing: str) -> dict | None:
     """:func:`summarize_live` for this pack's live layer, or None when the
     flight has none for this pack (never invented). Never raises: a live-layer
     problem must not fail a briefing read.
 
-    ``position_sharing`` is what the reader may see (:func:`sharing_for_viewer`);
-    ``full`` for the owner's own channels."""
+    ``position_sharing`` is what the reader may see (:func:`sharing_for_viewer`),
+    required so no caller can forget it; ``full`` for the owner's own
+    channels."""
     if not pack_dir:
         return None
     try:

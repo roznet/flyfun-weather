@@ -192,8 +192,8 @@ def test_absent_layer_is_none(tmp_path):
     pack_dir = tmp_path / "u" / "flight-zz" / "pack"
     pack_dir.mkdir(parents=True)
     (pack_dir / "briefing.json").write_text(json.dumps(BRIEFING))
-    assert live_summary(pack_dir) is None
-    assert live_summary(None) is None
+    assert live_summary(pack_dir, position_sharing="full") is None
+    assert live_summary(None, position_sharing="full") is None
 
 
 def test_layer_of_another_pack_is_none(tmp_path):
@@ -210,15 +210,15 @@ def test_layer_of_another_pack_is_none(tmp_path):
         ),
         sigmets=None, observed=None, started_at=NOW, pack_timestamp=PACK_TS, now=NOW,
     )
-    assert live_summary(old) is not None
-    assert live_summary(new) is None
+    assert live_summary(old, position_sharing="full") is not None
+    assert live_summary(new, position_sharing="full") is None
 
 
 def test_corrupt_layer_never_raises(tmp_path):
     pack_dir = tmp_path / "u" / "flight-zz" / "pack"
     pack_dir.mkdir(parents=True)
     (pack_dir.parent / "live.json").write_text("{not json")
-    assert live_summary(pack_dir) is None
+    assert live_summary(pack_dir, position_sharing="full") is None
 
 
 def test_lell_lemi_0830_leads_with_destination_sigmet(tmp_path):
@@ -303,7 +303,7 @@ def test_live_summary_reads_the_history(tmp_path):
             ),
             sigmets=None, observed=None, started_at=t, pack_timestamp=PACK_TS, now=t,
         )
-    out = live_summary(pack_dir)
+    out = live_summary(pack_dir, position_sharing="full")
     assert out["changes"] == []
     [row] = out["recently_cleared"]
     assert row["key"] == "metar:ZZDS"

@@ -434,9 +434,7 @@ def get_briefing(
 
     # Flight-day live layer (#641): newest observations + significant changes
     # since the briefing. Null when the pack has none — never invented.
-    from weatherbrief.tasks.live_layer import live_summary
-
-    from weatherbrief.tasks.live_layer import sharing_for_viewer
+    from weatherbrief.tasks.live_layer import live_summary, sharing_for_viewer
 
     flight = flights_api._load_flight_or_404(db, flight_id, viewer_id=user_id)
     # A shared flight's viewer sees its progress per the owner's setting (#760).

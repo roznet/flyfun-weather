@@ -1,7 +1,7 @@
 """Position sharing on flights (#760).
 
-Revision ID: 103
-Revises: 102
+Revision ID: 104
+Revises: 103
 Create Date: 2026-10-12
 
 Adds ``flights.position_sharing`` (VARCHAR(16), NOT NULL, default
@@ -17,8 +17,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "103"
-down_revision: Union[str, None] = "102"
+revision: str = "104"
+down_revision: Union[str, None] = "103"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

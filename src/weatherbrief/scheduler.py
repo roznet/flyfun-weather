@@ -822,7 +822,8 @@ def _flight_day_brief(
             db, flight, latest, pack_dir,
             user_id=user_id,
             refreshed=refreshed,
-            live=live_summary(pack_dir),
+            # The brief goes to the flight's owner: everything (#760).
+            live=live_summary(pack_dir, position_sharing="full"),
             present=present,
             override=effective_notify_override(db, flight),
         )

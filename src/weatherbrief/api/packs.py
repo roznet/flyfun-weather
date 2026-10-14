@@ -4965,8 +4965,11 @@ def get_report_html(
     meta = _load_pack_meta_or_404(db, flight_id, timestamp)
 
     from weatherbrief.report.render import render_html
+    from weatherbrief.tasks.live_layer import sharing_for_viewer
 
-    html = render_html(pack_dir, flight, meta)
+    html = render_html(pack_dir, flight, meta, position_sharing=sharing_for_viewer(
+        flight.user_id, user_id, flight.position_sharing,
+    ))
     return HTMLResponse(content=html)
 
 
@@ -4988,8 +4991,12 @@ def get_report_pdf(
 
     import re
 
+    from weatherbrief.tasks.live_layer import sharing_for_viewer
+
     with generation_slot():
-        pdf_bytes = render_pdf(pack_dir, flight, meta)
+        pdf_bytes = render_pdf(pack_dir, flight, meta, position_sharing=sharing_for_viewer(
+            flight.user_id, user_id, flight.position_sharing,
+        ))
     route_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", flight.route_name or "-".join(flight.waypoints))[:80]
     filename = f"briefing_{route_slug}_{flight.target_date}_d{meta.days_out}.pdf"
     return Response(
@@ -5261,7 +5268,6 @@ def post_live_progress(
     from weatherbrief.tasks.artifacts import load_briefing
     from weatherbrief.tasks.live_layer import (
         flight_dir_for_pack,
-        load_progress_events,
         progress_block,
         record_progress_event,
     )
@@ -5290,36 +5296,41 @@ def post_live_progress(
 
     now = datetime.now(timezone.utc)
     at = None if req.clear else ensure_utc(req.at) if req.at is not None else now
-    events = load_progress_events(flight_dir)
     event = ProgressEvent(kind=req.event, at=at, recorded_at=now)
-    before = FlightProgress.from_route(route, planned, now, events)
-    after = FlightProgress.from_route(route, planned, now, (*events, event))
-    if at is not None:
-        if at > now + _PROGRESS_CLOCK_SKEW:
-            raise HTTPException(status_code=422, detail=f"{req.event} time is in the future")
-        before_h, _ = live_window_hours()
-        if req.event == "takeoff" and not (
-            planned - timedelta(hours=before_h) <= at <= planned + timedelta(hours=MAX_TAKEOFF_DELAY_H)
-        ):
+    before_h, _ = live_window_hours()
+
+    def check(events):
+        """The entry against what is already recorded; runs under the
+        flight's lock, so a concurrent post cannot slip past it."""
+        before = FlightProgress.from_route(route, planned, now, events)
+        after = FlightProgress.from_route(route, planned, now, (*events, event))
+        if at is not None:
+            if at > now + _PROGRESS_CLOCK_SKEW:
+                raise HTTPException(status_code=422, detail=f"{req.event} time is in the future")
+            if req.event == "takeoff" and not (
+                planned - timedelta(hours=before_h) <= at <= planned + timedelta(hours=MAX_TAKEOFF_DELAY_H)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(f"take-off must be within {before_h:g} h before to {MAX_TAKEOFF_DELAY_H:g} h "
+                            "after the planned departure; change the flight's departure time instead"),
+                )
+            if req.event == "landed" and after.landed_at is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="landing must be after the departure (record the take-off first)",
+                )
+        if req.event == "takeoff" and before.landed_at is not None and after.landed_at is None:
+            # The recorded landing would no longer follow the departure and
+            # would silently stop counting: make the pilot fix it first.
             raise HTTPException(
                 status_code=422,
-                detail=(f"take-off must be within {before_h:g} h before to {MAX_TAKEOFF_DELAY_H:g} h "
-                        "after the planned departure; change the flight's departure time instead"),
+                detail="this take-off would come after the recorded landing; correct or clear the landing first",
             )
-        if req.event == "landed" and after.landed_at is None:
-            raise HTTPException(
-                status_code=422,
-                detail="landing must be after the departure (record the take-off first)",
-            )
-    if req.event == "takeoff" and before.landed_at is not None and after.landed_at is None:
-        # The recorded landing would no longer follow the departure and would
-        # silently stop counting: make the pilot fix the landing first.
-        raise HTTPException(
-            status_code=422,
-            detail="this take-off would come after the recorded landing; correct or clear the landing first",
-        )
+        return after
+
     try:
-        record_progress_event(flight_dir, event)
+        after = record_progress_event(flight_dir, event, check=check)
     except OSError:
         logger.exception("Live progress write failed for flight %s", flight_id)
         raise HTTPException(status_code=500, detail="Could not record the entry")

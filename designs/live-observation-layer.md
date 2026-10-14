@@ -397,7 +397,7 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
 ### Position sharing (#759, #760)
 
 `flights.position_sharing` (`none` / `along_route` default / `full`, migration
-103, owner-only `PATCH /flights/{id}/position-sharing`). The owner always gets
+104, owner-only `PATCH /flights/{id}/position-sharing`). The owner always gets
 `full`; anyone else (a share link, a follower, a viewer emailing themselves the
 flight-day brief, an agent reading a shared flight) gets the owner's setting
 via `live_layer.sharing_for_viewer`. One helper per shape:
