@@ -69,7 +69,6 @@
   "flights.form.errorWaypoints": "Route must be at least 2 waypoints separated by spaces (e.g. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Each waypoint must be 2-5 alphanumeric characters (airports, navaids, or fixes). Invalid: {codes}",
   "flights.form.defaultTag": " (default)",
-  "flights.form.aircraftHint": "Optional. Add and configure aircraft in Settings → Aircraft.",
   "flights.form.zeroDurationTitle": "Confirm flight duration",
   "flights.form.zeroDurationMessage": "You entered a duration of 0 hours. That's unusual — it produces a snapshot-in-time briefing rather than a flight window. Did you mean to leave it blank?",
   "flights.form.zeroDurationLabel": "Duration:",

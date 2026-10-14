@@ -781,7 +781,7 @@ struct AddFlightView: View {
                 )
                 .accessibilityIdentifier("ceilingSlider")
             }
-            Text("Ceiling \(viewModel.flightCeilingFt) ft")
+            Text("Ceiling \(AddFlightViewModel.groupedFeet(viewModel.flightCeilingFt)) ft")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             // Warn, never clamp (#777 §4): the pilot may want the sweep above

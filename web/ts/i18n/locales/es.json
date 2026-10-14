@@ -69,7 +69,6 @@
   "flights.form.errorWaypoints": "La ruta debe ser una lista de al menos 2 puntos de ruta separados por espacios (ej. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Cada punto de ruta debe tener de 2 a 5 caracteres alfanuméricos (aeropuertos, navaids o fixes). Inválidos: {codes}",
   "flights.form.defaultTag": " (por defecto)",
-  "flights.form.aircraftHint": "Opcional. Añada y configure aeronaves en Configuración → Aeronaves.",
   "flights.form.zeroDurationTitle": "Confirmar la duración del vuelo",
   "flights.form.zeroDurationMessage": "Ha introducido una duración de 0 horas. Es inusual — produce una instantánea meteorológica en lugar de una ventana de vuelo. ¿Quería dejarlo en blanco?",
   "flights.form.zeroDurationLabel": "Duración:",

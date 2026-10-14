@@ -689,7 +689,13 @@ import MapKit
         #expect(AddFlightViewModel.ceilingWarning(
             ceilingFt: 25000, aircraft: makeAircraft(ceilingFt: nil)) == nil)
         #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 25000, aircraft: nil) == nil)
-        // Name falls back nickname → type name.
+        // A zero service ceiling reads as unset, like the web helper.
+        #expect(AddFlightViewModel.ceilingWarning(
+            ceilingFt: 25000, aircraft: makeAircraft(ceilingFt: 0)) == nil)
+        // Name falls back nickname → type name; blank tail numbers are skipped.
+        let blankTail = makeAircraft(tailNumber: "  ", nickname: "Archie", ceilingFt: 14000)
+        #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 15000, aircraft: blankTail)?
+                .contains("Archie's service ceiling") == true)
         let archie = makeAircraft(tailNumber: nil, nickname: "Archie", ceilingFt: 14000)
         #expect(AddFlightViewModel.ceilingWarning(ceilingFt: 15000, aircraft: archie)?
                 .contains("Archie's service ceiling") == true)

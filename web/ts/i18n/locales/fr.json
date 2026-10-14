@@ -69,7 +69,6 @@
   "flights.form.errorWaypoints": "La route doit comporter au moins 2 points de passage séparés par des espaces (ex. EGTK POGOL LFQA LSGS).",
   "flights.form.errorInvalidCodes": "Chaque point de passage doit comporter 2 à 5 caractères alphanumériques (aérodromes, navaids ou fixes). Invalide(s) : {codes}",
   "flights.form.defaultTag": " (par défaut)",
-  "flights.form.aircraftHint": "Facultatif. Ajoutez et configurez vos aéronefs dans Paramètres → Aéronefs.",
   "flights.form.zeroDurationTitle": "Confirmer la durée du vol",
   "flights.form.zeroDurationMessage": "Vous avez saisi une durée de 0 heure. C'est inhabituel — cela produit une étude météo à un instant donné plutôt que sur une fenêtre de vol. Vouliez-vous vraiment laisser ce champ vide ?",
   "flights.form.zeroDurationLabel": "Durée :",

@@ -171,8 +171,8 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     /// How the ceiling warning names the aircraft: tail number, else nickname,
     /// else type name ("N123's service ceiling").
     var warningName: String {
-        if let tailNumber, !tailNumber.isEmpty { return tailNumber }
-        if let nickname, !nickname.isEmpty { return nickname }
+        if let tail = tailNumber?.trimmingCharacters(in: .whitespaces), !tail.isEmpty { return tail }
+        if let nick = nickname?.trimmingCharacters(in: .whitespaces), !nick.isEmpty { return nick }
         return typeName
     }
 }

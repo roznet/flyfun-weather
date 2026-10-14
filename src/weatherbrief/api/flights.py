@@ -2191,7 +2191,19 @@ def update_flight(
             altitude_changed = True
 
     # Aircraft change (0 is the "clear" sentinel — no ownership to check)
-    if req.aircraft_id is not None and req.aircraft_id != original_flight.aircraft_id:
+    # A NULL-stored flight reports its owner's default as aircraft_id; a client
+    # re-sending that id is not a change, so the NULL stays NULL (never written back).
+    resends_resolved_default = (
+        original_flight.aircraft_id is None
+        and req.aircraft_id
+        and (resolved := resolve_flight_aircraft(db, original_flight)) is not None
+        and resolved.id == req.aircraft_id
+    )
+    if (
+        req.aircraft_id is not None
+        and req.aircraft_id != original_flight.aircraft_id
+        and not resends_resolved_default
+    ):
         if req.aircraft_id != 0:
             _validate_aircraft_ownership(db, req.aircraft_id, user_id)
         row.aircraft_id = req.aircraft_id if req.aircraft_id != 0 else None

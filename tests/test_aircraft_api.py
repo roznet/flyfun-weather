@@ -324,6 +324,19 @@ class TestFlightsAttachDefault:
         assert resp.status_code == 200, resp.text
         assert resp.json()["aircraft_id"] == default
 
+    def test_resending_resolved_default_keeps_null(self, client, app_db):
+        default = _add_aircraft(app_db, icao_type="C172", is_default=True)
+        other = _add_aircraft(app_db, icao_type="SR22", is_default=False)
+        _save_flight(app_db, "legacy-2", aircraft_id=None)
+        resp = client.patch("/api/flights/legacy-2", json={"aircraft_id": default})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["aircraft_id"] == default
+        assert _flight_aircraft_id(app_db, "legacy-2") is None  # not written back
+        # A genuinely different aircraft still pins the flight.
+        resp = client.patch("/api/flights/legacy-2", json={"aircraft_id": other})
+        assert resp.status_code == 200, resp.text
+        assert _flight_aircraft_id(app_db, "legacy-2") == other
+
 
 class TestResolveFlightAircraft:
     def test_explicit_then_default(self, app_db):

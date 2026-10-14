@@ -1418,7 +1418,7 @@ def _resolve_cruise_ias_kt(db, flight):
             if ac is not None:
                 aircraft_speed = ac.cruise_speed_kt
         except Exception:
-            logger.debug("cruise IAS: aircraft lookup failed", exc_info=True)
+            logger.warning("cruise IAS: aircraft lookup failed", exc_info=True)
 
     return resolve_cruise_speed_ias(aircraft_speed)
 

@@ -855,7 +855,7 @@ final class AddFlightViewModel {
     /// Pure rule behind `ceilingWarning`: nil without an aircraft, without a
     /// service ceiling, or when the ceiling is at or below it.
     static func ceilingWarning(ceilingFt: Int, aircraft: AircraftResponse?) -> String? {
-        guard let aircraft, let serviceCeiling = aircraft.ceilingFt, ceilingFt > serviceCeiling else {
+        guard let aircraft, let serviceCeiling = aircraft.ceilingFt, serviceCeiling > 0, ceilingFt > serviceCeiling else {
             return nil
         }
         return "Ceiling \(groupedFeet(ceilingFt)) ft is above \(aircraft.warningName)'s service ceiling (\(groupedFeet(serviceCeiling)) ft)."
