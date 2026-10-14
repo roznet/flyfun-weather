@@ -447,3 +447,32 @@ def test_highlight_cost_survives_a_failed_latency_insert(db_session, dev_user, t
     assert db_session.execute(select(LiveTickTimingRow)).scalars().all() == []
     [cost] = db_session.execute(select(CostLedgerRow).where(CostLedgerRow.action == "live_highlight")).scalars().all()
     assert cost.reference_id == "zz-flight"
+
+
+def test_tick_row_carries_the_progress_source_and_fix_time(tmp_path, db_session):
+    """#761: the fix a tick measured from, so its age at use can be read
+    from prod (the UIBackgroundModes: location decision)."""
+    from weatherbrief.analysis.flight_progress import SOURCE_APP, FixData, ProgressEvent
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, record_progress_event
+
+    pack, briefing = _pack(tmp_path)
+    plan_trace = CommitTrace()
+    commit_live_update(pack, briefing_data=briefing, observations=_obs("VFR", NOW - timedelta(minutes=20)),
+                       sigmets=None, observed=None, started_at=NOW, now=NOW, trace=plan_trace)
+    assert plan_trace.progress_source == "plan" and plan_trace.fix_at is None
+
+    dep = datetime.fromisoformat(briefing["departure_time"])
+    fix_at, later = dep + timedelta(minutes=30), dep + timedelta(minutes=42)
+    lat, lon = ROUTE["waypoints"][0]["lat"], ROUTE["waypoints"][0]["lon"] + 0.3
+    record_progress_event(flight_dir_for_pack(pack), ProgressEvent(
+        kind="fix", at=fix_at, recorded_at=fix_at + timedelta(minutes=1), source=SOURCE_APP,
+        lat=lat, lon=lon, fix=FixData(gs_kt=110.0, h_accuracy_m=8.0)))
+    trace = CommitTrace()
+    commit_live_update(pack, briefing_data=briefing, observations=_obs("VFR", later - timedelta(minutes=5)),
+                       sigmets=None, observed=None, started_at=later, now=later, trace=trace)
+    row = build_tick_row(flight_id="f", pack_timestamp=None, tick_started_at=later, flight_ms=1, trace=trace)
+    assert row.progress_source == SOURCE_APP and row.fix_at == fix_at
+    db_session.add(row)
+    db_session.flush()
+    hops = {h["key"]: h for h in latency_report(db_session, now=later + timedelta(minutes=5))["hops"]}
+    assert hops["fix_age"]["n"] == 1 and hops["fix_age"]["max"] == 12 * 60.0

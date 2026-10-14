@@ -108,6 +108,9 @@ class CommitTrace:
     cells_frame_at: datetime | None = None
     cells_computed_at: datetime | None = None
     cells_received_at: datetime | None = None
+    # The tick's progress source and the fix it measured from (#761).
+    progress_source: str | None = None
+    fix_at: datetime | None = None
 
 
 _locks: dict[str, threading.Lock] = {}
@@ -341,11 +344,23 @@ def record_progress_event(flight_dir: Path | str, event: ProgressEvent, check=No
     and its return value is returned. Two concurrent posts then cannot both
     pass a check that only one of them may satisfy. An unreadable history
     raises rather than being checked as empty: nothing is written."""
+    def select(events):
+        return [event], (check(events) if check is not None else None)
+
+    return record_progress_events(flight_dir, select)
+
+
+def record_progress_events(flight_dir: Path | str, select):
+    """Append the events ``select(recorded)`` picks (#761: a batch of fixes,
+    deduplicated against what is recorded), under the commit lock like
+    :func:`record_progress_event`. ``select`` returns ``(events, result)``;
+    ``result`` is returned. Nothing is written when it picks none."""
     flight_dir = Path(flight_dir)
     with _lock_for(flight_dir):
-        result = check(load_progress_events(flight_dir, strict=True)) if check is not None else None
-        flight_dir.mkdir(parents=True, exist_ok=True)
-        _append_history(flight_dir, [event.history_record()])
+        events, result = select(load_progress_events(flight_dir, strict=True))
+        if events:
+            flight_dir.mkdir(parents=True, exist_ok=True)
+            _append_history(flight_dir, [e.history_record() for e in events])
         return result
 
 
@@ -356,7 +371,7 @@ def flight_progress(
     """Where the flight is as of ``now`` (#759): the one progress object every
     live consumer measures against. None without a route. The plan
     (on-time departure, constant speed), corrected by the flight's manual
-    take-off / landed ``events`` (#760)."""
+    take-off / landed ``events`` (#760) and app GPS fixes (#761)."""
     if route is None:
         return None
     return FlightProgress.from_route(route, departure, now, events)
@@ -370,6 +385,7 @@ def progress_block(progress: FlightProgress | None) -> LiveProgress | None:
     flown = progress.flown_nm
     pos = progress.position(progress.as_of) if progress.total_nm > 0 else None
     delay = progress.delay_min
+    fix, age = progress.fix, progress.fix_age_min
     return LiveProgress(
         source=progress.source,
         as_of=progress.as_of,
@@ -377,7 +393,10 @@ def progress_block(progress: FlightProgress | None) -> LiveProgress | None:
         route_nm=round(progress.total_nm, 1),
         lat=round(pos[0], 4) if pos is not None else None,
         lon=round(pos[1], 4) if pos is not None else None,
-        estimated=True,
+        fix_at=fix.at if fix is not None else None,
+        fix_age_min=round(age, 1) if age is not None else None,
+        estimated=progress.estimated,
+        off_route=progress.off_route,
         departed_at=progress.takeoff_at,
         eta_destination=progress.arrival,
         landed_at=progress.landed_at,
@@ -940,6 +959,9 @@ def commit_live_update(
         if trace is not None:
             trace.committed_at = now
             trace.layer = layer
+            if layer.progress is not None:
+                trace.progress_source = layer.progress.source
+                trace.fix_at = layer.progress.fix_at
             if cells is not None and cells.newest is not None and layer.storms is not None:
                 trace.cells_frame_at = layer.storms.frame_time
                 trace.cells_computed_at = cells.computed_at
@@ -1122,9 +1144,12 @@ LIVE_NOTE = (
     "say it was written at its written_at, which can be older than "
     "live_updated_at. progress is where the layer places the flight: source "
     "'plan' is the planned schedule, 'plan+takeoff' the plan corrected by "
-    "the pilot's recorded take-off or landing (departed_at / landed_at are "
-    "those entries; null means not recorded, not 'not departed'); null when "
-    "the owner does not share it. times_today of 2 or "
+    "the pilot's recorded take-off or landing, 'app' the pilot's phone GPS "
+    "(fix_at / fix_age_min: the fix used; estimated: extrapolated from the "
+    "plan or a fix over 20 min old; off_route: that fix was over 10 NM off "
+    "the route). departed_at / landed_at are observed (entered or seen by "
+    "the GPS); null means not observed, not 'not departed'. progress is "
+    "null when the owner does not share it. times_today of 2 or "
     "more means the change has come and gone today (bouncing, not building); "
     "recently_cleared lists what cleared in the last hour. "
     "sigmets_at_briefing_unavailable: true means the SIGMET source did not "

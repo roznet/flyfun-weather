@@ -679,16 +679,18 @@ class LiveProgress(BaseModel):
     "Landed" from a schedule. ``eta_destination`` is the effective arrival
     (the plan, shifted by a take-off, or the landing itself).
 
-    The fix fields (``fix_at``, ``fix_age_min``, ``off_route``) stay empty
-    until a position source exists (#761 app GPS, #762 ADS-B). ``estimated``
-    is True whenever the position is extrapolated rather than a fresh fix,
-    which is always the case for the plan and manual sources.
+    The fix fields (``fix_at``, ``fix_age_min``, ``off_route``) describe the
+    position fix in use (#761 app GPS; #762 ADS-B later), empty without one.
+    ``estimated`` is True when the position is extrapolated from the plan or
+    from a fix older than 20 min (``flight_progress.STALE_FIX``); always for
+    the plan and manual sources. ``departed_at`` is observed: entered, or
+    inferred from the fixes.
 
     Redacted for non-owner viewers per the flight's ``position_sharing``
     (``live_layer.redact_live``).
     """
 
-    # "plan" | "plan+takeoff" (later: "app", "adsb").
+    # "plan" | "plan+takeoff" | "app" (later: "adsb").
     source: str
     as_of: datetime
     along_nm: float | None = None
