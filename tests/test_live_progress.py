@@ -384,7 +384,8 @@ def test_none_strips_progress_etas_and_abeam_times():
     assert r.flown_nm is None and r.arrival_at is None
     assert r.waypoints[0].eta is None and r.stations[0].eta is None
     assert r.segments[0].eta_from is None and r.segments[0].eta_to is None
-    assert "~" not in out.glance.lines[0].text and "~" not in out.glance.highlight.text
+    assert "~" not in out.glance.lines[0].text
+    assert out.glance.highlight is None  # model-written: dropped, not pattern-stripped
     assert "~" not in out.changes.changes[0].message
     assert "~" not in out.changes.recently_cleared[0].message
     assert "~" not in out.last_refresh_delta.messages[0]
@@ -420,9 +421,19 @@ def test_summary_redaction():
     assert along["progress"] == {"source": "plan", "lat": None, "lon": None, "along_nm": 3.0}
     assert along["changes"] == summary["changes"]
     none = redact_summary(summary, "none")
-    assert none["progress"] is None
+    assert none["progress"] is None and none["highlight"] is None
     assert "~" not in json.dumps(none)
     assert summary["progress"]["lat"] == 1.0
+
+
+def test_unreadable_history_refuses_the_entry(tmp_path):
+    """The write path does not check a new entry against "no entries"
+    because the history could not be read: it raises and writes nothing."""
+    flight_dir = tmp_path / "flight"
+    (flight_dir / "live_history.jsonl").mkdir(parents=True)  # unreadable as a file
+    assert load_progress_events(flight_dir) == ()
+    with pytest.raises(OSError):
+        record_progress_event(flight_dir, ProgressEvent(kind="takeoff", at=T, recorded_at=T), check=lambda ev: None)
     assert redact_summary(None, "none") is None
 
 

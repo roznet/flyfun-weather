@@ -2554,7 +2554,10 @@ class TestLiveProgress:
             session.flush()
         departure = departure or (_NOW - timedelta(minutes=30)).replace(microsecond=0)
         flight = Flight(
-            id=_make_flight_id("zzdp_zzds", departure.strftime("%Y-%m-%d"), user=owner_id),
+            # The time is in the id: two flights the same UTC day (now-30 min
+            # and now-7 h after 07:00Z) must not collide.
+            id=_make_flight_id("zzdp_zzds", departure.strftime("%Y-%m-%d"),
+                               time=departure.strftime("%H:%M"), user=owner_id),
             user_id=owner_id, route_name="zzdp_zzds", waypoints=["ZZDP", "ZZDS"],
             departure_time=departure, flight_duration_hours=2.0, position_sharing=sharing,
             created_at=_NOW - timedelta(days=1),

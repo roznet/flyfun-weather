@@ -411,10 +411,10 @@ agent block, `/live/summary`, the on-request flight-day email) and
 - `none`: no progress block; ribbon `flown_nm` / `arrival_at` / every ETA,
   storm `abeam_eta` / `minutes_to_abeam` / `estimate` nulled; the "~HH:MMZ"
   estimate times stripped from glance lines, change, cleared and delta messages
-  and the highlight (`strip_eta_text`; only ETAs use the "~" form). Accepted
+  (`strip_eta_text`; only ETAs use the "~" form). The highlight is dropped:
+  it is model-written, so its times need not use the "~" form. Accepted
   leaks (#759): rows still drop passed airports and glance lines carry
-  `passed`, so coarse progress is inferable; a model-written highlight that
-  words a time without "~" is not caught.
+  `passed`, so coarse progress is inferable.
 - Redaction fails closed: `live_summary` returns null on any error.
 
 ## Radar storms (#688)

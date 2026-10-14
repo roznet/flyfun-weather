@@ -296,12 +296,14 @@ def load_live_history(flight_dir: Path | str) -> list[dict]:
 # --- Write ------------------------------------------------------------------
 
 
-def load_progress_events(flight_dir: Path | str) -> tuple[ProgressEvent, ...]:
+def load_progress_events(flight_dir: Path | str, *, strict: bool = False) -> tuple[ProgressEvent, ...]:
     """The flight's take-off / landed / fix events (#760), from its history.
 
     Cheaper than :func:`load_live_history` for callers that need nothing
     else (the live tick's window check): only lines that can be progress
-    records are parsed. Never raises.
+    records are parsed. Never raises unless ``strict``: the write path must
+    not validate a new entry against "no entries" because the file could
+    not be read.
     """
     path = Path(flight_dir) / LIVE_HISTORY_FILE
     try:
@@ -322,6 +324,8 @@ def load_progress_events(flight_dir: Path | str) -> tuple[ProgressEvent, ...]:
                 records.append(rec)
         return progress_events(records)
     except Exception:
+        if strict:
+            raise
         logger.warning("Unreadable progress events in %s — plan only", path, exc_info=True)
         return ()
 
@@ -335,10 +339,11 @@ def record_progress_event(flight_dir: Path | str, event: ProgressEvent, check=No
     ``check(events)`` (optional) is called under the lock with the entries
     already recorded, before the append: it may raise to refuse the entry,
     and its return value is returned. Two concurrent posts then cannot both
-    pass a check that only one of them may satisfy."""
+    pass a check that only one of them may satisfy. An unreadable history
+    raises rather than being checked as empty: nothing is written."""
     flight_dir = Path(flight_dir)
     with _lock_for(flight_dir):
-        result = check(load_progress_events(flight_dir)) if check is not None else None
+        result = check(load_progress_events(flight_dir, strict=True)) if check is not None else None
         flight_dir.mkdir(parents=True, exist_ok=True)
         _append_history(flight_dir, [event.history_record()])
         return result
@@ -1070,8 +1075,8 @@ def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
     if out.glance is not None:
         for ln in out.glance.lines:
             ln.text = strip_eta_text(ln.text)
-        if out.glance.highlight is not None:
-            out.glance.highlight.text = strip_eta_text(out.glance.highlight.text)
+        # Model-written: its times may not match the ~HH:MMZ pattern.
+        out.glance.highlight = None
     if out.changes is not None:
         for c in out.changes.changes + (out.changes.recently_cleared or []):
             c.message = strip_eta_text(c.message)
@@ -1091,8 +1096,7 @@ def redact_summary(summary: dict | None, sharing: str) -> dict | None:
         out["progress"] = None
         for ln in (out.get("glance") or {}).get("lines") or []:
             ln["text"] = strip_eta_text(ln["text"])
-        if out.get("highlight"):
-            out["highlight"]["text"] = strip_eta_text(out["highlight"]["text"])
+        out["highlight"] = None  # model-written, as in redact_live
         for c in (out.get("changes") or []) + (out.get("recently_cleared") or []):
             if isinstance(c.get("message"), str):
                 c["message"] = strip_eta_text(c["message"])
