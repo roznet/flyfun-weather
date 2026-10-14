@@ -478,6 +478,11 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.submitHighlightFeedback(request)
     }
 
+    /// Online-only: a fix is worth sending now or never (#761).
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult {
+        try await online.postLivePosition(flightId: flightId, request: request)
+    }
+
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws {
         try await online.submitGeneralFeedback(request)
     }

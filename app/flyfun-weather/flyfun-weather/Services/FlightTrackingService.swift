@@ -36,6 +36,13 @@ final class FlightTrackingService: NSObject {
     /// Incremented on every location update — forces SwiftUI view re-evaluation
     /// since CLLocation is a reference type that @Observable may not diff.
     private(set) var locationUpdateCount = 0
+    /// The fixes the server gets (#761): the newest plus up to two recent ones,
+    /// oldest first (`LivePositionRules`). Cleared on stop.
+    private(set) var recentFixes: [LivePositionFix] = []
+    /// Called with the recent fixes (the landing one last) just before the
+    /// landing auto-stop, so the server can record the landing (#761). Not
+    /// called on a manual stop or the past-window auto-stop.
+    @ObservationIgnored var onLanding: (@MainActor ([LivePositionFix]) -> Void)?
 
     private var locationManager: CLLocationManager?
     private var routePoints: [TrackingRoutePoint] = []
@@ -85,6 +92,7 @@ final class FlightTrackingService: NSObject {
         oneShotActive = false
         currentLocation = nil
         projectedPosition = nil
+        recentFixes = []
         routePoints = []
         flightEndTime = nil
         destinationCoordinate = nil
@@ -148,6 +156,10 @@ final class FlightTrackingService: NSObject {
             )
             if speedKt >= 0 && speedKt < 30 && distToDest < 5.0 {
                 logger.info("Auto-stopping: landing detected (speed=\(speedKt)kt, dist=\(distToDest)nm)")
+                if isTracking {
+                    let fix = Self.fix(from: location, alongNm: nil, crossTrackNm: nil)
+                    onLanding?(LivePositionRules.appending(fix, to: recentFixes))
+                }
                 stop()
                 return
             }
@@ -210,9 +222,33 @@ final class FlightTrackingService: NSObject {
             crossTrackNm: bestPerpDistance,
             headingDeg: heading
         )
+        if isTracking {
+            recentFixes = LivePositionRules.appending(
+                Self.fix(from: location, alongNm: bestAlongDistance, crossTrackNm: bestPerpDistance),
+                to: recentFixes
+            )
+        }
 
         let altStr = altitudeFt.map { "\(Int($0))ft" } ?? "no-alt"
         logger.info("Projected: \(bestAlongDistance, format: .fixed(precision: 1))nm along, \(altStr), \(bestPerpDistance, format: .fixed(precision: 1))nm off-track")
+    }
+
+    /// The fix the server gets for `location` (#761), nil without a valid
+    /// horizontal position. Speed, course and altitude are nil when the device
+    /// marks them invalid (negative).
+    static func fix(from location: CLLocation, alongNm: Double?, crossTrackNm: Double?) -> LivePositionFix? {
+        guard location.horizontalAccuracy >= 0 else { return nil }
+        return LivePositionFix(
+            at: location.timestamp,
+            lat: location.coordinate.latitude,
+            lon: location.coordinate.longitude,
+            altFt: location.verticalAccuracy >= 0 ? location.altitude * 3.28084 : nil,
+            gsKt: location.speed >= 0 ? location.speed * 1.94384 : nil,
+            trackDeg: location.course >= 0 ? location.course : nil,
+            hAccuracyM: location.horizontalAccuracy,
+            alongNm: alongNm,
+            crossTrackNm: crossTrackNm
+        )
     }
 
     /// Great-circle initial bearing from one coordinate to another, in degrees (0-360).

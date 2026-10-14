@@ -40,6 +40,11 @@ struct BriefingContainerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
+    /// Sends the tracking service's GPS fixes to the server (#761); owner only.
+    @State private var positionReporter: LivePositionReporter?
+    /// Post with the next fix (#761): set on Start Flight and on return to the
+    /// foreground, so the post carries a fix taken from that moment on.
+    @State private var postOnNextFix = false
     @State private var showingPirepSheet = false
     /// Per-flight notification override (bell), tracked locally since `flight`
     /// is immutable. Seeded from the flight in `.task`; updated optimistically.
@@ -215,6 +220,17 @@ struct BriefingContainerView: View {
                 networkMonitor: appState.networkMonitor
             )
             viewModel = vm
+            // App GPS positions (#761): with each live poll and at the landing
+            // auto-stop, while tracking. Only the owner may post them.
+            if flight.isEditable {
+                let reporter = LivePositionReporter(repository: repo, flightId: flight.id)
+                let tracking = trackingService
+                positionReporter = reporter
+                tracking.onLanding = { fixes in reporter.report(fixes, landed: true) }
+                vm.beforeLivePoll = {
+                    if tracking.isTracking { reporter.report(tracking.recentFixes) }
+                }
+            }
             // A flight-day push tap (#754) opened this screen: land on Observed,
             // and tag the first live fetch as push-opened. Before the load, so
             // that fetch carries it.
@@ -244,10 +260,19 @@ struct BriefingContainerView: View {
             if scenePhase == .active {
                 Task { await viewModel?.syncLatestPack() }
                 viewModel?.startLivePolling()
+                // Back in the foreground while tracking: send the next fix (#761).
+                if trackingService.isTracking { postOnNextFix = true }
             } else if scenePhase == .background {
                 // No live poll while backgrounded; restarted on activation.
                 viewModel?.stopLivePolling()
             }
+        }
+        .onChange(of: trackingService.recentFixes.last?.at) {
+            // The first fix after Start Flight, or after returning to the
+            // foreground (#761).
+            guard postOnNextFix, trackingService.isTracking else { return }
+            postOnNextFix = false
+            positionReporter?.report(trackingService.recentFixes)
         }
         .onChange(of: appState.externalSync) {
             // A push (or any external "data changed" nudge) is just another sync
@@ -348,6 +373,7 @@ struct BriefingContainerView: View {
         }
         let flightEndTime = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
         trackingService.start(routePoints: routePoints, flightEndTime: flightEndTime)
+        postOnNextFix = true
     }
 }
 

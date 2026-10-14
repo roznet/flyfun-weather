@@ -161,6 +161,9 @@ final class BriefingViewModel {
     @ObservationIgnored private var livePollTask: Task<Void, Never>?
     /// Collapses overlapping live fetches (load + poll + push landing together).
     @ObservationIgnored private var isFetchingLive = false
+    /// Run at each live poll before its fetch (#761): the briefing screen posts
+    /// the tracking service's GPS fixes here. Must not block (fire-and-forget).
+    @ObservationIgnored var beforeLivePoll: (@MainActor () -> Void)?
     /// The server refreshes the layer every ~10 min; polling at half that keeps
     /// the worst-case lag near one server tick without hammering it.
     static let livePollInterval: Duration = .seconds(300)
@@ -1005,6 +1008,7 @@ final class BriefingViewModel {
     private func pollLiveOnce() async {
         guard flight.isInLiveObservationWindow() else { return }
         if let networkMonitor, !networkMonitor.isConnected { return }
+        beforeLivePoll?()
         await syncLatestPack()
     }
 
