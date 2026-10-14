@@ -141,9 +141,12 @@ export function recapLanesSvg(
   y += LANE_H;
 
   // Forecast: the worst-of route-weather row of the selected pack.
+  // Named by what it grades: the observed lane above sees radar and
+  // lightning only, so an icing or cloud grade has nothing to match there.
+  const what = 'Forecast, worst of icing/cloud/precip/turb/convective';
   const fcLabel = forecast
-    ? `Forecast (pack ${formatHhmmZ(forecast.pack_timestamp)}${forecast.chosen_by === 'default' ? ', newest before departure' : ''})`
-    : 'Forecast';
+    ? `${what} (pack ${formatHhmmZ(forecast.pack_timestamp)}${forecast.chosen_by === 'default' ? ', newest before departure' : ''})`
+    : what;
   inner += laneLabel(y, fcLabel);
   const fcY = y + LANE_LABEL_H;
   if (bands.length === 0) {
@@ -231,22 +234,31 @@ export interface RecapModel {
 /** Wide enough to show the grid without a toggle. */
 export const GRID_WIDE_PX = 900;
 
-/** The recap block: caption, ribbon, lanes, grid toggle and grid. Returns a
- *  teardown. `onGridToggle` reports the toggle so the caller keeps it across
+/** A mounted recap: `setForecast` swaps the forecast row (pack picker)
+ *  without remounting; kept on the model, so a section collapsed at the time
+ *  draws the new row when it is next laid out. */
+export interface RecapHandle {
+  setForecast: (forecast: RecapForecast | null, bands: ForecastBand[]) => void;
+  teardown: () => void;
+}
+
+/** The recap block: caption, ribbon, lanes, grid toggle and grid.
+ *  `onGridToggle` reports the toggle so the caller keeps it across
  *  re-renders. */
 export function mountRecap(
   el: HTMLElement,
-  model: RecapModel,
+  initial: RecapModel,
   handlers: RecapHandlers,
   onGridToggle: (on: boolean) => void,
-): () => void {
+): RecapHandle {
+  const model = { ...initial };
   const { recap } = model;
   if (recap.status !== 'ok') {
     el.innerHTML = `<div class="recap-empty" data-testid="recap-empty">`
       + `<strong>${escapeHtml(recapEmptyTitle(recap.status))}</strong>`
       + (recap.message ? `<p class="muted">${escapeHtml(recap.message)}</p>` : '')
       + '</div>';
-    return () => { el.innerHTML = ''; };
+    return { setForecast: () => {}, teardown: () => { el.innerHTML = ''; } };
   }
 
   const caption = recapCaption(recap, model.forecast);
@@ -339,31 +351,25 @@ export function mountRecap(
     observer.observe(lanesEl);
   }
 
-  return () => {
-    observer?.disconnect();
-    ribbonTeardown();
-    lanesEl.removeEventListener('click', onClick);
-    gridEl.removeEventListener('click', onClick);
-    lanesEl.removeEventListener('keydown', onKey);
-    gridEl.removeEventListener('keydown', onKey);
-    toggle?.removeEventListener('change', onToggle);
+  return {
+    setForecast: (forecast, bands) => {
+      model.forecast = forecast;
+      model.bands = bands;
+      const cap = el.querySelector<HTMLElement>('[data-testid="recap-caption"]');
+      if (cap) cap.textContent = recapCaption(recap, forecast);
+      // Draws now when laid out; else the ResizeObserver draws it on expand.
+      draw();
+    },
+    teardown: () => {
+      observer?.disconnect();
+      ribbonTeardown();
+      lanesEl.removeEventListener('click', onClick);
+      gridEl.removeEventListener('click', onClick);
+      lanesEl.removeEventListener('keydown', onKey);
+      gridEl.removeEventListener('keydown', onKey);
+      toggle?.removeEventListener('change', onToggle);
+    },
   };
-}
-
-/** Redraw only the forecast lane (pack picker): the lanes re-render from the
- *  same recap with the new row. */
-export function redrawForecastLane(
-  el: HTMLElement,
-  recap: RecapResponse,
-  bands: ForecastBand[],
-  forecast: RecapForecast | null,
-): void {
-  const lanesEl = el.querySelector<HTMLElement>('.recap-lanes');
-  const width = lanesEl?.clientWidth ?? 0;
-  if (!lanesEl || width < MIN_WIDTH) return;
-  lanesEl.innerHTML = recapLanesSvg(recap, bands, forecast, width);
-  const cap = el.querySelector<HTMLElement>('[data-testid="recap-caption"]');
-  if (cap) cap.textContent = recapCaption(recap, forecast);
 }
 
 /** "Recap · actual times · forecast for 16:45Z departure, flown 17:40Z". */

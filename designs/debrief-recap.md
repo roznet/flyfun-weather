@@ -156,7 +156,10 @@ review pass decides.
   "not recorded"; a failed pack pick shows "No forecast row for this pack"
   rather than keeping the previous pack's row, and only the latest pick
   applies. A `forecast_lane.json` the model cannot read drops the forecast
-  row server-side, not the whole recap.
+  row server-side (logged with the pack), not the whole recap; band
+  profiles are typed loosely on `RecapResponse` for the same reason. While
+  replaying, the METAR table has no ↻ (it would refresh data the view
+  ignores).
 - **Grid (experiment)**: `/live/ticks?segments=1` (after the window only),
   one row per tick of the radar lane, the stretches the recap took outlined,
   the aircraft dot per row, alert ticks marked; rows open their tick. Behind
