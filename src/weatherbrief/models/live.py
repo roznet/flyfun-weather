@@ -19,6 +19,8 @@ The live layer annotates; it never re-grades the briefing.
 
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime
 from typing import Literal
 
@@ -30,6 +32,8 @@ from weatherbrief.models.observations import (
     RouteSigmets,
 )
 from weatherbrief.models.observed import ObservedConditions
+
+logger = logging.getLogger(__name__)
 
 ChangeKind = Literal[
     "metar_category",
@@ -878,7 +882,9 @@ class RecapWeather(BaseModel):
     side: str | None = None
     near_nm: float | None = None
     far_nm: float | None = None
-    profile: list[tuple[float, float, float]] = Field(default_factory=list)
+    # Loose on purpose: a stored entry of another shape must not 500 the
+    # whole recap (the ribbon's own model is the strict one).
+    profile: list[list[float]] = Field(default_factory=list)
     peak_dbz: float | None = None
     intensity: str | None = None
     tick_at: str | None = None
@@ -1007,5 +1013,7 @@ class RecapResponse(BaseModel):
         later lane version) drops the forecast row, not the whole recap."""
         try:
             return handler(value)
-        except ValidationError:
+        except ValidationError as exc:
+            pack = value.get("pack_timestamp") if isinstance(value, dict) else None
+            logger.warning("Unreadable forecast lane for pack %s, row dropped: %s", pack, exc)
             return None

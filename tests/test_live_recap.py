@@ -445,3 +445,17 @@ def test_tick_view_degrades_on_a_snapshot_the_models_no_longer_accept(lell_lemi)
     flight_dir, _ = lell_lemi
     snap = dict(load_snapshots(flight_dir)[3], changes={"changes": [{"key": "x"}]})
     assert tick_view(flight_dir, snap)["changes"] is None
+
+
+def test_recap_response_tolerates_an_off_shape_weather_profile():
+    """#769: a stored band whose profile entries are not the ribbon's
+    [along, lo, hi] triples must not 500 the typed /recap."""
+    from weatherbrief.models.live import RecapResponse
+
+    body = {
+        "flight_id": "zz", "note": "", "status": "ok",
+        "weather": [{"id": "rain-1", "tier": "rain", "from_nm": 0, "to_nm": 10,
+                     "profile": [[5.0, 1.0], [6.0, 1.0, 2.0, 3.0]], "tick_at": "2026-06-12T10:00:00+00:00"}],
+    }
+    resp = RecapResponse.model_validate(body)
+    assert resp.weather[0].profile == [[5.0, 1.0], [6.0, 1.0, 2.0, 3.0]]

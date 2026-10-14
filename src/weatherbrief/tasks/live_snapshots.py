@@ -444,8 +444,10 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
 def tick_index(snapshots: list[dict], *, segments: bool = False) -> list[dict]:
     """``GET /live/ticks``: each tick's time, radar frame and position. With
     ``segments``, each tick's radar lane too (the distance × time grid, #769):
-    ``[from_nm, to_nm, radar_status, radar_max_dbz, lightning]`` per stretch,
-    a few hundred bytes a tick."""
+    ``{from_nm, to_nm, radar_status, radar_max_dbz, lightning}`` per stretch,
+    every stretch of every tick. No cap of its own: bounded by the recording
+    (``SNAPSHOT_MAX_BYTES``), i.e. ticks × stretches, about 2 KB of JSON a
+    tick at 20-25 stretches."""
     out = []
     for s in snapshots:
         entry = {

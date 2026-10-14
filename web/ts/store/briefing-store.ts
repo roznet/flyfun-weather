@@ -1091,9 +1091,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       set({ ticks: keepSegments ? res.ticks.map((t) => ({
         ...t, segments: prev!.find((p) => sameInstant(p.tick_at, t.tick_at))?.segments ?? null,
       })) : res.ticks });
-    } catch {
+    } catch (err) {
       // No chips: the live view is unaffected, and the recap (its own
       // fetch) still says when nothing could be loaded.
+      console.warn('Debrief ticks failed to load', err);
     }
   },
 
@@ -1104,7 +1105,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       const recap = await api.fetchRecap(flightId);
       if (get().flight?.id !== flightId) return;
       set({ recap });
-    } catch {
+    } catch (err) {
+      console.warn('Debrief recap failed to load', err);
       if (get().flight?.id !== flightId) return;
       // A failure must not read as "not recorded", nor leave the last tick's
       // live ribbon on screen as if it were now: an explicit status.
@@ -1136,7 +1138,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     set({ replay: startTick(previous, tick) });
     try {
       const view = await api.fetchLiveAt(flightId, tick);
-      if (get().flight?.id !== flightId) return;
+      if (get().flight?.id !== flightId) { set({ replay: REPLAY_BASE }); return; }
       set({ replay: tickLoaded(get().replay, tick, view) });
     } catch {
       set({ replay: tickFailed(get().replay, tick, previous) });

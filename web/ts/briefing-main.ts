@@ -22,7 +22,7 @@ import {
   tickForRoutePoint,
   tickTimePoints,
 } from './helpers/debrief-replay';
-import { GRID_WIDE_PX, modeBarHtml, mountRecap, redrawForecastLane, tickChipsHtml } from './visualization/observed/recap-view';
+import { GRID_WIDE_PX, modeBarHtml, mountRecap, tickChipsHtml, type RecapHandle } from './visualization/observed/recap-view';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -2391,7 +2391,7 @@ async function init(): Promise<void> {
   // meanwhile; it just does not replace the view (`helpers/debrief-replay`).
   let liveRibbonShown = false;
   let replayPanelShown = false;
-  let recapTeardown: (() => void) | null = null;
+  let recapHandle: RecapHandle | null = null;
   let recapMounted: { recap: RecapResponse; ticks: unknown } | null = null;
   let recapForecastDrawn: unknown = null;
   /** The grid toggle as the pilot left it; null = default by width. */
@@ -2434,7 +2434,8 @@ async function init(): Promise<void> {
     ui.renderRefreshDelta(snap, state.currentPack?.fetch_timestamp ?? null, agesNow(state));
     ui.renderObservedConditions(snap);
     ui.renderRouteSigmets(snap);
-    ui.renderRouteObservations(snap, () => store.getState().refreshObservations());
+    // No ↻ on a replayed tick: it would refresh live data the view ignores.
+    ui.renderRouteObservations(snap, isReplaying(state.replay) ? undefined : () => store.getState().refreshObservations());
     refreshAges();
   }
 
@@ -2515,14 +2516,15 @@ async function init(): Promise<void> {
     if (showRecap && state.recap) {
       const forecast = state.recapForecast ?? state.recap.forecast ?? null;
       const bands = forecastLaneBands(forecast);
-      if (recapMounted?.recap !== state.recap || recapMounted.ticks !== state.ticks || !recapTeardown) {
-        recapTeardown?.();
-        recapTeardown = mountRecap(recapHost, {
+      if (recapMounted?.recap !== state.recap || recapMounted.ticks !== state.ticks || !recapHandle) {
+        recapHandle?.teardown();
+        recapHandle = mountRecap(recapHost, {
           recap: state.recap,
           forecast,
           bands,
           ticks,
-          showGrid: recapGridOn ?? panel.clientWidth >= GRID_WIDE_PX,
+          // A collapsed section measures 0: fall back to the window.
+          showGrid: recapGridOn ?? (panel.clientWidth || window.innerWidth) >= GRID_WIDE_PX,
         }, {
           onTick: (tick) => { void store.getState().viewTick(tick); },
           onRoutePoint: (nm) => {
@@ -2534,13 +2536,14 @@ async function init(): Promise<void> {
         recapMounted = { recap: state.recap, ticks: state.ticks };
         recapForecastDrawn = forecast;
       } else if (recapForecastDrawn !== forecast) {
-        // Pack picker: only the forecast lane changes.
-        redrawForecastLane(recapHost, state.recap, bands, forecast);
+        // Pack picker: only the forecast lane changes. The handle keeps it,
+        // so a collapsed section draws it when it is next laid out.
+        recapHandle.setForecast(forecast, bands);
         recapForecastDrawn = forecast;
       }
-    } else if (recapTeardown) {
-      recapTeardown();
-      recapTeardown = null;
+    } else if (recapHandle) {
+      recapHandle.teardown();
+      recapHandle = null;
       recapMounted = null;
       recapHost.innerHTML = '';
     }

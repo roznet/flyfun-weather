@@ -266,6 +266,20 @@ test.describe('Debrief recap after the live window', () => {
     await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
   });
 
+  test('a pack picked while the section is collapsed shows on expand', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${sc.flightId}`);
+    await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
+    const heading = page.locator('#observed-ribbon-wrapper > h3');
+    await heading.click();
+    await expect(page.locator('#observed-ribbon-wrapper')).toHaveClass(/collapsed/);
+    const recapReq = page.waitForResponse((r) => r.url().includes('/recap?pack='));
+    await page.locator('#history-select').selectOption(OLDER);
+    await recapReq;
+    await heading.click();
+    await expect(page.locator('.recap-lanes-svg [data-severity="red"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="recap-caption"]')).toBeVisible();
+  });
+
   test('a pack whose row fails to load says so, rather than keep the previous row', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${sc.flightId}`);
     await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
