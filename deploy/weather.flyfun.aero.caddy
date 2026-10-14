@@ -41,6 +41,25 @@ weather.flyfun.aero {
 }`
     }
 
+    # MCP server alias: weather.flyfun.aero/mcp serves the same MCP server as
+    # mcp.flyfun.aero/weather (pilots guess this URL). The protected-resource
+    # metadata advertises "mcp" for THIS resource only, so the AS metadata above
+    # keeps its flights:read default for third-party apps.
+    handle /.well-known/oauth-protected-resource/mcp {
+        header Content-Type application/json
+        respond `{"resource":"https://weather.flyfun.aero/mcp","authorization_servers":["https://weather.flyfun.aero"],"scopes_supported":["mcp"],"bearer_methods_supported":["header"],"resource_name":"FlyFun Weather Briefings"}`
+    }
+    handle /mcp/.well-known/oauth-protected-resource {
+        header Content-Type application/json
+        respond `{"resource":"https://weather.flyfun.aero/mcp","authorization_servers":["https://weather.flyfun.aero"],"scopes_supported":["mcp"],"bearer_methods_supported":["header"],"resource_name":"FlyFun Weather Briefings"}`
+    }
+    handle /mcp* {
+        reverse_proxy localhost:8021 {
+            header_up X-Real-IP {remote_host}
+            header_down WWW-Authenticate `resource_metadata="[^"]*"` `resource_metadata="https://weather.flyfun.aero/.well-known/oauth-protected-resource/mcp", scope="mcp"`
+        }
+    }
+
     # Don't expose client-side recon surface: the app's StaticFiles mount serves
     # the whole web/ tree, including raw TypeScript sources (/ts/*) and esbuild
     # sourcemaps (*.js.map). Block them at the edge — the bundled /dist/*.js is
