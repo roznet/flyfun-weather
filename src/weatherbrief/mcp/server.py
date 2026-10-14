@@ -292,7 +292,12 @@ def _error_result(message: str, code: int | None = None) -> dict:
 
 @mcp.tool(
     title="List Flights",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        title="List Flights",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def list_flights() -> dict[str, Any]:
     """List the user's upcoming flights with briefing status.
@@ -343,6 +348,7 @@ def list_flights() -> dict[str, Any]:
 @mcp.tool(
     title="Create Flight",
     annotations=ToolAnnotations(
+        title="Create Flight",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=False,
@@ -511,7 +517,12 @@ def create_flight(
 
 @mcp.tool(
     title="Get Flight Briefing",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        title="Get Flight Briefing",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def get_briefing(
     flight_id: Annotated[
@@ -669,6 +680,7 @@ def get_briefing(
 @mcp.tool(
     title="Refresh Briefing",
     annotations=ToolAnnotations(
+        title="Refresh Briefing",
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=False,
@@ -738,7 +750,12 @@ def refresh_briefing(
 
 @mcp.tool(
     title="Get Airport Weather",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
+    annotations=ToolAnnotations(
+        title="Get Airport Weather",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=True,
+    ),
 )
 def get_airport_weather(
     icao_codes: Annotated[
@@ -781,7 +798,12 @@ def get_airport_weather(
 
 @mcp.tool(
     title="Get Advisory Detail",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        title="Get Advisory Detail",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def get_advisory_detail(
     flight_id: Annotated[
@@ -909,7 +931,12 @@ def get_advisory_detail(
 
 @mcp.tool(
     title="Get Weather Alternates",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        title="Get Weather Alternates",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def get_alternates(
     flight_id: Annotated[
@@ -984,7 +1011,12 @@ def get_alternates(
 
 @mcp.tool(
     title="Get Digest Context",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        title="Get Digest Context",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
 )
 def get_digest_context(
     flight_id: Annotated[
