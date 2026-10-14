@@ -60,7 +60,14 @@ from weatherbrief.storage.sounding_profiles import (
     read_sounding_sidecar,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
-from weatherbrief.models.live import LiveChanges, LiveLayerResponse, LiveProgress, LiveTickResponse
+from weatherbrief.models.live import (
+    LiveChanges,
+    LiveLayerResponse,
+    LiveProgress,
+    LiveTickResponse,
+    LiveTicksResponse,
+    RecapResponse,
+)
 from weatherbrief.tasks.live_layer import live_updated_at_iso
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
@@ -5354,24 +5361,25 @@ def _live_flight_dir(db: Session, flight_id: str):
     return flight_dir_of(packs)
 
 
-@live_router.get("/{flight_id}/live/ticks")
+@live_router.get("/{flight_id}/live/ticks", response_model=LiveTicksResponse)
 def get_live_ticks(
     flight_id: str,
     request: Request,
+    segments: bool = Query(default=False, description="Include each tick's radar lane (distance x time grid)"),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
-) -> dict:
+):
     """The recorded ticks of the flight's live window, oldest first: each
     one's time, radar frame valid time, pack and planned position (flown NM).
     Empty when nothing was recorded (no live window, or flown before per-tick
-    snapshots existed)."""
+    snapshots existed). ``segments=1`` adds each tick's radar lane."""
     _load_flight_or_404(db, flight_id, viewer_id=user_id)
     audit_pack_access(user_id, flight_id, "get_live_ticks", request)
     from weatherbrief.tasks.live_snapshots import load_snapshots, tick_index
 
     flight_dir = _live_flight_dir(db, flight_id)
     snapshots = load_snapshots(flight_dir) if flight_dir is not None else []
-    return {"flight_id": flight_id, "ticks": tick_index(snapshots)}
+    return {"flight_id": flight_id, "ticks": tick_index(snapshots, segments=segments)}
 
 
 @live_router.get("/{flight_id}/live/at", response_model=LiveTickResponse)
@@ -5397,14 +5405,14 @@ def get_live_at(
     return LiveTickResponse(flight_id=flight_id, **tick_view(flight_dir, snap))
 
 
-@live_router.get("/{flight_id}/recap")
+@live_router.get("/{flight_id}/recap", response_model=RecapResponse)
 def get_recap(
     flight_id: str,
     request: Request,
     pack: str | None = Query(default=None, description="Pack timestamp for the forecast row"),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db),
-) -> dict:
+):
     """The debrief's observed recap, computed on request: per ribbon segment
     the observation nearest the time the aircraft was there, the alert
     markers, and the forecast row of ``pack`` (default: the newest pack before

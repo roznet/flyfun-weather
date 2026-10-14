@@ -311,13 +311,19 @@ def build_recap(
     out["message"] = STATUS_MESSAGES.get(status)
     out["alerts"] = alert_markers(history, progress if status == "ok" else None)
     if status != "ok":
-        out.update(segments=[], weather=[], storms=[], waypoints=[], route_nm=None, segment_nm=None)
+        out.update(
+            segments=[], weather=[], storms=[], waypoints=[], route_nm=None, segment_nm=None,
+            radar_radius_nm=None, weather_corridor_nm=None, weather_bin_nm=None,
+        )
         return out
 
     segments, weather, storms, base = _observed_segments(snapshots, progress)
     out.update(
         route_nm=base.get("route_nm") if base else None,
         segment_nm=base.get("segment_nm") if base else None,
+        # The scales the newest ribbon was drawn to, so the client draws the
+        # recap at the same corridor and bin width.
+        **{k: (base or {}).get(k) for k in ("radar_radius_nm", "weather_corridor_nm", "weather_bin_nm")},
         waypoints=[
             {**wp, "eta": (lambda t: t.isoformat() if t else None)(progress.eta(wp.get("along_nm")))}
             for wp in ((base or {}).get("waypoints") or [])

@@ -1,7 +1,8 @@
-# Debrief recap and single-tick replay (server, #711)
+# Debrief recap and single-tick replay (server #711, web #769)
 
-Slice A1 of the flight debrief (umbrella #710; plan and later slices in
-`future/flight-debrief-observed.md`). Server only: the web UI is #769, iOS later.
+Slices A1 (server) and A2 (web) of the flight debrief (umbrella #710; plan and
+later slices in `future/flight-debrief-observed.md`). iOS display is decided
+after the web one works.
 Answers two questions after (or during) a flight, from the live layer alone:
 
 1. **What did the Observed section show at HH:MM?** (single-tick replay)
@@ -19,6 +20,10 @@ Answers two questions after (or during) a flight, from the live layer alone:
 | `analysis/flight_progress.py` | `time_base` (`planned`/`partial`/`observed`), `planned()` |
 | `api/packs.py` (live router) | `GET /flights/{id}/live/ticks`, `/live/at?tick=`, `/recap[?pack=]`, `/recap/summary` |
 | `tasks/retention.py` | `_live_retention`, `kept_flight_ids` |
+| `models/live.py` | `LiveTicksResponse`, `RecapResponse` (typed #769; passthrough blocks `extra="allow"`) |
+| `web/ts/helpers/debrief-replay.ts` | Pure: time-base caption, route point → tick, forecast-lane merging, replay state, recap → `LiveRibbon`, grid rows |
+| `web/ts/visualization/observed/recap-view.ts` | DOM: tick chips, mode bar, recap lanes, distance × time grid |
+| `web/ts/store/briefing-store.ts` | `ticks`, `recap`, `recapForecast`, `replay`; `loadTicks`, `loadRecap`, `loadRecapForecast`, `viewTick`, `backToBase` |
 
 Agents: `get_briefing` carries `recap` next to `live` (ChatGPT in-process via
 `recap_summary`; MCP via `/recap/summary`). Null before departure and when
@@ -103,6 +108,60 @@ on the next read.
   #711 fall back to `route_advisories.json`. Default pack: newest fetched before
   `progress.departed_at`; `?pack=<ts>` picks another (404 if unknown). The
   block carries that pack's `planned_departure` so the UI can show the gap.
+
+## Web (#769)
+
+Where: the briefing page's Observed group. Flight page debrief section links
+to it (`?section=observed-ribbon`); the form stays on the flight page until the
+review pass decides.
+
+- **Before the window**: nothing new. **From departure − 3 h**: tick chips
+  (`/live/ticks`, re-read on each new live layer) above the live ribbon.
+  **After the window** (`isLiveWindowPast`): "Along the route" opens on the
+  recap and the last tick's live ribbon is hidden (it would read "now").
+- **Replay**: a chip, a recap stretch (its `tick_at`), an alert marker (its
+  tick), a grid row, or a route point (the "seen at" lane, or the point
+  selected on the cross-section / map shown as a dashed chip) → `/live/at`.
+  The store's `replay` holds the view; every Observed renderer reads
+  `observedLive(replay, live)` / `snapshotAtTick` (glance + highlight,
+  ribbon, radar & lightning cards, METAR table, SIGMETs, changes panel),
+  so the live poll keeps updating `live` / `snapshot` without replacing the
+  view. "N min ago" ages are measured from the tick. Back re-renders from the
+  latest. The route map's imagery stays live (no past frames on the droplet),
+  said on the bar.
+- **Route point → tick**: aircraft time at the point (interpolated between
+  the recap's waypoint ETAs and segment midpoints; during the window the
+  ticks' own `flown_nm`), then the last tick at or before it, as `/live/at`.
+  So a point can open a different tick than its stretch (nearest radar
+  frame): intended, they answer different questions.
+- **Recap drawing**: `recapRibbon` feeds `mountRibbon` (new `onSegment`
+  handler: a stretch opens its tick instead of framing the map). Bands only
+  when every observed stretch had the cells feed, each clipped to its own
+  stretch (a band from one tick must not paint another tick's stretch); else
+  the radar strip. Stretches not observed draw as "no sample", never "no
+  echo". No stations / SIGMET band (not on `/recap`; the replay has them).
+  Under it, on the same x scale: seen-at (radar frame time per stretch, or
+  "not recorded" / "before recording"), forecast, alerts.
+- **Forecast lane (first version)**: one worst-of row from the route-weather
+  advisories (`ROUTE_WEATHER_ADVISORIES`: icing, cloud, precipitation,
+  turbulence, convective categories), each advisory's per-model bands
+  combined with the pack's own `aggregation` (same rule as
+  `AdvisoryStatus.worst/majority`), adjacent equal severities merged. Picking
+  a pack in the sidebar list switches the page as before **and** re-fetches
+  `/recap?pack=` into `recapForecast`, redrawing only the lanes and caption.
+- **Empty**: status other than `ok` → "Not recorded for this flight" (or
+  "Cannot place the flight") with the server's message; `capped` → a note
+  that the tail was not recorded.
+- **Grid (experiment)**: `/live/ticks?segments=1` (after the window only),
+  one row per tick of the radar lane, the stretches the recap took outlined,
+  the aircraft dot per row, alert ticks marked; rows open their tick. Behind
+  "Show over time", on by default ≥ 900 px wide. Keep or drop is the
+  owner's call.
+
+Choices deferred to the review pass: grid keep/drop/layout; lane content
+(all advisories vs route-weather, per model vs consensus, one row vs one per
+advisory); where the debrief form lives. iOS has no recap DTOs yet: when it
+does, `tick_at`, `radar_time` and `progress` are optional there.
 
 ## Retention
 

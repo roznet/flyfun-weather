@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from weatherbrief.models.observations import (
     RefreshDelta,
@@ -795,3 +795,207 @@ class LiveTickResponse(LiveLayerResponse):
     # The ``FlightProgress`` state the tick used: source, flown_nm,
     # departed_at, arrival_at.
     progress: dict | None = None
+
+
+# --- Debrief replay and recap (#711 server, #769 typed) ----------------------
+#
+# The recap is computed from stored snapshots, so the blocks it passes through
+# (weather bands, storms, waypoints, lane advisories) keep ``extra="allow"``:
+# a field a later snapshot adds reaches the client instead of being dropped,
+# and an older snapshot missing one does not 500. Times stay the strings the
+# snapshots stored, so a ``tick_at`` round-trips to ``/live/at`` unchanged.
+
+
+class TickSegment(BaseModel):
+    """One ribbon stretch of a recorded tick (``/live/ticks?segments=1``),
+    for the distance × time grid: the radar lane only."""
+
+    from_nm: float
+    to_nm: float
+    radar_status: str | None = None
+    radar_max_dbz: float | None = None
+    lightning: bool | None = None
+
+
+class LiveTickEntry(BaseModel):
+    """One recorded tick of the live window."""
+
+    tick_at: str | None = None
+    # The radar frame the tick's ribbon was binned from (None without radar).
+    radar_time: str | None = None
+    pack_timestamp: str | None = None
+    # The planned (or observed, #759) position at the tick.
+    flown_nm: float | None = None
+    progress_source: str | None = None
+    alert_count: int | None = None
+    # Only with ``?segments=1``.
+    segments: list[TickSegment] | None = None
+
+
+class LiveTicksResponse(BaseModel):
+    """``GET /api/flights/{id}/live/ticks``: oldest first, empty when nothing
+    was recorded."""
+
+    flight_id: str
+    ticks: list[LiveTickEntry] = Field(default_factory=list)
+
+
+class RecapSegment(BaseModel):
+    """One ribbon stretch on the recap's diagonal: what was observed there
+    at the time the aircraft was there."""
+
+    index: int | None = None
+    from_nm: float
+    to_nm: float
+    # The aircraft's time at the stretch's midpoint (``FlightProgress.eta``).
+    at: str | None = None
+    # observed / not_reached / before_recording / untimed.
+    status: str
+    # The tick and radar frame this stretch was read from (observed only).
+    tick_at: str | None = None
+    radar_time: str | None = None
+    pack_timestamp: str | None = None
+    # Frame time minus aircraft time, minutes.
+    gap_min: float | None = None
+    weather_status: str | None = None
+    radar_max_dbz: float | None = None
+    radar_intensity: str | None = None
+    radar_status: str | None = None
+    lightning: bool | None = None
+    sigmet_ids: list[str] | None = None
+    storm_ids: list[str] | None = None
+
+
+class RecapWeather(BaseModel):
+    """A ``RibbonWeather`` band of the tick a stretch was read from."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    tier: str | None = None
+    from_nm: float | None = None
+    to_nm: float | None = None
+    side: str | None = None
+    near_nm: float | None = None
+    far_nm: float | None = None
+    profile: list[tuple[float, float, float]] = Field(default_factory=list)
+    peak_dbz: float | None = None
+    intensity: str | None = None
+    tick_at: str | None = None
+    segment_index: int | None = None
+
+
+class RecapStorm(BaseModel):
+    """A radar storm abeam a stretch, as the tick it was read from saw it."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    peak_dbz: float | None = None
+    intensity: str | None = None
+    flashes: int | None = None
+    top_fl: int | None = None
+    trend: str | None = None
+    along_nm: float | None = None
+    offtrack_nm: float | None = None
+    cross_nm: float | None = None
+    side: str | None = None
+    relative_motion: str | None = None
+    tick_at: str | None = None
+    segment_index: int | None = None
+
+
+class RecapAlert(BaseModel):
+    """A change raised or cleared over the flight day (history ``event``),
+    placed at the aircraft's position then."""
+
+    at: str | None = None
+    event: Literal["raised", "cleared"]
+    tier: str | None = None
+    direction: str | None = None
+    key: str | None = None
+    kind: str | None = None
+    role: str | None = None
+    icao: str | None = None
+    message: str | None = None
+    observed_at: str | None = None
+    enroute_distance_nm: float | None = None
+    aircraft_nm: float | None = None
+
+
+class RecapWaypoint(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    icao: str | None = None
+    along_nm: float | None = None
+    eta: str | None = None
+
+
+class ForecastLaneModel(BaseModel):
+    model: str
+    status: str | None = None
+    # [from_nm, to_nm, severity] — a gapless partition of the route.
+    ribbon: list[tuple[float, float, str]] = Field(default_factory=list)
+
+
+class ForecastLaneAdvisory(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    advisory_id: str
+    aggregate_status: str | None = None
+    representative_model: str | None = None
+    per_model: list[ForecastLaneModel] = Field(default_factory=list)
+
+
+class RecapForecast(BaseModel):
+    """The forecast row of one pack (``forecast_lane.json``)."""
+
+    pack_timestamp: str
+    # default (newest before departure) / request (``?pack=``).
+    chosen_by: str
+    # That pack's planned departure: its advisories are at its own ETAs.
+    planned_departure: str | None = None
+    available: bool = False
+    v: int | None = None
+    route_nm: float | None = None
+    cruise_altitude_ft: int | None = None
+    models: list[str] = Field(default_factory=list)
+    aggregation: str | None = None
+    advisories: list[ForecastLaneAdvisory] = Field(default_factory=list)
+
+
+class RecapResponse(BaseModel):
+    """``GET /api/flights/{id}/recap`` (``live_recap.recap_for_flight``)."""
+
+    flight_id: str
+    note: str
+    # ok / no_live_window / not_recorded / untimed.
+    status: str
+    message: str | None = None
+    cancelled: bool = False
+    # planned / partial / observed (``FlightProgress.time_base``).
+    time_base: str | None = None
+    progress_source: str | None = None
+    departed_at: str | None = None
+    arrival_at: str | None = None
+    ticks: int = 0
+    first_tick_at: str | None = None
+    last_tick_at: str | None = None
+    # Recording stopped at the size cap: later stretches were not recorded.
+    capped: bool = False
+    forecast: RecapForecast | None = None
+    alerts: list[RecapAlert] = Field(default_factory=list)
+    route_nm: float | None = None
+    segment_nm: float | None = None
+    # The base ribbon's scales, so the client draws the recap like the ribbon.
+    radar_radius_nm: float | None = None
+    weather_corridor_nm: float | None = None
+    weather_bin_nm: float | None = None
+    waypoints: list[RecapWaypoint] = Field(default_factory=list)
+    segments: list[RecapSegment] = Field(default_factory=list)
+    weather: list[RecapWeather] = Field(default_factory=list)
+    storms: list[RecapStorm] = Field(default_factory=list)
+    # Every pack of the flight, newest first (the pack picker's choices).
+    packs: list[str] = Field(default_factory=list)

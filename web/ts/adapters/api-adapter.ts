@@ -7,6 +7,9 @@ import type {
   FlightResponse,
   ForecastSnapshot,
   LiveLayer,
+  LiveTickResponse,
+  LiveTicksResponse,
+  RecapResponse,
   PackMeta,
   RealtimeRefreshResult,
   RouteAnalysesManifest,
@@ -814,6 +817,26 @@ export async function refreshObservations(
  *  conditions and the changes since the briefing). Cheap: a stored file. */
 export async function fetchLive(flightId: string): Promise<LiveLayer> {
   return apiFetch<LiveLayer>(`/flights/${encodeURIComponent(flightId)}/live`);
+}
+
+// --- Debrief replay and recap (#711, #769) ---
+
+export async function fetchLiveTicks(flightId: string, segments = false): Promise<LiveTicksResponse> {
+  return apiFetch<LiveTicksResponse>(
+    `/flights/${encodeURIComponent(flightId)}/live/ticks${segments ? '?segments=1' : ''}`,
+  );
+}
+
+export async function fetchLiveAt(flightId: string, tick: string): Promise<LiveTickResponse> {
+  return apiFetch<LiveTickResponse>(
+    `/flights/${encodeURIComponent(flightId)}/live/at?tick=${encodeURIComponent(tick)}`,
+  );
+}
+
+export async function fetchRecap(flightId: string, pack: string | null = null): Promise<RecapResponse> {
+  return apiFetch<RecapResponse>(
+    `/flights/${encodeURIComponent(flightId)}/recap${pack ? `?pack=${encodeURIComponent(pack)}` : ''}`,
+  );
 }
 
 // --- Elevation profile ---

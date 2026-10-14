@@ -1470,6 +1470,141 @@ export interface LiveLayer {
   last_refresh_delta: RefreshDelta | null;
 }
 
+/** GET /flights/{id}/live/at?tick= (#711): the Observed section as it stood
+ *  at one recorded tick, in the `/live` shape. `route_observations` is rebuilt
+ *  from the history's raw reports (no runway/wind picture). */
+export interface LiveTickResponse extends LiveLayer {
+  tick_at: string;
+  radar_time?: string | null;
+  progress?: Record<string, unknown> | null;
+}
+
+/** One radar-lane stretch of a recorded tick (`/live/ticks?segments=1`). */
+export interface TickSegment {
+  from_nm: number;
+  to_nm: number;
+  radar_status?: 'measured' | 'no_coverage' | 'no_sample' | null;
+  radar_max_dbz?: number | null;
+  lightning?: boolean | null;
+}
+
+/** One recorded tick of the live window (`/live/ticks`), oldest first. */
+export interface LiveTickEntry {
+  tick_at: string | null;
+  radar_time?: string | null;
+  pack_timestamp?: string | null;
+  flown_nm?: number | null;
+  progress_source?: string | null;
+  alert_count?: number | null;
+  segments?: TickSegment[] | null;
+}
+
+export interface LiveTicksResponse {
+  flight_id: string;
+  ticks: LiveTickEntry[];
+}
+
+/** One stretch on the recap's diagonal (#711): observed when the aircraft
+ *  was there, or why not. */
+export interface RecapSegment {
+  index?: number | null;
+  from_nm: number;
+  to_nm: number;
+  /** The aircraft's time at the stretch's midpoint. */
+  at?: string | null;
+  status: 'observed' | 'not_reached' | 'before_recording' | 'untimed' | string;
+  tick_at?: string | null;
+  radar_time?: string | null;
+  pack_timestamp?: string | null;
+  gap_min?: number | null;
+  weather_status?: string | null;
+  radar_max_dbz?: number | null;
+  radar_intensity?: string | null;
+  radar_status?: 'measured' | 'no_coverage' | 'no_sample' | null;
+  lightning?: boolean | null;
+  sigmet_ids?: string[] | null;
+  storm_ids?: string[] | null;
+}
+
+export interface RecapWeather extends Partial<RibbonWeather> {
+  tick_at?: string | null;
+  segment_index?: number | null;
+}
+
+export interface RecapStorm extends Partial<LiveStorm> {
+  tick_at?: string | null;
+  segment_index?: number | null;
+}
+
+/** An alert raised or cleared over the flight day, at the aircraft's
+ *  position then. */
+export interface RecapAlert {
+  at?: string | null;
+  event: 'raised' | 'cleared';
+  tier?: string | null;
+  direction?: string | null;
+  key?: string | null;
+  kind?: string | null;
+  role?: string | null;
+  icao?: string | null;
+  message?: string | null;
+  observed_at?: string | null;
+  enroute_distance_nm?: number | null;
+  aircraft_nm?: number | null;
+}
+
+/** [from_nm, to_nm, severity]: a gapless partition of the route. */
+export type ForecastLaneBand = [number, number, string];
+
+export interface ForecastLaneAdvisory {
+  advisory_id: string;
+  aggregate_status?: string | null;
+  representative_model?: string | null;
+  per_model: { model: string; status?: string | null; ribbon: ForecastLaneBand[] }[];
+}
+
+/** One pack's forecast row (`forecast_lane.json`). */
+export interface RecapForecast {
+  pack_timestamp: string;
+  chosen_by: 'default' | 'request' | string;
+  planned_departure?: string | null;
+  available: boolean;
+  route_nm?: number | null;
+  cruise_altitude_ft?: number | null;
+  models?: string[];
+  aggregation?: string | null;
+  advisories?: ForecastLaneAdvisory[];
+}
+
+/** GET /flights/{id}/recap[?pack=] (#711). */
+export interface RecapResponse {
+  flight_id: string;
+  note: string;
+  status: 'ok' | 'no_live_window' | 'not_recorded' | 'untimed' | string;
+  message?: string | null;
+  cancelled: boolean;
+  time_base?: 'planned' | 'partial' | 'observed' | string | null;
+  progress_source?: string | null;
+  departed_at?: string | null;
+  arrival_at?: string | null;
+  ticks: number;
+  first_tick_at?: string | null;
+  last_tick_at?: string | null;
+  capped: boolean;
+  forecast?: RecapForecast | null;
+  alerts: RecapAlert[];
+  route_nm?: number | null;
+  segment_nm?: number | null;
+  radar_radius_nm?: number | null;
+  weather_corridor_nm?: number | null;
+  weather_bin_nm?: number | null;
+  waypoints: RibbonWaypoint[];
+  segments: RecapSegment[];
+  weather: RecapWeather[];
+  storms: RecapStorm[];
+  packs: string[];
+}
+
 /** One weather-based divert candidate (issue #210). */
 /** One criterion (ceiling or visibility) vs its requirement band (#249). */
 export interface CriterionAssessment {

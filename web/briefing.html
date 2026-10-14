@@ -176,6 +176,11 @@
       </div>
     </div>
 
+    <!-- Debrief replay (#769): "Viewing 17:23Z · Back to live / recap" while a
+         recorded tick is on screen. Sticky, so every Observed section below
+         reads as the tick it shows. Hidden on the live / recap view. -->
+    <div id="observed-mode-bar" class="observed-mode-bar" data-testid="observed-mode-bar" hidden></div>
+
     <!-- Flight-day nutshell (#690): the server's one line per phase plus the
          comparison with the briefing. Hidden unless the live layer carries a
          glance (only built inside the live window). -->
@@ -195,6 +200,9 @@
     <div id="observed-ribbon-wrapper" class="section collapsible" data-section="observed-ribbon" style="display: none;">
       <h3>Along the route</h3>
       <div class="section-body">
+        <!-- Debrief (#769): recorded tick chips (from the live window on),
+             and after it the recap ribbon, its lanes and the grid. -->
+        <div id="observed-replay"></div>
         <div id="observed-ribbon-section"></div>
       </div>
     </div>

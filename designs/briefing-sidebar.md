@@ -69,6 +69,9 @@ renders.
   `ResizeObserver`s, so a section that is still `display:none` when focused
   renders at the right size once its data lands. Below 980 px a focused main
   pane is ordered before the rail, so the section is first on the page.
+  One exception to "all but the chosen section": `#observed-mode-bar`, the
+  debrief replay's sticky "Viewing 17:23Z · Back to …" bar (#769), stays
+  visible so a focused Observed section never shows a past tick unlabelled.
 
 ## Focusing a section from a link or a framing page
 

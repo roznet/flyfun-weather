@@ -2,7 +2,9 @@
 
 Status: brainstorm agreed 2026-10-06, split into slices A–C 2026-10-08, slice A reshaped
 2026-10-11 (per-tick snapshots, recap on request, replay, web first); slice A1 (server)
-built 2026-10-12, as-built in `designs/debrief-recap.md`; A2 onwards not built. Replaces the standalone PIREP
+built 2026-10-12, as-built in `designs/debrief-recap.md`; A2 (web) built 2026-10-14 as a
+first version awaiting the owner's review pass on real flights (grid keep/drop, forecast
+lane content, where the form lives), as-built in the same doc; B onwards not built. Replaces the standalone PIREP
 direction (`designs/pireps.md` as-built, `future/pirep-plan.md` M2/M3): pilot reports
 stop being their own feature and become part of the flight debrief. Builds on
 `designs/debrief.md`, `designs/live-observation-layer.md` and
