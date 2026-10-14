@@ -151,7 +151,12 @@ review pass decides.
   `/recap?pack=` into `recapForecast`, redrawing only the lanes and caption.
 - **Empty**: status other than `ok` → "Not recorded for this flight" (or
   "Cannot place the flight") with the server's message; `capped` → a note
-  that the tail was not recorded.
+  that the tail was not recorded. A failed `/recap` fetch is its own
+  client-side status (`load_failed`, "Recap unavailable"), never read as
+  "not recorded"; a failed pack pick shows "No forecast row for this pack"
+  rather than keeping the previous pack's row, and only the latest pick
+  applies. A `forecast_lane.json` the model cannot read drops the forecast
+  row server-side, not the whole recap.
 - **Grid (experiment)**: `/live/ticks?segments=1` (after the window only),
   one row per tick of the radar lane, the stretches the recap took outlined,
   the aircraft dot per row, alert ticks marked; rows open their tick. Behind

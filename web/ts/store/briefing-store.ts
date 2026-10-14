@@ -18,6 +18,18 @@ import { errorToMessage } from '../utils';
 import { addsTrails, applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
 import { REPLAY_BASE, startTick, tickFailed, tickLoaded, type ReplayState } from '../helpers/debrief-replay';
 
+/** Sequence of `loadRecapForecast` picks (#769): only the latest applies. */
+let recapForecastSeq = 0;
+
+/** The recap the section shows when `/recap` failed (#769). */
+function recapLoadFailed(flightId: string): RecapResponse {
+  return {
+    flight_id: flightId, note: '', status: 'load_failed', cancelled: false, ticks: 0, capped: false,
+    message: 'The recap could not be loaded. Reload the page to try again.',
+    alerts: [], waypoints: [], segments: [], weather: [], storms: [], packs: [],
+  };
+}
+
 // --- localStorage persistence helpers ---
 
 function loadDisplayMode(): DisplayMode {
@@ -1080,7 +1092,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         ...t, segments: prev!.find((p) => sameInstant(p.tick_at, t.tick_at))?.segments ?? null,
       })) : res.ticks });
     } catch {
-      /* non-critical: no chips */
+      // No chips: the live view is unaffected, and the recap (its own
+      // fetch) still says when nothing could be loaded.
     }
   },
 
@@ -1092,20 +1105,28 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (get().flight?.id !== flightId) return;
       set({ recap });
     } catch {
-      /* non-critical: the section says nothing was loaded */
+      if (get().flight?.id !== flightId) return;
+      // A failure must not read as "not recorded", nor leave the last tick's
+      // live ribbon on screen as if it were now: an explicit status.
+      set({ recap: recapLoadFailed(flightId) });
     }
   },
 
   loadRecapForecast: async (packTimestamp: string) => {
     const flightId = get().flight?.id;
     if (!flightId || !get().recap) return;
+    // Latest pick wins: A then B in quick succession must not leave A's row
+    // beside B's page when A's response lands last.
+    const seq = ++recapForecastSeq;
+    let forecast: RecapForecast | null;
     try {
-      const res = await api.fetchRecap(flightId, packTimestamp);
-      if (get().flight?.id !== flightId) return;
-      set({ recapForecast: res.forecast ?? null });
+      forecast = (await api.fetchRecap(flightId, packTimestamp)).forecast ?? null;
     } catch {
-      /* a pack without a lane: keep the current row */
+      // Say so rather than keep the previous pack's row under the new page.
+      forecast = { pack_timestamp: packTimestamp, chosen_by: 'request', available: false };
     }
+    if (seq !== recapForecastSeq || get().flight?.id !== flightId) return;
+    set({ recapForecast: forecast });
   },
 
   viewTick: async (tick: string) => {

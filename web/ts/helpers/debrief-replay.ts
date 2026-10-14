@@ -71,6 +71,7 @@ export function departureGapText(
 export function recapEmptyTitle(status: string | null | undefined): string {
   switch (status) {
     case 'untimed': return 'Cannot place the flight along the route';
+    case 'load_failed': return 'Recap unavailable';
     default: return 'Not recorded for this flight';
   }
 }
@@ -163,11 +164,13 @@ export function tickForRoutePoint(
 
 // --- Forecast lane -----------------------------------------------------------------
 
-/** The advisories that grade weather along the route (categories icing,
- *  cloud, precipitation, turbulence, convective). Airport, wind, feasibility,
- *  model-quality, front and sun advisories are left out: the lane sits beside
- *  the observed lane, which sees only en-route weather. First version of the
- *  lane (#769 review pass settles its content). */
+/** The advisories whose evaluator category is icing, cloud, precipitation,
+ *  turbulence or convective. That includes `vmc_cruise` (category cloud) and
+ *  `mountain_wind` (category turbulence: wave-corroborated, not trip wind).
+ *  Left out: airport, trip wind (`headwind`), feasibility, model-quality,
+ *  front and sun advisories. The observed lane beside it sees radar and
+ *  lightning only, so a cloud / icing / turbulence grade has nothing
+ *  observed to match; first version, the #769 review pass settles it. */
 export const ROUTE_WEATHER_ADVISORIES: ReadonlySet<string> = new Set([
   'cloud_top',
   'vmc_cruise',
