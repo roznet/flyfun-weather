@@ -94,10 +94,18 @@ class DigestConfig(BaseModel):
         model="claude-haiku-4-5-20251001",
         temperature=0.0,
     )
+    # DWD translation / extract. Haiku 5.5 since the 2026-10-14 blind A/B
+    # (10 prod DWD inputs, old/new prompt x 4.5/5.5, judged against the
+    # German): on the old prompt 5.5 alone cut major errors 25 -> 8; with the
+    # place table and glossary it made 2. Thinking off + effort low as for
+    # ``trip``; the extract of a long two-day text runs ~3k tokens.
     translator: LLMConfig = LLMConfig(
         provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        temperature=0.0,
+        model="claude-haiku-5-5",
+        temperature=None,
+        thinking={"type": "disabled"},
+        effort="low",
+        max_tokens=8192,
     )
     # Trip summary (#602).  Haiku is the *structural* right answer here, not
     # merely the cheap one: the task is rewriting, not analysis.  It runs over

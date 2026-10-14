@@ -485,12 +485,13 @@ def _format_dwd_translated_context(
     else:
         lines = [
             "=== TEXT FORECASTS (DWD Synoptic Overview, large-scale extract) ===",
-            "SOURCE: DWD (Deutscher Wetterdienst) — extracted large-scale synoptic "
-            "features only. German regional details have been removed.",
-            "NOTE: Your route does not cross Germany. The text below contains only "
-            "named pressure systems, frontal positions with coordinates and timing, "
-            "air mass types, and large-scale flow patterns. Use these as synoptic "
-            "context — do NOT extrapolate or reposition features to your route area.",
+            "SOURCE: DWD (Deutscher Wetterdienst) — large-scale content condensed "
+            "from a forecast written for Germany; places are given as English "
+            "names with approximate coordinates.",
+            "NOTE: Your route does not cross Germany. The text below gives pressure "
+            "systems, fronts, rain/fog/wind areas and the timing DWD states. Use it "
+            "as synoptic context — do NOT extrapolate or reposition features to "
+            "your route area.",
         ]
 
     for block, english in translated:

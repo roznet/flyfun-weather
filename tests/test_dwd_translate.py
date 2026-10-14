@@ -1,4 +1,4 @@
-"""Splitting the combined DWD translation back into per-day blocks."""
+"""DWD translation: per-day splitting, cache keying, prompt content."""
 
 from __future__ import annotations
 
@@ -89,3 +89,53 @@ def test_long_markdown_rule_inside_a_day_is_kept_and_fast():
     out = _split_translation(BLOCKS, english)
     assert out[0][1] == f"| a |\n{rule}\n| b |"
     assert [text for _, text in out[1:]] == ["Cold front at 5E.", "Ridge builds."]
+
+
+class _FakeLLM:
+    def __init__(self, calls: list):
+        self.calls = calls
+
+    def invoke(self, messages):
+        self.calls.append(messages)
+
+        class _R:
+            content = "=== Freitag (2026-10-09) ===\nok"
+
+        return _R()
+
+
+def test_cache_is_keyed_on_prompt_and_model(tmp_path, monkeypatch):
+    """A prompt or model change must not keep serving the old translation."""
+    from weatherbrief.digest import dwd_translate
+    from weatherbrief.digest.llm_config import DigestConfig, LLMConfig
+
+    calls: list = []
+    monkeypatch.setattr(dwd_translate, "create_chat_model", lambda cfg: _FakeLLM(calls))
+    blocks = _blocks(("Freitag", date(2026, 10, 9)))
+    config = DigestConfig()
+
+    dwd_translate.translate_dwd_blocks(blocks, config, tmp_path, synoptic_extract=True)
+    dwd_translate.translate_dwd_blocks(blocks, config, tmp_path, synoptic_extract=True)
+    assert len(calls) == 1  # second call is a cache hit
+
+    monkeypatch.setattr(dwd_translate, "_EXTRACT_SYNOPTIC_PROMPT", "changed prompt")
+    dwd_translate.translate_dwd_blocks(blocks, config, tmp_path, synoptic_extract=True)
+    assert len(calls) == 2
+
+    config.translator = LLMConfig(model="another-model")
+    dwd_translate.translate_dwd_blocks(blocks, config, tmp_path, synoptic_extract=True)
+    assert len(calls) == 3
+
+
+def test_prompts_carry_the_place_table_and_glossary():
+    """Places the 2026-10-14 review saw misplaced have one fixed position."""
+    from weatherbrief.digest.dwd_translate import (
+        _EXTRACT_SYNOPTIC_PROMPT,
+        _TRANSLATE_SYSTEM_PROMPT,
+    )
+
+    assert "southern Germany (~48.5°N 10.5°E)" in _EXTRACT_SYNOPTIC_PROMPT
+    assert "Norwegian Sea (~68°N 2°E)" in _EXTRACT_SYNOPTIC_PROMPT
+    for prompt in (_EXTRACT_SYNOPTIC_PROMPT, _TRANSLATE_SYSTEM_PROMPT):
+        assert "Hochnebel = low stratus" in prompt
+        assert "gebietsweise = in places" in prompt
