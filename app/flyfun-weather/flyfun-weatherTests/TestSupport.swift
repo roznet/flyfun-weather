@@ -351,6 +351,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws { throw MockError.notStubbed("submitDigestFeedback") }
     func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws { throw MockError.notStubbed("submitHighlightFeedback") }
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws { throw MockError.notStubbed("submitGeneralFeedback") }
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult { throw MockError.notStubbed("postLivePosition") }
 }
 
 // MARK: - Fixture factories

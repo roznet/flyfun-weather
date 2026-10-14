@@ -87,6 +87,10 @@ protocol BriefingRepository: Sendable {
     /// The same, tagged with where the fetch came from (`"push"`: a flight-day
     /// push tap, #754). Defaults to the untagged fetch.
     func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse
+    /// Send the app's recent GPS fixes (#761) — `POST /api/flights/{id}/live/position`,
+    /// owner only. `landed` records the landing auto-stop. Online-only, no
+    /// queue: only the newest fix matters, and the next post carries it.
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult
     // Flight sharing (#446) — all online-only.
     /// Resolve a share code (`/s/{code}`) to its flight for the preview-before-
     /// subscribe on-ramp. Throws `APIError.notFound` (404) for an unknown/invalid
@@ -341,6 +345,12 @@ final class OnlineBriefingRepository: BriefingRepository {
         }
         // Polled every 5 min on flight day — keep it out of the request log.
         return try await client.request("/api/flights/\(flightId)/live", quietLog: true)
+    }
+
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        // Sent with every live poll while tracking — keep it out of the request log.
+        return try await client.request("/api/flights/\(flightId)/live/position", method: "POST", body: body, quietLog: true)
     }
 
     func flightByShareCode(_ code: String) async throws -> FlightResponse {

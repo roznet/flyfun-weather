@@ -199,6 +199,9 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {}
     func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws {}
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws {}
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult {
+        LivePositionResult(accepted: request.fixes.count, landedRecorded: request.landed)
+    }
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }
     }
