@@ -102,36 +102,36 @@ def pack_dir(tmp_path, sample_pack):
 
 class TestRenderHtml:
     def test_renders_html_string(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert isinstance(html, str)
         assert "<!DOCTYPE html>" in html
 
     def test_contains_route(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "EGTK" in html
         assert "LSGS" in html
 
     def test_contains_assessment(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "GREEN" in html
         assert "Conditions favorable" in html
 
     def test_contains_synopsis_sections(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "High pressure over Western Europe" in html
         assert "Monitor fog risk" in html
 
     def test_contains_gramet_data_uri(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "data:image/png;base64," in html
 
     def test_contains_skewt_images(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         # Each waypoint should have a Skew-T card
         assert html.count("Skew-T") >= 3  # title + per-waypoint alt texts
 
     def test_contains_model_comparison(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "temperature_c" in html
         assert "5.0" in html
 
@@ -139,12 +139,12 @@ class TestRenderHtml:
         """Renders without errors even when artifacts are missing."""
         empty_dir = tmp_path / "empty_pack"
         empty_dir.mkdir()
-        html = render_html(empty_dir, sample_flight, sample_pack)
+        html = render_html(empty_dir, sample_flight, sample_pack, position_sharing="full")
         assert isinstance(html, str)
         assert "<!DOCTYPE html>" in html
 
     def test_date_and_altitude_in_header(self, pack_dir, sample_flight, sample_pack):
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "2026-02-21" in html
         assert "8000 ft" in html
         assert "D-2" in html
@@ -161,7 +161,7 @@ class TestRenderHtml:
             "corridor_nm": 50.0, "fetch_time": "2026-02-21T07:00:00Z",
             "sigmets": [], "fetch_ok": False,
         })
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "SIGMETs Along Route" in html
         assert "SIGMETs unavailable at briefing time (source did not respond)" in html
 
@@ -170,7 +170,7 @@ class TestRenderHtml:
         self._with_sigmets(pack_dir, {
             "corridor_nm": 50.0, "fetch_time": "2026-02-21T07:00:00Z", "sigmets": [],
         })
-        html = render_html(pack_dir, sample_flight, sample_pack)
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
         assert "SIGMETs Along Route" not in html
         assert "SIGMETs unavailable" not in html
 
@@ -181,7 +181,7 @@ class TestRenderPdf:
         mock_pdf = b"%PDF-1.4 fake content"
         with patch("weasyprint.HTML") as mock_html_cls:
             mock_html_cls.return_value.write_pdf.return_value = mock_pdf
-            result = render_pdf(pack_dir, sample_flight, sample_pack)
+            result = render_pdf(pack_dir, sample_flight, sample_pack, position_sharing="full")
             assert result == mock_pdf
             mock_html_cls.assert_called_once()
             call_kwargs = mock_html_cls.call_args

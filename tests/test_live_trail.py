@@ -582,7 +582,7 @@ def test_trail_fields_stay_out_of_live_json_and_the_overlay(tmp_path):
     text = (flight_dir / "live.json").read_text()
     assert "trail" not in text and "recently_cleared" not in text and "cleared_at" not in text
     layer = live_for_pack(ticks[-1].pack_dir)
-    overlaid = json.dumps(overlay_live({}, layer))
+    overlaid = json.dumps(overlay_live({}, layer, "full"))
     assert "trail" not in overlaid and "recently_cleared" not in overlaid and "cleared_at" not in overlaid
 
 

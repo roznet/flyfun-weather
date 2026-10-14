@@ -398,7 +398,7 @@ def test_snapshot_overlay_strips_times_for_none():
     resp = _response()
     layer = LiveLayer(flight_id="f", pack_timestamp="p", pack_dir_name="p", live_updated_at=T,
                       changes=resp.changes, last_refresh_delta=resp.last_refresh_delta)
-    full = overlay_live({}, layer)
+    full = overlay_live({}, layer, "full")
     assert "abeam ~09:30Z" in full["live_changes"]["changes"][0]["message"]
     for sharing in ("along_route", "full"):
         assert overlay_live({}, layer, sharing) == full

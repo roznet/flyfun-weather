@@ -180,7 +180,7 @@ def test_write_started_before_a_newer_commit_is_dropped(tmp_path):
 def test_overlay_and_meta(tmp_path):
     pack, briefing = _pack(tmp_path, "p1")
     layer = _commit(pack, briefing, _obs("MVFR", NOW), ts="2026-10-01T07:00:00+00:00")
-    data = load_briefing_with_live(pack)
+    data = load_briefing_with_live(pack, position_sharing="full")
     assert data["route_observations"]["airports"][0]["metar_flight_category"] == "MVFR"
     assert data["live_updated_at"] == layer.live_updated_at.isoformat()
     # On disk the pack is still the briefing's view.
@@ -193,7 +193,7 @@ def test_corrupt_live_file_is_ignored(tmp_path):
     pack, _ = _pack(tmp_path, "p1")
     (pack.parent / "live.json").write_text("{not json")
     assert load_live(pack.parent) is None
-    assert load_briefing_with_live(pack)["route_observations"] is not None
+    assert load_briefing_with_live(pack, position_sharing="full")["route_observations"] is not None
 
 
 def test_live_retention_sets_partition_live_files():
