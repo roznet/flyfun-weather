@@ -66,6 +66,9 @@ logger = logging.getLogger(__name__)
 LIVE_FILE = "live.json"
 LIVE_META_FILE = "live_meta.json"
 LIVE_HISTORY_FILE = "live_history.jsonl"
+#: How history records are serialised. ``load_progress_events`` pre-filters
+#: lines by the compact ``"type":"progress"`` spelling, so both use this.
+HISTORY_SEPARATORS = (",", ":")
 #: Every per-flight live file: what flight delete/move and retention remove.
 #: #697's review log is owned by ``live_highlight`` and listed here so a flight
 #: delete takes it with the rest of the layer. Imported rather than repeated —
@@ -302,7 +305,9 @@ def load_progress_events(flight_dir: Path | str) -> tuple[ProgressEvent, ...]:
     try:
         if not path.exists():
             return ()
-        marker = f'"type":"{PROGRESS_HISTORY_TYPE}"'
+        # Spelled with the separators _append_history writes, so a format
+        # change there cannot silently hide every entry.
+        marker = json.dumps({"type": PROGRESS_HISTORY_TYPE}, separators=HISTORY_SEPARATORS)[1:-1]
         records = []
         for line in path.read_text().splitlines():
             if marker not in line:
@@ -742,7 +747,7 @@ def _append_history(flight_dir: Path, records: list[dict]) -> None:
     if not records:
         return
     path = flight_dir / LIVE_HISTORY_FILE
-    lines = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records)
+    lines = "".join(json.dumps(r, separators=HISTORY_SEPARATORS) + "\n" for r in records)
     with open(path, "a+b") as f:
         # A previous append cut short would glue this record onto its tail.
         f.seek(0, os.SEEK_END)

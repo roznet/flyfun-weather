@@ -345,13 +345,24 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   learned it), so `progress.at(t)` (read-time trails) rebuilds exactly what the
   tick at `t` knew and an entry never rewrites what was already shown.
 - **`fix` records** are parsed and carried but not fused (#761 adds the rules).
+- **Reading entries cheaply**: `load_progress_events` pre-filters lines by the
+  compact `"type":"progress"` spelling, built from `HISTORY_SEPARATORS`, the
+  same constant `_append_history` writes with.
+- **The debrief recap** (#711) builds its `FlightProgress` with the entries
+  too (`live_recap.flight_progress_for`); `planned()` drops them for a
+  cancelled flight; `time_base` is `partial` with one entry, `observed` with
+  take-off and landing.
 - **Who writes**: `POST /flights/{id}/live/progress` `{event, at?, clear?}`,
   owner only (there are no editors today), appended under the commit lock by
   `record_progress_event`. No refetch and no recompute; the next tick (10 min)
   measures from it; the response is the progress block as of now so the client
-  can confirm. Validation: not in the future (5 min skew), a take-off within
-  `departure − 3 h … + MAX_TAKEOFF_DELAY_H` (6 h; later = change the flight's
-  departure time), a landing after the effective departure.
+  can confirm. Validation, all against the **latest pack's** departure (what
+  the tick measures from, not the flight row's, which may have been edited
+  since): not in the future (5 min skew), a take-off within `departure − 3 h …
+  + MAX_TAKEOFF_DELAY_H` (6 h; later = change the flight's departure time), a
+  landing after the effective departure, and no take-off edit or clear that
+  would leave a recorded landing before it (it would silently stop counting).
+  An unreadable pack is a 409 before anything is written.
 - **The `progress` block** (`LiveProgress`, on `LiveLayer`, `/live`, the agent
   block): `source`, `as_of`, `along_nm` / `route_nm`, `lat` / `lon` (the route
   position), `departed_at` / `landed_at` **observed only** (null on the plan,

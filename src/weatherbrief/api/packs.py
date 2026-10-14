@@ -5250,8 +5250,10 @@ def post_live_progress(
     response is the progress the tick will use, so the client can confirm.
 
     A take-off is accepted from the start of the live window to
-    ``MAX_TAKEOFF_DELAY_H`` after the planned departure; a landing must come
-    after the (effective) departure. Neither may be in the future.
+    ``MAX_TAKEOFF_DELAY_H`` after the planned departure (the latest pack's);
+    a landing must come after the (effective) departure, and a take-off edit
+    or clear may not leave a recorded landing before it. Neither may be in
+    the future. 409 when the latest pack cannot be read (nothing written).
     """
     from weatherbrief.analysis.flight_progress import FlightProgress, ProgressEvent
     from weatherbrief.models.analysis import RouteConfig
@@ -5265,7 +5267,7 @@ def post_live_progress(
     )
     from weatherbrief.tasks.live_tick import MAX_TAKEOFF_DELAY_H, live_window_hours
 
-    flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     audit_pack_access(user_id, flight_id, "post_live_progress", request)
     packs = list_packs(db, flight_id)
     if not packs or not packs[0].artifact_path:
@@ -5273,10 +5275,25 @@ def post_live_progress(
     pack_dir = Path(_resolve_artifact_path(packs[0].artifact_path))
     flight_dir = flight_dir_for_pack(pack_dir)
 
+    # One planned departure for the checks, the response and the next tick:
+    # the latest pack's, which is what the tick measures from (the flight's
+    # own departure can have been edited since). Read before anything is
+    # written, so an unreadable pack refuses the entry instead of storing it
+    # with no confirmation.
+    try:
+        briefing = load_briefing(pack_dir) or {}
+        route = RouteConfig.model_validate(briefing["route"])
+        planned = _parse_target_time(briefing)
+    except Exception:
+        logger.warning("Live progress: latest pack of %s unreadable", flight_id, exc_info=True)
+        raise HTTPException(status_code=409, detail="The flight's latest briefing cannot be read; refresh it first")
+
     now = datetime.now(timezone.utc)
-    planned = ensure_utc(flight.departure_time)
     at = None if req.clear else ensure_utc(req.at) if req.at is not None else now
     events = load_progress_events(flight_dir)
+    event = ProgressEvent(kind=req.event, at=at, recorded_at=now)
+    before = FlightProgress.from_route(route, planned, now, events)
+    after = FlightProgress.from_route(route, planned, now, (*events, event))
     if at is not None:
         if at > now + _PROGRESS_CLOCK_SKEW:
             raise HTTPException(status_code=422, detail=f"{req.event} time is in the future")
@@ -5289,14 +5306,18 @@ def post_live_progress(
                 detail=(f"take-off must be within {before_h:g} h before to {MAX_TAKEOFF_DELAY_H:g} h "
                         "after the planned departure; change the flight's departure time instead"),
             )
-        if req.event == "landed":
-            dep = FlightProgress.schedule(planned, flight.flight_duration_hours, now, events).departed_at
-            if dep is not None and at <= dep:
-                raise HTTPException(
-                    status_code=422,
-                    detail="landing must be after the departure (record the take-off first)",
-                )
-    event = ProgressEvent(kind=req.event, at=at, recorded_at=now)
+        if req.event == "landed" and after.landed_at is None:
+            raise HTTPException(
+                status_code=422,
+                detail="landing must be after the departure (record the take-off first)",
+            )
+    if req.event == "takeoff" and before.landed_at is not None and after.landed_at is None:
+        # The recorded landing would no longer follow the departure and would
+        # silently stop counting: make the pilot fix the landing first.
+        raise HTTPException(
+            status_code=422,
+            detail="this take-off would come after the recorded landing; correct or clear the landing first",
+        )
     try:
         record_progress_event(flight_dir, event)
     except OSError:
@@ -5304,16 +5325,7 @@ def post_live_progress(
         raise HTTPException(status_code=500, detail="Could not record the entry")
     logger.info("LIVE_PROGRESS flight=%s event=%s at=%s clear=%s", flight_id, req.event,
                 at.isoformat() if at else None, req.clear)
-
-    progress = None
-    briefing = load_briefing(pack_dir) or {}
-    try:
-        route = RouteConfig.model_validate(briefing["route"])
-        departure = _parse_target_time(briefing)
-        progress = progress_block(FlightProgress.from_route(route, departure, now, (*events, event)))
-    except Exception:
-        logger.warning("Live progress: no route to measure %s against", flight_id, exc_info=True)
-    return LiveProgressResult(flight_id=flight_id, progress=progress)
+    return LiveProgressResult(flight_id=flight_id, progress=progress_block(after))
 
 
 # ---------------------------------------------------------------------------
