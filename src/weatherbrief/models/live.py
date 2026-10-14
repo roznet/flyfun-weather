@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_field, field_validator
 
 from weatherbrief.models.observations import (
     RefreshDelta,
@@ -999,3 +999,13 @@ class RecapResponse(BaseModel):
     storms: list[RecapStorm] = Field(default_factory=list)
     # Every pack of the flight, newest first (the pack picker's choices).
     packs: list[str] = Field(default_factory=list)
+
+    @field_validator("forecast", mode="wrap")
+    @classmethod
+    def _forecast_or_none(cls, value, handler):
+        """A ``forecast_lane.json`` this model cannot read (hand-edited, or a
+        later lane version) drops the forecast row, not the whole recap."""
+        try:
+            return handler(value)
+        except ValidationError:
+            return None

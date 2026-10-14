@@ -246,6 +246,35 @@ test.describe('Debrief recap after the live window', () => {
     await expect(page.locator('.recap-lanes-svg')).toContainText(hhmm(sc.at(2)));
   });
 
+  test('the latest pack pick wins the forecast row, even when an earlier response lands last', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${sc.flightId}`);
+    await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
+    // The OLDER pick answers slowly, the pick back to TIMESTAMP at once.
+    let releaseOlder: () => void = () => {};
+    const olderHeld = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    await page.route(`**/api/flights/${sc.flightId}/recap?pack=*`, async (r) => {
+      const pack = new URL(r.request().url()).searchParams.get('pack');
+      if (pack === OLDER) await olderHeld;
+      return r.fulfill({ json: recap(sc, pack) });
+    });
+    await page.locator('#history-select').selectOption(OLDER);
+    await page.locator('#history-select').selectOption(TIMESTAMP);
+    await expect(page.locator('.recap-lanes-svg')).toContainText(`pack ${hhmm(TIMESTAMP)}`);
+    releaseOlder();
+    await page.waitForTimeout(300);
+    await expect(page.locator('.recap-lanes-svg [data-severity="red"]')).toHaveCount(0);
+    await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
+  });
+
+  test('a pack whose row fails to load says so, rather than keep the previous row', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${sc.flightId}`);
+    await expect(page.locator('.recap-lanes-svg [data-severity="amber"]')).toHaveCount(1);
+    await page.route(`**/api/flights/${sc.flightId}/recap?pack=*`, r => r.fulfill({ status: 500, json: { detail: 'boom' } }));
+    await page.locator('#history-select').selectOption(OLDER);
+    await expect(page.locator('[data-testid="forecast-lane-empty"]')).toBeVisible();
+    await expect(page.locator('.recap-lanes-svg')).toContainText(`pack ${hhmm(OLDER)}`);
+  });
+
   test('the grid stacks one row per tick with the diagonal outlined', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${sc.flightId}`);
     const toggle = page.locator('[data-grid-toggle]');
@@ -271,6 +300,19 @@ test.describe('Debrief recap when nothing was recorded', () => {
     await expect(empty).toContainText('Not recorded for this flight');
     await expect(empty).toContainText('flown before per-tick recording started');
     await expect(page.locator('[data-testid="tick-chips"]')).toHaveCount(0);
+  });
+});
+
+test.describe('Debrief recap that fails to load', () => {
+  const sc = scenario(-200);
+  test('says the recap is unavailable, not "not recorded", and hides the last tick\'s live ribbon', async ({ page }) => {
+    await mockApi(page, sc);
+    await page.route(`**/api/flights/${sc.flightId}/recap**`, r => r.fulfill({ status: 500, json: { detail: 'boom' } }));
+    await page.goto(`/briefing.html?flight=${sc.flightId}`);
+    const empty = page.locator('[data-testid="recap-empty"]');
+    await expect(empty).toContainText('Recap unavailable');
+    await expect(empty).not.toContainText('Not recorded');
+    await expect(page.locator('#observed-ribbon-section')).toBeHidden();
   });
 });
 

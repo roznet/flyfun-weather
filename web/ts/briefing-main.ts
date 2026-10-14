@@ -2443,7 +2443,12 @@ async function init(): Promise<void> {
    *  positions during it. */
   function tickAtRoutePoint(state: BriefingState, alongNm: number): string | null {
     const ticks = state.ticks ?? [];
-    const points = state.recap?.status === 'ok' ? recapTimePoints(state.recap) : tickTimePoints(ticks);
+    const onRecap = state.recap?.status === 'ok';
+    const points = onRecap ? recapTimePoints(state.recap!) : tickTimePoints(ticks);
+    // During the window the ticks' own positions are the only times known:
+    // a point past the last one has not been reached, so it has no tick
+    // (clamping would offer the latest tick as if it were about that point).
+    if (!onRecap && points.length > 0 && alongNm > points[points.length - 1].along_nm) return null;
     return tickForRoutePoint(alongNm, points, ticks)?.tick_at ?? null;
   }
 

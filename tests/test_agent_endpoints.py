@@ -712,6 +712,14 @@ def test_recap_pack_picker_and_stripped_pack(client, app_db):
     missing = client.get(f"/api/flights/{flight.id}/recap", params={"pack": "2020-01-01T00:00:00+00:00"})
     assert missing.status_code == 404
 
+    # A lane file the model cannot read drops the forecast row, not the recap.
+    (_pack_dir(flight, old) / "forecast_lane.json").write_text(json.dumps({
+        "v": 9, "advisories": [{"advisory_id": "icing", "per_model": [{"model": "gfs", "ribbon": [["x"]]}]}],
+    }))
+    bad = client.get(f"/api/flights/{flight.id}/recap", params={"pack": old})
+    assert bad.status_code == 200 and bad.json()["forecast"] is None
+    assert bad.json()["segments"] == recap["segments"]
+
 
 def test_recap_of_cancelled_flight_is_planned(client, app_db):
     from weatherbrief.debriefs.taxonomy import Decision
