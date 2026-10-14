@@ -2621,6 +2621,40 @@ class TestLiveProgress:
         assert self._post(client, old, event="takeoff").status_code == 422
         assert self._post(client, flight, event="bogus").status_code == 422
 
+    def test_unreadable_pack_refuses_without_writing(self, client, app_db):
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        flight, pack_dir = self._flight(app_db)
+        (pack_dir / "briefing.json").write_text('{"route": {}}')
+        assert self._post(client, flight, event="takeoff").status_code == 409
+        assert load_progress_events(flight_dir_for_pack(pack_dir)) == ()
+
+    def test_bounds_use_the_packs_departure(self, client, app_db):
+        """The flight's departure edited after the pack was built: the checks,
+        the delay and the tick all measure from the pack's."""
+        flight, pack_dir = self._flight(app_db)
+        pack_departure = flight.departure_time - timedelta(hours=5)
+        briefing = json.loads((pack_dir / "briefing.json").read_text())
+        briefing["departure_time"] = pack_departure.isoformat()
+        (pack_dir / "briefing.json").write_text(json.dumps(briefing))
+        # 5 h 20 after the pack's departure, 20 min after the flight's: inside.
+        at = flight.departure_time + timedelta(minutes=20)
+        resp = self._post(client, flight, event="takeoff", at=at.isoformat())
+        assert resp.status_code == 200 and resp.json()["progress"]["delay_min"] == 5 * 60 + 20
+        assert self._commit(pack_dir).progress.delay_min == 5 * 60 + 20
+
+    def test_takeoff_edit_may_not_strand_a_landing(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        dep = flight.departure_time
+        assert self._post(client, flight, event="takeoff", at=dep.isoformat()).status_code == 200
+        assert self._post(client, flight, event="landed", at=(dep + timedelta(minutes=10)).isoformat()).status_code == 200
+        late = (dep + timedelta(minutes=15)).isoformat()
+        assert self._post(client, flight, event="takeoff", at=late).status_code == 422
+        # Clearing the landing first makes the edit valid.
+        assert self._post(client, flight, event="landed", clear=True).status_code == 200
+        resp = self._post(client, flight, event="takeoff", at=late)
+        assert resp.status_code == 200 and resp.json()["progress"]["delay_min"] == 15
+
     def test_landed_defaults_to_now(self, client, app_db):
         flight, _ = self._flight(app_db)
         resp = self._post(client, flight, event="landed")

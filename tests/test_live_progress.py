@@ -424,3 +424,52 @@ def test_summary_redaction():
     assert "~" not in json.dumps(none)
     assert summary["progress"]["lat"] == 1.0
     assert redact_summary(None, "none") is None
+
+
+def test_none_leaves_no_eta_anywhere(plan_and_late):
+    """Structural guard for the allow-by-default redaction (#775 review): on
+    real ticks, under ``none`` no field named like an ETA or abeam time keeps
+    a value and no "~HH:MMZ" estimate survives in any text. A new ETA field
+    added without redaction fails here instead of leaking."""
+    import re
+
+    from live_scenario_replay import live_response
+
+    estimate = re.compile(r"~\d{2}:\d{2}Z")
+
+    iso = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+    # Position-bearing fields that must be gone, whatever their type.
+    gone = {"progress", "flown_nm", "minutes_to_abeam", "estimate"}
+
+    def walk(node, path=""):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                key = k.lower()
+                if key in gone:
+                    assert v is None, f"{path}.{k} = {v!r} survives under none"
+                # A clock time under an ETA-like name (eta, eta_from,
+                # abeam_eta, arrival_at…). TAF-at-ETA categories and the
+                # plan-relative eta_hour_offset are not times and may stay.
+                timed = bool({"eta", "abeam", "arrival"} & set(key.split("_")))
+                if timed and isinstance(v, str) and iso.match(v):
+                    raise AssertionError(f"{path}.{k} = {v!r} survives under none")
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+        elif isinstance(node, str):
+            assert not estimate.search(node), f"{path}: {node!r}"
+
+    _, late = plan_and_late
+    checked = 0
+    for t in late:
+        body = LiveLayerResponse.model_validate(live_response(t))
+        before = body.model_dump(mode="json")
+        if not estimate.search(json.dumps(before)) and before["progress"] is None:
+            continue
+        walk(redact_live(body, "none").model_dump(mode="json"))
+        # The guard itself bites: the unredacted body fails it.
+        with pytest.raises(AssertionError):
+            walk(before)
+        checked += 1
+    assert checked > 0
