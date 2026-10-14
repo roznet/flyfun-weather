@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -168,6 +169,181 @@ def test_history_records_round_trip_and_skip_garbage():
         {"type": "report", "kind": "metar"},
     ]
     assert progress_events(records) == events
-    # A fix is carried, not fused (#761).
-    fix_only = late(10, events[2])
-    assert fix_only.source == "plan" and fix_only.departed_at == DEP
+    # A fix's own fields round-trip too (#761).
+    full = fix(10, 1.0)
+    assert progress_events([full.history_record()]) == (full,)
+
+
+# --- App GPS fixes (#761) ----------------------------------------------------------
+
+from weatherbrief.analysis.flight_progress import (  # noqa: E402
+    GROUND_HOLD,
+    SOURCE_APP,
+    FixData,
+)
+
+NM_PER_DEG_LON = 60.0 * math.cos(math.radians(50.0))  # ZZDP → ZZDS runs along 50°N
+
+
+def fix(at_min, lon, gs=120.0, track=90.0, rec_min=None, lat=50.0, stored=None):
+    """An app fix ``at_min`` after DEP at (lat, lon), recorded ``rec_min``
+    after DEP (default: when taken). ``stored``: a server projection."""
+    rec = DEP + timedelta(minutes=rec_min if rec_min is not None else at_min)
+    return ProgressEvent(
+        kind="fix", at=DEP + timedelta(minutes=at_min), recorded_at=rec, source=SOURCE_APP,
+        lat=lat, lon=lon, fix=FixData(gs_kt=gs, track_deg=track, h_accuracy_m=10.0, **(stored or {})),
+    )
+
+
+def test_a_fix_anchors_the_position_and_infers_the_takeoff():
+    """30 min late: at +40 the aircraft is 0.5° (~19 NM) along at 120 kt."""
+    p = late(50, fix(40, 0.5))
+    along0 = p.track.project(50.0, 0.5).along_nm
+    assert p.source == SOURCE_APP and not p.estimated and not p.off_route
+    # Back-extrapolated to the departure at its own speed.
+    assert p.takeoff_at == DEP + timedelta(minutes=40) - timedelta(hours=along0 / 120.0)
+    assert p.delay_min == pytest.approx(40 - along0 / 2.0)
+    assert p.flown_nm == pytest.approx(along0 + 20.0)  # 10 min at 120 kt
+    assert p.arrival == DEP + timedelta(minutes=40) + timedelta(hours=(p.total_nm - along0) / 120.0)
+    assert p.eta(p.total_nm) == p.arrival
+    assert p.fix_age_min == pytest.approx(10.0) and p.fix.at == DEP + timedelta(minutes=40)
+    assert p.time_base == "partial"
+
+
+def test_a_stale_fix_keeps_extrapolating_and_is_estimated():
+    p = late(65, fix(40, 0.5))
+    assert p.estimated and p.source == SOURCE_APP
+    assert p.flown_nm == pytest.approx(p.track.project(50.0, 0.5).along_nm + 50.0)
+
+
+def test_along_track_speed_and_its_fallbacks():
+    track = FlightProgress.from_route(ROUTE, DEP, DEP).track
+    planned_kt = track.total_nm / 1.5
+    # 60° off the route's course: half the ground speed counts.
+    assert late(50, fix(40, 1.0, gs=200, track=150))._anchor.v_kt == pytest.approx(100.0, rel=0.01)
+    # Unknown or slow along-track speed: the planned one.
+    assert late(50, fix(40, 1.0, gs=None))._anchor.v_kt == pytest.approx(planned_kt)
+    assert late(50, ev("takeoff", 20), fix(40, 1.0, gs=30))._anchor.v_kt == pytest.approx(planned_kt)
+
+
+def test_off_route_fix_keeps_the_projection():
+    """18 NM north of the route: off route, planned speed, along-route kept."""
+    p = late(50, fix(20, 0.5), fix(40, 2.0, lat=50.3))
+    assert p.off_route and p.source == SOURCE_APP
+    assert p._anchor.seen.along == pytest.approx(p.track.project(50.3, 2.0).along_nm)
+    assert p._anchor.v_kt == pytest.approx(p.total_nm / 1.5)
+
+
+def test_never_backwards_holds_the_position_until_the_aircraft_catches_up():
+    """Fixes every 25 min; the second is 4 NM behind where the first had
+    extrapolated (a headwind): the position holds instead of going back."""
+    f1 = fix(25, 0.5)  # ~19 NM, 120 kt → 50 NM extrapolated at +40... and 69 at +50
+    expected_at_50 = late(50, f1).flown_nm
+    f2 = fix(50, (expected_at_50 - 4.0) / NM_PER_DEG_LON, gs=100)
+    flown = [late(m, f1, f2).flown_nm for m in range(25, 90, 5)]
+    assert flown == sorted(flown)
+    p = late(50, f1, f2)
+    assert p.flown_nm == pytest.approx(expected_at_50, abs=0.2)  # held, not 4 NM back
+    # Caught up after ~2.4 min at 100 kt; from then the fix's own speed.
+    later = late(60, f1, f2)
+    assert later.flown_nm == pytest.approx(f2_along(later, f2) + 100 / 6, abs=0.2)
+    # A point inside the hold reads as passed when the hold began.
+    assert p.eta(expected_at_50 - 1.0) <= DEP + timedelta(minutes=50)
+
+
+def f2_along(p, f):
+    return p.track.project(f.lat, f.lon).along_nm
+
+
+def test_a_reversal_needs_two_fixes_more_than_10_nm_behind():
+    f1 = fix(20, 1.0)  # ~38 NM
+    back1 = fix(30, 0.4, rec_min=30)  # ~15 NM: far behind the ~58 NM shown
+    one = late(32, f1, back1)
+    assert one.flown_nm >= late(30, f1).flown_nm - 0.01  # held
+    back2 = fix(40, 0.8)
+    two = late(42, f1, back1, back2)
+    assert two.flown_nm == pytest.approx(f2_along(two, back2) + 4.0, abs=0.2)  # accepted
+
+
+def test_first_fix_replaces_the_plan_even_behind_it():
+    """The plan had ~70 NM flown at +40; the first fix says 19: a late
+    departure, taken as it is."""
+    p = late(40, fix(40, 0.5))
+    assert p.flown_nm == pytest.approx(p.track.project(50.0, 0.5).along_nm)
+    assert at(40).flown_nm > p.flown_nm + 40
+
+
+def test_a_ground_fix_at_the_departure_holds_the_departure():
+    taxi = fix(10, 0.01, gs=8)
+    holding = late(20, taxi)
+    assert holding.source == SOURCE_APP and holding.takeoff_at is None
+    assert not holding.departed and holding.flown_nm == 0.0
+    assert holding.departed_at == holding.as_of
+    assert holding.arrival == holding.as_of + timedelta(hours=1.5)  # ETAs from now
+    # Before the planned departure the plan already says not departed.
+    early = FlightProgress.from_route(ROUTE, DEP + timedelta(minutes=30), DEP + timedelta(minutes=20),
+                                      (taxi,))
+    assert early.departed_at == DEP + timedelta(minutes=30) and not early.departed
+    # The hold runs out GROUND_HOLD after the fix: taken to have left then.
+    expired = late(60, taxi)
+    assert expired.departed and expired.departed_at == taxi.at + GROUND_HOLD
+    assert expired.arrival == taxi.at + GROUND_HOLD + timedelta(hours=1.5)
+
+
+def test_takeoff_never_before_the_last_ground_fix():
+    p = late(30, fix(15, 0.01, gs=5), fix(20, 0.6, gs=150))
+    assert p.takeoff_at == DEP + timedelta(minutes=15)
+
+
+def test_a_ground_fix_resets_a_takeoff_seen_on_the_road():
+    """60 kt on the way to the airfield, then taxiing: not departed."""
+    p = late(25, fix(0, 0.05, gs=60, lat=50.03), fix(20, 0.01, gs=10))
+    assert p.takeoff_at is None and not p.departed
+    off = late(45, fix(0, 0.05, gs=60, lat=50.03), fix(20, 0.01, gs=10), fix(40, 0.4, gs=120))
+    assert off.takeoff_at >= DEP + timedelta(minutes=20)
+
+
+def test_manual_entries_override_the_fixes():
+    p = late(50, ev("takeoff", 35), fix(40, 0.5))
+    assert p.takeoff_at == DEP + timedelta(minutes=35)
+    assert p.source == SOURCE_APP  # the position still comes from the fix
+    app_landed = ProgressEvent(kind="landed", at=DEP + timedelta(minutes=100),
+                               recorded_at=DEP + timedelta(minutes=101), source=SOURCE_APP)
+    manual = ev("landed", 95, recorded_min=96)
+    # A manual landing wins over the app's, whichever came last.
+    assert late(110, fix(40, 0.5), manual, app_landed).landed_at == DEP + timedelta(minutes=95)
+    # A withdrawn manual landing lets a later app one count.
+    cleared = ev("landed", None, recorded_min=97)
+    assert late(110, fix(40, 0.5), manual, cleared, app_landed).landed_at == DEP + timedelta(minutes=100)
+
+
+def test_landed_ends_the_fix_extrapolation():
+    landed = ProgressEvent(kind="landed", at=DEP + timedelta(minutes=95),
+                           recorded_at=DEP + timedelta(minutes=96), source=SOURCE_APP)
+    p = late(100, fix(40, 0.5), landed)
+    assert p.arrived and p.arrival == DEP + timedelta(minutes=95)
+    assert p.flown_nm == pytest.approx(p.total_nm) and p.time_base == "observed"
+
+
+def test_schedule_reads_the_stored_projection():
+    """No route in hand (the live window): the stored projection gives the
+    same departure and arrival as the route does."""
+    route_mode = late(50, fix(40, 0.5))
+    seen = route_mode._anchor.seen
+    stored = fix(40, 0.5, stored={"along_nm": seen.along, "cross_nm": seen.cross,
+                                  "course_deg": seen.course, "route_nm": route_mode.total_nm})
+    sched = FlightProgress.schedule(DEP, 1.5, DEP + timedelta(minutes=50), (stored,))
+    assert sched.departed_at == route_mode.departed_at
+    assert sched.arrival == route_mode.arrival
+
+
+def test_a_projection_on_another_route_is_redone():
+    stale = fix(40, 0.5, stored={"along_nm": 5.0, "cross_nm": 0.0, "course_deg": 90.0, "route_nm": 300.0})
+    p = late(50, stale)
+    assert p._anchor.seen.along == pytest.approx(p.track.project(50.0, 0.5).along_nm)
+
+
+def test_fixes_count_only_once_recorded():
+    p = late(45, fix(40, 0.5, rec_min=50))
+    assert p.source == "plan"
+    assert p.at(DEP + timedelta(minutes=55)).source == SOURCE_APP

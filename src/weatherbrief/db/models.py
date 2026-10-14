@@ -2036,6 +2036,10 @@ class LiveTickTimingRow(Base):
     new_reports: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     new_alerts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     new_items_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Where the tick placed the flight (#761): the progress source and the
+    # position fix it measured from (age at use = committed_at - fix_at).
+    progress_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    fix_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
 
 
 class LiveDeliveryRow(Base):

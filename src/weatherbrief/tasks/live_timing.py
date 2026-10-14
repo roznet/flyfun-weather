@@ -178,6 +178,8 @@ def build_tick_row(
         cells_frame_at=trace.cells_frame_at,
         cells_computed_at=trace.cells_computed_at,
         cells_received_at=trace.cells_received_at,
+        progress_source=trace.progress_source,
+        fix_at=trace.fix_at,
     )
     if observations is not None:
         airports = list(observations.airports or [])
@@ -377,6 +379,9 @@ HOPS: dict[str, str] = {
     "cells_computed_to_received": "Cells frame built → droplet",
     "cells_frame_to_available": "Cells frame time → available",
     "tick": "Tick duration",
+    # How old the app GPS fix was when a tick measured from it (#761): what
+    # the UIBackgroundModes: location decision (#759) reads.
+    "fix_age": "Position fix age at use (app)",
 }
 
 #: Report kinds the end-to-end chain is reported for.
@@ -463,6 +468,8 @@ def latency_report(db: Session, *, days: int = 30, now: datetime | None = None) 
             add(day, "available_to_highlight", _ms(t.committed_at, t.highlight_written_at))
         add(day, "cells_computed_to_received", _ms(t.cells_computed_at, t.cells_received_at))
         add(day, "cells_frame_to_available", _ms(t.cells_frame_at, t.committed_at))
+        if t.progress_source == "app":
+            add(day, "fix_age", _ms(t.fix_at, t.committed_at))
         try:
             items = json.loads(t.new_items_json) if t.new_items_json else []
         except ValueError:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2706,6 +2707,103 @@ class TestLiveProgress:
         other, _ = self._flight(app_db, owner_id="owner-user")
         assert client.patch(f"/api/flights/{other.id}/position-sharing",
                             json={"position_sharing": "full"}).status_code == 404
+
+
+class TestLivePosition:
+    """``POST /flights/{id}/live/position``: the app's GPS fixes (#761)."""
+
+    ROUTE = TestLiveProgress.ROUTE
+    _flight = TestLiveProgress._flight
+    _commit = TestLiveProgress._commit
+
+    def _fix(self, at, lon, *, gs=120.0, acc=10.0, lat=50.0, **extra):
+        return {"at": at.isoformat(), "lat": lat, "lon": lon, "alt_ft": 4500.0, "gs_kt": gs,
+                "track_deg": 90.0, "h_accuracy_m": acc, **extra}
+
+    def _post(self, client, flight, fixes, **body):
+        return client.post(f"/api/flights/{flight.id}/live/position", json={"fixes": fixes, **body})
+
+    def test_fixes_are_recorded_projected_and_used_by_the_next_tick(self, client, app_db):
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        flight, pack_dir = self._flight(app_db)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        fixes = [self._fix(now - timedelta(minutes=10), 0.3), self._fix(now - timedelta(minutes=1), 0.6,
+                                                                       along_nm=23.0, cross_track_nm=0.1)]
+        resp = self._post(client, flight, fixes)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["accepted"] == 2 and body["ignored"] == []
+        assert body["progress"]["source"] == "app" and body["progress"]["estimated"] is False
+        events = load_progress_events(flight_dir_for_pack(pack_dir))
+        assert [e.kind for e in events] == ["fix", "fix"] and all(e.source == "app" for e in events)
+        newest = events[-1].fix
+        # Projected here; the device's projection is kept as a cross-check only.
+        assert newest.along_nm == pytest.approx(0.6 * 60 * math.cos(math.radians(50)), abs=0.5)
+        assert newest.cross_nm < 0.1 and newest.route_nm > 150
+        assert newest.client_along_nm == 23.0 and newest.alt_ft == 4500.0
+        layer = self._commit(pack_dir)
+        assert layer.progress.source == "app" and layer.progress.fix_at == now - timedelta(minutes=1)
+        assert layer.progress.departed_at is not None and layer.progress.delay_min is not None
+
+    def test_ignored_fixes_say_why(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        good = self._fix(now - timedelta(minutes=2), 0.5)
+        resp = self._post(client, flight, [
+            good,
+            self._fix(now + timedelta(minutes=30), 0.6),
+            self._fix(now - timedelta(minutes=3), 0.5, acc=3000.0),
+            self._fix(flight.departure_time - timedelta(hours=4), 0.0),
+        ])
+        body = resp.json()
+        assert body["accepted"] == 1
+        assert sorted(i["reason"] for i in body["ignored"]) == ["accuracy", "future", "outside_window"]
+        # The app resends its recent fixes: once each.
+        again = self._post(client, flight, [good]).json()
+        assert again["accepted"] == 0 and again["ignored"][0]["reason"] == "duplicate"
+
+    def test_app_landing_is_recorded_once_and_a_manual_one_wins(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        resp = self._post(client, flight, [self._fix(now - timedelta(minutes=1), 3.99, gs=10.0)], landed=True)
+        body = resp.json()
+        assert body["landed_recorded"] is True
+        assert datetime.fromisoformat(body["progress"]["landed_at"]) == now - timedelta(minutes=1)
+        assert self._post(client, flight, [], landed=True).json()["landed_recorded"] is False
+        manual = (now - timedelta(minutes=5)).isoformat()
+        resp = client.post(f"/api/flights/{flight.id}/live/progress", json={"event": "landed", "at": manual})
+        assert datetime.fromisoformat(resp.json()["progress"]["landed_at"]) == now - timedelta(minutes=5)
+
+    def test_only_the_owner_may_post(self, client, app_db):
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        flight, pack_dir = self._flight(app_db, owner_id="owner-user")
+        now = datetime.now(timezone.utc)
+        assert self._post(client, flight, [self._fix(now, 0.5)]).status_code == 404
+        assert load_progress_events(flight_dir_for_pack(pack_dir)) == ()
+
+    def test_unreadable_pack_refuses_without_writing(self, client, app_db):
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        flight, pack_dir = self._flight(app_db)
+        (pack_dir / "briefing.json").write_text('{"route": {}}')
+        assert self._post(client, flight, [self._fix(datetime.now(timezone.utc), 0.5)]).status_code == 409
+        assert load_progress_events(flight_dir_for_pack(pack_dir)) == ()
+
+    def test_along_route_viewer_sees_the_fix_age_not_the_position(self, client, app_db):
+        from weatherbrief.analysis.flight_progress import SOURCE_APP, FixData, ProgressEvent
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, record_progress_event
+
+        flight, pack_dir = self._flight(app_db, owner_id="owner-user")
+        now = datetime.now(timezone.utc)
+        record_progress_event(flight_dir_for_pack(pack_dir), ProgressEvent(
+            kind="fix", at=now - timedelta(minutes=2), recorded_at=now - timedelta(minutes=1),
+            source=SOURCE_APP, lat=50.0, lon=0.5, fix=FixData(gs_kt=120.0, track_deg=90.0, h_accuracy_m=5.0)))
+        self._commit(pack_dir)
+        progress = client.get(f"/api/flights/{flight.id}/live").json()["progress"]
+        assert progress["source"] == "app" and progress["fix_age_min"] is not None
+        assert progress["lat"] is None and progress["lon"] is None
 
 
 class TestFlightDescription:

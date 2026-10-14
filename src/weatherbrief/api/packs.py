@@ -5346,6 +5346,180 @@ def post_live_progress(
     return LiveProgressResult(flight_id=flight_id, progress=progress_block(after))
 
 
+class LivePositionFix(BaseModel):
+    """One GPS fix from the app (#761). ``along_nm`` / ``cross_track_nm`` are
+    the device's own projection: kept as a cross-check, never used."""
+
+    at: datetime
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    alt_ft: float | None = None
+    # Null when the device has no valid speed / course.
+    gs_kt: float | None = None
+    track_deg: float | None = None
+    h_accuracy_m: float
+    along_nm: float | None = None
+    cross_track_nm: float | None = None
+
+
+class LivePositionRequest(BaseModel):
+    """``POST /flights/{id}/live/position`` (#761): the newest fix plus up to
+    a few recent ones, and ``landed`` when the app detected the landing."""
+
+    fixes: list[LivePositionFix] = Field(default_factory=list, max_length=5)
+    landed: bool = False
+
+
+class IgnoredFix(BaseModel):
+    at: datetime
+    # future | outside_window | accuracy | duplicate
+    reason: str
+
+
+class LivePositionResult(BaseModel):
+    flight_id: str
+    accepted: int = 0
+    ignored: list[IgnoredFix] = Field(default_factory=list)
+    landed_recorded: bool = False
+    # The progress the next tick will use, as of now (owner view).
+    progress: LiveProgress | None = None
+
+
+#: Fixes with a worse horizontal accuracy are ignored (#761): iOS's
+#: approximate location (km-scale) and network-only positions.
+MAX_FIX_ACCURACY_M = 1000.0
+#: The device's own along-route projection is logged when it disagrees with
+#: the server's by more than this (a cross-check, #761).
+_FIX_XCHECK_NM = 5.0
+
+
+@live_router.post("/{flight_id}/live/position", response_model=LivePositionResult)
+def post_live_position(
+    flight_id: str,
+    req: LivePositionRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Record the app's GPS fixes (#761), owner only.
+
+    Each accepted fix is one ``fix`` progress event in the flight's history,
+    projected on the latest pack's route here (the device's projection is a
+    cross-check only). Ignored, and listed with a reason: a fix in the
+    future, outside the live window, with a horizontal accuracy worse than
+    ``MAX_FIX_ACCURACY_M``, or already recorded (the app resends its recent
+    fixes). ``landed`` records an app landing at the newest fix's time,
+    unless a landing is already in effect or it would not follow the
+    departure; a manual landing always wins over it. No refetch: the next
+    tick (10 min) measures from them. 409 when the latest pack cannot be
+    read (nothing written).
+    """
+    from weatherbrief.analysis.flight_progress import (
+        EVENT_FIX,
+        EVENT_LANDED,
+        SOURCE_APP,
+        FixData,
+        FlightProgress,
+        ProgressEvent,
+    )
+    from weatherbrief.analysis.route_geometry import RouteTrack
+    from weatherbrief.models.analysis import RouteConfig
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.tasks.live_layer import (
+        flight_dir_for_pack,
+        progress_block,
+        record_progress_events,
+    )
+    from weatherbrief.tasks.live_tick import live_window_end, live_window_hours
+
+    _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    audit_pack_access(user_id, flight_id, "post_live_position", request)
+    packs = list_packs(db, flight_id)
+    if not packs or not packs[0].artifact_path:
+        raise HTTPException(status_code=404, detail="No packs yet for this flight")
+    pack_dir = Path(_resolve_artifact_path(packs[0].artifact_path))
+    flight_dir = flight_dir_for_pack(pack_dir)
+    try:
+        briefing = load_briefing(pack_dir) or {}
+        route = RouteConfig.model_validate(briefing["route"])
+        planned = _parse_target_time(briefing)
+        track = RouteTrack.from_route(route)
+    except Exception:
+        logger.warning("Live position: latest pack of %s unreadable", flight_id, exc_info=True)
+        raise HTTPException(status_code=409, detail="The flight's latest briefing cannot be read; refresh it first")
+
+    now = datetime.now(timezone.utc)
+    before_h, after_h = live_window_hours()
+
+    def select(recorded):
+        """The fixes worth recording, against what is already recorded;
+        runs under the flight's lock."""
+        window_end = live_window_end(planned, route.flight_duration_hours, after_h, recorded, now)
+        start = planned - timedelta(hours=before_h)
+        known = {e.at for e in recorded if e.kind == EVENT_FIX and e.source == SOURCE_APP}
+        accepted, ignored = [], []
+        for f in sorted(req.fixes, key=lambda f: f.at):
+            at = ensure_utc(f.at)
+            reason = None
+            if at > now + _PROGRESS_CLOCK_SKEW:
+                reason = "future"
+            elif not start <= at <= window_end:
+                reason = "outside_window"
+            elif not 0 <= f.h_accuracy_m <= MAX_FIX_ACCURACY_M:
+                reason = "accuracy"
+            elif at in known:
+                reason = "duplicate"
+            if reason is not None:
+                ignored.append(IgnoredFix(at=at, reason=reason))
+                continue
+            known.add(at)
+            p = track.project(f.lat, f.lon)
+            if f.along_nm is not None and abs(f.along_nm - p.along_nm) > _FIX_XCHECK_NM:
+                logger.info("LIVE_POSITION_XCHECK flight=%s at=%s server_along=%.1f client_along=%.1f",
+                            flight_id, at.isoformat(), p.along_nm, f.along_nm)
+            accepted.append(ProgressEvent(
+                kind=EVENT_FIX, at=at, recorded_at=now, source=SOURCE_APP, lat=f.lat, lon=f.lon,
+                fix=FixData(
+                    alt_ft=f.alt_ft, gs_kt=f.gs_kt, track_deg=f.track_deg, h_accuracy_m=f.h_accuracy_m,
+                    along_nm=round(p.along_nm, 2), cross_nm=round(p.offtrack_nm, 2),
+                    course_deg=round(p.track_deg, 1), route_nm=round(track.total_nm, 2),
+                    client_along_nm=f.along_nm, client_cross_nm=f.cross_track_nm,
+                ),
+            ))
+        events = [*recorded, *accepted]
+        landed_event = None
+        if req.landed:
+            newest = max((ensure_utc(f.at) for f in req.fixes), default=now)
+            at = min(newest, now)
+            before = FlightProgress.from_route(route, planned, now, events)
+            candidate = ProgressEvent(kind=EVENT_LANDED, at=at, recorded_at=now, source=SOURCE_APP)
+            after = FlightProgress.from_route(route, planned, now, (*events, candidate))
+            if (before.landed_at is None and after.landed_at is not None
+                    and start <= at <= window_end):
+                landed_event = candidate
+                events.append(candidate)
+        new = accepted + ([landed_event] if landed_event is not None else [])
+        progress = FlightProgress.from_route(route, planned, now, events)
+        return new, (accepted, ignored, landed_event is not None, progress)
+
+    try:
+        accepted, ignored, landed, progress = record_progress_events(flight_dir, select)
+    except OSError:
+        logger.exception("Live position write failed for flight %s", flight_id)
+        raise HTTPException(status_code=500, detail="Could not record the fixes")
+    newest_age = (now - accepted[-1].at).total_seconds() / 60.0 if accepted else None
+    logger.info(
+        "LIVE_POSITION flight=%s accepted=%d ignored=%s landed=%s newest_age_min=%s source=%s",
+        flight_id, len(accepted), ",".join(i.reason for i in ignored) or "-", landed,
+        f"{newest_age:.1f}" if newest_age is not None else "-", progress.source,
+    )
+    return LivePositionResult(
+        flight_id=flight_id, accepted=len(accepted), ignored=ignored, landed_recorded=landed,
+        progress=progress_block(progress),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Debrief: replay and observed recap (#711)
 # ---------------------------------------------------------------------------
