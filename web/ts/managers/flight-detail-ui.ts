@@ -671,11 +671,16 @@ export function renderDebriefSection(
   host.dataset.flightId = flight.id;
 
   const debrief = flight.debrief ?? null;
+  // #769: what the instruments saw along the flight lives on the briefing
+  // page (the recap, opened focused on "Along the route"). Where the form
+  // itself should live is the #769 review pass's call; it stays here.
+  const recapUrl = `/briefing.html?flight=${encodeURIComponent(flight.id)}&section=observed-ribbon`;
+  const recapLink = ` <a class="btn btn-secondary" href="${recapUrl}" data-testid="debrief-recap-link">${t('debrief.viewRecap')}</a>`;
   if (debrief) {
-    banner.innerHTML = `<button type="button" class="btn btn-secondary" id="debrief-edit-btn">${t('debrief.editCta')}</button>`;
+    banner.innerHTML = `<button type="button" class="btn btn-secondary" id="debrief-edit-btn">${t('debrief.editCta')}</button>${recapLink}`;
     summary.innerHTML = renderDebriefSummary(debrief);
   } else {
-    banner.innerHTML = `<button type="button" class="btn btn-primary" id="debrief-edit-btn">${t('debrief.addCta')}</button>`;
+    banner.innerHTML = `<button type="button" class="btn btn-primary" id="debrief-edit-btn">${t('debrief.addCta')}</button>${recapLink}`;
     summary.innerHTML = '';
   }
 

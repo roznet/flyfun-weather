@@ -1,7 +1,7 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, LiveLayer, PackMeta, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, LiveLayer, LiveTickEntry, PackMeta, RecapForecast, RecapResponse, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
 import type { RouteWindOverlay, TimeOptionsResponse } from '../adapters/api-adapter';
@@ -16,6 +16,7 @@ import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
 import { addsTrails, applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
+import { REPLAY_BASE, startTick, tickFailed, tickLoaded, type ReplayState } from '../helpers/debrief-replay';
 
 // --- localStorage persistence helpers ---
 
@@ -212,6 +213,15 @@ export interface BriefingState {
    *  null until `loadLive` applies one (the latest pack's snapshot already
    *  carries the server-side overlay at load time). */
   live: LiveLayer | null;
+  /** Debrief replay (#769): the recorded ticks of the live window (oldest
+   *  first; null until loaded), the recap (after the window), the forecast
+   *  row the pilot picked from the pack list (null = the recap's default),
+   *  and what the Observed section is showing. Flight-level: a pack switch
+   *  keeps them. */
+  ticks: LiveTickEntry[] | null;
+  recap: RecapResponse | null;
+  recapForecast: RecapForecast | null;
+  replay: ReplayState;
 
   // Actions
   loadFlight: (id: string) => Promise<void>;
@@ -256,6 +266,17 @@ export interface BriefingState {
    *  same pack with a different live_updated_at → `loadLive()`. No-op unless
    *  the user is viewing the latest pack. */
   syncLatest: () => Promise<void>;
+  /** Re-read the recorded ticks (`segments` for the distance × time grid). */
+  loadTicks: (segments?: boolean) => Promise<void>;
+  /** Load the recap with the server's default forecast pack. */
+  loadRecap: () => Promise<void>;
+  /** Re-fetch the recap for another pack's forecast row; only the forecast
+   *  lane changes (`recapForecast`). */
+  loadRecapForecast: (packTimestamp: string) => Promise<void>;
+  /** Show the Observed section as it stood at a recorded tick. */
+  viewTick: (tick: string) => Promise<void>;
+  /** Back to live (in the window) or the recap (after it). */
+  backToBase: () => void;
   /** Generate the AI summary on demand for a pack whose profile had AI off. */
   generateDigest: () => Promise<void>;
   sendEmail: () => Promise<void>;
@@ -425,6 +446,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   emailing: false,
   error: null,
   live: null,
+  ticks: null,
+  recap: null,
+  recapForecast: null,
+  replay: REPLAY_BASE,
 
   loadFlight: async (id: string) => {
     set({ loading: true, error: null });
@@ -1040,6 +1065,65 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     if (meta.live_updated_at && !sameInstant(meta.live_updated_at, applied)) {
       await get().loadLive();
     }
+  },
+
+  loadTicks: async (segments = false) => {
+    const flightId = get().flight?.id;
+    if (!flightId) return;
+    try {
+      const res = await api.fetchLiveTicks(flightId, segments);
+      if (get().flight?.id !== flightId) return;
+      // A plain re-read (the window's poll) must not drop the grid's lanes.
+      const prev = get().ticks;
+      const keepSegments = !segments && prev?.some((t) => t.segments);
+      set({ ticks: keepSegments ? res.ticks.map((t) => ({
+        ...t, segments: prev!.find((p) => sameInstant(p.tick_at, t.tick_at))?.segments ?? null,
+      })) : res.ticks });
+    } catch {
+      /* non-critical: no chips */
+    }
+  },
+
+  loadRecap: async () => {
+    const flightId = get().flight?.id;
+    if (!flightId) return;
+    try {
+      const recap = await api.fetchRecap(flightId);
+      if (get().flight?.id !== flightId) return;
+      set({ recap });
+    } catch {
+      /* non-critical: the section says nothing was loaded */
+    }
+  },
+
+  loadRecapForecast: async (packTimestamp: string) => {
+    const flightId = get().flight?.id;
+    if (!flightId || !get().recap) return;
+    try {
+      const res = await api.fetchRecap(flightId, packTimestamp);
+      if (get().flight?.id !== flightId) return;
+      set({ recapForecast: res.forecast ?? null });
+    } catch {
+      /* a pack without a lane: keep the current row */
+    }
+  },
+
+  viewTick: async (tick: string) => {
+    const flightId = get().flight?.id;
+    if (!flightId) return;
+    const previous = get().replay;
+    set({ replay: startTick(previous, tick) });
+    try {
+      const view = await api.fetchLiveAt(flightId, tick);
+      if (get().flight?.id !== flightId) return;
+      set({ replay: tickLoaded(get().replay, tick, view) });
+    } catch {
+      set({ replay: tickFailed(get().replay, tick, previous) });
+    }
+  },
+
+  backToBase: () => {
+    set({ replay: REPLAY_BASE });
   },
 
   generateDigest: async () => {

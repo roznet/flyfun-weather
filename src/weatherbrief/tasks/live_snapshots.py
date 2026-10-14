@@ -441,10 +441,14 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     }
 
 
-def tick_index(snapshots: list[dict]) -> list[dict]:
-    """``GET /live/ticks``: each tick's time, radar frame and position."""
-    return [
-        {
+def tick_index(snapshots: list[dict], *, segments: bool = False) -> list[dict]:
+    """``GET /live/ticks``: each tick's time, radar frame and position. With
+    ``segments``, each tick's radar lane too (the distance × time grid, #769):
+    ``[from_nm, to_nm, radar_status, radar_max_dbz, lightning]`` per stretch,
+    a few hundred bytes a tick."""
+    out = []
+    for s in snapshots:
+        entry = {
             "tick_at": s.get("tick_at"),
             "radar_time": s.get("radar_time"),
             "pack_timestamp": s.get("pack_timestamp"),
@@ -452,5 +456,11 @@ def tick_index(snapshots: list[dict]) -> list[dict]:
             "progress_source": (s.get("progress") or {}).get("source"),
             "alert_count": ((s.get("changes") or {}).get("alert_count")),
         }
-        for s in snapshots
-    ]
+        if segments:
+            entry["segments"] = [
+                {k: seg.get(k) for k in ("from_nm", "to_nm", "radar_status", "radar_max_dbz", "lightning")}
+                for seg in ((s.get("ribbon") or {}).get("segments") or [])
+                if seg.get("from_nm") is not None and seg.get("to_nm") is not None
+            ]
+        out.append(entry)
+    return out

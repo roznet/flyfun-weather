@@ -8929,7 +8929,7 @@ body.resizing-rail {
   border-radius: var(--radius);
 }
 .rail-focus-label { font-size: 0.82rem; font-weight: 600; }
-.briefing-shell[data-focus] .briefing-main > *:not([data-focus-target]) { display: none !important; }
+.briefing-shell[data-focus] .briefing-main > *:not([data-focus-target]):not(.observed-mode-bar) { display: none !important; }
 .briefing-shell[data-focus="cross-section"] .viz-canvas-container { height: min(62vh, 660px) !important; }
 .briefing-shell[data-focus="cross-section"] .map-container { height: min(62vh, 660px) !important; }
 
@@ -9774,3 +9774,101 @@ button.glance-line:hover {
 .rw-details summary { cursor: pointer; color: var(--text-muted); }
 .rw-details ul { margin: 0.25rem 0 0; padding-left: 1rem; }
 .rw-note { color: var(--text-muted); margin: 0.3rem 0 0; }
+
+
+/* --- Debrief recap + single-tick replay (#769) --------------------------- */
+
+.observed-mode-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  margin: 0 0 0.75rem;
+  padding: 0.45rem 0.75rem;
+  background: color-mix(in srgb, var(--primary) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: var(--radius);
+}
+.observed-mode-bar[hidden] { display: none; }
+.mode-bar-text { font-weight: 600; }
+.mode-bar-note { font-size: 0.8rem; color: var(--text-muted); flex: 1 1 14rem; }
+.mode-bar-back { margin-left: auto; }
+
+.tick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+.tick-chips-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 0.2rem;
+}
+.tick-chip {
+  font: inherit;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.tick-chip:hover { border-color: var(--primary); }
+.tick-chip-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.tick-chip-alerts { color: var(--red); font-size: 0.6rem; vertical-align: middle; }
+.tick-chip-active .tick-chip-alerts { color: #fff; }
+.tick-chip-point { border-style: dashed; }
+
+.recap-caption { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; }
+.recap-capped {
+  font-size: 0.8rem;
+  margin: 0 0 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border-left: 3px solid var(--amber);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+.recap-empty { padding: 0.5rem 0; }
+.recap-empty p { margin: 0.25rem 0 0; }
+.recap-lanes { margin-top: 0.25rem; }
+.recap-lanes-svg, .grid-svg { display: block; overflow: visible; }
+.recap-lane-label { font-size: 10px; fill: var(--text-muted); }
+.recap-lane-empty { font-size: 10px; fill: var(--text-muted); font-style: italic; }
+.recap-seen rect { fill: color-mix(in srgb, var(--text-muted) 8%, transparent); stroke: var(--surface); stroke-width: 1; }
+.recap-seen-observed { cursor: pointer; }
+.recap-seen-observed rect { fill: color-mix(in srgb, var(--primary) 14%, transparent); }
+.recap-seen-observed:hover rect, .recap-seen-observed:focus rect { fill: color-mix(in srgb, var(--primary) 30%, transparent); }
+.recap-seen-missing rect { fill: transparent; stroke: var(--border); stroke-dasharray: 2 2; }
+.recap-seen text { font-size: 10px; fill: var(--text); font-variant-numeric: tabular-nums; pointer-events: none; }
+.recap-seen-missing text { fill: var(--text-muted); font-style: italic; }
+.recap-route-hit { cursor: crosshair; }
+.recap-fc { opacity: 0.75; stroke: var(--surface); stroke-width: 0.5; }
+.recap-alert { cursor: pointer; }
+.recap-alert-worse { fill: var(--red); }
+.recap-alert-better { fill: var(--green); }
+.recap-alert-cleared { fill: none; stroke: var(--text-muted); stroke-width: 1.5; }
+.recap-alert:not(.recap-alert-tier) { opacity: 0.6; }
+.recap-grid-toggle { display: inline-flex; gap: 0.35rem; align-items: center; font-size: 0.82rem; margin: 0.4rem 0; cursor: pointer; }
+.recap-grid { margin-top: 0.25rem; }
+.grid-row { cursor: pointer; }
+.grid-row:hover .grid-row-hit, .grid-row:focus .grid-row-hit { fill: color-mix(in srgb, var(--primary) 10%, transparent); }
+.grid-time { font-size: 9px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
+.grid-cell { stroke: color-mix(in srgb, var(--text-muted) 15%, transparent); stroke-width: 0.5; }
+.grid-diagonal { stroke: var(--primary); stroke-width: 1.5; }
+.grid-aircraft { fill: var(--primary); }
+.grid-alert { fill: var(--red); }
+/* The recap draws no airports and no SIGMET band (the replay has them): the
+   shared ribbon key's first two items (METAR now, SIGMET) would mislead. */
+.recap-ribbon .ribbon-key-item:nth-child(-n+2) { display: none; }

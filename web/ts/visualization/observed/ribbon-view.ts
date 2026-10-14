@@ -44,6 +44,7 @@ import {
   ribbonCaption,
   routeNmOf,
   segmentFocusAt,
+  segmentIndexAt,
   segmentLabel,
   sigmetText,
   STATION_HIT_RADIUS,
@@ -80,6 +81,10 @@ export interface RibbonHandlers {
   onFocus: (focus: LiveFocus) => void;
   /** Open a cell's detail. */
   onStorm: (storm: LiveStorm) => void;
+  /** The debrief recap (#769): a tap on a stretch of route opens the tick it
+   *  was read from, instead of framing the map. Every stretch is a control
+   *  when set, focus or not. */
+  onSegment?: (index: number) => void;
 }
 
 /** A right-pointing arrow head, rotated by the band's motion. */
@@ -130,7 +135,7 @@ function sigmetMark(s: RibbonSigmet, ribbon: LiveRibbon, width: number, i: numbe
 }
 
 /** Without the cells feed: the radar max per stretch, hugging the line. */
-function radarStrip(ribbon: LiveRibbon, width: number): string {
+function radarStrip(ribbon: LiveRibbon, width: number, interactive = false): string {
   const routeNm = routeNmOf(ribbon);
   return (ribbon.segments ?? []).map((seg, i) => {
     const x0 = xForNm(seg.from_nm ?? 0, routeNm, width);
@@ -140,9 +145,10 @@ function radarStrip(ribbon: LiveRibbon, width: number): string {
       ? `<text x="${((x0 + x1) / 2).toFixed(1)}" y="${TRACK_Y - 11}" class="ribbon-bolt"`
         + ' text-anchor="middle">⚡</text>'
       : '';
-    const hit = seg.focus ? ' ribbon-hit' : '';
+    const control = !!seg.focus || interactive;
+    const hit = control ? ' ribbon-hit' : '';
     return `<g class="ribbon-radar${hit}" data-ribbon-seg="${i}"`
-      + `${seg.focus ? ` data-ribbon-focus="segment:${i}" tabindex="0" role="button"` : ''}`
+      + `${control ? ` data-ribbon-focus="segment:${i}" tabindex="0" role="button"` : ''}`
       + ` aria-label="${escapeHtml(segmentLabel(seg))}">`
       + `<rect x="${x0.toFixed(1)}" y="${TRACK_Y - 8}" width="${w.toFixed(1)}" height="16"`
       + ` fill="${radarFill(seg)}"/>${bolt}</g>`;
@@ -197,6 +203,7 @@ export function ribbonSvg(
   storms: LiveStorm[],
   corridorNm: number,
   width: number,
+  segmentsInteractive = false,
 ): string {
   const bands = weatherAvailable(ribbon);
   const corridor = corridorOf(ribbon, corridorNm);
@@ -220,7 +227,7 @@ export function ribbonSvg(
     // behind them — both resolve to the same segment focus; keyboard users
     // had no path to it at all before.
     inner += (ribbon.segments ?? []).map((seg, i) => {
-      if (!seg.focus) return '';
+      if (!seg.focus && !segmentsInteractive) return '';
       const x0 = xForNm(seg.from_nm ?? 0, routeNm, width);
       const x1 = xForNm(seg.to_nm ?? 0, routeNm, width);
       return `<rect class="ribbon-seg-hit ribbon-hit" data-ribbon-focus="segment:${i}"`
@@ -229,7 +236,7 @@ export function ribbonSvg(
         + ` height="${ZONE_BOTTOM - ZONE_TOP}" fill="transparent"/>`;
     }).join('');
   } else {
-    inner += radarStrip(ribbon, width);
+    inner += radarStrip(ribbon, width, segmentsInteractive);
   }
 
   // The route itself, straight and to scale.
@@ -394,7 +401,7 @@ export function mountRibbon(
     el.innerHTML =
       `<div class="ribbon-head">`
       + `<span class="ribbon-caption">${escapeHtml(ribbonCaption(ribbon, corridorNm, formatHhmmZ))}</span></div>`
-      + `<div class="ribbon-plot">${ribbonSvg(ribbon, list, corridorNm, width)}</div>`
+      + `<div class="ribbon-plot">${ribbonSvg(ribbon, list, corridorNm, width, !!handlers.onSegment)}</div>`
       + (bands ? ''
         : '<p class="ribbon-fallback-note">Rain and cells unavailable: radar strip within '
           + `${Math.round(ribbon.radar_radius_nm ?? 10)} NM of the route</p>`)
@@ -544,6 +551,11 @@ export function mountRibbon(
       return;
     }
     const focusEl = target.closest<HTMLElement>('[data-ribbon-focus]');
+    const token = focusEl?.dataset.ribbonFocus ?? '';
+    if (focusEl && handlers.onSegment && token.startsWith('segment:')) {
+      handlers.onSegment(Number(token.split(':')[1]));
+      return;
+    }
     if (focusEl) {
       const focus = focusFor(focusEl.dataset.ribbonFocus ?? '');
       if (focus) handlers.onFocus(focus);
@@ -555,6 +567,11 @@ export function mountRibbon(
       const svg = el.querySelector('.ribbon-svg');
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
+      if (handlers.onSegment) {
+        const i = segmentIndexAt(ribbon, clientX - rect.left, rect.width);
+        if (i != null) handlers.onSegment(i);
+        return;
+      }
       const focus = segmentFocusAt(ribbon, clientX - rect.left, rect.width);
       if (focus) handlers.onFocus(focus);
     }

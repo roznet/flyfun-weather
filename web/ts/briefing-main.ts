@@ -10,8 +10,19 @@ import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
-import { departureMs, isInLiveWindow, isLiveWindowPast, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
-import type { FlightResponse, LiveFocus } from './store/types';
+import { departureMs, formatHhmmZ, isInLiveWindow, isLiveWindowPast, isoToMs, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
+import type { FlightResponse, ForecastSnapshot, LiveFocus, LiveTickResponse, RecapResponse } from './store/types';
+import {
+  forecastLaneBands,
+  isReplaying,
+  modeBarText,
+  observedLive,
+  recapTimePoints,
+  snapshotAtTick,
+  tickForRoutePoint,
+  tickTimePoints,
+} from './helpers/debrief-replay';
+import { GRID_WIDE_PX, modeBarHtml, mountRecap, redrawForecastLane, tickChipsHtml } from './visualization/observed/recap-view';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -2280,8 +2291,11 @@ async function init(): Promise<void> {
   const SHOW_RUNWAY_WIND_DIALS = false;
   let lastRunwayWindHtml: string | null = null;
   function renderObservedLive(state: BriefingState): void {
-    const glance = state.live?.glance ?? null;
-    const ribbon = state.live?.ribbon ?? null;
+    // #769: while a recorded tick is on screen, every Observed renderer reads
+    // the tick; the live poll keeps updating `state.live` underneath.
+    const liveView = observedLive(state.replay, state.live);
+    const glance = liveView?.glance ?? null;
+    const ribbon = liveView?.ribbon ?? null;
     const glanceWrapper = document.getElementById('observed-glance-wrapper');
     const ribbonWrapper = document.getElementById('observed-ribbon-wrapper');
     const glanceEl = document.getElementById('observed-glance-section');
@@ -2291,9 +2305,9 @@ async function init(): Promise<void> {
     // #758: departure + destination runway/wind dials. Flight day only (the
     // live layer exists); its own tick's airports, else the pack's.
     const flightWaypoints = state.flight?.waypoints ?? [];
-    const windDials = SHOW_RUNWAY_WIND_DIALS && state.live
+    const windDials = SHOW_RUNWAY_WIND_DIALS && liveView
       ? runwayWindPair(
-        state.live.route_observations?.airports ?? state.snapshot?.route_observations?.airports,
+        liveView.route_observations?.airports ?? state.snapshot?.route_observations?.airports,
         flightWaypoints[0], flightWaypoints.length > 1 ? flightWaypoints[flightWaypoints.length - 1] : null,
       )
       : [];
@@ -2309,14 +2323,15 @@ async function init(): Promise<void> {
       }
     }
     if (hasGlance && glanceEl && glance) {
-      const live = state.live!;
+      const live = liveView!;
       const ratedKey = glance.highlight ? highlightRatingKey(live.flight_id, glance.highlight) : null;
       mountNutshell(glanceEl, glance, !!state.snapshot?.observed_conditions, {
         onFocus: (focus) => focusMapOn(focus),
         onShowMap: () => focusMapOn(null, ['radar', 'cells']),
         // #697: a 👍/👎 on the highlight, with the rated line as its context
-        // (the line is regenerated as the weather changes).
-        onRateHighlight: async (highlight, sentiment, comment, contactOk) => {
+        // (the line is regenerated as the weather changes). Not on a replayed
+        // tick (#769): the rating log is for the line as the pilot met it.
+        onRateHighlight: isReplaying(state.replay) ? undefined : async (highlight, sentiment, comment, contactOk) => {
           await api.submitFeedback({
             flight_id: live.flight_id,
             pack_timestamp: live.pack_timestamp,
@@ -2336,21 +2351,22 @@ async function init(): Promise<void> {
         },
       }, { highlightRated: ratedKey != null && ratedHighlights.has(ratedKey) });
       // Fill the "N min ago" the card leaves empty; the poll re-ages it after.
-      ui.refreshLiveAges();
+      refreshAges();
     }
 
     // The ribbon needs the nutshell: without a glance the tick could not
     // build either, and a ribbon on its own has no heading to read it by.
     const hasRibbon = hasGlance && !!ribbon;
-    if (ribbonWrapper) ribbonWrapper.style.display = hasRibbon ? '' : 'none';
+    liveRibbonShown = hasRibbon;
+    syncRibbonWrapper(ribbonWrapper);
     ribbonTeardown?.();
     ribbonTeardown = null;
     if (hasRibbon && ribbonEl && ribbon) {
       // The tooltips' airports: the ribbon's own tick when the layer has
       // them, else the pack's.
-      const airports = state.live?.route_observations?.airports
+      const airports = liveView?.route_observations?.airports
         ?? state.snapshot?.route_observations?.airports ?? null;
-      ribbonTeardown = mountRibbon(ribbonEl, ribbon, state.live?.storms, {
+      ribbonTeardown = mountRibbon(ribbonEl, ribbon, liveView?.storms, {
         onFocus: (focus) => focusMapOn(focus),
         onStorm: (storm) => {
           showPopupContent(stormDetailHtml(storm));
@@ -2363,6 +2379,176 @@ async function init(): Promise<void> {
         },
       }, airports);
     }
+  }
+
+  // --- Debrief recap + single-tick replay (#769) ----------------------------
+  //
+  // During the live window the "Along the route" section is live as before,
+  // plus a row of recorded tick chips; after it, the section opens on the
+  // recap. Picking a tick (chip, recap stretch, alert marker, grid row, a
+  // point on the route) re-renders the whole Observed group from
+  // `/live/at` until "Back to live / recap". Live polling keeps running
+  // meanwhile; it just does not replace the view (`helpers/debrief-replay`).
+  let liveRibbonShown = false;
+  let replayPanelShown = false;
+  let recapTeardown: (() => void) | null = null;
+  let recapMounted: { recap: RecapResponse; ticks: unknown } | null = null;
+  let recapForecastDrawn: unknown = null;
+  /** The grid toggle as the pilot left it; null = default by width. */
+  let recapGridOn: boolean | null = null;
+
+  const flightDeparture = (f: FlightResponse) =>
+    f.departure_time || { target_date: f.target_date, target_time_utc: f.target_time_utc };
+  const windowPast = (f: FlightResponse | null) =>
+    !!f && isLiveWindowPast(flightDeparture(f), f.flight_duration_hours);
+  const windowStarted = (f: FlightResponse | null) =>
+    !!f && Date.now() >= departureMs(flightDeparture(f)) - LIVE_WINDOW_BEFORE_H * 3600_000;
+
+  function syncRibbonWrapper(wrapper: HTMLElement | null = document.getElementById('observed-ribbon-wrapper')): void {
+    if (wrapper) wrapper.style.display = liveRibbonShown || replayPanelShown ? '' : 'none';
+  }
+
+  /** The snapshot the snapshot-driven Observed sections render: the tick
+   *  folded in while replaying (memoised on the two references). */
+  let tickSnapshotMemo: { snap: ForecastSnapshot; view: LiveTickResponse; out: ForecastSnapshot } | null = null;
+  function observedSnapshot(state: BriefingState): ForecastSnapshot | null {
+    if (!isReplaying(state.replay) || !state.snapshot) return state.snapshot;
+    const view = state.replay.view;
+    if (tickSnapshotMemo?.snap !== state.snapshot || tickSnapshotMemo.view !== view) {
+      tickSnapshotMemo = { snap: state.snapshot, view, out: snapshotAtTick(state.snapshot, view) };
+    }
+    return tickSnapshotMemo.out;
+  }
+
+  /** "N min ago" is measured from the tick while replaying. */
+  function agesNow(state: BriefingState): number {
+    return isReplaying(state.replay) ? isoToMs(state.replay.view.tick_at) : Date.now();
+  }
+  function refreshAges(): void {
+    ui.refreshLiveAges(agesNow(store.getState()));
+  }
+
+  /** Radar & lightning cards, METAR table, SIGMETs and the changes panel. */
+  function renderObservedSources(state: BriefingState): void {
+    const snap = observedSnapshot(state);
+    ui.renderRefreshDelta(snap, state.currentPack?.fetch_timestamp ?? null, agesNow(state));
+    ui.renderObservedConditions(snap);
+    ui.renderRouteSigmets(snap);
+    ui.renderRouteObservations(snap, () => store.getState().refreshObservations());
+    refreshAges();
+  }
+
+  /** Route point → tick: the aircraft's time there, then the last tick at
+   *  or before it. The recap's times after the window, the ticks' own
+   *  positions during it. */
+  function tickAtRoutePoint(state: BriefingState, alongNm: number): string | null {
+    const ticks = state.ticks ?? [];
+    const points = state.recap?.status === 'ok' ? recapTimePoints(state.recap) : tickTimePoints(ticks);
+    return tickForRoutePoint(alongNm, points, ticks)?.tick_at ?? null;
+  }
+
+  function onPackPicked(ts: string): void {
+    void store.getState().selectPack(ts);
+    // #769: the pack list also picks the recap's forecast row.
+    if (store.getState().recap) void store.getState().loadRecapForecast(ts);
+  }
+
+  function renderReplayPanel(state: BriefingState): void {
+    const panel = document.getElementById('observed-replay');
+    const bar = document.getElementById('observed-mode-bar');
+    const ribbonEl = document.getElementById('observed-ribbon-section');
+    if (!panel || !bar) return;
+    if (!panel.dataset.wired) {
+      panel.dataset.wired = '1';
+      panel.innerHTML = '<div class="replay-chips-host"></div><div class="recap-host"></div>';
+      panel.addEventListener('click', (ev) => {
+        const chip = (ev.target as Element | null)?.closest<HTMLElement>('[data-tick]');
+        if (chip?.dataset.tick) void store.getState().viewTick(chip.dataset.tick);
+      });
+      bar.addEventListener('click', (ev) => {
+        if ((ev.target as Element | null)?.closest('[data-testid="mode-bar-back"]')) store.getState().backToBase();
+      });
+    }
+    const chipsHost = panel.querySelector<HTMLElement>('.replay-chips-host')!;
+    const recapHost = panel.querySelector<HTMLElement>('.recap-host')!;
+    const past = windowPast(state.flight);
+    const ticks = state.ticks ?? [];
+    const replay = state.replay;
+
+    const text = modeBarText(replay);
+    if (text) {
+      bar.innerHTML = modeBarHtml(text, past ? 'Back to recap' : 'Back to live');
+      bar.hidden = false;
+    } else {
+      bar.hidden = true;
+      bar.innerHTML = '';
+    }
+
+    // Tick chips, plus the route point selected on the cross-section / map.
+    let pointChip = '';
+    const idx = state.selectedPointIndex;
+    const point = idx != null ? state.routeAnalyses?.analyses?.[idx] : null;
+    if (point && ticks.length) {
+      const tick = tickAtRoutePoint(state, point.distance_from_origin_nm);
+      if (tick) {
+        pointChip = `<button type="button" class="tick-chip tick-chip-point" data-tick="${escapeHtml(tick)}"`
+          + ` data-testid="route-point-tick">Selected point (${Math.round(point.distance_from_origin_nm)} NM)`
+          + ` → ${escapeHtml(formatHhmmZ(tick))}</button>`;
+      }
+    }
+    chipsHost.innerHTML = ticks.length
+      ? tickChipsHtml(ticks, replay.kind === 'base' ? null : replay.tick, pointChip)
+      : '';
+
+    // The recap: after the window, on the base view. Shown before mounting,
+    // so the drawing measures a real width.
+    const showRecap = past && replay.kind === 'base' && !!state.recap;
+    // The last tick's live ribbon would sit under the recap reading "now".
+    if (ribbonEl) ribbonEl.style.display = showRecap ? 'none' : '';
+    replayPanelShown = ticks.length > 0 || showRecap;
+    syncRibbonWrapper();
+    if (showRecap && state.recap) {
+      const forecast = state.recapForecast ?? state.recap.forecast ?? null;
+      const bands = forecastLaneBands(forecast);
+      if (recapMounted?.recap !== state.recap || recapMounted.ticks !== state.ticks || !recapTeardown) {
+        recapTeardown?.();
+        recapTeardown = mountRecap(recapHost, {
+          recap: state.recap,
+          forecast,
+          bands,
+          ticks,
+          showGrid: recapGridOn ?? panel.clientWidth >= GRID_WIDE_PX,
+        }, {
+          onTick: (tick) => { void store.getState().viewTick(tick); },
+          onRoutePoint: (nm) => {
+            const tick = tickAtRoutePoint(store.getState(), nm);
+            if (tick) void store.getState().viewTick(tick);
+          },
+          onStorm: (storm) => showPopupContent(stormDetailHtml(storm)),
+        }, (on) => { recapGridOn = on; });
+        recapMounted = { recap: state.recap, ticks: state.ticks };
+        recapForecastDrawn = forecast;
+      } else if (recapForecastDrawn !== forecast) {
+        // Pack picker: only the forecast lane changes.
+        redrawForecastLane(recapHost, state.recap, bands, forecast);
+        recapForecastDrawn = forecast;
+      }
+    } else if (recapTeardown) {
+      recapTeardown();
+      recapTeardown = null;
+      recapMounted = null;
+      recapHost.innerHTML = '';
+    }
+  }
+
+  /** Load the ticks (and the recap after the window) once the window has
+   *  opened. `segments` only after it: the grid is a recap view. */
+  function loadDebrief(): void {
+    const s = store.getState();
+    if (!windowStarted(s.flight)) return;
+    const past = windowPast(s.flight);
+    void s.loadTicks(past);
+    if (past) void s.loadRecap();
   }
 
   store.subscribe((state, prev) => {
@@ -2395,7 +2581,7 @@ async function init(): Promise<void> {
       ui.renderHistoryDropdown(
         state.packs,
         state.currentPack?.fetch_timestamp || null,
-        (ts) => store.getState().selectPack(ts),
+        onPackPicked,
       );
     }
     // Re-attach analytics context whenever the selected pack changes —
@@ -2437,11 +2623,8 @@ async function init(): Promise<void> {
       ui.renderDigestAltitudeBanner(state.flight, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
-      ui.renderRefreshDelta(state.snapshot, state.currentPack?.fetch_timestamp ?? null);
       ui.renderDigestLiveCaveat(state.currentPack, state.snapshot);
-      ui.renderObservedConditions(state.snapshot);
-      ui.renderRouteSigmets(state.snapshot);
-      ui.renderRouteObservations(state.snapshot, () => store.getState().refreshObservations());
+      renderObservedSources(state);
       ui.renderRouteAlternates(state.snapshot);
       ui.renderSynopsis(state.flight, state.currentPack, state.digest, state.displayMode, state.digestPending, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.renderDwdCharts(state.flight, state.currentPack, user.is_admin || !!state.currentPack?.metoffice_charts_public);
@@ -2459,8 +2642,30 @@ async function init(): Promise<void> {
     // card's innerHTML and would drop keyboard focus from a glance line on
     // every unrelated snapshot update (an observations refresh, a ↻).
     const observedNow = !!state.snapshot?.observed_conditions;
-    if (state.live !== prev.live || observedNow !== !!prev.snapshot?.observed_conditions) {
+    if (
+      observedLive(state.replay, state.live) !== observedLive(prev.replay, prev.live)
+      || observedNow !== !!prev.snapshot?.observed_conditions
+    ) {
       renderObservedLive(state);
+    }
+    // #769: a tick picked or left re-renders the snapshot-driven sections;
+    // a live update while replaying leaves them alone (observedSnapshot).
+    if (state.replay !== prev.replay) {
+      renderObservedSources(state);
+    }
+    if (
+      state.replay !== prev.replay
+      || state.ticks !== prev.ticks
+      || state.recap !== prev.recap
+      || state.recapForecast !== prev.recapForecast
+      || state.selectedPointIndex !== prev.selectedPointIndex
+      || state.routeAnalyses !== prev.routeAnalyses
+    ) {
+      renderReplayPanel(state);
+    }
+    // During the window each new tick adds a chip.
+    if (state.live !== prev.live && state.live && windowStarted(state.flight) && !windowPast(state.flight)) {
+      void store.getState().loadTicks();
     }
     if (
       state.timeOptions !== prev.timeOptions ||
@@ -2964,6 +3169,8 @@ async function init(): Promise<void> {
     const now = Date.now();
     if (isLiveWindowPast(liveDeparture(f), f.flight_duration_hours, now)) {
       stopLivePolling();
+      // #769: the window just closed with the page open: open on the recap.
+      loadDebrief();
       return;
     }
     if (!isInLiveWindow(liveDeparture(f), f.flight_duration_hours, now)) return;
@@ -2975,7 +3182,7 @@ async function init(): Promise<void> {
     } finally {
       liveSyncInFlight = false;
     }
-    ui.refreshLiveAges();
+    refreshAges();
   };
 
   const startLiveLayer = () => {
@@ -2998,14 +3205,14 @@ async function init(): Promise<void> {
     if (livePollTimer === null) {
       livePollTimer = setInterval(() => { void runLiveSync(); }, LIVE_POLL_MS);
       liveAgeTimer = setInterval(() => {
-        if (document.visibilityState !== 'hidden') ui.refreshLiveAges();
+        if (document.visibilityState !== 'hidden') refreshAges();
       }, LIVE_AGE_TICK_MS);
     }
     if (!liveVisibilityWired) {
       liveVisibilityWired = true;
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible' || livePollTimer === null) return;
-        ui.refreshLiveAges();
+        refreshAges();
         void runLiveSync();
       });
     }
@@ -3030,7 +3237,7 @@ async function init(): Promise<void> {
     }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
-    ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, (ts) => store.getState().selectPack(ts));
+    ui.renderHistoryDropdown(s.packs, s.currentPack?.fetch_timestamp || null, onPackPicked);
     // Wire analytics context + emit briefing.opened once the pack is loaded.
     if (s.flight && s.currentPack) {
       setBriefingContext(s.flight.id, s.currentPack.fetch_timestamp);
@@ -3052,11 +3259,8 @@ async function init(): Promise<void> {
     ui.renderDigestAltitudeBanner(s.flight, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
-    ui.renderRefreshDelta(s.snapshot, s.currentPack?.fetch_timestamp ?? null);
     ui.renderDigestLiveCaveat(s.currentPack, s.snapshot);
-    ui.renderObservedConditions(s.snapshot);
-    ui.renderRouteSigmets(s.snapshot);
-    ui.renderRouteObservations(s.snapshot, () => store.getState().refreshObservations());
+    renderObservedSources(s);
     ui.renderRouteAlternates(s.snapshot);
     ui.renderSynopsis(s.flight, s.currentPack, s.digest, s.displayMode, s.digestPending, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.renderDwdCharts(s.flight, s.currentPack, user.is_admin || !!s.currentPack?.metoffice_charts_public);
@@ -3160,6 +3364,8 @@ async function init(): Promise<void> {
     // Live observation layer (#637): catch up once, then poll while the
     // flight is in its live window.
     startLiveLayer();
+    // #769: recorded ticks (and the recap once the window is past).
+    loadDebrief();
 
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();

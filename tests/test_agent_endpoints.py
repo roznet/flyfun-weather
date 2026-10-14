@@ -653,6 +653,22 @@ def test_live_ticks_and_live_at(client, app_db):
     assert client.get(f"/api/flights/{flight.id}/live/at", params={"tick": before}).status_code == 404
 
 
+def test_live_ticks_segments_for_the_grid(client, app_db):
+    """#769: ``segments=1`` adds each tick's radar lane; without it the tick
+    rows stay small (the chips row reads them on every poll)."""
+    flight = _seed_flight(app_db, suffix="tickseg")
+    ts = _seed_pack(app_db, flight)
+    _commit_live(flight, ts)
+    plain = client.get(f"/api/flights/{flight.id}/live/ticks").json()["ticks"]
+    assert plain[0]["segments"] is None
+    ticks = client.get(f"/api/flights/{flight.id}/live/ticks", params={"segments": 1}).json()["ticks"]
+    from weatherbrief.tasks.live_layer import load_live
+
+    ribbon = load_live(_pack_dir(flight, ts).parent).ribbon
+    assert len(ticks[0]["segments"]) == len(ribbon.segments)
+    assert set(ticks[0]["segments"][0]) == {"from_nm", "to_nm", "radar_status", "radar_max_dbz", "lightning"}
+
+
 def test_replay_endpoints_follow_flight_visibility(client, app_db):
     flight = _seed_flight(app_db, owner=_OTHER_USER, private=True, suffix="tickspriv")
     _seed_pack(app_db, flight, owner=_OTHER_USER)
@@ -683,6 +699,10 @@ def test_recap_pack_picker_and_stripped_pack(client, app_db):
     assert recap["forecast"]["planned_departure"] == _DEP.isoformat()
     assert recap["forecast"]["advisories"][0]["aggregate_status"] == "green"
     assert set(recap["packs"]) == {old, new, after}
+    # #769: the typed response keeps the base ribbon's scales for the client.
+    assert recap["segment_nm"] is not None and "weather_corridor_nm" in recap
+    assert recap["segments"] and recap["segments"][0]["status"] in {
+        "observed", "not_reached", "before_recording", "untimed"}
 
     picked = client.get(f"/api/flights/{flight.id}/recap", params={"pack": old}).json()
     assert picked["forecast"]["pack_timestamp"] == old and picked["forecast"]["chosen_by"] == "request"

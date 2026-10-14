@@ -431,6 +431,17 @@ export function segmentFocusAt(
   return hit?.focus ?? segs[segs.length - 1]?.focus ?? null;
 }
 
+/** The stretch of route under a tap, by position in the drawing (the last
+ *  one past the end); null without segments. Web only (#769 recap): the
+ *  recap opens the tick a stretch came from, iOS has no recap yet. */
+export function segmentIndexAt(ribbon: LiveRibbon, px: number, width: number): number | null {
+  const nm = ((px - INSET) / Math.max(width - 2 * INSET, 1)) * routeNmOf(ribbon);
+  const segs = ribbon.segments ?? [];
+  if (segs.length === 0) return null;
+  const i = segs.findIndex((s) => (s.from_nm ?? 0) <= nm && nm < (s.to_nm ?? 0));
+  return i >= 0 ? i : segs.length - 1;
+}
+
 /** Storm marker diameter by peak reflectivity (no cell bands: storms as
  *  points). */
 export function stormMarkSize(peakDbz: number | null | undefined): number {
