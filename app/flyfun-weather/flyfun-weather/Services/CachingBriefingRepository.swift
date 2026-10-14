@@ -197,6 +197,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.updateAircraft(id: id, request: request)
     }
 
+    func deleteAircraft(id: Int) async throws {
+        try await online.deleteAircraft(id: id)
+    }
+
     func parseFpl(_ text: String) async throws -> ParseFplResponse {
         try await online.parseFpl(text)
     }

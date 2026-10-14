@@ -299,6 +299,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func deleteFlight(id: String) async throws { throw FixtureError.notProvided("deleteFlight") }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("createAircraft") }
     func updateAircraft(id: Int, request: UpdateAircraftRequest) async throws -> AircraftResponse { throw FixtureError.notProvided("updateAircraft") }
+    func deleteAircraft(id: Int) async throws { throw FixtureError.notProvided("deleteAircraft") }
     /// Canned FPL parse for the paste-flight-plan journey. The real endpoint
     /// runs `euro_aip.parse_icao_fpl` server-side; a fixture only has to prove
     /// the client half — a successful parse must fill the form and leave the
