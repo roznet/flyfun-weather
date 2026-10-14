@@ -1040,6 +1040,10 @@ def create_flight(
     )
 
     save_flight(db, flight, user_id)
+    # Commit before responding: get_db commits only after the response is
+    # sent (FastAPI's default dependency scope), and the MCP server's
+    # immediate refresh call landed in that gap and 404'd. Issue #784.
+    db.commit()
     return _flight_to_response(flight, db, viewer_id=user_id)
 
 
