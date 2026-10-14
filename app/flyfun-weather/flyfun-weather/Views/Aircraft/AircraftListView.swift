@@ -148,7 +148,7 @@ private struct AircraftRow: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(aircraft.listTitle)
+                    Text(aircraft.displayName)
                         .font(.body.weight(.medium))
                     if aircraft.isDefault {
                         badge("Default", color: .green)

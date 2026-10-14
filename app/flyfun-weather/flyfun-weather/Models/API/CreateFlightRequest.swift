@@ -176,11 +176,8 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
         return typeName
     }
 
-    /// Settings → Aircraft row title (#778): the nickname or tail, else the
-    /// type. A placeholder shows its name ("My aircraft").
-    var listTitle: String { displayName }
-
-    /// Second line under `listTitle`: the type name, plus the tail when the
+    /// Second line under the Settings → Aircraft row title (`displayName`,
+    /// #778): the type name, plus the tail when the
     /// title is the nickname. Nil when the title already is the type, and for
     /// a placeholder, whose `ZZZZ` type means nothing.
     var listSubtitle: String? {

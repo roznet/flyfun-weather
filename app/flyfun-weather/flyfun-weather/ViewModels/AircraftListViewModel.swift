@@ -29,6 +29,8 @@ final class AircraftListViewModel {
     /// The add / edit sheet, shared with the flight form.
     let form: AircraftFormModel
 
+    /// Set when `load()` is called while a load is in flight.
+    private var reloadRequested = false
     private let repository: any BriefingRepository
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AircraftList")
 
@@ -37,20 +39,34 @@ final class AircraftListViewModel {
         self.form = AircraftFormModel(repository: repository)
     }
 
+    /// Single-flight, but never drops a request: a call while a load is in
+    /// flight queues one more read, so the re-read after a delete or make
+    /// default isn't lost to a concurrent pull-to-refresh (whose response may
+    /// predate the change).
     func load() async {
-        guard !isLoading else { return }
+        guard !isLoading else {
+            reloadRequested = true
+            return
+        }
         isLoading = true
         defer { isLoading = false }
-        do {
-            aircraft = try await repository.aircraft().sortedForPicker()
-            hasLoaded = true
-            loadFailed = false
-        } catch {
-            if (error as? APIError)?.isCancellation == true { return }
-            loadFailed = true
-            errorMessage = "Couldn't load your aircraft: \(error.localizedDescription)"
-            Self.logger.error("Aircraft list load failed: \(error)")
-        }
+        repeat {
+            reloadRequested = false
+            do {
+                aircraft = try await repository.aircraft().sortedForPicker()
+                hasLoaded = true
+                loadFailed = false
+            } catch {
+                if (error as? APIError)?.isCancellation == true { return }
+                loadFailed = true
+                // An empty list already says so inline; alert only when there
+                // are (now possibly stale) rows on screen.
+                if !aircraft.isEmpty {
+                    errorMessage = "Couldn't refresh your aircraft: \(error.localizedDescription)"
+                }
+                Self.logger.error("Aircraft list load failed: \(error)")
+            }
+        } while reloadRequested
     }
 
     // MARK: - Add / edit

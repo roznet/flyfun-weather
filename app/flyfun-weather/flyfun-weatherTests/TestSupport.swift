@@ -180,7 +180,16 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let handler = bulkDeleteHandler { return try handler(ids) }
         return BulkDeleteResponse(deleted: ids, notFound: [])
     }
-    func aircraft() async throws -> [AircraftResponse] { try aircraftResult.get() }
+    /// Runs inside `aircraft()` before it returns, to act mid-request.
+    var aircraftHook: (() async -> Void)?
+    private(set) var aircraftCallCount = 0
+    func aircraft() async throws -> [AircraftResponse] {
+        aircraftCallCount += 1
+        // Read the result before the hook, as a real response would predate it.
+        let result = aircraftResult
+        if let aircraftHook { await aircraftHook() }
+        return try result.get()
+    }
     func profiles() async throws -> [ProfileResponse] { [] }
     func usageSummary() async throws -> UsageSummaryResponse {
         try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))

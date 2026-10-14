@@ -36,7 +36,41 @@ import Foundation
         #expect(vm.aircraft.isEmpty)
         #expect(vm.hasLoaded == false)
         #expect(vm.loadFailed)
-        #expect(vm.errorMessage?.hasPrefix("Couldn't load your aircraft") == true)
+        // The empty list says so inline; no alert on top of it.
+        #expect(vm.errorMessage == nil)
+    }
+
+    @Test func refreshFailureOverRowsAlerts() async {
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([makeAircraft(id: 1, typeName: "Alpha", isDefault: true)])
+        let vm = AircraftListViewModel(repository: repo)
+        await vm.load()
+        repo.aircraftResult = .failure(MockError.injected("offline"))
+        await vm.load()
+        #expect(vm.aircraft.map(\.id) == [1])
+        #expect(vm.loadFailed)
+        #expect(vm.errorMessage?.hasPrefix("Couldn't refresh your aircraft") == true)
+    }
+
+    /// A load requested while one is in flight (the re-read after a make
+    /// default racing a pull-to-refresh) runs once the first finishes, so the
+    /// list ends on the post-change state rather than the stale response.
+    @Test func loadDuringLoadIsQueuedNotDropped() async {
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([makeAircraft(id: 1, typeName: "Alpha", isDefault: true)])
+        let vm = AircraftListViewModel(repository: repo)
+        repo.aircraftHook = {
+            repo.aircraftHook = nil
+            repo.aircraftResult = .success([
+                makeAircraft(id: 1, typeName: "Alpha"),
+                makeAircraft(id: 2, typeName: "Bravo", isDefault: true),
+            ])
+            await vm.load()  // in flight: queued, returns at once
+        }
+        await vm.load()
+        #expect(repo.aircraftCallCount == 2)
+        #expect(vm.aircraft.map(\.id) == [2, 1])
+        #expect(vm.isLoading == false)
     }
 
     /// Deleting the default: the server promotes another, so the list is
@@ -210,7 +244,7 @@ import Foundation
         let placeholder = makeAircraft(icaoType: "ZZZZ", typeName: "Unknown", nickname: "My aircraft",
                                        cruiseSpeedKt: 120, ceilingFt: nil, isDefault: true,
                                        isPlaceholder: true)
-        #expect(placeholder.listTitle == "My aircraft")
+        #expect(placeholder.displayName == "My aircraft")
         #expect(placeholder.listSubtitle == nil)
         #expect(placeholder.listDetail == "120 kt")
 
@@ -223,16 +257,16 @@ import Foundation
         let dot = "\u{00b7}"
         let full = makeAircraft(icaoType: "PA28", typeName: "Piper PA-28", tailNumber: "ZZ-ABC",
                                 nickname: "Archie", cruiseSpeedKt: 105, ceilingFt: 12000)
-        #expect(full.listTitle == "Archie")
+        #expect(full.displayName == "Archie")
         #expect(full.listSubtitle == "Piper PA-28 \(dot) ZZ-ABC")
         #expect(full.listDetail == "PA28 \(dot) 105 kt \(dot) FL120")
 
         let tailOnly = makeAircraft(typeName: "Cessna 172", tailNumber: "ZZ-ABC")
-        #expect(tailOnly.listTitle == "ZZ-ABC")
+        #expect(tailOnly.displayName == "ZZ-ABC")
         #expect(tailOnly.listSubtitle == "Cessna 172")
 
         let typeOnly = makeAircraft(typeName: "Cessna 172")
-        #expect(typeOnly.listTitle == "Cessna 172")
+        #expect(typeOnly.displayName == "Cessna 172")
         #expect(typeOnly.listSubtitle == nil)
     }
 }
