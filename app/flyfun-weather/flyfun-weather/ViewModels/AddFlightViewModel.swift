@@ -168,23 +168,9 @@ final class AddFlightViewModel {
     // Aircraft picker + inline create
     private(set) var aircraftOptions: [AircraftResponse] = []
     private(set) var isLoadingAircraft: Bool = false
-    var newAircraftIcaoType: String = ""
-    var newAircraftTailNumber: String = ""
-    var newAircraftNickname: String = ""
-    var newAircraftCruiseSpeedKt: String = ""
-    var newAircraftCeilingFt: String = ""
-    var newAircraftIsIfr: Bool = false
-    var newAircraftIsFiki: Bool = false
-    var newAircraftIsDefault: Bool = false
-    private(set) var selectedAircraftType: AircraftTypeResponse?
-    private(set) var aircraftTypeSuggestions: [AircraftTypeResponse] = []
-    private(set) var isSearchingAircraftTypes: Bool = false
-    private(set) var isSavingAircraft: Bool = false
-    var aircraftFormError: String?
-    /// The saved aircraft the form sheet is editing (`PUT`), or nil when it is
-    /// adding a new one (`POST`). Set by `prepareEditAircraftForm` /
-    /// `prepareNewAircraftForm`.
-    private(set) var editingAircraftId: Int?
+    /// The add / edit sheet behind "Add Aircraft" and the selected aircraft's
+    /// Edit button (shared with Settings → Aircraft, #778).
+    let aircraftForm: AircraftFormModel
     /// On edit, an older flight stored without an aircraft resolves to the
     /// account default server-side; the picker shows that default (it no longer
     /// has a "No aircraft" row). Remembered so showing it is not mistaken for
@@ -212,6 +198,7 @@ final class AddFlightViewModel {
     init(repository: any BriefingRepository, flight: FlightResponse? = nil) {
         self.repository = repository
         self.editingFlight = flight
+        self.aircraftForm = AircraftFormModel(repository: repository)
         let defaultInstant = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
         let departureInstant = flight?.departureDate ?? defaultInstant
         self.departureTime = DepartureTimeModel(instant: departureInstant)
@@ -780,31 +767,6 @@ final class AddFlightViewModel {
         return aircraftOptions.first { $0.id == selectedAircraftId }
     }
 
-    var canSaveAircraft: Bool {
-        guard !isSavingAircraft else { return false }
-        // Editing may leave the type blank: it is then omitted from the PUT
-        // and the server keeps the stored one (the placeholder's `ZZZZ` is
-        // deliberately not prefilled).
-        if isEditingAircraft, newAircraftIcaoType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return true
-        }
-        return resolvedNewAircraftIcaoType != nil
-    }
-
-    /// The form sheet is editing a saved aircraft rather than adding one.
-    var isEditingAircraft: Bool { editingAircraftId != nil }
-
-    /// The aircraft being edited, looked up in the loaded options.
-    var editingAircraft: AircraftResponse? {
-        guard let editingAircraftId else { return nil }
-        return aircraftOptions.first { $0.id == editingAircraftId }
-    }
-
-    var aircraftFormTitle: String {
-        guard let editingAircraft else { return "Add Aircraft" }
-        return editingAircraft.isPlaceholder ? "Set Up Your Aircraft" : "Edit Aircraft"
-    }
-
     /// Label of the button next to the selected aircraft's detail line.
     var editAircraftButtonTitle: String {
         selectedAircraft?.isPlaceholder == true ? "Set up your aircraft" : "Edit"
@@ -918,201 +880,31 @@ final class AddFlightViewModel {
     }
 
     func prepareNewAircraftForm() {
-        editingAircraftId = nil
-        newAircraftIcaoType = ""
-        newAircraftTailNumber = ""
-        newAircraftNickname = ""
-        newAircraftCruiseSpeedKt = ""
-        newAircraftCeilingFt = ""
-        newAircraftIsIfr = false
-        newAircraftIsFiki = false
-        // On by default for the first aircraft, and when the only one is the
-        // server's placeholder: the server replaces the placeholder with this
-        // aircraft, which then has to be the default.
-        newAircraftIsDefault = aircraftOptions.isEmpty
-            || (aircraftOptions.count == 1 && aircraftOptions[0].isPlaceholder)
-        selectedAircraftType = nil
-        aircraftTypeSuggestions = []
-        aircraftFormError = nil
+        aircraftForm.prepareNew(existing: aircraftOptions)
     }
 
     /// Prefill the aircraft sheet from a saved aircraft for an edit (`PUT`).
-    /// A placeholder's `ZZZZ` type is left blank so the field shows its prompt;
-    /// a blank type is omitted from the PUT, keeping the stored one.
     func prepareEditAircraftForm(_ aircraft: AircraftResponse) {
-        editingAircraftId = aircraft.id
-        if aircraft.isPlaceholder {
-            newAircraftIcaoType = ""
-            selectedAircraftType = nil
-        } else {
-            newAircraftIcaoType = aircraft.icaoType
-            // Marks the prefilled type as already chosen, so opening the sheet
-            // doesn't fire a type search for it.
-            selectedAircraftType = AircraftTypeResponse(
-                icao: aircraft.icaoType, manufacturer: aircraft.typeName, model: "", category: nil
-            )
-        }
-        newAircraftTailNumber = aircraft.tailNumber ?? ""
-        newAircraftNickname = aircraft.nickname ?? ""
-        newAircraftCruiseSpeedKt = aircraft.cruiseSpeedKt.map { String($0) } ?? ""
-        newAircraftCeilingFt = aircraft.ceilingFt.map { String($0) } ?? ""
-        newAircraftIsIfr = aircraft.isIfr
-        newAircraftIsFiki = aircraft.isFiki
-        newAircraftIsDefault = aircraft.isDefault
-        aircraftTypeSuggestions = []
-        aircraftFormError = nil
+        aircraftForm.prepareEdit(aircraft)
     }
 
-    /// Save the sheet: `PUT` when editing, `POST` when adding.
+    /// Save the sheet (`PUT` when editing, `POST` when adding), then re-read
+    /// the options: the server may have replaced the placeholder with a new
+    /// aircraft, and a new default changes the other rows' flags. A new
+    /// aircraft becomes the selection; an edit keeps it.
     func saveAircraft() async -> Bool {
-        if let editingAircraftId {
-            return await updateAircraft(id: editingAircraftId)
-        }
-        return await createAircraft()
-    }
-
-    /// Search aircraft types as the user types. The caller (the form's `.task(id:)`)
-    /// debounces and cancels superseded searches; we also bail out if the task was
-    /// cancelled before the network call so a stale query never overwrites results.
-    func searchAircraftTypes() async {
-        let query = newAircraftIcaoType.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Clear a previously-picked type once the text diverges from it.
-        if let selectedAircraftType, query.uppercased() != selectedAircraftType.icao {
-            self.selectedAircraftType = nil
-        }
-        if let selectedAircraftType, query.uppercased() == selectedAircraftType.icao {
-            aircraftTypeSuggestions = []
-            isSearchingAircraftTypes = false
-            return
-        }
-        guard !query.isEmpty else {
-            aircraftTypeSuggestions = []
-            isSearchingAircraftTypes = false
-            return
-        }
-        guard query.count <= 20 else { return }
-
-        // Defensive cancellation guard: even though the debounce in the view
-        // cancels superseded `.task(id:)` runs, never fire a stale search.
-        guard !Task.isCancelled else { return }
-
-        isSearchingAircraftTypes = true
-        defer { isSearchingAircraftTypes = false }
-        do {
-            let results = try await repository.searchAircraftTypes(query)
-            // The query may have been superseded while the request was in flight.
-            guard !Task.isCancelled else { return }
-            aircraftTypeSuggestions = results
-        } catch {
-            aircraftTypeSuggestions = []
-            Self.logger.debug("Aircraft type search unavailable: \(error)")
-        }
-    }
-
-    func selectAircraftType(_ type: AircraftTypeResponse) {
-        selectedAircraftType = type
-        newAircraftIcaoType = type.icao
-        aircraftTypeSuggestions = []
-        aircraftFormError = nil
-    }
-
-    func createAircraft() async -> Bool {
-        guard let icaoType = resolvedNewAircraftIcaoType else {
-            aircraftFormError = "Enter a valid ICAO aircraft type, for example C172."
-            return false
-        }
-        aircraftFormError = nil
-        let cruiseSpeed = optionalPositiveInt(newAircraftCruiseSpeedKt, fieldName: "Cruise speed")
-        guard aircraftFormError == nil else { return false }
-        let ceiling = optionalPositiveInt(newAircraftCeilingFt, fieldName: "Service ceiling")
-        guard aircraftFormError == nil else { return false }
-
-        isSavingAircraft = true
-        defer { isSavingAircraft = false }
-
-        let request = CreateAircraftRequest(
-            icaoType: icaoType,
-            tailNumber: optionalText(newAircraftTailNumber)?.uppercased(),
-            nickname: optionalText(newAircraftNickname),
-            isIfr: newAircraftIsIfr,
-            isFiki: newAircraftIsFiki,
-            cruiseSpeedKt: cruiseSpeed,
-            ceilingFt: ceiling,
-            isDefault: newAircraftIsDefault
-        )
-
-        do {
-            let aircraft = try await repository.createAircraft(request)
-            aircraftOptions.removeAll { $0.id == aircraft.id }
+        let wasEditing = aircraftForm.isEditing
+        guard let aircraft = await aircraftForm.save() else { return false }
+        if let index = aircraftOptions.firstIndex(where: { $0.id == aircraft.id }) {
+            aircraftOptions[index] = aircraft
+        } else {
             aircraftOptions.append(aircraft)
-            aircraftOptions = aircraftOptions.sortedForPicker()
-            selectedAircraftId = aircraft.id
-            prepareNewAircraftForm()
-            // The server may have replaced the placeholder with this aircraft
-            // (and a new default changes the others' flags): re-read the list.
-            await loadAircraft()
-            return true
-        } catch {
-            aircraftFormError = error.localizedDescription
-            Self.logger.error("Create aircraft failed: \(error)")
-            return false
         }
-    }
-
-    /// `PUT` the edited aircraft, then refresh the options keeping the
-    /// selection.
-    func updateAircraft(id: Int) async -> Bool {
-        let original = aircraftOptions.first { $0.id == id }
-        let typedType = newAircraftIcaoType.trimmingCharacters(in: .whitespacesAndNewlines)
-        var icaoType: String?
-        if !typedType.isEmpty {
-            guard let resolved = resolvedNewAircraftIcaoType else {
-                aircraftFormError = "Enter a valid ICAO aircraft type, for example C172."
-                return false
-            }
-            icaoType = resolved
-        }
-        aircraftFormError = nil
-        let cruiseSpeed = optionalPositiveInt(newAircraftCruiseSpeedKt, fieldName: "Cruise speed")
-        guard aircraftFormError == nil else { return false }
-        let ceiling = optionalPositiveInt(newAircraftCeilingFt, fieldName: "Service ceiling")
-        guard aircraftFormError == nil else { return false }
-
-        isSavingAircraft = true
-        defer { isSavingAircraft = false }
-
-        let request = UpdateAircraftRequest(
-            icaoType: icaoType,
-            // Always sent: "" clears a tail number / nickname the pilot erased.
-            tailNumber: optionalText(newAircraftTailNumber)?.uppercased() ?? "",
-            nickname: optionalText(newAircraftNickname) ?? "",
-            isIfr: newAircraftIsIfr,
-            isFiki: newAircraftIsFiki,
-            // nil = unchanged server-side (a blank field can't clear these).
-            cruiseSpeedKt: cruiseSpeed,
-            ceilingFt: ceiling,
-            // Only ever *promote*: the server keeps one default per account, so
-            // un-defaulting is done by making another aircraft the default.
-            isDefault: (newAircraftIsDefault && original?.isDefault != true) ? true : nil
-        )
-
-        do {
-            let aircraft = try await repository.updateAircraft(id: id, request: request)
-            if let index = aircraftOptions.firstIndex(where: { $0.id == aircraft.id }) {
-                aircraftOptions[index] = aircraft
-            } else {
-                aircraftOptions.append(aircraft)
-            }
-            aircraftOptions = aircraftOptions.sortedForPicker()
-            // Re-read so a default change shows on every row; the selection is
-            // non-nil, so `loadAircraft` keeps it.
-            await loadAircraft()
-            return true
-        } catch {
-            aircraftFormError = error.localizedDescription
-            Self.logger.error("Update aircraft failed: \(error)")
-            return false
-        }
+        aircraftOptions = aircraftOptions.sortedForPicker()
+        if !wasEditing { selectedAircraftId = aircraft.id }
+        // The selection is non-nil, so `loadAircraft` keeps it.
+        await loadAircraft()
+        return true
     }
 
     // MARK: - FPL parse
@@ -1600,45 +1392,4 @@ final class AddFlightViewModel {
     /// test writes it.
     private static let queueRefreshAttempts = 6
     @MainActor static var queueRefreshRetryDelay: Duration = .seconds(30)
-
-    // MARK: - Aircraft form helpers
-
-    private var resolvedNewAircraftIcaoType: String? {
-        let value = newAircraftIcaoType
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        if let selectedAircraftType, value == selectedAircraftType.icao {
-            return selectedAircraftType.icao
-        }
-        guard value.range(of: #"^[A-Z0-9]{1,4}$"#, options: .regularExpression) != nil else {
-            return nil
-        }
-        return value
-    }
-
-    private func optionalText(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func optionalPositiveInt(_ value: String, fieldName: String) -> Int? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard let intValue = Int(trimmed), intValue > 0 else {
-            aircraftFormError = "\(fieldName) must be a positive number."
-            return nil
-        }
-        return intValue
-    }
-}
-
-private extension [AircraftResponse] {
-    func sortedForPicker() -> [AircraftResponse] {
-        sorted { lhs, rhs in
-            if lhs.isDefault != rhs.isDefault {
-                return lhs.isDefault && !rhs.isDefault
-            }
-            return lhs.pickerTitle.localizedCaseInsensitiveCompare(rhs.pickerTitle) == .orderedAscending
-        }
-    }
 }

@@ -175,6 +175,31 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
         if let nick = nickname?.trimmingCharacters(in: .whitespaces), !nick.isEmpty { return nick }
         return typeName
     }
+
+    /// Settings → Aircraft row title (#778): the nickname or tail, else the
+    /// type. A placeholder shows its name ("My aircraft").
+    var listTitle: String { displayName }
+
+    /// Second line under `listTitle`: the type name, plus the tail when the
+    /// title is the nickname. Nil when the title already is the type, and for
+    /// a placeholder, whose `ZZZZ` type means nothing.
+    var listSubtitle: String? {
+        guard !isPlaceholder, displayName != typeName else { return nil }
+        if let nickname, !nickname.isEmpty, let tailNumber, !tailNumber.isEmpty {
+            return "\(typeName) \u{00b7} \(tailNumber)"
+        }
+        return typeName
+    }
+
+    /// The row's detail line: `detailText`, without the placeholder's `ZZZZ`
+    /// (like the web list). Nil when a placeholder has nothing else to show.
+    var listDetail: String? {
+        guard isPlaceholder else { return detailText }
+        var parts: [String] = []
+        if let cruiseSpeedKt { parts.append("\(cruiseSpeedKt) kt") }
+        if let ceilingFt { parts.append("FL\(ceilingFt / 100)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00b7} ")
+    }
 }
 
 nonisolated extension AircraftResponse {

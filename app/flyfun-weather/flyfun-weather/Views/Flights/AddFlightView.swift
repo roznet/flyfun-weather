@@ -162,7 +162,7 @@ struct AddFlightView: View {
                 }
             }
             .sheet(isPresented: $showAircraftSheet) {
-                AircraftFormSheet(viewModel: viewModel) {
+                AircraftFormSheet(form: viewModel.aircraftForm, save: { await viewModel.saveAircraft() }) {
                     showAircraftSheet = false
                 }
             }
@@ -907,115 +907,6 @@ private struct FplPasteSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDone() }
                 }
-            }
-        }
-    }
-}
-
-// MARK: - Aircraft Sheet
-
-/// Inline aircraft create / edit flow with search-as-you-type ICAO-type
-/// suggestions. Edits when the view model was prepared with
-/// `prepareEditAircraftForm` (PUT), adds otherwise (POST).
-private struct AircraftFormSheet: View {
-    @Bindable var viewModel: AddFlightViewModel
-    let onDone: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("ICAO type, e.g. C172", text: $viewModel.newAircraftIcaoType)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-
-                    if viewModel.isSearchingAircraftTypes {
-                        HStack {
-                            ProgressView()
-                            Text("Searching aircraft types\u{2026}")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Aircraft Type")
-                }
-
-                if !viewModel.aircraftTypeSuggestions.isEmpty {
-                    Section {
-                        ForEach(viewModel.aircraftTypeSuggestions) { type in
-                            Button {
-                                viewModel.selectAircraftType(type)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(type.displayName)
-                                    if let category = type.category, !category.isEmpty {
-                                        Text(category)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("Matches")
-                    }
-                }
-
-                Section {
-                    TextField("Tail number", text: $viewModel.newAircraftTailNumber)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                    TextField("Nickname", text: $viewModel.newAircraftNickname)
-                    TextField("Cruise speed (kt)", text: $viewModel.newAircraftCruiseSpeedKt)
-                        .keyboardType(.numberPad)
-                    TextField("Service ceiling (ft)", text: $viewModel.newAircraftCeilingFt)
-                        .keyboardType(.numberPad)
-                } header: {
-                    Text("Details")
-                }
-
-                Section {
-                    Toggle("IFR equipped", isOn: $viewModel.newAircraftIsIfr)
-                    Toggle("FIKI", isOn: $viewModel.newAircraftIsFiki)
-                    Toggle("Make default", isOn: $viewModel.newAircraftIsDefault)
-                        // Already the default: un-defaulting happens by making
-                        // another aircraft the default.
-                        .disabled(viewModel.editingAircraft?.isDefault == true)
-                }
-
-                if let error = viewModel.aircraftFormError {
-                    Section {
-                        Text(error)
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
-            .navigationTitle(viewModel.aircraftFormTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDone() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        Task {
-                            if await viewModel.saveAircraft() {
-                                onDone()
-                            }
-                        }
-                    }
-                    .disabled(!viewModel.canSaveAircraft)
-                }
-            }
-            // Debounce the type search. `.task(id:)` cancels the previous run on
-            // each keystroke; the guard after the sleep makes that cancellation
-            // actually stop the superseded search (the `try?` swallows the
-            // CancellationError, so without this guard every keystroke would fire
-            // a network request).
-            .task(id: viewModel.newAircraftIcaoType) {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                guard !Task.isCancelled else { return }
-                await viewModel.searchAircraftTypes()
             }
         }
     }

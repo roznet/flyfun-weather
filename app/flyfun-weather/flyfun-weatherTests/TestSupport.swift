@@ -223,6 +223,13 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         lastUpdateAircraftRequest = request
         return try updateAircraftResult.get()
     }
+    /// Thrown by `deleteAircraft` when set (e.g. the last-aircraft 409).
+    var deleteAircraftError: Error?
+    private(set) var deletedAircraftIds: [Int] = []
+    func deleteAircraft(id: Int) async throws {
+        if let deleteAircraftError { throw deleteAircraftError }
+        deletedAircraftIds.append(id)
+    }
     func parseFpl(_ text: String) async throws -> ParseFplResponse { throw MockError.notStubbed("parseFpl") }
     /// Awaited *inside* `packs` before it returns — lets a test hold the pack
     /// count suspended and observe the copy the editor shows meanwhile.

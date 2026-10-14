@@ -534,16 +534,16 @@ import MapKit
 
     @Test func canSaveAircraftReflectsIcaoTypeRegex() {
         let vm = makeVM()
-        vm.newAircraftIcaoType = "C172"
-        #expect(vm.canSaveAircraft)            // 1–4 alphanumerics
-        vm.newAircraftIcaoType = "a1"          // lowercased → uppercased, valid
-        #expect(vm.canSaveAircraft)
-        vm.newAircraftIcaoType = "TOOLONG"     // > 4 chars
-        #expect(vm.canSaveAircraft == false)
-        vm.newAircraftIcaoType = "C-72"        // illegal character
-        #expect(vm.canSaveAircraft == false)
-        vm.newAircraftIcaoType = ""            // empty
-        #expect(vm.canSaveAircraft == false)
+        vm.aircraftForm.icaoType = "C172"
+        #expect(vm.aircraftForm.canSave)            // 1–4 alphanumerics
+        vm.aircraftForm.icaoType = "a1"          // lowercased → uppercased, valid
+        #expect(vm.aircraftForm.canSave)
+        vm.aircraftForm.icaoType = "TOOLONG"     // > 4 chars
+        #expect(vm.aircraftForm.canSave == false)
+        vm.aircraftForm.icaoType = "C-72"        // illegal character
+        #expect(vm.aircraftForm.canSave == false)
+        vm.aircraftForm.icaoType = ""            // empty
+        #expect(vm.aircraftForm.canSave == false)
     }
 
     // MARK: Aircraft — always-a-default, edit, placeholder (#777)
@@ -602,18 +602,18 @@ import MapKit
         #expect(vm.editAircraftButtonTitle == "Edit")
 
         vm.prepareEditAircraftForm(original)
-        #expect(vm.isEditingAircraft)
-        #expect(vm.aircraftFormTitle == "Edit Aircraft")
-        #expect(vm.newAircraftIcaoType == "PA28")
-        #expect(vm.newAircraftTailNumber == "N123")
-        #expect(vm.newAircraftNickname == "Archie")
-        #expect(vm.newAircraftCruiseSpeedKt == "105")
-        #expect(vm.newAircraftCeilingFt == "12000")
-        #expect(vm.newAircraftIsDefault)
-        #expect(vm.canSaveAircraft)
+        #expect(vm.aircraftForm.isEditing)
+        #expect(vm.aircraftForm.title == "Edit Aircraft")
+        #expect(vm.aircraftForm.icaoType == "PA28")
+        #expect(vm.aircraftForm.tailNumber == "N123")
+        #expect(vm.aircraftForm.nickname == "Archie")
+        #expect(vm.aircraftForm.cruiseSpeedKt == "105")
+        #expect(vm.aircraftForm.ceilingFt == "12000")
+        #expect(vm.aircraftForm.isDefault)
+        #expect(vm.aircraftForm.canSave)
 
-        vm.newAircraftCruiseSpeedKt = "115"
-        vm.newAircraftCeilingFt = "14000"
+        vm.aircraftForm.cruiseSpeedKt = "115"
+        vm.aircraftForm.ceilingFt = "14000"
         repo.updateAircraftResult = .success(updated)
         repo.aircraftResult = .success([updated])
         #expect(await vm.saveAircraft())
@@ -642,9 +642,9 @@ import MapKit
         #expect(vm.editAircraftButtonTitle == "Set up your aircraft")
 
         vm.prepareEditAircraftForm(placeholder)
-        #expect(vm.aircraftFormTitle == "Set Up Your Aircraft")
-        #expect(vm.newAircraftIcaoType == "")
-        #expect(vm.canSaveAircraft)                  // blank type = keep stored
+        #expect(vm.aircraftForm.title == "Set Up Your Aircraft")
+        #expect(vm.aircraftForm.icaoType == "")
+        #expect(vm.aircraftForm.canSave)                  // blank type = keep stored
 
         repo.updateAircraftResult = .success(placeholder)
         #expect(await vm.saveAircraft())
@@ -661,20 +661,41 @@ import MapKit
         repo.aircraftResult = .success([makeAircraft(id: 1, isDefault: true, isPlaceholder: true)])
         await vm.loadAircraft()
         vm.prepareNewAircraftForm()
-        #expect(vm.isEditingAircraft == false)
-        #expect(vm.aircraftFormTitle == "Add Aircraft")
-        #expect(vm.newAircraftIsDefault)
+        #expect(vm.aircraftForm.isEditing == false)
+        #expect(vm.aircraftForm.title == "Add Aircraft")
+        #expect(vm.aircraftForm.isDefault)
 
         // One real aircraft → off.
         repo.aircraftResult = .success([makeAircraft(id: 2, isDefault: true)])
         await vm.loadAircraft()
         vm.prepareNewAircraftForm()
-        #expect(vm.newAircraftIsDefault == false)
+        #expect(vm.aircraftForm.isDefault == false)
 
         // No aircraft at all (failed/old server) → on, as before.
         let empty = AddFlightViewModel(repository: MockBriefingRepository())
         empty.prepareNewAircraftForm()
-        #expect(empty.newAircraftIsDefault)
+        #expect(empty.aircraftForm.isDefault)
+    }
+
+    /// The sheet is shared with Settings (#778); from the flight form a new
+    /// aircraft still becomes the selection.
+    @Test func addingAircraftFromTheFlightFormSelectsIt() async throws {
+        let repo = MockBriefingRepository()
+        repo.aircraftResult = .success([makeAircraft(id: 1, isDefault: true)])
+        let vm = AddFlightViewModel(repository: repo)
+        await vm.loadAircraft()
+        #expect(vm.selectedAircraftId == 1)
+
+        vm.prepareNewAircraftForm()
+        vm.aircraftForm.icaoType = "SR22"
+        let created = makeAircraft(id: 2, icaoType: "SR22", typeName: "Cirrus SR22")
+        repo.createAircraftResult = .success(created)
+        repo.aircraftResult = .success([makeAircraft(id: 1, isDefault: true), created])
+        #expect(await vm.saveAircraft())
+
+        #expect(try #require(repo.lastCreateAircraftRequest).icaoType == "SR22")
+        #expect(vm.selectedAircraftId == 2)
+        #expect(vm.aircraftOptions.map(\.id) == [1, 2])
     }
 
     @Test func ceilingWarningShowsOnlyAboveTheServiceCeiling() async {

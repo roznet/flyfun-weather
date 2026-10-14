@@ -43,6 +43,23 @@ struct SettingsView: View {
                     }
                 }
 
+                // Aircraft (#778): the full list lives on its own screen so the
+                // rows keep their swipe actions.
+                if let repository = appState.repository {
+                    Section {
+                        NavigationLink {
+                            AircraftListView(repository: repository)
+                        } label: {
+                            Label("My Aircraft", systemImage: "airplane")
+                        }
+                        .accessibilityIdentifier("settingsAircraftLink")
+                    } header: {
+                        Text("Aircraft")
+                    } footer: {
+                        Text("Add, edit or delete your aircraft, and choose the default for new flights.")
+                    }
+                }
+
                 Section {
                     Link(destination: URL(string: "https://weather.flyfun.aero/privacy")!) {
                         Label("Privacy Policy", systemImage: "hand.raised")
