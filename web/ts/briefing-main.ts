@@ -2483,7 +2483,7 @@ async function init(): Promise<void> {
 
     const text = modeBarText(replay);
     if (text) {
-      bar.innerHTML = modeBarHtml(text, past ? 'Back to recap' : 'Back to live');
+      bar.innerHTML = modeBarHtml(text, past ? t('debrief.backToRecap') : t('debrief.backToLive'));
       bar.hidden = false;
     } else {
       bar.hidden = true;
@@ -2498,8 +2498,9 @@ async function init(): Promise<void> {
       const tick = tickAtRoutePoint(state, point.distance_from_origin_nm);
       if (tick) {
         pointChip = `<button type="button" class="tick-chip tick-chip-point" data-tick="${escapeHtml(tick)}"`
-          + ` data-testid="route-point-tick">Selected point (${Math.round(point.distance_from_origin_nm)} NM)`
-          + ` → ${escapeHtml(formatHhmmZ(tick))}</button>`;
+          + ` data-testid="route-point-tick">${escapeHtml(t('debrief.selectedPointTick', {
+            nm: Math.round(point.distance_from_origin_nm), tick: formatHhmmZ(tick),
+          }))}</button>`;
       }
     }
     chipsHost.innerHTML = ticks.length
@@ -2671,8 +2672,13 @@ async function init(): Promise<void> {
     ) {
       renderReplayPanel(state);
     }
-    // During the window each new tick adds a chip.
-    if (state.live !== prev.live && state.live && windowStarted(state.flight) && !windowPast(state.flight)) {
+    // During the window each new tick adds a chip: re-read the index only
+    // when the layer was rebuilt, not on every poll that touches `live`.
+    if (
+      state.live !== prev.live && state.live
+      && state.live.live_updated_at !== prev.live?.live_updated_at
+      && windowStarted(state.flight) && !windowPast(state.flight)
+    ) {
       void store.getState().loadTicks();
     }
     if (

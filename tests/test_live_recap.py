@@ -459,3 +459,31 @@ def test_recap_response_tolerates_an_off_shape_weather_profile():
     }
     resp = RecapResponse.model_validate(body)
     assert resp.weather[0].profile == [[5.0, 1.0], [6.0, 1.0, 2.0, 3.0]]
+
+
+def test_recap_response_drops_only_the_unreadable_stored_entries():
+    """#769 follow-up: a null or non-numeric value in one stored stretch,
+    band or storm drops that entry, not the whole /recap."""
+    from weatherbrief.models.live import LiveTickEntry, RecapResponse
+
+    body = {
+        "flight_id": "zz", "note": "", "status": "ok",
+        "segments": [
+            {"from_nm": 0, "to_nm": 10, "status": "observed"},
+            {"from_nm": None, "to_nm": 20, "status": "observed"},
+        ],
+        "weather": [
+            {"id": "rain-1", "profile": [[5.0, 1.0, 2.0]]},
+            {"id": "rain-2", "profile": [[5.0, None, 2.0]]},
+        ],
+        "storms": [{"id": "s1", "peak_dbz": 45}, {"id": "s2", "peak_dbz": "high"}],
+    }
+    resp = RecapResponse.model_validate(body)
+    assert [s.from_nm for s in resp.segments] == [0]
+    assert [w.id for w in resp.weather] == ["rain-1"]
+    assert [s.id for s in resp.storms] == ["s1"]
+
+    tick = LiveTickEntry.model_validate(
+        {"tick_at": "t", "segments": [{"from_nm": 0, "to_nm": 5}, {"from_nm": "x", "to_nm": 5}]}
+    )
+    assert len(tick.segments) == 1

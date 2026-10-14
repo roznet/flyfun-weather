@@ -15,6 +15,7 @@ import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-sec
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
+import { t } from '../i18n/i18n';
 import { addsTrails, applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
 import { REPLAY_BASE, startTick, tickFailed, tickLoaded, type ReplayState } from '../helpers/debrief-replay';
 
@@ -25,7 +26,7 @@ let recapForecastSeq = 0;
 function recapLoadFailed(flightId: string): RecapResponse {
   return {
     flight_id: flightId, note: '', status: 'load_failed', cancelled: false, ticks: 0, capped: false,
-    message: 'The recap could not be loaded. Reload the page to try again.',
+    message: t('debrief.recapLoadFailed'),
     alerts: [], waypoints: [], segments: [], weather: [], storms: [], packs: [],
   };
 }

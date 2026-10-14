@@ -20,7 +20,7 @@ Answers two questions after (or during) a flight, from the live layer alone:
 | `analysis/flight_progress.py` | `time_base` (`planned`/`partial`/`observed`), `planned()` |
 | `api/packs.py` (live router) | `GET /flights/{id}/live/ticks`, `/live/at?tick=`, `/recap[?pack=]`, `/recap/summary` |
 | `tasks/retention.py` | `_live_retention`, `kept_flight_ids` |
-| `models/live.py` | `LiveTicksResponse`, `RecapResponse` (typed #769; passthrough blocks `extra="allow"`) |
+| `models/live.py` | `LiveTicksResponse`, `RecapResponse` (typed #769; passthrough blocks `extra="allow"`; a stored list entry the model can't read is dropped with a warning, an unreadable forecast lane drops the row, never a 500) |
 | `web/ts/helpers/debrief-replay.ts` | Pure: time-base caption, route point → tick, forecast-lane merging, replay state, recap → `LiveRibbon`, grid rows |
 | `web/ts/visualization/observed/recap-view.ts` | DOM: tick chips, mode bar, recap lanes, distance × time grid |
 | `web/ts/store/briefing-store.ts` | `ticks`, `recap`, `recapForecast`, `replay`; `loadTicks`, `loadRecap`, `loadRecapForecast`, `viewTick`, `backToBase` |

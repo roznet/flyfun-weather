@@ -810,6 +810,28 @@ class LiveTickResponse(LiveLayerResponse):
 # snapshots stored, so a ``tick_at`` round-trips to ``/live/at`` unchanged.
 
 
+def _drop_unreadable_entries(value, handler, info):
+    """Wrap-validator body for a list read back from stored snapshots: an
+    entry the model can't read (a null or non-numeric value written by some
+    other code path) is dropped with a warning instead of 500ing the whole
+    response."""
+    try:
+        return handler(value)
+    except ValidationError:
+        if not isinstance(value, list):
+            raise
+        kept = []
+        for item in value:
+            try:
+                kept.extend(handler([item]))
+            except ValidationError:
+                pass
+        logger.warning(
+            "Dropped %d of %d unreadable stored %s entries", len(value) - len(kept), len(value), info.field_name
+        )
+        return kept
+
+
 class TickSegment(BaseModel):
     """One ribbon stretch of a recorded tick (``/live/ticks?segments=1``),
     for the distance × time grid: the radar lane only."""
@@ -834,6 +856,8 @@ class LiveTickEntry(BaseModel):
     alert_count: int | None = None
     # Only with ``?segments=1``.
     segments: list[TickSegment] | None = None
+
+    _segments_readable = field_validator("segments", mode="wrap")(_drop_unreadable_entries)
 
 
 class LiveTicksResponse(BaseModel):
@@ -1005,6 +1029,10 @@ class RecapResponse(BaseModel):
     storms: list[RecapStorm] = Field(default_factory=list)
     # Every pack of the flight, newest first (the pack picker's choices).
     packs: list[str] = Field(default_factory=list)
+
+    _entries_readable = field_validator(
+        "alerts", "waypoints", "segments", "weather", "storms", mode="wrap"
+    )(_drop_unreadable_entries)
 
     @field_validator("forecast", mode="wrap")
     @classmethod
