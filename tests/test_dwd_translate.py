@@ -165,3 +165,25 @@ def test_prompts_carry_the_place_table_and_glossary():
     for prompt in (_EXTRACT_SYNOPTIC_PROMPT, _TRANSLATE_SYSTEM_PROMPT):
         assert "Hochnebel = low stratus" in prompt
         assert "gebietsweise = in places" in prompt
+
+
+def test_a_new_version_prunes_the_same_texts_old_translations(tmp_path, monkeypatch):
+    from weatherbrief.digest import dwd_translate
+    from weatherbrief.digest.llm_config import DigestConfig
+
+    monkeypatch.setattr(dwd_translate, "create_chat_model", lambda cfg: _FakeLLM([]))
+    blocks = _blocks(("Freitag", date(2026, 10, 9)))
+    content_hash = dwd_translate._cache_key(dwd_translate._format_blocks_for_translation(blocks))
+    legacy = tmp_path / f"{content_hash}_extract.json"  # pre-version file name
+    legacy.write_text("{}")
+    other_mode = tmp_path / f"{content_hash}_translate_deadbeef.json"
+    other_mode.write_text("{}")
+    other_text = tmp_path / "0123456789abcdef_extract_deadbeef.json"
+    other_text.write_text("{}")
+
+    dwd_translate.translate_dwd_blocks(blocks, DigestConfig(), tmp_path, synoptic_extract=True)
+
+    left = sorted(p.name for p in tmp_path.iterdir())
+    assert not legacy.exists()
+    assert other_mode.exists() and other_text.exists()
+    assert len([n for n in left if n.startswith(f"{content_hash}_extract_")]) == 1

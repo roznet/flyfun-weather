@@ -88,14 +88,15 @@ Sea (~56°N 3°E)
 (~52.8°N 9.5°E); Nordrhein-Westfalen (~51.5°N 7.5°E); Hessen (~50.6°N 9°E); \
 Rheinland-Pfalz (~49.9°N 7.4°E); Saarland (~49.4°N 6.9°E); \
 Baden-Württemberg (~48.5°N 9°E); Bayern = Bavaria (~49°N 11.5°E); \
-Thüringen (~50.9°N 11°E); Sachsen = Saxony (~51°N 13.3°E), östliches Sachsen = eastern Saxony (~51.1°N 14.5°E), \
-südöstliches Bayern / Südosten Bayerns = southeastern Bavaria \
-(~48.3°N 12.7°E); Sachsen-Anhalt \
+Thüringen (~50.9°N 11°E); Sachsen = Saxony (~51°N 13.3°E); Sachsen-Anhalt \
 (~51.9°N 11.7°E); Brandenburg (~52.4°N 13.3°E); Mecklenburg-Vorpommern \
 (~53.8°N 12.5°E)
+- Parts of states: östliches Sachsen = eastern Saxony (~51.1°N 14.5°E); \
+südöstliches Bayern / Südosten Bayerns = southeastern Bavaria \
+(~48.3°N 12.7°E)
 - Emsland (~52.7°N 7.3°E); Schwarzwald = Black Forest (~48.2°N 8.2°E); \
 Harz (~51.75°N 10.6°E); Erzgebirge (~50.6°N 13°E); Bodensee = Lake \
-Constance (~47.6°N 9.4°E); Donau (in Germany) = the Danube (~48.7°N 11.5°E); \
+Constance (~47.6°N 9.4°E); Donau (the Bavarian stretch, Ulm to Passau) = the Danube in Bavaria (~48.7°N 11.5°E); \
 Oberrhein = the Upper Rhine valley (~48.5°N 7.8°E)
 - Countries and seas keep their English name: Frankreich = France \
 (~46.5°N 2.5°E), Benelux (~51°N 5°E), Britische Inseln = the British Isles \
@@ -233,10 +234,26 @@ def translate_dwd_blocks(
     }
     try:
         cache_file.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2))
+        _prune_stale_versions(cache_path, content_hash, mode_tag, keep=cache_file)
     except OSError:
         logger.warning("Failed to write translation cache", exc_info=True)
 
     return _split_translation(blocks, english)
+
+
+def _prune_stale_versions(
+    cache_path: Path, content_hash: str, mode_tag: str, *, keep: Path,
+) -> None:
+    """Drop this text's translations written by another prompt or model.
+
+    The file name carries a model+prompt version, so every prompt change would
+    otherwise leave the old file behind for good — including the pre-version
+    ``{hash}_{mode}.json`` files. Only the same German text and mode are
+    touched; other texts age out with their own next write.
+    """
+    for old in cache_path.glob(f"{content_hash}_{mode_tag}*.json"):
+        if old != keep:
+            old.unlink(missing_ok=True)
 
 
 def _format_blocks_for_translation(blocks: list[DWDDayBlock]) -> str:
