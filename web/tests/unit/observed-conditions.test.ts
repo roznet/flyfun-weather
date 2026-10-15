@@ -19,7 +19,8 @@ import {
 // Imported from the Leaflet-free geometry module: Leaflet touches `window` at
 // module load, which the node test environment does not provide.
 import {
-  corridorBox, flashOpacity, formatBadge, overlayUrl,
+  FLASH_GLYPH, FLASH_GLYPH_HEIGHT_PX, FLASH_GLYPH_WIDTH_PX,
+  corridorBox, drawableFlashes, flashGlyphPoints, flashOpacity, formatBadge, overlayUrl,
 } from '../../ts/visualization/route-map/observed-overlay-geometry';
 import { getMetricById, sampleMetric } from '../../ts/visualization/route-graph/metrics';
 import { LAYER_TOOLTIPS } from '../../ts/visualization/cross-section/tooltip-formatters';
@@ -509,6 +510,32 @@ describe('observed map overlay', () => {
     expect(flashOpacity(0)).toBeGreaterThan(flashOpacity(30));
     expect(flashOpacity(30)).toBeGreaterThan(0);
     expect(flashOpacity(90)).toBe(0);
+  });
+
+  it('draws flashes inside the trail, oldest first, faded by age (#665)', () => {
+    const now = Date.parse('2026-10-03T14:00:00Z');
+    const flashes = [
+      { lat: 49.1, lon: 2.1, time: '2026-10-03T13:58:00Z' },  // 2 min
+      { lat: 49.2, lon: 2.2, time: '2026-10-03T13:20:00Z' },  // 40 min
+      { lat: 49.3, lon: 2.3, time: '2026-10-03T12:30:00Z' },  // 90 min: past the trail
+      { lat: 49.4, lon: 2.4, time: 'not a time' },
+    ];
+    const drawn = drawableFlashes(flashes, now);
+    expect(drawn.map((d) => d.lat)).toEqual([49.2, 49.1]);
+    expect(drawn[0].opacity).toBeCloseTo(flashOpacity(40));
+    expect(drawn[1].opacity).toBeCloseTo(flashOpacity(2));
+    expect(drawn[1].opacity).toBeGreaterThan(drawn[0].opacity);
+  });
+
+  it('centres the lightning glyph on the flash, inside its box', () => {
+    const pts = flashGlyphPoints(100, 50);
+    expect(pts).toHaveLength(FLASH_GLYPH.length);
+    for (const [x, y] of pts) {
+      expect(Math.abs(x - 100)).toBeLessThanOrEqual(FLASH_GLYPH_WIDTH_PX / 2);
+      expect(Math.abs(y - 50)).toBeLessThanOrEqual(FLASH_GLYPH_HEIGHT_PX / 2);
+    }
+    // The tip is the bottom-most vertex, at the bottom of the box.
+    expect(Math.max(...pts.map(([, y]) => y))).toBeCloseTo(50 + FLASH_GLYPH_HEIGHT_PX / 2);
   });
 
   it('badges the frame with its own age and rolling window', () => {

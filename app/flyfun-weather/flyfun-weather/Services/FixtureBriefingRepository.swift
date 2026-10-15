@@ -268,6 +268,9 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func observedCellDisplay(path: String) async throws -> CellDisplay {
         throw FixtureError.notProvided("observedCellDisplay")
     }
+    func observedFlashes(path: String) async throws -> ObservedFlashesResponse {
+        throw FixtureError.notProvided("observedFlashes")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories

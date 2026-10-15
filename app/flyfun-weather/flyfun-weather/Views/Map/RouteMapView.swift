@@ -48,6 +48,10 @@ struct RouteMapView: View {
     /// The map's own cell model (not `viewModel.cellsModel`): it pairs with the
     /// drawn reflectivity frame, while the Observed list takes the newest.
     @State private var cellsModel: RouteCellsModel?
+    /// Lightning flashes as small bolts (#665). On by default: a measurement,
+    /// not an experimental analysis, and the web route map always draws it.
+    @AppStorage("mapObservedLightning") private var observedLightning = true
+    @State private var lightningModel: RouteLightningModel?
     /// The cross-section's corridor pick (0 = unset → the sampled default).
     /// `@AppStorage` so the corridor box follows a change made on that screen.
     @AppStorage(CrossSectionViewModel.observedRadiusDefaultsKey) private var observedRadiusPick = 0.0
@@ -155,6 +159,14 @@ struct RouteMapView: View {
             let stamp = cellsRadarStamp
             await cellsModel?.poll(radarStamp: { stamp }, box: viewModel.cellsBox)
         }
+        .task(id: lightningPollKey) {
+            // Restarts when the corridor box changes (the cross-section's pick).
+            guard showsLightning, let box = observedCorridor else { return }
+            if lightningModel == nil, let repo = appState.repository {
+                lightningModel = RouteLightningModel(repository: repo)
+            }
+            await lightningModel?.poll(box: box)
+        }
     }
 
     // MARK: Map
@@ -186,6 +198,8 @@ struct RouteMapView: View {
             mutedBaseMap: showsObserved && (!observedRadar.isEmpty || observedSatellite),
             cellsDisplay: showsCells ? cellsModel?.display : nil,
             cellsDisplayKey: showsCells ? cellsModel?.displayPath : nil,
+            lightningFlashes: showsLightning ? lightningModel?.drawable ?? [] : [],
+            lightningRevision: showsLightning ? lightningModel?.revision ?? 0 : -1,
             focusRegion: focusRegion,
             focusRegionKey: focusRegionKey,
             onFocusApplied: { focusRegion = nil }
@@ -305,6 +319,15 @@ struct RouteMapView: View {
         return "\(cellsRadarStamp ?? "newest")|\(box.south),\(box.west),\(box.north),\(box.east)"
     }
 
+    // MARK: Lightning (#665)
+
+    private var showsLightning: Bool { showsObserved && observedLightning }
+
+    private var lightningPollKey: String {
+        guard showsLightning, let box = observedCorridor else { return "off" }
+        return "\(box.south),\(box.west),\(box.north),\(box.east)"
+    }
+
     /// The corridor the sampled numbers describe, at the cross-section's pick.
     private var observedCorridor: ObservedMapImagery.LatLonBox? {
         guard showsObserved else { return nil }
@@ -344,6 +367,16 @@ struct RouteMapView: View {
                     }
                 }
                 .accessibilityIdentifier("map.observedCellsToggle")
+                Button {
+                    observedLightning.toggle()
+                } label: {
+                    if observedLightning {
+                        Label("Lightning", systemImage: "checkmark")
+                    } else {
+                        Text("Lightning")
+                    }
+                }
+                .accessibilityIdentifier("map.observedLightningToggle")
                 if !observedRadar.isEmpty {
                     Menu("Radar opacity \(Int((observedOpacity * 100).rounded()))%") {
                         ForEach(ObservedMapImagery.opacitySteps, id: \.self) { step in
@@ -428,14 +461,17 @@ struct RouteMapView: View {
         .sheet(isPresented: $showObservedDetails) { observedDetailsSheet }
     }
 
-    /// Cells first (the overlay the pilot opted into), then radar, then satellite.
+    /// Cells first (the overlay the pilot opted into), then radar, then
+    /// satellite, then lightning.
     private var observedChips: [ObservedMapImagery.SummaryChip] {
         (showsCells ? [cellsModel?.chip].compactMap { $0 } : []) + observedComposition.chips
+            + (showsLightning ? [lightningModel?.chip].compactMap { $0 } : [])
     }
 
     /// Full badge lines — time, age, rolling-max window, attribution.
     private var observedBadges: [String] {
         observedComposition.badges + (showsCells ? [cellsModel?.badge].compactMap { $0 } : [])
+            + (showsLightning ? [lightningModel?.badge].compactMap { $0 } : [])
     }
 
     /// Everything the summary leaves out: the radar ramp, each layer's full
@@ -456,6 +492,21 @@ struct RouteMapView: View {
                 if let legend, let stops = legend.legend, stops.count >= 2 {
                     Section(ObservedMapImagery.label(for: observedRadar)) {
                         observedLegend(legend, stops: stops)
+                    }
+                }
+                if showsLightning {
+                    Section {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bolt.fill")
+                                .foregroundStyle(Color(uiColor: ObservedLightning.color))
+                            Text("one flash, fading over \(Int(ObservedLightning.trailMinutes)) min")
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(Theme.text)
+                    } header: {
+                        Text("Lightning")
+                    } footer: {
+                        Text("Satellite total lightning (in-cloud and cloud-to-ground) in the corridor box, each flash at its own time.")
                     }
                 }
                 if showsCells {
@@ -704,6 +755,7 @@ struct RouteMapView: View {
         if let focus = intent.mapFocus {
             // #690 tap-to-map: the item's own layers, then frame its box.
             if focus.wantsCells { observedCells = true }
+            if focus.wantsLightning { observedLightning = true }
             if (focus.wantsRadar || focus.wantsCells), observedRadarOptions.contains("opera_dbzh") {
                 observedPick = "opera_dbzh"
             }

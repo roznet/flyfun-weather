@@ -566,7 +566,7 @@ final class flyfun_weatherUITests: XCTestCase {
     /// same patch path a D-0 briefing takes); the map then offers the Observed
     /// menu. The fixture repository serves no frame listings, so the badge must
     /// say the imagery is unavailable rather than leaving a blank map that reads
-    /// as "no echoes". iPhone + iPad.
+    /// as "no echoes"; the same for lightning (#665), on by default. iPhone + iPad.
     @MainActor
     func testRouteMapObservedImageryControls() throws {
         let live = """
@@ -588,6 +588,12 @@ final class flyfun_weatherUITests: XCTestCase {
         XCTAssertTrue(badge.waitForExistence(timeout: Self.uiTimeout),
                       "a failed frame listing should be named on the map, not left blank")
         XCTAssertTrue(badge.label.contains("imagery unavailable"), "badge was: \(badge.label)")
+        // #665: lightning is on by default; with no server it says so rather
+        // than drawing nothing silently.
+        let lightningNamed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Lightning unavailable"), object: badge)
+        XCTAssertEqual(XCTWaiter.wait(for: [lightningNamed], timeout: Self.uiTimeout), .completed,
+                       "the lightning layer should say it is unavailable, got: \(badge.label)")
 
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "RouteMap-Observed-Mock"
@@ -597,6 +603,8 @@ final class flyfun_weatherUITests: XCTestCase {
         menu.tap()
         XCTAssertTrue(app.buttons["Satellite infrared"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the menu should offer the satellite underlay toggle")
+        XCTAssertTrue(app.buttons["map.observedLightningToggle"].firstMatch.exists,
+                      "the menu should offer the lightning toggle")
         let open = XCTAttachment(screenshot: app.screenshot())
         open.name = "RouteMap-Observed-Menu-Mock"
         open.lifetime = .keepAlways

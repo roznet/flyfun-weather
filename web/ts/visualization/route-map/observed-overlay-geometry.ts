@@ -61,6 +61,56 @@ export function flashOpacity(ageMinutes: number): number {
   return 0.9 * (1 - ageMinutes / FLASH_TRAIL_MINUTES);
 }
 
+/** A flash ready to draw: where it is and how faded. */
+export interface DrawableFlash {
+  lat: number;
+  lon: number;
+  opacity: number;
+}
+
+/** Flashes still inside the trail, each with its age-faded opacity, oldest
+ *  first so the most recent draw on top. Unparseable times are dropped. */
+export function drawableFlashes(
+  flashes: ReadonlyArray<{ lat: number; lon: number; time: string }>,
+  nowMs: number,
+): DrawableFlash[] {
+  return flashes
+    .map((f) => ({ f, age: (nowMs - new Date(f.time).getTime()) / 60000 }))
+    .filter((d) => Number.isFinite(d.age) && d.age < FLASH_TRAIL_MINUTES)
+    .sort((a, b) => b.age - a.age)
+    .map(({ f, age }) => ({ lat: f.lat, lon: f.lon, opacity: flashOpacity(age) }))
+    .filter((d) => d.opacity > 0);
+}
+
+// SYNC — FLASH_GLYPH / FLASH_GLYPH_*_PX are mirrored in the iOS
+// `ObservedLightning` (app/.../Views/Map/ObservedLightning.swift).
+
+/** A small lightning bolt, as polygon vertices in a unit box ((0,0) top-left,
+ *  y down). Drawn instead of a dot (#665) so a strike reads as lightning
+ *  without a legend, and is not mistaken for a radar echo or an airport. */
+export const FLASH_GLYPH: ReadonlyArray<readonly [number, number]> = [
+  [0.62, 0],
+  [0.08, 0.58],
+  [0.44, 0.58],
+  [0.3, 1],
+  [0.92, 0.4],
+  [0.56, 0.4],
+  [0.78, 0],
+];
+/** On-screen size of the bolt, in CSS pixels (a dot was 5-6 px across). */
+export const FLASH_GLYPH_WIDTH_PX = 8;
+export const FLASH_GLYPH_HEIGHT_PX = 12;
+
+/** The bolt's vertices in screen pixels, centred on the flash at (x, y). */
+export function flashGlyphPoints(
+  x: number,
+  y: number,
+  width: number = FLASH_GLYPH_WIDTH_PX,
+  height: number = FLASH_GLYPH_HEIGHT_PX,
+): Array<[number, number]> {
+  return FLASH_GLYPH.map(([u, v]) => [x + (u - 0.5) * width, y + (v - 0.5) * height]);
+}
+
 /** Query string for the overlay and flashes endpoints. */
 export function boxParams(box: LatLonBox): string {
   return new URLSearchParams({

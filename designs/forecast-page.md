@@ -91,7 +91,7 @@ these layers are a tab and not extra layers on the forecast slider.
 - **Layers, each toggleable** (`#controls-now`, remembered per browser in
   `localStorage` `wb.now.layers`): METAR, radar (`opera_dbzh` tiles), satellite
   IR underlay, lightning (`/api/observed/flashes` for the viewport, clamped to
-  80°, `minutes=60`), Cells and Rain areas (the shared overlay,
+  80°, `minutes=60`; small age-faded bolts on one canvas, `FlashGlyphLayer`, #665), Cells and Rain areas (the shared overlay,
   `cells-overlay.md`; rain off by default). Cloud tops have no layer: they show
   in a cell's popup when the home node collects CTTH (a Europe-wide CTTH read
   on the droplet is out, #655).

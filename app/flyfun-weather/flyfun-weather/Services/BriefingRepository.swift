@@ -133,6 +133,9 @@ protocol BriefingRepository: Sendable {
     func observedCellFrames() async throws -> CellFramesResponse
     /// One overlay — `path` is a filled-in `urlTemplate`, with the route box query.
     func observedCellDisplay(path: String) async throws -> CellDisplay
+    /// Lightning flashes inside `path`'s box (#665) — `path` is
+    /// `ObservedLightning.flashesPath`, query included. Online-only.
+    func observedFlashes(path: String) async throws -> ObservedFlashesResponse
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse
     func recalculateAdvisories(flightId: String, timestamp: String, cruiseAltitudeFt: Int?) async throws
@@ -418,6 +421,12 @@ final class OnlineBriefingRepository: BriefingRepository {
         } catch {
             throw APIError.decodingError(error)
         }
+    }
+
+    func observedFlashes(path: String) async throws -> ObservedFlashesResponse {
+        // `requestURL` so the box query survives (`request` would percent-encode
+        // the `?` into the path).
+        try await client.requestURL(path)
     }
 
     /// `2026-09-28T14:30:00Z` — explicit UTC so the server never reads a naive time.

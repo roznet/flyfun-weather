@@ -304,6 +304,14 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let h = observedCellDisplayHandler { return try h(path) }
         throw MockError.notStubbed("observedCellDisplay")
     }
+
+    var observedFlashesHandler: (@Sendable (String) throws -> ObservedFlashesResponse)?
+    private(set) var observedFlashesRequests: [String] = []
+    func observedFlashes(path: String) async throws -> ObservedFlashesResponse {
+        observedFlashesRequests.append(path)
+        if let h = observedFlashesHandler { return try h(path) }
+        throw MockError.notStubbed("observedFlashes")
+    }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
         if let h = advisoriesHandler { return try h() }
         throw MockError.notStubbed("advisories")
