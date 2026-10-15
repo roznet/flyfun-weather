@@ -23,8 +23,9 @@ _GLOSSARY = """\
 DWD terms (use these renderings):
 - Hochnebel = low stratus (NOT "high fog"); Nebel = fog
 - Nordmeer / Europäisches Nordmeer = Norwegian Sea (NOT the North Sea)
-- "in der Nacht zum Freitag" = in the night into Friday (Thursday night), \
-NOT Friday night; "ausgangs der Nacht" = towards the end of the night
+- "in der Nacht zum Samstag" = write "in the night into Saturday", exactly \
+that, and never convert it to another day name; "ausgangs der Nacht" = \
+towards the end of the night; teils = partly / in places
 - Höhentief = upper low; Höhentrog = upper trough; Randtrog = peripheral \
 trough; Kaltlufttropfen / abtropfen = cut-off low / to cut off; Keil = ridge; \
 Hochdruckbrücke = high-pressure bridge; Wellentief = frontal-wave low
@@ -37,12 +38,18 @@ not forming
 - gebietsweise = in places (NOT area-wide); in der Fläche = widely, \
 across the area
 - Gusts are gusts, never sustained wind, and keep DWD's categories apart: \
-Windböen / steife Böen = Bft 7; stürmische Böen = Bft 8; Sturmböen = Bft 9; schwere \
-Sturmböen = Bft 10; orkanartige Böen = Bft 11. "stark bis stürmisch" = \
+Windböen / steife Böen = near-gale gusts (Bft 7); stürmische Böen = gale \
+gusts (Bft 8); Sturmböen = strong-gale gusts (Bft 9); schwere Sturmböen = \
+storm gusts (Bft 10); orkanartige Böen = violent-storm gusts (Bft 11). Never \
+"moderate", "fresh" or "strong" for these. "stark bis stürmisch" = \
 strong to gale (Bft 6-8); "Wind- und Sturmböen" = gusts and gale \
 gusts (both kept)
 - "dreht auf Nordwest" (from SW) = veers to northwest; "Geschichte sein" = \
 be over / have ended
+- "mit der Progression (der Front) ist es vorbei" = the front has stopped \
+advancing; "Außer in X ... überwiegt Y" = Y everywhere except X (X is the \
+exception, keep it that way round)
+- "uns" / "unsere Richtung" / "bei uns" = Germany ("towards Germany", "over Germany"), never "us"
 - Niederschlagswahrscheinlichkeit = probability of precipitation (it is \
 about rain, never about wind)\
 """
@@ -52,7 +59,10 @@ about rain, never about wind)\
 # Poland (2026-10-14 review).
 _GAZETTEER = """\
 Place phrases (DWD writes from Germany's point of view; "im Süden" means \
-southern Germany). Write the English name followed by the coordinate given \
+southern Germany when it locates weather in Germany. When a direction word \
+places a large-scale system that lies outside Germany — "schwenkt der Trog \
+im Nordwesten ostwärts" for an Atlantic trough — it means northwest OF \
+Germany: say so, without a German region's coordinate). Write the English name followed by the coordinate given \
 here, e.g. "over southern Germany (~48.5°N 10.5°E)":
 - Norden, norddeutsch, nördliche Landesteile = northern Germany (~53.5°N 10°E)
 - Nordwesten = northwestern Germany (~53°N 8°E)
@@ -96,8 +106,9 @@ Scandinavia (~58.5°N 12°E), Nordskandinavien = northern Scandinavia \
 (~45°N 5°W)
 - A compound ("im östlichen Sachsen und südöstlichen Bayern") narrows the \
 place: write "eastern Saxony and southeastern Bavaria" with the nearest \
-entries' coordinates. A place not listed: translate the name and add a \
-coordinate only if you know it well; otherwise leave it without one.\
+entries' coordinates. A place not listed: translate the name and give your \
+best approximate coordinate for that place itself (its centre), never a \
+wider region's.\
 """
 
 _TRANSLATE_SYSTEM_PROMPT = f"""\
@@ -107,7 +118,7 @@ meteorological text from the DWD (Deutscher Wetterdienst).
 Translate the following German weather forecast faithfully into English.
 - Preserve all meteorological terms, pressure values, temperatures, altitudes, \
 and wind speeds exactly as given.
-- Keep the day-by-day structure. Each section starts with a day header line.
+- Keep the day-by-day structure: copy each === day header === line exactly, one per input day; never add a header for a night or a later day mentioned inside a section.
 - Do not interpret, add, or remove information.
 - Do not add day-of-week to date references or vice versa — translate as-is.
 - Use standard aviation/meteorology English terminology.
@@ -120,12 +131,14 @@ You are an aviation meteorologist condensing a DWD (Deutscher Wetterdienst) \
 forecast that was written for Germany, for a pilot whose route does NOT \
 cross Germany.
 
-For each day section, write a short English paragraph (3-6 sentences) with \
-the large-scale content: pressure systems (names, central pressure, where \
-they are and where DWD says they move), fronts and their positions, the main \
-rain, fog and wind areas, air mass and flow, and any model disagreement DWD \
-mentions. Leave out purely local detail (town temperatures, rainfall \
-amounts at named places).
+For each day section, write English prose with the large-scale content: \
+pressure systems (names, central pressure, where they are and where DWD says \
+they move), fronts and their positions, rain, fog / low stratus, gust and \
+thunder areas, air mass and flow. Take as many sentences as that needs. \
+Always keep: each sub-period DWD describes (e.g. the night into the next \
+day), every statement of model disagreement or uncertainty, every gust area \
+with its Bft, any thunder, and fog / low stratus areas. Leave out only \
+purely local detail (town temperatures, rainfall amounts at named places).
 
 Rules:
 - Faithful, not interpretive: every statement must come from the German \
@@ -137,7 +150,7 @@ or direction for a feature, give none — never infer that a front clears, \
 weakens or moves somewhere.
 - Places: use the place phrases below — English name plus coordinate. Never \
 widen a place ("southern Germany" is not "southern Europe").
-- Keep the === day header === structure from the input; no other headings.
+- Copy the input's === day header === lines exactly, one per input day and in order. Never add a header for a night or later day mentioned inside a section ("in the night into Saturday" stays under its own day); no other headings.
 - Preserve all numerical values (pressure in hPa, temperatures, wind speeds) \
 exactly as stated.
 
@@ -270,10 +283,14 @@ def _split_translation(
 
     # Try to split on the header markers
     import re
+    headers = re.findall(r"===\s*(.+?)\s*===", english)
     parts = re.split(r"===\s*.+?\s*===\n?", english)
     # parts[0] is whatever preceded the first header; the rest map to blocks
-    sections = [_strip_trailing_decoration(s) for s in parts[1:]]
-    sections = [s for s in sections if s]
+    pairs = [(h, _strip_trailing_decoration(s)) for h, s in zip(headers, parts[1:])]
+    pairs = [(h, s) for h, s in pairs if s]
+    sections = [s for _, s in pairs]
+    if len(sections) != len(blocks):
+        sections = _fold_extra_days(blocks, pairs) or sections
 
     if len(sections) == len(blocks):
         for block, section in zip(blocks, sections):
@@ -293,3 +310,34 @@ def _split_translation(
         result.append((span, english.strip()))
 
     return result
+
+
+def _fold_extra_days(
+    blocks: list[DWDDayBlock], pairs: list[tuple[str, str]],
+) -> list[str] | None:
+    """Fold sections for days the input did not have into the day before.
+
+    The translator sometimes gives "the night into Saturday" inside a Friday
+    block its own ``=== Samstag ===`` header (2026-10-15, even when told not
+    to). A header naming the next input day — by German day name or ISO date —
+    starts that day; any other header and its text stay with the current day,
+    the header kept as a plain line so the timing is not lost. ``None`` when
+    the input days still don't line up one-to-one.
+    """
+    out: list[str] = []
+    for header, body in pairs:
+        nxt = blocks[len(out)] if len(out) < len(blocks) else None
+        if nxt is not None and (
+            nxt.day_name_de.lower() in header.lower()
+            or (nxt.date_iso is not None and nxt.date_iso.isoformat() in header)
+        ):
+            out.append(body)
+        elif out:
+            out[-1] = f"{out[-1]}\n\n{header}:\n{body}"
+        else:
+            return None
+    if len(out) != len(blocks):
+        return None
+    logger.info("Translation split: folded %d extra day header(s)", len(pairs) - len(out))
+    return out
+
