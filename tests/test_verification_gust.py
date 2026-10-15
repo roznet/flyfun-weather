@@ -302,6 +302,15 @@ class TestMonthlyRollupGust:
 
 
 class TestGetGustAccuracy:
+    """The per-airport path: ``verification_daily_stats`` + raw TAF scores.
+
+    These seed per-airport rows by hand, so every call is filtered to the
+    seeded airport — that is the path that reads them. Unfiltered calls read
+    the global rollups (#522); their gust numbers are pinned against this path
+    by ``test_verification_global_rollup``'s agreement test.
+    """
+
+    _AT = ["LFPG"]
 
     def _daily(self, db, **overrides):
         defaults = dict(
@@ -321,6 +330,7 @@ class TestGetGustAccuracy:
         self._daily(db_session)
         stats = get_gust_accuracy(
             db_session, _utc(2026, 5, 4), _utc(2026, 5, 5), source="standalone",
+            icao_filter=self._AT,
         )
         assert len(stats) == 1
         s = stats[0]
@@ -340,6 +350,7 @@ class TestGetGustAccuracy:
         self._daily(db_session, date=date(2026, 5, 5))
         stats = get_gust_accuracy(
             db_session, _utc(2026, 5, 4), _utc(2026, 5, 6), source="standalone",
+            icao_filter=self._AT,
         )
         assert len(stats) == 1
         assert stats[0].n_flagged == 80
@@ -356,6 +367,7 @@ class TestGetGustAccuracy:
         )
         assert get_gust_accuracy(
             db_session, _utc(2026, 5, 4), _utc(2026, 5, 5), source="standalone",
+            icao_filter=self._AT,
         ) == []
 
     def test_taf_comes_from_raw_scores(self, db_session):
@@ -379,6 +391,7 @@ class TestGetGustAccuracy:
 
         stats = get_gust_accuracy(
             db_session, _utc(2026, 5, 4), _utc(2026, 5, 5), source="standalone",
+            icao_filter=self._AT,
         )
         taf = [s for s in stats if s.model == "TAF"]
         assert len(taf) == 1

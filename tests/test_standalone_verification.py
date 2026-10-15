@@ -681,10 +681,18 @@ class TestVerificationStatsSourceFilter:
         assert standalone_summary.avg_cycle_duration_ms == pytest.approx(30000.0)
 
     def test_activity_summary_obs_filtered_by_source(self, db_session):
-        """Observation and airport counts only include obs with scores for that source."""
+        """Observation and airport counts only include obs with scores for that source.
+
+        Unfiltered activity reads the daily rollups (#522), so roll the day up
+        first — as the sibling category test does and as every cycle does in
+        production. Before the read gate was removed this test passed only
+        because the gate defaulted to the raw path.
+        """
+        from weatherbrief.tasks.verification_daily_rollup import rollup_day
         from weatherbrief.tasks.verification_stats import get_activity_summary
 
         self._insert_scores(db_session)
+        rollup_day(db_session, NOW.date())
 
         since = NOW - timedelta(hours=1)
         until = NOW + timedelta(hours=1)

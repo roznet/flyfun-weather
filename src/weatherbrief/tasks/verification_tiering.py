@@ -21,13 +21,6 @@ Row-level archive    Parquet under ``DATA_DIR/archive/``         forever
 Gate summary (all default to the pre-#522 behaviour, so a deploy that only
 ships the code changes nothing):
 
-``VERIFICATION_GLOBAL_ROLLUP_READS``
-    Phase 1. ``1`` points the unfiltered dashboard/digest aggregates at
-    ``verification_global_daily_stats`` / ``verification_activity_daily`` /
-    ``taf_verification_daily`` instead of ``verification_daily_stats`` and
-    raw scores. Requires the backfill to have run first — flipping it on an
-    un-backfilled database shows empty history, not wrong numbers.
-
 ``VERIFICATION_ARCHIVE_ENABLED``
     Phase 2. ``1`` runs the Parquet archive writer from the daily retention
     loop. The CLI (``verify archive ...``) works regardless — the gate only
@@ -36,18 +29,13 @@ ships the code changes nothing):
 ``VERIFICATION_RAW_RETENTION_DAYS``
     Phase 3. Online window for raw obs/scores/taf-scores. Left at the
     pre-#522 sentinel (9999 = pruning disabled) so the code can ship dark;
-    Phase 3 sets it to 180.
+    production has run with 90 since 2026-10-15 (Phase 3).
 
 ``VERIFICATION_PRUNE_REQUIRE_ARCHIVE``
     Phase 3 safety belt, on by default. No archive manifest for a period →
     that period is never deleted, and the snapshot prune stalls on days with
     no snapshot manifest. Only turn this off if the archive is deliberately
     abandoned.
-
-``SNAPSHOT_INBOX_RETENTION_DAYS``
-    Phase 3. Rotates ``eu-*/us-*.sqlite`` transport artifacts out of
-    ``SNAPSHOT_INBOX_DIR``. ``0`` (the shipping default) keeps them forever,
-    matching today's behaviour; Phase 3 sets it to 30.
 
 ``WB_OBSERVED_ARCHIVE_ENABLED``
     #575, alongside Phase 2. ``1`` samples the observed-frame store (radar,
@@ -97,21 +85,6 @@ def _int(name: str, default: int) -> int:
         return int(raw.strip())
     except ValueError:
         return default
-
-
-# ---------------------------------------------------------------------------
-# Phase 1 — global rollups + read switch
-# ---------------------------------------------------------------------------
-
-
-def global_rollup_reads_enabled() -> bool:
-    """Whether unfiltered aggregates read the global rollup tables.
-
-    Only affects *unfiltered* reads. A country/airport-filtered dashboard
-    request keeps reading the per-airport ``verification_daily_stats``, which
-    is the only table that can answer it.
-    """
-    return _flag("VERIFICATION_GLOBAL_ROLLUP_READS", False)
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +152,6 @@ def snapshot_prune_requires_archive() -> bool:
     table into an unbounded one.
     """
     return archive_enabled() and prune_requires_archive()
-
-
-def snapshot_inbox_retention_days() -> int:
-    """Rotation window for ``SNAPSHOT_INBOX_DIR`` artifacts. ``0`` = keep."""
-    return _int("SNAPSHOT_INBOX_RETENTION_DAYS", 0)
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -988,43 +987,6 @@ class TestPruneRawObservations:
         assert prune_session.get(VerificationObservationRow, shared_id) is not None
         assert prune_session.get(VerificationObservationRow, lone_id) is None
         assert result["observations"] == 1
-
-
-# ---------------------------------------------------------------------------
-# rotate_snapshot_inbox
-# ---------------------------------------------------------------------------
-
-
-class TestRotateSnapshotInbox:
-    def test_disabled_by_default(self, tmp_path, monkeypatch):
-        from weatherbrief.tasks.retention import rotate_snapshot_inbox
-
-        monkeypatch.delenv("SNAPSHOT_INBOX_RETENTION_DAYS", raising=False)
-        art = tmp_path / "eu-20260101.sqlite"
-        art.write_bytes(b"x" * 10)
-        os.utime(art, (0, 0))  # epoch — as old as it gets
-
-        assert rotate_snapshot_inbox(tmp_path)["deleted"] == 0
-        assert art.exists()
-
-    def test_removes_only_old_artifacts(self, tmp_path):
-        from weatherbrief.tasks.retention import rotate_snapshot_inbox
-
-        old = tmp_path / "eu-20260101.sqlite"
-        old.write_bytes(b"x" * 10)
-        os.utime(old, (0, 0))
-        fresh = tmp_path / "us-20260401.sqlite"
-        fresh.write_bytes(b"y" * 10)
-        unrelated = tmp_path / "notes.txt"
-        unrelated.write_text("keep me")
-        os.utime(unrelated, (0, 0))
-
-        result = rotate_snapshot_inbox(tmp_path, retain_days=30)
-        assert result["deleted"] == 1
-        assert result["bytes_freed"] == 10
-        assert not old.exists()
-        assert fresh.exists()
-        assert unrelated.exists()
 
 
 # ---------------------------------------------------------------------------

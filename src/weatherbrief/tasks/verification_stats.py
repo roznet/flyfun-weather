@@ -50,7 +50,6 @@ from weatherbrief.db.models import (
     VerificationScoreRow,
 )
 from weatherbrief.tasks.verification_gust import taf_gust_aggregate_columns
-from weatherbrief.tasks.verification_tiering import global_rollup_reads_enabled
 from weatherbrief.models.verification import (
     ActivitySummary,
     CategoryAccuracyRow,
@@ -96,12 +95,16 @@ def _icao_clause(col, icao_filter: list[str] | None):
 def _use_global(icao_filter: list[str] | None) -> bool:
     """Whether this request reads the global (ICAO-collapsed) rollups (#522).
 
-    Only unfiltered requests can: the global table has no ``icao`` column, so
-    a country/airport-filtered request has nothing to filter on and must stay
-    on the per-airport table. That is also the request shape the dashboard
-    never caches, so it was already expected to run live.
+    Every unfiltered request does. A country/airport-filtered request cannot:
+    the global table has no ``icao`` column, so it reads the per-airport table
+    (and raw scores for activity). That is also the request shape the
+    dashboard never caches, so it was already expected to run live.
+
+    This used to be gated by ``VERIFICATION_GLOBAL_ROLLUP_READS``. The gate
+    was removed after Phase 1 had run in production since 2026-08-04; the raw
+    path survives only for filtered requests.
     """
-    return global_rollup_reads_enabled() and not icao_filter
+    return not icao_filter
 
 
 def _nwp_daily_table(icao_filter: list[str] | None):
@@ -283,8 +286,10 @@ def _activity_counts_from_raw(
 ) -> tuple[int, int]:
     """(distinct observations, distinct airports) straight from raw scores.
 
-    The pre-#522 path. Still reached for country/airport-filtered requests
-    (small, bounded result sets) and whenever the Phase 1 gate is off.
+    The pre-#522 path, now reached only by country/airport-filtered requests
+    (small, bounded result sets): the rollups carry no per-airport
+    distinct-observation count, so a filtered request cannot be answered
+    from them.
     """
     common_where = (
         VerificationScoreRow.observation_time.between(since, until),

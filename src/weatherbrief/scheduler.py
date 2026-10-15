@@ -1065,8 +1065,6 @@ def _run_retention_once() -> None:
     #                                       writes the manifests step 4 needs
     #   4. raw prune                      — Phase 3, no-op until
     #                                       VERIFICATION_RAW_RETENTION_DAYS < 9999
-    #   5. snapshot inbox rotation        — Phase 3, no-op until
-    #                                       SNAPSHOT_INBOX_RETENTION_DAYS > 0
     #
     # Order matters between 3 and 4 only: nothing is deletable before it is
     # archived. Each step is wrapped independently so a single failure doesn't
@@ -1170,13 +1168,6 @@ def _run_retention_once() -> None:
             db.close()
     except Exception:
         logger.error("Raw observation retention failed", exc_info=True)
-
-    try:
-        from weatherbrief.tasks.retention import rotate_snapshot_inbox
-
-        rotate_snapshot_inbox()
-    except Exception:
-        logger.error("Snapshot inbox rotation failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

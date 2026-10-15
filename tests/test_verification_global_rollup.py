@@ -1,9 +1,15 @@
 """Tests for the #522 Phase 1 rollups and the dashboard read switch.
 
-Three new daily tables and one gate. The invariant worth protecting is that
-flipping ``VERIFICATION_GLOBAL_ROLLUP_READS`` must not change a single
-reported number — the global table is the per-airport table with ``icao``
-summed away, so gate-on and gate-off answers have to agree exactly.
+Three new daily tables and one read switch. The invariant worth protecting
+is that the rollup path and the raw path report the same numbers — the global
+table is the per-airport table with ``icao`` summed away, so the two answers
+have to agree exactly.
+
+The switch used to be the ``VERIFICATION_GLOBAL_ROLLUP_READS`` env gate. It is
+gone: unfiltered requests always read the rollups, and only filtered requests
+take the raw path. The tests below still force each path through
+``_use_global`` because a filtered and an unfiltered view of the same data sit
+side by side on the dashboard, so the two paths must keep agreeing.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from weatherbrief.tasks.verification_daily_rollup import (
     rollup_day,
     taf_days_out_expr,
 )
+import weatherbrief.tasks.verification_stats as verification_stats
 from weatherbrief.tasks.verification_stats import (
     get_activity_summary,
     get_category_accuracy,
@@ -46,9 +53,16 @@ SINCE = _utc(2026, 5, 12, 0, 0)
 UNTIL = _utc(2026, 5, 12, 23, 59)
 
 
-@pytest.fixture
-def gate_on(monkeypatch):
-    monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
+_ROLLUP_PATH = verification_stats._use_global
+
+
+def _force_raw(monkeypatch):
+    """Route every aggregate through the raw path, as a filtered request does."""
+    monkeypatch.setattr(verification_stats, "_use_global", lambda icao_filter: False)
+
+
+def _force_rollup(monkeypatch):
+    monkeypatch.setattr(verification_stats, "_use_global", _ROLLUP_PATH)
 
 
 def _obs(db, icao: str, when: datetime, *, wind=12, gust=None, taf_gust=None):
@@ -386,10 +400,16 @@ class TestReadSwitchAgreement:
              for r in get_gust_accuracy(db, SINCE, UNTIL, "standalone")},
         )
 
-    def test_aggregates_match_across_the_gate(self, populated, monkeypatch):
+    def test_unfiltered_reads_ignore_the_retired_env_gate(self, monkeypatch):
+        """The gate is gone; a stale ``=0`` in an .env must not resurrect raw reads."""
         monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "0")
+        assert verification_stats._use_global(None) is True
+        assert verification_stats._use_global(["LFPG"]) is False
+
+    def test_aggregates_match_across_the_gate(self, populated, monkeypatch):
+        _force_raw(monkeypatch)
         before = self._all_stats(populated)
-        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
+        _force_rollup(monkeypatch)
         after = self._all_stats(populated)
         assert before == after
 
@@ -400,9 +420,9 @@ class TestReadSwitchAgreement:
         midnight see :meth:`test_activity_widens_to_utc_days_off_boundary`,
         which is the shape a real trailing-24h request has.
         """
-        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "0")
+        _force_raw(monkeypatch)
         raw = get_activity_summary(populated, SINCE, UNTIL, "standalone")
-        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
+        _force_rollup(monkeypatch)
         rolled = get_activity_summary(populated, SINCE, UNTIL, "standalone")
 
         assert raw.observations_collected == rolled.observations_collected == 3
@@ -433,9 +453,9 @@ class TestReadSwitchAgreement:
         since = _utc(2026, 5, 11, 18, 0)
         until = _utc(2026, 5, 12, 6, 0)
 
-        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "0")
+        _force_raw(monkeypatch)
         raw = get_activity_summary(populated, since, until, "standalone")
-        monkeypatch.setenv("VERIFICATION_GLOBAL_ROLLUP_READS", "1")
+        _force_rollup(monkeypatch)
         rolled = get_activity_summary(populated, since, until, "standalone")
 
         # Exact-time window excludes the noon observations entirely...
@@ -444,8 +464,8 @@ class TestReadSwitchAgreement:
         assert rolled.observations_collected == 3
         assert rolled.airports_observed == 3
 
-    def test_gate_on_still_reads_per_airport_when_filtered(
-        self, populated, gate_on,
+    def test_filtered_requests_still_read_per_airport(
+        self, populated,
     ):
         """The global table has no icao column, so a filter must not use it.
 
@@ -481,7 +501,7 @@ class TestReadSwitchAgreement:
         assert activity.airports_observed == 1
         assert activity.observations_collected == 1
 
-    def test_taf_stats_also_narrow_under_a_filter(self, populated, gate_on):
+    def test_taf_stats_also_narrow_under_a_filter(self, populated):
         """TAF has its own gated path (taf_verification_daily), same rule."""
         all_taf = next(
             r for r in get_category_accuracy(populated, SINCE, UNTIL, "standalone")
