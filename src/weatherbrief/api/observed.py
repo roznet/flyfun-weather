@@ -69,6 +69,7 @@ from weatherbrief.observed.frames import (
     parse_frame_stamp,
 )
 from weatherbrief.observed.grid import compute_window
+from weatherbrief.observed.netcdf_io import open_netcdf
 from weatherbrief.observed.imagery import (
     AUX_FIELDS,
     OverlayBounds,
@@ -348,9 +349,7 @@ def _read_bbox(source: str, path, bounds: OverlayBounds):
             units=SOURCE_SPECS[source].units,
         )
 
-    import netCDF4
-
-    with netCDF4.Dataset(str(path)) as dataset:
+    with open_netcdf(path) as dataset:
         grid = ctth.read_grid(dataset)
     window = compute_window(
         grid,

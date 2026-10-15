@@ -257,6 +257,7 @@ monkeypatches `socket.connect` to assert it.
 | `observed/opera.py` | ODIM_H5 reader: geolocation from `/where`, three-state decode, attribution from `/how`. |
 | `observed/ctth.py` | MTG FCI L2 CTTH reader: geos grid from scan-angle radians, parallax fields, `quality_method`. |
 | `observed/lightning.py` | MTG LI L2 flash reader (tolerant of baseline variable renames; raises rather than reporting a quiet zero). |
+| `observed/netcdf_io.py` | `open_netcdf(path)`: the only way to open a netCDF4 file (#786). Holds a process-wide `RLock` over the whole `with` block (open, reads, close), because the netCDF4 wheel's vendored libhdf5 is not thread-safe and overlapping threadpool reads segfaulted uvicorn in prod. netCDF4 only: h5py (`opera.py`) has its own HDF5 copy and global lock, and `opera.iter_row_blocks` streams a whole composite, so locking across its yields would stall every read behind a tile render. Never enter from `async def`. `tests/observed/test_netcdf_lock.py` fails if a raw `netCDF4.Dataset(` appears elsewhere in `src/`. |
 | `observed/collect.py` | OPERA S3 + eumdac fetchers, retention purge, `due_sources`. |
 | `observed/sampler.py` | `sample(frame, window, stations, radii)` — one primitive, two call sites. |
 | `observed/coverage.py` | Per-source geographic domain: `covers`, `covering_sources`, `has_radar`, `SOURCE_DOMAINS`. |
