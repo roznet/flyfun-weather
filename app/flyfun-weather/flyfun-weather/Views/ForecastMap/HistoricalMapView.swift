@@ -98,11 +98,13 @@ struct HistoricalMapView: View {
     private var topControls: some View {
         VStack(spacing: Theme.spacingS) {
             HStack(alignment: .top) {
-                if isCompact, let onClose {
+                // Keyed on the container's callback, not size class — see
+                // ForecastMapView's leading slot.
+                if let onClose {
                     MapChrome.circleButton(systemImage: "xmark", action: onClose)
                         .accessibilityLabel("Close map")
                         .accessibilityIdentifier("mapCloseButton")
-                } else if !isCompact, let onToggleSidebar {
+                } else if let onToggleSidebar {
                     MapChrome.circleButton(systemImage: "sidebar.leading", action: onToggleSidebar)
                         .accessibilityLabel("Toggle Sidebar")
                         .accessibilityIdentifier("mapSidebarToggle")

@@ -48,7 +48,7 @@ struct ForecastMapView: View {
     /// Whether the top bar's leading slot is occupied — drives the trailing
     /// spacer that keeps the title optically centred.
     private var hasLeadingControl: Bool {
-        isCompact ? onClose != nil : onToggleSidebar != nil
+        onClose != nil || onToggleSidebar != nil
     }
 
     var body: some View {
@@ -104,7 +104,11 @@ struct ForecastMapView: View {
             HStack(alignment: .top) {
                 // Leading slot: dismiss on the iPhone cover, sidebar toggle on the
                 // iPad detail pane — the map's only route back to the flight list.
-                if isCompact, let onClose {
+                // Keyed on which callback the container passed, never on size
+                // class: the cover goes regular-width on a Plus/Pro Max iPhone in
+                // landscape (or an iPad window resized under it), and gating on
+                // `isCompact` hid the only exit there.
+                if let onClose {
                     Button { onClose() } label: {
                         Image(systemName: "xmark")
                             .font(.headline)
@@ -113,7 +117,7 @@ struct ForecastMapView: View {
                     }
                     .accessibilityLabel("Close map")
                     .accessibilityIdentifier("mapCloseButton")
-                } else if !isCompact, let onToggleSidebar {
+                } else if let onToggleSidebar {
                     Button { onToggleSidebar() } label: {
                         Image(systemName: "sidebar.leading")
                             .font(.headline)
