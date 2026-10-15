@@ -11,7 +11,7 @@ Three explicit tiers once all phases are live:
 ===================  ==========================================  ===========
 Tier                 Store                                       Retention
 ===================  ==========================================  ===========
-Raw operational      MySQL (observations, scores, taf_scores,    180 days
+Raw operational      MySQL (observations, scores, taf_scores,    90 days
                      airport_forecast_snapshots)                 (snapshots 10)
 Aggregates           MySQL rollup tables (per-airport daily,     forever
                      global daily, TAF daily, monthly)
@@ -61,11 +61,11 @@ import os
 from pathlib import Path
 
 # Pre-#522 sentinel: retention is *disabled* at or above this value. Kept as
-# the default so shipping the code prunes nothing until Phase 3 sets 180.
+# the default so shipping the code prunes nothing until Phase 3 sets 90.
 RAW_RETENTION_DISABLED_DAYS = 9999
 
 # Phase 3's target value, for documentation and for the plan's flip step.
-RAW_RETENTION_TARGET_DAYS = 180
+RAW_RETENTION_TARGET_DAYS = 90
 
 
 def _flag(name: str, default: bool = False) -> bool:

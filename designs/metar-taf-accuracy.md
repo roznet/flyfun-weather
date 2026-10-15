@@ -99,7 +99,6 @@ tasks/verification_rollup.py            ← monthly pre-aggregation (NWP only, #
 └── run_monthly_rollup()                ← entry point: find + process all
 
 tasks/verification_tiering.py           ← #522 phase gates (env-var reads)
-├── global_rollup_reads_enabled()       ← Phase 1 read switch
 ├── archive_enabled() / archive_root()  ← Phase 2
 ├── raw_retention_days() / prune_requires_archive()  ← Phase 3
 └── monthly_rollup_enabled() / daily_stats_retention_months()  ← Phase 4
@@ -194,7 +193,7 @@ One row per `(period, source, model, days_out, icao)`, NWP scores only (TAF out 
 
 - **SUMs, not averages** — SUMs are additive across periods; averages aren't. The dashboard computes `ceiling_mae = SUM(sum_abs_ceiling) / SUM(n_ceiling)`. Per-field non-NULL counts (`n_ceiling`, `n_wind`, …) preserve the raw query's "skip NULL deltas" semantics.
 - **2 category-direction buckets, not 3** — matches the monthly table's shape; the rare 3-step case (VFR↔LIFR) folds into `_2`. The bias-leaderboard formula `(n_cat_opt_1 + 2 * n_cat_opt_2) / n` weights `_2` accordingly.
-- **No observation_id** — counts of *distinct observations* can't be recovered from per-group counts (one obs → N scores), so `get_activity_summary` keeps its `COUNT(DISTINCT observation_id)` on the raw `verification_scores` instead.
+- **No observation_id** — counts of *distinct observations* can't be recovered from per-group counts (one obs → N scores). Unfiltered activity reads `verification_activity_daily` (#522, below); a country/airport-filtered `get_activity_summary` still runs `COUNT(DISTINCT observation_id)` on raw `verification_scores`.
 - **`category_direction(obs, fcst)`** classifies each score as match / optimistic_1/2 (forecast better than reality — dangerous) / pessimistic_1/2 (too conservative). TAF scores use the same classification via `lead_hours // 24 → days_out` bucketing.
 - **Gust columns join the observation row** (#491). The daily rollup's SELECT joins `verification_observations` on the score's FK so it can carry both gust conditionings: magnitude sums (`n_gust`, `sum_abs_gust_delta_kt`, `sum_gust_delta_kt`), the forecast-flagged over-peak sums (`n_gust_flagged_peak`, `sum_gust_flagged_over_peak_kt`), and the occurrence contingency (`n_model_gust_flag`, `n_obs_gust`, `n_gust_flag_hit` — false alarms and misses are derived from those three). The join is inner and can't drop rows: the FK is NOT NULL and retention prunes observations and scores in the same window. Monthly stores the MAE/bias equivalents; its TAF rows leave the occurrence columns NULL (the TAF group key is a `lead_hours` bucket with no SQL expression that truncates identically on SQLite and MySQL — TAF gust occurrence is served at query time by `get_gust_accuracy` instead).
 
@@ -205,8 +204,8 @@ All three are written by `rollup_day` alongside the per-airport table, in the
 same idempotent DELETE+INSERT idiom.
 
 - **`verification_global_daily_stats`** — key `(date, source, model, days_out)`.
-  Identical columns to `verification_daily_stats` minus `icao`, ~90 rows/day
-  against ~12K. Written as a `GROUP BY` over the per-airport table rather than
+  Identical columns to `verification_daily_stats` minus `icao`, ~40 rows/day
+  against ~12K (the model × days_out × source combinations are sparse). Written as a `GROUP BY` over the per-airport table rather than
   a second pass over raw, so the two can never disagree about a day. The
   per-airport table stays: it is the only one that can answer a
   country/airport-filtered request, and it feeds the bias leaderboard.
@@ -225,7 +224,10 @@ same idempotent DELETE+INSERT idiom.
   `CAST(2.5 AS SIGNED)` rounds *away from zero*, so a naive
   `CAST(lead_hours/24 AS INTEGER)` would bucket 60 h as 2 on SQLite and 3 on
   MySQL. Gust columns join `verification_observations` via `observation_id`
-  exactly as the NWP daily rollup does; "the TAF shows a gust" means the
+  exactly as the NWP daily rollup does. In practice every row has
+  `days_out = 0`: scoring pairs each observation with the TAF current at
+  collection time, so `lead_hours` never reaches 24 (max 20) — a missing
+  `days_out = 1` is not a gap. "The TAF shows a gust" means the
   applicable trend carried a gust group (`taf_wind_gust_kt` non-NULL), not the
   ~10 kt forecast criterion used for NWP.
 
@@ -444,18 +446,26 @@ Rollup is idempotent (delete + re-insert per month). Currently triggered manuall
 
 All in `tasks/verification_stats.py`. Every query accepts a `source` parameter ('flight' or 'standalone') to ensure isolation.
 
-Which table a query reads depends on the request shape and the #522 gate:
+Which table a query reads depends only on the request shape (`_use_global()`
+is "the request is unfiltered"):
 
-| Request | NWP table | TAF table |
-|---|---|---|
-| Unfiltered, `VERIFICATION_GLOBAL_ROLLUP_READS=1` | `verification_global_daily_stats` | `taf_verification_daily` |
-| Country/airport-filtered (any gate) | `verification_daily_stats` | raw `taf_verification_scores` |
-| Gate off (pre-#522 behaviour) | `verification_daily_stats` | raw `taf_verification_scores` |
+| Request | NWP table | TAF table | Activity |
+|---|---|---|---|
+| Unfiltered | `verification_global_daily_stats` | `taf_verification_daily` | `verification_activity_daily` |
+| Country/airport-filtered | `verification_daily_stats` | raw `taf_verification_scores` | raw `verification_scores` |
 
 The two NWP tables declare identical column names, so the query bodies differ
 only in which class `_nwp_daily_table()` hands them. Filtered requests keep the
 per-airport table because the global one has no `icao` to filter on — and those
 are the requests the dashboard never caches anyway.
+
+The paths agree exactly on NWP numbers (the global table is the per-airport
+table with `icao` summed away). Activity and TAF numbers do not: the rollups
+are keyed by UTC date, so window edges snap to whole UTC days on every period
+— a trailing-24h unfiltered request covers "yesterday all day + today so far".
+Accepted by design; pinned by `test_activity_widens_to_utc_days_off_boundary`.
+(The rollup path was behind a `VERIFICATION_GLOBAL_ROLLUP_READS` gate from
+2026-08-04 until the gate was removed on 2026-10-16.)
 
 NWP queries (post-#154) read from the daily rollup:
 
@@ -471,13 +481,14 @@ Still on raw `verification_scores` (need individual rows):
 - `get_missed_warnings()` — WARNINGs that models failed to predict
 
 Both are bounded by `limit` and scoped to D-0/D-1 over windows of ≤30 days,
-comfortably inside the 180-day raw retention #522 introduces.
+comfortably inside the 90-day raw retention #522 introduced.
 
 `get_activity_summary()` reads `verification_activity_daily` +
-`COUNT(DISTINCT icao)` over `verification_daily_stats` when the gate is on and
-the request is unfiltered; otherwise it falls back to the raw
-`COUNT(DISTINCT observation_id)` path (which is where the `FORCE INDEX` hint
-still lives — see the Phase 1 final step in the rollout plan).
+`COUNT(DISTINCT icao)` over `verification_daily_stats` for an unfiltered
+request. A filtered request runs the raw `COUNT(DISTINCT observation_id)` path,
+which is where the `FORCE INDEX (ix_verif_scores_source_time)` hint lives —
+that index must never be dropped (six live consumers; see the rollout plan's
+Phase 1).
 
 ### Removed in #154
 
@@ -751,7 +762,7 @@ python -m weatherbrief.verify archive run|backfill|list|verify [--table scores]
 # Raw prune (#522 Phase 3). Without --apply this only reports which months
 # pass both gates and why the others don't — the safe way to validate a
 # retention setting before a single row is deleted.
-python -m weatherbrief.verify prune-raw --retain-days 180 [--apply]
+python -m weatherbrief.verify prune-raw --retain-days 90 [--apply]
 ```
 
 ## Data Volume and Storage Tiers (#522)
@@ -777,9 +788,9 @@ they are cold data stored in the most expensive format available.
 
 | Tier | Store | Retention | Serves |
 |---|---|---|---|
-| **Raw operational** | MySQL (`verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`) | 180 days (snapshots 10, unchanged) | scoring, rollup jobs, notable-misses/missed-warnings, ad-hoc debugging |
+| **Raw operational** | MySQL (`verification_observations`, `verification_scores`, `taf_verification_scores`, `airport_forecast_snapshots`) | 90 days (snapshots 10, unchanged) | scoring, rollup jobs, notable-misses/missed-warnings, ad-hoc debugging |
 | **Aggregates** | MySQL rollup tables (per-airport daily, global daily, TAF daily, activity, monthly) | forever | all dashboard/digest/leaderboard reads |
-| **Row-level archive** | Parquet in `DATA_DIR/archive/verification/` | forever | re-scoring, calibration, data science (DuckDB), re-import |
+| **Row-level archive** | Parquet in `DATA_DIR/archive/verification/` | forever | re-scoring, calibration, data science (DuckDB), Historical tab beyond the raw window |
 
 "Keep data forever" survives — it just moves down a tier. The accuracy dataset
 still grows without bound; it grows in Parquet rather than in InnoDB.
@@ -875,26 +886,43 @@ The snapshot prune (`_prune_old_snapshots`, 10 days) applies the same gate per
 because with the archive off there would never be a manifest and a bounded
 table would become unbounded.
 
-Inbox rotation removes `eu-*/us-*.sqlite` from `SNAPSHOT_INBOX_DIR` older than
-`SNAPSHOT_INBOX_RETENTION_DAYS`. Nothing re-reads an old artifact; once a day
-is in both MySQL and Parquet the transport file is redundant, and this caps an
-otherwise unbounded disk leak.
+With the archive on, the gate also changes the snapshot prune's failure mode:
+if archiving stalls, snapshots stop being pruned and the table grows without
+limit. It warns (`Snapshot prune: N day(s) past retention are not safely
+archived`) rather than failing.
+
+Once raw rows are pruned, the Parquet archive is their only online copy, and
+one live feature reads it: the Historical tab (#629) loads observations for
+months past the raw window from the monthly archive
+(`archive.read_archived_rows`). It only looks there when
+`VERIFICATION_RAW_RETENTION_DAYS` is set — so set the gate *before* any manual
+prune, never after. `read_archived_rows` returns `None` for a requested column
+a file predates (`report_type` was added to observations after April–August
+were archived); keep that tolerance when adding columns to archived tables.
+
+`max_id` catches rows inserted after archiving, not rows updated in place: a
+repair to an already-archived month must re-archive it (`--force`) before it
+is pruned. There is no Parquet → MySQL re-import tool.
+
+The `eu-*/us-*.sqlite` transport artifacts in `SNAPSHOT_INBOX_DIR` are not the
+app's to clean. The container mounts the inbox read-only, so the Mac mini's
+forecast runner prunes it instead, deleting artifacts older than 7 days by
+arrival time after each successful push. Nothing re-reads an old artifact.
 
 ### Phase gates
 
-All of the above ships dark. `tasks/verification_tiering.py` owns every gate;
-`designs/plans/verification-data-tiering.md` is the rollout runbook (what to
-check before each phase, what to run, how to validate, how to roll back).
+`tasks/verification_tiering.py` owns every gate. Defaults are the pre-#522
+behaviour, so a fresh deployment archives and prunes nothing until configured;
+`designs/plans/verification-data-tiering.md` is the rollout runbook and the
+record of how production was switched over.
 
-| Env var | Default | Meaning |
-|---|---|---|
-| `VERIFICATION_GLOBAL_ROLLUP_READS` | `0` | Unfiltered aggregates read the global rollups |
-| `VERIFICATION_ARCHIVE_ENABLED` | `0` | Retention loop runs the Parquet archive writer |
-| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | Online window for raw obs/scores/TAF scores; target `180` |
-| `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | No verified manifest → no delete |
-| `SNAPSHOT_INBOX_RETENTION_DAYS` | `0` (keep) | Inbox artifact rotation; target `30` |
-| `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | Retention loop rolls completed months |
-| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | Prune daily stats older than N months |
+| Env var | Default | Production | Meaning |
+|---|---|---|---|
+| `VERIFICATION_ARCHIVE_ENABLED` | `0` | `1` (since 2026-08-19) | Retention loop runs the Parquet archive writer; snapshot prune becomes archive-gated |
+| `VERIFICATION_RAW_RETENTION_DAYS` | `9999` (disabled) | `90` (since 2026-10-15) | Online window for raw obs/scores/TAF scores |
+| `VERIFICATION_PRUNE_REQUIRE_ARCHIVE` | `1` | `1` | No verified manifest → no delete |
+| `VERIFICATION_MONTHLY_ROLLUP_ENABLED` | `0` | off | Retention loop rolls completed months |
+| `VERIFICATION_DAILY_STATS_RETENTION_MONTHS` | `0` (keep) | off | Prune daily stats older than N months |
 
 CLI: `python -m weatherbrief.verify archive run|backfill|list|verify`,
 `prune-raw [--retain-days N] [--apply]`, `rollup-monthly-stats`. DuckDB query
@@ -965,7 +993,7 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 **Phase 2 (Scoring)**: Complete. Model scoring, TAF scoring, wind advisory comparison.
 **Phase 3 (Surfacing)**: Partially complete. Admin dashboard and daily digest email implemented. Per-flight verification report and confidence annotations are future work.
 **Standalone pipeline**: Complete. Airport watchlist, Open-Meteo forecasting, GRIB ceiling enrichment, scoring.
-**Data tiering (#522)**: Code complete and deployed, but **shipped dark** — every gate in the Phase gates table is still at its default-off value in production, so the live system is still pre-#522 behaviour (unfiltered reads hit `verification_daily_stats`, nothing is archived, nothing is pruned). Turning a phase on is the rollout runbook's job, not a code change. Before assuming a global-rollup or archive path is live, check the env, not this doc.
+**Data tiering (#522)**: Phases 0–3 live in production. Unfiltered aggregates read the global rollups (unconditionally since the read gate was removed 2026-10-16), the Parquet archive has run daily since 2026-08-19, and raw retention has pruned at 90 days since 2026-10-15 — one month per scheduler pass from then on. Phase 4 (monthly stats) is code-complete but off.
 
 ## Open Considerations
 
