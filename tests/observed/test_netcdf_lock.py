@@ -78,7 +78,10 @@ def test_concurrent_reads_from_many_threads(ctth_path, li_path):
 
 
 def test_every_netcdf4_open_goes_through_the_helper():
-    pattern = re.compile(r"netCDF4\.Dataset\(")
+    # Aliased imports would let a raw Dataset open slip past a dotted-name match.
+    pattern = re.compile(
+        r"netCDF4\.(MF)?Dataset\(|from netCDF4 import|import netCDF4 as"
+    )
     offenders = [
         str(path.relative_to(SRC))
         for path in SRC.rglob("*.py")

@@ -69,13 +69,13 @@ from weatherbrief.observed.frames import (
     parse_frame_stamp,
 )
 from weatherbrief.observed.grid import compute_window
-from weatherbrief.observed.netcdf_io import open_netcdf
 from weatherbrief.observed.imagery import (
     AUX_FIELDS,
     OverlayBounds,
     legend_for,
     render_overlay,
 )
+from weatherbrief.observed.netcdf_io import open_netcdf
 
 logger = logging.getLogger(__name__)
 
