@@ -491,8 +491,9 @@ def test_recap_response_drops_only_the_unreadable_stored_entries():
 
 def test_tick_index_flags_the_ticks_where_the_alerts_changed():
     """#769 stepper: jump between alert changes, not every tick still showing one."""
-    def snap(at, *alerts, highlight=()):
-        changes = [{"key": k, "tier": "alert"} for k in alerts] + [{"key": k, "tier": "highlight"} for k in highlight]
+    def snap(at, *alerts, highlight=(), to="IFR"):
+        changes = ([{"key": k, "tier": "alert", "from_value": "VFR", "to_value": to} for k in alerts]
+                   + [{"key": k, "tier": "highlight"} for k in highlight])
         return {"tick_at": at, "changes": {"alert_count": len(alerts), "changes": changes}}
 
     snaps = [
@@ -502,6 +503,7 @@ def test_tick_index_flags_the_ticks_where_the_alerts_changed():
         snap("t3", "metar:EGKB", "taf:EGKB"),
         snap("t4", "taf:EGKB"),
         snap("t5", "taf:EGKB"),
-        {"tick_at": "t6", "changes": None},
+        snap("t6", "taf:EGKB", to="MVFR"),  # same alert, new value: a new moment
+        {"tick_at": "t7", "changes": None},
     ]
-    assert [t["alert_changed"] for t in tick_index(snaps)] == [False, True, False, True, True, False, True]
+    assert [t["alert_changed"] for t in tick_index(snaps)] == [False, True, False, True, True, False, True, True]

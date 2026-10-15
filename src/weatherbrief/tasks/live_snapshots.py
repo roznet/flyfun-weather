@@ -449,15 +449,17 @@ def tick_index(snapshots: list[dict], *, segments: bool = False) -> list[dict]:
     (``SNAPSHOT_MAX_BYTES``), i.e. ticks × stretches, about 2 KB of JSON a
     tick at 20-25 stretches.
 
-    ``alert_changed``: the set of alert-tier changes on screen differs from
-    the previous tick's (a first tick with any alert counts), so a client can
+    ``alert_changed``: the set of alert-tier changes on screen (key and
+    from/to value) differs from the previous tick's (a first tick with any alert counts), so a client can
     jump between the moments the alerts changed rather than every tick that
     merely still had one."""
     out = []
-    prev_alerts: frozenset[str] = frozenset()
+    prev_alerts: frozenset[tuple] = frozenset()
     for s in snapshots:
+        # Keyed with the value: the same airport's METAR alert going
+        # IFR → MVFR is a new moment, though its change key is unchanged.
         alerts = frozenset(
-            c.get("key") or ""
+            (c.get("key") or "", c.get("from_value"), c.get("to_value"))
             for c in ((s.get("changes") or {}).get("changes") or [])
             if c.get("tier") == "alert"
         )
