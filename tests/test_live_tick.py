@@ -194,7 +194,7 @@ def test_run_refreshes_each_flight_from_one_shared_fetch(db_session, dev_user, t
 
 
 def test_run_leaves_a_frozen_flight_alone(db_session, dev_user, tmp_path):
-    """A prod layer imported for local review (import_live_flight.py) keeps
+    """A prod layer imported for local review (scripts/ops/import_flight.py) keeps
     prod's text: the tick neither refreshes it nor fetches for it."""
     from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE
 

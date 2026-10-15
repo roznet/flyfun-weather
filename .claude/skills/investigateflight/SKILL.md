@@ -33,6 +33,11 @@ of the flight; `--prod` skips the local copy, for a flight that also exists in d
 line is `PACK_DIR=<path>`: that is `pack_dir` below. Exit 1 names what wasn't found; exit 2
 means the droplet couldn't be reached. The flight ID format is in the reference.
 
+**Need it in the running app too** (API, briefing page, debrief recap, live layer, iOS)? Use
+`python scripts/ops/import_flight.py "<URL or flight_id>"` instead: it brings the flight's DB
+rows and whole flight dir into the dev DB under the dev user (frozen, auto-refresh off), and
+`fetch_pack.py` then finds those packs locally without another copy.
+
 ## Step 3 — Load data in Python
 
 Activate the worktree's venv first. Pack layout and file contents: see the reference.

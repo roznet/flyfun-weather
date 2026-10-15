@@ -1001,9 +1001,9 @@ positive above.
   (which is also how the test suite runs the whole tick without calling
   anything — `conftest` deletes the key so a developer's shell cannot bill the
   suite).
-- **Reviewing real layers locally**: `scripts/ops/import_live_flight.py --list`
+- **Reviewing real layers locally**: `scripts/ops/import_flight.py --list`
   / `--live` / `FLIGHT…` copies prod flights (rows exported from the
-  container, flight dir rsynced) into the dev DB under the same id, owned by
+  container, flight dir tar-streamed out of it) into the dev DB under the same id, owned by
   the dev-login user. The flight dir gets `live_frozen` (`LIVE_FROZEN_FILE`,
   in `LIVE_FILES`), which the tick skips, so a running devserver neither
   overwrites prod's layer nor pays for a local highlight; a ↻ press still

@@ -54,3 +54,5 @@ Match on the text, not the markdown decoration: the shape is pinned in `.claude/
 ## Worktree & dev server
 
 `/worktree-init <branch>` creates a sibling worktree with its own venv, npm install, and `.env`; it does not run alembic or start a server. `/devserver` starts tmux session `wb-<basename>` (pane 0 uvicorn `--reload`, pane 1 esbuild) — port 8000 for `main`, 8001+ for worktrees, so several can run at once. `/devserver --https` is a **singleton** at `https://localhost.ro-z.me:8443` for iOS simulator testing; invoking it from another worktree kills and restarts it there. Both skills wrap `scripts/ops/worktree_init.py` / `devserver.py` (`--status`, `--stop`, `--dry-run`), which other skills and agents call directly.
+
+**A prod flight on the devserver** (to test on real data): `scripts/ops/import_flight.py <flight_id|URL>` — DB rows + flight dir into the dev DB, same id, dev user, frozen. The one tool for it; extend it rather than writing another.

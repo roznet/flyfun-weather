@@ -76,7 +76,7 @@ HISTORY_SEPARATORS = (",", ":")
 #: stops being cleaned up. Safe at module level: ``live_highlight`` imports
 #: nothing from this module except inside its functions.
 #: A flight dir holding this file is skipped by the live tick: a prod layer
-#: imported for local review (``scripts/ops/import_live_flight.py``) stays as
+#: imported for local review (``scripts/ops/import_flight.py``) stays as
 #: prod wrote it. In ``LIVE_FILES`` so a flight delete takes it too.
 LIVE_FROZEN_FILE = "live_frozen"
 LIVE_FILES = (

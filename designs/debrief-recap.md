@@ -187,11 +187,11 @@ follows the pack (T1 keeps it; T2 never touches a debriefed flight's packs).
 
 ## Testing on a real flight
 
-`scripts/import_prod_flight.py <flight_id> [--user U] [--dry-run] [--force]`
-copies one prod flight (rows + whole flight dir, live files included) into the
+`scripts/ops/import_flight.py <flight_id|URL>... [--user U] [--dry-run] [--overwrite]`
+copies prod flights (rows + whole flight dir, live files included) into the
 local dev DB/`DATA_DIR`, owned by the dev user, so `/live/ticks`, `/live/at`
-and `/recap` can be exercised on the devserver. It reports whether the flight's
-live window is still open (the local tick would then append to the files).
+and `/recap` can be exercised on the devserver. Frozen by default (the local
+tick skips it); `--no-freeze` lets the tick append while the window is open.
 
 ## Gotchas
 

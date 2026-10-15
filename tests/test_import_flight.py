@@ -1,4 +1,4 @@
-"""Row remapping of scripts/import_prod_flight.py (prod flight → local dev)."""
+"""Pure helpers of scripts/ops/import_flight.py (prod flight → local dev)."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "import_prod_flight.py"
+_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ops" / "import_flight.py"
 
 
 @pytest.fixture(scope="module")
 def mod():
-    spec = importlib.util.spec_from_file_location("import_prod_flight", _SCRIPT)
+    spec = importlib.util.spec_from_file_location("import_flight", _SCRIPT)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
@@ -65,3 +65,24 @@ def test_coerce_row_types_and_drops_unknown_columns(mod):
 def test_parse_dt_converts_offsets_to_utc(mod):
     assert mod.parse_dt("2026-01-01T10:00:00+02:00") == datetime(2026, 1, 1, 8, tzinfo=timezone.utc)
     assert mod.parse_dt(None) is None
+
+
+def test_remap_flight_private_no_refresh_hour(mod):
+    out = mod.remap_flight({"id": FLIGHT, "private": False, "auto_refresh_hour": 6}, "u")
+    assert out["private"] is True and out["auto_refresh_hour"] is None
+
+
+def test_parse_flight_ref_id_or_url(mod):
+    assert mod.parse_flight_ref(FLIGHT) == FLIGHT
+    url = f"https://weather.flyfun.aero/briefing.html?flight={FLIGHT}&pack=2026-01-01T19-34-45"
+    assert mod.parse_flight_ref(url) == FLIGHT
+    for bad in ("../etc", "a/b", "https://x/briefing.html?pack=1"):
+        with pytest.raises(ValueError):
+            mod.parse_flight_ref(bad)
+
+
+def test_packs_after_live_leaves_out_newer_packs(mod):
+    packs = [{"artifact_path": f"/p/{FLIGHT}/{ts}"} for ts in ("2026-01-01T06", "2026-01-01T12", "2026-01-01T18")]
+    assert mod.packs_after_live(packs, "2026-01-01T12") == {"2026-01-01T18"}
+    assert mod.packs_after_live(packs, None) == set()
+    assert mod.packs_after_live(packs, "2026-01-01T18") == set()
