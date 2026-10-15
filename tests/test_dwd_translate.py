@@ -72,9 +72,35 @@ def test_day_split_in_two_keeps_the_text_once():
         "## === Saturday Night into Sunday (2026-10-10/11) ===\nRidge builds.\n"
     )
     out = _split_translation(blocks, english)
-    assert len(out) == 1
-    assert out[0][1].count("Ridge builds.") == 1
-    assert out[0][0].text == "...\n\n..."
+    # The dated headers name both input days; the extra night section stays
+    # with Saturday, once.
+    assert [b.day_name_de for b, _ in out] == ["Freitag", "Samstag"]
+    assert out[0][1] == "Low over Iceland."
+    assert "Cold front at 5E." in out[1][1]
+    assert sum(text.count("Ridge builds.") for _, text in out) == 1
+
+
+def test_extra_night_header_folds_into_its_day(caplog):
+    # Prod 2026-10-15: one Donnerstag block came back with a Freitag header
+    # for its "night into Friday" paragraph.
+    blocks = BLOCKS[:1]
+    english = (
+        "=== Freitag (2026-10-09) ===\nHigh over central Europe.\n\n"
+        "=== Samstag (2026-10-10) ===\nFog in places overnight.\n"
+    )
+    out = _split_translation(blocks, english)
+    assert "split mismatch" not in caplog.text
+    assert len(out) == 1 and out[0][0] is blocks[0]
+    assert out[0][1] == (
+        "High over central Europe.\n\nSamstag (2026-10-10):\nFog in places overnight."
+    )
+
+
+def test_undated_unmatched_headers_still_fall_back():
+    blocks = BLOCKS[:2]
+    english = "=== Today ===\nA.\n\n=== Tonight ===\nB.\n\n=== Tomorrow ===\nC."
+    out = _split_translation(blocks, english)
+    assert len(out) == 1 and out[0][1] == english
 
 
 def test_long_markdown_rule_inside_a_day_is_kept_and_fast():
