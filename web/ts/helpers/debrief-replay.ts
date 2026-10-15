@@ -269,6 +269,57 @@ export function forecastLaneBands(
 
 /** What the Observed section shows: the base (live in the window, the recap
  *  after it), a tick being fetched, or a recorded tick. */
+/** Where each stepper button goes (#769): a tick time, or null when the
+ *  button is disabled. On the base view (`selected` null), ▶ starts at the
+ *  first tick and ◀ at the last; the alert jumps likewise start from the ends. */
+export interface StepTargets {
+  first: string | null;
+  prev: string | null;
+  next: string | null;
+  last: string | null;
+  prevAlert: string | null;
+  nextAlert: string | null;
+}
+
+/** The ticks where the alerts on screen changed. Falls back to a change in
+ *  `alert_count` for a tick index without `alert_changed` (older server). */
+export function alertChangeFlags(ticks: LiveTickEntry[]): boolean[] {
+  return ticks.map((t, i) => {
+    if (t.alert_changed != null) return t.alert_changed;
+    const prev = i > 0 ? (ticks[i - 1].alert_count ?? 0) : 0;
+    return (t.alert_count ?? 0) !== prev;
+  });
+}
+
+export function stepTargets(ticks: LiveTickEntry[], selected: string | null): StepTargets {
+  const timed = ticks.filter((t) => t.tick_at);
+  const times = timed.map((t) => t.tick_at as string);
+  const changed = alertChangeFlags(timed);
+  const n = times.length;
+  const none: StepTargets = { first: null, prev: null, next: null, last: null, prevAlert: null, nextAlert: null };
+  if (!n) return none;
+  const selMs = selected != null ? isoToMs(selected) : null;
+  const i = selMs == null ? -1 : times.findIndex((t) => isoToMs(t) === selMs);
+  const alertIdx = times.map((_, k) => k).filter((k) => changed[k]);
+  if (i < 0) {
+    return {
+      first: times[0], prev: times[n - 1], next: times[0], last: times[n - 1],
+      prevAlert: alertIdx.length ? times[alertIdx[alertIdx.length - 1]] : null,
+      nextAlert: alertIdx.length ? times[alertIdx[0]] : null,
+    };
+  }
+  const before = alertIdx.filter((k) => k < i);
+  const after = alertIdx.filter((k) => k > i);
+  return {
+    first: i > 0 ? times[0] : null,
+    prev: i > 0 ? times[i - 1] : null,
+    next: i < n - 1 ? times[i + 1] : null,
+    last: i < n - 1 ? times[n - 1] : null,
+    prevAlert: before.length ? times[before[before.length - 1]] : null,
+    nextAlert: after.length ? times[after[0]] : null,
+  };
+}
+
 export type ReplayState =
   | { kind: 'base' }
   | { kind: 'loading'; tick: string }

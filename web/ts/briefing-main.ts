@@ -22,7 +22,7 @@ import {
   tickForRoutePoint,
   tickTimePoints,
 } from './helpers/debrief-replay';
-import { GRID_WIDE_PX, modeBarHtml, mountRecap, tickChipsHtml, type RecapHandle } from './visualization/observed/recap-view';
+import { GRID_WIDE_PX, modeBarHtml, mountRecap, tickStepperHtml, type RecapHandle } from './visualization/observed/recap-view';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -2471,6 +2471,23 @@ async function init(): Promise<void> {
         const chip = (ev.target as Element | null)?.closest<HTMLElement>('[data-tick]');
         if (chip?.dataset.tick) void store.getState().viewTick(chip.dataset.tick);
       });
+      panel.addEventListener('change', (ev) => {
+        const sel = (ev.target as Element | null)?.closest<HTMLSelectElement>('[data-testid="tick-select"]');
+        if (sel?.value) void store.getState().viewTick(sel.value);
+      });
+      // ← / → step through the ticks while focus is on a stepper button (the
+      // select handles its own arrows).
+      panel.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        const target = ev.target as Element | null;
+        if (!target?.closest('[data-testid="tick-stepper"]') || target.closest('select')) return;
+        const btn = panel.querySelector<HTMLElement>(
+          `[data-testid="${ev.key === 'ArrowLeft' ? 'tick-prev' : 'tick-next'}"]`);
+        if (btn?.dataset.tick) {
+          ev.preventDefault();
+          void store.getState().viewTick(btn.dataset.tick);
+        }
+      });
       bar.addEventListener('click', (ev) => {
         if ((ev.target as Element | null)?.closest('[data-testid="mode-bar-back"]')) store.getState().backToBase();
       });
@@ -2503,9 +2520,14 @@ async function init(): Promise<void> {
           }))}</button>`;
       }
     }
+    // Re-rendering drops focus: put it back on the same stepper control so
+    // ← / → and repeated clicks keep working.
+    const focusedId = (document.activeElement as HTMLElement | null)?.closest('[data-testid="tick-stepper"]')
+      ? (document.activeElement as HTMLElement).dataset.testid : undefined;
     chipsHost.innerHTML = ticks.length
-      ? tickChipsHtml(ticks, replay.kind === 'base' ? null : replay.tick, pointChip)
+      ? tickStepperHtml(ticks, replay.kind === 'base' ? null : replay.tick, pointChip)
       : '';
+    if (focusedId) chipsHost.querySelector<HTMLElement>(`[data-testid="${focusedId}"]`)?.focus();
 
     // The recap: after the window, on the base view. Shown before mounting,
     // so the drawing measures a real width.

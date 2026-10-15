@@ -196,7 +196,7 @@ test.describe('Debrief recap after the live window', () => {
     await expect(lanes.locator('.recap-alert-worse')).toHaveCount(1);
     // The live ribbon of the last tick is not left reading "now" under it.
     await expect(page.locator('#observed-ribbon-section')).toBeHidden();
-    await expect(page.locator('[data-testid="tick-chips"] .tick-chip')).toHaveCount(3);
+    await expect(page.locator('[data-testid="tick-select"] option[value]:not([value=""])')).toHaveCount(3);
     await page.locator('#observed-ribbon-wrapper').screenshot({ path: 'test-results/debrief-recap.png' });
   });
 
@@ -204,14 +204,28 @@ test.describe('Debrief recap after the live window', () => {
     await page.goto(`/briefing.html?flight=${sc.flightId}`);
     await expect(page.locator('[data-testid="recap"]')).toBeVisible();
     const tick = sc.at(10);
-    await page.locator(`[data-testid="tick-chips"] [data-tick="${tick}"]`).click();
+    await page.locator('[data-testid="tick-select"]').selectOption(tick);
     await expect(page.locator('[data-testid="mode-bar-text"]')).toHaveText(`Viewing ${hhmm(tick)}`);
     await expect(page.locator('[data-testid="glance-highlight"]')).toContainText(`Replayed highlight ${hhmm(tick)}`);
     await expect(page.locator('.glance-line').first()).toContainText(`Tick ${hhmm(tick)}`);
     // The tick's own ribbon replaces the recap while it is on screen.
     await expect(page.locator('[data-testid="recap"]')).toHaveCount(0);
     await expect(page.locator('#observed-ribbon-section .ribbon-svg')).toBeVisible();
-    await expect(page.locator(`[data-tick="${tick}"].tick-chip-active`)).toHaveCount(1);
+    await expect(page.locator('[data-testid="tick-select"]')).toHaveValue(tick);
+    // The stepper: ◀ / ▶ step one tick, the alert jumps go to the tick
+    // whose alerts changed (only the last one here).
+    await page.locator('[data-testid="tick-next"]').click();
+    await expect(page.locator('[data-testid="mode-bar-text"]')).toHaveText(`Viewing ${hhmm(sc.at(30))}`);
+    await expect(page.locator('[data-testid="tick-next"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="tick-next-alert"]')).toBeDisabled();
+    await page.locator('[data-testid="tick-first"]').click();
+    await expect(page.locator('[data-testid="mode-bar-text"]')).toHaveText(`Viewing ${hhmm(sc.at(-20))}`);
+    await page.locator('[data-testid="tick-next-alert"]').click();
+    await expect(page.locator('[data-testid="mode-bar-text"]')).toHaveText(`Viewing ${hhmm(sc.at(30))}`);
+    // ← steps back while focus is on the stepper.
+    await page.locator('[data-testid="tick-prev"]').focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.locator('[data-testid="mode-bar-text"]')).toHaveText(`Viewing ${hhmm(tick)}`);
     await expect(page.locator('[data-testid="observed-mode-bar"]')).toContainText('stay live');
 
     await page.locator('[data-testid="mode-bar-back"]').click();
@@ -313,7 +327,7 @@ test.describe('Debrief recap when nothing was recorded', () => {
     await expect(empty).toBeVisible();
     await expect(empty).toContainText('Not recorded for this flight');
     await expect(empty).toContainText('flown before per-tick recording started');
-    await expect(page.locator('[data-testid="tick-chips"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="tick-stepper"]')).toHaveCount(0);
   });
 });
 
@@ -340,7 +354,7 @@ test.describe('Single-tick replay during the live window', () => {
     // No recap during the window: live, plus the chips.
     await expect(page.locator('[data-testid="recap"]')).toHaveCount(0);
     const tick = sc.at(-20);
-    await page.locator(`[data-testid="tick-chips"] [data-tick="${tick}"]`).click();
+    await page.locator('[data-testid="tick-select"]').selectOption(tick);
     await expect(page.locator('[data-testid="glance-highlight"]')).toContainText(`Replayed highlight ${hhmm(tick)}`);
     await expect(page.locator('[data-testid="mode-bar-back"]')).toHaveText('Back to live');
     // A replayed highlight is not rated: the log is for the line as met.

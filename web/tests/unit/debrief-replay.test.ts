@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../ts/i18n/i18n', () => ({ t: (key: string) => key }));
 import {
   aircraftTimeAt,
+  alertChangeFlags,
   clipBand,
   combineSeverities,
   departureGapText,
@@ -17,6 +18,7 @@ import {
   REPLAY_BASE,
   snapshotAtTick,
   startTick,
+  stepTargets,
   tickAtOrBefore,
   tickFailed,
   tickForRoutePoint,
@@ -269,5 +271,44 @@ describe('distance × time grid', () => {
     expect(rows[0].segments.map((c) => c.diagonal)).toEqual([false, false]);
     expect(rows[1].segments.map((c) => c.diagonal)).toEqual([true, false]);
     expect(rows[1].segments[0].seg.radar_max_dbz).toBe(30);
+  });
+});
+
+
+describe('tick stepper (#769)', () => {
+  const at = (h: number) => `2026-10-15T${String(h).padStart(2, '0')}:00:00Z`;
+  const tk = (h: number, changed: boolean, n = 0) => ({ tick_at: at(h), alert_count: n, alert_changed: changed });
+  const ticks = [tk(6, false), tk(7, true, 1), tk(8, false, 1), tk(9, true, 2), tk(10, false, 2)];
+
+  it('starts from the ends on the base view', () => {
+    expect(stepTargets(ticks, null)).toEqual({
+      first: at(6), prev: at(10), next: at(6), last: at(10), prevAlert: at(9), nextAlert: at(7),
+    });
+  });
+
+  it('steps around a selected tick and jumps between alert changes', () => {
+    expect(stepTargets(ticks, at(8))).toEqual({
+      first: at(6), prev: at(7), next: at(9), last: at(10), prevAlert: at(7), nextAlert: at(9),
+    });
+  });
+
+  it('disables what the ends leave nowhere to go', () => {
+    const first = stepTargets(ticks, at(6));
+    expect([first.first, first.prev, first.prevAlert]).toEqual([null, null, null]);
+    const last = stepTargets(ticks, at(10));
+    expect([last.next, last.last, last.nextAlert]).toEqual([null, null, null]);
+  });
+
+  it('matches the selected tick by instant, not by string', () => {
+    expect(stepTargets(ticks, '2026-10-15T08:00:00+00:00').prev).toBe(at(7));
+  });
+
+  it('falls back to alert_count changes without alert_changed', () => {
+    const old = [0, 1, 1, 0, 2].map((n, h) => ({ tick_at: at(h + 6), alert_count: n }));
+    expect(alertChangeFlags(old)).toEqual([false, true, false, true, true]);
+  });
+
+  it('has nothing to step through without ticks', () => {
+    expect(Object.values(stepTargets([], null)).every((v) => v === null)).toBe(true);
   });
 });

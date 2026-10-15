@@ -854,6 +854,8 @@ class LiveTickEntry(BaseModel):
     flown_nm: float | None = None
     progress_source: str | None = None
     alert_count: int | None = None
+    # The alert-tier changes on screen differ from the previous tick's.
+    alert_changed: bool | None = None
     # Only with ``?segments=1``.
     segments: list[TickSegment] | None = None
 

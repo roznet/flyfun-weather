@@ -9797,13 +9797,6 @@ button.glance-line:hover {
 .mode-bar-note { font-size: 0.8rem; color: var(--text-muted); flex: 1 1 14rem; }
 .mode-bar-back { margin-left: auto; }
 
-.tick-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.3rem;
-  margin-bottom: 0.6rem;
-}
 .tick-chips-label {
   font-size: 0.75rem;
   color: var(--text-muted);
@@ -9823,14 +9816,39 @@ button.glance-line:hover {
   cursor: pointer;
 }
 .tick-chip:hover { border-color: var(--primary); }
-.tick-chip-active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-.tick-chip-alerts { color: var(--red); font-size: 0.6rem; vertical-align: middle; }
-.tick-chip-active .tick-chip-alerts { color: #fff; }
 .tick-chip-point { border-style: dashed; }
+.tick-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.6rem;
+}
+.tick-step {
+  font: inherit;
+  font-size: 0.78rem;
+  min-width: 2rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.tick-step:hover:not(:disabled) { border-color: var(--primary); }
+.tick-step:disabled { opacity: 0.4; cursor: default; }
+.tick-step-alert:not(:disabled) { color: var(--red); }
+.tick-select {
+  font: inherit;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+.tick-stepper .tick-chip-point { margin-left: 0.4rem; }
 
 .recap-caption { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; }
 .recap-capped {

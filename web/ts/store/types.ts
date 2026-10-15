@@ -1496,6 +1496,8 @@ export interface LiveTickEntry {
   flown_nm?: number | null;
   progress_source?: string | null;
   alert_count?: number | null;
+  /** The alert-tier changes on screen differ from the previous tick's. */
+  alert_changed?: boolean | null;
   segments?: TickSegment[] | null;
 }
 

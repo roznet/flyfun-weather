@@ -17,14 +17,17 @@
  */
 
 import { escapeHtml } from '../../utils';
-import { formatHhmmZ, isoToMs, sameInstant } from '../../helpers/live-layer';
+import { t } from '../../i18n/i18n';
+import { formatHhmmZ, isoToMs } from '../../helpers/live-layer';
 import {
+  alertChangeFlags,
   departureGapText,
   gridRows,
   recapEmptyTitle,
   recapRibbon,
   segmentSeenAt,
   segmentStatusText,
+  stepTargets,
   timeBaseCaption,
   type ForecastBand,
   type GridRow,
@@ -48,17 +51,40 @@ export interface RecapHandlers {
 
 /** The row of recorded tick times. `selected` marks the tick on screen;
  *  `extra` is appended inside the row (the selected route point's chip). */
-export function tickChipsHtml(ticks: LiveTickEntry[], selected: string | null, extra = ''): string {
-  const chips = ticks.filter((t) => t.tick_at).map((t) => {
-    const active = selected != null && sameInstant(t.tick_at, selected);
-    const alerts = (t.alert_count ?? 0) > 0
-      ? ` <span class="tick-chip-alerts" aria-label="${t.alert_count} alerts">●</span>` : '';
-    return `<button type="button" class="tick-chip${active ? ' tick-chip-active' : ''}"`
-      + ` data-tick="${escapeHtml(t.tick_at as string)}" aria-pressed="${active}">`
-      + `${escapeHtml(formatHhmmZ(t.tick_at))}${alerts}</button>`;
+/** The recorded-tick stepper (#769): |◀ ◀ ⚠◀ [time ▾] ▶⚠ ▶ ▶|. Buttons
+ *  carry `data-tick` (the panel's click handler replays it); the select
+ *  replays on change. A disabled button has no `data-tick`. */
+export function tickStepperHtml(ticks: LiveTickEntry[], selected: string | null, extra = ''): string {
+  const timed = ticks.filter((tk) => tk.tick_at);
+  const changed = alertChangeFlags(timed);
+  const go = stepTargets(timed, selected);
+  const btn = (target: string | null, glyph: string, label: string, testid: string, cls = '') =>
+    `<button type="button" class="tick-step${cls}" data-testid="${testid}"`
+    + ` title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"`
+    + (target ? ` data-tick="${escapeHtml(target)}"` : ' disabled')
+    + `>${glyph}</button>`;
+  const selectedMs = selected != null ? isoToMs(selected) : null;
+  const options = timed.map((tk, i) => {
+    const at = tk.tick_at as string;
+    const n = tk.alert_count ?? 0;
+    const label = (changed[i] ? '\u26a0 ' : '')
+      + formatHhmmZ(at)
+      + (n > 0 ? ` \u00b7 ${t(n === 1 ? 'debrief.tickAlertsOne' : 'debrief.tickAlertsMany', { n })}` : '');
+    const sel = selectedMs != null && isoToMs(at) === selectedMs;
+    return `<option value="${escapeHtml(at)}"${sel ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
-  return `<div class="tick-chips" data-testid="tick-chips" role="group" aria-label="Recorded ticks">`
-    + `<span class="tick-chips-label">Recorded</span>${chips}${extra}</div>`;
+  const placeholder = selectedMs == null
+    ? `<option value="" selected disabled>${escapeHtml(t('debrief.tickPick'))}</option>` : '';
+  return `<div class="tick-stepper" data-testid="tick-stepper" role="group" aria-label="${escapeHtml(t('debrief.tickRecorded'))}">`
+    + `<span class="tick-chips-label">${escapeHtml(t('debrief.tickRecorded'))}</span>`
+    + btn(go.first, '|\u25c0', t('debrief.tickFirst'), 'tick-first')
+    + btn(go.prevAlert, '\u26a0\u25c0', t('debrief.tickPrevAlert'), 'tick-prev-alert', ' tick-step-alert')
+    + btn(go.prev, '\u25c0', t('debrief.tickPrev'), 'tick-prev')
+    + `<select class="tick-select" data-testid="tick-select" aria-label="${escapeHtml(t('debrief.tickRecorded'))}">${placeholder}${options}</select>`
+    + btn(go.next, '\u25b6', t('debrief.tickNext'), 'tick-next')
+    + btn(go.nextAlert, '\u25b6\u26a0', t('debrief.tickNextAlert'), 'tick-next-alert', ' tick-step-alert')
+    + btn(go.last, '\u25b6|', t('debrief.tickLast'), 'tick-last')
+    + `${extra}</div>`;
 }
 
 // --- Mode bar ---------------------------------------------------------------

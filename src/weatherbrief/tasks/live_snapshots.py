@@ -447,9 +447,20 @@ def tick_index(snapshots: list[dict], *, segments: bool = False) -> list[dict]:
     ``{from_nm, to_nm, radar_status, radar_max_dbz, lightning}`` per stretch,
     every stretch of every tick. No cap of its own: bounded by the recording
     (``SNAPSHOT_MAX_BYTES``), i.e. ticks × stretches, about 2 KB of JSON a
-    tick at 20-25 stretches."""
+    tick at 20-25 stretches.
+
+    ``alert_changed``: the set of alert-tier changes on screen differs from
+    the previous tick's (a first tick with any alert counts), so a client can
+    jump between the moments the alerts changed rather than every tick that
+    merely still had one."""
     out = []
+    prev_alerts: frozenset[str] = frozenset()
     for s in snapshots:
+        alerts = frozenset(
+            c.get("key") or ""
+            for c in ((s.get("changes") or {}).get("changes") or [])
+            if c.get("tier") == "alert"
+        )
         entry = {
             "tick_at": s.get("tick_at"),
             "radar_time": s.get("radar_time"),
@@ -457,7 +468,9 @@ def tick_index(snapshots: list[dict], *, segments: bool = False) -> list[dict]:
             "flown_nm": (s.get("progress") or {}).get("flown_nm"),
             "progress_source": (s.get("progress") or {}).get("source"),
             "alert_count": ((s.get("changes") or {}).get("alert_count")),
+            "alert_changed": alerts != prev_alerts,
         }
+        prev_alerts = alerts
         if segments:
             entry["segments"] = [
                 {k: seg.get(k) for k in ("from_nm", "to_nm", "radar_status", "radar_max_dbz", "lightning")}

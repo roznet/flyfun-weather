@@ -22,7 +22,7 @@ Answers two questions after (or during) a flight, from the live layer alone:
 | `tasks/retention.py` | `_live_retention`, `kept_flight_ids` |
 | `models/live.py` | `LiveTicksResponse`, `RecapResponse` (typed #769; passthrough blocks `extra="allow"`; a stored list entry the model can't read is dropped with a warning, an unreadable forecast lane drops the row, never a 500) |
 | `web/ts/helpers/debrief-replay.ts` | Pure: time-base caption, route point → tick, forecast-lane merging, replay state, recap → `LiveRibbon`, grid rows |
-| `web/ts/visualization/observed/recap-view.ts` | DOM: tick chips, mode bar, recap lanes, distance × time grid |
+| `web/ts/visualization/observed/recap-view.ts` | DOM: tick stepper, mode bar, recap lanes, distance × time grid |
 | `web/ts/store/briefing-store.ts` | `ticks`, `recap`, `recapForecast`, `replay`; `loadTicks`, `loadRecap`, `loadRecapForecast`, `viewTick`, `backToBase` |
 
 Agents: `get_briefing` carries `recap` next to `live` (ChatGPT in-process via
@@ -115,11 +115,16 @@ Where: the briefing page's Observed group. Flight page debrief section links
 to it (`?section=observed-ribbon`); the form stays on the flight page until the
 review pass decides.
 
-- **Before the window**: nothing new. **From departure − 3 h**: tick chips
-  (`/live/ticks`, re-read on each new live layer) above the live ribbon.
+- **Before the window**: nothing new. **From departure − 3 h**: the tick stepper
+  `|◀ ⚠◀ ◀ [time ▾] ▶ ▶⚠ ▶|` (`/live/ticks`, re-read on each new live layer)
+  above the live ribbon: first / previous / next / last tick, a select of every
+  tick ("⚠ 08:35Z · 2 alerts"), and jumps to the previous / next tick whose
+  alert set changed (`alert_changed` in the tick index, not merely
+  `alert_count > 0`); ← / → step while focus is on it. It replaced one chip
+  per tick, which wrapped to rows on a normal flight.
   **After the window** (`isLiveWindowPast`): "Along the route" opens on the
   recap and the last tick's live ribbon is hidden (it would read "now").
-- **Replay**: a chip, a recap stretch (its `tick_at`), an alert marker (its
+- **Replay**: the stepper, a recap stretch (its `tick_at`), an alert marker (its
   tick), a grid row, or a route point (the "seen at" lane, or the point
   selected on the cross-section / map shown as a dashed chip) → `/live/at`.
   The store's `replay` holds the view; every Observed renderer reads
@@ -179,6 +184,14 @@ earlier when the flight's packs reach a T2 shorter than 90 days (the pack rows
 are the only route back to the flight dir). Pinned flights and flights with a
 PIREP-linked pack skip it all. `forecast_lane.json` lives in the pack dir and
 follows the pack (T1 keeps it; T2 never touches a debriefed flight's packs).
+
+## Testing on a real flight
+
+`scripts/import_prod_flight.py <flight_id> [--user U] [--dry-run] [--force]`
+copies one prod flight (rows + whole flight dir, live files included) into the
+local dev DB/`DATA_DIR`, owned by the dev user, so `/live/ticks`, `/live/at`
+and `/recap` can be exercised on the devserver. It reports whether the flight's
+live window is still open (the local tick would then append to the files).
 
 ## Gotchas
 
