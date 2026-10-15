@@ -433,7 +433,13 @@ def test_highlight_cost_survives_a_failed_latency_insert(db_session, dev_user, t
             raise RuntimeError("latency table missing")
         return real_add_all(self, rows, *a, **kw)
 
-    with patch.object(Session, "add_all", add_all):
+    # No pushes here, and the push thread's session shares the test's one
+    # StaticPool connection: closing it after the cost flush rolled the cost
+    # row back on slow CI runners. Prod sessions have their own connections.
+    from weatherbrief.tasks.live_tick import LiveTick
+
+    with patch.object(Session, "add_all", add_all), \
+            patch.object(LiveTick, "_push_alerts_own_session", lambda *a, **kw: None):
         result, _ = _run_tick(db_session, highlight=HighlightOutcome("written", text="ok", usage=usage,
                                                                      latency_ms=800))
     assert result["highlighted"] == 1

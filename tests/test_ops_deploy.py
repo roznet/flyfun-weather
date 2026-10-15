@@ -77,6 +77,9 @@ def test_verify_skips_files_dockerignore_keeps_out_of_the_image():
     specs = deploy._dockerignored_pathspecs()
     assert ":(exclude)web/tests" in specs
     assert not any(s.endswith(("src", "web", "web/ts")) for s in specs)
+    # The diff half needs those two commits: CI's depth-1 checkout lacks them.
+    if any(deploy.git("cat-file", "-e", f"{c}^{{commit}}").returncode for c in ("7b5bf7af", "f2e13ccf")):
+        pytest.skip("shallow checkout: the 2026-10-13 commits are not here")
     files = deploy.git("diff", "--name-only", "7b5bf7af..f2e13ccf", "--",
                        *deploy.VERIFY_PATHS, *specs).stdout.split()
     assert files and not any(f.startswith("web/tests/") for f in files)
