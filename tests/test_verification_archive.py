@@ -598,3 +598,69 @@ class TestRunArchive:
 
         assert result["errors"] == 1
         assert "2026-07" in result["archived"]["scores"]
+
+
+class TestReadArchivedRowsSchemaEvolution:
+    """Older files predate columns added by later migrations (#522 Phase 3).
+
+    Prod's observations files for 2026-04..08 have no ``report_type`` (added
+    by migration 091). Once raw pruning is on, the historical map reads those
+    months from the archive asking for ``report_type``, and pyarrow raised
+    ``ArrowInvalid`` on every one of them.
+    """
+
+    def _write_old_observations_file(self, period: str):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        from weatherbrief.tasks.archive import archive_file_path
+
+        path = archive_file_path("observations", period)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.table({
+                "icao": ["EGTF", "LFPG"],
+                "observation_time": pa.array(
+                    [_utc(2026, 6, 10, 11, 20), _utc(2026, 6, 10, 11, 50)],
+                    type=pa.timestamp("us", tz="UTC"),
+                ),
+                "metar_raw": ["EGTF 101120Z ...", "LFPG 101150Z ..."],
+            }),
+            path,
+        )
+
+    def test_missing_requested_column_comes_back_as_none(self, archive_dir):
+        from weatherbrief.tasks.archive import read_archived_rows
+        from weatherbrief.tasks.historical_map import _OBSERVATION_COLUMNS
+
+        assert "report_type" in _OBSERVATION_COLUMNS  # the column that broke prod
+        self._write_old_observations_file("2026-06")
+
+        rows = read_archived_rows(
+            "observations", "2026-06",
+            columns=["icao", "observation_time", "report_type", "metar_raw"],
+            filters=[("observation_time", ">", _utc(2026, 6, 10, 11, 30))],
+        )
+
+        assert rows == [{
+            "icao": "LFPG",
+            "observation_time": _utc(2026, 6, 10, 11, 50),
+            "metar_raw": "LFPG 101150Z ...",
+            "report_type": None,
+        }]
+        assert rows[0]["observation_time"].tzinfo is not None
+
+    def test_filter_on_a_missing_column_matches_nothing(self, archive_dir):
+        from weatherbrief.tasks.archive import read_archived_rows
+
+        self._write_old_observations_file("2026-06")
+
+        assert read_archived_rows(
+            "observations", "2026-06",
+            columns=["icao"], filters=[("report_type", "==", "SPECI")],
+        ) == []
+
+    def test_unarchived_period_is_still_none(self, archive_dir):
+        from weatherbrief.tasks.archive import read_archived_rows
+
+        assert read_archived_rows("observations", "2026-05", columns=["icao"]) is None

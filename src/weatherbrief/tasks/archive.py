@@ -927,16 +927,37 @@ def read_archived_rows(
     ``None`` (not ``[]``) for a missing file, so a caller can tell "this
     period was never archived — try the database" from "archived, and nothing
     matched".
+
+    Tolerates schema evolution. A file keeps the columns its table had when
+    the period was archived, so a column added by a later migration is absent
+    from older files (``report_type`` from 091 is missing from every
+    observations file before 2026-09). Requested columns the file lacks come
+    back as ``None`` — exactly what the database held for those rows when they
+    were archived. A filter on such a column matches nothing, since no
+    predicate matches NULL. Without this, pyarrow raises ``ArrowInvalid`` and
+    every read of an older period fails.
     """
     path = archive_file_path(table_name, period)
     if not path.exists():
         return None
     _, pq = _require_pyarrow()
+    missing: list[str] = []
+    if columns is not None or filters:
+        present = set(pq.read_schema(path).names)
+        if filters and any(f[0] not in present for f in filters):
+            return []
+        if columns is not None:
+            missing = [c for c in columns if c not in present]
+            columns = [c for c in columns if c in present]
     table = pq.read_table(path, columns=columns, filters=filters)
-    return [
+    rows = [
         {k: _as_utc(v) for k, v in row.items()}
         for row in table.to_pylist()
     ]
+    for row in rows:
+        for c in missing:
+            row[c] = None
+    return rows
 
 
 def earliest_archived_period(db: Session, table_name: str) -> str | None:

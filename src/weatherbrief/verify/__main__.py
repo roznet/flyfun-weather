@@ -1052,7 +1052,7 @@ def cmd_prune_raw(args):
         if raw_retention_disabled(retain):
             print(
                 f"Raw retention is disabled (retain_days={retain}). "
-                "Set VERIFICATION_RAW_RETENTION_DAYS=180 or pass --retain-days."
+                "Set VERIFICATION_RAW_RETENTION_DAYS=90 (the decided window) or pass --retain-days."
             )
             return
 
