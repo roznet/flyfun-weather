@@ -526,18 +526,35 @@
         Skew-T diagrams, and route maps.
       </p>
       <h4>How to connect</h4>
-      <p>In <a href="https://claude.ai/" target="_blank" rel="noopener">claude.ai</a>:</p>
+      <p>
+        FlyFun Weather is listed in Claude's connectors directory. In
+        <a href="https://claude.ai/" target="_blank" rel="noopener">claude.ai</a> or Claude Desktop:
+      </p>
       <ol>
-        <li>Open <strong>Settings &rarr; Customize</strong> (or <strong>Connectors</strong>).</li>
-        <li>Under <strong>Connectors</strong>, press <strong>+</strong> (<em>Add custom connector</em>).</li>
         <li>
-          Enter the server URL:
-          <code>https://mcp.flyfun.aero/weather</code>
+          Open <strong>Customize &rarr; Connectors</strong> and press <strong>+</strong> next to
+          <strong>Connectors</strong> to browse the directory. (From a chat: press <strong>+</strong>,
+          hover <strong>Connectors</strong>, then <strong>Manage connectors</strong>.)
         </li>
+        <li>Search for <strong>FlyFun Weather</strong> and press <strong>Connect</strong>.</li>
+        <li>Sign in with your Flyfun Weather account and authorise access.</li>
       </ol>
       <p class="muted">
-        You'll be asked to sign in with your Flyfun Weather account the first time, so the assistant
-        only ever sees your own flights and briefings.
+        The assistant only ever sees your own flights and briefings. Once connected, the connector is
+        also available in the Claude iOS and Android apps. If it isn't active in a conversation, press
+        <strong>+</strong> in the chat, hover <strong>Connectors</strong> and switch FlyFun Weather on.
+      </p>
+      <p class="muted">
+        On a Claude Team or Enterprise plan, an organisation owner has to add FlyFun Weather under
+        <strong>Organization settings &rarr; Connectors</strong> before members can connect it.
+      </p>
+      <h4>Using the MCP server directly</h4>
+      <p>
+        Any other MCP client can connect to the server at
+        <a href="https://mcp.flyfun.aero/weather" target="_blank" rel="noopener"><code>https://mcp.flyfun.aero/weather</code></a>.
+        Clients that support OAuth sign-in will prompt you to log in with your Flyfun Weather account;
+        for tools that don't (such as Claude Code), generate an API token in
+        <a href="/settings.html#mcp-section">Settings &rarr; MCP Access</a> and supply it to the same URL.
       </p>
       <h4>ChatGPT (experimental)</h4>
       <p>
