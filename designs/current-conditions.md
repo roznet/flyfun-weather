@@ -379,11 +379,11 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 |---|---|
 | Cross-section `observed-tops` (group `conditions`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
 | Cross-section `observed-surface` (group `conditions`, default off) | Echo colour strip along the terrain + lightning ticks. Hatched strip for no coverage. |
-| Route map | Radar as Europe-wide tiles of the newest frame, satellite IR underneath (default on), cloud tops as a corridor `imageOverlay`; corridor box, lightning points age-faded, one age badge line per drawn layer, muted basemap while imagery is on. See [Map imagery](#map-imagery-652). |
+| Route map | Radar as Europe-wide tiles of the newest frame, satellite IR underneath (default on), cloud tops as a corridor `imageOverlay`; corridor box, lightning as small bolt glyphs age-faded (#665, one canvas `FlashGlyphLayer`, shared with the maps page's "Now" tab), one age badge line per drawn layer, muted basemap while imagery is on. See [Map imagery](#map-imagery-652). |
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 | iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
-| iOS route map (#654) | Radar tiles (reflectivity or rain rate) over the satellite IR underlay, corridor box, muted basemap, legend + one age badge line per layer. No cloud tops or lightning. See [iOS route map](#ios-route-map-654). |
+| iOS route map (#654) | Radar tiles (reflectivity or rain rate) over the satellite IR underlay, corridor box, muted basemap, legend + one age badge line per layer, lightning bolts (#665, "Lightning" toggle, on by default). No cloud tops. See [iOS route map](#ios-route-map-654). |
 
 ### The iOS surface needs no endpoint
 
@@ -640,8 +640,8 @@ alignment fork.
 The iOS `/observed` endpoint listed here originally is **not needed and not
 built**: the payload already rides the snapshot and the bundle (see [The iOS
 surface needs no endpoint](#the-ios-surface-needs-no-endpoint)). Still absent on
-iOS: the map's cloud-top image and lightning points (the radar/satellite tiles
-shipped in #654), the route-graph metrics, and the "Observed now" summary panel.
+iOS: the map's cloud-top image (the radar/satellite tiles shipped in #654,
+lightning in #665), the route-graph metrics, and the "Observed now" summary panel.
 
 **Out:** nowcasting. A time slider / loop was listed here as "permanently out"
 because it needed a tiled product; #652 built that product for the static map,
@@ -735,6 +735,26 @@ listings. Gotchas and choices:
   menu of steps (40–100 %) rather than the web's slider. The corridor box
   follows the cross-section's corridor pick
   (`CrossSectionViewModel.observedRadiusDefaultsKey`).
+- **Lightning (#665).** `ObservedLightning` (pure rules, SYNC with
+  `observed-overlay-geometry.ts`: trail 60 min, linear fade from 0.9, the bolt
+  polygon and its 8 x 12 pt size) and `RouteLightningModel` (polls
+  `/flashes` for the corridor box every 2 min, `minutes=60` so a phone only
+  downloads what is drawn; the web route map asks for every retained frame).
+  One `LightningOverlay` (world bounds, since a bolt is sized in screen points)
+  painted by `LightningRenderer`, replaced per refresh; never an annotation
+  per flash. Top of `.aboveLabels`; cell outlines rebuilt later are inserted
+  below it. Badge: "Lightning 14:05Z · 6 min old · N flashes in the last
+  60 min" from the newest LI frame's own time; "unavailable" on a failed
+  request, "no current frame" when none is held, and past 25 min (two missed
+  LI cycles) it still draws but says "feed late, newer flashes may be
+  missing". "Flashes", not "strikes": LI counts in-cloud lightning too. On by
+  default (`mapObservedLightning`), unlike the experimental cells: it is a
+  measurement, and the web route map draws it unconditionally.
+- **Bolts, not dots (#665), on both clients.** A dot read as an airport or a
+  radar speck; a small purple bolt with a pale rim reads as lightning with no
+  legend. Web paints all of them on one canvas (`FlashGlyphLayer`), redrawn
+  on `moveend`/`zoomend` and hidden during the zoom animation; a
+  `divIcon` per flash would not survive the "Now" tab's whole-Europe view.
 
 ## Known limitations
 

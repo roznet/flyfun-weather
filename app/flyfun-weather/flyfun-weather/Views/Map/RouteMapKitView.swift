@@ -108,6 +108,14 @@ struct RouteMapKitView: UIViewRepresentable {
     /// it changes, so an altitude drag keeps an open callout.
     var cellsDisplayKey: String?
 
+    // MARK: Lightning (#665)
+
+    /// Flashes to draw as bolts, already faded by `ObservedLightning.drawable`.
+    var lightningFlashes: [ObservedLightning.DrawableFlash] = []
+    /// Changes whenever `lightningFlashes` does (each refresh moves the fade);
+    /// the overlay is replaced only then, not on every re-render.
+    var lightningRevision = -1
+
     // MARK: Tap-to-map (#690)
 
     /// A region to frame once, e.g. a storm tapped on the Observed tab. Applied
@@ -175,6 +183,9 @@ struct RouteMapKitView: UIViewRepresentable {
         private var appliedMuted: Bool?
         /// Key of the cell overlay currently drawn (nil = none).
         private var renderedCellsKey: String?
+        /// The one lightning overlay on the map, and the revision it drew.
+        private var lightningOverlay: LightningOverlay?
+        private var renderedLightningRevision: Int?
         /// The last tap-to-map focus framed (#690).
         private var appliedFocusKey: Int?
         /// How long an old frame stays under its successor. MapKit gives no
@@ -200,6 +211,7 @@ struct RouteMapKitView: UIViewRepresentable {
             updateCorridor(on: map)
             updateRoute(on: map)
             updateCells(on: map)
+            updateLightning(on: map)
             updateForecastOverlay(on: map)
             updateWaypoints(on: map)
             updateActivePoint(on: map)
@@ -352,16 +364,43 @@ struct RouteMapKitView: UIViewRepresentable {
                     guard coords.count >= 2 else { continue }
                     let overlay = CellOutlineOverlay(coordinates: coords, count: coords.count)
                     overlay.tier = tier
-                    map.addOverlay(overlay, level: .aboveLabels)
+                    addBelowLightning(overlay, on: map)
                 }
             }
             let cores = display.cells.filter(\.isCore)
             for cell in cores {
                 guard let end = CellsOverlay.arrowEnd(cell) else { continue }
                 let coords = [CLLocationCoordinate2D(latitude: cell.lat, longitude: cell.lon), end]
-                map.addOverlay(CellArrowOverlay(coordinates: coords, count: 2), level: .aboveLabels)
+                addBelowLightning(CellArrowOverlay(coordinates: coords, count: 2), on: map)
             }
             map.addAnnotations(cores.map(CellAnnotation.init))
+        }
+
+        /// Cell outlines and arrows stay under the lightning bolts when they
+        /// are rebuilt after them (both sit at `.aboveLabels`).
+        private func addBelowLightning(_ overlay: MKOverlay, on map: MKMapView) {
+            if let lightningOverlay {
+                map.insertOverlay(overlay, below: lightningOverlay)
+            } else {
+                map.addOverlay(overlay, level: .aboveLabels)
+            }
+        }
+
+        // MARK: Lightning (#665)
+
+        /// Replace the bolt overlay when the flashes (or their fade) change.
+        /// One overlay for every flash: hundreds of annotations jank.
+        private func updateLightning(on map: MKMapView) {
+            let revision = parent.lightningFlashes.isEmpty ? nil : parent.lightningRevision
+            guard revision != renderedLightningRevision else { return }
+            renderedLightningRevision = revision
+            if let old = lightningOverlay { map.removeOverlay(old) }
+            lightningOverlay = nil
+            guard revision != nil else { return }
+            let overlay = LightningOverlay(flashes: parent.lightningFlashes)
+            lightningOverlay = overlay
+            // Top of `.aboveLabels`: over the radar, the route and the cells.
+            map.addOverlay(overlay, level: .aboveLabels)
         }
 
         // MARK: Waypoint annotations
@@ -518,6 +557,9 @@ extension RouteMapKitView.Coordinator: MKMapViewDelegate {
             r.lineWidth = 2.5
             r.lineCap = .round
             return r
+        }
+        if let lightning = overlay as? LightningOverlay {
+            return LightningRenderer(overlay: lightning)
         }
         if let corridor = overlay as? ObservedCorridorOverlay {
             let r = MKPolygonRenderer(polygon: corridor)

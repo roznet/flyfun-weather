@@ -2,7 +2,7 @@
  *
  * Layers, each toggleable: the latest METAR as flight-category markers
  * (`/maps/now`), OPERA radar reflectivity and the satellite IR underlay as
- * stamp-keyed tiles (#652), lightning points faded by age, and the radar cell
+ * stamp-keyed tiles (#652), lightning bolts faded by age (#665), the radar cell
  * overlay pushed by the home node (`cells-overlay.ts`, the same renderer as
  * the briefing route map). Cloud tops have no layer of their own: they appear
  * in a cell's details when the home node collects CTTH (a Europe-wide CTTH
@@ -30,12 +30,13 @@ import {
   boxParams,
   currentFrame,
   flashBox,
-  flashOpacity,
+  drawableFlashes,
   formatBadge,
   frameBadgeField,
   staleBadge,
 } from './route-map/observed-overlay-geometry';
 import { CellsLayer } from './cells-overlay';
+import { FlashGlyphLayer } from './flash-glyph-layer';
 import { cellsLegendHtml, hhmmZ } from './cells-overlay-core';
 import { $, escapeHtml } from '../utils';
 
@@ -45,7 +46,6 @@ const SHOW_REFRESH_MS = 60_000;
 const RADAR_SOURCE = 'opera_dbzh';
 const RADAR_OPACITY = 0.75;
 const SATELLITE_OPACITY = 0.8;
-const FLASH_COLOR = '#7c3aed';
 
 export type NowLayer = 'airports' | 'radar' | 'satellite' | 'lightning' | 'cells' | 'rain';
 export const NOW_LAYERS: readonly NowLayer[] = ['airports', 'radar', 'satellite', 'lightning', 'cells', 'rain'];
@@ -75,8 +75,7 @@ export class NowTab {
   private map: WeatherMap | null = null;
   private leaflet: L.Map | null = null;
   private tiles: L.LayerGroup | null = null;
-  private flashGroup: L.LayerGroup | null = null;
-  private flashRenderer: L.Canvas | null = null;
+  private flashLayer: FlashGlyphLayer | null = null;
   private cells: CellsLayer | null = null;
   private data: NowMapResponse | null = null;
   private flashes: FlashPoint[] = [];
@@ -115,8 +114,7 @@ export class NowTab {
     this.leaflet = this.map.getLeafletMap();
     if (!this.leaflet) return;
     this.tiles = L.layerGroup().addTo(this.leaflet);
-    this.flashRenderer = L.canvas({ padding: 0.2 });
-    this.flashGroup = L.layerGroup().addTo(this.leaflet);
+    this.flashLayer = new FlashGlyphLayer().addTo(this.leaflet);
     this.cells = new CellsLayer(this.leaflet, this.layers.cells);
     this.cells.setShowRain(this.layers.rain);
 
@@ -288,10 +286,10 @@ export class NowTab {
   // --- Lightning ------------------------------------------------------------------------
 
   private async refreshFlashes(): Promise<void> {
-    if (!this.flashGroup || !this.leaflet) return;
+    if (!this.flashLayer || !this.leaflet) return;
     const seq = ++this.flashSeq;
     if (!this.layers.lightning) {
-      this.flashGroup.clearLayers();
+      this.flashLayer.setFlashes([]);
       this.badges.lightning = '';
       return;
     }
@@ -322,22 +320,7 @@ export class NowTab {
   }
 
   private drawFlashes(): void {
-    if (!this.flashGroup) return;
-    this.flashGroup.clearLayers();
-    const now = Date.now();
-    const dated = this.flashes
-      .map((f) => ({ f, age: (now - new Date(f.time).getTime()) / 60000 }))
-      .filter((d) => Number.isFinite(d.age) && d.age < FLASH_TRAIL_MINUTES)
-      .sort((a, b) => b.age - a.age);
-    for (const { f, age } of dated) {
-      const opacity = flashOpacity(age);
-      if (opacity <= 0) continue;
-      L.circleMarker([f.lat, f.lon], {
-        renderer: this.flashRenderer ?? undefined,
-        radius: 2.5, color: FLASH_COLOR, fillColor: FLASH_COLOR,
-        fillOpacity: opacity, opacity, weight: 1, interactive: false,
-      }).addTo(this.flashGroup);
-    }
+    this.flashLayer?.setFlashes(drawableFlashes(this.flashes, Date.now()));
   }
 
   // --- Badge + panel ------------------------------------------------------------------------

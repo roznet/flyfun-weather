@@ -11,9 +11,10 @@
  *     `imageOverlay` clipped to the corridor box. Optionally, the satellite
  *     infrared image is drawn under the radar, as Windy does. No animation
  *     yet — the stamp-keyed URLs are what a loop (#653) will step through.
- *  3. **Lightning as points, faded by age.** A ten-minute accumulation drawn
- *     flat would suggest every flash happened at once; fading by each flash's
- *     own time keeps the trail readable as a trail.
+ *  3. **Lightning as small bolt glyphs, faded by age** (#665; one canvas,
+ *     `FlashGlyphLayer`). A ten-minute accumulation drawn flat would
+ *     suggest every flash happened at once; fading by each flash's own time
+ *     keeps the trail readable as a trail.
  *
  * The age badge is not decoration. A DBZH composite is a rolling ten-minute
  * maximum plus delivery lag, so an echo on screen can be ~15 min old — about
@@ -24,14 +25,14 @@
 
 import * as L from 'leaflet';
 import type { VizObserved, VizRouteData } from '../types';
+import { FlashGlyphLayer } from '../flash-glyph-layer';
 import {
-  FLASH_TRAIL_MINUTES,
   SATELLITE_SOURCE,
   boxParams,
   corridorBox,
   currentFrame,
+  drawableFlashes,
   fieldChip,
-  flashOpacity,
   formatBadge,
   frameBadgeField,
   frameTileUrl,
@@ -46,7 +47,6 @@ import {
 } from './observed-overlay-geometry';
 
 const CORRIDOR_COLOR = '#2563eb';
-const FLASH_COLOR = '#7c3aed';
 /** The satellite underlay is a picture of the whole sky; a fixed opacity lets
  *  the muted basemap's coastlines read through it, and the radar opacity
  *  slider stays about the radar. */
@@ -217,24 +217,9 @@ export function renderObservedOverlay(
     interactive: false,
   }).addTo(group);
 
-  // 4. Lightning, oldest first so recent flashes draw on top.
-  const dated = flashes
-    .map((f) => ({ flash: f, ageMinutes: (now.getTime() - new Date(f.time).getTime()) / 60000 }))
-    .filter((f) => Number.isFinite(f.ageMinutes) && f.ageMinutes < FLASH_TRAIL_MINUTES)
-    .sort((a, b) => b.ageMinutes - a.ageMinutes);
-  for (const { flash, ageMinutes } of dated) {
-    const opacity = flashOpacity(ageMinutes);
-    if (opacity <= 0) continue;
-    L.circleMarker([flash.lat, flash.lon], {
-      radius: 3,
-      color: FLASH_COLOR,
-      fillColor: FLASH_COLOR,
-      fillOpacity: opacity,
-      opacity,
-      weight: 1,
-      interactive: false,
-    }).addTo(group);
-  }
+  // 4. Lightning as small bolts, faded by age (#665).
+  const drawable = drawableFlashes(flashes, now.getTime());
+  if (drawable.length) new FlashGlyphLayer(drawable).addTo(group);
 
   return finish();
 }

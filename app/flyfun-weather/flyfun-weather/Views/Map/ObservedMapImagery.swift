@@ -17,7 +17,8 @@ import UIKit
 enum ObservedMapImagery {
 
     /// Radar sources the map draws as tiles, in menu order. Cloud tops stay on
-    /// the web's corridor image and lightning is points — neither is on iOS yet.
+    /// the web's corridor image (not on iOS yet); lightning is drawn as bolts
+    /// by `ObservedLightning` (#665).
     static let radarSources = ["opera_dbzh", "opera_rate"]
     /// The satellite infrared underlay (EUMETView, proxied by the server).
     static let satelliteSource = "satellite_ir"

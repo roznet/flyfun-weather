@@ -32,6 +32,7 @@ nonisolated struct LiveFocus: Codable, Sendable, Equatable, Hashable {
 
     var wantsCells: Bool { (layers ?? []).contains("cells") }
     var wantsRadar: Bool { (layers ?? []).contains("radar") }
+    var wantsLightning: Bool { (layers ?? []).contains("lightning") }
 
     /// The map region framing `bbox`, with a little margin. nil without a
     /// usable box.
