@@ -25,6 +25,7 @@ from weatherbrief.models.observed import ObservedAttribution
 
 from .ctth import _parse_iso, _valid_time
 from .frames import FlashFrame
+from .netcdf_io import open_netcdf
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,8 @@ def _attribution(dataset) -> ObservedAttribution:
 
 
 def read_metadata(path: Path | str) -> dict:
-    import netCDF4
-
     path = Path(path)
-    with netCDF4.Dataset(str(path)) as dataset:
+    with open_netcdf(path) as dataset:
         valid = _valid_time(dataset, path)
         lat_var = _find_variable(dataset, _LAT_NAMES)
         count = int(np.asarray(lat_var[:]).size) if lat_var is not None else 0
@@ -125,10 +124,8 @@ def read_metadata(path: Path | str) -> dict:
 
 def read_flashes(path: Path | str, *, source: str, window_minutes: float) -> FlashFrame:
     """Load one LI granule's flash positions and times."""
-    import netCDF4
-
     path = Path(path)
-    with netCDF4.Dataset(str(path)) as dataset:
+    with open_netcdf(path) as dataset:
         valid = _valid_time(dataset, path)
         if valid is None and "sensing_end_time" in dataset.ncattrs():
             valid = _parse_iso(str(dataset.getncattr("sensing_end_time")))

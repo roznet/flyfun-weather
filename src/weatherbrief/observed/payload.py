@@ -47,6 +47,7 @@ from .frames import (
 )
 from .coverage import covers, domain_name
 from .grid import compute_window, nm_to_km
+from .netcdf_io import open_netcdf
 from .sampler import DEFAULT_RADII_NM, SampleStation, sample, sample_flashes
 from .summary import build_summary_entries
 
@@ -137,9 +138,7 @@ def read_grid_frame(
         )
         return frame, window
 
-    import netCDF4
-
-    with netCDF4.Dataset(str(stored.path)) as dataset:
+    with open_netcdf(stored.path) as dataset:
         grid = ctth.read_grid(dataset)
     window = compute_window(
         grid,

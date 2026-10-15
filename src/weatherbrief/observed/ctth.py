@@ -39,6 +39,7 @@ from weatherbrief.models.observed import ObservedAttribution
 
 from .frames import GridFrame
 from .grid import GridSpec, GridWindow
+from .netcdf_io import open_netcdf
 
 logger = logging.getLogger(__name__)
 
@@ -292,10 +293,8 @@ def _attribution(dataset) -> ObservedAttribution:
 
 def read_metadata(path: Path | str) -> dict:
     """Sidecar metadata for one granule, without reading the 5568² arrays."""
-    import netCDF4
-
     path = Path(path)
-    with netCDF4.Dataset(str(path)) as dataset:
+    with open_netcdf(path) as dataset:
         grid = read_grid(dataset)
         valid = _valid_time(dataset, path)
         return {
@@ -323,10 +322,8 @@ def read_window(path: Path | str, window: GridWindow, *, source: str) -> GridFra
     decompression and saves nothing.  ``window.full_width`` records that the
     caller knows this.
     """
-    import netCDF4
-
     path = Path(path)
-    with netCDF4.Dataset(str(path)) as dataset:
+    with open_netcdf(path) as dataset:
         grid = read_grid(dataset)
         row0 = max(0, min(window.row0, grid.ny))
         row1 = max(row0, min(window.row1, grid.ny))
