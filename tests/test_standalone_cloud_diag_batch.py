@@ -92,3 +92,34 @@ def test_cloud_diag_no_jobs_skips_dispatch():
 
     assert result == {}
     assert called["n"] == 0, "no cached files → no decode batch"
+
+
+def test_cloud_diag_fetchers_purge_expired_runs(tmp_path):
+    """Both fetchers TTL-purge their model's cache before using it.
+
+    On a compute node (the Mac mini) nothing else ages ``.cache/grib`` — the
+    scheduler's daily retention pass only runs on the droplet — so without this
+    every cycle's run accumulated forever (179 runs / 142 GB by 2026-10-16).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, put_cached
+
+    fresh = datetime.now(timezone.utc) - timedelta(hours=1)
+    fresh_date, fresh_hour = fresh.strftime("%Y%m%d"), fresh.hour
+
+    for model, fetch in (("gfs", fetch_gfs_cloud_diag), ("icon-eu", fetch_icon_cloud_diag)):
+        stale = cache_dir_for_run(tmp_path, "20260719", 12, model=model)
+        put_cached(stale, cache_key(0, "T"), b"x")
+        current = cache_dir_for_run(tmp_path, fresh_date, fresh_hour, model=model)
+        put_cached(current, cache_key(0, "T"), b"x")
+
+        with patch("weatherbrief.tasks.standalone_grib.is_cached", return_value=True), \
+             patch(
+                 "weatherbrief.fetch.grib._dispatch_decode_parallel",
+                 lambda jobs, **kw: [[] for _ in jobs],
+             ):
+            fetch(fresh_date, fresh_hour, [6], [50.0], [0.0], data_dir=tmp_path)
+
+        assert not stale.exists(), f"{model}: expired run not purged"
+        assert current.exists(), f"{model}: current run must survive"

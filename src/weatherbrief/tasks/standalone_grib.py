@@ -25,7 +25,13 @@ from typing import TYPE_CHECKING
 
 import requests
 
-from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, put_cached
+from weatherbrief.fetch.grib.cache import (
+    cache_dir_for_run,
+    cache_key,
+    is_cached,
+    purge_old_runs,
+    put_cached,
+)
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
@@ -116,6 +122,10 @@ def fetch_gfs_cloud_diag(
     if session is None:
         session = requests.Session()
 
+    # TTL purge, as the briefing enrichment path does: on a compute node this is
+    # the only thing that ages the cache (no scheduler retention pass runs there),
+    # and without it every cycle's run accumulated forever (142 GB on the mini).
+    purge_old_runs(data_dir, model="gfs")
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
     result: dict[int, list[AirportGribDiagnostics]] = {}
 
@@ -220,6 +230,7 @@ def fetch_icon_cloud_diag(
     if session is None:
         session = requests.Session()
 
+    purge_old_runs(data_dir, model="icon-eu")  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
     result: dict[int, list[AirportGribDiagnostics]] = {}
 
