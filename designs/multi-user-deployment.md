@@ -21,7 +21,7 @@ Make WeatherBrief available to a small group of trusted pilots (friends, not pub
 weather.flyfun.aero (Caddy) → localhost:8020 → weatherbrief      (FastAPI + uvicorn)
 mcp.flyfun.aero     (Caddy) → localhost:8021 → weatherbrief-mcp  (same image, MCP server)
     both → shared-mysql (Docker network: shared-services)
-         → /app/data (artifacts) + /data/ecmwf (GRIB) + /app/snapshot_inbox (ro, compute-node artifacts)
+         → /app/data (artifacts) + /data/ecmwf (GRIB) + /app/snapshot_inbox, /app/hewson_inbox (ro, compute-node artifacts)
 ```
 
 Port 8020 chosen to avoid conflicts with existing services (8000=maps, 8010=boarding). Both
@@ -288,6 +288,9 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `HOST_DATA_DIR` / `HOST_ECMWF_GRIB_DIR` / `HOST_SNAPSHOT_INBOX` | Prod only | `./data…` | Host paths bind-mounted into the container (prod: under `/mnt/flyfun_data`, NOT the project dir) |
 | `SNAPSHOT_INBOX_DIR` | No | `/app/snapshot_inbox` | Where `verify ingest-artifact` reads compute-node snapshots |
 | `HOST_CELLS_INBOX` | Prod, with cells | `./data/cells_inbox` | Host dir the home node's cells loop rsyncs display files into (#656). Prod `/mnt/flyfun_data/weather/cells_inbox`, `dockerapp:dockerapp` mode 2770 like the snapshot inbox (the ssh user is in `dockerapp`, not `weatherdata`) — the app moves files out of it |
+| `HOST_HEWSON_INBOX` | Prod, with Hewson offload | `./data/hewson_inbox` | Host dir the home node mirrors its Hewson NPZs into (`rsync --delete`). Prod `/mnt/flyfun_data/weather/hewson_inbox`, `dockerapp:dockerapp` 2770; mounted `:ro` |
+| `HEWSON_INBOX_DIR` | No | `/app/hewson_inbox` | Container path of that inbox. Offload is in use once it holds a model dir; otherwise the 06Z/18Z precompute runs locally with no wait |
+| `HEWSON_INGEST_HEALTHCHECK_URL` | No | — | Deadman for the Hewson ingest: pinged when the node delivered every model, `/fail` when the droplet falls back |
 | `CELLS_INBOX_DIR` | No | `/app/cells_inbox` | Container path of that inbox; set to a local path on a dev server |
 | `WB_CELLS_INGEST_ENABLED` | No | off | `1` ingests the cell overlay into `DATA_DIR/observed/cells/display` (24 h) and serves `/api/observed/cells/*`; off → endpoints say `disabled`. See [cells-overlay.md](./cells-overlay.md) |
 | `HMAC_SECRET` | Prod only | derived from JWT_SECRET | HMAC key for pack integrity + admin approval links |

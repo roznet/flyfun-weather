@@ -125,6 +125,13 @@ _ARTIFACT_POLL_INTERVAL_SECONDS = 60
 # we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
 _HEWSON_SAMPLE_HOURS_UTC = [6, 18]
 _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
+# Compute offload: a home node runs the same precompute at the sample hour and
+# rsyncs its hewson/<model>/*.npz tree here. Absent dir = offload not in use,
+# and the loop computes locally with no wait (non-offload deploys unaffected).
+_HEWSON_INBOX_DIR_DEFAULT = "/app/hewson_inbox"
+# The node takes ~3 min plus a ~140 MB push. 30 min is generous on purpose and
+# still leaves a local fallback (~3 min) done well before the HH+1 forecast cycle.
+_HEWSON_INBOX_WAIT_MAX_SECONDS = 1800
 # Usage-analytics rollup runs daily — at the same UTC hour each day so the
 # rollup of "yesterday" lands well after the day has actually rolled over.
 _ANALYTICS_ROLLUP_INTERVAL_SECONDS = 86_400
@@ -1496,7 +1503,9 @@ def _ingest_artifact_blocking(path: str) -> tuple[int, int]:
     return result.rows_inserted, result.rows_skipped
 
 
-async def _ping_ingest_healthcheck(suffix: str = "", detail: str = "") -> None:
+async def _ping_ingest_healthcheck(
+    suffix: str = "", detail: str = "", env: str = "INGEST_HEALTHCHECK_URL",
+) -> None:
     """Ping the ingest deadman, if one is configured. Never raises.
 
     The node's own deadman only proves it computed and pushed. It says nothing
@@ -1506,9 +1515,11 @@ async def _ping_ingest_healthcheck(suffix: str = "", detail: str = "") -> None:
 
     Unset ``INGEST_HEALTHCHECK_URL`` means no pings at all, so dev and
     non-offload deployments are unaffected. A monitoring call must never be able
-    to break the thing it monitors, hence the blanket except.
+    to break the thing it monitors, hence the blanket except. ``env`` names the
+    variable holding the URL, so each offloaded job (forecast cycle, Hewson
+    precompute) alerts on its own check.
     """
-    url = os.environ.get("INGEST_HEALTHCHECK_URL", "").strip()
+    url = os.environ.get(env, "").strip()
     if not url:
         return
     try:
@@ -2327,6 +2338,9 @@ async def run_hewson_precompute_loop(app_state) -> None:
         _HEWSON_SAMPLE_HOURS_UTC,
     )
     await asyncio.sleep(_HEWSON_STARTUP_DELAY_SECONDS)
+    # Pick up anything the node pushed while this process was down (a deploy
+    # inside the wait window would otherwise leave fronts a cycle stale).
+    await _ingest_hewson_inbox_now()
 
     while True:
         try:
@@ -2336,7 +2350,17 @@ async def run_hewson_precompute_loop(app_state) -> None:
                 sleep_secs,
             )
             await asyncio.sleep(sleep_secs)
-            await asyncio.to_thread(_run_hewson_precompute_once)
+            # Compute offload first; only the models the node did not deliver
+            # are computed here. None = no inbox mounted → compute everything.
+            missing = await _try_ingest_hewson_snapshots()
+            if missing is None:
+                await asyncio.to_thread(_run_hewson_precompute_once)
+            elif missing:
+                await asyncio.to_thread(_run_hewson_precompute_once, sorted(missing))
+            else:
+                from weatherbrief.hewson.precompute import purge_old_snapshots
+
+                await asyncio.to_thread(purge_old_snapshots)
             # Advance past the current sample hour before the next loop so
             # we don't re-trigger in the same minute.
             await asyncio.sleep(60)
@@ -2344,6 +2368,133 @@ async def run_hewson_precompute_loop(app_state) -> None:
             logger.error("Hewson precompute cycle failed", exc_info=True)
             # Back off 15 min on failure (same as standalone verification)
             await asyncio.sleep(900)
+
+
+def _hewson_inbox_dir() -> str | None:
+    """The mounted Hewson inbox, or None when offload is not in use.
+
+    In use = the inbox holds at least one model directory. The compose default
+    mounts an empty dir whether or not a node exists, and an empty inbox must
+    not cost every cycle a 30-min wait; once a node has pushed, its mirror keeps
+    the model dirs even when it later goes dark, so the wait-then-fallback path
+    still covers an outage.
+    """
+    from weatherbrief.hewson.precompute import DEFAULT_MODELS
+
+    inbox = os.environ.get("HEWSON_INBOX_DIR", _HEWSON_INBOX_DIR_DEFAULT).strip()
+    if not inbox or not os.path.isdir(inbox):
+        return None
+    if not any(os.path.isdir(os.path.join(inbox, m)) for m in DEFAULT_MODELS):
+        return None
+    return inbox
+
+
+async def _ingest_hewson_inbox_now() -> None:
+    """One immediate, non-waiting inbox pass. Never raises."""
+    inbox = _hewson_inbox_dir()
+    if not inbox:
+        return
+    from weatherbrief.hewson.inbox import ingest_inbox
+
+    try:
+        result = await asyncio.to_thread(ingest_inbox, inbox)
+        if result.ingested:
+            logger.info("Hewson inbox: startup pass ingested %s", result.ingested)
+    except Exception:
+        logger.error("Hewson inbox: startup pass failed", exc_info=True)
+
+
+def _hewson_expected_inits(models: list[str]) -> dict[str, int]:
+    """Each model's current Open-Meteo init (unix); 0 when unknown.
+
+    Taken ONCE at the top of the sample hour, the same moment the node reads it.
+    Re-reading at each poll would be wrong: GFS/ECMWF 00Z land on Open-Meteo
+    around 06:40Z, so a later read could demand an init the node never saw and
+    force a needless local run.
+    """
+    from weatherbrief.fetch.model_status import fetch_model_metadata
+
+    try:
+        meta = fetch_model_metadata(models=models)
+    except Exception:
+        logger.warning("Hewson inbox: model metadata unavailable", exc_info=True)
+        meta = {}
+    return {m: int(meta[m].last_init_time or 0) if m in meta else 0 for m in models}
+
+
+async def _try_ingest_hewson_snapshots() -> set[str] | None:
+    """Wait for the node's Hewson snapshots for this cycle and ingest them.
+
+    Returns None when no inbox is mounted (caller computes everything, no
+    wait), else the set of models still missing at the end — empty when the
+    node delivered all of them. A model counts as delivered once a local
+    snapshot reaches the init Open-Meteo served at the top of the hour; when
+    that init is unknown, once any snapshot for it was ingested this cycle.
+    """
+    inbox = _hewson_inbox_dir()
+    if not inbox:
+        return None
+
+    from weatherbrief.hewson.inbox import ingest_inbox, newest_local_init
+    from weatherbrief.hewson.precompute import DEFAULT_MODELS, _init_to_iso_z
+
+    models = list(DEFAULT_MODELS)
+    expected = await asyncio.to_thread(_hewson_expected_inits, models)
+    ingested: set[str] = set()
+    rejected: set[Path] = set()
+    deadline = time.monotonic() + _HEWSON_INBOX_WAIT_MAX_SECONDS
+    logger.info(
+        "Hewson inbox %s: waiting up to %d min for %s",
+        inbox, _HEWSON_INBOX_WAIT_MAX_SECONDS // 60,
+        ", ".join(
+            f"{m}>={_init_to_iso_z(i)}" if i else f"{m}(init unknown)"
+            for m, i in expected.items()
+        ),
+    )
+
+    def _missing() -> set[str]:
+        out = set()
+        for m in models:
+            if expected[m]:
+                have = newest_local_init(m)
+                if have is None or have < expected[m]:
+                    out.add(m)
+            elif m not in ingested:
+                out.add(m)
+        return out
+
+    while True:
+        try:
+            result = await asyncio.to_thread(ingest_inbox, inbox, skip=rejected)
+            ingested.update(result.ingested)
+            rejected.update(result.rejected)
+        except Exception:
+            # A broken inbox must not cost the cycle: fall through to the
+            # deadline and the local fallback.
+            logger.error("Hewson inbox: ingest pass failed", exc_info=True)
+        missing = await asyncio.to_thread(_missing)
+        if not missing:
+            logger.info(
+                "Hewson inbox: all models delivered off-box — skipping the "
+                "local precompute",
+            )
+            await _ping_ingest_healthcheck(
+                detail=f"ingested {sorted(ingested)}",
+                env="HEWSON_INGEST_HEALTHCHECK_URL",
+            )
+            return set()
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "Hewson inbox: %s not delivered after %d min — computing "
+                "locally as fallback", sorted(missing),
+                _HEWSON_INBOX_WAIT_MAX_SECONDS // 60,
+            )
+            await _ping_ingest_healthcheck(
+                "/fail", f"missing {sorted(missing)} — computing locally",
+                env="HEWSON_INGEST_HEALTHCHECK_URL",
+            )
+            return missing
+        await asyncio.sleep(_ARTIFACT_POLL_INTERVAL_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -2468,8 +2619,11 @@ async def run_grib_precache_loop(app_state) -> None:
         await asyncio.sleep(_GRIB_PRECACHE_POLL_SECONDS)
 
 
-def _run_hewson_precompute_once() -> None:
+def _run_hewson_precompute_once(models: list[str] | None = None) -> None:
     """Execute a single Hewson precompute cycle (called in a thread).
+
+    ``models`` restricts the run (compute-offload fallback for the models the
+    node did not deliver); None means every default model.
 
     After the compute + write, persists the Open-Meteo call count to
     ``ApiUsageRow`` via :func:`weatherbrief.api.usage.log_api_usage` so
@@ -2480,7 +2634,7 @@ def _run_hewson_precompute_once() -> None:
     """
     from weatherbrief.hewson import run_once
 
-    result = run_once()
+    result = run_once(models)
     logger.info(
         "Hewson precompute: %d written, %d skipped, %d purged, "
         "%d Open-Meteo calls (%.1fs)",
