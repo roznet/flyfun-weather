@@ -72,7 +72,11 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         f"{result.api_calls_total} Open-Meteo API calls "
         f"(not logged to DB — CLI runs do not hit ApiUsageRow)"
     )
-    return 0
+    # Non-zero when any model failed (anything but "already on disk"), so a
+    # compute-node runner withholds its deadman ping; the serving box computes
+    # the missing models itself at its deadline.
+    failed = [m for m, reason in result.skipped.items() if reason != "fresh"]
+    return 1 if failed else 0
 
 
 def _cmd_list(args: argparse.Namespace) -> int:

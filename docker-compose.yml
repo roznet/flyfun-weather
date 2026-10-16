@@ -36,6 +36,10 @@ services:
       # ssh user is in dockerapp (not weatherdata) and the app user (uid 2000)
       # owns it, so both can write and the app can move files out.
       - ${HOST_CELLS_INBOX:-./data/cells_inbox}:/app/cells_inbox
+      # Hewson snapshots precomputed by the home node (rsync --delete mirror of
+      # its hewson/<model>/*.npz). Read-only like snapshot_inbox: the app copies
+      # valid files into DATA_DIR/hewson and the node's mirror prunes the inbox.
+      - ${HOST_HEWSON_INBOX:-./data/hewson_inbox}:/app/hewson_inbox:ro
     group_add:
       - "2002"  # weatherdata — lets app user write sentinels to ECMWF delivery dir
     healthcheck:
