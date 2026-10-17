@@ -342,67 +342,96 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   departure is ignored. **No "late = not departed" rule from silence**: without
   an entry or fix the plan says departed at the planned time, because a
   missing press is not evidence of being on the ground. Only an app fix on the
-  ground at the departure holds it back (#761, below).
+  ground at the departure moves it (#761, below).
 - **As of a time**: an entry counts only from its `tick_at` (when the server
   learned it), so `progress.at(t)` (read-time trails) rebuilds exactly what the
   tick at `t` knew and an entry never rewrites what was already shown.
 - **App GPS fixes (#761)**, rules in the `flight_progress` module docstring
-  (constants beside them):
-  - *Anchor*: the freshest fix after the departure (fix time, not source);
-    `flown(t) = along0 + v·(t − t0)`, capped at the route's end. `v` is the
-    along-track GS (`gs·cos(track − course)`), or the planned speed when it
-    is under 40 kt, unknown, or the fix is > 10 NM off route (`off_route`;
-    the along-route projection is kept, no diversion detection). Arrival and
-    ETAs come from the anchor too. `estimated` once the fix is > 20 min old;
-    a stale fix keeps extrapolating, never snaps back to the plan.
+  (constants beside them). **Premise: fixes are sparse corrections to the
+  plan, not its replacement.** Pilots don't watch the app live; the common
+  case is a few fixes when the app is opened to check the weather (the
+  locate button, the fix taken on opening), then nothing for an hour. Each
+  rule is chosen so a fix, however old or odd, never makes the progress
+  worse than the plan. (The first cut extrapolated the freshest fix at its
+  instantaneous GS: one climb fix put every ETA ~1 h late until the next
+  fix, which may never come. Revised 2026-10-17, plan on #761.)
+  - *What a fix shows*: from its height above the terrain under it when
+    known (`terrain_ft`, recorded at receipt from the pack's elevation
+    profile at the fix's along-route distance): airborne at ≥ 1000 ft,
+    on the ground below unless ≥ 50 kt (fast and low is a car or the
+    climb-out: shows nothing). Without a height, from its GS: airborne at
+    ≥ 50 kt, on the ground under 40 kt. Else unknown (a one-shot fix often
+    has no valid speed). A fix > 25 NM cross-track is not this flight (a
+    weather check from home) and is ignored outright. **Only an airborne fix
+    starts the flight**; once started, any fix places it.
+  - *Anchor = a delay, not a speed*: the freshest fix after the departure;
+    `flown(t) = along0 + v·(t − t0)`, capped at the route's end, with `v` the
+    **planned speed**, so ETAs are the plan's shifted by the delay the fix
+    shows. Instantaneous GS (a climb, a turn, a gust) is never extrapolated.
+    `v` is scaled by the speed flown between the anchor and an earlier fix
+    (or an entered take-off) ≥ 15 min and ≥ 20 NM apart, the ratio clamped
+    0.7–1.4. A fix that reaches the server late (no data in flight) moves no
+    anchor but still measures speed. `off_route` at > 10 NM cross-track
+    (planned speed, the projection kept, no diversion detection). `estimated`
+    once the fix is > 20 min old; it keeps going at the plan's speed.
   - *Never backwards*: fixes are replayed in the order the server learned
-    them; one behind what the previous anchor showed at that moment holds
-    that position as a floor (the marker waits for the aircraft) unless it is
-    > 10 NM behind for two fixes in a row. ETAs inside the hold read as passed
-    when the hold began. **The first fix always replaces the plan**, even
-    behind it: the plan is no observation, and a fix behind it is exactly a
-    late departure being found (one backward step, like a manual take-off).
-  - *Take-off*: inferred from the first fix at ≥ 50 kt (or unknown speed
-    beyond 3 NM of the departure) after the last fix on the ground at the
-    departure, back-extrapolated to along 0 at its speed, never before that
-    ground fix. A later ground fix resets it (a fast fix on the road to the
-    airfield, a return to the departure). It is `departed_at` / `delay_min`
-    like a manual one, and counts as observed for the recap's `time_base`.
-  - *On the ground*: the newest fix at < 40 kt within 3 NM of the departure,
-    no take-off known, after the planned time: not departed, `flown = 0`,
-    ETAs from now. **Bounded** (a departure from #759, which held it with no
-    limit): the hold lasts `GROUND_HOLD` (20 min) after that fix, then the
-    flight is taken to have left when it ran out (continuous: `departed_at`
-    stops moving then). Without it a phone pocketed on the ground would keep
-    the flight "not departed", every ETA sliding and the live window open,
-    until `MAX_TAKEOFF_DELAY_H`.
+    them; one up to 10 NM behind what the previous anchor showed at that
+    moment holds that position as a floor (the marker waits for the
+    aircraft; a passed airport doesn't flap). Further behind, it is taken as
+    it is when > 10 min after the previous fix (a new observation after a
+    gap: with sparse fixes, a real correction), else only when the next fix
+    agrees (jitter). ETAs inside the hold read as passed when the hold began.
+    **The first fix always replaces the plan**, even behind it: a late
+    departure being found.
+  - *Take-off*: inferred from the first airborne fix after the last one on
+    the ground, back-dated to along 0 at the planned speed, never before
+    that ground fix; a later ground fix at the departure resets it. It is
+    `departed_at` / `delay_min` like a manual one but **not observed**: the
+    recap's `time_base` counts entered events (and the app-detected landing)
+    only.
+  - *On the ground at the departure*: the newest telling fix on the ground
+    within 3 NM of the departure, no take-off known: `departed_at =
+    max(planned, fix + TAXI_MARGIN)` (10 min). A check at the airfield well
+    before the planned time changes nothing; one after it moves the
+    departure to just after it, and with nothing newer the flight is taken
+    to leave then. (Replaces the first cut's 20-min "not departed, ETAs from
+    now" hold.)
   - *Landing*: the app's auto-stop posts `landed` (`source: app`) at its last
-    fix's time. A manual landing always wins: an app landing never replaces
-    a manual one in effect, but counts after a manual clear. No landing is
-    inferred from fixes.
+    fix's time. A fix not airborne within 5 NM of the destination, once
+    flying there at 1.4× the plan could have got there, infers the landing at
+    the earlier of the fix and the expected arrival (the apron one-shot after
+    landing). Entered and app landings win over it (`landing_event_at`); a
+    manual landing wins over the app's but an app one counts after a manual
+    clear.
   - *Projection*: done once at receipt against the latest pack's route and
     stored; re-done here only when the route in hand differs in length by
     > 0.5 NM (a pack with another route). The live window and push expiry
     (`FlightProgress.schedule`, no route) read the stored projection, so a
     fix-found late departure keeps the window open to the real arrival.
   - Plan-only and manual-only flights are untouched: every fix rule is behind
-    "an anchor / ground fix / inferred take-off exists".
+    "an anchor / ground fix / inferred take-off / inferred landing exists".
 - **`POST /flights/{id}/live/position`** `{fixes: [{at, lat, lon, alt_ft?,
   gs_kt?, track_deg?, h_accuracy_m, along_nm?, cross_track_nm?}] (≤ 5),
   landed?}`, owner only, appended under the commit lock
-  (`record_progress_events`). Each fix is recorded or listed as ignored with
-  a reason: `future` (5 min skew), `outside_window` (before departure − 3 h
-  or after the live window's end as of now), `accuracy` (> 1000 m,
-  `MAX_FIX_ACCURACY_M`: iOS approximate location), `duplicate` (an app fix at
-  the same time is recorded; the app resends its two recent fixes). No
-  refetch; the response is the progress block as of now. A device along
-  more than 5 NM off the server's is logged (`LIVE_POSITION_XCHECK`); each
-  post logs `LIVE_POSITION` with the newest fix's age.
+  (`record_progress_events`). Values are bounded (GS ≤ 600 kt, altitude
+  −2,000…60,000 ft; else 422). Each fix is recorded, with the terrain under
+  it, or listed as ignored with a reason: `future` (5 min skew),
+  `outside_window` (before departure − 3 h or after the live window's end as
+  of now), `accuracy` (> 1000 m, `MAX_FIX_ACCURACY_M`: iOS approximate
+  location), `duplicate` (an app fix at the same time is recorded; the app
+  resends unsent fixes), `too_close` (< 30 s from a recorded one: the
+  server's own spacing, not trusting the client's) or `limit` (600 app fixes
+  per flight). No refetch; the response is the progress block as of now. A
+  device along more than 5 NM off the server's is logged
+  (`LIVE_POSITION_XCHECK`); each post logs `LIVE_POSITION` with the newest
+  fix's age.
 - **Retention / growth**: one record per accepted fix, ≤ ~12 an hour while the
-  app is open in the window (Start Flight, foreground, 5-min poll), ~400 bytes
-  each; the history's retention (90 days, #711) covers them.
+  app is open in the window (Start Flight, foreground, 5-min poll), capped at
+  600 a flight, ~400 bytes each; raw lat/lon lives only in the history, whose
+  retention (90 days, #711) covers them. Viewers below `full` sharing get the
+  route position, never the fix's lat/lon.
 - **Fix age at use**: each tick's `live_tick_timing` row records
-  `progress_source` and `fix_at` (migration 105); the admin latency report's
+  `progress_source` and `fix_at` (migration 106); the admin latency report's
   `fix_age` hop is `committed_at − fix_at` for `app` ticks. This is the data
   for the `UIBackgroundModes: location` decision (#759).
 - **Reading entries cheaply**: `load_progress_events` pre-filters lines by the
@@ -425,8 +454,9 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   An unreadable pack is a 409 before anything is written.
 - **The `progress` block** (`LiveProgress`, on `LiveLayer`, `/live`, the agent
   block): `source`, `as_of`, `along_nm` / `route_nm`, `lat` / `lon` (the route
-  position), `departed_at` / `landed_at` **observed only** (null on the plan,
-  so no client shows "Landed" from a schedule), `eta_destination` (effective
+  position), `departed_at` / `landed_at` entered, app-detected or inferred from a fix,
+  never from the plan alone (null on the plan, so no client shows "Landed"
+  from a schedule), `eta_destination` (effective
   arrival), `delay_min` (take-off − planned). `fix_at` / `fix_age_min` /
   `off_route` describe the fix in use (#761), empty without one;
   `estimated` is true on the plan, manual entries and a fix > 20 min old.
@@ -1215,7 +1245,7 @@ because the delivery join is an equality on `live_updated_at`):
   evidence time (one with none is counted as `end_to_end:alert:no_evidence_time`
   under "Not counted", not timed from its commit). Only the tick writes rows: a ↻ press commits versions no row
   describes (deliveries of those count as `untracked`). `progress_source` /
-  `fix_at` (migration 105, #761) give the `fix_age` hop: how old the app fix a
+  `fix_at` (migration 106, #761) give the `fix_age` hop: how old the app fix a
   tick measured from was.
 - `live_delivery`: one row per (flight, user, platform, version), on `/live`
   (platform from the User-Agent: `ios` / `web` / `other`), `/live/summary`
@@ -1321,7 +1351,7 @@ commit.
 - `tasks/live_layer.py::live_summary` / `summarize_live` — the agent block (#641)
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
-- `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix every 25 min), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
+- `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix stream and with occasional one-shot fixes), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`, `POST /flights/{id}/live/position`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`

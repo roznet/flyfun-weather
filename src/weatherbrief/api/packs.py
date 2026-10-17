@@ -5353,11 +5353,12 @@ class LivePositionFix(BaseModel):
     at: datetime
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
-    alt_ft: float | None = None
+    # Bounded to what a GA aircraft (or a phone in one) can show.
+    alt_ft: float | None = Field(default=None, ge=-2000, le=60000)
     # Null when the device has no valid speed / course.
-    gs_kt: float | None = None
-    track_deg: float | None = None
-    h_accuracy_m: float
+    gs_kt: float | None = Field(default=None, ge=0, le=600)
+    track_deg: float | None = Field(default=None, ge=0, le=360)
+    h_accuracy_m: float = Field(ge=0, le=100000)
     along_nm: float | None = None
     cross_track_nm: float | None = None
 
@@ -5372,7 +5373,7 @@ class LivePositionRequest(BaseModel):
 
 class IgnoredFix(BaseModel):
     at: datetime
-    # future | outside_window | accuracy | duplicate
+    # future | outside_window | accuracy | duplicate | too_close | limit
     reason: str
 
 
@@ -5388,6 +5389,12 @@ class LivePositionResult(BaseModel):
 #: Fixes with a worse horizontal accuracy are ignored (#761): iOS's
 #: approximate location (km-scale) and network-only positions.
 MAX_FIX_ACCURACY_M = 1000.0
+#: The server's own spacing (the app spaces its fixes too, but a client is not
+#: trusted to): a fix this close to one already recorded adds nothing.
+MIN_FIX_SPACING = timedelta(seconds=30)
+#: A flight's history keeps at most this many app fixes (one a minute for
+#: 10 h); beyond, fixes are ignored.
+MAX_FIXES_PER_FLIGHT = 600
 #: The device's own along-route projection is logged when it disagrees with
 #: the server's by more than this (a cross-check, #761).
 _FIX_XCHECK_NM = 5.0
@@ -5405,10 +5412,12 @@ def post_live_position(
 
     Each accepted fix is one ``fix`` progress event in the flight's history,
     projected on the latest pack's route here (the device's projection is a
-    cross-check only). Ignored, and listed with a reason: a fix in the
-    future, outside the live window, with a horizontal accuracy worse than
-    ``MAX_FIX_ACCURACY_M``, or already recorded (the app resends its recent
-    fixes). ``landed`` records an app landing at the newest fix's time,
+    cross-check only), with the terrain elevation under it from the pack's
+    profile (so its altitude reads as a height). Ignored, and listed with a
+    reason: a fix in the future, outside the live window, with a horizontal
+    accuracy worse than ``MAX_FIX_ACCURACY_M``, already recorded (the app
+    resends its unsent fixes), within ``MIN_FIX_SPACING`` of a recorded one,
+    or past ``MAX_FIXES_PER_FLIGHT``. ``landed`` records an app landing at the newest fix's time,
     unless a landing is already in effect or it would not follow the
     departure; a manual landing always wins over it. No refetch: the next
     tick (10 min) measures from them. 409 when the latest pack cannot be
@@ -5422,10 +5431,13 @@ def post_live_position(
         FlightProgress,
         ProgressEvent,
     )
+    from pydantic import ValidationError
+
+    from weatherbrief.analysis.advisories._helpers import terrain_at_distance
     from weatherbrief.analysis.route_geometry import RouteTrack
     from weatherbrief.models.analysis import RouteConfig
     from weatherbrief.storage.flights import _resolve_artifact_path
-    from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.tasks.artifacts import load_briefing, load_elevation_profile
     from weatherbrief.tasks.live_layer import (
         flight_dir_for_pack,
         progress_block,
@@ -5445,9 +5457,14 @@ def post_live_position(
         route = RouteConfig.model_validate(briefing["route"])
         planned = _parse_target_time(briefing)
         track = RouteTrack.from_route(route)
-    except Exception:
+    except (KeyError, TypeError, ValueError, ValidationError, OSError):
         logger.warning("Live position: latest pack of %s unreadable", flight_id, exc_info=True)
         raise HTTPException(status_code=409, detail="The flight's latest briefing cannot be read; refresh it first")
+    try:
+        elevation = load_elevation_profile(pack_dir)
+    except (ValueError, ValidationError, OSError):
+        logger.warning("Live position: elevation profile of %s unreadable", flight_id, exc_info=True)
+        elevation = None  # no heights: the fixes are read by their speed
 
     now = datetime.now(timezone.utc)
     before_h, after_h = live_window_hours()
@@ -5466,10 +5483,14 @@ def post_live_position(
                 reason = "future"
             elif not start <= at <= window_end:
                 reason = "outside_window"
-            elif not 0 <= f.h_accuracy_m <= MAX_FIX_ACCURACY_M:
+            elif f.h_accuracy_m > MAX_FIX_ACCURACY_M:
                 reason = "accuracy"
             elif at in known:
                 reason = "duplicate"
+            elif any(abs(at - k) < MIN_FIX_SPACING for k in known):
+                reason = "too_close"
+            elif len(known) >= MAX_FIXES_PER_FLIGHT:
+                reason = "limit"
             if reason is not None:
                 ignored.append(IgnoredFix(at=at, reason=reason))
                 continue
@@ -5478,10 +5499,12 @@ def post_live_position(
             if f.along_nm is not None and abs(f.along_nm - p.along_nm) > _FIX_XCHECK_NM:
                 logger.info("LIVE_POSITION_XCHECK flight=%s at=%s server_along=%.1f client_along=%.1f",
                             flight_id, at.isoformat(), p.along_nm, f.along_nm)
+            terrain = terrain_at_distance(elevation, p.along_nm)
             accepted.append(ProgressEvent(
                 kind=EVENT_FIX, at=at, recorded_at=now, source=SOURCE_APP, lat=f.lat, lon=f.lon,
                 fix=FixData(
                     alt_ft=f.alt_ft, gs_kt=f.gs_kt, track_deg=f.track_deg, h_accuracy_m=f.h_accuracy_m,
+                    terrain_ft=round(terrain) if terrain is not None else None,
                     along_nm=round(p.along_nm, 2), cross_nm=round(p.offtrack_nm, 2),
                     course_deg=round(p.track_deg, 1), route_nm=round(track.total_nm, 2),
                     client_along_nm=f.along_nm, client_cross_nm=f.cross_track_nm,
@@ -5495,7 +5518,9 @@ def post_live_position(
             before = FlightProgress.from_route(route, planned, now, events)
             candidate = ProgressEvent(kind=EVENT_LANDED, at=at, recorded_at=now, source=SOURCE_APP)
             after = FlightProgress.from_route(route, planned, now, (*events, candidate))
-            if (before.landed_at is None and after.landed_at is not None
+            # Against the entered / app landings only: one inferred from a
+            # fix at the destination is an estimate the app's replaces.
+            if (before.landing_event_at is None and after.landing_event_at is not None
                     and start <= at <= window_end):
                 landed_event = candidate
                 events.append(candidate)

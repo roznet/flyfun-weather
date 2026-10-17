@@ -1,7 +1,7 @@
 """Progress source and fix time on live tick rows (#761).
 
-Revision ID: 105
-Revises: 104
+Revision ID: 106
+Revises: 105
 Create Date: 2026-10-14
 
 Adds ``live_tick_timing.progress_source`` (VARCHAR(16), nullable: ``plan`` /
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import mysql
 
-revision: str = "105"
-down_revision: Union[str, None] = "104"
+revision: str = "106"
+down_revision: Union[str, None] = "105"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

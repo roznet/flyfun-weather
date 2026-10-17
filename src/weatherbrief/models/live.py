@@ -674,17 +674,17 @@ class LiveProgress(BaseModel):
 
     ``analysis/flight_progress.FlightProgress`` as of the tick, for clients
     to draw the "position used" marker at ``along_nm`` and caption it with
-    ``source``. ``departed_at`` / ``landed_at`` are **observed** entries only
-    (None on the plan, whatever the clock says), so a client never shows
-    "Landed" from a schedule. ``eta_destination`` is the effective arrival
-    (the plan, shifted by a take-off, or the landing itself).
+    ``source``. ``departed_at`` / ``landed_at`` are entered, app-detected or
+    inferred from a fix, never the plan alone (None on the plan, whatever the
+    clock says), so a client never shows "Landed" from a schedule.
+    ``eta_destination`` is the effective arrival (the plan, shifted by a
+    take-off or a fix, or the landing itself).
 
     The fix fields (``fix_at``, ``fix_age_min``, ``off_route``) describe the
     position fix in use (#761 app GPS; #762 ADS-B later), empty without one.
     ``estimated`` is True when the position is extrapolated from the plan or
     from a fix older than 20 min (``flight_progress.STALE_FIX``); always for
-    the plan and manual sources. ``departed_at`` is observed: entered, or
-    inferred from the fixes.
+    the plan and manual sources.
 
     Redacted for non-owner viewers per the flight's ``position_sharing``
     (``live_layer.redact_live``).

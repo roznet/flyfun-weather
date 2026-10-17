@@ -2775,6 +2775,43 @@ class TestLivePosition:
         resp = client.post(f"/api/flights/{flight.id}/live/progress", json={"event": "landed", "at": manual})
         assert datetime.fromisoformat(resp.json()["progress"]["landed_at"]) == now - timedelta(minutes=5)
 
+    def test_terrain_under_the_fix_is_recorded_from_the_profile(self, client, app_db):
+        """A one-shot with no valid speed reads by its height: the terrain
+        under it comes from the pack's elevation profile."""
+        from weatherbrief.models.analysis import ElevationPoint, ElevationProfile
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        flight, pack_dir = self._flight(app_db)
+        profile = ElevationProfile(
+            route_name="ZZDP-ZZDS", max_elevation_ft=1000.0, total_distance_nm=154.0,
+            points=[ElevationPoint(distance_nm=0.0, elevation_ft=200.0, lat=50.0, lon=0.0),
+                    ElevationPoint(distance_nm=154.0, elevation_ft=1000.0, lat=50.0, lon=4.0)],
+        )
+        (pack_dir / "elevation_profile.json").write_text(profile.model_dump_json())
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        body = self._post(client, flight, [self._fix(now - timedelta(minutes=1), 2.0, gs=None)]).json()
+        assert body["accepted"] == 1 and body["progress"]["source"] == "app"
+        recorded = load_progress_events(flight_dir_for_pack(pack_dir))[-1].fix
+        assert recorded.terrain_ft == pytest.approx(600.0, abs=10)  # half way up the slope
+        assert recorded.gs_kt is None
+
+    def test_spacing_and_the_per_flight_cap(self, client, app_db, monkeypatch):
+        from weatherbrief.api import packs
+
+        flight, _ = self._flight(app_db)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        first = self._post(client, flight, [self._fix(now - timedelta(minutes=5), 0.5),
+                                            self._fix(now - timedelta(minutes=5, seconds=-10), 0.5)]).json()
+        assert first["accepted"] == 1 and [i["reason"] for i in first["ignored"]] == ["too_close"]
+        monkeypatch.setattr(packs, "MAX_FIXES_PER_FLIGHT", 1)
+        capped = self._post(client, flight, [self._fix(now - timedelta(minutes=1), 0.6)]).json()
+        assert capped["accepted"] == 0 and capped["ignored"][0]["reason"] == "limit"
+
+    def test_implausible_values_are_refused(self, client, app_db):
+        flight, _ = self._flight(app_db)
+        now = datetime.now(timezone.utc)
+        assert self._post(client, flight, [self._fix(now, 0.5, gs=1e9)]).status_code == 422
+
     def test_only_the_owner_may_post(self, client, app_db):
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
 

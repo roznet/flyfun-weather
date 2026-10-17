@@ -14,11 +14,13 @@ Sources so far:
   departure, a landing replaces the planned arrival. With both, the speed is
   the one actually flown. The source reads ``plan+takeoff`` once either is in
   effect.
-- **position fixes** (#761, app GPS; ADS-B #762 later): the freshest fix
-  anchors the position, extrapolated at its along-track ground speed. A fix
-  also infers the take-off (the first one moving at ``TAKEOFF_GS_KT``) and,
-  on the ground at the departure, holds the departure back. The source reads
-  the fix's (``app``). The rules are under "Fixes" below.
+- **position fixes** (#761, app GPS; ADS-B #762 later): sparse corrections
+  to the plan, not a replacement for it. A fix says how late the flight is at
+  one point; from there it flies the plan's speed (scaled once two fixes far
+  enough apart measure the real one). A fix also infers the take-off, holds
+  the departure back while on the ground at the departure, and infers the
+  landing at the destination. The source reads the fix's (``app``). The rules
+  are under "Fixes" below.
 
 A manual entry always overrides what the fixes infer: a manual take-off wins
 over the inferred one, and an app ``landed`` never replaces a manual landing.
@@ -34,40 +36,60 @@ read-time trail rebuilds exactly what a past tick knew. Within a kind, the
 event recorded last wins (an edit replaces the earlier entry); one with
 ``at=None`` withdraws that kind (back to the plan).
 
-**Fixes** (#759 rules, #761):
+**Fixes** (#759 rules, #761). Expect them sparse: the app sends one when it
+is open (a weather check, the locate button), so a flight may have one or two
+and nothing for an hour. A fix never makes things worse than the plan.
 
 - Projected on the route when received (``FixData.along_nm`` / ``cross_nm``,
   against the latest pack's route); re-projected here when the route in hand
   has another length (a pack with a different route). Without a route (the
-  live window, :meth:`schedule`) the stored projection is all there is.
-- The anchor is the freshest fix after the departure (by fix time, not
-  source); ``flown(t) = along0 + v·(t − t0)``, capped at the route's end.
-  ``v`` is the along-track ground speed, or the planned speed when it is
-  under ``SLOW_GS_KT``, unknown, or the fix is off route.
+  live window, :meth:`schedule`) the stored projection is all there is. A
+  fix more than ``FAR_OFF_ROUTE_NM`` across is not this flight (a weather
+  check from home): ignored.
+- What a fix shows, from its height above the terrain under it
+  (``terrain_ft``, the pack's profile) when known: **airborne** at
+  ``AIRBORNE_AGL_FT`` or more, **on the ground** below it unless fast (fast
+  and low is a car, or the climb-out: unknown). Without a height, from its
+  speed: airborne at ``TAKEOFF_GS_KT`` or more, on the ground under
+  ``SLOW_GS_KT``. Else unknown (a one-shot fix often has no valid speed).
+  Only an airborne fix starts the flight; any fix after the take-off places
+  it.
+- A fix measures a delay, not a speed: the anchor is the freshest fix after
+  the departure, ``flown(t) = along0 + v·(t − t0)``, capped at the route's
+  end, with ``v`` the **planned speed**, so the ETAs are the plan's shifted
+  by the delay the fix shows. The instantaneous ground speed (a climb, a
+  turn, a gust) is never extrapolated. ``v`` is scaled by the speed actually
+  flown between the anchor and an earlier fix (or an entered take-off) at
+  least ``SPEED_MIN_GAP`` and ``SPEED_MIN_NM`` apart, the ratio clamped to
+  ``SPEED_RATIO``.
 - ``off_route`` beyond ``OFF_ROUTE_NM`` cross-track; the along-route
   projection is kept (diversions are not detected).
-- ``estimated`` once the fix is older than ``STALE_FIX``. A stale fix never
-  snaps back to the plan: it keeps extrapolating.
-- Never backwards: a fix behind the position the previous anchor showed when
-  it arrived holds that position as a floor (the marker waits for the
-  aircraft) unless it is more than ``REVERSAL_NM`` behind for two fixes in a
-  row. The first fix of a flight always replaces the plan: the plan is not
-  an observation, and a late departure is exactly a fix behind it.
-- Take-off: the first fix moving at ``TAKEOFF_GS_KT`` or more (or of unknown
-  speed beyond ``NEAR_DEPARTURE_NM`` of the departure) after the last fix on
-  the ground at the departure, back-extrapolated to along 0 at its speed,
-  never before that ground fix. A later ground fix at the departure resets
-  it (a fast fix on the road to the airfield, a return to the departure).
-- On the ground: the latest fix at taxi speed within ``NEAR_DEPARTURE_NM``
-  of the departure, nothing seen airborne, after the planned departure: not
-  departed, ETAs measured from now. The hold lasts ``GROUND_HOLD`` after the
-  fix; then the flight is taken to have left when it ran out, so a phone
-  pocketed on the ground cannot keep the flight "not departed" all day.
+- ``estimated`` once the fix is older than ``STALE_FIX``; it keeps
+  extrapolating at the plan's speed, which is the plan shifted, never worse.
+- Never backwards: a fix up to ``REVERSAL_NM`` behind where the previous
+  anchor put the aircraft when it arrived holds that position as a floor (the
+  marker waits for the aircraft), so a passed airport does not flap. Further
+  behind, it is taken as it is when it comes more than ``JITTER_GAP`` after
+  the previous fix (a new observation after a gap), else only when the next
+  fix agrees (jitter). The first fix of a flight always replaces the plan: a
+  late departure is exactly a fix behind it.
+- Take-off: the first airborne fix after the last fix on the ground,
+  back-dated to along 0 at the planned speed, never before that ground fix.
+  A later ground fix at the departure resets it (a return to the departure).
+  It is inferred, not observed: :attr:`time_base` counts entries only.
+- On the ground at the departure (the newest fix, within
+  ``NEAR_DEPARTURE_NM``, nothing airborne since): the departure is
+  ``max(planned, fix + TAXI_MARGIN)``. A ground fix well before the planned
+  time changes nothing; one after it moves the departure to a little after
+  it, and the flight is taken to leave then if nothing newer comes.
+- Landing: the first fix not airborne within ``NEAR_DESTINATION_NM`` of the
+  destination, once flying there at the top of ``SPEED_RATIO`` could have
+  got there, lands the flight at the earlier of the fix and the expected
+  arrival. An entered or app-detected landing wins over it.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
@@ -102,19 +124,33 @@ HISTORY_TYPE = "progress"
 
 #: A fix at or above this ground speed shows the aircraft airborne.
 TAKEOFF_GS_KT = 50.0
-#: Under this: taxi speed on the ground, and a speed not worth extrapolating
-#: with in the air (the planned speed is used instead).
+#: Under this ground speed a fix is on the ground (taxiing, parked, walking).
 SLOW_GS_KT = 40.0
+#: A fix this high above the terrain under it is airborne; lower, on the ground.
+AIRBORNE_AGL_FT = 1000.0
 #: "At the departure": within this of the route's first point, along and across.
 NEAR_DEPARTURE_NM = 3.0
-#: Cross-track beyond this is off route (planned speed, ``off_route``).
+#: "At the destination": within this of the route's last point, along and across.
+NEAR_DESTINATION_NM = 5.0
+#: Cross-track beyond this is off route (``off_route``).
 OFF_ROUTE_NM = 10.0
+#: Cross-track beyond this is not the flight at all: the fix is ignored.
+FAR_OFF_ROUTE_NM = 25.0
 #: A fix older than this makes the position ``estimated``.
 STALE_FIX = timedelta(minutes=20)
-#: A fix on the ground at the departure holds the departure back this long.
-GROUND_HOLD = STALE_FIX
-#: A fix may move the position back only by more than this, two fixes in a row.
+#: On the ground at the departure: the take-off is at least this after the fix.
+TAXI_MARGIN = timedelta(minutes=10)
+#: A fix up to this far behind is held at the floor; beyond, it may move the
+#: position back (see ``JITTER_GAP``).
 REVERSAL_NM = 10.0
+#: Fixes closer together than this are one stream: a reversal beyond
+#: ``REVERSAL_NM`` needs two of them. Further apart, one fix is enough.
+JITTER_GAP = timedelta(minutes=10)
+#: Two fixes measure the speed actually flown when this far apart in time and
+#: along the route; the ratio to the planned speed is clamped to ``SPEED_RATIO``.
+SPEED_MIN_GAP = timedelta(minutes=15)
+SPEED_MIN_NM = 20.0
+SPEED_RATIO = (0.7, 1.4)
 #: A stored projection is reused while the route is this close in length to
 #: the one it was made against; beyond, the fix is re-projected.
 ROUTE_MATCH_NM = 0.5
@@ -143,11 +179,14 @@ class FixData:
 
     ``along_nm`` / ``cross_nm`` (unsigned) / ``course_deg`` are the server's
     projection on the route the fix was received against, ``route_nm`` that
-    route's length. ``client_*`` is the device's own projection, kept as a
-    cross-check only (it projects on the briefing's analysis points).
+    route's length. ``terrain_ft`` is the terrain elevation under the fix
+    (the pack's profile at ``along_nm``), so ``alt_ft`` reads as a height.
+    ``client_*`` is the device's own projection, kept as a cross-check only
+    (it projects on the briefing's analysis points).
     """
 
     alt_ft: float | None = None
+    terrain_ft: float | None = None
     gs_kt: float | None = None
     track_deg: float | None = None
     h_accuracy_m: float | None = None
@@ -227,32 +266,56 @@ class _Seen:
     course: float | None
 
     @property
-    def gs(self) -> float | None:
-        return self.event.fix.gs_kt if self.event.fix is not None else None
+    def at(self) -> datetime:
+        return self.event.at
 
     @property
-    def along_gs(self) -> float | None:
-        """The ground speed's component along the route, None when unknown."""
-        gs = self.gs
-        if gs is None or gs < 0:
+    def gs(self) -> float | None:
+        """The ground speed, None when unknown (the device marks it invalid)."""
+        gs = self.event.fix.gs_kt if self.event.fix is not None else None
+        return gs if gs is not None and gs >= 0 else None
+
+    @property
+    def height(self) -> float | None:
+        """Height above the terrain under the fix, None without both."""
+        f = self.event.fix
+        if f is None or f.alt_ft is None or f.terrain_ft is None:
             return None
-        track = self.event.fix.track_deg
-        if track is None or track < 0 or self.course is None:
-            return gs
-        return gs * math.cos(math.radians(track - self.course))
+        return f.alt_ft - f.terrain_ft
+
+    @property
+    def airborne(self) -> bool:
+        """High above the terrain, or fast when the height is unknown. A
+        known height decides: fast and low is a car (or the climb-out)."""
+        gs, h = self.gs, self.height
+        if h is not None:
+            return h >= AIRBORNE_AGL_FT
+        return gs is not None and gs >= TAKEOFF_GS_KT
+
+    @property
+    def on_ground(self) -> bool:
+        """Positively on the ground: low and not fast, or slow when the
+        height is unknown. A fix with neither (or fast and low) shows
+        nothing either way."""
+        gs, h = self.gs, self.height
+        if h is not None:
+            return h < AIRBORNE_AGL_FT and (gs is None or gs < TAKEOFF_GS_KT)
+        return gs is not None and gs < SLOW_GS_KT
+
+    @property
+    def at_departure(self) -> bool:
+        return self.along <= NEAR_DEPARTURE_NM and self.cross <= NEAR_DEPARTURE_NM
+
+    def at_destination(self, total: float) -> bool:
+        return self.along >= total - NEAR_DESTINATION_NM and self.cross <= NEAR_DESTINATION_NM
 
     @property
     def on_ground_at_departure(self) -> bool:
-        gs = self.gs
-        return (gs is not None and 0 <= gs < SLOW_GS_KT
-                and self.along <= NEAR_DEPARTURE_NM and self.cross <= NEAR_DEPARTURE_NM)
+        return self.on_ground and self.at_departure
 
-    @property
-    def shows_departed(self) -> bool:
-        gs = self.gs
-        if gs is not None and gs >= 0:
-            return gs >= TAKEOFF_GS_KT
-        return self.along > NEAR_DEPARTURE_NM
+    def landing(self, total: float) -> bool:
+        """Not airborne at the destination: what a landing looks like."""
+        return not self.airborne and self.at_destination(total)
 
 
 @dataclass(frozen=True)
@@ -267,7 +330,7 @@ class _Anchor:
 
     @property
     def t0(self) -> datetime:
-        return self.seen.event.at
+        return self.seen.at
 
     def flown(self, t: datetime, total: float) -> float:
         val = self.seen.along + self.v_kt * (t - self.t0).total_seconds() / 3600.0
@@ -325,9 +388,10 @@ class FlightProgress:
     def time_base(self) -> str:
         """``planned`` / ``partial`` / ``observed``: which times the schedule
         below comes from (#711). ``observed`` once both the take-off and the
-        landing are known (entered or inferred from fixes), ``partial`` with
-        only one of them (#760)."""
-        observed = (self.takeoff_at is not None) + (self.landed_at is not None)
+        landing are entered (or the app detected the landing), ``partial``
+        with only one of them (#760). What the fixes infer is an estimate and
+        does not count."""
+        observed = (self._latest(EVENT_TAKEOFF) is not None) + (self.landing_event_at is not None)
         return (TIME_BASE_PLANNED, TIME_BASE_PARTIAL, TIME_BASE_OBSERVED)[observed]
 
     # --- Observed events -------------------------------------------------------
@@ -352,19 +416,33 @@ class FlightProgress:
 
     @property
     def takeoff_at(self) -> datetime | None:
-        """The observed take-off (entered, else inferred from the fixes),
-        None when only the plan says so."""
-        return self._latest(EVENT_TAKEOFF) or self._inferred_takeoff
+        """The take-off (entered, else inferred from the fixes), None when
+        only the plan says so."""
+        entered = self._latest(EVENT_TAKEOFF)
+        if entered is not None:
+            return entered
+        inferred = self._inferred_takeoff
+        return inferred[0] if inferred is not None else None
 
     @property
-    def landed_at(self) -> datetime | None:
-        """The observed landing, None when only the plan says so (or the
-        entry is not after the departure it would close)."""
+    def landing_event_at(self) -> datetime | None:
+        """The landing entered (or detected by the app), None without one or
+        when it is not after the departure it would close."""
         landed = self._latest(EVENT_LANDED)
         dep = self.departed_at
         if landed is None or (dep is not None and landed <= dep):
             return None
         return landed
+
+    @property
+    def landed_at(self) -> datetime | None:
+        """The landing (entered or app-detected, else inferred from a fix at
+        the destination), None when only the plan says so."""
+        landed = self.landing_event_at
+        if landed is not None:
+            return landed
+        inferred = self._inferred_landing
+        return inferred[0] if inferred is not None else None
 
     @property
     def source(self) -> str:
@@ -377,7 +455,7 @@ class FlightProgress:
 
     @property
     def delay_min(self) -> float | None:
-        """Observed take-off minus planned departure, minutes (+ = late)."""
+        """Take-off minus planned departure, minutes (+ = late)."""
         if self.takeoff_at is None or self.planned_departure is None:
             return None
         return (self.takeoff_at - self.planned_departure).total_seconds() / 60.0
@@ -409,101 +487,148 @@ class FlightProgress:
 
     @cached_property
     def _fixes(self) -> tuple[_Seen, ...]:
-        """The fixes known as of ``as_of``, projected, in fix-time order."""
+        """The fixes known as of ``as_of`` and close enough to the route to
+        be this flight, projected, in fix-time order."""
         seen = [s for e in self.events
                 if e.kind == EVENT_FIX and e.at is not None and e.recorded_at <= self.as_of
-                and (s := self._project(e)) is not None]
-        return tuple(sorted(seen, key=lambda s: s.event.at))
-
-    @cached_property
-    def _inferred_takeoff(self) -> datetime | None:
-        """The take-off the fixes show: the first fix seen departed after the
-        last one on the ground at the departure, back-extrapolated to the
-        departure, never before that ground fix. A ground fix resets it: a
-        fast fix on the road to the airfield, or a return to the departure,
-        is not the take-off."""
-        takeoff = last_ground = None
-        for s in self._fixes:
-            if s.on_ground_at_departure:
-                takeoff, last_ground = None, s.event.at
-            elif takeoff is None and s.shows_departed:
-                v = self._speed(s)
-                t = s.event.at - timedelta(hours=s.along / v) if v > 0 else s.event.at
-                takeoff = max(t, last_ground) if last_ground is not None else t
-        return takeoff
-
-    @cached_property
-    def _ground_fix(self) -> ProgressEvent | None:
-        """The newest fix, when it puts the aircraft on the ground at the
-        departure and no take-off is known."""
-        if self.takeoff_at is not None or not self._fixes:
-            return None
-        newest = self._fixes[-1]
-        return newest.event if newest.on_ground_at_departure else None
-
-    @property
-    def _holding(self) -> bool:
-        """On the ground at the departure past the planned time, with a fix
-        recent enough to say so: not departed yet."""
-        g, planned = self._ground_fix, self.planned_departure
-        return (g is not None and planned is not None
-                and planned < self.as_of < g.at + GROUND_HOLD)
+                and (s := self._project(e)) is not None and s.cross <= FAR_OFF_ROUTE_NM]
+        return tuple(sorted(seen, key=lambda s: s.at))
 
     @property
     def _planned_kt(self) -> float:
         return self._route_nm / self.duration_h if self.duration_h > 0 else 0.0
 
-    def _speed(self, s: _Seen) -> float:
-        """Along-track ground speed to extrapolate with, or the planned one."""
-        v = s.along_gs
-        if v is None or v < SLOW_GS_KT or s.cross > OFF_ROUTE_NM:
-            return self._planned_kt
+    @cached_property
+    def _inferred_takeoff(self) -> tuple[datetime, ProgressEvent] | None:
+        """The take-off the fixes show, and the fix that shows it: the first
+        airborne fix after the last one on the ground, back-dated to the
+        departure at the planned speed, never before that ground fix. A
+        ground fix at the departure resets it (a return to the departure)."""
+        takeoff = last_ground = None
+        v = self._planned_kt
+        for s in self._fixes:
+            if s.on_ground:
+                last_ground = s.at
+                if s.at_departure:
+                    takeoff = None
+            elif takeoff is None and s.airborne:
+                t = s.at - timedelta(hours=s.along / v) if v > 0 else s.at
+                takeoff = (max(t, last_ground) if last_ground is not None else t, s.event)
+        return takeoff
+
+    @cached_property
+    def _ground_fix(self) -> ProgressEvent | None:
+        """The newest fix that shows anything, when it puts the aircraft on
+        the ground at the departure and no take-off is known."""
+        if self.takeoff_at is not None:
+            return None
+        telling = [s for s in self._fixes if s.on_ground or s.airborne]
+        if not telling or not telling[-1].on_ground_at_departure:
+            return None
+        return telling[-1].event
+
+    def _speed(self, s: _Seen, known: list[_Seen]) -> float:
+        """The speed to fly on from ``s``: the planned one, scaled by the
+        speed actually flown since an earlier fix (or the entered take-off)
+        far enough back to measure it."""
+        v = self._planned_kt
+        if v <= 0 or s.cross > OFF_ROUTE_NM:
+            return v
+        refs = [(r.at, r.along) for r in known
+                if r.at < s.at and r.cross <= OFF_ROUTE_NM and not r.on_ground]
+        entered = self._latest(EVENT_TAKEOFF)
+        if entered is not None:
+            refs.append((entered, 0.0))
+        for t, along in sorted(refs, reverse=True):
+            gap, nm = s.at - t, s.along - along
+            if gap >= SPEED_MIN_GAP and nm >= SPEED_MIN_NM:
+                lo, hi = SPEED_RATIO
+                return v * max(lo, min(hi, nm / (gap.total_seconds() / 3600.0) / v))
         return v
 
     @cached_property
     def _anchor(self) -> _Anchor | None:
         """The freshest fix after the departure (and before a landing), with
         the never-backwards floor. Fixes are replayed in the order the server
-        learned them, each compared with what the previous anchor showed then."""
+        learned them, each compared with what the previous anchor showed then;
+        a fix that arrives late changes no anchor but still measures speed."""
         if self.takeoff_at is None:
             return None
-        dep, landed = self.departed_at, self.landed_at
+        dep, landed, total = self.departed_at, self.landing_event_at, self._route_nm
         candidates = [s for s in self._fixes
-                      if s.event.at >= dep and (landed is None or s.event.at <= landed)
-                      and not s.on_ground_at_departure]
-        total = self._route_nm
+                      if s.at >= dep and (landed is None or s.at <= landed)
+                      and not s.on_ground_at_departure and not s.landing(total)]
         anchor: _Anchor | None = None
         pending_reversal = False
-        for s in sorted(candidates, key=lambda s: (s.event.recorded_at, s.event.at)):
-            if anchor is not None and s.event.at <= anchor.t0:
-                continue  # older than the fix in use: arrived late, changes nothing
-            new = _Anchor(s, self._speed(s))
+        known: list[_Seen] = []
+        for s in sorted(candidates, key=lambda s: (s.event.recorded_at, s.at)):
+            known.append(s)
+            if anchor is not None and s.at <= anchor.t0:
+                anchor = replace(anchor, v_kt=self._speed(anchor.seen, known))
+                continue
+            new = _Anchor(s, self._speed(s, known))
             if anchor is not None:
                 when = s.event.recorded_at
-                shown, mine = anchor.flown(when, total), new.flown(when, total)
-                back = shown - mine
-                if back > 0:
-                    if back > REVERSAL_NM and pending_reversal:
-                        pending_reversal = False  # sustained: accept the reversal
-                    else:
-                        pending_reversal = back > REVERSAL_NM
-                        new = replace(new, floor_nm=shown, floor_at=when)
-                else:
+                shown = anchor.flown(when, total)
+                back = shown - new.flown(when, total)
+                hold = False
+                if back <= 0:
                     pending_reversal = False
+                elif back <= REVERSAL_NM:
+                    hold, pending_reversal = True, False
+                elif s.at - anchor.t0 > JITTER_GAP or pending_reversal:
+                    pending_reversal = False  # a fresh observation, or sustained
+                else:
+                    hold, pending_reversal = True, True
+                if hold:
+                    new = replace(new, floor_nm=shown, floor_at=when)
             anchor = new
         return anchor
 
     @property
+    def _arrival_unlanded(self) -> datetime | None:
+        """The arrival the departure and the anchor give, ignoring any landing."""
+        dep = self.departed_at
+        if dep is None or self.duration_h <= 0:
+            return None
+        a = self._anchor
+        if a is not None and a.v_kt > 0:
+            return a.t0 + timedelta(hours=max(0.0, self._route_nm - a.seen.along) / a.v_kt)
+        return dep + timedelta(hours=self.duration_h)
+
+    @cached_property
+    def _inferred_landing(self) -> tuple[datetime, ProgressEvent] | None:
+        """The landing a fix shows, and that fix: the first not airborne at
+        the destination once flying there at the fastest plausible speed
+        (``SPEED_RATIO``) could have got there, landed at the earlier of the
+        fix and the expected arrival (never before the anchor's fix)."""
+        dep, expected = self.departed_at, self._arrival_unlanded
+        if dep is None or expected is None:
+            return None
+        earliest = dep + (expected - dep) / SPEED_RATIO[1]
+        total = self._route_nm
+        for s in self._fixes:
+            if s.at > dep and s.at >= earliest and s.landing(total):
+                t = min(s.at, expected)
+                if self._anchor is not None:
+                    t = max(t, self._anchor.t0)
+                return t, s.event
+        return None
+
+    @property
     def fix(self) -> ProgressEvent | None:
-        """The fix the position comes from: the anchor, else the ground fix
-        holding the departure, else the fix the take-off was inferred from."""
+        """The fix the position comes from: the one the landing was inferred
+        from, else the anchor, else the ground fix holding the departure,
+        else the fix the take-off was inferred from."""
+        if self.landing_event_at is None and self._inferred_landing is not None:
+            return self._inferred_landing[1]
         if self._anchor is not None:
             return self._anchor.seen.event
-        if self._ground_fix is not None and self.planned_departure is not None \
-                and self.as_of > self.planned_departure:
-            return self._ground_fix
+        g, planned = self._ground_fix, self.planned_departure
+        if g is not None and planned is not None and g.at + TAXI_MARGIN > planned:
+            return g
         if self._latest(EVENT_TAKEOFF) is None and self._inferred_takeoff is not None:
-            return next(s.event for s in self._fixes if s.shows_departed)
+            return self._inferred_takeoff[1]
         return None
 
     @property
@@ -531,14 +656,14 @@ class FlightProgress:
     @property
     def departed_at(self) -> datetime | None:
         """The effective departure every schedule computation measures from:
-        the observed take-off, else the plan (held back by a ground fix).
-        Read this, never ``planned_departure``, so a better source moves
-        them all."""
+        the take-off, else the plan (moved to ``TAXI_MARGIN`` after a ground
+        fix at the departure). Read this, never ``planned_departure``, so a
+        better source moves them all."""
         if self.takeoff_at is not None:
             return self.takeoff_at
         planned, g = self.planned_departure, self._ground_fix
-        if g is not None and planned is not None and self.as_of > planned:
-            return max(planned, min(self.as_of, g.at + GROUND_HOLD))
+        if g is not None and planned is not None:
+            return max(planned, g.at + TAXI_MARGIN)
         return planned
 
     @property
@@ -558,20 +683,17 @@ class FlightProgress:
 
     @property
     def departed(self) -> bool:
-        return self.departed_at is not None and self.as_of >= self.departed_at and not self._holding
+        return self.departed_at is not None and self.as_of >= self.departed_at
 
     @property
     def arrival(self) -> datetime | None:
-        """When the flight lands: the observed landing, else extrapolated
-        from the fix in use, else the departure plus the planned duration."""
+        """When the flight lands: the landing, else extrapolated from the fix
+        in use, else the departure plus the planned duration."""
         if self.landed_at is not None:
             return self.landed_at
         if not self.timed:
             return None
-        a = self._anchor
-        if a is not None and a.v_kt > 0:
-            return a.t0 + timedelta(hours=(self._route_nm - a.seen.along) / a.v_kt)
-        return self.departed_at + timedelta(hours=self._duration_h)
+        return self._arrival_unlanded
 
     @property
     def arrived(self) -> bool:
