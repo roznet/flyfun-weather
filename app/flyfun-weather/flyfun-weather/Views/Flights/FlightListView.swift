@@ -434,7 +434,7 @@ struct FlightListView: View {
                 // the sidebar over it used to strand the user on the map with no way
                 // back to the list.
                 if let repo = appState.repository {
-                    ForecastMapView(repository: repo, deepLink: mapDeepLink,
+                    ForecastMapView(repository: repo, deepLink: mapDeepLink, liveFlightId: liveOwnedFlightId,
                                     onToggleSidebar: toggleSidebar,
                                     onShowHistorical: { openHistoricalMap(deepLink: nil) })
                         .id(mapOpenToken)
@@ -456,7 +456,7 @@ struct FlightListView: View {
             if let repo = appState.repository {
                 switch mapCoverKind {
                 case .forecast:
-                    ForecastMapView(repository: repo, deepLink: mapDeepLink,
+                    ForecastMapView(repository: repo, deepLink: mapDeepLink, liveFlightId: liveOwnedFlightId,
                                     onClose: { showMapCover = false },
                                     onShowHistorical: { openHistoricalMap(deepLink: nil) })
                         .id(mapOpenToken)
@@ -797,6 +797,15 @@ struct FlightListView: View {
                 deleteError = error.localizedDescription
             }
         }
+    }
+
+    /// The pilot's own flight in its live window, when there is exactly one:
+    /// the map's locate button sends its fix there (#761). With two, the fix
+    /// could belong to either, so it goes nowhere.
+    private var liveOwnedFlightId: String? {
+        guard case .loaded(let flights) = viewModel?.state else { return nil }
+        let live = flights.filter { $0.isEditable && $0.isInLiveObservationWindow() }
+        return live.count == 1 ? live[0].id : nil
     }
 
     /// Open the forecast map: an iPad detail pane (regular width) or an iPhone

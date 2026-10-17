@@ -50,7 +50,12 @@ final class AppState {
     // MARK: - State
 
     private(set) var apiClient: APIClient?
-    private(set) var repository: (any BriefingRepository)?
+    private(set) var repository: (any BriefingRepository)? {
+        didSet { livePositions = repository.map { LivePositionService(repository: $0) } }
+    }
+    /// Sends GPS fixes to the server (#761), one per signed-in repository, so
+    /// a fix taken on any screen shares the flight's unsent queue.
+    @ObservationIgnored private(set) var livePositions: LivePositionService?
     /// Offline PIREP queue, scoped to the signed-in user (reassigned in
     /// `setupClient`). Same cross-user leak as the briefing cache: a single
     /// unscoped `pending_pireps.json` would sync user A's queued reports under
@@ -218,6 +223,8 @@ final class AppState {
         self.tokenStore = store
         self.jwt = store.token
         Self.current = self
+        // Back online: send the GPS fixes queued while there was no data (#761).
+        networkMonitor.onReconnect = { [weak self] in self?.livePositions?.flushAll() }
 
         self.rollingSession = RollingBearerSession(
             store: store,

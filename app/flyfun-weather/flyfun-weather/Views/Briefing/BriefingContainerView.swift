@@ -40,8 +40,6 @@ struct BriefingContainerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: BriefingViewModel?
     @State private var trackingService = FlightTrackingService()
-    /// Sends the tracking service's GPS fixes to the server (#761); owner only.
-    @State private var positionReporter: LivePositionReporter?
     /// Post with the next fix (#761): set on Start Flight and on return to the
     /// foreground, so the post carries a fix taken from that moment on.
     @State private var postOnNextFix = false
@@ -220,17 +218,25 @@ struct BriefingContainerView: View {
                 networkMonitor: appState.networkMonitor
             )
             viewModel = vm
-            // App GPS positions (#761): with each live poll and at the landing
-            // auto-stop, while tracking. Only the owner may post them.
-            if flight.isEditable {
-                let reporter = LivePositionReporter(repository: repo, flightId: flight.id)
+            // App GPS positions (#761): every fix this screen gets during the
+            // live window, through the app's one queue. Only the owner may post.
+            if flight.isEditable, let positions = appState.livePositions {
                 let tracking = trackingService
-                positionReporter = reporter
-                tracking.onLanding = { fixes in reporter.report(fixes, landed: true) }
+                let flight = flight
+                tracking.onLanding = { fixes in positions.submit(fixes, flightId: flight.id, landed: true) }
+                tracking.onOneShotFix = { fix in
+                    // The PIREP form's fix, or the one taken on opening.
+                    if flight.isInLiveObservationWindow() { positions.submit([fix], flightId: flight.id) }
+                }
                 vm.beforeLivePoll = {
-                    if tracking.isTracking { reporter.report(tracking.recentFixes) }
+                    if tracking.isTracking {
+                        positions.submit(tracking.recentFixes, flightId: flight.id)
+                    } else {
+                        positions.flush(flightId: flight.id)  // anything left unsent
+                    }
                 }
             }
+            takeFixOnOpen()
             // A flight-day push tap (#754) opened this screen: land on Observed,
             // and tag the first live fetch as push-opened. Before the load, so
             // that fetch carries it.
@@ -260,8 +266,9 @@ struct BriefingContainerView: View {
             if scenePhase == .active {
                 Task { await viewModel?.syncLatestPack() }
                 viewModel?.startLivePolling()
-                // Back in the foreground while tracking: send the next fix (#761).
-                if trackingService.isTracking { postOnNextFix = true }
+                // Back in the foreground: send the next fix while tracking,
+                // else take one if the pilot started this flight (#761).
+                if trackingService.isTracking { postOnNextFix = true } else { takeFixOnOpen() }
             } else if scenePhase == .background {
                 // No live poll while backgrounded; restarted on activation.
                 viewModel?.stopLivePolling()
@@ -270,9 +277,9 @@ struct BriefingContainerView: View {
         .onChange(of: trackingService.recentFixes.last?.at) {
             // The first fix after Start Flight, or after returning to the
             // foreground (#761).
-            guard postOnNextFix, trackingService.isTracking else { return }
+            guard postOnNextFix, trackingService.isTracking, flight.isEditable else { return }
             postOnNextFix = false
-            positionReporter?.report(trackingService.recentFixes)
+            appState.livePositions?.submit(trackingService.recentFixes, flightId: flight.id)
         }
         .onChange(of: appState.externalSync) {
             // A push (or any external "data changed" nudge) is just another sync
@@ -374,6 +381,19 @@ struct BriefingContainerView: View {
         let flightEndTime = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
         trackingService.start(routePoints: routePoints, flightEndTime: flightEndTime)
         postOnNextFix = true
+        // Start Flight is the pilot's consent for this flight: from now on,
+        // opening it in its live window takes a fix (#761).
+        if flight.isEditable { LivePositionService.grantConsent(flightId: flight.id) }
+    }
+
+    /// One fix when the flight is opened (or comes back to the foreground)
+    /// in its live window, for a flight the pilot pressed Start Flight on
+    /// (#761). Never prompts; it goes out through `onOneShotFix`. The common
+    /// case: the app opened to check the weather, nobody watching it live.
+    private func takeFixOnOpen() {
+        guard flight.isEditable, !trackingService.isTracking, flight.isInLiveObservationWindow(),
+              LivePositionService.hasConsent(flightId: flight.id) else { return }
+        trackingService.requestOneShotLocation(prompt: false)
     }
 }
 

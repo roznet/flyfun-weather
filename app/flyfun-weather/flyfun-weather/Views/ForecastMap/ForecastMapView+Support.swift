@@ -130,12 +130,16 @@ final class OneShotLocator: NSObject {
     struct Fix: Equatable { let lat: Double; let lon: Double }
 
     private(set) var located: Fix?
+    /// The full location behind `located`: sent to the server as a GPS fix
+    /// when a flight is live (#761).
+    @ObservationIgnored private(set) var location: CLLocation?
     private let manager = CLLocationManager()
 
     override init() {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyKilometer
+        // Good enough for the server to take as a fix (≤ 1000 m, #761).
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
     func request() {
@@ -159,8 +163,11 @@ extension OneShotLocator: CLLocationManagerDelegate {
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let c = locations.last?.coordinate else { return }
-        Task { @MainActor in self.located = Fix(lat: c.latitude, lon: c.longitude) }
+        guard let loc = locations.last else { return }
+        Task { @MainActor in
+            self.location = loc
+            self.located = Fix(lat: loc.coordinate.latitude, lon: loc.coordinate.longitude)
+        }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

@@ -54,6 +54,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var bulkDeleteHandler: (@Sendable ([String]) throws -> BulkDeleteResponse)?
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
+    /// Queued outcomes for successive `postLivePosition` calls (#761); empty
+    /// means the call is not stubbed. Every request is recorded.
+    var postLivePositionResults: [Result<LivePositionResult, Error>] = []
+    private(set) var postedLivePositions: [LivePositionRequest] = []
 
     // --- Trips (#607). Stored here because a Swift extension can't declare
     // stored properties; the conformance itself is in the extension below.
@@ -351,7 +355,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws { throw MockError.notStubbed("submitDigestFeedback") }
     func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws { throw MockError.notStubbed("submitHighlightFeedback") }
     func submitGeneralFeedback(_ request: GeneralFeedbackRequest) async throws { throw MockError.notStubbed("submitGeneralFeedback") }
-    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult { throw MockError.notStubbed("postLivePosition") }
+    func postLivePosition(flightId: String, request: LivePositionRequest) async throws -> LivePositionResult {
+        postedLivePositions.append(request)
+        guard !postLivePositionResults.isEmpty else { throw MockError.notStubbed("postLivePosition") }
+        return try postLivePositionResults.removeFirst().get()
+    }
 }
 
 // MARK: - Fixture factories

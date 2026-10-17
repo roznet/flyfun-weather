@@ -30,13 +30,18 @@ struct ForecastMapView: View {
     private let onToggleSidebar: (() -> Void)?
     /// Swap this screen for the historical map (#629), the web's Historical tab.
     private let onShowHistorical: (() -> Void)?
+    /// The pilot's one flight in its live window, if any: the locate button's
+    /// fix goes to it as a GPS position (#761).
+    private let liveFlightId: String?
 
     init(repository: any BriefingRepository,
          deepLink: MapDeepLink? = nil,
+         liveFlightId: String? = nil,
          onClose: (() -> Void)? = nil,
          onToggleSidebar: (() -> Void)? = nil,
          onShowHistorical: (() -> Void)? = nil) {
         _viewModel = State(initialValue: ForecastMapViewModel(repository: repository, deepLink: deepLink))
+        self.liveFlightId = liveFlightId
         self.onClose = onClose
         self.onToggleSidebar = onToggleSidebar
         self.onShowHistorical = onShowHistorical
@@ -63,6 +68,10 @@ struct ForecastMapView: View {
         .task { viewModel.start() }
         .onChange(of: locator.located) {
             guard let c = locator.located else { return }
+            if let flightId = liveFlightId, let loc = locator.location,
+               let fix = FlightTrackingService.fix(from: loc, alongNm: nil, crossTrackNm: nil) {
+                appState.livePositions?.submit([fix], flightId: flightId)
+            }
             viewModel.focusRequest = ForecastMapViewModel.FocusRequest(
                 center: CLLocationCoordinate2D(latitude: c.lat, longitude: c.lon),
                 span: MKCoordinateSpan(latitudeDelta: 4, longitudeDelta: 5), biasForSheet: false)

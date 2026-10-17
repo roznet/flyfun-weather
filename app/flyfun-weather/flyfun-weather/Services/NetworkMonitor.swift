@@ -21,6 +21,9 @@ final class NetworkMonitor {
     /// gate used for the default "Wi-Fi only" auto-download mode.
     var isOnWiFi: Bool { isConnected && !isExpensive && !isConstrained }
 
+    /// Called when a usable path comes back after none.
+    @ObservationIgnored var onReconnect: (@MainActor () -> Void)?
+
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private let queue = DispatchQueue(label: "aero.flyfun.weather.network-monitor")
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "Network")
@@ -41,7 +44,9 @@ final class NetworkMonitor {
     deinit { monitor.cancel() }
 
     private func apply(connected: Bool, expensive: Bool, constrained: Bool) {
+        let reconnected = connected && !isConnected
         isConnected = connected
+        if reconnected { onReconnect?() }
         isExpensive = expensive
         isConstrained = constrained
         Self.logger.debug(
