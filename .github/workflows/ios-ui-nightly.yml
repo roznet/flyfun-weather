@@ -145,11 +145,16 @@ jobs:
           # -collect-test-diagnostics never: a red run otherwise stalls ~10 min
           # collecting a simulator sysdiagnose after the last test (see
           # scripts/ios_test.py).
+          # Two parallel-testing clones, not Xcode's pick: the UI target is four
+          # classes balanced for clones (FlyfunUITestCase.swift), and the
+          # runner's few cores and 7 GB would slow every journey past its
+          # timeouts with more.
           xcodebuild test \
             -project app/flyfun-weather/flyfun-weather.xcodeproj \
             -scheme flyfun-weather \
             -destination "$DESTINATION" \
             -only-testing:flyfun-weatherUITests \
+            -maximum-parallel-testing-workers 2 \
             -clonedSourcePackagesDirPath .spm \
             -resultBundlePath ui.xcresult \
             -collect-test-diagnostics never \

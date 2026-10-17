@@ -49,7 +49,7 @@ Verify that the Release/production build will NOT use localhost. Check `app/flyf
 
 The UI journeys on **both** an iPhone and an iPad must be green for the code being archived,
 and a failure on either idiom is a release blocker. They can be proven green two ways —
-ask the nightly first, because the full local route costs ~35 min.
+ask the nightly first, because the full local route costs ~10 min (iPhone ~4.5 + iPad ~5, 2026-10-17).
 
 **First, ask the nightly** (needs `gh`, so run it unsandboxed):
 ```bash
@@ -64,10 +64,11 @@ version-bump lines.
   that builds the archive — builds and launches what CI tested, and the iPad's split view
   and paginated tab bar are where local and CI diverged before.
   ```bash
-  T=flyfun-weatherUITests/flyfun_weatherUITests
+  T=flyfun-weatherUITests
   python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)" --only flyfun-weatherTests \
-    --only $T/testFlightListRendersSeededFlights --only $T/testBriefingAdvisoryDrillDown \
-    --only $T/testRouteSigmetsSectionRenders
+    --only $T/FlightsUITests/testFlightListRendersSeededFlights \
+    --only $T/BriefingUITests/testBriefingAdvisoryDrillDown \
+    --only $T/BriefingUITests/testRouteSigmetsSectionRenders
   ```
   Report it as "UI covered by nightly <sha> (<run url>); local unit + iPad smoke green".
 - **`NOT COVERED` (exit 1)** — it says why (app code changed since, or no two-leg green run
@@ -91,18 +92,14 @@ the last test), caps each test, prints each test as it finishes, and kills xcode
 exit 124 (`STALLED`) if output and the result bundle both go quiet for 5 min. Its closing
 summary lists every failure's assertion message.
 
-Run each pass with `run_in_background: true` — a clean build plus the UI journeys exceeds
-the 10-min foreground limit — and wait for the completion notification. One pass at a
-time; the script exits 3 if another `xcodebuild test` is running (`--wait` to queue).
+Run both passes in one call with `run_in_background: true` — a build plus the UI journeys
+exceeds the 10-min foreground limit — and wait for the completion notification. The
+script runs the devices one after another (each fans its test classes out over simulator
+clones; several destinations in one xcodebuild would turn that off) and prints a summary
+per device. It exits 3 if another `xcodebuild test` is running (`--wait` to queue).
 
-**iPhone pass:**
 ```bash
-python3 scripts/ios_test.py --device "iPhone 17 Pro"
-```
-
-**iPad pass:**
-```bash
-python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)"
+python3 scripts/ios_test.py --device "iPhone 17 Pro" --device "iPad Pro 11-inch (M5)"
 ```
 
 If tests fail on either idiom, stop and show the failures, noting which device the failure
