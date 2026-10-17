@@ -383,7 +383,7 @@ struct BriefingContainerView: View {
         postOnNextFix = true
         // Start Flight is the pilot's consent for this flight: from now on,
         // opening it in its live window takes a fix (#761).
-        if flight.isEditable { LivePositionService.grantConsent(flightId: flight.id) }
+        if flight.isEditable { appState.livePositions?.grantConsent(flightId: flight.id) }
     }
 
     /// One fix when the flight is opened (or comes back to the foreground)
@@ -392,7 +392,7 @@ struct BriefingContainerView: View {
     /// case: the app opened to check the weather, nobody watching it live.
     private func takeFixOnOpen() {
         guard flight.isEditable, !trackingService.isTracking, flight.isInLiveObservationWindow(),
-              LivePositionService.hasConsent(flightId: flight.id) else { return }
+              appState.livePositions?.hasConsent(flightId: flight.id) == true else { return }
         trackingService.requestOneShotLocation(prompt: false)
     }
 }

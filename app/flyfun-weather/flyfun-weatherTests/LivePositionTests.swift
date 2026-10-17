@@ -85,7 +85,7 @@ import CoreLocation
     @Test @MainActor func aFailedPostKeepsItsFixesForTheNext() async {
         let repo = MockBriefingRepository()
         repo.postLivePositionResults = [.failure(MockError.notStubbed("offline")), .success(result(2))]
-        let service = LivePositionService(repository: repo)
+        let service = LivePositionService(repository: repo, scope: "test", defaults: scratchDefaults())
         service.submit([fix(0)], flightId: "f")
         await settle(repo, posts: 1)
         // No data: the next fix goes out with the one that failed.
@@ -101,7 +101,7 @@ import CoreLocation
     @Test @MainActor func anUnchangedTrackingBufferIsNotResent() async {
         let repo = MockBriefingRepository()
         repo.postLivePositionResults = [.success(result(2)), .success(result(1))]
-        let service = LivePositionService(repository: repo)
+        let service = LivePositionService(repository: repo, scope: "test", defaults: scratchDefaults())
         let buffer = [fix(0), fix(60)]
         service.submit(buffer, flightId: "f")
         await settle(repo, posts: 1)
@@ -116,7 +116,7 @@ import CoreLocation
     @Test @MainActor func theLandingIsKeptUntilSent() async {
         let repo = MockBriefingRepository()
         repo.postLivePositionResults = [.failure(MockError.notStubbed("offline")), .success(result(0))]
-        let service = LivePositionService(repository: repo)
+        let service = LivePositionService(repository: repo, scope: "test", defaults: scratchDefaults())
         service.submit([], flightId: "f", landed: true)
         await settle(repo, posts: 1)
         service.flushAll()  // back online
@@ -129,7 +129,7 @@ import CoreLocation
         #expect(R.failureAction(for: APIError.networkError(URLError(.notConnectedToInternet))) == .retry)
         #expect(R.failureAction(for: APIError.serverError(503, nil)) == .retry)
         #expect(R.failureAction(for: APIError.serverError(429, nil)) == .retry)
-        #expect(R.failureAction(for: APIError.serverError(409, "briefing unreadable")) == .drop)
+        #expect(R.failureAction(for: APIError.serverError(409, "briefing unreadable")) == .hold)
         #expect(R.failureAction(for: APIError.serverError(422, nil)) == .drop)
         #expect(R.failureAction(for: APIError.notFound) == .drop)
         #expect(R.failureAction(for: APIError.forbidden("x")) == .drop)
@@ -138,8 +138,8 @@ import CoreLocation
 
     @Test @MainActor func aRefusedPostIsNotRetried() async {
         let repo = MockBriefingRepository()
-        repo.postLivePositionResults = [.failure(APIError.serverError(409, nil)), .success(result(1))]
-        let service = LivePositionService(repository: repo)
+        repo.postLivePositionResults = [.failure(APIError.notFound), .success(result(1))]
+        let service = LivePositionService(repository: repo, scope: "test", defaults: scratchDefaults())
         service.submit([fix(0)], flightId: "f", landed: true)
         await settle(repo, posts: 1)
         // Dropped: the next poll's flush has nothing to send.
@@ -153,12 +153,37 @@ import CoreLocation
         #expect(repo.postedLivePositions.last?.landed == false)
     }
 
-    @Test @MainActor func consentIsPerFlight() {
-        let defaults = UserDefaults(suiteName: "LivePositionTests.\(UUID().uuidString)")!
-        #expect(!LivePositionService.hasConsent(flightId: "a", defaults: defaults))
-        LivePositionService.grantConsent(flightId: "a", defaults: defaults)
-        #expect(LivePositionService.hasConsent(flightId: "a", defaults: defaults))
-        #expect(!LivePositionService.hasConsent(flightId: "b", defaults: defaults))
+    @Test @MainActor func aConflictHoldsTheQueueUntilSomethingNew() async {
+        // 409: the briefing cannot be read until refreshed. Kept, not resent
+        // every poll; the next fix tries again, with the held ones.
+        let repo = MockBriefingRepository()
+        repo.postLivePositionResults = [.failure(APIError.serverError(409, nil)), .success(result(2))]
+        let service = LivePositionService(repository: repo, scope: "test", defaults: scratchDefaults())
+        service.submit([fix(0)], flightId: "f", landed: true)
+        await settle(repo, posts: 1)
+        service.flush(flightId: "f")  // a live poll: held, nothing sent
+        service.flushAll()            // a reconnect: the same
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.count == 1)
+        service.submit([fix(900)], flightId: "f")
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.last?.fixes.map { $0.at.timeIntervalSince(t0) } == [0, 900])
+        #expect(repo.postedLivePositions.last?.landed == true)
+    }
+
+    private func scratchDefaults() -> UserDefaults {
+        UserDefaults(suiteName: "LivePositionTests.\(UUID().uuidString)")!
+    }
+
+    @Test @MainActor func consentIsPerFlightAndPerUser() {
+        let defaults = scratchDefaults()
+        let mine = LivePositionService(repository: MockBriefingRepository(), scope: "me", defaults: defaults)
+        let theirs = LivePositionService(repository: MockBriefingRepository(), scope: "them", defaults: defaults)
+        #expect(!mine.hasConsent(flightId: "a"))
+        mine.grantConsent(flightId: "a")
+        #expect(mine.hasConsent(flightId: "a"))
+        #expect(!mine.hasConsent(flightId: "b"))
+        #expect(!theirs.hasConsent(flightId: "a"))
     }
 
     @Test @MainActor func locationToFix() throws {

@@ -35,17 +35,21 @@ nonisolated enum LivePositionRules {
     }
 
     /// What a failed post means for its fixes: `.retry` keeps them queued (no
-    /// data, a server hiccup, 408 / 429); `.drop` discards them, since the
-    /// same request would fail again (not the owner, no flight, a briefing
-    /// the server cannot read: 4xx); `.sent` when the reply came back but
-    /// did not decode (a 2xx: the server recorded them).
-    enum FailureAction: Equatable { case retry, drop, sent }
+    /// data, a server hiccup, 408 / 429); `.hold` keeps them but stops the
+    /// per-poll retry until something new is submitted (409: the briefing
+    /// cannot be read until it is refreshed); `.drop` discards them, since the
+    /// same request would fail again (signed out, not the owner, no flight,
+    /// any other 4xx); `.sent` when the reply came back but did not decode (a
+    /// 2xx: the server recorded them).
+    enum FailureAction: Equatable { case retry, hold, drop, sent }
 
     static func failureAction(for error: Error) -> FailureAction {
         guard let api = error as? APIError else { return .retry }
         switch api {
         case .unauthorized, .forbidden, .notFound:
             return .drop
+        case .serverError(409, _):
+            return .hold
         case .serverError(let code, _):
             return (400..<500).contains(code) && code != 408 && code != 429 ? .drop : .retry
         case .decodingError:
@@ -77,8 +81,9 @@ nonisolated enum LivePositionRules {
 /// server refuses anyone else). A post that fails for want of data (or a
 /// server hiccup) keeps its fixes queued, and the next submit, live poll or
 /// reconnect resends them: in flight there is often no data, and a late fix
-/// still counts on the server. One the server refuses (4xx) is dropped
-/// (`LivePositionRules.failureAction`), not retried every poll. One post per
+/// still counts on the server. One the server refuses (4xx) is dropped, or
+/// held until the next fix or landing on a 409 (the briefing needs a refresh)
+/// (`LivePositionRules.failureAction`), never retried every poll. One post per
 /// flight at a time; what arrives meanwhile goes with the next one. The queue
 /// lives in memory: an app killed with fixes unsent loses them.
 @MainActor
@@ -91,24 +96,35 @@ final class LivePositionService {
     /// tracking buffer is not resent.
     private var lastSent: [String: Date] = [:]
     private var posting: Set<String> = []
+    /// Flights whose last post got a 409: kept, not resent until something new.
+    private var held: Set<String> = []
+    private let defaults: UserDefaults
+    private let consentKey: String
 
-    init(repository: any BriefingRepository) {
+    /// `scope`: the signed-in user's cache scope (`AppState.cacheScope`), so
+    /// one user's consents never apply to another on the same device.
+    init(repository: any BriefingRepository, scope: String, defaults: UserDefaults = .standard) {
         self.repository = repository
+        self.defaults = defaults
+        self.consentKey = "livePositionConsentFlightIds.\(scope)"
     }
 
     /// Queue `fixes` (and the landing) for `flightId` and send them.
     func submit(_ fixes: [LivePositionFix], flightId: String, landed: Bool = false) {
+        let before = queues[flightId]?.last?.at
         queues[flightId] = LivePositionRules.queued(fixes, into: queues[flightId] ?? [],
                                                     since: lastSent[flightId])
         if landed { landings.insert(flightId) }
+        // Something new is worth one more try after a 409.
+        if landed || queues[flightId]?.last?.at != before { held.remove(flightId) }
         flush(flightId: flightId)
     }
 
-    /// Send what is queued for `flightId`, if anything.
+    /// Send what is queued for `flightId`, if anything (not while held).
     func flush(flightId: String) {
         let fixes = queues[flightId] ?? []
         let landed = landings.contains(flightId)
-        guard !fixes.isEmpty || landed, !posting.contains(flightId) else { return }
+        guard !fixes.isEmpty || landed, !posting.contains(flightId), !held.contains(flightId) else { return }
         posting.insert(flightId)
         let request = LivePositionRequest(fixes: fixes, landed: landed)
         Task { [weak self, repository] in
@@ -121,6 +137,10 @@ final class LivePositionService {
                 case .retry:
                     self?.posting.remove(flightId)
                     logger.debug("Position post failed, kept for the next one: \(error)")
+                case .hold:
+                    self?.posting.remove(flightId)
+                    self?.held.insert(flightId)
+                    logger.warning("Position post refused for now, held for the next fix: \(error)")
                 case .drop:
                     self?.drop(flightId: flightId)
                     logger.warning("Position post refused, \(fixes.count) fixes dropped: \(error)")
@@ -162,17 +182,16 @@ final class LivePositionService {
 
     // MARK: - Consent for the fix taken on opening
 
-    private static let consentKey = "livePositionConsentFlightIds"
-    /// Flights the pilot has pressed Start Flight for: opening one of them in
+    /// Flights this user has pressed Start Flight for: opening one of them in
     /// its live window takes a fix without asking again.
-    static func grantConsent(flightId: String, defaults: UserDefaults = .standard) {
+    func grantConsent(flightId: String) {
         var ids = defaults.stringArray(forKey: consentKey) ?? []
         guard !ids.contains(flightId) else { return }
         ids.append(flightId)
         defaults.set(Array(ids.suffix(50)), forKey: consentKey)
     }
 
-    static func hasConsent(flightId: String, defaults: UserDefaults = .standard) -> Bool {
+    func hasConsent(flightId: String) -> Bool {
         (defaults.stringArray(forKey: consentKey) ?? []).contains(flightId)
     }
 }

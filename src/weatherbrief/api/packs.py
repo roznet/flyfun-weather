@@ -16,7 +16,7 @@ from typing import AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
@@ -5350,6 +5350,9 @@ class LivePositionFix(BaseModel):
     """One GPS fix from the app (#761). ``along_nm`` / ``cross_track_nm`` are
     the device's own projection: kept as a cross-check, never used."""
 
+    # NaN / Infinity would be written to the history (and is not valid JSON).
+    model_config = ConfigDict(allow_inf_nan=False)
+
     at: datetime
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
@@ -5469,6 +5472,13 @@ def post_live_position(
 
     now = datetime.now(timezone.utc)
     before_h, after_h = live_window_hours()
+    # Projected (and the terrain looked up) before taking the flight's lock;
+    # only the checks against what is recorded run under it.
+    projected = {}
+    for f in req.fixes:
+        p = track.project(f.lat, f.lon)
+        terrain = terrain_at_distance(elevation, p.along_nm)
+        projected[id(f)] = (p, round(terrain) if terrain is not None else None)
 
     def select(recorded):
         """The fixes worth recording, against what is already recorded;
@@ -5496,16 +5506,15 @@ def post_live_position(
                 ignored.append(IgnoredFix(at=at, reason=reason))
                 continue
             known.add(at)
-            p = track.project(f.lat, f.lon)
+            p, terrain = projected[id(f)]
             if f.along_nm is not None and abs(f.along_nm - p.along_nm) > _FIX_XCHECK_NM:
                 logger.info("LIVE_POSITION_XCHECK flight=%s at=%s server_along=%.1f client_along=%.1f",
                             flight_id, at.isoformat(), p.along_nm, f.along_nm)
-            terrain = terrain_at_distance(elevation, p.along_nm)
             accepted.append(ProgressEvent(
                 kind=EVENT_FIX, at=at, recorded_at=now, source=SOURCE_APP, lat=f.lat, lon=f.lon,
                 fix=FixData(
                     alt_ft=f.alt_ft, gs_kt=f.gs_kt, track_deg=f.track_deg, h_accuracy_m=f.h_accuracy_m,
-                    terrain_ft=round(terrain) if terrain is not None else None,
+                    terrain_ft=terrain,
                     along_nm=round(p.along_nm, 2), cross_nm=round(p.offtrack_nm, 2),
                     course_deg=round(p.track_deg, 1), route_nm=round(track.total_nm, 2),
                     client_along_nm=f.along_nm, client_cross_nm=f.cross_track_nm,

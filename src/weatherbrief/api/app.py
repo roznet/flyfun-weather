@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -498,9 +499,16 @@ def create_app() -> FastAPI:
         # which the default json encoder can't serialise. Without this
         # the response serialisation throws and Starlette turns it into
         # a 500, which is exactly what this handler exists to prevent.
+        # Same for a NaN / Infinity echoed back as ``input`` (a field with
+        # ``allow_inf_nan=False``): not valid JSON, so sent as a string.
+        errors = [
+            {**e, "input": str(e["input"])}
+            if isinstance(e.get("input"), float) and not math.isfinite(e["input"]) else e
+            for e in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content={"detail": jsonable_encoder(exc.errors())},
+            content={"detail": jsonable_encoder(errors)},
         )
 
     @app.exception_handler(StarletteHTTPException)

@@ -429,7 +429,7 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
 - **Retention / growth**: one record per accepted fix, ≤ ~12 an hour while the
   app is open in the window (Start Flight, foreground, 5-min poll), capped at
   600 a flight, ~400 bytes each; raw lat/lon lives only in the history, whose
-  retention (90 days, #711) covers them. Viewers below `full` sharing get the
+  retention (90 days, #711) covers them; deleting the flight removes its live files with the packs (`storage/flights._live_files`), and deleting the account removes the user's whole `packs/` directory. Viewers below `full` sharing get the
   route position, never the fix's lat/lon.
 - **Fix age at use**: each tick's `live_tick_timing` row records
   `progress_source` and `fix_at` (migration 106); the admin latency report's

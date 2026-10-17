@@ -2811,6 +2811,11 @@ class TestLivePosition:
         flight, _ = self._flight(app_db)
         now = datetime.now(timezone.utc)
         assert self._post(client, flight, [self._fix(now, 0.5, gs=1e9)]).status_code == 422
+        # NaN would be written to the history, where it is not valid JSON.
+        body = json.dumps({"fixes": [self._fix(now, 0.5, along_nm=float("nan"))]})
+        resp = client.post(f"/api/flights/{flight.id}/live/position", content=body,
+                           headers={"content-type": "application/json"})
+        assert resp.status_code == 422
 
     def test_only_the_owner_may_post(self, client, app_db):
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events

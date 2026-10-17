@@ -51,7 +51,10 @@ final class AppState {
 
     private(set) var apiClient: APIClient?
     private(set) var repository: (any BriefingRepository)? {
-        didSet { livePositions = repository.map { LivePositionService(repository: $0) } }
+        didSet {
+            let scope = Self.cacheScope(forToken: tokenStore.token ?? "")
+            livePositions = repository.map { LivePositionService(repository: $0, scope: scope) }
+        }
     }
     /// Sends GPS fixes to the server (#761), one per signed-in repository, so
     /// a fix taken on any screen shares the flight's unsent queue.
