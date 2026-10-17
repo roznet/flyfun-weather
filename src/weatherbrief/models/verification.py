@@ -311,6 +311,14 @@ class DebriefInfo(BaseModel):
     note: str = ""
 
 
+class RatingCount(BaseModel):
+    """Thumb ratings received during the period for one feedback target."""
+
+    target: str = ""  # digest | live_highlight
+    up: int = 0
+    down: int = 0
+
+
 class DebriefsSectionData(BaseModel):
     """Flight debriefs filed during the admin digest period."""
 
@@ -319,14 +327,23 @@ class DebriefsSectionData(BaseModel):
     cancelled_count: int = 0
     monitoring_count: int = 0
     recent: list[DebriefInfo] = Field(default_factory=list)  # last 5, newest first
+    ratings: list[RatingCount] = Field(default_factory=list)  # thumbs, by target
 
 
 class AdminDigestData(BaseModel):
-    """Complete admin digest payload."""
+    """Complete admin digest payload.
+
+    ``users`` / ``flights_briefings`` cover the last 24h before the send and
+    their ``_7d`` twins the last 7 days; every other section covers the period.
+    """
 
     period_label: str = ""
     users: UsersSectionData = Field(default_factory=UsersSectionData)
+    users_7d: UsersSectionData = Field(default_factory=UsersSectionData)
     flights_briefings: FlightsBriefingsSectionData = Field(
+        default_factory=FlightsBriefingsSectionData
+    )
+    flights_briefings_7d: FlightsBriefingsSectionData = Field(
         default_factory=FlightsBriefingsSectionData
     )
     performance: PerformanceSectionData = Field(default_factory=PerformanceSectionData)

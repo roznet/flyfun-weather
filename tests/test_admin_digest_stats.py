@@ -1,4 +1,4 @@
-"""Tests for the admin daily digest data builder — donations + debriefs sections."""
+"""Tests for the admin daily digest data builder and its rendering."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 from flyfun_common.db.models import DonationRow, UserRow
 
-from weatherbrief.db.models import FlightDebriefRow, FlightRow
+from weatherbrief.db.models import (
+    BriefingUsageRow,
+    FeedbackRow,
+    FlightDebriefRow,
+    FlightRow,
+)
 from weatherbrief.notify.admin_digest_email import _build_html, _build_plain
 from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
 
@@ -21,11 +26,30 @@ def _mk_user(db, user_id="u1", email="pilot@example.com"):
     db.flush()
 
 
-def _mk_flight(db, flight_id, user_id="u1", route_name="LFAT-EGKA", dep=None):
+def _mk_flight(db, flight_id, user_id="u1", route_name="LFAT-EGKA", dep=None,
+               created_at=None):
     db.add(FlightRow(
         id=flight_id, user_id=user_id, route_name=route_name, waypoints_json="[]",
         departure_time=dep or datetime.now(timezone.utc),
         cruise_altitude_ft=8000, flight_ceiling_ft=18000, flight_duration_hours=2.0,
+        **({"created_at": created_at} if created_at else {}),
+    ))
+    db.flush()
+
+
+def _mk_usage(db, flight_id, triggered_by, timestamp, user_id="u1"):
+    db.add(BriefingUsageRow(
+        user_id=user_id, flight_id=flight_id, timestamp=timestamp,
+        triggered_by=triggered_by,
+    ))
+    db.flush()
+
+
+def _mk_thumb(db, target, sentiment, created_at=None, user_id="u1"):
+    db.add(FeedbackRow(
+        user_id=user_id, flight_id="f1", category="rating", comment="",
+        sentiment=sentiment, target=target,
+        created_at=created_at or datetime.now(timezone.utc),
     ))
     db.flush()
 
@@ -164,3 +188,65 @@ def test_render_has_new_sections_and_no_verification(db_session):
     # verification section fully removed
     assert "Verification" not in h and "VERIFICATION" not in pl
     assert "LFAT-EGKA" in h and "pilot@example.com" in h
+
+
+# --- 24h / 7d activity windows -----------------------------------------------
+
+
+def test_users_and_flights_split_into_24h_and_7d(db_session):
+    now = datetime.now(timezone.utc)
+    _mk_user(db_session)
+    _mk_flight(db_session, "f1", created_at=now - timedelta(hours=2))
+    _mk_flight(db_session, "f2", created_at=now - timedelta(days=3))
+    _mk_flight(db_session, "f3", created_at=now - timedelta(days=10))
+    _mk_usage(db_session, "f1", "user", now - timedelta(hours=1))
+    _mk_usage(db_session, "f2", "scheduler", now - timedelta(days=2))
+    _mk_usage(db_session, "f2", "user", now - timedelta(days=4))
+    _mk_usage(db_session, "f3", "scheduler", now - timedelta(days=9))
+
+    # The period only drives the other sections; the windows hang off `until`.
+    data = get_admin_digest_data(db_session, now - timedelta(hours=1), now)
+
+    assert data.flights_briefings.new_flights == 1
+    assert data.flights_briefings_7d.new_flights == 2
+    assert (data.flights_briefings.manual_briefings,
+            data.flights_briefings.auto_briefings) == (1, 0)
+    assert (data.flights_briefings_7d.manual_briefings,
+            data.flights_briefings_7d.auto_briefings) == (2, 1)
+    assert data.users.active_user_count == 1
+    assert data.users_7d.active_user_count == 1
+    assert data.users_7d.total_user_count == 1
+
+
+# --- Thumb ratings -----------------------------------------------------------
+
+
+def test_thumbs_counted_by_target_in_period(db_session):
+    _mk_user(db_session)
+    _mk_thumb(db_session, "digest", "up")
+    _mk_thumb(db_session, "digest", "up")
+    _mk_thumb(db_session, "digest", "down")
+    _mk_thumb(db_session, "live_highlight", "down")
+    _mk_thumb(db_session, "digest", "down",
+              created_at=datetime.now(timezone.utc) - timedelta(days=3))
+    _mk_thumb(db_session, None, None)  # a traditional feedback form
+
+    ratings = {r.target: (r.up, r.down) for r in _window(db_session).debriefs.ratings}
+
+    assert ratings == {"digest": (2, 1), "live_highlight": (0, 1)}
+
+
+def test_render_order_and_window_tables(db_session):
+    _mk_user(db_session)
+    _mk_thumb(db_session, "digest", "up")
+
+    data = _window(db_session)
+    h = _build_html(data)
+    pl = _build_plain(data)
+
+    order = ["USERS", "FLIGHTS & BRIEFINGS", "DONATIONS", "FLIGHT DEBRIEFS",
+             "PERFORMANCE & RESOURCES"]
+    assert [pl.index(s_) for s_ in order] == sorted(pl.index(s_) for s_ in order)
+    assert "Last 24h" in h and "Last 7 days" in h
+    assert "Last 24h" in pl and "Last 7 days" in pl
+    assert "Thumbs: Digest up 1 down 0" in pl

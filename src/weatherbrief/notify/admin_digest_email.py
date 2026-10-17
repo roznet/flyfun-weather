@@ -1,7 +1,8 @@
 """Unified admin daily digest email — HTML + plain text.
 
-A broad daily status email covering users, flights & briefings,
-performance/resources, donations, and flight debriefs.
+A broad daily status email: users and flights & briefings over the last
+24h and 7 days, then donations, flight debriefs (with thumb ratings) and
+performance/resources over the period.
 """
 
 from __future__ import annotations
@@ -11,7 +12,12 @@ import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from weatherbrief.models.verification import AdminDigestData
+from weatherbrief.models.verification import (
+    AdminDigestData,
+    FlightsBriefingsSectionData,
+    RatingCount,
+    UsersSectionData,
+)
 from weatherbrief.notify.email import SmtpConfig, send_message
 
 logger = logging.getLogger(__name__)
@@ -75,9 +81,56 @@ def _metric_pill(label: str, value: str) -> str:
     )
 
 
+_RATING_LABELS = {"digest": "Digest", "live_highlight": "Observed highlight"}
+
+
+def _window_rows(
+    data: AdminDigestData,
+) -> list[tuple[str, UsersSectionData, FlightsBriefingsSectionData]]:
+    return [
+        ("Last 24h", data.users, data.flights_briefings),
+        ("Last 7 days", data.users_7d, data.flights_briefings_7d),
+    ]
+
+
+def _users_cells(u: UsersSectionData) -> list[str]:
+    return [str(u.new_user_count), str(u.active_user_count), str(u.total_user_count)]
+
+
+def _flights_cells(fb: FlightsBriefingsSectionData) -> list[str]:
+    return [
+        str(fb.new_flights), str(fb.total_briefings),
+        str(fb.manual_briefings), str(fb.auto_briefings),
+    ]
+
+
+def _ratings_text(ratings: list[RatingCount], up: str, down: str, sep: str) -> str:
+    return sep.join(
+        f"{_RATING_LABELS.get(r.target, r.target)} {up} {r.up} {down} {r.down}"
+        for r in ratings
+    )
+
+
+def _html_table(headers: list[str], rows: list[list[str]]) -> str:
+    p = [f'<table style="{_STYLE_TABLE}"><tr>']
+    for i, h_ in enumerate(headers):
+        align = "" if i == 0 else " text-align:right;"
+        p.append(f'<th style="{_STYLE_TH}{align}">{h_}</th>')
+    p.append("</tr>")
+    for row in rows:
+        p.append("<tr>")
+        for i, cell in enumerate(row):
+            style = "font-weight:600;" if i == 0 else "text-align:right;"
+            p.append(f'<td style="{_STYLE_TD} {style}">{cell}</td>')
+        p.append("</tr>")
+    p.append("</table>")
+    return "".join(p)
+
+
 def _build_html(data: AdminDigestData) -> str:
     p: list[str] = []
     label = data.period_label or "Daily"
+    windows = _window_rows(data)
 
     p.append(f'<div style="{_STYLE_BASE}">')
     p.append(
@@ -86,67 +139,37 @@ def _build_html(data: AdminDigestData) -> str:
     )
 
     # --- Users ---
-    u = data.users
     p.append(f'<h3 style="{_STYLE_SECTION}">Users</h3>')
-    p.append("<div>")
-    p.append(_metric_pill("New", str(u.new_user_count)))
-    p.append(_metric_pill("Active", str(u.active_user_count)))
-    p.append(_metric_pill("Total", str(u.total_user_count)))
-    p.append("</div>")
-
+    p.append(_html_table(
+        ["", "New", "Active", "Total"],
+        [[w, *_users_cells(u)] for w, u, _ in windows],
+    ))
+    u = data.users
     if u.new_users:
         p.append('<div style="margin:8px 0; font-size:12px; color:#555;">')
         names = [
             f"{html.escape(nu.display_name or nu.email)}"
             for nu in u.new_users
         ]
-        p.append("New: " + ", ".join(names))
+        p.append("New in last 24h: " + ", ".join(names))
         p.append("</div>")
 
     # --- Flights & Briefings ---
-    fb = data.flights_briefings
     p.append(f'<h3 style="{_STYLE_SECTION}">Flights &amp; Briefings</h3>')
-    p.append("<div>")
-    p.append(_metric_pill("New flights", str(fb.new_flights)))
-    p.append(_metric_pill("Briefings", str(fb.total_briefings)))
-    p.append(_metric_pill("Manual", str(fb.manual_briefings)))
-    p.append(_metric_pill("Auto", str(fb.auto_briefings)))
-    p.append("</div>")
-
+    p.append(_html_table(
+        ["", "New flights", "Briefings", "Manual", "Auto"],
+        [[w, *_flights_cells(fb)] for w, _, fb in windows],
+    ))
+    fb = data.flights_briefings
     p.append('<div style="margin:8px 0; font-size:12px; color:#555;">')
     p.append(
+        f"Last 24h &mdash; "
         f"Single-briefing flights: {fb.flights_single_briefing} &middot; "
         f"Refreshed flights: {fb.flights_refreshed} &middot; "
         f"GRAMET: {fb.gramet_count} &middot; "
         f"LLM digest: {fb.digest_count}"
     )
     p.append("</div>")
-
-    # --- Performance & Resources ---
-    perf = data.performance
-    p.append(f'<h3 style="{_STYLE_SECTION}">Performance &amp; Resources</h3>')
-    p.append(f'<table style="{_STYLE_TABLE}">')
-    rows = [
-        ("Total cost", f"${perf.total_cost_usd:.4f}"),
-        ("LLM tokens", f"{_fmt_tokens(perf.total_llm_input_tokens)} in / "
-                       f"{_fmt_tokens(perf.total_llm_output_tokens)} out"),
-        ("Disk usage", _fmt_bytes(perf.total_disk_bytes)),
-    ]
-    if perf.avg_elapsed_seconds is not None:
-        rows.append(("Avg briefing time", f"{perf.avg_elapsed_seconds:.1f}s"))
-    if perf.avg_queue_wait_seconds is not None:
-        rows.append(("Avg queue wait", f"{perf.avg_queue_wait_seconds:.1f}s"))
-    if perf.briefing_count_for_perf > 0:
-        rows.append(("Sample size", str(perf.briefing_count_for_perf)))
-
-    for label_text, value in rows:
-        p.append(
-            f"<tr>"
-            f'<td style="{_STYLE_TD} font-weight:600; width:40%;">{label_text}</td>'
-            f'<td style="{_STYLE_TD}">{value}</td>'
-            f"</tr>"
-        )
-    p.append("</table>")
 
     # --- Donations ---
     don = data.donations
@@ -207,6 +230,38 @@ def _build_html(data: AdminDigestData) -> str:
             p.append("</table>")
     else:
         p.append('<p style="color:#666; font-style:italic;">No debriefs in this period.</p>')
+    if db_.ratings:
+        p.append('<div style="margin:8px 0; font-size:12px; color:#555;">')
+        p.append("Thumbs: " + _ratings_text(
+            db_.ratings, "&#128077;", "&#128078;", " &middot; ",
+        ))
+        p.append("</div>")
+
+    # --- Performance & Resources ---
+    perf = data.performance
+    p.append(f'<h3 style="{_STYLE_SECTION}">Performance &amp; Resources</h3>')
+    p.append(f'<table style="{_STYLE_TABLE}">')
+    rows = [
+        ("Total cost", f"${perf.total_cost_usd:.4f}"),
+        ("LLM tokens", f"{_fmt_tokens(perf.total_llm_input_tokens)} in / "
+                       f"{_fmt_tokens(perf.total_llm_output_tokens)} out"),
+        ("Disk usage", _fmt_bytes(perf.total_disk_bytes)),
+    ]
+    if perf.avg_elapsed_seconds is not None:
+        rows.append(("Avg briefing time", f"{perf.avg_elapsed_seconds:.1f}s"))
+    if perf.avg_queue_wait_seconds is not None:
+        rows.append(("Avg queue wait", f"{perf.avg_queue_wait_seconds:.1f}s"))
+    if perf.briefing_count_for_perf > 0:
+        rows.append(("Sample size", str(perf.briefing_count_for_perf)))
+
+    for label_text, value in rows:
+        p.append(
+            f"<tr>"
+            f'<td style="{_STYLE_TD} font-weight:600; width:40%;">{label_text}</td>'
+            f'<td style="{_STYLE_TD}">{value}</td>'
+            f"</tr>"
+        )
+    p.append("</table>")
 
     # Footer
     p.append(
@@ -222,46 +277,51 @@ def _build_html(data: AdminDigestData) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _plain_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    widths = [
+        max(len(r[i]) for r in [headers, *rows]) for i in range(len(headers))
+    ]
+    out = []
+    for r in [headers, *rows]:
+        cells = [r[0].ljust(widths[0])] + [
+            c.rjust(w) for c, w in zip(r[1:], widths[1:])
+        ]
+        out.append("  " + "  ".join(cells))
+    return out
+
+
 def _build_plain(data: AdminDigestData) -> str:
     lines: list[str] = []
     label = data.period_label or "Daily"
+    windows = _window_rows(data)
     lines.append(f"FlyFun Admin Digest -- {label}")
     lines.append("=" * 50)
     lines.append("")
 
     # Users
-    u = data.users
     lines.append("USERS")
-    lines.append(f"  New:    {u.new_user_count}")
-    lines.append(f"  Active: {u.active_user_count}")
-    lines.append(f"  Total:  {u.total_user_count}")
+    lines.extend(_plain_table(
+        ["", "New", "Active", "Total"],
+        [[w, *_users_cells(u)] for w, u, _ in windows],
+    ))
+    u = data.users
     if u.new_users:
         names = ", ".join(nu.display_name or nu.email for nu in u.new_users)
-        lines.append(f"  New users: {names}")
+        lines.append(f"  New in last 24h: {names}")
     lines.append("")
 
     # Flights & Briefings
-    fb = data.flights_briefings
     lines.append("FLIGHTS & BRIEFINGS")
-    lines.append(f"  New flights:       {fb.new_flights}")
-    lines.append(f"  Total briefings:   {fb.total_briefings}  (manual: {fb.manual_briefings}, auto: {fb.auto_briefings})")
-    lines.append(f"  Single-briefing:   {fb.flights_single_briefing}")
-    lines.append(f"  Refreshed flights: {fb.flights_refreshed}")
-    lines.append(f"  GRAMET: {fb.gramet_count}  LLM digest: {fb.digest_count}")
-    lines.append("")
-
-    # Performance
-    perf = data.performance
-    lines.append("PERFORMANCE & RESOURCES")
-    lines.append(f"  Total cost:      ${perf.total_cost_usd:.4f}")
-    lines.append(f"  LLM tokens:      {_fmt_tokens(perf.total_llm_input_tokens)} in / {_fmt_tokens(perf.total_llm_output_tokens)} out")
-    lines.append(f"  Disk usage:      {_fmt_bytes(perf.total_disk_bytes)}")
-    if perf.avg_elapsed_seconds is not None:
-        lines.append(f"  Avg briefing:    {perf.avg_elapsed_seconds:.1f}s")
-    if perf.avg_queue_wait_seconds is not None:
-        lines.append(f"  Avg queue wait:  {perf.avg_queue_wait_seconds:.1f}s")
-    if perf.briefing_count_for_perf > 0:
-        lines.append(f"  Sample size:     {perf.briefing_count_for_perf}")
+    lines.extend(_plain_table(
+        ["", "New flights", "Briefings", "Manual", "Auto"],
+        [[w, *_flights_cells(fb)] for w, _, fb in windows],
+    ))
+    fb = data.flights_briefings
+    lines.append(
+        f"  Last 24h -- single-briefing: {fb.flights_single_briefing}, "
+        f"refreshed: {fb.flights_refreshed}, GRAMET: {fb.gramet_count}, "
+        f"LLM digest: {fb.digest_count}"
+    )
     lines.append("")
 
     # Donations
@@ -299,6 +359,22 @@ def _build_plain(data: AdminDigestData) -> str:
                 lines.append(f"      note: {r_.note}")
     else:
         lines.append("  No debriefs in this period.")
+    if db_.ratings:
+        lines.append("  Thumbs: " + _ratings_text(db_.ratings, "up", "down", ", "))
+    lines.append("")
+
+    # Performance
+    perf = data.performance
+    lines.append("PERFORMANCE & RESOURCES")
+    lines.append(f"  Total cost:      ${perf.total_cost_usd:.4f}")
+    lines.append(f"  LLM tokens:      {_fmt_tokens(perf.total_llm_input_tokens)} in / {_fmt_tokens(perf.total_llm_output_tokens)} out")
+    lines.append(f"  Disk usage:      {_fmt_bytes(perf.total_disk_bytes)}")
+    if perf.avg_elapsed_seconds is not None:
+        lines.append(f"  Avg briefing:    {perf.avg_elapsed_seconds:.1f}s")
+    if perf.avg_queue_wait_seconds is not None:
+        lines.append(f"  Avg queue wait:  {perf.avg_queue_wait_seconds:.1f}s")
+    if perf.briefing_count_for_perf > 0:
+        lines.append(f"  Sample size:     {perf.briefing_count_for_perf}")
     lines.append("")
 
     return "\n".join(lines)

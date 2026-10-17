@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import case, func, select
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.db.models import CostLedgerRow, DonationRow, UserRow
 from weatherbrief.db.models import (
     BriefingUsageRow,
+    FeedbackRow,
     FlightDebriefRow,
     FlightRow,
 )
@@ -31,6 +32,7 @@ from weatherbrief.models.verification import (
     FlightsBriefingsSectionData,
     NewUserInfo,
     PerformanceSectionData,
+    RatingCount,
     UsersSectionData,
 )
 
@@ -39,6 +41,13 @@ logger = logging.getLogger(__name__)
 _RECENT_DEBRIEF_LIMIT = 5
 
 _SERVICE = "flyfun-weather"
+
+# Fixed activity windows for the users / flights tables, ending at the send.
+_DAY = timedelta(hours=24)
+_WEEK = timedelta(days=7)
+
+# Thumb-rating targets, in display order.
+_RATING_TARGETS = ("digest", "live_highlight")
 
 
 # ---------------------------------------------------------------------------
@@ -252,13 +261,31 @@ def _debrief_summary(row: FlightDebriefRow) -> str:
 def _get_debriefs_section(
     db: Session, since: datetime, until: datetime,
 ) -> DebriefsSectionData:
-    """Flight debriefs filed in the period: counts by decision + last 5 with reasons."""
+    """Flight debriefs filed in the period: counts by decision + last 5 with
+    reasons, plus the thumb ratings received in the same period."""
     rows = db.execute(
         select(FlightDebriefRow, FlightRow.route_name)
         .join(FlightRow, FlightDebriefRow.flight_id == FlightRow.id)
         .where(FlightDebriefRow.created_at.between(since, until))
         .order_by(FlightDebriefRow.created_at.desc())
     ).all()
+
+    rating_rows = db.execute(
+        select(FeedbackRow.target, FeedbackRow.sentiment, func.count(FeedbackRow.id))
+        .where(
+            FeedbackRow.target.in_(_RATING_TARGETS),
+            FeedbackRow.sentiment.in_(("up", "down")),
+            FeedbackRow.created_at.between(since, until),
+        )
+        .group_by(FeedbackRow.target, FeedbackRow.sentiment)
+    ).all()
+    counts = {(t, s_): n for t, s_, n in rating_rows}
+    ratings = [
+        RatingCount(
+            target=t, up=counts.get((t, "up"), 0), down=counts.get((t, "down"), 0),
+        )
+        for t in _RATING_TARGETS
+    ]
 
     flown = sum(1 for d, _ in rows if d.decision == Decision.FLOWN.value)
     cancelled = sum(1 for d, _ in rows if d.decision == Decision.CANCELLED.value)
@@ -280,6 +307,7 @@ def _get_debriefs_section(
         cancelled_count=cancelled,
         monitoring_count=monitoring,
         recent=recent,
+        ratings=ratings,
     )
 
 
@@ -296,11 +324,18 @@ def get_admin_digest_data(
     period_label: str = "",
     base_url: str = "",
 ) -> AdminDigestData:
-    """Build complete admin digest payload."""
+    """Build complete admin digest payload.
+
+    Users and flights/briefings always cover the last 24h and 7 days before
+    ``until``; the other sections cover ``since``..``until``.
+    """
+    day, week = until - _DAY, until - _WEEK
     return AdminDigestData(
         period_label=period_label,
-        users=_get_users_section(db, since, until),
-        flights_briefings=_get_flights_briefings_section(db, since, until),
+        users=_get_users_section(db, day, until),
+        users_7d=_get_users_section(db, week, until),
+        flights_briefings=_get_flights_briefings_section(db, day, until),
+        flights_briefings_7d=_get_flights_briefings_section(db, week, until),
         performance=_get_performance_section(db, since, until),
         donations=_get_donations_section(db, since, until),
         debriefs=_get_debriefs_section(db, since, until),
