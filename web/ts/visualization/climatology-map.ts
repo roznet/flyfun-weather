@@ -151,6 +151,11 @@ export class ClimatologyMap {
     }
   }
 
+  /** The underlying Leaflet map, for the tab's viewport binding (#796). */
+  getLeafletMap(): L.Map {
+    return this.map;
+  }
+
   invalidateSize(): void {
     this.map.invalidateSize();
   }

@@ -23,34 +23,30 @@ import {
 } from './weather-map-format';
 import { isConsensusMode } from './weather-map-consensus';
 import { $, escapeHtml } from '../utils';
+import { bindMapView, type MapViewBinding } from '../utils/map-view';
+import type { UrlStateful } from '../utils/url-state';
+import {
+  HISTORICAL_LEADS, HISTORICAL_SOURCES, HISTORICAL_URL_SCHEMA,
+  historicalStateFromUrl, historicalUrlValues,
+  type HistoricalSource, type HistoricalState, type HistoricalUrlValues,
+} from './historical-url';
 
-export const HISTORICAL_SOURCES = [
-  'metar', 'taf', 'worst', 'majority', 'gfs', 'icon', 'ecmwf',
-] as const;
-export type HistoricalSource = typeof HISTORICAL_SOURCES[number];
+export {
+  HISTORICAL_LEADS, HISTORICAL_SOURCES,
+  type HistoricalSource, type HistoricalState,
+} from './historical-url';
+
 const OBSERVED: readonly string[] = ['metar', 'taf'];
 const MODELS: readonly string[] = ['gfs', 'icon', 'ecmwf'];
 const SOURCE_LABEL: Record<string, string> = {
   metar: 'METAR', taf: 'TAF', worst: 'Worst', majority: 'Majority',
   gfs: 'GFS', icon: 'ICON', ecmwf: 'ECMWF',
 };
-export const HISTORICAL_LEADS: readonly number[] = [0, 1, 2, 3, 4, 5, 6];
 /** Compact column headers for the airport panel (full label in the tooltip). */
 const PANEL_LABEL: Partial<Record<ForecastMetric, string>> = {
   flight_category: 'Cat', ceiling_ft: 'Ceiling', visibility_m: 'Vis',
   wind_speed_kt: 'Wind', crosswind_kt: 'X-wind', alternate_needed: 'Alt req',
 };
-
-/** Deep-linkable state (see `hist.*` keys in maps-main.ts). Empty date/time
- *  mean "latest available slot". */
-export interface HistoricalState {
-  date: string;   // YYYY-MM-DD (UTC)
-  time: string;   // HH:MM (UTC)
-  lead: number;
-  source: HistoricalSource;
-  metric: ForecastMetric;
-  apt: string;
-}
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -86,8 +82,10 @@ function reasonText(source: string, info: HistoricalSourceInfo | undefined, lead
   }
 }
 
-export class HistoricalTab {
+export class HistoricalTab implements UrlStateful<typeof HISTORICAL_URL_SCHEMA> {
+  readonly urlSchema = HISTORICAL_URL_SCHEMA;
   private map: WeatherMap | null = null;
+  private viewBinding: MapViewBinding | null = null;
   private range: HistoricalRange | null = null;
   private data: HistoricalMapResponse | null = null;
   private state: HistoricalState;
@@ -95,13 +93,13 @@ export class HistoricalTab {
   private initialised = false;
   private readonly onStateChange: () => void;
 
-  constructor(initial: HistoricalState, onStateChange: () => void) {
-    this.state = { ...initial };
+  constructor(initial: HistoricalUrlValues, onStateChange: () => void) {
+    this.state = historicalStateFromUrl(initial);
     this.onStateChange = onStateChange;
   }
 
-  getState(): HistoricalState {
-    return { ...this.state };
+  urlValues(): HistoricalUrlValues {
+    return historicalUrlValues({ ...this.state, view: this.viewBinding?.current() ?? this.state.view });
   }
 
   async show(): Promise<void> {
@@ -122,6 +120,10 @@ export class HistoricalTab {
     this.map = new WeatherMap(container);
     this.map.init();
     this.map.setAirportClickHandler((icao) => this.openPanel(icao));
+    const leaflet = this.map.getLeafletMap();
+    if (leaflet) {
+      this.viewBinding = bindMapView(leaflet, { initial: this.state.view, onChange: () => this.onStateChange() });
+    }
 
     this.buildMetricPicker();
     this.buildLeadPicker();

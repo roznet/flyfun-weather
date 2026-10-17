@@ -104,24 +104,28 @@ these layers are a tab and not extra layers on the forecast slider.
   deep-linked. Frontend: `visualization/now-tab.ts`. Not on iOS yet.
 
 ### Synoptic
-- Hewson frontal-analysis overlay (`synoptic-map.ts` + hewson adapters/colormaps). Inner controls (model/init/level/metric) are NOT yet deep-linked — only the `tab=synoptic` switch is preserved. See [frontal-detection.md](./frontal-detection.md).
+- Hewson frontal-analysis overlay (`synoptic-map.ts` + hewson adapters/colormaps). Inner controls are deep-linked as `syn.*` (see URL State); the basemap is not. See [frontal-detection.md](./frontal-detection.md).
 
 ### Climatology
-- `climatology-tab.ts`, with its own `Map` / `Top airports` sub-tabs (`#clim-subtabs`, not deep-linked). Opening the tab fires the `CLIMATOLOGY_OPENED` analytics event.
+- `climatology-tab.ts`, with its own `Map` / `Top airports` sub-tabs (`#clim-subtabs`); sub-tab, month, dataset and sub-selection are deep-linked as `clim.*`. Opening the tab fires the `CLIMATOLOGY_OPENED` analytics event.
 
 ### Accuracy Stats (`stats`)
 - Embedded iframe to `/verification.html?embed`; loaded lazily on first switch. No inner filters are deep-linked from this page (the iframe carries its own state).
 
 ## URL State & Share Links
 
-The forecast tab deep-links via the URL query string so any view can be shared as a stable link (PR #117).
+Every tab deep-links via the query string, so **Share view** (`web/ts/utils/share-link.ts`, which shares `location.href`) reopens the same view: tab, controls, open panel and map position (PR #117, generalised in #796).
 
-- **Encoder/decoder**: `web/ts/utils/url-state.ts` (`createUrlState`) — a schema of `{key: {default, values?}}` parses + serialises the current view to/from `URLSearchParams`. `maps-main.ts` defines `mapsUrlState` with keys: `tab`, `fc.day`, `fc.hour`, `fc.model`, `fc.metric`, `fc.apt` (open airport-profile ICAO), `fc.apModel`, `fc.apView` (`card|cross|skewt`). State changes write back via `history.replaceState` (no history pollution). Keys whose value equals the default are omitted, so an untouched view yields a bare `/maps.html`.
-- **Share button**: `web/ts/utils/share-link.ts` — copies the canonical URL for the current view to the clipboard with a transient toast.
-- **`tab=` is the dispatch key** with values `forecast | historical | synoptic | climatology | stats`. The forecast and historical tabs' inner controls are deep-linked (`fc.*`, `hist.*`); synoptic/climatology/stats preserve the tab switch but not their inner state.
-- **Backwards-compatible**: bookmarks without `tab=` default to forecast tab with the page-level defaults.
-
-Pattern: any new control on the forecast tab that affects the rendered view should be added to the `mapsUrlState` schema so the share-link round-trip stays lossless.
+- **Encoder/decoder**: `web/ts/utils/url-state.ts` (`createUrlState`): a schema of `{key: {default, values?, codec?}}` read from / written to `URLSearchParams` via `history.replaceState`. Defaults are elided, so an untouched view is a bare `/maps.html` (and a bare `?tab=X`). Unknown or non-whitelisted values fall back to the default.
+- **Per-tab contract** (`UrlStateful` in `url-state.ts`): each tab owns a prefixed slice (`fc.`, `hist.`, `now.`, `syn.`, `clim.`) declared in a leaflet-free `web/ts/visualization/<tab>-url.ts` (so the page can compose it before the lazily created tab exists, and vitest can import it). The tab class takes its URL-hydrated slice at construction, implements `urlValues()` (typed `UrlValues<S>`, so a schema key can't be forgotten on the write side) and calls the page's `onStateChange` on every URL-relevant change. `maps-main.ts` composes `tab` + the five schemas with `composeUrlSchemas` (throws on a key claimed twice) and `syncUrl()` spreads each tab's `urlValues()`, falling back to the URL-hydrated slice for tabs not created yet, so switching tabs never drops another tab's keys. Historical, Now and Climatology are classes; Forecast and Synoptic keep their state as `maps-main.ts` module vars, with `forecastUrlValues()` / `synopticUrlValues()` standing in.
+- **Rule: any control that changes what a tab renders goes through its tab's schema**, or shared links silently drop it.
+- **Keys**: `fc.day/hour/model/metric/apt/apModel/apView/view`; `hist.date/time/lead/source/metric/apt/view` (empty date/time = latest slot); `now.layers/view/apt`; `syn.model/init/level/metric/hour/opacity/scale/fronts/view` (`syn.opacity` is a percent); `clim.sub/month/dataset/cat/view`. Stats (iframe) carries none.
+- **Viewport** (`web/ts/utils/map-view.ts`): one `*.view` key per tab (each tab has its own Leaflet map), `lat,lon,zoom` at 2 dp / integer zoom, kept as the canonical string with `''` = the map's initial view (Central Europe, `DEFAULT_MAP_VIEW`). `bindMapView` applies the linked view at map creation and reports `moveend` debounced (300 ms), **only when the formatted view changed**: `invalidateSize()` also emits `moveend`, and a write then would put untouched state (the forecast tab's smart-default `fc.hour`) into a bare URL. `current()` is read live, so Share never waits on the debounce. None of these maps auto-fits to data; one that starts to must apply the linked view after its fit.
+- **Now layers**: `now.layers` = enabled layers in fixed order (`none` = all off). URL beats the viewer's `localStorage` (`wb.now.layers`) on load and is not saved until they toggle something; no key = their saved set, else defaults. The key is elided only when the set equals `DEFAULT_NOW_LAYERS`, so a sender on the defaults sends no key and a viewer with a custom saved set then sees their own (accepted to keep bare URLs bare).
+- **Data-driven fallbacks**: `syn.init` is written only when pinned (picked, or from a link); empty = newest, and a linked run no longer in the manifest falls back to the newest keeping the other params (same for model, level, hour clamp). After the manifest lands the URL is rewritten if a fallback changed anything, as `refreshDayAvailability` does for the forecast. `clim.month` empty = current month; a month out of the picker falls back to it; `clim.cat` empty = the dataset's first eligible option.
+- **Synoptic basemap is not linked**; chart sources depend on the viewer's access, and a chart's `CRS.Simple` zoom isn't geographic, so `syn.view` tracks the OSM basemap only and keeps the last OSM view while a chart is shown.
+- **Do not rename existing keys**: the iOS app opens shared `/maps.html` links natively and reads `fc.day/hour/model/metric/apt` and `hist.date/time/lead/source/metric/apt` by name (`AppState.mapDeepLink` / `historicalMapDeepLink`). It ignores unknown keys, so new ones are safe; it does not read `*.view`, `now.*`, `syn.*`, `clim.*` yet.
+- **Tests**: `web/tests/maps-share-link.spec.ts` (one round trip per tab in a fresh context, bare URLs, stale values, tab switching), `web/tests/unit/map-view.test.ts`, `now-layers-url.test.ts`, `maps-url-schema.test.ts` (no duplicate keys, prefixes, iOS keys kept).
 
 ## Consensus Algorithm
 

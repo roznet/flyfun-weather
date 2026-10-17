@@ -11,7 +11,7 @@ import {
   type HewsonManifest, type HewsonManifestSnapshot,
   type HewsonAllMetricsSlice,
 } from './adapters/hewson-map-adapter';
-import { WeatherMap, FORECAST_METRICS, type ForecastMetric } from './visualization/weather-map';
+import { WeatherMap, type ForecastMetric } from './visualization/weather-map';
 import {
   AirportProfilePanel,
   type AirportSummaryInput, type ViewMode as ApViewMode,
@@ -25,17 +25,20 @@ import {
 import { makeChartProjection } from './visualization/chart-projection';
 import { ClimatologyTab } from './visualization/climatology-tab';
 import { NowTab } from './visualization/now-tab';
-import {
-  HistoricalTab, HISTORICAL_SOURCES, HISTORICAL_LEADS,
-  type HistoricalSource, type HistoricalState,
-} from './visualization/historical-tab';
+import { HistoricalTab } from './visualization/historical-tab';
+import { FORECAST_URL_SCHEMA } from './visualization/forecast-url';
+import { HISTORICAL_URL_SCHEMA, type HistoricalUrlValues } from './visualization/historical-url';
+import { NOW_URL_SCHEMA, type NowUrlValues } from './visualization/now-url';
+import { SYNOPTIC_URL_SCHEMA, type SynopticUrlValues } from './visualization/synoptic-url';
+import { CLIMATOLOGY_URL_SCHEMA, type ClimatologyUrlValues } from './visualization/climatology-url';
 import { type HewsonMetric, type ColorScale, vRangeFor } from './visualization/hewson-colormaps';
 import { initInfoPopup, showPopupContent } from './components/info-popup';
 import { renderHewsonInfo } from './helpers/hewson-info';
 import { redirectToLogin, renderUserInfo, $ } from './utils';
 import { initI18n, t } from './i18n/i18n';
 import { setUnitsPreference } from './units';
-import { createUrlState } from './utils/url-state';
+import { createUrlState, composeUrlSchemas, type UrlValues } from './utils/url-state';
+import { bindMapView, type MapViewBinding } from './utils/map-view';
 import { shareCurrentUrl } from './utils/share-link';
 import { track, EVENTS } from './analytics/track';
 
@@ -52,6 +55,10 @@ let statsLoaded = false;
 let synManifest: HewsonManifest | null = null;
 let synModel = 'ecmwf';
 let synInit: string | null = null;       // ISO 8601 with Z, picked from manifest
+// True once the init is a choice (picked, or from a link) rather than "newest":
+// only then does `syn.init` go in the URL, so an untouched tab stays bare and a
+// link to the latest run keeps meaning the latest run.
+let synInitPinned = false;
 let synLevel = 850;
 let synMetric: HewsonMetric = 'tfp';
 let synHour = 0;
@@ -106,58 +113,50 @@ let airportPanelView: ApViewMode = 'card';
 
 // --- URL state ---
 //
-// Schema covers the forecast tab. The synoptic tab's init time is
-// data-driven (depends on the manifest) and opt-in per user, so it's
-// deliberately not deep-linked yet — switching to the synoptic tab is
-// preserved via the `tab` key, but its inner controls aren't.
+// Each tab owns a prefixed slice of the query string (#796): its schema lives
+// in a leaflet-free `visualization/<tab>-url.ts` module, and the tab class
+// implements `UrlStateful` (`urlValues()`), taking its URL-hydrated slice at
+// construction and calling `syncUrl` when a URL-relevant control changes.
+// This page only composes them and writes the union. The Forecast and
+// Synoptic tabs keep their state in this module, so their `urlValues` are the
+// two functions below rather than tab classes.
 //
-// Defaults match the module-level state above and the HTML's pre-active
-// buttons, so an untouched view yields a bare `/maps.html` URL.
-const mapsUrlState = createUrlState({
-  tab:         { default: 'forecast' as Tab, values: ['forecast', 'historical', 'now', 'synoptic', 'climatology', 'stats'] as readonly Tab[] },
-  'fc.day':    { default: 0,  values: [0, 1, 2, 3, 4, 5, 6] as readonly number[] },
-  'fc.hour':   { default: 12, values: [6, 9, 12, 15, 18] as readonly number[] },
-  'fc.model':  { default: 'worst', values: ['worst', 'majority', 'gfs', 'icon', 'ecmwf'] as readonly string[] },
-  'fc.metric': {
-    default: 'flight_category' as ForecastMetric,
-    values: FORECAST_METRICS as readonly ForecastMetric[],
-  },
-  // Open airport-profile panel (ICAO) and the panel's selected model.
-  // Empty ICAO = no panel open. Panel model defaults differ from the
-  // map's per-airport model (panel always needs a real model, not a
-  // consensus mode), so they're separate keys.
-  'fc.apt':    { default: '' },
-  'fc.apModel':{ default: 'ecmwf', values: FORECAST_INDIVIDUAL_MODELS },
-  // Panel view: card (default) | cross | skewt. Lets a shared link land
-  // straight on the cross-section; bare links open the summary card.
-  'fc.apView': { default: 'card', values: ['card', 'cross', 'skewt'] as readonly string[] },
-  // Historical tab (#629). Empty date/time = the latest available slot.
-  'hist.date':   { default: '' },
-  'hist.time':   { default: '' },
-  'hist.lead':   { default: 0, values: HISTORICAL_LEADS },
-  'hist.source': {
-    default: 'metar' as HistoricalSource,
-    values: HISTORICAL_SOURCES as readonly HistoricalSource[],
-  },
-  'hist.metric': {
-    default: 'flight_category' as ForecastMetric,
-    values: FORECAST_METRICS as readonly ForecastMetric[],
-  },
-  'hist.apt':    { default: '' },
-});
+// Rule: any control that changes what a tab renders goes through its tab's
+// schema, or shared links silently drop it.
+//
+// Defaults are elided, so an untouched view yields a bare `/maps.html`.
+const mapsUrlState = createUrlState(composeUrlSchemas(
+  { tab: { default: 'forecast' as Tab, values: ['forecast', 'historical', 'now', 'synoptic', 'climatology', 'stats'] as readonly Tab[] } },
+  FORECAST_URL_SCHEMA,
+  HISTORICAL_URL_SCHEMA,
+  NOW_URL_SCHEMA,
+  SYNOPTIC_URL_SCHEMA,
+  CLIMATOLOGY_URL_SCHEMA,
+));
+type MapsUrlValues = Parameters<typeof mapsUrlState.write>[0];
 
-// Historical state as hydrated from the URL; the tab owns it once created.
-let histInit: HistoricalState | null = null;
+// URL-hydrated slices for the lazily created tabs; each tab owns its state
+// once created, and until then its slice is written back unchanged, so a
+// round trip through other tabs keeps it.
+let urlInit: MapsUrlValues | null = null;
 
-function historicalState(): HistoricalState {
-  return historicalTab?.getState() ?? histInit ?? {
-    date: '', time: '', lead: 0, source: 'metar', metric: 'flight_category', apt: '',
-  };
+function initSlice<K extends keyof MapsUrlValues>(keys: readonly K[]): Pick<MapsUrlValues, K> {
+  const src = urlInit ?? mapsUrlState.read();
+  const out = {} as Pick<MapsUrlValues, K>;
+  for (const k of keys) out[k] = src[k];
+  return out;
 }
 
-function syncUrl(): void {
-  mapsUrlState.write({
-    tab:         currentTab,
+const keysOf = <S extends object>(schema: S) => Object.keys(schema) as (keyof S & keyof MapsUrlValues)[];
+const historicalInit = (): HistoricalUrlValues => initSlice(keysOf(HISTORICAL_URL_SCHEMA));
+const nowInit = (): NowUrlValues => initSlice(keysOf(NOW_URL_SCHEMA));
+const climatologyInit = (): ClimatologyUrlValues => initSlice(keysOf(CLIMATOLOGY_URL_SCHEMA));
+
+let fcView: MapViewBinding | null = null;
+let synViewInit = '';
+
+function forecastUrlValues(): UrlValues<typeof FORECAST_URL_SCHEMA> {
+  return {
     'fc.day':    fcDay,
     'fc.hour':   fcHour,
     'fc.model':  fcModel,
@@ -165,20 +164,33 @@ function syncUrl(): void {
     'fc.apt':    airportPanelIcao ?? '',
     'fc.apModel': airportPanel?.getModel() ?? 'ecmwf',
     'fc.apView': airportPanelView,
-    ...historicalUrlValues(),
-  });
+    'fc.view':   fcView?.current() ?? '',
+  };
 }
 
-function historicalUrlValues() {
-  const h = historicalState();
+function synopticUrlValues(): SynopticUrlValues {
   return {
-    'hist.date':   h.date,
-    'hist.time':   h.time,
-    'hist.lead':   h.lead,
-    'hist.source': h.source,
-    'hist.metric': h.metric,
-    'hist.apt':    h.apt,
+    'syn.model':   synModel,
+    'syn.init':    synInitPinned && synInit ? synInit : '',
+    'syn.level':   synLevel,
+    'syn.metric':  synMetric,
+    'syn.hour':    synHour,
+    'syn.opacity': Math.round(synOpacity * 100),
+    'syn.scale':   synScale,
+    'syn.fronts':  synFrontsGate,
+    'syn.view':    synopticMap?.currentView() ?? synViewInit,
   };
+}
+
+function syncUrl(): void {
+  mapsUrlState.write({
+    tab: currentTab,
+    ...forecastUrlValues(),
+    ...(historicalTab?.urlValues() ?? historicalInit()),
+    ...(nowTab?.urlValues() ?? nowInit()),
+    ...synopticUrlValues(),
+    ...(climatologyTab?.urlValues() ?? climatologyInit()),
+  });
 }
 
 // --- Helpers ---
@@ -639,9 +651,11 @@ function repopulateInitPicker(): void {
     opt.textContent = yr === thisYr ? `${dd} ${mon} ${hh}Z` : `${dd} ${mon} ${yr} ${hh}Z`;
     sel.appendChild(opt);
   }
-  // Pick newest if current init isn't in this model's list
+  // Pick newest if current init isn't in this model's list (a linked run since
+  // pruned, or another model's run): back to "newest", so no longer pinned.
   if (!sorted.find((s) => s.init_time === synInit)) {
     synInit = sorted[0]?.init_time ?? null;
+    synInitPinned = false;
   }
   if (synInit) sel.value = synInit;
   reconfigureLevelPicker();
@@ -1017,24 +1031,29 @@ function wireSynopticControls(): void {
   wireButtonGroup('syn-model-picker', 'model', (v) => {
     synModel = v;
     repopulateInitPicker();
+    syncUrl();
     loadSynoptic();
   });
 
   const initSel = $('syn-init-picker') as HTMLSelectElement | null;
   initSel?.addEventListener('change', () => {
     synInit = initSel.value || null;
+    synInitPinned = synInit != null;
     reconfigureHourSlider();
+    syncUrl();
     loadSynoptic();
   });
 
   wireButtonGroup('syn-level-picker', 'level', (v) => {
     synLevel = parseInt(v);
+    syncUrl();
     loadSynoptic();
   });
 
   const metricSel = $('syn-metric-picker') as HTMLSelectElement | null;
   metricSel?.addEventListener('change', () => {
     synMetric = metricSel.value as HewsonMetric;
+    syncUrl();
     changeActiveMetric();
   });
 
@@ -1047,6 +1066,7 @@ function wireSynopticControls(): void {
   });
   hourSlider?.addEventListener('change', () => {
     synHour = parseInt(hourSlider.value);
+    syncUrl();
     loadSynoptic();
   });
 
@@ -1058,10 +1078,14 @@ function wireSynopticControls(): void {
     if (opVal) opVal.textContent = `${pct}%`;
     synopticMap?.setOpacity(synOpacity);
   });
+  // URL on release only: `input` fires per pixel of drag, and Safari throttles
+  // history.replaceState (it throws past ~100 calls in 30 s).
+  opSlider?.addEventListener('change', () => syncUrl());
 
   const frontsSel = $('syn-fronts-picker') as HTMLSelectElement | null;
   frontsSel?.addEventListener('change', () => {
     synFrontsGate = frontsSel.value;
+    syncUrl();
     // No grid refetch — just (re)load or clear the front overlay for the
     // current selection.
     loadFronts(synLoadToken);
@@ -1078,6 +1102,7 @@ function wireSynopticControls(): void {
 
   wireButtonGroup('syn-scale-picker', 'scale', (v) => {
     synScale = v as ColorScale;
+    syncUrl();
     // No refetch needed — just rescale the existing canvas + legend.
     if (synopticMap) {
       const { vmin, vmax } = vRangeFor(synMetric, synScale);
@@ -1093,6 +1118,7 @@ async function initSynopticTab(): Promise<void> {
     if (container) {
       synopticMap = new SynopticMap(container);
       synopticMap.init();
+      synopticMap.bindView(synViewInit, () => syncUrl());
     }
   } else {
     synopticMap.invalidateSize();
@@ -1113,9 +1139,13 @@ async function initSynopticTab(): Promise<void> {
       if (info) info.textContent = 'No Hewson snapshots on disk yet — run the precompute loop.';
       return;
     }
+    // A linked model, level, init or hour the manifest no longer has falls
+    // back below; the URL must then say what is shown, not what was asked.
+    const asked = JSON.stringify(synopticUrlValues());
     if (!modelsWithData.includes(synModel)) synModel = modelsWithData[0];
     repopulateModelPicker();
     repopulateInitPicker();
+    if (JSON.stringify(synopticUrlValues()) !== asked) syncUrl();
   }
   // Discover available chart basemaps in the background; the Base picker shows
   // only "Map" until this lands, then gains a button per allowed source.
@@ -1123,6 +1153,32 @@ async function initSynopticTab(): Promise<void> {
     console.warn('basemap picker init failed:', err);
   });
   loadSynoptic();
+}
+
+/** Synoptic state + controls from the URL. Manifest-dependent values (model,
+ *  init, level, hour) are checked when the manifest lands (initSynopticTab). */
+function hydrateSynoptic(init: SynopticUrlValues): void {
+  synModel = init['syn.model'];
+  synInit = init['syn.init'] || null;
+  synInitPinned = synInit != null;
+  synLevel = init['syn.level'];
+  synMetric = init['syn.metric'];
+  synHour = Math.max(0, init['syn.hour']);
+  synOpacity = init['syn.opacity'] / 100;
+  synScale = init['syn.scale'];
+  synFrontsGate = init['syn.fronts'];
+  synViewInit = init['syn.view'];
+
+  setActive('syn-level-picker', String(synLevel), 'level');
+  setActive('syn-scale-picker', synScale, 'scale');
+  const metricSel = $('syn-metric-picker') as HTMLSelectElement | null;
+  if (metricSel) metricSel.value = synMetric;
+  const frontsSel = $('syn-fronts-picker') as HTMLSelectElement | null;
+  if (frontsSel) frontsSel.value = synFrontsGate;
+  const opSlider = $('syn-opacity-slider') as HTMLInputElement | null;
+  if (opSlider) opSlider.value = String(init['syn.opacity']);
+  const opVal = $('syn-opacity-value');
+  if (opVal) opVal.textContent = `${init['syn.opacity']}%`;
 }
 
 // --- Tab switching ---
@@ -1155,15 +1211,15 @@ function switchTab(tab: Tab): void {
     else rerender();
     setTimeout(() => forecastMap?.invalidateSize(), 100);
   } else if (tab === 'historical') {
-    if (!historicalTab) historicalTab = new HistoricalTab(historicalState(), () => syncUrl());
+    if (!historicalTab) historicalTab = new HistoricalTab(historicalInit(), () => syncUrl());
     void historicalTab.show();
   } else if (tab === 'now') {
-    if (!nowTab) nowTab = new NowTab();
+    if (!nowTab) nowTab = new NowTab(nowInit(), () => syncUrl());
     void nowTab.show();
   } else if (tab === 'synoptic') {
     setTimeout(() => { initSynopticTab(); }, 50);
   } else if (tab === 'climatology') {
-    if (!climatologyTab) climatologyTab = new ClimatologyTab();
+    if (!climatologyTab) climatologyTab = new ClimatologyTab(climatologyInit(), () => syncUrl());
     climatologyTab.show();
   } else if (tab === 'stats') {
     if (!statsLoaded) {
@@ -1253,10 +1309,9 @@ async function main(): Promise<void> {
   fcHour      = init['fc.hour'];
   fcModel     = init['fc.model'];
   fcMetric    = init['fc.metric'];
-  histInit = {
-    date: init['hist.date'], time: init['hist.time'], lead: init['hist.lead'],
-    source: init['hist.source'], metric: init['hist.metric'], apt: init['hist.apt'],
-  };
+  urlInit = init;
+  hydrateSynoptic(init);
+  fcView = bindMapView(forecastMap.getLeafletMap()!, { initial: init['fc.view'], onChange: () => syncUrl() });
 
   if (!urlParams.has('fc.hour')) {
     const nowHour = new Date().getUTCHours();
