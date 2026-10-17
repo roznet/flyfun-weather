@@ -145,15 +145,25 @@ def test_dispatch_returns_result(monkeypatch):
     (os.cpu_count() or 1) < 2,
     reason="requires at least 2 logical CPUs to actually parallelise",
 )
-def _assert_ran_concurrently(intervals, label):
-    """Every job was running at one common instant: serialised jobs cannot
-    overlap, concurrent ones do even when a loaded machine time-slices them."""
-    latest_start = max(start for start, _ in intervals)
-    earliest_end = min(end for _, end in intervals)
-    assert latest_start < earliest_end, (
-        f"{label}: busy-loops did not overlap (last started "
-        f"{latest_start - earliest_end:.2f}s after the first finished) — serialised"
+def _assert_ran_concurrently(results, label):
+    """Each job ran on its own worker, and the jobs overlapped in time.
+
+    Load-independent: the #133 bug dispatched everything to one worker, which
+    fails both checks however busy the machine is. Requiring *all* jobs to share
+    one instant was too strict — on CI's 4 vCPUs under xdist the 4th of four
+    jobs started 3 ms after the first finished, despite four workers.
+    """
+    pids = {pid for _, _, pid in results}
+    assert len(pids) == len(results), (
+        f"{label}: {len(results)} jobs ran on {len(pids)} worker(s) — serialised"
     )
+    spans = sorted((start, end) for start, end, _ in results)
+    running_until = spans[0][1]
+    for start, end in spans[1:]:
+        if start < running_until:
+            return
+        running_until = max(running_until, end)
+    raise AssertionError(f"{label}: no two busy-loops overlapped in time — serialised")
 
 
 def test_two_concurrent_submits_run_in_parallel(monkeypatch):
