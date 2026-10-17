@@ -3987,6 +3987,8 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         "cape_jkg": None,
         "cloud_cover_pct": None,
         "cloud_cover_low_pct": None,
+        "cloud_cover_mid_pct": None,
+        "cloud_cover_high_pct": None,
         "surface_pressure_hpa": None,
         "nwp_ceiling_ft": None,
         "cloud_base_ft": None,
@@ -4042,6 +4044,14 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     lcc = raw.get("low_cover_frac")
     if lcc is not None:
         out["cloud_cover_low_pct"] = lcc * 100.0
+
+    mcc = raw.get("mid_cover_frac")
+    if mcc is not None:
+        out["cloud_cover_mid_pct"] = mcc * 100.0
+
+    hcc = raw.get("high_cover_frac")
+    if hcc is not None:
+        out["cloud_cover_high_pct"] = hcc * 100.0
 
     sp = raw.get("surface_pressure_pa")
     if sp is not None:

@@ -360,6 +360,13 @@ def metar_observed_part(raw: str) -> str:
     return raw[: m.start()] if m else raw
 
 
+def observed_cloud_types(raw: str) -> set[str]:
+    """``CB`` / ``TCU`` in the cloud groups of a raw METAR's observed part —
+    the trend forecast and remarks are cut off first (#682). Shared with the
+    verification cycle's ``convective_cloud`` column (#793)."""
+    return set(_CLOUD_TYPE_RE.findall(metar_observed_part(raw)))
+
+
 def convective_tags(obs: AirportObservation) -> set[str]:
     """``TS`` / ``VCTS`` from present weather, ``CB`` / ``TCU`` from the cloud
     groups (read off the raw report, so packs written before the field
@@ -369,7 +376,7 @@ def convective_tags(obs: AirportObservation) -> set[str]:
     for c in _present_weather(obs):
         if "TS" in c:
             tags.add("VCTS" if c.startswith("VC") else "TS")
-    tags.update(_CLOUD_TYPE_RE.findall(metar_observed_part(obs.metar_raw or "")))
+    tags.update(observed_cloud_types(obs.metar_raw or ""))
     return tags
 
 

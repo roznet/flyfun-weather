@@ -567,6 +567,8 @@ def _fetch_forecasts_for_model(
                     "cape_jkg": hourly.cape_jkg,
                     "cloud_cover_pct": hourly.cloud_cover_pct,
                     "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
+                    "cloud_cover_mid_pct": hourly.cloud_cover_mid_pct,
+                    "cloud_cover_high_pct": hourly.cloud_cover_high_pct,
                     "lcl_ft": lcl_ft,
                 }
 
@@ -1364,6 +1366,10 @@ def fetch_ecmwf_grib_snapshots(
                 "cape_jkg": snap_fields.get("cape_jkg"),
                 "cloud_cover_pct": snap_fields.get("cloud_cover_pct"),
                 "cloud_cover_low_pct": snap_fields.get("cloud_cover_low_pct"),
+                # Recorded only: deliberately not passed into the HourlyForecast
+                # below, which would change this model's nwp_layer_* columns.
+                "cloud_cover_mid_pct": snap_fields.get("cloud_cover_mid_pct"),
+                "cloud_cover_high_pct": snap_fields.get("cloud_cover_high_pct"),
                 "nwp_ceiling_ft": snap_fields.get("nwp_ceiling_ft"),
                 "cloud_base_ft": snap_fields.get("cloud_base_ft"),
                 "lcl_ft": lcl_ft,
@@ -1537,6 +1543,8 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "cape_jkg": snap.get("cape_jkg"),
             "cloud_cover_pct": snap.get("cloud_cover_pct"),
             "cloud_cover_low_pct": snap.get("cloud_cover_low_pct"),
+            "cloud_cover_mid_pct": snap.get("cloud_cover_mid_pct"),
+            "cloud_cover_high_pct": snap.get("cloud_cover_high_pct"),
             "nwp_ceiling_ft": snap.get("nwp_ceiling_ft"),
             "cloud_base_ft": snap.get("cloud_base_ft"),
             "lcl_ft": snap.get("lcl_ft"),
@@ -1782,6 +1790,18 @@ def _score_cycle(
                         score_row.cloud_base_delta_ft = cloud_base_agl - obs_ceiling_ft
                 if snap.lcl_ft is not None:
                     score_row.lcl_delta_ft = snap.lcl_ft - obs_ceiling_ft
+            # The same model base against the lowest reported base, any amount
+            # (#793): the FEW/SCT days the ceiling delta above never sees.
+            if obs.lowest_cloud_base_ft is not None and snap.cloud_base_ft is not None:
+                cloud_base_agl = to_agl_ceiling(
+                    snap.cloud_base_ft,
+                    elev_map.get(snap.icao),
+                    source_is_agl=_nwp_ceiling_is_agl(snap.model),
+                )
+                if cloud_base_agl is not None:
+                    score_row.lowest_base_delta_ft = (
+                        cloud_base_agl - float(obs.lowest_cloud_base_ft)
+                    )
             db.add(score_row)
             existing_score_keys.add(score_key)
             scores_created += 1

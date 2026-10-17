@@ -301,6 +301,8 @@ def _build_observation(
     """
     from euro_aip.briefing.weather.analysis import WeatherAnalyzer
 
+    from weatherbrief.tasks.metar_clouds import metar_cloud_fields
+
     # Guard the natural key at the boundary — see _observation_time_problem.
     problem = _observation_time_problem(metar.observation_time, now)
     if problem is not None:
@@ -341,6 +343,14 @@ def _build_observation(
 
     if metar.flight_category is not None:
         obs.flight_category = metar.flight_category.value
+
+    # Re-parsed from the raw text rather than read off `metar`, so ingest and
+    # `verify backfill-cloud-layers` cannot disagree (#793).
+    clouds = metar_cloud_fields(metar.raw_text, obs.observation_time)
+    if clouds is not None:
+        obs.cloud_layers = clouds["cloud_layers"]
+        obs.lowest_cloud_base_ft = clouds["lowest_cloud_base_ft"]
+        obs.convective_cloud = clouds["convective_cloud"]
 
     # A TAF whose validity does not contain the observation is not a forecast
     # for it — aviationweather.gov hands back the latest TAF however old, so
@@ -582,6 +592,9 @@ def store_observations(
                 dewpoint_c=obs.dewpoint_c,
                 qnh=obs.qnh,
                 weather=obs.weather_json(),
+                cloud_layers=obs.cloud_layers,
+                lowest_cloud_base_ft=obs.lowest_cloud_base_ft,
+                convective_cloud=obs.convective_cloud,
                 taf_raw=obs.taf_raw,
                 taf_applicable=obs.taf_applicable,
                 taf_issue_time=obs.taf_issue_time,

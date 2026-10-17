@@ -172,10 +172,14 @@ METAR + active-TAF fields as fetched. Natural key `UNIQUE(icao, observation_time
 
 `report_type` (migration 091) is `'METAR'` (routine) or `'SPECI'` (special, issued off-cycle on significant change), and **NULL on every row written before 091**. NULL reads as routine everywhere — that is what made 091 behaviour-preserving, since pre-091 rows are whatever `latest_metar` returned. Reclassifying history is a deliberate act: `verify backfill-report-type` (`--dry-run` surveys and reports the SPECI rate without writing). Read through `routine_observation_filter()` rather than comparing the column directly, so the NULL case cannot be got wrong.
 
+**Cloud detail** (migration 107, #793): `cloud_layers` (JSON list of `{amount, base_ft, type}`, VV kept as amount `"VV"`), `lowest_cloud_base_ft` (lowest FEW/SCT/BKN/OVC base, VV excluded, as `ceiling_ft` excludes it) and `convective_cloud` (`CB` / `TCU` / NULL). One function derives all three from the observed part of `metar_raw` (`tasks/metar_clouds.metar_cloud_fields`), at ingest and in the backfill alike, so a backfilled row equals an ingested one; CB/TCU is read by the live layer's own rule (`live_significance.observed_cloud_types`, trend and remarks cut off), so calibration and flight-day alerts agree on "a CB was reported". `cloud_layers` is the "derived?" marker: `[]` = no cloud reported, NULL = written before 107 and not backfilled yet. `verify backfill-cloud-layers` fills the DB rows; `--archive` also writes `DATA_DIR/archive/derived/observation_clouds/YYYY-MM.parquet` (keyed by observation `id`) for months already pruned, rather than rewriting archive files the prune gate has hashed. RVR is still only in `metar_raw`.
+
 ### `verification_scores` — model vs reality
 One row per `(icao, observation_time, model, model_init_time, source)`. The `source` column distinguishes flight-based from standalone scores — **all queries filter by source** to prevent mixing. Only two stored values: `'flight'` and `'standalone'` (the `standalone_full`/`standalone_light`/`standalone_forecast` distinction lives only on `verification_cycles.source`, for per-cycle metrics, never on the scores themselves). Migration 055 adds a composite `(source, days_out, observation_time)` index to keep dashboard queries off full table scans.
 
 Gust is stored as a **raw value plus a delta plus a flag** (`model_wind_gust_kt`, `wind_gust_delta_kt`, `model_gust_flag`), unlike every other scored field which keeps only a delta (#491). Two reasons the delta alone doesn't work: the observed gust is NULL on ~90% of hours (a METAR only carries a gust group when the peak exceeds the mean by ~10 kt), so a delta-only column would silently drop exactly the "model called a gust, the airport wasn't gusting" rows; and the forecast gust is **not** recoverable after the fact the way `wind_speed` is, because the snapshot holding it (`airport_forecast_snapshots`) is pruned at >10 days.
+
+`lowest_base_delta_ft` (#793) is the standalone model `cloud_base_ft` (converted to AGL like `cloud_base_delta_ft`) minus the observation's `lowest_cloud_base_ft`. `cloud_base_delta_ft` differences the same model base against the *ceiling*, so it is NULL on exactly the FEW/SCT days the VFR question is about; the two are kept side by side rather than redefining the old column under its history. Only scores written after the observation has its cloud detail carry it, and scores are never recomputed: run `verify backfill-cloud-layers` right after migration 107, before the next scoring cycle, or the observations collected just before the deploy keep a NULL delta for good (ingest fills the columns itself from then on).
 
 ### `taf_verification_scores` — TAF vs METAR
 TAFs are forecasts too, scored per METAR (one TAF scored against multiple METARs across its validity period — shows accuracy over time). Separate table because the key shape differs: `UNIQUE(icao, observation_time, taf_issue_time, source)`.
@@ -186,7 +190,7 @@ TAF gust is only a delta (`wind_gust_delta_kt`): the TAF gust itself already liv
 Timing (`phase_*_ms`) and counts for each collection/scoring cycle, plus nullable `peak_rss_mb`/`peak_cgroup_mb` (migration 051 / #137; legacy rows predate sampling). `source` distinguishes `flight` / `metar_ingest` / `standalone_*`. The `error` column stores the last 500 chars of a failure traceback so post-mortems don't need log access.
 
 ### `airport_forecast_snapshots` — standalone NWP forecasts
-Open-Meteo forecasts at watchlist airports (surface + ceiling estimates + sounding-derived fields), keyed `UNIQUE(icao, model, model_init_time, forecast_hour)`. Standalone needs its own forecast storage since there is no briefing pack to reference.
+Open-Meteo forecasts at watchlist airports (surface + ceiling estimates + sounding-derived fields), keyed `UNIQUE(icao, model, model_init_time, forecast_hour)`. Standalone needs its own forecast storage since there is no briefing pack to reference. Cloud cover is stored as total, low, mid and high (`cloud_cover_mid_pct` / `cloud_cover_high_pct` from migration 107, #793; NULL before, and not backfillable). For ECMWF the mid/high values are recorded only — they are not fed into that row's sounding pass, which would have changed its `nwp_layer_*` columns.
 
 ### `verification_daily_stats` / `verification_monthly_stats` — pre-aggregated rollups (#154)
 One row per `(period, source, model, days_out, icao)`, NWP scores only (TAF out of scope — different key shape). The daily rollup runs after each standalone cycle (`rollup_today_and_pending` before `cache_builder.rebuild_all`); the monthly rollup processes only completed months and is idempotent (delete + reinsert). Design choices worth preserving:
@@ -648,6 +652,13 @@ Gust accuracy is the one metric where a single averaged number is actively misle
 
 The two select different, mostly non-overlapping samples. Collapsing them into one average is what made the first ad-hoc pass (EGLL/LFPG/EDDF, Apr–Jul 2026) look self-contradictory.
 
+### What counts as observed convection (#793)
+
+Two observed definitions, used by two different scores; keep them apart.
+
+- **METAR side** (`obs_has_convection` on `verification_scores`, `_has_thunderstorm` in `tasks/scoring.py`): any present-weather group containing `TS`, at any intensity and **including `VCTS`**; recent weather (`RE…`) excluded. The same reading as the live layer's `convective_tags`. Fixed in 72478a5a (bare `TS` only had missed `+TSRA`/`TSRA`/`-TSRA`, about two thirds of thunderstorm METARs); rows scored before keep their old value. VCTS counts because it reports a storm 8–16 km from the field, inside the grid box an airport-point forecast represents and inside the 10/20 NM discs the radar/lightning score uses. CB/TCU alone do not count as convection here; they are on the observation row (`convective_cloud`) for a score that wants them. **Open:** the owner has not yet confirmed VCTS-in for calibration (#793 item 4).
+- **Archive side** (`verify convective-score`, `tasks/convective_verification.py`): forecast yes = `sounding_convective_risk` ≥ `moderate`; observed yes = radar max ≥ 41 dBZ within 10 NM (adequately covered frame) **or** any flash within 20 NM, in the frames valid `[hour − 30 min, hour + 30 min)` around the forecast hour. Observed *no* needs evidence of absence (≥ 1 covered radar frame **and** ≥ 1 lightning frame in the hour); otherwise the hour is unknown and dropped, so an outage never scores as a correct negative. Output: hits / misses / false alarms / correct negatives with POD, FAR, CSI and bias per model and `days_out` (calendar-date difference, as everywhere here); `--pairs-out` writes the per-hour pairs with CAPE, `nwp_conv_cover_pct`, `nwp_conv_top_ft`, max dBZ, flashes and highest top FL for threshold work (#791). Offline, DuckDB over the two Parquet archives (`pip install -e ".[analysis]"`); the server never runs it. The observed archive starts 2026-10-01, so the first convective season in it is summer 2027.
+
 ### Observation Frequency: One Routine Report Per 30-Minute Bucket
 
 METARs are issued every 30-60 minutes. To avoid inflating the dataset with near-duplicate observations, **keep at most one routine observation per airport per 30-minute bucket** (`[HH:00, HH:30)` and `[HH:30, HH+1:00)`). The `UNIQUE(icao, observation_time)` constraint handles exact dedup; the bucket filter is applied during collection, before insertion, and keeps the first arrival — a stored observation is never replaced, since scores and FK references may already point at it.
@@ -723,6 +734,15 @@ python -m weatherbrief.verify backfill-gust --taf-only
 python -m weatherbrief.verify export --format csv --output accuracy.csv
 python -m weatherbrief.verify export --table scores --source standalone \
     --model ecmwf --format csv --output scores.csv
+
+# Cloud layers / lowest base / CB-TCU from metar_raw (migration 107, #793).
+# --archive also writes derived side files for archived (pruned) months.
+python -m weatherbrief.verify backfill-cloud-layers [--dry-run] [--archive]
+
+# Forecast convective risk vs observed radar/lightning, from the Parquet
+# archives (needs duckdb: pip install -e ".[analysis]")
+python -m weatherbrief.verify convective-score [--risk moderate] [--dbz 41] \
+    [--since 2027-05-01] [--until 2027-10-01] [--pairs-out pairs.parquet]
 
 # Summary statistics (--source flight|standalone, --model, --icao)
 python -m weatherbrief.verify stats --source standalone
@@ -985,6 +1005,9 @@ Dashboard and digest breakdowns — per-model accuracy at lead time, TAF-vs-mode
 | Dashboard cache with staleness | Expensive queries cached as JSON; staleness checked via MAX(observation_time) comparison; falls back to live on stale |
 | Composite index on (source, days_out, observation_time) | Migration 055 — prevents full table scans on dashboard queries that filter by source + days_out + time range |
 | Store the raw model gust, not just its delta | The observed gust is NULL ~90% of hours and the snapshot holding the forecast gust is pruned at 10 days — a delta-only column would lose the over-warn signal permanently (#491) |
+| Cloud detail derived from `metar_raw` by one function (#793) | Ingest and backfill cannot disagree, and the CB/TCU rule is the live layer's, so a calibration and a flight-day alert read a report the same way |
+| Pruned months get a derived side file, not a rewritten archive (#793) | Archive files are hashed into the manifest the prune gate trusts; a derived file keyed by `id` adds the columns without touching that chain |
+| Unknown observed hours are dropped from the convective score | A radar outage or an airport outside the MTG disc would otherwise score as "no storm", inflating correct negatives and hiding misses |
 | Gust reported under two conditionings | Forecast-flagged and obs-flagged hours are nearly disjoint samples pointing opposite ways (over-warns on average, runs low on the gusty days); one blended number reads as self-contradictory |
 
 ## Implementation Status
