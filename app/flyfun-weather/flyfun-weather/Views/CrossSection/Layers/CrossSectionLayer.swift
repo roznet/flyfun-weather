@@ -103,8 +103,8 @@ enum CrossSectionLayer {
         ReferenceLinesLayer(),
     ]
 
-    // The boot layer set lives in `CrossSectionPresets.bootDefaults` (GRAMET plus
-    // the observed layers at their defaults).
+    // The boot layer set lives in `CrossSectionPresets.bootDefaults` (every
+    // layer at these defaults).
 
     /// Layers the web registry marks `defaultEnabled`, restricted to ids iOS has.
     /// A family chip switching on a group that is a set of independent lines —

@@ -582,7 +582,7 @@ extension CrossSectionTheme {
     // value (and `ColorScales`, which reads it) to `@MainActor` makes that a
     // compiler-enforced guarantee rather than a documented convention — an
     // off-main caller won't compile. Defaults to `.standard`; the view model sets
-    // it to the booted theme (GRAMET) before the first frame.
+    // it to the booted theme before the first frame.
 
     @MainActor private static var _active: CrossSectionTheme = standard
 

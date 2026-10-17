@@ -34,6 +34,7 @@ import ios_test  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 TEST = "flyfun-weatherUITests/ScreenshotUITests/testCaptureStoreScreenshots"
 DEFAULT_DEVICES = ["iPhone 17", "iPad Pro 13-inch (M5)"]
+BUNDLE_ID = "net.ro-z.flyfun-weather"
 
 
 def simctl(*args: str) -> None:
@@ -41,9 +42,15 @@ def simctl(*args: str) -> None:
 
 
 def prepare(udid: str, appearance: str) -> None:
-    """Boot, pin the status bar and set the appearance (both persist until reboot)."""
+    """Boot, pin the status bar and set the appearance (both persist until reboot).
+
+    Also uninstalls the app, which xcodebuild then reinstalls: the screenshots
+    show a fresh install's defaults (cross-section layers, emulation, theme),
+    not whatever the UI journeys last left in the simulator's UserDefaults.
+    """
     subprocess.run(["xcrun", "simctl", "boot", udid], capture_output=True)  # already booted is fine
     simctl("bootstatus", udid)
+    subprocess.run(["xcrun", "simctl", "uninstall", udid, BUNDLE_ID], capture_output=True)
     simctl("status_bar", udid, "override", "--time", "9:41", "--dataNetwork", "wifi",
            "--wifiMode", "active", "--wifiBars", "3", "--cellularMode", "active",
            "--cellularBars", "4", "--batteryState", "charged", "--batteryLevel", "100")

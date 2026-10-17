@@ -144,24 +144,23 @@ enum CrossSectionPresets {
         return all.first { $0.id == id }
     }
 
-    /// The emulation a fresh install boots into — the chart has always opened
-    /// GRAMET-shaped on iOS.
-    static let bootEmulationId = "gramet"
+    /// The emulation a fresh install boots into: none — our own conventions with
+    /// square NWP clouds, as the web boots. (Until 1.15 iOS opened GRAMET-shaped,
+    /// natural clouds and all; an install that stored it keeps it.)
+    static let bootEmulationId: String? = nil
 
     /// What "no emulation" is called: our own conventions, i.e. the methods this
     /// briefing graded with (web `viz.emulateNone`). Not an absence.
     static let ownConventionsLabel = "FlyFun"
 
-    /// Boot state, and the base every restored map merges over: GRAMET plus the
-    /// observed layers at their web defaults. Covers every layer, so a merge can
-    /// never leave an id missing.
-    static let bootDefaults: [String: Bool] = {
-        var m = gramet
-        for layer in CrossSectionLayer.allLayers where m[layer.id] == nil {
-            m[layer.id] = CrossSectionLayer.defaultEnabled.contains(layer.id)
+    /// Boot state, and the base every restored map merges over: every layer at
+    /// its web default (web `getDefaultEnabled`). Covers every layer, so a merge
+    /// can never leave an id missing.
+    static let bootDefaults: [String: Bool] = Dictionary(
+        uniqueKeysWithValues: CrossSectionLayer.allLayers.map {
+            ($0.id, CrossSectionLayer.defaultEnabled.contains($0.id))
         }
-        return m
-    }()
+    )
 
     // MARK: - Method groups
 

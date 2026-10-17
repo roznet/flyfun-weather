@@ -81,13 +81,17 @@ extension CrossSectionSharedStateTests {
         }
 
         @Test func familySummaryNamesAnswersThenCounts() {
-            let vm = CrossSectionViewModel()  // GRAMET boot
+            let vm = CrossSectionViewModel()  // web-default boot
             let icing = LayerFamily.icing.summary(enabledLayers: vm.enabledLayers, cloudStyle: vm.cloudStyle)
             #expect(icing.text == "Ogimet-NWP" && !icing.off)
             let clouds = LayerFamily.clouds.summary(enabledLayers: vm.enabledLayers, cloudStyle: vm.cloudStyle)
-            #expect(clouds.text == "NWP · Natural")
+            #expect(clouds.text == "NWP · Square")
             let levels = LayerFamily.levels.summary(enabledLayers: vm.enabledLayers, cloudStyle: vm.cloudStyle)
-            #expect(levels.text == "0°C + cruise")
+            #expect(levels.text == "4 on")
+
+            vm.applyEmulation("gramet")  // 0°C + cruise only, no stability lines
+            let grametLevels = LayerFamily.levels.summary(enabledLayers: vm.enabledLayers, cloudStyle: vm.cloudStyle)
+            #expect(grametLevels.text == "0°C + cruise")
             let stability = LayerFamily.stability.summary(enabledLayers: vm.enabledLayers, cloudStyle: vm.cloudStyle)
             #expect(stability.text == "off" && stability.off)
 
@@ -98,10 +102,13 @@ extension CrossSectionSharedStateTests {
 
         // MARK: Emulate
 
-        @Test func freshInstallBootsGramet() {
+        @Test func freshInstallBootsFlyFunWithSquareClouds() {
+            // As the web boots: our own conventions, standard theme, square NWP clouds.
             let vm = CrossSectionViewModel()
-            #expect(vm.activeEmulation == "gramet")
-            #expect(vm.themeId == .gramet)
+            #expect(vm.activeEmulation == nil)
+            #expect(vm.themeId == .standard)
+            #expect(vm.cloudStyle == .square)
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
         }
 
         @Test func emulationReadsBackAsTheMethodsItChose() {
@@ -141,7 +148,7 @@ extension CrossSectionSharedStateTests {
             vm.applyEmulation(nil)
             #expect(on(vm, in: .icing) == ["sfip-bands"])
             #expect(on(vm, in: .convection) == ["thermo-convective-bg"])
-            #expect(on(vm, in: .clouds) == ["cloud-bands"])  // DD, in the natural style already drawn
+            #expect(on(vm, in: .clouds) == ["square-cloud-bands"])  // DD, in the square style already drawn
             #expect(on(vm, in: .turbulence) == ["cat-bands"])
         }
 
@@ -283,14 +290,14 @@ extension CrossSectionSharedStateTests {
         // MARK: Clouds
 
         @Test func cloudSourcesArePickAnyInOneStyle() {
-            let vm = CrossSectionViewModel()  // NWP natural
+            let vm = CrossSectionViewModel()  // NWP square
             vm.toggleCloudSource(.dd)
-            #expect(Set(on(vm, in: .clouds)) == ["nwp-cloud-bands", "cloud-bands"])
-            vm.setCloudStyle(.square)
             #expect(Set(on(vm, in: .clouds)) == ["square-nwp-cloud-bands", "square-cloud-bands"])
+            vm.setCloudStyle(.natural)
+            #expect(Set(on(vm, in: .clouds)) == ["nwp-cloud-bands", "cloud-bands"])
             vm.toggleCloudSource(.nwp)
-            #expect(on(vm, in: .clouds) == ["square-cloud-bands"])
-            #expect(vm.cloudStyle == .square)
+            #expect(on(vm, in: .clouds) == ["cloud-bands"])
+            #expect(vm.cloudStyle == .natural)
         }
 
         // MARK: Graded methods
