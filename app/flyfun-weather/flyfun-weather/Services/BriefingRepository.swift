@@ -159,6 +159,15 @@ protocol BriefingRepository: Sendable {
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
     func grametImage(flightId: String, timestamp: String) async throws -> Data
+    /// GRAMET for a pack (#799): the PDF (`%PDF` magic), or a PNG for packs
+    /// stored before the PDF switch. The caching layer keeps it in the pack dir.
+    func grametDocument(flightId: String, timestamp: String) async throws -> Data
+    /// One surface chart's bytes (#799), from the pack's `charts` manifest. A
+    /// 410 (`APIError.serverError(410, …)`) means the server evicted it. The
+    /// caching layer serves and fills the shared on-disk chart cache.
+    func chartImage(_ chart: PackChart) async throws -> Data
+    /// Route overlay for one chart source (#799), keyed by chart type.
+    func chartOverlay(flightId: String, timestamp: String, source: PackChartSource) async throws -> ChartOverlay
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error>
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse
@@ -193,6 +202,20 @@ extension BriefingRepository {
     /// that don't name a source stay unchanged; Siri passes `.siri` explicitly.
     func refreshStream(flightId: String) async -> AsyncThrowingStream<RefreshEvent, Error> {
         await refreshStream(flightId: flightId, source: .manual)
+    }
+
+    /// Charts and GRAMET (#799) are only served by the online/caching layers;
+    /// fixtures and test fakes that don't stub them report "not available".
+    func grametDocument(flightId: String, timestamp: String) async throws -> Data {
+        throw APIError.notFound
+    }
+
+    func chartImage(_ chart: PackChart) async throws -> Data {
+        throw APIError.notFound
+    }
+
+    func chartOverlay(flightId: String, timestamp: String, source: PackChartSource) async throws -> ChartOverlay {
+        throw APIError.notFound
     }
 
     /// Repositories with no notion of a fetch source (fixtures, test fakes)
@@ -517,6 +540,27 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func grametImage(flightId: String, timestamp: String) async throws -> Data {
         try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/gramet.png")
+    }
+
+    func grametDocument(flightId: String, timestamp: String) async throws -> Data {
+        // Raw timestamp: `requestData` percent-encodes the path segment itself.
+        try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/gramet")
+    }
+
+    func chartImage(_ chart: PackChart) async throws -> Data {
+        // The manifest URL is already percent-encoded and may carry `?w=…`, so
+        // it goes through `requestDataURL` (which keeps both as they are).
+        try await client.requestDataURL(chart.url)
+    }
+
+    func chartOverlay(flightId: String, timestamp: String, source: PackChartSource) async throws -> ChartOverlay {
+        let data = try await client.requestDataURL(source.overlayUrl)
+        do {
+            // Plain decoder: the keys are chart types, not snake_case fields.
+            return try JSONDecoder().decode(ChartOverlay.self, from: data)
+        } catch {
+            throw APIError.decodingError(error)
+        }
     }
 
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {

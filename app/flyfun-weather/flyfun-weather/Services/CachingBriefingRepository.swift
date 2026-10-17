@@ -557,6 +557,129 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.grametImage(flightId: flightId, timestamp: timestamp)
     }
 
+    // MARK: - Charts + GRAMET (#799)
+
+    /// GRAMET file names in the pack dir, by format. Route-specific, so it
+    /// lives with the pack rather than in the shared chart cache.
+    private static let grametPDFName = "gramet.pdf"
+    private static let grametPNGName = "gramet.png"
+
+    /// Pack-dir first (an offline download put it there), then the network,
+    /// writing through so a second open — or airplane mode — needs no fetch.
+    func grametDocument(flightId: String, timestamp: String) async throws -> Data {
+        for name in [Self.grametPDFName, Self.grametPNGName] {
+            if let data = await cache.readPackFile(flightId: flightId, timestamp: timestamp, fileName: name) {
+                return data
+            }
+        }
+        let data = try await online.grametDocument(flightId: flightId, timestamp: timestamp)
+        let name = data.starts(with: Array("%PDF".utf8)) ? Self.grametPDFName : Self.grametPNGName
+        try? await cache.writePackFile(data, flightId: flightId, timestamp: timestamp, fileName: name)
+        return data
+    }
+
+    /// Shared chart cache first, keyed by the manifest's immutable cache key —
+    /// so a second leg or a refresh on the same run never re-downloads.
+    func chartImage(_ chart: PackChart) async throws -> Data {
+        if let data = await cache.readChart(cachePath: chart.cachePath) {
+            return data
+        }
+        let data = try await online.chartImage(chart)
+        do {
+            try await cache.writeChart(data, cachePath: chart.cachePath)
+        } catch {
+            Self.logger.warning("Could not cache chart \(chart.cachePath): \(error)")
+        }
+        return data
+    }
+
+    /// Route overlay: route-specific, so cached per pack (`chart-overlay-<source>.json`).
+    func chartOverlay(flightId: String, timestamp: String, source: PackChartSource) async throws -> ChartOverlay {
+        let endpoint = "chart-overlay-\(source.source)"
+        if let data = await cache.readData(flightId: flightId, timestamp: timestamp, endpoint: endpoint),
+           let overlay = try? JSONDecoder().decode(ChartOverlay.self, from: data) {
+            return overlay
+        }
+        let overlay = try await online.chartOverlay(flightId: flightId, timestamp: timestamp, source: source)
+        if let data = try? JSONEncoder().encode(overlay) {
+            try? await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+        }
+        return overlay
+    }
+
+    /// Optional offline artifacts fetched after the bundle (#799): the charts
+    /// the server flagged `prefetch` (around the ETD), their sources' route
+    /// overlays, and the GRAMET. Never part of `requiredEndpoints` — each
+    /// failure (a 410 for an evicted chart, a dropped connection) is logged and
+    /// skipped, and the download still succeeds. Charts already in the shared
+    /// cache are not fetched again.
+    func prefetchOptionalArtifacts(flightId: String, timestamp: String, packMeta: PackMetaResponse) async {
+        var fetched = 0
+        var failed = 0
+        for source in packMeta.charts?.sources ?? [] {
+            let charts = source.charts.filter(\.prefetch)
+            guard !charts.isEmpty else { continue }
+            if (try? await chartOverlay(flightId: flightId, timestamp: timestamp, source: source)) == nil {
+                failed += 1
+            }
+            for chart in charts {
+                if await cache.hasChart(cachePath: chart.cachePath) { continue }
+                do {
+                    _ = try await chartImage(chart)
+                    fetched += 1
+                } catch {
+                    failed += 1
+                    Self.logger.info("Optional chart \(chart.cachePath) not prefetched: \(error)")
+                }
+            }
+        }
+        if packMeta.hasGramet {
+            do {
+                _ = try await grametDocument(flightId: flightId, timestamp: timestamp)
+            } catch {
+                failed += 1
+                Self.logger.info("GRAMET not prefetched for \(flightId)/\(timestamp): \(error)")
+            }
+        }
+        Self.logger.info("Prefetched \(fetched) chart(s) for \(flightId)/\(timestamp), \(failed) optional artifact(s) skipped")
+    }
+
+    /// Mark-and-sweep the shared chart cache (#799): keep only charts some
+    /// pack still on disk refers to — every indexed pack's own manifest plus
+    /// the flight-level sidecars (latest pack, pack history, last download),
+    /// which cover packs viewed but never downloaded — then apply the size cap
+    /// (least recently read first). Runs after pack pruning, so charts of
+    /// evicted packs go with them.
+    func sweepChartCache() async {
+        var referenced: Set<String> = []
+        func collect(_ data: Data?) {
+            guard let data else { return }
+            if let pack = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
+                referenced.formUnion(pack.charts?.cachePaths ?? [])
+            } else if let packs = try? JSONDecoder.weatherBrief.decode([PackMetaResponse].self, from: data) {
+                for pack in packs { referenced.formUnion(pack.charts?.cachePaths ?? []) }
+            }
+        }
+        for entry in await cache.cachedPacks() {
+            collect(await cache.readData(flightId: entry.flightId, timestamp: entry.timestamp, endpoint: Self.packMetaEndpoint))
+        }
+        for flightId in await cache.flightDirectoryIDs() {
+            for name in ["latest-pack", "pack-meta", "packs"] {
+                collect(await cache.readFlightMetadata(flightId: flightId, name: name))
+            }
+        }
+        let swept = await cache.sweepCharts(keeping: referenced)
+        let capped = await cache.enforceChartSizeCap()
+        if swept > 0 || capped > 0 {
+            Self.logger.info("Chart cache: swept \(swept) unreferenced, \(capped) over the size cap")
+        }
+    }
+
+    /// Per-pack copy of the pack meta written at download, so the chart sweep
+    /// knows which charts each downloaded pack needs (the flight-level
+    /// `pack-meta` only holds the last download).
+    static let packMetaEndpoint = "pack-meta"
+
     // MARK: - Offline recovery
 
     /// Cache flight data for offline recovery (called when navigating to a flight).
@@ -620,8 +743,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         // Cache pack metadata for offline latestPack() recovery
         if let packMeta, let metaData = try? JSONEncoder.weatherBrief.encode(packMeta) {
             try? await cache.writeFlightMetadata(metaData, flightId: flightId, name: "pack-meta")
+            try? await cache.writeData(metaData, flightId: flightId, timestamp: timestamp, endpoint: Self.packMetaEndpoint)
         }
         Self.logger.info("Downloaded pack \(flightId)/\(timestamp): \(downloaded.count) endpoints, \(diskBytes) bytes")
+        // After registration: the pack is already usable offline, and nothing
+        // here can fail the download.
+        if let packMeta {
+            await prefetchOptionalArtifacts(flightId: flightId, timestamp: timestamp, packMeta: packMeta)
+        }
     }
 
     func deletePack(flightId: String, timestamp: String) async {
@@ -699,6 +828,7 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         if removed > 0 || sweptDirs > 0 {
             Self.logger.info("Pruned \(removed) stale pack(s) and \(sweptDirs) viewed-only flight dir(s) older than \(days)d")
         }
+        await sweepChartCache()
         return removed
     }
 

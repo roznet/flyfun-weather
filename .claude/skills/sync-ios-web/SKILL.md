@@ -217,6 +217,13 @@ each changed endpoint, cross-check the three mirrors:
 - `web/ts/types/*.ts` (the web's view of the same shape)
 - `app/flyfun-weather/flyfun-weather/Models/API/*Response.swift`
 
+Known one-sided DTO: `PackMetaResponse.charts` (the surface-charts manifest,
+`api/_chart_manifest.py` → `Models/API/PackChartsManifest.swift`, #799) is
+consumed by iOS only; the web still builds its chart panel from the flat
+`*_charts_*` fields. Check the Swift structs against the Pydantic models there
+(every field the server may omit must stay Optional), and do not flag the web
+for lacking it.
+
 Report field name / optionality / nesting mismatches. Prioritise fields present
 in the backend (or web) but **missing or non-optional in Swift** — those are the
 runtime-decode hazards. A field the server may omit must be `Optional` on iOS.

@@ -33,6 +33,10 @@ nonisolated struct PackMetaResponse: Codable, Sendable {
     /// keeps `fetchTimestamp`, so this is how a client notices new observations
     /// on an unchanged pack.
     let liveUpdatedAt: String?
+    /// Surface charts (DWD / Met Office / TEMSI) for the Discussion tab (#799).
+    /// nil from servers that predate the manifest — the Charts section then
+    /// stays hidden.
+    let charts: PackChartsManifest?
 }
 
 nonisolated struct DataStatus: Codable, Sendable {

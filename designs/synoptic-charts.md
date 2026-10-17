@@ -233,6 +233,14 @@ Two items deferred from the plan, by choice:
   closest chart and surface the gap in the info line (`… 36 h gap from Hewson
   valid time`). Simpler and still honest; revisit if the mismatch confuses.
 
+## Briefing consumers beyond the web
+
+iOS reads the pack's charts through a server-built manifest
+(`api/_chart_manifest.py`, on `PackMetaResponse.charts`) and takes the DWD
+analysis as a 1600 px copy (`ana_w1600.png` in the cycle dir, `?w=1600`). Its
+cache keys carry a version token because forecast bytes change within a cycle
+(next section). See `briefing-charts-ios.md`.
+
 ## DWD forecast chart times
 
 The cycle key (`run_cycle`) is the **analysis** chart's `Last-Modified` floored

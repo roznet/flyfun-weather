@@ -104,6 +104,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// Live observation layer (#637). nil → `notStubbed` throw (the view model
     /// swallows it, so suites that don't care need not stub it).
     var liveLayerHandler: (@Sendable () throws -> LiveLayerResponse)?
+    /// Surface chart bytes (#799). nil → `notStubbed` throw.
+    var chartImageHandler: (@Sendable (PackChart) throws -> Data)?
+    /// One per `chartImage` call — proves the shared chart cache short-circuits.
+    private(set) var chartImageCallCount = 0
     /// One per `liveLayer` call — lets a test prove a sync did (or didn't)
     /// fetch the live layer.
     private(set) var liveLayerCallCount = 0
@@ -334,6 +338,11 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse { throw MockError.notStubbed("elevation") }
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw MockError.notStubbed("skewtImage") }
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw MockError.notStubbed("grametImage") }
+    func chartImage(_ chart: PackChart) async throws -> Data {
+        chartImageCallCount += 1
+        guard let chartImageHandler else { throw MockError.notStubbed("chartImage") }
+        return try chartImageHandler(chart)
+    }
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw MockError.notStubbed("soundingProfile") }
     func refreshStream(flightId: String, source: RefreshSource) async -> AsyncThrowingStream<RefreshEvent, Error> {
         AsyncThrowingStream { $0.finish() }

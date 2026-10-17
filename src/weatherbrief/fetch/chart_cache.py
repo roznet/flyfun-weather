@@ -133,6 +133,22 @@ def parse_http_datetime(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write bytes to ``path`` via tempfile + rename, so readers never see a torn file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 # ---------------------------------------------------------------------------
 # ChartCache
 # ---------------------------------------------------------------------------
@@ -217,18 +233,7 @@ class ChartCache:
 
     def atomic_write_bytes(self, path: Path, data: bytes) -> None:
         """Write bytes to ``path`` via tempfile + rename for atomicity."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
+        atomic_write_bytes(path, data)
 
     # -- read-only lookups --------------------------------------------------
 

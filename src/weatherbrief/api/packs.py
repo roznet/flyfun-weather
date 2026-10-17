@@ -48,6 +48,7 @@ def _validate_model(model: str) -> str:
     if not _MODEL_RE.match(model):
         raise HTTPException(status_code=400, detail="Invalid model name")
     return model
+from weatherbrief.api._chart_manifest import PackChartsManifest, build_pack_charts_manifest
 from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.digest.llm_digest import LongRangeDigest, ecmwf_grib_horizon_days
@@ -590,6 +591,12 @@ class PackMetaResponse(BaseModel):
     meteofrance_charts_default_id: str | None = None
     meteofrance_charts_in_coverage: bool = False
     meteofrance_charts_within_horizon: bool = False
+    # The same charts as one server-built list (#799): which sources this pack
+    # shows, each chart's label/caption/URL/overlay key and an immutable cache
+    # key. iOS renders this instead of re-deriving the web's gating rules from
+    # the flat fields above (which stay for the web). None only on responses
+    # built before the field existed.
+    charts: PackChartsManifest | None = None
     # Live flight Flexibility mode (timing scenarios). Injected fresh from the
     # flight row at serve time — NOT baked into the stored pack — so clients gate
     # the timing-scenario panel on the CURRENT value even when viewing an old
@@ -659,9 +666,22 @@ def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
     flexibility: FlexibilityMode | None = None,
+    departure_time: datetime | None = None,
 ) -> PackMetaResponse:
+    """``departure_time`` (the flight's current ETD) only shapes the charts
+    manifest: TEMSI captions name their gap to departure, and the offline
+    prefetch subset is picked around it. Omit it where no flight is at hand."""
     has_advisories = pack_has_advisories(meta.artifact_path)
     mf_options, mf_default = _live_meteofrance_options(meta)
+    metoffice_public = _metoffice_public()
+    charts = build_pack_charts_manifest(
+        meta,
+        data_dir=Path(os.environ.get("DATA_DIR", "data")),
+        meteofrance_options=mf_options,
+        meteofrance_default_id=mf_default,
+        metoffice_public=metoffice_public,
+        departure_time=departure_time,
+    )
 
     return PackMetaResponse(
         flight_id=meta.flight_id,
@@ -694,11 +714,12 @@ def _meta_to_response(
         metoffice_charts_default_id=meta.metoffice_charts_default_id,
         metoffice_charts_in_coverage=meta.metoffice_charts_in_coverage,
         metoffice_charts_within_horizon=meta.metoffice_charts_within_horizon,
-        metoffice_charts_public=_metoffice_public(),
+        metoffice_charts_public=metoffice_public,
         meteofrance_charts_options=mf_options,
         meteofrance_charts_default_id=mf_default,
         meteofrance_charts_in_coverage=meta.meteofrance_charts_in_coverage,
         meteofrance_charts_within_horizon=meta.meteofrance_charts_within_horizon,
+        charts=charts,
         flexibility=flexibility,
         live_updated_at=live_updated_at_iso(meta.artifact_path),
     )
@@ -723,7 +744,9 @@ def list_flight_packs(
     """List all packs (history) for a flight. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
-    return [_meta_to_response(p, flexibility=flight.flexibility) for p in packs]
+    return [_meta_to_response(
+        p, flexibility=flight.flexibility, departure_time=flight.departure_time,
+    ) for p in packs]
 
 
 @router.get("/latest", response_model=PackMetaResponse)
@@ -737,7 +760,9 @@ def get_latest_pack(
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
-    return _meta_to_response(packs[0], flexibility=flight.flexibility)
+    return _meta_to_response(
+        packs[0], flexibility=flight.flexibility, departure_time=flight.departure_time,
+    )
 
 
 @router.get("/freshness", response_model=DataStatus)
@@ -2582,7 +2607,8 @@ async def refresh_briefing_stream(
                         update={"mode": effective_mode},
                     )
                     pack_resp = _meta_to_response(
-                        latest, data_status=status, flexibility=flight.flexibility
+                        latest, data_status=status, flexibility=flight.flexibility,
+                        departure_time=flight.departure_time,
                     ).model_dump(mode="json")
                     decision_payload = decision.model_dump(mode="json")
                     decision_payload["mode"] = effective_mode
@@ -2736,7 +2762,9 @@ async def refresh_briefing_stream(
             thread_db.close()
         event = {
             "type": "briefing_ready",
-            "pack": _meta_to_response(meta).model_dump(mode="json"),
+            "pack": _meta_to_response(
+                meta, departure_time=flight.departure_time,
+            ).model_dump(mode="json"),
         }
         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
 
@@ -2785,7 +2813,8 @@ async def refresh_briefing_stream(
             complete_event = {
                 "type": "complete",
                 "pack": _meta_to_response(
-                    meta, flexibility=flight.flexibility
+                    meta, flexibility=flight.flexibility,
+                    departure_time=flight.departure_time,
                 ).model_dump(mode="json"),
                 "elapsed_seconds": total_elapsed,
             }
@@ -3017,7 +3046,9 @@ def get_pack(
     except KeyError:
         raise HTTPException(status_code=404, detail="Pack not found")
     audit_pack_access(user_id, flight_id, "get_pack", request)
-    return _meta_to_response(meta, flexibility=flight.flexibility)
+    return _meta_to_response(
+        meta, flexibility=flight.flexibility, departure_time=flight.departure_time,
+    )
 
 
 @router.get("/{timestamp}/snapshot")
@@ -3146,8 +3177,10 @@ def get_gramet_png(
 ):
     """Get the GRAMET cross-section as a PNG image.
 
-    If the stored artifact is a PDF, converts the first page to PNG.
-    If it's already a PNG, serves it directly.
+    If the stored artifact is a PDF, converts the first page to PNG once and
+    keeps it as ``gramet.png`` in the pack dir (#799), so later requests serve
+    the file instead of re-rendering. Retention already deletes ``gramet.png``
+    with the PDF. If it's already a PNG, serves it directly.
     """
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
 
@@ -3167,12 +3200,19 @@ def get_gramet_png(
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
             png_bytes = pix.tobytes("png")
             doc.close()
-            return Response(content=png_bytes, media_type="image/png")
         except ImportError:
             raise HTTPException(
                 status_code=500,
                 detail="PyMuPDF not available for PDF-to-PNG conversion",
             )
+        try:
+            from weatherbrief.fetch.chart_cache import atomic_write_bytes
+
+            atomic_write_bytes(png_path, png_bytes)
+        except OSError:
+            # Read-only or full disk: still answer, just render again next time.
+            logger.warning("Could not cache %s", png_path, exc_info=True)
+        return Response(content=png_bytes, media_type="image/png")
 
     raise HTTPException(status_code=404, detail="GRAMET not available")
 
@@ -4126,7 +4166,9 @@ def generate_digest(
     # Already has a summary — nothing to do. Return current meta so the client
     # simply re-renders (keeps the action idempotent).
     if meta.has_digest:
-        return _meta_to_response(meta, flexibility=flight.flexibility)
+        return _meta_to_response(
+            meta, flexibility=flight.flexibility, departure_time=flight.departure_time,
+        )
 
     briefing_data = load_briefing(pack_dir)
     if not briefing_data:
@@ -4243,7 +4285,9 @@ def generate_digest(
     _charge_briefing_cost(db, user_id, usage, pack_size, usage_row_id)
 
     logger.info("On-demand digest generated for %s @ %s", flight_id, timestamp)
-    return _meta_to_response(meta, flexibility=flight.flexibility)
+    return _meta_to_response(
+        meta, flexibility=flight.flexibility, departure_time=flight.departure_time,
+    )
 
 
 @router.get("/{timestamp}/advisories/altitude-table")
@@ -4656,6 +4700,7 @@ def get_dwd_chart(
     flight_id: str,
     timestamp: str,
     chart_id: str,
+    w: int | None = Query(None, description="Downscaled width; only the analysis at 1600"),
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db, scope="function"),
 ):
@@ -4664,6 +4709,10 @@ def get_dwd_chart(
     Looks up the bytes in the shared ``DATA_DIR/dwd_charts/<run_cycle>/``
     cache. Returns 410 (Gone) when the cache has been evicted — the
     frontend renders an "unavailable" placeholder for that chart.
+
+    ``?w=1600`` on the analysis serves its downscaled copy (#799) — the full
+    chart is 4389 px / ~4.8 MB, which is what iOS asks to avoid. No other
+    width or chart is offered (400).
 
     Auth: any authenticated user can view (matches dwd-overview).
     """
@@ -4681,8 +4730,27 @@ def get_dwd_chart(
         )
 
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    if w is not None:
+        return _serve_small_dwd_analysis(data_dir, meta.dwd_charts_run_cycle, chart_id, w)
     return serve_chart_bytes(
         data_dir, SOURCES["dwd"], meta.dwd_charts_run_cycle, chart_id, immutable=False,
+    )
+
+
+def _serve_small_dwd_analysis(data_dir: Path, run_cycle: str, chart_id: str, width: int) -> Response:
+    """The downscaled DWD analysis; same status codes as ``serve_chart_bytes``."""
+    from weatherbrief.api._chart_serving import RUN_CYCLE_RE
+    from weatherbrief.fetch.dwd_charts import ANALYSIS_SMALL_WIDTH, resolve_small_analysis_path
+
+    if chart_id != "ana" or width != ANALYSIS_SMALL_WIDTH:
+        raise HTTPException(status_code=400, detail="Only the analysis has a downscaled copy")
+    if not RUN_CYCLE_RE.match(run_cycle):
+        raise HTTPException(status_code=400, detail="Invalid run cycle")
+    path = resolve_small_analysis_path(data_dir, run_cycle)
+    if path is None:
+        raise HTTPException(status_code=410, detail="Chart not available")
+    return FileResponse(
+        path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"},
     )
 
 

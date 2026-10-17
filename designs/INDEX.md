@@ -173,6 +173,11 @@ Key exports: `/api/flights/{id}/move`, `/api/flights/{id}/packs/{ts}/bundle`, `/
 End-state feature set + vision, largely NOT as-built — read the status banner first. Briefing sync (offline payload + on-demand artifacts), PIREP filing modes, voice PIREP via Siri, passive collection, observation timeline, community feed, live sharing, post-flight verification. Shipped: pack download, refresh push, Start Flight tracking, briefing-anchored PIREP filing with offline queue; unbuilt: prompting engine, standalone/community PIREP UI, voice, WebSocket. Authoritative status: ios-app-overview.md
 → Full doc: ios-app-features.md
 
+### briefing-charts-ios
+Surface charts (DWD / Met Office / TEMSI) + GRAMET on the iOS Discussion tab (#799): server-built `charts` manifest on pack meta (web gating, versioned immutable cache keys, `available`/`prefetch` flags), downscaled DWD analysis (`?w=1600`), GRAMET PDF + cached `gramet.png`, the iOS shared chart cache (`charts/<cacheKey>.<ext>`, mark-and-sweep + 50 MB LRU cap), offline prefetch subset, Canvas route overlay and zoom viewer.
+Key exports: `build_pack_charts_manifest`, `PackChartsManifest`, `resolve_small_analysis_path`, `SurfaceChartsView`, `GrametSectionView`, `ChartRouteOverlay`, `ZoomableScrollView`, `BriefingCacheStore.sweepCharts`, `CachingBriefingRepository.prefetchOptionalArtifacts`
+→ Full doc: briefing-charts-ios.md
+
 ### ios-app-ui
 Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking) and screen layouts. As-built: briefing viewer + a single manual `PirepReportingView` sheet inside the existing tabs. The in-flight mode/map and report-card variants are original Phase-3 vision, NOT yet built.
 → Full doc: ios-app-ui.md
