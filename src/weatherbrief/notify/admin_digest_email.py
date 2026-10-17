@@ -386,9 +386,9 @@ def _build_plain(data: AdminDigestData) -> str:
 
 
 def _subject(data: AdminDigestData) -> str:
-    """Subject line; a heart flags a period with at least one donation."""
+    """Subject line; the app's donation heart flags a period with a donation."""
     label = data.period_label or "Daily"
-    heart = " ❤️" if data.donations.count > 0 else ""
+    heart = " 💙" if data.donations.count > 0 else ""
     return f"[FlyFun] Admin Digest{heart} — {label}"
 
 
