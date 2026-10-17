@@ -496,6 +496,22 @@ point to agree with the radar); and the radar clause says where the peak is,
 None in payloads built before), falling back to "within 20 NM of …" without
 them or for an unnamed route point.
 
+**Places through the route locator (#790).** With a locator
+(`build_summary_entries(conditions, locator=)`) every place reads against the
+route's anchors instead of a sampled point's name or "N NM along the route":
+the radar peak is offset from its point by `max_at_nm` / `max_bearing_deg` and
+located itself ("peak 54 dBZ over the sea, 16 NM after coast-out (Middelburg),
+5 NM left of track"), lightning "nearest 3 NM from the route, near Uden (EHVK)",
+tops "Cloud tops to FL320, 10 NM before Middelburg (EHMZ)". The payload is
+built with a route-only locator (waypoints + coast, `payload._route_locator`);
+the live tick rewords `summary_entries` with its full one (ribbon stations
+too). "clear at 40 of 60 points" became a share: "clear over most of the
+route" (≥ 75 %), "about half" (≥ 40 %), else "part of the route". #790 also
+asked for "lightning strikes" over "flash detections" and for the VIP word to
+lead with the dBZ behind the ⓘ ("heavy shower"); not done: discs overlap, so
+the count is detections, not strikes, and §33 keeps the number in the
+sentence and the word phase-neutral.
+
 **The intensity word is a deliberate carve-out from "grades nothing"**
 (2026-09-16, `observed/intensity.py`, decision §33 in
 `designs/meteorology-decisions.md`). The clauses now read "heavy echo, peak

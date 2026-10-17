@@ -207,8 +207,8 @@ IOS_HIGHLIGHT_TICKS = {
         "08:30",
         {
             "text": (
-                "New EMBD TS SIGMETs LECB 3 and LECM 3 from 235 NM to LEMI, valid from 08:35Z; "
-                "EMBD TS SIGMET LECB 2 covers 10 to 276 NM. LECH, 126 NM along, now LIFR."
+                "New EMBD TS SIGMETs LECB 3 and LECM 3 from LEAL to LEMI, valid from 08:35Z; "
+                "EMBD TS SIGMET LECB 2 covers LEBL to LEMI. LECH, near DIKUT, now LIFR."
             ),
             "model": "fixture",
             "facts_hash": "fixture-lell-lemi-0830",

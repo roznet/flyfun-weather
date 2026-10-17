@@ -92,6 +92,19 @@ def build_stations(
     return refs, stations
 
 
+def _route_locator(route: RouteConfig):
+    """The route locator from the route alone (waypoints + coast, #790): the
+    live tick re-words the cards with its ribbon stations too. None when it
+    cannot be built: the cards then read by waypoint name / NM along."""
+    try:
+        from weatherbrief.analysis.route_locator import for_route
+
+        return for_route(route) if len(route.waypoints) >= 2 else None
+    except Exception:
+        logger.warning("Route locator failed — observed summary in NM along", exc_info=True)
+        return None
+
+
 def _usable_frame(
     store: FrameStore, source: str, now: datetime
 ) -> tuple[StoredFrame | None, str | None]:
@@ -330,7 +343,7 @@ def build_observed_conditions(
         lightning=fields.get(SOURCE_EUMETSAT_LI),
         sources=statuses,
     )
-    conditions.summary_entries = build_summary_entries(conditions)
+    conditions.summary_entries = build_summary_entries(conditions, locator=_route_locator(route))
     conditions.summary_lines = [e.text for e in conditions.summary_entries]
     conditions.summary = " ".join(conditions.summary_lines)
     return conditions

@@ -92,7 +92,8 @@ def test_tops_with_a_top_and_a_contradicted_point():
         _tops({"ZZDP": None, "r1": 250.0, "ZZDS": None}),
     ))
     assert line.startswith("Cloud tops to FL250 near 45 NM along the route")
-    assert "clear at 1 of 3 points" in line and "unavailable at 1 of 3 points" in line
+    # #790: a share a pilot can picture, not a count of sampled points.
+    assert "clear over part of the route" in line and "unavailable at 1 of 3 points" in line
 
 
 def test_tops_clear_where_the_radar_agrees():

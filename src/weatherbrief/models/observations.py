@@ -46,7 +46,19 @@ class AirportObservation(BaseModel):
     icao: str
     name: str | None = None
     distance_from_route_nm: float
+    # euro_aip's legacy enroute distance: the closest segment's start plus the
+    # straight distance to the airport, not a projection (an airport behind
+    # the departure reads positive). Kept for stored packs; read
+    # :attr:`along_nm` instead.
     enroute_distance_nm: float | None = None
+    # The true projection onto the route (euro_aip ≥ 0.23, #790): negative
+    # behind the departure, past the route length beyond the destination;
+    # cross-track + right of track. None on packs built before it.
+    along_track_nm: float | None = None
+    cross_track_nm: float | None = None
+    route_end: str | None = None  # "departure" / "destination" when off that end
+    # The town nav.db gives the airport ("Middelburg"), for pilot wording.
+    municipality: str | None = None
     nearest_waypoint_icao: str
     # Airport position (#688: a station's CB/TCU joins the radar storm near
     # it). None for reports fetched before the field, or an airport the
@@ -129,6 +141,12 @@ class AirportObservation(BaseModel):
     # runways. None for a field with its own report, and on older packs.
     metar_proxy: ObsProxy | None = None
     taf_proxy: ObsProxy | None = None
+
+    @property
+    def along_nm(self) -> float | None:
+        """Where the airport is along the route, NM: the true projection when
+        the pack has it (#790), else the legacy enroute distance."""
+        return self.along_track_nm if self.along_track_nm is not None else self.enroute_distance_nm
 
     @computed_field
     @property

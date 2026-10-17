@@ -48,6 +48,7 @@ from euro_aip.utils.geometry import (
     point_in_multipolygon,
 )
 
+from weatherbrief.analysis.route_locator import RouteLocator
 from weatherbrief.models.live import (
     ChangeRole,
     LiveChange,
@@ -56,6 +57,7 @@ from weatherbrief.models.live import (
     LiveSigmetTrace,
     LiveStorm,
     LiveStorms,
+    RoutePlace,
 )
 from weatherbrief.models.observations import (
     AirportObservation,
@@ -321,7 +323,10 @@ def airport_relevant(
     if role == "departure":
         return not departed
     if role == "route":
-        return _ahead(enroute_distance_nm, flown_nm)
+        # An airport behind the departure (a negative along-track position,
+        # #790) is passed at take-off, like the departure itself.
+        along = max(enroute_distance_nm, 0.0) if enroute_distance_nm is not None else None
+        return _ahead(along, flown_nm)
     return True
 
 
@@ -531,7 +536,7 @@ def _airport_changes(
         role = roles.get(a.icao.upper(), "route")
         if role == "route" and a.icao.upper() in serving:
             continue
-        if not airport_relevant(role, a.enroute_distance_nm, departed=departed, flown_nm=flown_nm):
+        if not airport_relevant(role, a.along_nm, departed=departed, flown_nm=flown_nm):
             continue
         label = None
         metar_known = True
@@ -556,7 +561,7 @@ def _airport_changes(
                 key=f"{_KEY_PREFIX[kind]}:{a.icao}",
                 kind=kind, source=source, direction=direction, tier=tier, role=role,
                 icao=a.icao, from_value=from_v, to_value=to_v,
-                observed_at=a.metar_time, enroute_distance_nm=a.enroute_distance_nm,
+                observed_at=a.metar_time, enroute_distance_nm=a.along_nm,
                 message=message,
             ))
 
@@ -579,7 +584,7 @@ def _airport_changes(
             kind="taf_category", source="TAF", direction=direction, tier=tier, role=role,
             icao=a.icao,
             from_value=base.taf_flight_category_at_eta, to_value=a.taf_flight_category_at_eta,
-            observed_at=a.taf_issue_time, enroute_distance_nm=a.enroute_distance_nm,
+            observed_at=a.taf_issue_time, enroute_distance_nm=a.along_nm,
             message=(
                 f"{label or a.icao} TAF at ETA: {base.taf_flight_category_at_eta}"
                 f" → {a.taf_flight_category_at_eta}"
@@ -1220,20 +1225,30 @@ def _radar_span(
     return hits, radius, peak, observed.reflectivity.valid_time, evidence
 
 
-def _span_text(hits: list[float]) -> str:
+def _span_text(hits: list[float], locator: RouteLocator | None = None) -> str:
     known = [h for h in hits if h >= 0]
     if not known:
         return ""
     lo, hi = min(known), max(known)
+    if locator is not None:
+        # #790: pilot words, not NM along.
+        if round(lo) == round(hi):
+            return f", {locator.locate_along(lo).text}"
+        return f", {locator.span(lo, hi)}"
     if round(lo) == round(hi):
         return f" at {lo:.0f} NM along route"
     return f" {lo:.0f}–{hi:.0f} NM along route"
+
+
+def _place_at(locator: RouteLocator | None, along: float | None) -> RoutePlace | None:
+    return locator.locate_along(along) if locator is not None and along is not None and along >= 0 else None
 
 
 def _observed_changes(
     baseline: ObservedConditions | None,
     latest: ObservedConditions | None,
     flown_nm: float | None,
+    locator: RouteLocator | None = None,
 ) -> list[LiveChange]:
     out: list[LiveChange] = []
 
@@ -1252,7 +1267,8 @@ def _observed_changes(
                 # change (#682).
                 from_value="none", to_value="present", observed_at=valid,
                 enroute_distance_nm=min((h for h in l_hits if h >= 0), default=None),
-                message=f"Lightning within {r} of route{_span_text(l_hits)}",
+                place=_place_at(locator, min((h for h in l_hits if h >= 0), default=None)),
+                message=f"Lightning within {r} of route{_span_text(l_hits, locator)}",
                 evidence=evidence,
             ))
         elif b_hits and not l_hits:
@@ -1278,9 +1294,10 @@ def _observed_changes(
                 from_value="none", to_value="heavy",
                 observed_at=valid,
                 enroute_distance_nm=min((h for h in l_hits if h >= 0), default=None),
+                place=_place_at(locator, min((h for h in l_hits if h >= 0), default=None)),
                 message=(
                     f"Heavy radar echo (peak {peak:.0f} dBZ) within {r} of route"
-                    f"{_span_text(l_hits)}"
+                    f"{_span_text(l_hits, locator)}"
                 ),
                 evidence=evidence,
             ))
@@ -1393,8 +1410,16 @@ def _hhmm(t: datetime | None) -> str:
 
 
 def storm_position_text(storm: LiveStorm) -> str:
-    """"8 NM right of track at 85 NM", or from the airport past the route's end."""
+    """"8 NM right of track, 10 NM before Middelburg (EHMZ)" (the locator's
+    place, #790), or from the airport past the route's end. Without a place
+    (a layer written before #790), the legacy "… at 85 NM"."""
     off = f"{storm.offtrack_nm:.0f} NM"
+    if storm.place is not None:
+        if storm.place.relation in ("off_departure", "past_destination"):
+            return storm.place.text
+        if storm.side is None or storm.offtrack_nm < 1:
+            return f"on track, {storm.place.text}"
+        return f"{off} {storm.side} of track, {storm.place.text}"
     if storm.end is not None:
         where = storm.end_icao or storm.end
         return f"{off} {storm.end_bearing or ''} of {where}".replace("  ", " ")
@@ -1437,7 +1462,7 @@ def _motion_text(storm: LiveStorm) -> str:
     return ""
 
 
-def cluster_message(group: list[LiveStorm]) -> str:
+def cluster_message(group: list[LiveStorm], locator: RouteLocator | None = None) -> str:
     """"4 cells (peak 56 dBZ, developing, 7 flashes) 1–9 NM either side of
     track at 138–212 NM, abeam ~16:56–17:27Z; nearest 1 NM right of track at
     169 NM, closing 5 kt; LIRP reports CB" — one row for one cluster (§41)."""
@@ -1453,8 +1478,14 @@ def cluster_message(group: list[LiveStorm]) -> str:
     sides = {s.side for s in group if s.side}
     where = "either side of track" if len(sides) > 1 else (f"{next(iter(sides))} of track" if sides else "on track")
     alongs = [s.along_nm for s in group]
-    text = (f"{len(group)} cells ({', '.join(detail)}) {off} {where} at "
-            f"{min(alongs):.0f}–{max(alongs):.0f} NM")
+    if locator is not None:
+        text = f"{len(group)} cells ({', '.join(detail)}) {off} {where}, {locator.span(min(alongs), max(alongs))}"
+    else:
+        text = (f"{len(group)} cells ({', '.join(detail)}) {off} {where} at "
+                f"{min(alongs):.0f}–{max(alongs):.0f} NM")
+    # The clock, never "in ~25 min" (#790 asks for it in flight): a change
+    # row is pushed and read later, and a relative time goes stale with it.
+    # The glance, rebuilt every tick, says "in ~N min".
     etas = [s.abeam_eta for s in group if s.abeam_eta is not None]
     if etas:
         a, b = _hhmm(min(etas)), _hhmm(max(etas))
@@ -1512,7 +1543,9 @@ def storm_clusters(storms: list[LiveStorm]) -> list[list[LiveStorm]]:
     return groups
 
 
-def _storm_row(group: list[LiveStorm], storms: LiveStorms, departed: bool) -> LiveChange:
+def _storm_row(
+    group: list[LiveStorm], storms: LiveStorms, departed: bool, locator: RouteLocator | None = None,
+) -> LiveChange:
     """One row for one storm or one cluster. Keyed on the cluster's oldest
     lineage (ids carry their first frame), the member most likely to persist,
     so the row keeps its key as cells come and go; the alert-once memory
@@ -1530,13 +1563,14 @@ def _storm_row(group: list[LiveStorm], storms: LiveStorms, departed: bool) -> Li
         # every frame and are in the message (as #682 did for radar).
         from_value="none", to_value="heavy" if heavy else "lightning",
         observed_at=storms.frame_time, enroute_distance_nm=min(s.along_nm for s in group),
-        message=storm_message(group[0]) if len(group) == 1 else cluster_message(group),
+        place=min(group, key=lambda s: s.offtrack_nm).place,
+        message=storm_message(group[0]) if len(group) == 1 else cluster_message(group, locator),
         storm_ids=[s.id for s in group], alert_storm_ids=alerting,
         storm_span=(min(s.along_nm for s in spanned), max(s.along_nm for s in spanned)),
     )
 
 
-def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
+def _storm_changes(storms: LiveStorms, *, departed: bool, locator: RouteLocator | None = None) -> list[LiveChange]:
     """One row per storm ahead near the track (§41), plus one highlight for
     the heavy storms reached later than :data:`STORM_NEAR_MINUTES`."""
     out: list[LiveChange] = []
@@ -1551,10 +1585,13 @@ def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
             continue
         rowed.append(st)
     for group in storm_clusters(rowed):
-        out.append(_storm_row(group, storms, departed))
+        out.append(_storm_row(group, storms, departed, locator))
     if later:
         lo, hi = min(s.along_nm for s in later), max(s.along_nm for s in later)
-        span = f"at {lo:.0f} NM" if round(lo) == round(hi) else f"{lo:.0f}–{hi:.0f} NM"
+        if locator is not None:
+            span = locator.locate_along(lo).text if round(lo) == round(hi) else locator.span(lo, hi)
+        else:
+            span = (f"at {lo:.0f} NM" if round(lo) == round(hi) else f"{lo:.0f}–{hi:.0f} NM") + " along route"
         etas = [s.abeam_eta for s in later if s.abeam_eta is not None]
         when = ""
         if etas:
@@ -1566,8 +1603,9 @@ def _storm_changes(storms: LiveStorms, *, departed: bool) -> list[LiveChange]:
             direction="worse", tier="highlight", role="route",
             from_value="none", to_value="present",
             observed_at=storms.frame_time, enroute_distance_nm=lo,
+            place=_place_at(locator, lo),
             message=(
-                f"Convective activity {span} along route{when}: {n} heavy "
+                f"Convective activity {span}{when}: {n} heavy "
                 f"{'cell' if n == 1 else 'cells'}, peak {max(s.peak_dbz for s in later):.0f} dBZ"
             ),
         ))
@@ -1598,6 +1636,7 @@ def classify_changes(
     memory: ClassifierMemory | None = None,
     now: datetime | None = None,
     storms: LiveStorms | None = None,
+    locator: RouteLocator | None = None,
 ) -> tuple[LiveChanges, ClassifierMemory]:
     """Everything significant since the briefing, plus the updated memory.
 
@@ -1611,7 +1650,8 @@ def classify_changes(
     ``storms`` (the radar storms against the route, #688) replaces the
     radar/lightning ring rows when the cells feed is available; without it
     (None, or a dark feed) the ring rows and the station CB/TCU alerts are
-    the fallback (§41).
+    the fallback (§41). ``locator`` (#790) words the positions in the
+    storm and radar/lightning rows; without one they read "N NM along".
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
@@ -1661,10 +1701,10 @@ def classify_changes(
             for st in storms.storms
         ]
     if storms_available(storms):
-        changes += _storm_changes(storms, departed=departed)
+        changes += _storm_changes(storms, departed=departed, locator=locator)
         evaluated |= {"storm:", "storms:"}
     else:
-        changes += _observed_changes(baseline_observed, latest_observed, flown_nm)
+        changes += _observed_changes(baseline_observed, latest_observed, flown_nm, locator)
         evaluated |= {"lightning:", "radar:"}
 
     changes.sort(key=lambda c: (

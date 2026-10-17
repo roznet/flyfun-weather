@@ -81,7 +81,9 @@ def _interpolate_airport_time(
         or enroute_distance_nm is None
     ):
         return departure
-    fraction = min(enroute_distance_nm / total_distance_nm, 1.0)
+    # Clamped both ways: an airport behind the departure (a negative along-
+    # track position, #790) is "at departure", not before it.
+    fraction = max(0.0, min(enroute_distance_nm / total_distance_nm, 1.0))
     return departure + timedelta(hours=fraction * duration_hours)
 
 
@@ -96,6 +98,28 @@ def _airport_position(model, icao: str) -> tuple[float | None, float | None]:
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
         return float(lat), float(lon)
     return None, None
+
+
+def _route_locator(route: RouteConfig, observations: RouteObservations | None):
+    """The route locator (#790) for a classification outside the live tick;
+    None when it cannot be built (the rows then read "N NM along")."""
+    try:
+        from weatherbrief.analysis.route_locator import for_route
+
+        return for_route(route, observations)
+    except Exception:
+        logger.warning("Route locator failed — NM-along wording", exc_info=True)
+        return None
+
+
+def _airport_town(model, icao: str) -> str | None:
+    """nav.db's ``municipality`` for an airport ("Middelburg"), for the route
+    locator's wording (#790). Never raises."""
+    try:
+        town = model.airports.where(ident=icao).first().municipality
+    except Exception:
+        return None
+    return town.strip() if isinstance(town, str) and town.strip() else None
 
 
 # Default wind advisory thresholds (matching airport_wind evaluator defaults)
@@ -247,16 +271,18 @@ def run_route_weather(
     all_phenomena: list[str] = []
 
     for raw in result.airports:
-        nearest_wp = _find_nearest_waypoint(
-            raw.enroute_distance_nm, route, route_distances,
-        )
+        # euro_aip ≥ 0.23 projects the airport onto the route (#790); its
+        # legacy enroute distance pushes off-track airports forward and puts
+        # one behind the departure ahead of it.
+        along_track = getattr(raw, "along_track_nm", None)
+        along = along_track if along_track is not None else raw.enroute_distance_nm
+        nearest_wp = _find_nearest_waypoint(along, route, route_distances)
 
-        # Compute per-airport ETA based on enroute distance
+        # Compute per-airport ETA based on its position along the route
         airport_time = _interpolate_airport_time(
-            target_time, duration_hours,
-            raw.enroute_distance_nm, total_distance,
+            target_time, duration_hours, along, total_distance,
         )
-        if duration_hours > 0 and raw.enroute_distance_nm is not None:
+        if duration_hours > 0 and along is not None:
             offset_hours = (airport_time - target_time).total_seconds() / 3600
             eta_hour_offset = round(offset_hours)
         else:
@@ -268,6 +294,10 @@ def run_route_weather(
             name=raw.name,
             distance_from_route_nm=raw.distance_from_route_nm,
             enroute_distance_nm=raw.enroute_distance_nm,
+            along_track_nm=along_track,
+            cross_track_nm=getattr(raw, "cross_track_nm", None),
+            route_end=getattr(raw, "route_end", None),
+            municipality=_airport_town(model, raw.icao),
             nearest_waypoint_icao=nearest_wp,
             eta_hour_offset=eta_hour_offset,
             lat=lat,
@@ -595,7 +625,7 @@ def run_observation_comparison(
         # Compute per-airport interpolated time
         airport_time = _interpolate_airport_time(
             target_time, duration_hours,
-            obs.enroute_distance_nm, total_distance,
+            obs.along_nm, total_distance,
         )
 
         # Find model forecast for the nearest waypoint
@@ -1081,6 +1111,7 @@ def run_realtime_refresh(
             destination=route_destination(route),
             departure_at=progress.departed_at,
             arrival_at=progress.arrival,
+            locator=_route_locator(route, new_obs),
         )
         delta = worsening_delta(changes)
 
