@@ -86,7 +86,7 @@ async function mockApis(page: import('@playwright/test').Page) {
 // Tests
 // ---------------------------------------------------------------------------
 
-test.describe('Forecast page', () => {
+test.describe('Maps page', () => {
   test.beforeEach(async ({ page }) => {
     await mockApis(page);
   });
@@ -94,7 +94,7 @@ test.describe('Forecast page', () => {
   test('loads with forecast tab active and shows airports', async ({ page }) => {
     await page.goto('/maps.html');
     // Page title
-    await expect(page.locator('.page-header h2')).toHaveText('Forecast');
+    await expect(page.locator('.page-header h2')).toHaveText('Maps');
     // Forecast tab is active
     await expect(page.locator('.tab-btn[data-tab="forecast"]')).toHaveClass(/active/);
     // Forecast controls visible
@@ -282,8 +282,8 @@ test.describe('Forecast page', () => {
     await expect(page.locator('#model-picker .btn-toggle[data-model="worst"]')).not.toHaveClass(/active/);
   });
 
-  test('nav shows Forecast as current page', async ({ page }) => {
+  test('nav shows Maps as current page', async ({ page }) => {
     await page.goto('/maps.html');
-    await expect(page.locator('.nav-current')).toHaveText('Forecast');
+    await expect(page.locator('.nav-current')).toHaveText('Maps');
   });
 });
