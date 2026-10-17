@@ -58,10 +58,41 @@ nonisolated struct MapDeepLink: Equatable, Sendable {
     var model: String?
     var metric: String?
     var airport: String?
+    /// The shared map position (`fc.view`, or the linked tab's own `*.view`).
+    var view: MapViewport?
 
     var isEmpty: Bool {
-        day == nil && hour == nil && model == nil && metric == nil && airport == nil
+        day == nil && hour == nil && model == nil && metric == nil && airport == nil && view == nil
     }
+}
+
+/// A web map viewport from a `*.view` key (#796): `lat,lon,zoom`, Leaflet zoom.
+/// Validated like the web's `parseMapView` (lat/lon in range, zoom 1…18), so a
+/// garbage value is nil and the map keeps its own opening view, as on the web.
+nonisolated struct MapViewport: Equatable, Sendable {
+    var lat: Double
+    var lon: Double
+    var zoom: Int
+
+    init(lat: Double, lon: Double, zoom: Int) {
+        self.lat = lat
+        self.lon = lon
+        self.zoom = zoom
+    }
+
+    init?(token: String) {
+        let parts = token.split(separator: ",", omittingEmptySubsequences: false)
+            .map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 3, let lat = parts[0], let lon = parts[1], let zoom = parts[2],
+              lat.isFinite, lon.isFinite, zoom.isFinite,
+              (-90...90).contains(lat), (-180...180).contains(lon) else { return nil }
+        let z = Int(zoom.rounded())
+        guard (1...18).contains(z) else { return nil }
+        self.init(lat: lat, lon: lon, zoom: z)
+    }
+
+    /// The web's canonical form, also the pending-navigation encoding.
+    var token: String { String(format: "%.2f,%.2f,%d", lat, lon, zoom) }
 }
 
 /// Historical-map deep-link state parsed from `/maps.html?tab=historical&hist.*`.
@@ -74,9 +105,12 @@ nonisolated struct HistoricalMapDeepLink: Equatable, Sendable {
     var source: String?
     var metric: String?
     var airport: String?
+    /// The shared map position (`hist.view`).
+    var view: MapViewport?
 
     var isEmpty: Bool {
         date == nil && time == nil && lead == nil && source == nil && metric == nil && airport == nil
+            && view == nil
     }
 
     /// The linked instant; nil (→ latest) unless both date and time are given, as on the web.
@@ -192,6 +226,7 @@ struct PendingNavigationStore {
         if let m = dl.model { parts.append("model=\(m)") }
         if let mt = dl.metric { parts.append("metric=\(mt)") }
         if let a = dl.airport { parts.append("apt=\(a)") }
+        if let v = dl.view { parts.append("view=\(v.token)") }
         return parts.joined(separator: "&")
     }
 
@@ -203,6 +238,7 @@ struct PendingNavigationStore {
         if let s = dl.source { parts.append("source=\(s)") }
         if let m = dl.metric { parts.append("metric=\(m)") }
         if let a = dl.airport { parts.append("apt=\(a)") }
+        if let v = dl.view { parts.append("view=\(v.token)") }
         return parts.joined(separator: "&")
     }
 
@@ -219,6 +255,7 @@ struct PendingNavigationStore {
             case "source": dl.source = value
             case "metric": dl.metric = value
             case "apt": dl.airport = value
+            case "view": dl.view = MapViewport(token: value)
             default: break
             }
         }
@@ -237,6 +274,7 @@ struct PendingNavigationStore {
             case "model": dl.model = value
             case "metric": dl.metric = value
             case "apt": dl.airport = value
+            case "view": dl.view = MapViewport(token: value)
             default: break
             }
         }

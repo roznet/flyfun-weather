@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import MapKit
 import Testing
 @testable import flyfun_weather
 
@@ -246,6 +247,13 @@ struct HistoricalMapTests {
         #expect(repo.historicalMapRequests.first?.lead == 3)
     }
 
+    @Test func deepLinkViewSetsInitialRegion() async throws {
+        let link = HistoricalMapDeepLink(view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))
+        let (vm, _) = try await Self.loadedViewModel(deepLink: link)
+        #expect(vm.initialRegion.center.latitude == 51.5)
+        #expect(vm.initialRegion.span.longitudeDelta == ForecastMapViewModel.europeRegion.span.longitudeDelta / 4)
+    }
+
     @Test func futureDeepLinkClampsToLatest() async throws {
         let link = HistoricalMapDeepLink(date: "2026-10-05", time: "09:00")
         let (vm, _) = try await Self.loadedViewModel(deepLink: link)
@@ -296,9 +304,10 @@ struct HistoricalMapTests {
     // MARK: - Universal link routing
 
     @Test func historicalMapsLinkRoutesWithState() {
-        let url = URL(string: "https://weather.flyfun.aero/maps.html?tab=historical&hist.date=2026-09-20&hist.time=14:30&hist.lead=2&hist.source=taf&hist.metric=ceiling_ft&hist.apt=EGLL")!
+        let url = URL(string: "https://weather.flyfun.aero/maps.html?tab=historical&hist.date=2026-09-20&hist.time=14:30&hist.lead=2&hist.source=taf&hist.metric=ceiling_ft&hist.apt=EGLL&hist.view=51.50,-0.12,7")!
         #expect(AppState.navigationTarget(for: url) == .historicalMap(HistoricalMapDeepLink(
-            date: "2026-09-20", time: "14:30", lead: 2, source: "taf", metric: "ceiling_ft", airport: "EGLL")))
+            date: "2026-09-20", time: "14:30", lead: 2, source: "taf", metric: "ceiling_ft", airport: "EGLL",
+            view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))))
     }
 
     @Test func bareHistoricalTabIsEmptyDeepLink() {

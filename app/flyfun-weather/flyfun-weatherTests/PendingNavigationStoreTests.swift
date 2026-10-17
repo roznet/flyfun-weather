@@ -64,7 +64,8 @@ struct PendingNavigationStoreTests {
             .forecastMap(MapDeepLink(day: 2, hour: 6, model: "gfs",
                                      metric: "ceiling_ft", airport: "EGLL")),
             .historicalMap(HistoricalMapDeepLink(date: "2026-09-20", time: "14:30", lead: 2,
-                                                 source: "taf", metric: "ceiling_ft", airport: "EGLL")),
+                                                 source: "taf", metric: "ceiling_ft", airport: "EGLL",
+                                                 view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))),
         ]
         for target in targets {
             store.set(target)

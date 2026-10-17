@@ -477,10 +477,11 @@ final class AppState {
             let items = comps.queryItems ?? []
             // `tab=historical` (#629) opens the historical map; every other tab
             // (forecast, or one iOS doesn't have) lands on the forecast map.
-            if items.first(where: { $0.name == "tab" })?.value == "historical" {
+            let tab = items.first(where: { $0.name == "tab" })?.value
+            if tab == "historical" {
                 return .historicalMap(historicalMapDeepLink(from: items))
             }
-            return .forecastMap(mapDeepLink(from: items))
+            return .forecastMap(mapDeepLink(from: items, tab: tab))
         case "/trip.html":
             // #607. Requires `/trip.html` in the domain's AASA `paths` — iOS
             // caches that file per-install, so the Caddy change must be deployed
@@ -520,17 +521,29 @@ final class AppState {
 
     /// Read the forecast map's `fc.*` share-state keys from a `/maps.html` query.
     /// `fc.day`/`fc.hour` stay relative integers so existing share links resolve.
-    nonisolated static func mapDeepLink(from items: [URLQueryItem]) -> MapDeepLink {
+    /// A link to a web tab iOS doesn't have (`now`, `synoptic`, `climatology`)
+    /// still lands here, positioned on that tab's own `*.view` so the recipient
+    /// sees the sender's area; `fc.view` is the fallback.
+    nonisolated static func mapDeepLink(from items: [URLQueryItem], tab: String? = nil) -> MapDeepLink {
         func value(_ name: String) -> String? {
             let v = items.first { $0.name == name }?.value
             return (v?.isEmpty == false) ? v : nil
         }
+        let tabViewKey: String? = switch tab {
+        case "now": "now.view"
+        case "synoptic": "syn.view"
+        case "climatology": "clim.view"
+        default: nil
+        }
+        let view = tabViewKey.flatMap(value).flatMap(MapViewport.init(token:))
+            ?? value("fc.view").flatMap(MapViewport.init(token:))
         return MapDeepLink(
             day: value("fc.day").flatMap(Int.init),
             hour: value("fc.hour").flatMap(Int.init),
             model: value("fc.model"),
             metric: value("fc.metric"),
-            airport: value("fc.apt")
+            airport: value("fc.apt"),
+            view: view
         )
     }
 
@@ -546,7 +559,8 @@ final class AppState {
             lead: value("hist.lead").flatMap(Int.init),
             source: value("hist.source"),
             metric: value("hist.metric"),
-            airport: value("hist.apt")
+            airport: value("hist.apt"),
+            view: value("hist.view").flatMap(MapViewport.init(token:))
         )
     }
 
