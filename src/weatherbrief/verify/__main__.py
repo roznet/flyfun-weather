@@ -1297,7 +1297,8 @@ def main():
     )
     p_clouds.add_argument(
         "--dry-run", action="store_true",
-        help="Parse and count only — write nothing",
+        help="Parse and count the database rows only — write nothing "
+             "(the --archive step is skipped)",
     )
     p_clouds.add_argument(
         "--archive", action="store_true",
