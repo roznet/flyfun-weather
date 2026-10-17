@@ -84,6 +84,18 @@ The committed corpus has only `cross_section.json.gz`; rebuild the gitignored de
 python scripts/rehydrate_eval_cache.py --area corpus     # run_analysis from cross_section, ~3.5s/pack
 ```
 
+## Recipe: rank staged packs into a review queue
+
+A season pull is too many packs to label by hand. `rank_eval_candidates.py` scores unlabelled packs on debrief-vs-grade (over/under-warn), model RED/GREEN spread, drift under today's code (systematic drifts reported once, not scored) and digest thumbs-down, de-duplicates route+day, and picks the top N greedily for **advisory diversity**. Read-only; ~15 s for 70 packs.
+
+```bash
+# feedback.json = the archive's metadata/feedback.json (scp from the mini)
+python scripts/rank_eval_candidates.py --area staging --since 2026-07-21 \
+    --feedback-json feedback.json --top 15 --output <evalset>/staging/REVIEW_QUEUE.md
+```
+
+Season packs come from the **Mac mini archive**, not prod (prod strips them at 30 days): tar the chosen `<user>/<flight>/<ts>` tails over ssh into a scratch dir, `pull_eval_corpus.py --from <dir>`, then `pull_debrief_data.py`. Count availability from the archive tree, not from `index.json` flags.
+
 ## Recipe: build/refresh corpus from local packs; promote
 
 ```bash
