@@ -26,8 +26,12 @@ import {
   type CategoryKey, type DatasetKey, type PhenomenaKey, type WindKey,
 } from './climatology-datasets';
 import { $ } from '../utils';
-
-type SubTab = 'map' | 'top';
+import { bindMapView, type MapViewBinding } from '../utils/map-view';
+import type { UrlStateful } from '../utils/url-state';
+import {
+  CLIMATOLOGY_URL_SCHEMA,
+  type ClimatologySubTab as SubTab, type ClimatologyUrlValues,
+} from './climatology-url';
 
 const MONTH_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -49,8 +53,16 @@ function buildMonthOptions(months: number, now: Date): MonthOption[] {
   return out;
 }
 
-export class ClimatologyTab {
+export class ClimatologyTab implements UrlStateful<typeof CLIMATOLOGY_URL_SCHEMA> {
+  readonly urlSchema = CLIMATOLOGY_URL_SCHEMA;
   private mapView: ClimatologyMap | null = null;
+  private viewBinding: MapViewBinding | null = null;
+  /** URL-hydrated values; they stand for the tab until init() resolves them
+   *  against the pickers (an unknown month or sub falls back to the default). */
+  private readonly initial: ClimatologyUrlValues;
+  private readonly onStateChange: () => void;
+  /** The picker's first month (current, to date): elided from the URL. */
+  private defaultMonth = '';
   private month = '';
   private monthIsMtd = false;
   private dataset: DatasetKey = 'category';
@@ -64,6 +76,23 @@ export class ClimatologyTab {
   private reloadDirty = false;
   private leaderboardLoaded = false;
 
+  constructor(initial: ClimatologyUrlValues, onStateChange: () => void) {
+    this.initial = initial;
+    this.onStateChange = onStateChange;
+    this.dataset = initial['clim.dataset'];
+  }
+
+  urlValues(): ClimatologyUrlValues {
+    if (!this.initialised) return this.initial;
+    return {
+      'clim.sub': this.currentSub,
+      'clim.month': this.month === this.defaultMonth ? '' : this.month,
+      'clim.dataset': this.dataset,
+      'clim.cat': this.sub === this.defaultSub() ? '' : this.sub,
+      'clim.view': this.viewBinding?.current() ?? this.initial['clim.view'],
+    };
+  }
+
   init(): void {
     if (this.initialised) {
       this.mapView?.invalidateSize();
@@ -71,11 +100,15 @@ export class ClimatologyTab {
     }
     this.initialised = true;
 
-    this.populateMonthPicker();
+    this.populateMonthPicker(this.initial['clim.month']);
     this.populateDatasetPicker();
-    this.renderSubPicker();   // populates "Color by" for default dataset
+    this.renderSubPicker(this.initial['clim.cat']);   // populates "Color by" for the dataset
     this.mapView = new ClimatologyMap('clim-map-container');
+    this.viewBinding = bindMapView(this.mapView.getLeafletMap(), {
+      initial: this.initial['clim.view'], onChange: () => this.onStateChange(),
+    });
     this.wireControls();
+    if (this.initial['clim.sub'] !== 'map') this.switchSubTab(this.initial['clim.sub'], false);
     this.reload();
   }
 
@@ -89,13 +122,17 @@ export class ClimatologyTab {
 
   // --- Pickers -------------------------------------------------------------
 
-  private populateMonthPicker(): void {
+  /** `preferred` = a linked month; one no longer in the picker falls back to
+   *  the current month. */
+  private populateMonthPicker(preferred = ''): void {
     const sel = $('clim-month-picker') as HTMLSelectElement | null;
     if (!sel) return;
     const opts = buildMonthOptions(13, new Date());
     sel.innerHTML = opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
-    this.month = opts[0].value;
-    this.monthIsMtd = opts[0].isMtd;
+    const pick = opts.find((o) => o.value === preferred) ?? opts[0];
+    this.defaultMonth = opts[0].value;
+    this.month = pick.value;
+    this.monthIsMtd = pick.isMtd;
     sel.value = this.month;
   }
 
@@ -108,8 +145,15 @@ export class ClimatologyTab {
     sel.value = this.dataset;
   }
 
-  /** Repopulate the "Color by" row based on the active dataset. */
-  private renderSubPicker(): void {
+  /** The sub-selection a dataset opens on: its first eligible option. */
+  private defaultSub(): string {
+    const opts = this.subOptionsForActiveDataset();
+    return (opts.find((o) => !this.isSubDisabled(o.value)) ?? opts[0])?.value ?? '';
+  }
+
+  /** Repopulate the "Color by" row based on the active dataset. `preferred`
+   *  (a linked sub) is kept when the dataset offers it and it is enabled. */
+  private renderSubPicker(preferred = ''): void {
     const host = $('clim-metric-picker');
     if (!host) return;
     const opts = this.subOptionsForActiveDataset();
@@ -119,8 +163,8 @@ export class ClimatologyTab {
       return;
     }
     // Default sub: first eligible option (skips MTD-disabled ones if current month is MTD).
-    const firstEligible = opts.find((o) => !this.isSubDisabled(o.value)) ?? opts[0];
-    this.sub = firstEligible.value;
+    const keep = opts.some((o) => o.value === preferred) && !this.isSubDisabled(preferred);
+    this.sub = keep ? preferred : this.defaultSub();
     host.innerHTML = opts.map((o) => {
       const disabled = this.isSubDisabled(o.value);
       const active = o.value === this.sub ? ' active' : '';
@@ -158,6 +202,7 @@ export class ClimatologyTab {
             .forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
           this.sub = btn.dataset.sub!;
+          this.onStateChange();
           this.invalidateLeaderboard();
           this.reload();
         });
@@ -180,6 +225,7 @@ export class ClimatologyTab {
       const cur = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
       this.monthIsMtd = this.month === cur;
       this.renderSubPicker();
+      this.onStateChange();
       this.invalidateLeaderboard();
       this.reload();
     });
@@ -188,6 +234,7 @@ export class ClimatologyTab {
     dsSel?.addEventListener('change', () => {
       this.dataset = dsSel.value as DatasetKey;
       this.renderSubPicker();
+      this.onStateChange();
       this.invalidateLeaderboard();
       this.reload();
     });
@@ -200,8 +247,9 @@ export class ClimatologyTab {
       });
   }
 
-  private switchSubTab(sub: SubTab): void {
+  private switchSubTab(sub: SubTab, notify = true): void {
     this.currentSub = sub;
+    if (notify) this.onStateChange();
     document.querySelectorAll('#clim-subtabs .tab-btn').forEach((b) => {
       b.classList.toggle('active', (b as HTMLElement).dataset.subtab === sub);
     });

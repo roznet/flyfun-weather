@@ -46,6 +46,14 @@ import { CellsLayer } from './cells-overlay';
 import { FlashGlyphLayer } from './flash-glyph-layer';
 import { cellsLegendHtml, hhmmZ } from './cells-overlay-core';
 import { $, escapeHtml } from '../utils';
+import { bindMapView, type MapViewBinding } from '../utils/map-view';
+import type { UrlStateful } from '../utils/url-state';
+import {
+  DEFAULT_NOW_LAYERS, NOW_URL_SCHEMA, decodeNowLayers, encodeNowLayers,
+  type NowLayer, type NowLayers, type NowUrlValues,
+} from './now-url';
+
+export { NOW_LAYERS, type NowLayer } from './now-url';
 
 export const NOW_REFRESH_MS = 5 * 60_000;
 const TICK_MS = 30_000;
@@ -54,32 +62,28 @@ const RADAR_SOURCE = 'opera_dbzh';
 const RADAR_OPACITY = 0.75;
 const SATELLITE_OPACITY = 0.8;
 
-export type NowLayer = 'airports' | 'radar' | 'satellite' | 'lightning' | 'cells' | 'rain';
-export const NOW_LAYERS: readonly NowLayer[] = ['airports', 'radar', 'satellite', 'lightning', 'cells', 'rain'];
-const DEFAULT_LAYERS: Record<NowLayer, boolean> = {
-  airports: true, radar: true, satellite: true, lightning: true, cells: true,
-  // Rain areas are off by default, as in the prototype: dozens of frontal
-  // outlines would bury the cores.
-  rain: false,
-};
 const STORAGE_KEY = 'wb.now.layers';
 
 interface FlashPoint { lat: number; lon: number; time: string }
 
-function loadLayers(): Record<NowLayer, boolean> {
+function loadLayers(): NowLayers {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_LAYERS, ...(JSON.parse(raw) as Partial<Record<NowLayer, boolean>>) };
+    if (raw) return { ...DEFAULT_NOW_LAYERS, ...(JSON.parse(raw) as Partial<NowLayers>) };
   } catch { /* private mode, blocked storage: defaults */ }
-  return { ...DEFAULT_LAYERS };
+  return { ...DEFAULT_NOW_LAYERS };
 }
 
-function saveLayers(layers: Record<NowLayer, boolean>): void {
+function saveLayers(layers: NowLayers): void {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layers)); } catch { /* per-viewer convenience only */ }
 }
 
-export class NowTab {
+export class NowTab implements UrlStateful<typeof NOW_URL_SCHEMA> {
+  readonly urlSchema = NOW_URL_SCHEMA;
   private map: WeatherMap | null = null;
+  private viewBinding: MapViewBinding | null = null;
+  private readonly initialView: string;
+  private readonly onStateChange: () => void;
   private leaflet: L.Map | null = null;
   private tiles: L.LayerGroup | null = null;
   private flashLayer: FlashGlyphLayer | null = null;
@@ -87,7 +91,7 @@ export class NowTab {
   private data: NowMapResponse | null = null;
   private flashes: FlashPoint[] = [];
   private flashNote = '';
-  private layers = loadLayers();
+  private layers: NowLayers;
   private visible = false;
   private lastRefresh = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -99,6 +103,23 @@ export class NowTab {
   // Lightning refreshes on every pan, so overlapping requests are normal: only
   // the newest one may draw.
   private flashSeq = 0;
+
+  /** `initial` is the URL-hydrated `now.*` slice. A linked layer set wins over
+   *  the viewer's saved one but is not saved until they toggle something. */
+  constructor(initial: NowUrlValues, onStateChange: () => void) {
+    this.layers = decodeNowLayers(initial['now.layers']) ?? loadLayers();
+    this.openIcao = initial['now.apt'] || null;
+    this.initialView = initial['now.view'];
+    this.onStateChange = onStateChange;
+  }
+
+  urlValues(): NowUrlValues {
+    return {
+      'now.layers': encodeNowLayers(this.layers),
+      'now.view': this.viewBinding?.current() ?? this.initialView,
+      'now.apt': this.openIcao ?? '',
+    };
+  }
 
   async show(): Promise<void> {
     this.visible = true;
@@ -121,6 +142,8 @@ export class NowTab {
     this.map.setAirportClickHandler((icao) => this.openPanel(icao));
     this.leaflet = this.map.getLeafletMap();
     if (!this.leaflet) return;
+    // Before the first refresh: lightning is fetched for the box in view.
+    this.viewBinding = bindMapView(this.leaflet, { initial: this.initialView, onChange: () => this.onStateChange() });
     this.tiles = L.layerGroup().addTo(this.leaflet);
     this.flashLayer = new FlashGlyphLayer().addTo(this.leaflet);
     this.cells = new CellsLayer(this.leaflet, this.layers.cells);
@@ -157,6 +180,7 @@ export class NowTab {
       input.addEventListener('change', () => {
         this.layers[key] = input.checked;
         saveLayers(this.layers);
+        this.onStateChange();
         void this.applyLayer(key);
       });
     }
@@ -393,11 +417,15 @@ export class NowTab {
     const host = $('now-panel-host') as HTMLElement | null;
     const apt = this.data?.airports.find((a) => a.icao === icao);
     if (!host || !apt) return;
+    // Re-opened on every refresh (and from a link): only a new airport is a
+    // state change worth writing.
+    const changed = this.openIcao !== icao;
     this.openIcao = icao;
     host.style.display = '';
     host.innerHTML = this.panelHtml(apt);
     host.querySelector('.hist-panel-close')?.addEventListener('click', () => this.closePanel());
     this.map?.setHighlightedIcao(icao);
+    if (changed) this.onStateChange();
     setTimeout(() => this.map?.invalidateSize(), 50);
   }
 
@@ -406,6 +434,7 @@ export class NowTab {
     if (host) { host.style.display = 'none'; host.innerHTML = ''; }
     this.openIcao = null;
     this.map?.setHighlightedIcao(null);
+    this.onStateChange();
     setTimeout(() => this.map?.invalidateSize(), 50);
   }
 

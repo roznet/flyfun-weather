@@ -22,7 +22,7 @@
  *   state.write({ tab, 'fc.day': fcDay, 'fc.hour': fcHour });  // sync after change
  */
 
-type Codec<T> = {
+export type Codec<T> = {
   parse: (raw: string) => T | undefined;
   format: (value: T) => string;
 };
@@ -53,6 +53,46 @@ export type UrlSchema = Record<string, UrlField<any>>;
 export type UrlValues<S extends UrlSchema> = {
   [K in keyof S]: S[K] extends UrlField<infer T> ? T : never;
 };
+
+/** Per-tab URL contract (#796). A tab owns a prefixed slice of the page's
+ *  query string: its `urlSchema` (declared in a leaflet-free sibling module so
+ *  the page can compose it before the tab exists) and `urlValues()`, the
+ *  current snapshot the page writes. The tab takes its URL-hydrated values at
+ *  construction and calls the page's `onStateChange` whenever a URL-relevant
+ *  control changes. Typing `urlValues()` as `UrlValues<S>` means a key added
+ *  to the schema can't be forgotten on the write side.
+ *
+ *  Rule: any control that changes what a tab renders goes through its schema,
+ *  or shared links silently drop it. */
+export interface UrlStateful<S extends UrlSchema> {
+  readonly urlSchema: S;
+  urlValues(): UrlValues<S>;
+}
+
+type UnionToIntersection<U> =
+  (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
+
+/** Keys that appear in more than one schema. */
+export function duplicateUrlKeys(...schemas: UrlSchema[]): string[] {
+  const seen = new Set<string>();
+  const dups = new Set<string>();
+  for (const s of schemas) {
+    for (const k of Object.keys(s)) {
+      if (seen.has(k)) dups.add(k);
+      seen.add(k);
+    }
+  }
+  return [...dups];
+}
+
+/** Merge per-tab schemas into one page schema. Throws on a key two schemas
+ *  both claim: a plain spread would let the later one win silently, and one
+ *  tab's control would then overwrite another's in the URL. */
+export function composeUrlSchemas<T extends UrlSchema[]>(...schemas: T): UnionToIntersection<T[number]> {
+  const dups = duplicateUrlKeys(...schemas);
+  if (dups.length) throw new Error(`URL schema keys claimed twice: ${dups.join(', ')}`);
+  return Object.assign({}, ...schemas);
+}
 
 export interface UrlState<S extends UrlSchema> {
   /** Read the current URL and return values, applying defaults for

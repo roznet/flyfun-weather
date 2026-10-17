@@ -23,6 +23,7 @@ import type { HewsonAllMetricsSlice, HewsonFront, HewsonSlice } from '../adapter
 import { COLORMAPS, gradientCss, type HewsonMetric } from './hewson-colormaps';
 import { HewsonGridLayer } from './hewson-grid-layer';
 import type { ChartProjection } from './chart-projection';
+import { bindMapView, DEFAULT_MAP_VIEW, type MapViewBinding } from '../utils/map-view';
 
 // Gate-detected front-axis colours (match the CLI DWD overlay: blue cold,
 // red warm, purple quasi-stationary).
@@ -70,6 +71,12 @@ export class SynopticMap {
   private legendEl: HTMLElement | null = null;
 
   private mode: BasemapMode = 'osm';
+  // Viewport <-> `syn.view` (#796). Tracked on the OSM basemap only: a chart's
+  // CRS.Simple zoom isn't a geographic zoom, and the basemap isn't linked, so
+  // while a chart is shown the key keeps the last OSM view.
+  private viewChange: (() => void) | null = null;
+  private viewBinding: MapViewBinding | null = null;
+  private lastOsmView = '';
   private chartSpec: ChartBasemapSpec | null = null;
   private chartAttr: string | null = null;
 
@@ -103,6 +110,28 @@ export class SynopticMap {
     this.map?.invalidateSize();
   }
 
+  /** Apply a URL-hydrated view ('' = none) and report later moves. Call once,
+   *  after init(). */
+  bindView(initial: string, onChange: () => void): void {
+    this.viewChange = onChange;
+    this.lastOsmView = initial;
+    if (this.mode === 'osm') this.attachViewBinding(initial);
+  }
+
+  /** The `syn.view` value: '' while at the default view. */
+  currentView(): string {
+    return this.viewBinding?.current() ?? this.lastOsmView;
+  }
+
+  private attachViewBinding(initial: string): void {
+    this.viewBinding?.dispose();
+    this.viewBinding = null;
+    if (!this.map || !this.viewChange || this.mode !== 'osm') return;
+    this.viewBinding = bindMapView(this.map, {
+      initial, onChange: this.viewChange, defaultView: DEFAULT_MAP_VIEW,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Basemap mode
   // -------------------------------------------------------------------------
@@ -130,6 +159,11 @@ export class SynopticMap {
   /** Tear down and rebuild the Leaflet map for the current mode, re-applying
    * the slice / fronts / opacity and fitting to `geo` (if given). */
   private rebuild(geo: GeoBounds | null): void {
+    if (this.viewBinding) {
+      this.lastOsmView = this.viewBinding.current();
+      this.viewBinding.dispose();
+      this.viewBinding = null;
+    }
     if (this.map) {
       this.map.remove();
       this.map = null;
@@ -148,6 +182,12 @@ export class SynopticMap {
     }
     this.gridLayer?.setOpacity(this.opacity);
     if (this.lastFronts.length) this.drawFronts(this.lastFronts);
+
+    // Back on OSM (fitted to the chart's area): track, and report the move.
+    if (this.mode === 'osm' && this.viewChange) {
+      this.attachViewBinding('');
+      if (this.currentView() !== this.lastOsmView) this.viewChange();
+    }
   }
 
   private buildMap(geo: GeoBounds | null): void {
@@ -179,7 +219,9 @@ export class SynopticMap {
   }
 
   private buildOsmMap(geo: GeoBounds | null): void {
-    this.map = L.map(this.container, { center: [48, 10], zoom: 5, zoomControl: true });
+    this.map = L.map(this.container, {
+      center: [DEFAULT_MAP_VIEW.lat, DEFAULT_MAP_VIEW.lon], zoom: DEFAULT_MAP_VIEW.zoom, zoomControl: true,
+    });
     this.tileLayer = createBaseTileLayer(isDark()).addTo(this.map);
     if (geo) this.fitGeoBounds(geo);
   }
