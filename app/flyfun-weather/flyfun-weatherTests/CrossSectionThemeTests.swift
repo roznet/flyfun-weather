@@ -88,12 +88,12 @@ extension CrossSectionSharedStateTests {
 
         // MARK: Preset → theme wiring (CrossSectionViewModel)
 
-        @Test func bootDefaultsToGrametThemeMatchingTheGrametEmulation() {
+        @Test func bootDrawsTheStandardThemeWithNoEmulation() {
             let vm = CrossSectionViewModel()
-            // The booted emulation is GRAMET, so the theme agrees on boot.
-            #expect(vm.themeId == .gramet)
-            #expect(vm.activeEmulation == "gramet")
-            #expect(CrossSectionTheme.active.id == .gramet)
+            // No emulation on boot (as the web), so nothing overrides standard.
+            #expect(vm.themeId == .standard)
+            #expect(vm.activeEmulation == nil)
+            #expect(CrossSectionTheme.active.id == .standard)
         }
 
         @Test func selectingAnEmulationAlsoAppliesItsTheme() {
@@ -123,7 +123,9 @@ extension CrossSectionSharedStateTests {
 
         @Test func flyFunOnAFreshInstallDrawsStandard() {
             let vm = CrossSectionViewModel()
-            #expect(vm.themeId == .gramet)        // boot emulation's look
+            #expect(vm.themeId == .standard)
+            vm.applyEmulation("gramet")
+            #expect(vm.themeId == .gramet)        // the emulation's look
             vm.applyEmulation(nil)
             #expect(vm.themeId == .standard)
             #expect(CrossSectionTheme.active.id == .standard)
@@ -154,6 +156,7 @@ extension CrossSectionSharedStateTests {
         @Test func handPickedThemeWhileEmulatingDropsTheEmulationInFull() {
             let vm = CrossSectionViewModel()
             vm.setGradedMethods([.clouds: "dd", .icing: "sfip_nwp", .convection: "thermo"])
+            vm.applyEmulation("gramet")
             vm.setHighlightAdvisory("icing")
             #expect(vm.activeEmulation == "gramet")
             vm.setTheme(.standard)

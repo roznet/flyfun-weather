@@ -48,8 +48,8 @@ final class CrossSectionViewModel {
     private(set) var userThemeId: CrossSectionThemeID?
     /// The theme the cross-section draws with: the active emulation's, else the
     /// user's own, else standard. Derived, so nothing extra is stored for FlyFun
-    /// to restore (web `effectiveThemeId`). A fresh install boots GRAMET and so
-    /// draws GRAMET; FlyFun on a fresh install draws standard.
+    /// to restore (web `effectiveThemeId`). A fresh install boots FlyFun and so
+    /// draws standard.
     var themeId: CrossSectionThemeID {
         CrossSectionPresets.emulation(activeEmulation)?.themeId ?? userThemeId ?? .standard
     }
@@ -101,7 +101,7 @@ final class CrossSectionViewModel {
 
     init() {
         cloudStylePreference = UserDefaults.standard.string(forKey: Self.cloudStyleDefaultsKey)
-            .flatMap(CloudStyle.init(rawValue:)) ?? .natural
+            .flatMap(CloudStyle.init(rawValue:)) ?? .square
 
         // Restore the last layer config so a relaunch keeps the user's layers
         // (not just colours) — mirrors the web, which persists the whole viz
@@ -162,7 +162,7 @@ final class CrossSectionViewModel {
 
     /// The stored emulation. Before #605 there was none to store — the preset was
     /// inferred from an exact layer-map match — so infer it once the same way: a
-    /// fresh install boots GRAMET, a stored map that still matches an emulation
+    /// fresh install boots `bootEmulationId` (none), a stored map that still matches an emulation
     /// keeps that label, and anything hand-tuned reads as FlyFun.
     private static func restoredEmulation(layers: [String: Bool], restoredLayers: Bool) -> String? {
         if let stored = UserDefaults.standard.string(forKey: emulationDefaultsKey) {
