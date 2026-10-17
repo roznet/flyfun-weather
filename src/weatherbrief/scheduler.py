@@ -132,6 +132,10 @@ _HEWSON_INBOX_DIR_DEFAULT = "/app/hewson_inbox"
 # The node takes ~3 min plus a ~140 MB push. 30 min is generous on purpose and
 # still leaves a local fallback (~3 min) done well before the HH+1 forecast cycle.
 _HEWSON_INBOX_WAIT_MAX_SECONDS = 1800
+# With the Open-Meteo init unknown, a local snapshot this recent counts as this
+# cycle's. Current inits are 6-12 h old at a sample hour; the previous cycle's are
+# >= 18 h old, so 15 h separates the two.
+_HEWSON_UNKNOWN_INIT_MAX_AGE_SECONDS = 15 * 3600
 # Usage-analytics rollup runs daily — at the same UTC hour each day so the
 # rollup of "yesterday" lands well after the day has actually rolled over.
 _ANALYTICS_ROLLUP_INTERVAL_SECONDS = 86_400
@@ -2429,7 +2433,8 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
     wait), else the set of models still missing at the end — empty when the
     node delivered all of them. A model counts as delivered once a local
     snapshot reaches the init Open-Meteo served at the top of the hour; when
-    that init is unknown, once any snapshot for it was ingested this cycle.
+    that init is unknown, once a snapshot was ingested this cycle or a local one
+    is recent enough to be this cycle's (startup pass, earlier poll).
     """
     inbox = _hewson_inbox_dir()
     if not inbox:
@@ -2454,12 +2459,13 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
 
     def _missing() -> set[str]:
         out = set()
+        recent = time.time() - _HEWSON_UNKNOWN_INIT_MAX_AGE_SECONDS
         for m in models:
+            have = newest_local_init(m)
             if expected[m]:
-                have = newest_local_init(m)
                 if have is None or have < expected[m]:
                     out.add(m)
-            elif m not in ingested:
+            elif m not in ingested and (have is None or have < recent):
                 out.add(m)
         return out
 
@@ -2489,8 +2495,13 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
                 "locally as fallback", sorted(missing),
                 _HEWSON_INBOX_WAIT_MAX_SECONDS // 60,
             )
+            # Name rejections: a corrupt delivery and no delivery need
+            # different fixes, and both end here.
             await _ping_ingest_healthcheck(
-                "/fail", f"missing {sorted(missing)} — computing locally",
+                "/fail",
+                f"missing {sorted(missing)}, rejected {len(rejected)} "
+                f"({', '.join(sorted(p.name for p in rejected)) or '-'}) "
+                f"— computing locally",
                 env="HEWSON_INGEST_HEALTHCHECK_URL",
             )
             return missing

@@ -161,12 +161,15 @@ def sched_env(tmp_path, monkeypatch):
 
     pings: list[str] = []
 
+    details: list[str] = []
+
     async def fake_ping(suffix="", detail="", env="INGEST_HEALTHCHECK_URL"):
         pings.append(f"{env}{suffix}")
+        details.append(detail)
 
     monkeypatch.setattr(sched, "_ping_ingest_healthcheck", fake_ping)
     return SimpleNamespace(sched=sched, inbox=inbox, clock=clock, init=init,
-                           expected=expected, pings=pings)
+                           expected=expected, pings=pings, details=details)
 
 
 class TestTryIngestHewsonSnapshots:
@@ -209,6 +212,56 @@ class TestTryIngestHewsonSnapshots:
         for m in ("ecmwf", "gfs", "icon"):
             _write(sched_env.inbox, m, sched_env.init, n_time=1)
         assert asyncio.run(sched_env.sched._try_ingest_hewson_snapshots()) == set()
+
+
+    def test_unknown_init_accepts_recent_local_snapshot(self, sched_env):
+        """Metadata outage + snapshot already on disk is not a non-delivery."""
+        import os
+
+        sched_env.expected["ecmwf"] = 0
+        _write(sched_env.inbox, "gfs", sched_env.init, n_time=1)
+        _write(sched_env.inbox, "icon", sched_env.init, n_time=1)
+        _write(Path(os.environ["DATA_DIR"]) / "hewson", "ecmwf", sched_env.init,
+               n_time=1)
+        assert asyncio.run(sched_env.sched._try_ingest_hewson_snapshots()) == set()
+        assert sched_env.clock["t"] == 0
+
+    def test_unknown_init_old_local_snapshot_still_missing(self, sched_env):
+        import os
+
+        sched_env.expected["ecmwf"] = 0
+        for m in ("gfs", "icon"):
+            _write(sched_env.inbox, m, sched_env.init, n_time=1)
+        _write(Path(os.environ["DATA_DIR"]) / "hewson", "ecmwf",
+               sched_env.init - 24 * 3600, n_time=1)
+        assert asyncio.run(sched_env.sched._try_ingest_hewson_snapshots()) == {"ecmwf"}
+
+    def test_fail_ping_names_rejected_files(self, sched_env):
+        for m in ("gfs", "icon"):
+            _write(sched_env.inbox, m, sched_env.init, n_time=1)
+        bad = _write(sched_env.inbox, "ecmwf", sched_env.init, n_time=1)
+        bad.write_bytes(b"not a zip")
+        assert asyncio.run(sched_env.sched._try_ingest_hewson_snapshots()) == {"ecmwf"}
+        assert "rejected 1" in sched_env.details[-1]
+        assert bad.name in sched_env.details[-1]
+
+
+@pytest.mark.parametrize("skipped, rc", [
+    ({}, 0), ({"gfs": "fresh"}, 0), ({"gfs": "error"}, 1), ({"ecmwf": "no-init-time"}, 1),
+])
+def test_cli_exit_code_flags_failed_models(monkeypatch, skipped, rc):
+    """Non-zero only for real failures, so the node withholds its deadman."""
+    import argparse
+
+    from weatherbrief.hewson import cli
+
+    monkeypatch.setattr(cli, "run_once", lambda **kw: SimpleNamespace(
+        snapshots={}, skipped=skipped, elapsed_seconds=0.0, purged=0,
+        api_calls_total=0))
+    args = argparse.Namespace(
+        models=None, levels=None, output_dir=None, forecast_days=5,
+        stride_hours=3, retention_hours=48, dry_run=False, force=False, date=None)
+    assert cli._cmd_precompute(args) == rc
 
 
 def test_fallback_runs_only_missing_models(monkeypatch):
