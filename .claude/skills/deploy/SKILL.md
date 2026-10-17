@@ -129,8 +129,11 @@ ssh <SERVER_SSH> "cd <SERVER_PROJECT_DIR> && docker compose restart"
    under one), or its DB isn't alembic-stamped (§D3); otherwise checkout, `pull --ff-only`
    and `alembic upgrade head` **in one command** (no cycle can start between them, §D3), pip
    only if `pyproject.toml` changed, then it **checks the node reached `origin/main`** and its
-   alembic head. A `daemon` warn (e.g. the mini's `aero.flyfun.observed-cells`) keeps running
-   the old code: hand the user the printed `sudo launchctl kickstart -k …`. A node failure
+   alembic head. Each listed `daemon` (e.g. the mini's `aero.flyfun.observed-cells`) is then
+   restarted by killing its pid — a KeepAlive job running as the ssh user, so launchd
+   respawns it on the new code, no sudo. Only a `daemon` warn (not KeepAlive, another user,
+   didn't come back) still runs the old code: first try `kill <pid>` yourself; the printed
+   `sudo launchctl kickstart -k …` is the last resort for the user. A node failure
    never fails the deploy — but never report it complete while a node was skipped: say
    production is deployed *and* name the nodes left behind.
 

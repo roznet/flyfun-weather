@@ -434,6 +434,34 @@ echo @@end
 
 # --- nodes ---------------------------------------------------------------------------
 
+def restart_daemon(ssh: str, label: str) -> tuple[str, str, str]:
+    """Restart a node's KeepAlive LaunchDaemon by killing its pid; launchd respawns it.
+
+    Only for a job running as the ssh user (no sudo); otherwise, or if it doesn't come
+    back, the (status, label, evidence) falls back to the user's `kickstart -k`.
+    """
+    script = f"""job=system/{label}
+info=$(launchctl print "$job" 2>/dev/null) || {{ echo @@nojob; exit 0; }}
+old=$(printf '%s\\n' "$info" | awk -F' = ' '/^\\tpid = /{{print $2}}')
+usr=$(printf '%s\\n' "$info" | awk -F' = ' '/^\\tusername = /{{print $2}}')
+printf '%s\\n' "$info" | grep -q 'keepalive' || {{ echo @@nokeepalive; exit 0; }}
+[ "$usr" = "$(whoami)" ] || {{ echo @@otheruser; exit 0; }}
+[ -n "$old" ] && kill "$old"
+for i in $(seq 20); do
+  sleep 2
+  new=$(launchctl print "$job" 2>/dev/null | awk -F' = ' '/^\\tpid = /{{print $2}}')
+  [ -n "$new" ] && [ "$new" != "$old" ] && {{ echo @@restarted; echo "$old -> $new"; exit 0; }}
+done
+echo @@stuck
+"""
+    d = sections(remote(ssh, script, timeout=120).stdout)
+    if "restarted" in d:
+        return OK, label, f"restarted (pid {d['restarted']})"
+    why = next(iter(d), "no answer")
+    return WARN, label, (f"not restarted ({why}), still runs the old code: "
+                         f"`sudo launchctl kickstart -k system/{label}` on the node")
+
+
 def cmd_nodes(a) -> Report:
     rep = Report("compute nodes" + ("" if a.execute else " (dry run; --execute to update)"))
     nodes = hosts.load_hosts(hosts.DEFAULT_HOSTS_FILE).get("nodes", [])
@@ -510,10 +538,10 @@ echo @@end
         rep.add(name, OK, f"{head} -> {new_head}",
                 f"alembic {','.join(new_rev)}; deps {'reinstalled' if 'deps' in s else 'unchanged'}")
         for label in node.get("daemons", []):
-            # Long-running services from this checkout keep the old code until restarted;
-            # system LaunchDaemons need sudo, which the user runs.
-            rep.add(f"{name} daemon", WARN, label, "still runs the old code: "
-                    f"`sudo launchctl kickstart -k system/{label}` on the node")
+            # Long-running services from this checkout keep the old code until restarted.
+            # A KeepAlive job running as the ssh user restarts itself once killed, so no
+            # sudo is needed; anything else falls back to the user's `kickstart -k`.
+            rep.add(f"{name} daemon", *restart_daemon(node["ssh"], label))
     if not rep.checks:
         if a.node:
             rep.add("nodes", UNKNOWN, a.node, "no such node in hosts.json")
