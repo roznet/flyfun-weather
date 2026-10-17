@@ -347,14 +347,19 @@ def _test_echo(payload, sleep: float = 0.0, raise_exc: str | None = None):
     return payload
 
 
-def _test_busy_loop(seconds: float) -> int:
-    """CPU-bound loop — used to verify two workers actually run in parallel."""
+def _test_busy_loop(seconds: float) -> tuple[float, float]:
+    """CPU-bound loop — used to verify workers actually run in parallel.
+
+    Returns its own wall-clock ``(start, end)`` so a test can check that jobs
+    overlapped in time — a load-independent proof of concurrency, unlike a
+    total-elapsed bound, which a busy machine (xdist on 4 vCPUs) blows.
+    """
     import time as _t
+    start = _t.time()
     end = _t.perf_counter() + seconds
-    n = 0
     while _t.perf_counter() < end:
-        n += 1
-    return n
+        pass
+    return start, _t.time()
 
 
 def _test_crash() -> None:

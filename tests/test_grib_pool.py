@@ -145,12 +145,22 @@ def test_dispatch_returns_result(monkeypatch):
     (os.cpu_count() or 1) < 2,
     reason="requires at least 2 logical CPUs to actually parallelise",
 )
+def _assert_ran_concurrently(intervals, label):
+    """Every job was running at one common instant: serialised jobs cannot
+    overlap, concurrent ones do even when a loaded machine time-slices them."""
+    latest_start = max(start for start, _ in intervals)
+    earliest_end = min(end for _, end in intervals)
+    assert latest_start < earliest_end, (
+        f"{label}: busy-loops did not overlap (last started "
+        f"{latest_start - earliest_end:.2f}s after the first finished) — serialised"
+    )
+
+
 def test_two_concurrent_submits_run_in_parallel(monkeypatch):
     """Two concurrent decode jobs should run in parallel, not serialise.
 
-    With workers=2, two CPU-bound jobs of duration ``D`` should complete in
-    wall-clock close to ``D`` (parallel) rather than ``2D`` (serial). We
-    leave generous slack for spawn-time and scheduling jitter.
+    With workers=2, two CPU-bound jobs must overlap in time; serialised, the
+    second would only start once the first had finished.
     """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     shutdown_decode_pool()
@@ -165,19 +175,9 @@ def test_two_concurrent_submits_run_in_parallel(monkeypatch):
         f.result()
 
     duration = 0.5
-    t0 = time.perf_counter()
     f1 = pool.submit(decode_worker._test_busy_loop, duration)
     f2 = pool.submit(decode_worker._test_busy_loop, duration)
-    f1.result()
-    f2.result()
-    elapsed = time.perf_counter() - t0
-
-    # Serial would take ~1.0s; parallel should be ~0.5s. Allow up to 0.85s
-    # for jitter — but flag if it sneaks past serial-ish territory.
-    assert elapsed < 0.85, (
-        f"Two parallel busy-loops of {duration}s took {elapsed:.2f}s — "
-        "looks serialised, not parallel"
-    )
+    _assert_ran_concurrently([f1.result(), f2.result()], "two pool.submit jobs")
 
 
 def test_error_propagation(monkeypatch):
@@ -336,9 +336,8 @@ def test_parallel_dispatch_runs_two_jobs_in_parallel(monkeypatch):
     """Companion 2-CPU regression for issue #133.
 
     The 4-way test below skips on 2-CPU CI runners, leaving the core
-    regression unverified there. With workers=2 and two CPU-bound jobs
-    of duration ``D``, total wall time should be close to ``D`` (not
-    ``2D``) — the same bug surface as the 4-way case.
+    regression unverified there. With workers=2 the two CPU-bound jobs
+    must overlap in time — the same bug surface as the 4-way case.
     """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "2")
     shutdown_decode_pool()
@@ -352,16 +351,10 @@ def test_parallel_dispatch_runs_two_jobs_in_parallel(monkeypatch):
     duration = 0.5
     jobs = [("_test_busy_loop", (duration,)) for _ in range(2)]
 
-    t0 = time.perf_counter()
     results = _dispatch_decode_parallel(jobs)
-    elapsed = time.perf_counter() - t0
 
     assert len(results) == 2
-    # Serial would take ~1.0s; parallel should be ~0.5s.
-    assert elapsed < 0.9, (
-        f"Two parallel busy-loops of {duration}s took {elapsed:.2f}s — "
-        "looks serialised, not parallel (issue #133 regression)"
-    )
+    _assert_ran_concurrently(results, "2-way dispatch (issue #133 regression)")
 
 
 @pytest.mark.skipif(
@@ -373,10 +366,8 @@ def test_parallel_dispatch_runs_four_jobs_in_parallel(monkeypatch):
     in ~D wall-clock, not 4D — the bug was that sequential ``_dispatch_decode``
     calls in a ``for`` loop only ever exercised one worker even with workers>=2.
 
-    With workers=4 and four CPU-bound jobs of duration ``D``, total wall time
-    should be close to ``D``. We allow generous slack for spawn-time and
-    scheduling jitter, but flag if it sneaks into "obviously serialised"
-    territory (>= 2D).
+    With workers=4 all four CPU-bound jobs must be running at one common
+    instant; any serialisation leaves some pair without overlap.
     """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "4")
     shutdown_decode_pool()
@@ -391,17 +382,10 @@ def test_parallel_dispatch_runs_four_jobs_in_parallel(monkeypatch):
     duration = 0.5
     jobs = [("_test_busy_loop", (duration,)) for _ in range(4)]
 
-    t0 = time.perf_counter()
     results = _dispatch_decode_parallel(jobs)
-    elapsed = time.perf_counter() - t0
 
     assert len(results) == 4
-    # Serial would take ~2.0s; parallel should be ~0.5s. Generous bound to
-    # allow for jitter, but well below serial-ish territory.
-    assert elapsed < 1.5, (
-        f"Four parallel busy-loops of {duration}s took {elapsed:.2f}s — "
-        "looks serialised, not parallel (issue #133 regression)"
-    )
+    _assert_ran_concurrently(results, "4-way dispatch (issue #133 regression)")
 
 
 def test_parallel_dispatch_error_propagation(monkeypatch):
