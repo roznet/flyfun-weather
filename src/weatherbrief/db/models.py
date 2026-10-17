@@ -755,6 +755,17 @@ class VerificationObservationRow(Base):
     dewpoint_c: Mapped[int | None] = mapped_column(Integer, nullable=True)
     qnh: Mapped[float | None] = mapped_column(Float, nullable=True)
     weather: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    # Cloud detail beyond the single ceiling (migration 107, #793), all derived
+    # from the observed part of ``metar_raw`` by ``tasks/metar_clouds``.
+    # ``cloud_layers`` is the "was this derived?" marker: a JSON list of
+    # ``{"amount", "base_ft", "type"}`` (``[]`` = no cloud reported, VV kept as
+    # amount ``"VV"``), NULL = written before 107 and not yet backfilled
+    # (``verify backfill-cloud-layers``). ``lowest_cloud_base_ft`` is the lowest
+    # FEW/SCT/BKN/OVC base, VV excluded; ``convective_cloud`` is ``'CB'``,
+    # ``'TCU'`` or NULL.
+    cloud_layers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lowest_cloud_base_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    convective_cloud: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
     # TAF fields (active at observation_time)
     taf_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -820,6 +831,10 @@ class VerificationScoreRow(Base):
     # Quantitative deltas (model - observation)
     ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_base_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Model cloud base (AGL) minus the observation's lowest reported base, any
+    # amount (#793, migration 107). Standalone only, like cloud_base_delta_ft,
+    # which is against the ceiling and so is NULL on FEW/SCT-only reports.
+    lowest_base_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     lcl_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_delta_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1011,6 +1026,12 @@ class AirportForecastSnapshotRow(Base):
     cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_cover_low_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Mid / high bulk cover (migration 107, #793). Already fetched for every
+    # model (Convective Character reads them) but not kept until then; NULL on
+    # every row written before 107, and not backfillable — the forecast that
+    # produced an old row is gone.
+    cloud_cover_mid_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cloud_cover_high_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Ceiling estimates (from GRIB + computed)
     nwp_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -408,6 +408,94 @@ def cmd_backfill_report_type(args):
         db.close()
 
 
+def cmd_backfill_cloud_layers(args):
+    """Derive cloud layers / lowest base / CB-TCU from ``metar_raw`` (#793).
+
+    The database rows first (those with ``cloud_layers`` NULL); with
+    ``--archive``, also a side file per archived observations month, which
+    covers the months already pruned from MySQL. ``--dry-run`` parses and
+    counts without writing either.
+    """
+    SessionLocal = _init_db()
+    db = SessionLocal()
+
+    try:
+        from weatherbrief.tasks.metar_clouds import (
+            backfill_cloud_layers,
+            derive_archived_month,
+            derived_clouds_root,
+        )
+
+        result = backfill_cloud_layers(
+            db, batch_size=args.batch_size, dry_run=args.dry_run,
+        )
+        print("Observation cloud detail (database):")
+        print(result.render())
+        if args.dry_run:
+            print("\nDry run — nothing written.")
+            return
+        if args.archive:
+            from weatherbrief.tasks.verification_tiering import archive_root
+
+            months = sorted(
+                p.stem for p in (archive_root() / "observations").glob("*.parquet")
+            )
+            print(f"\nArchived months -> {derived_clouds_root()}")
+            for period in months:
+                n = derive_archived_month(period)
+                print(f"  {period}: {n:,} rows")
+    finally:
+        db.close()
+
+
+def cmd_convective_score(args):
+    """Forecast convective risk vs the observed radar/lightning archive (#793).
+
+    Offline: reads the two Parquet archives with DuckDB, touches no database.
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from weatherbrief.tasks.convective_verification import (
+        ConvectiveScoreParams,
+        score_convective,
+    )
+    from weatherbrief.tasks.verification_tiering import (
+        archive_root,
+        observed_archive_root,
+    )
+
+    def _day(s):
+        return datetime.fromisoformat(s).replace(tzinfo=timezone.utc) if s else None
+
+    params = ConvectiveScoreParams(
+        risk_threshold=args.risk,
+        dbz_threshold=args.dbz,
+        since=_day(args.since),
+        until=_day(args.until),
+    )
+    rows = score_convective(
+        archive_root(), observed_archive_root(), params,
+        pairs_out=Path(args.pairs_out) if args.pairs_out else None,
+    )
+
+    def _pct(v):
+        return "   -" if v is None else f"{100 * v:4.0f}"
+
+    print(
+        f"risk >= {args.risk} vs >= {args.dbz:g} dBZ within 10 NM or lightning within 20 NM"
+    )
+    print(f"{'model':<8} {'D':>2} {'n':>8} {'hit':>6} {'miss':>6} {'FA':>6} "
+          f"{'CN':>8} {'POD':>4} {'FAR':>4} {'CSI':>4} {'bias':>5}")
+    for r in rows:
+        bias = "    -" if r["bias"] is None else f"{r['bias']:5.2f}"
+        print(f"{r['model']:<8} {r['days_out']:>2} {r['n']:>8,} {r['hits']:>6,} "
+              f"{r['misses']:>6,} {r['false_alarms']:>6,} {r['correct_negatives']:>8,} "
+              f"{_pct(r['pod'])} {_pct(r['far'])} {_pct(r['csi'])} {bias}")
+    if not rows:
+        print("(no forecast hour with a known observed outcome)")
+
+
 def cmd_stats(args):
     """Show verification statistics."""
     SessionLocal = _init_db()
@@ -1202,6 +1290,45 @@ def main():
         help="Primary-key window per batch (default 20000)",
     )
 
+    p_clouds = subparsers.add_parser(
+        "backfill-cloud-layers",
+        help="Derive cloud layers, lowest base and CB/TCU from metar_raw "
+             "(migration 107, #793)",
+    )
+    p_clouds.add_argument(
+        "--dry-run", action="store_true",
+        help="Parse and count only — write nothing",
+    )
+    p_clouds.add_argument(
+        "--archive", action="store_true",
+        help="Also write archive/derived/observation_clouds/YYYY-MM.parquet "
+             "for every archived observations month (covers pruned months)",
+    )
+    p_clouds.add_argument(
+        "--batch-size", type=int, default=5_000,
+        help="Primary-key window per batch (default 5000)",
+    )
+
+    p_conv = subparsers.add_parser(
+        "convective-score",
+        help="Score forecast convective risk against the observed radar/"
+             "lightning archive (#793; needs duckdb)",
+    )
+    p_conv.add_argument(
+        "--risk", default="moderate",
+        choices=["marginal", "low", "moderate", "high", "extreme"],
+        help="Forecast 'yes' at or above this sounding_convective_risk (default moderate)",
+    )
+    p_conv.add_argument(
+        "--dbz", type=float, default=41.0,
+        help="Observed 'yes' radar threshold within 10 NM (default 41)",
+    )
+    p_conv.add_argument("--since", help="First forecast day, YYYY-MM-DD (UTC)")
+    p_conv.add_argument("--until", help="Day after the last forecast day, YYYY-MM-DD (UTC)")
+    p_conv.add_argument(
+        "--pairs-out", help="Also write the per-forecast-hour pairs to this Parquet file",
+    )
+
     # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
     p_stats.add_argument(
@@ -1449,6 +1576,10 @@ def main():
         cmd_backfill_gust(args)
     elif args.command == "backfill-report-type":
         cmd_backfill_report_type(args)
+    elif args.command == "backfill-cloud-layers":
+        cmd_backfill_cloud_layers(args)
+    elif args.command == "convective-score":
+        cmd_convective_score(args)
     elif args.command == "stats":
         cmd_stats(args)
     elif args.command == "discover":

@@ -317,6 +317,21 @@ class TestStoreSnapshots:
     def test_empty_list(self, db_session):
         assert _store_snapshots([], db_session) == 0
 
+    def test_mid_and_high_cover_are_stored(self, db_session):
+        """#793: mid/high bulk cover reach the table (and so the archive)."""
+        snap = {
+            "icao": "LFPG", "model": "ecmwf",
+            "model_init_time": GFS_INIT,
+            "forecast_hour": _utc(2026, 4, 2, 12, 0),
+            "cloud_cover_low_pct": 10.0,
+            "cloud_cover_mid_pct": 55.0,
+            "cloud_cover_high_pct": 80.0,
+        }
+        assert _store_snapshots([snap], db_session) == 1
+        row = db_session.execute(select(AirportForecastSnapshotRow)).scalar_one()
+        assert row.cloud_cover_mid_pct == 55.0
+        assert row.cloud_cover_high_pct == 80.0
+
     def test_region_is_tagged_on_stored_rows(self, db_session):
         snap = {
             "icao": "KJFK", "model": "gfs",
@@ -433,6 +448,21 @@ class TestScoreCycle:
 
         row = db_session.execute(select(VerificationScoreRow)).scalar_one()
         assert row.days_out == 1
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_lowest_base_delta_scores_few_sct_days(self, mock_rwy, db_session):
+        """#793: a FEW-only report has no ceiling, but its base is scored."""
+        _insert_snapshot(db_session, model="ecmwf", cloud_base_ft=2800.0)
+        _insert_observation(
+            db_session, ceiling_ft=None, lowest_cloud_base_ft=2000,
+            cloud_layers='[{"amount":"FEW","base_ft":2000,"type":null}]',
+        )
+
+        _score_cycle(NOW, [], "/fake/db", db_session)
+
+        row = db_session.execute(select(VerificationScoreRow)).scalar_one()
+        assert row.cloud_base_delta_ft is None
+        assert row.lowest_base_delta_ft == pytest.approx(800.0)
 
     @patch("weatherbrief.airports.get_runway_ends", return_value={})
     def test_no_double_scoring(self, mock_rwy, db_session):

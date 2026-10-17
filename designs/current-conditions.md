@@ -585,6 +585,14 @@ alignment and belongs with the phase-2 verdicts. It ships now because neither
 side of the pairing can be backfilled: OPERA's open cache is 24 h deep and the
 local store keeps 1–3 h.
 
+The pairing now exists offline (#793): `verify convective-score`
+(`tasks/convective_verification.py`) joins these files with the archived
+forecast snapshots in DuckDB, frames in `[hour − 30 min, hour + 30 min)` to the
+forecast hour, and drops hours with no covered radar or lightning frame rather
+than reading them as "no storm". Definitions in `metar-taf-accuracy.md` ("What
+counts as observed convection"). Nothing here changed: the writer still reads
+no forecast.
+
 `tasks/observed_archive.py`, CLI `verify observed-archive run|verify`. Each
 METAR ingest tick (30 min) launches it as a separate task in a child process,
 so a slow run cannot delay the next ingest. It is gated on

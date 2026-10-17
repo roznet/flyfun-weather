@@ -661,6 +661,8 @@ class TestEcmwfSurfaceSnapshot:
             "mucape_jkg": 250.0,
             "total_cover_frac": 0.75,
             "low_cover_frac": 0.30,
+            "mid_cover_frac": 0.40,
+            "high_cover_frac": 0.90,
             "surface_pressure_pa": 101325.0,
             "ceiling_m": 600.0,
             "cloud_base_height_m": 500.0,
@@ -680,6 +682,8 @@ class TestEcmwfSurfaceSnapshot:
         assert out["cape_jkg"] == 250.0
         assert out["cloud_cover_pct"] == pytest.approx(75.0)
         assert out["cloud_cover_low_pct"] == pytest.approx(30.0)
+        assert out["cloud_cover_mid_pct"] == pytest.approx(40.0)
+        assert out["cloud_cover_high_pct"] == pytest.approx(90.0)
         assert out["surface_pressure_hpa"] == pytest.approx(1013.25)
         assert out["nwp_ceiling_ft"] == pytest.approx(1968.5, rel=1e-3)
         assert out["cloud_base_ft"] == pytest.approx(1640.4, rel=1e-3)
@@ -748,6 +752,7 @@ class TestEcmwfSurfaceSnapshot:
             "wind_speed_10m_kt", "wind_direction_10m_deg",
             "wind_gusts_10m_kt", "precipitation_mm", "snowfall_cm",
             "cape_jkg", "cloud_cover_pct", "cloud_cover_low_pct",
+            "cloud_cover_mid_pct", "cloud_cover_high_pct",
         ):
             assert out[key] is None, f"{key} should be None for empty input"
 
