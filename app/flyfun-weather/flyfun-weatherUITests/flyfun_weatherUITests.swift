@@ -870,8 +870,16 @@ final class flyfun_weatherUITests: XCTestCase {
         guard (toggle.value as? String) != "expanded" else { return }
         // Below the ribbon: bring it on screen before tapping.
         for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        // The value flips inside an animation, and a tap landing while the
+        // swipe's scroll is still settling can be dropped: wait for it, and
+        // tap once more only if it never opened.
+        let expanded = { (timeout: TimeInterval) in XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "expanded"), object: toggle)], timeout: timeout) }
         toggle.tap()
-        XCTAssertEqual(toggle.value as? String, "expanded", "tapping Details should open it")
+        if expanded(5) != .completed {
+            toggle.tap()
+            XCTAssertEqual(expanded(Self.uiTimeout), .completed, "tapping Details should open it")
+        }
     }
 
     @MainActor
