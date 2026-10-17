@@ -1,8 +1,9 @@
 import XCTest
 
 /// App Store screenshots of one real briefing (`Showcase/showcase.json`, see
-/// `FixtureShowcase`). Not a regression journey: it asserts only enough to
-/// know each screen is the one being captured, and runs only when asked —
+/// `FixtureShowcase`). Not a regression journey, but every capture is a hard
+/// assertion — a store set missing a screen must fail, not ship short — and
+/// it runs only when asked —
 /// `scripts/ios_screenshots.py` sets `TEST_RUNNER_FLYFUN_SCREENSHOTS=1` and
 /// collects the attachments, named `NN-screen`, from the result bundle.
 final class ScreenshotUITests: FlyfunUITestCase {
@@ -41,18 +42,16 @@ final class ScreenshotUITests: FlyfunUITestCase {
         capture(app, "01-briefing")
 
         let advisories = app.buttons["Advisories"].firstMatch
-        if advisories.waitForExistence(timeout: Self.probeTimeout) {
-            advisories.tap()
-            capture(app, "02-advisories")
-        }
+        XCTAssertTrue(advisories.waitForExistence(timeout: Self.uiTimeout), "the Advisories pill should be shown")
+        advisories.tap()
+        capture(app, "02-advisories")
 
         let why = app.buttons["advisoryWhy-vfr_feasibility"].firstMatch
-        if why.waitForExistence(timeout: Self.probeTimeout) {
-            why.tap()
-            capture(app, "04-why-red")
-            app.swipeDown(velocity: .fast)
-            sleep(1)
-        }
+        XCTAssertTrue(why.waitForExistence(timeout: Self.uiTimeout), "VFR Feasibility should offer 'Why it's RED'")
+        why.tap()
+        capture(app, "04-why-red")
+        app.swipeDown(velocity: .fast)
+        sleep(1)
 
         switchToBriefingTab(app, "Cross-Section")
         XCTAssertTrue(app.descendants(matching: .any)["crossSectionCanvas"].firstMatch
@@ -60,10 +59,9 @@ final class ScreenshotUITests: FlyfunUITestCase {
         capture(app, "03-cross-section")
 
         let sounding = app.buttons["Sounding"].firstMatch
-        if sounding.waitForExistence(timeout: Self.probeTimeout) {
-            sounding.tap()
-            capture(app, "05-skewt")
-        }
+        XCTAssertTrue(sounding.waitForExistence(timeout: Self.uiTimeout), "the cross-section should offer the Sounding")
+        sounding.tap()
+        capture(app, "05-skewt")
 
         switchToBriefingTab(app, "Map")
         capture(app, "06-map")

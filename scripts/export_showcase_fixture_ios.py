@@ -25,6 +25,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -37,8 +38,6 @@ FIXTURE = REPO / "app/flyfun-weather/flyfun-weatherUITests/Showcase/showcase.jso
 MODEL = "ecmwf"
 # Per-model dicts inside each route point (route-analyses and snapshot).
 PER_MODEL_KEYS = ("sounding", "wind_components")
-# Tokens that must never reach the public fixture (the owner's real aircraft).
-FORBIDDEN = ("N122DR", "2DR")
 FAKE_AIRCRAFT = {"tail_number": "ZZ-DEMO", "nickname": "Demo"}
 
 
@@ -120,6 +119,21 @@ def _ecmwf_point(point: dict) -> dict:
 
 
 FETCH_KEYS = ("fetch_timestamp", "fetch_date", "fetch_time")
+DATE_PREFIX = re.compile(r"\d{4}-\d{2}-\d{2}")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+
+
+def _identifying(raw: dict) -> set[str]:
+    """The owner's identifiers in this dump: the public fixture must carry none.
+
+    Read from the data rather than listed here, so this public script names no
+    real aircraft or account.
+    """
+    flight = raw["flight"]
+    aircraft = flight.get("aircraft") or {}
+    values = {flight.get("user_id"), flight.get("owner_display_name"), flight.get("share_code"),
+              aircraft.get("tail_number"), aircraft.get("nickname")}
+    return {v for v in values if isinstance(v, str) and len(v) >= 3}
 
 
 def _as_day_before(node):
@@ -137,7 +151,7 @@ def _as_day_before(node):
     for key, value in node.items():
         if key == "days_out" and isinstance(value, int):
             value = 1
-        elif key in FETCH_KEYS and isinstance(value, str) and len(value) >= 10:
+        elif key in FETCH_KEYS and isinstance(value, str) and DATE_PREFIX.match(value):
             day = date.fromisoformat(value[:10]) - timedelta(days=1)
             value = day.isoformat() + value[10:]
         out[key] = _as_day_before(value)
@@ -189,7 +203,7 @@ def trim(raw: dict) -> dict:
         "sounding_profiles": soundings,
     }
     text = json.dumps(out)
-    leaked = [t for t in FORBIDDEN if t in text]
+    leaked = sorted(t for t in _identifying(raw) if t in text) + EMAIL.findall(text)
     if leaked:
         raise SystemExit(f"refusing to write: {leaked} still in the fixture")
     return out

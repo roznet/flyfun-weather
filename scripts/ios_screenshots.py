@@ -35,6 +35,9 @@ ROOT = Path(__file__).resolve().parent.parent
 TEST = "flyfun-weatherUITests/ScreenshotUITests/testCaptureStoreScreenshots"
 DEFAULT_DEVICES = ["iPhone 17", "iPad Pro 13-inch (M5)"]
 BUNDLE_ID = "net.ro-z.flyfun-weather"
+# What ScreenshotUITests captures: a run missing any of them fails.
+EXPECTED = ["01-briefing", "02-advisories", "03-cross-section", "04-why-red",
+            "05-skewt", "06-map", "07-discussion", "08-flights"]
 
 
 def simctl(*args: str) -> None:
@@ -99,10 +102,16 @@ def main() -> int:
         for appearance in args.appearance or ["light"]:
             prepare(udid, appearance)
             bundle = Path(tempfile.mkdtemp(prefix="ios-screenshots-")) / "result.xcresult"
-            code = ios_test.run_device(device, udid, run_args, bundle)
-            shots = export(bundle, args.out / ios_test.slug(device) / appearance) if bundle.exists() else []
-            print(f"{device} / {appearance}: {len(shots)} screenshots → {args.out / ios_test.slug(device) / appearance}")
-            failed |= code != 0 or not shots
+            try:
+                code = ios_test.run_device(device, udid, run_args, bundle)
+            finally:
+                simctl("status_bar", udid, "clear")
+            dest = args.out / ios_test.slug(device) / appearance
+            shots = export(bundle, dest) if bundle.exists() else []
+            missing = sorted(set(EXPECTED) - {s.stem for s in shots})
+            print(f"{device} / {appearance}: {len(shots)} screenshots → {dest}"
+                  + (f"  MISSING {missing}" if missing else ""))
+            failed |= code != 0 or bool(missing)
     return 1 if failed else 0
 
 

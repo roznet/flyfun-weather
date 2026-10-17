@@ -176,6 +176,25 @@ extension CrossSectionSharedStateTests {
             #expect(CrossSectionViewModel().activeEmulation == "windy")
         }
 
+        @Test func anUpgraderFromTheGrametBootKeepsGrametAndNaturalClouds() {
+            // Before #804 a fresh install booted GRAMET: the stored map is the
+            // GRAMET one, with or without the emulation key (pre-#605 had none).
+            // The new square default must not repaint it.
+            let oldBoot = CrossSectionPresets.bootDefaults.merging(CrossSectionPresets.gramet) { $1 }
+            UserDefaults.standard.set(try! JSONEncoder().encode(oldBoot), forKey: "crossSectionEnabledLayers")
+            for emulationKey in ["gramet", nil] {
+                if let emulationKey {
+                    UserDefaults.standard.set(emulationKey, forKey: "crossSectionEmulation")
+                } else {
+                    UserDefaults.standard.removeObject(forKey: "crossSectionEmulation")
+                }
+                let vm = CrossSectionViewModel()
+                #expect(vm.activeEmulation == "gramet")
+                #expect(vm.cloudStyle == .natural)
+                #expect(on(vm, in: .clouds) == ["nwp-cloud-bands"])
+            }
+        }
+
         // MARK: Focus × Emulate
 
         @Test func focusResolvesThroughTheEmulationsMethods() {

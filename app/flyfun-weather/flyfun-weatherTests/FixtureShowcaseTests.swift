@@ -48,4 +48,9 @@ private let showcasePath = URL(fileURLWithPath: #filePath)
         let shifted = FixtureShowcase.shiftDates(in: text, toDepartTomorrowFrom: now)
         #expect(shifted == #"{"target_date": "2026-12-31", "a": "2026-12-30T23:00:00Z", "b": "on 2027-01-01 18Z"}"#)
     }
+
+    @Test func refusesTextWithNoTargetDate() {
+        // Nothing to anchor the shift on: a silent no-op would leave a stale fixture.
+        #expect(FixtureShowcase.shiftDates(in: #"{"a": "2026-10-12"}"#, toDepartTomorrowFrom: Date()) == nil)
+    }
 }

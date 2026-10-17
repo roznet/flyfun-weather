@@ -25,13 +25,8 @@ struct FixtureShowcase {
     /// Keyed by route point index; ECMWF at the named waypoints only.
     let soundingProfiles: [Int: SoundingProfileResponse]
 
-    var liveLayer: LiveLayerResponse {
-        try! JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: Data("""
-        {"flight_id": "\(flight.id)", "pack_timestamp": "\(pack.fetchTimestamp)", "live_updated_at": null,
-         "route_observations": null, "route_sigmets": null, "observed_conditions": null,
-         "changes": null, "last_refresh_delta": null}
-        """.utf8))
-    }
+    /// A null layer: what the server returns before any live data.
+    let liveLayer: LiveLayerResponse
 
     /// The file's shape. Its dictionaries' keys are ignored: `convertFromSnakeCase`
     /// rewrites dictionary keys too (`vfr_feasibility` comes back
@@ -48,10 +43,17 @@ struct FixtureShowcase {
         let soundingProfiles: [String: SoundingProfileResponse]
     }
 
+    enum LoadError: Error { case noTargetDate }
+
     static func load(path: String, now: Date = Date()) throws -> FixtureShowcase {
         let text = try String(contentsOfFile: path, encoding: .utf8)
-        let shifted = shiftDates(in: text, toDepartTomorrowFrom: now)
+        guard let shifted = shiftDates(in: text, toDepartTomorrowFrom: now) else { throw LoadError.noTargetDate }
         let file = try JSONDecoder.weatherBrief.decode(File.self, from: Data(shifted.utf8))
+        let live = try JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: Data("""
+            {"flight_id": "\(file.flight.id)", "pack_timestamp": "\(file.pack.fetchTimestamp)", "live_updated_at": null,
+             "route_observations": null, "route_sigmets": null, "observed_conditions": null,
+             "changes": null, "last_refresh_delta": null}
+            """.utf8))
         return FixtureShowcase(
             flight: file.flight,
             pack: file.pack,
@@ -63,7 +65,8 @@ struct FixtureShowcase {
             routeAnalyses: file.routeAnalyses,
             elevation: file.elevation,
             soundingProfiles: Dictionary(file.soundingProfiles.values.map { ($0.pointIndex, $0) },
-                                         uniquingKeysWith: { a, _ in a })
+                                         uniquingKeysWith: { a, _ in a }),
+            liveLayer: live
         )
     }
 
@@ -76,13 +79,16 @@ struct FixtureShowcase {
     }
 
     /// Shift every date by the whole days between the flight's `target_date`
-    /// and tomorrow.
-    static func shiftDates(in text: String, toDepartTomorrowFrom now: Date) -> String {
+    /// and tomorrow — every `YYYY-MM-DD` in the text, free text and ids
+    /// included (the flight id carries its date), which is what keeps them
+    /// consistent. Nil when the text has no `target_date` to anchor on.
+    static func shiftDates(in text: String, toDepartTomorrowFrom now: Date) -> String? {
         let calendar = utc
         let ns = text as NSString
         guard let target = ns.range(of: #""target_date":\s*"\d{4}-\d{2}-\d{2}""#, options: .regularExpression)
-                .nonEmpty.flatMap({ date(in: ns.substring(with: $0), calendar: calendar) }),
-              let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)),
+                .nonEmpty.flatMap({ date(in: ns.substring(with: $0), calendar: calendar) })
+        else { return nil }
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)),
               let days = calendar.dateComponents([.day], from: target, to: tomorrow).day,
               days != 0
         else { return text }

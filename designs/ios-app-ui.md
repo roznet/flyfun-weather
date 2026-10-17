@@ -111,9 +111,11 @@ Theme ownership follows the web (#647, see visualization.md): `userThemeId` is
 the user's own and an emulation never writes it; the drawn `themeId` is derived
 (emulation's, else the user's, else standard), and a hand-picked theme while
 emulating drops the emulation via `applyEmulation(nil)` (graded methods, Focus
-re-applied). **First run:** iOS boots GRAMET, so it draws GRAMET; FlyFun on a
-fresh install draws **standard**, the same as the web — deliberately not GRAMET,
-which would put GRAMET's look on our methods. A one-time migration
+re-applied). **First run (since #804):** iOS boots as the web does — no emulation
+(FlyFun), every layer at its web default (`CrossSectionPresets.bootDefaults`,
+square NWP clouds), drawn in **standard** — deliberately not GRAMET's theme, which
+would put GRAMET's look on our methods. Before #804 iOS booted Emulate GRAMET
+(natural clouds); an install that stored that keeps it. A one-time migration
 (`crossSectionSettingsVersion` = 1) clears a stored theme equal to the active
 emulation's (the pre-#647 write).
 Graded methods come from the advisories manifest's `primary_method_id`
