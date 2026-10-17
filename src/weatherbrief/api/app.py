@@ -767,7 +767,9 @@ def create_app() -> FastAPI:
     from flyfun_common.db import get_db as _get_db_for_share
 
     @app.get("/s/{code}")
-    def share_redirect(code: str, request: Request, db=Depends(_get_db_for_share, scope="function")):
+    def share_redirect(
+        code: str, request: Request, db=Depends(_get_db_for_share, scope="function"),
+    ):
         # Reject obviously-bogus codes before hitting the DB so log spam
         # from random scanners doesn't blow up the index.
         if not SHARE_CODE_RE.match(code):
@@ -796,7 +798,9 @@ def create_app() -> FastAPI:
     from weatherbrief.storage.trips import lookup_trip_id_by_share_code
 
     @app.get("/t/{code}")
-    def trip_share_redirect(code: str, db=Depends(_get_db_for_share, scope="function")):
+    def trip_share_redirect(
+        code: str, db=Depends(_get_db_for_share, scope="function"),
+    ):
         if not SHARE_CODE_RE.match(code):
             raise _HTTPException(status_code=404, detail="Unknown share link")
         trip_id = lookup_trip_id_by_share_code(db, code)
