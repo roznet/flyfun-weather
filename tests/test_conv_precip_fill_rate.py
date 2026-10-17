@@ -75,6 +75,15 @@ def _grib_message(
         eccodes.codes_release(h)
 
 
+@pytest.fixture(autouse=True)
+def _no_ttl_purge(monkeypatch):
+    """The cache is seeded under a fixed INIT, which the fetchers' TTL purge
+    (gfs 24 h, icon-eu 12 h against wall-clock now) would delete as expired."""
+    import weatherbrief.tasks.standalone_grib as sg
+
+    monkeypatch.setattr(sg, "purge_old_runs", lambda *a, **kw: None)
+
+
 @pytest.fixture
 def inline_decode(monkeypatch, tmp_path):
     """Decode in-process, and point DATA_DIR at an empty temp cache."""
