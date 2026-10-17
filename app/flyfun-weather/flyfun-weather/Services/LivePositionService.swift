@@ -34,6 +34,27 @@ nonisolated enum LivePositionRules {
         return Array(out.suffix(cap))
     }
 
+    /// What a failed post means for its fixes: `.retry` keeps them queued (no
+    /// data, a server hiccup, 408 / 429); `.drop` discards them, since the
+    /// same request would fail again (not the owner, no flight, a briefing
+    /// the server cannot read: 4xx); `.sent` when the reply came back but
+    /// did not decode (a 2xx: the server recorded them).
+    enum FailureAction: Equatable { case retry, drop, sent }
+
+    static func failureAction(for error: Error) -> FailureAction {
+        guard let api = error as? APIError else { return .retry }
+        switch api {
+        case .unauthorized, .forbidden, .notFound:
+            return .drop
+        case .serverError(let code, _):
+            return (400..<500).contains(code) && code != 408 && code != 429 ? .drop : .retry
+        case .decodingError:
+            return .sent
+        case .networkError:
+            return .retry
+        }
+    }
+
     /// The unsent queue with `fixes` merged in (oldest first): only fixes
     /// newer than `sent` (the newest the server has) and than the queue's
     /// last, spaced `queueSpacing` and capped at `maxQueued`.
@@ -53,9 +74,11 @@ nonisolated enum LivePositionRules {
 /// return to the foreground), the landing auto-stop (with `landed`), and any
 /// one-shot fix during the flight's live window (the PIREP form, the map's
 /// locate button, the fix taken when the flight is opened). Owner only (the
-/// server refuses anyone else). A post that fails keeps its fixes queued, and
-/// the next submit, live poll or reconnect resends them: in flight there is
-/// often no data, and a late fix still counts on the server. One post per
+/// server refuses anyone else). A post that fails for want of data (or a
+/// server hiccup) keeps its fixes queued, and the next submit, live poll or
+/// reconnect resends them: in flight there is often no data, and a late fix
+/// still counts on the server. One the server refuses (4xx) is dropped
+/// (`LivePositionRules.failureAction`), not retried every poll. One post per
 /// flight at a time; what arrives meanwhile goes with the next one. The queue
 /// lives in memory: an app killed with fixes unsent loses them.
 @MainActor
@@ -94,8 +117,17 @@ final class LivePositionService {
                 self?.sent(fixes, landed: landed, flightId: flightId)
                 logger.debug("Posted \(fixes.count) fixes: \(result.accepted) accepted, landed=\(result.landedRecorded)")
             } catch {
-                self?.posting.remove(flightId)
-                logger.debug("Position post failed, kept for the next one: \(error)")
+                switch LivePositionRules.failureAction(for: error) {
+                case .retry:
+                    self?.posting.remove(flightId)
+                    logger.debug("Position post failed, kept for the next one: \(error)")
+                case .drop:
+                    self?.drop(flightId: flightId)
+                    logger.warning("Position post refused, \(fixes.count) fixes dropped: \(error)")
+                case .sent:
+                    self?.sent(fixes, landed: landed, flightId: flightId)
+                    logger.warning("Position post reply unreadable, taken as sent: \(error)")
+                }
             }
         }
     }
@@ -105,6 +137,13 @@ final class LivePositionService {
         for flightId in Set(queues.keys).union(landings) {
             flush(flightId: flightId)
         }
+    }
+
+    /// Refused for good: what is queued would be refused again.
+    private func drop(flightId: String) {
+        posting.remove(flightId)
+        queues[flightId] = nil
+        landings.remove(flightId)
     }
 
     private func sent(_ fixes: [LivePositionFix], landed: Bool, flightId: String) {

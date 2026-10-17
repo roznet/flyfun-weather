@@ -222,8 +222,8 @@ def test_a_fix_shifts_the_plan_by_the_delay_it_shows():
     assert p.arrival == p.takeoff_at + timedelta(hours=1.5)
     assert p.eta(TOTAL_NM / 2) == p.takeoff_at + timedelta(minutes=45)
     assert p.fix_age_min == pytest.approx(10.0) and p.fix == f
-    # Inferred, not entered: the times are still the plan's kind.
-    assert p.time_base == "planned"
+    # Inferred from a fix: partly observed, never "observed" (nor the plan).
+    assert p.time_base == "partial"
 
 
 def test_the_instantaneous_speed_is_never_extrapolated():
@@ -385,7 +385,7 @@ def test_a_fix_at_the_destination_lands_the_flight():
     # After the expected arrival (+90): landed then, not when the app opened.
     p = late(110, apron(105))
     assert p.landed_at == mins(90) and p.arrived and p.source == SOURCE_APP
-    assert p.flown_nm == pytest.approx(p.total_nm) and p.time_base == "planned"
+    assert p.flown_nm == pytest.approx(p.total_nm) and p.time_base == "partial"
     # Earlier than expected (a fast flight): landed at the fix.
     assert late(80, apron(75)).landed_at == mins(75)
     # Too early to have flown there (+30, faster than 1.4× the plan): not landed.
