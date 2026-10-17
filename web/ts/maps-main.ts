@@ -1190,10 +1190,10 @@ async function main(): Promise<void> {
   // Pan-European overview — no single flight, so 'auto' falls back to europe.
   setUnitsPreference(user.units_region);
 
-  // Synoptic Forecast is opt-in per user. Hide the tab unless the user
-  // enabled it in Settings → Account → Optional Services. The toggle is
-  // off by default; the underlying endpoint only requires authentication.
-  const synopticEnabled = user.synoptic_forecast_map_enabled === true;
+  // Synoptic Forecast is on by default; a user can hide the tab in
+  // Settings → Account → Optional Services. The underlying endpoint only
+  // requires authentication.
+  const synopticEnabled = user.synoptic_forecast_map_enabled !== false;
   if (!synopticEnabled) {
     document.querySelector('#tabs .tab-btn[data-tab="synoptic"]')?.remove();
     $('panel-synoptic')?.remove();

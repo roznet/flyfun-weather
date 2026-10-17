@@ -42,7 +42,7 @@ from weatherbrief.api.trips import router as trips_router
 from weatherbrief.api.notifications import router as notifications_router
 from weatherbrief.api.devices import router as devices_router
 from weatherbrief.api.packs import live_router, refresh_router, router as packs_router
-from weatherbrief.api.preferences import router as preferences_router
+from weatherbrief.api.preferences import SYNOPTIC_FORECAST_MAP_DEFAULT, router as preferences_router
 from weatherbrief.api.profiles import admin_router as profiles_admin_router, router as profiles_router
 from weatherbrief.api.admin import router as admin_router, require_admin
 from weatherbrief.api.credits import (
@@ -552,7 +552,7 @@ def create_app() -> FastAPI:
                 prefs_data = _json.loads(prefs.app_prefs_json)
             except _json.JSONDecodeError:
                 prefs_data = {}
-        synoptic_enabled = bool(prefs_data.get("synoptic_forecast_map_enabled", False))
+        synoptic_enabled = bool(prefs_data.get("synoptic_forecast_map_enabled", SYNOPTIC_FORECAST_MAP_DEFAULT))
         _ur = prefs_data.get("units_region")
         units_region = _ur if _ur in ("auto", "europe", "us") else "auto"
         return {

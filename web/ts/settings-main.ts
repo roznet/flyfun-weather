@@ -919,7 +919,7 @@ function populateAccountForm(prefs: PreferencesResponse): void {
   // Account-level optional services
   const synopticToggle = document.getElementById('toggle-synoptic-forecast-map') as HTMLInputElement;
   if (synopticToggle) {
-    synopticToggle.checked = prefs.synoptic_forecast_map_enabled ?? false;
+    synopticToggle.checked = prefs.synoptic_forecast_map_enabled ?? true;
   }
   const deferToggle = document.getElementById('toggle-defer-model-update') as HTMLInputElement;
   if (deferToggle) {

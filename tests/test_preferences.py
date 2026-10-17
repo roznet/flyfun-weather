@@ -72,6 +72,14 @@ class TestPreferencesAPI:
         assert data["defaults"]["cruise_altitude_ft"] is None
         assert data["defaults"]["models"] is None
         assert data["units_region"] == "auto"  # default
+        assert data["synoptic_forecast_map_enabled"] is True  # default
+
+    def test_synoptic_map_defaults_on_and_opts_out(self, client):
+        assert client.get("/auth/me").json()["synoptic_forecast_map_enabled"] is True
+        resp = client.put("/api/user/preferences", json={"synoptic_forecast_map_enabled": False})
+        assert resp.status_code == 200
+        assert client.get("/api/user/preferences").json()["synoptic_forecast_map_enabled"] is False
+        assert client.get("/auth/me").json()["synoptic_forecast_map_enabled"] is False
 
     def test_units_region_round_trip(self, client):
         resp = client.put("/api/user/preferences", json={"units_region": "us"})

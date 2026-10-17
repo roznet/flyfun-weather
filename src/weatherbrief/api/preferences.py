@@ -27,6 +27,10 @@ from flyfun_common.db.models import UserPreferencesRow
 from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
 from weatherbrief.api.user_migrations import run_pending_migrations
 
+# Synoptic Forecast tab on the Maps page. On by default since 2026-10; migration
+# 105 cleared the ``false`` that every earlier Settings save had written.
+SYNOPTIC_FORECAST_MAP_DEFAULT = True
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/preferences", tags=["preferences"])
@@ -288,7 +292,7 @@ def _parse_service_toggles(raw: str) -> dict:
         "default_departure_tz": _normalize_departure_tz(data.get("default_departure_tz")),
         "default_departure_lead_hours": _normalize_departure_lead_hours(data.get("default_departure_lead_hours")),
         "display_currency": data.get("display_currency", "auto"),
-        "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", False),
+        "synoptic_forecast_map_enabled": data.get("synoptic_forecast_map_enabled", SYNOPTIC_FORECAST_MAP_DEFAULT),
         "defer_email_for_model_update": data.get("defer_email_for_model_update", False),
     }
 
