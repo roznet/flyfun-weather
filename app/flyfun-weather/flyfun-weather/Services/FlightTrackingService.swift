@@ -43,6 +43,9 @@ final class FlightTrackingService: NSObject {
     /// landing auto-stop, so the server can record the landing (#761). Not
     /// called on a manual stop or the past-window auto-stop.
     @ObservationIgnored var onLanding: (@MainActor ([LivePositionFix]) -> Void)?
+    /// Called with each one-shot fix taken outside tracking (the PIREP form,
+    /// the fix taken when a flight is opened), so it reaches the server too (#761).
+    @ObservationIgnored var onOneShotFix: (@MainActor (LivePositionFix) -> Void)?
 
     private var locationManager: CLLocationManager?
     private var routePoints: [TrackingRoutePoint] = []
@@ -104,9 +107,14 @@ final class FlightTrackingService: NSObject {
     /// reporting form can pre-fill lat/lon/altitude even when the pilot hasn't
     /// tapped "Start" — the entry point is no longer gated on an active track.
     /// No-op while already tracking, since the live track already updates
-    /// `currentLocation`.
-    func requestOneShotLocation() {
+    /// `currentLocation`. `prompt: false` never asks for permission: without
+    /// it already granted, nothing happens (the fix taken on opening a flight).
+    func requestOneShotLocation(prompt: Bool = true) {
         guard !isTracking else { return }
+        if !prompt {
+            let status = (locationManager ?? CLLocationManager()).authorizationStatus
+            guard status == .authorizedWhenInUse || status == .authorizedAlways else { return }
+        }
         // Drop any prior fix so a *stale* position can't be pre-filled before the
         // fresh one lands. The reporting form reads `currentLocation` synchronously
         // on appear (to seed altitude), and this service instance is shared across
@@ -288,9 +296,13 @@ extension FlightTrackingService: CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         Task { @MainActor in
+            let oneShot = oneShotActive && !isTracking
             projectLocation(location)
             // A one-shot fix has landed; the manager auto-stops after delivery.
             oneShotActive = false
+            if oneShot, let fix = Self.fix(from: location, alongNm: nil, crossTrackNm: nil) {
+                onOneShotFix?(fix)
+            }
         }
     }
 

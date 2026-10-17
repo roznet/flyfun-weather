@@ -58,12 +58,78 @@ import CoreLocation
         #expect(LivePositionRules.appending(nil, to: buffer) == buffer)
     }
 
-    @Test func onlyANewerFixIsWorthAPost() {
-        let fixes = [fix(0), fix(90)]
-        #expect(LivePositionRules.hasNew(fixes, since: nil))
-        #expect(LivePositionRules.hasNew(fixes, since: t0))
-        #expect(!LivePositionRules.hasNew(fixes, since: t0.addingTimeInterval(90)))
-        #expect(!LivePositionRules.hasNew([], since: nil))
+    @Test func unsentQueueSpansTheFlight() {
+        // A fix a minute for an hour with no data: the queue keeps the newest
+        // plus older ones 10 min apart, at most 5 (what one post may carry).
+        var queue: [LivePositionFix] = []
+        for s in stride(from: 0.0, through: 3600, by: 60) {
+            queue = LivePositionRules.queued([fix(s)], into: queue, since: nil)
+        }
+        let times = queue.map { $0.at.timeIntervalSince(t0) }
+        #expect(times.count == 5 && times.last == 3600)
+        #expect(zip(times, times.dropFirst()).dropLast().allSatisfy { $1 - $0 >= 600 })
+        // Nothing the server already has; nothing older than the queue's last.
+        #expect(LivePositionRules.queued([fix(10)], into: [], since: t0.addingTimeInterval(60)).isEmpty)
+        #expect(LivePositionRules.queued([fix(10)], into: queue, since: nil) == queue)
+    }
+
+    private func result(_ accepted: Int) -> LivePositionResult {
+        LivePositionResult(accepted: accepted, landedRecorded: false)
+    }
+
+    private func settle(_ repo: MockBriefingRepository, posts: Int) async {
+        for _ in 0..<200 where repo.postedLivePositions.count < posts { await Task.yield() }
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    @Test @MainActor func aFailedPostKeepsItsFixesForTheNext() async {
+        let repo = MockBriefingRepository()
+        repo.postLivePositionResults = [.failure(MockError.notStubbed("offline")), .success(result(2))]
+        let service = LivePositionService(repository: repo)
+        service.submit([fix(0)], flightId: "f")
+        await settle(repo, posts: 1)
+        // No data: the next fix goes out with the one that failed.
+        service.submit([fix(900)], flightId: "f")
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.map { $0.fixes.map { $0.at.timeIntervalSince(t0) } } == [[0], [0, 900]])
+        // Sent: nothing left, so a flush posts nothing.
+        service.flush(flightId: "f")
+        await settle(repo, posts: 3)
+        #expect(repo.postedLivePositions.count == 2)
+    }
+
+    @Test @MainActor func anUnchangedTrackingBufferIsNotResent() async {
+        let repo = MockBriefingRepository()
+        repo.postLivePositionResults = [.success(result(2)), .success(result(1))]
+        let service = LivePositionService(repository: repo)
+        let buffer = [fix(0), fix(60)]
+        service.submit(buffer, flightId: "f")
+        await settle(repo, posts: 1)
+        service.submit(buffer, flightId: "f")  // the next live poll, no new fix
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.count == 1)
+        service.submit(buffer + [fix(120)], flightId: "f")
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.last?.fixes.map { $0.at.timeIntervalSince(t0) } == [120])
+    }
+
+    @Test @MainActor func theLandingIsKeptUntilSent() async {
+        let repo = MockBriefingRepository()
+        repo.postLivePositionResults = [.failure(MockError.notStubbed("offline")), .success(result(0))]
+        let service = LivePositionService(repository: repo)
+        service.submit([], flightId: "f", landed: true)
+        await settle(repo, posts: 1)
+        service.flushAll()  // back online
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.map(\.landed) == [true, true])
+    }
+
+    @Test @MainActor func consentIsPerFlight() {
+        let defaults = UserDefaults(suiteName: "LivePositionTests.\(UUID().uuidString)")!
+        #expect(!LivePositionService.hasConsent(flightId: "a", defaults: defaults))
+        LivePositionService.grantConsent(flightId: "a", defaults: defaults)
+        #expect(LivePositionService.hasConsent(flightId: "a", defaults: defaults))
+        #expect(!LivePositionService.hasConsent(flightId: "b", defaults: defaults))
     }
 
     @Test @MainActor func locationToFix() throws {
