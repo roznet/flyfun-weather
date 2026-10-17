@@ -98,6 +98,8 @@ export function startFlightsTour(): void {
   track(EVENTS.TOUR_STARTED, { tour: 'flights' });
   activeDriver = driver({
     showProgress: true,
+    // Skip the 400 ms highlight transition for users who asked for less motion.
+    animate: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
     allowClose: true,
     steps: buildSteps(),
     // Overriding onDestroyStarted means driver.js no longer auto-closes, so we

@@ -168,15 +168,16 @@ test.describe('Maps page share links', () => {
     await mockApis(page);
   });
 
-  test('a bare URL stays bare until the user changes something', async ({ page }) => {
-    for (const path of ['/maps.html', '/maps.html?tab=now', '/maps.html?tab=synoptic',
-      '/maps.html?tab=historical', '/maps.html?tab=climatology']) {
+  // One test per tab so the 800 ms "nothing rewrote it" waits run in parallel.
+  for (const path of ['/maps.html', '/maps.html?tab=now', '/maps.html?tab=synoptic',
+    '/maps.html?tab=historical', '/maps.html?tab=climatology']) {
+    test(`a bare URL stays bare until the user changes something: ${path}`, async ({ page }) => {
       await page.goto(path);
       await expect(page.locator('#tabs .tab-btn.active')).toBeVisible();
       await page.waitForTimeout(800);
       expect(page.url()).toBe(new URL(path, page.url()).href);
-    }
-  });
+    });
+  }
 
   test('Forecast: controls and map position', async ({ page, browser }) => {
     await page.goto('/maps.html');

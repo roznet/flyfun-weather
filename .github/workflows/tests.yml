@@ -101,8 +101,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       # playwright.config.ts starts the app with
-      # `cd .. && source venv/bin/activate && uvicorn …`, so the venv has to
-      # live at the repo root under that exact name.
+      # `cd .. && venv/bin/uvicorn …`, so the venv has to live at the repo
+      # root under that exact name.
       - name: Install app
         run: |
           python -m venv venv
