@@ -1199,6 +1199,13 @@ async function main(): Promise<void> {
     $('panel-synoptic')?.remove();
   }
 
+  // Accuracy Stats embeds the verification page, whose data endpoints are
+  // admin-only — hide the tab for everyone else.
+  if (!user.is_admin) {
+    document.querySelector('#tabs .tab-btn[data-tab="stats"]')?.remove();
+    $('panel-stats')?.remove();
+  }
+
   // Experimental banner toggle — banner is now scoped to the Synoptic
   // tab only (it's still calibrating). The Forecast Overview map is
   // stable, so we don't want a page-wide "Experimental" badge anymore.
@@ -1249,6 +1256,7 @@ async function main(): Promise<void> {
   // every other panel and none gets it back — blank content area. Drop
   // them on the forecast tab instead.
   if (currentTab === 'synoptic' && !synopticEnabled) currentTab = 'forecast';
+  if (currentTab === 'stats' && !user.is_admin) currentTab = 'forecast';
   fcDay       = init['fc.day'];
   fcHour      = init['fc.hour'];
   fcModel     = init['fc.model'];

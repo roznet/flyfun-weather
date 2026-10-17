@@ -44,7 +44,7 @@ Data source:
 
 ## Tabs
 
-The page hosts six tabs (`forecast`, `historical`, `now`, `synoptic`, `climatology`, `stats`). The forecast and historical tabs are owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
+The page (titled **Maps** in the nav; was "Forecast") hosts six tabs, in display order `forecast`, `now`, `synoptic`, `historical`, `climatology`, `stats`. `stats` (Accuracy Stats) is admin-only — the tab and panel are removed client-side for non-admins (its `/admin/verification` data is admin-gated server-side anyway), and a `?tab=stats` link clamps to `forecast`, like `synoptic` when a user has hidden it. The forecast and historical tabs are owned by this doc; the others are surfaced here but the analysis behind them lives in their own docs.
 
 ### Forecast Overview
 - ~620 airport markers (watchlist) on a Leaflet map, color-coded by selectable metric

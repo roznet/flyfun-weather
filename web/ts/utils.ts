@@ -35,20 +35,17 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
   const container = document.getElementById('user-info');
   if (!container) return;
 
-  const navItems: { label: string; href: string; page: string; adminOnly?: boolean; pirepOnly?: boolean; badgeId?: string }[] = [
+  const navItems: { label: string; href: string; page: string; adminOnly?: boolean; badgeId?: string }[] = [
     { label: t('nav.flights'),  href: '/',               page: 'flights' },
-    { label: 'PIREPs',          href: '/pireps.html',    page: 'pireps', pirepOnly: true },
-    { label: 'Forecast',        href: '/maps.html',      page: 'maps' },
+    { label: 'Maps',            href: '/maps.html',      page: 'maps' },
     { label: t('nav.settings'), href: '/settings.html',  page: 'settings' },
     { label: t('nav.help'),     href: '/help.html',      page: 'help', badgeId: 'nav-messages-badge' },
     { label: t('nav.admin'),    href: '/admin.html',     page: 'admin', adminOnly: true },
   ];
 
-  // Render nav without PIREP initially; it will appear once preferences load
-  const renderNav = (pirepEnabled: boolean) => {
+  const renderNav = () => {
     const links = navItems
       .filter(item => !item.adminOnly || user.is_admin)
-      .filter(item => !item.pirepOnly || pirepEnabled)
       .map(item => {
         const badge = item.badgeId ? `<span class="nav-dot" id="${item.badgeId}"></span>` : '';
         if (item.page === currentPage) {
@@ -81,18 +78,12 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
     });
   };
 
-  // Initial render (no PIREP tab)
-  renderNav(currentPage === 'pireps');
+  renderNav();
 
   // Close the mobile menu on outside-click / Escape. Attached once per page;
   // the handlers re-query the DOM so they survive nav re-renders. A no-op on
   // desktop where the menu is never in the `.open` state.
   setupNavDismiss();
-
-  // Fire-and-forget: check pirep permission and re-render if enabled
-  checkPirepNav(currentPage).then(enabled => {
-    if (enabled) renderNav(true);
-  });
 
   // Fire-and-forget: check for unseen messages and show badge
   checkMessagesBadge();
@@ -150,19 +141,6 @@ function setupNavDismiss(): void {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') close();
   });
-}
-
-/** Check if the user has PIREP viewing enabled. */
-async function checkPirepNav(currentPage?: string): Promise<boolean> {
-  // If we're already on the PIREPs page, always show the tab
-  if (currentPage === 'pireps') return true;
-  try {
-    const { fetchPreferences } = await import('./adapters/preferences-adapter');
-    const prefs = await fetchPreferences();
-    return prefs.pirep_can_view;
-  } catch {
-    return false;
-  }
 }
 
 /** Check for unseen messages and show/hide the nav badge dot. */
