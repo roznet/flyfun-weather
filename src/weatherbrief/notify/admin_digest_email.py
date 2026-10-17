@@ -385,6 +385,13 @@ def _build_plain(data: AdminDigestData) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _subject(data: AdminDigestData) -> str:
+    """Subject line; a heart flags a period with at least one donation."""
+    label = data.period_label or "Daily"
+    heart = " ❤️" if data.donations.count > 0 else ""
+    return f"[FlyFun] Admin Digest{heart} — {label}"
+
+
 def send_admin_digest(
     recipients: list[str],
     data: AdminDigestData,
@@ -396,11 +403,8 @@ def send_admin_digest(
         logger.debug("No recipients for admin digest, skipping")
         return
 
-    label = data.period_label or "Daily"
-    subject = f"[FlyFun] Admin Digest \u2014 {label}"
-
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
+    msg["Subject"] = _subject(data)
     msg["From"] = (
         smtp_config.from_address
         if smtp_config

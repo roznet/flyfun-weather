@@ -250,3 +250,12 @@ def test_render_order_and_window_tables(db_session):
     assert "Last 24h" in h and "Last 7 days" in h
     assert "Last 24h" in pl and "Last 7 days" in pl
     assert "Thumbs: Digest up 1 down 0" in pl
+
+
+def test_subject_hearts_only_when_donated(db_session):
+    from weatherbrief.notify.admin_digest_email import _subject
+
+    _mk_user(db_session)
+    assert "❤" not in _subject(_window(db_session))
+    _mk_donation(db_session, 10.0, provider_ref="pi_h")
+    assert "❤" in _subject(_window(db_session))
