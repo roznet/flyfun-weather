@@ -38,7 +38,7 @@
    {
     "cleared_at": null,
     "direction": "better",
-    "enroute_distance_nm": 268.7,
+    "enroute_distance_nm": 268.43,
     "from_value": "MVFR",
     "icao": "LERI",
     "key": "metar:LERI",
@@ -237,7 +237,7 @@
      "sigmet:LECB|3",
      "sigmet:LECM|3"
     ],
-    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 4 covers from LELL to VLC (briefed), EMBD TS SIGMET LECB 3 covers from 5 NM before abeam LEAL to LEMI (new), +1 more SIGMET",
+    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 4 covers from Sabadell (LELL) to VLC (briefed), EMBD TS SIGMET LECB 3 covers from 5 NM before abeam Alicante (LEAL) to Corvera (LEMI) (new), +1 more SIGMET",
     "unavailable": [
      "storms"
     ]
@@ -315,7 +315,7 @@
     "kind": "waypoint",
     "lat": 41.5209,
     "lon": 2.1051,
-    "town": null
+    "town": "Sabadell"
    },
    {
     "along_nm": 275.6,
@@ -324,7 +324,7 @@
     "kind": "waypoint",
     "lat": 37.8029,
     "lon": -1.1249,
-    "town": null
+    "town": "Corvera"
    },
    {
     "along_nm": 10.8,
@@ -333,7 +333,7 @@
     "kind": "station",
     "lat": 41.2971,
     "lon": 2.0785,
-    "town": null
+    "town": "Barcelona"
    },
    {
     "along_nm": 25.0,
@@ -342,7 +342,7 @@
     "kind": "coast_out",
     "lat": 41.2131,
     "lon": 1.7354,
-    "town": "LEBL"
+    "town": "Barcelona"
    },
    {
     "along_nm": 102.4,
@@ -387,7 +387,7 @@
     "kind": "station",
     "lat": 39.4892,
     "lon": -0.481,
-    "town": null
+    "town": "Valencia"
    },
    {
     "along_nm": 170.1,
@@ -405,7 +405,7 @@
     "kind": "station",
     "lat": 37.9511,
     "lon": -1.2303,
-    "town": null
+    "town": "Alcantarilla"
    }
   ],
   "arrival_at": "2026-10-02T10:00:00Z",
@@ -1361,7 +1361,7 @@
     "new": true,
     "pending": false,
     "qualifier": "EMBD",
-    "span_text": "from 5 NM before abeam LEAL to LEMI",
+    "span_text": "from 5 NM before abeam Alicante (LEAL) to Corvera (LEMI)",
     "to_nm": 275.6,
     "valid_from": "2026-10-02T08:35:00Z",
     "valid_to": "2026-10-02T10:35:00Z"
@@ -1391,7 +1391,7 @@
     "new": true,
     "pending": false,
     "qualifier": "EMBD",
-    "span_text": "from abeam LEAL to LEMI",
+    "span_text": "from abeam Alicante (LEAL) to Corvera (LEMI)",
     "to_nm": 275.6,
     "valid_from": "2026-10-02T08:35:00Z",
     "valid_to": "2026-10-02T10:35:00Z"
@@ -1421,7 +1421,7 @@
     "new": false,
     "pending": false,
     "qualifier": "EMBD",
-    "span_text": "from LELL to VLC",
+    "span_text": "from Sabadell (LELL) to VLC",
     "to_nm": 170.2,
     "valid_from": "2026-10-02T09:00:00Z",
     "valid_to": "2026-10-02T11:00:00Z"
@@ -1451,7 +1451,7 @@
     "icao": "LELL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Sabadell",
     "place": null,
     "role": "departure",
     "taf_category_at_eta": null,
@@ -1461,10 +1461,10 @@
     "via": null
    },
    {
-    "along_nm": 13.5,
+    "along_nm": 10.7,
     "convective": [],
-    "cross_nm": -8.1,
-    "eta": "2026-10-02T08:05:52.469264Z",
+    "cross_nm": -8.24,
+    "eta": "2026-10-02T08:04:39.049054Z",
     "focus": {
      "bbox": [
       1.8566,
@@ -1483,20 +1483,20 @@
     "icao": "LEBL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Barcelona",
     "place": {
      "along_nm": 10.8,
      "anchor": "LELL",
      "anchor_icao": "LELL",
      "anchor_kind": "waypoint",
-     "anchor_name": null,
+     "anchor_name": "Sabadell",
      "cross_nm": -8.1,
      "distance_nm": 10.8,
      "lateral": ", 8 NM left of track",
      "relation": "after",
      "short": "11 NM after LELL",
      "side": "left",
-     "text": "11 NM after LELL"
+     "text": "11 NM after Sabadell (LELL)"
     },
     "role": "route",
     "taf_category_at_eta": null,
@@ -1506,10 +1506,10 @@
     "via": null
    },
    {
-    "along_nm": 47.8,
+    "along_nm": 45.0,
     "convective": [],
-    "cross_nm": 16.4,
-    "eta": "2026-10-02T08:20:49.188698Z",
+    "cross_nm": 16.05,
+    "eta": "2026-10-02T08:19:36.813615Z",
     "focus": {
      "bbox": [
       0.947,
@@ -1528,20 +1528,20 @@
     "icao": "LERS",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Reus",
     "place": {
      "along_nm": 45.1,
      "anchor": "coast_out@25",
      "anchor_icao": null,
      "anchor_kind": "coast_out",
-     "anchor_name": "LEBL",
+     "anchor_name": "Barcelona",
      "cross_nm": 16.4,
      "distance_nm": 20.1,
      "lateral": ", 16 NM right of track",
      "relation": "after",
      "short": "20 NM after coast-out",
      "side": "right",
-     "text": "20 NM after coast-out (LEBL)"
+     "text": "20 NM after coast-out (Barcelona)"
     },
     "role": "route",
     "taf_category_at_eta": null,
@@ -1551,10 +1551,10 @@
     "via": null
    },
    {
-    "along_nm": 126.2,
+    "along_nm": 121.5,
     "convective": [],
-    "cross_nm": 14.2,
-    "eta": "2026-10-02T08:54:56.332276Z",
+    "cross_nm": 14.18,
+    "eta": "2026-10-02T08:52:53.791072Z",
     "focus": {
      "bbox": [
       -0.1449,
@@ -1573,7 +1573,7 @@
     "icao": "LECH",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Castell\u00f3n de la Plana",
     "place": {
      "along_nm": 121.5,
      "anchor": "DIKUT",
@@ -1598,7 +1598,7 @@
    {
     "along_nm": 169.9,
     "convective": [],
-    "cross_nm": 0.1,
+    "cross_nm": 0.09,
     "eta": "2026-10-02T09:13:59.963092Z",
     "focus": {
      "bbox": [
@@ -1618,7 +1618,7 @@
     "icao": "LEVC",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Valencia",
     "place": {
      "along_nm": 169.9,
      "anchor": "VLC",
@@ -1641,10 +1641,10 @@
     "via": null
    },
    {
-    "along_nm": 242.5,
+    "along_nm": 240.3,
     "convective": [],
-    "cross_nm": -17.3,
-    "eta": "2026-10-02T09:45:35.563177Z",
+    "cross_nm": -17.48,
+    "eta": "2026-10-02T09:44:39.648853Z",
     "focus": {
      "bbox": [
       -0.7705,
@@ -1663,7 +1663,7 @@
     "icao": "LEAL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Alicante",
     "place": {
      "along_nm": 240.3,
      "anchor": "VLC",
@@ -1676,7 +1676,7 @@
      "relation": "between",
      "short": "between VLC and LERI",
      "side": "left",
-     "text": "between VLC and LERI"
+     "text": "between VLC and Alcantarilla (LERI)"
     },
     "role": "alternate",
     "taf_category_at_eta": null,
@@ -1686,10 +1686,10 @@
     "via": null
    },
    {
-    "along_nm": 268.7,
+    "along_nm": 268.4,
     "convective": [],
     "cross_nm": 7.3,
-    "eta": "2026-10-02T09:57:00.644282Z",
+    "eta": "2026-10-02T09:56:53.589671Z",
     "focus": {
      "bbox": [
       -1.4417,
@@ -1708,20 +1708,20 @@
     "icao": "LERI",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Alcantarilla",
     "place": {
      "along_nm": 268.5,
      "anchor": "LEMI",
      "anchor_icao": "LEMI",
      "anchor_kind": "waypoint",
-     "anchor_name": null,
+     "anchor_name": "Corvera",
      "cross_nm": 7.3,
      "distance_nm": -7.1,
      "lateral": ", 7 NM right of track",
      "relation": "before",
      "short": "7 NM before LEMI",
      "side": "right",
-     "text": "7 NM before LEMI"
+     "text": "7 NM before Corvera (LEMI)"
     },
     "role": "alternate",
     "taf_category_at_eta": null,
@@ -1731,10 +1731,10 @@
     "via": null
    },
    {
-    "along_nm": 274.0,
+    "along_nm": 273.0,
     "convective": [],
-    "cross_nm": -14.7,
-    "eta": "2026-10-02T09:59:19.123682Z",
+    "cross_nm": -14.69,
+    "eta": "2026-10-02T09:58:51.950366Z",
     "focus": {
      "bbox": [
       -1.0232,
@@ -1753,20 +1753,20 @@
     "icao": "LELC",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "San Javier",
     "place": {
      "along_nm": 272.9,
      "anchor": "LEMI",
      "anchor_icao": "LEMI",
      "anchor_kind": "waypoint",
-     "anchor_name": null,
+     "anchor_name": "Corvera",
      "cross_nm": -14.7,
      "distance_nm": -2.7,
      "lateral": ", 15 NM left of track",
      "relation": "abeam",
      "short": "abeam LEMI",
      "side": "left",
-     "text": "abeam LEMI"
+     "text": "abeam Corvera (LEMI)"
     },
     "role": "alternate",
     "taf_category_at_eta": null,
@@ -1798,7 +1798,7 @@
     "icao": "LEMI",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T09:00:00Z",
-    "name": null,
+    "name": "Corvera",
     "place": null,
     "role": "destination",
     "taf_category_at_eta": null,
@@ -1848,8 +1848,8 @@
  "route_observations": {
   "airports": [
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 0.0,
+    "cross_track_nm": 0.0,
     "distance_from_route_nm": 0.0,
     "enroute_distance_nm": 0.0,
     "eta_hour_offset": 0,
@@ -1880,7 +1880,7 @@
     "metar_wind_speed_kt": 2,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
-    "municipality": null,
+    "municipality": "Sabadell",
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
@@ -1910,8 +1910,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 10.68,
+    "cross_track_nm": -8.24,
     "distance_from_route_nm": 8.24,
     "enroute_distance_nm": 13.49,
     "eta_hour_offset": 0,
@@ -1944,7 +1944,7 @@
     "metar_wind_speed_kt": 12,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
-    "municipality": null,
+    "municipality": "Barcelona",
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
@@ -2099,8 +2099,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 45.04,
+    "cross_track_nm": 16.05,
     "distance_from_route_nm": 16.05,
     "enroute_distance_nm": 47.81,
     "eta_hour_offset": 0,
@@ -2133,7 +2133,7 @@
     "metar_wind_speed_kt": 9,
     "metar_wind_variable_from": 350,
     "metar_wind_variable_to": 60,
-    "municipality": null,
+    "municipality": "Reus",
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
@@ -2220,8 +2220,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 121.47,
+    "cross_track_nm": 14.18,
     "distance_from_route_nm": 14.18,
     "enroute_distance_nm": 126.16,
     "eta_hour_offset": 1,
@@ -2252,7 +2252,7 @@
     "metar_wind_speed_kt": 7,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
-    "municipality": null,
+    "municipality": "Castell\u00f3n de la Plana",
     "name": "Castell\u00f3n-Costa Azahar Airport",
     "nearest_waypoint_icao": "DIKUT",
     "proxy_caption": null,
@@ -2339,8 +2339,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 169.93,
+    "cross_track_nm": 0.09,
     "distance_from_route_nm": 0.09,
     "enroute_distance_nm": 169.93,
     "eta_hour_offset": 1,
@@ -2371,7 +2371,7 @@
     "metar_wind_speed_kt": 7,
     "metar_wind_variable_from": 10,
     "metar_wind_variable_to": 70,
-    "municipality": null,
+    "municipality": "Valencia",
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
     "proxy_caption": null,
@@ -2458,8 +2458,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 240.34,
+    "cross_track_nm": -17.48,
     "distance_from_route_nm": 17.48,
     "enroute_distance_nm": 242.48,
     "eta_hour_offset": 2,
@@ -2490,7 +2490,7 @@
     "metar_wind_speed_kt": 15,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
-    "municipality": null,
+    "municipality": "Alicante",
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
@@ -2577,8 +2577,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 268.43,
+    "cross_track_nm": 7.3,
     "distance_from_route_nm": 7.3,
     "enroute_distance_nm": 268.7,
     "eta_hour_offset": 2,
@@ -2609,7 +2609,7 @@
     "metar_wind_speed_kt": 10,
     "metar_wind_variable_from": 20,
     "metar_wind_variable_to": 100,
-    "municipality": null,
+    "municipality": "Alcantarilla",
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
@@ -2696,8 +2696,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 272.96,
+    "cross_track_nm": -14.69,
     "distance_from_route_nm": 14.69,
     "enroute_distance_nm": 274.0,
     "eta_hour_offset": 2,
@@ -2728,7 +2728,7 @@
     "metar_wind_speed_kt": 14,
     "metar_wind_variable_from": 30,
     "metar_wind_variable_to": 90,
-    "municipality": null,
+    "municipality": "San Javier",
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
@@ -2849,8 +2849,8 @@
     "taf_wind_variable_to": null
    },
    {
-    "along_track_nm": null,
-    "cross_track_nm": null,
+    "along_track_nm": 275.56,
+    "cross_track_nm": 0.0,
     "distance_from_route_nm": 0.0,
     "enroute_distance_nm": 275.56,
     "eta_hour_offset": 2,
@@ -2881,7 +2881,7 @@
     "metar_wind_speed_kt": 12,
     "metar_wind_variable_from": 20,
     "metar_wind_variable_to": 80,
-    "municipality": null,
+    "municipality": "Corvera",
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,

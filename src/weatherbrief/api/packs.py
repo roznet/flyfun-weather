@@ -5409,7 +5409,7 @@ def post_live_position(
     req: LivePositionRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Record the app's GPS fixes (#761), owner only.
 
