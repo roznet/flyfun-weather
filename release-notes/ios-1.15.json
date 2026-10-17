@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-17",
+    "title": "iOS 1.15 — Surface charts, My Aircraft and lightning",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Surface charts and GRAMET in the app: the Discussion tab now shows the DWD, Met Office and TEMSI surface charts and the GRAMET cross-section for your route, even for briefings without an AI digest.\n- My Aircraft: view, add, edit and delete your aircraft from Settings, and choose which one is your default.\n- Runway wind at a glance: the Observed tab shows your departure and destination runways with the current wind, so crosswind and headwind are easy to read.\n- Lightning on the route map: recent strikes appear as small bolts that fade with age, with a toggle to hide them and the time of the latest data.\n- Clearer route ribbon: storms, stations and SIGMETs are described by the nearest place along your route, and a cell's motion is now shown as an arrow rather than a confusing dot.\n- Shared map links open where the sender was looking, instead of on the default Europe view.\n- Fixed: the map's close button could be missing on larger iPhones in landscape and on iPad, leaving you stuck on the map."
+  }
+]
