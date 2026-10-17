@@ -95,9 +95,14 @@ these layers are a tab and not extra layers on the forecast slider.
   `cells-overlay.md`; rain off by default). Cloud tops have no layer: they show
   in a cell's popup when the home node collects CTTH (a Europe-wide CTTH read
   on the droplet is out, #655).
-- **Badge**: one line per drawn layer, each with its own time (radar frame,
-  overlay frame, satellite cycle, newest LI frame, METAR read time). A stale
-  or absent layer draws nothing and says so.
+- **Label**: the briefing route map's observed panel (`.map-observed-badge`,
+  pinned top-right here since the flight-category legend owns bottom-left).
+  Collapsed: one age chip per drawn imagery layer ("Radar 7 min · Cells
+  10 min · Sat 27 min · Lightning 7 min"), amber when stale/failed/absent;
+  METAR only gets a chip on failure (each marker carries its own time).
+  ⓘ opens the full line per layer, each with its own time (radar frame,
+  overlay frame, satellite cycle, newest LI frame, METAR read time), plus the
+  cells legend. A stale or absent layer draws nothing and says so.
 - **Refresh**: every 5 min while the tab and the page are visible
   (`NOW_REFRESH_MS`, a 30 s visibility-aware tick + `visibilitychange`);
   lightning also refetches on pan/zoom. Only the `tab=now` switch is

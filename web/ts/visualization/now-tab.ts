@@ -8,9 +8,11 @@
  * in a cell's details when the home node collects CTTH (a Europe-wide CTTH
  * read on the droplet is out of bounds, see #655).
  *
- * Refreshes every 5 min while the tab and the page are visible. The badge
- * carries one line per drawn layer, each with that layer's own time — the
- * radar and the cell overlay are different frames and never share an "as of".
+ * Refreshes every 5 min while the tab and the page are visible. The label is
+ * the briefing route map's observed panel (`.map-observed-badge`): collapsed,
+ * one chip per drawn layer with its own age; opened, one full line per layer
+ * plus the cells legend — the radar and the cell overlay are different frames
+ * and never share an "as of".
  */
 
 import * as L from 'leaflet';
@@ -28,12 +30,17 @@ import {
   FLASH_TRAIL_MINUTES,
   SATELLITE_SOURCE,
   boxParams,
+  chipAge,
+  chipText,
   currentFrame,
+  fieldChip,
   flashBox,
   drawableFlashes,
   formatBadge,
   frameBadgeField,
   staleBadge,
+  staleChip,
+  type SummaryChip,
 } from './route-map/observed-overlay-geometry';
 import { CellsLayer } from './cells-overlay';
 import { FlashGlyphLayer } from './flash-glyph-layer';
@@ -87,6 +94,7 @@ export class NowTab {
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
   private openIcao: string | null = null;
   private badges: Partial<Record<NowLayer, string>> = {};
+  private chips: Partial<Record<NowLayer, SummaryChip | null>> = {};
   private inFlight: Promise<void> | null = null;
   // Lightning refreshes on every pan, so overlapping requests are normal: only
   // the newest one may draw.
@@ -118,8 +126,12 @@ export class NowTab {
     this.cells = new CellsLayer(this.leaflet, this.layers.cells);
     this.cells.setShowRain(this.layers.rain);
 
-    const legend = $('now-legend');
-    if (legend) legend.innerHTML = cellsLegendHtml();
+    const label = $('now-badge');
+    if (label) {
+      // Clicks on the label must not reach the map underneath.
+      L.DomEvent.disableClickPropagation(label);
+      L.DomEvent.disableScrollPropagation(label);
+    }
     this.wireControls();
 
     // Lightning follows the viewport (the endpoint takes a box); the rest is
@@ -198,6 +210,7 @@ export class NowTab {
     } catch (err) {
       this.data = null;
       this.badges.airports = `METAR: failed to load (${err instanceof Error ? err.message : err})`;
+      this.chips.airports = { name: 'METAR', status: 'failed', warning: true };
       this.renderAirports();
       return;
     }
@@ -225,9 +238,14 @@ export class NowTab {
     this.map.setHighlightedIcao(this.openIcao);
     if (!this.layers.airports) {
       this.badges.airports = '';
+      this.chips.airports = null;
     } else if (this.data) {
       const m = this.data.sources.metar;
-      this.badges.airports = `METAR: latest report per airport (≤${m.max_age_min ?? 90} min old) · ${view.airports.length} airports · read ${hhmmZ(this.data.at)}`;
+      const maxAge = m.max_age_min ?? 90;
+      this.badges.airports = `METAR: latest report per airport (≤${maxAge} min old) · ${view.airports.length} airports · read ${hhmmZ(this.data.at)}`;
+      // No chip when loaded: each marker carries its own report time, and the
+      // summary line is about how old the imagery is.
+      this.chips.airports = null;
     }
   }
 
@@ -248,25 +266,33 @@ export class NowTab {
       const frame = currentFrame(sat);
       if (sat && frame) {
         wanted.push(tileSpec(sat, frame, SATELLITE_OPACITY, 5));
-        this.badges.satellite = formatBadge(frameBadgeField(sat, frame, now));
+        const field = frameBadgeField(sat, frame, now);
+        this.badges.satellite = formatBadge(field);
+        this.chips.satellite = fieldChip(SATELLITE_SOURCE, field);
       } else {
         this.badges.satellite = sat ? staleBadge(sat, now) : 'Satellite IR: not available';
+        this.chips.satellite = sat ? staleChip(SATELLITE_SOURCE, sat) : { name: 'Sat', status: 'n/a', warning: true };
       }
     } else {
       this.badges.satellite = '';
+      this.chips.satellite = null;
     }
     if (this.layers.radar) {
       const frame = currentFrame(radar);
       if (radar && frame) {
         wanted.push(tileSpec(radar, frame, RADAR_OPACITY, 6));
         this.radarStamp = frame.stamp;
-        this.badges.radar = formatBadge(frameBadgeField(radar, frame, now));
+        const field = frameBadgeField(radar, frame, now);
+        this.badges.radar = formatBadge(field);
+        this.chips.radar = fieldChip(RADAR_SOURCE, field);
       } else {
         // Stale or absent: draw nothing rather than an old sky.
         this.badges.radar = radar ? staleBadge(radar, now) : 'Radar: not available';
+        this.chips.radar = radar ? staleChip(RADAR_SOURCE, radar) : { name: 'Radar', status: 'n/a', warning: true };
       }
     } else {
       this.badges.radar = '';
+      this.chips.radar = null;
     }
     reconcileTiles(this.tiles, wanted);
   }
@@ -277,10 +303,12 @@ export class NowTab {
     if (!this.cells) return;
     if (!this.layers.cells) {
       this.badges.cells = '';
+      this.chips.cells = null;
       return;
     }
     // The whole of Europe (no box): the server hands over the stored gzip.
     this.badges.cells = await this.cells.refresh(this.radarStamp, null);
+    this.chips.cells = this.cells.chip();
   }
 
   // --- Lightning ------------------------------------------------------------------------
@@ -291,16 +319,19 @@ export class NowTab {
     if (!this.layers.lightning) {
       this.flashLayer.setFlashes([]);
       this.badges.lightning = '';
+      this.chips.lightning = null;
       return;
     }
     const b = this.leaflet.getBounds();
     const box = flashBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
     let flashes: FlashPoint[] = [];
     let note: string;
+    let chip: SummaryChip = { name: 'Lightning', status: 'failed', warning: true };
     try {
       const response = await fetch(`/api/observed/flashes?${boxParams(box)}&minutes=${FLASH_TRAIL_MINUTES}`);
       if (!response.ok) {
         note = response.status === 404 ? 'Lightning: not available on this server' : 'Lightning: failed to load';
+        if (response.status === 404) chip = { name: 'Lightning', status: 'n/a', warning: true };
       } else {
         const payload = await response.json();
         flashes = (payload.flashes ?? []) as FlashPoint[];
@@ -308,6 +339,10 @@ export class NowTab {
         note = newest
           ? `Lightning ${hhmmZ(newest)} · last ${FLASH_TRAIL_MINUTES} min, faded by age · ${flashes.length} flashes in view`
           : 'Lightning: no current frame';
+        const newestMs = newest ? new Date(newest).getTime() : NaN;
+        chip = Number.isNaN(newestMs)
+          ? { name: 'Lightning', status: 'none', warning: true }
+          : { name: 'Lightning', status: chipAge(Math.max(0, (Date.now() - newestMs) / 60000)), warning: false };
       }
     } catch {
       note = 'Lightning: failed to load';
@@ -317,6 +352,7 @@ export class NowTab {
     this.flashNote = note;
     this.drawFlashes();
     this.badges.lightning = this.flashNote;
+    this.chips.lightning = chip;
   }
 
   private drawFlashes(): void {
@@ -325,15 +361,32 @@ export class NowTab {
 
   // --- Badge + panel ------------------------------------------------------------------------
 
+  /** One line of per-layer ages, ⓘ to open the full lines and the cells
+   *  legend — the same panel as the briefing route map. The `<details>`
+   *  persists across refreshes, so an open panel stays open. */
   private renderBadge(): void {
     const el = $('now-badge');
     if (!el) return;
     const order: NowLayer[] = ['radar', 'cells', 'satellite', 'lightning', 'airports'];
     const lines = order.map((k) => this.badges[k]).filter((s): s is string => !!s);
-    el.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
-    el.style.display = lines.length ? '' : 'none';
-    const legend = $('now-legend');
-    if (legend) legend.style.display = this.layers.cells ? '' : 'none';
+    const chips = order.map((k) => this.chips[k]).filter((c): c is SummaryChip => !!c);
+    if (!lines.length && !chips.length) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    const summary = chips
+      .map((c) => `<span class="${c.warning ? 'mob-chip mob-warn' : 'mob-chip'}">${escapeHtml(chipText(c))}</span>`)
+      .join('<span class="mob-sep">·</span>');
+    const text = lines.join('\n');
+    el.title = text;
+    el.innerHTML =
+      `<summary aria-label="${escapeHtml(text.replace(/\n/g, '. '))}">${summary || 'Now'}<span class="mob-info" aria-hidden="true">ⓘ</span></summary>`
+      + `<div class="mob-body">`
+      + `<div class="mob-lines">${escapeHtml(text)}</div>`
+      + (this.layers.cells ? `<div class="mob-section">${cellsLegendHtml()}</div>` : '')
+      + `<div class="mob-note">Observed imagery shows the sky as it was, not as it is: at 120 kt, ten minutes is twenty nautical miles.</div>`
+      + `</div>`;
   }
 
   private openPanel(icao: string): void {

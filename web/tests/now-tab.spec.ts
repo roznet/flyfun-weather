@@ -116,7 +116,16 @@ test.describe('Now tab', () => {
     await expect(badge).toContainText('METAR');
     // The radar and the overlay are different frames: two different times.
     expect(hhmm(radar.iso)).not.toBe(hhmm(cellsFrame.iso));
-    await expect(page.locator('#now-legend')).toContainText('position in 30 min');
+    // Collapsed it is one line of per-layer ages; ⓘ opens the full lines and
+    // the cells legend.
+    await expect(badge).not.toHaveAttribute('open', '');
+    await expect(badge.locator('summary')).toContainText('Radar');
+    await expect(badge.locator('summary')).toContainText('Cells');
+    await expect(badge.locator('.mob-body')).toBeHidden();
+    await badge.locator('summary').click();
+    await expect(badge.locator('.mob-body')).toBeVisible();
+    await expect(badge.locator('.mob-body')).toContainText('position in 30 min');
+    await badge.locator('summary').click();
 
     // Arrows only for available motion: one cell of two has one (Leaflet
     // names the custom pane `leaflet-cells-pane`).
