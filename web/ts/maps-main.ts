@@ -59,7 +59,7 @@ let synOpacity = 0.5;
 let synScale: ColorScale = 'default';
 // Gate-detected front overlay: 'off' or a gate preset name. Dev/calibration —
 // draws TFP=0 axes on top of the grid for the current (model, init, level, hour).
-let synFrontsGate = 'off';
+let synFrontsGate = 'default';
 // Cached multi-metric grid for the active (model, init, level, hour) — used
 // by the cursor tooltip and (when present) lets metric-change skip a
 // network call. Fetched in the background after the fast initial render.
