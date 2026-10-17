@@ -1,7 +1,7 @@
 """Tests for METAR/TAF verification scoring (Phase 2).
 
 Covers:
-- Delta helpers: _delta, _circular_delta, _has_precip
+- Delta helpers: _delta, _circular_delta, _has_precip, _has_thunderstorm
 - Nearest route point matching: _haversine_nm, _find_nearest_route_point, _find_nearest_waypoint_forecasts
 - _score_model_vs_metar: model-vs-METAR scoring using advisory pipeline functions
 - _score_taf_vs_metar: TAF-vs-METAR scoring
@@ -37,6 +37,7 @@ from weatherbrief.tasks.scoring import (
     _find_nearest_route_point,
     _find_nearest_waypoint_forecasts,
     _has_precip,
+    _has_thunderstorm,
     _distance_nm,
     _score_model_vs_metar,
     _score_taf_vs_metar,
@@ -143,6 +144,28 @@ class TestHasPrecip:
     def test_thunderstorm_only(self):
         # TS alone is not in the precip set (it's convection, not precip)
         assert not _has_precip(["TS"])
+
+
+class TestHasThunderstorm:
+    def test_bare_ts(self):
+        assert _has_thunderstorm(["TS"])
+
+    def test_ts_with_precip(self):
+        # The common forms: an exact "TS" match missed every one of these.
+        assert _has_thunderstorm(["+TSRA"])
+        assert _has_thunderstorm(["-TSRA"])
+        assert _has_thunderstorm(["TSRA", "BR"])
+        assert _has_thunderstorm(["TSGR"])
+
+    def test_vicinity_counts(self):
+        assert _has_thunderstorm(["VCTS"])
+
+    def test_recent_does_not_count(self):
+        assert not _has_thunderstorm(["RETSRA"])
+
+    def test_no_thunderstorm(self):
+        assert not _has_thunderstorm(["SHRA", "BR"])
+        assert not _has_thunderstorm([])
 
 
 # ---------------------------------------------------------------------------

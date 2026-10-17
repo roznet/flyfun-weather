@@ -70,6 +70,16 @@ def _has_precip(weather: list[str]) -> bool:
     return any(w in _PRECIP_PHENOMENA for w in weather)
 
 
+def _has_thunderstorm(weather: list[str]) -> bool:
+    """Check if METAR present weather reports a thunderstorm.
+
+    Any group carrying TS counts (``TS``, ``+TSRA``, ``-TSRA``, ``TSGR``, and
+    ``VCTS`` in the vicinity); recent weather (``RE…``) does not. Same reading
+    as ``live_significance.convective_tags``.
+    """
+    return any("TS" in w.upper() and not w.upper().startswith("RE") for w in weather)
+
+
 # ---------------------------------------------------------------------------
 # Nearest route point matching
 # ---------------------------------------------------------------------------
@@ -201,7 +211,7 @@ def _score_model_vs_metar(
             ConvectiveRisk.NONE, ConvectiveRisk.MARGINAL,
         )
     )
-    obs_has_convection = "TS" in obs_weather
+    obs_has_convection = _has_thunderstorm(obs_weather)
 
     return VerificationScoreRow(
         observation_id=obs_row.id,
