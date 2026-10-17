@@ -34,8 +34,24 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// flight list can read it synchronously, like `CachingBriefingRepository`.
     nonisolated let isServingCachedFlights: Bool
 
+    /// A real briefing for App Store screenshots (`FLYFUN_MOCK_SHOWCASE=<path>`,
+    /// see `FixtureShowcase`). When set it is the only flight listed, so the
+    /// screenshots show no test fixtures.
+    let showcase: FixtureShowcase?
+
     init(offline: Bool = false) {
         self.isServingCachedFlights = offline
+        if let path = ProcessInfo.processInfo.environment["FLYFUN_MOCK_SHOWCASE"], !path.isEmpty {
+            // try! like the fixtures below: a broken file must fail loudly.
+            self.showcase = try! FixtureShowcase.load(path: path)
+        } else {
+            self.showcase = nil
+        }
+    }
+
+    /// The showcase, when `flightId` is its flight.
+    private func showcase(_ flightId: String) -> FixtureShowcase? {
+        showcase.flatMap { $0.flight.id == flightId ? $0 : nil }
     }
 
     /// Offline, `fixture-1` is the one flight with a "downloaded" pack, so it
@@ -90,7 +106,8 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// (#607); they are separate rows from `fixture-1`/`fixture-2` precisely so
     /// the older journeys keep asserting against untouched fixtures.
     private var allFlights: [FlightResponse] {
-        (flightsFixture + FixtureTripData.legs + createdFlights)
+        if let showcase { return [showcase.flight] }
+        return (flightsFixture + FixtureTripData.legs + createdFlights)
             .filter { !deletedFlightIds.contains($0.id) }
     }
 
@@ -215,11 +232,13 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     private func isBriefed(_ flightId: String) -> Bool { flightId == FixtureBriefingData.flightId }
 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
+        if let s = showcase(flightId) { return s.pack }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.pack
     }
     func packs(flightId: String) async throws -> [PackMetaResponse] {
-        isBriefed(flightId) ? FixtureBriefingData.packs : []
+        if let s = showcase(flightId) { return [s.pack] }
+        return isBriefed(flightId) ? FixtureBriefingData.packs : []
     }
     /// A null layer by default (what the server returns before any live data),
     /// so the existing journeys render exactly as before. `FLYFUN_MOCK_LIVE=1`
@@ -229,6 +248,7 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// response body) — the live-scenario UI tests feed one tick of a real
     /// flight morning per launch this way.
     func liveLayer(flightId: String) async throws -> LiveLayerResponse {
+        if let s = showcase(flightId) { return s.liveLayer }
         guard isBriefed(flightId) else { throw APIError.notFound }
         let env = ProcessInfo.processInfo.environment
         if let json = env["FLYFUN_MOCK_LIVE_JSON"], !json.isEmpty {
@@ -275,26 +295,35 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         throw FixtureError.notProvided("observedFlashes")
     }
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {
+        if let s = showcase(flightId) { return s.advisories }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.advisories
     }
     func advisoryDetail(flightId: String, timestamp: String, advisoryId: String) async throws -> AdvisoryDetailResponse {
+        if let s = showcase(flightId) {
+            guard let detail = s.advisoryDetails[advisoryId] else { throw APIError.notFound }
+            return detail
+        }
         guard isBriefed(flightId), advisoryId == "convective" else { throw FixtureError.notProvided("advisoryDetail(\(advisoryId))") }
         return FixtureBriefingData.convectiveDetail
     }
     func digest(flightId: String, timestamp: String) async throws -> DigestResponse {
+        if let s = showcase(flightId) { return s.digest }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.digest
     }
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse {
+        if let s = showcase(flightId) { return s.snapshot }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.snapshot
     }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse {
+        if let s = showcase(flightId) { return s.routeAnalyses }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.routeAnalyses
     }
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse {
+        if let s = showcase(flightId) { return s.elevation }
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.elevation
     }
@@ -393,7 +422,10 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func rescanTimeOptions(flightId: String, timestamp: String) async throws { throw FixtureError.notProvided("rescanTimeOptions") }
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw FixtureError.notProvided("skewtImage") }
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw FixtureError.notProvided("grametImage") }
-    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse { throw FixtureError.notProvided("soundingProfile") }
+    func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {
+        guard let profile = showcase(flightId)?.soundingProfiles[pointIndex] else { throw FixtureError.notProvided("soundingProfile") }
+        return profile
+    }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw FixtureError.notProvided("refreshStatus") }
     func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
     func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw FixtureError.notProvided("submitPirep") }

@@ -212,3 +212,33 @@ to unwind.
 `find_build` filters on the build number server-side and then matches the pre-release version
 client-side to pin the (1.5, 11) pair. Filtering on the build number alone will eventually
 attach the wrong binary.
+
+## §A8 — App Store screenshots (`scripts/ios_screenshots.py`)
+
+Screenshots are regenerated, not hand-made: `python3 scripts/ios_screenshots.py` runs
+`ScreenshotUITests` on iPhone 17 (6.3", 1206x2622) and iPad Pro 13" (2064x2752) — the two
+sizes App Store Connect requires; it scales the rest — with the status bar pinned to 9:41,
+and writes `build/appstore-screenshots/<device>/<light|dark>/NN-screen.png`. `--appearance
+dark` adds a dark set; `--wait` queues behind another `xcodebuild test`.
+
+The journey drives the mock app on **one real briefing**, `flyfun-weatherUITests/Showcase/
+showcase.json` (EGTF→LSGS 2026-10-12: IFR stratus at Fairoaks clearing to CAVOK over the
+Alps; the ECMWF cross-section shows the terrain). Choices baked into it:
+
+- *Only what the app draws.* The fixture serves no live layer, no surface-chart manifest and
+  no GRAMET, and the mock serves no radar/satellite tiles, so every screen is a native render
+  of forecast data — no third-party imagery, nothing that reads as stale.
+- *Always tomorrow.* `FixtureShowcase` shifts every date in the file by whole days at load so
+  the flight departs tomorrow (UTC); the exporter presents the pack as D-1 (briefed the day
+  before) so nothing is stamped in the future. Times of day are untouched.
+- *ECMWF only, fictional aircraft.* The repo is public: the exporter keeps one model's
+  soundings (1.1 MB of JSON instead of ~4 MB) and swaps the aircraft for `ZZ-DEMO`, and
+  refuses to write if the real registration survives.
+- *Raw dump kept privately.* `scripts/export_showcase_fixture_ios.py fetch` saves every
+  endpoint, all models, to the eval-set repo (`demo-fixtures/<flight>/api_responses.json.gz`);
+  `trim` rebuilds the fixture from it after prod retention has dropped the flight. To switch
+  flights: `scripts/ops/import_flight.py <id>`, then `export_showcase_fixture_ios.py all <id>`
+  against the devserver, and update `ScreenshotUITests.cardPrefix` and the unit test's route.
+
+`FixtureShowcaseTests` (unit target, so CI) fails when the fixture stops decoding against the
+DTOs — re-run the `trim` step then. The journey itself runs only on demand.
