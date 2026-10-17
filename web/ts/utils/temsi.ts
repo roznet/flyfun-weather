@@ -2,6 +2,10 @@
  *
  * Split out of `briefing-ui.ts` so they can be unit-tested: that module pulls
  * in Leaflet, which needs a DOM the node test environment doesn't provide.
+ *
+ * SYNC: `temsiTabLabel`, `temsiValidityOffset` and the zone tables are ported
+ * to Python in `src/weatherbrief/api/_chart_manifest.py` (the iOS charts
+ * manifest, #799). Change both together.
  */
 
 export const TEMSI_ZONE_LABEL: Record<string, string> = {

@@ -56,6 +56,50 @@ nonisolated struct PackChart: Codable, Sendable, Equatable, Identifiable {
     var cachePath: String { "\(cacheKey).\(fileExt)" }
 }
 
+// Lenient decoding: the flags and lists default when a server omits them, so
+// a shape change in the manifest degrades the chart panel instead of failing
+// the whole `PackMetaResponse` decode (and with it the briefing). Declared in
+// extensions to keep the memberwise initialisers.
+
+extension PackChartsManifest {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        inCoverage = try c.decodeIfPresent(Bool.self, forKey: .inCoverage) ?? false
+        sources = try c.decodeIfPresent([PackChartSource].self, forKey: .sources) ?? []
+    }
+}
+
+extension PackChart {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chartId = try c.decode(String.self, forKey: .chartId)
+        label = try c.decode(String.self, forKey: .label)
+        caption = try c.decodeIfPresent(String.self, forKey: .caption) ?? ""
+        validTime = try c.decodeIfPresent(String.self, forKey: .validTime)
+        initTime = try c.decodeIfPresent(String.self, forKey: .initTime)
+        url = try c.decode(String.self, forKey: .url)
+        overlayKey = try c.decodeIfPresent(String.self, forKey: .overlayKey) ?? ""
+        cacheKey = try c.decode(String.self, forKey: .cacheKey)
+        fileExt = try c.decode(String.self, forKey: .fileExt)
+        // Unknown availability: try the URL; a 410 is handled like any other.
+        available = try c.decodeIfPresent(Bool.self, forKey: .available) ?? true
+        prefetch = try c.decodeIfPresent(Bool.self, forKey: .prefetch) ?? false
+    }
+
+    /// Whether `data` starts like an image the chart view can draw (PNG, GIF,
+    /// JPEG). Anything else — an HTML error page behind a 200, a truncated
+    /// body — must not land under an immutable cache key, where it would be
+    /// served forever.
+    static func looksLikeImage(_ data: Data) -> Bool {
+        let signatures: [[UInt8]] = [
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], // PNG
+            Array("GIF8".utf8),                                 // GIF87a / GIF89a
+            [0xFF, 0xD8, 0xFF],                                 // JPEG
+        ]
+        return signatures.contains { data.starts(with: $0) }
+    }
+}
+
 /// Route overlay for one chart type: waypoints pre-projected into the chart's
 /// native pixel space (`native_size`). Drawn scaled to whatever size the image
 /// is shown at — including the downscaled DWD analysis, which keeps the aspect.

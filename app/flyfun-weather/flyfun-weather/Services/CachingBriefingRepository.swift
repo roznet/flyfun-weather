@@ -573,7 +573,16 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             }
         }
         let data = try await online.grametDocument(flightId: flightId, timestamp: timestamp)
-        let name = data.starts(with: Array("%PDF".utf8)) ? Self.grametPDFName : Self.grametPNGName
+        let name: String
+        if data.starts(with: Array("%PDF".utf8)) {
+            name = Self.grametPDFName
+        } else if PackChart.looksLikeImage(data) {
+            name = Self.grametPNGName
+        } else {
+            // Neither a PDF nor an image (an error page behind a 200): don't
+            // cache it, or every later open would read it back.
+            throw APIError.decodingError(CocoaError(.fileReadCorruptFile))
+        }
         try? await cache.writePackFile(data, flightId: flightId, timestamp: timestamp, fileName: name)
         return data
     }
@@ -585,6 +594,12 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             return data
         }
         let data = try await online.chartImage(chart)
+        // The key is immutable and never revalidated, so only real image
+        // bytes may be written under it.
+        guard PackChart.looksLikeImage(data) else {
+            Self.logger.warning("Chart \(chart.cachePath) is not an image (\(data.count) bytes); not cached")
+            throw APIError.decodingError(CocoaError(.fileReadCorruptFile))
+        }
         do {
             try await cache.writeChart(data, cachePath: chart.cachePath)
         } catch {
@@ -650,14 +665,22 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// which cover packs viewed but never downloaded — then apply the size cap
     /// (least recently read first). Runs after pack pruning, so charts of
     /// evicted packs go with them.
+    ///
+    /// A sidecar that exists but won't decode (a model change, a partial
+    /// write) can't say which charts it needs, so the sweep is skipped rather
+    /// than treating it as "needs none" and emptying an offline pack's charts.
+    /// The size cap still applies.
     func sweepChartCache() async {
         var referenced: Set<String> = []
+        var undecodable = 0
         func collect(_ data: Data?) {
             guard let data else { return }
             if let pack = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
                 referenced.formUnion(pack.charts?.cachePaths ?? [])
             } else if let packs = try? JSONDecoder.weatherBrief.decode([PackMetaResponse].self, from: data) {
                 for pack in packs { referenced.formUnion(pack.charts?.cachePaths ?? []) }
+            } else {
+                undecodable += 1
             }
         }
         for entry in await cache.cachedPacks() {
@@ -668,8 +691,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
                 collect(await cache.readFlightMetadata(flightId: flightId, name: name))
             }
         }
-        let swept = await cache.sweepCharts(keeping: referenced)
-        let capped = await cache.enforceChartSizeCap()
+        if undecodable > 0 {
+            Self.logger.warning("Chart cache: \(undecodable) pack-meta file(s) unreadable; skipping the sweep")
+        }
+        let (swept, capped) = await cache.pruneCharts(keeping: undecodable == 0 ? referenced : nil)
         if swept > 0 || capped > 0 {
             Self.logger.info("Chart cache: swept \(swept) unreferenced, \(capped) over the size cap")
         }

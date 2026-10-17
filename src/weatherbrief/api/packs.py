@@ -667,10 +667,13 @@ def _meta_to_response(
     data_status: DataStatus | None = None,
     flexibility: FlexibilityMode | None = None,
     departure_time: datetime | None = None,
+    chart_cycle_memo: dict | None = None,
 ) -> PackMetaResponse:
     """``departure_time`` (the flight's current ETD) only shapes the charts
     manifest: TEMSI captions name their gap to departure, and the offline
-    prefetch subset is picked around it. Omit it where no flight is at hand."""
+    prefetch subset is picked around it. Omit it where no flight is at hand.
+    ``chart_cycle_memo`` is shared across a list of packs (see
+    ``build_pack_charts_manifest``)."""
     has_advisories = pack_has_advisories(meta.artifact_path)
     mf_options, mf_default = _live_meteofrance_options(meta)
     metoffice_public = _metoffice_public()
@@ -681,6 +684,7 @@ def _meta_to_response(
         meteofrance_default_id=mf_default,
         metoffice_public=metoffice_public,
         departure_time=departure_time,
+        cycle_memo=chart_cycle_memo,
     )
 
     return PackMetaResponse(
@@ -744,8 +748,12 @@ def list_flight_packs(
     """List all packs (history) for a flight. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
     packs = list_packs(db, flight_id)
+    # Every pack carries its charts manifest (iOS switches to a history entry
+    # as is); packs of one run cycle share its disk reads.
+    chart_cycle_memo: dict = {}
     return [_meta_to_response(
         p, flexibility=flight.flexibility, departure_time=flight.departure_time,
+        chart_cycle_memo=chart_cycle_memo,
     ) for p in packs]
 
 

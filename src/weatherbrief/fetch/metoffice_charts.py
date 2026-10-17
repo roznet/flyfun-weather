@@ -286,6 +286,11 @@ def list_cycles(data_dir: Path) -> list[str]:
     return _cache.list_cycles(data_dir)
 
 
+def cycle_snapshot(data_dir: Path, run_cycle: str) -> tuple[dict[str, dict], frozenset[str]]:
+    """The cycle's meta and the chart ids on disk, in one directory read."""
+    return _cache.cycle_snapshot(data_dir, run_cycle)
+
+
 def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
     return _cache.chart_meta(data_dir, run_cycle, chart_id)
 

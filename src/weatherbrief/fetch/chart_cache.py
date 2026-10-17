@@ -248,6 +248,22 @@ class ChartCache:
         """Per-chart metadata (last_modified, etag, ...) or None on miss."""
         return self.read_meta(self.cycle_dir(data_dir, run_cycle)).get(chart_id)
 
+    def cycle_snapshot(self, data_dir: Path, run_cycle: str) -> tuple[dict[str, dict], frozenset[str]]:
+        """A cycle's ``meta.json`` and the chart ids whose bytes are on disk.
+
+        One directory listing and at most one meta read, for callers that ask
+        about every chart of a cycle (the per-pack charts manifest) instead of
+        a stat plus a meta read per chart. An evicted cycle costs one failed
+        ``iterdir``.
+        """
+        cdir = self.cycle_dir(data_dir, run_cycle)
+        try:
+            names = {p.name for p in cdir.iterdir()}
+        except OSError:
+            return {}, frozenset()
+        present = frozenset(cid for cid in self.chart_ids if f"{cid}.{self.extension}" in names)
+        return (self.read_meta(cdir) if "meta.json" in names else {}), present
+
     # -- eviction -----------------------------------------------------------
 
     def evict_old_cycles(self, data_dir: Path, *, keep: int | None = None) -> list[str]:

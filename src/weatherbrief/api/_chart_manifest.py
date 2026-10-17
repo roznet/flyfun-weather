@@ -151,6 +151,22 @@ def temsi_validity_offset(valid: datetime, departure: datetime) -> str | None:
     return f"{amount} h {'before' if diff_min < 0 else 'after'} departure"
 
 
+CycleMemo = dict[tuple[str, str], tuple[dict[str, dict], frozenset[str]]]
+"""``(source, run_cycle)`` → that cycle's meta and charts on disk, shared by the
+manifests of one request so a pack-history list reads each cycle once."""
+
+
+def _cycle_snapshot(
+    source: str, module, data_dir: Path, run_cycle: str, memo: CycleMemo | None,
+) -> tuple[dict[str, dict], frozenset[str]]:
+    if memo is None:
+        return module.cycle_snapshot(data_dir, run_cycle)
+    key = (source, run_cycle)
+    if key not in memo:
+        memo[key] = module.cycle_snapshot(data_dir, run_cycle)
+    return memo[key]
+
+
 def _offset_label(chart_id: str, offset_h: int) -> str:
     return "Analysis" if chart_id == "ana" else f"+{offset_h}h"
 
@@ -169,6 +185,7 @@ def _offset_source_charts(
     base_url: str,
     url_segment: str,
     file_ext: str,
+    snapshot: tuple[dict[str, dict], frozenset[str]],
     valid_times: dict[str, tuple[datetime, datetime | None, int]] | None = None,
 ) -> list[PackChartResponse]:
     """Charts for a run-cycle + forecast-offset source (DWD, Met Office)."""
@@ -176,11 +193,12 @@ def _offset_source_charts(
 
     issued = parse_run_cycle_dt(run_cycle)
     known = valid_times or {}
+    cycle_meta, on_disk = snapshot
     charts: list[PackChartResponse] = []
     for chart_id in module.CHART_IDS:
         offset_h = module.FORECAST_OFFSETS_H.get(chart_id, 0)
-        meta = module.chart_meta(data_dir, run_cycle, chart_id)
-        available = module.resolve_chart_path(data_dir, run_cycle, chart_id) is not None
+        meta = cycle_meta.get(chart_id)
+        available = chart_id in on_disk
 
         stamp = known.get(chart_id)
         if stamp is not None:
@@ -219,17 +237,24 @@ def _offset_source_charts(
     return charts
 
 
-def _dwd_source(meta: BriefingPackMeta, data_dir: Path, base_url: str) -> PackChartSourceResponse:
+def _dwd_source(
+    meta: BriefingPackMeta, data_dir: Path, base_url: str, memo: CycleMemo | None,
+) -> PackChartSourceResponse:
     from weatherbrief.fetch import dwd_charts
+    from weatherbrief.fetch.dwd_chart_stamp import ForecastStamp
 
     run_cycle = meta.dwd_charts_run_cycle or ""
-    stamps = {
-        cid: (s.valid_time, s.init_time, s.lead_h)
-        for cid, s in dwd_charts.forecast_stamps(data_dir, run_cycle).items()
-    }
+    snapshot = _cycle_snapshot("dwd", dwd_charts, data_dir, run_cycle, memo)
+    # Same stamps ``dwd_charts.forecast_stamps`` reads, taken from the snapshot.
+    stamps = {}
+    for cid in dwd_charts.CHART_IDS:
+        s = ForecastStamp.from_meta(snapshot[0].get(cid)) if cid != "ana" else None
+        if s is not None:
+            stamps[cid] = (s.valid_time, s.init_time, s.lead_h)
     charts = _offset_source_charts(
         source="dwd", module=dwd_charts, run_cycle=run_cycle, data_dir=data_dir,
-        base_url=base_url, url_segment="dwd-chart", file_ext="png", valid_times=stamps,
+        base_url=base_url, url_segment="dwd-chart", file_ext="png",
+        snapshot=snapshot, valid_times=stamps,
     )
     return PackChartSourceResponse(
         source="dwd",
@@ -241,13 +266,16 @@ def _dwd_source(meta: BriefingPackMeta, data_dir: Path, base_url: str) -> PackCh
     )
 
 
-def _metoffice_source(meta: BriefingPackMeta, data_dir: Path, base_url: str) -> PackChartSourceResponse:
+def _metoffice_source(
+    meta: BriefingPackMeta, data_dir: Path, base_url: str, memo: CycleMemo | None,
+) -> PackChartSourceResponse:
     from weatherbrief.fetch import metoffice_charts
 
     run_cycle = meta.metoffice_charts_run_cycle or ""
     charts = _offset_source_charts(
         source="metoffice", module=metoffice_charts, run_cycle=run_cycle, data_dir=data_dir,
         base_url=base_url, url_segment="metoffice-chart", file_ext="gif",
+        snapshot=_cycle_snapshot("metoffice", metoffice_charts, data_dir, run_cycle, memo),
     )
     return PackChartSourceResponse(
         source="metoffice",
@@ -365,12 +393,16 @@ def build_pack_charts_manifest(
     meteofrance_default_id: str | None,
     metoffice_public: bool,
     departure_time: datetime | None = None,
+    cycle_memo: CycleMemo | None = None,
 ) -> PackChartsManifest:
     """The chart panel for one pack: allowed sources, in web order.
 
     ``meteofrance_options`` must already be filtered to live (non-evicted)
     validities — ``packs._live_meteofrance_options`` does that for the
     response's own ``meteofrance_charts_options`` and is reused here.
+
+    ``cycle_memo``: pass one dict across every pack of a request (the history
+    list) so packs sharing a run cycle don't re-read its directory.
     """
     base_url = (
         f"/api/flights/{quote(meta.flight_id, safe='')}/packs/"
@@ -382,14 +414,14 @@ def build_pack_charts_manifest(
 
     sources: list[PackChartSourceResponse] = []
     if meta.dwd_charts_in_coverage and meta.dwd_charts_within_horizon and meta.dwd_charts_run_cycle:
-        sources.append(_dwd_source(meta, data_dir, base_url))
+        sources.append(_dwd_source(meta, data_dir, base_url, cycle_memo))
     if (
         metoffice_public
         and meta.metoffice_charts_in_coverage
         and meta.metoffice_charts_within_horizon
         and meta.metoffice_charts_run_cycle
     ):
-        sources.append(_metoffice_source(meta, data_dir, base_url))
+        sources.append(_metoffice_source(meta, data_dir, base_url, cycle_memo))
     if (
         meta.meteofrance_charts_in_coverage
         and meta.meteofrance_charts_within_horizon

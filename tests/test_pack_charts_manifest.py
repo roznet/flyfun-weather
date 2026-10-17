@@ -91,6 +91,38 @@ def test_dwd_source_lists_every_chart_with_availability(tmp_path):
     assert dwd.overlay_url.endswith("/dwd-chart-overlay")
 
 
+def test_cycle_memo_reads_a_shared_cycle_once(tmp_path, monkeypatch):
+    """A pack-history list shares one memo: packs on the same run cycle reuse
+    its directory read, and the manifests match the unmemoised build."""
+    _write(dwd_charts, tmp_path, _DWD_CYCLE, "048", {"last_modified": "2026-05-08T04:43:00+00:00"})
+    plain = _build(_meta(), tmp_path)
+
+    calls: list[str] = []
+    real = dwd_charts.cycle_snapshot
+    monkeypatch.setattr(dwd_charts, "cycle_snapshot", lambda d, rc: calls.append(rc) or real(d, rc))
+    memo: dict = {}
+    built = [
+        build_pack_charts_manifest(
+            _meta(fetch_timestamp=_FETCH_TS + timedelta(hours=h)), data_dir=tmp_path,
+            meteofrance_options=[], meteofrance_default_id=None, metoffice_public=False,
+            cycle_memo=memo,
+        )
+        for h in (0, 1, 2)
+    ]
+    assert calls == [_DWD_CYCLE]
+    assert [c.cache_key for c in built[0].sources[0].charts] == [
+        c.cache_key for c in plain.sources[0].charts
+    ]
+    assert [c.available for c in built[2].sources[0].charts] == [
+        c.available for c in plain.sources[0].charts
+    ]
+
+
+def test_evicted_cycle_lists_charts_unavailable(tmp_path):
+    [dwd] = _build(_meta(dwd_charts_run_cycle="2026-04-01T06Z"), tmp_path).sources
+    assert dwd.charts and not any(c.available or c.prefetch for c in dwd.charts)
+
+
 def test_dwd_analysis_points_at_downscaled_variant(tmp_path):
     _write(dwd_charts, tmp_path, _DWD_CYCLE, "ana", {"last_modified": "2026-05-08T06:40:00+00:00"})
     ana = _build(_meta(), tmp_path).sources[0].charts[0]

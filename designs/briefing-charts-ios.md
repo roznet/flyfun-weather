@@ -62,6 +62,9 @@ placeholder).
   A hit is never revalidated; a second leg or a refresh on the same run never
   re-downloads (unit-tested in `ChartCacheTests`). `flightDirectoryIDs` skips
   `charts/`. Cache paths are server strings, so `..`/empty components are refused.
+  Only bytes that start like an image (PNG/GIF/JPEG, `PackChart.looksLikeImage`)
+  are written — an error page behind a 200 under an immutable key would be
+  served forever. GRAMET likewise caches only `%PDF` or image bytes.
 - **Per pack**: GRAMET (`gramet.pdf`/`.png`) and the route overlays
   (`chart-overlay-<source>.json`) — both route-specific. A downloaded pack also
   keeps its own `pack-meta.json`, because the flight-level `pack-meta` only
@@ -70,7 +73,10 @@ placeholder).
   charts referenced by any indexed pack's `pack-meta.json` or any flight dir's
   `latest-pack` / `pack-meta` / `packs` sidecar (so packs viewed but never
   downloaded keep theirs until their flight ages out), then a **50 MB** cap
-  removes least-recently-read files (reads touch mtime). Chart bytes are not
+  removes least-recently-read files (reads touch mtime), both from one walk of
+  the directory (`BriefingCacheStore.pruneCharts`). If any of those sidecars
+  exists but won't decode, the sweep is **skipped** (logged) — it can't tell
+  which charts that pack needs — and only the cap runs. Chart bytes are not
   counted in `CachedPackEntry.totalBytes`.
 - **Offline download** prefetches, after the bundle and after registering the
   pack, the charts flagged `prefetch` + their sources' overlays + GRAMET. Never in
@@ -82,8 +88,18 @@ placeholder).
 
 ## Gotchas
 
-- `_meta_to_response` now reads chart `meta.json` files per pack (one or two
-  per source) — also on pack lists. Same order of cost as `dwd_charts_times`.
+- `_meta_to_response` builds the manifest for every pack, pack lists included
+  (iOS switches to a history entry as is). Each DWD / Met Office cycle is read
+  once per call via `ChartCache.cycle_snapshot` (one directory listing + one
+  `meta.json`; an evicted cycle is one failed listing), and `list_flight_packs`
+  shares a `cycle_memo` across its packs so a run cycle is read once per request.
+- The lazy `?w=1600` downscale for older cycles runs under a process lock, so
+  concurrent first requests don't each run the LANCZOS pass.
+- Python ports of `temsiTabLabel` / `temsiValidityOffset` live in
+  `_chart_manifest.py`; `web/ts/utils/temsi.ts` carries the reciprocal SYNC note.
+- Manifest DTOs decode leniently on iOS (missing `in_coverage`/`sources`/
+  `available`/`prefetch`/`caption`/`overlay_key` default) so a manifest shape
+  change can't fail the whole `PackMetaResponse` decode.
 - `departure_time` passed to `_meta_to_response` is the flight's **current**
   ETD, not the one the pack was built for; only captions and prefetch use it.
 - The route overlay is drawn by `ChartRouteOverlay` with sizes relative to the

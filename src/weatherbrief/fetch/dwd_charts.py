@@ -36,6 +36,7 @@ from __future__ import annotations
 import email.utils
 import io
 import logging
+import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +88,7 @@ _USER_AGENT = "flyfun-weather/1.0 (+https://weather.flyfun.aero)"
 # an overlay projected in native pixels scales onto it by the width ratio.
 ANALYSIS_SMALL_WIDTH = 1600
 _ANALYSIS_SMALL_STEM = f"ana_w{ANALYSIS_SMALL_WIDTH}"
+_downscale_lock = threading.Lock()
 
 # Native pixel sizes of each chart, used for client-side SVG overlay scaling.
 CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
@@ -239,6 +241,11 @@ def resolve_chart_path(data_dir: Path, run_cycle: str, chart_id: str) -> Path | 
     return _cache.resolve_chart_path(data_dir, run_cycle, chart_id)
 
 
+def cycle_snapshot(data_dir: Path, run_cycle: str) -> tuple[dict[str, dict], frozenset[str]]:
+    """The cycle's meta and the chart ids on disk, in one directory read."""
+    return _cache.cycle_snapshot(data_dir, run_cycle)
+
+
 def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
     """Per-chart metadata (last_modified, etag, ...) or None on miss."""
     return _cache.chart_meta(data_dir, run_cycle, chart_id)
@@ -284,9 +291,21 @@ def resolve_small_analysis_path(data_dir: Path, run_cycle: str) -> Path | None:
     if full is None:
         return None
     small = full.with_name(f"{_ANALYSIS_SMALL_STEM}.png")
-    if small.exists() and small.stat().st_mtime >= full.stat().st_mtime:
+    if _small_is_fresh(small, full):
         return small
-    return small if downscale_analysis(full, small) else None
+    # Several devices opening a new cycle at once would each run the LANCZOS
+    # pass on the 4389 px chart; serialise it and re-check under the lock.
+    with _downscale_lock:
+        if _small_is_fresh(small, full):
+            return small
+        return small if downscale_analysis(full, small) else None
+
+
+def _small_is_fresh(small: Path, full: Path) -> bool:
+    try:
+        return small.stat().st_mtime >= full.stat().st_mtime
+    except OSError:
+        return False
 
 
 def forecast_stamps(data_dir: Path, run_cycle: str) -> dict[str, ForecastStamp]:

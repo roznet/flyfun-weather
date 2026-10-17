@@ -321,36 +321,43 @@ actor BriefingCacheStore {
         return out
     }
 
-    /// Mark-and-sweep: delete every cached chart whose path is not in
-    /// `referenced`, then empty directories. Returns the number of files removed.
+    /// Mark-and-sweep then size cap, from one walk of the charts directory:
+    /// delete every chart whose path is not in `referenced` (skipped when
+    /// `referenced` is nil), then the least-recently-read ones until the rest
+    /// fits `maxBytes`. Returns the files removed by each step.
     @discardableResult
-    func sweepCharts(keeping referenced: Set<String>) -> Int {
-        var removed = 0
-        for chart in cachedCharts() where !referenced.contains(chart.path) {
-            if let url = chartFileURL(cachePath: chart.path), (try? FileManager.default.removeItem(at: url)) != nil {
-                removed += 1
+    func pruneCharts(
+        keeping referenced: Set<String>?,
+        maxBytes: Int64 = BriefingCacheStore.chartCacheMaxBytes
+    ) -> (swept: Int, capped: Int) {
+        func remove(_ path: String) -> Bool {
+            guard let url = chartFileURL(cachePath: path) else { return false }
+            return (try? FileManager.default.removeItem(at: url)) != nil
+        }
+        var remaining: [(path: String, bytes: Int64, lastUsed: Date)] = []
+        var swept = 0
+        for chart in cachedCharts() {
+            if let referenced, !referenced.contains(chart.path) {
+                if remove(chart.path) { swept += 1; continue }
+            }
+            remaining.append(chart)
+        }
+        var total = remaining.reduce(Int64(0)) { $0 + $1.bytes }
+        var capped = 0
+        for chart in remaining.sorted(by: { $0.lastUsed < $1.lastUsed }) where total > maxBytes {
+            if remove(chart.path) {
+                total -= chart.bytes
+                capped += 1
             }
         }
-        removeEmptyChartDirectories()
-        return removed
+        if swept > 0 || capped > 0 { removeEmptyChartDirectories() }
+        return (swept, capped)
     }
 
-    /// Size backstop: delete least-recently-read charts until the cache fits
-    /// `maxBytes`. Returns the number of files removed.
+    /// Size backstop alone: `pruneCharts` without the sweep.
     @discardableResult
     func enforceChartSizeCap(maxBytes: Int64 = BriefingCacheStore.chartCacheMaxBytes) -> Int {
-        let charts = cachedCharts().sorted { $0.lastUsed < $1.lastUsed }
-        var total = charts.reduce(Int64(0)) { $0 + $1.bytes }
-        var removed = 0
-        for chart in charts where total > maxBytes {
-            guard let url = chartFileURL(cachePath: chart.path) else { continue }
-            if (try? FileManager.default.removeItem(at: url)) != nil {
-                total -= chart.bytes
-                removed += 1
-            }
-        }
-        if removed > 0 { removeEmptyChartDirectories() }
-        return removed
+        pruneCharts(keeping: nil, maxBytes: maxBytes).capped
     }
 
     func chartCacheSize() -> Int64 {

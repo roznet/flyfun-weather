@@ -31,6 +31,11 @@ private func makeChart(
     return try JSONDecoder.weatherBrief.decode(PackChart.self, from: Data(json.utf8))
 }
 
+/// Bytes that pass `PackChart.looksLikeImage` (a PNG signature + payload).
+private func pngBytes(_ tag: String) -> Data {
+    Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(tag.utf8)
+}
+
 /// A pack meta carrying a one-source charts manifest that lists `cacheKeys`.
 private func packMetaJSON(flightId: String, timestamp: String, cacheKeys: [String]) -> Data {
     let charts = cacheKeys.enumerated().map { i, key in
@@ -77,7 +82,7 @@ private func packMetaJSON(flightId: String, timestamp: String, cacheKeys: [Strin
         let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
         let store = BriefingCacheStore(cacheDir: dir)
         let online = MockBriefingRepository()
-        let bytes = Data("chart-bytes".utf8)
+        let bytes = pngBytes("chart-bytes")
         online.chartImageHandler = { _ in bytes }
         let repo = CachingBriefingRepository.makeForTesting(online: online, cache: store)
 
@@ -103,6 +108,35 @@ private func packMetaJSON(flightId: String, timestamp: String, cacheKeys: [Strin
         let chart = try makeChart()
         await #expect(throws: APIError.self) { try await repo.chartImage(chart) }
         #expect(await store.hasChart(cachePath: chart.cachePath) == false)
+    }
+
+    /// An error page behind a 200 must not be written under the immutable key.
+    @Test func nonImageResponseIsNotCached() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let online = MockBriefingRepository()
+        online.chartImageHandler = { _ in Data("<html>proxy error</html>".utf8) }
+        let repo = CachingBriefingRepository.makeForTesting(online: online, cache: store)
+
+        let chart = try makeChart()
+        await #expect(throws: APIError.self) { try await repo.chartImage(chart) }
+        #expect(await store.hasChart(cachePath: chart.cachePath) == false)
+        #expect(PackChart.looksLikeImage(Data("GIF89a…".utf8)))
+    }
+
+    /// Missing flags default instead of failing the whole pack-meta decode.
+    @Test func manifestWithMissingFlagsStillDecodes() throws {
+        let json = """
+        {"sources": [{"source": "dwd", "label": "DWD", "attribution": "DWD", "default_chart_id": "ana",
+          "overlay_url": "/o", "charts": [{"chart_id": "ana", "label": "Analysis",
+          "url": "/x", "cache_key": "dwd/c/ana", "file_ext": "png"}]}]}
+        """
+        let manifest = try JSONDecoder.weatherBrief.decode(PackChartsManifest.self, from: Data(json.utf8))
+        let chart = try #require(manifest.sources.first?.charts.first)
+        #expect(manifest.inCoverage == false)
+        #expect(chart.available)
+        #expect(chart.prefetch == false)
+        #expect(chart.caption == "")
     }
 
     @Test func cachePathsThatEscapeTheCacheAreRefused() async throws {
@@ -148,6 +182,25 @@ private func packMetaJSON(flightId: String, timestamp: String, cacheKeys: [Strin
         // The emptied run-cycle directory goes too, and is never mistaken for a flight.
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("charts/dwd/2026-05-06T06Z").path))
         #expect(await store.flightDirectoryIDs().contains(BriefingCacheStore.chartsDirName) == false)
+    }
+
+    /// A pack meta that won't decode can't say what it needs: keep everything
+    /// rather than sweep that pack's charts away.
+    @Test func undecodableSidecarSkipsTheSweep() async throws {
+        let dir = makeTempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BriefingCacheStore(cacheDir: dir)
+        let repo = CachingBriefingRepository.makeForCacheTesting(cache: store)
+
+        let orphan = "dwd/2026-05-06T06Z/048-A"
+        try await store.writeChart(Data(orphan.utf8), cachePath: "\(orphan).png")
+        let soon = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
+        try await store.writeFlightMetadata(Data("{\"not\": \"a pack\"}".utf8),
+                                            flightId: "f3", name: "latest-pack")
+        await repo.cacheFlightData(makeFlight(id: "f3", departureTime: soon))
+
+        await repo.pruneStalePacks(olderThanDays: 7)
+
+        #expect(await store.hasChart(cachePath: "\(orphan).png"))
     }
 
     @Test func sizeCapEvictsLeastRecentlyRead() async throws {
