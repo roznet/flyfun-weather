@@ -442,6 +442,48 @@ def _coarse_stretches(bins: set[float], route_nm: float, flown: float, locator=N
 _CELL_BANDS = ((3, "within 3 NM of the track"), (10, "within 10 NM of the track"))
 
 
+def _coarse_place(place: dict | None) -> str | None:
+    """A cell's place at anchor level, without its distances (#790): "over the
+    sea after coast-out (Middelburg)", "near Middelburg (EHMZ)", "before
+    Oostende (EBOS)". Gated, so it must hold while the cell drifts within the
+    stretch: the NM from the anchor would move every frame, the anchor (kept
+    by the locator's hysteresis) does not."""
+    if not place:
+        return None
+    rel = place.get("relation")
+    kind = place.get("anchor_kind")
+    icao, town = place.get("anchor_icao"), place.get("anchor_name")
+    if kind in ("coast_out", "coast_in"):
+        word = "coast-out" if kind == "coast_out" else "coast-in"
+        label = f"{word} ({town})" if town else word
+    elif town and icao and town.upper() != icao.upper():
+        label = f"{town} ({icao})"
+    else:
+        label = icao or place.get("anchor")
+    if rel == "mid_crossing":
+        return "over the sea, mid-crossing"
+    if rel == "between":
+        return place.get("text")  # "between A and B": no figure in it
+    if rel == "off_departure":
+        return "around the departure"
+    if rel == "past_destination":
+        return "beyond the destination"
+    if not label:
+        return None
+    if rel == "over_sea":
+        return f"over the sea {'after' if kind == 'coast_out' else 'before'} {label}"
+    if rel == "abeam" and place.get("distance_nm") is not None and abs(place["distance_nm"]) > 5:
+        return f"{'after' if place['distance_nm'] > 0 else 'before'} abeam {label}"
+    if rel in ("near", "abeam", "before", "after"):
+        return f"{rel} {label}"
+    return None
+
+
+def _with_place(words: str, storm: dict | None) -> str:
+    where = _coarse_place((storm or {}).get("place"))
+    return f"{words}, {where}" if where else words
+
+
 def _cells_ahead(st: dict) -> str | dict:
     """Radar cells ahead as flags (#706 item 4).
 
@@ -450,23 +492,31 @@ def _cells_ahead(st: dict) -> str | dict:
     either (item 5): a kept highlight quoting "42 dBZ at 102 NM" would go
     stale silently. What is left is what a pilot acts on: how close the
     nearest one is, whether any has lightning, whether one near the track is
-    closing on it.
+    closing on it — and, since #790, *where* each flagged cell is, at anchor
+    level only (:func:`_coarse_place`: "over the sea after coast-out
+    (Middelburg)", never its NM), so the words hold while it drifts and a
+    move to another anchor regenerates.
     """
+    def off(s: dict) -> float:
+        return s["offtrack_nm"] if s.get("offtrack_nm") is not None else 99
+
     corridor = _f(st.get("corridor_nm") or 30)
     ahead = [s for s in st.get("storms") or [] if s.get("ahead")]
     if not ahead:
         return f"none within {corridor} NM of the track"
-    nearest = min((s.get("offtrack_nm") if s.get("offtrack_nm") is not None else 99) for s in ahead)
-    band = next((words for limit, words in _CELL_BANDS if nearest <= limit), f"within {corridor} NM of the track")
-    out: dict = {"nearest": band}
+    nearest = min(ahead, key=off)
+    band = next((words for limit, words in _CELL_BANDS if off(nearest) <= limit), f"within {corridor} NM of the track")
+    out: dict = {"nearest": _with_place(band, nearest)}
     if any(s.get("flashes") for s in ahead):
         # Only present when true: ``check_grounding`` reads this key as the
         # licence for "thunderstorm".
         out["lightning_flashes"] = "in at least one cell"
-    if any(s.get("relative_motion") == "closing" and (s["offtrack_nm"] if s.get("offtrack_nm") is not None else 99) <= 10 for s in ahead):
-        out["closing_on_track"] = "at least one cell within 10 NM"
-    if any(s.get("trend") == "developing" and (s["offtrack_nm"] if s.get("offtrack_nm") is not None else 99) <= 10 for s in ahead):
-        out["developing"] = "at least one cell within 10 NM"
+    closing = [s for s in ahead if s.get("relative_motion") == "closing" and off(s) <= 10]
+    if closing:
+        out["closing_on_track"] = _with_place("at least one cell within 10 NM", min(closing, key=off))
+    developing = [s for s in ahead if s.get("trend") == "developing" and off(s) <= 10]
+    if developing:
+        out["developing"] = _with_place("at least one cell within 10 NM", min(developing, key=off))
     return out
 
 

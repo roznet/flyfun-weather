@@ -922,7 +922,7 @@ What the gate holds, and so what the facts show:
 | Route airports | every notable one ahead, **uncapped**, by ICAO | passing one (`along < flown − 5`); the next sliding into the 12 cap |
 | SIGMETs | exactly, **id included** (the highlight quotes ids, a reissue must regenerate) | — |
 | Rain on track | stretches on a **25 NM** grid; 10 NM coverage as a band none / < 25 / < 50 / ≥ 50 % | edges within a bin; `main_rain_area` (shown, not gated) |
-| Cells ahead | nearest band (≤ 3 / ≤ 10 / corridor NM), any lightning, any closing ≤ 10 NM, any developing ≤ 10 NM | dBZ, along, side, abeam time, closing speed |
+| Cells ahead | nearest band (≤ 3 / ≤ 10 / corridor NM), any lightning, any closing ≤ 10 NM, any developing ≤ 10 NM; since #790 each flagged cell's place **at anchor level** ("over the sea after coast-out (Middelburg)", "near Middelburg (EHMZ)", `_coarse_place`), so moving to another anchor regenerates | dBZ, along, side, abeam time, closing speed, the NM from the anchor |
 | Change rows | METAR/TAF/SIGMET rows by identity `key|direction|to_value` | storm / radar / lightning rows (dropped: `cells_ahead` is the radar source); re-wording; improvement count |
 | Phase | before departure / en route / arrived | the flown figure |
 

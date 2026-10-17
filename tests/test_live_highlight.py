@@ -521,6 +521,44 @@ def test_a_real_cell_change_regenerates(after):
     assert _changed(_live(storms=_cells(_storm(6))), _live(storms=_cells(after))) == ["cells"]
 
 
+def _placed(off, place, **kw):
+    s = _storm(off, **kw)
+    s["place"] = place
+    return s
+
+
+_SEA = {"relation": "over_sea", "anchor": "coast_out@127", "anchor_kind": "coast_out",
+        "anchor_name": "Middelburg", "distance_nm": 16.0, "text": "over the sea, 16 NM after coast-out (Middelburg)"}
+_NEAR_EHMZ = {"relation": "near", "anchor": "EHMZ", "anchor_kind": "waypoint", "anchor_icao": "EHMZ",
+              "anchor_name": "Middelburg", "distance_nm": -2.0, "text": "near Middelburg (EHMZ)"}
+
+
+def test_cells_carry_their_anchor_level_place():
+    f = lh.facts_and_gate(_live(storms=_cells(
+        _placed(1, _SEA, motion="closing"), _placed(8, _NEAR_EHMZ, along=118))))[0]["cells_ahead"]
+    assert f["nearest"] == "within 3 NM of the track, over the sea after coast-out (Middelburg)"
+    assert f["closing_on_track"] == "at least one cell within 10 NM, over the sea after coast-out (Middelburg)"
+    assert "16 NM" not in str(f)  # never the figure
+
+
+def test_a_cell_drifting_within_its_stretch_does_not_regenerate():
+    later = dict(_SEA, distance_nm=19.0, text="over the sea, 19 NM after coast-out (Middelburg)")
+    assert _changed(_live(storms=_cells(_placed(2, _SEA))), _live(storms=_cells(_placed(2, later)))) == []
+
+
+def test_the_nearest_cell_at_another_anchor_regenerates():
+    assert _changed(_live(storms=_cells(_placed(2, _SEA))),
+                    _live(storms=_cells(_placed(2, _NEAR_EHMZ)))) == ["cells"]
+
+
+def test_coarse_place_words():
+    assert lh._coarse_place({"relation": "abeam", "anchor_icao": "LEAL", "anchor_name": "Alicante",
+                             "distance_nm": -8.0}) == "before abeam Alicante (LEAL)"
+    assert lh._coarse_place({"relation": "mid_crossing"}) == "over the sea, mid-crossing"
+    assert lh._coarse_place({"relation": "off_departure", "anchor_icao": "EDLD"}) == "around the departure"
+    assert lh._coarse_place(None) is None
+
+
 def test_a_cell_exactly_on_track_counts_as_closing():
     """``offtrack_nm == 0`` is on the track, not unknown."""
     assert _gate(_live(storms=_cells(_storm(0, motion="closing"))))["cells"]["closing_on_track"]
