@@ -60,8 +60,9 @@ def metar_cloud_fields(
 ) -> dict[str, object] | None:
     """The three cloud columns for one raw METAR, or None if it cannot be parsed.
 
-    ``reference`` only helps the parser resolve the report's date (unused here)
-    and keeps it from warning on old reports; pass the observation time.
+    ``reference`` is the observation time. Only the parser uses it, to resolve
+    the report's day-of-month without warning on old reports; the date itself is
+    not part of the result.
     """
     from euro_aip.briefing.weather.parser import WeatherParser
 
@@ -72,8 +73,11 @@ def metar_cloud_fields(
 
     if not raw or not raw.strip():
         return None
+    # Everything below reads the observed part only. The parser drops trend and
+    # remark groups itself today; cutting first makes that true by construction.
+    observed = metar_observed_part(raw)
     try:
-        report = WeatherParser.parse_metar(raw, reference=reference)
+        report = WeatherParser.parse_metar(observed, reference=reference)
     except Exception:
         logger.debug("METAR parse failed: %s", raw[:80], exc_info=True)
         return None
@@ -86,7 +90,7 @@ def metar_cloud_fields(
         if amount not in _CLOUD_AMOUNTS:
             continue
         layers.append({"amount": amount, "base_ft": c.get("height"), "type": c.get("type")})
-    vv = _VV_RE.search(metar_observed_part(raw))
+    vv = _VV_RE.search(observed)
     if vv is not None:
         height = vv.group(1)
         layers.append({
@@ -99,7 +103,7 @@ def metar_cloud_fields(
         int(layer["base_ft"]) for layer in layers
         if layer["amount"] in _CLOUD_AMOUNTS and layer["base_ft"] is not None
     ]
-    types = observed_cloud_types(raw)
+    types = observed_cloud_types(observed)
     convective = "CB" if "CB" in types else ("TCU" if "TCU" in types else None)
     return {
         "cloud_layers": json.dumps(layers, separators=(",", ":")),

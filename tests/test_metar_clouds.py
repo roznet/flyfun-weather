@@ -54,6 +54,14 @@ class TestMetarCloudFields:
         assert _layers(f) == [{"amount": "SCT", "base_ft": 3000, "type": None}]
         assert f["convective_cloud"] is None
 
+    @pytest.mark.parametrize("tail", [
+        "TEMPO BKN008", "BECMG FEW005", "RMK BKN006", "NOSIG RMK OVC004 VV002",
+    ])
+    def test_trend_and_remark_groups_never_lower_the_base(self, tail):
+        f = metar_cloud_fields(f"METAR ZZAA 171220Z 24010KT 9999 SCT030 12/08 Q1012 {tail}")
+        assert _layers(f) == [{"amount": "SCT", "base_ft": 3000, "type": None}]
+        assert f["lowest_cloud_base_ft"] == 3000
+
     def test_cb_outranks_tcu(self):
         f = metar_cloud_fields(
             "METAR ZZAA 171220Z 24010KT 9999 FEW030TCU SCT045CB 12/08 Q1012"

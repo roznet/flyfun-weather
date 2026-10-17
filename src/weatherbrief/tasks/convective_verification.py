@@ -83,6 +83,8 @@ def pairs_sql(
             f"FROM read_parquet({_sql_str(_glob(observed_root, source))}, union_by_name=true)"
         )
 
+    # `radius_nm = x` is an exact match on purpose: the archiver writes the fixed
+    # disc radii (observed.sampler.DEFAULT_RADII_NM, 5/10/20), so x must be one.
     hour_of = "date_trunc('hour', frame_valid_time + INTERVAL 30 MINUTE)"
     # Cloud tops are context, not part of the verdict: an archive without
     # CTTH files (it is the one source a missed tick loses) still scores.
