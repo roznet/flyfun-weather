@@ -30,15 +30,32 @@ private func storm(
     endIcao: String = "null",
     endBearing: String = "null",
     peakDbz: String = "47.0",
-    flashes: String = "null"
+    flashes: String = "null",
+    offtrackNm: String = "25.0",
+    place: String = "null"
 ) throws -> LiveStorm {
     try decode(LiveStorm.self, """
     {"id": "c1", "cell_ids": ["c1"], "lat": 50.0, "lon": 0.0, "peak_dbz": \(peakDbz),
-     "along_nm": 60.0, "offtrack_nm": 25.0, "cross_nm": -25.0, "side": \(side),
+     "along_nm": 60.0, "offtrack_nm": \(offtrackNm), "cross_nm": -25.0, "side": \(side),
      "end": \(end), "end_icao": \(endIcao), "end_bearing": \(endBearing),
-     "flashes": \(flashes),
+     "flashes": \(flashes), "place": \(place),
      "relative_motion": "\(relativeMotion)", "closing_kt": \(closingKt)}
     """)
+}
+
+/// #790 — the server's route locator words (the web's `place()` helper);
+/// fictional towns and ZZ ICAOs.
+private func place(
+    text: String = "10 NM before Zedburg (ZZAB)",
+    short: String = "10 NM before ZZAB",
+    lateral: String = "\", 6 NM left of track\"",
+    relation: String = "before"
+) -> String {
+    """
+    {"text": "\(text)", "short": "\(short)", "lateral": \(lateral), "relation": "\(relation)",
+     "anchor": "ZZAB", "anchor_kind": "station", "anchor_icao": "ZZAB", "anchor_name": "Zedburg",
+     "distance_nm": -10.0, "along_nm": 60.0, "cross_nm": -6.0, "side": "left"}
+    """
 }
 
 private func segment(status: String, dbz: String = "null") throws -> LiveRibbonSegment {
@@ -149,6 +166,49 @@ private func band(tier: String = "core", peakDbz: String = "47.0") throws -> Rib
         #expect(RouteRibbonRules.stormPositionText(
             try storm(end: "\"departure\"", endIcao: "\"LPPR\"", endBearing: "\"NE\"")
         ) == "25 NM NE of LPPR")
+    }
+
+    @Test func placesACellByTheServersPlaceWhenTheLayerCarriesOne() throws {
+        let p = place(lateral: "null")
+        #expect(RouteRibbonRules.stormPositionText(try storm(place: p))
+                == "25 NM left of track, 10 NM before Zedburg (ZZAB)")
+        #expect(RouteRibbonRules.stormPositionText(try storm(place: p), form: .short)
+                == "25 NM left of track, 10 NM before ZZAB")
+        #expect(RouteRibbonRules.stormPositionText(try storm(side: "null", place: p))
+                == "on track, 10 NM before Zedburg (ZZAB)")
+        #expect(RouteRibbonRules.stormPositionText(try storm(offtrackNm: "0.4", place: p), form: .short)
+                == "on track, 10 NM before ZZAB")
+        let off = place(text: "29 NM east of departure", short: "29 NM east of departure",
+                        lateral: "null", relation: "off_departure")
+        #expect(RouteRibbonRules.stormPositionText(
+            try storm(end: "\"departure\"", endIcao: "\"ZZDP\"", place: off)
+        ) == "29 NM east of departure")
+        // The ribbon's own label takes the ICAO-only wording.
+        #expect(RouteRibbonRules.stormLabel(try storm(place: p))
+                == "Cell 47 dBZ, 25 NM left of track, 10 NM before ZZAB, moving away 15 kt")
+    }
+
+    @Test func placesAnEnRouteStationByTheServersPlaceAndItsLateral() throws {
+        func st(cross: Double, place p: String) throws -> RibbonStation {
+            try decode(RibbonStation.self, """
+            {"icao": "ZZCD", "role": "route", "metar_category": "VFR", "cross_nm": \(cross),
+             "along_nm": 60.0, "place": \(p)}
+            """)
+        }
+        let full = try st(cross: -6, place: place())
+        #expect(RouteRibbonRules.stationLabel(full) == "ZZCD VFR 10 NM before ZZAB, 6 NM left of track")
+        #expect(RouteRibbonRules.stationPositionText(full, form: .text, withAlong: true)
+                == "10 NM before Zedburg (ZZAB), 6 NM left of track")
+        // Under 3 NM the server sends no lateral; within 1 NM it is on the track.
+        #expect(RouteRibbonRules.stationPositionText(try st(cross: 0.4, place: place(lateral: "null")), form: .short)
+                == "10 NM before ZZAB, on track")
+        #expect(RouteRibbonRules.stationPositionText(try st(cross: 2, place: place(lateral: "null")), form: .short)
+                == "10 NM before ZZAB")
+        // Pre-#790 layer: the old wording, the ends say nothing.
+        #expect(RouteRibbonRules.stationPositionText(try st(cross: -6, place: "null"), form: .text, withAlong: true)
+                == "6 NM left of course at 60 NM")
+        let dep = try decode(RibbonStation.self, #"{"icao": "ZZDP", "role": "departure", "cross_nm": 0}"#)
+        #expect(RouteRibbonRules.stationPositionText(dep, form: .text) == nil)
     }
 
     @Test func statesObservedMotionAndSaysSoWhenThereIsNone() throws {

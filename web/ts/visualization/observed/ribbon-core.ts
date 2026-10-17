@@ -43,6 +43,7 @@ import type {
   LiveRibbonSegment,
   LiveStorm,
   RibbonSigmet,
+  RoutePlace,
   RibbonStation,
   RibbonWeather,
 } from '../../store/types';
@@ -193,15 +194,47 @@ export function stationLabel(st: RibbonStation): string {
   if (st.taf_temporary_type && st.taf_temporary_category) {
     parts.push(`${st.taf_temporary_type} ${st.taf_temporary_category}`);
   }
-  if (st.cross_nm != null && (st.role === 'route' || st.role === 'alternate')) {
-    parts.push(`${roundHalfAway(Math.abs(st.cross_nm))} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`);
-  }
+  const where = stationPositionText(st, 'short');
+  if (where) parts.push(where);
   return parts.join(' ');
+}
+
+/** Which of a `RoutePlace`'s two wordings a surface shows: `short` (ICAO
+ *  only) on the ribbon's own labels, `text` (with the town) on the hover
+ *  tooltip / iOS inspector card and the cell detail. */
+export type PlaceForm = 'text' | 'short';
+
+/** The place's words in `form`; null when absent or empty, so the caller
+ *  falls back to the pre-#790 wording. */
+function placeWords(place: RoutePlace | null | undefined, form: PlaceForm): string | null {
+  if (!place) return null;
+  return (form === 'short' ? place.short : place.text) || null;
+}
+
+/** Where an en-route / alternate airport is: the server's place (#790) plus
+ *  its lateral offset ("10 NM before ZZAB, 6 NM left of track"; ", on track"
+ *  within 1 NM of the line), else the pre-#790 "4 NM left of course" with
+ *  `at N NM` when `withAlong`. `null` for the route's ends or without a
+ *  position. */
+export function stationPositionText(
+  st: RibbonStation,
+  form: PlaceForm,
+  withAlong = false,
+): string | null {
+  const words = placeWords(st.place, form);
+  if (st.place && words) {
+    let lateral = st.place.lateral ?? '';
+    if (!lateral && st.cross_nm != null && Math.abs(st.cross_nm) < 1) lateral = ', on track';
+    return words + lateral;
+  }
+  if (st.cross_nm == null || (st.role !== 'route' && st.role !== 'alternate')) return null;
+  return `${roundHalfAway(Math.abs(st.cross_nm))} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`
+    + (withAlong && st.along_nm != null ? ` at ${roundHalfAway(st.along_nm)} NM` : '');
 }
 
 export function stormLabel(storm: LiveStorm): string {
   const parts = [`Cell ${roundHalfAway(storm.peak_dbz ?? 0)} dBZ`];
-  parts.push(stormPositionText(storm));
+  parts.push(stormPositionText(storm, 'short'));
   parts.push(stormMotionText(storm));
   if (storm.flashes != null && storm.flashes > 0) {
     parts.push(storm.flashes === 1 ? '1 flash' : `${storm.flashes} flashes`);
@@ -227,10 +260,19 @@ export function relativeMotionText(deg: number): string {
   return deg > 0 ? 'drifting toward the right of course' : 'drifting toward the left of course';
 }
 
-/** "8 NM right of track at 85 NM", or from the airport past the route's ends
- *  — the server's `storm_position_text`. */
-export function stormPositionText(storm: LiveStorm): string {
+/** "8 NM right of track, 10 NM before Middelburg (ZZAB)" from the server's
+ *  place (#790; `form` picks its full or ICAO-only wording), or from the
+ *  airport past the route's ends — the server's `storm_position_text`.
+ *  Without a place (a pre-#790 layer), the legacy "… at 85 NM". */
+export function stormPositionText(storm: LiveStorm, form: PlaceForm = 'text'): string {
   const off = `${roundHalfAway(storm.offtrack_nm ?? 0)} NM`;
+  const place = storm.place;
+  const words = placeWords(place, form);
+  if (place && words) {
+    if (place.relation === 'off_departure' || place.relation === 'past_destination') return words;
+    if (!storm.side || (storm.offtrack_nm ?? 0) < 1) return `on track, ${words}`;
+    return `${off} ${storm.side} of track, ${words}`;
+  }
   if (storm.end != null) {
     const place = storm.end_icao ?? storm.end ?? '';
     return [off, storm.end_bearing, 'of', place].filter(Boolean).join(' ');
@@ -387,7 +429,9 @@ export function stormTargets(
 }
 
 /** Departure / destination sit on the line's ends; the others in the row on
- *  their side of the course. `null` without a position. */
+ *  their side of the course. `null` without a position. An airport behind
+ *  the departure (negative `along_nm`, #790) or past the destination sits
+ *  over that end, as `xForNm` clamps — like a storm past the route's end. */
 export function stationPoint(
   st: RibbonStation,
   ribbon: LiveRibbon,

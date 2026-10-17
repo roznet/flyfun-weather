@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   ARROW_MIN_GAP,
   INSET,
+  LEFT_ROW_Y,
+  RIGHT_ROW_Y,
   TRACK_Y,
   ZONE_BOTTOM,
   ZONE_TOP,
@@ -22,6 +24,9 @@ import {
   STORM_HIT_RADIUS,
   stationLabel,
   stationMarkSize,
+  stationPoint,
+  stationPositionText,
+  stormLabel,
   stormMarkSize,
   stormMotionText,
   stormPositionText,
@@ -37,6 +42,7 @@ import type {
   LiveStorm,
   RibbonStation,
   RibbonWeather,
+  RoutePlace,
 } from '../../ts/store/types';
 
 const WIDTH = 520;
@@ -46,6 +52,16 @@ function storm(over: Partial<LiveStorm> = {}): LiveStorm {
     id: 'c1', cell_ids: ['c1'], lat: 50, lon: 0, peak_dbz: 47,
     along_nm: 60, offtrack_nm: 25, cross_nm: -25, side: 'left',
     relative_motion: 'moving_away', closing_kt: -15, ...over,
+  };
+}
+
+// #790 — the server's route locator words; fictional towns and ZZ ICAOs.
+function place(over: Partial<RoutePlace> = {}): RoutePlace {
+  return {
+    text: '10 NM before Zedburg (ZZAB)', short: '10 NM before ZZAB',
+    lateral: ', 6 NM left of track', relation: 'before',
+    anchor: 'ZZAB', anchor_kind: 'station', anchor_icao: 'ZZAB', anchor_name: 'Zedburg',
+    distance_nm: -10, along_nm: 60, cross_nm: -6, side: 'left', ...over,
   };
 }
 
@@ -206,6 +222,45 @@ describe('words', () => {
       .toBe('25 NM NE of LPPR');
   });
 
+  it('places a cell by the server\'s place when the layer carries one (#790)', () => {
+    const p = place({ lateral: null });
+    expect(stormPositionText(storm({ place: p })))
+      .toBe('25 NM left of track, 10 NM before Zedburg (ZZAB)');
+    expect(stormPositionText(storm({ place: p }), 'short'))
+      .toBe('25 NM left of track, 10 NM before ZZAB');
+    expect(stormPositionText(storm({ place: p, side: null })))
+      .toBe('on track, 10 NM before Zedburg (ZZAB)');
+    expect(stormPositionText(storm({ place: p, offtrack_nm: 0.4 }), 'short'))
+      .toBe('on track, 10 NM before ZZAB');
+    const off = place({
+      text: '29 NM east of departure', short: '29 NM east of departure',
+      relation: 'off_departure', lateral: null,
+    });
+    expect(stormPositionText(storm({ place: off, end: 'departure', end_icao: 'ZZDP' })))
+      .toBe('29 NM east of departure');
+    // The ribbon's own label takes the ICAO-only wording.
+    expect(stormLabel(storm({ place: p })))
+      .toBe('Cell 47 dBZ, 25 NM left of track, 10 NM before ZZAB, moving away 15 kt');
+  });
+
+  it('places an en-route station by the server\'s place and its lateral (#790)', () => {
+    const st: RibbonStation = {
+      icao: 'ZZCD', role: 'route', metar_category: 'VFR', cross_nm: -6, along_nm: 60,
+      place: place(),
+    };
+    expect(stationLabel(st)).toBe('ZZCD VFR 10 NM before ZZAB, 6 NM left of track');
+    expect(stationPositionText(st, 'text', true))
+      .toBe('10 NM before Zedburg (ZZAB), 6 NM left of track');
+    // Under 3 NM the server sends no lateral; within 1 NM it is on the track.
+    expect(stationPositionText({ ...st, cross_nm: 0.4, place: place({ lateral: null }) }, 'short'))
+      .toBe('10 NM before ZZAB, on track');
+    expect(stationPositionText({ ...st, cross_nm: 2, place: place({ lateral: null }) }, 'short'))
+      .toBe('10 NM before ZZAB');
+    // Pre-#790 layer: the old wording, the ends say nothing.
+    expect(stationPositionText({ ...st, place: null }, 'text', true)).toBe('6 NM left of course at 60 NM');
+    expect(stationPositionText({ icao: 'ZZDP', role: 'departure', cross_nm: 0 }, 'text')).toBeNull();
+  });
+
   it('states observed motion, and says so when there is none', () => {
     expect(stormMotionText(storm())).toBe('moving away 15 kt');
     expect(stormMotionText(storm({ relative_motion: 'closing', closing_kt: 8 })))
@@ -358,6 +413,14 @@ describe('arrows', () => {
 });
 
 describe('tap targets', () => {
+  it('clamps an airport behind the departure or past the destination to that end (#790)', () => {
+    const r = ribbon({ route_nm: 100 });
+    const behind = stationPoint({ icao: 'ZZBH', role: 'route', along_nm: -29, cross_nm: -4 }, r, WIDTH);
+    expect(behind).toEqual({ x: INSET, y: LEFT_ROW_Y });
+    const past = stationPoint({ icao: 'ZZPD', role: 'alternate', along_nm: 115, cross_nm: 3 }, r, WIDTH);
+    expect(past).toEqual({ x: WIDTH - INSET, y: RIGHT_ROW_Y });
+  });
+
   it('offers one target per storm, however many bands it has', () => {
     const targets = stormTargets(
       ribbon({

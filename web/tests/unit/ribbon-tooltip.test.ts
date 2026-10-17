@@ -77,6 +77,28 @@ describe('ribbon tooltips: airports', () => {
     expect(html).not.toContain('<code>');
   });
 
+  it('positions an airport by the server\'s place, with its town (#790)', () => {
+    const html = stationTooltipHtml({
+      icao: 'ZZCD', role: 'route', metar_category: 'VFR', cross_nm: -6, along_nm: 60,
+      name: 'Zedtown',
+      place: {
+        text: '10 NM before Zedburg (ZZAB)', short: '10 NM before ZZAB',
+        lateral: ', 6 NM left of track', relation: 'before',
+      },
+    }, null);
+    expect(html).toContain('Zedtown');
+    expect(html).toContain('10 NM before Zedburg (ZZAB), 6 NM left of track');
+    expect(html).not.toContain('of course');
+    expect(html).not.toMatch(noLeak);
+  });
+
+  it('a SIGMET reads its span in pilot words when the layer has them (#790)', () => {
+    const base = { id: 'sigmet:ZZZZ|1', label: 'ZZZZ 1: EMBD TS', hazard: 'TS', from_nm: 20, to_nm: 45 };
+    expect(sigmetTooltipHtml({ ...base, span_text: 'from Zedburg (ZZAB) to Zedmouth (ZZEF)' }))
+      .toContain('from Zedburg (ZZAB) to Zedmouth (ZZEF)');
+    expect(sigmetTooltipHtml({ ...base, span_text: null })).toContain('20–45 NM');
+  });
+
   it('escapes the raw report', () => {
     const html = stationTooltipHtml(
       { icao: 'ZZAA', role: 'destination', metar_category: 'VFR' },
@@ -111,6 +133,20 @@ describe('ribbon tooltips: cells and bands', () => {
     expect(html).toContain('3 flashes');
     expect(html).toContain('FL310');
     expect(html).not.toMatch(noLeak);
+  });
+
+  it('a cell with the server\'s place reads it in full (#790)', () => {
+    const storm: LiveStorm = {
+      id: 'c1', cell_ids: ['c1'], lat: 0, lon: 0, peak_dbz: 47,
+      along_nm: 60, offtrack_nm: 8, cross_nm: -8, side: 'left',
+      place: {
+        text: 'over the sea, 16 NM after coast-out (Zedburg)', short: 'over the sea, 16 NM after coast-out',
+        lateral: ', 8 NM left of track', relation: 'over_sea',
+      },
+    };
+    const html = stormTooltipHtml(storm);
+    expect(html).toContain('8 NM left of track, over the sea, 16 NM after coast-out (Zedburg)');
+    expect(html).not.toContain('at 60 NM');
   });
 
   it('a rain band: span, side, distance, motion', () => {

@@ -182,8 +182,54 @@ nonisolated struct LiveStorm: Codable, Sendable, Identifiable {
     let backing: [String]?
     let estimate: LiveStormEstimate?
     let focus: LiveFocus?
+    /// #790: where it is in the pilot's terms; nil on a pre-#790 layer.
+    var place: RoutePlace? = nil
 
     var isClosing: Bool { relativeMotion == "closing" }
+}
+
+// MARK: - Route locator (#790)
+
+/// A route position in the pilot's terms (`analysis/route_locator.py`).
+/// Server-built so every surface words the same point the same way. `text`
+/// names the anchor in full ("10 NM before Middelburg (EHMZ)"), `short` by
+/// ICAO ("10 NM before EHMZ"); neither carries the lateral offset, which is
+/// `lateral` (", 6 NM left of track", leading comma included; nil under 3 NM).
+nonisolated struct RoutePlace: Codable, Sendable, Equatable, Hashable {
+    let text: String?
+    let short: String?
+    let lateral: String?
+    /// near / before / after / between / over_sea / mid_crossing /
+    /// off_departure / past_destination.
+    let relation: String?
+    /// The anchor's key: an ICAO, a waypoint, "coast_out@127".
+    let anchor: String?
+    /// waypoint / station / coast_out / coast_in.
+    let anchorKind: String?
+    let anchorIcao: String?
+    /// The anchor's town, when the server knows one.
+    let anchorName: String?
+    /// NM from the anchor along the route (signed: + after), or from the
+    /// route's end for off_departure / past_destination.
+    let distanceNm: Double?
+    let alongNm: Double?
+    let crossNm: Double?
+    let side: String?
+
+    /// Off the route's ends: the place says it all, no "left of track".
+    var isOffEnd: Bool { relation == "off_departure" || relation == "past_destination" }
+}
+
+/// One rung of the route locator's anchor ladder (#790). Informational.
+nonisolated struct RouteAnchor: Codable, Sendable {
+    let key: String?
+    /// waypoint / station / coast_out / coast_in.
+    let kind: String?
+    let alongNm: Double?
+    let lat: Double?
+    let lon: Double?
+    let icao: String?
+    let town: String?
 }
 
 // MARK: - Ribbon
@@ -209,6 +255,8 @@ nonisolated struct LiveRibbon: Codable, Sendable {
     let weatherStatus: String?
     let weatherCorridorNm: Double?
     let weatherBinNm: Double?
+    /// #790: the anchors the server words positions against. Informational.
+    var anchors: [RouteAnchor]? = nil
 
     var weatherAvailable: Bool { weatherStatus == "available" && weather != nil }
 }
@@ -279,6 +327,11 @@ nonisolated struct RibbonStation: Codable, Sendable, Identifiable {
     let focus: LiveFocus?
     /// #767: a departure/destination read through these proxy stations.
     let via: [String]?
+    /// #790: the airport's town ("Dortmund").
+    var name: String? = nil
+    /// #790: where it is against the route's other anchors; nil for the
+    /// departure / destination and on a pre-#790 layer.
+    var place: RoutePlace? = nil
 
     var id: String { icao }
 }
@@ -291,6 +344,9 @@ nonisolated struct RibbonSigmet: Codable, Sendable, Identifiable {
     let fromNm: Double?
     let toNm: Double?
     let minDistanceNm: Double?
+    /// #790: the stretch it covers in pilot words ("from Uden (EHVK) to
+    /// Rijen (EHGR)"); nil on a pre-#790 layer.
+    var spanText: String? = nil
     let validFrom: String?
     let validTo: String?
     let pending: Bool?

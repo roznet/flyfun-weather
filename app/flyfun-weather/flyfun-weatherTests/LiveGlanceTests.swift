@@ -128,6 +128,65 @@ private let liveJSON = """
         #expect(cached.storms?.items.first?.focus == original.storms?.items.first?.focus)
     }
 
+    /// #790: the fixture above predates the route locator, so every new
+    /// field is absent and the clients fall back to their own wording.
+    @Test func aPreLocatorLayerHasNoPlaces() throws {
+        let layer = try layer()
+        #expect(layer.ribbon?.stations?.first?.place == nil)
+        #expect(layer.ribbon?.stations?.first?.name == nil)
+        #expect(layer.ribbon?.sigmets?.first?.spanText == nil)
+        #expect(layer.ribbon?.anchors == nil)
+        #expect(layer.storms?.items.first?.place == nil)
+    }
+
+    /// #790: the locator's fields decode onto the ribbon, the storms and the
+    /// change rows, and survive the plain-JSON live cache.
+    @Test func decodesTheRouteLocatorsPlaces() throws {
+        let place = """
+        {"text": "10 NM before Zedburg (ZZAB)", "short": "10 NM before ZZAB",
+         "lateral": ", 6 NM left of track", "relation": "before", "anchor": "ZZAB",
+         "anchor_kind": "station", "anchor_icao": "ZZAB", "anchor_name": "Zedburg",
+         "distance_nm": -10.0, "along_nm": 60.0, "cross_nm": -6.0, "side": "left"}
+        """
+        let ribbon = try JSONDecoder.weatherBrief.decode(LiveRibbon.self, from: Data("""
+        {"route_nm": 100.0, "segment_nm": 10.0, "radar_radius_nm": 10.0,
+         "stations": [{"icao": "ZZCD", "role": "route", "along_nm": -29.0, "cross_nm": -6.0,
+                       "name": "Zedtown", "place": \(place)}],
+         "sigmets": [{"id": "sigmet:ZZZZ|1", "label": "ZZZZ 1: EMBD TS",
+                      "span_text": "from Zedburg (ZZAB) to Zedmouth (ZZEF)"}],
+         "anchors": [{"key": "ZZAB", "kind": "station", "along_nm": 70.0, "lat": 50.0, "lon": 1.0,
+                      "icao": "ZZAB", "town": "Zedburg"}]}
+        """.utf8))
+        let st = try #require(ribbon.stations?.first)
+        #expect(st.alongNm == -29.0)
+        #expect(st.name == "Zedtown")
+        #expect(st.place?.text == "10 NM before Zedburg (ZZAB)")
+        #expect(st.place?.short == "10 NM before ZZAB")
+        #expect(st.place?.lateral == ", 6 NM left of track")
+        #expect(st.place?.anchorKind == "station")
+        #expect(st.place?.anchorIcao == "ZZAB")
+        #expect(st.place?.distanceNm == -10.0)
+        #expect(st.place?.isOffEnd == false)
+        #expect(ribbon.sigmets?.first?.spanText == "from Zedburg (ZZAB) to Zedmouth (ZZEF)")
+        #expect(ribbon.anchors?.first?.town == "Zedburg")
+
+        let storm = try JSONDecoder.weatherBrief.decode(LiveStorm.self, from: Data("""
+        {"id": "c1", "along_nm": 60.0, "offtrack_nm": 25.0, "cross_nm": -25.0, "side": "left",
+         "place": \(place)}
+        """.utf8))
+        #expect(RouteRibbonRules.stormPositionText(storm) == "25 NM left of track, 10 NM before Zedburg (ZZAB)")
+
+        let change = try JSONDecoder.weatherBrief.decode(LiveChange.self, from: Data("""
+        {"key": "radar:route", "message": "Heavy cell 25 NM left of track, 10 NM before Zedburg (ZZAB)",
+         "place": \(place)}
+        """.utf8))
+        #expect(change.place?.relation == "before")
+
+        let cached = try JSONDecoder().decode(LiveRibbon.self, from: try JSONEncoder().encode(ribbon))
+        #expect(cached.stations?.first?.place == st.place)
+        #expect(cached.sigmets?.first?.spanText == ribbon.sigmets?.first?.spanText)
+    }
+
     @Test func olderServerWithoutTheBlocksDecodes() throws {
         let json = #"{"flight_id": "f", "pack_timestamp": "2099-06-30T06:00:00+00:00", "live_updated_at": null}"#
         let layer = try JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: Data(json.utf8))
