@@ -35,6 +35,7 @@ import {
   routeNmOf,
   segmentLabel,
   sigmetText,
+  stationPositionText,
   stormMotionText,
   stormPositionText,
   xForNm,
@@ -74,7 +75,7 @@ export function airportFor(
 
 /** An airport disc: who it is, its categories now and at ETA, the raw text. */
 export function stationTooltipHtml(st: RibbonStation, airport: AirportObservation | null): string {
-  let html = head(st.icao, airport?.name ?? null);
+  let html = head(st.icao, airport?.name ?? st.name ?? null);
   html += row('Role', ROLE_LABEL[st.role] ?? st.role);
   const metarAt = formatHhmmZ(st.metar_time ?? airport?.metar_time ?? null);
   html += row('METAR now', st.metar_category
@@ -91,11 +92,8 @@ export function stationTooltipHtml(st: RibbonStation, airport: AirportObservatio
     html += row('ETA', eta);
   }
   if ((st.taf_weather ?? []).length > 0) html += row('TAF weather', (st.taf_weather ?? []).join(' '));
-  if (st.cross_nm != null && (st.role === 'route' || st.role === 'alternate')) {
-    const off = roundHalfAway(Math.abs(st.cross_nm));
-    html += row('Position', `${off} NM ${st.cross_nm < 0 ? 'left' : 'right'} of course`
-      + (st.along_nm != null ? ` at ${roundHalfAway(st.along_nm)} NM` : ''));
-  }
+  const where = stationPositionText(st, 'text', true);
+  if (where) html += row('Position', where);
   // Without a joined airport the raw text is unknown, not absent: say
   // nothing rather than "no report" beside the station's own METAR category.
   if (airport) {
@@ -155,7 +153,9 @@ export function bandTooltipHtml(band: RibbonWeather): string {
 export function sigmetTooltipHtml(s: RibbonSigmet): string {
   let html = head(sigmetText(s), s.new ? 'new' : null);
   if (s.label) html += row('SIGMET', s.label);
-  if (s.from_nm != null && s.to_nm != null) {
+  if (s.span_text) {
+    html += row('Along route', s.span_text);
+  } else if (s.from_nm != null && s.to_nm != null) {
     html += row('Along route', `${roundHalfAway(s.from_nm)}–${roundHalfAway(s.to_nm)} NM`);
   }
   const from = formatHhmmZ(s.valid_from ?? null);

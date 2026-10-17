@@ -162,7 +162,7 @@ enum RouteRibbonInspectorRules {
 
     /// An airport disc: who it is, its categories now and at ETA, the raw text.
     static func stationContent(_ st: RibbonStation, airport: AirportObservation?) -> RibbonCardContent {
-        var c = RibbonCardContent(title: st.icao, subtitle: airport?.name)
+        var c = RibbonCardContent(title: st.icao, subtitle: airport?.name ?? st.name)
         let role = st.role.map { roleLabels[$0] ?? $0 } ?? ""
         if !role.isEmpty { c.rows.append(.init(label: "Role", value: role)) }
         let metarAt = hhmmZ(st.metarTime ?? airport?.metarTime)
@@ -187,10 +187,8 @@ enum RouteRibbonInspectorRules {
         if let weather = st.tafWeather, !weather.isEmpty {
             c.rows.append(.init(label: "TAF weather", value: weather.joined(separator: " ")))
         }
-        if let cross = st.crossNm, st.role == "route" || st.role == "alternate" {
-            let at = st.alongNm.map { " at \(nm($0)) NM" } ?? ""
-            c.rows.append(.init(label: "Position",
-                                value: "\(nm(abs(cross))) NM \(cross < 0 ? "left" : "right") of course\(at)"))
+        if let position = R.stationPositionText(st, form: .text, withAlong: true) {
+            c.rows.append(.init(label: "Position", value: position))
         }
         // Without a joined airport the raw text is unknown, not absent: say
         // nothing rather than "no report" beside the station's own category.
@@ -261,7 +259,9 @@ enum RouteRibbonInspectorRules {
     static func sigmetContent(_ s: RibbonSigmet) -> RibbonCardContent {
         var c = RibbonCardContent(title: R.sigmetText(s), subtitle: s.new == true ? "new" : nil)
         if let label = s.label, !label.isEmpty { c.rows.append(.init(label: "SIGMET", value: label)) }
-        if let lo = s.fromNm, let hi = s.toNm {
+        if let span = s.spanText, !span.isEmpty {
+            c.rows.append(.init(label: "Along route", value: span))
+        } else if let lo = s.fromNm, let hi = s.toNm {
             c.rows.append(.init(label: "Along route", value: "\(nm(lo))–\(nm(hi)) NM"))
         }
         let from = hhmmZ(s.validFrom), to = hhmmZ(s.validTo)

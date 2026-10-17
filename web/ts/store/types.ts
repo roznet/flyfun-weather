@@ -1127,6 +1127,9 @@ export interface LiveChange {
   /** #682: on a SIGMET reissue row, the SIGMET it replaces ("LFMM T01"). The
    *  key is then "<chain's first SIGMET>+<this SIGMET>". Display only. */
   replaces?: string | null;
+  /** #790: where the change sits on the route, when it has a position
+   *  (`message` already carries the words). Display only. */
+  place?: RoutePlace | null;
 }
 
 /** One period a change was on screen; `end` null while it still is. */
@@ -1224,6 +1227,43 @@ export interface StormEstimate {
   horizon_min: number;
 }
 
+/** A route position in the pilot's terms (#790, server
+ *  `analysis/route_locator.py`). Server-built so every surface words the same
+ *  point the same way. `text` names the anchor in full ("10 NM before
+ *  Middelburg (EHMZ)"), `short` by ICAO ("10 NM before EHMZ"); neither
+ *  carries the lateral offset, which is `lateral` (", 6 NM left of track",
+ *  leading comma included; null under 3 NM). */
+export interface RoutePlace {
+  text: string;
+  short: string;
+  lateral?: string | null;
+  relation: 'near' | 'before' | 'after' | 'between' | 'over_sea' | 'mid_crossing'
+    | 'off_departure' | 'past_destination';
+  /** The anchor's key: an ICAO, a waypoint, "coast_out@127". */
+  anchor?: string | null;
+  anchor_kind?: 'waypoint' | 'station' | 'coast_out' | 'coast_in' | null;
+  anchor_icao?: string | null;
+  /** The anchor's town, when the server knows one. */
+  anchor_name?: string | null;
+  /** NM from the anchor along the route (signed: + after), or from the
+   *  route's end for off_departure / past_destination. */
+  distance_nm?: number | null;
+  along_nm?: number | null;
+  cross_nm?: number | null;
+  side?: 'left' | 'right' | null;
+}
+
+/** One rung of the route locator's anchor ladder (#790). Informational. */
+export interface RouteAnchor {
+  key: string;
+  kind: 'waypoint' | 'station' | 'coast_out' | 'coast_in';
+  along_nm: number;
+  lat: number;
+  lon: number;
+  icao?: string | null;
+  town?: string | null;
+}
+
 /** One radar storm against the route (#688): a core35 cell with the core41s
  *  inside it, or a core41 on its own. Everything but `estimate` is an
  *  observation of the newest cell frame. */
@@ -1265,6 +1305,8 @@ export interface LiveStorm {
   backing?: string[];
   estimate?: StormEstimate | null;
   focus?: LiveFocus | null;
+  /** #790: where it is in the pilot's terms; null on a pre-#790 layer. */
+  place?: RoutePlace | null;
 }
 
 /** The radar storms near the route at the newest cell frame (#688). `status`
@@ -1355,6 +1397,8 @@ export interface LiveRibbonSegment {
 export interface RibbonStation {
   icao: string;
   role: 'departure' | 'destination' | 'alternate' | 'route';
+  /** Since #790 negative for an airport behind the departure and past
+   *  `route_nm` for one beyond the destination; the drawing clamps it. */
   along_nm?: number | null;
   /** Signed: + right of track, − left (null without a position). */
   cross_nm?: number | null;
@@ -1371,6 +1415,11 @@ export interface RibbonStation {
   focus?: LiveFocus | null;
   /** #767 — a departure/destination read through these proxy stations. */
   via?: string[] | null;
+  /** #790: the airport's town ("Dortmund"). */
+  name?: string | null;
+  /** #790: where it is against the route's other anchors; null for the
+   *  departure / destination and on a pre-#790 layer. */
+  place?: RoutePlace | null;
 }
 
 /** A route SIGMET on the SIGMET band. */
@@ -1384,6 +1433,9 @@ export interface RibbonSigmet {
   to_nm?: number | null;
   /** Closest distance to the route when it does not cross it. */
   min_distance_nm?: number | null;
+  /** #790: the stretch it covers in pilot words ("from Uden (EHVK) to
+   *  Rijen (EHGR)"); null on a pre-#790 layer. */
+  span_text?: string | null;
   valid_from?: string | null;
   valid_to?: string | null;
   pending?: boolean;
@@ -1444,6 +1496,8 @@ export interface LiveRibbon {
   weather_status?: string | null;
   weather_corridor_nm?: number | null;
   weather_bin_nm?: number | null;
+  /** #790: the anchors the server words positions against. Informational. */
+  anchors?: RouteAnchor[];
 }
 
 /** GET /flights/{id}/live — the latest pack's live overlay. */

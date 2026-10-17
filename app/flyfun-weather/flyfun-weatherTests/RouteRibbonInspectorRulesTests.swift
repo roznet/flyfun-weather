@@ -92,6 +92,33 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
         #expect(c.raws.first?.value.hasPrefix("ZZAA 020820Z") == true)
     }
 
+    @Test func positionsAnAirportByTheServersPlaceWithItsTown() throws {
+        let st = try station("""
+        {"icao": "ZZCD", "role": "route", "metar_category": "VFR", "cross_nm": -6, "along_nm": 60,
+         "name": "Zedtown",
+         "place": {"text": "10 NM before Zedburg (ZZAB)", "short": "10 NM before ZZAB",
+                   "lateral": ", 6 NM left of track", "relation": "before"}}
+        """)
+        let c = I.stationContent(st, airport: nil)
+        #expect(c.subtitle == "Zedtown")
+        #expect(c.rows.contains(RibbonCardRow(label: "Position", value: "10 NM before Zedburg (ZZAB), 6 NM left of track")))
+        #expect(!c.text.contains("of course"))
+        #expect(!leaks(c))
+    }
+
+    @Test func aSigmetReadsItsSpanInPilotWordsWhenTheLayerHasThem() throws {
+        func sigmet(_ span: String) throws -> RibbonSigmet {
+            try decode(RibbonSigmet.self, """
+            {"id": "sigmet:ZZZZ|1", "label": "ZZZZ 1: EMBD TS", "hazard": "TS",
+             "from_nm": 20, "to_nm": 45, "span_text": \(span)}
+            """)
+        }
+        #expect(I.sigmetContent(try sigmet(#""from Zedburg (ZZAB) to Zedmouth (ZZEF)""#)).rows
+            .contains(RibbonCardRow(label: "Along route", value: "from Zedburg (ZZAB) to Zedmouth (ZZEF)")))
+        #expect(I.sigmetContent(try sigmet("null")).rows
+            .contains(RibbonCardRow(label: "Along route", value: "20–45 NM")))
+    }
+
     @Test func stationWithAnAirportThatHasNoTafSaysNoneIssued() throws {
         let st = try station(#"{"icao": "ZZAA", "role": "destination", "metar_category": "VFR"}"#)
         let apt = try airport(#"{"icao": "ZZAA", "name": "Test <Field>", "metar_raw": "ZZAA 091200Z <script>", "taf_raw": null}"#)
@@ -124,6 +151,30 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
         #expect(c.rows.contains(RibbonCardRow(label: "Cloud top", value: "FL310")))
         #expect(c.rows.contains(RibbonCardRow(label: "Trend (30 min)", value: "growing")))
         #expect(!leaks(c))
+    }
+
+    @Test func aCellWithTheServersPlaceReadsItInFull() throws {
+        let storm = try decode(LiveStorm.self, """
+        {"id": "c1", "cell_ids": ["c1"], "lat": 0, "lon": 0, "peak_dbz": 47,
+         "along_nm": 60, "offtrack_nm": 8, "cross_nm": -8, "side": "left",
+         "place": {"text": "over the sea, 16 NM after coast-out (Zedburg)",
+                   "short": "over the sea, 16 NM after coast-out",
+                   "lateral": ", 8 NM left of track", "relation": "over_sea"}}
+        """)
+        let c = I.stormContent(storm)
+        #expect(c.rows.contains(RibbonCardRow(label: "Position",
+                                              value: "8 NM left of track, over the sea, 16 NM after coast-out (Zedburg)")))
+        #expect(!c.text.contains("at 60 NM"))
+    }
+
+    @Test func clampsAnAirportBehindTheDepartureOrPastTheDestinationToThatEnd() throws {
+        let width: CGFloat = 520
+        let behind = try station(#"{"icao": "ZZBH", "role": "route", "along_nm": -29, "cross_nm": -4}"#)
+        #expect(I.stationPoint(behind, routeNm: 100, width: width)
+                == CGPoint(x: RouteRibbonRules.inset, y: RouteRibbonRules.leftRowY))
+        let past = try station(#"{"icao": "ZZPD", "role": "alternate", "along_nm": 115, "cross_nm": 3}"#)
+        #expect(I.stationPoint(past, routeNm: 100, width: width)
+                == CGPoint(x: width - RouteRibbonRules.inset, y: RouteRibbonRules.rightRowY))
     }
 
     @Test func aRainBandSaysSpanSideDistanceAndMotion() throws {

@@ -22,6 +22,8 @@ import SwiftUI
 //   sigmetText              → sigmetText
 //   segmentLabel            → segmentLabel
 //   stationLabel            → stationLabel
+//   PlaceForm               → PlaceForm
+//   stationPositionText     → stationPositionText
 //   stormLabel              → stormLabel
 //   weatherSummary          → weatherSummary
 //   relativeMotionText      → relativeMotionText
@@ -183,15 +185,43 @@ enum RouteRibbonRules {
         parts += st.convective ?? []
         if let taf = st.tafCategoryAtEta { parts.append("TAF at ETA \(taf)") }
         if let type = st.tafTemporaryType, let cat = st.tafTemporaryCategory { parts.append("\(type) \(cat)") }
-        if let cross = st.crossNm, st.role == "route" || st.role == "alternate" {
-            parts.append("\(Int(abs(cross).rounded())) NM \(cross < 0 ? "left" : "right") of course")
-        }
+        if let place = stationPositionText(st, form: .short) { parts.append(place) }
         return parts.joined(separator: " ")
+    }
+
+    /// Which of a `RoutePlace`'s two wordings a surface shows: `short` (ICAO
+    /// only) on the ribbon's own labels, `text` (with the town) on the
+    /// inspector card (web: the hover tooltip) and the cell detail.
+    enum PlaceForm { case text, short }
+
+    private static func words(_ place: RoutePlace, _ form: PlaceForm) -> String? {
+        let w: String?
+        switch form {
+        case .short: w = place.short
+        case .text: w = place.text
+        }
+        return (w?.isEmpty ?? true) ? nil : w
+    }
+
+    /// Where an en-route / alternate airport is: the server's place (#790)
+    /// plus its lateral offset ("10 NM before ZZAB, 6 NM left of track";
+    /// ", on track" within 1 NM of the line), else the pre-#790 "4 NM left of
+    /// course" with " at N NM" when `withAlong`. nil for the route's ends or
+    /// without a position.
+    static func stationPositionText(_ st: RibbonStation, form: PlaceForm, withAlong: Bool = false) -> String? {
+        if let place = st.place, let w = words(place, form) {
+            var lateral = place.lateral ?? ""
+            if lateral.isEmpty, let cross = st.crossNm, abs(cross) < 1 { lateral = ", on track" }
+            return w + lateral
+        }
+        guard let cross = st.crossNm, st.role == "route" || st.role == "alternate" else { return nil }
+        let at = withAlong ? (st.alongNm.map { " at \(Int($0.rounded())) NM" } ?? "") : ""
+        return "\(Int(abs(cross).rounded())) NM \(cross < 0 ? "left" : "right") of course\(at)"
     }
 
     static func stormLabel(_ storm: LiveStorm) -> String {
         var parts = ["Cell \(Int((storm.peakDbz ?? 0).rounded())) dBZ"]
-        parts.append(stormPositionText(storm))
+        parts.append(stormPositionText(storm, form: .short))
         parts.append(stormMotionText(storm))
         if let flashes = storm.flashes, flashes > 0 { parts.append(flashes == 1 ? "1 flash" : "\(flashes) flashes") }
         return parts.joined(separator: ", ")
@@ -215,10 +245,18 @@ enum RouteRibbonRules {
         return deg > 0 ? "drifting toward the right of course" : "drifting toward the left of course"
     }
 
-    /// "8 NM right of track at 85 NM", or from the airport past the route's
-    /// ends — the server's `storm_position_text`.
-    static func stormPositionText(_ storm: LiveStorm) -> String {
+    /// "8 NM right of track, 10 NM before Middelburg (ZZAB)" from the
+    /// server's place (#790; `form` picks its full or ICAO-only wording), or
+    /// from the airport past the route's ends — the server's
+    /// `storm_position_text`. Without a place (a pre-#790 layer), the legacy
+    /// "… at 85 NM".
+    static func stormPositionText(_ storm: LiveStorm, form: PlaceForm = .text) -> String {
         let off = "\(Int((storm.offtrackNm ?? 0).rounded())) NM"
+        if let place = storm.place, let w = words(place, form) {
+            if place.isOffEnd { return w }
+            guard let side = storm.side, (storm.offtrackNm ?? 0) >= 1 else { return "on track, \(w)" }
+            return "\(off) \(side) of track, \(w)"
+        }
         if storm.end != nil {
             let place = storm.endIcao ?? storm.end ?? ""
             return [off, storm.endBearing, "of", place].present.joined(separator: " ")

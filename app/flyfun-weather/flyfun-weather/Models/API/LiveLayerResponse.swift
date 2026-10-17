@@ -166,6 +166,9 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
     /// #682: on a SIGMET reissue row, the SIGMET it replaces ("LFMM T01").
     /// The key is then "<chain's first SIGMET>+<this SIGMET>". Display only.
     var replaces: String? = nil
+    /// #790: where the change sits on the route, when it has a position
+    /// (`message` already carries the words). Display only.
+    var place: RoutePlace? = nil
 
     /// `key` alone is not unique if the server ever emits the same key twice
     /// (e.g. a worse and a better reading), so fold the direction in.
