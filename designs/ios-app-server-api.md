@@ -31,7 +31,9 @@ are the load-bearing part.
 | `/api/flights/{id}/packs/{ts}/elevation` | GET | Elevation profile |
 | `/api/flights/{id}/packs/{ts}/skewt/{icao}/{model}` | GET | Skew-T image (PNG; no `.png` in route) |
 | `/api/flights/{id}/packs/{ts}/sounding-profile/{point_index}/{model}` | GET | Raw sounding profile for client Skew-T |
-| `/api/flights/{id}/packs/{ts}/gramet.png` | GET | GRAMET image |
+| `/api/flights/{id}/packs/{ts}/gramet.png` | GET | GRAMET image (rendered from the PDF once, then cached in the pack dir) |
+| `/api/flights/{id}/packs/{ts}/gramet` | GET | GRAMET PDF (PNG for old packs) — what the app shows (#799) |
+| `/api/flights/{id}/packs/{ts}/{dwd,metoffice}-chart/{id}`, `meteofrance-chart/{rc}/{zone}`, `*-chart-overlay` | GET | Surface charts + route overlays; the app takes the URLs from `PackMetaResponse.charts` (DWD analysis as `?w=1600`) — `briefing-charts-ios.md` |
 | `/api/flights/{id}/packs/{ts}/bundle` | GET | Gzipped single-JSON offline bundle (see Phase 2) |
 | `/api/flights/{id}/live` | GET | Flight-day live observation layer (#637): newest METAR/TAF, SIGMETs, observed conditions + changes since the briefing — see below |
 

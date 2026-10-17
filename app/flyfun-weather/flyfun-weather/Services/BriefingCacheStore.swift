@@ -79,6 +79,19 @@ actor BriefingCacheStore {
         try data.write(to: file, options: Self.writeOptions)
     }
 
+    /// Binary pack artifact (e.g. `gramet.pdf`), stored beside the pack's JSON
+    /// endpoints. `fileName` carries its own extension, unlike `writeData`.
+    func writePackFile(_ data: Data, flightId: String, timestamp: String, fileName: String) throws {
+        try ensureCacheRoot()
+        let dir = packDir(flightId: flightId, timestamp: timestamp)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try data.write(to: dir.appendingPathComponent(fileName), options: Self.writeOptions)
+    }
+
+    func readPackFile(flightId: String, timestamp: String, fileName: String) -> Data? {
+        try? Data(contentsOf: packDir(flightId: flightId, timestamp: timestamp).appendingPathComponent(fileName))
+    }
+
     // MARK: - Metadata cache (for offline fallback)
 
     /// Write a metadata file at the cache root level (e.g. "flights.json").
@@ -210,7 +223,9 @@ actor BriefingCacheStore {
         ) else { return [] }
         return entries.compactMap { url in
             let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            return isDir ? url.lastPathComponent : nil
+            // `charts/` is the shared chart cache, not a flight.
+            guard isDir, url.lastPathComponent != Self.chartsDirName else { return nil }
+            return url.lastPathComponent
         }
     }
 
@@ -235,6 +250,126 @@ actor BriefingCacheStore {
         saveIndex()
         try? FileManager.default.removeItem(at: cacheDir)
         Self.logger.info("Cleared all cached packs")
+    }
+
+    // MARK: - Shared chart cache (#799)
+
+    /// Surface charts are shared across packs, not stored per pack: the same
+    /// DWD / Met Office run serves every leg of a trip and every refresh of a
+    /// flight. Layout mirrors the server: `charts/<source>/<run_cycle>/<stem>.<ext>`,
+    /// i.e. `charts/<cacheKey>.<fileExt>`. A key's bytes never change, so a hit
+    /// is never revalidated. Under the user scope, so `evictInactiveUsers`
+    /// covers it and licence-restricted TEMSI stays with the entitled user.
+    static let chartsDirName = "charts"
+
+    /// Backstop on the chart cache's size; the oldest-read files go first.
+    static let chartCacheMaxBytes: Int64 = 50 * 1024 * 1024
+
+    private var chartsDir: URL { cacheDir.appendingPathComponent(Self.chartsDirName, isDirectory: true) }
+
+    /// File for a chart cache path (`<cacheKey>.<fileExt>`), or nil when the
+    /// path isn't a plain relative one (server-supplied, so never trusted to
+    /// stay inside the cache).
+    private func chartFileURL(cachePath: String) -> URL? {
+        let parts = cachePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !parts.isEmpty,
+              parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") })
+        else { return nil }
+        return parts.reduce(chartsDir) { $0.appendingPathComponent(String($1)) }
+    }
+
+    func hasChart(cachePath: String) -> Bool {
+        guard let url = chartFileURL(cachePath: cachePath) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Cached chart bytes, marking the file as just used for the size cap's LRU.
+    func readChart(cachePath: String) -> Data? {
+        guard let url = chartFileURL(cachePath: cachePath),
+              let data = try? Data(contentsOf: url) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return data
+    }
+
+    func writeChart(_ data: Data, cachePath: String) throws {
+        guard let url = chartFileURL(cachePath: cachePath) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        try ensureCacheRoot()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: Self.writeOptions)
+    }
+
+    /// Every cached chart as `(cachePath, size, lastUsed)`.
+    func cachedCharts() -> [(path: String, bytes: Int64, lastUsed: Date)] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let walker = FileManager.default.enumerator(
+            at: chartsDir, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+        ) else { return [] }
+        // Resolve symlinks on both sides (`/var` vs `/private/var`) so the
+        // relative path is the cache path the file was written under.
+        let rootPath = chartsDir.resolvingSymlinksInPath().path + "/"
+        var out: [(path: String, bytes: Int64, lastUsed: Date)] = []
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
+            let full = url.resolvingSymlinksInPath().path
+            guard full.hasPrefix(rootPath) else { continue }
+            out.append((path: String(full.dropFirst(rootPath.count)),
+                        bytes: Int64(values.fileSize ?? 0),
+                        lastUsed: values.contentModificationDate ?? .distantPast))
+        }
+        return out
+    }
+
+    /// Mark-and-sweep: delete every cached chart whose path is not in
+    /// `referenced`, then empty directories. Returns the number of files removed.
+    @discardableResult
+    func sweepCharts(keeping referenced: Set<String>) -> Int {
+        var removed = 0
+        for chart in cachedCharts() where !referenced.contains(chart.path) {
+            if let url = chartFileURL(cachePath: chart.path), (try? FileManager.default.removeItem(at: url)) != nil {
+                removed += 1
+            }
+        }
+        removeEmptyChartDirectories()
+        return removed
+    }
+
+    /// Size backstop: delete least-recently-read charts until the cache fits
+    /// `maxBytes`. Returns the number of files removed.
+    @discardableResult
+    func enforceChartSizeCap(maxBytes: Int64 = BriefingCacheStore.chartCacheMaxBytes) -> Int {
+        let charts = cachedCharts().sorted { $0.lastUsed < $1.lastUsed }
+        var total = charts.reduce(Int64(0)) { $0 + $1.bytes }
+        var removed = 0
+        for chart in charts where total > maxBytes {
+            guard let url = chartFileURL(cachePath: chart.path) else { continue }
+            if (try? FileManager.default.removeItem(at: url)) != nil {
+                total -= chart.bytes
+                removed += 1
+            }
+        }
+        if removed > 0 { removeEmptyChartDirectories() }
+        return removed
+    }
+
+    func chartCacheSize() -> Int64 {
+        cachedCharts().reduce(0) { $0 + $1.bytes }
+    }
+
+    /// Drop `<source>/<run_cycle>/` directories left empty by a sweep.
+    private func removeEmptyChartDirectories() {
+        let fm = FileManager.default
+        guard let sources = try? fm.contentsOfDirectory(at: chartsDir, includingPropertiesForKeys: nil) else { return }
+        for source in sources {
+            for cycle in (try? fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)) ?? []
+            where ((try? fm.contentsOfDirectory(atPath: cycle.path)) ?? ["?"]).isEmpty {
+                try? fm.removeItem(at: cycle)
+            }
+            if ((try? fm.contentsOfDirectory(atPath: source.path)) ?? ["?"]).isEmpty {
+                try? fm.removeItem(at: source)
+            }
+        }
     }
 
     // MARK: - Private

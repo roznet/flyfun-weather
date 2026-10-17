@@ -9,6 +9,7 @@ Cache layout:
     {data_dir}/dwd_charts/
         2026-05-08T06Z/                # one subdir per ICON run cycle
             ana.png
+            ana_w1600.png              # downscaled analysis for phones (#799)
             036.png 048.png 060.png 084.png 108.png
             meta.json                  # per-chart Last-Modified, ETag, ...
         2026-05-08T12Z/
@@ -33,6 +34,7 @@ keeps DWD-specific cycle discovery + a back-compat function surface.
 from __future__ import annotations
 
 import email.utils
+import io
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -78,6 +80,13 @@ _FILENAMES: dict[str, str] = {
 _TIMEOUT_SECONDS = 30
 _DEFAULT_KEEP_CYCLES = 8  # ~2 days at 6h cadence
 _USER_AGENT = "flyfun-weather/1.0 (+https://weather.flyfun.aero)"
+
+# The analysis chart is 4389 px wide and ~4.8 MB — too heavy for a phone to
+# download per briefing. A downscaled copy is written beside it at refresh and
+# served instead to clients that ask for it (iOS, #799). Same aspect ratio, so
+# an overlay projected in native pixels scales onto it by the width ratio.
+ANALYSIS_SMALL_WIDTH = 1600
+_ANALYSIS_SMALL_STEM = f"ana_w{ANALYSIS_SMALL_WIDTH}"
 
 # Native pixel sizes of each chart, used for client-side SVG overlay scaling.
 CHART_NATIVE_SIZE: dict[str, tuple[int, int]] = {
@@ -235,6 +244,51 @@ def chart_meta(data_dir: Path, run_cycle: str, chart_id: str) -> dict | None:
     return _cache.chart_meta(data_dir, run_cycle, chart_id)
 
 
+def downscale_analysis(src: Path, dst: Path) -> bool:
+    """Write a ``ANALYSIS_SMALL_WIDTH``-wide copy of the analysis chart.
+
+    Aspect ratio is kept (height rounded), so native-pixel overlay coordinates
+    map onto it by ``ANALYSIS_SMALL_WIDTH / native_width``. Re-quantized to a
+    256-colour palette: the chart is line art, and RGB at this size is ~3x the
+    bytes for no visible gain. Returns False (and logs) when the source can't
+    be read; a missing small copy only costs the client the full-size chart.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(src) as im:
+            rgb = im.convert("RGB")
+        w, h = rgb.size
+        if w <= ANALYSIS_SMALL_WIDTH:
+            small = rgb
+        else:
+            height = round(h * ANALYSIS_SMALL_WIDTH / w)
+            small = rgb.resize((ANALYSIS_SMALL_WIDTH, height), Image.Resampling.LANCZOS)
+        paletted = small.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
+        buf = io.BytesIO()
+        paletted.save(buf, format="PNG", optimize=True)
+        _cache.atomic_write_bytes(dst, buf.getvalue())
+        return True
+    except Exception:  # noqa: BLE001 — a bad source image must not break refresh/serve
+        logger.warning("DWD analysis downscale failed (%s)", src, exc_info=True)
+        return False
+
+
+def resolve_small_analysis_path(data_dir: Path, run_cycle: str) -> Path | None:
+    """The downscaled analysis for a cycle, created on first use.
+
+    Refresh writes it eagerly; this also covers cycles cached before the small
+    copy existed. None when the full-size analysis itself is gone (evicted).
+    """
+    full = _cache.resolve_chart_path(data_dir, run_cycle, "ana")
+    if full is None:
+        return None
+    small = full.with_name(f"{_ANALYSIS_SMALL_STEM}.png")
+    if small.exists() and small.stat().st_mtime >= full.stat().st_mtime:
+        return small
+    return small if downscale_analysis(full, small) else None
+
+
 def forecast_stamps(data_dir: Path, run_cycle: str) -> dict[str, ForecastStamp]:
     """Each forecast chart's ICON run, lead and valid time, as recorded at refresh.
 
@@ -373,6 +427,12 @@ def refresh_charts(
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "http_status": ana_resp.status_code,
     }
+
+    # The small copy follows the full-size bytes: rebuilt on a new download,
+    # backfilled for a cycle cached before it existed.
+    small_path = cdir / f"{_ANALYSIS_SMALL_STEM}.png"
+    if ana_status == "downloaded" or not small_path.exists():
+        downscale_analysis(cdir / "ana.png", small_path)
 
     # Step 2: parallel fetch 5 forecast charts
     forecast_ids = tuple(cid for cid in CHART_IDS if cid != "ana")

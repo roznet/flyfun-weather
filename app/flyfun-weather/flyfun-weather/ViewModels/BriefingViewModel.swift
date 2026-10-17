@@ -582,6 +582,28 @@ final class BriefingViewModel {
         )
     }
 
+    // MARK: - Surface charts + GRAMET (#799)
+
+    /// One chart's bytes — from the shared on-disk chart cache when present.
+    func fetchChartImage(_ chart: PackChart) async throws -> Data {
+        try await repository.chartImage(chart)
+    }
+
+    /// The route overlay for a chart source, or nil when it can't be had (the
+    /// chart is then shown without the route, as on the web).
+    func fetchChartOverlay(for source: PackChartSource) async -> ChartOverlay? {
+        guard let pack else { return nil }
+        return try? await repository.chartOverlay(
+            flightId: flight.id, timestamp: pack.fetchTimestamp, source: source
+        )
+    }
+
+    /// The pack's GRAMET (PDF, or PNG for older packs).
+    func fetchGrametDocument() async throws -> Data {
+        guard let pack else { throw APIError.notFound }
+        return try await repository.grametDocument(flightId: flight.id, timestamp: pack.fetchTimestamp)
+    }
+
     // MARK: - Download / Cache
 
     /// Check which packs in history are cached.
