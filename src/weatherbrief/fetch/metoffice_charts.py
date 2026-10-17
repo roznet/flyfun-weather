@@ -259,10 +259,10 @@ def select_default_chart_id(
     run_cycle: str,
     available_ids: set[str] | None = None,
 ) -> str:
-    """Pick the chart whose valid time best brackets the flight ETD.
+    """Pick the chart whose valid time is nearest the flight ETD.
 
-    ETD within ~3h of issuance -> analysis; otherwise the nearest available
-    forecast offset (tie-break toward the earlier offset). ``available_ids``
+    The analysis (valid at the cycle time) competes with every forecast offset;
+    ties break toward the earlier offset. ``available_ids``
     constrains the choice to charts actually fetched (a run's index may omit
     the longest offsets).
     """

@@ -86,6 +86,19 @@ def test_select_default_chart_etd_within_3h_picks_analysis():
     assert select_default_chart_id(etd, "2026-05-08T06Z") == "ana"
 
 
+def test_select_default_same_day_etd_past_3h_picks_analysis():
+    """Analysis valid 00Z, forecasts from the 00Z run: a 09:45Z ETD is 9.75h
+    from the analysis and 26h from +36h — the current chart, not tomorrow's."""
+    run = datetime(2026, 10, 17, tzinfo=timezone.utc)
+    valid = {cid: run + timedelta(hours=h) for cid, h in FORECAST_OFFSETS_H.items() if cid != "ana"}
+    etd = datetime(2026, 10, 17, 9, 45, tzinfo=timezone.utc)
+    assert select_default_chart_id(etd, "2026-10-17T00Z", valid_times=valid) == "ana"
+    # Past the midpoint between analysis and +36h, the forecast is nearer.
+    assert select_default_chart_id(
+        run + timedelta(hours=19), "2026-10-17T00Z", valid_times=valid,
+    ) == "036"
+
+
 def test_select_default_chart_etd_at_36h_picks_036():
     issued = datetime(2026, 5, 8, 6, 0, tzinfo=timezone.utc)
     etd = issued + timedelta(hours=36)

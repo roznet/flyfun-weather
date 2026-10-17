@@ -101,6 +101,8 @@ def test_parse_run_cycle_dt_roundtrip():
 def test_select_default_within_3h_picks_analysis():
     issued = datetime(2026, 5, 29, 0, tzinfo=timezone.utc)
     assert select_default_chart_id(issued + timedelta(hours=2), "2026-05-29T00Z") == "ana"
+    # Equidistant from the analysis and +12h -> the analysis (tie-break earlier)
+    assert select_default_chart_id(issued + timedelta(hours=6), "2026-05-29T00Z") == "ana"
 
 
 def test_select_default_nearest_offset():

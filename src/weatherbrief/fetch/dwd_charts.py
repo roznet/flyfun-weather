@@ -176,10 +176,10 @@ def select_default_chart_id(
     available_ids: set[str] | None = None,
     valid_times: Mapping[str, datetime] | None = None,
 ) -> str:
-    """Pick the chart whose estimated valid time best brackets the flight ETD.
+    """Pick the chart whose valid time is nearest the flight ETD.
 
-    ETD < ~3h after issuance -> analysis; else the nearest available forecast
-    offset (tie-break toward the earlier offset). ``available_ids`` constrains
+    The analysis (valid at the cycle time) competes with every forecast offset;
+    ties break toward the earlier offset. ``available_ids`` constrains
     the choice to charts that were actually fetched (DWD's server is flaky and
     individual forecast charts can fail independently). ``valid_times`` (from
     :func:`forecast_stamps`) replaces the ``run_cycle + offset`` estimate for

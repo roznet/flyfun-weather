@@ -304,15 +304,16 @@ class ChartCache:
         available_ids: set[str] | None = None,
         valid_times: Mapping[str, datetime] | None = None,
     ) -> str:
-        """Pick the chart whose valid time best brackets the flight ETD.
+        """Pick the chart whose valid time is nearest the flight ETD.
 
-        ETD within ~3h of issuance -> analysis; otherwise the nearest available
-        forecast offset (tie-break toward the earlier offset).
+        The analysis is a candidate like any forecast, valid at the cycle time,
+        so a same-day flight gets the current chart rather than a +36h one a day
+        away. Ties break toward the earlier offset (the analysis wins a tie).
 
         ``available_ids`` constrains the choice to charts that were actually
         fetched, so a default never points at a chart whose bytes were never
-        cached (which would 410 at render time). Falls back to ``"ana"`` when no
-        forecast charts are available.
+        cached (which would 410 at render time). Falls back to ``"ana"`` when
+        nothing is available.
 
         ``valid_times`` overrides ``run_cycle + offset`` for the charts a source
         has actual valid times for — DWD's forecasts come from an earlier run
@@ -322,14 +323,10 @@ class ChartCache:
         if issued is None:
             return "ana"
         delta_hours = (departure_time - issued).total_seconds() / 3600.0
-        if delta_hours < 3:
-            return "ana"
-        forecast_ids = tuple(
-            cid
-            for cid in self.chart_ids
-            if cid != "ana" and (available_ids is None or cid in available_ids)
+        candidate_ids = tuple(
+            cid for cid in self.chart_ids if available_ids is None or cid in available_ids
         )
-        if not forecast_ids:
+        if not candidate_ids:
             return "ana"
         known = valid_times or {}
 
@@ -339,7 +336,7 @@ class ChartCache:
                 return abs(self.forecast_offsets_h[cid] - delta_hours)
             return abs((valid - departure_time).total_seconds()) / 3600.0
 
-        return min(forecast_ids, key=lambda cid: (gap_hours(cid), self.forecast_offsets_h[cid]))
+        return min(candidate_ids, key=lambda cid: (gap_hours(cid), self.forecast_offsets_h[cid]))
 
     # -- georeferencing -----------------------------------------------------
 
