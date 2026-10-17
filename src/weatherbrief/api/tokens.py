@@ -48,7 +48,7 @@ class TokenListItem(BaseModel):
 def create_token(
     body: CreateTokenRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a new API token for the current user.
 
@@ -88,7 +88,7 @@ def create_token(
 @router.get("", response_model=list[TokenListItem])
 def list_tokens(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all active (non-revoked) tokens for the current user."""
     rows = (
@@ -112,7 +112,7 @@ def list_tokens(
 def revoke_token(
     token_id: int,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke one of the current user's tokens."""
     token_row = (

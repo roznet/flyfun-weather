@@ -232,7 +232,7 @@ def create_checkout(
     body: CheckoutRequest,
     request: Request,
     viewer_id: str | None = Depends(optional_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> CheckoutResponse:
     """Create a hosted Stripe Checkout Session for a donation.
 
@@ -296,7 +296,7 @@ def create_checkout(
 
 
 @router.post("/webhook")
-async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
+async def stripe_webhook(request: Request, db: Session = Depends(get_db, scope="function")) -> dict:
     """Stripe webhook: record/refund donations. Idempotent on ``provider_ref``.
 
     Verifies the signature (``STRIPE_WEBHOOK_SECRET``); a bad/forged signature
@@ -586,7 +586,7 @@ class EmailReceiptResponse(BaseModel):
 
 @router.post("/email-receipt", response_model=EmailReceiptResponse)
 def send_email_receipt(
-    body: EmailReceiptRequest, db: Session = Depends(get_db)
+    body: EmailReceiptRequest, db: Session = Depends(get_db, scope="function")
 ) -> EmailReceiptResponse:
     """Send an opt-in confirmation email for a just-completed donation.
 
@@ -757,7 +757,7 @@ class DonationMeResponse(BaseModel):
 @router.get("/me", response_model=DonationMeResponse)
 def get_my_donations(
     viewer_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     currency: str | None = None,
 ) -> DonationMeResponse:
     """The viewer's own donation total + impact framing (USD + ``fx`` block).
@@ -862,7 +862,7 @@ class DonationSummaryResponse(BaseModel):
 @router.get("/summary", response_model=DonationSummaryResponse)
 def get_summary(
     viewer_id: str | None = Depends(optional_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     currency: str | None = None,
 ) -> DonationSummaryResponse:
     """Public this-year community total + coverage framing + stats header.
@@ -929,7 +929,7 @@ def preview_donation(
     amount: float,
     currency: str | None = None,
     viewer_id: str | None = Depends(optional_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> DonationPreviewResponse:
     """Translate a prospective amount via the adaptive ladder.
 
@@ -1189,7 +1189,7 @@ class NudgeResponse(BaseModel):
 @router.get("/nudge", response_model=NudgeResponse)
 def get_nudge(
     viewer_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> NudgeResponse:
     """Should the briefing page offer this pilot a donate chip right now?
 
@@ -1401,7 +1401,7 @@ class NudgeAckRequest(BaseModel):
 def ack_nudge(
     body: NudgeAckRequest,
     viewer_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> NudgeResponse:
     """Record an impression or an answer against the open ask.
 

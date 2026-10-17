@@ -686,7 +686,7 @@ def viewer_trip_ref_for(
 @router.get("", response_model=list[TripResponse])
 def list_trips(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """All of the caller's trips, each with its derived summary."""
     trips = trip_storage.list_trips(db, user_id)
@@ -709,7 +709,7 @@ def list_trips(
 def create_trip(
     req: CreateTripRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Group flights into a new trip.
 
@@ -742,7 +742,7 @@ def create_trip(
 def get_trip_by_share_code(
     code: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Resolve a ``/t/{code}`` token to its trip — the iOS on-ramp.
 
@@ -772,7 +772,7 @@ def get_trip_by_share_code(
 def get_trip(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _, role = _viewable_trip_row(db, trip_id, user_id)
     return _trip_to_response(
@@ -784,7 +784,7 @@ def get_trip(
 def get_trip_summary(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """The pure ``TripSummary`` on its own — computed, never stored."""
     _viewable_trip_row(db, trip_id, user_id)
@@ -799,7 +799,7 @@ def update_trip(
     trip_id: str,
     req: UpdateTripRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     row = _owned_trip_row(db, trip_id, user_id)
     if req.name is not None:
@@ -820,7 +820,7 @@ def update_trip(
 def delete_trip(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Delete the trip container. Its legs survive, unlinked — never deleted."""
     if not trip_storage.delete_trip(db, trip_id, user_id):
@@ -833,7 +833,7 @@ def add_legs(
     trip_id: str,
     req: AddLegsRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _owned_trip_row(db, trip_id, user_id)
     flight_ids = _validate_owned_flights(db, req.flight_ids, user_id)
@@ -862,7 +862,7 @@ def remove_leg(
     trip_id: str,
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Unlink a leg from its trip — an unlink, **never** a delete.
 
@@ -901,7 +901,7 @@ class TripSubscribeResponse(BaseModel):
 def subscribe_trip(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Follow a shared trip — i.e. subscribe to each of its legs.
 
@@ -948,7 +948,7 @@ def subscribe_trip(
 def unsubscribe_trip(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Stop following a shared trip: drop the subscription on every leg.
 
@@ -985,7 +985,7 @@ def refresh_trip(
     trip_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Refresh every remaining leg — **one at a time, server-driven**.
 
@@ -1012,7 +1012,7 @@ def refresh_trip(
 def refresh_trip_status(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from weatherbrief.api import trip_refresh
 
@@ -1036,7 +1036,7 @@ class TripAiSummaryResponse(BaseModel):
 def generate_ai_summary(
     trip_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the trip's AI paragraph, regenerating it only when stale.
 

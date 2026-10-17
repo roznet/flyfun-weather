@@ -31,12 +31,12 @@ def data_dir(request: Request) -> Path:
 def current_user_id_short(request: Request) -> str:
     """``current_user_id`` without holding a pooled connection for the request.
 
-    flyfun-common's ``current_user_id`` takes ``Depends(get_db)``. ``get_db``
-    is a generator dependency, and FastAPI runs its teardown only after the
-    response has been sent, so that session stays checked out for the whole
-    request, not just the user lookup. On an endpoint that then waits on
-    something slow (an upstream fetch, a render, a large file transfer) that
-    is one pooled connection per in-flight request. The engine keeps
+    flyfun-common's ``current_user_id`` takes ``Depends(get_db, scope="function")``,
+    so that session stays checked out until the endpoint returns, not just
+    for the user lookup (before #784 it was held until the response had been
+    sent, a ``FileResponse`` transfer included). On an endpoint that waits on
+    something slow (an upstream fetch, a render) that is one pooled
+    connection per in-flight request. The engine keeps
     SQLAlchemy's default pool (5 + 10 overflow), so a map pan firing dozens of
     tile requests exhausted it and every other endpoint 500'd for minutes
     (#719).
@@ -47,7 +47,7 @@ def current_user_id_short(request: Request) -> str:
     ``/airport-profile`` and ``/refresh/stream``.
 
     Use it on endpoints that do no other DB work. An endpoint that also takes
-    ``Depends(get_db)`` should keep ``current_user_id``: the two share the
+    ``Depends(get_db, scope="function")`` should keep ``current_user_id``: the two share the
     request-cached session there, so this would only add a second checkout.
 
     Tests override this dependency, not ``current_user_id``, on the endpoints

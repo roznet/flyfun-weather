@@ -36,7 +36,7 @@ router = APIRouter(prefix="/climatology", tags=["climatology"])
 def get_category_map(
     month: str = Query(..., description="Month as 'YYYY-MM' (e.g. '2026-05')"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Per-airport flight-category counts and percentages for ``month``.
@@ -64,7 +64,7 @@ def get_phenomena_map(
     month: str = Query(..., description="Month as 'YYYY-MM'"),
     kind: str = Query(..., description="'ts' or 'fog'"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """TS or fog frequency (% of observations) per airport."""
@@ -85,7 +85,7 @@ def get_wind_map(
     month: str = Query(..., description="Month as 'YYYY-MM'"),
     metric: str = Query(..., description="'over25', 'p95', or 'gust'"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Wind metric per airport. MTD restricts to 'gust' only."""
@@ -105,7 +105,7 @@ def get_wind_map(
 def get_volatility_map(
     month: str = Query(..., description="Month as 'YYYY-MM'"),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Category transitions per observation, per airport."""
@@ -129,7 +129,7 @@ def get_leaderboard_endpoint(
     sub: str | None = Query(default=None, description="Sub-metric (required except for volatility)"),
     limit: int = Query(default=20, ge=1, le=100),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Top airports for any (dataset, sub) combination, sorted by value DESC.

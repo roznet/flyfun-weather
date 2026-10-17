@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Medium-range weather assessment for cross-country GA flights in Europe"
 requires-python = ">=3.11"
 dependencies = [
-    "flyfun-common>=0.6.11",  # 0.6.11: token endpoint accepts client_secret_basic (ChatGPT MCP)
+    "flyfun-common>=0.6.12",  # 0.6.12: get_db commits before the response (scope="function", #784)
     "requests>=2.31",
     "pyyaml>=6.0",
     "pydantic>=2.0",

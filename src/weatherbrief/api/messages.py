@@ -85,7 +85,7 @@ def _row_to_response(r: SystemMessageRow) -> SystemMessage:
 # --- Public endpoints ---
 
 @router.get("", response_model=list[SystemMessage])
-def get_messages(db: Session = Depends(get_db)):
+def get_messages(db: Session = Depends(get_db, scope="function")):
     """Return all system messages, newest first."""
     rows = db.query(SystemMessageRow).order_by(desc(SystemMessageRow.date), desc(SystemMessageRow.id)).all()
     return [_row_to_response(r) for r in rows]
@@ -94,7 +94,7 @@ def get_messages(db: Session = Depends(get_db)):
 @router.get("/status", response_model=MessagesStatus)
 def get_messages_status(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return unseen message count for the current user."""
     prefs_row = db.get(UserPreferencesRow, user_id)
@@ -115,7 +115,7 @@ def get_messages_status(
 @router.post("/seen", status_code=204)
 def mark_messages_seen(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Mark all current messages as seen (stores max message ID)."""
     row = db.get(UserPreferencesRow, user_id)
@@ -140,7 +140,7 @@ def mark_messages_seen(
 @admin_router.get("", response_model=list[SystemMessage])
 def admin_list_messages(
     _admin: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all system messages (admin)."""
     rows = db.query(SystemMessageRow).order_by(desc(SystemMessageRow.date), desc(SystemMessageRow.id)).all()
@@ -151,7 +151,7 @@ def admin_list_messages(
 def admin_create_message(
     body: MessageCreate,
     _admin: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a new system message (admin)."""
     row = SystemMessageRow(
@@ -171,7 +171,7 @@ def admin_update_message(
     message_id: int,
     body: MessageUpdate,
     _admin: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update a system message (admin)."""
     row = db.get(SystemMessageRow, message_id)
@@ -195,7 +195,7 @@ def admin_update_message(
 def admin_delete_message(
     message_id: int,
     _admin: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Delete a system message (admin)."""
     row = db.get(SystemMessageRow, message_id)

@@ -146,7 +146,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 @router.get("/export")
 def export_account_data(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return all personal data held for the authenticated user as JSON.
 

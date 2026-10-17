@@ -97,7 +97,7 @@ def _profile_to_response(profile: FlightProfile) -> ProfileResponse:
 @router.get("", response_model=list[ProfileResponse])
 def list_user_profiles(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all profiles for the current user. Creates a default if none exist."""
     ensure_default_profile(db, user_id)
@@ -126,7 +126,7 @@ def _validated_profile_name(raw: str | None) -> str:
 def create_profile(
     req: CreateProfileRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a new profile."""
     name = _validated_profile_name(req.name)
@@ -156,7 +156,7 @@ def create_profile(
 def get_profile(
     profile_id: int,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get a specific profile."""
     profile = _load_owned_profile(db, profile_id, user_id)
@@ -168,7 +168,7 @@ def update_user_profile(
     profile_id: int,
     req: UpdateProfileRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update an existing profile."""
     profile = _load_owned_profile(db, profile_id, user_id)
@@ -225,7 +225,7 @@ def update_user_profile(
 def delete_user_profile(
     profile_id: int,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Delete a profile. Cannot delete the default profile."""
     profile = _load_owned_profile(db, profile_id, user_id)
@@ -242,7 +242,7 @@ def duplicate_profile(
     profile_id: int,
     req: DuplicateProfileRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Duplicate an existing profile with a new name."""
     source = _load_owned_profile(db, profile_id, user_id)
@@ -350,7 +350,7 @@ def get_digest_guidance_text(
 def reset_profile_to_template(
     profile_id: int,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Reset a profile's settings to its system template.
 
@@ -454,7 +454,7 @@ def _get_default_profile(db: Session, user_id: str) -> FlightProfile | None:
 admin_router = APIRouter(prefix="/admin/system-profiles", tags=["admin"])
 
 
-def _require_admin(request: Request, db: Session = Depends(get_db)) -> str:
+def _require_admin(request: Request, db: Session = Depends(get_db, scope="function")) -> str:
     """Thin DI wrapper around require_admin to avoid circular import at module level."""
     from weatherbrief.api.admin import require_admin
     return require_admin(request, db=db)
@@ -471,7 +471,7 @@ def update_system_template(
     template_key: str,
     req: UpdateSystemTemplateRequest,
     _admin_id: str = Depends(_require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update a system profile template's settings. Admin only.
 

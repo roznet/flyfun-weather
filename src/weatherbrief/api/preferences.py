@@ -389,7 +389,7 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
 @router.get("", response_model=PreferencesResponse)
 def get_preferences(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the current user's preferences."""
     row = _load_prefs(db, user_id)
@@ -402,7 +402,7 @@ def update_preferences(
     body: PreferencesUpdate,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update the current user's preferences."""
     row = _load_prefs(db, user_id)
@@ -529,7 +529,7 @@ def update_preferences(
 @router.delete("/autorouter", status_code=204)
 def clear_autorouter_credentials(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Clear the user's stored autorouter credentials."""
     clear_encrypted_creds(db, user_id)
@@ -849,7 +849,7 @@ def can_publish_pireps(db: Session, user_id: str) -> bool:
 @router.post("/setup-complete", status_code=204)
 def mark_setup_complete(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Mark the user's initial setup as completed."""
     row = _load_prefs(db, user_id)

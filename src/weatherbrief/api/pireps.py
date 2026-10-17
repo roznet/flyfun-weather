@@ -371,7 +371,7 @@ def _create_one(
 def submit_pirep(
     req: SubmitPirepRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Submit a single PIREP."""
     if not can_publish_pireps(db, user_id):
@@ -402,7 +402,7 @@ def submit_pirep(
 def submit_pireps_batch(
     items: list[SubmitPirepRequest],
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Submit multiple PIREPs (offline sync).
 
@@ -472,7 +472,7 @@ def query_pireps(
     altitude_max: int | None = None,
     aircraft_type: str | None = None,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Query PIREPs with flexible filters."""
     if not can_view_pireps(db, user_id):

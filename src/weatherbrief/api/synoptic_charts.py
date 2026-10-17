@@ -47,7 +47,7 @@ def _data_dir() -> Path:
 def get_manifest(
     request: Request,
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List the chart sources the caller may use as a synoptic basemap.
 
@@ -73,7 +73,7 @@ def get_chart(
     chart_id: str,
     request: Request,
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Serve chart bytes from the shared cache (immutable)."""
     spec = get_source_or_404(source)

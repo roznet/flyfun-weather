@@ -190,7 +190,7 @@ class CreateFlightInput(BaseModel):
 @router.get("/flights", operation_id="listFlights")
 def list_flights(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """List the user's upcoming flights with briefing status.
 
@@ -240,7 +240,7 @@ async def create_flight(
     body: CreateFlightInput,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """Create a flight from one route string and start its briefing (~2 min).
 
@@ -376,7 +376,7 @@ async def create_flight(
 def get_briefing(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """Latest briefing: assessment (GREEN/AMBER/RED/UNAVAILABLE), advisories,
     AI digest, web link. Status: ready, stale, processing, none (call
@@ -466,7 +466,7 @@ async def refresh_briefing(
     flight_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """Trigger a weather briefing refresh for a flight.
 
@@ -520,7 +520,7 @@ def get_advisory_detail(
         PathParam(description="Advisory id to drill into, e.g. 'convective', 'fiki_icing', 'cloud_top'."),
     ],
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """Drill into ONE advisory to explain WHY it is red/amber: the per-model
     and cross-check breakdown. Use when the user questions a grade or a result
@@ -585,7 +585,7 @@ def get_advisory_detail(
 def get_digest_context(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """The exact text the AI weather digest saw for this flight. Use for the
     deepest context behind a briefing — e.g. to reconcile a red/amber advisory
@@ -623,7 +623,7 @@ def get_digest_context(
 def get_alternates(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict[str, Any]:
     """Weather-based divert alternates for a destination. Use for diversion
     questions or 'is a filed alternate required'. Returns the FAA/EASA trigger,
@@ -674,7 +674,7 @@ def get_airport_weather(
         int, Query(description="Forecast hour in UTC: 6, 9, 12, 15, or 18", ge=0, le=23),
     ] = 12,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(maps_api._airports_db),
 ) -> dict[str, Any]:
     """Weather forecasts and observations for specific airports: multi-model

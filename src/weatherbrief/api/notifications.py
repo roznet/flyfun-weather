@@ -37,7 +37,7 @@ class BadgeStatus(BaseModel):
 @router.get("/badge", response_model=BadgeStatus)
 def get_badge(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the current user's unseen-briefing badge count (authoritative)."""
     return BadgeStatus(count=compute_badge_count(db, user_id))
@@ -47,7 +47,7 @@ def get_badge(
 def mark_seen(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Mark a flight's briefing seen for the current user; return the new badge.
 

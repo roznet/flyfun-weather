@@ -86,7 +86,7 @@ def _window(days: int) -> tuple[date, date, datetime, datetime]:
 @router.get("/summary")
 def usage_summary(
     _admin_id: Annotated[str, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db, scope="function")],
     days: int = Query(_DEFAULT_WINDOW_DAYS, ge=1, le=_MAX_WINDOW_DAYS),
 ) -> dict:
     """High-level totals + feature attachment rates over the window."""
@@ -199,7 +199,7 @@ def usage_summary(
 @router.get("/timeseries")
 def usage_timeseries(
     _admin_id: Annotated[str, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db, scope="function")],
     days: int = Query(_DEFAULT_WINDOW_DAYS, ge=1, le=_MAX_WINDOW_DAYS),
 ) -> dict:
     """Per-day series of briefings opened + new users for charts."""
@@ -239,7 +239,7 @@ def usage_timeseries(
 @router.get("/briefing-shape")
 def briefing_shape(
     _admin_id: Annotated[str, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db, scope="function")],
     days: int = Query(_DEFAULT_WINDOW_DAYS, ge=1, le=_MAX_WINDOW_DAYS),
 ) -> dict:
     """Distributions over flight + briefing dimensions in the window."""
@@ -299,7 +299,7 @@ def briefing_shape(
 @router.get("/xsection-config")
 def xsection_config(
     _admin_id: Annotated[str, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db, scope="function")],
     days: int = Query(_DEFAULT_WINDOW_DAYS, ge=1, le=_MAX_WINDOW_DAYS),
 ) -> dict:
     """Per-dimension breakdown of the cross-section display config.
@@ -369,7 +369,7 @@ def xsection_config(
 @router.get("/digest")
 def usage_digest(
     _admin_id: Annotated[str, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[Session, Depends(get_db, scope="function")],
 ) -> dict:
     """Plain-text weekly digest (same string the cron logs)."""
     return {"text": build_digest(db)}
