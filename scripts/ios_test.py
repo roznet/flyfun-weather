@@ -1,4 +1,4 @@
-"""Run the iOS test suite on one simulator, without the silent hangs.
+"""Run the iOS test suite on one or more simulators, without the silent hangs.
 
 A bare ``xcodebuild test -quiet | tail`` has three ways to waste a quarter of
 an hour without saying so:
@@ -18,10 +18,18 @@ an hour without saying so:
 The summary at the end comes from the result bundle, with every failure's
 assertion message, so a red run is diagnosable without opening Xcode.
 
+Parallel testing hands whole test classes to simulator clones (``--workers``
+caps them per device), which is why the UI journeys are split into balanced
+classes (FlyfunUITestCase.swift). Several ``--device`` flags run the devices
+one after another, each with its own summary — not as several destinations of
+one xcodebuild, which silently turns parallel testing off. With ``--only``
+parallel testing is off too: a rerun of a test or two gains nothing from clones
+and would pay ~50 s booting one.
+
 Usage:
-    python3 scripts/ios_test.py --device "iPhone 17 Pro"
+    python3 scripts/ios_test.py --device "iPhone 17 Pro" --device "iPad Pro 11-inch (M5)"
     python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)" \\
-        --only flyfun-weatherUITests/flyfun_weatherUITests/testRouteSigmetsSectionRenders
+        --only flyfun-weatherUITests/BriefingUITests/testRouteSigmetsSectionRenders
 
 Exit codes: 0 all passed, 1 test failures, 2 build/setup failure, 3 another
 ``xcodebuild test`` is already running, 124 stalled (killed by the watchdog).
@@ -136,8 +144,11 @@ def summarize(bundle: Path) -> tuple[dict | None, list[tuple[str, str]]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--device", required=True, help="simulator name or UDID")
+    ap.add_argument("--device", action="append", required=True,
+                    help="simulator name or UDID (repeatable: the devices run one after another)")
     ap.add_argument("--only", action="append", default=[], help="-only-testing identifier (repeatable)")
+    ap.add_argument("--workers", type=int, default=5,
+                    help="parallel-testing clones per device (default 5: the four UI classes + the unit target)")
     ap.add_argument("--stall-minutes", type=float, default=5,
                     help="kill xcodebuild after this long with no output and no result-bundle writes (default 5)")
     ap.add_argument("--test-allowance", type=int, default=900,
@@ -153,24 +164,49 @@ def main() -> int:
             return 3
         time.sleep(15)
 
-    udid = resolve_device(args.device)
+    # One device at a time, never several `-destination`s in one xcodebuild:
+    # with more than one destination xcodebuild silently drops parallel
+    # testing (no clones), so every class ran one after another per device —
+    # slower than these sequential runs, each fanning its classes out over
+    # clones. The second device's build is incremental (seconds).
+    codes = []
+    for device in args.device:
+        bundle = args.result_bundle
+        if bundle and len(args.device) > 1:
+            bundle = bundle.with_name(f"{bundle.stem}-{slug(device)}{bundle.suffix}")
+        codes.append(run_device(device, resolve_device(device), args, bundle))
+    if len(codes) > 1:
+        print("\n" + "\n".join(f"=== {d}: exit {c}" for d, c in zip(args.device, codes)))
+    # Most severe first: a stall, then a build failure, then test failures.
+    for code in (124, 2, 1):
+        if code in codes:
+            return code
+    return 0
+
+
+def slug(device: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", device).strip("-")
+
+
+def run_device(device: str, udid: str, args: argparse.Namespace, result_bundle: Path | None) -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    workdir = Path(tempfile.mkdtemp(prefix=f"ios-test-{stamp}-"))
-    bundle = args.result_bundle or workdir / "result.xcresult"
+    workdir = Path(tempfile.mkdtemp(prefix=f"ios-test-{stamp}-{slug(device)}-"))
+    bundle = result_bundle or workdir / "result.xcresult"
     log_path = workdir / "xcodebuild.log"
 
     cmd = [
         "xcodebuild", "test",
         "-project", str(PROJECT), "-scheme", SCHEME,
         "-destination", f"platform=iOS Simulator,id={udid}",
+        *(["-parallel-testing-enabled", "NO"] if args.only
+          else ["-maximum-parallel-testing-workers", str(args.workers)]),
         "-resultBundlePath", str(bundle),
         "-collect-test-diagnostics", "never",
-        "-showBuildTimingSummary",  # per-phase build times, in the log for wall-clock review
         "-test-timeouts-enabled", "YES",
         "-maximum-test-execution-time-allowance", str(args.test_allowance),
         *[f"-only-testing:{t}" for t in args.only],
     ]
-    print(f"device {args.device} ({udid})\nlog    {log_path}\nbundle {bundle}", flush=True)
+    print(f"device {device} ({udid})\nlog    {log_path}\nbundle {bundle}", flush=True)
 
     start = time.time()
     last_output = start
@@ -213,7 +249,7 @@ def main() -> int:
     wall = time.time() - start
 
     summary, failures = summarize(bundle) if bundle.exists() else (None, [])
-    print(f"\n=== {args.device}: xcodebuild exit {proc.returncode}, {wall / 60:.1f} min")
+    print(f"\n=== {device}: xcodebuild exit {proc.returncode}, {wall / 60:.1f} min")
     if summary:
         print(f"passed {summary['passedTests']}  failed {summary['failedTests']}  "
               f"skipped {summary['skippedTests']}  (of {summary['totalTestCount']})")
