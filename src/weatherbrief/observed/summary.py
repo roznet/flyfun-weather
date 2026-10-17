@@ -27,6 +27,8 @@ Three things the wording is careful about:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from weatherbrief.models.observed import (
     ObservedAnnulus,
     ObservedConditions,
@@ -37,6 +39,9 @@ from weatherbrief.models.observed import (
 )
 
 from .intensity import classify_dbz, classify_rate, intensity_label
+
+if TYPE_CHECKING:
+    from weatherbrief.analysis.route_locator import RouteLocator
 
 # Reflectivity at which an echo is worth naming in a one-line summary.  Below
 # this is cloud and drizzle returns that a pilot would not route around; the
@@ -70,15 +75,21 @@ _METRIC_FOR_KIND = {
 }
 
 
-def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummaryEntry]:
+def build_summary_entries(
+    conditions: ObservedConditions, locator: RouteLocator | None = None,
+) -> list[ObservedSummaryEntry]:
     """One clause per available source, in order of operational bite.
 
     Structured rather than plain strings because the clauses are not uniformly
     shaped — "Radar: heavy echo, peak 44 dBZ…" against "Precip rate to
     18.0 mm/h (heavy)…" — so a client rendering them as per-source rows cannot
     recover the source from the prose without guessing.
+
+    ``locator`` (#790) words where things are in the pilot's terms ("10 NM
+    before Middelburg (EHMZ)"); without one a sampled point reads by its
+    waypoint name, else "N NM along the route".
     """
-    by_station = {s.id: s for s in conditions.stations}
+    by_station = _Places({s.id: s for s in conditions.stations}, locator)
     widest = max(conditions.radii_nm) if conditions.radii_nm else 0.0
 
     # Each clause yields (text, category).  Only the two intensity-bearing
@@ -116,9 +127,17 @@ def build_summary_entries(conditions: ObservedConditions) -> list[ObservedSummar
     return entries
 
 
-def build_summary(conditions: ObservedConditions) -> list[str]:
+def build_summary(conditions: ObservedConditions, locator: RouteLocator | None = None) -> list[str]:
     """Plain-string form of :func:`build_summary_entries`, for PDF and digest."""
-    return [entry.text for entry in build_summary_entries(conditions)]
+    return [entry.text for entry in build_summary_entries(conditions, locator)]
+
+
+class _Places(dict):
+    """The station refs by id, plus the locator the clauses word places with."""
+
+    def __init__(self, stations: dict, locator: RouteLocator | None):
+        super().__init__(stations)
+        self.locator = locator
 
 
 # --- per-source clauses ----------------------------------------------------
@@ -174,9 +193,21 @@ def _reflectivity_clause(
 
 
 def _peak_place(station_id, annulus: ObservedAnnulus, by_station, widest) -> str:
-    """"8 NM NE of LPPR" when the sampler recorded where the peak is and the
-    point has a name (#689); else "within 20 NM of <point>", as before."""
+    """"10 NM before Middelburg (EHMZ), 5 NM left of track" with the route
+    locator (#790), placing the peak itself when the sampler recorded where
+    it is. Without a locator: "8 NM NE of LPPR" when the point has a name
+    (#689); else "within 20 NM of <point>", as before."""
     station = by_station.get(station_id) if station_id else None
+    locator = getattr(by_station, "locator", None)
+    if locator is not None and station is not None and station.lat is not None and station.lon is not None:
+        lat, lon = station.lat, station.lon
+        if annulus.max_at_nm is not None and annulus.max_at_nm >= 1 and annulus.max_bearing_deg is not None:
+            lat, lon = _offset(lat, lon, annulus.max_bearing_deg, annulus.max_at_nm)
+            place = locator.locate(lat, lon)
+            return f"{place.text}{place.lateral or ''}"
+        if annulus.max_at_nm is None:
+            return f"within {widest:.0f} NM of the route {locator.locate(lat, lon).text}"
+        return locator.locate(lat, lon).text
     if station is not None and station.name and annulus.max_at_nm is not None:
         if annulus.max_at_nm < 1 or annulus.max_bearing_deg is None:
             return f"at {station.name}"
@@ -239,10 +270,13 @@ def _lightning_clause(
         )
     # Discs overlap, so a flash near two adjacent route points is counted
     # twice; say "detections" rather than implying a flash census.
+    if getattr(by_station, "locator", None) is not None:
+        at = f"from the route, {_where(nearest_station, by_station)}"
+    else:
+        at = f"at {_where(nearest_station, by_station)}"
     return (
         f"Lightning: {total} flash detections within {widest:.0f} NM of the route "
-        f"in the last {window:.0f} min, nearest {nearest:.0f} NM at "
-        f"{_where(nearest_station, by_station)} ({_age(field)}){scope}.",
+        f"in the last {window:.0f} min, nearest {nearest:.0f} NM {at} ({_age(field)}){scope}.",
         "",
     )
 
@@ -306,11 +340,12 @@ def _tops_clause(
                 "",
             )
         return f"Cloud tops: clear over the whole corridor ({_age(field)}).", ""
+    near = ", " if getattr(by_station, "locator", None) is not None else " near "
     parts = [
-        f"Cloud tops to FL{highest:.0f} near {_where(highest_station, by_station)}"
+        f"Cloud tops to FL{highest:.0f}{near}{_where(highest_station, by_station)}"
     ]
     if clear:
-        parts.append(f"clear at {clear} of {covered + contradicted} points")
+        parts.append(_clear_share(clear, covered + contradicted))
     if contradicted:
         parts.append(_tops_unavailable(contradicted, covered))
     if multilayer:
@@ -318,6 +353,17 @@ def _tops_clause(
         # the case where a single cloud-top number is least trustworthy.
         parts.append(f"multi-layer suspected at {multilayer} of {covered}")
     return f"{', '.join(parts)} ({_age(field)}).", ""
+
+
+def _clear_share(clear: int, points: int) -> str:
+    """"clear over most of the route" (#790): a share a pilot can picture,
+    not "clear at 40 of 60 points" (the sampled points are 10 NM apart)."""
+    share = clear / points if points else 0.0
+    if share >= 0.75:
+        return "clear over most of the route"
+    if share >= 0.4:
+        return "clear over about half the route"
+    return "clear over part of the route"
 
 
 def _tops_unavailable(contradicted: int, covered: int) -> str:
@@ -392,11 +438,24 @@ def _station_count(field: ObservedField, widest: float) -> int:
     )
 
 
+def _offset(lat: float, lon: float, bearing_deg: float, nm: float) -> tuple[float, float]:
+    """The point ``nm`` from (lat, lon) on ``bearing_deg`` (flat earth: the
+    sampler's discs are at most tens of NM)."""
+    import math
+
+    b = math.radians(bearing_deg)
+    return lat + nm * math.cos(b) / 60.0, lon + nm * math.sin(b) / (60.0 * math.cos(math.radians(lat)))
+
+
 def _where(station_id: str | None, by_station) -> str:
-    """Name a place the way a pilot would: an ICAO, else a route distance."""
+    """Name a place the way a pilot would: the route locator's words (#790),
+    else an ICAO, else a route distance."""
     station = by_station.get(station_id) if station_id else None
     if station is None:
         return "the route"
+    locator = getattr(by_station, "locator", None)
+    if locator is not None and station.lat is not None and station.lon is not None:
+        return locator.locate(station.lat, station.lon).text
     if station.name:
         return station.name
     if station.enroute_distance_nm is not None:

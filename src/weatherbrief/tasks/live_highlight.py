@@ -99,8 +99,8 @@ Rules:
 - Use only the facts given. Never add weather, causes, forecasts or numbers that are not in them.
 - No verdict and no advice: never say safe, unsafe, go, no-go, avoid, divert, recommend or should. Point at the thing; the pilot decides.
 - Say what is there, not what is absent: don't list missing hazards ("no SIGMETs", "no lightning", "no cells"). Absence belongs only in the quiet-route sentence below.
-- Plain cockpit words. Places as distance along the route ("mid-route", "near LFMD") or ICAO codes. Times in Z.
-- Give every distance, time and figure exactly as the facts give it. Do not round it, convert it, or work out a span, total or difference of your own: say "from 235 NM to the destination" when the facts say 235, never "the last 41 NM".
+- Plain cockpit words. Places as the facts word them ("10 NM before Middelburg (EHMZ)", "over the sea after coast-out", "near LFMD") or ICAO codes, never as a distance along the route ("143 NM along"). Times in Z.
+- Give every distance, time and figure exactly as the facts give it. Do not round it, convert it, or work out a span, total or difference of your own: say "from Rijen (EHGR) to the destination" when the facts say that, never "the last 41 NM".
 - Keep every condition at the place the facts give it. A route airport's METAR is that airport's, never the destination's.
 - Give each airport's flight category exactly as the facts give it, and keep "now" and "at ETA" apart: an airport MVFR now and LIFR at ETA is "MVFR now, LIFR at ETA", never "IFR or LIFR"; LIFR is never "IFR".
 - Airports along the route matter when they show something notable (non-VFR, showers, thunderstorms, a worse TAF at your time); don't list VFR ones.
@@ -362,9 +362,17 @@ def _airports_along(live: dict, flown: float) -> tuple[dict, dict]:
             continue
         a = by_icao.get(st["icao"], {})
         cross = st.get("cross_nm")
-        where = f"{_f(along)} NM along" if along is not None else "position unknown"
-        if cross is not None:
-            where += ", on track" if abs(cross) < 1 else f", {_f(abs(cross))} NM {'right' if cross > 0 else 'left'} of track"
+        place = st.get("place")
+        if place:
+            # The route locator's words (#790): "15 NM after Uden (EHVK)",
+            # "29 NM east of departure"; never "29 NM along".
+            where = place["text"]
+            if cross is not None and place.get("relation") not in ("off_departure", "past_destination"):
+                where += ", on track" if abs(cross) < 1 else f", {_f(abs(cross))} NM {'right' if cross > 0 else 'left'} of track"
+        else:
+            where = f"{_f(along)} NM along" if along is not None else "position unknown"
+            if cross is not None:
+                where += ", on track" if abs(cross) < 1 else f", {_f(abs(cross))} NM {'right' if cross > 0 else 'left'} of track"
         line = {"icao": st["icao"], "role": st.get("role") or "route", "where": where,
                 "metar_now": _metar_words(a) if a.get("has_metar") else "no METAR"}
         taf = _taf_words(a, st)
@@ -402,11 +410,13 @@ def _coverage_band(pct: float) -> str:
     return "50% or more of the route ahead"
 
 
-def _coarse_stretches(bins: set[float], route_nm: float, flown: float) -> list[str]:
+def _coarse_stretches(bins: set[float], route_nm: float, flown: float, locator=None) -> list[str]:
     """Rain-over-track 5 NM bins as stretches on a :data:`RAIN_BIN_NM` grid.
 
     The first stretch says "from the aircraft" rather than a figure behind it
-    once airborne, so its start does not move with the clock.
+    once airborne, so its start does not move with the clock. With the
+    route locator (#790) the ends are anchors ("to 10 NM before Middelburg
+    (EHMZ)"); the grid keeps them from moving every tick.
     """
     coarse = sorted({int(a // RAIN_BIN_NM) for a in bins})
     spans: list[list[int]] = []
@@ -418,6 +428,11 @@ def _coarse_stretches(bins: set[float], route_nm: float, flown: float) -> list[s
     out = []
     for lo, hi in spans:
         lo_nm, hi_nm = lo * RAIN_BIN_NM, min(_f(route_nm), hi * RAIN_BIN_NM)
+        if locator is not None:
+            start = ("from the aircraft" if flown > 0 and lo_nm <= flown
+                     else f"from {locator.end_label(lo_nm)}")
+            out.append(f"{start} to {locator.end_label(hi_nm)}")
+            continue
         start = "from the aircraft" if flown > 0 and lo_nm <= flown else f"from {lo_nm} NM"
         out.append(f"{start} to {hi_nm} NM")
     return out
@@ -472,6 +487,20 @@ def _change_words(c: dict) -> str:
     return c["message"]
 
 
+def _ladder_locator(r: dict, route_nm: float):
+    """The route locator from the ribbon's anchor ladder (#790), or None on a
+    layer written before it (the facts then keep NM along)."""
+    if not r.get("anchors"):
+        return None
+    from weatherbrief.analysis.route_locator import RouteLocator
+
+    try:
+        return RouteLocator.from_ladder(r["anchors"], route_nm)
+    except Exception:
+        logger.warning("Highlight: unreadable anchor ladder — NM along", exc_info=True)
+        return None
+
+
 def _phase(r: dict, flown: float, route_nm: float) -> tuple[str, str]:
     """(facts wording, gate key) of the flight's phase."""
     if flown <= 0:
@@ -508,6 +537,7 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
     now = g.get("as_of") or live.get("live_updated_at")
 
     phase, phase_key = _phase(r, flown, route_nm)
+    locator = _ladder_locator(r, route_nm)
     out: dict = {"now": _hhmm(now), "route": f"{dep} to {dest}, {_f(route_nm)} NM", "flight": phase}
     gate: dict = {"route": out["route"], "phase": phase_key, "_flown_nm": flown}
 
@@ -543,7 +573,9 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
             continue
         item = {"what": " ".join(p for p in (s.get("qualifier"), s.get("hazard")) if p) or "SIGMET",
                 "id": (s.get("label") or "").split(":")[0]}
-        if lo is not None and hi is not None:
+        if s.get("span_text"):
+            item["covers"] = s["span_text"]
+        elif lo is not None and hi is not None:
             item["covers_route_nm"] = [_f(lo), _f(hi)]
         if s.get("new"):
             item["new_since_briefing"] = True
@@ -574,7 +606,8 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
                 rain_motion.append((ahead_len, b["motion_rel_deg"]))
         ahead_nm = max(route_nm - flown, 1)
         rain = {
-            "stretches_where_radar_rain_lies_over_the_track_itself": _coarse_stretches(on_track, route_nm, flown) or "none",
+            "stretches_where_radar_rain_lies_over_the_track_itself": (
+                _coarse_stretches(on_track, route_nm, flown, locator) or "none"),
             "rain_within_10_NM_either_side": "on " + _coverage_band(len(near) * 5 / ahead_nm * 100),
         }
         gate["rain"] = dict(rain)
@@ -597,12 +630,16 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
 
     rows = [c for c in (live.get("changes") or {}).get("changes") or [] if c.get("kind") in _FACT_CHANGE_KINDS]
 
+    places = {x["icao"]: x["place"]["text"] for x in r.get("stations") or [] if x.get("place")}
+
     def place(c):
         role = c.get("role") or "route"
         icao = c.get("icao")
         if role in ("departure", "destination", "alternate") and icao:
             return f"{role} {icao}"
         if icao:
+            if (c.get("place") or {}).get("text") or icao in places:
+                return f"route airport {icao}, {(c.get('place') or {}).get('text') or places[icao]}"
             d = c.get("enroute_distance_nm")
             return f"route airport {icao}" + (f" at {_f(d)} NM along" if d is not None else "")
         # A SIGMET row: its span is in ``sigmets_ahead``; the row's own
@@ -732,6 +769,8 @@ _META_RE = re.compile(
 _NEGATED_TS_RE = re.compile(
     r"\b(?:no|without|nor)\s+(?:lightning|thunderstorms?|ts)\b", re.IGNORECASE)
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+#: "143 NM along (the route)": the system's coordinates, not the pilot's (#790).
+_NM_ALONG_RE = re.compile(r"\b\d+(?:\.\d+)?\s*NM along\b")
 
 
 def _icaos(text: str) -> set[str]:
@@ -833,6 +872,12 @@ def review_flags(text: str, f: dict) -> list[str]:
     invented = sorted({n for n in _NUM_RE.findall(text) if n not in fact_numbers})
     if invented:
         flags.append(f"figure not in facts: {', '.join(invented)}")
+
+    along = _NM_ALONG_RE.findall(text)
+    if along:
+        # #790: a position the pilot cannot place. Flagged, not rejected,
+        # like the figures: a layer written before the locator still says it.
+        flags.append(f"NM-along position: {', '.join(along)}")
 
     return flags
 

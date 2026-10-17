@@ -15,6 +15,7 @@
     "message": "New SIGMET LECB 2: EMBD TS",
     "new_alert": true,
     "observed_at": "2026-10-02T05:05:00Z",
+    "place": null,
     "replaces": null,
     "role": "route",
     "source": "SIGMET",
@@ -45,6 +46,7 @@
     "message": "LEVC METAR: CB, TS reported (SPECI)",
     "new_alert": true,
     "observed_at": "2026-10-02T05:09:00Z",
+    "place": null,
     "replaces": null,
     "role": "route",
     "source": "SPECI",
@@ -140,7 +142,7 @@
     "sources": [
      "sigmet:LECB|2"
     ],
-    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers last 266 NM (new)",
+    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers from LEBL to LEMI (new)",
     "unavailable": [
      "storms"
     ]
@@ -211,6 +213,134 @@
   "source": "plan"
  },
  "ribbon": {
+  "anchors": [
+   {
+    "along_nm": 0.0,
+    "icao": "LELL",
+    "key": "LELL",
+    "kind": "waypoint",
+    "lat": 41.5209,
+    "lon": 2.1051,
+    "town": null
+   },
+   {
+    "along_nm": 275.6,
+    "icao": "LEMI",
+    "key": "LEMI",
+    "kind": "waypoint",
+    "lat": 37.8029,
+    "lon": -1.1249,
+    "town": null
+   },
+   {
+    "along_nm": 10.8,
+    "icao": "LEBL",
+    "key": "LEBL",
+    "kind": "station",
+    "lat": 41.2971,
+    "lon": 2.0785,
+    "town": null
+   },
+   {
+    "along_nm": 25.0,
+    "icao": null,
+    "key": "coast_out@25",
+    "kind": "coast_out",
+    "lat": 41.2131,
+    "lon": 1.7354,
+    "town": "LEBL"
+   },
+   {
+    "along_nm": 45.1,
+    "icao": "LERS",
+    "key": "LERS",
+    "kind": "station",
+    "lat": 41.1475,
+    "lon": 1.1684,
+    "town": null
+   },
+   {
+    "along_nm": 102.4,
+    "icao": "TORDU",
+    "key": "TORDU",
+    "kind": "waypoint",
+    "lat": 40.2581,
+    "lon": 0.5883,
+    "town": null
+   },
+   {
+    "along_nm": 124.5,
+    "icao": "DIKUT",
+    "key": "DIKUT",
+    "kind": "waypoint",
+    "lat": 40.0069,
+    "lon": 0.2361,
+    "town": null
+   },
+   {
+    "along_nm": 139.7,
+    "icao": "SOPET",
+    "key": "SOPET",
+    "kind": "waypoint",
+    "lat": 39.8339,
+    "lon": -0.0047,
+    "town": null
+   },
+   {
+    "along_nm": 152.8,
+    "icao": null,
+    "key": "coast_in@153",
+    "kind": "coast_in",
+    "lat": 39.6846,
+    "lon": -0.2098,
+    "town": "SOPET"
+   },
+   {
+    "along_nm": 169.9,
+    "icao": "LEVC",
+    "key": "LEVC",
+    "kind": "station",
+    "lat": 39.4892,
+    "lon": -0.481,
+    "town": null
+   },
+   {
+    "along_nm": 170.1,
+    "icao": "VLC",
+    "key": "VLC",
+    "kind": "waypoint",
+    "lat": 39.4856,
+    "lon": -0.4831,
+    "town": null
+   },
+   {
+    "along_nm": 240.3,
+    "icao": "LEAL",
+    "key": "LEAL",
+    "kind": "station",
+    "lat": 38.2822,
+    "lon": -0.5582,
+    "town": null
+   },
+   {
+    "along_nm": 268.5,
+    "icao": "LERI",
+    "key": "LERI",
+    "kind": "station",
+    "lat": 37.9511,
+    "lon": -1.2303,
+    "town": null
+   },
+   {
+    "along_nm": 272.9,
+    "icao": "LELC",
+    "key": "LELC",
+    "kind": "station",
+    "lat": 37.775,
+    "lon": -0.8124,
+    "town": null
+   }
+  ],
   "arrival_at": "2026-10-02T10:00:00Z",
   "departure_at": "2026-10-02T08:00:00Z",
   "flown_nm": 0.0,
@@ -1168,6 +1298,7 @@
     "new": true,
     "pending": false,
     "qualifier": "EMBD",
+    "span_text": "from LEBL to LEMI",
     "to_nm": 275.6,
     "valid_from": "2026-10-02T05:05:00Z",
     "valid_to": "2026-10-02T09:00:00Z"
@@ -1197,6 +1328,8 @@
     "icao": "LELL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": null,
     "role": "departure",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1227,6 +1360,21 @@
     "icao": "LEBL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 10.8,
+     "anchor": "LELL",
+     "anchor_icao": "LELL",
+     "anchor_kind": "waypoint",
+     "anchor_name": null,
+     "cross_nm": -8.1,
+     "distance_nm": 10.8,
+     "lateral": ", 8 NM left of track",
+     "relation": "after",
+     "short": "11 NM after LELL",
+     "side": "left",
+     "text": "11 NM after LELL"
+    },
     "role": "route",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1257,6 +1405,21 @@
     "icao": "LERS",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 45.1,
+     "anchor": "coast_out@25",
+     "anchor_icao": null,
+     "anchor_kind": "coast_out",
+     "anchor_name": "LEBL",
+     "cross_nm": 16.4,
+     "distance_nm": 20.1,
+     "lateral": ", 16 NM right of track",
+     "relation": "over_sea",
+     "short": "20 NM after coast-out",
+     "side": "right",
+     "text": "over the sea, 20 NM after coast-out (LEBL)"
+    },
     "role": "route",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1290,6 +1453,21 @@
     "icao": "LEVC",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:09:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 169.9,
+     "anchor": "VLC",
+     "anchor_icao": "VLC",
+     "anchor_kind": "waypoint",
+     "anchor_name": null,
+     "cross_nm": 0.1,
+     "distance_nm": -0.2,
+     "lateral": null,
+     "relation": "near",
+     "short": "near VLC",
+     "side": null,
+     "text": "near VLC"
+    },
     "role": "route",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1320,6 +1498,21 @@
     "icao": "LEAL",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 240.3,
+     "anchor": "VLC",
+     "anchor_icao": "VLC",
+     "anchor_kind": "waypoint",
+     "anchor_name": null,
+     "cross_nm": -17.3,
+     "distance_nm": 70.2,
+     "lateral": ", 17 NM left of track",
+     "relation": "between",
+     "short": "between VLC and LERI",
+     "side": "left",
+     "text": "between VLC and LERI"
+    },
     "role": "alternate",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1350,6 +1543,21 @@
     "icao": "LERI",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 268.5,
+     "anchor": "LELC",
+     "anchor_icao": "LELC",
+     "anchor_kind": "station",
+     "anchor_name": null,
+     "cross_nm": 7.3,
+     "distance_nm": -4.4,
+     "lateral": ", 7 NM right of track",
+     "relation": "near",
+     "short": "near LELC",
+     "side": "right",
+     "text": "near LELC"
+    },
     "role": "alternate",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1380,6 +1588,21 @@
     "icao": "LELC",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": {
+     "along_nm": 272.9,
+     "anchor": "LEMI",
+     "anchor_icao": "LEMI",
+     "anchor_kind": "waypoint",
+     "anchor_name": null,
+     "cross_nm": -14.7,
+     "distance_nm": -2.7,
+     "lateral": ", 15 NM left of track",
+     "relation": "near",
+     "short": "near LEMI",
+     "side": "left",
+     "text": "near LEMI"
+    },
     "role": "alternate",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1410,6 +1633,8 @@
     "icao": "LEMI",
     "metar_category": "VFR",
     "metar_time": "2026-10-02T05:00:00Z",
+    "name": null,
+    "place": null,
     "role": "destination",
     "taf_category_at_eta": null,
     "taf_temporary_category": null,
@@ -1458,6 +1683,8 @@
  "route_observations": {
   "airports": [
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 0.0,
     "enroute_distance_nm": 0.0,
     "eta_hour_offset": 0,
@@ -1488,9 +1715,11 @@
     "metar_wind_speed_kt": 2,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
+    "municipality": null,
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": null,
     "taf_applicable_lines": [],
     "taf_best_runway_id": null,
@@ -1516,6 +1745,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 8.24,
     "enroute_distance_nm": 13.49,
     "eta_hour_offset": 0,
@@ -1546,9 +1777,11 @@
     "metar_wind_speed_kt": 13,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
+    "municipality": null,
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LEBL",
      "runways": [
@@ -1699,6 +1932,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 16.05,
     "enroute_distance_nm": 47.81,
     "eta_hour_offset": 0,
@@ -1731,9 +1966,11 @@
     "metar_wind_speed_kt": 6,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
+    "municipality": null,
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LERS",
      "runways": [
@@ -1816,6 +2053,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 0.09,
     "enroute_distance_nm": 169.93,
     "eta_hour_offset": 1,
@@ -1848,9 +2087,11 @@
     "metar_wind_speed_kt": 9,
     "metar_wind_variable_from": 20,
     "metar_wind_variable_to": 80,
+    "municipality": null,
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LEVC",
      "runways": [
@@ -1933,6 +2174,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 17.48,
     "enroute_distance_nm": 242.48,
     "eta_hour_offset": 2,
@@ -1963,9 +2206,11 @@
     "metar_wind_speed_kt": 5,
     "metar_wind_variable_from": 340,
     "metar_wind_variable_to": 60,
+    "municipality": null,
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LEAL",
      "runways": [
@@ -2048,6 +2293,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 7.3,
     "enroute_distance_nm": 268.7,
     "eta_hour_offset": 2,
@@ -2078,9 +2325,11 @@
     "metar_wind_speed_kt": 4,
     "metar_wind_variable_from": 340,
     "metar_wind_variable_to": 60,
+    "municipality": null,
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LERI",
      "runways": [
@@ -2163,6 +2412,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 14.69,
     "enroute_distance_nm": 274.0,
     "eta_hour_offset": 2,
@@ -2193,9 +2444,11 @@
     "metar_wind_speed_kt": 8,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
+    "municipality": null,
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LELC",
      "runways": [
@@ -2312,6 +2565,8 @@
     "taf_wind_variable_to": null
    },
    {
+    "along_track_nm": null,
+    "cross_track_nm": null,
     "distance_from_route_nm": 0.0,
     "enroute_distance_nm": 275.56,
     "eta_hour_offset": 2,
@@ -2342,9 +2597,11 @@
     "metar_wind_speed_kt": 10,
     "metar_wind_variable_from": null,
     "metar_wind_variable_to": null,
+    "municipality": null,
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "route_end": null,
     "runway_wind": {
      "icao": "LEMI",
      "runways": [

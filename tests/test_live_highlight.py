@@ -191,9 +191,18 @@ def test_watch_pointing_at_an_airport_is_allowed():
     advice. 9 of 22 rejections on the #715 replay were this word, and banning it
     in the prompt made the model write "Watch-free note:" around it."""
     assert _flag(
-        "Quiet route ahead. Watch LFAC, MVFR at 11:00Z, 130 NM along and 19 NM left of track.",
+        "Quiet route ahead. Watch LFAC, MVFR at 11:00Z, 19 NM left of track.",
         _lfac_facts()) is None
     assert "watch" not in lh.SYSTEM.lower()
+
+
+def test_nm_along_position_is_flagged_not_rejected():
+    """#790: "130 NM along" is the system's coordinate; flagged for review,
+    never a reject (a layer written before the locator still says it)."""
+    text = "Watch LFAC, MVFR at 11:00Z, 130 NM along and 19 NM left of track."
+    assert _flag(text, _lfac_facts()) == "NM-along position: 130 NM along"
+    assert lh.check_grounding(text, _lfac_facts()) is None
+    assert "never as a distance along the route" in lh.SYSTEM
 
 
 # --- Grounding: what rejects and what only flags (owner, 2026-10-09) -------

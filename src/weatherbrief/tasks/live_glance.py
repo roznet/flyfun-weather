@@ -33,6 +33,7 @@ from euro_aip.utils.geometry import haversine_nm
 
 from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.analysis.route_geometry import RouteTrack
+from weatherbrief.analysis.route_locator import RouteLocator, when_text
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     ChangeRole,
@@ -143,9 +144,11 @@ class _Flight:
     """The route's ends and the flight's progress the tick measured against
     (``progress.as_of`` is the tick time)."""
 
-    def __init__(self, route: RouteConfig, progress: FlightProgress):
+    def __init__(self, route: RouteConfig, progress: FlightProgress, locator: RouteLocator | None = None):
         self.route = route
         self.progress = progress
+        # Pilot wording for positions (#790); None falls back to NM along.
+        self.locator = locator
         self.dep_icao = route.waypoints[0].icao.upper()
         self.dest_icao = route.waypoints[-1].icao.upper()
         self.dep_pos = (route.waypoints[0].lat, route.waypoints[0].lon)
@@ -395,9 +398,15 @@ def _enroute_storms(storms: LiveStorms | None, flight: _Flight) -> tuple[str, bo
     if lit:
         text += f", {lit} with lightning"
     nearest = min(ahead, key=lambda st: st.offtrack_nm)
-    eta = f" ~{_hhmm(nearest.abeam_eta)}" if nearest.abeam_eta is not None else ""
     side = f" {nearest.side}" if nearest.side else ""
-    text += (f"; nearest {nearest.offtrack_nm:.0f} NM{side} at {nearest.along_nm:.0f} NM{eta}"
+    if nearest.place is not None:
+        when = when_text(nearest.abeam_eta, flight.now, departed=flight.progress.departed)
+        eta = f" {when}" if when else ""
+        at = f", {nearest.place.short}"
+    else:
+        eta = f" ~{_hhmm(nearest.abeam_eta)}" if nearest.abeam_eta is not None else ""
+        at = f" at {nearest.along_nm:.0f} NM"
+    text += (f"; nearest {nearest.offtrack_nm:.0f} NM{side}{at}{eta}"
              f" ({nearest.peak_dbz:.0f} dBZ), {_storm_motion_words(nearest)}")
     return text, False, ahead
 
@@ -419,6 +428,8 @@ def _sigmet_clause(
         if s.from_nm is not None and s.to_nm is not None:
             if s.from_nm <= 1.0 and s.to_nm >= flight.total_nm - 1.0:
                 span = "covers the whole route"
+            elif s.span_text is not None:
+                span = f"covers {s.span_text}"
             elif s.from_nm <= 1.0:
                 span = f"covers first {s.to_nm:.0f} NM"
             elif s.to_nm >= flight.total_nm - 1.0:
@@ -544,6 +555,11 @@ def _ribbon_sigmets(layer: LiveLayer, flight: _Flight) -> list[RibbonSigmet]:
             new=(key in new_keys) if new_keys is not None else None,
             motion=_sigmet_motion(s, flight.track),
             focus=_sigmet_focus(key, s, flight.now),
+            span_text=(
+                flight.locator.span(s.enroute_distance_from_nm, s.enroute_distance_to_nm)
+                if flight.locator is not None and s.enroute_distance_from_nm is not None
+                and s.enroute_distance_to_nm is not None else None
+            ),
         ))
     return out
 
@@ -571,10 +587,14 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
         if not (a.has_metar or a.metar_raw or a.has_taf or a.taf_raw):
             continue
         icao = a.icao.upper()
-        along, cross = a.enroute_distance_nm, None
+        # The true projection (#790): an airport behind the departure is at a
+        # negative distance, not "29 NM along".
+        along, cross = a.along_nm, a.cross_track_nm
+        place = None
         if a.lat is not None and a.lon is not None:
             proj = flight.track.project(a.lat, a.lon)
-            cross = round(proj.cross_nm, 1)
+            if cross is None:
+                cross = round(proj.cross_nm, 1)
             if along is None:
                 along = proj.along_nm
         role = roles.get(icao, "route")
@@ -582,6 +602,9 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
             along, cross = 0.0, 0.0
         elif role == "destination":
             along, cross = flight.total_nm, 0.0
+        elif flight.locator is not None and a.lat is not None and a.lon is not None:
+            # Against the other anchors, never itself.
+            place = flight.locator.locate(a.lat, a.lon, exclude=icao)
         taf_ok = a.taf_valid_at_eta is not False
         out.append(RibbonStation(
             icao=icao, role=role,
@@ -595,6 +618,8 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
             taf_weather=list(a.taf_significant_weather) if taf_ok else [],
             focus=_station_focus(icao, a.lat, a.lon, a.metar_time) if a.lat is not None and a.lon is not None else None,
             via=via,
+            name=a.municipality,
+            place=place,
         ))
     out.sort(key=lambda s: (s.along_nm if s.along_nm is not None else math.inf))
     return out
@@ -662,6 +687,7 @@ def build_glance(
     *,
     alternate_icaos: list[str] | None = None,
     cell_frame: dict | None = None,
+    locator: RouteLocator | None = None,
 ) -> tuple[LiveGlance, LiveRibbon]:
     """The nutshell and the ribbon for this tick, and ``focus`` on every
     storm of ``layer.storms`` (set in place, last, so a failure part-way
@@ -669,12 +695,13 @@ def build_glance(
     its ``as_of`` is the tick time, the glance's "as of". ``cell_frame`` is
     the cells feed's newest display file, the source of the ribbon's
     rain/core bands (used only while ``layer.storms`` says the feed is
-    available)."""
+    available). ``locator`` (#790) words positions for the pilot; without
+    one they read "N NM along"."""
     from weatherbrief.observed.route_bands import BIN_NM, build_weather_bands
     from weatherbrief.tasks.live_significance import airport_roles
 
     now = progress.as_of
-    flight = _Flight(route, progress)
+    flight = _Flight(route, progress, locator)
     roles = airport_roles([wp.icao for wp in route.waypoints], alternate_icaos)
 
     storms = layer.storms
@@ -700,6 +727,7 @@ def build_glance(
         weather_status=storms.status if storms is not None else None,
         weather_corridor_nm=storms.corridor_nm if storms is not None else None,
         weather_bin_nm=BIN_NM,
+        anchors=locator.ladder() if locator is not None else [],
     )
     if storms is not None and storms.status == "available":
         ribbon.weather = build_weather_bands(

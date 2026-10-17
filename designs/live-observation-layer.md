@@ -1326,6 +1326,54 @@ commit.
 - Eligibility, payload and APNs headers: ios-app-briefing-notifications.md
   → "Live-alert push (#754)".
 
+## Route locator (#790)
+
+`analysis/route_locator.py` turns a route position into pilot words, so the same
+point reads the same way on the glance, change rows, highlight facts, ribbon,
+Radar & lightning cards and the agent block. Built once per tick in
+`commit_live_update` (`_build_locator`) and passed to `classify_changes`,
+`build_glance` and `build_summary_entries`; `None` everywhere falls back to the
+old "N NM along" wording (a layer or pack written before #790, a locator failure).
+
+- **Anchors** (the ladder, `LiveRibbon.anchors`): named route waypoints (lat/lon
+  fixes skipped; a doubled-back route anchors each pass, `EHMZ@234`), the route
+  airports with a METAR/TAF that project inside the route (the ribbon's stations),
+  and coast-out / coast-in (`analysis/coastline.py`). Towns from nav.db
+  `municipality`, carried on `AirportObservation.municipality`.
+- **Rules**: ≤ 5 NM "near X"; ≤ 20 NM "N NM after/before X" (nearest wins);
+  over water "over the sea, N NM after coast-out (X)" / "mid-crossing"; on land
+  with nothing within 20 NM "between A and B" (named anchors before coast points);
+  off the ends "29 NM east of departure" / "15 NM past the destination". Lateral
+  only past 3 NM, kept in `RoutePlace.lateral` so a line that states it (storm
+  rows) does not repeat it. `text` names the town ("Middelburg (EHMZ)"), `short`
+  the ICAO; change rows and cards use `text`, the glance uses `short`.
+- **Hysteresis**: `locate(prior=)` keeps last tick's anchor while it is within
+  3 NM of being the nearest, and "near" until 8 NM. Only storms carry it
+  (`LiveStorm.place`, read back from the previous layer by lineage id in
+  `_place_storms`); spans (SIGMETs, radar hits) are recomputed each tick.
+- **Structured**: `RoutePlace` on `RibbonStation`, `LiveStorm`, storm/radar
+  `LiveChange` rows; `RibbonSigmet.span_text`. The highlight facts are built from
+  the serialized layer, so they rebuild the locator from the ladder
+  (`RouteLocator.from_ladder`, along-track only); its prompt now says places "as
+  the facts word them, never as a distance along the route", and `review_flags`
+  flags an "N NM along" (non-blocking).
+- **Time**: `when_text` ("~10:20Z" before departure, "in ~25 min" in flight) is
+  used by the glance only. Change rows keep the clock: they are pushed and read
+  later, where a relative time is stale (a departure from #790's ask).
+- **True along-track**: airport positions come from euro_aip's signed
+  projection (`along_track_nm` / `cross_track_nm` / `route_end`, rzflight, euro_aip
+  ≥ 0.23) via `AirportObservation.along_nm`, falling back to the legacy
+  `enroute_distance_nm` (closest segment start + straight distance: puts an airport
+  behind the departure ahead of it) on older packs or an older euro_aip. ETA clamps
+  a negative position to the departure; `airport_relevant` keeps such an airport
+  until take-off. Ribbon stations can now sit at `along_nm < 0` or past `route_nm`.
+- **Coast data**: Natural Earth 10m land clipped to Europe and simplified
+  (`analysis/data/europe_land.json.gz`, 270 KB, rebuilt by
+  `scripts/build_europe_land.py` with shapely as a build-time-only dependency).
+  Pure-python even-odd ray cast over edges bucketed in 0.05° latitude bands;
+  crossings cached per route. Water under 8 NM (estuaries) is no crossing, land
+  under 3 NM inside one (islets) does not split it; outside the bbox is land.
+
 ## Gotchas
 
 - **Packs written before #637** were patched in place, so their "baseline" is
@@ -1354,6 +1402,7 @@ commit.
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix stream and with occasional one-shot fixes), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
+- `analysis/route_locator.py` — `RouteLocator` (`build`, `locate`, `locate_along`, `span`, `ladder`, `from_ladder`), `for_route`, `when_text`; `analysis/coastline.py` — `is_land`, `coast_crossings` (#790); tests `tests/test_route_locator.py`, `tests/test_route_locator_wiring.py`
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`, `POST /flights/{id}/live/position`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`
 - `tasks/live_timing.py` — `build_tick_row`, `write_tick_rows`, `record_delivery`, `latency_report`, `purge_old` (#751); `live_layer.CommitTrace`

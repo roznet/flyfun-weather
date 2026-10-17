@@ -423,12 +423,54 @@ def _build_storms(
         return LiveStorms(status="unavailable", corridor_nm=STORM_CORRIDOR_NM)
 
 
+def _build_locator(layer: LiveLayer, route: RouteConfig | None, progress: FlightProgress | None):
+    """The route locator for this tick (#790): the route's waypoints, the
+    ribbon's stations, the coast points. Never raises: without it every
+    surface falls back to "N NM along"."""
+    if route is None or progress is None or progress.track is None:
+        return None
+    try:
+        from weatherbrief.analysis.route_locator import for_route
+
+        return for_route(route, layer.route_observations, track=progress.track)
+    except Exception:
+        logger.warning("Route locator failed for %s — NM-along wording this tick", layer.flight_id, exc_info=True)
+        return None
+
+
+def _place_storms(storms: LiveStorms | None, locator, prior: LiveStorms | None) -> None:
+    """Each storm's place, in place, keeping last tick's anchor for the same
+    lineage while it is still nearly the nearest (the locator's hysteresis)."""
+    if locator is None or storms is None:
+        return
+    before = {st.id: st.place for st in (prior.storms if prior is not None else []) if st.place is not None}
+    for st in storms.storms:
+        try:
+            st.place = locator.locate(st.lat, st.lon, prior=before.get(st.id))
+        except Exception:
+            logger.warning("Storm %s could not be placed", st.id, exc_info=True)
+
+
+def _place_observed(observed: ObservedConditions | None, locator) -> None:
+    """Re-word the Radar & lightning cards with the tick's full locator (the
+    fetch built them against the route's waypoints only, #790)."""
+    if observed is None or locator is None:
+        return
+    try:
+        from weatherbrief.observed.summary import build_summary_entries
+
+        observed.summary_entries = build_summary_entries(observed, locator=locator)
+    except Exception:
+        logger.warning("Observed summary re-wording failed", exc_info=True)
+
+
 def _build_glance(
     layer: LiveLayer,
     route: RouteConfig | None,
     progress: FlightProgress | None,
     briefing_data: dict,
     cells: CellFrames | None = None,
+    locator=None,
 ) -> tuple[LiveGlance | None, LiveRibbon | None]:
     """The Observed tab's nutshell and ribbon for this tick (#690), and the
     storms' map focus. Never raises: a failure leaves both blocks null (the
@@ -440,7 +482,7 @@ def _build_glance(
 
         return build_glance(
             layer, route, progress, alternate_icaos=_alternate_icaos(briefing_data),
-            cell_frame=cells.newest if cells is not None else None,
+            cell_frame=cells.newest if cells is not None else None, locator=locator,
         )
     except Exception:
         # One distinctive line to alert on: a systematic failure blanks the
@@ -914,6 +956,9 @@ def commit_live_update(
         progress = flight_progress(route, departure, now, progress_events(history))
         layer.progress = progress_block(progress)
         layer.storms = _build_storms(cells, route, progress)
+        locator = _build_locator(layer, route, progress)
+        _place_storms(layer.storms, locator, prior.storms if prior is not None else None)
+        _place_observed(layer.observed_conditions, locator)
         memory = ClassifierMemory(
             alerted=dict(prior.alerted) if prior else {},
             sigmets={t.key: t for t in prior.sigmet_traces} if prior else {},
@@ -934,11 +979,12 @@ def commit_live_update(
             memory=memory,
             now=now,
             storms=layer.storms,
+            locator=locator,
         )
         if seeded:
             changes.baseline_source = "live_start"
         layer.changes = changes
-        layer.glance, layer.ribbon = _build_glance(layer, route, progress, briefing_data, cells)
+        layer.glance, layer.ribbon = _build_glance(layer, route, progress, briefing_data, cells, locator)
         # The glance is rebuilt wholesale, so #697's highlight has to be
         # carried over here or every tick loses it and pays for a new one.
         # Pure computation — the model call happens after this commit returns.

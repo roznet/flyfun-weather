@@ -210,6 +210,56 @@ class StormEstimate(BaseModel):
     horizon_min: float
 
 
+PlaceRelation = Literal[
+    "near", "before", "after", "between", "over_sea", "mid_crossing",
+    "off_departure", "past_destination",
+]
+AnchorKind = Literal["waypoint", "station", "coast_out", "coast_in"]
+
+
+class RouteAnchor(BaseModel):
+    """One rung of the route locator's anchor ladder (#790): a waypoint, a
+    ribbon station or a coast point, at its distance along the route.
+    Serialized on the ribbon so a reader of ``live.json`` (the highlight's
+    facts, a client) words positions with the same anchors."""
+
+    key: str
+    kind: AnchorKind
+    along_nm: float
+    lat: float
+    lon: float
+    icao: str | None = None
+    town: str | None = None
+
+
+class RoutePlace(BaseModel):
+    """A route position in the pilot's terms (#790, ``analysis/route_locator.py``).
+
+    Server-built so every live surface (glance, changes, highlight, ribbon,
+    Radar & lightning cards, MCP) reads the same point the same way. ``text``
+    names the anchor in full ("10 NM before Middelburg (EHMZ)"), ``short`` by
+    ICAO ("10 NM before EHMZ"); neither carries the lateral offset, which is
+    ``lateral`` (", 5 NM left of track", set only past 3 NM) so a line that
+    already states it does not repeat it. The anchor fields let a client link
+    the anchor rather than only show the words.
+    """
+
+    text: str
+    short: str
+    lateral: str | None = None
+    relation: PlaceRelation
+    anchor: str | None = None  # the anchor's key: an ICAO, a waypoint, "coast_out@127"
+    anchor_kind: AnchorKind | None = None
+    anchor_icao: str | None = None
+    anchor_name: str | None = None  # the town, when nav.db has one
+    # NM from the anchor along the route (signed: + after), or from the
+    # route's end for off_departure / past_destination.
+    distance_nm: float | None = None
+    along_nm: float | None = None
+    cross_nm: float | None = None
+    side: Literal["left", "right"] | None = None
+
+
 class LiveStorm(BaseModel):
     """One radar storm against the route (#688): a core35 cell with the
     core41 cells inside it, or a core41 on its own.
@@ -266,6 +316,9 @@ class LiveStorm(BaseModel):
     estimate: StormEstimate | None = None
     # Tap-to-map (#690): framed on the storm and the track point abeam it.
     focus: LiveFocus | None = None
+    # Where it is in pilot words (#790); also the hysteresis memory: the next
+    # tick keeps this anchor while it is nearly as close as the nearest.
+    place: RoutePlace | None = None
 
 
 class LiveStorms(BaseModel):
@@ -432,6 +485,10 @@ class RibbonStation(BaseModel):
     # A departure/destination read through a proxy station (#767): the
     # station(s) its METAR/TAF come from ("EGLL"). None otherwise.
     via: list[str] | None = None
+    # The town nav.db gives the airport ("Middelburg"), and where it is
+    # against the route's other anchors (#790): "29 NM east of departure".
+    name: str | None = None
+    place: RoutePlace | None = None
 
 
 class RibbonSigmet(BaseModel):
@@ -445,6 +502,8 @@ class RibbonSigmet(BaseModel):
     to_nm: float | None = None
     # Closest distance to the route when it does not cross it.
     min_distance_nm: float | None = None
+    # The stretch it covers in pilot words (#790): "from Uden to Rijen".
+    span_text: str | None = None
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     pending: bool = False
@@ -518,6 +577,9 @@ class LiveRibbon(BaseModel):
     weather_status: str | None = None
     weather_corridor_nm: float | None = None
     weather_bin_nm: float | None = None
+    # The route locator's anchor ladder (#790): departure, destination, then
+    # every anchor in order. Empty when the locator could not be built.
+    anchors: list[RouteAnchor] = Field(default_factory=list)
 
 
 class LiveChange(BaseModel):
@@ -548,6 +610,9 @@ class LiveChange(BaseModel):
     # SIGMET valid_from, radar/lightning frame time.
     observed_at: datetime | None = None
     enroute_distance_nm: float | None = None
+    # ``enroute_distance_nm`` in pilot words (#790), for a client or the agent
+    # to link the anchor; the message already says it.
+    place: RoutePlace | None = None
     message: str
     # True on the tick where this alert-tier change first appeared (or changed
     # value). Consumers that deliver alerts act on this, never on ``tier``
