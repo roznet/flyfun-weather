@@ -165,6 +165,7 @@ def main() -> int:
         "-destination", f"platform=iOS Simulator,id={udid}",
         "-resultBundlePath", str(bundle),
         "-collect-test-diagnostics", "never",
+        "-showBuildTimingSummary",  # per-phase build times, in the log for wall-clock review
         "-test-timeouts-enabled", "YES",
         "-maximum-test-execution-time-allowance", str(args.test_allowance),
         *[f"-only-testing:{t}" for t in args.only],
