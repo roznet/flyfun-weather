@@ -56,6 +56,10 @@ class VerificationObservation(BaseModel):
     dewpoint_c: int | None = None
     qnh: float | None = None
     weather: list[str] = Field(default_factory=list)
+    # Cloud detail from the raw report (#793, ``tasks/metar_clouds``).
+    cloud_layers: str | None = None  # JSON list; None = not derived
+    lowest_cloud_base_ft: int | None = None
+    convective_cloud: str | None = None  # 'CB' / 'TCU'
 
     # TAF fields (active at observation_time)
     taf_raw: str | None = None

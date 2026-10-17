@@ -211,3 +211,31 @@ def test_empty_airport_list_returns_no_snapshots(monkeypatch):
 
     assert snaps == []
     assert calls == 0
+
+
+def test_snapshot_carries_mid_and_high_cover(monkeypatch):
+    """#793: the Open-Meteo path copies mid/high bulk cover onto the snapshot."""
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None, hour_filter=None):
+        self._record_call()
+        out = []
+        for p in points:
+            wf = _forecast_with_one_sample(p.waypoint_icao)
+            wf.hourly[0].cloud_cover_mid_pct = 45.0
+            wf.hourly[0].cloud_cover_high_pct = 70.0
+            out.append(wf)
+        return out
+
+    with patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ):
+        snaps, _ = sv._fetch_forecasts_for_model(
+            "gfs",
+            datetime(2026, 5, 5, 0, 0, tzinfo=timezone.utc),
+            [_airport("ZZ01")],
+            session=None,
+        )
+
+    assert len(snaps) == 1
+    assert snaps[0]["cloud_cover_mid_pct"] == 45.0
+    assert snaps[0]["cloud_cover_high_pct"] == 70.0
