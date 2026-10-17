@@ -305,7 +305,7 @@
      "sigmet:LECB|3",
      "sigmet:LECM|3"
     ],
-    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers from LEBL to LEMI (briefed), EMBD TS SIGMET LECB 3 covers from 5 NM before LEAL to LEMI from 08:35Z (new), +1 more SIGMET",
+    "text": "radar cells unavailable \u00b7 EMBD TS SIGMET LECB 2 covers from LEBL to LEMI (briefed), EMBD TS SIGMET LECB 3 covers from 5 NM before abeam LEAL to LEMI from 08:35Z (new), +1 more SIGMET",
     "unavailable": [
      "storms"
     ]
@@ -414,30 +414,12 @@
     "town": "LEBL"
    },
    {
-    "along_nm": 45.1,
-    "icao": "LERS",
-    "key": "LERS",
-    "kind": "station",
-    "lat": 41.1475,
-    "lon": 1.1684,
-    "town": null
-   },
-   {
     "along_nm": 102.4,
     "icao": "TORDU",
     "key": "TORDU",
     "kind": "waypoint",
     "lat": 40.2581,
     "lon": 0.5883,
-    "town": null
-   },
-   {
-    "along_nm": 121.5,
-    "icao": "LECH",
-    "key": "LECH",
-    "kind": "station",
-    "lat": 40.2139,
-    "lon": 0.0733,
     "town": null
    },
    {
@@ -486,30 +468,12 @@
     "town": null
    },
    {
-    "along_nm": 240.3,
-    "icao": "LEAL",
-    "key": "LEAL",
-    "kind": "station",
-    "lat": 38.2822,
-    "lon": -0.5582,
-    "town": null
-   },
-   {
     "along_nm": 268.5,
     "icao": "LERI",
     "key": "LERI",
     "kind": "station",
     "lat": 37.9511,
     "lon": -1.2303,
-    "town": null
-   },
-   {
-    "along_nm": 272.9,
-    "icao": "LELC",
-    "key": "LELC",
-    "kind": "station",
-    "lat": 37.775,
-    "lon": -0.8124,
     "town": null
    }
   ],
@@ -1509,7 +1473,7 @@
     "new": true,
     "pending": true,
     "qualifier": "EMBD",
-    "span_text": "from 5 NM before LEAL to LEMI",
+    "span_text": "from 5 NM before abeam LEAL to LEMI",
     "to_nm": 275.6,
     "valid_from": "2026-10-02T08:35:00Z",
     "valid_to": "2026-10-02T10:35:00Z"
@@ -1539,7 +1503,7 @@
     "new": true,
     "pending": true,
     "qualifier": "EMBD",
-    "span_text": "from LEAL to LEMI",
+    "span_text": "from abeam LEAL to LEMI",
     "to_nm": 275.6,
     "valid_from": "2026-10-02T08:35:00Z",
     "valid_to": "2026-10-02T10:35:00Z"
@@ -1656,10 +1620,10 @@
      "cross_nm": 16.4,
      "distance_nm": 20.1,
      "lateral": ", 16 NM right of track",
-     "relation": "over_sea",
+     "relation": "after",
      "short": "20 NM after coast-out",
      "side": "right",
-     "text": "over the sea, 20 NM after coast-out (LEBL)"
+     "text": "20 NM after coast-out (LEBL)"
     },
     "role": "route",
     "taf_category_at_eta": null,
@@ -1701,10 +1665,10 @@
      "cross_nm": 14.2,
      "distance_nm": -3.0,
      "lateral": ", 14 NM right of track",
-     "relation": "near",
-     "short": "near DIKUT",
+     "relation": "abeam",
+     "short": "abeam DIKUT",
      "side": "right",
-     "text": "near DIKUT"
+     "text": "abeam DIKUT"
     },
     "role": "route",
     "taf_category_at_eta": null,
@@ -1829,17 +1793,17 @@
     "name": null,
     "place": {
      "along_nm": 268.5,
-     "anchor": "LELC",
-     "anchor_icao": "LELC",
-     "anchor_kind": "station",
+     "anchor": "LEMI",
+     "anchor_icao": "LEMI",
+     "anchor_kind": "waypoint",
      "anchor_name": null,
      "cross_nm": 7.3,
-     "distance_nm": -4.4,
+     "distance_nm": -7.1,
      "lateral": ", 7 NM right of track",
-     "relation": "near",
-     "short": "near LELC",
+     "relation": "before",
+     "short": "7 NM before LEMI",
      "side": "right",
-     "text": "near LELC"
+     "text": "7 NM before LEMI"
     },
     "role": "alternate",
     "taf_category_at_eta": null,
@@ -1881,10 +1845,10 @@
      "cross_nm": -14.7,
      "distance_nm": -2.7,
      "lateral": ", 15 NM left of track",
-     "relation": "near",
-     "short": "near LEMI",
+     "relation": "abeam",
+     "short": "abeam LEMI",
      "side": "left",
-     "text": "near LEMI"
+     "text": "abeam LEMI"
     },
     "role": "alternate",
     "taf_category_at_eta": null,

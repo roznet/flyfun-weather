@@ -33,7 +33,7 @@ from euro_aip.utils.geometry import haversine_nm
 
 from weatherbrief.analysis.flight_progress import FlightProgress
 from weatherbrief.analysis.route_geometry import RouteTrack
-from weatherbrief.analysis.route_locator import RouteLocator, when_text
+from weatherbrief.analysis.route_locator import RouteLocator, town_name, when_text
 from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     ChangeRole,
@@ -618,7 +618,7 @@ def _ribbon_stations(layer: LiveLayer, flight: _Flight, roles: dict[str, ChangeR
             taf_weather=list(a.taf_significant_weather) if taf_ok else [],
             focus=_station_focus(icao, a.lat, a.lon, a.metar_time) if a.lat is not None and a.lon is not None else None,
             via=via,
-            name=a.municipality,
+            name=(flight.locator.names.get(icao) if flight.locator is not None else None) or town_name(a.municipality),
             place=place,
         ))
     out.sort(key=lambda s: (s.along_nm if s.along_nm is not None else math.inf))

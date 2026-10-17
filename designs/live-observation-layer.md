@@ -1337,13 +1337,25 @@ old "N NM along" wording (a layer or pack written before #790, a locator failure
 
 - **Anchors** (the ladder, `LiveRibbon.anchors`): named route waypoints (lat/lon
   fixes skipped; a doubled-back route anchors each pass, `EHMZ@234`), the route
-  airports with a METAR/TAF that project inside the route (the ribbon's stations),
-  and coast-out / coast-in (`analysis/coastline.py`). Towns from nav.db
-  `municipality`, carried on `AirportObservation.municipality`.
+  airports with a METAR/TAF that project inside the route **within 10 NM of the
+  track** (`ANCHOR_OFFTRACK_NM`; the ribbon's stations), and coast-out / coast-in
+  (`analysis/coastline.py`). Without the cap two airports 25 NM either side
+  project to one point and read "Rotterdam near Antwerp" (EDLD→EGTF replay,
+  2026-10-17). Stations 10–20 NM off (`ABEAM_OFFTRACK_NM`) are a fallback only
+  where no anchor is within 20 NM, always "abeam": "5 NM before abeam Alicante
+  (LEAL)"; they are not on the ladder, and also name coast points
+  ("coast-in (Southend-on-Sea)"). Names (`display_names`): nav.db `municipality`
+  (on `AirportObservation.municipality`) without its county; where several route
+  airports share a town ("London") each reads by its short airport name
+  ("Gatwick", "Biggin Hill", "London City"). The ribbon's `RibbonStation.name`
+  is the same name.
 - **Rules**: ≤ 5 NM "near X"; ≤ 20 NM "N NM after/before X" (nearest wins);
   over water "over the sea, N NM after coast-out (X)" / "mid-crossing"; on land
   with nothing within 20 NM "between A and B" (named anchors before coast points);
-  off the ends "29 NM east of departure" / "15 NM past the destination". Lateral
+  off the ends "29 NM east of departure" / "15 NM past the destination". A
+  position more than 10 NM off track reads "abeam X" rather than "near X", and
+  over a crossing "N NM after coast-out (X)" without "over the sea" (an
+  off-track airport is on the coast, not at sea). Lateral
   only past 3 NM, kept in `RoutePlace.lateral` so a line that states it (storm
   rows) does not repeat it. `text` names the town ("Middelburg (EHMZ)"), `short`
   the ICAO; change rows and cards use `text`, the glance uses `short`.
@@ -1402,7 +1414,7 @@ old "N NM along" wording (a layer or pack written before #790, a locator failure
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix stream and with occasional one-shot fixes), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
 - `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
-- `analysis/route_locator.py`: `RouteLocator` (`build`, `locate`, `locate_along`, `span`, `ladder`, `from_ladder`), `for_route`, `when_text`; `analysis/coastline.py`: `is_land`, `coast_crossings` (#790); tests `tests/test_route_locator.py`, `tests/test_route_locator_wiring.py`
+- `analysis/route_locator.py`: `RouteLocator` (`build`, `locate`, `locate_along`, `span`, `ladder`, `from_ladder`), `for_route`, `display_names`, `town_name`, `short_airport_name`, `when_text`; `analysis/coastline.py`: `is_land`, `coast_crossings` (#790); tests `tests/test_route_locator.py`, `tests/test_route_locator_wiring.py`
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`, `POST /flights/{id}/live/position`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`
 - `tasks/live_timing.py` — `build_tick_row`, `write_tick_rows`, `record_delivery`, `latency_report`, `purge_old` (#751); `live_layer.CommitTrace`

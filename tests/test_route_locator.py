@@ -15,8 +15,13 @@ from weatherbrief.analysis.coastline import coast_crossings, is_land
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.analysis.route_locator import (
     HYSTERESIS_NM,
+    Anchor,
     RouteLocator,
     StationAnchor,
+    display_names,
+    for_route,
+    short_airport_name,
+    town_name,
     when_text,
 )
 
@@ -201,6 +206,84 @@ def test_unreadable_coast_data_keeps_the_other_anchors(monkeypatch):
     loc = _locator([("ZZUA", 40, "Upton")], coast=True)
     assert [a.key for a in loc.anchors] == ["ZZDP", "ZZUA", "ZZMD", "ZZAR"]
     assert loc.locate_along(42).text == "near Upton (ZZUA)"
+
+
+# --- Off-track anchors and names (review of the 2026-10-17 EDLD→EGTF replay) ------
+
+
+def _airport(icao, nm, cross_nm, town=None, name=None):
+    from types import SimpleNamespace
+
+    # cross + = right of a west→east track = south.
+    return SimpleNamespace(icao=icao, lat=LAT - cross_nm / 60.0, lon=_lon(nm), municipality=town, name=name,
+                           has_metar=True, metar_raw="METAR", has_taf=False, taf_raw=None)
+
+
+def _route_locator(airports):
+    from types import SimpleNamespace
+
+    wps = [SimpleNamespace(icao=i, lat=LAT, lon=_lon(n)) for i, n in (("ZZDP", 0), ("ZZMD", 100), ("ZZAR", 200))]
+    return for_route(SimpleNamespace(waypoints=wps), SimpleNamespace(airports=airports),
+                     track=_track(0, 100, 200), coast=False)
+
+
+def test_a_station_far_off_track_is_not_an_anchor():
+    # Rotterdam / Antwerp: 25 NM either side, the same point along the track.
+    loc = _route_locator([_airport("ZZRT", 60, -25, "Rotterdam"), _airport("ZZAN", 60, 21, "Antwerp"),
+                          _airport("ZZHG", 62, 5, "Hoogerheide")])
+    assert [a.key for a in loc.anchors] == ["ZZDP", "ZZHG", "ZZMD", "ZZAR"]
+    rt = loc.locate(LAT + 25 / 60.0, _lon(60), exclude="ZZRT")
+    assert rt.text == "abeam Hoogerheide (ZZHG)" and rt.relation == "abeam"
+    assert rt.lateral == ", 25 NM left of track"
+
+
+def test_an_off_track_station_is_an_abeam_fallback_only_where_nothing_closer():
+    # LEAL: 17 NM off, the only airfield for 40 NM; ZZRT 25 NM off is never used.
+    loc = _route_locator([_airport("ZZAL", 140, -17, "Alicante"), _airport("ZZRT", 60, -25, "Rotterdam")])
+    assert [a.key for a in loc.anchors] == ["ZZDP", "ZZMD", "ZZAR"]
+    assert loc.locate_along(132).text == "8 NM before abeam Alicante (ZZAL)"
+    assert loc.locate_along(141).text == "abeam Alicante (ZZAL)"
+    assert loc.locate_along(110).text == "10 NM after ZZMD"  # an anchor within 20 NM wins
+    assert loc.span(132, 200) == "from 8 NM before abeam Alicante (ZZAL) to ZZAR"
+    assert loc.locate_along(60).text == "between ZZDP and ZZMD"
+
+
+def test_a_cell_near_the_track_still_reads_near():
+    loc = _route_locator([_airport("ZZHG", 62, 5, "Hoogerheide")])
+    assert loc.locate_along(60, 2.0).text == "near Hoogerheide (ZZHG)"
+    assert loc.locate_along(60, 12.0).text == "abeam Hoogerheide (ZZHG)"
+
+
+def test_far_off_track_over_a_crossing_is_not_over_the_sea():
+    loc = _locator()
+    out = Anchor("coast_out@120", "coast_out", 120.0, LAT, _lon(120), town="Depton")
+    inn = Anchor("coast_in@190", "coast_in", 190.0, LAT, _lon(190), town="Arrford")
+    loc = RouteLocator(loc.track, list(loc.anchors) + [out, inn], loc.dep, loc.dest)
+    assert loc.locate_along(135, 1.0).text == "over the sea, 15 NM after coast-out (Depton)"
+    assert loc.locate_along(135, 17.0).text == "15 NM after coast-out (Depton)"
+
+
+def test_town_drops_the_county():
+    assert town_name("Southend-on-Sea, Essex") == "Southend-on-Sea"
+    assert town_name("Middelburg") == "Middelburg"
+    assert town_name("") is None and town_name(None) is None
+
+
+def test_short_airport_name():
+    assert short_airport_name("London Gatwick Airport", "London") == "Gatwick"
+    assert short_airport_name("London Biggin Hill Airport", "London") == "Biggin Hill"
+    assert short_airport_name("London City Airport", "London") == "London City"
+    assert short_airport_name("Antwerp International Airport (Deurne)", "Antwerp") == "Antwerp"
+
+
+def test_a_shared_town_reads_by_airport_name():
+    names = display_names([
+        _airport("ZZGW", 10, 0, "London", "London Gatwick Airport"),
+        _airport("ZZLC", 20, 0, "London", "London City Airport"),
+        _airport("ZZSS", 30, 0, "London, Essex", "London Stansted Airport"),
+        _airport("ZZSE", 40, 0, "Southend-on-Sea, Essex", "London Southend Airport"),
+    ])
+    assert names == {"ZZGW": "Gatwick", "ZZLC": "London City", "ZZSS": "Stansted", "ZZSE": "Southend-on-Sea"}
 
 
 # --- Time ------------------------------------------------------------------------

@@ -211,7 +211,7 @@ class StormEstimate(BaseModel):
 
 
 PlaceRelation = Literal[
-    "near", "before", "after", "between", "over_sea", "mid_crossing",
+    "near", "abeam", "before", "after", "between", "over_sea", "mid_crossing",
     "off_departure", "past_destination",
 ]
 AnchorKind = Literal["waypoint", "station", "coast_out", "coast_in"]

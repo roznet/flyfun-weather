@@ -38,7 +38,17 @@ like any other: within :data:`ANCHOR_NM` it wins "N NM after X" over the
 over-the-sea wording, which only takes over beyond that.
 
 Names: town + ICAO in ``text`` ("Middelburg (EHMZ)"), ICAO alone in
-``short``. The town is nav.db's ``municipality``; without one the ICAO alone.
+``short``. The town is nav.db's ``municipality`` without its county
+("Southend-on-Sea, Essex" → "Southend-on-Sea"); where several route airports
+share it ("London") each reads by its own name instead ("Gatwick",
+"Biggin Hill", "London City"). Without either, the ICAO alone.
+
+Only stations within :data:`ANCHOR_OFFTRACK_NM` of the track are anchors. A
+position further off (a cell, an off-track airport) reads against the
+on-track anchors with its offset: "abeam Hoogerheide (EHWO), 25 NM right of
+track". Stations up to :data:`ABEAM_OFFTRACK_NM` off are a fallback where no
+anchor is within :data:`ANCHOR_NM`, always as "abeam": "5 NM before abeam
+Alicante (LEAL)". They are not on the serialized ladder.
 
 **Stability:** a moving storm would flip between "after Rijen" and "before
 Hoeven" every tick at the midpoint. :meth:`RouteLocator.locate` takes the
@@ -51,6 +61,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -66,6 +77,16 @@ logger = logging.getLogger(__name__)
 NEAR_NM = 5.0
 #: An anchor further than this is not used for "N NM after/before X".
 ANCHOR_NM = 20.0
+#: A ribbon station further off track than this is not an anchor: two
+#: airports 25 NM either side of the track project to the same point and
+#: would read "Rotterdam near Antwerp". A position this far off reads
+#: "abeam X", never "near X" or "over the sea".
+ANCHOR_OFFTRACK_NM = 10.0
+#: A station between ANCHOR_OFFTRACK_NM and this far off track is an "abeam"
+#: anchor: used only where no anchor is within ANCHOR_NM, and always worded
+#: "abeam" ("5 NM before abeam Alicante (LEAL)" rather than "33 NM before
+#: LERI"). Further off it is never a reference.
+ABEAM_OFFTRACK_NM = 20.0
 #: Off-track distance below which the lateral offset is not worth saying.
 LATERAL_NM = 3.0
 #: The previous anchor is kept while it is at most this much further than the
@@ -157,7 +178,7 @@ class RouteLocator:
 
     def __init__(
         self, track: RouteTrack | None, anchors: Sequence[Anchor], dep: Anchor, dest: Anchor,
-        total_nm: float | None = None,
+        total_nm: float | None = None, abeam: Sequence[Anchor] = (),
     ):
         self.track = track
         self.total_nm = track.total_nm if track is not None else float(total_nm or 0.0)
@@ -165,6 +186,10 @@ class RouteLocator:
         self.dep = dep
         self.dest = dest
         self._by_key = {a.key: a for a in self.anchors}
+        #: Off-track stations offered as "abeam" fallbacks (see ABEAM_OFFTRACK_NM).
+        self.abeam = sorted(abeam, key=lambda a: a.along_nm)
+        #: ICAO → display name for every route airport (set by :func:`for_route`).
+        self.names: dict[str, str] = {}
         self._waters = self._water_stretches()
 
     @classmethod
@@ -176,6 +201,7 @@ class RouteLocator:
         *,
         towns: dict[str, str] | None = None,
         coast: bool = True,
+        abeam: Iterable[StationAnchor] = (),
     ) -> RouteLocator:
         """The ladder for one route.
 
@@ -212,6 +238,13 @@ class RouteLocator:
                                  icao=key, town=st.town)
         named = list(by_key.values())
         anchors = list(named)
+        # Coast points take their name from the nearest airfield, off-track
+        # ones included: "coast-in (Southend-on-Sea)" reads better than a
+        # bare "coast-in" (they stay names here, never "near" references).
+        far = [Anchor(key=st.icao.upper(), kind="station", along_nm=st.along_nm, lat=st.lat, lon=st.lon,
+                      icao=st.icao.upper(), town=st.town)
+               for st in abeam if st.along_nm is not None and 0.0 <= st.along_nm <= track.total_nm
+               and st.icao.upper() not in by_key]
         crossings = ()
         if coast:
             from weatherbrief.analysis.coastline import coast_crossings
@@ -224,7 +257,7 @@ class RouteLocator:
                 logger.warning("Coast data unreadable — route locator without coast points", exc_info=True)
         for c in crossings:
             town = None
-            near = [(haversine_nm(c.lat, c.lon, a.lat, a.lon), a) for a in named]
+            near = [(haversine_nm(c.lat, c.lon, a.lat, a.lon), a) for a in named + far]
             near = [x for x in near if x[0] <= COAST_NAME_NM]
             if near:
                 a = min(near, key=lambda x: x[0])[1]
@@ -240,7 +273,7 @@ class RouteLocator:
             d_id, "waypoint", 0.0, dlat, dlon, d_id, towns.get(d_id))
         dest = last or Anchor(a_id if a_id not in by_key else f"{a_id}@{track.total_nm:.0f}", "waypoint",
                               track.total_nm, alat, alon, a_id, towns.get(a_id))
-        return cls(track, anchors, dep, dest)
+        return cls(track, anchors, dep, dest, abeam=far)
 
     def ladder(self) -> list[RouteAnchor]:
         """The anchors, departure and destination first, for the ribbon."""
@@ -308,10 +341,26 @@ class RouteLocator:
                               relation="between", **base)
         anchor = self._pick(anchors, along, prior)
         delta = along - anchor.along_nm
+        # Far off track, the track's own surroundings are not the thing's:
+        # not "near" the anchor but abeam it, and not "over the sea" because
+        # the track is (Oostende is on the coast 17 NM from a mid-sea track).
+        far = cross_nm is not None and abs(cross_nm) > ANCHOR_OFFTRACK_NM
         water = self._water_at(along)
-        near_nm = NEAR_NM + (HYSTERESIS_NM if prior is not None and prior.relation == "near"
+        if far and water is not None and abs(delta) > NEAR_NM:
+            # Off to the side of a crossing: the coast points still frame it,
+            # without claiming the thing is over the sea.
+            out, in_ = water
+            d_out, d_in = along - out.along_nm, in_.along_nm - along
+            c, d = (out, d_out) if d_out <= d_in else (in_, -d_in)
+            rel = "after" if d > 0 else "before"
+            return self._place(rel, c, d, f"{_nm(d)} {rel} {c.label}", f"{_nm(d)} {rel} {c.short}", base)
+        if far:
+            water = None
+        near_nm = NEAR_NM + (HYSTERESIS_NM if prior is not None and prior.relation in ("near", "abeam")
                              and prior.anchor == anchor.key else 0.0)
         if abs(delta) <= near_nm:
+            if far:
+                return self._place("abeam", anchor, delta, f"abeam {anchor.label}", f"abeam {anchor.short}", base)
             return self._place("near", anchor, delta, f"near {anchor.label}", f"near {anchor.short}", base)
         if water is not None and (abs(delta) > ANCHOR_NM or anchor.kind in ("coast_out", "coast_in")):
             return self._over_sea(water, along, base)
@@ -319,6 +368,9 @@ class RouteLocator:
             rel = "after" if delta > 0 else "before"
             return self._place(rel, anchor, delta, f"{_nm(delta)} {rel} {anchor.label}",
                                f"{_nm(delta)} {rel} {anchor.short}", base)
+        abeam = self._abeam_fallback(along, exclude)
+        if abeam is not None:
+            return abeam(base)
         # Between two named places: a coast point is a last resort here, the
         # land side of a crossing reads better against an airfield.
         named = [a for a in anchors if a.kind in ("waypoint", "station")] or anchors
@@ -388,6 +440,20 @@ class RouteLocator:
         return self._place("over_sea", in_, -d_in, f"over the sea, {_nm(d_in)} before {in_.label}",
                            f"{_nm(d_in)} before coast-in", base)
 
+    def _abeam_fallback(self, along: float, exclude: str | None = None):
+        """An off-track station within ANCHOR_NM, for a position no anchor
+        is within ANCHOR_NM of: a builder of its place, or None."""
+        far = [a for a in self.abeam if a.key != exclude and abs(along - a.along_nm) <= ANCHOR_NM]
+        if not far:
+            return None
+        a = min(far, key=lambda x: abs(along - x.along_nm))
+        d = along - a.along_nm
+        if abs(d) <= NEAR_NM:
+            return lambda base: self._place("abeam", a, d, f"abeam {a.label}", f"abeam {a.short}", base)
+        rel = "after" if d > 0 else "before"
+        return lambda base: self._place("abeam", a, d, f"{_nm(d)} {rel} abeam {a.label}",
+                                        f"{_nm(d)} {rel} abeam {a.short}", base)
+
     def end_label(self, along: float) -> str:
         """One end of a stretch: the anchor if near, else "N NM after X"
         (no "over the sea": it is half of a "from … to …")."""
@@ -399,27 +465,88 @@ class RouteLocator:
         d = along - a.along_nm
         if abs(d) <= NEAR_NM:
             return a.label
+        if abs(d) > ANCHOR_NM:
+            far = self._abeam_fallback(along)
+            if far is not None:
+                return far({}).text
         return f"{_nm(d)} {'after' if d > 0 else 'before'} {a.label}"
 
 
 def for_route(route, observations=None, *, track: RouteTrack | None = None, coast: bool = True) -> RouteLocator:
     """The locator for a briefing route: its waypoints, plus — when the live
     layer has them — the route airports with a METAR or TAF (the ribbon's
-    stations), with nav.db towns. ``observations`` is a
+    stations) within :data:`ANCHOR_OFFTRACK_NM` of the track, named by
+    :func:`display_names`. ``observations`` is a
     :class:`~weatherbrief.models.observations.RouteObservations`."""
     track = track or RouteTrack.from_route(route)
-    towns: dict[str, str] = {}
+    airports = list(observations.airports) if observations is not None else []
+    names = display_names(airports)
     stations: list[StationAnchor] = []
-    for a in (observations.airports if observations is not None else ()):
-        if a.municipality:
-            towns[a.icao.upper()] = a.municipality
+    abeam: list[StationAnchor] = []
+    for a in airports:
         if a.lat is None or a.lon is None or not (a.has_metar or a.metar_raw or a.has_taf or a.taf_raw):
             continue
         proj = track.project(a.lat, a.lon)
-        if proj.end is None:
-            stations.append(StationAnchor(a.icao.upper(), a.lat, a.lon, proj.along_nm, a.municipality))
+        if proj.end is not None or proj.offtrack_nm > ABEAM_OFFTRACK_NM:
+            continue
+        st = StationAnchor(a.icao.upper(), a.lat, a.lon, proj.along_nm, names.get(a.icao.upper()))
+        (stations if proj.offtrack_nm <= ANCHOR_OFFTRACK_NM else abeam).append(st)
     waypoints = [(wp.icao, wp.lat, wp.lon) for wp in route.waypoints]
-    return RouteLocator.build(track, waypoints, stations, towns=towns, coast=coast)
+    loc = RouteLocator.build(track, waypoints, stations, towns=names, coast=coast, abeam=abeam)
+    loc.names = names
+    return loc
+
+
+#: Words dropped from an airport's name for its short form.
+_NAME_NOISE = re.compile(
+    r"\b(international|regional|airport|airfield|aerodrome|airbase|air base|heliport|executive)\b",
+    re.IGNORECASE,
+)
+#: What is left of "London City Airport" once "London" goes is not a name.
+_GENERIC_REST = {"city", "central", "north", "south", "east", "west", "main"}
+
+
+def town_name(municipality: str | None) -> str | None:
+    """nav.db's municipality without the county: "Southend-on-Sea, Essex" →
+    "Southend-on-Sea". None when empty."""
+    town = (municipality or "").split(",")[0].strip()
+    return town or None
+
+
+def short_airport_name(name: str | None, town: str | None = None) -> str | None:
+    """"London Gatwick Airport" → "Gatwick", "London City Airport" →
+    "London City", "Flanders International Airport Kortrijk-Wevelgem" →
+    "Flanders Kortrijk-Wevelgem". The town prefix goes only when what is
+    left still names the place."""
+    if not name:
+        return None
+    n = re.sub(r"\(.*?\)", " ", name)
+    n = " ".join(_NAME_NOISE.sub(" ", n).split())
+    if town and n.lower().startswith(town.lower() + " "):
+        rest = n[len(town):].strip()
+        if rest and rest.lower() not in _GENERIC_REST:
+            n = rest
+    return n or None
+
+
+def display_names(airports) -> dict[str, str]:
+    """ICAO → the name the live wording uses for each route airport: the town
+    (:func:`town_name`), or the airport's own short name
+    (:func:`short_airport_name`) where several share the town ("London")."""
+    towns = {a.icao.upper(): town_name(getattr(a, "municipality", None)) for a in airports}
+    counts: dict[str, int] = {}
+    for t in towns.values():
+        if t:
+            counts[t.lower()] = counts.get(t.lower(), 0) + 1
+    out: dict[str, str] = {}
+    for a in airports:
+        icao = a.icao.upper()
+        town = towns.get(icao)
+        if town and counts[town.lower()] > 1:
+            out[icao] = short_airport_name(getattr(a, "name", None), town) or town
+        elif town:
+            out[icao] = town
+    return out
 
 
 def when_text(t: datetime | None, now: datetime, *, departed: bool) -> str:

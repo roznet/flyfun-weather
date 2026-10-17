@@ -1237,7 +1237,7 @@ export interface RoutePlace {
   text: string;
   short: string;
   lateral?: string | null;
-  relation: 'near' | 'before' | 'after' | 'between' | 'over_sea' | 'mid_crossing'
+  relation: 'near' | 'abeam' | 'before' | 'after' | 'between' | 'over_sea' | 'mid_crossing'
     | 'off_departure' | 'past_destination';
   /** The anchor's key: an ICAO, a waypoint, "coast_out@127". */
   anchor?: string | null;
