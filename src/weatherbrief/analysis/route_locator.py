@@ -33,6 +33,10 @@ before the departure / past the destination "29 NM east of departure",
 lateral, past :data:`LATERAL_NM`            ", 5 NM left of track" (separate)
 =========================================  ====================================
 
+A named waypoint inside a crossing (an island field, a platform) is an anchor
+like any other: within :data:`ANCHOR_NM` it wins "N NM after X" over the
+over-the-sea wording, which only takes over beyond that.
+
 Names: town + ICAO in ``text`` ("Middelburg (EHMZ)"), ICAO alone in
 ``short``. The town is nav.db's ``municipality``; without one the ICAO alone.
 
@@ -45,6 +49,7 @@ near radius.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -54,6 +59,8 @@ from euro_aip.utils.geometry import haversine_nm
 
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.models.live import AnchorKind, RouteAnchor, RoutePlace
+
+logger = logging.getLogger(__name__)
 
 #: Within this along-track distance of an anchor a position is "near" it.
 NEAR_NM = 5.0
@@ -177,6 +184,8 @@ class RouteLocator:
         stations bring their own). ``coast=False`` skips the land/sea pass
         (tests, or a route the coast data cannot help).
         """
+        if len(waypoints) < 2:
+            raise ValueError("a route locator needs the route's departure and destination")
         towns = {k.upper(): v for k, v in (towns or {}).items() if v}
         by_key: dict[str, Anchor] = {}
         for (ident, lat, lon), along in zip(waypoints, track.distances):
@@ -203,18 +212,25 @@ class RouteLocator:
                                  icao=key, town=st.town)
         named = list(by_key.values())
         anchors = list(named)
+        crossings = ()
         if coast:
             from weatherbrief.analysis.coastline import coast_crossings
 
-            for c in coast_crossings(tuple(track.points), tuple(track.distances)):
-                town = None
-                near = [(haversine_nm(c.lat, c.lon, a.lat, a.lon), a) for a in named]
-                near = [x for x in near if x[0] <= COAST_NAME_NM]
-                if near:
-                    a = min(near, key=lambda x: x[0])[1]
-                    town = a.town or a.icao
-                anchors.append(Anchor(key=f"{c.kind}@{c.along_nm:.0f}", kind=c.kind,
-                                      along_nm=c.along_nm, lat=c.lat, lon=c.lon, town=town))
+            # Broken coast data costs the coast points, not the waypoint and
+            # station anchors (callers would otherwise drop to "N NM along").
+            try:
+                crossings = coast_crossings(tuple(track.points), tuple(track.distances))
+            except Exception:
+                logger.warning("Coast data unreadable — route locator without coast points", exc_info=True)
+        for c in crossings:
+            town = None
+            near = [(haversine_nm(c.lat, c.lon, a.lat, a.lon), a) for a in named]
+            near = [x for x in near if x[0] <= COAST_NAME_NM]
+            if near:
+                a = min(near, key=lambda x: x[0])[1]
+                town = a.town or a.icao
+            anchors.append(Anchor(key=f"{c.kind}@{c.along_nm:.0f}", kind=c.kind,
+                                  along_nm=c.along_nm, lat=c.lat, lon=c.lon, town=town))
         (dlat, dlon), (alat, alon) = track.points[0], track.points[-1]
         d_id, a_id = waypoints[0][0].upper(), waypoints[-1][0].upper()
         first = by_key.get(d_id)

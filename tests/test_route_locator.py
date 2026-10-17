@@ -173,6 +173,36 @@ def test_ladder_round_trip_words_the_same():
         back.locate(LAT, _lon(10))
 
 
+def test_round_trip_ladder_keeps_the_departure_rung():
+    # ZZDP → ZZMD → ZZDP, the out-and-back the review asked about: the two
+    # ends are separate rungs, so a reader of the ladder words it the same.
+    track = RouteTrack([(LAT, _lon(0)), (LAT, _lon(100)), (LAT + 0.0001, _lon(0))], [0.0, 100.0, 200.0])
+    wps = [("ZZDP", LAT, _lon(0)), ("ZZMD", LAT, _lon(100)), ("ZZDP", LAT + 0.0001, _lon(0))]
+    loc = RouteLocator.build(track, wps, towns={"ZZDP": "Depton"}, coast=False)
+    assert loc.dep.key != loc.dest.key
+    back = RouteLocator.from_ladder([a.model_dump() for a in loc.ladder()], loc.total_nm)
+    assert [a.key for a in back.anchors] == [a.key for a in loc.anchors]
+    for x in (2, 10, 60, 100, 150, 190, 199):
+        assert back.locate_along(x).text == loc.locate_along(x).text
+
+
+def test_a_route_without_two_waypoints_is_refused():
+    with pytest.raises(ValueError):
+        RouteLocator.build(_track(0, 100), [("ZZDP", LAT, _lon(0))], coast=False)
+
+
+def test_unreadable_coast_data_keeps_the_other_anchors(monkeypatch):
+    import weatherbrief.analysis.coastline as coastline
+
+    def broken(*_a, **_k):
+        raise OSError("europe_land.json.gz missing")
+
+    monkeypatch.setattr(coastline, "coast_crossings", broken)
+    loc = _locator([("ZZUA", 40, "Upton")], coast=True)
+    assert [a.key for a in loc.anchors] == ["ZZDP", "ZZUA", "ZZMD", "ZZAR"]
+    assert loc.locate_along(42).text == "near Upton (ZZUA)"
+
+
 # --- Time ------------------------------------------------------------------------
 
 
