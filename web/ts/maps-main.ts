@@ -1319,7 +1319,10 @@ async function main(): Promise<void> {
   fcMetric    = init['fc.metric'];
   urlInit = init;
   hydrateSynoptic(init);
-  fcView = bindMapView(forecastMap.getLeafletMap()!, { initial: init['fc.view'], onChange: () => syncUrl() });
+  const fcLeaflet = forecastMap.getLeafletMap();
+  if (fcLeaflet) {
+    fcView = bindMapView(fcLeaflet, { initial: init['fc.view'], onChange: () => syncUrl() });
+  }
 
   if (!urlParams.has('fc.hour')) {
     const nowHour = new Date().getUTCHours();

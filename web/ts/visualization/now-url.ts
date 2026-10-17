@@ -50,8 +50,8 @@ const nowLayersCodec: Codec<string> = {
     const layers = decodeNowLayers(raw);
     if (!layers) return undefined;
     const s = encodeNowLayers(layers);
-    // A link spelling out the default set reads the same as no key would be
-    // wrong here: it must still beat localStorage. Keep the explicit list.
+    // A link that spells out the default set must not collapse to '' (no key),
+    // or it would lose to the viewer's localStorage. Keep the explicit list.
     return s || NOW_LAYERS.filter((k) => layers[k]).join(',');
   },
   format: (v) => v,
