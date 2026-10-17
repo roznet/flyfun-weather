@@ -461,8 +461,13 @@ def _build_vfr_highlights(
     arr_status: AdvisoryStatus,
     conv_grade: ConvectiveModelGrade | None = None,
     conv_capped: bool = False,
-) -> AdvisoryHighlights:
-    """Highlight geometry for the VFR composite (#375).
+) -> tuple[AdvisoryHighlights, list[tuple[float, HighlightSeverity]]]:
+    """Highlight geometry for the VFR composite (#375), plus its per-point ribbon.
+
+    The per-point ``(distance, severity)`` list is returned beside the
+    highlights because it is also the composite's published extent: the
+    flagged points of the ribbon are exactly the union of the firing axes, so
+    reducing them gives the miles the card publishes — see the caller.
 
     Regions are the union of the firing sub-axes, each with its own kind:
     ``cruise_imc`` (cloud segments intersecting the cruise line, same geometry
@@ -595,7 +600,7 @@ def _build_vfr_highlights(
         ribbon=ribbon,
         regions=regions,
         peak_dist_nm=ribbon_peak(ribbon),
-    )
+    ), ribbon_points
 
 
 # Severity order for the strict-improvement check on the cruise_imc mitigation.
@@ -1159,6 +1164,7 @@ class VFRFeasibilityEvaluator:
             conv_status = conv_grade.status
             character = classify_route_character(ctx, model, char_params)
             conv_detail = ""
+            conv_named_extent = None
             cap_applied = False
             if conv_status not in (AdvisoryStatus.GREEN, AdvisoryStatus.UNAVAILABLE):
                 # Soften ONLY on a band that positively establishes the cells can
@@ -1181,17 +1187,16 @@ class VFRFeasibilityEvaluator:
                     conv_key = "vfr.conv_not_circumnavigable"
                 else:
                     conv_key = "vfr.conv_uncharacterised"
+                # Quote the extent of the tier the sentence names (#571 D1) —
+                # same rule the convective and IFR cards follow.
+                conv_named_extent = (
+                    conv_grade.extent_mod if conv_grade.affected_mod else conv_grade.extent
+                )
                 conv_detail = adv_t(
                     conv_key,
                     loc,
                     risk=conv_grade.worst_risk.value.upper(),
-                    # Quote the extent of the tier the sentence names (#571 D1) —
-                    # same rule the convective and IFR cards follow.
-                    extent=format_extent(
-                        conv_grade.extent_mod
-                        if conv_grade.affected_mod
-                        else conv_grade.extent
-                    ),
+                    extent=format_extent(conv_named_extent),
                 )
             # Coverage tolerance (#391), matching the axes above: a clear
             # convective verdict off soundings covering too little of the route
@@ -1295,12 +1300,30 @@ class VFRFeasibilityEvaluator:
             # multi-kind cutouts (cruise IMC + corridor decks) are the point of
             # this composite's geometry.
             highlights = None
+            published_extent = enroute_extent
             if total > 0:
-                highlights = _build_vfr_highlights(
+                highlights, ribbon_points = _build_vfr_highlights(
                     ctx, model, cloud_clearance_ft, corridor_nm,
                     dep_status, arr_status,
                     conv_grade=conv_grade,
                     conv_capped=cap_applied,
+                )
+                # The published extent is the union of every axis the card
+                # grades on or reports — the ribbon's flagged points. The cloud
+                # extent alone left a grade driven by convection, precipitation,
+                # a corridor deck or an airport publishing 0 nm / 0% beside a
+                # sentence quoting its miles; the digest, MCP and the
+                # representative-model pick all read that 0 as "nothing wrong".
+                # An airport's flight category flags the endpoint point, whose
+                # cell is about the terminal corridor at the usual 10 nm spacing.
+                # The cloud extent still grades the en-route axis above.
+                published_extent = route_extent(
+                    [d for d, _ in ribbon_points],
+                    ctx.total_distance_nm,
+                    [sev in (HighlightSeverity.AMBER, HighlightSeverity.RED)
+                     for _, sev in ribbon_points],
+                    [sev != HighlightSeverity.UNAVAILABLE for _, sev in ribbon_points],
+                    speed_kt=ctx.cruise_groundspeed_kt,
                 )
 
             # primary_method_id: clouds are this composite's only method-bearing
@@ -1314,11 +1337,17 @@ class VFRFeasibilityEvaluator:
             cloud_primary = driving_method_id(highlights, status)
             primary_method_id = cloud_primary if cloud_status == status else None
 
+            # The named tier follows the sentence: when convection is the only
+            # axis quoting miles, its tier (e.g. MODERATE+ out of LOW+) is what
+            # a pilot reads, so it is what the object publishes beside the union.
+            if not named_extent.points and conv_named_extent is not None:
+                named_extent = conv_named_extent
+
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
-                affected=affected, total=total,
+                affected=published_extent.points, total=total,
                 total_distance_nm=ctx.total_distance_nm,
-                extent=enroute_extent,
+                extent=published_extent,
                 # The tier the sentence named rides the higher-threshold field,
                 # so the number a pilot reads is one the object also publishes.
                 affected_mod=named_extent.points,

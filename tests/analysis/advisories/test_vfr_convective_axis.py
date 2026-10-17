@@ -662,3 +662,24 @@ class TestConvectionReachesTheHighlight:
         result = _vfr(self._conv_only_route())
         severities = {s.severity for s in result.highlights.ribbon}
         assert severities - {"green"}, f"ribbon reads all-green: {severities}"
+
+    def test_the_published_extent_counts_the_convective_miles(self):
+        """A convection-driven grade publishes those miles, not the cloud's 0.
+
+        The extent was the cloud axis alone, so this route read "AMBER — HIGH
+        convection over 40nm" beside affected_nm=0 / affected_pct=0, which the
+        digest, MCP and the representative-model pick read as nothing wrong
+        (7 of 9 eval-corpus packs).
+        """
+        from weatherbrief.analysis.advisories import invariants
+
+        result = _vfr(self._conv_only_route())
+        assert result.status != AdvisoryStatus.GREEN
+        assert result.affected_nm > 0 and result.affected_pct > 0
+        violations = invariants.check_model_result("vfr_feasibility", result)
+        assert not violations, violations
+
+    def test_the_named_tier_is_the_convective_one_the_sentence_quotes(self):
+        result = _vfr(self._conv_only_route())
+        assert result.affected_mod_nm > 0
+        assert f"{round(result.affected_mod_nm)}nm" in result.detail
