@@ -752,7 +752,8 @@ listings. Gotchas and choices:
   measurement, and the web route map draws it unconditionally.
 - **Bolts, not dots (#665), on both clients.** A dot read as an airport or a
   radar speck; a small purple bolt with a pale rim reads as lightning with no
-  legend. Web paints all of them on one canvas (`FlashGlyphLayer`), redrawn
+  legend. Web paints all of them on one canvas (`FlashGlyphLayer`), half a
+  viewport larger on each side so a drag reveals bolts already drawn, redrawn
   on `moveend`/`zoomend` and hidden during the zoom animation; a
   `divIcon` per flash would not survive the "Now" tab's whole-Europe view.
 

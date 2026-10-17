@@ -57,6 +57,14 @@ final class RouteLightningModel {
         }
     }
 
+    /// Back to the not-yet-loaded state; any in-flight refresh is dropped.
+    func reset() {
+        token += 1
+        state = .loading
+        drawable = []
+        revision += 1
+    }
+
     private func apply(_ state: ObservedLightning.State, at time: Date) {
         self.state = state
         now = time

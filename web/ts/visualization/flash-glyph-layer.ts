@@ -5,7 +5,8 @@
  * hundreds of flashes an hour, and the "Now" tab's whole-Europe view can be
  * thousands, which DOM markers (a `divIcon` per flash) would not survive.
  *
- * The canvas covers the viewport and is redrawn when the map settles
+ * The canvas covers the viewport plus `PAD` of it on each side (so a drag
+ * reveals bolts already drawn) and is redrawn when the map settles
  * (`moveend` / `zoomend` / `resize`); during a zoom animation it is hidden
  * rather than scaled, so a bolt never draws stretched or in the wrong place.
  * Non-interactive. Which flashes to draw and how faded is
@@ -21,6 +22,8 @@ import {
 export const FLASH_COLOR = '#7c3aed';
 /** A pale rim keeps a bolt readable over radar colours and dark imagery. */
 const FLASH_RIM = 'rgba(255, 255, 255, 0.85)';
+/** Canvas overhang beyond the viewport, as a fraction of its size per side. */
+const PAD = 0.5;
 
 export class FlashGlyphLayer extends L.Layer {
   private flashes: DrawableFlash[];
@@ -65,14 +68,17 @@ export class FlashGlyphLayer extends L.Layer {
     const map = this._map as L.Map | undefined;
     const canvas = this.canvas;
     if (!map || !canvas) return;
-    const size = map.getSize();
+    const view = map.getSize();
+    const offX = Math.round(view.x * PAD);
+    const offY = Math.round(view.y * PAD);
+    const size = L.point(view.x + 2 * offX, view.y + 2 * offY);
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.round(size.x * ratio);
     canvas.height = Math.round(size.y * ratio);
     canvas.style.width = `${size.x}px`;
     canvas.style.height = `${size.y}px`;
-    // The pane moves with the map; pin the canvas to the viewport's top-left.
-    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0, 0]));
+    // The pane moves with the map; pin the canvas `PAD` up-left of the viewport.
+    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([-offX, -offY]));
     canvas.style.visibility = '';
 
     const ctx = canvas.getContext('2d');
@@ -85,7 +91,7 @@ export class FlashGlyphLayer extends L.Layer {
     ctx.lineJoin = 'round';
     const margin = 12;
     for (const flash of this.flashes) {
-      const p = map.latLngToContainerPoint([flash.lat, flash.lon]);
+      const p = map.latLngToContainerPoint([flash.lat, flash.lon]).add([offX, offY]);
       if (p.x < -margin || p.y < -margin || p.x > size.x + margin || p.y > size.y + margin) continue;
       const pts = flashGlyphPoints(p.x, p.y);
       ctx.globalAlpha = flash.opacity;

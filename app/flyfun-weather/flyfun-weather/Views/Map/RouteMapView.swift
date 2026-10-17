@@ -161,7 +161,12 @@ struct RouteMapView: View {
         }
         .task(id: lightningPollKey) {
             // Restarts when the corridor box changes (the cross-section's pick).
-            guard showsLightning, let box = observedCorridor else { return }
+            // Hidden → forget the flashes, so toggling back on doesn't show
+            // stale bolts and badge until the first poll lands.
+            guard showsLightning, let box = observedCorridor else {
+                lightningModel?.reset()
+                return
+            }
             if lightningModel == nil, let repo = appState.repository {
                 lightningModel = RouteLightningModel(repository: repo)
             }
