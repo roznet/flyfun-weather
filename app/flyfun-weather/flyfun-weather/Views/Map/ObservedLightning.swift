@@ -43,15 +43,17 @@ enum ObservedLightning {
     nonisolated static let glyphWidth: CGFloat = 8
     nonisolated static let glyphHeight: CGFloat = 12
 
-    /// Web `FLASH_COLOR` (#7c3aed), with a pale rim so a bolt reads over radar
-    /// colours and dark imagery.
-    static let color = UIColor(cgColor: fillCGColor())
-    /// Built per call so the off-main renderer needn't touch a main-actor static.
+    /// Legend tint: the rim purple, since a white bolt vanishes on the sheet.
+    static let color = UIColor(cgColor: rimCGColor())
+    /// Web `FLASH_COLOR` (white) and `FLASH_RIM` (#6d28d9): white like
+    /// lightning, the purple rim keeps it readable over bright cloud tops and
+    /// the light basemap. Built per call so the off-main renderer needn't
+    /// touch a main-actor static.
     nonisolated static func fillCGColor() -> CGColor {
-        CGColor(srgbRed: 0x7C / 255, green: 0x3A / 255, blue: 0xED / 255, alpha: 1)
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
     }
     nonisolated static func rimCGColor() -> CGColor {
-        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85)
+        CGColor(srgbRed: 0x6D / 255, green: 0x28 / 255, blue: 0xD9 / 255, alpha: 1)
     }
 
     // MARK: Fade

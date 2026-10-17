@@ -19,9 +19,10 @@ import {
   type DrawableFlash,
 } from './route-map/observed-overlay-geometry';
 
-export const FLASH_COLOR = '#7c3aed';
-/** A pale rim keeps a bolt readable over radar colours and dark imagery. */
-const FLASH_RIM = 'rgba(255, 255, 255, 0.85)';
+/** White like lightning; the purple rim keeps it readable over bright cloud
+ *  tops and the light basemap, and away from the radar ramp's yellow. */
+export const FLASH_COLOR = '#ffffff';
+const FLASH_RIM = '#6d28d9';
 /** Canvas overhang beyond the viewport, as a fraction of its size per side. */
 const PAD = 0.5;
 
