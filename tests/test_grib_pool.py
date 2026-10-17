@@ -141,22 +141,15 @@ def test_dispatch_returns_result(monkeypatch):
     assert result == {"a": 1, "b": [2, 3]}
 
 
-@pytest.mark.skipif(
-    (os.cpu_count() or 1) < 2,
-    reason="requires at least 2 logical CPUs to actually parallelise",
-)
 def _assert_ran_concurrently(results, label):
-    """Each job ran on its own worker, and the jobs overlapped in time.
+    """At least two of the jobs overlapped in time.
 
-    Load-independent: the #133 bug dispatched everything to one worker, which
-    fails both checks however busy the machine is. Requiring *all* jobs to share
-    one instant was too strict — on CI's 4 vCPUs under xdist the 4th of four
-    jobs started 3 ms after the first finished, despite four workers.
+    The #133 bug waited on each job before submitting the next, so no two jobs
+    could ever overlap. Stricter checks were load-dependent on CI's 4 vCPUs
+    under xdist: *all* jobs sharing one instant failed when the 4th started 3 ms
+    after the 1st finished, and one-job-per-worker failed when a free worker
+    picked up a second job before a CPU-starved one took its first.
     """
-    pids = {pid for _, _, pid in results}
-    assert len(pids) == len(results), (
-        f"{label}: {len(results)} jobs ran on {len(pids)} worker(s) — serialised"
-    )
     spans = sorted((start, end) for start, end, _ in results)
     running_until = spans[0][1]
     for start, end in spans[1:]:
@@ -376,8 +369,8 @@ def test_parallel_dispatch_runs_four_jobs_in_parallel(monkeypatch):
     in ~D wall-clock, not 4D — the bug was that sequential ``_dispatch_decode``
     calls in a ``for`` loop only ever exercised one worker even with workers>=2.
 
-    With workers=4 all four CPU-bound jobs must be running at one common
-    instant; any serialisation leaves some pair without overlap.
+    With workers=4 the CPU-bound jobs must overlap in time; serialised, each
+    would only start once the previous had finished.
     """
     monkeypatch.setenv("GRIB_DECODE_WORKERS", "4")
     shutdown_decode_pool()
