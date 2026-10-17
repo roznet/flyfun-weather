@@ -143,6 +143,26 @@ export function hasArrow(cell: DisplayCell): boolean {
   return cell.motion?.status === 'available' && Array.isArray(cell.arrow) && cell.arrow.length === 2;
 }
 
+/** On-screen direction of the line `from` → `to` ([lat, lon]), in degrees
+ *  clockwise from up, on a Web-Mercator map. Mercator is conformal, so the
+ *  angle is the same at every zoom: an arrowhead rotated once stays on its
+ *  line. (A plain lat/lon bearing would skew away from the line further
+ *  north, where Mercator stretches latitude.) */
+export function screenBearingDeg(from: [number, number], to: [number, number]): number {
+  const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+  const dx = ((to[1] - from[1]) * Math.PI) / 180;
+  const dy = mercY(to[0]) - mercY(from[0]);
+  return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+}
+
+/** Arrowhead glyph, tip at the centre of a 24 px box so rotating it about its
+ *  anchor keeps the tip on the end of the line. Fixed screen size: it reads
+ *  as an arrow at any zoom, where a lat/lon triangle would vanish or swamp. */
+export function arrowHeadSvg(rotationDeg: number): string {
+  return `<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(${rotationDeg.toFixed(1)}deg)">`
+    + `<polygon points="12,11 7,21 12,18.5 17,21" fill="${ARROW_COLOUR}" stroke="${ARROW_COLOUR}" stroke-width="1" stroke-linejoin="round"/></svg>`;
+}
+
 export type CellMatch =
   | { state: 'ok'; frame: CellFrame }
   | { state: 'disabled' }
@@ -282,7 +302,7 @@ export function cellsLegendHtml(): string {
     '<b>Radar cells</b> <span class="cells-exp">experimental</span>',
     `Marker colour = trend over ~30 min: ${trends}`,
     `Outlines: ${tiers}`,
-    `<span style="color:${ARROW_COLOUR}">━</span> arrow = position in 30 min if the recent motion continues`,
+    `<span style="color:${ARROW_COLOUR}">━➤</span> arrow = position in 30 min if the recent motion continues`,
     '<span class="cells-muted">Provisional thresholds: cells often flicker in as "new", rain rate can show artefact peaks and lag the radar by ~10 min. Describes evolution, not safety.</span>',
   ].join('<br>');
 }

@@ -520,7 +520,7 @@ struct RouteMapView: View {
                     } header: {
                         Text("Radar cells (experimental)")
                     } footer: {
-                        Text("Markers are coloured by trend; the magenta line is where a core would be in 30 min if its motion continued. Tap a marker for its measurements. "
+                        Text("Markers are coloured by trend; the magenta arrow points to where a core would be in 30 min if its motion continued. Tap a marker for its measurements. "
                              + CellsOverlay.caveat)
                     }
                 }

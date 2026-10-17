@@ -14,12 +14,14 @@ import type { SummaryChip } from './route-map/observed-overlay-geometry';
 import {
   ARROW_COLOUR,
   OUTLINE_STYLE,
+  arrowHeadSvg,
   cellPopupHtml,
   frameKey,
   cellsBadge,
   cellsChip,
   hasArrow,
   matchCellFrame,
+  screenBearingDeg,
   trendColour,
   type CellDisplay,
   type CellFramesInfo,
@@ -82,12 +84,26 @@ export async function fetchCellDisplay(url: string): Promise<CellDisplay | null>
   }
 }
 
-/** Draw one display file into `group` (cleared first). */
+/** A motion arrowhead and the line it ends, so it can hide when the line is
+ *  too short on screen to carry one. */
+export interface ArrowHead {
+  marker: L.Marker;
+  from: [number, number];
+  to: [number, number];
+}
+
+/** Shortest on-screen line (px) that shows its head: the head is 10 px long,
+ *  and on a shorter line it would sit on the cell's own marker. */
+const MIN_HEAD_LINE_PX = 14;
+
+/** Draw one display file into `group` (cleared first). Returns the drawn
+ *  arrowheads. */
 export function drawCells(
   group: L.LayerGroup,
   display: CellDisplay,
   opts: { showRain: boolean; pane?: string },
-): void {
+): ArrowHead[] {
+  const heads: ArrowHead[] = [];
   // Leaflet does not pass a group's pane to its children: set it per layer.
   const pane = opts.pane ?? 'overlayPane';
   group.clearLayers();
@@ -114,9 +130,33 @@ export function drawCells(
     // Arrows for cores only (as the prototype): a frontal band's centroid
     // motion is not a useful "where will it be".
     if (c.tier !== 'rain20' && hasArrow(c)) {
-      L.polyline([[c.lat, c.lon], c.arrow!], { color: ARROW_COLOUR, weight: 2.5, interactive: false, pane }).addTo(group);
-      L.circleMarker(c.arrow!, { radius: 2.5, color: ARROW_COLOUR, fillOpacity: 1, interactive: false, pane }).addTo(group);
+      const from: [number, number] = [c.lat, c.lon];
+      const to = c.arrow!;
+      L.polyline([from, to], { color: ARROW_COLOUR, weight: 2.5, interactive: false, pane }).addTo(group);
+      // A head rather than an end dot: a dot read as "a second cell" or "where
+      // it came from"; the head says which way and where it ends up.
+      const marker = L.marker(to, {
+        icon: L.divIcon({
+          className: 'cells-arrowhead',
+          html: arrowHeadSvg(screenBearingDeg(from, to)),
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        }),
+        interactive: false,
+        keyboard: false,
+        pane,
+      }).addTo(group);
+      heads.push({ marker, from, to });
     }
+  }
+  return heads;
+}
+
+/** Show each head only where its line is long enough on screen at this zoom. */
+export function fitArrowHeads(map: L.Map, heads: ArrowHead[]): void {
+  for (const h of heads) {
+    const px = map.latLngToContainerPoint(h.from).distanceTo(map.latLngToContainerPoint(h.to));
+    h.marker.setOpacity(px >= MIN_HEAD_LINE_PX ? 1 : 0);
   }
 }
 
@@ -131,8 +171,11 @@ export class CellsLayer {
   // What is drawn now, so a re-render with the same overlay (the route map
   // re-renders on every altitude drag) keeps the layers and any open popup.
   private drawnKey: string | null = null;
+  private heads: ArrowHead[] = [];
+  private readonly map: L.Map;
 
   constructor(map: L.Map, enabled = true) {
+    this.map = map;
     // Its own pane, above the radar tiles and the route but under popups.
     if (!map.getPane(CELLS_PANE)) {
       const pane = map.createPane(CELLS_PANE);
@@ -140,6 +183,7 @@ export class CellsLayer {
     }
     this.group = L.layerGroup().addTo(map);
     this.enabled = enabled;
+    map.on('zoomend', () => fitArrowHeads(map, this.heads));
   }
 
   setEnabled(on: boolean): void {
@@ -154,6 +198,7 @@ export class CellsLayer {
 
   private clear(): void {
     this.group.clearLayers();
+    this.heads = [];
     this.drawnKey = null;
   }
 
@@ -203,7 +248,8 @@ export class CellsLayer {
     }
     const key = `${url}|${this.showRain}`;
     if (key !== this.drawnKey) {
-      drawCells(this.group, display, { showRain: this.showRain, pane: CELLS_PANE });
+      this.heads = drawCells(this.group, display, { showRain: this.showRain, pane: CELLS_PANE });
+      fitArrowHeads(this.map, this.heads);
       this.drawnKey = key;
     }
     this.lastBadge = cellsBadge(match, display, now);

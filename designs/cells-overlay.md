@@ -122,7 +122,12 @@ badge gets its own line with the overlay's own time.  Never a shared "as of".
 - `visualization/cells-overlay.ts`: `CellsLayer` (fetch listing with a 60 s
   TTL, fetch the display file — cached by URL, immutable — and draw into its
   own pane `cellsPane`, z 450, above tiles and the route).  Arrows (magenta,
-  30 min) only for `motion.status == "available"` and only for cores.
+  30 min) only for `motion.status == "available"` and only for cores.  The
+  end is an arrowhead (fixed-size divIcon rotated by `screenBearingDeg`, the
+  Mercator screen angle, so it stays on its line at every zoom), not a dot —
+  a dot read as a second cell.  The head hides when its line is under 14 px
+  on screen (`fitArrowHeads`, re-run on `zoomend`), where it would cover the
+  cell's own marker; iOS `CellArrowRenderer` applies the same rule.
   Redraws only when the URL or the rain toggle changes, so the route map's
   altitude-drag re-renders keep an open popup.
 - **"Now" tab** (`forecast-page.md`): the whole of Europe, no bbox — the

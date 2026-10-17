@@ -7131,6 +7131,9 @@ html {
 .cells-sw { display: inline-block; width: 9px; height: 9px; border: 1px solid #333; margin: 0 2px 0 6px; vertical-align: middle; }
 .cells-exp { font-size: 0.65rem; padding: 0 0.3rem; border-radius: 3px; background: #f59e0b; color: #111; font-weight: 600; }
 .cells-muted { color: var(--text-muted); }
+/* Motion arrowhead: a divIcon, so Leaflet's default white marker box must go. */
+.cells-arrowhead { background: none; border: none; }
+.cells-arrowhead svg { display: block; pointer-events: none; }
 
 /* "Observed now" briefing section (#574). */
 /* --- Observed Now (#574) ---------------------------------------------------

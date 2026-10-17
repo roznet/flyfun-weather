@@ -9,6 +9,7 @@ import {
   hasArrow,
   matchCellFrame,
   motionText,
+  screenBearingDeg,
   trendColour,
   trendText,
   type CellFramesInfo,
@@ -183,5 +184,22 @@ describe('cells summary chip', () => {
     expect(ok).toEqual({ name: 'Cells', status: '10 min', warning: false });
     expect(cellsChip({ state: 'disabled' }, NOW)).toEqual({ name: 'Cells', status: 'n/a', warning: true });
     expect(cellsChip({ state: 'unavailable', since: null }, NOW).warning).toBe(true);
+  });
+});
+
+describe('screenBearingDeg (arrowhead rotation)', () => {
+  it('points along the line on a Mercator map', () => {
+    expect(screenBearingDeg([50, 10], [51, 10])).toBeCloseTo(0);
+    expect(screenBearingDeg([50, 10], [50, 11])).toBeCloseTo(90);
+    expect(screenBearingDeg([50, 10], [49, 10])).toBeCloseTo(180);
+    expect(screenBearingDeg([50, 10], [50, 9])).toBeCloseTo(270);
+  });
+
+  it('accounts for Mercator stretching latitude', () => {
+    // Equal degrees north and east at 60°N: on screen the north leg is twice
+    // as long (sec 60° = 2), so the line is steeper than 45°.
+    const deg = screenBearingDeg([60, 10], [60.1, 10.1]);
+    expect(deg).toBeGreaterThan(20);
+    expect(deg).toBeLessThan(35);
   });
 });

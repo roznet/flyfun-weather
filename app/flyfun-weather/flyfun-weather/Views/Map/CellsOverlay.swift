@@ -388,10 +388,27 @@ nonisolated final class CellArrowRenderer: MKPolylineRenderer {
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
         super.draw(mapRect, zoomScale: zoomScale, in: context)
         guard polyline.pointCount >= 2 else { return }
+        // An arrowhead rather than an end dot (a dot read as a second cell).
+        // Renderer space is Mercator map points, so the head follows the line
+        // at any zoom; sizes are screen points divided by `zoomScale`.
+        let start = point(for: polyline.points()[0])
         let end = point(for: polyline.points()[polyline.pointCount - 1])
-        let r = 3.0 / zoomScale
+        let dx = end.x - start.x, dy = end.y - start.y
+        let length = (dx * dx + dy * dy).squareRoot()
+        // Too short on screen to carry a 10 pt head: it would sit on the
+        // cell's own marker (as the web, `MIN_HEAD_LINE_PX`).
+        guard length * zoomScale >= 14 else { return }
+        let ux = dx / length, uy = dy / length
+        let headLength = 10.0 / zoomScale, halfWidth = 5.0 / zoomScale
+        let base = CGPoint(x: end.x - ux * headLength, y: end.y - uy * headLength)
+        context.beginPath()
+        context.move(to: end)
+        context.addLine(to: CGPoint(x: base.x - uy * halfWidth, y: base.y + ux * halfWidth))
+        context.addLine(to: CGPoint(x: end.x - ux * headLength * 0.75, y: end.y - uy * headLength * 0.75))
+        context.addLine(to: CGPoint(x: base.x + uy * halfWidth, y: base.y - ux * halfWidth))
+        context.closePath()
         context.setFillColor((strokeColor ?? .magenta).cgColor)
-        context.fillEllipse(in: CGRect(x: end.x - r, y: end.y - r, width: 2 * r, height: 2 * r))
+        context.fillPath()
     }
 }
 

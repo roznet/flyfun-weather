@@ -129,8 +129,9 @@ test.describe('Now tab', () => {
 
     // Arrows only for available motion: one cell of two has one (Leaflet
     // names the custom pane `leaflet-cells-pane`).
-    // A line and an end dot, for the one cell with available motion.
-    await expect(page.locator('.leaflet-cells-pane path[stroke="#b000b5"]')).toHaveCount(2);
+    // A line and an arrowhead, for the one cell with available motion.
+    await expect(page.locator('.leaflet-cells-pane path[stroke="#b000b5"]')).toHaveCount(1);
+    await expect(page.locator('.leaflet-cells-pane .cells-arrowhead')).toHaveCount(1);
 
     // Marker popup describes the cell, not a verdict.
     await page.locator('.leaflet-cells-pane path[fill="#d7263d"]').first().click({ force: true });
