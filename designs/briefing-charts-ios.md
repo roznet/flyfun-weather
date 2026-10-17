@@ -6,8 +6,10 @@
 
 ## Shape
 
-Discussion tab order: **Synoptic Overview → Charts → GRAMET → rest of the
-digest**. Charts and GRAMET come from the pack, not the digest, so they render
+Discussion tab order: **Synoptic Overview → Charts → rest of the digest
+(Specific Concerns, Trend, Watch Items) → GRAMET**. The charts illustrate the
+synoptic narrative, so they sit right under it; the GRAMET is a reference
+image and closes the tab (owner's call after testing on device). Charts and GRAMET come from the pack, not the digest, so they render
 while the digest is generating, failed, or was never requested
 (`DiscussionTabView`; the digest state is an inline row, not a full-page
 placeholder).

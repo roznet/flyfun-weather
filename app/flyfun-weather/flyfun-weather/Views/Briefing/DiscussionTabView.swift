@@ -5,10 +5,11 @@ import SwiftUI
 /// Watch Items — as markdown. Watch lives here only since #661 (it reads as
 /// the "what to keep an eye on" close of the discussion).
 ///
-/// Since #799 the surface charts (DWD / Met Office / TEMSI) and the GRAMET sit
-/// right after the Synoptic Overview, the web's Discussion extras. They come
-/// from the pack, not the digest, so they show even while the digest is still
-/// generating, failed, or was never requested.
+/// Since #799 the web's Discussion extras come along: the surface charts (DWD /
+/// Met Office / TEMSI) right after the Synoptic Overview they illustrate, and
+/// the GRAMET at the very end, after Watch Items. They come from the pack, not
+/// the digest, so they show even while the digest is still generating, failed,
+/// or was never requested.
 ///
 /// A sticky scroll-spy pill bar (the same `ScrollSpyScroll` the Advisory tab
 /// uses) lets the pilot jump straight to a section instead of hunting through
@@ -54,8 +55,8 @@ struct DiscussionTabView: View {
         let narrative = loadedSections
         var result = narrative.prefix { $0.id == "synoptic" }.map { SpySection($0.id, $0.title) }
         if chartsManifest != nil { result.append(SpySection(Self.chartsId, "Charts")) }
-        if viewModel.pack != nil { result.append(SpySection(Self.grametId, "GRAMET")) }
         result += narrative.drop { $0.id == "synoptic" }.map { SpySection($0.id, $0.title) }
+        if viewModel.pack != nil { result.append(SpySection(Self.grametId, "GRAMET")) }
         return result
     }
 
@@ -83,12 +84,13 @@ struct DiscussionTabView: View {
             }
             .spyAnchor(Self.chartsId)
         }
+
+        ForEach(Array(rest), id: \.id) { narrativeBlock($0) }
+
         if let pack = viewModel.pack {
             GrametSectionView(viewModel: viewModel, hasGramet: pack.hasGramet)
                 .spyAnchor(Self.grametId)
         }
-
-        ForEach(Array(rest), id: \.id) { narrativeBlock($0) }
     }
 
     /// Loading / error / empty state for the digest. Inline (not a full-page
