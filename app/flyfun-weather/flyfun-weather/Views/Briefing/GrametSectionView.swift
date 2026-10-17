@@ -6,10 +6,10 @@ import UIKit
 /// (PDFKit: vector, so zoom stays sharp) — the PNG the web shows is a raster
 /// of the same page. Packs stored before the PDF switch serve a PNG instead,
 /// shown as an image. Tap for full screen. Cached in the pack's directory by
-/// the repository, so a downloaded pack shows it offline.
+/// the repository, so a downloaded pack shows it offline. Only placed for a
+/// pack whose `hasGramet` is true (`DiscussionTabView`).
 struct GrametSectionView: View {
     let viewModel: BriefingViewModel
-    let hasGramet: Bool
 
     @State private var state: LoadState = .loading
     @State private var showFullScreen = false
@@ -27,21 +27,14 @@ struct GrametSectionView: View {
                 .font(.headline)
                 .foregroundStyle(Theme.text)
 
-            if !hasGramet {
-                Text("GRAMET not available for this briefing.")
-                    .font(.callout)
-                    .foregroundStyle(Theme.textMuted)
-            } else {
-                content
-                Text("GRAMET cross-section from Autorouter")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textMuted)
-            }
+            content
+            Text("GRAMET cross-section from Autorouter")
+                .font(.caption)
+                .foregroundStyle(Theme.textMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.cardPadding)
         .task(id: viewModel.pack?.fetchTimestamp) {
-            guard hasGramet else { return }
             await load()
         }
         .fullScreenCover(isPresented: $showFullScreen) {

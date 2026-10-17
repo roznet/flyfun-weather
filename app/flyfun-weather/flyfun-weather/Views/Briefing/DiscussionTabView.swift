@@ -46,6 +46,12 @@ struct DiscussionTabView: View {
         return manifest
     }
 
+    /// Only packs that actually carry a GRAMET get the section and its pill —
+    /// none when the profile has GRAMET off, Autorouter isn't connected, the
+    /// pack is historical, or retention has since dropped it (`has_gramet`
+    /// goes false then too).
+    private var hasGramet: Bool { viewModel.pack?.hasGramet == true }
+
     private static let chartsId = "charts"
     private static let grametId = "gramet"
 
@@ -56,7 +62,7 @@ struct DiscussionTabView: View {
         var result = narrative.prefix { $0.id == "synoptic" }.map { SpySection($0.id, $0.title) }
         if chartsManifest != nil { result.append(SpySection(Self.chartsId, "Charts")) }
         result += narrative.drop { $0.id == "synoptic" }.map { SpySection($0.id, $0.title) }
-        if viewModel.pack != nil { result.append(SpySection(Self.grametId, "GRAMET")) }
+        if hasGramet { result.append(SpySection(Self.grametId, "GRAMET")) }
         return result
     }
 
@@ -87,8 +93,8 @@ struct DiscussionTabView: View {
 
         ForEach(Array(rest), id: \.id) { narrativeBlock($0) }
 
-        if let pack = viewModel.pack {
-            GrametSectionView(viewModel: viewModel, hasGramet: pack.hasGramet)
+        if hasGramet {
+            GrametSectionView(viewModel: viewModel)
                 .spyAnchor(Self.grametId)
         }
     }
