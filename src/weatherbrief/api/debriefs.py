@@ -129,7 +129,7 @@ def _load_owned_flight_or_404(db: Session, flight_id: str, user_id: str) -> Flig
 def get_flight_debrief(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Load the debrief for a flight. 404 if no row exists."""
     _load_owned_flight_or_404(db, flight_id, user_id)
@@ -144,7 +144,7 @@ def upsert_flight_debrief(
     flight_id: str,
     req: DebriefRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Insert or update the debrief for a flight."""
     _load_owned_flight_or_404(db, flight_id, user_id)
@@ -166,7 +166,7 @@ def upsert_flight_debrief(
 def delete_flight_debrief(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Remove the debrief for a flight. Idempotent."""
     _load_owned_flight_or_404(db, flight_id, user_id)
@@ -177,7 +177,7 @@ def delete_flight_debrief(
 def get_user_debrief_stats(
     window_days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=3650),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Aggregate stats for the current user's flights within ``window_days``."""
     flights = list_flights(db, user_id)

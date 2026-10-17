@@ -162,7 +162,7 @@ def submit_feedback(
     body: FeedbackRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Submit feedback for a specific briefing pack."""
     # Lightweight thumb ratings (digest, live highlight) get their own, looser
@@ -338,7 +338,7 @@ def list_feedback(
         "(digest_rating and highlight_rating)",
     ),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all feedback entries (admin only), optionally filtered by status/kind."""
     query = (
@@ -379,7 +379,7 @@ def update_feedback_status(
     feedback_id: int,
     body: StatusUpdate,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update the workflow status of a feedback entry."""
     row = _get_feedback_or_404(db, feedback_id)
@@ -396,7 +396,7 @@ def save_feedback_reply(
     feedback_id: int,
     body: ReplyUpdate,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Save a draft reply for a feedback entry (does not send email)."""
     row = _get_feedback_or_404(db, feedback_id)
@@ -412,7 +412,7 @@ def send_feedback_reply_email(
     request: Request,
     body: SendReplyRequest = SendReplyRequest(),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Send the reply email to the user and mark feedback as replied."""
     row = _get_feedback_or_404(db, feedback_id)
@@ -472,7 +472,7 @@ def send_feedback_reply_email(
 def reopen_feedback(
     feedback_id: int,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Re-open a replied/ignored feedback so the admin can send another reply.
 
@@ -501,7 +501,7 @@ def save_feedback_notes(
     feedback_id: int,
     body: NotesUpdate,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Save admin notes for a feedback entry."""
     row = _get_feedback_or_404(db, feedback_id)

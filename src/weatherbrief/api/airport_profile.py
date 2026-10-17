@@ -603,10 +603,9 @@ async def get_airport_profile(
     # any DB error surfaces as a normal HTTP error (cleaner UX than an
     # SSE error mid-stream).
     #
-    # The session is owned here rather than taken from ``Depends(get_db)``:
-    # FastAPI defers generator-dependency teardown until the response is
-    # complete, so behind a StreamingResponse that session would stay checked
-    # out for the whole life of the stream. `_limiter` admits _MAX_GLOBAL
+    # The session is owned here and closed before the stream opens. A session
+    # that outlived the handler (a request-scoped ``Depends(get_db)``, before
+    # #784) stayed checked out for the whole life of the stream. `_limiter` admits _MAX_GLOBAL
     # concurrent streams while the engine keeps SQLAlchemy's defaults
     # (pool_size=5 + max_overflow=10 = 15), so the streams alone can exhaust
     # the pool and the next checkout blocks for pool_timeout and then 500s.

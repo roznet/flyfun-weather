@@ -241,7 +241,8 @@ def test_radar_tile_render_holds_no_connection(app, engine, monkeypatch):
 
 def test_control_get_db_backed_auth_does_hold_a_connection(app, engine, slow_satellite):
     """The premise of #719 on this FastAPI version: with ``current_user_id``
-    (``Depends(get_db)``) the session is still checked out during the fetch.
+    (``Depends(get_db, scope="function")``) the session is still checked out
+    during the fetch: the fetch runs inside the handler, before teardown (#784).
 
     If this ever fails, FastAPI changed when generator dependencies tear down;
     the short dependency is then harmless but no longer needed.

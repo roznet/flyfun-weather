@@ -174,7 +174,7 @@ def search_types(
 @router.get("", response_model=list[AircraftResponse])
 def list_user_aircraft(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all aircraft for the current user.
 
@@ -192,7 +192,7 @@ def list_user_aircraft(
 def add_aircraft(
     req: CreateAircraftRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Add an aircraft to the user's list.
 
@@ -227,7 +227,7 @@ def edit_aircraft(
     aircraft_id: int,
     req: UpdateAircraftRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update an aircraft.
 
@@ -259,7 +259,7 @@ def edit_aircraft(
 def remove_aircraft(
     aircraft_id: int,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Remove an aircraft from the user's list.
 

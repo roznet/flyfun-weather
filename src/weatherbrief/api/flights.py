@@ -779,7 +779,7 @@ def list_all_flights(
     past_offset: int = Query(default=0, ge=0),
     past_q: str | None = Query(default=None, max_length=MAX_QUERY_LEN),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List owned + subscribed flights with latest briefing status, debrief, and section.
 
@@ -909,7 +909,7 @@ def create_flight(
     req: CreateFlightRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a new flight.
 
@@ -1040,10 +1040,6 @@ def create_flight(
     )
 
     save_flight(db, flight, user_id)
-    # Commit before responding: get_db commits only after the response is
-    # sent (FastAPI's default dependency scope), and the MCP server's
-    # immediate refresh call landed in that gap and 404'd. Issue #784.
-    db.commit()
     return _flight_to_response(flight, db, viewer_id=user_id)
 
 
@@ -1383,7 +1379,7 @@ def parse_flight_plan(
 def list_autorouter_routes(
     limit: int = 25,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> AutorouterRoutesResponse:
     """List the user's recent Autorouter routes for the "Import from Autorouter" picker.
 
@@ -1425,7 +1421,7 @@ class BulkDeleteResponse(BaseModel):
 def bulk_delete_flights(
     req: BulkDeleteRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Delete multiple flights in one request. Silently skips IDs that don't exist
     or aren't owned by the current user (returned in `not_found`)."""
@@ -1545,7 +1541,7 @@ def move_flight(
     req: MoveFlightRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Atomically replace a flight with a new one carrying updated structural fields.
 
@@ -1823,7 +1819,7 @@ def compute_frequent_airports(
 @router.get("/frequent-airports", response_model=FrequentAirportsResponse)
 def get_frequent_airports(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the current user's top-5 departure and destination airports.
 
@@ -1839,7 +1835,7 @@ def get_frequent_airports(
 def get_flight_by_share_code(
     code: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Resolve a share code to a flight — the iOS preview-before-subscribe on-ramp.
 
@@ -1870,7 +1866,7 @@ def get_flight_by_share_code(
 def get_flight(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get flight details. Any authenticated user can view public flights."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -1882,7 +1878,7 @@ def export_flight(
     flight_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Export a flight as a cross-app ``FlightExchange`` JSON payload.
 
@@ -1925,7 +1921,7 @@ class SubscribeResponse(BaseModel):
 def subscribe_to_flight(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Subscribe the current user to another pilot's flight.
 
@@ -1952,7 +1948,7 @@ def subscribe_to_flight(
 def unsubscribe_from_flight(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Remove the current user's subscription. Idempotent — returns 204 either way.
 
@@ -1985,7 +1981,7 @@ def update_auto_refresh(
     flight_id: str,
     req: UpdateAutoRefreshRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update auto-refresh settings for a flight."""
     row = _load_owned_row(db, flight_id, user_id)
@@ -2018,7 +2014,7 @@ def update_privacy(
     flight_id: str,
     req: UpdatePrivacyRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Toggle flight visibility. Only the flight owner can change this."""
     row = _load_owned_row(db, flight_id, user_id)
@@ -2039,7 +2035,7 @@ def update_position_sharing(
     flight_id: str,
     req: UpdatePositionSharingRequest,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """What viewers of a shared flight see of its live progress (owner only).
     The owner always sees everything."""
@@ -2119,7 +2115,7 @@ def update_flight(
     req: UpdateFlightRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Update editable flight parameters (time, altitude, ceiling, duration, route).
 
@@ -2319,7 +2315,7 @@ def update_flight(
 def remove_flight(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Delete a flight and all its packs."""
     flight = _load_owned_flight(db, flight_id, user_id)  # verify ownership

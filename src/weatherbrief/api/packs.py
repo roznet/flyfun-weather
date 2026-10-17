@@ -718,7 +718,7 @@ def _meta_to_response(
 def list_flight_packs(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all packs (history) for a flight. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -730,7 +730,7 @@ def list_flight_packs(
 def get_latest_pack(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the most recent pack for a flight. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -744,7 +744,7 @@ def get_latest_pack(
 def get_freshness(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Check whether the latest pack's data is still fresh."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -2196,7 +2196,7 @@ async def refresh_briefing(
     as_of_date: str | None = None,
     source: str = "user",
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Trigger a new briefing fetch for a flight.
 
@@ -2462,8 +2462,8 @@ async def refresh_briefing_stream(
     in-app manual refresh doesn't email — they're already looking).
     Returns an SSE error event if a refresh is already in progress.
     """
-    # Manage our own DB session — FastAPI's Depends(get_db) cleanup
-    # conflicts with the long-lived StreamingResponse.
+    # Manage our own DB session: a ``Depends(get_db, scope="function")``
+    # session is closed before the long-lived StreamingResponse body runs.
     db = SessionLocal()
     registered = False
     try:
@@ -2901,7 +2901,7 @@ def _interrupted_refresh_status(
 def get_refresh_status(
     flight_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the refresh status for a specific flight."""
     # Same visibility as the briefing itself: a private flight's refresh state
@@ -2942,7 +2942,7 @@ refresh_router = APIRouter(prefix="/refresh", tags=["refresh"])
 @refresh_router.get("/active")
 def get_active_refreshes(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the caller's active refreshes: their own flights' plus the public
     flights they subscribe to (both appear in their flight list).
@@ -2979,7 +2979,7 @@ def get_active_refreshes(
 @refresh_router.get("/stats")
 def get_refresh_stats(
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return average refresh time (7-day window) for the progress hint."""
     since = datetime.now(timezone.utc) - timedelta(days=7)
@@ -3008,7 +3008,7 @@ def get_pack(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get a specific pack's metadata. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -3026,7 +3026,7 @@ def get_snapshot(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the briefing JSON for a pack (route + analyses + observations, no forecasts)."""
     audit_pack_access(user_id, flight_id, "get_snapshot", request)
@@ -3062,7 +3062,7 @@ def refresh_observations(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Re-fetch METAR/TAF observations + route SIGMETs and update snapshot
     without full pipeline.
@@ -3123,7 +3123,7 @@ def get_gramet(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the GRAMET cross-section for a pack (PDF, with PNG fallback for old packs)."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -3142,7 +3142,7 @@ def get_gramet_png(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the GRAMET cross-section as a PNG image.
 
@@ -3181,7 +3181,7 @@ def get_gramet_png(
 def get_skewt(
     flight_id: str, timestamp: str, icao: str, model: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get a Skew-T image for a waypoint, generating on-demand if needed."""
     icao, model = _validate_icao(icao), _validate_model(model)
@@ -3246,7 +3246,7 @@ def get_skewt(
 def get_hodograph(
     flight_id: str, timestamp: str, icao: str, model: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get a hodograph image for a waypoint, generating on-demand if needed."""
     icao, model = _validate_icao(icao), _validate_model(model)
@@ -3297,7 +3297,7 @@ def get_route_analyses(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the route analyses JSON for a pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -3312,7 +3312,7 @@ def get_alternates(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the weather-based alternates block from a pack's snapshot (#210/#249).
 
@@ -3348,7 +3348,7 @@ def get_advisories(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the route advisories JSON for a pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -3364,7 +3364,7 @@ def get_advisory_detail(
     timestamp: str,
     advisory_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict:
     """Per-advisory drill-down for the iOS "why it's RED" ladder (§4.6).
 
@@ -3413,7 +3413,7 @@ def get_route_fronts(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the front-detection artifact (``route_fronts.json``) for a pack.
 
@@ -3433,7 +3433,7 @@ def get_alt_advisories(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the alt-departure route advisories JSON for a pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -3449,7 +3449,7 @@ def get_time_options(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Timing-scenario scan for a pack — status + result, poll-friendly.
 
@@ -3509,7 +3509,7 @@ def rescan_time_options(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Re-queue the timing scan for a pack (owner only).
 
@@ -3546,7 +3546,7 @@ def confirm_time_option(
     body: TimeConfirmRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Queue the multi-model check of one provisional candidate.
 
@@ -3589,7 +3589,7 @@ def compute_alt_advisories(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Compute alt-departure advisories on-demand from existing pack data.
 
@@ -3849,7 +3849,7 @@ def recalculate_advisories(
     request: Request,
     cruise_altitude_ft: int | None = None,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Recalculate route advisories from existing analysis data.
 
@@ -3974,7 +3974,7 @@ def preview_advisories(
     body: PreviewAdvisoriesRequest,
     cruise_altitude_ft: int | None = None,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Preview advisories under *draft* settings WITHOUT persisting (#387, slice 4).
 
@@ -4101,7 +4101,7 @@ def generate_digest(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Generate the AI summary for an existing pack on demand.
 
@@ -4251,7 +4251,7 @@ def get_altitude_table(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the precomputed altitude table persisted at refresh (#259).
 
@@ -4273,7 +4273,7 @@ def altitude_table(
     request: Request,
     step_ft: int = 2000,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Compute altitude advisory table — sweep altitude-dependent advisories across altitudes."""
     from weatherbrief.tasks.advise import run_altitude_table_from_pack
@@ -4320,7 +4320,7 @@ def get_elevation(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the elevation profile JSON for a pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -4335,7 +4335,7 @@ def get_bundle(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Download a complete pack as a single gzipped JSON bundle for offline use.
 
@@ -4413,7 +4413,7 @@ def get_bundle(
 def get_route_skewt(
     flight_id: str, timestamp: str, point_index: int, model: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get an on-demand Skew-T for a route point.
 
@@ -4499,7 +4499,7 @@ def get_route_skewt(
 def get_sounding_profile(
     flight_id: str, timestamp: str, point_index: int, model: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get raw sounding profile data (T, Td, wind at pressure levels) for a route point.
 
@@ -4530,7 +4530,7 @@ def get_sounding_profile(
 def get_route_hodograph(
     flight_id: str, timestamp: str, point_index: int, model: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get an on-demand hodograph for a route point.
 
@@ -4605,7 +4605,7 @@ def get_digest(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the LLM digest markdown for a pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -4620,7 +4620,7 @@ def get_digest_json(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the structured LLM digest as JSON."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -4635,7 +4635,7 @@ def get_digest_context(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the exact plain-text context that was fed to the LLM digest.
 
@@ -4657,7 +4657,7 @@ def get_dwd_chart(
     timestamp: str,
     chart_id: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Serve a DWD surface chart PNG for this pack.
 
@@ -4691,7 +4691,7 @@ def get_dwd_chart_overlay(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Compute the route-overlay JSON for the DWD chart section.
 
@@ -4749,7 +4749,7 @@ def get_metoffice_chart(
     chart_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Serve a Met Office surface-pressure chart GIF for this pack.
 
@@ -4784,7 +4784,7 @@ def get_metoffice_chart_overlay(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Compute the route-overlay JSON for the Met Office chart section.
 
@@ -4858,7 +4858,7 @@ def get_meteofrance_chart(
     run_cycle: str,
     zone: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Serve a Météo-France TEMSI chart PNG for this pack.
 
@@ -4908,7 +4908,7 @@ def get_meteofrance_chart_overlay(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Route-overlay JSON for the TEMSI section, keyed by zone.
 
@@ -4949,7 +4949,7 @@ def get_dwd_overview(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Get the translated DWD synoptic overview for this pack."""
     pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
@@ -4964,7 +4964,7 @@ def get_report_html(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """View a self-contained HTML briefing report. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -4985,7 +4985,7 @@ def get_report_pdf(
     flight_id: str,
     timestamp: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Download a PDF briefing report. Any authenticated user can view."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -5019,7 +5019,7 @@ def send_email(
     timestamp: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Send briefing email to the current user. Any authenticated user can send."""
     flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
@@ -5113,7 +5113,7 @@ def get_live_summary(
     flight_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     pack_timestamp: str | None = None,
 ) -> dict:
     """The compact live block agents get with a briefing (#641).
@@ -5161,7 +5161,7 @@ def get_live_layer(
     request: Request,
     source: Literal["push"] | None = Query(default=None),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """The newest observations for the flight's latest pack.
 
@@ -5254,7 +5254,7 @@ def post_live_progress(
     req: LiveProgressRequest,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Record the pilot's take-off or landing (#760), owner only.
 
@@ -5367,7 +5367,7 @@ def get_live_ticks(
     request: Request,
     segments: bool = Query(default=False, description="Include each tick's radar lane (distance x time grid)"),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """The recorded ticks of the flight's live window, oldest first: each
     one's time, radar frame valid time, pack and planned position (flown NM).
@@ -5388,7 +5388,7 @@ def get_live_at(
     request: Request,
     tick: datetime = Query(..., description="ISO time of a recorded tick; the last tick at or before it is served"),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """The Observed section as it stood at a recorded tick, in the ``/live``
     shape (single-tick replay). 404 when no tick was recorded at or before
@@ -5411,7 +5411,7 @@ def get_recap(
     request: Request,
     pack: str | None = Query(default=None, description="Pack timestamp for the forecast row"),
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """The debrief's observed recap, computed on request: per ribbon segment
     the observation nearest the time the aircraft was there, the alert
@@ -5434,7 +5434,7 @@ def get_recap_summary(
     flight_id: str,
     request: Request,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> dict:
     """The compact recap agents get next to ``live`` in ``get_briefing``
     (``live_recap.recap_summary``); ``recap`` is null before departure or

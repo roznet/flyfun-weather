@@ -47,7 +47,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 def require_admin(
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> str:
     """Validate that the current request comes from an admin user.
 
@@ -178,7 +178,7 @@ def list_users(
     limit: int = Query(default=25, ge=0),
     offset: int = Query(default=0, ge=0),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List all users with usage summaries and disk usage.
 
@@ -327,7 +327,7 @@ def get_user_costs(
     user_id: str,
     limit: int = Query(default=50, ge=1, le=500),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return detailed cost data for a single user (admin only)."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
@@ -527,7 +527,7 @@ def approve_user(
     request: Request,
     user_id: str,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Approve a pending user."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
@@ -560,7 +560,7 @@ def set_pirep_permissions(
     user_id: str,
     body: PirepPermissionsRequest,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Set PIREP permissions for a user."""
     row = db.get(UserPreferencesRow, user_id)
@@ -586,7 +586,7 @@ def bulk_set_pirep_permissions(
     request: Request,
     body: PirepPermissionsRequest,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Enable PIREP permissions for all approved users."""
     rows = db.query(UserPreferencesRow).join(
@@ -615,7 +615,7 @@ def one_click_approve(
     user_id: str,
     ts: str,
     sig: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """One-click approval from email link. Auth is via HMAC signature, no login needed."""
     # Validate HMAC
@@ -735,7 +735,7 @@ def create_agent(
     request: Request,
     body: CreateAgentRequest,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a bot/agent user with an initial API token.
 
@@ -776,7 +776,7 @@ def create_agent_token(
     user_id: str,
     body: CreateTokenRequest,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Generate an additional API token for an existing agent user."""
     user = db.query(UserRow).filter(
@@ -806,7 +806,7 @@ def revoke_agent(
     request: Request,
     user_id: str,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke an agent user — disables account and all tokens."""
     user = db.query(UserRow).filter(
@@ -831,7 +831,7 @@ def revoke_agent(
 @router.get("/metrics")
 def get_metrics(
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return refresh timing metrics and live queue state."""
     from weatherbrief.api.packs import refresh_registry
@@ -917,7 +917,7 @@ def get_live_latency(
     # admin request bounded.
     days: int = Query(30, ge=1, le=90),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Observed latency (#751): daily p50/p95/max per hop, report time to device."""
     from weatherbrief.tasks.live_timing import latency_report
@@ -931,7 +931,7 @@ def revoke_agent_token(
     user_id: str,
     token_id: int,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke a single API token."""
     token_row = db.query(ApiTokenRow).filter(
@@ -959,7 +959,7 @@ def revoke_agent_token(
 @router.get("/connected-apps")
 def list_connected_apps(
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """List dynamically-registered OAuth apps (MCP connector, native/3rd-party
     apps) with usage stats aggregated from the tokens they were issued.
@@ -1069,7 +1069,7 @@ def list_connected_apps(
 @router.get("/api-usage")
 def get_api_usage(
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return API call totals grouped by service and pipeline."""
     from weatherbrief.api.usage import get_api_usage_summary
@@ -1089,7 +1089,7 @@ def get_verification_stats(
     country: str | None = Query(default=None, min_length=2, max_length=2),
     icao: str | None = Query(default=None, min_length=4, max_length=4),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return verification accuracy stats for the requested period."""
     from weatherbrief.tasks.cache_builder import get_cached, is_stale
@@ -1159,7 +1159,7 @@ def get_verification_airports(
 def send_digest_now(
     period: str = Query(default="24h", pattern=r"^(24h|7d)$"),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Send the admin digest email on demand for the given period."""
     from weatherbrief.notify.admin_digest_email import send_admin_digest
@@ -1185,7 +1185,7 @@ def send_digest_now(
 def preview_digest(
     period: str = Query(default="24h", pattern=r"^(24h|7d)$"),
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the admin digest data as JSON (preview without sending)."""
     from weatherbrief.tasks.admin_digest_stats import get_admin_digest_data
@@ -1203,7 +1203,7 @@ def preview_digest(
 @router.post("/onboarding/reset", status_code=204)
 def reset_my_onboarding(
     admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Reset the calling admin's onboarding flags so the welcome wizard replays.
 

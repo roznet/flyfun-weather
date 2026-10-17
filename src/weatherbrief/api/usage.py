@@ -363,7 +363,7 @@ def get_usage_summary(db: Session, user_id: str) -> UsageSummary:
 @router.get("", response_model=UsageSummary)
 def get_usage(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> UsageSummary:
     """Return usage summary for the current user."""
     return get_usage_summary(db, user_id)

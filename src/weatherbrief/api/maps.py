@@ -60,7 +60,7 @@ def get_forecast_map(
     day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
     hour: int = Query(default=12),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Return forecast overview data for all watchlist airports.
@@ -159,7 +159,7 @@ def compute_day_availability(db: Session) -> list[dict[str, Any]]:
 @router.get("/forecast/days")
 def get_available_days(
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the forecast grid: per day, which hours and models have data.
 
@@ -180,7 +180,7 @@ def get_historical_map(
     at: datetime = Query(..., description="UTC instant; floored to the 30-min grid"),
     lead: int = Query(default=0, ge=0, le=_HIST_MAX_LEAD),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Per-airport METAR, TAF and model forecasts at a past instant.
@@ -213,7 +213,7 @@ def get_historical_map(
 def get_now_map(
     response: Response,
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Latest METAR per airport right now (the "Now" tab, #656).
@@ -230,7 +230,7 @@ def get_now_map(
 @router.get("/historical/range")
 def get_historical_range(
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """What the historical pickers can offer: date range, leads, time step."""
     from weatherbrief.tasks.historical_map import compute_historical_range
@@ -338,7 +338,7 @@ def get_airport_weather(
     day: int = Query(default=0, ge=0, le=MAX_FORECAST_DAY),
     hour: int = Query(default=12),
     _user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
     """Return forecast + observation data for specific airports.

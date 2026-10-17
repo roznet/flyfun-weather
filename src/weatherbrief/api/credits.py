@@ -289,7 +289,7 @@ router = APIRouter(prefix="/user/credits", tags=["costs"])
 @router.get("", response_model=CostSummaryResponse)
 def get_costs(
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> CostSummaryResponse:
     """Return cost summary and recent transactions for the current user."""
     user = db.query(UserRow).filter(UserRow.id == user_id).first()
@@ -344,7 +344,7 @@ admin_router = APIRouter(prefix="/admin/cost-config", tags=["admin"])
 @admin_router.get("", response_model=CostConfigResponse | None)
 def get_cost_config(
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the current active cost configuration."""
     row = get_active_cost_config(db)
@@ -355,7 +355,7 @@ def get_cost_config(
 def update_cost_config(
     body: dict,
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Create a new cost config version; deactivate the previous one.
 
@@ -450,7 +450,7 @@ def update_cost_config(
 @admin_router.get("/history", response_model=list[CostConfigResponse])
 def get_cost_config_history(
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return all cost config versions, newest first."""
     rows = (
@@ -624,7 +624,7 @@ def other_llm_spend(
 def get_cost_report(
     window: str = "30d",
     _admin_id: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Program-wide cost report for a window: real fixed cost + actual variable."""
     window_days = _ALLOWED_WINDOWS.get(window)
@@ -655,7 +655,7 @@ transparency_router = APIRouter(prefix="/transparency", tags=["transparency"])
 
 @transparency_router.get("", response_model=TransparencyResponse | None)
 def get_transparency(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     viewer_id: str | None = Depends(optional_user_id),
 ):
     """Return the public-facing cost structure (no auth required).

@@ -49,7 +49,7 @@ class DeviceRegistration(BaseModel):
 def register_device(
     body: DeviceRegistration,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Register or update the caller's APNs device token.
 
@@ -80,7 +80,7 @@ def register_device(
 def unregister_device(
     token: str,
     user_id: str = Depends(current_user_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Unregister a device token (sign-out).
 
