@@ -76,6 +76,9 @@ final class ForecastMapViewModel {
     private var pendingOpenIcao: String?
     /// Suppresses cold-open centring when a deep link already set the view.
     private var hasExplicitLocation = false
+    /// The link pinned `fc.hour`. Without it the cold-open smart hour still
+    /// applies, as on the web (a view- or metric-only link keeps it).
+    private var hourFromLink = false
     /// Set once the user pans/zooms the map, so a late-resolving cold-open target
     /// never yanks the camera out from under them.
     private var userDidInteract = false
@@ -93,7 +96,7 @@ final class ForecastMapViewModel {
         if let deepLink {
             hasExplicitLocation = true
             if let d = deepLink.day { selectedDay = d }
-            if let h = deepLink.hour { selectedHour = h }
+            if let h = deepLink.hour { selectedHour = h; hourFromLink = true }
             if let m = deepLink.model { mode = ForecastModelMode(token: m) }
             if let mt = deepLink.metric { metric = mt }
             pendingOpenIcao = deepLink.airport
@@ -123,7 +126,7 @@ final class ForecastMapViewModel {
             days = Self.fallbackDays()
         }
         // 2. Snap the selection into the real grid (deep link may be off-grid).
-        snapSelectionIntoGrid(smartDefaultHour: !hasExplicitLocation)
+        snapSelectionIntoGrid(smartDefaultHour: !hourFromLink)
         // 3. Cold-open centring target (non-blocking, non-fatal).
         if !hasExplicitLocation {
             Task { await resolveColdOpenTarget() }
@@ -380,7 +383,9 @@ final class ForecastMapViewModel {
     /// The region a shared web `*.view` shows. Leaflet zoom is calibrated so the
     /// web's default view (zoom 5) is `europeRegion`; each zoom step halves the
     /// span. Approximate by design — the phone's aspect differs from the sender's
-    /// window, and MapKit fits the region to the screen.
+    /// window, and MapKit fits the region to the screen. The span is linear in
+    /// degrees, so far from 48°N (e.g. Scandinavia) the latitude extent is wider
+    /// than the sender's Mercator view.
     nonisolated static func region(for view: MapViewport) -> MKCoordinateRegion {
         let scale = pow(2.0, Double(5 - view.zoom))
         return MKCoordinateRegion(

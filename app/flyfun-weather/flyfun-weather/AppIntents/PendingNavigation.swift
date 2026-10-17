@@ -91,8 +91,12 @@ nonisolated struct MapViewport: Equatable, Sendable {
         self.init(lat: lat, lon: lon, zoom: z)
     }
 
-    /// The web's canonical form, also the pending-navigation encoding.
-    var token: String { String(format: "%.2f,%.2f,%d", lat, lon, zoom) }
+    /// The web's canonical form (`formatMapView`, -0.00 normalised to 0.00),
+    /// also the pending-navigation encoding.
+    var token: String {
+        func fix(_ v: Double) -> Double { abs(v) < 0.005 ? 0 : v }
+        return String(format: "%.2f,%.2f,%d", fix(lat), fix(lon), zoom)
+    }
 }
 
 /// Historical-map deep-link state parsed from `/maps.html?tab=historical&hist.*`.

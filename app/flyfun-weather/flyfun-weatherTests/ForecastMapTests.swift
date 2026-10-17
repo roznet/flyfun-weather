@@ -253,6 +253,27 @@ struct ForecastMapTests {
         #expect(r7.span.longitudeDelta == ForecastMapViewModel.europeRegion.span.longitudeDelta / 4)
     }
 
+    @Test func viewportTokenNormalisesNegativeZero() {
+        #expect(MapViewport(lat: -0.001, lon: 10, zoom: 5).token == "0.00,10.00,5")
+    }
+
+    /// Only a linked `fc.hour` turns off the smart cold-open hour (web parity).
+    @MainActor
+    @Test func viewOnlyLinkKeepsSmartHour() async throws {
+        let repo = MockBriefingRepository()
+        let vm = ForecastMapViewModel(
+            repository: repo, deepLink: MapDeepLink(view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7)))
+        let pinned = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(hour: 18))
+        vm.start(); pinned.start()
+        for _ in 0..<200 where !(vm.didLoadOnce && pinned.didLoadOnce) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let utc = Calendar(identifier: .gregorian).dateComponents(in: TimeZone(identifier: "UTC")!, from: Date()).hour!
+        let nearest = vm.hours(forDay: vm.selectedDay).min { abs($0 - utc) < abs($1 - utc) }
+        #expect(vm.selectedHour == nearest)
+        #expect(pinned.selectedHour == 18)
+    }
+
     @MainActor
     @Test func viewModelAppliesViewportAtInit() {
         let vm = ForecastMapViewModel(
