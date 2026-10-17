@@ -46,7 +46,7 @@ final class HistoricalMapViewModel {
     /// an unavailable source explains itself instead of sitting inert.
     var notice: String?
 
-    let initialRegion = ForecastMapViewModel.europeRegion
+    private(set) var initialRegion = ForecastMapViewModel.europeRegion
     var focusRequest: ForecastMapViewModel.FocusRequest?
 
     // MARK: - Private
@@ -79,6 +79,7 @@ final class HistoricalMapViewModel {
             if let s = deepLink.source.flatMap(HistoricalSource.init(rawValue:)) { source = s }
             if let m = deepLink.metric { metric = m }
             pendingOpenIcao = deepLink.airport
+            if let v = deepLink.view { initialRegion = ForecastMapViewModel.region(for: v) }
         }
     }
 

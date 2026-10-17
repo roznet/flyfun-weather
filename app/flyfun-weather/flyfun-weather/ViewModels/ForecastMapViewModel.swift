@@ -97,6 +97,7 @@ final class ForecastMapViewModel {
             if let m = deepLink.model { mode = ForecastModelMode(token: m) }
             if let mt = deepLink.metric { metric = mt }
             pendingOpenIcao = deepLink.airport
+            if let v = deepLink.view { initialRegion = Self.region(for: v) }
         }
     }
 
@@ -371,10 +372,24 @@ final class ForecastMapViewModel {
 
     // MARK: - Regions & defaults
 
-    static let europeRegion = MKCoordinateRegion(
+    nonisolated static let europeRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 48, longitude: 10),
         span: MKCoordinateSpan(latitudeDelta: 22, longitudeDelta: 26)
     )
+
+    /// The region a shared web `*.view` shows. Leaflet zoom is calibrated so the
+    /// web's default view (zoom 5) is `europeRegion`; each zoom step halves the
+    /// span. Approximate by design — the phone's aspect differs from the sender's
+    /// window, and MapKit fits the region to the screen.
+    nonisolated static func region(for view: MapViewport) -> MKCoordinateRegion {
+        let scale = pow(2.0, Double(5 - view.zoom))
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: view.lat, longitude: view.lon),
+            span: MKCoordinateSpan(
+                latitudeDelta: min(europeRegion.span.latitudeDelta * scale, 170),
+                longitudeDelta: min(europeRegion.span.longitudeDelta * scale, 360))
+        )
+    }
 
     /// Near-days fallback grid when `/maps/forecast/days` is unreachable (mirrors
     /// the web `fallbackDayGrid`): D+0…D+3, five hours, all three models.

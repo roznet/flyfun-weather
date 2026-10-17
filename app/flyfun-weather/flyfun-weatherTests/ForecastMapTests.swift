@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import MapKit
 import Testing
 import UIKit
 @testable import flyfun_weather
@@ -211,6 +212,56 @@ struct ForecastMapTests {
         #expect(dl.isEmpty)
     }
 
+    @Test func mapsLinkCarriesViewport() {
+        let url = URL(string: "https://weather.flyfun.aero/maps.html?fc.view=51.50,-0.12,7")!
+        guard case .forecastMap(let dl) = AppState.navigationTarget(for: url) else {
+            Issue.record("expected forecastMap"); return
+        }
+        #expect(dl.view == MapViewport(lat: 51.5, lon: -0.12, zoom: 7))
+    }
+
+    /// Garbage views are dropped, like the web's `parseMapView`.
+    @Test func viewportTokenValidation() {
+        #expect(MapViewport(token: "48.00,10.00,5") == MapViewport(lat: 48, lon: 10, zoom: 5))
+        #expect(MapViewport(token: "48,10,5.4")?.zoom == 5)
+        for bad in ["", "48,10", "48,10,5,1", "91,10,5", "48,181,5", "48,10,0", "48,10,19", "a,b,c", "48,,5"] {
+            #expect(MapViewport(token: bad) == nil, "\(bad)")
+        }
+    }
+
+    /// A tab iOS lacks lands on the forecast map at that tab's own view, falling
+    /// back to `fc.view`.
+    @Test func otherTabUsesItsOwnView() {
+        let syn = URL(string: "https://weather.flyfun.aero/maps.html?tab=synoptic&syn.view=55.00,-3.00,6&fc.view=48.00,10.00,4")!
+        guard case .forecastMap(let dl) = AppState.navigationTarget(for: syn) else {
+            Issue.record("expected forecastMap"); return
+        }
+        #expect(dl.view == MapViewport(lat: 55, lon: -3, zoom: 6))
+        let now = URL(string: "https://weather.flyfun.aero/maps.html?tab=now&fc.view=48.00,10.00,4")!
+        guard case .forecastMap(let dl2) = AppState.navigationTarget(for: now) else {
+            Issue.record("expected forecastMap"); return
+        }
+        #expect(dl2.view == MapViewport(lat: 48, lon: 10, zoom: 4))
+    }
+
+    /// Web zoom 5 (its default view) maps to the app's Europe span; each step halves it.
+    @Test func viewportRegionCalibration() {
+        let r5 = ForecastMapViewModel.region(for: MapViewport(lat: 51.5, lon: -0.12, zoom: 5))
+        #expect(r5.span.latitudeDelta == ForecastMapViewModel.europeRegion.span.latitudeDelta)
+        #expect(r5.center.latitude == 51.5)
+        let r7 = ForecastMapViewModel.region(for: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))
+        #expect(r7.span.longitudeDelta == ForecastMapViewModel.europeRegion.span.longitudeDelta / 4)
+    }
+
+    @MainActor
+    @Test func viewModelAppliesViewportAtInit() {
+        let vm = ForecastMapViewModel(
+            repository: MockBriefingRepository(),
+            deepLink: MapDeepLink(view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7)))
+        #expect(vm.initialRegion.center.latitude == 51.5)
+        #expect(vm.initialRegion.span.longitudeDelta == ForecastMapViewModel.europeRegion.span.longitudeDelta / 4)
+    }
+
     @Test func briefingLinkStillRoutes() {
         let target = AppState.navigationTarget(for: URL(string: "https://weather.flyfun.aero/briefing.html?flight=abc")!)
         #expect(target == .briefing(flightId: "abc"))
@@ -223,7 +274,8 @@ struct ForecastMapTests {
         // round-trip let one test consume the other's value (#578).
         let store = PendingNavigationStore.testStore(#function)
         defer { PendingNavigationStore.removeTestStore(#function) }
-        let dl = MapDeepLink(day: 2, hour: 6, model: "gfs", metric: "ceiling_ft", airport: "EGLL")
+        let dl = MapDeepLink(day: 2, hour: 6, model: "gfs", metric: "ceiling_ft", airport: "EGLL",
+                             view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))
         store.set(.forecastMap(dl))
         #expect(store.take() == .forecastMap(dl))
         #expect(store.take() == nil, "take() consumes the target")
