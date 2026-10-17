@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import email.utils
 import io
+import json
 import logging
 import threading
-from collections.abc import Mapping
-from datetime import datetime, timezone
+import time
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -48,6 +51,7 @@ from weatherbrief.fetch.chart_cache import (
     ChartCalibration,
     ChartFetchResult,  # re-exported for back-compat
     RefreshReport,  # re-exported for back-compat
+    atomic_write_bytes,
     parse_http_datetime,
     parse_run_cycle_dt,  # re-exported for back-compat
 )
@@ -480,6 +484,161 @@ def refresh_charts(
         logger.warning("DWD chart eviction failed", exc_info=True)
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# Check throttling + cache fallback
+# ---------------------------------------------------------------------------
+#
+# Every briefing used to run ``refresh_charts`` — six requests to www.dwd.de —
+# although the charts change a handful of times a day. Observed on prod
+# (2026-10-15..17): the analysis rolls every 6 h, Last-Modified 1h10-2h20
+# after its synoptic hour; the five forecast charts come from the 00Z ICON run
+# only, published 03:30-06:10 UTC. Concurrent briefings also fetched in
+# parallel, and a failed fetch (timeouts, SSL session errors) left the
+# briefing with no charts although the cache held a perfectly good cycle.
+
+_CHECK_STATE_FILE = ".check_state.json"
+_REFRESH_LOCK_FILE = ".refresh.lock"
+_MIN_CHECK_INTERVAL = timedelta(minutes=10)
+_MAX_CHECK_AGE = timedelta(hours=3)
+_ANALYSIS_EARLIEST_LAG = timedelta(hours=1)
+_FORECAST_EARLIEST_UTC_HOUR = 3
+_LOCK_WAIT_SECONDS = 120.0
+
+_refresh_thread_lock = threading.Lock()
+
+
+def _read_check_state(root: Path) -> dict:
+    try:
+        return json.loads((root / _CHECK_STATE_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_check_state(root: Path, *, now: datetime, ok: bool, error: str | None) -> None:
+    state = {"checked_at": now.isoformat(), "ok": ok, "error": error}
+    try:
+        atomic_write_bytes(root / _CHECK_STATE_FILE, json.dumps(state).encode())
+    except OSError:
+        logger.warning("DWD check state write failed", exc_info=True)
+
+
+def _cached_report(data_dir: Path) -> RefreshReport | None:
+    """A report for the newest cached cycle that has its analysis, or None."""
+    for run_cycle in reversed(_cache.list_cycles(data_dir)):
+        _meta, present = _cache.cycle_snapshot(data_dir, run_cycle)
+        if "ana" in present:
+            return RefreshReport(
+                run_cycle=run_cycle,
+                charts_unchanged=[cid for cid in CHART_IDS if cid in present],
+                from_cache=True,
+            )
+    return None
+
+
+def check_due_reason(
+    data_dir: Path, cached: RefreshReport | None, state: dict, now: datetime,
+) -> str | None:
+    """Why DWD should be asked now, or None to serve the cache.
+
+    The ten-minute floor applies to every reason — including a failed last
+    check — so a briefing burst, or the wait between a run being due and
+    DWD actually publishing it, costs one request series per ten minutes.
+    """
+    if cached is None:
+        return "nothing cached"
+    try:
+        checked_at = datetime.fromisoformat(state["checked_at"])
+    except (KeyError, TypeError, ValueError):
+        return "no previous check"
+    since = now - checked_at
+    if since < _MIN_CHECK_INTERVAL:
+        return None
+    if not state.get("ok", False):
+        return "previous check failed"
+    if since >= _MAX_CHECK_AGE:
+        return "last check over 3 h ago"
+
+    issued = parse_run_cycle_dt(cached.run_cycle or "")
+    if issued is None or now >= issued + timedelta(hours=6) + _ANALYSIS_EARLIEST_LAG:
+        return "next analysis due"
+
+    if set(CHART_IDS) - set(cached.charts_unchanged):
+        return "charts missing from the cached cycle"
+
+    today_00z = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if now >= today_00z + timedelta(hours=_FORECAST_EARLIEST_UTC_HOUR):
+        stamps = forecast_stamps(data_dir, cached.run_cycle or "")
+        newest_run = max((s.init_time for s in stamps.values()), default=None)
+        if newest_run is None or newest_run < today_00z:
+            return "today's forecast charts due"
+    return None
+
+
+@contextmanager
+def _refresh_lock(root: Path) -> Iterator[bool]:
+    """One DWD check at a time across threads and processes.
+
+    Yields False when the lock couldn't be had within ``_LOCK_WAIT_SECONDS``
+    (a stuck holder); the caller then serves the cache.
+    """
+    import fcntl
+
+    with _refresh_thread_lock:
+        root.mkdir(parents=True, exist_ok=True)
+        with open(root / _REFRESH_LOCK_FILE, "w") as fh:
+            deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        yield False
+                        return
+                    time.sleep(0.5)
+            try:
+                yield True
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def refresh_charts_if_due(
+    data_dir: Path,
+    *,
+    now: datetime | None = None,
+    timeout: float = _TIMEOUT_SECONDS,
+) -> RefreshReport:
+    """``refresh_charts`` when DWD may have something new, else the cache.
+
+    Serialised (a briefing that waited on another's check re-reads the state
+    and usually finds nothing due), and a failed check falls back to the
+    newest cached cycle — the briefing then still records charts, which the
+    horizon check in ``run_dwd_charts`` judges as usual.
+    """
+    now = now or datetime.now(timezone.utc)
+    root = _cache.cache_root(data_dir)
+    with _refresh_lock(root) as locked:
+        cached = _cached_report(data_dir)
+        if not locked:
+            logger.warning("DWD chart check lock not acquired; serving the cache")
+            return cached or RefreshReport(error="refresh lock timeout")
+
+        reason = check_due_reason(data_dir, cached, _read_check_state(root), now)
+        if reason is None and cached is not None:
+            return cached
+
+        logger.info("DWD chart check (%s)", reason)
+        report = refresh_charts(data_dir, timeout=timeout)
+        _write_check_state(root, now=now, ok=report.run_cycle is not None, error=report.error)
+        if report.run_cycle is None and cached is not None:
+            logger.warning(
+                "DWD chart check failed (%s); using cached cycle %s", report.error, cached.run_cycle,
+            )
+            cached.error = report.error
+            return cached
+        return report
 
 
 def _stamp_forecast_times(cdir: Path, meta: dict[str, dict], forecast_ids: tuple[str, ...]) -> None:

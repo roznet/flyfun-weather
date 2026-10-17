@@ -455,3 +455,142 @@ def test_select_default_uses_recorded_valid_times_over_cycle_offsets():
     etd = datetime(2026, 9, 16, 18, tzinfo=timezone.utc)
     assert select_default_chart_id(etd, "2026-09-14T18Z") == "048"
     assert select_default_chart_id(etd, "2026-09-14T18Z", valid_times=valid) == "060"
+
+
+# ---------------------------------------------------------------------------
+# refresh_charts_if_due — throttling, single flight, cache fallback
+# ---------------------------------------------------------------------------
+
+from weatherbrief.fetch import dwd_charts as _dwd  # noqa: E402
+from weatherbrief.fetch.dwd_charts import check_due_reason, refresh_charts_if_due  # noqa: E402
+
+_CYCLE = "2026-05-08T06Z"
+_CYCLE_DT = datetime(2026, 5, 8, 6, tzinfo=timezone.utc)
+
+
+def _seed_cycle(data_dir: Path, *, forecast_run: datetime = datetime(2026, 5, 8, 0, tzinfo=timezone.utc),
+                ids: tuple[str, ...] = CHART_IDS) -> None:
+    """A cached cycle with every chart and forecast stamps from ``forecast_run``."""
+    import json
+
+    cdir = cycle_dir(data_dir, _CYCLE)
+    cdir.mkdir(parents=True)
+    meta = {}
+    for cid in ids:
+        (cdir / f"{cid}.png").write_bytes(_PNG_BYTES)
+        entry = {"last_modified": "2026-05-08T07:50:00+00:00", "etag": f'"{cid}"'}
+        if cid != "ana":
+            lead = FORECAST_OFFSETS_H[cid]
+            entry |= {"init_time": forecast_run.isoformat(), "lead_h": lead,
+                      "valid_time": (forecast_run + timedelta(hours=lead)).isoformat()}
+        meta[cid] = entry
+    (cdir / "meta.json").write_text(json.dumps(meta))
+
+
+def _state(checked_at: datetime, ok: bool = True) -> dict:
+    return {"checked_at": checked_at.isoformat(), "ok": ok}
+
+
+def _due(data_dir: Path, now: datetime, state: dict) -> str | None:
+    return check_due_reason(data_dir, _dwd._cached_report(data_dir), state, now)
+
+
+def test_check_not_due_between_publications(tmp_path: Path):
+    _seed_cycle(tmp_path)
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=30))) is None
+
+
+def test_check_due_once_next_analysis_can_be_out(tmp_path: Path):
+    _seed_cycle(tmp_path)
+    # 12Z analysis can appear from 13:00Z.
+    now = datetime(2026, 5, 8, 13, 5, tzinfo=timezone.utc)
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=30))) == "next analysis due"
+    # …but never more often than every ten minutes while waiting for it.
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=4))) is None
+
+
+def test_check_due_for_todays_forecasts(tmp_path: Path):
+    # Cached forecasts are yesterday's 00Z run; today's appear from 03Z.
+    _seed_cycle(tmp_path, forecast_run=datetime(2026, 5, 7, 0, tzinfo=timezone.utc))
+    now = datetime(2026, 5, 8, 9, 0, tzinfo=timezone.utc)
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=30))) == "today's forecast charts due"
+
+
+def test_check_due_when_a_chart_is_missing_or_last_check_failed(tmp_path: Path):
+    _seed_cycle(tmp_path, ids=("ana", "036", "048"))
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=30))) == "charts missing from the cached cycle"
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=30), ok=False)) == "previous check failed"
+    assert _due(tmp_path, now, _state(now - timedelta(minutes=5), ok=False)) is None
+
+
+def test_check_due_with_empty_cache_or_no_state(tmp_path: Path):
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    assert _due(tmp_path, now, {}) == "nothing cached"
+    _seed_cycle(tmp_path)
+    assert _due(tmp_path, now, {}) == "no previous check"
+    assert _due(tmp_path, now, _state(now - timedelta(hours=4))) == "last check over 3 h ago"
+
+
+@responses.activate
+def test_refresh_if_due_serves_cache_without_asking_dwd(tmp_path: Path):
+    _seed_cycle(tmp_path)
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    _dwd._write_check_state(_dwd._cache.cache_root(tmp_path), now=now - timedelta(minutes=20), ok=True, error=None)
+
+    report = refresh_charts_if_due(tmp_path, now=now)
+
+    assert len(responses.calls) == 0
+    assert report.from_cache and report.run_cycle == _CYCLE
+    assert sorted(report.charts_unchanged) == sorted(CHART_IDS)
+
+
+@responses.activate
+def test_failed_check_falls_back_to_cached_cycle(tmp_path: Path):
+    _seed_cycle(tmp_path)
+    responses.add(responses.GET, _url("ana"), body=responses.ConnectionError("SSL: INVALID_SESSION_ID"))
+    now = datetime(2026, 5, 8, 13, 30, tzinfo=timezone.utc)  # 12Z analysis due
+
+    report = refresh_charts_if_due(tmp_path, now=now)
+
+    assert report.from_cache and report.run_cycle == _CYCLE
+    assert "unreachable" in (report.error or "")
+    state = _dwd._read_check_state(_dwd._cache.cache_root(tmp_path))
+    assert state["ok"] is False
+    # The next briefing a minute later doesn't retry yet.
+    responses.reset()
+    again = refresh_charts_if_due(tmp_path, now=now + timedelta(minutes=1))
+    assert len(responses.calls) == 0 and again.run_cycle == _CYCLE
+
+
+@responses.activate
+def test_failed_check_with_empty_cache_still_reports_failure(tmp_path: Path):
+    _add_chart_response("ana", "", status=500)
+    report = refresh_charts_if_due(tmp_path, now=datetime(2026, 5, 8, 10, tzinfo=timezone.utc))
+    assert report.run_cycle is None and not report.from_cache
+
+
+def test_concurrent_briefings_make_one_check(tmp_path: Path, monkeypatch):
+    """The second briefing waits for the first's check, then finds nothing due."""
+    import threading
+
+    calls: list[int] = []
+
+    def fake_refresh(data_dir, timeout=30):
+        calls.append(1)
+        _seed_cycle(data_dir)
+        return _dwd.RefreshReport(run_cycle=_CYCLE, charts_refreshed=list(CHART_IDS))
+
+    monkeypatch.setattr(_dwd, "refresh_charts", fake_refresh)
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(refresh_charts_if_due(tmp_path, now=now)))
+               for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(calls) == 1
+    assert {r.run_cycle for r in results} == {_CYCLE}

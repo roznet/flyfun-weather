@@ -274,6 +274,32 @@ horizon in `run_dwd_charts`, and the pack response's `dwd_charts_times` — read
 from the shared cache, not stored on the pack — which the briefing caption shows
 as "Valid … · ICON … run +Nh".
 
+## When a briefing asks DWD
+
+`run_dwd_charts` calls `refresh_charts_if_due` (`fetch/dwd_charts.py`), not
+`refresh_charts`. Every briefing used to send six conditional GETs to
+www.dwd.de; prod (2026-10-15..17) showed the analysis rolling every 6 h
+(Last-Modified 1h10-2h20 after its synoptic hour) and the five forecast charts
+only once a day, from the 00Z ICON run, published 03:30-06:10 UTC.
+
+- **Only when due** (`check_due_reason`): nothing cached; no recorded check;
+  the last check failed; it is over 3 h old (safety net for re-issues);
+  the next analysis can be out (cached cycle + 6 h + 1 h); a chart is missing
+  from the cached cycle; or it is past 03:00 UTC and the cached forecasts are
+  from an earlier day's run. Otherwise the newest cached cycle is used as is.
+- **Ten-minute floor** on every reason, failures included: between a run being
+  due and DWD publishing it, a briefing burst costs one check per ten minutes.
+- **One check at a time** across threads and processes (`flock` on
+  `dwd_charts/.refresh.lock`); a briefing that waited re-reads the state
+  (`dwd_charts/.check_state.json`) and usually finds nothing due. Lock wait is
+  capped at 120 s, then the cache is served.
+- **Cache fallback**: a failed check (timeouts, SSL session errors — 18 of 1,628
+  briefings in 30 days, 15 of them on 10-16/17) uses the newest cached cycle
+  that has its analysis, so the briefing still records charts; the horizon
+  check is unchanged. Only a failed check on an empty cache leaves
+  `run_cycle=None`. `RefreshReport.from_cache` marks both cache paths.
+- Met Office and Météo-France still refresh on every briefing.
+
 ## Open (non-blocking) questions
 
 - Met Office `colour` is 800×540 — blurry zoomed in; cap `maxZoom`. Same as DWD

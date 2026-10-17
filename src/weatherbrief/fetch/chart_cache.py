@@ -99,6 +99,9 @@ class RefreshReport:
     charts_failed: list[str] = field(default_factory=list)
     evicted: list[str] = field(default_factory=list)
     error: str | None = None  # set when refresh couldn't even determine a cycle
+    # Built from the on-disk cache without asking the server: the check
+    # wasn't due, or it failed and the newest cached cycle stood in.
+    from_cache: bool = False
 
 
 # ---------------------------------------------------------------------------

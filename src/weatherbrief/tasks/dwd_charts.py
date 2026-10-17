@@ -26,7 +26,7 @@ from weatherbrief.fetch.dwd_charts import (
     FORECAST_OFFSETS_H,
     forecast_stamps,
     parse_run_cycle_dt,
-    refresh_charts,
+    refresh_charts_if_due,
     select_default_chart_id,
 )
 from weatherbrief.fetch.text_forecasts import ForecastRegion, detect_region
@@ -54,20 +54,17 @@ def run_dwd_charts(
 ) -> DwdChartsResult:
     """Refresh the DWD chart cache and compute briefing references.
 
-    Always cheap when the cycle hasn't rolled — conditional GETs return
-    304 in ~300ms total across 6 parallel requests. The first refresh of
-    a new cycle does 6 fresh downloads (~1s in parallel).
-
-    Returns a result with all fields populated; refresh failures leave
-    ``run_cycle=None`` and ``in_coverage=False`` so the section renders
-    "unavailable" gracefully.
+    DWD is only asked when a chart may have changed since the last check
+    (``refresh_charts_if_due``); otherwise, and when the check fails, the
+    newest cached cycle is used. Only an empty cache plus a failed check
+    leaves ``run_cycle=None`` (section renders "unavailable").
     """
     in_coverage = detect_region(route) == ForecastRegion.EUROPE
     if not in_coverage:
         return DwdChartsResult(in_coverage=False)
 
     try:
-        report = refresh_charts(data_dir)
+        report = refresh_charts_if_due(data_dir)
     except Exception:
         logger.warning("DWD chart refresh raised", exc_info=True)
         return DwdChartsResult(in_coverage=True, within_horizon=False)
