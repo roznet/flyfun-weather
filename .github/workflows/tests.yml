@@ -57,8 +57,9 @@ jobs:
           python -m venv venv
           ./venv/bin/pip install --upgrade pip
           ./venv/bin/pip install -e ".[dev]"
-      # pyproject sets `addopts = -m 'not slow'`, so the slow-marked tests are
-      # excluded here exactly as they are locally.
+      # pyproject sets `addopts = -m 'not slow' -n auto --dist worksteal`, so the
+      # slow-marked tests are excluded here exactly as they are locally, and the
+      # suite runs on every vCPU the runner has.
       - name: pytest
         run: ./venv/bin/python -m pytest -q
 

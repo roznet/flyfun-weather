@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -36,17 +37,28 @@ def _decode(png: bytes) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(png)).convert("RGBA"))
 
 
-def test_overlay_is_a_valid_rgba_png(dbzh_path):
-    png, bounds = render_overlay(_full_frame(dbzh_path), BOUNDS)
+@pytest.fixture(scope="module")
+def full_render() -> tuple[bytes, OverlayBounds]:
+    """The full DBZH frame rendered over ``BOUNDS`` — read by several tests.
+
+    A render is ~0.4 s (mostly projecting the mesh), so it is done once per
+    module; the PNG bytes are immutable, so sharing them is safe.
+    """
+    path = Path(__file__).parent / "data" / "opera_dbzh.h5"
+    return render_overlay(_full_frame(path), BOUNDS)
+
+
+def test_overlay_is_a_valid_rgba_png(full_render):
+    png, bounds = full_render
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     image = _decode(png)
     assert image.shape[2] == 4
     assert bounds == BOUNDS
 
 
-def test_no_coverage_is_drawn_and_no_echo_is_not(dbzh_path):
+def test_no_coverage_is_drawn_and_no_echo_is_not(full_render):
     """Leaving both blank would show half the OPERA grid as clear sky."""
-    image = _decode(render_overlay(_full_frame(dbzh_path), BOUNDS)[0])
+    image = _decode(full_render[0])
     alpha = image[:, :, 3]
 
     nodata_pixels = np.all(image == np.array(NODATA_RGBA, dtype=np.uint8), axis=-1)
@@ -58,8 +70,8 @@ def test_no_coverage_is_drawn_and_no_echo_is_not(dbzh_path):
     assert (alpha == DETECTION_ALPHA).any()
 
 
-def test_stronger_echo_gets_a_hotter_colour(dbzh_path):
-    image = _decode(render_overlay(_full_frame(dbzh_path), BOUNDS)[0])
+def test_stronger_echo_gets_a_hotter_colour(full_render):
+    image = _decode(full_render[0])
     drawn = image[image[:, :, 3] == DETECTION_ALPHA]
     assert drawn.size > 0
     # The fixture's 45 dBZ core lands on the orange stop; its 20 dBZ fringe on
@@ -74,8 +86,8 @@ def test_aspect_ratio_follows_the_requested_box(dbzh_path):
     assert image.shape[0] > image.shape[1]
 
 
-def test_overlay_size_is_capped(dbzh_path):
-    image = _decode(render_overlay(_full_frame(dbzh_path), BOUNDS)[0])
+def test_overlay_size_is_capped(full_render):
+    image = _decode(full_render[0])
     assert max(image.shape[:2]) <= MAX_OVERLAY_PIXELS
 
 
@@ -86,7 +98,7 @@ def test_area_outside_the_frame_reads_as_no_coverage(dbzh_path):
     assert np.all(image == np.array(NODATA_RGBA, dtype=np.uint8))
 
 
-def test_drawn_colours_are_class_colours_or_blends_just_below_a_floor(dbzh_path):
+def test_drawn_colours_are_class_colours_or_blends_just_below_a_floor(full_render):
     """Smoothing may add colours, but only pessimistic ones (§33).
 
     Every drawn colour is either a class colour or the colour of a value within
@@ -99,8 +111,11 @@ def test_drawn_colours_are_class_colours_or_blends_just_below_a_floor(dbzh_path)
         smooth_colour,
     )
 
-    image = _decode(render_overlay(_full_frame(dbzh_path), BOUNDS)[0])
-    drawn = {tuple(int(c) for c in row[:3]) for row in image[image[:, :, 3] > 0]}
+    image = _decode(full_render[0])
+    rgb = image[image[:, :, 3] > 0][:, :3].astype(np.uint32)
+    # Pack to one int per pixel: a 1-D unique is ~100x faster than a set of tuples.
+    packed = np.unique((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2])
+    drawn = {(int(v >> 16), int(v >> 8 & 0xFF), int(v & 0xFF)) for v in packed}
     drawn.discard(tuple(NODATA_RGBA[:3]))
     allowed = {(r, g, b) for _v, r, g, b in _DBZ_STOPS}
     for floor, *_rgb in _DBZ_STOPS[1:]:
@@ -236,11 +251,11 @@ def test_cloud_tops_are_not_stippled(ctth_path):
     assert inner.all(), f"{(~inner).sum()} transparent pixels inside a solid deck"
 
 
-def test_radar_png_is_a_palette_image(dbzh_path):
+def test_radar_png_is_a_palette_image(full_render):
     """Binned paint fits a lossless palette: several times smaller than RGBA."""
     from PIL import Image
 
-    png = render_overlay(_full_frame(dbzh_path), BOUNDS)[0]
+    png = full_render[0]
     assert Image.open(io.BytesIO(png)).mode == "P"
 
 

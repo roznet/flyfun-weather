@@ -15,10 +15,13 @@ import random
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks import verification_daily_rollup
 from weatherbrief.tasks.verification_daily_rollup import rollup_all_complete_days
 from weatherbrief.tasks.verification_stats import (
     get_category_accuracy,
@@ -207,6 +210,21 @@ class TestValidationGate:
     Synthetic 7-day dataset → rollup → get_digest_data, assert that every
     numeric field matches the expected values computed straight from raw.
     """
+
+    @pytest.fixture(autouse=True)
+    def _frozen_today(self, monkeypatch):
+        """Pin the rollup's "today" a few days after the fixture data.
+
+        The day walk runs from the first score to today, so against the real
+        clock these fixed dates rolled a growing run of empty days (~7 ms each,
+        ~200 days by October 2026).
+        """
+        class _Frozen(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+
+        monkeypatch.setattr(verification_daily_rollup, "datetime", _Frozen)
 
     def test_category_accuracy_matches_raw_aggregation(self, db_session):
         scores = _build_dataset(db_session, date(2026, 4, 1), days=7)

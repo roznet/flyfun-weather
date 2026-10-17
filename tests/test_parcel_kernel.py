@@ -69,8 +69,12 @@ def _metpy(p, t, td):
     if prof is not None:
         out["lfc"] = _value(lambda: mpcalc.lfc(P, T, TD, parcel_temperature_profile=prof)[0].to("hPa").m)
         out["el"] = _value(lambda: mpcalc.el(P, T, TD, parcel_temperature_profile=prof)[0].to("hPa").m)
-        out["cape"] = _value(lambda: mpcalc.cape_cin(P, T, TD, prof)[0].m)
-        out["cin"] = _value(lambda: mpcalc.cape_cin(P, T, TD, prof)[1].m)
+        try:  # one solve for both halves; MetPy's cape_cin dominates this sweep
+            cape_cin = mpcalc.cape_cin(P, T, TD, prof)
+        except Exception:
+            cape_cin = None
+        out["cape"] = _value(lambda: cape_cin[0].m)
+        out["cin"] = _value(lambda: cape_cin[1].m)
         out["li"] = _value(lambda: mpcalc.lifted_index(P, T, prof).m)
     out["mu"] = _value(lambda: mpcalc.most_unstable_cape_cin(P, T, TD)[0].m)
     out["ml"] = _value(lambda: mpcalc.mixed_layer_cape_cin(P, T, TD)[0].m)

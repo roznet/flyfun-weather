@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
+import dotenv
 import pytest
+
+# create_app() and several CLIs call load_dotenv(), which copies the developer's
+# whole .env (DATA_DIR, EVAL_CORPUS_DIR, API keys) into os.environ for the rest
+# of the process. What a test then sees depended on whether an earlier test in
+# the same process had built the app — order-dependent locally, random under
+# xdist, and never what CI (no .env) sees. Neutralised before anything imports
+# weatherbrief, so every `from dotenv import load_dotenv` binds the no-op.
+dotenv.load_dotenv = lambda *args, **kwargs: False
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -21,6 +31,45 @@ def _clean_env_leaks(monkeypatch):
     # would have the suite call Anthropic — and be billed for it. Tests that
     # want the path set the key themselves.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "testserver"}
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch, request):
+    """Refuse every non-loopback TCP connect and DNS lookup.
+
+    Pipeline/refresh paths fetch best-effort extras (model-status probes,
+    DWD / Met Office / Météo-France charts, FX rates) and swallow the failure,
+    so a test that forgets to stub one still passes — after a real download,
+    making the suite slow, network-dependent and timing-flaky. Failing fast
+    here surfaces the leak as a clear error instead. Unix sockets (process
+    pools, multiprocessing) are untouched. A test that genuinely needs the
+    network opts out with ``@pytest.mark.network``.
+    """
+    if request.node.get_closest_marker("network"):
+        return
+    import socket
+
+    real_connect = socket.socket.connect
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _guarded_connect(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and address[0] not in _LOOPBACK:
+            raise ConnectionRefusedError(f"test tried to reach {address!r}: network is blocked in tests")
+        return real_connect(sock, address)
+
+    def _guarded_getaddrinfo(host, *args, **kwargs):
+        if host is not None and host not in _LOOPBACK:
+            raise socket.gaierror(f"test tried to resolve {host!r}: network is blocked in tests")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", _guarded_getaddrinfo)
+    # The refresh path's model-status probe retries a failed fetch after 5 s
+    # then 10 s; against the blocked network that is 15 s of sleep per model.
+    monkeypatch.setattr("weatherbrief.fetch.model_status._META_RETRY_BACKOFF", [0, 0])
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +88,61 @@ def _reset_procedure_coverage_cache():
     _procedure_coverage_countries.cache_clear()
 
 
+# Env vars create_app() only copies into app.state, re-applied per hand-out, plus
+# pytest's own per-test marker — everything else is part of the cache key.
+_PER_TEST_ENV = {"DATA_DIR", "AIRPORTS_DB", "PYTEST_CURRENT_TEST"}
+_APP_CACHE: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _reuse_built_app(request, monkeypatch):
+    """Hand test modules a cached app instead of rebuilding it per test.
+
+    ``create_app()`` costs 0.1-0.3 s (FastAPI building ~1500 route dependants)
+    and ~950 tests call it, nearly all in the same configuration. The cache key
+    is the whole environment minus ``_PER_TEST_ENV``, so a test that sets
+    anything create_app might read gets its own build — a new construction-time
+    env read can cost an extra build, never a stale app. On hand-out the app is
+    reset to how create_app left it: overrides cleared, ``app.state`` restored
+    and DATA_DIR / AIRPORTS_DB applied as create_app does. A test that asks for
+    two apps (owner + friend) gets two distinct instances.
+
+    Patches the test module's own ``create_app`` binding, so it covers modules
+    that ``from weatherbrief.api.app import create_app``; opt out with
+    ``@pytest.mark.fresh_app`` (e.g. to monkeypatch something create_app
+    captures at construction).
+    """
+    import sys
+
+    app_module = sys.modules.get("weatherbrief.api.app")
+    if (
+        app_module is None
+        or getattr(request.module, "create_app", None) is not app_module.create_app
+        or request.node.get_closest_marker("fresh_app")
+    ):
+        return
+    real_create_app = app_module.create_app
+    handed_out: dict = {}
+
+    def _cached_create_app():
+        env_key = frozenset((k, v) for k, v in os.environ.items() if k not in _PER_TEST_ENV)
+        slot = handed_out.get(env_key, 0)
+        handed_out[env_key] = slot + 1
+        entry = _APP_CACHE.get((env_key, slot))
+        if entry is None:
+            app = real_create_app()
+            entry = _APP_CACHE[(env_key, slot)] = (app, dict(app.state._state))
+        app, built_state = entry
+        app.dependency_overrides.clear()
+        app.state._state.clear()
+        app.state._state.update(built_state)
+        app.state.db_path = os.environ.get("AIRPORTS_DB", "")
+        app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        return app
+
+    monkeypatch.setattr(request.module, "create_app", _cached_create_app)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _drain_module_executors_at_session_end():
     """Drain module-level executors at session end so background threads
@@ -53,16 +157,22 @@ def _drain_module_executors_at_session_end():
     failed or hung. Draining at session end keeps stdout clean.
     """
     yield
-    try:
-        from weatherbrief.api.packs import _refresh_executor
-        _refresh_executor.shutdown(wait=True, cancel_futures=True)
-    except Exception:
-        pass
-    try:
-        from weatherbrief.fetch.grib import shutdown_decode_pool
-        shutdown_decode_pool()
-    except Exception:
-        pass
+    import sys
+
+    # Only drain what the session actually imported: importing api.packs here
+    # just to shut down an executor nobody started cost ~1.3 s per small run.
+    packs = sys.modules.get("weatherbrief.api.packs")
+    if packs is not None:
+        try:
+            packs._refresh_executor.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+    grib = sys.modules.get("weatherbrief.fetch.grib")
+    if grib is not None:
+        try:
+            grib.shutdown_decode_pool()
+        except Exception:
+            pass
 
 from flyfun_common.db import DEV_USER_ID
 from flyfun_common.db.models import Base, UserPreferencesRow, UserRow

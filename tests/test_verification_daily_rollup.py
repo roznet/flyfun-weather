@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 from sqlalchemy import select
 
 from weatherbrief.db.models import (
@@ -11,6 +13,7 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
     VerificationScoreRow,
 )
+from weatherbrief.tasks import verification_daily_rollup
 from weatherbrief.tasks.verification_daily_rollup import (
     completed_days,
     rebuild_all_days,
@@ -337,6 +340,21 @@ class TestContingencyCounts:
 
 
 class TestOrchestrators:
+    @pytest.fixture(autouse=True)
+    def _frozen_today(self, monkeypatch):
+        """Pin the rollup's "today" a few days after the fixture data.
+
+        The day walk runs from the first score to today, so against the real
+        clock these fixed dates rolled a growing run of empty days (~7 ms each,
+        ~200 days by October 2026).
+        """
+        class _Frozen(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 2, 20, 12, tzinfo=timezone.utc)
+
+        monkeypatch.setattr(verification_daily_rollup, "datetime", _Frozen)
+
     def test_completed_days_excludes_today_and_summarised(self, db_session):
         # A score from a clearly-completed past day
         oid_past = _make_obs(db_session, "LFPG", _utc(2026, 2, 15, 12, 0))
