@@ -16,7 +16,7 @@ from typing import AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
 
@@ -5417,11 +5417,14 @@ def post_live_position(
     reason: a fix in the future, outside the live window, with a horizontal
     accuracy worse than ``MAX_FIX_ACCURACY_M``, already recorded (the app
     resends its unsent fixes), within ``MIN_FIX_SPACING`` of a recorded one,
-    or past ``MAX_FIXES_PER_FLIGHT``. ``landed`` records an app landing at the newest fix's time,
-    unless a landing is already in effect or it would not follow the
-    departure; a manual landing always wins over it. No refetch: the next
-    tick (10 min) measures from them. 409 when the latest pack cannot be
-    read (nothing written).
+    or past ``MAX_FIXES_PER_FLIGHT``. The app only reads ``accepted``: a fix
+    ignored here (``too_close`` included, under the app's own 60 s spacing
+    only when two sources post close together) is simply not resent.
+    ``landed`` records an app landing at the newest fix's time, unless a
+    landing is already in effect or it would not follow the departure; a
+    manual landing always wins over it. No refetch: the next tick (10 min)
+    measures from them. 409 when the latest pack cannot be read (nothing
+    written).
     """
     from weatherbrief.analysis.flight_progress import (
         EVENT_FIX,
@@ -5431,8 +5434,6 @@ def post_live_position(
         FlightProgress,
         ProgressEvent,
     )
-    from pydantic import ValidationError
-
     from weatherbrief.analysis.advisories._helpers import terrain_at_distance
     from weatherbrief.analysis.route_geometry import RouteTrack
     from weatherbrief.models.analysis import RouteConfig

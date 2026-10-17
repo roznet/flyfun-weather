@@ -76,7 +76,7 @@ and nothing for an hour. A fix never makes things worse than the plan.
 - Take-off: the first airborne fix after the last fix on the ground,
   back-dated to along 0 at the planned speed, never before that ground fix.
   A later ground fix at the departure resets it (a return to the departure).
-  It is inferred, not observed: :attr:`time_base` counts entries only.
+  It is inferred, never observed: :attr:`time_base` reads ``partial``.
 - On the ground at the departure (the newest fix, within
   ``NEAR_DEPARTURE_NM``, nothing airborne since): the departure is
   ``max(planned, fix + TAXI_MARGIN)``. A ground fix well before the planned
@@ -389,10 +389,14 @@ class FlightProgress:
         """``planned`` / ``partial`` / ``observed``: which times the schedule
         below comes from (#711). ``observed`` once both the take-off and the
         landing are entered (or the app detected the landing), ``partial``
-        with only one of them (#760). What the fixes infer is an estimate and
-        does not count."""
-        observed = (self._latest(EVENT_TAKEOFF) is not None) + (self.landing_event_at is not None)
-        return (TIME_BASE_PLANNED, TIME_BASE_PARTIAL, TIME_BASE_OBSERVED)[observed]
+        with only one of them (#760) or with anything the fixes infer (#761:
+        an estimate from an observation, never ``observed``, never the plan)."""
+        entered = (self._latest(EVENT_TAKEOFF) is not None) + (self.landing_event_at is not None)
+        if entered == 2:
+            return TIME_BASE_OBSERVED
+        if entered or self.takeoff_at is not None or self.landed_at is not None:
+            return TIME_BASE_PARTIAL
+        return TIME_BASE_PLANNED
 
     # --- Observed events -------------------------------------------------------
 

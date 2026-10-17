@@ -386,9 +386,10 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   - *Take-off*: inferred from the first airborne fix after the last one on
     the ground, back-dated to along 0 at the planned speed, never before
     that ground fix; a later ground fix at the departure resets it. It is
-    `departed_at` / `delay_min` like a manual one but **not observed**: the
-    recap's `time_base` counts entered events (and the app-detected landing)
-    only.
+    `departed_at` / `delay_min` like a manual one but **never observed**: the
+    recap's `time_base` is `observed` only with an entered take-off and an
+    entered (or app-detected) landing; anything a fix infers makes it
+    `partial` ("partly observed", "flown 08:29"), never the plan's wording.
   - *On the ground at the departure*: the newest telling fix on the ground
     within 3 NM of the departure, no take-off known: `departed_at =
     max(planned, fix + TAXI_MARGIN)` (10 min). A check at the airfield well

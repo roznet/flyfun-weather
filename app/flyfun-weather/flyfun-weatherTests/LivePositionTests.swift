@@ -124,6 +124,35 @@ import CoreLocation
         #expect(repo.postedLivePositions.map(\.landed) == [true, true])
     }
 
+    @Test func onlyATransientFailureIsRetried() {
+        typealias R = LivePositionRules
+        #expect(R.failureAction(for: APIError.networkError(URLError(.notConnectedToInternet))) == .retry)
+        #expect(R.failureAction(for: APIError.serverError(503, nil)) == .retry)
+        #expect(R.failureAction(for: APIError.serverError(429, nil)) == .retry)
+        #expect(R.failureAction(for: APIError.serverError(409, "briefing unreadable")) == .drop)
+        #expect(R.failureAction(for: APIError.serverError(422, nil)) == .drop)
+        #expect(R.failureAction(for: APIError.notFound) == .drop)
+        #expect(R.failureAction(for: APIError.forbidden("x")) == .drop)
+        #expect(R.failureAction(for: APIError.decodingError(URLError(.badServerResponse))) == .sent)
+    }
+
+    @Test @MainActor func aRefusedPostIsNotRetried() async {
+        let repo = MockBriefingRepository()
+        repo.postLivePositionResults = [.failure(APIError.serverError(409, nil)), .success(result(1))]
+        let service = LivePositionService(repository: repo)
+        service.submit([fix(0)], flightId: "f", landed: true)
+        await settle(repo, posts: 1)
+        // Dropped: the next poll's flush has nothing to send.
+        service.flush(flightId: "f")
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.count == 1)
+        // A later fix goes on its own.
+        service.submit([fix(900)], flightId: "f")
+        await settle(repo, posts: 2)
+        #expect(repo.postedLivePositions.last?.fixes.map { $0.at.timeIntervalSince(t0) } == [900])
+        #expect(repo.postedLivePositions.last?.landed == false)
+    }
+
     @Test @MainActor func consentIsPerFlight() {
         let defaults = UserDefaults(suiteName: "LivePositionTests.\(UUID().uuidString)")!
         #expect(!LivePositionService.hasConsent(flightId: "a", defaults: defaults))
