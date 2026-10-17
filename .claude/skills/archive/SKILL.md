@@ -83,8 +83,8 @@ version-bump lines.
 `NavigationSplitView` fork means an iPhone pass does not imply an iPad pass, and
 `generic/platform=iOS Simulator` builds the tests without running them.
 
-Pick models the machine actually has (`xcrun simctl list devices available`) and substitute
-the closest current iPhone / iPad if these names aren't present.
+The defaults are the owner's own devices. A name resolves to its newest-iOS simulator (CI's
+`pick-device` rule); pass `--device` for others (`xcrun simctl list devices available`).
 
 Use `scripts/ios_test.py`, never a bare `xcodebuild test -quiet | tail`. The script turns off
 xcodebuild's on-failure simulator diagnostics (which stalled every red run ~10 min *after*
@@ -99,7 +99,7 @@ clones; several destinations in one xcodebuild would turn that off) and prints a
 per device. It exits 3 if another `xcodebuild test` is running (`--wait` to queue).
 
 ```bash
-python3 scripts/ios_test.py --device "iPhone 17 Pro" --device "iPad Pro 11-inch (M5)"
+python3 scripts/ios_test.py   # defaults: iPhone 18 Pro + iPad Pro 11-inch (M5), each on its newest iOS
 ```
 
 If tests fail on either idiom, stop and show the failures, noting which device the failure

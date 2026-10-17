@@ -564,6 +564,15 @@ class FlyfunUITestCase: XCTestCase {
         return (canvas.value as? String) ?? ""
     }
 
+    /// A menu item by its identifier, else by its label. On iOS 27 some SwiftUI
+    /// menu items (a Button with a Label or a Text) come through without their
+    /// accessibilityIdentifier — the item is there, the lookup by id misses it —
+    /// while iOS 26 keeps it.
+    @MainActor
+    func menuItem(_ app: XCUIApplication, _ identifier: String, label: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", identifier, label)).firstMatch
+    }
+
     /// One tick of the 2026-10-02 LELL→LEMI scenario (dep 08:00Z): LEVC
     /// thunderstorms under the route, a one-report MVFR at the destination,
     /// LECB 3 / LECM 3 EMBD TS at LEMI. Each tick is its own test — every tick

@@ -94,7 +94,10 @@ jobs:
             # Exact name first, then prefixes, newest runtime that has it — so a
             # runner-image change that drops a model degrades instead of failing
             # as "unavailable destination".
-            devices: 'iPhone 17|iPhone 16|iPhone'
+            # iPhone 18 Pro + iPad Pro 11-inch (M5) are the owner's devices and
+            # what scripts/ios_test.py runs locally; older names cover runner
+            # images that don't ship them yet.
+            devices: 'iPhone 18 Pro|iPhone 17|iPhone 16|iPhone'
           - idiom: iPad
             devices: 'iPad Pro 11-inch (M5)|iPad Pro 11-inch|iPad Air 11-inch|iPad'
 

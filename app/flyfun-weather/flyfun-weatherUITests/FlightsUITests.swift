@@ -14,7 +14,7 @@ final class FlightsUITests: FlyfunUITestCase {
         XCTAssertTrue(packMenu.waitForExistence(timeout: Self.uiTimeout), "the pack menu should be in the toolbar")
         packMenu.tap()
 
-        let feedback = app.buttons["briefingFeedbackButton"].firstMatch
+        let feedback = menuItem(app, "briefingFeedbackButton", label: "Send Feedback on This Briefing")
         XCTAssertTrue(feedback.waitForExistence(timeout: Self.uiTimeout), "the pack menu should offer briefing feedback")
         feedback.tap()
 

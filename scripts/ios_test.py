@@ -27,7 +27,7 @@ parallel testing is off too: a rerun of a test or two gains nothing from clones
 and would pay ~50 s booting one.
 
 Usage:
-    python3 scripts/ios_test.py --device "iPhone 17 Pro" --device "iPad Pro 11-inch (M5)"
+    python3 scripts/ios_test.py            # iPhone 18 Pro + iPad Pro 11-inch (M5), newest iOS
     python3 scripts/ios_test.py --device "iPad Pro 11-inch (M5)" \\
         --only flyfun-weatherUITests/BriefingUITests/testRouteSigmetsSectionRenders
 
@@ -51,9 +51,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from ios_ci import pick_device  # same directory: the device rule CI uses
+
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = ROOT / "app/flyfun-weather/flyfun-weather.xcodeproj"
 SCHEME = "flyfun-weather"
+# The owner's own devices; each resolves to its newest-iOS simulator.
+DEFAULT_DEVICES = ["iPhone 18 Pro", "iPad Pro 11-inch (M5)"]
 
 # xcodebuild lines worth showing live; everything else still goes to the log.
 # Its own per-test lines are left out: under parallel testing it prints them
@@ -66,21 +70,15 @@ RUNNER = re.compile(r"Test Case '.*' (started|passed|failed|skipped)|^\W*Test ru
 
 
 def resolve_device(name: str) -> str:
-    """Map a simulator name to one UDID — names are duplicated on this machine."""
+    """Map a simulator name to one UDID — names are duplicated on this machine.
+
+    CI's rule (ios_ci.pick_device): the newest iOS that has the name. Older
+    same-named copies linger, and the 26.4 iPad carried an Apple Account whose
+    sign-in prompt covered a test's alert.
+    """
     if re.fullmatch(r"[0-9A-F-]{36}", name):
         return name
-    out = subprocess.run(
-        ["xcrun", "simctl", "list", "devices", "available", "-j"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    matches = [
-        d for devs in json.loads(out)["devices"].values() for d in devs if d["name"] == name
-    ]
-    if not matches:
-        sys.exit(f"no available simulator named {name!r} (xcrun simctl list devices available)")
-    # Prefer one already booted: it saves a boot.
-    matches.sort(key=lambda d: d["state"] != "Booted")
-    return matches[0]["udid"]
+    return pick_device([name]).rsplit("id=", 1)[1]
 
 
 def other_xcodebuild_test() -> str | None:
@@ -144,8 +142,9 @@ def summarize(bundle: Path) -> tuple[dict | None, list[tuple[str, str]]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--device", action="append", required=True,
-                    help="simulator name or UDID (repeatable: the devices run one after another)")
+    ap.add_argument("--device", action="append",
+                    help="simulator name or UDID (repeatable: the devices run one after another; "
+                         f"default: {' + '.join(DEFAULT_DEVICES)}, each on its newest iOS)")
     ap.add_argument("--only", action="append", default=[], help="-only-testing identifier (repeatable)")
     ap.add_argument("--workers", type=int, default=5,
                     help="parallel-testing clones per device (default 5: the four UI classes + the unit target)")
@@ -157,12 +156,7 @@ def main() -> int:
     ap.add_argument("--wait", action="store_true",
                     help="queue behind another running `xcodebuild test` instead of exiting 3")
     args = ap.parse_args()
-
-    while (other := other_xcodebuild_test()):
-        if not args.wait:
-            print(f"another `xcodebuild test` is running — one at a time:\n{other}", file=sys.stderr)
-            return 3
-        time.sleep(15)
+    args.device = args.device or DEFAULT_DEVICES
 
     # One device at a time, never several `-destination`s in one xcodebuild:
     # with more than one destination xcodebuild silently drops parallel
@@ -171,17 +165,27 @@ def main() -> int:
     # clones. The second device's build is incremental (seconds).
     codes = []
     for device in args.device:
+        # Before every device, not just the first: another session can start
+        # its own run while ours is between devices.
+        while (other := other_xcodebuild_test()):
+            if not args.wait:
+                print(f"another `xcodebuild test` is running — one at a time:\n{other}", file=sys.stderr)
+                codes.append(3)
+                break
+            time.sleep(15)
+        if codes and codes[-1] == 3:
+            break
         bundle = args.result_bundle
         if bundle and len(args.device) > 1:
             bundle = bundle.with_name(f"{bundle.stem}-{slug(device)}{bundle.suffix}")
         codes.append(run_device(device, resolve_device(device), args, bundle))
     if len(codes) > 1:
         print("\n" + "\n".join(f"=== {d}: exit {c}" for d, c in zip(args.device, codes)))
-    # Most severe first: a stall, then a build failure, then test failures.
-    for code in (124, 2, 1):
+    # Most severe first: a stall, then a build failure, test failures, busy.
+    for code in (124, 2, 1, 3):
         if code in codes:
             return code
-    return 0
+    return max(codes)
 
 
 def slug(device: str) -> str:

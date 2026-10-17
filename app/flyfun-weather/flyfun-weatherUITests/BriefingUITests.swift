@@ -93,7 +93,7 @@ final class BriefingUITests: FlyfunUITestCase {
         menu.tap()
         XCTAssertTrue(app.buttons["Satellite infrared"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the menu should offer the satellite underlay toggle")
-        XCTAssertTrue(app.buttons["map.observedLightningToggle"].firstMatch.exists,
+        XCTAssertTrue(menuItem(app, "map.observedLightningToggle", label: "Lightning").exists,
                       "the menu should offer the lightning toggle")
         let open = XCTAttachment(screenshot: app.screenshot())
         open.name = "RouteMap-Observed-Menu-Mock"
