@@ -14,6 +14,7 @@
  */
 
 import { escapeHtml } from '../../utils';
+import { t } from '../../i18n/i18n';
 import { formatHhmmZ } from '../../helpers/live-layer';
 import type {
   AirportObservation,
@@ -204,7 +205,7 @@ export function ribbonSvg(
   corridorNm: number,
   width: number,
   segmentsInteractive = false,
-  markerLabel = 'Planned position now',
+  markerLabel?: string,
 ): string {
   const bands = weatherAvailable(ribbon);
   const corridor = corridorOf(ribbon, corridorNm);
@@ -272,8 +273,9 @@ export function ribbonSvg(
   // (#816: "You · 4 min ago", "Estimated position", "Planned position").
   if (ribbon.flown_nm != null && ribbon.flown_nm > 0) {
     const x = xForNm(ribbon.flown_nm, routeNm, width);
-    inner += `<g role="img" aria-label="${escapeHtml(markerLabel)}" data-testid="ribbon-position">`
-      + `<title>${escapeHtml(markerLabel)}</title>`
+    const label = markerLabel ?? t('observed.ribbon.plannedPositionNow');
+    inner += `<g role="img" aria-label="${escapeHtml(label)}" data-testid="ribbon-position">`
+      + `<title>${escapeHtml(label)}</title>`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="9" fill="var(--surface)"/>`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="4.5" fill="var(--primary)"/></g>`;
   }

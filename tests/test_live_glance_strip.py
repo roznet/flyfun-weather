@@ -195,3 +195,44 @@ def test_agent_block_quotes_the_strip_and_redaction_drops_it():
     hidden = redact_live(resp, "none").glance
     assert hidden.flight is None and hidden.destination.eta is None
     assert hidden.destination.metar_text == layer.glance.destination.metar_text
+
+
+def test_a_failing_strip_or_destination_leaves_the_lines(monkeypatch):
+    """Review round 1: the blocks are additive; a bug in one never blanks the
+    nutshell lines the tab already relied on."""
+    import weatherbrief.tasks.live_glance as lg
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(lg, "flight_strip", boom)
+    monkeypatch.setattr(lg, "destination_block", boom)
+    glance, ribbon = build_glance(_layer(), ROUTE, _progress(NOW))
+    assert glance.flight is None and glance.destination is None
+    assert [ln.phase for ln in glance.lines] == ["departure", "enroute", "arrival"]
+    assert ribbon is not None
+
+
+def test_no_eta_text_survives_in_the_destination_under_sharing_none():
+    """Review round 1: the destination's clauses carry no "~HH:MMZ" estimate
+    (TAF and wind are categories, codes and winds), so ``none`` only has to
+    null its ``eta``."""
+    from weatherbrief.tasks.live_layer import strip_eta_text
+
+    dest = _airport("ZZDS", 154.0, taf={
+        "taf_flight_category_at_eta": "MVFR", "taf_prevailing_category_at_eta": "VFR",
+        "taf_temporary_category_at_eta": "MVFR", "taf_temporary_type": "PROB30 TEMPO",
+        "taf_significant_weather": ["TSRA", "CB"],
+        "taf_wind_dir": 240, "taf_wind_speed_kt": 18, "taf_wind_gust_kt": 28,
+        "taf_best_runway_id": "27", "taf_crosswind_kt": 12.0, "taf_wind_advisory": "amber",
+    })
+    storms = storms_at(NOW, [cell("core41-near", "core41", along=148, cross=4, peak=52.0, speed=10.0, toward=0.0)])
+    layer = _layer(observations=_obs(_airport("ZZDP", 0.0), dest), storms=storms)
+    layer.glance, layer.ribbon = build_glance(layer, ROUTE, _progress(mins(50), fix(40, 0.5)))
+    resp = LiveLayerResponse(flight_id=layer.flight_id, pack_timestamp=layer.pack_timestamp,
+                             glance=layer.glance, ribbon=layer.ribbon)
+    d = redact_live(resp, "none").glance.destination
+    assert d.eta is None
+    for text in [d.metar_text, d.taf_text, d.wind_text, d.cells_text, d.lightning_text,
+                 *(c.text for c in d.cells)]:
+        assert text == strip_eta_text(text), text

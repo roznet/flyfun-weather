@@ -6,7 +6,11 @@ import { describe, it, expect, vi } from 'vitest';
 import en from '../../ts/i18n/locales/en.json';
 
 vi.mock('../../ts/i18n/i18n', () => ({
-  t: (key: string) => (en as Record<string, string>)[key] ?? key,
+  t: (key: string, params?: Record<string, string | number>) => {
+    let msg = (en as Record<string, string>)[key] ?? key;
+    for (const [k, v] of Object.entries(params ?? {})) msg = msg.split(`{${k}}`).join(String(v));
+    return msg;
+  },
 }));
 
 import type { LiveGlanceDestination, LiveGlanceFlight, LiveRibbon } from '../../ts/store/types';
