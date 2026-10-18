@@ -229,6 +229,7 @@ def derive_archived_month(period: str, *, out_root: Path | None = None) -> int |
         return None
     table = pq.read_table(src, columns=["id", "metar_raw", "observation_time"])
     ids, layers, bases, convective = [], [], [], []
+    skipped = 0
     for row_id, raw, obs_time in zip(
         table.column("id").to_pylist(),
         table.column("metar_raw").to_pylist(),
@@ -236,6 +237,7 @@ def derive_archived_month(period: str, *, out_root: Path | None = None) -> int |
     ):
         fields = metar_cloud_fields(raw, obs_time)
         if fields is None:
+            skipped += 1
             continue
         ids.append(row_id)
         layers.append(fields["cloud_layers"])
@@ -253,4 +255,11 @@ def derive_archived_month(period: str, *, out_root: Path | None = None) -> int |
     tmp = dest.with_suffix(".parquet.tmp")
     pq.write_table(out, tmp, compression="zstd")
     tmp.replace(dest)
+    if skipped:
+        # Rows with no side-file entry read back as NULL cloud detail, the same
+        # as never derived; the count tells a partial file from a complete one.
+        logger.warning(
+            "observation_clouds %s: %d of %d reports unparseable, left out",
+            period, skipped, len(ids) + skipped,
+        )
     return len(ids)

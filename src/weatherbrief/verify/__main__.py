@@ -483,7 +483,9 @@ def cmd_convective_score(args):
         return "   -" if v is None else f"{100 * v:4.0f}"
 
     print(
-        f"risk >= {args.risk} vs >= {args.dbz:g} dBZ within 10 NM or lightning within 20 NM"
+        f"risk >= {args.risk} vs >= {args.dbz:g} dBZ within "
+        f"{params.radar_radius_nm:g} NM or lightning within "
+        f"{params.lightning_radius_nm:g} NM"
     )
     print(f"{'model':<8} {'D':>2} {'n':>8} {'hit':>6} {'miss':>6} {'FA':>6} "
           f"{'CN':>8} {'POD':>4} {'FAR':>4} {'CSI':>4} {'bias':>5}")

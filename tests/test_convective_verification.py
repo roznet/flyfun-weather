@@ -135,3 +135,10 @@ def test_tops_are_optional_and_joined_when_present(archives, tmp_path):
 def test_skill_scores_handle_empty_denominators():
     r = with_skill({"hits": 0, "misses": 0, "false_alarms": 0})
     assert r["pod"] is None and r["far"] is None and r["csi"] is None and r["bias"] is None
+
+
+def test_radius_not_archived_is_rejected():
+    """The radius columns are matched exactly, so an unarchived radius would
+    score nothing; it fails loudly instead."""
+    with pytest.raises(ValueError, match="radar_radius_nm"):
+        ConvectiveScoreParams(radar_radius_nm=15.0)

@@ -53,6 +53,18 @@ class ConvectiveScoreParams:
     since: datetime | None = None
     until: datetime | None = None
 
+    def __post_init__(self) -> None:
+        # The archive's radius columns are matched exactly (see pairs_sql), so a
+        # radius the archiver never writes would silently score nothing.
+        from weatherbrief.observed.sampler import DEFAULT_RADII_NM
+
+        for name in ("radar_radius_nm", "lightning_radius_nm", "tops_radius_nm"):
+            if getattr(self, name) not in DEFAULT_RADII_NM:
+                raise ValueError(
+                    f"{name}={getattr(self, name)} is not an archived radius "
+                    f"{DEFAULT_RADII_NM}"
+                )
+
     def risks_at_or_above(self) -> list[str]:
         return list(RISK_ORDER[RISK_ORDER.index(self.risk_threshold):])
 

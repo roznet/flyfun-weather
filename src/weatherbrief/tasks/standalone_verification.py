@@ -1778,30 +1778,25 @@ def _score_cycle(
             # AGL for ECMWF — so it is converted first; lcl_ft is the Espy
             # surface approximation, a height above the station and therefore
             # already AGL, so it differences directly. (#441 #3)
-            if obs.ceiling_ft is not None:
-                obs_ceiling_ft = float(obs.ceiling_ft)
-                if snap.cloud_base_ft is not None:
-                    cloud_base_agl = to_agl_ceiling(
-                        snap.cloud_base_ft,
-                        elev_map.get(snap.icao),
-                        source_is_agl=_nwp_ceiling_is_agl(snap.model),
-                    )
-                    if cloud_base_agl is not None:
-                        score_row.cloud_base_delta_ft = cloud_base_agl - obs_ceiling_ft
-                if snap.lcl_ft is not None:
-                    score_row.lcl_delta_ft = snap.lcl_ft - obs_ceiling_ft
-            # The same model base against the lowest reported base, any amount
-            # (#793): the FEW/SCT days the ceiling delta above never sees.
-            if obs.lowest_cloud_base_ft is not None and snap.cloud_base_ft is not None:
+            cloud_base_agl = None
+            if snap.cloud_base_ft is not None:
                 cloud_base_agl = to_agl_ceiling(
                     snap.cloud_base_ft,
                     elev_map.get(snap.icao),
                     source_is_agl=_nwp_ceiling_is_agl(snap.model),
                 )
+            if obs.ceiling_ft is not None:
+                obs_ceiling_ft = float(obs.ceiling_ft)
                 if cloud_base_agl is not None:
-                    score_row.lowest_base_delta_ft = (
-                        cloud_base_agl - float(obs.lowest_cloud_base_ft)
-                    )
+                    score_row.cloud_base_delta_ft = cloud_base_agl - obs_ceiling_ft
+                if snap.lcl_ft is not None:
+                    score_row.lcl_delta_ft = snap.lcl_ft - obs_ceiling_ft
+            # The same model base against the lowest reported base, any amount
+            # (#793): the FEW/SCT days the ceiling delta above never sees.
+            if obs.lowest_cloud_base_ft is not None and cloud_base_agl is not None:
+                score_row.lowest_base_delta_ft = (
+                    cloud_base_agl - float(obs.lowest_cloud_base_ft)
+                )
             db.add(score_row)
             existing_score_keys.add(score_key)
             scores_created += 1
