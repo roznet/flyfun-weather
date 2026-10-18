@@ -90,6 +90,12 @@ and ChatGPT cannot drift.
 | `getDigestContext` | `GET /agent/v1/flights/{id}/digest-context` | `get_digest_context` |
 | `getAlternates` | `GET /agent/v1/flights/{id}/alternates` | `get_alternates` |
 | `getAirportWeather` | `GET /agent/v1/airport-weather` | `get_airport_weather` |
+| — | — | `show_cross_section` (+ app-only `xsection_data`) |
+
+`show_cross_section` is MCP-only: it is an MCP App (an in-chat widget, see
+[mcp-apps.md](mcp-apps.md)), which a Custom GPT Action cannot render. ChatGPT
+gets it by adding the **MCP server** as a connector (Apps SDK), not through this
+OpenAPI front-door.
 
 **Route input (#745, #749).** Both `createFlight` and MCP `create_flight` take a
 single `route` string (filed Field-15 or a plain waypoint list, airports included,

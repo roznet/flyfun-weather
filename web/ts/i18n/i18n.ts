@@ -50,15 +50,21 @@ export function isSupportedLocale(s: string): s is Locale {
 export async function setLocale(locale: Locale): Promise<void> {
   if (!isSupportedLocale(locale)) return;
   currentLocale = locale;
-  localStorage.setItem(STORAGE_KEY, locale);
+  try {
+    localStorage.setItem(STORAGE_KEY, locale);
+  } catch {
+    /* storage blocked (sandboxed iframe, e.g. the MCP App widget): in-memory only */
+  }
   document.documentElement.lang = locale;
   await loadMessages(locale);
 }
 
 /** Initialize i18n — detect locale and load messages.
- *  Call once from each entry point before rendering. */
-export async function initI18n(): Promise<void> {
-  const locale = detectLocale();
+ *  Call once from each entry point before rendering. `preferred` (a BCP 47
+ *  tag such as an MCP host's `fr-FR`) wins over detection when supported. */
+export async function initI18n(preferred?: string): Promise<void> {
+  const code = preferred?.split('-')[0].toLowerCase();
+  const locale = code && isSupportedLocale(code) ? code : detectLocale();
   currentLocale = locale;
   document.documentElement.lang = locale;
   await loadMessages(locale);
@@ -66,8 +72,13 @@ export async function initI18n(): Promise<void> {
 
 /** Detect locale from: localStorage > user preference > browser > default. */
 function detectLocale(): Locale {
-  // 1. localStorage (explicit user choice)
-  const stored = localStorage.getItem(STORAGE_KEY);
+  // 1. localStorage (explicit user choice); throws in a sandboxed iframe
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    /* storage blocked: fall through to the browser language */
+  }
   if (stored && isSupportedLocale(stored)) return stored;
 
   // 2. Browser language

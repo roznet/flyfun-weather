@@ -17,17 +17,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
 import httpx
 from fastmcp import Context, FastMCP
+from fastmcp.apps import UI_MIME_TYPE, AppConfig
 from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.dependencies import get_http_request
-from mcp.types import ToolAnnotations
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent, ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 
 from weatherbrief.connectors.views import (
@@ -37,6 +41,8 @@ from weatherbrief.connectors.views import (
     assessment_note as _assessment_note,
     briefing_freshness_status as _briefing_freshness_status,
     convective_detail as _convective_detail,
+    slice_route_analyses as _slice_route_analyses,
+    slice_snapshot as _slice_snapshot,
     summarize_advisories as _summarize_advisories,
     summarize_alternates as _summarize_alternates,
     summarize_altitude_table as _summarize_altitude_table,
@@ -182,6 +188,12 @@ mcp = FastMCP(
         "operational alternates: operational suitability (hours, customs, fuel, "
         "NOTAMs, approach currency) is not evaluated — combine each candidate "
         "with airport/AIP data before recommending a divert.\n\n"
+        "When the pilot wants to SEE the vertical picture along the route "
+        "(cloud, icing, freezing level, convection, turbulence), call "
+        "show_cross_section: hosts that support MCP Apps draw the interactive "
+        "cross-section in the chat, and the pilot's current model, layers and "
+        "selected point then arrive as model context, so 'this point' or 'why "
+        "is this red' refers to what is on their screen.\n\n"
         "All tools return a web_url for the full interactive briefing with "
         "cross-sections, Skew-T diagrams, and route maps — present this link "
         "to the pilot for visual details."
@@ -557,6 +569,9 @@ def get_briefing(
     on the times ``recap.time_base`` names (``planned`` = the flight plan, not
     a recorded track), with the alerts raised over the flight day. Radar
     unavailable is not clear.
+
+    To let the pilot SEE the vertical picture (cloud, icing, freezing level,
+    winds aloft along the route), call show_cross_section.
 
     Status values:
     - ready: briefing available with fresh data
@@ -1073,6 +1088,263 @@ def get_digest_context(
         "digest_context": context,
         "web_url": _flight_web_url(flight_id),
     }
+
+
+# ---------------------------------------------------------------------------
+# MCP App: interactive cross-section (#819)
+# ---------------------------------------------------------------------------
+#
+# Three parts (designs/mcp-apps.md): the model-visible show_cross_section
+# carries only view parameters and points the host at the widget resource; the
+# widget then fetches the pack data through the app-only xsection_data tool.
+# Pack data never goes in a model-visible result: ChatGPT surfaces
+# structuredContent to the model, and #278 keeps viz payloads away from it.
+
+XSECTION_RESOURCE_URI = "ui://weatherbrief/cross-section.html"
+
+#: The built single-file widget (``web/scripts/build-mcp-app.mjs``). Resolved
+#: like ``api/app.py`` finds ``web/``: the repo root, ``/app`` in the image.
+_XSECTION_HTML_PATH = (
+    Path(__file__).resolve().parent.parent.parent.parent / "web" / "dist" / "mcp-cross-section.html"
+)
+_xsection_html: str | None = None
+
+_XSECTION_STUB_HTML = (
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>"
+    "<body style=\"font:14px system-ui,sans-serif;padding:12px\">"
+    "The cross-section widget is not built on this server "
+    "(web/dist/mcp-cross-section.html is missing; run npm run build in web/)."
+    "</body></html>"
+)
+
+#: Layer ids the model may pass to show_cross_section (a subset of the web
+#: layer registry; test_mcp_cross_section checks each still exists there).
+XSECTION_LAYER_IDS = (
+    "nwp-cloud-bands", "cloud-bands", "surface-obscuration-bands",
+    "nwp-convective-bg", "thermo-convective-bg",
+    "icing-ogimet-nwp-bands", "icing-bands", "sfip-bands", "ieng-icing-bands", "sld-bands",
+    "cat-bands", "e-shear-bands", "inversion-bands",
+    "freezing-level", "minus-10c", "minus-20c", "lcl", "lfc", "el",
+    "current-conditions", "observed-surface", "observed-tops", "fronts-markers",
+)
+
+
+def _widget_html() -> str:
+    """The widget HTML, read once per process; a stub (not cached) when unbuilt."""
+    global _xsection_html
+    if _xsection_html is None:
+        try:
+            _xsection_html = _XSECTION_HTML_PATH.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("MCP App widget missing at %s; serving a stub", _XSECTION_HTML_PATH)
+            return _XSECTION_STUB_HTML
+    return _xsection_html
+
+
+@mcp.resource(
+    XSECTION_RESOURCE_URI,
+    name="cross_section_widget",
+    title="Route cross-section",
+    description="Interactive vertical cross-section of a flight's briefing (MCP App).",
+    mime_type=UI_MIME_TYPE,
+    # No csp: the widget inlines its script and styles and reaches our data only
+    # through tools/call, so the default connect-src 'none' is what it needs. No
+    # domain either: Claude derives a per-connector sandbox origin itself, and a
+    # declared one is only needed for origin-allowlisted APIs or OAuth (and
+    # must match the exact connector URL, of which we have two).
+    app=AppConfig(prefers_border=True),
+)
+def cross_section_widget() -> str:
+    return _widget_html()
+
+
+def _xsection_timestamp(
+    client: WeatherbriefClient, flight_id: str, pack_timestamp: str | None,
+) -> tuple[str | None, dict | None]:
+    """``(timestamp, None)``, or ``(None, error_or_status)`` shaped like get_briefing's."""
+    try:
+        if not pack_timestamp:
+            return _resolve_pack(client, flight_id)
+        if client.get_pack(flight_id, pack_timestamp) is None:
+            return None, _error_result(f"No briefing pack {pack_timestamp} for flight {flight_id}.", 404)
+        return pack_timestamp, None
+    except httpx.HTTPStatusError as e:
+        return None, _error_result(f"API error: {e.response.text}", e.response.status_code)
+
+
+def _structured(result: dict) -> ToolResult:
+    """A dict result as both text and structuredContent (errors, statuses)."""
+    return ToolResult(content=json.dumps(result, default=str), structured_content=result)
+
+
+@mcp.tool(
+    title="Show Cross-Section",
+    annotations=ToolAnnotations(
+        title="Show Cross-Section",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+    app=AppConfig(resource_uri=XSECTION_RESOURCE_URI),
+)
+def show_cross_section(
+    flight_id: Annotated[
+        str,
+        Field(description="Flight ID from list_flights or create_flight"),
+    ],
+    model: Annotated[
+        str | None,
+        Field(description="Weather model to show first, e.g. 'ecmwf', 'gfs', 'icon', 'ukmo'. Default: ECMWF when the pack has it."),
+    ] = None,
+    layers: Annotated[
+        list[str] | None,
+        Field(description=(
+            "Layers to switch on, on top of the default view (clouds, NWP convection, "
+            "Ogimet icing, freezing level, terrain), to match the question, e.g. "
+            "['sld-bands'] for freezing drizzle or ['cat-bands'] for turbulence. "
+            "Ids: " + ", ".join(XSECTION_LAYER_IDS) + "."
+        )),
+    ] = None,
+    point_index: Annotated[
+        int | None,
+        Field(description="Route point to select first (point_index from get_advisory_detail)"),
+    ] = None,
+    pack_timestamp: Annotated[
+        str | None,
+        Field(description="A specific briefing pack (briefing_timestamp); default: the latest"),
+    ] = None,
+) -> ToolResult:
+    """Show the pilot the interactive vertical cross-section of the route.
+
+    Hosts that support MCP Apps (Claude, ChatGPT) draw it in the chat: the
+    pilot can switch model, toggle layers and tap a route point, and their
+    current selection arrives as model context — read it before answering
+    "what am I looking at" or "why is this red". Other hosts get the text and
+    the web_url to the full briefing. Use it when the pilot wants to SEE the
+    vertical picture (cloud, icing, freezing level, convection, turbulence);
+    it shows the same data as get_briefing, it does not re-grade anything.
+    """
+    try:
+        client = _get_client()
+    except ValueError as e:
+        return _structured(_error_result(str(e)))
+
+    with client:
+        try:
+            flight = client.get_flight(flight_id)
+        except httpx.HTTPStatusError as e:
+            return _structured(_error_result(f"API error: {e.response.text}", e.response.status_code))
+        if flight is None:
+            return _structured(_error_result(f"Flight {flight_id} not found.", 404))
+        timestamp, problem = _xsection_timestamp(client, flight_id, pack_timestamp)
+        if problem is not None:
+            return _structured(problem)
+
+    web_url = _flight_web_url(flight_id)
+    unknown = [layer for layer in layers or [] if layer not in XSECTION_LAYER_IDS]
+    view = {
+        "flight_id": flight_id,
+        "pack_timestamp": timestamp,
+        "model": model,
+        "layers": [layer for layer in layers or [] if layer in XSECTION_LAYER_IDS],
+        "point_index": point_index,
+        "web_url": web_url,
+    }
+    route = " → ".join(flight.get("waypoints") or []) or flight.get("route_name") or flight_id
+    text = (
+        f"Cross-section for {route}, briefing of {timestamp}, "
+        f"model {model or 'default (ECMWF when available)'}"
+        + (f", extra layers {', '.join(view['layers'])}" if view["layers"] else "")
+        + (f", point {point_index} selected" if point_index is not None else "")
+        + ". If the chat shows the interactive widget, the pilot can switch model, "
+        "toggle layers and select a point; their current selection arrives as model "
+        "context. If it does not, give the pilot the full briefing link: "
+        f"{web_url}"
+    )
+    if unknown:
+        text += f" Ignored unknown layer ids: {', '.join(unknown)}."
+    return ToolResult(content=[TextContent(type="text", text=text)], structured_content=view)
+
+
+def _default_model(models: list[str], requested: str | None) -> str | None:
+    """The widget's own fallback order (embed-main.ts): requested, ECMWF, GFS, first."""
+    if requested in models:
+        return requested
+    for m in ("ecmwf", "gfs"):
+        if m in models:
+            return m
+    return models[0] if models else None
+
+
+@mcp.tool(
+    title="Cross-Section Data",
+    annotations=ToolAnnotations(
+        title="Cross-Section Data",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=False,
+    ),
+    # Called by the widget only: hosts keep app-only tools out of the model's
+    # tool list (fastmcp still lists them; filtering is the host's job).
+    app=AppConfig(visibility=["app"]),
+)
+def xsection_data(
+    flight_id: Annotated[str, Field(description="Flight ID")],
+    pack_timestamp: Annotated[str, Field(description="Briefing pack timestamp")],
+    model: Annotated[str | None, Field(description="Model to slice to; default ECMWF, GFS, first")] = None,
+) -> ToolResult:
+    """Pack data the cross-section widget draws, sliced to one model.
+
+    Returns what embed-main.ts assembles over REST: pack meta, the flight
+    ceiling, route analyses (one model's soundings), elevation, fronts (or
+    null) and the snapshot's observations/SIGMETs. For the widget, not the
+    model.
+    """
+    try:
+        client = _get_client()
+    except ValueError as e:
+        return _structured(_error_result(str(e)))
+
+    # Fetched one at a time and sliced at once, so at most one full multi-MB
+    # artifact is held alongside the sliced result (256M container).
+    with client:
+        try:
+            pack = client.get_pack(flight_id, pack_timestamp)
+            if pack is None:
+                return _structured(_error_result(f"No briefing pack {pack_timestamp} for flight {flight_id}.", 404))
+            manifest = client.get_route_analyses(flight_id, pack_timestamp)
+            if manifest is None:
+                return _structured(_error_result("No route analyses for this briefing.", 404))
+            models = list(manifest.get("models") or [])
+            chosen = _default_model(models, model)
+            route_analyses = _slice_route_analyses(manifest, chosen) if chosen else manifest
+            del manifest
+            snapshot = _slice_snapshot(client.get_snapshot(flight_id, pack_timestamp))
+            elevation = client.get_elevation(flight_id, pack_timestamp)
+            fronts = client.get_route_fronts(flight_id, pack_timestamp)
+            flight = client.get_flight(flight_id) or {}
+        except httpx.HTTPStatusError as e:
+            return _structured(_error_result(f"API error: {e.response.text}", e.response.status_code))
+
+    data = {
+        "flight_id": flight_id,
+        "pack_timestamp": pack_timestamp,
+        "model": chosen,
+        "pack": pack,
+        "ceiling_ft": flight.get("flight_ceiling_ft"),
+        "route_analyses": route_analyses,
+        "elevation": elevation,
+        "fronts": fronts,
+        "snapshot": snapshot,
+    }
+    size = len(json.dumps(data, default=str))
+    logger.info("xsection_data flight=%s model=%s bytes=%d", flight_id, chosen, size)
+    # The data rides structuredContent only; the text block stays a one-liner
+    # instead of fastmcp's default second copy of the whole payload.
+    return ToolResult(
+        content=[TextContent(type="text", text=f"Cross-section data for {flight_id} ({chosen}, {size} bytes).")],
+        structured_content=data,
+    )
 
 
 # ---------------------------------------------------------------------------

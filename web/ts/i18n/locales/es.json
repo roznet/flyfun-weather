@@ -1071,5 +1071,13 @@
   "trips.btnUnfollow": "Quitar de mi lista",
   "trips.followed": "Los {count} tramos están en tu lista",
   "trips.unfollowConfirm": "¿Quitar estos vuelos compartidos de tu lista? Puedes volver a añadirlos desde el enlace del viaje.",
-  "trips.viewerNote": "Estás viendo un viaje compartido. Solo su propietario puede actualizarlo o editarlo."
+  "trips.viewerNote": "Estás viendo un viaje compartido. Solo su propietario puede actualizarlo o editarlo.",
+  "mcpApp.model": "Modelo",
+  "mcpApp.layers": "Capas",
+  "mcpApp.openBriefing": "Abrir el briefing completo",
+  "mcpApp.fullscreen": "Pantalla completa",
+  "mcpApp.exitFullscreen": "Salir de pantalla completa",
+  "mcpApp.loading": "Cargando el corte…",
+  "mcpApp.tapToSelect": "Toque el gráfico para elegir un punto",
+  "mcpApp.cancelled": "La solicitud se canceló."
 }

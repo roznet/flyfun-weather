@@ -1,0 +1,78 @@
+/* MCP App cross-section widget (#819). The few rules of css/style.css the
+   cross-section needs (colour tokens, tooltip), plus the widget's own toolbar. */
+
+:root {
+  --bg: #f8f9fa;
+  --surface: #ffffff;
+  --text: #1a1a2e;
+  --text-muted: #6c757d;
+  --border: #dee2e6;
+  --primary: #2563eb;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #121218;
+  --surface: #1e1e2a;
+  --text: #e4e4e8;
+  --text-muted: #9ca3af;
+  --border: #2d2d3a;
+  --primary: #60a5fa;
+  color-scheme: dark;
+}
+
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+#xs-root { display: flex; flex-direction: column; }
+#xs-root.xs-fullscreen { height: 100vh; }
+
+#xs-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+#xs-toolbar select, #xs-toolbar button {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer;
+}
+#xs-toolbar button:hover, #xs-toolbar select:hover { border-color: var(--primary); }
+#xs-toolbar button[hidden] { display: none; }
+#xs-info { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.xs-spacer { flex: 1; }
+
+#xs-layers {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  max-height: 180px; overflow-y: auto;
+}
+#xs-layers[hidden] { display: none; }
+#xs-layers fieldset { border: none; margin: 0; padding: 0; min-width: 120px; }
+#xs-layers legend { font-weight: 600; color: var(--text-muted); padding: 0; }
+#xs-layers label { display: block; white-space: nowrap; cursor: pointer; }
+
+#xs-chart { position: relative; height: 320px; }
+.xs-fullscreen #xs-chart { flex: 1; height: auto; min-height: 0; }
+
+#xs-status { padding: 8px; color: var(--text-muted); text-align: center; }
+#xs-status[hidden] { display: none; }
+
+/* Hover tooltip (copied from css/style.css .viz-tooltip). */
+.viz-tooltip {
+  display: none; position: absolute; background: rgba(0, 0, 0, 0.85); color: #fff;
+  font-size: 0.75rem; line-height: 1.4; padding: 0.4rem 0.6rem; border-radius: 4px;
+  pointer-events: none; z-index: 10; max-width: 280px; white-space: normal;
+}
+.viz-tooltip .tt-section { border-top: 1px solid rgba(255, 255, 255, 0.15); margin-top: 3px; padding-top: 3px; }
+.viz-tooltip .tt-section:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.viz-tooltip .tt-raw {
+  display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem; opacity: 0.85; word-break: break-word;
+}
+.viz-tooltip .tt-header { white-space: nowrap; }
+.viz-tooltip .tt-line-swatch {
+  display: inline-block; width: 22px; height: 3px; margin-right: 5px; vertical-align: middle; border-radius: 1px;
+}
+.viz-tooltip .tt-square-swatch {
+  display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: baseline;
+  border-radius: 2px; border: 1px solid rgba(255, 255, 255, 0.35);
+}

@@ -246,6 +246,11 @@ Native ChatGPT support (Custom GPT + OpenAPI Action) as the sibling of the Claud
 Key exports: `summarize_advisories`, `summarize_altitude_table`, `advisory_detail`, `convective_detail`, `summarize_alternates`, `alternates_hook`, `briefing_freshness_status`, `agent.router`
 → Full doc: chatgpt-connector.md
 
+### mcp-apps [project]
+MCP App for the Claude/ChatGPT connector (#819): the interactive route cross-section drawn in the chat. Model-visible `show_cross_section` returns only view parameters (never pack data: ChatGPT surfaces structuredContent to the model, #278); the widget loads data through the app-only `xsection_data` tool (route analyses sliced to one model, snapshot to three keys, byte size logged); resource `ui://weatherbrief/cross-section.html` serves the single-file build `web/dist/mcp-cross-section.html`. Widget shares `XsectionView` with `/embed.html`, pushes the pilot's model/layers/point to the model via `updateModelContext`, follows host theme/locale/fullscreen. Sandbox gotchas (storage, inlined CSS, no csp/domain) and debugging.
+Key exports: `show_cross_section`, `xsection_data`, `XSECTION_RESOURCE_URI`, `XSECTION_LAYER_IDS`, `slice_route_analyses`, `slice_snapshot`, `XsectionView`, `XsectionLoader`, `buildModelContext`
+→ Full doc: mcp-apps.md
+
 ## Infrastructure & operations
 
 ### stage-labels [project]

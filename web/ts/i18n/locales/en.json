@@ -1249,5 +1249,13 @@
   "trips.btnUnfollow": "Remove from my list",
   "trips.followed": "All {count} legs are in your list",
   "trips.unfollowConfirm": "Remove these shared flights from your list? You can add them again from the trip link.",
-  "trips.viewerNote": "You are viewing a shared trip. Only its owner can refresh or edit it."
+  "trips.viewerNote": "You are viewing a shared trip. Only its owner can refresh or edit it.",
+  "mcpApp.model": "Model",
+  "mcpApp.layers": "Layers",
+  "mcpApp.openBriefing": "Open full briefing",
+  "mcpApp.fullscreen": "Fullscreen",
+  "mcpApp.exitFullscreen": "Exit fullscreen",
+  "mcpApp.loading": "Loading cross-section…",
+  "mcpApp.tapToSelect": "Tap the chart to select a point",
+  "mcpApp.cancelled": "The request was cancelled."
 }

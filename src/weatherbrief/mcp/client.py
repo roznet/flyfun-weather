@@ -135,6 +135,33 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def _get_or_none(self, path: str) -> Any:
+        """``_get`` with a 404 read as None (the artifact doesn't exist)."""
+        try:
+            return self._get(path)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    def get_flight(self, flight_id: str) -> dict | None:
+        return self._get_or_none(f"/flights/{flight_id}")
+
+    def get_pack(self, flight_id: str, timestamp: str) -> dict | None:
+        """One pack's metadata, or None if the pack doesn't exist."""
+        return self._get_or_none(f"/flights/{flight_id}/packs/{timestamp}")
+
+    def get_snapshot(self, flight_id: str, timestamp: str) -> dict | None:
+        """The pack's briefing JSON (observations, SIGMETs; multi-MB on long routes)."""
+        return self._get_or_none(f"/flights/{flight_id}/packs/{timestamp}/snapshot")
+
+    def get_elevation(self, flight_id: str, timestamp: str) -> dict | None:
+        return self._get_or_none(f"/flights/{flight_id}/packs/{timestamp}/elevation")
+
+    def get_route_fronts(self, flight_id: str, timestamp: str) -> dict | None:
+        """Fronts crossing the route; None (404) is the normal "no fronts" case."""
+        return self._get_or_none(f"/flights/{flight_id}/packs/{timestamp}/route-fronts")
+
     def get_alternates(self, flight_id: str, timestamp: str) -> dict | None:
         """Get the weather-based alternates block for a pack (None if none)."""
         try:

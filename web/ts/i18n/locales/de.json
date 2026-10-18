@@ -1071,5 +1071,13 @@
   "trips.btnUnfollow": "Aus meiner Liste entfernen",
   "trips.followed": "Alle {count} Etappen sind in Ihrer Liste",
   "trips.unfollowConfirm": "Diese geteilten Flüge aus Ihrer Liste entfernen? Sie können sie über den Reise-Link wieder hinzufügen.",
-  "trips.viewerNote": "Sie sehen eine geteilte Reise. Nur ihre Eigentümerin oder ihr Eigentümer kann sie aktualisieren oder bearbeiten."
+  "trips.viewerNote": "Sie sehen eine geteilte Reise. Nur ihre Eigentümerin oder ihr Eigentümer kann sie aktualisieren oder bearbeiten.",
+  "mcpApp.model": "Modell",
+  "mcpApp.layers": "Ebenen",
+  "mcpApp.openBriefing": "Vollständiges Briefing öffnen",
+  "mcpApp.fullscreen": "Vollbild",
+  "mcpApp.exitFullscreen": "Vollbild beenden",
+  "mcpApp.loading": "Querschnitt wird geladen…",
+  "mcpApp.tapToSelect": "Tippen Sie auf das Diagramm, um einen Punkt zu wählen",
+  "mcpApp.cancelled": "Die Anfrage wurde abgebrochen."
 }

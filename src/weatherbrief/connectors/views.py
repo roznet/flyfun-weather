@@ -526,3 +526,52 @@ def nwp_block(max_cover: float | None, peak_top: float | None) -> dict[str, Any]
             "and may come from different points"
         )
     return block
+
+
+# --- MCP App cross-section payload (#819) -------------------------------------
+#
+# Shaped for the in-chat cross-section widget, never for the model: the widget
+# fetches it through the app-only ``xsection_data`` tool. Nothing here may be
+# put in a model-visible tool result (#278: no viz payloads to the model).
+
+#: Per-point fields keyed by model name; only the selected model is kept.
+_PER_MODEL_POINT_KEYS = ("sounding", "wind_components", "cruise_temperature_c")
+
+#: The snapshot keys the cross-section reads (``embed-main.ts::draw``).
+XSECTION_SNAPSHOT_KEYS = ("route_observations", "route_sigmets", "observed_conditions")
+
+
+def slice_route_analyses(manifest: dict[str, Any], model: str) -> dict[str, Any]:
+    """``route_analyses.json`` cut to what the cross-section draws for ``model``.
+
+    Per-point ``sounding`` (~80% of a point), ``wind_components`` and
+    ``cruise_temperature_c`` keep only ``model``; ``model_divergence`` keeps
+    every variable with its precomputed ``agreement`` (the renderer reads the
+    worst agreement across models) but only ``model`` in ``model_values``.
+    ``altitude_advisories`` is dropped: the cross-section never reads it (only
+    the briefing page's point panel does). ``models`` stays whole so the widget
+    can still offer the model switch. Shallow: untouched sub-objects are shared
+    with the input, not copied, to keep the MCP process's peak memory low.
+    """
+    points = []
+    for point in manifest.get("analyses") or []:
+        out = dict(point)
+        for key in _PER_MODEL_POINT_KEYS:
+            per_model = point.get(key)
+            if isinstance(per_model, dict):
+                out[key] = {model: per_model[model]} if model in per_model else {}
+        out["model_divergence"] = [
+            {**d, "model_values": {model: d["model_values"][model]}
+             if model in (d.get("model_values") or {}) else {}}
+            for d in point.get("model_divergence") or []
+        ]
+        out["altitude_advisories"] = None
+        points.append(out)
+    return {**manifest, "analyses": points}
+
+
+def slice_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The briefing snapshot cut to the three keys the cross-section reads."""
+    if snapshot is None:
+        return None
+    return {key: snapshot.get(key) for key in XSECTION_SNAPSHOT_KEYS}
