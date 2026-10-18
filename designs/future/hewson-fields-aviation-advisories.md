@@ -213,7 +213,7 @@ Advisory evaluators and cross-section bands that need finer temporal resolution 
 
 **Key decision (2026-04-24, revised)**: the frontal-detection module is CLI-only — there is **no existing 6 h cron** to piggyback on (the earlier draft of this section assumed one; that was wrong). Hewson precompute is therefore a **new, independent loop** inside `scheduler.py`, following the same pattern as the five existing loops (`run_retention_loop`, `run_verification_loop`, `run_standalone_verification_loop`, `run_digest_loop`, `run_ecmwf_watcher_loop`).
 
-**Timing**: fires at **06 Z** and **18 Z** (`_HEWSON_SAMPLE_HOURS_UTC = [6, 18]` in `scheduler.py`), ~6 h after each 00 Z / 12 Z init so Open-Meteo has all three models published. Note: this now *coincides* with `run_standalone_verification_loop`, which runs at `VERIFICATION_HOURS_UTC = [6, 9, 12, 15, 18]` — but that loop only *scores* snapshots already in the DB (no Open-Meteo / GRIB fetch), so the original "keep a margin before the heavy full-fetch cycle" worry no longer applies. (Earlier drafts of this doc and the loop docstring said 05 Z / 17 Z with a 1 h buffer before a 06/18 full-fetch cycle; both the chosen hours and that rationale have since drifted — the constant is the source of truth.) Other loops are light (ECMWF watcher is disk-only, retention is once/day, etc.).
+**Timing**: fires at **08 Z** and **20 Z** (`_HEWSON_SAMPLE_HOURS_UTC = [8, 20]` in `scheduler.py`), once Open-Meteo has published all three models' 00 Z / 12 Z run. Measured lags from `meta.json` (2026-10-18): ICON ~4.7 h, GFS ~5.7 h, ECMWF IFS ~7.6 h after init. The earlier 06 Z / 18 Z hours assumed "all three by ~6 h", which held only for ICON — every 06 Z run paired ICON 00 Z with the previous 18 Z ECMWF/GFS. A model that is still late at the sample hour simply falls back to its previous init. The precompute now runs on the home compute node (see `designs/frontal-detection.md`, compute offload), so the hours are not constrained by droplet load; the node's runner has a matching UTC guard. Other loops are light (ECMWF watcher is disk-only, retention is once/day, etc.).
 
 **Disable switch**: `DISABLE_HEWSON_PRECOMPUTE=1` (mirrors the existing `DISABLE_*` flags).
 
@@ -642,7 +642,7 @@ What was pivotal about this session — we made the pipeline source-agnostic bef
 - Sidesteps the current calibration blocker (moisture gap — see §10a.1)
 
 **Phase D.0 — Precompute loop** ✅ DONE (2026-04-24, [task #8]):
-- New `run_hewson_precompute_loop` in `scheduler.py`, firing at **06 Z** / **18 Z** (`_HEWSON_SAMPLE_HOURS_UTC`; ~6 h after each 00/12 Z init — see §6.1 for the timing-drift note)
+- New `run_hewson_precompute_loop` in `scheduler.py`, firing at **08 Z** / **20 Z** (`_HEWSON_SAMPLE_HOURS_UTC`; once all three models' 00/12 Z run is on Open-Meteo — see §6.1)
 - New module `src/weatherbrief/hewson/` with `run_once()` as the shared entry point for the loop and the `python -m weatherbrief.hewson precompute` CLI (one implementation, two surfaces)
 - Generalised `fetch_grid_fields` / `reshape_to_fields` in `frontal/grid.py` to accept `levels=[925, 850, 700]` with 850-only back-compat for the frontal CLI
 - Computes `theta_e, gradient, neg_laplacian, tfp, advection, tendency` at **925/850/700 hPa**
@@ -717,7 +717,7 @@ about the **synoptic snapshot / map** side, which still has no moisture channel.
 | **Architecture consolidation (0.25°, ERA5 loader, unified Case)** | ✅ Done (PR #91, merged) |
 | Resolution decision | ✅ 0.25° — consistent across all three models (ECMWF order at 0.25°, GFS/ICON ingestion at 0.25°) |
 | Level decision | ✅ 925 / 850 / 700 hPa (3 levels; 500/400 explicitly rejected as upper-IFR out-of-scope) |
-| Cadence decision | ✅ 2×/day — dedicated scheduler loop fires at 06 Z / 18 Z (`_HEWSON_SAMPLE_HOURS_UTC`, ~6 h after each 00/12 Z init; see §6.1 timing-drift note) |
+| Cadence decision | ✅ 2×/day — dedicated scheduler loop fires at 08 Z / 20 Z (`_HEWSON_SAMPLE_HOURS_UTC`; see §6.1) |
 | Storage decision | ✅ NPZ flat level-suffixed keys; ~46 MB per snapshot → **~550 MB** peak across 48 h × 3 models × 2 cycles (see §5 — the old "~24 MB total" figure was the float16/1 h-stride draft) |
 | Retention decision | ✅ 48 h cache |
 | ERA5 bulk fetch | ✅ Done (1 year, 2025-02 → 2026-02, ~700 MB on disk at `data/era5/hewson/`) |
@@ -754,7 +754,7 @@ Phases D.0 / D.1 / D.2 are done and merged via PR #96; Phase C shipped via #195/
 - `route-hewson` CLI subcommand that resolves ICAO codes and prints per-waypoint values
 - Retrospective scripts: `scripts/analyze_flight_log.py` and `scripts/analyze_cancellations.py`
 - 1 year of ERA5 GRIBs at `data/era5/hewson/` (gitignored)
-- **Phase D.0**: `src/weatherbrief/hewson/` module — `precompute.py`, `cli.py`, `era5_case.py`, `__main__.py`. `run_hewson_precompute_loop` in `scheduler.py` at 06 Z / 18 Z (`_HEWSON_SAMPLE_HOURS_UTC = [6, 18]`; see §6.1 timing-drift note). NPZ snapshots at `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`. Back-compat-preserving `levels=` / `level_hPa=` kwargs added to `fetch_grid_fields` and `reshape_to_fields` in `frontal/grid.py`.
+- **Phase D.0**: `src/weatherbrief/hewson/` module — `precompute.py`, `cli.py`, `era5_case.py`, `__main__.py`. `run_hewson_precompute_loop` in `scheduler.py` at 08 Z / 20 Z (`_HEWSON_SAMPLE_HOURS_UTC = [8, 20]`; see §6.1). NPZ snapshots at `${DATA_DIR}/hewson/<model>/<init_iso_z>.npz`. Back-compat-preserving `levels=` / `level_hPa=` kwargs added to `fetch_grid_fields` and `reshape_to_fields` in `frontal/grid.py`.
 - **Phase D.1**: `src/weatherbrief/api/hewson_map.py` — three endpoints (`/api/hewson-map`, `/manifest`, `/all-metrics`). Lazy NPZ access, corrupt-file → 404, path-traversal guard, `Cache-Control: private, max-age=86400, immutable`. Gated to any authenticated user via the `_synoptic_auth` alias (`= current_user_id`; was admin-only earlier).
 - **Phase D.2**: Synoptic Forecast tab on `/maps.html`. `web/ts/visualization/synoptic-map.ts` + `hewson-grid-layer.ts` (canvas overlay) + `hewson-colormaps.ts` (matplotlib-equivalent ramps with default/storm scale) + `hewson-metrics-catalog.ts` (per-level pilot-facing thresholds) + `web/ts/helpers/hewson-info.ts` (briefing-style modal). Cursor-following tooltip reads `/all-metrics` cached per (model, init, level, hour). Progressive load: single-metric slice first, all-metrics in the background. Token-based stale-fetch cancellation.
 - **ERA5 historical cases**: `python -m weatherbrief.hewson era5-case --case <dir>` builds a synoptic snapshot from any calibration Case directory; surfaces in the same UI under model="era5". Storm Ciarán (2023-11-02) is the test case.

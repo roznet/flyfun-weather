@@ -120,10 +120,13 @@ _SNAPSHOT_INBOX_DIR_DEFAULT = "/app/snapshot_inbox"
 # patience.
 _ARTIFACT_WAIT_MAX_SECONDS = 3000  # 50 min past the hour
 _ARTIFACT_POLL_INTERVAL_SECONDS = 60
-# Hewson precompute fires once per init cycle. 06Z and 18Z pick up the 00Z /
-# 12Z inits after ~6 h — Open-Meteo has all 3 models published by then, and
-# we keep ~1 h buffer before the 07Z / 19Z standalone forecast-fetch cycles.
-_HEWSON_SAMPLE_HOURS_UTC = [6, 18]
+# Hewson precompute fires once per init cycle. 08Z and 20Z pick up the 00Z /
+# 12Z inits of all 3 models: Open-Meteo publishes ICON ~4.7 h, GFS ~5.7 h and
+# ECMWF IFS ~7.6 h after init (meta.json, 2026-10-18), so the old 06Z / 18Z
+# always paired a fresh ICON with the previous ECMWF/GFS run. A late model just
+# falls back to its previous init. Must match the compute node's UTC guard
+# (flyfun-hewson.sh in roznet/scripts).
+_HEWSON_SAMPLE_HOURS_UTC = [8, 20]
 _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-cache anyway
 # Compute offload: a home node runs the same precompute at the sample hour and
 # rsyncs its hewson/<model>/*.npz tree here. Absent dir = offload not in use,
@@ -2321,10 +2324,9 @@ async def run_cells_ingest_loop(app_state) -> None:
 async def run_hewson_precompute_loop(app_state) -> None:
     """Fire Hewson diagnostic precompute at fixed UTC hours.
 
-    Runs at ``_HEWSON_SAMPLE_HOURS_UTC`` (06Z / 18Z by default), chosen to
-    sit ~6 h after each ``00Z/12Z`` init (Open-Meteo has all 3 models
-    published by then) and ~1 h before the 07Z/19Z standalone forecast-fetch
-    cycles (avoids CPU/network overlap). See
+    Runs at ``_HEWSON_SAMPLE_HOURS_UTC`` (08Z / 20Z by default), chosen to
+    sit ~8 h after each ``00Z/12Z`` init, once Open-Meteo has published all 3
+    models (ECMWF IFS is last, ~7.6 h after init). See
     ``designs/future/hewson-fields-aviation-advisories.md`` § 6.1.
 
     The heavy lifting is in :func:`weatherbrief.hewson.precompute.run_once`,
@@ -2412,9 +2414,9 @@ def _hewson_expected_inits(models: list[str]) -> dict[str, int]:
     """Each model's current Open-Meteo init (unix); 0 when unknown.
 
     Taken ONCE at the top of the sample hour, the same moment the node reads it.
-    Re-reading at each poll would be wrong: GFS/ECMWF 00Z land on Open-Meteo
-    around 06:40Z, so a later read could demand an init the node never saw and
-    force a needless local run.
+    Re-reading at each poll would be wrong: a run that lands on Open-Meteo
+    during the 30 min wait would demand an init the node never saw and force a
+    needless local run.
     """
     from weatherbrief.fetch.model_status import fetch_model_metadata
 

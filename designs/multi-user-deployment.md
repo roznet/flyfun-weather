@@ -291,7 +291,7 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `SNAPSHOT_INBOX_DIR` | No | `/app/snapshot_inbox` | Where `verify ingest-artifact` reads compute-node snapshots |
 | `HOST_CELLS_INBOX` | Prod, with cells | `./data/cells_inbox` | Host dir the home node's cells loop rsyncs display files into (#656). Prod `/mnt/flyfun_data/weather/cells_inbox`, `dockerapp:dockerapp` mode 2770 like the snapshot inbox (the ssh user is in `dockerapp`, not `weatherdata`) — the app moves files out of it |
 | `HOST_HEWSON_INBOX` | Prod, with Hewson offload | `./data/hewson_inbox` | Host dir the home node mirrors its Hewson NPZs into (`rsync --delete`). Prod `/mnt/flyfun_data/weather/hewson_inbox`, `dockerapp:dockerapp` 2770; mounted `:ro` |
-| `HEWSON_INBOX_DIR` | No | `/app/hewson_inbox` | Container path of that inbox. Offload is in use once it holds a model dir; otherwise the 06Z/18Z precompute runs locally with no wait |
+| `HEWSON_INBOX_DIR` | No | `/app/hewson_inbox` | Container path of that inbox. Offload is in use once it holds a model dir; otherwise the 08Z/20Z precompute runs locally with no wait |
 | `HEWSON_INGEST_HEALTHCHECK_URL` | No | — | Deadman for the Hewson ingest: pinged when the node delivered every model, `/fail` when the droplet falls back |
 | `CELLS_INBOX_DIR` | No | `/app/cells_inbox` | Container path of that inbox; set to a local path on a dev server |
 | `WB_CELLS_INGEST_ENABLED` | No | off | `1` ingests the cell overlay into `DATA_DIR/observed/cells/display` (24 h) and serves `/api/observed/cells/*`; off → endpoints say `disabled`. See [cells-overlay.md](./cells-overlay.md) |
