@@ -300,7 +300,8 @@ Lead with the verdict: what's broken, what regressed, what improved. Then:
   regressions of past fixes.
 - **Digests:** the C1 counts; core/tail sizes; packs with a major, by weakness; the 2–3 worst
   examples with the digest quote and the context line; anything promoted from the tail; the
-  tally trend against earlier runs.
+  tally trend against earlier runs. Advisory conflicts (#9, severity `engine`) go in their
+  own list: they are leads for the advisory code, not digest faults.
 - **Not exercised** (e.g. no SIGMET on any route, no 👎 that day), so it isn't counted as verified.
 
 Record live-layer findings in the memory note `project_live_alerts_push_gating`, and the

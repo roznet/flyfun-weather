@@ -25,9 +25,34 @@ trend. Add a new weakness at the end; retire one by marking it, never by reusing
    reason given for it) does not hold.
 8. **Text forecast misused.** DWD/AFD detail projected onto the route, the wrong day, or
    German regional detail kept for a non-German route.
+9. **Advisory conflict (engine).** Two advisories in the context contradict each other, e.g.
+   IFR Feasibility RED for icing next to Icing Escape "warm escape available", or LIFR
+   inside IFR Feasibility while Airport Weather is GREEN. Not a digest fault: record it
+   with severity `engine`, which the tally counts apart from the digest's majors. The fix
+   belongs in the advisory code, not the prompt.
 
-Severity: **major** = would mislead a pilot about what matters for this flight (wrong
-driver, wrong grade reason, a hazard hidden or invented). **minor** = everything else.
+Severity comes from two questions, asked as a pilot reading the whole digest:
+1. **Does it highlight the right risk?** The hazard that matters for this flight and this
+   pilot is named and prominent, not buried, and no hazard is invented.
+2. **Does it get the interpretation of that risk completely wrong?** For example, it
+   calls a flight workable that the evidence says is not, or it states a conclusion
+   the observations rule out without saying why.
+
+"Interpretation" means for this pilot and this aircraft, as the context header gives them:
+PILOT CAPABILITY (VFR only vs IFR), FIKI or not, and the aircraft ceiling. Grading an IFR
+pilot on a VFR-only issue, or reading tops "above cruise" when they are above the ceiling
+(so climbing over them is not an option), changes the risk.
+
+On D-0, the conclusion must follow the observations. Quoting a METAR worse than the
+models is not enough if the conclusion ignores what it means for the flight (e.g. citing
+OVC002 at the destination's proxies and then advising a VFR arrival).
+
+**major** = a no to the first or a yes to the second. **minor** = everything else,
+including a reason that weights one model more than the split supports while the body
+attributes it correctly, figures slightly off, plumbing, and DWD text stretched. Under
+real uncertainty (D-3 and beyond, models split), a fair call either way is not a
+finding. When the advisories contradict each other, record #9 and don't fault the digest
+for picking one reading.
 
 ## Reviewer prompt (full review)
 
@@ -41,11 +66,14 @@ Fill in the pack folders and send one subagent per 3–4 packs:
 >
 > Read each context fully (the header has route, date, lead time, PILOT CAPABILITY), then the
 > digest. Check every factual claim against the context. Use the weakness list in
-> `.claude/skills/prod-briefings-review/digest_checklist.md` (read it first). Judge whether
-> the grade is defensible and whether the text leads with what matters.
+> `.claude/skills/prod-briefings-review/digest_checklist.md` (read it first, including how
+> severity is decided). Answer first: does it highlight the right risk, and does it get the
+> interpretation of that risk completely wrong? Then judge whether the grade is defensible.
+> Mark a finding major only by those two questions; be fair under uncertainty.
 >
-> Return per pack: one line with route / lead / pilot / grade; whether the grade is
-> defensible (1–2 lines); each issue as `[major|minor] #<weakness>`, with a short digest quote
+> Return per pack: one line with route / lead / pilot / grade; right risk highlighted?
+> (yes/no + the risk); interpretation completely wrong? (yes/no + why); whether the grade
+> is defensible (1–2 lines); each issue as `[major|minor] #<weakness>`, with a short digest quote
 > and the context line that contradicts or fails to support it; one line of strengths. Under
 > 300 words per pack. End with a JSON array, one object per pack:
 > `{"pack_id": …, "findings": [{"weakness": 3, "severity": "major", "note": "…"}]}`.

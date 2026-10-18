@@ -451,8 +451,8 @@ def cmd_record(a):
         if missing:
             raise SystemExit(f"pack {e.get('pack_id')}: missing {sorted(missing)}")
         for f in e["findings"]:
-            if f.get("severity") not in ("major", "minor") or "weakness" not in f:
-                raise SystemExit(f"pack {e['pack_id']}: finding needs weakness + major/minor: {f}")
+            if f.get("severity") not in ("major", "minor", "engine") or "weakness" not in f:
+                raise SystemExit(f"pack {e['pack_id']}: finding needs weakness + major/minor/engine: {f}")
     os.makedirs(os.path.dirname(os.path.abspath(a.record)), exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # One row per (day, pack): a re-run, or a tail pack promoted to a full
@@ -478,10 +478,13 @@ def cmd_tally(a):
         full = [r for r in rs if r["review"] == "full"]
         majors = Counter(f["weakness"] for r in rs for f in r["findings"] if f["severity"] == "major")
         packs_major = sum(any(f["severity"] == "major" for f in r["findings"]) for r in rs)
+        # Advisory conflicts (#9) are the engine's, not the digest's: counted apart.
+        engine = sum(any(f["severity"] == "engine" for f in r["findings"]) for r in rs)
         promoted = sum(r["tier"] == "tail" and r["review"] == "full" for r in rs)
         heads = sorted({r.get("server_head", "?") for r in rs})
         print(f"{day}: {len(rs)} packs ({len(full)} full, {promoted} promoted from tail), "
-              f"{packs_major} with a major | majors by weakness {dict(majors)} | head {','.join(heads)}")
+              f"{packs_major} with a major | majors by weakness {dict(majors)} | "
+              f"{engine} with an advisory conflict | head {','.join(heads)}")
 
 
 def main():
