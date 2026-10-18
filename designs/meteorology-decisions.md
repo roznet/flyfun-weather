@@ -6158,3 +6158,91 @@ destination TAF said for 40 min before they would get there.
 - No "late means still on the ground" rule: without an entry the flight is
   taken as departed at the planned time (#759's rule waits for an automatic
   source, #761), because a missing button press is not evidence.
+
+## 51. Pipeline-review 2026-08 fixes: datums, absence is not quiet, severe icing anywhere at cruise
+
+**Date:** 2026-10-18 · **Issues:** #807 (with #805/#806) · **Agent decisions,
+unattended; owner to confirm.** Source audit: `meteorology-pipeline-review-2026-08.md`.
+Rule applied throughout: where a finding is a clear bug, fix it in the direction that
+does not reduce warnings; where it is a calibration choice, record it here instead of
+re-tuning numbers.
+
+### 51a. ECMWF `hcct` is normalized to MSL at decode
+
+`hcct` (convective cloud top) arrives AGL but is graded against FL thresholds
+(FL380/280/200/120). It is now `hcct + model orography`, the §21 `deg0l` rule, dropped
+when orography is unknown (not passed through). §21's "ceilings are AGL by convention"
+argument does not extend to a tower top on FL tiers; `ceil`/`cbh` stay AGL. For `hcct`
+only the literal 9999 is dropped: ECMWF no-cloud is bitmap NaN (#672/#675) and real tops
+≥ 9999 m (≳ FL330) exist. Effect: ECMWF convective tier rises over terrain by about the
+orography height (1,500 m ≈ +FL49), worst in the Alps. Stored ECMWF `nwp_conv_top_ft`
+snapshots change datum from the deploy date.
+
+### 51b. Missing data is not an assessed quiet
+
+- **Convective:** no CAPE from any source → no assessment (`None`), not `NONE`. A computed
+  0 is still `NONE`. Unassessed points ribbon UNAVAILABLE, leave the extent domain, and
+  `grade_convective_model` gets the shared `below_coverage` guard (demotes only a
+  would-be GREEN). §26 fallback points (thermo graded because the NWP track is absent)
+  still count as assessed, so "capped" (§26) and "blank" (#807) don't overlap.
+- **Terrain:** an elevation void is `None` + `terrain_elevation_incomplete` diagnostic,
+  never 0 ft. Terrain guards treat unknown as blocking: the §8a descent escape is
+  infeasible, icing-escape-by-descent is unavailable, the altitude table withholds
+  `best_below_cruise`.
+- **NWP cover for icing:** `nwp_cloud_cover_at_altitude` uses the diagnosed layer's own
+  `cover_pct`, then bulk, else `None` (was `bulk or 0.0`). Ogimet-NWP/IENG treat unknown
+  cover inside a model cloud layer as the layer mean or an unscaled index, never as clear.
+- **E-Shear:** the model set is the union across route points, not point 0's.
+- **Horizon:** the skip compares against `departure + ceil(duration)`, not arrival midnight.
+
+### 51c. FIKI: SEVERE or SLD at cruise is RED anywhere on the route
+
+Was corridor-only (50 nm of departure/arrival). Any assessed point with a SEVERE/SLD zone
+within `cruise_icing_buffer_ft` of cruise is now RED. No §27 minimum extent: severe icing
+is outside FIKI certification however short the stretch. Transit-thickness stays
+corridor-scoped (it measures the column climbed/descended through). `severe_is_red` is
+no longer user-tunable (it is not a personal-minimum axis); stored values are ignored.
+
+### 51d. Icing calibration items recorded, not re-tuned
+
+- **Stratiform ceiling (2026-06 §3.1):** Ogimet's raw/2 normalisation caps pure
+  stratiform icing at index 50 (MODERATE; SEVERE = 80). Deliberate for now. Stratiform
+  SEVERE comes only from SFIP, IENG, or the opt-in `icing_severity_enhance`, which is now
+  wired (it was threaded and never read): upgrade-only, Ogimet-DD/NWP zones, needs ≥ 3
+  levels > 95 % RH with known NWP cover ≥ 50 % (SEVERE also mean T ≤ −5 °C).
+- **DD "in cloud" gate (3.0 °C) vs Ogimet-DD attenuation (0 at ≥ 2.0 °C):** levels at
+  DD 2–3 °C pass the gate and score zero in Ogimet-DD while SFIP-proxy scores them. Known
+  divergence; extending the taper to 3.0 would add warnings and is a later calibration call.
+- **SFIP-full CLW ≤ 0 → NONE vs `glaciation_factor`'s 0.8 floor:** with CLW = 0 and
+  ICMR > 0 at −5 °C, Ogimet-NWP keeps 80 % while SFIP says NONE. Open: pick one rule.
+
+### 51e. Profiles stop at the model ground
+
+When `surface_pressure_hpa` is plausible (300–1100 hPa), pressure levels more than 5 hPa
+below ground are dropped; after a clip, the 2 m observation is inserted as level 0 if
+the first kept level is > 10 hPa above ground (height from model orography, as §21/§29).
+Flat profiles are bit-identical (no insertion without a clip, so 2 m inversions/fog are
+not newly introduced as a side effect). Cloud-fraction NWP layers read the same clipped
+list. SB-CAPE/CIN, LCL, DD cloud and icing no longer run on sub-ground extrapolation;
+K-index/TT/Showalter become `None` where the ground is above 850 hPa.
+
+### 51f. Smaller choices
+
+- **Regime CIN** pairs with the parcel that supplied the effective CAPE (MU CIN for MU,
+  SB otherwise; old packs fall back to SB). Elevated MU-CAPE over a stable surface layer
+  no longer reads LOADED_GUN off a cap its parcel never feels.
+- **NWP cover → BKN at 50 %** (METAR 5/8 = 62.5 %) is kept deliberately: the NWP
+  category is one okta more severe than METAR at each boundary because a grid-box mean
+  under-reads broken decks; IFR-leaning is the conservative side.
+- **Cruise wind** interpolates u/v linearly between bracketing levels; unbracketed, the
+  nearest level is used within 2,000 ft, else `None`. This removes part of the ECMWF vs
+  GFS cruise-wind "divergence" that was a level-table artefact, so it can lower a
+  model-agreement warning.
+- **Altitude table** rows below route max terrain + 1,000 ft (`_TERRAIN_CLEARANCE_FT`)
+  are never picked; UNAVAILABLE ranks with AMBER and loses the tie to it.
+- **Snow:** ECMWF `sf` uses Open-Meteo's 7:1 (`SNOW_CM_PER_MM_WATER = 0.7`); the rain
+  fallback is `max(0, precip − snow_cm / 0.7)`.
+- **GFS/ICON hours:** contiguous `floor(dep)..ceil(end)` (HRRR's rule), so :30 departures
+  are hourly again.
+- **EDR:** Ri < 0 is excluded from `richardson_to_d`. The calibration accumulator holds
+  moments contaminated since §8c (2026-06-11); resetting it is an owner call.

@@ -193,6 +193,14 @@ def _cloud_cover_for_level(
     Delegates to ``icing_common.nwp_cloud_cover_at_altitude`` which checks
     **all** diagnostic layers (not just the ICAO band matching the altitude),
     correctly handling cross-band cloud layers.
+
+    Unknown cover (``None``, #807) becomes 0.0 here, and that is deliberate
+    rather than "missing read as clear": the only consumer is the proxy
+    variant's ``membership_clw_proxy``, which takes ``max(sounding_score,
+    nwp_score)``. A 0 NWP score contributes nothing to a max, so unknown cover
+    falls back to the sounding (DD/RH) evidence alone — it neither invents
+    cloud nor suppresses the cloud the sounding sees. The full variant ignores
+    this value entirely (CLW drives it).
     """
     result = nwp_cloud_cover_at_altitude(
         altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
@@ -236,7 +244,13 @@ def compute_sfip_level(
     if temperature_c >= 0.0 or temperature_c < -25.0:
         return 0.0, 0.0, "NONE", variant
 
-    # Cloud gating for full variant: no liquid water → no icing
+    # Cloud gating for full variant: no measured liquid water → no icing.
+    # NOTE (#807): this is stricter than Ogimet-NWP, whose
+    # ``icing_common.glaciation_factor`` floors CLW = 0 with ICMR > 0 at 0.8
+    # above −10 °C on the "GFS under-reports grid-scale SLW" argument. Same
+    # input, opposite outcome — a documented calibration divergence, not
+    # re-tuned here. The glaciation floor below therefore only ever applies to
+    # CLW > 0 (thin liquid in an ice-dominant mix).
     if clw_g_kg is not None and clw_g_kg <= 0:
         return 0.0, 0.0, "NONE", variant
 

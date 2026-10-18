@@ -25,7 +25,6 @@ from weatherbrief.fetch.grib.cache import (
     put_cached,
 )
 from weatherbrief.fetch.grib.grib_fetch import (
-    bracket_forecast_hours,
     gfs_grib2_url,
     gfs_idx_url,
 )
@@ -123,33 +122,6 @@ def test_gfs_grib2_url():
 def test_gfs_idx_url():
     url = gfs_idx_url("20231027", 12, 24)
     assert url.endswith("gfs.t12z.pgrb2.0p25.f024.idx")
-
-
-# --- Bracket forecast hours tests ---
-
-
-def test_bracket_hourly_region():
-    """Within f000–f120, 1-hourly spacing."""
-    from datetime import datetime, timezone
-
-    # Init at 00z, target at 06:30z → brackets f006 and f007
-    target = datetime(2023, 10, 27, 6, 30, tzinfo=timezone.utc)
-    f_prev, f_next = bracket_forecast_hours("20231027", 0, target)
-    assert f_prev == 6
-    assert f_next == 7
-
-
-def test_bracket_3hourly_region():
-    """Beyond f120, 3-hourly spacing."""
-    from datetime import datetime, timezone
-
-    # Init at 00z, target at 130h later (beyond f120)
-    target = datetime(2023, 10, 27, 0, 0, tzinfo=timezone.utc)
-    from datetime import timedelta
-    target = target + timedelta(hours=130)
-    f_prev, f_next = bracket_forecast_hours("20231027", 0, target)
-    assert f_prev == 129
-    assert f_next == 132
 
 
 # --- Cache tests ---
@@ -1344,6 +1316,79 @@ class TestBuildIconCloudDiagnostics:
         assert diag.ceiling_ft is None
         assert diag.convective_top_ft is None
 
+    def test_ecmwf_convective_top_converted_to_msl(self):
+        """#807: hcct is AGL; convective_top_ft is graded on MSL FLs.
+
+        7200 m AGL over 1500 m model orography is 8700 m MSL ≈ FL285 — a
+        HIGH-tier tower that read ≈FL236 (MODERATE) while left AGL.
+        """
+        from weatherbrief.analysis.sounding.convective import _risk_from_conv_top
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+        from weatherbrief.models import ConvectiveRisk
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 7000.0, "ceiling_m": 800.0},
+            terrain_elevation_m=1500.0,
+        )
+        assert diag is not None
+        assert diag.convective_top_ft == round(8500.0 * 3.28084)
+        # Ceiling stays AGL (#441 finding #3 is a separate question).
+        assert diag.ceiling_ft == round(800.0 * 3.28084)
+        # The pre-#807 AGL reading of the same tower was one tier low.
+        assert _risk_from_conv_top(round(7200.0 * 3.28084)) == ConvectiveRisk.MODERATE
+        diag2 = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 7200.0}, terrain_elevation_m=1500.0,
+        )
+        assert _risk_from_conv_top(diag2.convective_top_ft) == ConvectiveRisk.HIGH
+
+    def test_ecmwf_convective_top_dropped_without_terrain(self):
+        """Same rule as deg0l: an unconvertible AGL top is dropped, never
+        passed through onto an MSL field."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 7000.0, "total_cover_frac": 0.5},
+        )
+        assert diag is not None
+        assert diag.convective_top_ft is None
+        assert diag.total_cover_pct == 50.0
+
+    def test_ecmwf_tall_convective_top_kept(self):
+        """Real a1 hcct carries genuine heights ≥ 9999 m AGL (no-cloud is a
+        bitmap NaN cell, commit 0369671b); the old ≥ 9999 drop discarded every
+        tower above ~FL330 as "no cloud". Only the literal sentinel goes."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 11500.0}, terrain_elevation_m=400.0,
+        )
+        assert diag is not None
+        assert diag.convective_top_ft == round(11900.0 * 3.28084)
+
+        edge = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 10000.0}, terrain_elevation_m=0.0,
+        )
+        assert edge.convective_top_ft == round(10000.0 * 3.28084)
+
+        literal = build_ecmwf_cloud_diagnostics(
+            {"convective_cloud_top_m": 9999.0, "total_cover_frac": 0.5},
+            terrain_elevation_m=400.0,
+        )
+        assert literal.convective_top_ft is None
+
+    def test_ecmwf_ceiling_keeps_threshold_sentinel(self):
+        """ceil/cbh keep the ≥ 9999 m drop: a ceiling above FL330 is no
+        ceiling operationally, so only hcct needed the exact match."""
+        from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
+
+        diag = build_ecmwf_cloud_diagnostics(
+            {"ceiling_m": 10500.0, "cloud_base_height_m": 10500.0,
+             "total_cover_frac": 0.5},
+            terrain_elevation_m=0.0,
+        )
+        assert diag.ceiling_ft is None
+        assert diag.low.base_ft is None
+
     def test_ecmwf_freezing_level_sentinel_dropped(self):
         """The 9999 m no-value sentinel must not become 9999 m + terrain."""
         from weatherbrief.fetch.grib.decode import build_ecmwf_cloud_diagnostics
@@ -1739,6 +1784,72 @@ class TestComputeFlightWindowHours:
         assert 138 in hours
         # f141 = 120 + 7*3 = nearest round of 140
         assert 141 in hours
+
+
+class TestHalfHourDepartureGetsEveryHour:
+    """#807: a :30 departure used to sample X.5 offsets and round() them
+    ties-to-even (9.5→10, 10.5→10, 11.5→12), dropping every odd hour. The
+    contiguous floor(dep)..ceil(end) range (HRRR's, PR #508) cannot skip one."""
+
+    def test_gfs_hourly_region(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        dep = datetime(2026, 2, 27, 9, 30, tzinfo=timezone.utc)
+        assert compute_flight_window_hours("20260227", 0, dep, 3.0) == [
+            9, 10, 11, 12, 13,
+        ]
+
+    def test_icon_eu_and_d2_hourly_region(self):
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_D2,
+            compute_icon_eu_flight_window_hours,
+        )
+
+        dep = datetime(2026, 2, 27, 9, 30, tzinfo=timezone.utc)
+        assert compute_icon_eu_flight_window_hours("20260227", 0, dep, 3.0) == [
+            9, 10, 11, 12, 13,
+        ]
+        assert compute_icon_eu_flight_window_hours(
+            "20260227", 6, dep, 3.0, ICON_D2,
+        ) == [3, 4, 5, 6, 7]
+
+    def test_gfs_coarse_region_brackets_window_on_grid(self):
+        """Beyond f120 every hour is a 3-hourly native step, and the window
+        is bracketed: f138 before departure (f140.5), f144 at/after the end."""
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        init = datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
+        dep = init + timedelta(hours=140, minutes=30)
+        hours = compute_flight_window_hours("20260301", 0, dep, 2.0)
+        assert hours == [138, 141, 144]
+        assert all((h - 120) % 3 == 0 for h in hours)
+
+    def test_gfs_window_straddling_f120(self):
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+
+        init = datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
+        dep = init + timedelta(hours=118, minutes=30)
+        assert compute_flight_window_hours("20260301", 0, dep, 3.0) == [
+            118, 119, 120, 123,
+        ]
+
+    def test_icon_eu_coarse_region_and_clamp(self):
+        from datetime import datetime, timedelta, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import compute_icon_eu_flight_window_hours
+
+        init = datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
+        dep = init + timedelta(hours=77, minutes=30)
+        assert compute_icon_eu_flight_window_hours("20260301", 0, dep, 2.0) == [
+            77, 78, 81,
+        ]
+        late = init + timedelta(hours=118, minutes=30)
+        assert compute_icon_eu_flight_window_hours("20260301", 0, late, 4.0) == [
+            117, 120,
+        ]
 
 
 class TestSnapToGfsGridFloor:

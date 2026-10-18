@@ -27,6 +27,9 @@ class FetchCode(StrEnum):
     # Europe). The model itself may still be fetched via another source.
     GRIB_SKIPPED_OUT_OF_DOMAIN = "grib_skipped_out_of_domain"
     GRIB_UNAVAILABLE_FOR_MODEL = "grib_unavailable_for_model"
+    # Some route terrain samples have no elevation (SRTM void + failed
+    # Open-Meteo fallback). Terrain checks over them read as unknown (#807).
+    TERRAIN_ELEVATION_INCOMPLETE = "terrain_elevation_incomplete"
 
 
 class DigestCode(StrEnum):

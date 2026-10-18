@@ -276,9 +276,10 @@ class FrontsEvaluator:
         cruise_ft = ctx.cruise_altitude_ft
 
         # Gating: no artifact → experimental feature was off → UNAVAILABLE.
-        # Build the result directly (not via from_per_model): the aggregation
-        # helpers collapse an all-UNAVAILABLE set to GREEN, but here we want the
-        # advisory to genuinely read UNAVAILABLE so it stays hidden.
+        # Built directly (not via from_per_model) to carry the "no data"
+        # detail verbatim. (AdvisoryStatus.worst/majority return UNAVAILABLE
+        # for an all-UNAVAILABLE set — they no longer collapse it to GREEN —
+        # so this is about the detail text, not the status.)
         if manifest is None or not manifest.per_model:
             return _unavailable(params, loc)
 
@@ -352,8 +353,12 @@ class FrontsEvaluator:
 
 
 def _unavailable(params: dict[str, float], loc: str | None) -> RouteAdvisoryResult:
-    """An explicitly-UNAVAILABLE result (the aggregation helpers would otherwise
-    collapse an all-UNAVAILABLE per-model set to GREEN)."""
+    """An explicitly-UNAVAILABLE result with the "no data" detail.
+
+    Built directly rather than through ``from_per_model``; the aggregation
+    helpers would also yield UNAVAILABLE for this set (they no longer collapse
+    an all-UNAVAILABLE set to GREEN), so this only fixes the detail text.
+    """
     return RouteAdvisoryResult(
         advisory_id=FRONTS_ADVISORY_ID,
         aggregate_status=AdvisoryStatus.UNAVAILABLE,

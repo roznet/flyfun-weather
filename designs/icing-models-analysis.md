@@ -145,9 +145,29 @@ grades on every ICON-D2 winter briefing at once. Issue #411 gates the upgrade.
 
 ### `nwp_cloud_cover_at_altitude(altitude_ft, ...)`
 
-Checks **all** diagnostic layers (low/mid/high) regardless of ICAO band. Returns highest cloud cover for any layer whose base/top range (±500ft margin) contains the altitude. Falls back to bulk ICAO band percentages when diagnostics unavailable.
+Checks **all** diagnostic layers (low/mid/high) regardless of ICAO band. Returns highest cloud cover for any layer whose base/top range (±500ft margin) contains the altitude. Falls back to bulk ICAO band percentages when diagnostics unavailable (no band with both base and top).
 
-Used by both Ogimet-NWP and SFIP (previously SFIP had a simpler single-band version that missed cross-band cloud layers).
+**`None` means unknown, never 0 %** (#807). Inside the geometry branch the cover paired with a diagnostic layer is that layer's own `cover_pct` (same model field as the geometry — for GFS the NCEP pressure-band cover), with the bulk ICAO-slab % only as a fallback when the layer has none; this matches `clouds.build_nwp_cloud_layers`. Previously it was `bulk_pct or 0.0` — a mismatched-slice pairing and missing-as-clear. Outside every diagnosed layer it returns 0.0 only when the altitude's ICAO band has geometry of its own; a band without geometry returns its bulk % (or `None`).
+
+What each caller does with unknown:
+- **Ogimet-NWP / IENG** — the level already passed the native-NWP-layer gate, so cloud is present and only the fraction is unknown: `icing._cloud_fraction_for_level` uses the gating layer's `mean_cloud_cover_pct`, else an unscaled index (fraction 1.0). A *known* 0 % still skips the level.
+- **SFIP proxy** — unknown → 0.0, deliberately: `membership_clw_proxy` takes `max(sounding_score, nwp_score)`, so it falls back to the DD/RH evidence alone. SFIP-full ignores cover.
+
+Used by Ogimet-NWP, IENG and SFIP (previously SFIP had a simpler single-band version that missed cross-band cloud layers).
+
+### `glaciation_factor(clw, icmr, T)` — scope of the warm floor
+
+CLW/(CLW+ICE) floored at 0.8 above −10 °C, tapering to 0.15 at −20 °C. The floor applies to an ice-dominant mix (CLW≈0, ICMR>0). It does **not** apply when CLW = ICMR = 0 (returns 0.0 — the level is dropped even inside an NWP cloud layer). SFIP-full never reaches it for CLW ≤ 0: `compute_sfip_level` hard-gates CLW ≤ 0 → NONE first. So CLW = 0, ICMR > 0 at −5 °C keeps 80 % in Ogimet-NWP but is NONE in SFIP-full. Both are recorded calibration divergences (pipeline-review 2026-08 §3.8), not re-tuned.
+
+### Opt-in severity enhancement (`icing_severity_enhance`)
+
+Wired in #807 (it was threaded to `analyze_sounding` and never read). When on, `_enhance_severity` runs per zone on the zone's own grouped levels for **Ogimet-DD and Ogimet-NWP only**: ≥3 levels RH > 95 % **and** known NWP cover ≥ 50 % somewhere in the zone → LIGHT→MODERATE, MODERATE→SEVERE if mean T ≤ −5 °C; column PW > 25 mm → LIGHT→MODERATE. Upgrade-only; `mean_icing_index` is left as computed. Unknown cover never corroborates. IENG and SFIP are excluded (they reach SEVERE on their own). Not applied by the airport-profile / on-the-fly sounding paths (`api/airport_profile.py`, `storage/sounding_profiles.py`), which call `analyze_sounding` without the flag.
+
+**Known ceiling:** the Ogimet `raw/2` normalisation caps pure-stratiform icing at index 50 (MODERATE; SEVERE = 80). Deliberate and not re-tuned; stratiform SEVERE comes only from the enhancement above, SFIP or IENG.
+
+### DD gate vs DD attenuation (Ogimet-DD)
+
+The DD cloud layers that gate Ogimet-DD come from `clouds.py` (`IN_CLOUD_DD_THRESHOLD = 3.0`, so DD 2–3 °C forms SCT layers), but the Ogimet-DD attenuation taper is 0 at DD ≥ 2.0 °C. SCT-grade and ±500 ft margin levels pass the gate and contribute nothing; SFIP-proxy still scores them. Recorded calibration choice (§3.8), not re-tuned; an unused duplicate `IN_CLOUD_DD_THRESHOLD` was removed from `icing.py`.
 
 ### `classify_icing_type(temperature_c, wet_bulb_c)`
 

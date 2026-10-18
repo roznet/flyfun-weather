@@ -30,13 +30,22 @@ coefficients ``a, b`` are fixed and we just apply
 
 Diagnostic for Richardson number
 --------------------------------
-Richardson number is the *inverse* of turbulence intensity (low Ri ⇒ turbulent)
-and ``compute_stability_indicators`` only assigns Ri when ``N² >= 0`` (so
-Ri ≥ 0). We therefore define the positive, turbulence-increasing diagnostic::
+Richardson number is the *inverse* of turbulence intensity (low Ri ⇒ turbulent).
+We define the positive, turbulence-increasing diagnostic::
 
-    D_ri = 1 / max(Ri, RI_FLOOR)
+    D_ri = 1 / max(Ri, RI_FLOOR)      for Ri >= 0
+    (undefined — level skipped)        for Ri <  0
 
 ``RI_FLOOR`` caps ``D`` so a near-zero Ri does not blow up to infinity.
+
+Since meteorology-decisions §8c, ``compute_stability_indicators`` *does* store
+a negative Ri for statically unstable layers (N² < 0) so the CAT classifier can
+flag them. Those layers are **excluded here**: the Sharman & Pearson lognormal
+climatology this remap matches excludes the convective regime, and mapping
+every unstable layer to the ``1/RI_FLOOR = 100`` ceiling piled a spike at the
+top of ``ln D`` that inflated the calibration moments (review 2026-08 §3.5,
+#807). Overturning intensity belongs to the convective tier; the CAT
+classifier handles negative Ri on its own path.
 
 Scope
 -----
@@ -105,9 +114,10 @@ def richardson_to_d(ri: float | None) -> float | None:
     """Map a Richardson number to the positive turbulence diagnostic ``D``.
 
     ``D = 1 / max(Ri, RI_FLOOR)``. Returns ``None`` for missing/non-finite Ri
-    so the caller skips the level (no ``ln(D)`` is taken).
+    **and for negative Ri** (statically unstable, N² < 0 — see the module
+    docstring) so the caller skips the level (no ``ln(D)`` is taken).
     """
-    if ri is None or not math.isfinite(ri):
+    if ri is None or not math.isfinite(ri) or ri < 0.0:
         return None
     return 1.0 / max(ri, RI_FLOOR)
 
@@ -169,9 +179,10 @@ class EdrAccumulator:
         Samples every adjacent-level Ri that ``compute_stability_indicators``
         assigned — not just layers flagged as CAT risk (that threshold-only
         sampling would bias the mean high; cf. issue #221). Note this is *not*
-        the full atmosphere: ``richardson_number`` is only set where N² ≥ 0 and
-        shear is non-trivial, so convectively unstable and near-calm layers are
-        excluded. That subset is consistent between calibration here and the
+        the full atmosphere: ``richardson_number`` is only set where shear is
+        non-trivial, and negative Ri (N² < 0, stored since §8c for the CAT
+        classifier) is rejected by :func:`richardson_to_d`, so convectively
+        unstable and near-calm layers are excluded. That subset is consistent between calibration here and the
         runtime remap (both apply only where Ri exists), so the coefficients
         stay self-consistent — but they describe this sheared/stable subset,
         not a global climatology. Each valid level contributes to both its

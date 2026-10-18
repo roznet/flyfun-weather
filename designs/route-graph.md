@@ -76,7 +76,7 @@ interface RouteGraphMetric {
 
 **ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent. That one does *not* come from `model_divergence` — it reads `RoutePointAnalysis.cruise_temperature_c[selectedModel]`, a per-model `model_key → °C` map filled in `tasks/analyze.py` (model in `models/analysis.py`). `model_divergence` is the per-model store for *surface* values only.
 
-**Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion, and both pin their axis to 0–5000 ft AGL — a ceiling higher than that renders as **above-scale** (see below), not as a missing value.
+**Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion (the served profile: terrain voids — stored as `null` since #807 — arrive display-filled by interpolation with `elevation_known: false`, so the AGL there is approximate; the client does not yet read the flag), and both pin their axis to 0–5000 ft AGL — a ceiling higher than that renders as **above-scale** (see below), not as a missing value.
 
 **CIN** is convention-negative (it inhibits convection), so its bars hang *below* the zero line as the "cap" beside CAPE's upward bars; it sets `showZeroLine` so the reference line is drawn at the top of the `[-300, 0]` range.
 

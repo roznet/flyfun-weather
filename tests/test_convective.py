@@ -131,11 +131,33 @@ def test_cin_suppression():
     assert result.risk_level == ConvectiveRisk.MODERATE
 
 
-def test_no_cape_no_risk():
-    """No CAPE → NONE risk."""
-    indices = ThermodynamicIndices()
-    result = assess_convective_thermo(indices)
+def test_no_cape_is_unassessed_not_none():
+    """No CAPE from any source → unassessed (None), never an assessed NONE (#807).
+
+    A NONE here read as "checked, no convection" and graded GREEN downstream."""
+    assert assess_convective_thermo(ThermodynamicIndices()) is None
+    # Other indices present but still no CAPE variant → still unassessed.
+    assert assess_convective_thermo(
+        ThermodynamicIndices(cin_surface_jkg=-40.0, k_index=25.0, lcl_altitude_ft=3000.0)
+    ) is None
+
+
+def test_zero_cape_is_an_assessed_none():
+    """CAPE computed as 0 is a real, assessed NONE — distinct from missing CAPE."""
+    result = assess_convective_thermo(ThermodynamicIndices(cape_surface_jkg=0.0))
+    assert result is not None
     assert result.risk_level == ConvectiveRisk.NONE
+
+
+def test_nwp_cape_fallback_without_cape_is_unassessed():
+    """No native scheme content and no CAPE → no NWP assessment (absent track)."""
+    from weatherbrief.analysis.sounding.convective import assess_convective_nwp
+    from weatherbrief.models import NWPCloudDiagnostics
+
+    assert assess_convective_nwp(ThermodynamicIndices(), NWPCloudDiagnostics()) is None
+    # With CAPE the fallback still assesses.
+    res = assess_convective_nwp(ThermodynamicIndices(cape_surface_jkg=500.0), NWPCloudDiagnostics())
+    assert res is not None and res.method == "nwp_cape_fallback"
 
 
 def test_thermo_base_ft_from_lfc():
@@ -352,11 +374,76 @@ def test_thermal_regime_annotated():
 
 
 def test_regime_none_when_no_cape():
-    """Empty sounding → no regime, no drivers/suppressors."""
-    result = assess_convective_thermo(ThermodynamicIndices())
-    assert result.regime is None
-    assert result.drivers == []
-    assert result.suppressors == []
+    """Empty sounding → no assessment at all (#807), hence no regime."""
+    assert assess_convective_thermo(ThermodynamicIndices()) is None
+
+
+# ---------------------------------------------------------------------------
+# CIN paired with the parcel that supplied the effective CAPE (#807)
+# ---------------------------------------------------------------------------
+
+
+def test_effective_cape_cin_pairs_mu_cin_when_mu_drives():
+    from weatherbrief.analysis.sounding.convective import effective_cape_cin
+
+    idx = ThermodynamicIndices(
+        cape_surface_jkg=20.0, cin_surface_jkg=-150.0,
+        cape_most_unstable_jkg=1200.0, cin_most_unstable_jkg=-5.0,
+    )
+    assert effective_cape_cin(idx) == (1200.0, -5.0)
+
+
+def test_effective_cape_cin_keeps_sb_cin_when_surface_parcel_drives():
+    from weatherbrief.analysis.sounding.convective import effective_cape_cin
+
+    # MU == SB (surface-rooted MU parcel): the tie goes to SB, historical pairing.
+    idx = ThermodynamicIndices(
+        cape_surface_jkg=900.0, cin_surface_jkg=-80.0,
+        cape_most_unstable_jkg=900.0, cin_most_unstable_jkg=-60.0,
+    )
+    assert effective_cape_cin(idx) == (900.0, -80.0)
+
+
+def test_effective_cape_cin_falls_back_to_sb_cin_without_mu_cin():
+    """Packs predating cin_most_unstable_jkg keep the old pairing."""
+    from weatherbrief.analysis.sounding.convective import effective_cape_cin
+
+    idx = ThermodynamicIndices(
+        cape_surface_jkg=20.0, cin_surface_jkg=-150.0, cape_most_unstable_jkg=1200.0,
+    )
+    assert effective_cape_cin(idx) == (1200.0, -150.0)
+
+
+def test_elevated_mu_cape_over_stable_layer_not_classified_by_sb_cin():
+    """Elevated MU-CAPE above a stable surface layer: the SB "cap" (−150) is a
+    cap the elevated parcel never feels. With its own small MU CIN the regime is
+    ACTIVE, not LOADED_GUN, and the SB CIN does not drive the narrative."""
+    idx = ThermodynamicIndices(
+        cape_surface_jkg=20.0, cin_surface_jkg=-150.0,
+        cape_most_unstable_jkg=1200.0, cin_most_unstable_jkg=-5.0,
+    )
+    result = assess_convective_thermo(idx, omega_700_pa_s=0.1)
+    assert result.regime is ConvectiveRegime.ACTIVE
+    assert result.cin_jkg == -5.0
+    assert result.risk_level == ConvectiveRisk.HIGH
+    assert not any("Capping inversion" in s for s in result.suppressors)
+    # Old pairing (SB CIN) would have read a loaded gun held down by subsidence.
+    old = assess_convective_thermo(
+        idx.model_copy(update={"cin_most_unstable_jkg": None}), omega_700_pa_s=0.1,
+    )
+    assert old.regime is ConvectiveRegime.LOADED_GUN
+    assert old.risk_level == ConvectiveRisk.MODERATE
+
+
+def test_elevated_mu_parcel_with_its_own_strong_cap_is_loaded_gun():
+    """A genuinely capped MU parcel still reads LOADED_GUN on its own CIN."""
+    idx = ThermodynamicIndices(
+        cape_surface_jkg=20.0, cin_surface_jkg=-5.0,
+        cape_most_unstable_jkg=1200.0, cin_most_unstable_jkg=-90.0,
+    )
+    result = assess_convective_thermo(idx, omega_700_pa_s=0.1)
+    assert result.regime is ConvectiveRegime.LOADED_GUN
+    assert result.cin_jkg == -90.0
 
 
 # ---------------------------------------------------------------------------

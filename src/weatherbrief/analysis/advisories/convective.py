@@ -157,7 +157,9 @@ class ConvectiveEvaluator:
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
             # Wording only — the colour was decided by ``grade_convective_model``.
-            if total == 0:
+            # UNAVAILABLE also covers a model whose assessed points are too thin a
+            # share of the route to vouch for a clear verdict (#391/#807).
+            if total == 0 or status == AdvisoryStatus.UNAVAILABLE:
                 detail = adv_t("no_data", loc)
             elif affected == 0:
                 if below_cruise_count > 0:
@@ -209,7 +211,8 @@ class ConvectiveEvaluator:
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
-                affected=affected, total=total,
+                # The grading denominator: points actually assessed (#807).
+                affected=affected, total=grade.assessed,
                 total_distance_nm=ctx.total_distance_nm,
                 affected_mod=affected_mod,
                 extent=grade.extent,

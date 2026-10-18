@@ -59,7 +59,7 @@ The ECMWF `ceil` (ceiling) field in the a1 surface GRIB is ~50% NaN. ECMWF only 
 
 **Since then (2026-08, still consistent with the above):** two things about `ceil`/`cbh` are now pinned in the decoder, so "no ceiling at this point" has *two* distinct causes and you should not confuse them when debugging:
 - **9999 m is an explicit ECMWF "no cloud" sentinel**, dropped in `build_ecmwf_cloud_diagnostics`'s `_agl_m` helper (`_ECMWF_NO_CLOUD_SENTINEL_M`). That path is *not* the sparse-field problem — the model is positively saying "clear".
-- **`ceil`/`cbh`/`hcct` are metres AGL** (referenced to the model's own orography, #487), not MSL and not gpm. `deg0l` is AGL too and is the one field allowed to go negative.
+- **`ceil`/`cbh`/`hcct` are delivered in metres AGL** (referenced to the model's own orography, #487), not MSL and not gpm. `ceil`/`cbh` stay AGL in `NWPCloudDiagnostics`; `hcct` is normalized to MSL at decode since #807, and for `hcct` only the literal 9999 is dropped (real tops above 9999 m exist). `deg0l` is AGL too and is the one field allowed to go negative.
 
 The NaN-gap case described above is the remaining one: `_interpolate_per_point` does bilinear via `xarray.interp` and maps NaN → None, so any of the 4 surrounding grid cells being NaN loses the point.
 

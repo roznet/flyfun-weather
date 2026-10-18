@@ -470,6 +470,7 @@ def _analyze_sounding_heavy(
     levels: list[PressureLevelData],
     hourly: HourlyForecast | None,
     profile: PreparedProfile,
+    icing_severity_enhance: bool = False,
 ) -> None:
     """Extend a lite SoundingAnalysis with icing, NWP cloud synthesis, etc.
 
@@ -483,12 +484,14 @@ def _analyze_sounding_heavy(
     )
     from weatherbrief.analysis.sounding.convective import effective_cape
     from weatherbrief.analysis.sounding.icing import (
+        SeverityEnhanceInputs,
         assess_icing_zones_ieng,
         assess_icing_zones_ogimet_dd,
         assess_icing_zones_ogimet_nwp,
     )
     from weatherbrief.analysis.sounding.inversions import detect_inversions
     from weatherbrief.analysis.sounding.precipitation import assess_precipitation
+    from weatherbrief.analysis.sounding.prepare import levels_above_ground
     from weatherbrief.analysis.sounding.sfip import assess_sfip_zones
     from weatherbrief.analysis.sounding.sld import assess_sld_zones
     from weatherbrief.analysis.sounding.thermodynamics import (
@@ -540,7 +543,8 @@ def _analyze_sounding_heavy(
         nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
-        pressure_levels=levels,
+        # Sub-ground levels carry extrapolated cloud fraction (#807).
+        pressure_levels=levels_above_ground(levels, hourly),
     )
 
     # NWP-source sounding ceiling, the counterpart to the DD one set by the
@@ -564,11 +568,27 @@ def _analyze_sounding_heavy(
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
     )
 
+    # Opt-in RH/PW severity upgrade (``icing_severity_enhance`` preference).
+    # Upgrade-only, Ogimet-family zones only; see icing._enhance_severity.
+    # It was threaded here for a long time and never read (#807).
+    severity_enhance = (
+        SeverityEnhanceInputs(
+            precipitable_water_mm=indices.precipitable_water_mm if indices else None,
+            nwp_cloud_low_pct=hourly.cloud_cover_low_pct if hourly else None,
+            nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
+            nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
+            nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+        )
+        if icing_severity_enhance
+        else None
+    )
+
     # Ogimet-DD icing
     icing_zones = assess_icing_zones_ogimet_dd(
         derived_levels,
         cloud_layers,
         cape_jkg=eff_cape,
+        severity_enhance=severity_enhance,
     )
 
     # Ogimet-NWP icing (gated by NWP cloud layers; returns [] if none)
@@ -580,6 +600,7 @@ def _analyze_sounding_heavy(
         nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
         nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
         nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+        severity_enhance=severity_enhance,
     )
 
     # IENG icing (gated by NWP cloud layers; returns [] if none)
@@ -655,6 +676,9 @@ def analyze_sounding(
     if result is None:
         return None
 
-    _analyze_sounding_heavy(result, levels, hourly, profile)
+    _analyze_sounding_heavy(
+        result, levels, hourly, profile,
+        icing_severity_enhance=icing_severity_enhance,
+    )
 
     return result

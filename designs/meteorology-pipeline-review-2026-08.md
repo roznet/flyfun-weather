@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-08
 
-**Status (re-checked against main 61291a04, 2026-10-18):** of the §6 priority items, only
+**Status 2026-10-18 (#807):** the §6 items 1–11 and 13–16 are implemented or recorded as decisions in `meteorology-decisions.md` §51 (12 was already closed). Items 3.4 (ISA vs geopotential), the remaining 3.8 bullets not listed in #807, and 2.2/2.3 (intensity, SLD aloft) stay open.
+
+**Earlier status (re-checked against main 61291a04, 2026-10-18):** of the §6 priority items, only
 #12 is closed (#672/#675: ECMWF no-cloud is bitmap NaN; the seam path takes nearest
 corner). #16 is partly done. Every other item is **still open and untracked**, except #8's
 SLD half (#411). Line numbers below have drifted. Side finding: real a1 data carries

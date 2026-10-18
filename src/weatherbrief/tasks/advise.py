@@ -1026,7 +1026,9 @@ def run_alt_from_pack(
     rp_analyses = _resolve_analyses(rp_analyses, icing_method, cloud_source, convective_method)
 
     total_distance = route_points[-1].distance_from_origin_nm
-    model_names = list(rp_analyses[0].sounding.keys()) if rp_analyses else []
+    # Union across every point, first-seen order: a model whose sounding failed
+    # at the origin alone must not vanish from the whole alt scenario (#807).
+    model_names = list(dict.fromkeys(m for rpa in rp_analyses for m in rpa.sounding))
     advisory_model_names = _compute_advisory_model_names(model_names, advisory_models)
 
     # Airport conditions
@@ -1081,6 +1083,11 @@ def run_alt_from_pack(
             airport_conditions=airport_conds,
             locale=locale,
             route_fronts=route_fronts,
+            # Recomputed, not copied from the primary manifest: the alt
+            # analyses carry the shifted ``interpolated_time``, so night /
+            # low-sun intervals move with the departure — exactly what a
+            # timing scenario is asking about (review 2026-08 §3.8, #807).
+            sun=_compute_route_sun(rp_analyses, airport_conds),
             arrival_approaches=_collect_arrival_approaches(
                 _arrival_icao(route, airport_conds), airports_db_path,
                 declared_approach_icaos,

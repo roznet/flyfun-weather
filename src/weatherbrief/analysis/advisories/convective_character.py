@@ -666,7 +666,12 @@ def _segment_floor_ft(
         "mitigation_min_base_agl_ft",
         CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
     )
-    return (max_terrain_between(ctx.elevation, from_nm, to_nm) or 0.0) + min_base_agl
+    terrain = max_terrain_between(ctx.elevation, from_nm, to_nm)
+    if terrain is None and ctx.elevation is not None and ctx.elevation.points:
+        # A terrain void in this span (#807): no below-base altitude is
+        # provably clear of the ground, so the segment offers none.
+        return math.inf
+    return (terrain or 0.0) + min_base_agl
 
 
 def _merge_same_level(
@@ -868,7 +873,14 @@ def _candidate_altitudes(
         CHARACTER_PARAM_DEFAULTS["mitigation_min_base_agl_ft"],
     )
     max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
+    if floor_ft is None and ctx.elevation is not None and ctx.elevation.points and (
+        not ctx.elevation.terrain_complete
+    ):
+        # Route max over known samples only is a lower bound (#807).
+        return []
     floor = (max_terrain or 0.0) + min_base_agl if floor_ft is None else floor_ft
+    if not math.isfinite(floor):
+        return []
     ceiling = ctx.flight_ceiling_ft
     cruise = ctx.cruise_altitude_ft
     step = MITIGATION_BIN_STEP_FT

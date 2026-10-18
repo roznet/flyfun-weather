@@ -153,10 +153,10 @@ def temperature_at_pressure(
 
     Linear in log-pressure between the two bracketing levels that carry a
     temperature; clamps to the nearest end when the target lies outside the
-    reported range. Returns ``None`` when no level has a temperature. Mirrors
-    :func:`weatherbrief.analysis.wind.pick_wind_at_pressure` but interpolates
-    rather than snapping to the nearest level, since temperature varies
-    smoothly and the cruise level rarely lands exactly on a reported level.
+    reported range. Returns ``None`` when no level has a temperature. The
+    counterpart of :func:`weatherbrief.analysis.wind.pick_wind_at_pressure`,
+    which also interpolates (since #807) but withholds wind beyond 2,000 ft of
+    the column instead of clamping.
     """
     levels = [lvl for lvl in hourly.pressure_levels if lvl.temperature_c is not None]
     if not levels:
@@ -810,6 +810,10 @@ class ThermodynamicIndices(BaseModel):
     cape_most_unstable_jkg: Optional[float] = None
     cape_mixed_layer_jkg: Optional[float] = None
     cin_surface_jkg: Optional[float] = None
+    # The most-unstable parcel's own CIN (#807). Paired with MU-CAPE by the
+    # convective regime classifier when MU supplies the effective CAPE; None on
+    # packs written before it existed (the classifier then falls back to SB CIN).
+    cin_most_unstable_jkg: Optional[float] = None
     lifted_index: Optional[float] = None
     showalter_index: Optional[float] = None
     k_index: Optional[float] = None
@@ -1453,21 +1457,43 @@ class RouteWindOverlay(BaseModel):
 
 
 class ElevationPoint(BaseModel):
-    """Single elevation sample along the route."""
+    """Single elevation sample along the route.
+
+    ``elevation_ft`` is ``None`` when neither SRTM nor the Open-Meteo fallback
+    returned a value (SRTM voids cluster on steep terrain; a failed fallback
+    batch nulls every point it carried). Unknown terrain is never sea level:
+    the terrain helpers in ``analysis/advisories/_helpers.py`` return ``None``
+    for any query that touches a void, so a terrain guard cannot approve an
+    altitude over ground it has not seen (#807, review 2026-08 §2.7).
+    """
 
     distance_nm: float
-    elevation_ft: float
+    elevation_ft: float | None
     lat: float
     lon: float
 
 
 class ElevationProfile(BaseModel):
-    """High-resolution terrain profile along a route."""
+    """High-resolution terrain profile along a route.
+
+    ``max_elevation_ft`` is the maximum over the *known* samples (``None`` when
+    no sample is known) — a lower bound on the route's true terrain maximum
+    whenever ``missing_point_count > 0``. Consumers using it as a floor must
+    check ``missing_point_count`` (see :attr:`terrain_complete`).
+    """
 
     route_name: str
     points: list[ElevationPoint]
-    max_elevation_ft: float
+    max_elevation_ft: float | None
     total_distance_nm: float
+    # Samples whose terrain is unknown (elevation_ft None). Defaults to 0 so
+    # packs written before #807 (which stored voids as 0 ft) still load.
+    missing_point_count: int = 0
+
+    @property
+    def terrain_complete(self) -> bool:
+        """True when every sample has a known elevation."""
+        return self.missing_point_count == 0 and self.max_elevation_ft is not None
 
 
 class RouteCrossSection(BaseModel):

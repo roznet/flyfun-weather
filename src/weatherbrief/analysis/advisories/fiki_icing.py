@@ -4,6 +4,14 @@ Evaluates three flight phases:
 - Departure: total icing thickness to transit during climb (near origin)
 - Cruise: proportion of route with clear air at cruise altitude
 - Arrival: total icing thickness to transit during descent (near destination)
+
+Two hazards sit outside FIKI certification wherever they are met, so they grade
+RED on their own, not through any of the three phase metrics (#807):
+- SEVERE icing (or SLD) in the climb/descent column of a terminal corridor, and
+- SEVERE icing (or SLD) *at cruise* — within ``cruise_icing_buffer_ft`` of the
+  cruise altitude — at **any** assessed route point, mid-route included.
+Neither is a pilot preference: ``severe_is_red`` was retired as a tunable
+(stored profiles may still carry it; it is ignored).
 """
 
 from __future__ import annotations
@@ -40,6 +48,29 @@ _RISK_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SE
 def _worst_risk(a: IcingRisk, b: IcingRisk) -> IcingRisk:
     """Return the more severe of two icing risks."""
     return a if _RISK_ORDER.index(a) >= _RISK_ORDER.index(b) else b
+
+
+def _cruise_band_icing(
+    zones: list[IcingZone],
+    cruise_alt_ft: float,
+    buffer_ft: float,
+) -> tuple[IcingRisk, bool]:
+    """Worst severity and SLD among zones within *buffer_ft* of cruise.
+
+    "At cruise" uses the same predicate as the clear-air check
+    (:func:`min_icing_clearance` ``< buffer``), applied zone by zone, so a
+    point cannot be clear-air for the extent axis yet carry a cruise-band
+    severity here, or vice versa.
+
+    Returns (worst_severity, has_sld).
+    """
+    worst = IcingRisk.NONE
+    sld = False
+    for zone in zones:
+        if _min_icing_clearance([zone], cruise_alt_ft) < buffer_ft:
+            worst = _worst_risk(worst, zone.risk)
+            sld = sld or zone.sld_risk
+    return worst, sld
 
 
 def _transit_icing(
@@ -86,7 +117,9 @@ class FIKIIcingEvaluator:
                 "phases: climb-out near departure, clear-air cruise proportion, "
                 "and descent near arrival. FIKI can transit icing layers but "
                 "should minimise exposure — thick transit layers or extended "
-                "cruise in icing are concerning."
+                "cruise in icing are concerning. Severe icing or SLD is always "
+                "red — in the climb/descent corridors or at cruise anywhere "
+                "on the route — as it exceeds FIKI certification."
             ),
             category="icing",
             timing_class="scan",
@@ -175,16 +208,12 @@ class FIKIIcingEvaluator:
                     step=5,
                 ),
                 extent_min_nm_param(),
-                AdvisoryParameterDef(
-                    key="severe_is_red",
-                    label="Severe = RED",
-                    description="Any severe icing in transit triggers RED",
-                    type="boolean",
-                    default=1,
-                    min=0,
-                    max=1,
-                    step=1,
-                ),
+                # ``severe_is_red`` (a boolean "Severe = RED" toggle) was
+                # retired in #807. SEVERE icing exceeds FIKI certification, so
+                # it is not a personal-minimum axis a pilot may switch off —
+                # it is always RED. Stored profiles that still carry the key
+                # are tolerated: the evaluator never reads it and it is
+                # stripped from ``parameters_used``.
             ],
         )
 
@@ -197,7 +226,9 @@ class FIKIIcingEvaluator:
         extent_pct_amber = params.get("extent_pct_amber", 20)
         extent_pct_red = params.get("extent_pct_red", 50)
         extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
-        severe_is_red = params.get("severe_is_red", 1) > 0.5
+        # Retired tunable (#807): ignore any stored ``severe_is_red`` and do not
+        # echo it back as if it had been applied.
+        params = {k: v for k, v in params.items() if k != "severe_is_red"}
 
         cruise_alt = ctx.cruise_altitude_ft
         total_dist = ctx.total_distance_nm
@@ -212,6 +243,13 @@ class FIKIIcingEvaluator:
             arr_max_thickness = 0.0
             arr_worst = IcingRisk.NONE
             arr_sld = False
+
+            # SEVERE / SLD within the cruise buffer, anywhere on the route
+            # (#807). Mid-route icing used to reach the grade only through the
+            # clear-cruise extent, so a short stretch of SEVERE at cruise could
+            # grade GREEN.
+            cruise_worst = IcingRisk.NONE
+            cruise_sld = False
 
             cruise_clear = 0
             cruise_total = 0
@@ -265,12 +303,25 @@ class FIKIIcingEvaluator:
                 if point_clear:
                     cruise_clear += 1
 
+                # --- SEVERE / SLD at cruise, any point (#807) ---
+                c_sev, c_sld = _cruise_band_icing(zones, cruise_alt, cruise_buffer_ft)
+                cruise_worst = _worst_risk(cruise_worst, c_sev)
+                cruise_sld = cruise_sld or c_sld
+                # Hazards beyond FIKI certification at this point: the
+                # corridor transit column, or the cruise band anywhere.
+                point_sld = (in_corridor and sld) or c_sld
+                point_severe = (
+                    (in_corridor and sev == IcingRisk.SEVERE)
+                    or c_sev == IcingRisk.SEVERE
+                )
+
                 # --- per-point ribbon verdict + icing-band cutout (#375) ---
                 # Corridor points grade the transit column exactly as the route
-                # grade does (SLD / SEVERE / thickness); everywhere the cruise
-                # clear-air check contributes amber when icing sits within the
-                # cruise buffer. Thin transit-able icing away from cruise stays
-                # green.
+                # grade does (SLD / SEVERE / thickness); every point grades RED
+                # for SLD / SEVERE within the cruise buffer (#807); everywhere
+                # else the cruise clear-air check contributes amber when icing
+                # sits within the cruise buffer. Thin transit-able icing away
+                # from cruise stays green.
                 # ``reason_code`` is derived here, in the same branch as the
                 # severity, so the two cannot drift. It matters for this advisory
                 # more than for any other: a RED icing band means three quite
@@ -289,15 +340,11 @@ class FIKIIcingEvaluator:
                 # Precedence runs most-consequential first; a point can satisfy
                 # several predicates and the code names the one that decides.
                 reason: str | None = None
-                if in_corridor and (
-                    sld
-                    or (severe_is_red and sev == IcingRisk.SEVERE)
-                    or t >= transit_red
-                ):
+                if point_sld or point_severe or (in_corridor and t >= transit_red):
                     severity = HighlightSeverity.RED
-                    if sld:
+                    if point_sld:
                         reason = "sld"
-                    elif severe_is_red and sev == IcingRisk.SEVERE:
+                    elif point_severe:
                         reason = "severe_icing"
                     else:
                         reason = "thick_transit"
@@ -355,30 +402,40 @@ class FIKIIcingEvaluator:
             statuses: list[AdvisoryStatus] = []
             detail_parts: list[str] = []
 
-            # SLD — always RED
-            if dep_sld or arr_sld:
+            # SLD — always RED, in a corridor or at cruise anywhere
+            if dep_sld or arr_sld or cruise_sld:
                 statuses.append(AdvisoryStatus.RED)
                 where = " & ".join(
-                    [x for x in ["dep" if dep_sld else "", "arr" if arr_sld else ""] if x]
+                    x for x, hit in (
+                        ("dep", dep_sld), ("arr", arr_sld), ("cruise", cruise_sld),
+                    ) if hit
                 )
                 detail_parts.append(adv_t("fiki.sld_risk", loc, where=where))
 
-            # Severe icing in transit
-            if severe_is_red and (
-                dep_worst == IcingRisk.SEVERE or arr_worst == IcingRisk.SEVERE
-            ):
+            # Severe icing — always RED (#807): in the climb/descent corridors
+            # or within the cruise buffer anywhere on the route. Any assessed
+            # point suffices, the same as the corridor rule always was: FIKI
+            # certification has no extent allowance for severe icing, so this
+            # is deliberately not routed through ``grade_extent``'s
+            # ``extent_min_nm`` floor.
+            dep_severe = dep_worst == IcingRisk.SEVERE
+            arr_severe = arr_worst == IcingRisk.SEVERE
+            cruise_severe = cruise_worst == IcingRisk.SEVERE
+            if dep_severe or arr_severe or cruise_severe:
                 statuses.append(AdvisoryStatus.RED)
                 where = " & ".join(
-                    [
-                        x
-                        for x in [
-                            "dep" if dep_worst == IcingRisk.SEVERE else "",
-                            "arr" if arr_worst == IcingRisk.SEVERE else "",
-                        ]
-                        if x
-                    ]
+                    x for x, hit in (
+                        ("dep", dep_severe), ("arr", arr_severe),
+                        ("cruise", cruise_severe),
+                    ) if hit
                 )
                 detail_parts.append(adv_t("fiki.severe_icing", loc, where=where))
+
+            # Transit thickness stays corridor-scoped by design: it measures the
+            # surface-to-cruise column a FIKI aircraft must climb or descend
+            # through. Mid-route the column below cruise is not transited;
+            # icing met en route is priced by the cruise-band SEVERE/SLD rule
+            # above and the clear-cruise extent below.
 
             # Transit thickness (worst of departure / arrival)
             worst_transit = max(dep_max_thickness, arr_max_thickness)

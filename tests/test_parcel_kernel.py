@@ -228,7 +228,8 @@ def test_compute_indices_core_kernel_vs_metpy_switch(monkeypatch):
         a, b = ref.indices, new.indices
         for field, tol in [
             ("cape_surface_jkg", _cape_tol), ("cin_surface_jkg", _cape_tol),
-            ("cape_most_unstable_jkg", _cape_tol), ("cape_mixed_layer_jkg", _cape_tol),
+            ("cape_most_unstable_jkg", _cape_tol), ("cin_most_unstable_jkg", _cape_tol),
+            ("cape_mixed_layer_jkg", _cape_tol),
             ("lcl_pressure_hpa", lambda _: 2.0), ("lfc_pressure_hpa", lambda _: 2.0),
             ("el_pressure_hpa", lambda _: 2.0), ("lifted_index", lambda _: 0.2),
         ]:

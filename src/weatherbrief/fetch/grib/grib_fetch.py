@@ -116,41 +116,6 @@ def find_latest_run_with_response(
     return None
 
 
-def bracket_forecast_hours(
-    init_date: str,
-    init_hour: int,
-    target_time: datetime,
-) -> tuple[int, int]:
-    """Find the two forecast hours that bracket the target time.
-
-    GFS has 1-hourly forecasts for f000–f120, 3-hourly for f120–f384.
-
-    Returns:
-        (f_prev, f_next) such that init_time + f_prev <= target <= init_time + f_next.
-    """
-    init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
-        tzinfo=timezone.utc,
-    )
-    delta_hours = (target_time - init_dt).total_seconds() / 3600
-    delta_hours = max(0, delta_hours)
-
-    if delta_hours <= 120:
-        # 1-hourly region
-        f_prev = int(delta_hours)
-        f_next = f_prev + 1
-    else:
-        # 3-hourly region
-        base = int((delta_hours - 120) / 3)
-        f_prev = 120 + base * 3
-        f_next = f_prev + 3
-
-    # Clamp
-    f_prev = min(f_prev, 384)
-    f_next = min(f_next, 384)
-
-    return f_prev, f_next
-
-
 def _snap_to_gfs_grid(fhour: float) -> int:
     """Snap a fractional forecast hour to the nearest GFS grid point.
 
@@ -173,6 +138,53 @@ def _snap_to_gfs_grid_floor(fhour: float) -> int:
     return min(base, 384)
 
 
+def contiguous_window_forecast_hours(
+    init_dt: datetime,
+    departure_time: datetime,
+    flight_duration_hours: float,
+    *,
+    hourly_to_h: int,
+    coarse_step_h: int,
+    horizon_h: int,
+) -> list[int]:
+    """Forecast hours covering ``departure .. departure + ceil(duration)``.
+
+    The CONTIGUOUS inclusive range ``floor(departure) .. ceil(end)`` in
+    hours-from-init (HRRR's shape, ``compute_hrrr_flight_window_hours``),
+    mapped onto a grid that is hourly up to ``hourly_to_h`` and every
+    ``coarse_step_h`` hours beyond it, clamped to ``[0, horizon_h]``.
+
+    Deliberately NOT sample-``departure + h``-and-``round()``: ``round()`` is
+    ties-to-even, so a :30 departure collapsed consecutive half-hour offsets
+    onto the same even hour and silently dropped every other forecast hour
+    (PR #508 review for HRRR; back-ported to GFS/ICON in #807). In the coarse
+    region each in-window hour snaps DOWN to its grid step, and the step at or
+    after the window end is added, so the window is always bracketed by
+    native steps (the forward-fill / interpolation anchors either side).
+    """
+    end_dt = departure_time + timedelta(
+        hours=math.ceil(max(flight_duration_hours, 0.0))
+    )
+    first = math.floor((departure_time - init_dt).total_seconds() / 3600)
+    last = math.ceil((end_dt - init_dt).total_seconds() / 3600)
+    first = max(0, first)
+    last = max(first, last)
+
+    def _floor_snap(h: int) -> int:
+        if h <= hourly_to_h:
+            return h
+        return hourly_to_h + ((h - hourly_to_h) // coarse_step_h) * coarse_step_h
+
+    def _ceil_snap(h: int) -> int:
+        if h <= hourly_to_h:
+            return h
+        return hourly_to_h + math.ceil((h - hourly_to_h) / coarse_step_h) * coarse_step_h
+
+    fhours = {min(_floor_snap(h), horizon_h) for h in range(first, last + 1)}
+    fhours.add(min(_ceil_snap(last), horizon_h))
+    return sorted(fhours)
+
+
 def compute_flight_window_hours(
     init_date: str,
     init_hour: int,
@@ -181,8 +193,10 @@ def compute_flight_window_hours(
 ) -> list[int]:
     """Compute GFS forecast hours covering a flight window.
 
-    Returns one forecast hour per UTC hour from departure through
-    departure + ceil(duration), snapped to the GFS temporal grid.
+    Every native GFS step from ``floor(departure)`` through
+    ``ceil(departure + ceil(duration))`` — see
+    :func:`contiguous_window_forecast_hours`. GFS is 1-hourly to f120 and
+    3-hourly to f384.
 
     Args:
         init_date: YYYYMMDD of model init.
@@ -196,34 +210,10 @@ def compute_flight_window_hours(
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    dep_dt = departure_time
-
-    # Extra hour needed when departure has non-zero minutes, to bracket the
-    # end of the flight window (e.g. 09:15 + 2h → need 09,10,11,12 not just 09,10,11)
-    extra = 1 if dep_dt.minute > 0 else 0
-    n_hours = max(1, math.ceil(flight_duration_hours) + 1 + extra)
-    fhours: set[int] = set()
-    for h in range(n_hours):
-        utc = dep_dt + timedelta(hours=h)
-        delta = (utc - init_dt).total_seconds() / 3600
-        delta = max(0.0, delta)
-        fhours.add(_snap_to_gfs_grid(delta))
-
-    # Include the floor hour so non-round departure times get coverage
-    if dep_dt.minute > 0:
-        floor_utc = dep_dt.replace(minute=0, second=0, microsecond=0)
-        floor_delta = (floor_utc - init_dt).total_seconds() / 3600
-        if floor_delta >= 0:
-            fhours.add(_snap_to_gfs_grid(floor_delta))
-
-    # Include the floor native hour before departure for forward-fill coverage.
-    # In the 3-hourly region (>120h), rounding may skip the preceding native
-    # hour, leaving interpolated hours without GRIB diagnostics.
-    dep_delta = (dep_dt - init_dt).total_seconds() / 3600
-    if dep_delta > 0:
-        fhours.add(_snap_to_gfs_grid_floor(dep_delta))
-
-    return sorted(fhours)
+    return contiguous_window_forecast_hours(
+        init_dt, departure_time, flight_duration_hours,
+        hourly_to_h=120, coarse_step_h=3, horizon_h=384,
+    )
 
 
 def fetch_idx(

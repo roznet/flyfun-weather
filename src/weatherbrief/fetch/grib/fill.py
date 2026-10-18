@@ -946,10 +946,10 @@ def apply_gfs_rh_condensate_gate(
 def _gate_gfs_hourly(h: HourlyForecast) -> int:
     """Apply the gate to one hourly forecast. Returns # layers dropped.
 
-    Only low/mid/high are gated. Convective, boundary, total, ceiling, and
-    freezing level are *instantaneous* products in GFS pgrb2 (TCDC@atmosphere,
-    TCDC@convectiveCloudLayer, TCDC@boundaryLayerCloudLayer, GH@cloudCeiling,
-    HGT@0degC) — they don't suffer the averaged-window back-smear that
+    Only low/mid/high are gated. Convective, boundary, total and ceiling are
+    *instantaneous* products in GFS pgrb2 (TCDC@atmosphere,
+    TCDC@convectiveCloudLayer, TCDC@boundaryLayerCloudLayer, GH@cloudCeiling;
+    GFS freezing level is not decoded at all, #807) — they don't suffer the averaged-window back-smear that
     motivates this gate, so they're forwarded unchanged.
 
     Caveat: ``ceiling_ft`` is computed by GFS from the column's lowest

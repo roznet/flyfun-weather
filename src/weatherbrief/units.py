@@ -39,6 +39,11 @@ def resolve_units_region(pref: str | None, detected: str | None) -> UnitsRegion:
 # Conversion constants (single source of truth — was duplicated as _M_PER_SM).
 M_PER_SM = 1609.34
 HPA_PER_INHG = 33.8639  # 1 inHg == 33.8639 hPa
+# Snow depth per unit of liquid water: Open-Meteo's documented ``snowfall``
+# convention ("7 cm snow = 10 mm precipitation water equivalent", ~7:1 by
+# depth). ``HourlyForecast.snowfall_cm`` carries this convention for every
+# model, so ECMWF's water-equivalent ``sf`` is converted with it too (#807).
+SNOW_CM_PER_MM_WATER = 0.7
 
 
 def normalize_region(region: str | None) -> UnitsRegion:

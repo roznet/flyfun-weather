@@ -202,7 +202,12 @@ class TestIngredientValues:
         # hcct with no convective cover fraction → LCL-as-base + tower top.
         # This is the pathway no model was exercising before #581.
         assert snaps[0]["nwp_conv_method"] == "nwp_lcl_top"
-        assert snaps[0]["nwp_conv_top_ft"] == pytest.approx(6000 * 3.28084, rel=1e-3)
+        # hcct is AGL; the tower top is graded on MSL FLs, so it arrives as
+        # 6000 m AGL + the model's own orography (110 m: sp 1000 hPa sits on
+        # the 1000 hPa gh) — #807.
+        assert snaps[0]["nwp_conv_top_ft"] == pytest.approx(
+            (6000 + 110) * 3.28084, rel=1e-3,
+        )
 
     def test_convective_precip_is_a_rate_not_the_accumulation(self, snaps):
         # cp accumulates 0.5 mm/h since init; every sampled step is 1 h past

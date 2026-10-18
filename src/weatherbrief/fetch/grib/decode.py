@@ -231,10 +231,15 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # confirmed against eccodes names + the ECMWF Parameter DB — NOT MSL. See
     # issue #441 finding #3 (datum normalization for airport-vs-en-route use is
     # a separate follow-up; these are AGL as delivered).
-    "ceil": "ceiling_m",                   # meters AGL, 9999 = no cloud sentinel
-    "cbh": "cloud_base_height_m",          # meters AGL, 9999 = no cloud sentinel
-    "hcct": "convective_cloud_top_m",      # meters AGL, 9999 = no cloud sentinel
-    # deg0l is AGL as delivered, but unlike ceil/cbh/hcct it feeds a field
+    # "No cloud" is a bitmap-missing (NaN) cell in real a1 data, not a literal
+    # 9999 (checked on the 20261004_12z a1, commit 0369671b); the 9999 guard
+    # is defensive. See _agl_m in build_ecmwf_cloud_diagnostics.
+    "ceil": "ceiling_m",                   # meters AGL (ceil/cbh stay AGL)
+    "cbh": "cloud_base_height_m",          # meters AGL
+    # hcct feeds convective_top_ft, which is graded on MSL flight-level
+    # thresholds (FL120/200/280/380) — normalized to MSL like deg0l (#807).
+    "hcct": "convective_cloud_top_m",      # meters AGL as delivered → MSL
+    # deg0l is AGL as delivered, but unlike ceil/cbh it feeds a field
     # (NWPCloudDiagnostics.freezing_level_ft) that every OTHER writer fills
     # with MSL. build_ecmwf_cloud_diagnostics normalizes it (#487).
     "deg0l": "freezing_level_m",           # meters AGL (geometric height above ground, not MSL)
@@ -3721,7 +3726,12 @@ def _decode_icon_eu_single_var_direct(
     return level_values
 
 
-_ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF uses 9999m for "no cloud"
+_ECMWF_NO_CLOUD_SENTINEL_M = 9999.0  # ECMWF's documented "no cloud" value
+# Tolerance for matching the LITERAL sentinel on fields where real heights
+# can exceed it (hcct: towers above ~FL330 are 9999 m+ AGL). A float32-packed
+# literal 9999 decodes within a fraction of a metre; a genuine height landing
+# inside ±0.5 m of it is negligible, and dropping it costs nothing.
+_ECMWF_SENTINEL_EXACT_TOL_M = 0.5
 
 
 def model_surface_height_m(
@@ -3808,8 +3818,12 @@ def build_ecmwf_cloud_diagnostics(
     """Convert raw ECMWF surface values into NWPCloudDiagnostics.
 
     ECMWF reports heights in meters (like ICON-EU), cloud covers as
-    0–1 fractions.  Heights ≥ 9998 m are treated as "no cloud" sentinel
-    (ECMWF uses 9999 m; threshold at 9998 for float tolerance).
+    0–1 fractions. In real a1 data "no cloud" is a bitmap-missing (NaN)
+    cell, already None here. The documented 9999 m sentinel is still guarded
+    defensively: ceiling / base / blh / deg0l drop anything ≥ 9999 m (a
+    ceiling above FL330 is operationally no ceiling anyway); ``hcct`` drops
+    only the literal 9999 because real towers above ~FL330 carry genuine
+    heights ≥ 9999 m (#807).
 
     Unit conversions:
     - meters → feet (× 3.28084)
@@ -3817,11 +3831,11 @@ def build_ecmwf_cloud_diagnostics(
 
     **Freezing-level datum (#487).** ECMWF ``deg0l`` is metres ABOVE GROUND,
     but ``NWPCloudDiagnostics.freezing_level_ft`` is an MSL field everywhere
-    else it is written or read: GFS fills it from ``HGT@0degC`` (MSL
-    geopotential), the sounding's own 0 °C crossing is MSL, and Open-Meteo's
-    ``freezing_level_height`` is MSL. ``terrain_elevation_m`` — the model's
-    own orography at this point — is added to bring ``deg0l`` onto that
-    datum.
+    else it is written or read: the sounding's own 0 °C crossing is MSL and
+    Open-Meteo's ``freezing_level_height`` is MSL. (No GFS decode fills this
+    field — GFS's ``HGT:0C isotherm`` is in its ``.idx`` but not fetched; a
+    possible follow-up.) ``terrain_elevation_m`` — the model's own orography
+    at this point — is added to bring ``deg0l`` onto that datum.
 
     Without it the value is **dropped rather than passed through as AGL**.
     ``HourlyForecast.attach_nwp_diagnostics`` mirrors this field onto
@@ -3829,9 +3843,16 @@ def build_ecmwf_cloud_diagnostics(
     correctly-referenced Open-Meteo number beats a wrongly-referenced ECMWF
     one, and the mirror is skipped when the field is None.
 
-    ``ceil`` / ``cbh`` / ``hcct`` are AGL too and are NOT converted here.
-    Ceiling and cloud base are conventionally AGL in aviation, so their datum
-    is a separate question (the #441 finding #3 follow-up), not this one.
+    **Convective-top datum (#807).** ``hcct`` is AGL too, but
+    ``convective_top_ft`` is graded as MSL everywhere it is read (FL
+    thresholds in ``_risk_from_conv_top``, the cross-check bands, the
+    tops-below-cruise filter, the ``nwp_lcl_top`` LCL envelope) and GFS /
+    ICON already deliver it MSL. It is normalized exactly like ``deg0l``:
+    ``hcct + terrain``, dropped (not passed through) without terrain.
+
+    ``ceil`` / ``cbh`` stay AGL and are NOT converted here. Ceiling and cloud
+    base are conventionally AGL in aviation, so their datum is a separate
+    question (the #441 finding #3 follow-up), not this one.
 
     A NEGATIVE ``deg0l`` is kept and converted: it means the 0 °C isotherm
     sits below the model's ground, which is a real cold-airmass forecast, and
@@ -3846,10 +3867,17 @@ def build_ecmwf_cloud_diagnostics(
     if not raw:
         return None
 
-    def _agl_m(key: str, *, allow_below_ground: bool = False) -> float | None:
+    def _agl_m(
+        key: str,
+        *,
+        allow_below_ground: bool = False,
+        exact_sentinel_only: bool = False,
+    ) -> float | None:
         """Validated metres-AGL for one field, or None.
 
-        Drops the 9999 m no-value sentinel. ``allow_below_ground`` decides
+        Drops the 9999 m no-value sentinel: by default anything at or above
+        it; with ``exact_sentinel_only`` (``hcct``) only the literal value,
+        so a genuine tower top ≥ 9999 m AGL survives. ``allow_below_ground`` decides
         whether NEGATIVE values survive, and the two answers genuinely
         differ by field — which is why this floor lives here rather than
         being re-checked at each call site:
@@ -3868,7 +3896,12 @@ def build_ecmwf_cloud_diagnostics(
         NaN never reaches here — ``_interpolate_per_point`` maps it to None.
         """
         val = raw.get(key)
-        if val is None or val >= _ECMWF_NO_CLOUD_SENTINEL_M:
+        if val is None:
+            return None
+        if exact_sentinel_only:
+            if abs(val - _ECMWF_NO_CLOUD_SENTINEL_M) <= _ECMWF_SENTINEL_EXACT_TOL_M:
+                return None
+        elif val >= _ECMWF_NO_CLOUD_SENTINEL_M:
             return None
         if val < 0 and not allow_below_ground:
             return None
@@ -3886,7 +3919,12 @@ def build_ecmwf_cloud_diagnostics(
 
     ceiling_ft = _m_to_ft("ceiling_m")
     cloud_base_ft = _m_to_ft("cloud_base_height_m")
-    convective_top_ft = _m_to_ft("convective_cloud_top_m")
+    # hcct is AGL; convective_top_ft is MSL for every consumer and every other
+    # model. Normalized like deg0l, dropped without terrain (#807).
+    conv_top_agl_m = _agl_m("convective_cloud_top_m", exact_sentinel_only=True)
+    convective_top_ft: float | None = None
+    if conv_top_agl_m is not None and terrain_elevation_m is not None:
+        convective_top_ft = round((conv_top_agl_m + terrain_elevation_m) * _M_TO_FT)
     # deg0l is AGL; only usable once referenced to MSL. See the datum note
     # in the docstring for why an unconvertible value is dropped, not passed
     # through. (#487)
@@ -3965,8 +4003,10 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     - K → °C (temperature, dewpoint)
     - m/s u/v → kt speed + meteorological "from" direction
     - m/s gust → kt
-    - m water-equivalent → mm water (precip) and cm snow (snowfall, ×1000
-      assumes a 10:1 snow:water ratio, matching ECMWF's reference conversion)
+    - m water-equivalent → mm water (precip) and cm snow (snowfall: mm
+      water × ``SNOW_CM_PER_MM_WATER`` = 0.7, Open-Meteo's ``snowfall``
+      convention, so one ``HourlyForecast.snowfall_cm`` series does not mix a
+      10:1 ECMWF ratio with Open-Meteo's ~7:1 across the GRIB window — #807)
     - 0–1 cloud fraction → 0–100 %
 
     ``total_precip_m`` and ``snowfall_m_we`` arrive accumulated since model
@@ -4031,7 +4071,9 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
 
     sf = raw.get("snowfall_m_we")
     if sf is not None:
-        out["snowfall_cm"] = sf * 1000.0
+        from weatherbrief.units import SNOW_CM_PER_MM_WATER
+
+        out["snowfall_cm"] = sf * 1000.0 * SNOW_CM_PER_MM_WATER
 
     cape = raw.get("mucape_jkg")
     if cape is not None:

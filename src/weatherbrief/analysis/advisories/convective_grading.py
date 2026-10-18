@@ -17,7 +17,11 @@ meteorology-decisions §18:
   raised to AMBER only (``reason="dd_trigger"``), tier capped at MODERATE, and
   excluded from the red-coverage count — DD alone can never make a red;
 - any MODERATE+ point reaching cruise floors the model at AMBER;
-- convection whose tops are below ``cruise - top_clearance_ft`` is ignored.
+- convection whose tops are below ``cruise - top_clearance_ft`` is ignored;
+- a point with a sounding but **no convective assessment** (no CAPE and no
+  native track, #807) is unassessed, not clear: it is left out of the grading
+  denominator, and a would-be-GREEN model whose assessed points cover too little
+  of the route (``below_coverage``, #391) grades UNAVAILABLE.
 
 What stays OUT of this module: everything locale-dependent. The evaluators own
 their own copy (headline wording, coverage suffixes, aggregate synthesis) — this
@@ -34,6 +38,7 @@ from weatherbrief.analysis.advisories._helpers import (
     FlaggedCell,
     RouteExtent,
     EXTENT_MIN_NM,
+    below_coverage,
     grade_extent,
     route_extent,
 )
@@ -91,7 +96,9 @@ class ConvectiveModelGrade:
 
     model: str
     status: AdvisoryStatus
-    total: int              # points with a sounding (the grading denominator)
+    # Points with a sounding. Kept as the en-route sounding count the composites
+    # (ifr/vfr feasibility) use for their own coverage guards and other axes.
+    total: int
     affected: int           # >= min_risk (LOW floor) — drives the colour
     affected_mod: int       # >= MODERATE — anchors the headline extent (#300)
     dd_trigger_count: int   # DD-only amber points (#442) — never escalate RED
@@ -108,6 +115,11 @@ class ConvectiveModelGrade:
     # their own ``domain_nm`` so a consumer never has to scale a point ratio.
     extent: RouteExtent = EMPTY_EXTENT
     extent_mod: RouteExtent = EMPTY_EXTENT
+    # Points with a sounding AND a convective assessment — the grading
+    # denominator (#807). ``total - assessed`` points had a sounding but nothing
+    # to grade convection on (no CAPE, no native track); they are neither GREEN
+    # nor in the extent domain.
+    assessed: int = 0
 
 
 def resolve_convective_params(ctx: RouteContext) -> dict[str, float]:
@@ -209,6 +221,7 @@ def grade_convective_model(
     cruise_ft = ctx.cruise_altitude_ft
 
     total = 0
+    assessed = 0
     affected = 0
     affected_mod = 0
     dd_trigger_count = 0
@@ -284,12 +297,17 @@ def grade_convective_model(
 
         conv = sounding.convective
         if conv is None:
-            # Sounding present but no convective assessment: not a hazard we can
-            # locate — grade the ribbon GREEN (not UNAVAILABLE, which is
-            # reserved for a missing sounding).
-            ribbon_points.append((dist, HighlightSeverity.GREEN))
+            # Sounding present but no convective assessment (no CAPE from any
+            # source and no native track — #807). Unassessed is not clear: the
+            # ribbon reads UNAVAILABLE and the point leaves the grading
+            # denominator, so it can neither dilute a flagged extent nor vouch
+            # for a GREEN (the coverage guard below decides whether the
+            # assessed remainder is enough to speak for the route).
+            graded_flags[-1] = False
+            ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
             region_cells.append((dist, None))
             continue
+        assessed += 1
 
         # NWP-native grade (#442, meteorology-decisions §18). The colour comes
         # from the model's OWN convective scheme (the active track), NOT
@@ -570,7 +588,7 @@ def grade_convective_model(
     )
 
     # --- colour ---
-    if total == 0:
+    if total == 0 or assessed == 0:
         status = AdvisoryStatus.UNAVAILABLE
     elif affected == 0:
         status = AdvisoryStatus.GREEN
@@ -612,6 +630,18 @@ def grade_convective_model(
         if affected_mod > 0 and status == AdvisoryStatus.GREEN:
             status = AdvisoryStatus.AMBER
 
+    # Coverage tolerance (#391, #807) — the guard every other route evaluator
+    # has: a clear verdict from convectively-assessed points covering too small a
+    # share of the route cannot vouch for the unassessed remainder, so it
+    # abstains (UNAVAILABLE). Only a would-be GREEN is demoted; a flagged verdict
+    # always stands, so real hazard evidence on partial coverage is never
+    # diluted. The domain is the whole route (``len(ctx.analyses)``), so a
+    # missing sounding and a sounding with no assessment both count against it.
+    # §26 fallback points (thermo-graded where the NWP track is absent) ARE
+    # assessed and count as coverage — an absent track is capped, not blank.
+    if status == AdvisoryStatus.GREEN and below_coverage(assessed, len(ctx.analyses)):
+        status = AdvisoryStatus.UNAVAILABLE
+
     return ConvectiveModelGrade(
         model=model,
         status=status,
@@ -631,4 +661,5 @@ def grade_convective_model(
         ),
         extent=extent,
         extent_mod=extent_mod,
+        assessed=assessed,
     )

@@ -303,12 +303,20 @@ def detect_cloud_layers(
     return cloud_layers
 
 
-# Coverage mapping from NWP cloud cover percentage (standard METAR oktas)
+# Coverage mapping from NWP cloud cover percentage. DELIBERATELY one okta more
+# severe than the METAR convention at each boundary (METAR: FEW 1-2/8, SCT 3-4/8,
+# BKN 5-7/8, OVC 8/8): each category starts at the *upper* okta of the category
+# below. For BKN this is the ceiling-relevant choice — a 50 % (4/8) model deck
+# becomes a ceiling, where METAR would call it SCT until 62.5 % (5/8). Kept on
+# purpose (review 2026-08 §3.8, #807): a grid-box fraction is an area average
+# that smears a broken deck across clear gaps, so it under-reads what a pilot
+# under the deck sees, and the IFR-leaning bias is the conservative side for a
+# ceiling. It is a calibration choice, not a METAR-equivalence claim.
 _NWP_COVERAGE_THRESHOLDS = [
-    (87.5, CloudCoverage.OVC),  # 7-8 oktas
-    (50.0, CloudCoverage.BKN),  # 5-6 oktas
-    (25.0, CloudCoverage.SCT),  # 3-4 oktas
-    (12.5, CloudCoverage.FEW),  # 1-2 oktas
+    (87.5, CloudCoverage.OVC),  # >= 7/8 (METAR OVC is 8/8)
+    (50.0, CloudCoverage.BKN),  # >= 4/8 (METAR BKN starts at 5/8) — deliberate, see above
+    (25.0, CloudCoverage.SCT),  # >= 2/8 (METAR SCT starts at 3/8)
+    (12.5, CloudCoverage.FEW),  # >= 1/8
 ]
 
 

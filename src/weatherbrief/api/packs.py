@@ -4379,7 +4379,30 @@ def get_elevation(
     path = pack_dir / "elevation_profile.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Elevation profile not available")
+    projected = _elevation_wire_projection(path)
+    if projected is not None:
+        return projected
     return FileResponse(path, media_type="application/json")
+
+
+def _elevation_wire_projection(path: Path) -> dict | None:
+    """Display-safe elevation JSON when the stored profile has unknown samples.
+
+    Packs since #807 store terrain voids as ``elevation_ft: null``; the web and
+    iOS clients decode it as a number, so voids are filled for drawing and
+    flagged (``elevation_known``, ``missing_point_count``). ``None`` when the
+    profile is complete — the file is then served as-is.
+    """
+    from weatherbrief.fetch.elevation import display_elevation_profile
+    from weatherbrief.models import ElevationProfile
+
+    try:
+        profile = ElevationProfile.model_validate_json(path.read_text())
+    except (ValueError, OSError):
+        return None
+    if profile.terrain_complete or not profile.points:
+        return None
+    return display_elevation_profile(profile)
 
 
 @router.get("/{timestamp}/bundle")
@@ -4415,7 +4438,10 @@ def get_bundle(
         for filename in filenames:
             path = pack_dir / filename
             if path.exists():
-                bundle[endpoint] = json.loads(path.read_text())
+                projected = (
+                    _elevation_wire_projection(path) if endpoint == "elevation" else None
+                )
+                bundle[endpoint] = projected if projected is not None else json.loads(path.read_text())
                 break
 
     # Same live overlay as GET .../snapshot, so a download carries the newest

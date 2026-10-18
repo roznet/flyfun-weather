@@ -140,15 +140,34 @@ def nwp_cloud_cover_at_altitude(
 ) -> float | None:
     """Return the NWP cloud cover percentage for a given altitude.
 
-    When *nwp_cloud_diagnostics* is provided, checks **all** diagnostic
-    layers (low/mid/high) and returns the highest cloud cover for any layer
-    whose base/top range (with margin) contains the altitude.  This handles
-    NWP cloud layers that extend beyond ICAO band boundaries — e.g. a low
-    cloud layer topping at 11,000 ft is correctly detected at 8,000 ft even
-    though 8,000 ft falls in the ICAO "mid" band.
+    ``None`` means **unknown** — no cover value exists for this altitude — and
+    is never a stand-in for 0 % (#807). Callers decide what unknown means for
+    their method; they must not read it as clear sky.
 
-    When diagnostics are ``None`` or no layer has base/top, fall back to
-    the existing bulk percentage behavior (backward compatible).
+    When *nwp_cloud_diagnostics* carries layer geometry (base **and** top on at
+    least one band), checks **all** diagnostic layers (low/mid/high) and
+    returns the highest cover of any layer whose base/top range (with margin)
+    contains the altitude. This handles NWP cloud layers that extend beyond
+    ICAO band boundaries — e.g. a low cloud layer topping at 11,000 ft is
+    correctly detected at 8,000 ft even though 8,000 ft falls in the ICAO
+    "mid" band. The cover paired with a diagnostic layer is that layer's own
+    ``cover_pct`` (the same model field that produced the geometry — for GFS,
+    the NCEP pressure-band cover); the bulk ICAO-slab percentage is used only
+    when the layer has no cover of its own. Pairing NCEP band geometry with
+    an Open-Meteo ICAO-slab percentage was a mismatched-slice pairing
+    (decisions §23 records the same class of bug fixed twice elsewhere).
+
+    Inside the geometry branch:
+
+    * altitude inside one or more diagnosed layers → the highest known cover
+      among them; ``None`` if none of them has any cover value;
+    * altitude outside every diagnosed layer → ``0.0`` when the ICAO band the
+      altitude falls in has its own geometry (the model drew that band's deck
+      elsewhere — genuinely clear here); otherwise that band has no geometry
+      to rule on, so its bulk percentage is returned (``None`` if absent).
+
+    When diagnostics are ``None`` or no band has base/top, fall back to the
+    bulk ICAO band percentage (``None`` when the model publishes none).
     """
     margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
 
@@ -161,16 +180,30 @@ def nwp_cloud_cover_at_altitude(
         ]
         best: float | None = None
         any_diag = False
+        inside_any = False
+        band_has_geometry: list[bool] = []
         for bulk_pct, diag_layer in candidates:
-            if diag_layer is None or diag_layer.base_ft is None or diag_layer.top_ft is None:
+            has_geom = (
+                diag_layer is not None
+                and diag_layer.base_ft is not None
+                and diag_layer.top_ft is not None
+            )
+            band_has_geometry.append(has_geom)
+            if not has_geom:
                 continue
             any_diag = True
             if (diag_layer.base_ft - margin) <= altitude_ft <= (diag_layer.top_ft + margin):
-                pct = bulk_pct or 0.0
-                if best is None or pct > best:
+                inside_any = True
+                pct = diag_layer.cover_pct if diag_layer.cover_pct is not None else bulk_pct
+                if pct is not None and (best is None or pct > best):
                     best = pct
         if any_diag:
-            return best if best is not None else 0.0
+            if inside_any:
+                return best  # None when no matching layer had any cover value
+            band_idx = 0 if altitude_ft < 6500 else (1 if altitude_ft < 20000 else 2)
+            if band_has_geometry[band_idx]:
+                return 0.0
+            return candidates[band_idx][0]
 
     # No diagnostics available — fall back to bulk ICAO band percentages
     if altitude_ft < 6500:
@@ -184,10 +217,20 @@ def nwp_cloud_cover_at_altitude(
 # ── Glaciation floor ───────────────────────────────────────────────
 
 
-# GFS often reports CLW=0 at grid scale even when sub-grid SLW exists,
+# GFS often reports CLW≈0 at grid scale even when sub-grid SLW exists,
 # especially at warmer temperatures where SLW is physically expected.
-# A temperature-dependent floor prevents CLW=0 from completely zeroing
-# out icing when NWP cloud cover confirms cloud exists.
+# A temperature-dependent floor keeps an ice-dominant mix (CLW≈0, ICMR>0)
+# from zeroing out icing.
+#
+# Scope, as the code actually behaves (#807, pipeline-review 2026-08 §3.8):
+#   * CLW = ICMR = 0 (no grid-scale condensate at all) returns 0.0 — the floor
+#     does NOT apply, so Ogimet-NWP drops such a level even inside an NWP cloud
+#     layer. Whether "cloud fraction > 0 but no condensate" deserves the floor
+#     is an open calibration question, not changed here.
+#   * SFIP-full never reaches this floor for CLW ≤ 0: ``compute_sfip_level``
+#     hard-gates measured CLW ≤ 0 → NONE first, and only calls this when
+#     CLW > 0 and ICMR > 0. So for CLW = 0, ICMR > 0 at −5 °C Ogimet-NWP keeps
+#     80 % of its index while SFIP-full reports NONE — a known divergence.
 _GLAC_FLOOR_WARM = 0.8   # above -10°C — SLW very likely despite CLW=0
 _GLAC_FLOOR_COLD = 0.15  # below -20°C — glaciation is physically plausible
 
@@ -205,6 +248,8 @@ def glaciation_factor(
     At cold temperatures (< −20 °C) the floor drops to 0.15.
 
     When *temperature_c* is None, no floor is applied (backward compat).
+    When CLW + ICE ≤ 0 (no condensate at all) the result is 0.0 and the floor
+    is not applied — see the scope note above.
     """
     total = clw_g_kg + icmr_g_kg
     if total <= 0:

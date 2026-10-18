@@ -410,6 +410,39 @@ def test_surface_amounts_passed_through():
     assert result.snow_cm == 0.0
 
 
+def test_rain_fallback_uses_snow_water_equivalent_and_clamps():
+    """#807: with no rain_mm, rain = total − snow WATER (depth ÷ 0.7, the
+    Open-Meteo 7 cm = 10 mm convention), never negative. The old
+    ``precip − snow × 10`` turned 2 mm + 1 cm into −8 mm."""
+    levels = [DerivedLevel(pressure_hpa=1000, altitude_ft=300, wet_bulb_c=0.5)]
+
+    mixed = assess_precipitation(levels, [], hourly=HourlyForecast(
+        time=datetime(2025, 1, 1), precipitation_mm=2.0, snowfall_cm=0.7,
+    ))
+    assert mixed.rain_mm == pytest.approx(1.0)  # 0.7 cm snow = 1 mm water
+
+    over = assess_precipitation(levels, [], hourly=HourlyForecast(
+        time=datetime(2025, 1, 1), precipitation_mm=2.0, snowfall_cm=7.0,  # 10 mm water > 2 mm total
+    ))
+    assert over.rain_mm == 0.0
+
+
+def test_ecmwf_snow_matches_open_meteo_convention():
+    """ECMWF sf (m water) → snowfall_cm with the same 0.7 cm/mm Open-Meteo
+    uses, so the rain fallback recovers the water exactly."""
+    from weatherbrief.fetch.grib.decode import build_ecmwf_surface_snapshot
+    from weatherbrief.units import SNOW_CM_PER_MM_WATER
+
+    out = build_ecmwf_surface_snapshot({"snowfall_m_we": 0.002})  # 2 mm water
+    assert out["snowfall_cm"] == pytest.approx(2.0 * SNOW_CM_PER_MM_WATER)
+    levels = [DerivedLevel(pressure_hpa=1000, altitude_ft=300, wet_bulb_c=-1.0)]
+    res = assess_precipitation(levels, [], hourly=HourlyForecast(
+        time=datetime(2025, 1, 1), precipitation_mm=2.0,
+        snowfall_cm=out["snowfall_cm"],
+    ))
+    assert res.rain_mm == pytest.approx(0.0, abs=1e-9)
+
+
 # --- Precipitation partition from qr/qs/qg (#530) ---
 #
 # Three tiers, in order: the genuine precipitation partition (qr vs qs+qg)
