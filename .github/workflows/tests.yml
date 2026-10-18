@@ -16,7 +16,7 @@ on:
       # touching just the iOS app or documentation has nothing here to break, so
       # skip it rather than spend a runner. NOTE: a run is skipped only when
       # *every* changed file matches — a commit spanning app/ and src/ still runs.
-      - 'app/**'           # iOS/iPadOS app — has its own toolchain (xcodebuild)
+      - 'app/**'           # Native clients (iOS + Android) — each has its own CI workflow
       - 'designs/**'       # design docs
       - '**.md'
       - '.claude/**'       # agent instructions, skills, commands

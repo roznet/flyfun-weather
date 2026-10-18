@@ -1,0 +1,564 @@
+package aero.flyfun.weather.viewmodel
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import aero.flyfun.weather.data.ApiClient
+import aero.flyfun.weather.data.BriefingRepository
+import aero.flyfun.weather.data.CachingBriefingRepository
+import aero.flyfun.weather.data.OnlineBriefingRepository
+import aero.flyfun.weather.model.*
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * ViewModel for the 5-tab Briefing viewer (`Advisory`, `Observed`, `Discussion`, `Cross-Section`, `Map`).
+ * Mirrors `BriefingViewModel` on iOS.
+ */
+class BriefingViewModel(
+    val repository: BriefingRepository,
+    val flightId: String? = null,
+    initialFlight: FlightResponse? = null,
+    val helpStore: aero.flyfun.weather.data.HelpCatalogStore? = null,
+    private val apiClient: ApiClient? = (repository as? OnlineBriefingRepository)?.api
+        ?: ((repository as? CachingBriefingRepository)?.online as? OnlineBriefingRepository)?.api,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    scopeOverride: CoroutineScope? = null,
+) : ViewModel() {
+
+    private val scope: CoroutineScope = scopeOverride ?: viewModelScope
+
+    private val _flight = MutableStateFlow<FlightResponse?>(initialFlight)
+    val flight: StateFlow<FlightResponse?> = _flight.asStateFlow()
+
+    private val _packs = MutableStateFlow<List<PackMetaResponse>>(emptyList())
+    val packs: StateFlow<List<PackMetaResponse>> = _packs.asStateFlow()
+
+    private val _selectedPack = MutableStateFlow<PackMetaResponse?>(null)
+    val selectedPack: StateFlow<PackMetaResponse?> = _selectedPack.asStateFlow()
+
+    private val _selectedTab = MutableStateFlow(BriefingTab.ADVISORY)
+    val selectedTab: StateFlow<BriefingTab> = _selectedTab.asStateFlow()
+
+    private val _availableTabs = MutableStateFlow(BriefingTab.tabs(showsObserved = false))
+    val availableTabs: StateFlow<List<BriefingTab>> = _availableTabs.asStateFlow()
+
+    private val _advisories = MutableStateFlow<AdvisoriesResponse?>(null)
+    val advisories: StateFlow<AdvisoriesResponse?> = _advisories.asStateFlow()
+
+    private val _digest = MutableStateFlow<DigestResponse?>(null)
+    val digest: StateFlow<DigestResponse?> = _digest.asStateFlow()
+
+    private val _snapshot = MutableStateFlow<SnapshotResponse?>(null)
+    val snapshot: StateFlow<SnapshotResponse?> = _snapshot.asStateFlow()
+
+    private val _routeAnalyses = MutableStateFlow<RouteAnalysesResponse?>(null)
+    val routeAnalyses: StateFlow<RouteAnalysesResponse?> = _routeAnalyses.asStateFlow()
+
+    private val _elevation = MutableStateFlow<ElevationResponse?>(null)
+    val elevation: StateFlow<ElevationResponse?> = _elevation.asStateFlow()
+
+    private val _alternates = MutableStateFlow<AlternatesResponse?>(null)
+    val alternates: StateFlow<AlternatesResponse?> = _alternates.asStateFlow()
+
+    private val _timeOptions = MutableStateFlow<TimeOptionsResponse?>(null)
+    val timeOptions: StateFlow<TimeOptionsResponse?> = _timeOptions.asStateFlow()
+
+    private val _debrief = MutableStateFlow<DebriefResponse?>(null)
+    val debrief: StateFlow<DebriefResponse?> = _debrief.asStateFlow()
+
+    private val _debriefTaxonomy = MutableStateFlow<DebriefTaxonomy?>(defaultTaxonomy())
+    val debriefTaxonomy: StateFlow<DebriefTaxonomy?> = _debriefTaxonomy.asStateFlow()
+
+    private val _liveLayer = MutableStateFlow<LiveLayerResponse?>(null)
+    val liveLayer: StateFlow<LiveLayerResponse?> = _liveLayer.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _refreshProgressText = MutableStateFlow<String?>(null)
+    val refreshProgressText: StateFlow<String?> = _refreshProgressText.asStateFlow()
+
+    private val _isOfflineCached = MutableStateFlow(false)
+    val isOfflineCached: StateFlow<Boolean> = _isOfflineCached.asStateFlow()
+
+    private val _isDownloadingPack = MutableStateFlow(false)
+    val isDownloadingPack: StateFlow<Boolean> = _isDownloadingPack.asStateFlow()
+
+    private val _focusIntent = MutableStateFlow<FocusIntent?>(null)
+    val focusIntent: StateFlow<FocusIntent?> = _focusIntent.asStateFlow()
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    private val _selectedModel = MutableStateFlow("ecmwf")
+    val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
+
+    private val _availableModels = MutableStateFlow<List<String>>(emptyList())
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
+    private val _activePointIndex = MutableStateFlow<Int?>(null)
+    val activePointIndex: StateFlow<Int?> = _activePointIndex.asStateFlow()
+
+    private var currentFlightId: String? = flightId
+    private var openObservedRequested: Boolean = false
+
+    fun loadInitialBriefing(preferredTimestamp: String? = null) {
+        val id = currentFlightId ?: _flight.value?.id ?: return
+        load(
+            flightId = id,
+            initialPackTimestamp = preferredTimestamp,
+            openObserved = _selectedTab.value == BriefingTab.OBSERVED,
+        )
+    }
+
+    fun load(
+        flightId: String,
+        initialPackTimestamp: String? = null,
+        openObserved: Boolean = false,
+    ) {
+        currentFlightId = flightId
+        openObservedRequested = openObserved
+        scope.launch {
+            loadInternal(flightId, initialPackTimestamp, openObserved)
+        }
+    }
+
+    private suspend fun loadInternal(
+        flightId: String,
+        initialPackTimestamp: String?,
+        openObserved: Boolean,
+    ) {
+        _isLoading.value = true
+        _errorMessage.value = null
+        try {
+            val loadedFlight = runCatching { repository.getFlight(flightId) }.getOrElse {
+                runCatching { repository.listFlights().firstOrNull { it.id == flightId } }.getOrNull()
+            }
+            _flight.value = loadedFlight
+
+            val packList = runCatching { repository.listPacks(flightId) }.getOrDefault(emptyList())
+            val latest = runCatching { repository.latestPack(flightId) }.getOrNull()
+            val mergedPacks = buildList {
+                if (latest != null && packList.none { it.fetchTimestamp == latest.fetchTimestamp }) {
+                    add(latest)
+                }
+                addAll(packList)
+            }
+            _packs.value = mergedPacks
+
+            val targetPack = when {
+                !initialPackTimestamp.isNullOrBlank() ->
+                    mergedPacks.firstOrNull { it.fetchTimestamp == initialPackTimestamp }
+                        ?: latest
+                        ?: mergedPacks.firstOrNull()
+                else -> latest ?: mergedPacks.firstOrNull()
+            }
+
+            if (targetPack != null) {
+                loadPackContents(flightId, targetPack, openObserved = openObserved)
+            } else {
+                // No pack yet — trigger initial refresh stream
+                reconcileTabs(openObserved = openObserved)
+                refreshBriefingInternal(flightId)
+            }
+        } catch (e: Throwable) {
+            _errorMessage.value = e.message ?: "Failed to load briefing"
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
+    private suspend fun loadPackContents(
+        flightId: String,
+        pack: PackMetaResponse,
+        openObserved: Boolean = false,
+    ) {
+        _selectedPack.value = pack
+        val ts = pack.fetchTimestamp
+
+        val adv = runCatching { repository.advisories(flightId, ts) }.getOrNull()
+        val dig = runCatching { repository.digest(flightId, ts) }.getOrNull()
+        val snap = runCatching { repository.snapshot(flightId, ts) }.getOrNull()
+        val analyses = runCatching { repository.routeAnalyses(flightId, ts) }.getOrNull()
+        val elev = runCatching { repository.elevation(flightId, ts) }.getOrNull()
+        val alts = runCatching { repository.alternates(flightId, ts) }.getOrNull() ?: adv?.alternates
+        val times = runCatching { repository.timeOptions(flightId) }.getOrNull()
+        val deb = runCatching { repository.debrief(flightId) }.getOrNull()
+        val live = runCatching { repository.liveLayer(flightId) }.getOrNull()
+
+        // Overlay live observation blocks onto snapshot when live layer is newer
+        val effectiveSnapshot = if (snap != null && live != null && live.hasObservationOverlay) {
+            snap.copy(
+                routeObservations = live.routeObservations ?: snap.routeObservations,
+                routeSigmets = live.routeSigmets ?: snap.routeSigmets,
+                observedConditions = live.observedConditions ?: snap.observedConditions,
+            )
+        } else {
+            snap
+        }
+
+        _advisories.value = adv
+        _digest.value = dig
+        _snapshot.value = effectiveSnapshot
+        _routeAnalyses.value = analyses
+        _elevation.value = elev
+        _alternates.value = alts
+        _timeOptions.value = times
+        _debrief.value = deb
+        if (deb != null && (deb.taxonomy.categories.isNotEmpty() || deb.taxonomy.severities.isNotEmpty())) {
+            _debriefTaxonomy.value = deb.taxonomy
+        } else if (_debriefTaxonomy.value == null) {
+            _debriefTaxonomy.value = defaultTaxonomy()
+        }
+        _liveLayer.value = if (live != null && isLiveLayerMeaningful(live)) live else live
+
+        val models = buildList {
+            analyses?.models?.let { addAll(it) }
+            adv?.models?.forEach { if (it !in this) add(it) }
+            pack.modelInitTimes.keys.forEach { if (it !in this) add(it) }
+        }
+        _availableModels.value = models
+        if (models.isNotEmpty() && _selectedModel.value !in models) {
+            _selectedModel.value = if ("ecmwf" in models) "ecmwf" else models.first()
+        }
+
+        val cachingRepo = repository as? CachingBriefingRepository
+        _isOfflineCached.value = cachingRepo?.cache?.isPackCached(flightId, ts) ?: false
+
+        reconcileTabs(openObserved = openObserved)
+    }
+
+    private fun reconcileTabs(openObserved: Boolean = false) {
+        val showsObserved = openObserved ||
+            hasObservedContent(_snapshot.value, _liveLayer.value) ||
+            (_flight.value?.isInLiveObservationWindow() == true)
+        val tabs = BriefingTab.tabs(showsObserved = showsObserved)
+        _availableTabs.value = tabs
+
+        if (openObserved && BriefingTab.OBSERVED in tabs) {
+            _selectedTab.value = BriefingTab.OBSERVED
+        } else if (_selectedTab.value !in tabs) {
+            _selectedTab.value = BriefingTab.ADVISORY
+        }
+    }
+
+    fun selectTab(tab: BriefingTab) {
+        if (tab == BriefingTab.OBSERVED && tab !in _availableTabs.value) {
+            _availableTabs.value = BriefingTab.tabs(showsObserved = true)
+        }
+        _selectedTab.value = tab
+    }
+
+    fun selectPack(pack: PackMetaResponse) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: pack.flightId.takeIf { it.isNotEmpty() } ?: return
+        _selectedPack.value = pack
+        scope.launch {
+            _isLoading.value = true
+            try {
+                loadPackContents(flightId, pack, openObserved = false)
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to switch pack"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun selectModel(model: String) {
+        _selectedModel.value = model
+    }
+
+    fun setActivePointIndex(index: Int?) {
+        _activePointIndex.value = index
+    }
+
+    fun applyFocusIntent(intent: FocusIntent) {
+        _focusIntent.value = intent
+        _selectedTab.value = intent.tab
+        val analyses = _routeAnalyses.value?.analyses.orEmpty()
+        if (intent.waypointIcao != null) {
+            val match = analyses.firstOrNull { it.waypointIcao.equals(intent.waypointIcao, ignoreCase = true) }
+            if (match != null) {
+                _activePointIndex.value = match.pointIndex
+            }
+        } else if (intent.distanceNm != null && analyses.isNotEmpty()) {
+            val nearest = analyses.minByOrNull { kotlin.math.abs(it.distanceFromOriginNm - intent.distanceNm) }
+            if (nearest != null) {
+                _activePointIndex.value = nearest.pointIndex
+            }
+        }
+    }
+
+    fun clearFocusIntent() {
+        _focusIntent.value = null
+    }
+
+    fun refreshBriefing() {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        scope.launch {
+            refreshBriefingInternal(flightId)
+        }
+    }
+
+    private suspend fun refreshBriefingInternal(flightId: String) {
+        if (_isRefreshing.value) return
+        _isRefreshing.value = true
+        _refreshProgressText.value = "Starting briefing refresh…"
+        _errorMessage.value = null
+        try {
+            var completedPack: PackMetaResponse? = null
+            repository.refreshPack(flightId, force = false, notifyEmail = false).collect { event ->
+                when (event.type) {
+                    "progress", "stage" -> {
+                        val stage = event.stage ?: "Refreshing"
+                        val detail = event.detail?.takeIf { it.isNotBlank() }
+                        val pct = event.progress?.let { "${(it * 100).toInt()}%" }
+                        _refreshProgressText.value = listOfNotNull(stage, detail, pct).joinToString(" · ")
+                    }
+                    "complete" -> {
+                        completedPack = event.pack
+                        _refreshProgressText.value = null
+                    }
+                    "error" -> {
+                        _errorMessage.value = event.message ?: event.detail ?: "Refresh failed"
+                    }
+                }
+            }
+            val newPack = completedPack ?: runCatching { repository.latestPack(flightId) }.getOrNull()
+            if (newPack != null) {
+                val updatedList = runCatching { repository.listPacks(flightId) }.getOrDefault(listOf(newPack))
+                _packs.value = if (updatedList.none { it.fetchTimestamp == newPack.fetchTimestamp }) {
+                    listOf(newPack) + updatedList
+                } else {
+                    updatedList
+                }
+                loadPackContents(flightId, newPack, openObserved = false)
+            }
+        } catch (e: Throwable) {
+            _errorMessage.value = e.message ?: "Failed to refresh briefing"
+        } finally {
+            _isRefreshing.value = false
+            _refreshProgressText.value = null
+        }
+    }
+
+    fun downloadCurrentPack() {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val pack = _selectedPack.value ?: return
+        scope.launch {
+            _isDownloadingPack.value = true
+            try {
+                val caching = repository as? CachingBriefingRepository
+                if (caching != null) {
+                    caching.downloadPack(
+                        flightId = flightId,
+                        timestamp = pack.fetchTimestamp,
+                        flightTitle = _flight.value?.shortTitle ?: flightId,
+                        assessment = pack.assessment,
+                        includeGramet = pack.hasGramet,
+                        departureTime = _flight.value?.departureTime,
+                        packMeta = pack,
+                    )
+                }
+                _isOfflineCached.value = true
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to download pack for offline use"
+            } finally {
+                _isDownloadingPack.value = false
+            }
+        }
+    }
+
+    fun submitDebrief(request: DebriefRequest) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        scope.launch {
+            try {
+                val saved = repository.saveDebrief(flightId, request)
+                _debrief.value = saved
+                if (saved.taxonomy.categories.isNotEmpty() || saved.taxonomy.severities.isNotEmpty()) {
+                    _debriefTaxonomy.value = saved.taxonomy
+                }
+                _flight.value = _flight.value?.copy(hasDebrief = true)
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to save debrief"
+            }
+        }
+    }
+
+    fun deleteDebrief() {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        scope.launch {
+            try {
+                repository.deleteDebrief(flightId)
+                _debrief.value = null
+                _flight.value = _flight.value?.copy(hasDebrief = false)
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to delete debrief"
+            }
+        }
+    }
+
+    fun submitDigestFeedback(thumbsUp: Boolean, comment: String? = null) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return
+        scope.launch {
+            try {
+                val category = if (thumbsUp) "helpful" else FeedbackCategory.OTHER.wireValue
+                apiClient?.submitDigestFeedback(
+                    DigestFeedbackRequest(
+                        flightId = flightId,
+                        packTimestamp = packTs,
+                        category = category,
+                        comment = comment.orEmpty(),
+                    )
+                )
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to submit feedback"
+            }
+        }
+    }
+
+    fun confirmTimeOption(departureTime: String) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        scope.launch {
+            _isLoading.value = true
+            try {
+                val updatedFlight = repository.confirmTimeOption(
+                    flightId,
+                    ConfirmTimeOptionRequest(
+                        departureTime = departureTime,
+                        lockToFixed = true,
+                        refreshNow = true,
+                    ),
+                )
+                _flight.value = updatedFlight
+                refreshBriefingInternal(flightId)
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to confirm departure time"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun recalculateAdvisories(cruiseAltitudeFt: Int?) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return
+        scope.launch {
+            try {
+                if (cruiseAltitudeFt != null && cruiseAltitudeFt != _flight.value?.cruiseAltitudeFt) {
+                    val updated = runCatching {
+                        repository.updateFlight(flightId, UpdateFlightRequest(cruiseAltitudeFt = cruiseAltitudeFt))
+                    }.getOrNull()
+                    if (updated != null) {
+                        _flight.value = updated.flight
+                    }
+                }
+                val recalculated = repository.recalculateAdvisories(flightId, packTs)
+                _advisories.value = recalculated
+                recalculated.alternates?.let { _alternates.value = it }
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to recalculate advisories"
+            }
+        }
+    }
+
+    suspend fun loadChartImage(chart: PackChart): ByteArray? =
+        runCatching { repository.chartImage(chart) }.getOrNull()
+
+    suspend fun loadChartOverlay(source: PackChartSource): ChartOverlay? {
+        val overlayUrl = source.overlayUrl?.takeIf { it.isNotBlank() } ?: return null
+        val flightId = currentFlightId ?: _flight.value?.id ?: return null
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return null
+        return runCatching {
+            repository.chartOverlay(
+                urlPath = overlayUrl,
+                flightId = flightId,
+                timestamp = packTs,
+                source = source.source,
+            )
+        }.getOrNull()
+    }
+
+    suspend fun loadGrametDocument(): ByteArray? {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return null
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return null
+        return runCatching { repository.gramet(flightId, packTs) }.getOrNull()
+    }
+
+    suspend fun loadSoundingProfile(
+        pointIndex: Int,
+        model: String = _selectedModel.value,
+    ): SoundingProfileResponse? {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return null
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return null
+        return runCatching { repository.soundingProfile(flightId, packTs, pointIndex, model) }.getOrNull()
+    }
+
+    suspend fun loadAdvisoryDetail(
+        advisoryId: String,
+        alt: Boolean = false,
+    ): AdvisoryDetailResponse? {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return null
+        val packTs = _selectedPack.value?.fetchTimestamp ?: return null
+        return runCatching { repository.advisoryDetail(flightId, packTs, advisoryId, alt) }.getOrNull()
+    }
+
+    fun clearError() {
+        _errorMessage.value = null
+    }
+
+    companion object {
+        fun isLiveLayerMeaningful(live: LiveLayerResponse?): Boolean {
+            if (live == null) return false
+            return !live.liveUpdatedAt.isNullOrBlank() ||
+                live.hasObservationOverlay ||
+                (live.changes?.changes?.isNotEmpty() == true) ||
+                live.glance != null ||
+                live.ribbon != null ||
+                live.storms != null
+        }
+
+        fun hasObservedContent(
+            snapshot: SnapshotResponse?,
+            liveLayer: LiveLayerResponse? = null,
+        ): Boolean {
+            if (isLiveLayerMeaningful(liveLayer)) return true
+            if (snapshot == null) return false
+            val hasObsAirports = snapshot.routeObservations?.airports?.any { it.hasMetar || it.hasTaf } == true
+            val hasSigmets = (snapshot.routeSigmets?.sigmets?.isNotEmpty() == true) ||
+                ((snapshot.routeSigmets?.count ?: 0) > 0)
+            val hasObservedCond = snapshot.observedConditions != null && (
+                snapshot.observedConditions.radar != null ||
+                    snapshot.observedConditions.cloudTops != null ||
+                    snapshot.observedConditions.lightning != null ||
+                    !snapshot.observedConditions.summaryEntries.isNullOrEmpty()
+                )
+            return hasObsAirports || hasSigmets || hasObservedCond
+        }
+
+        fun defaultTaxonomy(): DebriefTaxonomy = DebriefTaxonomy(
+            severities = listOf(
+                TaxonomySeverity(id = "better", label = "Better than forecast", hint = "Conditions were more benign than predicted"),
+                TaxonomySeverity(id = "as_expected", label = "As expected", hint = "Matched the briefing closely"),
+                TaxonomySeverity(id = "worse", label = "Worse than forecast", hint = "Conditions were more challenging than predicted"),
+            ),
+            categories = listOf(
+                TaxonomyCategory(id = "clouds", label = "Cloud base & tops", hint = "Ceiling or cloud layers", advisoryIds = listOf("cloud")),
+                TaxonomyCategory(id = "visibility", label = "Visibility & precip", hint = "In-flight visibility or rain/snow", advisoryIds = listOf("visibility")),
+                TaxonomyCategory(id = "winds", label = "Winds aloft & surface", hint = "Headwind, crosswind, or gusts", advisoryIds = listOf("winds_aloft")),
+                TaxonomyCategory(id = "turbulence", label = "Turbulence", hint = "Mechanical or clear-air turbulence", advisoryIds = listOf("turbulence")),
+                TaxonomyCategory(id = "icing", label = "Icing", hint = "Airframe icing or freezing level", advisoryIds = listOf("icing")),
+                TaxonomyCategory(id = "convective", label = "Convection", hint = "Build-ups, CB/TCU, or storms", advisoryIds = listOf("convective")),
+            ),
+        )
+    }
+}

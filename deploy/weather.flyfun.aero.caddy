@@ -21,6 +21,12 @@ weather.flyfun.aero {
         respond `{"applinks":{"apps":[],"details":[{"appID":"M7QSSF3624.net.ro-z.flyfun-weather","paths":["/auth/callback","/briefing.html","/maps.html","/trip.html","/s/*","/t/*"]}]}}`
     }
 
+    # Android App Links — associate net.ro_z.flyfun_weather with this domain.
+    handle /.well-known/assetlinks.json {
+        header Content-Type application/json
+        respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"net.ro_z.flyfun_weather","sha256_cert_fingerprints":["00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"]}}]`
+    }
+
     # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party
     # apps treat weather.flyfun.aero as the issuer and discover the OAuth endpoints.
     # Only the least-privilege "flights:read" scope is advertised here. The broad

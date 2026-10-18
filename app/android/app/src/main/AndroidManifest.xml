@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".FlyFunWeatherApp"
+        android:allowBackup="false"
+        android:label="WeatherBrief"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Custom scheme for OAuth & Autorouter callbacks -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="flyfunweather" />
+            </intent-filter>
+
+            <!-- Android App Links for weather.flyfun.aero -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/briefing.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/maps.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/trip.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/s/" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/t/" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/auth/callback" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

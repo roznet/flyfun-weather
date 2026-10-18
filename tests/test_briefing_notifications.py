@@ -848,3 +848,97 @@ def test_flight_notify_override_update(client):
     r = client.patch("/api/flights/f1", json={"notify_override": "mute"})
     assert r.status_code == 200
     assert r.json()["notify_override"] == "mute"
+
+
+# ---------------------------------------------------------------------------
+# Android / FCM push support
+# ---------------------------------------------------------------------------
+
+
+def test_register_android_device_long_fcm_token(client, app_db):
+    fcm_tok = "fcm_" + ("a" * 240)
+    r = client.post(
+        "/api/devices",
+        json={"token": fcm_tok, "environment": "production", "platform": "android"},
+    )
+    assert r.status_code == 204
+    s = app_db()
+    row = s.query(DeviceTokenRow).filter(DeviceTokenRow.token == fcm_tok).first()
+    assert row is not None
+    assert row.platform == "android"
+    assert row.environment == "production"
+    s.close()
+
+
+def test_apns_payload_to_fcm_message():
+    payload = {
+        "aps": {
+            "alert": {"title": "EGTF → LFAT", "body": "Now AMBER — icing"},
+            "sound": "default",
+            "badge": 2,
+        },
+        "flight_id": "f1",
+        "timestamp": "2026-07-08T10:00:00+00:00",
+    }
+    msg = push_mod._apns_payload_to_fcm_message("fcm_123", payload, push_type="alert")["message"]
+    assert msg["token"] == "fcm_123"
+    assert msg["notification"] == {"title": "EGTF → LFAT", "body": "Now AMBER — icing"}
+    assert msg["data"]["flight_id"] == "f1"
+    assert msg["data"]["badge"] == "2"
+    assert msg["android"]["priority"] == "HIGH"
+
+
+def test_fcm_dispatch_and_dead_token_prune(db_session, dev_user, monkeypatch):
+    prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
+    prefs.app_prefs_json = '{"notify_push": true, "notify_email": false, "notify_scope": "all"}'
+    db_session.add(
+        DeviceTokenRow(
+            user_id=DEV_USER_ID,
+            token="fcm_dead",
+            environment="production",
+            platform="android",
+        )
+    )
+    db_session.flush()
+
+    monkeypatch.setattr(
+        push_mod.FcmConfig,
+        "from_env",
+        classmethod(lambda cls: push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")),
+    )
+    monkeypatch.setattr(
+        push_mod,
+        "_send_fcm_one",
+        lambda *a, **k: push_mod.ApnsResult(
+            ok=False, status_code=404, reason="UNREGISTERED", dead=True
+        ),
+    )
+
+    flight = Flight(
+        id="f1",
+        user_id=DEV_USER_ID,
+        route_name="R",
+        departure_time=datetime(2026, 7, 10, 12, tzinfo=timezone.utc),
+        created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    meta = BriefingPackMeta(
+        flight_id="f1",
+        fetch_timestamp=datetime(2026, 7, 8, tzinfo=timezone.utc),
+        days_out=2,
+        assessment="AMBER",
+    )
+
+    sent = push_mod.send_briefing_push(db_session, DEV_USER_ID, flight, meta, badge=1)
+    db_session.flush()
+
+    assert sent == 0
+    assert (
+        db_session.query(DeviceTokenRow).filter(DeviceTokenRow.token == "fcm_dead").first()
+        is None
+    )
+    import json as _json
+
+    data = _json.loads(db_session.get(UserPreferencesRow, DEV_USER_ID).app_prefs_json)
+    assert data["notify_email"] is True
+    assert data["notify_decay_notice"] is True
+

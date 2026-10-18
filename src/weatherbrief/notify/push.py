@@ -165,9 +165,10 @@ def _provider_token(config: ApnsConfig) -> str:
 
 
 def _reset_token_cache() -> None:
-    """Clear the provider-token cache (test hook)."""
+    """Clear the provider-token caches (test hook)."""
     with _token_lock:
         _token_cache.clear()
+        _fcm_token_cache.clear()
 
 
 # --- Low-level send ----------------------------------------------------------
@@ -227,8 +228,167 @@ def _send_one(
     return ApnsResult(ok=False, status_code=resp.status_code, reason=reason, dead=dead)
 
 
+@dataclass(frozen=True)
+class FcmConfig:
+    """Firebase Cloud Messaging (HTTP v1) service-account settings."""
+
+    project_id: str
+    client_email: str
+    private_key: str
+    token_uri: str = "https://oauth2.googleapis.com/token"
+
+    @classmethod
+    def from_env(cls) -> "FcmConfig":
+        """Load from ``FCM_SERVICE_ACCOUNT_JSON`` (raw JSON or base64),
+        ``FCM_SERVICE_ACCOUNT_PATH``, or ``FCM_PROJECT_ID`` +
+        ``FCM_CLIENT_EMAIL`` + ``FCM_PRIVATE_KEY``."""
+        raw_json = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
+        json_path = os.environ.get("FCM_SERVICE_ACCOUNT_PATH")
+        if not raw_json and json_path:
+            try:
+                raw_json = open(json_path, encoding="utf-8").read()
+            except OSError as e:
+                raise ValueError(f"FCM_SERVICE_ACCOUNT_PATH unreadable: {e}") from e
+        if raw_json:
+            raw_json = raw_json.strip()
+            if not raw_json.startswith("{"):
+                try:
+                    raw_json = base64.b64decode(raw_json).decode("utf-8")
+                except (ValueError, UnicodeDecodeError) as e:
+                    raise ValueError("FCM_SERVICE_ACCOUNT_JSON is not valid JSON or base64") from e
+            try:
+                data = json.loads(raw_json)
+            except ValueError as e:
+                raise ValueError("FCM_SERVICE_ACCOUNT_JSON is not valid JSON") from e
+            project_id = data.get("project_id")
+            client_email = data.get("client_email")
+            private_key = data.get("private_key")
+            token_uri = data.get("token_uri") or "https://oauth2.googleapis.com/token"
+        else:
+            project_id = os.environ.get("FCM_PROJECT_ID")
+            client_email = os.environ.get("FCM_CLIENT_EMAIL")
+            private_key = os.environ.get("FCM_PRIVATE_KEY")
+            token_uri = os.environ.get("FCM_TOKEN_URI", "https://oauth2.googleapis.com/token")
+
+        if private_key:
+            private_key = _normalize_key_pem(private_key)
+        if not all([project_id, client_email, private_key]):
+            raise ValueError(
+                "FCM not configured. Set FCM_SERVICE_ACCOUNT_JSON (or "
+                "FCM_SERVICE_ACCOUNT_PATH) or FCM_PROJECT_ID, FCM_CLIENT_EMAIL, "
+                "and FCM_PRIVATE_KEY."
+            )
+        return cls(
+            project_id=project_id,
+            client_email=client_email,
+            private_key=private_key,
+            token_uri=token_uri,
+        )
+
+
+_fcm_token_cache: dict[str, tuple[str, float]] = {}
+
+
+def _fcm_access_token(client: httpx.Client, config: FcmConfig) -> str:
+    """Return a cached OAuth2 access token for FCM HTTP v1, minting via RS256 JWT assertion."""
+    now = time.monotonic()
+    with _token_lock:
+        cached = _fcm_token_cache.get(config.client_email)
+        if cached is not None and (now - cached[1]) < _TOKEN_TTL_SECONDS:
+            return cached[0]
+
+    iat = int(time.time())
+    assertion = jwt.encode(
+        {
+            "iss": config.client_email,
+            "scope": "https://www.googleapis.com/auth/firebase.messaging",
+            "aud": config.token_uri,
+            "iat": iat,
+            "exp": iat + 3600,
+        },
+        config.private_key,
+        algorithm="RS256",
+    )
+    resp = client.post(
+        config.token_uri,
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        },
+    )
+    resp.raise_for_status()
+    access_token = resp.json()["access_token"]
+    with _token_lock:
+        _fcm_token_cache[config.client_email] = (access_token, now)
+    return access_token
+
+
+def _apns_payload_to_fcm_message(token: str, payload: dict, *, push_type: str) -> dict:
+    """Convert our canonical ``aps`` + custom keys dict into an FCM v1 ``message``."""
+    aps = payload.get("aps") or {}
+    alert = aps.get("alert") if isinstance(aps.get("alert"), dict) else {}
+    data: dict[str, str] = {}
+    for k, v in payload.items():
+        if k == "aps" or v is None:
+            continue
+        data[str(k)] = v if isinstance(v, str) else json.dumps(v)
+    if "badge" in aps and aps["badge"] is not None:
+        data["badge"] = str(aps["badge"])
+
+    msg: dict = {
+        "token": token,
+        "data": data,
+        "android": {
+            "priority": "HIGH" if push_type == "alert" else "NORMAL",
+        },
+    }
+    if push_type == "alert" and (alert.get("title") or alert.get("body")):
+        msg["notification"] = {
+            "title": alert.get("title") or "",
+            "body": alert.get("body") or "",
+        }
+    return {"message": msg}
+
+
+def _send_fcm_one(
+    client: httpx.Client,
+    config: FcmConfig,
+    token: str,
+    payload: dict,
+    *,
+    push_type: str,
+) -> ApnsResult:
+    """POST one notification to FCM HTTP v1 for an Android device token."""
+    url = f"https://fcm.googleapis.com/v1/projects/{config.project_id}/messages:send"
+    headers = {
+        "authorization": f"Bearer {_fcm_access_token(client, config)}",
+        "content-type": "application/json",
+    }
+    body = _apns_payload_to_fcm_message(token, payload, push_type=push_type)
+    resp = client.post(url, headers=headers, content=json.dumps(body).encode())
+    if resp.status_code == 200:
+        return ApnsResult(ok=True, status_code=200)
+
+    reason: str | None = None
+    dead = resp.status_code == 404
+    try:
+        err = resp.json().get("error") or {}
+        reason = err.get("status") or err.get("message")
+        for detail in err.get("details") or []:
+            if detail.get("errorCode") in {"UNREGISTERED", "INVALID_ARGUMENT"}:
+                if detail.get("errorCode") == "UNREGISTERED":
+                    dead = True
+                reason = detail.get("errorCode")
+    except Exception:
+        reason = resp.text or None
+    if reason == "UNREGISTERED" or resp.status_code == 410:
+        dead = True
+    logger.warning("FCM send failed: status=%d reason=%s", resp.status_code, reason)
+    return ApnsResult(ok=False, status_code=resp.status_code, reason=reason, dead=dead)
+
+
 def _delete_dead_tokens(db: Session, tokens: list[str]) -> None:
-    """Remove device rows APNs reported as dead (Unregistered/BadDeviceToken)."""
+    """Remove device rows APNs/FCM reported as dead (Unregistered/BadDeviceToken)."""
     if not tokens:
         return
     from weatherbrief.db.models import DeviceTokenRow
@@ -241,67 +401,100 @@ def _delete_dead_tokens(db: Session, tokens: list[str]) -> None:
 
 def _dispatch(
     db: Session,
-    devices: list[tuple[str, str]],
+    devices: list[tuple[str, ...]],
     payload: dict,
     *,
     push_type: str,
     priority: int,
     config: ApnsConfig | None = None,
+    fcm_config: FcmConfig | None = None,
     user_id: str | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> int:
-    """Send ``payload`` to each ``(token, environment)`` device; prune dead ones.
+    """Send ``payload`` to each device (APNs for iOS, FCM for Android); prune dead ones.
 
-    Returns the number of successful sends. Never raises — the whole thing is
-    best-effort (a push must not break a refresh).
-
-    ``user_id`` (when known) lets the channel-invariant decay fail-safe fire if
-    pruning a dead token removes the user's LAST device — the far more common way
-    a device disappears (app deleted without signing out) than an explicit
-    unregister. Mirrors ``api/devices.py::unregister_device`` so the invariant
-    holds on both device-loss paths.
+    Accepts 2-tuples ``(token, environment)`` (defaults to ``ios``) or 3-tuples
+    ``(token, environment, platform)``. Returns the number of successful sends.
+    Never raises — the whole thing is best-effort (a push must not break a refresh).
     """
     if not devices:
         return 0
-    try:
-        config = config or ApnsConfig.from_env()
-    except ValueError:
-        logger.debug("APNs not configured — skipping push")
-        return 0
+
+    ios_devices: list[tuple[str, str]] = []
+    android_tokens: list[str] = []
+    for entry in devices:
+        token = entry[0]
+        environment = entry[1] if len(entry) > 1 else "production"
+        platform = entry[2] if len(entry) > 2 else "ios"
+        if platform == "android":
+            android_tokens.append(token)
+        else:
+            ios_devices.append((token, environment))
 
     sent = 0
     dead: list[str] = []
-    try:
-        with httpx.Client(http2=True, timeout=15.0) as client:
-            for token, environment in devices:
-                try:
-                    result = _send_one(
-                        client, config, token, environment, payload,
-                        push_type=push_type, priority=priority,
-                        extra_headers=extra_headers,
-                    )
-                except Exception:
-                    logger.warning("APNs send raised for a device", exc_info=True)
-                    continue
-                if result.ok:
-                    sent += 1
-                elif result.dead:
-                    dead.append(token)
-    except Exception:
-        logger.warning("APNs dispatch failed", exc_info=True)
+
+    if ios_devices:
+        apns_cfg = config
+        if apns_cfg is None:
+            try:
+                apns_cfg = ApnsConfig.from_env()
+            except ValueError:
+                logger.debug("APNs not configured — skipping iOS push")
+        if apns_cfg is not None:
+            try:
+                with httpx.Client(http2=True, timeout=15.0) as client:
+                    for token, environment in ios_devices:
+                        try:
+                            result = _send_one(
+                                client, apns_cfg, token, environment, payload,
+                                push_type=push_type, priority=priority,
+                                extra_headers=extra_headers,
+                            )
+                        except Exception:
+                            logger.warning("APNs send raised for a device", exc_info=True)
+                            continue
+                        if result.ok:
+                            sent += 1
+                        elif result.dead:
+                            dead.append(token)
+            except Exception:
+                logger.warning("APNs dispatch failed", exc_info=True)
+
+    if android_tokens:
+        fcm_cfg = fcm_config
+        if fcm_cfg is None:
+            try:
+                fcm_cfg = FcmConfig.from_env()
+            except ValueError:
+                logger.debug("FCM not configured — skipping Android push")
+        if fcm_cfg is not None:
+            try:
+                with httpx.Client(timeout=15.0) as client:
+                    for token in android_tokens:
+                        try:
+                            result = _send_fcm_one(
+                                client, fcm_cfg, token, payload, push_type=push_type,
+                            )
+                        except Exception:
+                            logger.warning("FCM send raised for a device", exc_info=True)
+                            continue
+                        if result.ok:
+                            sent += 1
+                        elif result.dead:
+                            dead.append(token)
+            except Exception:
+                logger.warning("FCM dispatch failed", exc_info=True)
 
     if dead:
         try:
             _delete_dead_tokens(db, dead)
-            # If pruning dropped the user's last device, apply the same decay
-            # fail-safe as an explicit unregister — otherwise a push-only user
-            # who deleted the app (email off) is silently stranded.
             if user_id is not None and count_user_devices(db, user_id) == 0:
                 from weatherbrief.api.preferences import apply_last_device_decay
 
                 if apply_last_device_decay(db, user_id):
                     logger.info(
-                        "Re-enabled briefing email for %s after APNs pruned last device",
+                        "Re-enabled briefing email for %s after pruning last device",
                         user_id,
                     )
         except Exception:
@@ -309,12 +502,18 @@ def _dispatch(
     return sent
 
 
-def _load_devices(db: Session, user_id: str) -> list[tuple[str, str]]:
-    """Return ``(token, environment)`` for all of a user's registered devices."""
+def _load_devices(db: Session, user_id: str) -> list[tuple[str, ...]]:
+    """Return ``(token, environment)`` for iOS devices and
+    ``(token, environment, 'android')`` for Android devices."""
     from weatherbrief.db.models import DeviceTokenRow
 
     rows = db.query(DeviceTokenRow).filter(DeviceTokenRow.user_id == user_id).all()
-    return [(r.token, r.environment) for r in rows]
+    return [
+        (r.token, r.environment, r.platform)
+        if getattr(r, "platform", "ios") != "ios"
+        else (r.token, r.environment)
+        for r in rows
+    ]
 
 
 def count_user_devices(db: Session, user_id: str) -> int:

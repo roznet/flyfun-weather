@@ -29,18 +29,18 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 
 
 class DeviceRegistration(BaseModel):
-    """Payload for registering/upserting an APNs device token."""
+    """Payload for registering/upserting an APNs or FCM device token."""
 
     token: str
     environment: Literal["sandbox", "production"] = "production"
+    platform: Literal["ios", "android"] = "ios"
 
     @field_validator("token")
     @classmethod
     def _validate_token(cls, v: str) -> str:
         v = v.strip()
-        # APNs tokens are hex; be lenient on length (32-byte legacy vs longer)
-        # but reject empty / obviously-bogus values.
-        if not v or len(v) > 200:
+        # APNs tokens are 64-160 hex chars; FCM tokens are ~160-250 base64url chars.
+        if not v or len(v) > 512:
             raise ValueError("Invalid device token")
         return v
 
@@ -51,12 +51,12 @@ def register_device(
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db, scope="function"),
 ):
-    """Register or update the caller's APNs device token.
+    """Register or update the caller's push device token (APNs or FCM).
 
     Upserts on the unique ``token``: re-registering the same token (token
     rotation keeps the same value across launches) refreshes its owner,
-    environment, and ``updated_at``. A token that moves to a new user (device
-    handed over, re-signed-in) is reassigned rather than duplicated.
+    environment, platform, and ``updated_at``. A token that moves to a new user
+    (device handed over, re-signed-in) is reassigned rather than duplicated.
     """
     row = db.query(DeviceTokenRow).filter(DeviceTokenRow.token == body.token).first()
     if row is None:
@@ -65,15 +65,22 @@ def register_device(
                 user_id=user_id,
                 token=body.token,
                 environment=body.environment,
+                platform=body.platform,
             )
         )
     else:
         row.user_id = user_id
         row.environment = body.environment
+        row.platform = body.platform
         from datetime import datetime, timezone
 
         row.updated_at = datetime.now(timezone.utc)
-    logger.info("Registered device token for %s (%s)", user_id, body.environment)
+    logger.info(
+        "Registered %s device token for %s (%s)",
+        body.platform,
+        user_id,
+        body.environment,
+    )
 
 
 @router.delete("/{token}", status_code=204)

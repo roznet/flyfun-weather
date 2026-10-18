@@ -647,8 +647,11 @@ class DeviceTokenRow(Base):
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    token: Mapped[str] = mapped_column(String(200), unique=True)
+    token: Mapped[str] = mapped_column(String(512), unique=True)
     environment: Mapped[str] = mapped_column(String(16))
+    platform: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="ios", server_default="ios"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

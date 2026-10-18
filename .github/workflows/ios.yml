@@ -17,7 +17,7 @@ on:
   push:
     branches: [main]
     paths: &paths
-      - 'app/**'
+      - 'app/flyfun-weather/**'
       - '.github/workflows/ios.yml'
   pull_request:
     paths: *paths

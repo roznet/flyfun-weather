@@ -1,0 +1,60 @@
+name: Android
+
+# Hermetic JVM unit tests for the Android app and its first-party Kotlin modules
+# (:flyfun-common, :rzflight, :app). Mirrors ios.yml: fast, emulator-free, and
+# includes an explicit vacuous-pass guard so a misconfigured test filter can
+# never pass having run 0 tests.
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - 'app/android/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths: *paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: gradlew test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run JVM unit tests
+        working-directory: app/android
+        run: ./gradlew test :app:testDebugUnitTest --stacktrace
+
+      - name: Guard against a vacuous pass
+        working-directory: app/android
+        run: |
+          total=$(python3 -c '
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("**/build/test-results/**/*.xml", recursive=True)
+          count = sum(int(ET.parse(f).getroot().attrib.get("tests", 0)) for f in files)
+          print(count)
+          ')
+          echo "Ran $total Android/Kotlin unit tests" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::Gradle reported success but ran 0 tests."
+            exit 1
+          fi
+          echo "Ran $total unit tests."
