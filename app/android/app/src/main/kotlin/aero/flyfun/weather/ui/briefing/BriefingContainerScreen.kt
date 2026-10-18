@@ -62,6 +62,8 @@ import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.WaypointAnalysis
 import aero.flyfun.weather.ui.crosssection.CrossSectionTabScreen
+import aero.flyfun.weather.ui.map.RouteMapTabScreen
+import aero.flyfun.weather.ui.observed.ObservedTabScreen
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import java.util.Locale
 import kotlin.math.abs
@@ -345,15 +347,9 @@ fun BriefingContainerScreen(
             when (selectedTab) {
                 BriefingTab.ADVISORY -> AdvisoryTabScreen(viewModel = viewModel)
                 BriefingTab.DISCUSSION -> DiscussionTabScreen(viewModel = viewModel)
-                BriefingTab.OBSERVED -> ObservedTabPreviewScreen(viewModel = viewModel)
+                BriefingTab.OBSERVED -> ObservedTabScreen(viewModel = viewModel)
                 BriefingTab.CROSS_SECTION -> CrossSectionTabScreen(briefingViewModel = viewModel)
-                BriefingTab.MAP -> RouteMapPreviewScreen(
-                    flight = flight,
-                    snapshot = snapshot,
-                    advisories = advisories,
-                    focusIntent = focusIntent,
-                    onClearFocusIntent = { viewModel.clearFocusIntent() },
-                )
+                BriefingTab.MAP -> RouteMapTabScreen(briefingViewModel = viewModel)
             }
         }
     }

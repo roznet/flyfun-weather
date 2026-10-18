@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -110,6 +111,7 @@ fun FlightListScreen(
     onEditFlightClick: (FlightResponse) -> Unit = {},
     onAddNextLegClick: (FlightResponse) -> Unit = {},
     onOpenTripClick: (String) -> Unit = {},
+    onOpenMapsClick: () -> Unit = {},
     onOpenAircraftClick: () -> Unit = {},
     onOpenWhatsNewClick: () -> Unit = {},
     onOpenSettingsClick: () -> Unit = {},
@@ -168,6 +170,9 @@ fun FlightListScreen(
                         }
                         IconButton(onClick = { viewModel.loadFlights() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh flights")
+                        }
+                        IconButton(onClick = onOpenMapsClick) {
+                            Icon(Icons.Default.Map, contentDescription = "Explore Maps")
                         }
                         IconButton(onClick = onOpenAircraftClick) {
                             Icon(Icons.Default.AirplanemodeActive, contentDescription = "Aircraft")

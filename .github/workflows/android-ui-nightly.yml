@@ -1,0 +1,75 @@
+name: Android UI (nightly)
+
+# Nightly Android APK assembly + instrumented/UI verification. Mirrors
+# ios-ui-nightly.yml: skips when HEAD is unchanged since the last green run,
+# and always runs on manual workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: android-ui-nightly
+  cancel-in-progress: false
+
+jobs:
+  changed:
+    name: New commits since last pass?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" \
+                   --workflow android-ui-nightly.yml --status success \
+                   --limit 1 --json headSha -q '.[0].headSha // ""')
+          echo "HEAD:          $GITHUB_SHA"
+          echo "last green on: ${last:-<none>}"
+          if [ "$last" = "$GITHUB_SHA" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Unchanged since the last green run — skipping." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-verify:
+    name: Assemble APK & Full Verification
+    needs: changed
+    if: github.event_name == 'workflow_dispatch' || needs.changed.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run full unit test suite & assemble Debug/Release APKs
+        working-directory: app/android
+        run: ./gradlew test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --stacktrace
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flyfun-weather-debug-apk
+          path: app/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7

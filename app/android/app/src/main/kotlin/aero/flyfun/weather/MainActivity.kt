@@ -37,6 +37,8 @@ import aero.flyfun.weather.ui.flights.FlightListScreen
 import aero.flyfun.weather.ui.flights.SharedFlightPreviewSheet
 import aero.flyfun.weather.ui.help.SettingsScreen
 import aero.flyfun.weather.ui.help.WhatsNewScreen
+import aero.flyfun.weather.ui.map.PanEuropeanMapMode
+import aero.flyfun.weather.ui.map.PanEuropeanMapScreen
 import aero.flyfun.weather.ui.theme.FlyFunWeatherTheme
 import aero.flyfun.weather.ui.trips.TripDetailScreen
 import aero.flyfun.weather.viewmodel.AddFlightViewModel
@@ -44,6 +46,8 @@ import aero.flyfun.weather.viewmodel.AircraftListViewModel
 import aero.flyfun.weather.viewmodel.AppStateViewModel
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import aero.flyfun.weather.viewmodel.FlightListViewModel
+import aero.flyfun.weather.viewmodel.ForecastMapViewModel
+import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
 import aero.flyfun.weather.viewmodel.TripsViewModel
 
 /**
@@ -92,6 +96,9 @@ private sealed interface RootScreen {
         val openObserved: Boolean = false,
     ) : RootScreen
     data class TripDetail(val tripId: String) : RootScreen
+    data class PanEuropeanMap(
+        val initialMode: PanEuropeanMapMode = PanEuropeanMapMode.FORECAST,
+    ) : RootScreen
     data object AircraftList : RootScreen
     data object WhatsNew : RootScreen
     data object Settings : RootScreen
@@ -128,6 +135,22 @@ fun FlyFunWeatherRoot(
             apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
         )
     }
+
+    val forecastMapViewModel = remember(isMockMode, isGuestBrowsing) {
+        ForecastMapViewModel(
+            apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
+            isMockModeProvider = { isMockMode || isGuestBrowsing },
+        )
+    }
+
+    val historicalMapViewModel = remember(isMockMode, isGuestBrowsing) {
+        HistoricalMapViewModel(
+            apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
+            isMockModeProvider = { isMockMode || isGuestBrowsing },
+        )
+    }
+
+    val mapCatalog by (appState.helpStore?.mapCatalog?.collectAsState() ?: remember { mutableStateOf(null) })
 
     var currentScreen by remember { mutableStateOf<RootScreen>(RootScreen.Flights) }
     var selectedBriefingVm by remember { mutableStateOf<BriefingViewModel?>(null) }
@@ -186,10 +209,13 @@ fun FlyFunWeatherRoot(
             is NavigationTarget.SharedTrip -> {
                 currentScreen = RootScreen.TripDetail(target.code)
             }
-            is NavigationTarget.ForecastMap,
-            is NavigationTarget.HistoricalMap,
-            -> {
-                currentScreen = RootScreen.Flights
+            is NavigationTarget.ForecastMap -> {
+                forecastMapViewModel.applyDeepLinkTarget(target)
+                currentScreen = RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
+            }
+            is NavigationTarget.HistoricalMap -> {
+                historicalMapViewModel.applyDeepLinkTarget(target)
+                currentScreen = RootScreen.PanEuropeanMap(PanEuropeanMapMode.HISTORICAL)
             }
         }
     }
@@ -198,6 +224,15 @@ fun FlyFunWeatherRoot(
     val isExpandedScreen = configuration.screenWidthDp >= 840
 
     when (val screen = currentScreen) {
+        is RootScreen.PanEuropeanMap -> {
+            PanEuropeanMapScreen(
+                forecastViewModel = forecastMapViewModel,
+                historicalViewModel = historicalMapViewModel,
+                initialMode = screen.initialMode,
+                mapCatalog = mapCatalog,
+                onBack = { currentScreen = RootScreen.Flights },
+            )
+        }
         RootScreen.AircraftList -> {
             AircraftListScreen(
                 viewModel = aircraftViewModel,
@@ -267,6 +302,9 @@ fun FlyFunWeatherRoot(
                         },
                         onOpenTripClick = { tripId ->
                             currentScreen = RootScreen.TripDetail(tripId)
+                        },
+                        onOpenMapsClick = {
+                            currentScreen = RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
                         },
                         onOpenAircraftClick = {
                             currentScreen = RootScreen.AircraftList
@@ -347,6 +385,9 @@ fun FlyFunWeatherRoot(
                         },
                         onOpenTripClick = { tripId ->
                             currentScreen = RootScreen.TripDetail(tripId)
+                        },
+                        onOpenMapsClick = {
+                            currentScreen = RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
                         },
                         onOpenAircraftClick = {
                             currentScreen = RootScreen.AircraftList
