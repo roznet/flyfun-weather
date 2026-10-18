@@ -425,9 +425,22 @@ class FlyfunUITestCase: XCTestCase {
                 if let glance = tick.body["glance"] as? [String: Any] {
                     XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].firstMatch.exists,
                                   "\(hhmm): the nutshell should replace the glance card")
+                    // #816: the flight strip leads, and "Destination at your
+                    // ETA" stands in for a non-alert arrival line.
+                    if let flight = glance["flight"] as? [String: Any], let text = flight["text"] as? String {
+                        let strip = app.descendants(matching: .any)["observedFlightStrip"].firstMatch
+                        XCTAssertTrue(strip.exists, "\(hhmm): the flight strip should render")
+                        XCTAssertTrue(strip.label.contains(text), "\(hhmm): the strip should read \"\(text)\", got \(strip.label)")
+                    }
+                    let hasDestination = glance["destination"] is [String: Any]
+                    if hasDestination {
+                        XCTAssertTrue(app.descendants(matching: .any)["observedDestination"].firstMatch.exists,
+                                      "\(hhmm): the destination-at-ETA card should render unfolded")
+                    }
                     for line in (glance["lines"] as? [[String: Any]]) ?? [] {
                         let phase = line["phase"] as? String ?? ""
                         let text = line["text"] as? String ?? ""
+                        if hasDestination, phase == "arrival", line["alert"] as? Bool != true { continue }
                         let row = app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch
                         XCTAssertTrue(row.waitForExistence(timeout: Self.uiTimeout),
                                       "\(hhmm): the \(phase) nutshell line should render")

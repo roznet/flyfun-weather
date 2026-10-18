@@ -531,6 +531,18 @@ class FlightProgress:
             return None
         return telling[-1].event
 
+    @property
+    def ground_fix(self) -> ProgressEvent | None:
+        """The app fix putting the aircraft on the ground at the departure,
+        no take-off known (the flight strip's "on the ground", #816)."""
+        return self._ground_fix
+
+    @property
+    def planned_arrival(self) -> datetime | None:
+        """The arrival on the plan alone (no events): what an ETA's "vs plan"
+        is measured against (#816)."""
+        return self.planned().arrival
+
     def _speed(self, s: _Seen, known: list[_Seen]) -> float:
         """The speed to fly on from ``s``: the planned one, scaled by the
         speed actually flown since an earlier fix (or the entered take-off)

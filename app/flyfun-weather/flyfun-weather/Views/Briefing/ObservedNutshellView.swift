@@ -31,6 +31,9 @@ struct ObservedNutshellCard: View {
     let glance: LiveGlance
     var lines: [LiveGlanceLine]? = nil
     var showsHeadline: Bool = true
+    /// #816: the "ahead" card leaves the map button to the Details fold.
+    var offersMap: Bool = true
+    var identifier: String = "observedNutshell"
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
@@ -44,7 +47,7 @@ struct ObservedNutshellCard: View {
             ForEach(lines ?? glance.items) { line in
                 ObservedNutshellLineRow(viewModel: viewModel, line: line)
             }
-            if showsMapButton {
+            if offersMap, showsMapButton {
                 Button {
                     viewModel.setFocusIntent(FocusIntent(target: .map, showObservedCells: true))
                 } label: {
@@ -62,7 +65,7 @@ struct ObservedNutshellCard: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.cornerRadius).stroke(Theme.border, lineWidth: 0.5))
         .padding(.horizontal, Theme.cardPadding)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("observedNutshell")
+        .accessibilityIdentifier(identifier)
     }
 
     private var showsMapButton: Bool {
@@ -148,6 +151,9 @@ struct RouteRibbonCard: View {
     let viewModel: BriefingViewModel
     let ribbon: LiveRibbon
     let storms: LiveStorms?
+    /// `glance.flight.markerLabel` (#816): "You · 4 min ago", "Estimated
+    /// position", "Planned position". nil → "Planned position now".
+    var markerLabel: String? = nil
     @State private var inspection: RibbonInspection?
 
     private typealias I = RouteRibbonInspectorRules
@@ -163,6 +169,12 @@ struct RouteRibbonCard: View {
                     .font(.caption)
                     .foregroundStyle(Theme.textMuted)
             }
+            if let markerLabel, let flown = ribbon.flownNm, flown > 0 {
+                Label(markerLabel, systemImage: "airplane")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.primary)
+                    .accessibilityIdentifier("observedRibbonPosition")
+            }
             RouteRibbonView(
                 ribbon: ribbon, storms: shownStorms, corridorNm: corridorNm,
                 selected: inspection?.selected,
@@ -170,7 +182,8 @@ struct RouteRibbonCard: View {
                     withAnimation(.snappy(duration: 0.2)) {
                         inspection = I.inspection(after: hits, current: inspection)
                     }
-                }
+                },
+                markerLabel: markerLabel
             )
             .frame(height: RouteRibbonRules.height)
             if !ribbon.weatherAvailable {
@@ -270,6 +283,8 @@ struct RouteRibbonView: View {
     let selected: RibbonMarkKey?
     /// The marks under a tap, best first; empty on bare ribbon.
     let onTap: ([RibbonMarkKey]) -> Void
+    /// The position marker's accessibility label (#816), nil → "Planned position now".
+    var markerLabel: String? = nil
 
     /// All geometry, colours and wording live in `RouteRibbonRules` — the
     /// file the web's `ribbon-core.ts` is diffed against — and the hit test
@@ -357,7 +372,7 @@ struct RouteRibbonView: View {
             .foregroundStyle(Theme.primary)
             .background(Circle().fill(Theme.surface).frame(width: 18, height: 18))
             .position(x: x, y: R.trackY)
-            .accessibilityLabel("Planned position now")
+            .accessibilityLabel(markerLabel ?? String(localized: "Planned position now"))
     }
 
     // MARK: Weather bands

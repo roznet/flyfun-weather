@@ -240,6 +240,60 @@
  "glance": {
   "as_of": "2026-10-02T08:30:00Z",
   "comparison": "mixed",
+  "destination": {
+   "alert": true,
+   "cells": [],
+   "cells_text": "radar cells unavailable",
+   "eta": "2026-10-02T10:00:00Z",
+   "focus": {
+    "bbox": [
+     -1.5468,
+     37.4695,
+     -0.703,
+     38.1362
+    ],
+    "id": "LEMI",
+    "kind": "station",
+    "layers": [
+     "route",
+     "radar",
+     "cells",
+     "lightning",
+     "sigmets"
+    ],
+    "time": null
+   },
+   "icao": "LEMI",
+   "lightning_text": "lightning unavailable",
+   "metar_category": "VFR",
+   "metar_text": "LEMI VFR",
+   "metar_time": "2026-10-02T08:30:00Z",
+   "name": "Corvera",
+   "proxy_caption": null,
+   "taf_category": null,
+   "taf_text": "no TAF for ETA",
+   "unavailable": [
+    "taf",
+    "storms",
+    "lightning"
+   ],
+   "wind_advisory": "green",
+   "wind_text": "Wind now 040\u00b0 10 kt \u00b7 RWY 05 crosswind 1 kt"
+  },
+  "flight": {
+   "along_nm": 68.9,
+   "departed_at": null,
+   "estimated": true,
+   "eta": "2026-10-02T10:00:00Z",
+   "eta_delay_min": null,
+   "fix_age_min": null,
+   "landed_at": null,
+   "marker_label": "Planned position",
+   "phase": "planned",
+   "route_nm": 275.6,
+   "source": "plan",
+   "text": "Planned \u00b7 69 of 276 NM \u00b7 ETA LEMI 10:00Z"
+  },
   "headline": "Observed 08:30Z \u00b7 2 worse since the briefing (en route, arrival), en route and arrival improving",
   "highlight": {
    "facts_hash": "fixture-lell-lemi-0830",

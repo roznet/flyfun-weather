@@ -988,6 +988,7 @@
   "observed.noCoverage": "Hors couverture",
   "observed.unavailable": "Non collecté",
   "observed.highlight.experimental": "Expérimental, encore en cours de calibrage. Merci de signaler les problèmes.",
+  "observed.destination.title": "Destination à votre ETA",
   "observed.highlight.written": "rédigé à {time}",
   "observed.highlight.up": "Ce résumé correspondait à ce que j'ai vu",
   "observed.highlight.down": "Quelque chose semblait faux dans ce résumé",

@@ -420,7 +420,7 @@ test.describe('Observed nutshell + route ribbon', () => {
     await expect(page.locator('#map-observed-cells')).toBeChecked();
   });
 
-  test('the highlight sits above the alert line, with its caption and a 👍/👎 that posts the rated line', async ({ page }) => {
+  test('the alert line sits above the highlight, with its caption and a 👍/👎 that posts the rated line', async ({ page }) => {
     await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveLayer(HIGHLIGHT) }));
     let posted: Record<string, unknown> | null = null;
     await page.route('**/api/feedback', (r) => {
@@ -434,11 +434,12 @@ test.describe('Observed nutshell + route ribbon', () => {
     await expect(block).toContainText('Experimental, still being calibrated');
     await expect(block).toContainText('written 05:50Z');
 
-    // Reading order: the highlight, the alert line, then the headline.
+    // Reading order (#816): the alert line, the highlight, then the headline
+    // (no flight strip: this layer has no `glance.flight`).
     const order = await page.locator('[data-testid="observed-nutshell"] > *').evaluateAll(
       (els) => els.map((e) => (e as HTMLElement).dataset.testid ?? e.className));
-    expect(order.indexOf('glance-highlight')).toBe(0);
-    expect(order.indexOf('glance-lines glance-lines-alert')).toBe(1);
+    expect(order.indexOf('glance-lines glance-lines-alert')).toBe(0);
+    expect(order.indexOf('glance-highlight')).toBe(1);
     expect(order.indexOf('glance-headline')).toBe(2);
 
     await block.locator('[data-hl-thumb="down"]').click();
