@@ -107,6 +107,47 @@ class TestFieldsAreProducedByTheRealPath:
         assert fields.get("nwp_conv_precip_mm_h") == pytest.approx(2.5)
         assert fields.get("nwp_ml_cape_jkg") == pytest.approx(1450.0)
 
+    def test_native_verdict_is_stored_beside_the_thermo_one(self):
+        """The grader reads the native track by default; scoring it needs the
+        verdict itself, not just the ingredients (#798 follow-up)."""
+        from weatherbrief.models.analysis import ConvectiveRisk, NWPCloudDiagnostics
+
+        assert compute_snapshot_sounding_fields(_hourly(), "gfs").get("nwp_conv_risk") is None
+        diag = NWPCloudDiagnostics(
+            convective_cover_pct=45.0, convective_base_ft=3500.0,
+            convective_top_ft=28000.0, convective_precip_mm_h=2.5,
+        )
+        fields = compute_snapshot_sounding_fields(
+            _hourly(nwp_cloud_diagnostics=diag), "ecmwf",
+        )
+        assert fields["nwp_conv_method"] is not None
+        assert fields["nwp_conv_risk"] in {r.value for r in ConvectiveRisk}
+
+    def test_lowest_bases_keep_scattered_cloud(self):
+        """A SCT-only native deck has no ceiling but does have a lowest base —
+        the FEW/SCT case the METAR lowest base is scored on."""
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+
+        hourly = _hourly()
+        hourly.attach_nwp_diagnostics(build_cloud_diagnostics({
+            "low_cover_pct": 30.0, "low_base_pa": 90000.0, "low_top_pa": 85000.0,
+        }))
+        fields = compute_snapshot_sounding_fields(hourly, "gfs")
+
+        assert fields.get("nwp_layer_ceiling_ft") is None
+        assert fields.get("nwp_layer_lowest_base_ft") is not None
+
+    def test_dd_lowest_base_is_never_above_the_dd_ceiling(self):
+        from weatherbrief.analysis.sounding import analyze_sounding_lite
+
+        hourly = _hourly()
+        fields = compute_snapshot_sounding_fields(hourly, "gfs")
+        layers = analyze_sounding_lite(hourly.pressure_levels, hourly, model_key="gfs").dd_cloud_layers
+        assert layers, "fixture profile must produce DD layers"
+        assert fields["sounding_lowest_base_ft"] == min(cl.base_ft for cl in layers)
+        if fields.get("sounding_cloud_base_ft") is not None:
+            assert fields["sounding_lowest_base_ft"] <= fields["sounding_cloud_base_ft"]
+
     def test_attaching_diagnostics_leaves_the_scored_columns_alone(self):
         """#635 moved GFS/ICON diagnostics ahead of the sounding pass. That must
         add the native-track columns without moving what verification scores

@@ -138,6 +138,58 @@ def test_tops_are_optional_and_joined_when_present(archives, tmp_path):
     assert tops["ZZAC"] is None
 
 
+RISK_SCHEMA = pa.schema([
+    ("icao", pa.string()), ("model", pa.string()),
+    ("model_init_time", TS), ("forecast_hour", TS),
+    ("sounding_convective_risk", pa.string()),
+    ("nwp_conv_method", pa.string()), ("nwp_conv_risk", pa.string()),
+])
+
+
+def _counts(rows):
+    d0 = next(r for r in rows if r["days_out"] == 0)
+    return d0["hits"], d0["misses"], d0["false_alarms"], d0["correct_negatives"]
+
+
+@pytest.mark.parametrize("source,expected", [
+    # ZZAA thermo none / native high, 45 dBZ: thermo misses it, native hits.
+    # ZZAD thermo high, no native assessment, nothing observed: a thermo false
+    # alarm; `nwp` drops it, `graded` falls back to thermo as the grader does.
+    # ZZAC native assessment but no stored verdict (pre-108): `graded` must
+    # drop it, not quietly score thermo.
+    ("thermo", (0, 1, 2, 0)),
+    ("nwp", (1, 0, 0, 0)),
+    ("graded", (1, 0, 1, 0)),
+])
+def test_risk_source_picks_the_verdict(archives, source, expected):
+    verif, observed = archives
+    for f in (verif / "snapshots").glob("*.parquet"):
+        f.unlink()
+    _write(verif / "snapshots" / "2026-07-01.parquet", [
+        _snap("ZZAA", "none") | {"nwp_conv_method": "nwp", "nwp_conv_risk": "high"},
+        _snap("ZZAD", "high"),
+        _snap("ZZAC", "high") | {"nwp_conv_method": "nwp"},
+    ], RISK_SCHEMA)
+    rows = score_convective(verif, observed, ConvectiveScoreParams(risk_source=source))
+    assert _counts(rows) == expected
+
+
+def test_columns_an_old_archive_lacks_read_null(archives, tmp_path):
+    """Files written before 108 have no native verdict: scoring it finds no
+    rows rather than failing, and the pairs carry the column as NULL."""
+    verif, observed = archives
+    assert score_convective(verif, observed, ConvectiveScoreParams(risk_source="nwp")) == []
+    out = tmp_path / "pairs.parquet"
+    score_convective(verif, observed, pairs_out=out)
+    pair = pq.read_table(out).to_pylist()[0]
+    assert pair["nwp_conv_risk"] is None and pair["nwp_k_index"] is None
+
+
+def test_unknown_risk_source_is_rejected():
+    with pytest.raises(ValueError, match="risk_source"):
+        ConvectiveScoreParams(risk_source="dd")
+
+
 def test_skill_scores_handle_empty_denominators():
     r = with_skill({"hits": 0, "misses": 0, "false_alarms": 0})
     assert r["pod"] is None and r["far"] is None and r["csi"] is None and r["bias"] is None

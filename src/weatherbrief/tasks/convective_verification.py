@@ -14,23 +14,30 @@ table per model and lead day, the dataset that tunes the convective thresholds
 
 Definitions (all in :class:`ConvectiveScoreParams`, so a variant is one flag):
 
-- **Forecast yes**: ``sounding_convective_risk`` at or above ``risk_threshold``
-  (default ``moderate``). Rows with no risk (no sounding) are left out.
+- **Forecast yes**: the ``risk_source`` verdict at or above ``risk_threshold``
+  (default ``moderate``). Rows with no verdict are left out. ``risk_source``
+  picks the track (:data:`RISK_SOURCES`): ``thermo`` is
+  ``sounding_convective_risk``; ``nwp`` the model-native ``nwp_conv_risk``
+  (108), the track the grader reads by default; ``graded`` the native verdict
+  where the row has a native assessment and thermo where it has none, which is
+  the fallback the grader applies (before its own grade floors).
 - **Observed yes** in the hour around the forecast hour (frames valid in
   ``[hour - 30 min, hour + 30 min)``): a radar max at or above ``dbz_threshold``
   (41 dBZ, the live layer's core tier) within ``radar_radius_nm`` (10 NM) on a
   frame with adequate coverage, or any flash within ``lightning_radius_nm``
   (20 NM).
-- **Observed no** needs evidence of absence: at least one adequately covered
-  radar frame **and** one lightning frame in the hour. An hour with neither
-  (radar outage, airport outside the MTG disc, archive gap) is ``unknown`` and
-  dropped, so an outage never reads as a correct negative.
+- **Known hours only**: every scored hour needs at least one adequately
+  covered radar frame **and** one lightning frame, whatever it observed. An
+  hour without both (radar outage, airport outside the MTG disc, archive gap)
+  is ``unknown`` and dropped, so an outage never reads as a correct negative
+  and an under-covered hour never enters the sample only because it stormed.
 - **Lead day** is the calendar-date difference between forecast hour and run,
   the convention every verification table uses (``days_out``).
 
 The per-pair view (:func:`pairs_sql`) also carries the ingredients for
-threshold work: CAPE, ``nwp_conv_cover_pct``, ``nwp_conv_top_ft``, observed
-max dBZ, flash count and the highest cloud top (FL, 10 NM).
+threshold work: both verdicts and every convective and stability column of
+the snapshot (:data:`PAIR_COLUMNS`), observed max dBZ, flash count and the
+highest cloud top (FL, 10 NM). A column older archive files lack reads NULL.
 """
 
 from __future__ import annotations
@@ -38,9 +45,48 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 #: ConvectiveRisk values in order; "at or above" is read off this list.
 RISK_ORDER = ("none", "marginal", "low", "moderate", "high", "extreme")
+
+#: The forecast verdict each ``risk_source`` scores. ``nwp_conv_method`` is set
+#: exactly when the row has a native assessment, so ``graded`` falls back to
+#: thermo only where the grader would; a pre-108 row with a native assessment
+#: has no stored native verdict and drops out rather than scoring thermo.
+RISK_SOURCES = {
+    "thermo": "sounding_convective_risk",
+    "nwp": "nwp_conv_risk",
+    "graded": (
+        "CASE WHEN nwp_conv_method IS NULL THEN sounding_convective_risk "
+        "ELSE nwp_conv_risk END"
+    ),
+}
+
+#: Snapshot columns carried onto every pair, with the DuckDB type a missing
+#: one is read as (archive files written before the column existed).
+PAIR_COLUMNS = {
+    "sounding_convective_risk": "VARCHAR",
+    "nwp_conv_risk": "VARCHAR",
+    "nwp_conv_method": "VARCHAR",
+    "cape_jkg": "DOUBLE",
+    "nwp_cape_type": "VARCHAR",
+    "nwp_cin_jkg": "DOUBLE",
+    "nwp_lifted_index": "DOUBLE",
+    "nwp_k_index": "DOUBLE",
+    "nwp_total_totals": "DOUBLE",
+    "nwp_ml_cape_jkg": "DOUBLE",
+    "nwp_ml_cin_jkg": "DOUBLE",
+    "nwp_conv_cover_pct": "DOUBLE",
+    "nwp_conv_base_ft": "DOUBLE",
+    "nwp_conv_top_ft": "DOUBLE",
+    "nwp_conv_precip_mm_h": "DOUBLE",
+    "sounding_cape_jkg": "DOUBLE",
+    "sounding_cin_jkg": "DOUBLE",
+    "sounding_lifted_index": "DOUBLE",
+    "sounding_lfc_ft": "DOUBLE",
+    "sounding_el_ft": "DOUBLE",
+}
 
 
 @dataclass(frozen=True)
@@ -50,10 +96,15 @@ class ConvectiveScoreParams:
     radar_radius_nm: float = 10.0
     lightning_radius_nm: float = 20.0
     tops_radius_nm: float = 10.0
+    risk_source: str = "thermo"
     since: datetime | None = None
     until: datetime | None = None
 
     def __post_init__(self) -> None:
+        if self.risk_source not in RISK_SOURCES:
+            raise ValueError(
+                f"risk_source={self.risk_source!r} is not one of {sorted(RISK_SOURCES)}"
+            )
         # The archive's radius columns are matched exactly (see pairs_sql), so a
         # radius the archiver never writes would silently score nothing.
         from weatherbrief.observed.sampler import DEFAULT_RADII_NM
@@ -79,15 +130,27 @@ def _sql_str(value: str) -> str:
 
 def pairs_sql(
     verification_root: Path, observed_root: Path, params: ConvectiveScoreParams,
+    snapshot_columns: Iterable[str] | None = None,
 ) -> str:
-    """One row per forecast hour with a known observed outcome."""
+    """One row per forecast hour with a known observed outcome.
+
+    ``snapshot_columns`` is what the snapshot archive actually holds; any
+    :data:`PAIR_COLUMNS` entry missing from it reads NULL. ``None`` assumes
+    all are present.
+    """
     risks = ", ".join(_sql_str(r) for r in params.risks_at_or_above())
+    present = set(PAIR_COLUMNS if snapshot_columns is None else snapshot_columns)
+    missing = "".join(
+        f", NULL::{kind} AS {name}"
+        for name, kind in PAIR_COLUMNS.items() if name not in present
+    )
+    risk = RISK_SOURCES[params.risk_source]
     window = []
     if params.since is not None:
         window.append(f"forecast_hour >= TIMESTAMPTZ {_sql_str(params.since.isoformat())}")
     if params.until is not None:
         window.append(f"forecast_hour < TIMESTAMPTZ {_sql_str(params.until.isoformat())}")
-    snap_where = " AND ".join(["sounding_convective_risk IS NOT NULL", *window])
+    snap_where = " AND ".join([f"({risk}) IS NOT NULL", *window])
 
     def hourly(source: str) -> str:
         # Frames in [h - 30 min, h + 30 min) belong to hour h.
@@ -108,14 +171,18 @@ def pairs_sql(
     else:
         tops = "SELECT NULL::VARCHAR AS icao, NULL::TIMESTAMPTZ AS hour, NULL::DOUBLE AS max_top_fl WHERE false"
     return f"""
-WITH snap AS (
+WITH snap_src AS (
+    SELECT *{missing}
+    FROM read_parquet({_sql_str(_glob(verification_root, 'snapshots'))}, union_by_name=true)
+),
+snap AS (
     SELECT icao, model,
            CAST(model_init_time AS TIMESTAMPTZ) AS model_init_time,
            CAST(forecast_hour AS TIMESTAMPTZ) AS forecast_hour,
-           sounding_convective_risk AS risk,
-           sounding_convective_risk IN ({risks}) AS forecast_yes,
-           cape_jkg, nwp_conv_cover_pct, nwp_conv_top_ft
-    FROM read_parquet({_sql_str(_glob(verification_root, 'snapshots'))}, union_by_name=true)
+           {risk} AS risk,
+           ({risk}) IN ({risks}) AS forecast_yes,
+           {", ".join(PAIR_COLUMNS)}
+    FROM snap_src
     WHERE {snap_where}
 ),
 radar AS (
@@ -200,7 +267,13 @@ def score_convective(
 
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
-    pairs = pairs_sql(verification_root, observed_root, params)
+    snap_glob = _sql_str(_glob(verification_root, "snapshots"))
+    columns = [
+        r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({snap_glob}, union_by_name=true)"
+        ).fetchall()
+    ]
+    pairs = pairs_sql(verification_root, observed_root, params, columns)
     if pairs_out is not None:
         con.execute(f"COPY ({pairs}) TO {_sql_str(str(pairs_out))} (FORMAT parquet)")
     cur = con.execute(score_sql(pairs))

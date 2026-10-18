@@ -1559,8 +1559,11 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "sounding_convective_risk": snap.get("sounding_convective_risk"),
             "nwp_layer_ceiling_ft": snap.get("nwp_layer_ceiling_ft"),
             "nwp_layer_source": snap.get("nwp_layer_source"),
+            "sounding_lowest_base_ft": snap.get("sounding_lowest_base_ft"),
+            "nwp_layer_lowest_base_ft": snap.get("nwp_layer_lowest_base_ft"),
             # Convective ingredients (#565)
             "nwp_conv_method": snap.get("nwp_conv_method"),
+            "nwp_conv_risk": snap.get("nwp_conv_risk"),
             "nwp_conv_cover_pct": snap.get("nwp_conv_cover_pct"),
             "nwp_conv_base_ft": snap.get("nwp_conv_base_ft"),
             "nwp_conv_top_ft": snap.get("nwp_conv_top_ft"),
