@@ -472,3 +472,39 @@ class TestCruiseWindInterpolation:
         from weatherbrief.analysis.wind import pick_wind_at_pressure
 
         assert pick_wind_at_pressure(_hourly([(850, None, None)]), 850) is None
+
+
+class TestCrossSectionWindFallbackGate:
+    """#809 follow-up: the snap guard's None must not reopen the
+    precomputed-component fallback (another altitude's wind)."""
+
+    @staticmethod
+    def _cs(hourly):
+        wf = SimpleNamespace(at_time=lambda t: hourly)
+        return [SimpleNamespace(model=SimpleNamespace(value="gfs"), point_forecasts=[wf])]
+
+    def test_winds_present_but_far_from_target(self):
+        from weatherbrief.analysis.advisories._helpers import (
+            cross_section_has_winds,
+            wind_at_altitude,
+        )
+
+        cs = self._cs(_hourly([(850, 20.0, 250.0), (700, 40.0, 270.0)]))
+        t = datetime(2026, 3, 1, 12, 0)
+        assert wind_at_altitude(cs, "gfs", 0, 18000, t) is None
+        assert cross_section_has_winds(cs, "gfs", 0, t) is True
+
+    def test_no_wind_levels_allows_fallback(self):
+        from weatherbrief.analysis.advisories._helpers import cross_section_has_winds
+
+        cs = self._cs(_hourly([(850, None, None), (700, None, None)]))
+        assert cross_section_has_winds(cs, "gfs", 0, datetime(2026, 3, 1, 12, 0)) is False
+
+    def test_missing_model_or_point_allows_fallback(self):
+        from weatherbrief.analysis.advisories._helpers import cross_section_has_winds
+
+        cs = self._cs(_hourly([(850, 20.0, 250.0)]))
+        t = datetime(2026, 3, 1, 12, 0)
+        assert cross_section_has_winds(cs, "ecmwf", 0, t) is False
+        assert cross_section_has_winds(cs, "gfs", 5, t) is False
+        assert cross_section_has_winds([], "gfs", 0, t) is False

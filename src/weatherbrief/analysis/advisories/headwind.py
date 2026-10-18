@@ -33,6 +33,7 @@ from weatherbrief.analysis.advisories._helpers import (
     MIN_GROUNDSPEED_KT,
     headwind_component,
     resolve_cruise_tas,
+    cross_section_has_winds,
     wind_at_altitude,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -142,7 +143,9 @@ class HeadwindEvaluator:
                 if wind is not None:
                     speed_kt, direction_deg = wind
                     hw = _headwind_component(speed_kt, direction_deg, rpa.track_deg)
-                else:
+                elif not cross_section_has_winds(
+                    ctx.cross_sections, model, rpa.point_index, rpa.forecast_hour,
+                ):
                     # Pack without cross-section winds: precomputed component
                     # at the pack's original cruise level.
                     wc = rpa.wind_components.get(model)

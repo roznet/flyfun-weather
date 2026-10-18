@@ -1041,3 +1041,32 @@ def wind_at_altitude(
             return (best_level.wind_speed_kt, best_level.wind_direction_deg)
 
     return None
+
+
+def cross_section_has_winds(
+    cross_sections: list[RouteCrossSection],
+    model: str,
+    point_index: int,
+    target_time: datetime,
+) -> bool:
+    """Whether *model*'s cross-section carries any wind at this point and time.
+
+    Separates "pack without cross-section winds" (fall back to the precomputed
+    ``wind_components`` at the pack's original cruise level) from "winds exist
+    but none near the target altitude" (``pick_wind_at_pressure``'s snap guard
+    refused): the latter must stay unavailable, not borrow another altitude's
+    wind (#809 follow-up).
+    """
+    for cs in cross_sections:
+        if cs.model.value != model:
+            continue
+        if point_index >= len(cs.point_forecasts):
+            return False
+        hourly = cs.point_forecasts[point_index].at_time(target_time)
+        if hourly is None:
+            return False
+        return any(
+            lv.wind_speed_kt is not None and lv.wind_direction_deg is not None
+            for lv in hourly.pressure_levels
+        )
+    return False

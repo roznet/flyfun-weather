@@ -110,6 +110,7 @@ class RouteContext:
         """
         from weatherbrief.analysis.advisories._helpers import (
             MIN_GROUNDSPEED_KT,
+            cross_section_has_winds,
             resolve_cruise_tas,
             wind_at_altitude,
             headwind_component,
@@ -129,6 +130,10 @@ class RouteContext:
                         headwind_component(speed_kt, direction_deg, rpa.track_deg)
                     )
                     continue
+                if cross_section_has_winds(
+                    self.cross_sections, model, rpa.point_index, rpa.forecast_hour,
+                ):
+                    continue  # winds exist, none near cruise: leave the point out
                 # Pack without cross-section winds: the precomputed component at
                 # the pack's original cruise level, same fallback as ``headwind``.
                 wc = rpa.wind_components.get(model)

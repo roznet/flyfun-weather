@@ -1396,7 +1396,7 @@ def _classify_refresh_time(flight, now: datetime | None = None) -> tuple[bool, d
       but GRIB run-selection is pinned to the departure time so the chosen run
       actually forecasts the flight window. Without this, run-selection would
       pick the freshest run — whose init can fall *after* the window — and
-      ``bracket_forecast_hours`` would clamp every pre-init hour to f000 (the
+      the forecast-hour window would clamp every pre-init hour to f000 (the
       analysis snapshot), silently mis-enriching the flight.
     - Well past (beyond estimated arrival + grace, or past the max window) →
       ``(True, None)``: historical archive path (free API, no digest, admin-only).
