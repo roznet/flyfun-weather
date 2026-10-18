@@ -26,6 +26,7 @@ logs and carries on without the block).
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -56,6 +57,8 @@ from weatherbrief.models.live import (
 from weatherbrief.models.observations import AirportObservation, SigmetAlongRoute
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.intensity import classify_dbz, intensity_label
+
+logger = logging.getLogger(__name__)
 
 #: Storms and lightning "at" an airport: within this distance of it. The
 #: widest radar/lightning ring the sampler draws (``DEFAULT_RADII_NM``), so
@@ -330,6 +333,25 @@ def _storms_unavailable(storms: LiveStorms | None) -> str:
     return "radar cells unavailable"
 
 
+def _storms_around(
+    storms: LiveStorms, pos: tuple[float, float],
+) -> tuple[list[tuple[float, LiveStorm]], list[tuple[float, LiveStorm]]]:
+    """(distance, storm) within ``TERMINAL_NM`` of an airport, and those
+    beyond it but inside the corridor before the route's start / past its
+    end, each nearest first. The one scan the arrival line and the
+    destination block (#816) both read, so they never disagree."""
+    near, beyond = [], []
+    for st in storms.storms:
+        d = haversine_nm(pos[0], pos[1], st.lat, st.lon)
+        if d <= TERMINAL_NM:
+            near.append((d, st))
+        elif st.end is not None and d <= storms.corridor_nm:
+            beyond.append((d, st))
+    near.sort(key=lambda x: x[0])
+    beyond.sort(key=lambda x: x[0])
+    return near, beyond
+
+
 def _terminal_storms(
     storms: LiveStorms | None, pos: tuple[float, float], when: str = "",
 ) -> tuple[str, bool, list[LiveStorm]]:
@@ -341,15 +363,7 @@ def _terminal_storms(
     list a cell the nutshell leaves out."""
     if storms is None or storms.status != "available":
         return _storms_unavailable(storms), True, []
-    near, beyond = [], []
-    for st in storms.storms:
-        d = haversine_nm(pos[0], pos[1], st.lat, st.lon)
-        if d <= TERMINAL_NM:
-            near.append((d, st))
-        elif st.end is not None and d <= storms.corridor_nm:
-            beyond.append((d, st))
-    near.sort(key=lambda x: x[0])
-    beyond.sort(key=lambda x: x[0])
+    near, beyond = _storms_around(storms, pos)
     tail = ""
     if beyond:
         d, st = beyond[0]
@@ -668,13 +682,7 @@ def destination_block(
     cells: list[LiveDestinationCell] = []
     if storms is not None and storms.status == "available":
         lat, lon = flight.dest_pos
-        near = sorted(
-            ((haversine_nm(lat, lon, st.lat, st.lon), st) for st in storms.storms),
-            key=lambda x: x[0],
-        )
-        for d, st in near:
-            if d > TERMINAL_NM:
-                break
+        for d, st in _storms_around(storms, flight.dest_pos)[0]:
             flash = ", lightning" if st.flashes else ""
             cells.append(LiveDestinationCell(
                 id=st.id,
@@ -1023,12 +1031,23 @@ def build_glance(
     ))
 
     headline, comparison = _headline(layer.changes, now)
+    # The strip and the destination are additive (#816): a failure in either
+    # leaves that block null, never the lines the tab already relied on.
+    try:
+        strip = flight_strip(progress, flight.dep_icao, flight.dest_icao)
+    except Exception:
+        logger.exception("LIVE_GLANCE_FLIGHT_FAILED — flight strip null this tick")
+        strip = None
+    try:
+        destination = destination_block(
+            layer, flight, focus_by_storm, alert="arrival" in alert_phases, obs_stale=obs_stale,
+        )
+    except Exception:
+        logger.exception("LIVE_GLANCE_DESTINATION_FAILED — destination block null this tick")
+        destination = None
     glance = LiveGlance(
         as_of=now, headline=headline, comparison=comparison, lines=lines,
-        flight=flight_strip(progress, flight.dep_icao, flight.dest_icao),
-        destination=destination_block(
-            layer, flight, focus_by_storm, alert="arrival" in alert_phases, obs_stale=obs_stale,
-        ),
+        flight=strip, destination=destination,
     )
     if storms is not None:
         for st in storms.storms:

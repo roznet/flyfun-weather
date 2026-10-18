@@ -142,7 +142,7 @@ export function destinationHtml(dest: LiveGlanceDestination): string {
       + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
     : `<div class="glance-dest-cell">${escapeHtml(c.text)}</div>`)).join('');
   const missing = (dest.unavailable ?? []).length > 0
-    ? `<span class="glance-missing">${escapeHtml((dest.unavailable ?? []).join(', '))} unavailable</span>`
+    ? `<span class="glance-missing">${escapeHtml(t('observed.destination.unavailable', { sources: (dest.unavailable ?? []).join(', ') }))}</span>`
     : '';
   const advisory = dest.wind_advisory ? ` glance-dest-wind-${escapeHtml(dest.wind_advisory)}` : '';
   return `<div class="glance-dest${dest.alert ? ' glance-dest-alert' : ''}" data-testid="glance-destination">`
@@ -153,10 +153,10 @@ export function destinationHtml(dest: LiveGlanceDestination): string {
     + row('METAR', dest.metar_text)
     + (dest.proxy_caption ? `<span class="glance-proxy">${escapeHtml(dest.proxy_caption)}</span>` : '')
     + row('TAF', dest.taf_text)
-    + (dest.wind_text ? row('Wind', dest.wind_text, advisory) : '')
-    + row('Cells', dest.cells_text)
+    + (dest.wind_text ? row(t('observed.destination.wind'), dest.wind_text, advisory) : '')
+    + row(t('observed.destination.cells'), dest.cells_text)
     + (cells ? `<div class="glance-dest-cells">${cells}</div>` : '')
-    + (dest.lightning_text ? row('Lightning', dest.lightning_text) : '')
+    + (dest.lightning_text ? row(t('observed.destination.lightning'), dest.lightning_text) : '')
     + missing
     + '</div>';
 }

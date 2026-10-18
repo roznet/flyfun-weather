@@ -67,17 +67,17 @@ struct DestinationAtETACard: View {
             }
             row("TAF", destination.tafText)
             if let wind = destination.windText {
-                row("Wind", wind, tint: windTint)
+                row(String(localized: "Wind"), wind, tint: windTint)
             }
-            row("Cells", destination.cellsText)
+            row(String(localized: "Cells"), destination.cellsText)
             ForEach(destination.cells ?? []) { cell in
                 cellRow(cell)
             }
             if let lightning = destination.lightningText {
-                row("Lightning", lightning)
+                row(String(localized: "Lightning"), lightning)
             }
             if let missing = destination.unavailable, !missing.isEmpty {
-                Text("\(missing.joined(separator: ", ")) unavailable")
+                Text(String(localized: "\(missing.joined(separator: ", ")) unavailable"))
                     .font(.caption)
                     .foregroundStyle(Theme.amber)
             }
@@ -141,6 +141,7 @@ struct DestinationAtETACard: View {
         }
     }
 
+    /// `label` arrives localized (METAR / TAF stay as they are in every language).
     private func row(_ label: String, _ text: String?, tint: Color = Theme.text) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.spacingS) {
             Text(label.uppercased())
