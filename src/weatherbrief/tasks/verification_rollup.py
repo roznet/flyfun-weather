@@ -161,6 +161,14 @@ def _build_month_select(month_start: datetime):
             func.sum(v.n_model_gust_flag).label("n_model_gust_flag"),
             func.sum(v.n_obs_gust).label("n_obs_gust"),
             func.sum(v.n_gust_flag_hit).label("n_gust_flag_hit"),
+            # Lowest cloud base (#806): bias is model-relative, not vs zero.
+            _ratio(
+                v.sum_abs_lowest_base_delta_ft, v.n_lowest_base,
+            ).label("lowest_base_mae_ft"),
+            _ratio(
+                v.sum_lowest_base_delta_ft, v.n_lowest_base,
+            ).label("lowest_base_bias_ft"),
+            func.sum(v.n_lowest_base).label("n_lowest_base"),
             func.sum(v.n_precip_hit).label("n_precip_hit"),
             func.sum(v.n_precip_miss).label("n_precip_miss"),
             func.sum(v.n_precip_false_alarm).label("n_precip_false_alarm"),
