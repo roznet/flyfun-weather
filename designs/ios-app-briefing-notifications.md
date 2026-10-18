@@ -4,11 +4,12 @@
 > knows to look — and so a Siri-triggered refresh can truthfully say "I'll let you
 > know when it's ready."
 
-**Status: IMPLEMENTED (#366) — server + iOS client.** The full
+**Status: IMPLEMENTED (#366, Android FCM in migration `110`) — server + iOS & Android clients.** The full
 server side is built and tested (`tests/test_briefing_notifications.py`):
 
-- `notify/push.py` — token-based APNs sender (httpx HTTP/2 + PyJWT ES256,
-  cached ~50 min), per-token sandbox/production routing, dead-token pruning.
+- `notify/push.py` — `ApnsPushSender` (token-based APNs over httpx HTTP/2 + PyJWT ES256,
+  cached ~50 min) and `FcmPushSender` (Firebase Cloud Messaging HTTP v1 API), routed by
+  `DeviceTokenRow.platform` (`"ios"` | `"android"`, migration `110`), with dead-token pruning.
 - `notify/dispatch.py` — the single notification gate + channel dispatch, emitted
   once from the shared post-commit sink `api/packs.py::_notify_refresh_complete`
   (called by each refresh path *after* it commits the pack) so it covers
@@ -17,9 +18,9 @@ server side is built and tested (`tests/test_briefing_notifications.py`):
 - `notify/badge.py` + `api/notifications.py` — server-derived cross-surface badge
   (`flight_briefing_seen` table), `GET /api/flights/badge`,
   `POST /api/flights/{id}/seen` (+ silent badge-sync push on web read).
-- `api/devices.py` — `POST /api/devices` (upsert), `DELETE /api/devices/{token}`.
+- `api/devices.py` — `POST /api/devices` (upsert with `platform="ios"|"android"`), `DELETE /api/devices/{token}`.
 - Preferences (`app_prefs_json`): `notify_email` / `notify_push` / `notify_scope`
-  / `notify_change_only`; per-flight `FlightRow.notify_override`. Migration `075`.
+  / `notify_change_only`; per-flight `FlightRow.notify_override`. Migrations `075` and `110`.
 
 **iOS client (built on #364's app-shell):**
 
