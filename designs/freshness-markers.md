@@ -228,7 +228,7 @@ When tuning registry offsets:
 
 ## Gotchas
 
-- **Bootstrap is wall-clock dependent.** `initial_marker_for` picks the most-recent cycle whose expected delivery is at-or-before now, falling back one cycle if not yet due. Tests must inject `now=` explicitly to be deterministic.
+- **Bootstrap is wall-clock dependent.** `initial_marker_for` picks the most-recent cycle whose expected delivery is at-or-before now, stepping back as many cycles as it takes. One step is not enough (#815): UKMO, ECMWF and GEM via Open-Meteo (8-8h30), GFS via Open-Meteo (6h45) and ECMWF direct (6h40) all deliver later than the 6-h cycle spacing, so the cycle before the current one can be undue too; claiming it reported the model stale before its run existed (a D-0 press then ran a "full" refresh that got the same run back) and left no `model_delivery_log` row for it. Tests must inject `now=` explicitly to be deterministic.
 - **`marker.is_stale(loop_interval)` is heartbeat, not data freshness.** Returns True if `last_check is None` or older than `2 × loop_interval`. Used to surface `marker_health="suspect"` and trigger inline-check fallback. Not a comment on the underlying data.
 - **Open-Meteo ECMWF cycles are tracked as `(0, 12)` only.** OM publishes 06/18 as `bc-runs` with heavy lag (per issue #100); tracking them would cause the marker to bounce on bc-run shuffles.
 - **OM ICON cycles are `(0, 6, 12, 18)` not 3-hourly.** Even though DWD itself runs ICON every 3h, OM's `meta.json` reports `update_interval_seconds: 21600` — OM only republishes the 6-hourly main runs.

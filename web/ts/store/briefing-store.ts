@@ -16,7 +16,7 @@ import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
 import { t } from '../i18n/i18n';
-import { addsTrails, applyLiveToSnapshot, isoToMs, sameInstant } from '../helpers/live-layer';
+import { addsTrails, applyLiveToSnapshot, highlightChanged, isoToMs, sameInstant } from '../helpers/live-layer';
 import { REPLAY_BASE, startTick, tickFailed, tickLoaded, type ReplayState } from '../helpers/debrief-replay';
 
 /** Sequence of `loadRecapForecast` picks (#769): only the latest applies. */
@@ -276,7 +276,8 @@ export interface BriefingState {
    *  stale responses are dropped. */
   loadLive: () => Promise<void>;
   /** Poll step (#637): re-read the latest pack meta. A new pack → select it;
-   *  same pack with a different live_updated_at → `loadLive()`. No-op unless
+   *  same pack with a different live_updated_at or highlight_updated_at
+   *  (#815) → `loadLive()`. No-op unless
    *  the user is viewing the latest pack. */
   syncLatest: () => Promise<void>;
   /** Re-read the recorded ticks (`segments` for the distance × time grid). */
@@ -1036,11 +1037,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // Drop a response older than (or equal to) the one already applied —
     // a slow poll landing after a newer one must not roll the overlay back.
     // Equal is fine once, when it brings the trails (#669) the snapshot
-    // overlay never carries.
+    // overlay never carries, or a highlight patched in after the tick (#815).
     const appliedMs = isoToMs(now.live?.live_updated_at);
     const liveMs = isoToMs(live.live_updated_at);
     if (!isNaN(appliedMs) && !(liveMs > appliedMs)
-        && !(liveMs === appliedMs && addsTrails(now.snapshot.live_changes, live.changes))) return;
+        && !(liveMs === appliedMs && (addsTrails(now.snapshot.live_changes, live.changes)
+                                      || highlightChanged(now.live, live)))) return;
     // A layer for another pack is not ours to show at all.
     if (!sameInstant(live.pack_timestamp, packTs)) return;
     // `storms` / `glance` / `ribbon` (#688, #690) ride ONLY on this response —
@@ -1075,7 +1077,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       return;
     }
     const applied = now.snapshot?.live_updated_at ?? null;
-    if (meta.live_updated_at && !sameInstant(meta.live_updated_at, applied)) {
+    // #815: a highlight patched in after the tick moves only its own stamp.
+    const highlightApplied = now.live?.highlight_updated_at ?? null;
+    if ((meta.live_updated_at && !sameInstant(meta.live_updated_at, applied))
+        || (meta.highlight_updated_at && !sameInstant(meta.highlight_updated_at, highlightApplied))) {
       await get().loadLive();
     }
   },

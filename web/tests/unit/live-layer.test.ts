@@ -19,6 +19,7 @@ import {
   clearedRows,
   changedSigmetKeys,
   formatHhmmZ,
+  highlightChanged,
   isInLiveWindow,
   isLiveWindowPast,
   minutesAgo,
@@ -378,5 +379,21 @@ describe('sigmetPendingFrom (#683)', () => {
     expect(sigmetPendingFrom('2026-10-05T06:36:00Z', now)).toBeNull();
     expect(sigmetPendingFrom(null, now)).toBeNull();
     expect(sigmetPendingFrom('garbage', now)).toBeNull();
+  });
+});
+
+describe('highlightChanged (#815)', () => {
+  const layer = (text: string | null, at = '2026-10-01T11:00:50Z') => ({
+    glance: { highlight: text ? { text, model: 'm', facts_hash: 'h', generated_at: at } : null },
+  }) as never;
+  it('is true when the same tick gains or changes its highlight', () => {
+    expect(highlightChanged(layer(null), layer('A'))).toBe(true);
+    expect(highlightChanged(layer('A'), layer('B'))).toBe(true);
+    expect(highlightChanged(layer('A'), layer('A', '2026-10-01T11:10:50Z'))).toBe(true);
+  });
+  it('is false for the same highlight, or none on either side', () => {
+    expect(highlightChanged(layer('A'), layer('A'))).toBe(false);
+    expect(highlightChanged(layer(null), layer(null))).toBe(false);
+    expect(highlightChanged(null, null)).toBe(false);
   });
 });

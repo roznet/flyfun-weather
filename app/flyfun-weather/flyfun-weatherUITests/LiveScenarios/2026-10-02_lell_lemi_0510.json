@@ -183,6 +183,7 @@
    }
   ]
  },
+ "highlight_updated_at": null,
  "last_refresh_delta": {
   "computed_at": "2026-10-02T05:10:00Z",
   "messages": [

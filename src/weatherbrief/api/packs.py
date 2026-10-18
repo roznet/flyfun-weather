@@ -69,7 +69,7 @@ from weatherbrief.models.live import (
     LiveTicksResponse,
     RecapResponse,
 )
-from weatherbrief.tasks.live_layer import live_updated_at_iso
+from weatherbrief.tasks.live_layer import highlight_updated_at_iso, live_updated_at_iso
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
 from weatherbrief.observed.collect import observed_enabled
@@ -609,6 +609,9 @@ class PackMetaResponse(BaseModel):
     # whether to fetch ``GET /flights/{id}/live`` — a realtime refresh keeps
     # the pack timestamp, so ``fetch_timestamp`` alone cannot signal it.
     live_updated_at: str | None = None
+    # #815: a highlight patched in after the tick's commit moves this, not
+    # ``live_updated_at``; clients fetch ``/live`` when either moves.
+    highlight_updated_at: str | None = None
 
 
 def _live_meteofrance_options(
@@ -726,6 +729,7 @@ def _meta_to_response(
         charts=charts,
         flexibility=flexibility,
         live_updated_at=live_updated_at_iso(meta.artifact_path),
+        highlight_updated_at=highlight_updated_at_iso(meta.artifact_path),
     )
 
     try:
@@ -5311,6 +5315,7 @@ def get_live_layer(
         flight_id=flight_id,
         pack_timestamp=pack_ts,
         live_updated_at=layer.live_updated_at,
+        highlight_updated_at=layer.highlight_updated_at,
         route_observations=layer.route_observations,
         observations_updated_at=layer.observations_updated_at,
         route_sigmets=layer.route_sigmets,

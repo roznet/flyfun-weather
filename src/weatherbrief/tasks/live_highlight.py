@@ -31,7 +31,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -416,7 +416,8 @@ def _coarse_stretches(bins: set[float], route_nm: float, flown: float, locator=N
     The first stretch says "from the aircraft" rather than a figure behind it
     once airborne, so its start does not move with the clock. With the
     route locator (#790) the ends are anchors ("to 10 NM before Middelburg
-    (EHMZ)"); the grid keeps them from moving every tick.
+    (EHMZ)"); the grid keeps them from moving every tick. A stretch whose two
+    ends name the same place reads "around X" (#815).
     """
     coarse = sorted({int(a // RAIN_BIN_NM) for a in bins})
     spans: list[list[int]] = []
@@ -429,9 +430,14 @@ def _coarse_stretches(bins: set[float], route_nm: float, flown: float, locator=N
     for lo, hi in spans:
         lo_nm, hi_nm = lo * RAIN_BIN_NM, min(_f(route_nm), hi * RAIN_BIN_NM)
         if locator is not None:
-            start = ("from the aircraft" if flown > 0 and lo_nm <= flown
-                     else f"from {locator.end_label(lo_nm)}")
-            out.append(f"{start} to {locator.end_label(hi_nm)}")
+            end = locator.end_label(hi_nm)
+            if flown > 0 and lo_nm <= flown:
+                out.append(f"from the aircraft to {end}")
+            elif (start := locator.end_label(lo_nm)) == end:
+                # Both ends at one anchor (#815): "from X to X" read as a typo.
+                out.append(f"around {end}")
+            else:
+                out.append(f"from {start} to {end}")
             continue
         start = "from the aircraft" if flown > 0 and lo_nm <= flown else f"from {lo_nm} NM"
         out.append(f"{start} to {hi_nm} NM")
@@ -551,14 +557,57 @@ def _ladder_locator(r: dict, route_nm: float):
         return None
 
 
-def _phase(r: dict, flown: float, route_nm: float) -> tuple[str, str]:
-    """(facts wording, gate key) of the flight's phase."""
+#: How long after the effective arrival (a take-off or a fix carried on at
+#: the plan's speed, no landing recorded) the highlight keeps going (#815).
+#: That arrival is an estimate; a landing entered or detected ends it at once.
+ARRIVAL_GRACE = timedelta(minutes=20)
+
+
+def _iso(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _phase(r: dict, flown: float, route_nm: float, progress: dict | None = None) -> tuple[str, str, float]:
+    """(facts wording, gate key, flown figure the facts measure "ahead" from).
+
+    "Arrived" needs more than the plan (#815): ``flown`` follows the flight's
+    progress, which on a flight with no take-off, fix or landing recorded is
+    the plan alone, and on a late leg that read "arrived" with the aircraft
+    still on the ground. So:
+
+    - a landing (entered, app-detected or inferred from a fix) is arrived;
+    - an effective arrival from a take-off or a fix is arrived only
+      :data:`ARRIVAL_GRACE` after it, "arriving" until then;
+    - the plan alone never arrives: past the planned arrival the position is
+      unknown and the whole route is shown again (flown 0), until the live
+      window closes.
+
+    A layer written before the progress block (#760) keeps the old rule.
+    """
+    if progress and progress.get("landed_at"):
+        return f"arrived (landed {_hhmm(progress['landed_at'])})", "arrived", flown
     if flown <= 0:
-        return f"before departure (departure planned {_hhmm(r.get('departure_at'))})", "before departure"
+        return f"before departure (departure planned {_hhmm(r.get('departure_at'))})", "before departure", flown
     if flown >= route_nm - 1:
-        return "arrived (at plan)", "arrived"
+        if not progress:
+            return "arrived (at plan)", "arrived", flown
+        if progress.get("source") == "plan":
+            return (f"take-off not recorded: departure planned {_hhmm(r.get('departure_at'))}, "
+                    f"planned arrival {_hhmm(r.get('arrival_at'))} has passed with no take-off, "
+                    "position fix or landing recorded, so the whole route is shown",
+                    "position unknown", 0.0)
+        eta, as_of = _iso(progress.get("eta_destination")), _iso(progress.get("as_of"))
+        if eta is not None and as_of is not None and as_of >= eta + ARRIVAL_GRACE:
+            return f"arrived (estimated {_hhmm(progress['eta_destination'])}, no landing recorded)", "arrived", flown
+        return (f"arriving, estimated arrival {_hhmm(progress.get('eta_destination') or r.get('arrival_at'))}",
+                "arriving", flown)
     return (f"en route, about {_f(flown)} of {_f(route_nm)} NM flown, arrival planned {_hhmm(r.get('arrival_at'))}",
-            "en route")
+            "en route", flown)
 
 
 def facts_and_gate(live: dict) -> tuple[dict, dict]:
@@ -586,7 +635,7 @@ def facts_and_gate(live: dict) -> tuple[dict, dict]:
     dep, dest = (wps[0]["icao"], wps[-1]["icao"]) if wps else ("DEP", "DEST")
     now = g.get("as_of") or live.get("live_updated_at")
 
-    phase, phase_key = _phase(r, flown, route_nm)
+    phase, phase_key, flown = _phase(r, flown, route_nm, live.get("progress"))
     locator = _ladder_locator(r, route_nm)
     out: dict = {"now": _hhmm(now), "route": f"{dep} to {dest}, {_f(route_nm)} NM", "flight": phase}
     gate: dict = {"route": out["route"], "phase": phase_key, "_flown_nm": flown}
@@ -715,10 +764,12 @@ def facts(live: dict) -> dict:
 
 
 def arrived(gate: dict) -> bool:
-    """At or past the planned arrival (#706 item 6). The flown figure is
-    interpolated from the plan, so this is the plan's arrival, not a landing:
-    after it the "ahead" cells have abeam times in the past and every figure
-    "ahead" is about a route the aircraft has (on paper) finished."""
+    """The flight has arrived (#706 item 6): after it the "ahead" cells have
+    abeam times in the past and every figure "ahead" is about a route already
+    flown. Since #760/#761 the flown figure follows the flight's progress, and
+    since #815 :func:`_phase` calls it arrived only on a landing, or
+    :data:`ARRIVAL_GRACE` after the effective arrival a take-off or fix gives,
+    never on the plan alone."""
     return gate.get("phase") == "arrived"
 
 
@@ -1026,7 +1077,7 @@ def carry_forward(stored, layer) -> bool:
     The comparison is against the gate state stored **with the highlight**
     — the state it was written from — not the previous tick (#706). A carried
     highlight keeps that baseline, so drift is measured from where the text
-    was true. After the planned arrival nothing is carried (item 6): the
+    was true. After arrival nothing is carried (item 6, :func:`arrived`): the
     "ahead" a kept line talks about is a route already flown, so the layer
     falls back to the nutshell headline.
 
@@ -1169,7 +1220,7 @@ def ensure_highlight(
 
     No-ops when nothing significant changed (``carry_forward`` already
     attached the previous highlight during the commit), which is most ticks,
-    and after the planned arrival.
+    and after arrival (:func:`arrived`).
 
     Does **not** charge the ledger: it is called from a worker thread and a
     SQLAlchemy ``Session`` is not thread-safe. The caller charges
@@ -1200,7 +1251,7 @@ def ensure_highlight(
     if arrived(gate):
         # #706 item 6: 34 of a flight day's 311 attempts came after the planned
         # arrival, about "ahead" cells already abeam in the past.
-        return HighlightOutcome("skipped", reason="after planned arrival")
+        return HighlightOutcome("skipped", reason="after arrival")
 
     # The retry cap counts per gate state, so a rejected state is not retried
     # on a change the gate ignores (a rain-motion word, an airport passed).
@@ -1294,11 +1345,21 @@ def charge_highlight(db, user_id: str | None, flight_id: str, usage: dict | None
     (see ``digest/trip_summary._charge``). ~$0.0016 a call here, several times
     an hour per live flight — small, and recorded, because an invisible cost
     line is how a small cost becomes an unexplained one.
+
+    Written and committed on its **own** session on ``db``'s engine (#815).
+    The caller's session is the live tick's, open for the whole tick across
+    the METAR fetch, every flight's refresh and the model calls: a statement
+    or a connection that failed earlier on it left the ledger flush failing
+    with that earlier error (a recurring MySQL traceback in prod, the
+    highlight itself written), and a failed flush here left the tick's
+    session needing a rollback. Isolated, neither can take the other down.
+    A failure is one warning line naming the error; the traceback is at DEBUG.
     """
     if db is None or not user_id or not usage or not usage.get("model"):
         return
     try:
         from flyfun_common.costs import record_cost
+        from sqlalchemy.orm import Session
 
         from weatherbrief.api.credits import SERVICE
         from weatherbrief.costs import compute_call_cost
@@ -1310,17 +1371,22 @@ def charge_highlight(db, user_id: str | None, flight_id: str, usage: dict | None
             cache_read_tokens=usage.get("cache_read_tokens") or 0,
             cache_write_tokens=usage.get("cache_write_tokens") or 0,
         )
-        record_cost(
-            db, user_id,
-            service=SERVICE,
-            action="live_highlight",
-            cost=cost,
-            category="live_highlight",
-            description=f"Observed highlight (${cost:.4f})",
-            metadata={"model": usage["model"],
-                      "input_tokens": usage.get("input_tokens") or 0,
-                      "output_tokens": usage.get("output_tokens") or 0},
-            reference_id=flight_id,
-        )
-    except Exception:
-        logger.warning("Live highlight cost charge failed for %s", flight_id, exc_info=True)
+        with Session(bind=db.get_bind()) as own:
+            record_cost(
+                own, user_id,
+                service=SERVICE,
+                action="live_highlight",
+                cost=cost,
+                category="live_highlight",
+                description=f"Observed highlight (${cost:.4f})",
+                metadata={"model": usage["model"],
+                          "input_tokens": usage.get("input_tokens") or 0,
+                          "output_tokens": usage.get("output_tokens") or 0},
+                reference_id=flight_id,
+            )
+            own.commit()
+    except Exception as exc:
+        first = (str(exc).splitlines() or [""])[0][:300]
+        logger.warning("Live highlight cost charge failed for %s: %s: %s",
+                       flight_id, type(exc).__name__, first)
+        logger.debug("Live highlight cost charge traceback", exc_info=True)

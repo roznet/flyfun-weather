@@ -682,7 +682,7 @@ def test_no_highlight_after_planned_arrival(monkeypatch, tmp_path):
     monkeypatch.setattr(lh, "generate", lambda *a, **k: pytest.fail("should not call the model"))
     arrived = _live(flown=ROUTE_NM)
     out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance(), dump=arrived))
-    assert out.outcome == "skipped" and out.reason == "after planned arrival"
+    assert out.outcome == "skipped" and out.reason == "after arrival"
     gate = _gate(_live(flown=290))
     stored = _Layer(glance=_glance(highlight=_highlight(facts_hash=lh.gate_hash(gate), gate=gate)))
     fresh = _Layer(glance=_glance(), dump=arrived)
@@ -1179,3 +1179,154 @@ def test_a_reply_cut_at_max_tokens_is_rejected_as_truncated(monkeypatch, tmp_pat
     monkeypatch.setattr(lh, "_anthropic_client", lambda: _Client(_Resp(text="Quiet route", stop_reason="max_tokens")))
     out = lh.ensure_highlight(tmp_path, _Layer(glance=_glance()))
     assert out.outcome == "rejected" and out.reason.startswith("truncated")
+
+
+# --- #815 -------------------------------------------------------------------
+
+
+def _with_progress(live, **progress):
+    live["progress"] = {"source": "plan", "as_of": "2026-10-08T11:00:00Z", **progress}
+    return live
+
+
+def test_plan_alone_never_arrives():
+    """#815 item 6: a late leg with nothing recorded read "arrived" on the plan
+    and lost its highlight before take-off. Past the planned arrival with no
+    take-off, fix or landing, the position is unknown: the whole route is
+    shown again, departure included, and the highlight keeps going."""
+    live = _with_progress(_live(flown=ROUTE_NM, airports=[(_station("ZZMD", 150), _obs("ZZMD", 150, cat="IFR"))]))
+    f, gate = lh.facts_and_gate(live)
+    assert gate["phase"] == "position unknown"
+    assert not lh.arrived(gate)
+    assert "take-off not recorded" in f["flight"]
+    assert f["departure"]["icao"] == "ZZDP"
+    assert [a["icao"] for a in f["airports_along_route_ahead"]["notable"]] == ["ZZMD"]
+
+
+def test_effective_arrival_holds_a_grace_period():
+    """A take-off (or a fix) carries the plan on: its arrival is an estimate,
+    so "arriving" for ARRIVAL_GRACE after it, then arrived."""
+    eta = "2026-10-08T10:40:00Z"
+    inside = _with_progress(_live(flown=ROUTE_NM), source="plan+takeoff", eta_destination=eta,
+                            as_of="2026-10-08T10:55:00Z")
+    gate = _gate(inside)
+    assert gate["phase"] == "arriving" and not lh.arrived(gate)
+    after = _with_progress(_live(flown=ROUTE_NM), source="app", eta_destination=eta,
+                           as_of="2026-10-08T11:00:00Z")
+    assert lh.arrived(_gate(after))
+
+
+def test_a_landing_arrives_at_once():
+    live = _with_progress(_live(flown=ROUTE_NM), source="plan+takeoff", landed_at="2026-10-08T10:31:00Z",
+                          eta_destination="2026-10-08T10:31:00Z", as_of="2026-10-08T10:32:00Z")
+    f, gate = lh.facts_and_gate(live)
+    assert lh.arrived(gate) and "landed 10:31" in f["flight"]
+
+
+def test_en_route_and_before_departure_unchanged_by_progress():
+    assert _gate(_with_progress(_live(flown=100.0), source="plan"))["phase"] == "en route"
+    assert _gate(_with_progress(_live(flown=0.0), source="plan"))["phase"] == "before departure"
+
+
+class _OneAnchor:
+    """A locator whose every end resolves to the same place."""
+
+    def end_label(self, along):
+        return "Middelburg (EHMZ)"
+
+
+class _TwoAnchors:
+    def end_label(self, along):
+        return "Middelburg (EHMZ)" if along < 50 else "Oostende (EBOS)"
+
+
+def test_a_span_whose_ends_name_one_place_says_around_it():
+    """#815 item 2: "from Middelburg (EHMZ) to Middelburg (EHMZ)"."""
+    assert lh._coarse_stretches({30.0, 35.0}, ROUTE_NM, 0.0, _OneAnchor()) == ["around Middelburg (EHMZ)"]
+    assert lh._coarse_stretches({30.0, 60.0}, ROUTE_NM, 0.0, _TwoAnchors()) == [
+        "from Middelburg (EHMZ) to Oostende (EBOS)"]
+    # From the aircraft is never collapsed: it names no place.
+    assert lh._coarse_stretches({30.0}, ROUTE_NM, 40.0, _OneAnchor()) == ["from the aircraft to Middelburg (EHMZ)"]
+
+
+def _ledger_session():
+    from sqlalchemy.orm import sessionmaker
+
+    from conftest import make_app_engine
+
+    engine = make_app_engine()
+    return engine, sessionmaker(bind=engine)
+
+
+def test_charge_commits_on_its_own_session():
+    """#815 item 3: the tick's session is open for the whole tick; a failure
+    on it earlier must not take the ledger row down, and the charge must not
+    leave that session needing a rollback."""
+    from flyfun_common.db.models import CostLedgerRow
+
+    engine, factory = _ledger_session()
+    tick = factory()
+    try:
+        # Poison the tick's session: a failed flush leaves it needing a
+        # rollback, and anything flushed on it after fails with that error.
+        tick.add(CostLedgerRow(user_id=None, service="s", action="a", cost=0.0))
+        with pytest.raises(Exception):
+            tick.flush()
+        lh.charge_highlight(tick, "u1", "ZZ-f1", {"model": "claude-haiku-4-5", "input_tokens": 1000,
+                                                  "output_tokens": 50})
+        tick.rollback()
+        with factory() as check:
+            rows = check.query(CostLedgerRow).filter_by(reference_id="ZZ-f1").all()
+            assert len(rows) == 1 and rows[0].category == "live_highlight" and rows[0].cost > 0
+    finally:
+        tick.close()
+        engine.dispose()
+
+
+def test_charge_failure_is_one_line(caplog, monkeypatch):
+    import flyfun_common.costs as fc
+
+    def boom(*a, **k):
+        raise RuntimeError("(MySQLdb.OperationalError) (2013, 'Lost connection')\n[SQL: INSERT ...]")
+
+    monkeypatch.setattr(fc, "record_cost", boom)
+    engine, factory = _ledger_session()
+    try:
+        with factory() as tick, caplog.at_level("WARNING"):
+            lh.charge_highlight(tick, "u1", "ZZ-f1", {"model": "claude-haiku-4-5", "input_tokens": 10})
+        warn = [r for r in caplog.records if "cost charge failed" in r.getMessage()]
+        assert len(warn) == 1 and warn[0].exc_info is None
+        assert "Lost connection" in warn[0].getMessage() and "[SQL" not in warn[0].getMessage()
+    finally:
+        engine.dispose()
+
+
+def test_patch_moves_highlight_updated_at_not_live_updated_at(tmp_path):
+    """#815 item 5: clients fetch /live only when a stamp moves. The patch
+    leaves ``live_updated_at`` (the tick's identity) and moves its own stamp,
+    in the meta file /packs/latest reads; the next commit resets it."""
+    import json as _json
+
+    from weatherbrief.models.live import LiveLayer
+    from weatherbrief.tasks.live_layer import (
+        LIVE_FILE, LIVE_META_FILE, highlight_updated_at_for_pack, live_updated_at_for_pack,
+        load_live, patch_highlight,
+    )
+
+    as_of = datetime(2026, 10, 2, 9, 0, tzinfo=timezone.utc)
+    pack_dir = tmp_path / "p"
+    pack_dir.mkdir()
+    flight_dir = tmp_path
+    stored = LiveLayer(flight_id="f1", pack_timestamp="2026-10-02T05:00:00+00:00", pack_dir_name="p",
+                       live_updated_at=as_of, glance=_glance(as_of=as_of))
+    (flight_dir / LIVE_FILE).write_text(stored.model_dump_json())
+    (flight_dir / LIVE_META_FILE).write_text(_json.dumps({
+        "pack_dir_name": "p", "pack_timestamp": stored.pack_timestamp, "live_updated_at": as_of.isoformat()}))
+    assert highlight_updated_at_for_pack(pack_dir) is None
+
+    assert patch_highlight(flight_dir, _highlight(), pack_timestamp=stored.pack_timestamp, as_of=as_of)
+    back = load_live(flight_dir)
+    assert back.live_updated_at == as_of
+    assert back.highlight_updated_at is not None and back.highlight_updated_at > as_of
+    assert live_updated_at_for_pack(pack_dir) == as_of
+    assert highlight_updated_at_for_pack(pack_dir) == back.highlight_updated_at

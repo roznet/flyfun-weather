@@ -430,13 +430,13 @@ class LiveTick:
             push_thread.join()
         pushed = push_result.get("pushed", 0)
         highlighted = sum(1 for h in highlights.values() if h.outcome == "written")
-        # The highlight cost rows (charge_highlight) are committed on their own,
-        # before the latency rows: a failed latency insert must not roll the
-        # ledger back with it.
+        # The highlight cost rows (charge_highlight) are committed on their own
+        # session (#815). Close this one's transaction before the latency rows
+        # so they start clean.
         try:
             db.commit()
         except Exception:
-            logger.warning("Live tick: highlight cost rows not committed", exc_info=True)
+            logger.warning("Live tick: tick session not committed before the latency rows", exc_info=True)
             db.rollback()
 
         tick_ms = int((time.monotonic() - t0) * 1000)

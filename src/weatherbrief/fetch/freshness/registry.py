@@ -827,14 +827,17 @@ def initial_marker_for(source: str, now: datetime | None = None) -> tuple[dateti
 
     Picks the most recent cycle whose expected delivery is at-or-before
     ``now`` (so the loop's first dynamic check has a plausible "current"
-    init to compare against).  Falls back to one cycle prior if the latest
-    cycle hasn't been delivered yet.
+    init to compare against).  Steps back as many cycles as it takes: a
+    delivery offset longer than the cycle spacing (UKMO / ECMWF via
+    Open-Meteo, ~8 h on a 6-h cycle) means the cycle before the current one
+    may not be due either, and claiming it would report the model stale
+    before its run exists (#815).
     """
     now = now or datetime.now(timezone.utc)
     cfg = SOURCE_REGISTRY[source]
     init = _floor_to_cycle(now, cfg)
-    if init + cfg.offset_for(init.hour) > now:
-        # current cycle not yet expected to be ready — use prior cycle
+    while init + cfg.offset_for(init.hour) > now:
+        # this cycle not yet expected to be ready — try the one before
         init = _floor_to_cycle(init - timedelta(seconds=1), cfg)
     next_expected = next_run_after(source, init)
     return init, next_expected

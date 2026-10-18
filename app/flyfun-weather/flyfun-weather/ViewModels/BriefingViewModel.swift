@@ -429,7 +429,8 @@ final class BriefingViewModel {
         // Already showing the newest pack — seamless no-op for the pack itself
         // (the frequent case). Its observations may still have moved.
         guard latest.fetchTimestamp != pack?.fetchTimestamp else {
-            if forceLive || LiveTime.isNewer(latest.liveUpdatedAt, than: appliedLiveUpdatedAt) {
+            if forceLive || LiveTime.isNewer(latest.liveUpdatedAt, than: appliedLiveUpdatedAt)
+                || LiveTime.isNewer(latest.highlightUpdatedAt, than: liveLayer?.highlightUpdatedAt) {
                 await fetchLiveLayer(timestamp: latest.fetchTimestamp)
             }
             return
@@ -960,12 +961,36 @@ final class BriefingViewModel {
     @discardableResult
     private func adoptLiveLayer(_ layer: LiveLayerResponse, timestamp: String) -> Bool {
         guard pack?.fetchTimestamp == timestamp,
-              case .loaded(let snapshot) = snapshotState,
-              let patched = Self.applyLive(layer, to: snapshot, packTimestamp: timestamp)
+              case .loaded(let snapshot) = snapshotState else { return false }
+        if let patched = Self.applyLive(layer, to: snapshot, packTimestamp: timestamp) {
+            snapshotState = .loaded(patched)
+            liveLayer = layer
+            return true
+        }
+        // #815: the same tick with the highlight the server patched in after
+        // its commit. The snapshot has nothing new; the glance does.
+        guard Self.refreshesHighlight(current: liveLayer, incoming: layer, packTimestamp: timestamp)
         else { return false }
-        snapshotState = .loaded(patched)
         liveLayer = layer
         return true
+    }
+
+    /// `incoming` is the tick already adopted (same pack, same
+    /// `liveUpdatedAt`) but carries a different highlight: the server patches
+    /// it in ~50 s after the commit without moving `liveUpdatedAt`, so a fetch
+    /// in between got the tick without it (#815). Pure, for testing.
+    static func refreshesHighlight(
+        current: LiveLayerResponse?,
+        incoming: LiveLayerResponse,
+        packTimestamp: String
+    ) -> Bool {
+        guard let current,
+              LiveTime.sameInstant(incoming.packTimestamp, packTimestamp),
+              LiveTime.sameInstant(current.packTimestamp, packTimestamp),
+              incoming.liveUpdatedAt != nil,
+              LiveTime.sameInstant(incoming.liveUpdatedAt, current.liveUpdatedAt)
+        else { return false }
+        return incoming.glance?.highlight != current.glance?.highlight
     }
 
     /// Disk-only: the last live layer this device saw. A downloaded pack's
