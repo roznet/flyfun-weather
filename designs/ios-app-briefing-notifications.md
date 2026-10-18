@@ -341,9 +341,11 @@ keeping:
   `\n`-escaped, or base64 PEM). `_fcm_access_token` exchanges an RS256 JWT assertion at
   `https://oauth2.googleapis.com/token` for a cached (~50 min) OAuth2 bearer token, minted once
   per dispatch batch and evicted immediately on a 401 response. Sends go to
-  `POST https://fcm.googleapis.com/v1/projects/{project_id}/messages:send`; `UNREGISTERED` and
-  `SENDER_ID_MISMATCH` responses prune the dead token (and trigger last-device email decay if
-  it was the user's last device). Alert payloads set `android.notification.channel_id` to
+  `POST https://fcm.googleapis.com/v1/projects/{project_id}/messages:send`; only an `UNREGISTERED`
+  errorCode prunes the dead token (and triggers last-device email decay if it was the user's
+  last device). `SENDER_ID_MISMATCH` or a 404 without `UNREGISTERED` is logged as an error and
+  the token kept — it means our `FCM_*` credentials don't match the app's Firebase project, and
+  pruning would wipe every Android device on a bad deploy. Alert payloads set `android.notification.channel_id` to
   `flyfun_briefing_updates`, `flyfun_flight_day`, `flyfun_live_alerts` (`time-sensitive`,
   `HIGH` priority), or `flyfun_live_clear` (`active`, `NORMAL` priority), matching the channels
   registered by `PushNotificationManager.kt`. Missing FCM config → log-and-skip Android tokens

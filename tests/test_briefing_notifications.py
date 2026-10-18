@@ -1050,7 +1050,7 @@ def test_send_fcm_one_error_parsing_and_cache_eviction(monkeypatch):
     )
     assert r_unreg.ok is False and r_unreg.dead is True and r_unreg.reason == "UNREGISTERED"
 
-    # 2. 403 SENDER_ID_MISMATCH -> dead=True
+    # 2. 403 SENDER_ID_MISMATCH -> config error, token kept
     r_mismatch = push_mod._send_fcm_one(
         _FakeClient(
             _FakeResp(
@@ -1069,7 +1069,18 @@ def test_send_fcm_one_error_parsing_and_cache_eviction(monkeypatch):
         push_type="alert",
         access_token="tok",
     )
-    assert r_mismatch.ok is False and r_mismatch.dead is True and r_mismatch.reason == "SENDER_ID_MISMATCH"
+    assert r_mismatch.ok is False and r_mismatch.dead is False and r_mismatch.reason == "SENDER_ID_MISMATCH"
+
+    # 2b. bare 404 (e.g. wrong FCM_PROJECT_ID) without UNREGISTERED -> token kept
+    r_bare_404 = push_mod._send_fcm_one(
+        _FakeClient(_FakeResp(404, {"error": {"status": "NOT_FOUND"}})),
+        cfg,
+        "tok2b",
+        payload,
+        push_type="alert",
+        access_token="tok",
+    )
+    assert r_bare_404.ok is False and r_bare_404.dead is False
 
     # 3. 400 INVALID_ARGUMENT -> dead=False
     r_invalid = push_mod._send_fcm_one(

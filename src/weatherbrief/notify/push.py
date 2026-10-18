@@ -21,8 +21,10 @@ on iOS, ``android.ttl`` on Android).
 Routing is per **device** row (`PushDevice(token, environment, platform)`):
 iOS rows route to APNs (``production`` vs ``sandbox`` host), Android rows route
 to FCM HTTP v1. On a dead-token response (APNs ``BadDeviceToken`` /
-``Unregistered`` / ``DeviceTokenNotForTopic``, or FCM ``UNREGISTERED`` /
-``SENDER_ID_MISMATCH``) the offending row is deleted so the table self-heals.
+``Unregistered`` / ``DeviceTokenNotForTopic``, or FCM ``UNREGISTERED``) the
+offending row is deleted so the table self-heals. FCM ``SENDER_ID_MISMATCH`` or
+a bare 404 is logged as a config error and the token kept: it almost always
+means our ``FCM_*`` credentials are wrong, not that the device is gone.
 
 Everything here is best-effort: a push must NEVER break a refresh, so the
 high-level senders log-and-skip on any failure and the caller wraps them too.
@@ -307,8 +309,10 @@ _FCM_CHANNEL_FLIGHT_DAY = "flyfun_flight_day"
 _FCM_CHANNEL_LIVE_ALERTS = "flyfun_live_alerts"
 _FCM_CHANNEL_LIVE_CLEAR = "flyfun_live_clear"
 
-# FCM errorCode values that mean this registration token will never succeed.
-_FCM_DEAD_ERROR_CODES = {"UNREGISTERED", "SENDER_ID_MISMATCH"}
+# The only FCM errorCode that proves a registration token is dead. Not
+# SENDER_ID_MISMATCH: a wrong FCM_* project/service account returns it for every
+# token, and pruning on it would wipe every Android device on a bad deploy.
+_FCM_DEAD_ERROR_CODE = "UNREGISTERED"
 
 
 def _fcm_access_token(client: httpx.Client, config: FcmConfig) -> str:
@@ -442,23 +446,21 @@ def _send_fcm_one(
         _evict_fcm_token(config)
 
     reason: str | None = None
-    dead = resp.status_code in {404, 410}
+    error_code: str | None = None
     try:
         err = resp.json().get("error") or {}
         reason = err.get("status") or err.get("message")
         for detail in err.get("details") or []:
-            code = detail.get("errorCode")
-            if code in _FCM_DEAD_ERROR_CODES or code == "INVALID_ARGUMENT":
-                if code in _FCM_DEAD_ERROR_CODES:
-                    dead = True
-                reason = code
+            if code := detail.get("errorCode"):
+                error_code = reason = code
     except Exception:
         reason = resp.text or None
-    if reason in _FCM_DEAD_ERROR_CODES:
-        dead = True
-    if reason == "SENDER_ID_MISMATCH":
-        logger.warning(
-            "FCM token belongs to a different Firebase project (SENDER_ID_MISMATCH) — pruning"
+    dead = error_code == _FCM_DEAD_ERROR_CODE
+    if error_code == "SENDER_ID_MISMATCH" or (resp.status_code == 404 and not dead):
+        logger.error(
+            "FCM send failed: status=%d reason=%s — likely FCM_* credentials not "
+            "matching the app's Firebase project; token kept",
+            resp.status_code, reason,
         )
     else:
         logger.warning("FCM send failed: status=%d reason=%s", resp.status_code, reason)
@@ -488,7 +490,6 @@ def _dispatch(
     fcm_config: FcmConfig | None = None,
     user_id: str | None = None,
     expires_at: datetime | None = None,
-    extra_headers: dict[str, str] | None = None,
 ) -> int:
     """Send ``payload`` to each device (APNs for iOS, FCM for Android); prune dead ones.
 
@@ -527,9 +528,10 @@ def _dispatch(
             except ValueError:
                 logger.debug("APNs not configured — skipping iOS push")
         if apns_cfg is not None:
-            apns_headers = dict(extra_headers) if extra_headers else {}
-            if expires_at is not None:
-                apns_headers["apns-expiration"] = str(int(expires_at.timestamp()))
+            apns_headers = (
+                {"apns-expiration": str(int(expires_at.timestamp()))}
+                if expires_at is not None else None
+            )
             try:
                 with httpx.Client(http2=True, timeout=15.0) as client:
                     for token, environment in ios_devices:
@@ -537,7 +539,7 @@ def _dispatch(
                             result = _send_one(
                                 client, apns_cfg, token, environment, payload,
                                 push_type=push_type, priority=priority,
-                                extra_headers=apns_headers or None,
+                                extra_headers=apns_headers,
                             )
                         except Exception:
                             logger.warning("APNs send raised for a device", exc_info=True)
