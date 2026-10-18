@@ -698,8 +698,30 @@ class TestTurbulence:
 
 class TestConvective:
     def test_green_no_convection(self, clear_context: RouteContext):
-        result = ConvectiveEvaluator.evaluate(clear_context, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})
+        # GREEN needs an *assessed* quiet column (#807): attach an assessed NONE
+        # to every sounding (the shared fixture carries no assessment at all).
+        from weatherbrief.models import ConvectiveAssessment, ConvectiveRisk
+
+        quiet = ConvectiveAssessment(risk_level=ConvectiveRisk.NONE, cape_jkg=0.0)
+        import dataclasses
+
+        ctx = dataclasses.replace(clear_context, analyses=[
+            rpa.model_copy(update={"sounding": {
+                m: s.model_copy(update={"convective": quiet, "convective_thermo": quiet})
+                for m, s in rpa.sounding.items()
+            }})
+            for rpa in clear_context.analyses
+        ])
+        result = ConvectiveEvaluator.evaluate(ctx, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})
         assert result.aggregate_status == AdvisoryStatus.GREEN
+
+    def test_unassessed_soundings_are_unavailable_not_green(self, clear_context: RouteContext):
+        """Soundings with no convective assessment (no CAPE, no native track) are
+        unassessed, not clear (#807): the model grades UNAVAILABLE, not GREEN."""
+        result = ConvectiveEvaluator.evaluate(clear_context, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})
+        assert result.aggregate_status == AdvisoryStatus.UNAVAILABLE
+        for m in result.per_model:
+            assert m.status == AdvisoryStatus.UNAVAILABLE
 
     def test_moderate_convection(self, convective_context: RouteContext):
         result = ConvectiveEvaluator.evaluate(convective_context, {"min_risk": 2, "extent_pct_amber": 20, "extent_pct_red": 50})

@@ -89,6 +89,40 @@ def effective_cape(indices: ThermodynamicIndices) -> float | None:
 _effective_cape = effective_cape
 
 
+def effective_cape_cin(
+    indices: ThermodynamicIndices,
+) -> tuple[float | None, float | None]:
+    """Effective CAPE plus the CIN *of the parcel that supplied it* (#807).
+
+    The regime classifier reads CAPE and CIN as one parcel's energy budget. Pairing
+    the max-of-variants CAPE with the surface parcel's CIN unconditionally mixes
+    parcels: elevated MU-CAPE above a stable nocturnal / marine boundary layer then
+    reads LOADED_GUN off an SB "cap" the elevated parcel never has to break.
+
+    - SB supplies the CAPE (it wins ties, so a surface-rooted MU parcel — MU == SB
+      — keeps the historical pairing) → SB CIN.
+    - MU supplies it → the MU parcel's own CIN, falling back to SB CIN when MU CIN
+      is absent (packs written before ``cin_most_unstable_jkg`` existed — the
+      two come from one call, so on fresh data they are present together).
+    - ML supplies it → SB CIN, as before (no ML CIN is computed; ML exceeding MU
+      is the rare case).
+    - NWP raw CAPE fallback → SB CIN, as before (the model CIN's sign convention
+      and parcel are source-dependent; not paired here).
+    """
+    cape = effective_cape(indices)
+    sb_cin = indices.cin_surface_jkg
+    if cape is None:
+        return None, sb_cin
+    sb = indices.cape_surface_jkg
+    mu = indices.cape_most_unstable_jkg
+    if sb is not None and cape == sb:
+        return cape, sb_cin
+    if mu is not None and cape == mu:
+        mu_cin = indices.cin_most_unstable_jkg
+        return cape, mu_cin if mu_cin is not None else sb_cin
+    return cape, sb_cin
+
+
 def _severity_modifiers(indices: ThermodynamicIndices, cape: float | None) -> list[str]:
     """Compute severity modifier strings from indices."""
     modifiers: list[str] = []
@@ -389,11 +423,19 @@ def _regime_explanation(
 def assess_convective_thermo(
     indices: ThermodynamicIndices,
     omega_700_pa_s: float | None = None,
-) -> ConvectiveAssessment:
+) -> ConvectiveAssessment | None:
     """Assess convective risk from thermodynamic indices.
 
+    Returns None when no CAPE is available at all (no MetPy SB/MU/ML variant and
+    no NWP raw CAPE): the column was *not assessed*, which must stay distinct from
+    an assessed-quiet NONE (#807). A NONE here used to read as "checked, no
+    convection" and graded GREEN; downstream it is now an unassessed point
+    (``grade_convective_model`` excludes it from the grading denominator and its
+    coverage guard can make the model UNAVAILABLE).
+
     The *regime* (THERMAL / WEAK_INSTABILITY / LOADED_GUN / ACTIVE) is classified
-    from the potential CAPE (max of MetPy SB/MU/ML variants) and CIN, then drives
+    from the potential CAPE (max of MetPy SB/MU/ML variants) and the CIN of the
+    parcel that supplied it (:func:`effective_cape_cin`), then drives
     regime-appropriate scoring:
 
     - LOADED_GUN (high potential CAPE under a strong cap): scored on the
@@ -414,8 +456,9 @@ def assess_convective_thermo(
     surface tier is low. The ``drivers``/``suppressors`` lists make the reasoning
     explicit; ``severe_modifiers`` flag the character of convection if it fires.
     """
-    potential = _effective_cape(indices)
-    cin = indices.cin_surface_jkg
+    potential, cin = effective_cape_cin(indices)
+    if potential is None:
+        return None
     regime = classify_regime(potential, cin)
 
     # Only ACTIVE (high potential, weak cap) is scored on realizable mixed-layer
@@ -754,7 +797,8 @@ def assess_convective_nwp(
     """Assess convective risk from the model's own convective-scheme output.
 
     Returns None when ``nwp_diagnostics`` is None (no GRIB enrichment for this
-    model — e.g. AROME / UKMO / Météo-France, which are Open-Meteo-only).
+    model — e.g. AROME / UKMO / Météo-France, which are Open-Meteo-only), and on
+    the CAPE-fallback path when there is no CAPE to score (#807).
 
     For GRIB models (GFS, ECMWF, ICON-EU) the risk level is **model-native**
     (#283): driven by the convective tower top (``convective_top_ft``) and, where
@@ -808,6 +852,11 @@ def assess_convective_nwp(
             # Modifiers were computed above against the sounding CAPE; recompute
             # so they describe whichever value actually grades this assessment.
             modifiers = _severity_modifiers(indices, cape)
+        if cape is None:
+            # No native scheme AND no CAPE from any source: nothing was assessed.
+            # Return None (an absent track, §26) rather than a CAPE-less NONE
+            # that would read as "scheme quiet" (#807).
+            return None
         risk = _nwp_cape_fallback_risk(cape)
         if cin is not None and cin < CIN_CAP_THRESHOLD and risk != ConvectiveRisk.NONE:
             risk = _down_one(risk)

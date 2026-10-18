@@ -8,8 +8,11 @@ components blended by CAPE. Replaces the previous wet-bulb band classification.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from weatherbrief.analysis.sounding.icing_common import (
+    CLOUD_MARGIN_FT,
     MIN_ZONE_HALF_THICKNESS_FT as _MIN_ZONE_HALF_THICKNESS_FT,
     classify_icing_type,
     glaciation_factor,
@@ -27,12 +30,19 @@ from weatherbrief.models import (
     NWPCloudDiagnostics,
 )
 
-# Dewpoint depression threshold — level must be near/in cloud
-IN_CLOUD_DD_THRESHOLD = 3.0
-
 # --- DD attenuation ---
+#
+# The "in cloud" gate is NOT in this module: Ogimet-DD gates on the DD cloud
+# layers built by ``clouds.py`` (``IN_CLOUD_DD_THRESHOLD = 3.0`` there, so
+# DD 2–3 °C levels form SCT layers), plus ``is_in_cloud_layer``'s ±500 ft
+# margin. Within those layers this taper reaches 0 at DD ≥ 2.0 °C, so SCT-grade
+# levels (DD 2–3) and margin levels pass the gate but contribute no Ogimet-DD
+# icing, whereas SFIP-proxy still scores them (``membership_clw_proxy``). That
+# divergence is a calibration choice, documented rather than re-tuned (#807,
+# pipeline-review 2026-08 §3.8); a stale duplicate ``IN_CLOUD_DD_THRESHOLD``
+# that used to sit here (unused) suggested a 3.0 °C gate in this file.
 
-_DD_ATTENUATION_CUTOFF = 2.0  # DD above this → factor = 0
+_DD_ATTENUATION_CUTOFF = 2.0  # DD at/above this → factor = 0
 
 
 def _dd_attenuation_factor(dewpoint_depression_c: float) -> float:
@@ -123,7 +133,16 @@ def _compute_icing_index(
     convective_frac: float,
     vapor_density_base: float,
 ) -> float:
-    """Combined Ogimet icing index (0–100 scale)."""
+    """Combined Ogimet icing index (0–100 scale).
+
+    Known ceiling (deliberate, not re-tuned — #807, approach-review §3.1): the
+    ``raw / 2`` normalisation caps a pure-stratiform profile (layered_frac 1.0,
+    layered max 100 at −7 °C) at **50**, i.e. MODERATE against
+    ``_INDEX_SEVERE = 80``. SEVERE from the index alone needs the convective
+    term (CAPE ≥ 100 J/kg). Stratiform SEVERE is reachable only through the
+    opt-in ``icing_severity_enhance`` path (:func:`_enhance_severity`), SFIP,
+    or IENG (which scales the unhalved layered index by cover).
+    """
     rho_v = _vapor_density(dewpoint_c)
 
     layered = _compute_layered_index(temperature_c)
@@ -169,6 +188,10 @@ def _enhance_severity(
     nwp_cloud_pct: float | None = None,
 ) -> IcingRisk:
     """Potentially upgrade severity based on zone-level moisture indicators.
+
+    Wired behind the opt-in ``icing_severity_enhance`` preference (#807) via
+    :class:`SeverityEnhanceInputs`, for the Ogimet-DD and Ogimet-NWP zone
+    builders only (IENG and SFIP reach SEVERE on their own). Upgrade-only.
 
     RH-based upgrade requires corroboration:
       - At least 3 levels in the zone with RH > 95% (deep saturation)
@@ -283,6 +306,44 @@ def _nwp_cloud_for_altitude(
     )
 
 
+def _cloud_fraction_for_level(
+    lv: DerivedLevel,
+    clouds: list[EnhancedCloudLayer],
+    nwp_cloud_pct: float | None,
+) -> float:
+    """Cloud fraction (0–1) scaling the index at a level already inside *clouds*.
+
+    Only called after the level passed ``is_in_cloud_layer(lv, clouds)`` — the
+    model-native NWP cloud envelope says there IS cloud here. So an unknown
+    cover (``nwp_cloud_pct is None``, #807) is "cloud present, fraction
+    unknown", never "clear": it used to drop the level exactly as a 0 % cover
+    would, silently erasing icing inside a drawn cloud band.
+
+    Unknown resolves, in order, to:
+
+    1. the highest ``mean_cloud_cover_pct`` of the gating layer(s) that contain
+       the level — the model's own cover for the very deck the gate admitted
+       the level on (GFS band cover, ECMWF/ICON 3D cloud fraction);
+    2. otherwise 1.0 — an unscaled index. The cloud is not invented (the model
+       drew the layer); only its fraction is taken at the conservative bound.
+
+    A *known* cover is used as-is, including a known 0 % (the caller skips it).
+    """
+    if nwp_cloud_pct is not None:
+        return nwp_cloud_pct / 100.0
+    alt = lv.altitude_ft
+    layer_pcts = [
+        cl.mean_cloud_cover_pct
+        for cl in clouds
+        if cl.mean_cloud_cover_pct is not None
+        and alt is not None
+        and (cl.base_ft - CLOUD_MARGIN_FT) <= alt <= (cl.top_ft + CLOUD_MARGIN_FT)
+    ]
+    if layer_pcts:
+        return max(layer_pcts) / 100.0
+    return 1.0
+
+
 # NWP cloud cover threshold for the fallback icing pass — when the NWP model
 # reports cloud cover above this in an icing-temperature band, assess icing
 # even if the sounding didn't detect cloud proximity at that level.
@@ -346,18 +407,89 @@ def _build_zone_simple(
     )
 
 
+@dataclass(frozen=True)
+class SeverityEnhanceInputs:
+    """Inputs for the opt-in RH/PW severity upgrade (``icing_severity_enhance``).
+
+    Passing an instance to an Ogimet zone builder turns the upgrade on; ``None``
+    (the default) leaves the Ogimet index's own severity untouched. The cover
+    fields are the same bulk/diagnostic inputs the NWP-gated methods read, used
+    here only as the "NWP corroborates ≥ 50 % cloud" check — an unknown cover
+    never corroborates.
+    """
+
+    precipitable_water_mm: float | None = None
+    nwp_cloud_low_pct: float | None = None
+    nwp_cloud_mid_pct: float | None = None
+    nwp_cloud_high_pct: float | None = None
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None
+
+
+def _zone_nwp_cloud_pct(
+    levels_in_zone: list[DerivedLevel], enhance: SeverityEnhanceInputs,
+) -> float | None:
+    """Highest KNOWN NWP cover at any of the zone's levels; None if none known."""
+    known = [
+        pct
+        for lv in levels_in_zone
+        if lv.altitude_ft is not None
+        and (pct := _nwp_cloud_for_altitude(
+            lv.altitude_ft,
+            enhance.nwp_cloud_low_pct,
+            enhance.nwp_cloud_mid_pct,
+            enhance.nwp_cloud_high_pct,
+            nwp_cloud_diagnostics=enhance.nwp_cloud_diagnostics,
+        )) is not None
+    ]
+    return max(known) if known else None
+
+
+def _zone_builder(
+    enhance: SeverityEnhanceInputs | None,
+) -> Callable[[list[tuple[DerivedLevel, IcingType, IcingRisk, float]]], IcingZone]:
+    """Zone builder, optionally applying :func:`_enhance_severity` per zone.
+
+    The upgrade runs on the zone's own grouped levels (not an altitude
+    re-selection), so it sees exactly the levels that formed the zone. It only
+    ever raises ``risk`` — never lowers it — and leaves ``mean_icing_index``
+    as the Ogimet index computed it, so a SEVERE zone with a MODERATE-range
+    index is recognisably an enhanced one.
+    """
+    if enhance is None:
+        return _build_zone_simple
+
+    def _build(items: list[tuple[DerivedLevel, IcingType, IcingRisk, float]]) -> IcingZone:
+        zone = _build_zone_simple(items)
+        levels_in_zone = [lv for lv, _, _, _ in items]
+        upgraded = _enhance_severity(
+            zone.risk,
+            levels_in_zone,
+            enhance.precipitable_water_mm,
+            nwp_cloud_pct=_zone_nwp_cloud_pct(levels_in_zone, enhance),
+        )
+        if upgraded != zone.risk:
+            zone = zone.model_copy(update={"risk": upgraded})
+        return zone
+
+    return _build
+
+
 def _group_into_zones(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     all_levels: list[DerivedLevel] | None = None,
+    enhance: SeverityEnhanceInputs | None = None,
 ) -> list[IcingZone]:
     """Group adjacent icing levels into zones — see :func:`group_icing_levels` for ``all_levels`` semantics."""
-    return group_icing_levels(icing_levels, _build_zone_simple, all_levels=all_levels)
+    return group_icing_levels(
+        icing_levels, _zone_builder(enhance), all_levels=all_levels,
+    )
 
 
 def assess_icing_zones_ogimet_dd(
     levels: list[DerivedLevel],
     clouds: list[EnhancedCloudLayer],
     cape_jkg: float | None = None,
+    severity_enhance: SeverityEnhanceInputs | None = None,
 ) -> list[IcingZone]:
     """Ogimet index gated by DD cloud layers with DD severity modulation.
 
@@ -365,6 +497,9 @@ def assess_icing_zones_ogimet_dd(
     DD-detected + NWP-filtered cloud layers (same layers drawn on the
     cross-section).  Within cloud, the DD attenuation factor modulates
     severity (denser cloud → more icing).
+
+    *severity_enhance* (opt-in ``icing_severity_enhance``) applies
+    :func:`_enhance_severity` to each zone — upgrade only.
     """
     if not levels:
         return []
@@ -404,7 +539,7 @@ def assess_icing_zones_ogimet_dd(
         lv.icing_index = round(effective, 1)
         icing_levels.append((lv, icing_type, risk, effective))
 
-    return _group_into_zones(icing_levels, all_levels=levels)
+    return _group_into_zones(icing_levels, all_levels=levels, enhance=severity_enhance)
 
 
 def assess_icing_zones_ogimet_nwp(
@@ -415,6 +550,7 @@ def assess_icing_zones_ogimet_nwp(
     nwp_cloud_mid_pct: float | None = None,
     nwp_cloud_high_pct: float | None = None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+    severity_enhance: SeverityEnhanceInputs | None = None,
 ) -> list[IcingZone]:
     """Ogimet index gated by NWP cloud layers, scaled by cloud fraction.
 
@@ -432,6 +568,8 @@ def assess_icing_zones_ogimet_nwp(
 
     Stores per-level index in ``lv.icing_index_nwp`` (separate from
     ``icing_index`` used by Ogimet-DD) to avoid overwriting.
+
+    *severity_enhance*: as for :func:`assess_icing_zones_ogimet_dd`.
     """
     if not levels or not clouds:
         return []
@@ -461,15 +599,22 @@ def assess_icing_zones_ogimet_nwp(
             lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
             nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
-        if nwp_cloud is None or nwp_cloud <= 0:
+        # Known 0 % → no cloud at this altitude per the model; skip. Unknown
+        # (None) is NOT clear — see ``_cloud_fraction_for_level`` (#807).
+        if nwp_cloud is not None and nwp_cloud <= 0:
             continue
 
-        cloud_fraction = nwp_cloud / 100.0
+        cloud_fraction = _cloud_fraction_for_level(lv, clouds, nwp_cloud)
+        if cloud_fraction <= 0:
+            continue
         effective = raw_index * cloud_fraction
 
         # Apply glaciation factor when CLW/ICMR microphysics are available.
-        # Temperature-dependent floor prevents grid-scale CLW=0 from
-        # completely zeroing out icing at warm temps where SLW is expected.
+        # The temperature-dependent floor keeps ice-dominant cloud (CLW≈0,
+        # ICMR>0) from zeroing out at warm temps where SLW is expected. It does
+        # NOT cover CLW = ICMR = 0 (no grid-scale condensate at all): that
+        # returns 0 and the level is dropped even inside an NWP cloud layer —
+        # see ``icing_common.glaciation_factor`` (#807, documented, not tuned).
         clw = lv.cloud_liquid_water_g_kg
         icmr = lv.ice_mixing_ratio_g_kg
         if clw is not None and icmr is not None:
@@ -486,7 +631,7 @@ def assess_icing_zones_ogimet_nwp(
         lv.icing_index_nwp = round(effective, 1)
         icing_levels.append((lv, icing_type, risk, effective))
 
-    return _group_into_zones(icing_levels, all_levels=levels)
+    return _group_into_zones(icing_levels, all_levels=levels, enhance=severity_enhance)
 
 
 def assess_icing_zones_ieng(
@@ -530,10 +675,14 @@ def assess_icing_zones_ieng(
             lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
             nwp_cloud_diagnostics=nwp_cloud_diagnostics,
         )
-        if nwp_cloud is None or nwp_cloud <= 0:
+        # Known 0 % → no cloud at this altitude per the model; skip. Unknown
+        # (None) is NOT clear — see ``_cloud_fraction_for_level`` (#807).
+        if nwp_cloud is not None and nwp_cloud <= 0:
             continue
 
-        cloud_fraction = nwp_cloud / 100.0
+        cloud_fraction = _cloud_fraction_for_level(lv, clouds, nwp_cloud)
+        if cloud_fraction <= 0:
+            continue
         effective = raw_index * cloud_fraction
 
         # Add convective component when CAPE is significant

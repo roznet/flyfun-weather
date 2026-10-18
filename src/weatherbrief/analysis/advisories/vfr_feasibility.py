@@ -24,6 +24,7 @@ the flight is infeasible at the filed level and available beneath the cells.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
@@ -329,12 +330,14 @@ def _field_elevation_ft(ctx: RouteContext, distance_nm: float) -> float:
 
     Used as the floor for the climb/descent corridor check so a cloud layer
     buried below the field (base above cruise is already excluded) is not
-    mistaken for a deck the aircraft must transit.
+    mistaken for a deck the aircraft must transit. Unknown (no profile, or a
+    void sample, #807) → 0.0: the lowest floor counts every deck, so a data
+    gap can only add corridor warnings, never hide one.
     """
     if ctx.elevation is None or not ctx.elevation.points:
         return 0.0
     nearest = min(ctx.elevation.points, key=lambda p: abs(p.distance_nm - distance_nm))
-    return nearest.elevation_ft
+    return nearest.elevation_ft if nearest.elevation_ft is not None else 0.0
 
 
 def _corridor_points(
@@ -837,7 +840,14 @@ def _solver_mitigations(
     # "fly lower" stays reserved for routes that cannot sustain cruise at all.
     if enroute_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED):
         max_terrain = ctx.elevation.max_elevation_ft if ctx.elevation else 0.0
-        floor = max_terrain + floor_margin_ft
+        if ctx.elevation is not None and ctx.elevation.points and (
+            not ctx.elevation.terrain_complete
+        ):
+            # Known-sample max is a lower bound over a void (#807): offer no
+            # lower flat altitude rather than one that may sit in the hill.
+            floor = math.inf
+        else:
+            floor = (max_terrain or 0.0) + floor_margin_ft
         best_alt: int | None = None
         best_status: AdvisoryStatus | None = None
         alt = cruise - MITIGATION_BIN_STEP_FT

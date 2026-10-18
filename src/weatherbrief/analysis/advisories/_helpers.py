@@ -75,8 +75,17 @@ def build_cost_model(
     distances = [d for d, _ in points]
     cost_field: list[list[float]] = []
     floors: list[float] = []
+    has_profile = ctx.elevation is not None and bool(ctx.elevation.points)
     for d, sounding in points:
-        floor = (terrain_at_distance(ctx.elevation, d) or 0.0) + floor_margin_ft
+        terrain = terrain_at_distance(ctx.elevation, d)
+        if terrain is None and has_profile:
+            # A terrain void here (#807): no altitude is provably clear of the
+            # ground, so the column is walled and the solver cannot route a
+            # mitigation profile through it. (No profile at all keeps the
+            # legacy sea-level floor — that path predates #807.)
+            floor = INF
+        else:
+            floor = (terrain or 0.0) + floor_margin_ft
         floors.append(floor)
         cost_field.append([
             INF if (alt < floor or alt > ceiling) else cell_cost(sounding, alt)
@@ -875,7 +884,10 @@ def terrain_at_distance(
 ) -> float | None:
     """Interpolate terrain elevation at a given distance along the route.
 
-    Returns elevation in feet, or None if no profile available.
+    Returns elevation in feet, or None if no profile is available **or** the
+    interpolation would touch an unknown sample (``elevation_ft is None`` —
+    an SRTM void with a failed fallback, #807). Unknown terrain is never read
+    as sea level; the caller decides what an unknown floor means.
     """
     if elevation is None or not elevation.points:
         return None
@@ -899,6 +911,8 @@ def terrain_at_distance(
 
     # Linear interpolation
     p0, p1 = points[lo], points[hi]
+    if p0.elevation_ft is None or p1.elevation_ft is None:
+        return None
     if p1.distance_nm == p0.distance_nm:
         return p0.elevation_ft
     frac = (distance_nm - p0.distance_nm) / (p1.distance_nm - p0.distance_nm)
@@ -921,22 +935,25 @@ def max_terrain_between(
 
     Both endpoints are included by interpolation, so a span shorter than the
     elevation sampling still returns a real number rather than ``None``.
-    Returns ``None`` only when no profile is available at all — the caller
-    decides what an unknown floor means.
+    Returns ``None`` when no profile is available, or when any sample in the
+    span (or an endpoint's interpolation) is unknown — a partial maximum is a
+    lower bound, the wrong side for a floor (#807). The caller decides what an
+    unknown floor means.
     """
     if elevation is None or not elevation.points:
         return None
     lo, hi = (from_nm, to_nm) if from_nm <= to_nm else (to_nm, from_nm)
-    highest = max(
-        (pt.elevation_ft for pt in elevation.points if lo <= pt.distance_nm <= hi),
-        default=None,
-    )
+    in_span = [pt.elevation_ft for pt in elevation.points if lo <= pt.distance_nm <= hi]
+    if any(e is None for e in in_span):
+        return None
+    highest = max(in_span, default=None)
     # The endpoints matter as much as the samples between them, and a span
     # narrower than the sampling interval contains none of them.
     for edge in (lo, hi):
         at_edge = terrain_at_distance(elevation, edge)
-        if at_edge is not None:
-            highest = at_edge if highest is None else max(highest, at_edge)
+        if at_edge is None:
+            return None
+        highest = at_edge if highest is None else max(highest, at_edge)
     return highest
 
 
@@ -945,13 +962,20 @@ def max_terrain_near_point(
     distance_nm: float,
     radius_nm: float = 5.0,
 ) -> float | None:
-    """Find maximum terrain elevation within radius of a distance along the route."""
+    """Find maximum terrain elevation within radius of a distance along the route.
+
+    ``None`` when no profile is available or any sample within the radius is
+    unknown (#807): terrain guards built on this (icing escape, mountain wind)
+    then take their unknown-terrain path instead of reading a void as 0 ft.
+    """
     if elevation is None or not elevation.points:
         return None
 
     max_elev = None
     for pt in elevation.points:
         if abs(pt.distance_nm - distance_nm) <= radius_nm:
+            if pt.elevation_ft is None:
+                return None
             if max_elev is None or pt.elevation_ft > max_elev:
                 max_elev = pt.elevation_ft
     return max_elev

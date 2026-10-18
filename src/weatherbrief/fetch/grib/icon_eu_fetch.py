@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import bz2
 import logging
-import math
 import os
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -920,37 +919,23 @@ def compute_icon_eu_flight_window_hours(
 ) -> list[int]:
     """Compute ICON forecast hours covering a flight window.
 
-    Same logic as GFS but snapped to the variant's temporal grid.
+    Same contiguous ``floor(departure) .. ceil(end)`` range as GFS
+    (:func:`~weatherbrief.fetch.grib.grib_fetch.contiguous_window_forecast_hours`),
+    on the variant's grid. Not sample-and-``round()``: ties-to-even dropped
+    every odd hour for :30 departures (#807), which for ICON-D2 also broke
+    the f(H−1) 15-min windows hour H's explicit echo top needs.
     """
+    from weatherbrief.fetch.grib.grib_fetch import contiguous_window_forecast_hours
+
     init_dt = datetime.strptime(f"{init_date}{init_hour:02d}", "%Y%m%d%H").replace(
         tzinfo=timezone.utc,
     )
-    dep_dt = departure_time
-
-    extra = 1 if dep_dt.minute > 0 else 0
-    n_hours = max(1, math.ceil(flight_duration_hours) + 1 + extra)
-    fhours: set[int] = set()
-    for h in range(n_hours):
-        utc = dep_dt + timedelta(hours=h)
-        delta = (utc - init_dt).total_seconds() / 3600
-        delta = max(0.0, delta)
-        fhours.add(_snap_to_icon_eu_grid(delta, variant))
-
-    # Include the floor hour so non-round departure times get coverage
-    if dep_dt.minute > 0:
-        floor_utc = dep_dt.replace(minute=0, second=0, microsecond=0)
-        floor_delta = (floor_utc - init_dt).total_seconds() / 3600
-        if floor_delta >= 0:
-            fhours.add(_snap_to_icon_eu_grid(floor_delta, variant))
-
-    # Include the floor native hour before departure for forward-fill coverage.
-    # In a coarse (post-hourly) region, rounding may skip the preceding native
-    # hour, leaving interpolated hours without GRIB diagnostics.
-    dep_delta = (dep_dt - init_dt).total_seconds() / 3600
-    if dep_delta > 0:
-        fhours.add(_snap_to_icon_eu_grid_floor(dep_delta, variant))
-
-    return sorted(fhours)
+    return contiguous_window_forecast_hours(
+        init_dt, departure_time, flight_duration_hours,
+        hourly_to_h=variant.hourly_to_h,
+        coarse_step_h=variant.coarse_step_h,
+        horizon_h=variant.horizon_main_h,
+    )
 
 
 def _format_failure_summary(failures: dict[int | str, int]) -> str:

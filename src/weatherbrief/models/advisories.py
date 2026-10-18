@@ -748,6 +748,11 @@ class AltitudeTableResult(BaseModel):
     step_ft: int
     best_below_cruise: int | None = None  # altitude_ft with best score below cruise
     best_above_cruise: int | None = None  # altitude_ft with best score at/above cruise
+    # Lowest altitude the sweep may recommend: route terrain max (known samples)
+    # + the 1,000 ft terrain clearance (#807). Rows below it are not swept
+    # (except the planned cruise row) and never chosen as best_*. None when no
+    # elevation profile was available (legacy, unfloored).
+    terrain_floor_ft: int | None = None
 
 
 class AltitudeAdvisoryChange(BaseModel):

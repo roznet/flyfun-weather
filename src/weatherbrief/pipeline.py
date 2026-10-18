@@ -737,6 +737,13 @@ def _execute_briefing_stages(
     # `result` existed (alt-advisories runs before snapshot construction).
     if _alt_advisory_diagnostic is not None:
         result.diagnostics.append(_alt_advisory_diagnostic)
+    # Unknown terrain samples (SRTM void + failed fallback) — surfaced so the
+    # pilot knows why terrain-guarded advice is withheld there (#807).
+    from weatherbrief.fetch.elevation import elevation_diagnostic
+
+    _terrain_diag = elevation_diagnostic(fetch_result.elevation_profile)
+    if _terrain_diag is not None:
+        result.diagnostics.append(_terrain_diag)
     result.usage.open_meteo_calls = fetch_result.open_meteo_api_calls
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed

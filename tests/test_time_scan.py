@@ -282,13 +282,13 @@ class TestModelCoverage:
     def test_gfs_forward_fill_smear_is_bounded_by_rule_window(self):
         # GFS marked 07..23 — the trailing hours are the forward-fill smear
         # (fill.py fills diagnostics/CLW past the last native anchor). The
-        # rule window (floor(dep)..dep+ceil(dur)+1h for :30 departures) must
-        # cut the claim back to 07:00..09:30.
+        # rule window (floor(dep)..ceil(dep+ceil(dur)), the hours actually
+        # fetched since #807) must cut the claim back to 07:00..09:00.
         cs = _cs(ModelSource.GFS, [_wf(ModelSource.GFS, gfs_marked_hours=set(range(7, 24)))])
         per_point, _ = compute_model_coverage([cs], DEP, 1.0)
         lo, hi = per_point["gfs"][0]
         assert lo == DAY + timedelta(hours=7)
-        assert hi == DEP + timedelta(hours=2)  # 09:30, not 23:00
+        assert hi == DAY + timedelta(hours=9)  # not 23:00
 
     def test_unenriched_point_gets_fidelity_parity_uniform_span(self):
         # Point 1 was never enriched (fetch gap) — the baseline graded it on
@@ -332,7 +332,7 @@ class TestRuleWindow:
     def test_gfs_forward_window_with_minutes(self):
         lo, hi = _rule_window(ModelSource.GFS, DEP, 1.0)
         assert lo == DEP.replace(minute=0)  # floor hour
-        assert hi == DEP + timedelta(hours=2)  # ceil(1)+1 extra for :30
+        assert hi == DAY + timedelta(hours=9)  # ceil(07:30 + 1h), last fetched hour
 
 
 # ---------------------------------------------------------------------------

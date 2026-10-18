@@ -28,6 +28,7 @@ wc.crosswind_kt  # positive = from right, negative = from left
 
 - Uses `cos(relative_wind)` for head/tail, `sin(relative_wind)` for crosswind
 - Track per waypoint comes from `RouteConfig.waypoint_track()` (circular mean of leg bearings)
+- **Cruise wind** (`pick_wind_at_pressure(hourly, target_hpa)`, used for per-point `wind_components`, the wind overlay and the advisories' `wind_at_altitude`): when two valid-wind levels bracket the target, u/v are interpolated linearly in ISA pressure altitude (vector, so a veer across north stays northerly); an exact level is returned as-is; an unbracketed target uses the nearest level only within `MAX_WIND_SNAP_FT` (2,000 ft), else `None` (no wind for that model at that point). Before #807 it snapped to the nearest level unguarded — ECMWF's Open-Meteo table has nothing between 850 and 700 hPa, so an 8,000 ft cruise read the ~9,900 ft wind (review 2026-08 §3.8)
 
 ## Sounding Analysis (`analysis/sounding/`)
 
@@ -44,7 +45,7 @@ result = analyze_sounding(hourly.pressure_levels, hourly)
 1. `analyze_sounding_lite()` — core thermodynamic indices (LCL, parcel, LFC, EL, surface/MU/ML-CAPE, lifted index, freezing level), core derived levels, DD cloud layers (published verbatim — the `apply_nwp_coverage` reclassification overlay is off by default), inversions, ceiling, and convective assessment (thermo + NWP/explicit). This is the subset shared with standalone verification.
 2. `_analyze_sounding_heavy()` — mutates the lite result in place: extended indices (Showalter, K-index, Total Totals, PW, bulk shear), extended derived levels (wet bulb, theta-e, RH, omega→w), LWC enrichment (with vertical CLW/ICMR interpolation), cloud top uncertainty, NWP cloud layers, SFIP / Ogimet-DD / Ogimet-NWP / IENG icing, precipitation, SLD, stability indicators + vertical motion / turbulence.
 
-E-Shear is a separate post-pass (`tasks/analyze.py:_enrich_e_shear()`) across all route points after every per-point sounding completes (HWS needs neighbors).
+E-Shear is a separate post-pass (`tasks/analyze.py:_enrich_e_shear()`) across all route points after every per-point sounding completes (HWS needs neighbors). Its model set is the **union** of models across all points (#807) — taking point 0's set dropped E-Shear for the whole route whenever one model's origin sounding failed.
 
 Note: inversions are detected **before** NWP cloud building because the synthesis tier uses inversion layers for cloud top capping. Cloud top uncertainty and icing all read `effective_cape()` over the CAPE variants (no separate NWP-value-preservation pass — raw NWP CAPE/CIN are attached to indices inside `analyze_sounding_lite`).
 
@@ -356,7 +357,7 @@ E = (5 × HWS + VWS² + 42) / 4
 - **VWS** (vertical): ∂U/∂z, ∂V/∂z between adjacent pressure levels (per-sounding)
 - **HWS** (horizontal): ∂U/∂x, ∂V/∂x between adjacent route points at matching pressure levels
 
-E-Shear is computed as a **post-processing pass** in `tasks/analyze.py:_enrich_e_shear()` after all per-point sounding analyses complete (HWS requires adjacent route points). For each model, it averages HWS from both neighbors, then calls `compute_e_shear_per_sounding()`.
+E-Shear is computed as a **post-processing pass** in `tasks/analyze.py:_enrich_e_shear()` after all per-point sounding analyses complete (HWS requires adjacent route points). For each model present at any route point (union, #807), it averages HWS from both neighbors (a neighbor without that model's sounding contributes nothing), then calls `compute_e_shear_per_sounding()`.
 
 | E range | Risk |
 |---------|------|
@@ -389,7 +390,7 @@ adv = compute_altitude_advisories(soundings, cruise_altitude_ft=8000, flight_cei
 4. Generate label: "Clear" / "In cloud" / "In cloud, icing MOD (mixed)"
 
 **Advisory types:**
-- `descend_below_icing`: Per model, escape = max(freezing level, lowest icing-overlapping cloud base) - 500ft — warm air OR clear air each exit icing, so the higher suffices. Aggregate: min() across models. Guards: a model with `freezing_rain_risk` has no descent escape (None); when terrain elevation is known (plumbed from the elevation profile) an escape leaving <1000ft AGL is marked `feasible=False`. See [meteorology-decisions §8](./meteorology-decisions.md).
+- `descend_below_icing`: Per model, escape = max(freezing level, lowest icing-overlapping cloud base) - 500ft — warm air OR clear air each exit icing, so the higher suffices. Aggregate: min() across models. Guards: a model with `freezing_rain_risk` has no descent escape (None); when terrain elevation is known (plumbed from the elevation profile) an escape leaving <1000ft AGL is marked `feasible=False`; when the profile exists but this point sits on a terrain void (`terrain_unknown`, #807) the escape is also `feasible=False` — unknown terrain never approves a descent. (No profile at all keeps the legacy unguarded behaviour.) See [meteorology-decisions §8](./meteorology-decisions.md).
 - `climb_above_icing`: Per model, max(highest icing top, highest cloud top in icing temps) + 500ft. Aggregate: max() across models. `feasible` if ≤ flight_ceiling_ft.
 - `cat_turbulence`: CAT risk layers from Richardson number analysis, integrated into regimes.
 - `strong_vertical_motion`: Flags altitude bands where |w| > 200 fpm.
@@ -474,7 +475,7 @@ Advisory model filtering: `advisory_models` preference excludes `best_match` by 
 - Pressure levels not guaranteed sorted by API — `prepare_profile()` sorts them
 - Pint units must not leak beyond sounding subpackage (causes Pydantic serialization issues)
 - `matplotlib.use("agg")` required in skewt.py for worker thread compatibility
-- `sounding/edr.py` (Sharman & Pearson 2017 EDR remap + `EdrAccumulator`) is **not in the briefing path** — it is fed only by the standalone verification cycle and has no display surface yet. Don't wire it into `analyze_sounding()` expecting calibrated output; the accumulator collects nothing until Richardson numbers reach it.
+- `sounding/edr.py` (Sharman & Pearson 2017 EDR remap + `EdrAccumulator`) is **not in the briefing path** — it is fed only by the standalone verification cycle and has no display surface yet. Don't wire it into `analyze_sounding()` expecting calibrated output; the accumulator collects nothing until Richardson numbers reach it. **Negative Ri is excluded** from `richardson_to_d` (→ `None`, level skipped, #807): since §8c the stability pass stores Ri < 0 for statically unstable layers, which used to map to the `1/RI_FLOOR` ceiling and inflate the calibration moments of a climatology that excludes the convective regime. Moments already accumulated in `edr_calibration_accumulator` since §8c (2026-06-11) still carry that contamination.
 
 ## Deep-dive analyses
 

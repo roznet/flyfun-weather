@@ -75,21 +75,20 @@ GRIB enrichment fetches data for **each UTC hour of the flight window**, not jus
 
 ### Flight Window Computation
 
-`compute_flight_window_hours()` (GFS), `compute_icon_eu_flight_window_hours()` (ICON, variant-parameterised) and `compute_hrrr_flight_window_hours()` (HRRR) compute the set of forecast hours covering `[departure, departure + ceil(duration)]`:
+`compute_flight_window_hours()` (GFS), `compute_icon_eu_flight_window_hours()` (ICON, variant-parameterised) and `compute_hrrr_flight_window_hours()` (HRRR) compute the set of forecast hours covering `[departure, departure + ceil(duration)]`.
 
-1. For each UTC hour in the window, compute `delta = (utc_hour - init_time)` in hours
-2. Snap to the model's temporal grid:
+All three use the same shape: the **contiguous** inclusive range `floor(departure) .. ceil(departure + ceil(duration))` in hours-from-init, clamped to `[0, horizon]` (GFS/ICON via `grib_fetch.contiguous_window_forecast_hours`; HRRR's own copy uses the raw duration). On a coarse grid each in-window hour snaps **down** to its native step and the step at/after the window end is added, so the window is always bracketed by native steps for the fill:
    - **GFS:** 1-hourly for f000–f120, 3-hourly for f120–f384
    - **ICON-EU:** 1-hourly for 0–78h, 3-hourly for 78–120h
-   - **ICON-D2:** 1-hourly to 48h (`variant.hourly_to_h` / `coarse_step_h` / `horizon_main_h` own the arithmetic — `_snap_to_icon_eu_grid` is variant-generic)
-3. Deduplicate and sort
+   - **ICON-D2:** 1-hourly to 48h (`variant.hourly_to_h` / `coarse_step_h` / `horizon_main_h` own the arithmetic)
 
-Both the GFS and the ICON paths add coverage hours the simple loop would miss: a non-zero-minute departure gets an extra bracket hour (`extra = 1 if minute > 0`) plus its floor (`minute=0`) hour, and the flooring `_snap_to_gfs_grid_floor` / `_snap_to_icon_eu_grid_floor` native hour before departure is always included so the preceding native step exists for forward-fill in the coarse region.
+This replaced a sample-`departure + h`-and-`round()` loop (plus "extra" and floor hours) on GFS/ICON: `round()` is ties-to-even, so a :30 departure collapsed 9.5/10.5 → 10, 11.5/12.5 → 12 and silently fetched only every other hour — the bug HRRR had already been fixed for in PR #508, back-ported in #807.
 
 Edge cases:
-- `flight_duration_hours=0`, round departure → `max(1, ceil(0)+1+0) = 1` hour → departure hour only (same as a point-to-point enrichment)
-- GFS init after departure → `max(0, delta)` clamp → f000
-- Cross-midnight flights → hours in the next day that fall outside the 24h Open-Meteo cross-section are silently skipped (no matching `hourly.time.hour`)
+- `flight_duration_hours=0`, round departure → departure hour only; a :30 departure with zero duration → its floor and ceil hours
+- GFS init after departure → `max(0, …)` clamp → f000
+- Cross-midnight flights are covered: `run_fetch` sets the Open-Meteo `end_date` from `departure + ceil(duration)`, so next-day window hours exist in the cross-section and receive their GRIB step. (An older version of this audit said they were silently skipped; that predates the `end_date` extension.)
+- Live-horizon skip: `run_fetch` drops a model whose current Open-Meteo run ends (`data_end`) before the window end `departure + ceil(duration)` — with `MODEL_SKIPPED_HORIZON`. It used to compare against 00:00 of the arrival day, letting a run that ends mid-window ship null tails silently (#807).
 
 ### Enrichment Flow
 

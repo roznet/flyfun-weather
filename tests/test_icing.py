@@ -6,6 +6,8 @@ Tests cover the three active icing methods:
   - IENG: Temperature curve gated by NWP cloud layers, cloud fraction modulation
 """
 
+import pytest
+
 from weatherbrief.analysis.sounding.icing import (
     _cape_to_cloud_split,
     _compute_layered_index,
@@ -354,14 +356,61 @@ def test_ogimet_nwp_no_cloud_layers_no_icing():
     assert len(zones) == 0
 
 
-def test_ogimet_nwp_no_nwp_data_no_icing():
-    """No NWP cloud data (None) → no icing."""
+def test_ogimet_nwp_unknown_cover_inside_cloud_layer_is_not_clear():
+    """Unknown cover (None) inside a native NWP cloud layer is NOT clear (#807).
+
+    Previously this expected no icing: a missing cover percentage dropped the
+    level exactly as 0 % would, erasing icing inside a drawn cloud band. The
+    gate already established the model has cloud here, so only the fraction is
+    unknown — the index is taken unscaled (no layer cover to fall back to).
+    """
     levels = [
         DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
                      dewpoint_c=-8.0, dewpoint_depression_c=1.0),
     ]
     zones = assess_icing_zones_ogimet_nwp(levels, [_cloud(9000, 11000)])
-    assert len(zones) == 0
+    assert len(zones) == 1
+    # Layered-only index at −7 °C is 50 (raw 100 / 2), unscaled.
+    assert levels[0].icing_index_nwp == pytest.approx(50.0)
+
+
+def test_ogimet_nwp_unknown_cover_uses_gating_layer_cover():
+    """Unknown cover falls back to the gating layer's own model cover (#807)."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    layer = EnhancedCloudLayer(
+        base_ft=9000, top_ft=11000, coverage=CloudCoverage.BKN,
+        mean_cloud_cover_pct=60.0, source="nwp_3d",
+    )
+    zones = assess_icing_zones_ogimet_nwp(levels, [layer])
+    assert len(zones) == 1
+    assert levels[0].icing_index_nwp == pytest.approx(30.0)  # 50 × 0.60
+
+
+def test_ogimet_nwp_known_zero_cover_still_skips():
+    """A KNOWN 0 % is data, not absence: the level is still skipped."""
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones_ogimet_nwp(
+        levels, [_cloud(9000, 11000)], nwp_cloud_mid_pct=0.0,
+    )
+    assert zones == []
+
+
+def test_ieng_unknown_cover_inside_cloud_layer_is_not_clear():
+    """IENG shares the Ogimet-NWP unknown-cover semantics (#807)."""
+    from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
+
+    levels = [
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, temperature_c=-7.0,
+                     dewpoint_c=-8.0, dewpoint_depression_c=1.0),
+    ]
+    zones = assess_icing_zones_ieng(levels, [_cloud(9000, 11000)])
+    assert len(zones) == 1
 
 
 def test_ogimet_nwp_empty_input():

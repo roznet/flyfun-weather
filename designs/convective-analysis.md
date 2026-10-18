@@ -7,7 +7,7 @@ _Code references verified against the repo on 2026-08-15 (standalone-path sectio
 > 📐 Convective design rationale (realizable-CAPE/regime tiers, DD-stays-pure, NWP-cover vs CAPE risk) is decided in [meteorology-decisions.md](./meteorology-decisions.md) §4–§5; the NWP-native grade + DD-trigger amber cap in §18, the ICON-D2 explicit-convection firing table in §19, the single-grading-formula extraction in §22, and the absent-NWP-track cap + embedded population floor in §26 — read before changing thresholds or the DD/NWP boundary.
 
 **Key code paths** (bare filenames below refer to these):
-- `analysis/sounding/convective.py` — `assess_convective_thermo`, `assess_convective_nwp`, `assess_convective_explicit` (#462), `classify_regime`, `effective_cape` (alias `_effective_cape`), `convection_realized`, `convective_cross_check` / `ConvectiveCrossCheck` / `_explicit_cross_check`, `classify_convective_character`
+- `analysis/sounding/convective.py` — `assess_convective_thermo`, `assess_convective_nwp`, `assess_convective_explicit` (#462), `classify_regime`, `effective_cape` (alias `_effective_cape`), `effective_cape_cin` (#807), `convection_realized`, `convective_cross_check` / `ConvectiveCrossCheck` / `_explicit_cross_check`, `classify_convective_character`
 - `analysis/sounding/thermodynamics.py` — `compute_indices_core` (all three CAPE variants), `compute_derived_levels_core` (omega 700)
 - `analysis/sounding/__init__.py` — orchestrates the lite/full passes; picks the explicit-vs-parameterized NWP track; sets `cape_raw_vs_calc_divergent`
 - `analysis/advisories/convective_grading.py` — **`grade_convective_model()`, the single convective-colour formula** (§22). `ConvectiveEvaluator` and `IFRFeasibilityEvaluator` both come through it; it also owns `CONVECTIVE_PARAM_DEFAULTS` and `resolve_convective_params`
@@ -98,7 +98,9 @@ The **DD/thermo track** always runs. The **NWP track** is filled by exactly one 
 
 #### Method 1: Thermo (Thermodynamic) — Default
 
-`convective.py:assess_convective_thermo(indices, omega_700_pa_s=None)` → `ConvectiveAssessment`
+`convective.py:assess_convective_thermo(indices, omega_700_pa_s=None)` → `ConvectiveAssessment | None`
+
+- **No CAPE → `None`, never NONE (#807):** when no CAPE exists from any source (no MetPy SB/MU/ML variant and no `nwp_cape_jkg`) the column was not assessed, and the assessor returns `None` rather than an assessed-quiet `ConvectiveRisk.NONE`. A computed CAPE of 0 is still a real NONE. The NWP-track CAPE fallback (`nwp_cape_fallback`) does the same — no native scheme and no CAPE returns `None` (an absent track, §26). Downstream this is an *unassessed* point (see Stage 7).
 
 - **Input:** `ThermodynamicIndices` (MetPy-derived from pressure levels) + optional 700 hPa omega (large-scale ascent trigger, read from `derived_levels` by the caller via `_omega_near_700()`)
 - **Base risk:** `_effective_cape()` thresholds (European-calibrated):
@@ -111,7 +113,7 @@ The **DD/thermo track** always runs. The **NWP track** is filled by exactly one 
 | > 50 | LOW |
 | > 0 + LFC + EL | MARGINAL |
 
-- **Regime discrimination** (`classify_regime(cape, cin)` → `ConvectiveRegime`, classified from **potential** CAPE = `_effective_cape()` = max(SB,MU,ML)): the base CAPE risk is refined per regime, so a single CAPE threshold no longer misjudges a capped "loaded gun" or mislabels thermally driven convection:
+- **Regime discrimination** (`classify_regime(cape, cin)` → `ConvectiveRegime`, classified from **potential** CAPE = `_effective_cape()` = max(SB,MU,ML), paired with **that parcel's own CIN** via `effective_cape_cin()` (#807): SB drives (wins ties) → `cin_surface_jkg`; MU drives → `cin_most_unstable_jkg` (falls back to SB CIN on packs that predate the field); ML or NWP-raw drives → SB CIN as before (no ML CIN computed). Before #807 the SB CIN was always used, so elevated MU-CAPE over a stable nocturnal/marine layer read LOADED_GUN off a "cap" the elevated parcel never feels. `ConvectiveAssessment.cin_jkg` carries the paired CIN, so the front co-location realized gate (`convection_realized`) sees the same parcel): the base CAPE risk is refined per regime, so a single CAPE threshold no longer misjudges a capped "loaded gun" or mislabels thermally driven convection:
 
 | Regime | Boundary | Risk behaviour |
 |--------|----------|----------------|
@@ -122,7 +124,7 @@ The **DD/thermo track** always runs. The **NWP track** is filled by exactly one 
 
 - **Elevated-convection flag:** `elevated_convection` (bool + driver) fires when MU − SB ≥ 200 J/kg & MU ≥ 300 — most-unstable parcel above the surface, convection possible aloft. Additive warning, independent of the surface tier and regime.
 - **Generic CIN suppression:** preserved for THERMAL / WEAK_INSTABILITY only (CIN < −200 J/kg → one level down). LOADED_GUN models the cap via the omega gate above; ACTIVE is weak-cap by definition and tempered on ML instead.
-- **CAPE parcels:** MU/ML-CAPE are computed in `compute_indices_core` (not `_extended`) so the tier — run in the lite pass, used by briefings **and** standalone verification — always sees all three variants.
+- **CAPE parcels:** MU/ML-CAPE (and the MU parcel's CIN, `cin_most_unstable_jkg`, #807) are computed in `compute_indices_core` (not `_extended`) so the tier — run in the lite pass, used by briefings **and** standalone verification — always sees all three variants.
 - **Explanation outputs:** `regime`, `drivers` (factors raising risk), and `suppressors` (factors holding it down) are populated and consumed by `digest/prompt_builder.py` (LLM narrative) and `digest/text.py` (plain-text digest). They are serialized into `briefing.json` but not yet rendered in the web/iOS UI.
 - **Severity modifiers:** shear >40kt (supercell), >25kt (multicell), high freezing + CAPE >1000 (hail), K >35, TT >55, LI < −6
 - **Tower bounds:** base = LFC (LCL fallback), top = EL
@@ -208,6 +210,7 @@ Both layers share the same color palette (via exports from `thermo-convective-bg
 **The grading formula does not live in the evaluator.** `advisories/convective_grading.py:grade_convective_model(ctx, model, params)` is the single source of the convective colour (§22); `ConvectiveEvaluator` adds only locale wording and the cross-model aggregate, and `IFRFeasibilityEvaluator` takes `status` from the same call. Before the extraction, `ifr_feasibility` carried its own older derivation (own `convective_min_risk` floor, own 10% red threshold, no tops-below-cruise filter, no #442 awareness) and the two advisories disagreed on the same sounding in both directions. **Any new consumer must come through `grade_convective_model`,** and read its tuning through `resolve_convective_params` / `CONVECTIVE_PARAM_DEFAULTS` (`min_risk` 2 = LOW, `affected_pct_amber` 20, `affected_pct_red` 50, `top_clearance_ft` 2000) so the settings page and the grading cannot drift apart.
 
 It reads `sounding.convective` (the resolved active slot):
+- **Unassessed ≠ clear (#807):** a point with a sounding but `sounding.convective is None` (no CAPE and no native track) ribbons UNAVAILABLE and is excluded from the grading denominator (`ConvectiveModelGrade.assessed`, and the extent domain), so it neither dilutes a flagged extent nor vouches for a GREEN. **Coverage guard (#391):** a would-be-GREEN whose assessed points are < 50 % of the route points (`below_coverage(assessed, len(ctx.analyses))`) grades UNAVAILABLE; a flagged verdict always stands. §26 fallback points (thermo-graded where the NWP track is absent) *are* assessed and count as coverage — the absent-track cap is untouched. `total` stays the sounding count (the composites' en-route denominator); the convective card publishes `assessed` as `total_points`. `ifr_feasibility`/`vfr_feasibility` take the status verbatim, so their own convective-axis guards (keyed on soundings) become a no-op on an already-UNAVAILABLE grade rather than double-counting.
 - HIGH/EXTREME at any flagged point → RED; else coverage percentages give AMBER vs GREEN, with a MODERATE+-reaching-cruise amber floor
 - **NWP-native grade (#442, meteorology-decisions §18) — this REPLACED the old DD floor.** The colour comes from the model's own NWP tier, **not** `max(NWP, DD)`. The old `graded_risk = max(active, convective_thermo)` floor produced the loaded-gun false-alarm REDs and is gone.
 - **DD-trigger AMBER cap:** when the NWP tier is below `min_risk` but the cross-check reads `dd_not_corroborated` (DD MODERATE+, scheme quiet), the point is raised to AMBER only — tier capped at MODERATE, `reason_code="dd_trigger"`, counted in `dd_trigger_count` and **excluded from the red-coverage count**. DD alone can never make a red. The colour is bound to the *same* condition as the cross-check note, so colour/note/reason cannot diverge.

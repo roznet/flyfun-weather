@@ -126,9 +126,9 @@ class _MetPyParcel:
         cape, cin = mpcalc.cape_cin(self.p, self.t, self.td, parcel_k * units.kelvin)
         return _mag(cape.to("J/kg")), _mag(cin.to("J/kg"))
 
-    def mu_cape(self) -> float:
-        cape, _ = mpcalc.most_unstable_cape_cin(self.p, self.t, self.td)
-        return _mag(cape.to("J/kg"))
+    def mu_cape_cin(self) -> tuple[float, float]:
+        cape, cin = mpcalc.most_unstable_cape_cin(self.p, self.t, self.td)
+        return _mag(cape.to("J/kg")), _mag(cin.to("J/kg"))
 
     def ml_cape(self) -> float:
         cape, _ = mpcalc.mixed_layer_cape_cin(self.p, self.t, self.td)
@@ -201,9 +201,9 @@ class _KernelParcel:
             "cape_cin", lambda: parcel.cape_cin(self.p, self.t, self.td, parcel_k), parcel_k,
         )
 
-    def mu_cape(self) -> float:
+    def mu_cape_cin(self) -> tuple[float, float]:
         return self._try(
-            "mu_cape", lambda: parcel.most_unstable_cape_cin(self.p, self.t, self.td)[0],
+            "mu_cape_cin", lambda: parcel.most_unstable_cape_cin(self.p, self.t, self.td),
         )
 
     def ml_cape(self) -> float:
@@ -303,10 +303,15 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     # In core, not extended: the convective regime tier scores on ML-CAPE and
     # flags elevated instability from MU-CAPE, so both must be available wherever
     # convective risk is assessed (briefing and standalone verification alike).
+    # The MU parcel's own CIN is kept too (#807): the regime classifier pairs CIN
+    # with whichever parcel supplied the effective CAPE, and an elevated MU parcel
+    # above a stable surface layer never feels the surface parcel's "cap".
     try:
-        idx.cape_most_unstable_jkg = round(calc.mu_cape(), 1)
+        mu_cape, mu_cin = calc.mu_cape_cin()
+        idx.cape_most_unstable_jkg = round(mu_cape, 1)
+        idx.cin_most_unstable_jkg = round(mu_cin, 1)
     except Exception:
-        logger.debug("MU CAPE failed", exc_info=True)
+        logger.debug("MU CAPE/CIN failed", exc_info=True)
 
     # --- Mixed-layer CAPE (realizable, well-mixed boundary layer) ---
     try:
@@ -345,6 +350,17 @@ def compute_indices_core(profile: PreparedProfile) -> CoreIndicesResult:
     return CoreIndicesResult(indices=idx, parcel_path=parcel_path)
 
 
+def _finite_round(value, ndigits: int = 1) -> float | None:
+    """Round, or None when MetPy hands back NaN/inf.
+
+    A profile clipped at the model ground (#807) can lack the 850 hPa level
+    the K-index / Total Totals read; MetPy then interpolates out of bounds
+    and returns NaN, which must not reach the digest as "KI=nan".
+    """
+    v = float(value)
+    return round(v, ndigits) if np.isfinite(v) else None
+
+
 def compute_indices_extended(
     profile: PreparedProfile,
     idx: ThermodynamicIndices,
@@ -363,28 +379,28 @@ def compute_indices_extended(
 
     # --- Showalter index ---
     try:
-        idx.showalter_index = round(_parcel_backend(profile).showalter(), 1)
+        idx.showalter_index = _finite_round(_parcel_backend(profile).showalter())
     except Exception:
         logger.debug("Showalter index failed", exc_info=True)
 
     # --- K-index ---
     try:
         ki = mpcalc.k_index(p, t, td)
-        idx.k_index = round(_mag(ki.to("degC")), 1)
+        idx.k_index = _finite_round(_mag(ki.to("degC")))
     except Exception:
         logger.debug("K-index failed", exc_info=True)
 
     # --- Total Totals ---
     try:
         tt = mpcalc.total_totals_index(p, t, td)
-        idx.total_totals = round(_mag(tt.to("delta_degC")), 1)
+        idx.total_totals = _finite_round(_mag(tt.to("delta_degC")))
     except Exception:
         logger.debug("Total Totals failed", exc_info=True)
 
     # --- Precipitable water ---
     try:
         pw = mpcalc.precipitable_water(p, td)
-        idx.precipitable_water_mm = round(_mag(pw.to("mm")), 1)
+        idx.precipitable_water_mm = _finite_round(_mag(pw.to("mm")))
     except Exception:
         logger.debug("Precipitable water failed", exc_info=True)
 

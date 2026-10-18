@@ -307,7 +307,7 @@ def run_fetch(
         from weatherbrief.fetch.elevation import get_elevation_profile
 
         elevation_profile = get_elevation_profile(route, spacing_nm=0.5)
-        logger.info("Elevation profile: %d points, max %.0f ft",
+        logger.info("Elevation profile: %d points, max %s ft",
                      len(elevation_profile.points), elevation_profile.max_elevation_ft)
     except Exception:
         logger.warning("Elevation profile failed", exc_info=True)
@@ -322,13 +322,14 @@ def run_fetch(
     models_returned_empty: list[str] = []
 
     route_region = detect_model_region(route)
-    end_date = (
-        departure_time
-        + timedelta(hours=math.ceil(route.flight_duration_hours or 0))
-    ).strftime("%Y-%m-%d")
+    window_end_dt = departure_time + timedelta(
+        hours=math.ceil(route.flight_duration_hours or 0)
+    )
+    if window_end_dt.tzinfo is None:
+        window_end_dt = window_end_dt.replace(tzinfo=timezone.utc)
+    end_date = window_end_dt.strftime("%Y-%m-%d")
 
     # Filter models up-front so we don't waste worker threads on skipped models.
-    end_date_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
     live_horizons = _open_meteo_live_horizons() if not historical_mode else {}
     models_to_fetch: list[ModelSource] = []
     for model in models:
@@ -351,13 +352,16 @@ def run_fetch(
             continue
         # Live horizon check: Open-Meteo's data_end_time can fall short of
         # the static config horizon for a given run. Skip rather than fetch
-        # a structurally-valid response of all-null values.
+        # a structurally-valid response of all-null values. Compared against
+        # the actual window end (departure + ceil(duration)), NOT midnight of
+        # the arrival day: that was up to ~24 h early, so a model ending
+        # mid-window shipped null tails with no MODEL_SKIPPED_HORIZON (#807).
         live_end = live_horizons.get(model.value)
-        if live_end is not None and end_date_dt > live_end:
+        if live_end is not None and window_end_dt > live_end:
             logger.info(
                 "Skipping %s: flight window ends %s, but current run only "
                 "serves data through %s",
-                model.value, end_date_dt.isoformat(), live_end.isoformat(),
+                model.value, window_end_dt.isoformat(), live_end.isoformat(),
             )
             models_skipped_horizon.append((model.value, live_end))
             continue

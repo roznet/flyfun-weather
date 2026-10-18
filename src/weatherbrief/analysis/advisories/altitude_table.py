@@ -23,6 +23,13 @@ from weatherbrief.models import (
 
 logger = logging.getLogger(__name__)
 
+# Terrain clearance for a recommendable altitude — the same 1,000 ft the §8a
+# descent-escape guard and the IcingEscape route advisory (terrain_margin_ft)
+# use, so "an altitude we would offer" means one thing across the app (#807).
+from weatherbrief.analysis.sounding.advisories import (  # noqa: E402
+    _TERRAIN_CLEARANCE_FT as TERRAIN_CLEARANCE_FT,
+)
+
 # Severity rank for status comparison; UNAVAILABLE is excluded (not comparable).
 _SEVERITY: dict[AdvisoryStatus, int] = {
     AdvisoryStatus.GREEN: 0,
@@ -147,9 +154,19 @@ def compute_altitude_table(
             step_ft=step_ft,
         )
 
+    # Terrain floor (#807). A row is one constant altitude for the whole route,
+    # so the relevant terrain is the route's maximum; below it + clearance the
+    # air is hazard-free *by construction* (the sweep never sees the ground)
+    # and a GREEN there would be a recommendation into the hill.
+    terrain_floor_ft = _terrain_floor_ft(elevation)
+    terrain_complete = elevation is None or not elevation.points or elevation.terrain_complete
+
     # Build altitude range: 2000 to ceiling, stepping by step_ft
     altitudes = set(range(2000, flight_ceiling_ft + 1, step_ft))
-    # Ensure cruise altitude is included
+    if terrain_floor_ft is not None:
+        altitudes = {a for a in altitudes if a >= terrain_floor_ft}
+    # Ensure cruise altitude is included — the planned row is shown even when
+    # it sits below the floor (it is the pilot's plan), but never recommended.
     if 2000 <= cruise_altitude_ft <= flight_ceiling_ft:
         altitudes.add(cruise_altitude_ft)
     sorted_alts = sorted(altitudes)
@@ -199,12 +216,23 @@ def compute_altitude_table(
             green_count=green_count,
         ))
 
-    # Find best altitudes below and above cruise
-    best_below = _find_best(
-        rows, lambda r: r.altitude_ft < cruise_altitude_ft, cruise_altitude_ft
+    # Find best altitudes below and above cruise, never below the terrain floor.
+    def _clear(r: AltitudeAdvisoryRow) -> bool:
+        return terrain_floor_ft is None or r.altitude_ft >= terrain_floor_ft
+
+    # With voids in the profile the floor is built from a lower bound on the
+    # route's terrain, so no altitude *below* the plan is offered at all.
+    best_below = (
+        _find_best(
+            rows,
+            lambda r: r.altitude_ft < cruise_altitude_ft and _clear(r),
+            cruise_altitude_ft,
+        )
+        if terrain_complete
+        else None
     )
     best_above = _find_best(
-        rows, lambda r: r.altitude_ft >= cruise_altitude_ft, cruise_altitude_ft
+        rows, lambda r: r.altitude_ft >= cruise_altitude_ft and _clear(r), cruise_altitude_ft
     )
 
     # Sort rows descending by altitude (highest first — natural for pilots)
@@ -219,7 +247,19 @@ def compute_altitude_table(
         step_ft=step_ft,
         best_below_cruise=best_below,
         best_above_cruise=best_above,
+        terrain_floor_ft=terrain_floor_ft,
     )
+
+
+def _terrain_floor_ft(elevation: ElevationProfile | None) -> int | None:
+    """Route terrain max (known samples) + clearance; None without a profile.
+
+    ``max_elevation_ft`` ignores void samples (#807), so with voids this is a
+    lower bound — the caller withholds below-cruise recommendations then.
+    """
+    if elevation is None or not elevation.points or elevation.max_elevation_ft is None:
+        return None
+    return int(elevation.max_elevation_ft + TERRAIN_CLEARANCE_FT)
 
 
 def _find_best(
@@ -229,18 +269,29 @@ def _find_best(
 ) -> int | None:
     """Find the altitude with the best score among rows matching predicate.
 
-    Best = fewest reds, then fewest ambers. Ties go to the altitude closest to
-    cruise: the smallest change from the plan that buys the same picture.
-    Breaking ties by *lowest* sent a pilot to 2,000 ft over the Channel when
-    8,000 ft cleared the same icing (EGTF-LFAT, 2026-09-28).
+    Best = fewest reds, then fewest (ambers + unavailables), then fewest
+    unavailables. Ties go to the altitude closest to cruise: the smallest
+    change from the plan that buys the same picture. Breaking ties by *lowest*
+    sent a pilot to 2,000 ft over the Channel when 8,000 ft cleared the same
+    icing (EGTF-LFAT, 2026-09-28).
+
+    UNAVAILABLE costs as much as AMBER and loses the tie against it (#807):
+    scoring it like GREEN rewarded data absence (an altitude whose advisory
+    could not be assessed beat one assessed AMBER). It is not ranked with RED —
+    that would send the pilot to a *known* hazard over an unknown one.
     """
     candidates = [r for r in rows if predicate(r)]
     if not candidates:
         return None
+
+    def _unavailable(r: AltitudeAdvisoryRow) -> int:
+        return sum(1 for s in r.statuses.values() if s == AdvisoryStatus.UNAVAILABLE)
+
     candidates.sort(
         key=lambda r: (
             r.red_count,
-            r.amber_count,
+            r.amber_count + _unavailable(r),
+            _unavailable(r),
             abs(r.altitude_ft - cruise_altitude_ft),
         )
     )

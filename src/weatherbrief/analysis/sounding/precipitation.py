@@ -87,12 +87,30 @@ def assess_precipitation(
         freezing_rain_risk=freezing_rain_risk,
         warm_nose_base_ft=warm_nose_base,
         warm_nose_top_ft=warm_nose_top,
-        rain_mm=rain_mm if rain_mm is not None else (
-            (precip_mm - (snowfall_cm or 0) * 10) if precip_mm else None
+        rain_mm=rain_mm if rain_mm is not None else _rain_fallback_mm(
+            precip_mm, snowfall_cm,
         ),
         snow_cm=snowfall_cm,
         total_mm=precip_mm,
     )
+
+
+def _rain_fallback_mm(
+    precip_mm: float | None, snowfall_cm: float | None,
+) -> float | None:
+    """Liquid rain when the source gives no ``rain_mm``: total minus snow.
+
+    ``snowfall_cm`` is snow DEPTH; its water equivalent is depth ÷
+    ``SNOW_CM_PER_MM_WATER`` (Open-Meteo's 7 cm = 10 mm). The old
+    ``snow × 10`` read 1 cm as 10 mm water (~7× over-subtraction) and went
+    negative (2 mm + 1 cm → −8 mm). Clamped at 0 (#807).
+    """
+    if not precip_mm:
+        return None
+    from weatherbrief.units import SNOW_CM_PER_MM_WATER
+
+    snow_water_mm = (snowfall_cm or 0.0) / SNOW_CM_PER_MM_WATER
+    return max(0.0, precip_mm - snow_water_mm)
 
 
 def _classify_intensity(precip_mm: float | None) -> PrecipIntensity:

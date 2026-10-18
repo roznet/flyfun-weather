@@ -152,10 +152,9 @@ def _rule_window(
 ) -> tuple[datetime, datetime]:
     """The span the fetch stage *intended* to enrich for this model.
 
-    ECMWF filters steps to flight window ±3h; GFS/ICON fetch forward hours
-    from ``floor(departure)`` through ``departure + ceil(duration) (+1 when
-    departure has minutes)`` (``compute_flight_window_hours`` /
-    ``compute_icon_eu_flight_window_hours``).
+    ECMWF filters steps to flight window ±3h; GFS/ICON fetch the contiguous
+    hours ``floor(departure) .. ceil(departure + ceil(duration))``
+    (``grib_fetch.contiguous_window_forecast_hours``, #807).
     """
     dep = _aware(departure)
     dep_end = dep + timedelta(hours=max(duration_hours, 1.0))
@@ -164,8 +163,10 @@ def _rule_window(
     floor = dep.replace(minute=0, second=0, microsecond=0)
     import math
 
-    extra = 1 if dep.minute > 0 else 0
-    hi = dep + timedelta(hours=max(1, math.ceil(max(duration_hours, 0.0)) + extra))
+    end = dep + timedelta(hours=max(1, math.ceil(max(duration_hours, 0.0))))
+    hi = end.replace(minute=0, second=0, microsecond=0)
+    if hi < end:
+        hi += timedelta(hours=1)
     return floor, hi
 
 

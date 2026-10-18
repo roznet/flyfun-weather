@@ -261,8 +261,10 @@ def evaluate_all(
             # all-UNAVAILABLE result to stay hidden. So only re-aggregate when the
             # requested mode actually DIFFERS from that majority default (else we
             # would discard those customizations), and never re-run an
-            # all-UNAVAILABLE set through ``from_per_model`` (it collapses to
-            # GREEN — resurrecting a deliberately-hidden advisory). Re-aggregating
+            # all-UNAVAILABLE set through ``from_per_model`` — the status would
+            # stay UNAVAILABLE (worst/majority no longer collapse it to GREEN),
+            # but the rebuild would discard the evaluator's hand-built detail
+            # (e.g. fronts' "no data"). Re-aggregating
             # only for non-majority modes is what fixes the prior bug where a
             # WORST preference silently kept a majority-built aggregate.
             if aggregation != AdvisoryAggregation.MAJORITY and not all(

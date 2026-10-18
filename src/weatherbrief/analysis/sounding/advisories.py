@@ -39,6 +39,7 @@ def compute_altitude_advisories(
     cruise_altitude_ft: int,
     flight_ceiling_ft: int,
     terrain_elevation_ft: float | None = None,
+    terrain_unknown: bool = False,
 ) -> AltitudeAdvisories:
     """Build vertical regimes and altitude advisories from sounding analyses.
 
@@ -48,6 +49,10 @@ def compute_altitude_advisories(
         flight_ceiling_ft: Maximum altitude the aircraft can reach.
         terrain_elevation_ft: Terrain elevation at this point (MSL), when
             known — used to mark descent escapes below terrain as infeasible.
+        terrain_unknown: True when a terrain profile exists but this point
+            falls on a void (no elevation from any source, #807). A descent
+            escape is then marked infeasible — unknown terrain is never
+            assumed to be clear of the escape altitude.
 
     Returns:
         AltitudeAdvisories with per-model regimes and cross-model advisories.
@@ -61,7 +66,7 @@ def compute_altitude_advisories(
     )
 
     advisories: list[AltitudeAdvisory] = []
-    descend = _descend_below_icing(soundings, terrain_elevation_ft)
+    descend = _descend_below_icing(soundings, terrain_elevation_ft, terrain_unknown)
     if descend is not None:
         advisories.append(descend)
     climb = _climb_above_icing(soundings, flight_ceiling_ft)
@@ -566,6 +571,7 @@ def _cruise_icing_status(
 def _descend_below_icing(
     soundings: dict[str, SoundingAnalysis],
     terrain_elevation_ft: float | None = None,
+    terrain_unknown: bool = False,
 ) -> AltitudeAdvisory | None:
     """Compute descend-below-icing advisory aggregated across models.
 
@@ -584,6 +590,9 @@ def _descend_below_icing(
     - When terrain elevation is known and the aggregate escape leaves less
       than ``_TERRAIN_CLEARANCE_FT`` above it, the advisory is kept (the
       meteorological altitude is still true) but marked ``feasible=False``.
+      When ``terrain_unknown`` (a void in the profile, #807) the escape is
+      likewise ``feasible=False``: the guard cannot approve a descent over
+      ground it has not seen.
     """
     # Only hazardous zones: an Ogimet zone at risk NONE is "assessed, no icing",
     # so counting it would advertise a descent escape from icing that isn't there.
@@ -669,6 +678,9 @@ def _descend_below_icing(
     ):
         feasible = False
         reason += f" — below terrain clearance (terrain ~{terrain_elevation_ft:.0f}ft)"
+    elif terrain_elevation_ft is None and terrain_unknown:
+        feasible = False
+        reason += " — terrain elevation unknown here, clearance not verified"
     if fzra_models:
         # A freezing-rain model's escape is None (descending stays in FZRA), and
         # that None must NOT be silently dropped from the aggregate so min() of

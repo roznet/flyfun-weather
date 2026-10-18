@@ -129,10 +129,11 @@ class SunEvaluator:
 
         if sun is None:
             # Old pack / sun unavailable. Follow the ModelAgreementEvaluator
-            # pattern: a single model="all" UNAVAILABLE entry. (The aggregate
-            # badge resolves to GREEN under MAJORITY, but the per-model entry and
-            # detail make the unavailability visible — and this keeps the
-            # aggregation-mode invariant the registry enforces.)
+            # pattern: a single model="all" UNAVAILABLE entry. The aggregate
+            # resolves to UNAVAILABLE under both MAJORITY and WORST
+            # (AdvisoryStatus.worst/majority never turn an all-UNAVAILABLE set
+            # into GREEN), and going through from_per_model keeps the
+            # aggregation-mode invariant the registry enforces.
             per_model = [ModelAdvisoryResult.build(
                 model="all", status=AdvisoryStatus.UNAVAILABLE,
                 detail=adv_t("sun.no_data", loc), affected=0, total=0,

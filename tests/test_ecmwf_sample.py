@@ -678,7 +678,10 @@ class TestEcmwfSurfaceSnapshot:
         assert out["wind_direction_10m_deg"] == pytest.approx(0.0, abs=0.01)
         assert out["wind_gusts_10m_kt"] == pytest.approx(29.16, rel=1e-3)
         assert out["precipitation_mm"] == pytest.approx(5.0)
-        assert out["snowfall_cm"] == pytest.approx(1.0)
+        # 1 mm water → 0.7 cm snow: Open-Meteo's snowfall convention, not
+        # ECMWF's 10:1 (#807), so the series doesn't change ratio at the
+        # GRIB window boundary.
+        assert out["snowfall_cm"] == pytest.approx(0.7)
         assert out["cape_jkg"] == 250.0
         assert out["cloud_cover_pct"] == pytest.approx(75.0)
         assert out["cloud_cover_low_pct"] == pytest.approx(30.0)

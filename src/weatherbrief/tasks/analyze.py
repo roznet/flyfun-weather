@@ -69,6 +69,7 @@ def _run_point_analysis(
     flight_ceiling_ft: int,
     icing_severity_enhance: bool = False,
     terrain_elevation_ft: float | None = None,
+    terrain_unknown: bool = False,
 ) -> tuple[
     dict[str, WindComponent],
     dict[str, SoundingAnalysis],
@@ -166,6 +167,7 @@ def _run_point_analysis(
         altitude_advisories = compute_altitude_advisories(
             soundings, cruise_altitude_ft, flight_ceiling_ft,
             terrain_elevation_ft=terrain_elevation_ft,
+            terrain_unknown=terrain_unknown,
         )
 
     # Model comparison
@@ -365,11 +367,17 @@ def analyze_all_route_points(
             continue
 
         terrain_ft = terrain_at_distance(elevation, rp.distance_from_origin_nm)
+        # A profile exists but this point sits on a void (#807): the §8a
+        # descent-escape guard must not read that as "no terrain".
+        terrain_unknown = (
+            terrain_ft is None and elevation is not None and bool(elevation.points)
+        )
 
         wind_components, soundings, alt_advisories, divergences, cruise_temps = _run_point_analysis(
             forecasts_by_model, tracks[i], cruise_altitude_ft, flight_ceiling_ft,
             icing_severity_enhance=icing_severity_enhance,
             terrain_elevation_ft=terrain_ft,
+            terrain_unknown=terrain_unknown,
         )
 
         analyses.append(RoutePointAnalysis(
@@ -410,7 +418,12 @@ def _enrich_e_shear(analyses: list[RoutePointAnalysis]) -> None:
     if len(analyses) < 2:
         return
 
-    for model in analyses[0].sounding:
+    # Union of models across ALL points (first-seen order), not point 0's: a
+    # model whose sounding failed at the origin alone used to lose E-Shear for
+    # the entire route — CAT absence reading as smooth air, the #391 failure
+    # class (review 2026-08 §2.9). Per-point absence is handled below.
+    models = list(dict.fromkeys(m for rpa in analyses for m in rpa.sounding))
+    for model in models:
         for i, rpa in enumerate(analyses):
             sounding = rpa.sounding.get(model)
             if sounding is None or sounding.vertical_motion is None:
