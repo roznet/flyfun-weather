@@ -137,12 +137,17 @@ def parse_http_datetime(value: str | None) -> datetime | None:
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write bytes to ``path`` via tempfile + rename, so readers never see a torn file."""
+    """Write bytes to ``path`` via tempfile + rename, so readers never see a torn file.
+
+    The result is world-readable: ``mkstemp`` creates 0600, which would survive the
+    rename and lock out the off-box pack mirror (it reads as a different user).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -226,6 +231,7 @@ class ChartCache:
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(meta, f, indent=2, sort_keys=True)
+            os.chmod(tmp, 0o644)
             os.replace(tmp, path)
         except BaseException:
             try:

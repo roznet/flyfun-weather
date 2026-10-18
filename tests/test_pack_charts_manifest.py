@@ -471,7 +471,18 @@ def test_gramet_png_rendered_once_and_cached(api):
     cached = pack_dir / "gramet.png"
     assert cached.exists()
     assert cached.read_bytes() == first.content
+    # The weekly pack mirror reads prod as another user: mkstemp's 0600 broke it.
+    assert cached.stat().st_mode & 0o777 == 0o644
 
     second = client.get(f"/api/flights/{flight_id}/packs/{ts}/gramet.png")
     assert second.status_code == 200
     assert second.content == first.content
+
+
+def test_atomic_write_bytes_is_world_readable(tmp_path):
+    from weatherbrief.fetch.chart_cache import atomic_write_bytes
+
+    target = tmp_path / "x.png"
+    atomic_write_bytes(target, b"data")
+    assert target.read_bytes() == b"data"
+    assert target.stat().st_mode & 0o777 == 0o644
