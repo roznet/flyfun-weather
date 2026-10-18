@@ -45,7 +45,7 @@ class AppStateViewModel(
     val baseUrl: String = ApiClient.DEFAULT_BASE_URL,
     tokenStoreOverride: TokenStore? = null,
     val authService: FlyFunAuthService = FlyFunAuthService(
-        AuthConfig(baseUrl = baseUrl, callbackScheme = "flyfunweather", platform = "android"),
+        AuthConfig(baseUrl = baseUrl, callbackScheme = "flyfunweather"),
     ),
     initialMockMode: Boolean = false,
     private val scopeOverride: CoroutineScope? = null,
@@ -107,6 +107,7 @@ class AppStateViewModel(
     private val _userPreferences = MutableStateFlow<UserPreferencesResponse?>(null)
     val userPreferences: StateFlow<UserPreferencesResponse?> = _userPreferences.asStateFlow()
 
+    private var pendingOAuthVerifier: String? = null
     private var pendingPkceVerifier: String? = null
 
     val briefingCache: BriefingCache? by lazy {
@@ -177,12 +178,18 @@ class AppStateViewModel(
         }
     }
 
-    /** Build the Google OAuth URL for Chrome Custom Tabs and store the state nonce. */
+    /** Build the Google OAuth URL for Chrome Custom Tabs and store the state nonce + PKCE verifier. */
     fun startGoogleLogin(): String {
         _authError.value = null
         val state = authService.generateStateNonce()
+        val (verifier, challenge) = authService.generatePkcePair()
         _pendingOAuthState.value = state
-        return authService.buildAuthorizeUrl(provider = "google", state = state)
+        pendingOAuthVerifier = verifier
+        return authService.buildAuthorizeUrl(
+            provider = "google",
+            state = state,
+            codeChallenge = challenge,
+        )
     }
 
     /** Request an email magic link + 6-digit code. */
@@ -335,18 +342,25 @@ class AppStateViewModel(
         _isAuthLoading.value = true
         _authError.value = null
         val expectedState = _pendingOAuthState.value
+        val codeVerifier = pendingOAuthVerifier
         scope.launch {
             runCatching {
                 val params = authService.parseCallbackUri(uriString)
-                // Scope guard for direct token callbacks
+                // Scope guard for direct token callbacks (`flyfunweather://auth?token=...`)
                 if (params?.token != null) {
                     if (!JwtClaims.shouldAcceptDeepLinkToken(params.token!!, _isAuthenticated.value)) {
                         throw IllegalStateException("Scoped token ignored while already authenticated")
                     }
+                    return@runCatching params.token!!
                 }
-                authService.handleCallback(uriString, expectedState.orEmpty())
+                authService.handleCallback(
+                    callbackUri = uriString,
+                    expectedState = expectedState.orEmpty(),
+                    codeVerifier = codeVerifier,
+                )
             }.onSuccess { jwt ->
                 _pendingOAuthState.value = null
+                pendingOAuthVerifier = null
                 completeLogin(jwt)
             }.onFailure { err ->
                 _isAuthLoading.value = false

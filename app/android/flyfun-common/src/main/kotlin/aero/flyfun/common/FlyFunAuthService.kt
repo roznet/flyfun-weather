@@ -19,11 +19,16 @@ import java.util.Base64
 
 /**
  * Configuration for [FlyFunAuthService].
+ *
+ * Note: `flyfun-common`'s `/auth/login/{provider}` endpoint checks `platform == "ios"` along with
+ * `scheme` (`"flyfunweather"`) and `state` to trigger the native mobile custom-scheme auth-code
+ * redirect (`flyfunweather://auth/callback?code=...&state=...`) instead of setting a web cookie
+ * and redirecting to `/`.
  */
 data class AuthConfig(
     val baseUrl: String,
     val callbackScheme: String = "flyfunweather",
-    val platform: String = "android",
+    val platform: String = "ios",
 )
 
 /**
@@ -147,6 +152,7 @@ class FlyFunAuthService(
     private data class CodeExchangeRequest(
         val code: String,
         val state: String,
+        val code_verifier: String? = null,
     )
 
     @Serializable
@@ -175,18 +181,44 @@ class FlyFunAuthService(
     }
 
     /**
-     * Builds the OAuth authorization URL for [provider] and [state].
+     * Generates a 32-byte PKCE `code_verifier` and its S256 `code_challenge`.
      */
-    fun buildAuthorizeUrl(provider: String = "google", state: String = generateStateNonce()): String {
+    fun generatePkcePair(): Pair<String, String> {
+        val verifierBytes = ByteArray(32)
+        secureRandom.nextBytes(verifierBytes)
+        val verifier = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes)
+        val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
+        val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+        return verifier to challenge
+    }
+
+    /**
+     * Builds the OAuth authorization URL for [provider], [state], and optional PKCE [codeChallenge].
+     * Includes `platform=${config.platform}&scheme=${config.callbackScheme}&state=$state` so
+     * `flyfun-common` redirects back to `${config.callbackScheme}://auth/callback?code=...&state=...`.
+     */
+    fun buildAuthorizeUrl(
+        provider: String = "google",
+        state: String = generateStateNonce(),
+        codeChallenge: String? = null,
+    ): String {
         val base = config.baseUrl.trimEnd('/')
-        return "$base/auth/login/$provider?platform=${config.platform}&state=$state"
+        val baseQuery = "$base/auth/login/$provider?platform=${config.platform}&scheme=${config.callbackScheme}&state=$state"
+        return if (!codeChallenge.isNullOrBlank()) {
+            "$baseQuery&code_challenge=$codeChallenge&code_challenge_method=S256"
+        } else {
+            baseQuery
+        }
     }
 
     /**
      * Alias for [buildAuthorizeUrl].
      */
-    fun authorizationUrl(provider: String = "google", state: String = generateStateNonce()): String =
-        buildAuthorizeUrl(provider = provider, state = state)
+    fun authorizationUrl(
+        provider: String = "google",
+        state: String = generateStateNonce(),
+        codeChallenge: String? = null,
+    ): String = buildAuthorizeUrl(provider = provider, state = state, codeChallenge = codeChallenge)
 
     /**
      * Parses an inbound OAuth callback URI (`flyfunweather://auth/callback?code=...&state=...`,
@@ -223,9 +255,13 @@ class FlyFunAuthService(
 
     /**
      * Parses [callbackUri], verifies that `state == expectedState`, and exchanges `code` + `state`
-     * for a session JWT via `POST /auth/exchange`.
+     * (and optional PKCE [codeVerifier]) for a session JWT via `POST /auth/exchange`.
      */
-    suspend fun handleCallback(callbackUri: String, expectedState: String): String {
+    suspend fun handleCallback(
+        callbackUri: String,
+        expectedState: String,
+        codeVerifier: String? = null,
+    ): String {
         val params = parseCallbackUri(callbackUri)
             ?: throw AuthException("Invalid auth callback URI")
         if (!params.error.isNullOrBlank()) {
@@ -239,15 +275,22 @@ class FlyFunAuthService(
         if (code.isNullOrBlank()) {
             throw AuthException("Missing authorization code in callback URI")
         }
-        return exchangeCode(code = code, state = state)
+        return exchangeCode(code = code, state = state, codeVerifier = codeVerifier)
     }
 
     /**
      * Exchanges a one-time OAuth [code] and [state] for a session JWT via `POST /auth/exchange`.
      */
-    suspend fun exchangeCode(code: String, state: String): String = withContext(Dispatchers.IO) {
+    suspend fun exchangeCode(
+        code: String,
+        state: String,
+        codeVerifier: String? = null,
+    ): String = withContext(Dispatchers.IO) {
         val url = "${config.baseUrl.trimEnd('/')}/auth/exchange"
-        val bodyJson = json.encodeToString(CodeExchangeRequest.serializer(), CodeExchangeRequest(code, state))
+        val bodyJson = json.encodeToString(
+            CodeExchangeRequest.serializer(),
+            CodeExchangeRequest(code = code, state = state, code_verifier = codeVerifier),
+        )
         val request = Request.Builder()
             .url(url)
             .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))

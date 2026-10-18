@@ -48,7 +48,6 @@ class FlyFunAuthServiceTest {
             AuthConfig(
                 baseUrl = "https://weather.flyfun.aero/",
                 callbackScheme = "flyfunweather",
-                platform = "android",
             )
         )
         val nonce1 = service.generateStateNonce()
@@ -61,8 +60,21 @@ class FlyFunAuthServiceTest {
 
         val url = service.buildAuthorizeUrl(provider = "google", state = "state-123")
         assertEquals(
-            "https://weather.flyfun.aero/auth/login/google?platform=android&state=state-123",
+            "https://weather.flyfun.aero/auth/login/google?platform=ios&scheme=flyfunweather&state=state-123",
             url,
+        )
+
+        val (verifier, challenge) = service.generatePkcePair()
+        assertTrue(verifier.length >= 43)
+        assertTrue(challenge.isNotBlank())
+        val pkceUrl = service.buildAuthorizeUrl(
+            provider = "google",
+            state = "state-123",
+            codeChallenge = challenge,
+        )
+        assertEquals(
+            "https://weather.flyfun.aero/auth/login/google?platform=ios&scheme=flyfunweather&state=state-123&code_challenge=$challenge&code_challenge_method=S256",
+            pkceUrl,
         )
     }
 
@@ -101,6 +113,7 @@ class FlyFunAuthServiceTest {
         val token = service.handleCallback(
             callbackUri = "flyfunweather://auth/callback?code=one-time-code&state=expected-nonce",
             expectedState = "expected-nonce",
+            codeVerifier = "pkce-verifier-123",
         )
         assertEquals("minted-session-jwt", token)
 
@@ -110,6 +123,7 @@ class FlyFunAuthServiceTest {
         val bodyObj = Json.parseToJsonElement(recorded.body.readUtf8()).jsonObject
         assertEquals("one-time-code", bodyObj["code"]?.jsonPrimitive?.content)
         assertEquals("expected-nonce", bodyObj["state"]?.jsonPrimitive?.content)
+        assertEquals("pkce-verifier-123", bodyObj["code_verifier"]?.jsonPrimitive?.content)
     }
 
     @Test
