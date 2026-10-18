@@ -832,8 +832,10 @@ class VerificationScoreRow(Base):
     ceiling_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     cloud_base_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Model cloud base (AGL) minus the observation's lowest reported base, any
-    # amount (#793, migration 107). Standalone only, like cloud_base_delta_ft,
-    # which is against the ceiling and so is NULL on FEW/SCT-only reports.
+    # amount (#793, migration 107). Both sources since #806 (standalone and
+    # flight); cloud_base_delta_ft is still standalone only, and is against
+    # the ceiling, so NULL on FEW/SCT-only reports. Biased by construction
+    # (model cloud-fraction threshold vs first FEW): read bias per model.
     lowest_base_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     lcl_delta_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     visibility_delta_m: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1259,6 +1261,13 @@ class VerificationMonthlyStatsRow(Base):
     n_obs_gust: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_gust_flag_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Lowest cloud base (#806), from the daily sums. Biased by construction
+    # (model cloud-fraction threshold vs the first observed FEW): compare the
+    # bias across models, not against zero.
+    lowest_base_mae_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_base_bias_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_lowest_base: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Precipitation / convection hit rates (model scores only, NULL for TAF)
     n_precip_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     n_precip_miss: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1353,6 +1362,20 @@ class VerificationDailyStatsRow(Base):
     )
     n_gust_flag_hit: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
+    )
+
+    # Lowest cloud base (#806): verification_scores.lowest_base_delta_ft,
+    # model base AGL minus the METAR's lowest FEW/SCT/BKN/OVC base. Biased by
+    # construction — compare bias across models, not against zero. Rows
+    # rolled up before migration 109 carry 0/NULL until the day is re-rolled.
+    n_lowest_base: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    sum_abs_lowest_base_delta_ft: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    sum_lowest_base_delta_ft: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
     )
 
     # Advisory direction counts
@@ -1462,6 +1485,16 @@ class VerificationGlobalDailyStatsRow(Base):
     )
     n_gust_flag_hit: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
+    )
+
+    n_lowest_base: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    sum_abs_lowest_base_delta_ft: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    sum_lowest_base_delta_ft: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
     )
 
     n_advisory_match: Mapped[int] = mapped_column(

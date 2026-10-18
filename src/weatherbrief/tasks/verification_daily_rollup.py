@@ -207,6 +207,17 @@ def _build_rollup_select(
             # Gust (#491) — needs the observation row for the observed gust
             # and the realised peak, hence the join below.
             *gust_aggregate_columns(),
+            # Lowest cloud base (#806). Biased by construction — see
+            # VerificationDailyStatsRow.n_lowest_base.
+            func.count(VerificationScoreRow.lowest_base_delta_ft).label(
+                "n_lowest_base"
+            ),
+            func.sum(func.abs(VerificationScoreRow.lowest_base_delta_ft)).label(
+                "sum_abs_lowest_base_delta_ft"
+            ),
+            func.sum(VerificationScoreRow.lowest_base_delta_ft).label(
+                "sum_lowest_base_delta_ft"
+            ),
         )
         .join(
             VerificationObservationRow,
@@ -267,6 +278,7 @@ def _build_global_rollup_select(day: date_t):
         "n_gust", "sum_abs_gust_delta_kt", "sum_gust_delta_kt",
         "n_gust_flagged_peak", "sum_gust_flagged_over_peak_kt",
         "n_model_gust_flag", "n_obs_gust", "n_gust_flag_hit",
+        "n_lowest_base", "sum_abs_lowest_base_delta_ft", "sum_lowest_base_delta_ft",
         "n_advisory_match", "n_advisory_opt", "n_advisory_pess",
         "n_precip_hit", "n_precip_miss", "n_precip_false_alarm",
         "n_convection_hit", "n_convection_miss", "n_convection_false_alarm",

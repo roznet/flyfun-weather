@@ -53,6 +53,59 @@ def _delta(model_val: float | None, obs_val: float | None) -> float | None:
     return model_val - obs_val
 
 
+def hourly_cloud_base_ft(hourly) -> float | None:
+    """The model's own lowest cloud base on an hour, in the model's datum.
+
+    The low-band base of the attached NWP diagnostics: what
+    ``standalone_grib._diagnostics_from`` persists as
+    ``airport_forecast_snapshots.cloud_base_ft`` for GFS/ICON, and ECMWF's
+    ``cbh``. Read here so the flight path scores the same quantity the
+    standalone path reads off the snapshot. ``getattr`` so a duck-typed hour
+    without diagnostics reads as "no base", not an error.
+    """
+    diag = getattr(hourly, "nwp_cloud_diagnostics", None)
+    low = getattr(diag, "low", None) if diag is not None else None
+    return getattr(low, "base_ft", None) if low is not None else None
+
+
+def model_cloud_base_agl(
+    cloud_base_ft: float | None,
+    model: str | None,
+    field_elevation_ft: float | None,
+) -> float | None:
+    """A model cloud base converted to AGL, on the METAR's datum (#441 #3).
+
+    ECMWF's base is already AGL; GFS/ICON/HRRR's are MSL. Without a field
+    elevation the value passes through unchanged (datum-naive), exactly as
+    :func:`~weatherbrief.analysis.airport_conditions.to_agl_ceiling` does.
+    Shared by the flight and standalone scoring paths (#806).
+    """
+    from weatherbrief.analysis.airport_conditions import (
+        _nwp_ceiling_is_agl,
+        to_agl_ceiling,
+    )
+
+    return to_agl_ceiling(
+        cloud_base_ft, field_elevation_ft,
+        source_is_agl=_nwp_ceiling_is_agl(model),
+    )
+
+
+def lowest_base_delta(
+    cloud_base_agl_ft: float | None, obs_lowest_base_ft: float | None,
+) -> float | None:
+    """Model base (AGL) minus the METAR's lowest FEW/SCT/BKN/OVC base (#793).
+
+    The delta that sees FEW/SCT-only reports, which the ceiling-based
+    ``cloud_base_delta_ft`` drops. Biased by construction — the model's base
+    is where its cloud fraction crosses a threshold, the METAR's is the first
+    FEW — so read its bias per model, never against zero.
+    """
+    if obs_lowest_base_ft is None:
+        return None
+    return _delta(cloud_base_agl_ft, float(obs_lowest_base_ft))
+
+
 def _circular_delta(dir_a: float | None, dir_b: float | None) -> float | None:
     """Circular delta for wind direction, result in -180..+180."""
     if dir_a is None or dir_b is None:
@@ -156,8 +209,15 @@ def _score_model_vs_metar(
     days_out: int,
     source: str = "flight",
     field_elevation_ft: float | None = None,
+    cloud_base_ft: float | None = None,
 ) -> VerificationScoreRow | None:
-    """Compute a single model-vs-METAR score using advisory pipeline functions."""
+    """Compute a single model-vs-METAR score using advisory pipeline functions.
+
+    ``cloud_base_ft`` is the model's lowest cloud base in its own datum; when
+    omitted it is read off ``hourly``'s NWP diagnostics
+    (:func:`hourly_cloud_base_ft`) — the flight path's case. The standalone
+    path passes the snapshot's persisted value.
+    """
     from weatherbrief.analysis.airport_conditions import (
         classify_flight_category,
         reconcile_ceiling,
@@ -213,6 +273,14 @@ def _score_model_vs_metar(
     )
     obs_has_convection = _has_thunderstorm(obs_weather)
 
+    # Model base against the lowest reported base, any amount (#793/#806).
+    if cloud_base_ft is None:
+        cloud_base_ft = hourly_cloud_base_ft(hourly)
+    lowest_base_delta_ft = lowest_base_delta(
+        model_cloud_base_agl(cloud_base_ft, model, field_elevation_ft),
+        getattr(obs_row, "lowest_cloud_base_ft", None),
+    )
+
     return VerificationScoreRow(
         observation_id=obs_row.id,
         icao=obs_row.icao,
@@ -233,6 +301,7 @@ def _score_model_vs_metar(
             if obs_row.ceiling_ft is not None and model_ceiling is not None
             else None
         ),
+        lowest_base_delta_ft=lowest_base_delta_ft,
         visibility_delta_m=_delta(
             hourly.visibility_m, float(obs_row.visibility_m)
         ) if obs_row.visibility_m is not None and hourly.visibility_m is not None else None,
