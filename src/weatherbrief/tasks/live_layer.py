@@ -1184,7 +1184,16 @@ def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
         # The strip is the progress block in words (#816).
         out.glance.flight = None
         if out.glance.destination is not None:
-            out.glance.destination.eta = None
+            d = out.glance.destination
+            d.eta = None
+            # Its clauses carry no estimate today; stripped anyway so a future
+            # wording change cannot leak one (#816 review).
+            d.metar_text, d.taf_text, d.cells_text = (
+                strip_eta_text(d.metar_text), strip_eta_text(d.taf_text), strip_eta_text(d.cells_text))
+            d.wind_text = strip_eta_text(d.wind_text) if d.wind_text else d.wind_text
+            d.lightning_text = strip_eta_text(d.lightning_text) if d.lightning_text else d.lightning_text
+            for c in d.cells:
+                c.text = strip_eta_text(c.text)
         # Model-written: its times may not match the ~HH:MMZ pattern.
         out.glance.highlight = None
     if out.changes is not None:

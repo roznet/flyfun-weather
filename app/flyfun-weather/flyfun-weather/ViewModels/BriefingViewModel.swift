@@ -990,7 +990,10 @@ final class BriefingViewModel {
               incoming.liveUpdatedAt != nil,
               LiveTime.sameInstant(incoming.liveUpdatedAt, current.liveUpdatedAt)
         else { return false }
+        // A moved stamp counts even with the same text: adopting it is what
+        // stops `syncLatestPack` refetching on every poll.
         return incoming.glance?.highlight != current.glance?.highlight
+            || LiveTime.isNewer(incoming.highlightUpdatedAt, than: current.highlightUpdatedAt)
     }
 
     /// Disk-only: the last live layer this device saw. A downloaded pack's

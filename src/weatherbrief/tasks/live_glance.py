@@ -632,20 +632,24 @@ def _destination_wind(obs: AirportObservation | None) -> tuple[str | None, str |
     if obs is None:
         return None, None
     taf_ok = (obs.has_taf or bool(obs.taf_raw)) and obs.taf_valid_at_eta is not False
-    for kind, label, ok in (("taf", "Wind at ETA", taf_ok), ("metar", "Wind now", obs.has_metar or bool(obs.metar_raw))):
+    # Explicit fields (not string-built names): a renamed field fails the type
+    # check and the tests, not silently at runtime (#816 review).
+    sources = (
+        ("Wind at ETA", taf_ok, obs.taf_wind_dir, obs.taf_wind_speed_kt, obs.taf_wind_gust_kt,
+         obs.taf_best_runway_id, obs.taf_crosswind_kt, obs.taf_wind_advisory),
+        ("Wind now", obs.has_metar or bool(obs.metar_raw), obs.metar_wind_dir, obs.metar_wind_speed_kt,
+         obs.metar_wind_gust_kt, obs.metar_best_runway_id, obs.metar_crosswind_kt, obs.metar_wind_advisory),
+    )
+    for label, ok, wdir, speed, gust, rwy, xw, advisory in sources:
         if not ok:
             continue
-        words = _wind_words(
-            getattr(obs, f"{kind}_wind_dir"), getattr(obs, f"{kind}_wind_speed_kt"),
-            getattr(obs, f"{kind}_wind_gust_kt"),
-        )
+        words = _wind_words(wdir, speed, gust)
         if words is None:
             continue
         text = f"{label} {words}"
-        rwy, xw = getattr(obs, f"{kind}_best_runway_id"), getattr(obs, f"{kind}_crosswind_kt")
         if rwy and xw is not None:
             text += f" · RWY {rwy} crosswind {abs(xw):.0f} kt"
-        return text, getattr(obs, f"{kind}_wind_advisory")
+        return text, advisory
     return None, None
 
 

@@ -388,11 +388,11 @@ class LiveHighlight(BaseModel):
     a layer always exists without one: ``None`` until the first generation
     lands, and ``None`` again each time the weather changes significantly
     (#706: compared with :attr:`LiveHighlight.gate`) until the next tick fills
-    it, and after arrival (``live_highlight.arrived``, #815). A gate state whose generation is
-    rejected is retried once and then left alone (``MAX_ATTEMPTS_PER_FACTS``),
-    so this stays ``None`` for that state — the next real weather change gets
-    a fresh attempt. Readers
-    fall back to :attr:`LiveGlance.headline`.
+    it, and after arrival (``live_highlight.arrived``, #815). A gate state
+    whose generation is rejected is retried once and then left alone
+    (``MAX_ATTEMPTS_PER_FACTS``), so this stays ``None`` for that state — the
+    next real weather change gets a fresh attempt. Readers fall back to
+    :attr:`LiveGlance.headline`.
 
     Displayed (owner, 2026-10-09) above the nutshell on iOS and web, with an
     "experimental" caption, its written time and a 👍/👎 rated as feedback

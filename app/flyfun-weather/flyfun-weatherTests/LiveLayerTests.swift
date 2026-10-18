@@ -410,6 +410,12 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
         #expect(!BriefingViewModel.refreshesHighlight(current: fetchedEarly, incoming: patched,
                                                       packTimestamp: "2026-06-25T09:00:00Z"))
         #expect(!BriefingViewModel.refreshesHighlight(current: nil, incoming: patched, packTimestamp: packTS))
+        // Same highlight, newer stamp → adopted, so the held stamp advances
+        // and the next poll stops refetching.
+        var restamped = patched
+        restamped.highlightUpdatedAt = "2026-06-24T10:01:00Z"
+        #expect(BriefingViewModel.refreshesHighlight(current: patched, incoming: restamped, packTimestamp: packTS))
+        #expect(!BriefingViewModel.refreshesHighlight(current: restamped, incoming: patched, packTimestamp: packTS))
     }
 }
 

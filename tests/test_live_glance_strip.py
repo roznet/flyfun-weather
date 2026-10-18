@@ -98,6 +98,11 @@ def test_on_the_ground_at_the_departure_then_estimated_from_that_fix():
     assert later.phase == "enroute"
     assert later.text.endswith("· last fix on the ground 12:05Z, estimated")
     assert later.marker_label == "Estimated position"
+    # Review: pin the whole sentence for a long silence after the ground fix.
+    silent = _strip(mins(60), g)
+    assert silent.phase == "enroute" and silent.estimated
+    assert silent.text.startswith(f"{silent.along_nm:.0f} of 154 NM · ETA ZZDS 13:45Z (+15 min vs plan)")
+    assert silent.text.endswith("· last fix on the ground 12:05Z, estimated")
 
 
 # --- Manual entries -----------------------------------------------------------------
@@ -115,6 +120,9 @@ def test_landed_entered_and_inferred():
     assert entered.phase == "landed"
     assert entered.text == "Landed ZZDS 13:40Z (+10 min vs plan)"
     assert entered.marker_label == "Landed"
+    # Review: once landed, "vs plan" is measured against the landing itself.
+    assert entered.eta == entered.landed_at == mins(100)
+    assert entered.eta_delay_min == 10
 
     # A fix on the apron at the destination: inferred, so "~".
     apron = fix(95, 4.0, gs=0.0)
@@ -236,3 +244,19 @@ def test_no_eta_text_survives_in_the_destination_under_sharing_none():
     for text in [d.metar_text, d.taf_text, d.wind_text, d.cells_text, d.lightning_text,
                  *(c.text for c in d.cells)]:
         assert text == strip_eta_text(text), text
+
+
+def test_sharing_none_strips_an_estimate_from_every_destination_clause():
+    """Review round 2: redaction strips the destination's clauses itself, so a
+    future wording that adds "~HH:MMZ" cannot leak under ``none``."""
+    layer = _layer()
+    layer.glance, layer.ribbon = build_glance(layer, ROUTE, _progress(mins(50), fix(40, 0.5)))
+    d = layer.glance.destination
+    d.taf_text, d.wind_text, d.cells_text = "TAF at ETA ~13:30Z VFR", "Wind at ETA ~13:30Z 240° 18 kt", "cell ~13:25Z"
+    resp = LiveLayerResponse(flight_id=layer.flight_id, pack_timestamp=layer.pack_timestamp,
+                             glance=layer.glance, ribbon=layer.ribbon)
+    hidden = redact_live(resp, "none").glance.destination
+    for text in (hidden.taf_text, hidden.wind_text, hidden.cells_text):
+        assert "13:" not in text, text
+    # The owner's own view is untouched.
+    assert redact_live(resp, "full").glance.destination.taf_text == "TAF at ETA ~13:30Z VFR"

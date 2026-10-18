@@ -822,7 +822,10 @@ same `build_glance` call, so they inherit its "never raises" guard:
   **in place of a non-alert arrival line** (an alert one stays in the alert
   group); the arrival line itself is unchanged for the agent and the highlight.
 - **Redaction:** `position_sharing=none` drops `glance.flight` (it is the
-  progress block in words) and nulls `destination.eta`; `along_route` keeps both.
+  progress block in words), nulls `destination.eta` and runs every
+  destination clause (METAR, TAF, wind, cells, lightning, each cell's text)
+  through `strip_eta_text`. They carry no estimate today; the strip keeps a
+  future wording from leaking one. `along_route` keeps both.
 - **Agent:** `summarize_live` adds `glance.flight` `{phase, text}`.
 - **Reading order, both clients:** strip → alert lines (and on iOS alert
   change rows) → highlight or headline → lines not yet `passed` → destination
@@ -953,7 +956,9 @@ the latency join (`live_delivery` → tick by version) and the snapshots. Instea
 it sets `LiveLayer.highlight_updated_at` (reset to null by every commit) and
 writes it into `live_meta.json`; `/packs/latest` and `/live` serve it, and both
 clients fetch when it moves and take the same tick when only the highlight
-differs (iOS `refreshesHighlight`, web `highlightChanged`).
+differs (iOS `refreshesHighlight`, web `highlightChanged`). A moved stamp with
+the same text counts as a change too: adopting it is what advances the held
+stamp, otherwise every poll would refetch.
 
 ### What counts as "changed" (the regeneration gate, #706)
 

@@ -396,4 +396,11 @@ describe('highlightChanged (#815)', () => {
     expect(highlightChanged(layer(null), layer(null))).toBe(false);
     expect(highlightChanged(null, null)).toBe(false);
   });
+  it('is true when only the highlight stamp moved, so the held stamp advances', () => {
+    const at = (stamp: string | null) => ({ ...(layer('A') as object), highlight_updated_at: stamp }) as never;
+    expect(highlightChanged(at('2026-10-01T11:00:50Z'), at('2026-10-01T11:01:00Z'))).toBe(true);
+    expect(highlightChanged(at(null), at('2026-10-01T11:01:00Z'))).toBe(true);
+    expect(highlightChanged(at('2026-10-01T11:01:00Z'), at('2026-10-01T11:00:50Z'))).toBe(false);
+    expect(highlightChanged(at('2026-10-01T11:01:00Z'), at('2026-10-01T11:01:00Z'))).toBe(false);
+  });
 });

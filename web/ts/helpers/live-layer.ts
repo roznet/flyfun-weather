@@ -92,7 +92,12 @@ export function highlightChanged(
 ): boolean {
   const a = current?.glance?.highlight ?? null;
   const b = incoming?.glance?.highlight ?? null;
-  return (a?.text ?? null) !== (b?.text ?? null) || (a?.generated_at ?? null) !== (b?.generated_at ?? null);
+  // A moved stamp counts even with the same text: adopting it is what stops
+  // syncLatest refetching on every poll.
+  const stampMoved = isoToMs(incoming?.highlight_updated_at) > isoToMs(current?.highlight_updated_at)
+    || (!!incoming?.highlight_updated_at && !current?.highlight_updated_at);
+  return (a?.text ?? null) !== (b?.text ?? null) || (a?.generated_at ?? null) !== (b?.generated_at ?? null)
+    || stampMoved;
 }
 
 /** Departure as epoch ms, from an ISO `departure_time` or the legacy
