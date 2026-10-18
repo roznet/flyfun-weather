@@ -150,8 +150,10 @@ joined AS (
     LEFT JOIN lightning l ON l.icao = s.icao AND l.hour = s.forecast_hour
     LEFT JOIN tops t ON t.icao = s.icao AND t.hour = s.forecast_hour
 )
+-- Both sources must be present whatever the outcome: letting an observed yes
+-- through on one source would keep an under-covered hour only when it stormed.
 SELECT * FROM joined
-WHERE observed_yes OR (radar_frames > 0 AND lightning_frames > 0)
+WHERE radar_frames > 0 AND lightning_frames > 0
 """
 
 

@@ -69,6 +69,7 @@ def archives(tmp_path):
         _snap("ZZAD", "none"),                          # correct negative
         _snap("ZZAE", "high"),                          # unknown: radar coverage bad
         _snap("ZZAF", None),                            # no sounding: excluded
+        _snap("ZZAH", "none"),                          # unknown even though it flashed
         _snap("ZZAG", "none"),                          # 12:30 echo is the 13:00 hour
         _snap("ZZAA", "moderate", init=INIT - timedelta(days=1)),  # D1 hit
     ], SNAP_SCHEMA)
@@ -79,13 +80,14 @@ def archives(tmp_path):
         _radar("ZZAD", 0, None),
         _radar("ZZAD", 0, 55.0, radius=20.0),            # outside the 10 NM disc
         _radar("ZZAE", 0, 50.0, bad=True),
+        _radar("ZZAH", 0, 50.0, bad=True),
         _radar("ZZAG", 10, 20.0),
         _radar("ZZAG", 30, 50.0),
     ], GRID_SCHEMA)
     _write(observed / "eumetsat_li" / "2026-07-01.parquet", [
         _li("ZZAA", 0, 0), _li("ZZAB", -20, 3), _li("ZZAC", 0, 0),
         _li("ZZAD", 0, 0), _li("ZZAD", 0, 9, radius=40.0), _li("ZZAE", 0, 0),
-        _li("ZZAG", 0, 0),
+        _li("ZZAG", 0, 0), _li("ZZAH", 0, 4),
     ], LI_SCHEMA)
     return verif, observed
 
@@ -98,7 +100,10 @@ def test_contingency_per_model_and_lead_day(archives, tmp_path):
     by_day = {r["days_out"]: r for r in rows}
     d0 = by_day[0]
     assert (d0["hits"], d0["misses"], d0["false_alarms"], d0["correct_negatives"]) == (1, 1, 1, 2)
-    assert d0["n"] == 5  # ZZAE (unknown) and ZZAF (no risk) dropped
+    # ZZAE and ZZAH (no covered radar frame) and ZZAF (no risk) dropped. ZZAH
+    # flashed: an unknown hour is dropped whatever it observed, or uncovered
+    # hours would enter the sample only when they stormed.
+    assert d0["n"] == 5
     assert d0["pod"] == pytest.approx(0.5)
     assert d0["far"] == pytest.approx(0.5)
     assert by_day[1]["hits"] == 1
@@ -107,6 +112,7 @@ def test_contingency_per_model_and_lead_day(archives, tmp_path):
     assert pairs[("ZZAA", 0)]["max_dbz"] == 45.0
     assert pairs[("ZZAB", 0)]["flashes"] == 3
     assert ("ZZAE", 0) not in pairs
+    assert ("ZZAH", 0) not in pairs
 
 
 def test_threshold_is_a_parameter(archives):
