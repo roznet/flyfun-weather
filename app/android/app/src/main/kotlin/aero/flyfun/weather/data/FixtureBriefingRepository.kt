@@ -52,6 +52,10 @@ object FixtureBriefingData {
         WbJson.decodeFromString(ElevationResponse.serializer(), ELEVATION_JSON)
     }
 
+    val soundingProfile: SoundingProfileResponse by lazy {
+        WbJson.decodeFromString(SoundingProfileResponse.serializer(), SOUNDING_PROFILE_JSON)
+    }
+
     const val PACK_JSON = """
     {
       "flight_id": "fixture-1",
@@ -576,6 +580,178 @@ object FixtureBriefingData {
       ]
     }
     """
+
+    const val SOUNDING_PROFILE_JSON = """
+    {
+      "point_index": 0,
+      "lat": 43.542,
+      "lon": 6.953,
+      "distance_from_origin_nm": 0.0,
+      "waypoint_icao": "LFMD",
+      "waypoint_name": "Cannes-Mandelieu",
+      "interpolated_time": "2099-07-01T09:00:00Z",
+      "model": "ecmwf",
+      "cruise_altitude_ft": 8000,
+      "track_deg": 262.0,
+      "terrain_elevation_ft": 12.0,
+      "levels": [
+        {
+          "pressure_hpa": 1000.0, "altitude_ft": 364.0,
+          "temperature_c": 22.0, "dewpoint_c": 15.0,
+          "wind_speed_kt": 8.0, "wind_direction_deg": 200.0,
+          "relative_humidity_pct": 64.0, "dewpoint_depression_c": 7.0,
+          "theta_e_k": 328.5, "lapse_rate_c_per_km": 6.5,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.0, "cloud_liquid_water_g_m3": 0.0,
+          "ice_mixing_ratio_g_kg": 0.0, "cloud_area_fraction_pct": 5.0,
+          "richardson_number": 4.2, "omega_pa_s": -0.05, "w_fpm": 10.0
+        },
+        {
+          "pressure_hpa": 925.0, "altitude_ft": 2500.0,
+          "temperature_c": 17.0, "dewpoint_c": 12.5,
+          "wind_speed_kt": 12.0, "wind_direction_deg": 215.0,
+          "relative_humidity_pct": 75.0, "dewpoint_depression_c": 4.5,
+          "theta_e_k": 326.0, "lapse_rate_c_per_km": 6.8,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.02, "cloud_liquid_water_g_m3": 0.02,
+          "ice_mixing_ratio_g_kg": 0.0, "cloud_area_fraction_pct": 25.0,
+          "richardson_number": 3.5, "omega_pa_s": -0.12, "w_fpm": 24.0
+        },
+        {
+          "pressure_hpa": 850.0, "altitude_ft": 4780.0,
+          "temperature_c": 11.5, "dewpoint_c": 9.5,
+          "wind_speed_kt": 16.0, "wind_direction_deg": 235.0,
+          "relative_humidity_pct": 88.0, "dewpoint_depression_c": 2.0,
+          "theta_e_k": 324.2, "lapse_rate_c_per_km": 6.2,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.18, "cloud_liquid_water_g_m3": 0.19,
+          "ice_mixing_ratio_g_kg": 0.0, "cloud_area_fraction_pct": 65.0,
+          "richardson_number": 2.1, "omega_pa_s": -0.25, "w_fpm": 52.0
+        },
+        {
+          "pressure_hpa": 700.0, "altitude_ft": 9880.0,
+          "temperature_c": -1.5, "dewpoint_c": -3.5,
+          "wind_speed_kt": 24.0, "wind_direction_deg": 255.0,
+          "relative_humidity_pct": 86.0, "dewpoint_depression_c": 2.0,
+          "theta_e_k": 321.0, "lapse_rate_c_per_km": 6.9,
+          "icing_index": 35.0, "icing_index_nwp": 42.0, "sfip_100": 38.0,
+          "cloud_liquid_water_g_kg": 0.22, "cloud_liquid_water_g_m3": 0.20,
+          "ice_mixing_ratio_g_kg": 0.04, "cloud_area_fraction_pct": 70.0,
+          "richardson_number": 1.4, "omega_pa_s": -0.35, "w_fpm": 85.0
+        },
+        {
+          "pressure_hpa": 600.0, "altitude_ft": 13800.0,
+          "temperature_c": -9.5, "dewpoint_c": -13.0,
+          "wind_speed_kt": 32.0, "wind_direction_deg": 265.0,
+          "relative_humidity_pct": 76.0, "dewpoint_depression_c": 3.5,
+          "theta_e_k": 320.4, "lapse_rate_c_per_km": 7.2,
+          "icing_index": 22.0, "icing_index_nwp": 28.0, "sfip_100": 25.0,
+          "cloud_liquid_water_g_kg": 0.10, "cloud_liquid_water_g_m3": 0.08,
+          "ice_mixing_ratio_g_kg": 0.09, "cloud_area_fraction_pct": 45.0,
+          "richardson_number": 1.1, "omega_pa_s": -0.28, "w_fpm": 74.0
+        },
+        {
+          "pressure_hpa": 500.0, "altitude_ft": 18280.0,
+          "temperature_c": -18.5, "dewpoint_c": -25.0,
+          "wind_speed_kt": 42.0, "wind_direction_deg": 270.0,
+          "relative_humidity_pct": 56.0, "dewpoint_depression_c": 6.5,
+          "theta_e_k": 321.5, "lapse_rate_c_per_km": 7.5,
+          "icing_index": 5.0, "icing_index_nwp": 8.0, "sfip_100": 6.0,
+          "cloud_liquid_water_g_kg": 0.02, "cloud_liquid_water_g_m3": 0.01,
+          "ice_mixing_ratio_g_kg": 0.12, "cloud_area_fraction_pct": 25.0,
+          "richardson_number": 0.9, "omega_pa_s": -0.18, "w_fpm": 55.0
+        },
+        {
+          "pressure_hpa": 400.0, "altitude_ft": 23570.0,
+          "temperature_c": -30.0, "dewpoint_c": -40.0,
+          "wind_speed_kt": 54.0, "wind_direction_deg": 275.0,
+          "relative_humidity_pct": 38.0, "dewpoint_depression_c": 10.0,
+          "theta_e_k": 324.0, "lapse_rate_c_per_km": 7.8,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.0, "cloud_liquid_water_g_m3": 0.0,
+          "ice_mixing_ratio_g_kg": 0.08, "cloud_area_fraction_pct": 15.0,
+          "richardson_number": 0.7, "omega_pa_s": -0.08, "w_fpm": 28.0
+        },
+        {
+          "pressure_hpa": 300.0, "altitude_ft": 30065.0,
+          "temperature_c": -44.5, "dewpoint_c": -56.0,
+          "wind_speed_kt": 68.0, "wind_direction_deg": 280.0,
+          "relative_humidity_pct": 28.0, "dewpoint_depression_c": 11.5,
+          "theta_e_k": 328.0, "lapse_rate_c_per_km": 7.4,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.0, "cloud_liquid_water_g_m3": 0.0,
+          "ice_mixing_ratio_g_kg": 0.03, "cloud_area_fraction_pct": 10.0,
+          "richardson_number": 0.6, "omega_pa_s": 0.02, "w_fpm": -8.0
+        },
+        {
+          "pressure_hpa": 250.0, "altitude_ft": 33985.0,
+          "temperature_c": -52.5, "dewpoint_c": -65.0,
+          "wind_speed_kt": 75.0, "wind_direction_deg": 282.0,
+          "relative_humidity_pct": 22.0, "dewpoint_depression_c": 12.5,
+          "theta_e_k": 332.0, "lapse_rate_c_per_km": 6.0,
+          "icing_index": 0.0, "icing_index_nwp": 0.0, "sfip_100": 0.0,
+          "cloud_liquid_water_g_kg": 0.0, "cloud_liquid_water_g_m3": 0.0,
+          "ice_mixing_ratio_g_kg": 0.01, "cloud_area_fraction_pct": 5.0,
+          "richardson_number": 1.2, "omega_pa_s": 0.05, "w_fpm": -22.0
+        }
+      ],
+      "parcel_path": [
+        { "pressure_hpa": 1000.0, "temperature_c": 22.0 },
+        { "pressure_hpa": 925.0, "temperature_c": 15.2 },
+        { "pressure_hpa": 885.0, "temperature_c": 11.4 },
+        { "pressure_hpa": 850.0, "temperature_c": 9.8 },
+        { "pressure_hpa": 795.0, "temperature_c": 7.1 },
+        { "pressure_hpa": 700.0, "temperature_c": 1.5 },
+        { "pressure_hpa": 600.0, "temperature_c": -5.8 },
+        { "pressure_hpa": 500.0, "temperature_c": -15.2 },
+        { "pressure_hpa": 400.0, "temperature_c": -28.5 },
+        { "pressure_hpa": 390.0, "temperature_c": -30.2 },
+        { "pressure_hpa": 300.0, "temperature_c": -46.0 },
+        { "pressure_hpa": 250.0, "temperature_c": -55.0 }
+      ],
+      "indices": {
+        "lcl_altitude_ft": 3800.0,
+        "lcl_pressure_hpa": 885.0,
+        "lfc_altitude_ft": 6500.0,
+        "lfc_pressure_hpa": 795.0,
+        "el_altitude_ft": 24000.0,
+        "el_pressure_hpa": 390.0,
+        "cape_surface_jkg": 600.0,
+        "cin_surface_jkg": -40.0,
+        "lifted_index": -2.0,
+        "k_index": 28.0,
+        "total_totals": 48.0,
+        "precipitable_water_mm": 24.5,
+        "freezing_level_ft": 9500.0,
+        "minus10c_level_ft": 14000.0,
+        "minus20c_level_ft": 19000.0,
+        "sounding_ceiling_ft": 4500.0,
+        "nwp_ceiling_ft": 4300.0
+      },
+      "cloud_layers": [
+        { "base_ft": 3800.0, "top_ft": 10500.0, "base_pressure_hpa": 885.0, "top_pressure_hpa": 685.0, "coverage": "BKN", "mean_dewpoint_depression_c": 2.0, "mean_cloud_cover_pct": 68.0 }
+      ],
+      "nwp_cloud_layers": [
+        { "base_ft": 4000.0, "top_ft": 10200.0, "base_pressure_hpa": 878.0, "top_pressure_hpa": 692.0, "coverage": "BKN", "mean_dewpoint_depression_c": null, "mean_cloud_cover_pct": 68.0 }
+      ],
+      "icing_zones": [
+        { "base_ft": 9500.0, "top_ft": 13800.0, "base_pressure_hpa": 710.0, "top_pressure_hpa": 600.0, "risk": "light", "icing_type": "rime", "mean_icing_index": 30.0 }
+      ],
+      "icing_ogimet_nwp_zones": [
+        { "base_ft": 9500.0, "top_ft": 13800.0, "base_pressure_hpa": 710.0, "top_pressure_hpa": 600.0, "risk": "moderate", "icing_type": "rime", "mean_icing_index": 38.0 }
+      ],
+      "sfip_zones": [
+        { "base_ft": 9500.0, "top_ft": 13000.0, "base_pressure_hpa": 710.0, "top_pressure_hpa": 620.0, "risk": "light", "icing_type": "rime", "mean_sfip_100": 35.0, "variant": "nwp" }
+      ],
+      "inversion_layers": [
+        { "base_ft": 2500.0, "top_ft": 3200.0, "base_pressure_hpa": 925.0, "top_pressure_hpa": 900.0, "strength_c": 2.0, "surface_based": false }
+      ],
+      "convective": {
+        "risk_level": "moderate", "base_ft": 6500.0, "top_ft": 24000.0,
+        "cape_jkg": 600.0, "cin_jkg": -40.0, "cover_pct": 15.0, "method": "thermo"
+      }
+    }
+    """
 }
 
 /**
@@ -743,7 +919,7 @@ open class FixtureBriefingRepository(
         timestamp: String,
         pointIndex: Int,
         model: String,
-    ): SoundingProfileResponse = throw ApiError.NotFound
+    ): SoundingProfileResponse = FixtureBriefingData.soundingProfile
 
     override suspend fun gramet(flightId: String, timestamp: String): ByteArray =
         throw ApiError.NotFound

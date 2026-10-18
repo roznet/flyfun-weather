@@ -1158,10 +1158,16 @@ data class NWPCloudLayerDiag(
 data class ThermodynamicIndices(
     @SerialName("lcl_altitude_ft")
     val lclAltitudeFt: Double? = null,
+    @SerialName("lcl_pressure_hpa")
+    val lclPressureHpa: Double? = null,
     @SerialName("lfc_altitude_ft")
     val lfcAltitudeFt: Double? = null,
+    @SerialName("lfc_pressure_hpa")
+    val lfcPressureHpa: Double? = null,
     @SerialName("el_altitude_ft")
     val elAltitudeFt: Double? = null,
+    @SerialName("el_pressure_hpa")
+    val elPressureHpa: Double? = null,
     @SerialName("cape_surface_jkg")
     val capeSurfaceJkg: Double? = null,
     @SerialName("cin_surface_jkg")
@@ -1189,6 +1195,8 @@ data class ThermodynamicIndices(
     @SerialName("nwp_ceiling_ft")
     val nwpCeilingFt: Double? = null,
 )
+
+typealias SoundingIndicesResponse = ThermodynamicIndices
 
 @Serializable
 data class EnhancedCloudLayer(
@@ -1417,6 +1425,7 @@ data class SoundingProfileResponse(
 )
 
 @Serializable
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 data class SoundingProfileLevel(
     @SerialName("pressure_hpa")
     val pressureHpa: Double = 0.0,
@@ -1432,12 +1441,37 @@ data class SoundingProfileLevel(
     val windDirectionDeg: Double? = null,
     @SerialName("relative_humidity_pct")
     val relativeHumidityPct: Double? = null,
+    @SerialName("dewpoint_depression_c")
+    val dewpointDepressionC: Double? = null,
+    @SerialName("wet_bulb_c")
+    val wetBulbC: Double? = null,
+    @SerialName("theta_e_k")
+    val thetaEK: Double? = null,
+    @SerialName("lapse_rate_c_per_km")
+    val lapseRateCPerKm: Double? = null,
+    @SerialName("icing_index")
+    val icingIndex: Double? = null,
+    @SerialName("icing_index_nwp")
+    val icingIndexNwp: Double? = null,
+    @SerialName("sfip_100")
+    @kotlinx.serialization.json.JsonNames("sfip")
+    val sfip100: Double? = null,
     @SerialName("cloud_liquid_water_g_kg")
     val cloudLiquidWaterGKg: Double? = null,
+    @SerialName("cloud_liquid_water_g_m3")
+    val cloudLiquidWaterGM3: Double? = null,
     @SerialName("ice_mixing_ratio_g_kg")
     val iceMixingRatioGKg: Double? = null,
+    @SerialName("cloud_area_fraction_pct")
+    val cloudAreaFractionPct: Double? = null,
+    @SerialName("richardson_number")
+    val richardsonNumber: Double? = null,
     @SerialName("vertical_velocity_pa_s")
     val verticalVelocityPaS: Double? = null,
+    @SerialName("omega_pa_s")
+    val omegaPaS: Double? = null,
+    @SerialName("w_fpm")
+    val wFpm: Double? = null,
 )
 
 @Serializable
@@ -1447,6 +1481,8 @@ data class ParcelPoint(
     @SerialName("temperature_c")
     val temperatureC: Double = 0.0,
 )
+
+typealias ParcelPathPointResponse = ParcelPoint
 
 // ============================================================================
 // Alternates

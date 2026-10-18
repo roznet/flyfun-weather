@@ -24,3 +24,4 @@ rootProject.name = "flyfun-weather-android"
 include(":app")
 include(":flyfun-common")
 include(":rzflight")
+include(":rzskewt")

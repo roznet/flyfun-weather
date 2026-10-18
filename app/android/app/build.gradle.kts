@@ -46,6 +46,7 @@ android {
 dependencies {
     implementation(project(":flyfun-common"))
     implementation(project(":rzflight"))
+    implementation(project(":rzskewt"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
