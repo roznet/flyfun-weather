@@ -334,6 +334,21 @@ keeping:
   `APNS_KEY_P8` (PEM contents; or `APNS_KEY_P8_PATH` for local dev), `APNS_KEY_ID`,
   `APNS_TEAM_ID`, `APNS_BUNDLE_ID` (→ `apns-topic`). Missing config → log-and-skip.
 
+- **Android FCM transport & key management** — `FcmConfig.from_env()` reads a Firebase
+  service account from `FCM_SERVICE_ACCOUNT_JSON` (raw JSON or base64-encoded JSON, recommended
+  for single-line Docker `env_file`), `FCM_SERVICE_ACCOUNT_PATH` (local file path), or discrete
+  `FCM_PROJECT_ID` + `FCM_CLIENT_EMAIL` + `FCM_PRIVATE_KEY` (`_normalize_key_pem` accepts raw,
+  `\n`-escaped, or base64 PEM). `_fcm_access_token` exchanges an RS256 JWT assertion at
+  `https://oauth2.googleapis.com/token` for a cached (~50 min) OAuth2 bearer token, minted once
+  per dispatch batch and evicted immediately on a 401 response. Sends go to
+  `POST https://fcm.googleapis.com/v1/projects/{project_id}/messages:send`; `UNREGISTERED` and
+  `SENDER_ID_MISMATCH` responses prune the dead token (and trigger last-device email decay if
+  it was the user's last device). Alert payloads set `android.notification.channel_id` to
+  `flyfun_briefing_updates`, `flyfun_flight_day`, `flyfun_live_alerts` (`time-sensitive`,
+  `HIGH` priority), or `flyfun_live_clear` (`active`, `NORMAL` priority), matching the channels
+  registered by `PushNotificationManager.kt`. Missing FCM config → log-and-skip Android tokens
+  without affecting iOS tokens.
+
 - **Sandbox vs production routing** — per-**token**, decided by the *app build on the device*,
   **not** by which server runs: an Xcode **debug** build → `aps-environment: development` →
   **sandbox** token → sandbox host; **TestFlight and App Store** → `production` → production
@@ -356,6 +371,7 @@ keeping:
   iOS `flyfun-weatherTests/PushNotificationsTests.swift`
 - iOS: `Services/PushNotifications.swift`, `App/AppState.swift` (push/badge methods),
   `Views/SettingsView.swift`, `Views/Briefing/BriefingContainerView.swift`
+- Android: `app/android/app/src/main/kotlin/aero/flyfun/weather/service/PushNotificationManager.kt`
 - Change detection: `compute_refresh_delta` (see [metar-taf-route-weather](./metar-taf-route-weather.md))
 </content>
 
@@ -378,24 +394,26 @@ meteorology-decisions §47.
   first: the row's deterministic message, its role, and its report time
   ("LFAT METAR: IFR → LIFR (destination) · SPECI 10:20Z"), so a late delivery
   reads as dated. Clears start "Cleared: ". Never the model highlight.
-- **APNs**: `apns-priority: 10`, `apns-expiration` = min(sent + 30 min, end of
-  the live window): APNs keeps only the newest pending push per device, so a
-  phone offline for a leg lands to nothing stale. No `apns-collapse-id`: each
-  push stays its own Notification Center entry. No badge (the badge counts
-  unseen briefings). In `aps`: `thread-id` = flight id (groups a flight's
-  pushes) and `interruption-level` `time-sensitive` for alerts, `active` for
-  clears-only. `thread-id` and `interruption-level` are payload keys, not
-  headers. Time Sensitive needs the
-  `com.apple.developer.usernotifications.time-sensitive` entitlement, **not
-  added yet** (it also needs the capability on the App ID); until then iOS
-  delivers these as `active`.
+- **APNs & FCM**: `apns-priority: 10`, `apns-expiration` (iOS) and `android.ttl`
+  (Android) = min(sent + 30 min, end of the live window): both transports drop
+  a pending push after this expiry, so a phone offline for a leg lands to
+  nothing stale. No `apns-collapse-id`: each push stays its own Notification
+  Center entry. No badge (the badge counts unseen briefings). In `aps`:
+  `thread-id` = flight id (groups a flight's pushes) and `interruption-level`
+  `time-sensitive` for alerts (Android `flyfun_live_alerts`, `HIGH` priority),
+  `active` for clears-only (Android `flyfun_live_clear`, `NORMAL` priority).
+  `thread-id` and `interruption-level` are payload keys, not headers. Time
+  Sensitive needs the `com.apple.developer.usernotifications.time-sensitive`
+  entitlement, **not added yet** (it also needs the capability on the App ID);
+  until then iOS delivers these as `active`.
 - **Custom data**: `{flight_id, type: "live_alert" | "live_clear", keys, tick_at}`
   (`type: "flight_day"` is #753's, handled by the same client code).
-- `_send_one` / `_dispatch` take optional `extra_headers` (they cannot
-  override the four standard headers); `send_live_alert_push` sets the expiry.
+- `_dispatch` takes `expires_at: datetime | None` and translates it to
+  `apns-expiration` on iOS and `android.ttl = "<n>s"` on Android;
+  `send_live_alert_push` sets the expiry.
 - **Ledger**: a sent push writes a `live_delivery` row (`delivered_via=push`,
   `push_sent_at`, platform `ios`).
-- **Shadow mode** until `WB_LIVE_PUSH_SEND=1` (only the APNs call is gated).
+- **Shadow mode** until `WB_LIVE_PUSH_SEND=1` (only the APNs/FCM call is gated).
 
 **iOS.** `PushSupport.pendingNavigation` maps the three flight-day types to
 `PendingNavigation.briefingObserved(flightId:)`; the flight list routes it

@@ -22,10 +22,13 @@ weather.flyfun.aero {
     }
 
     # Android App Links — associate net.ro_z.flyfun_weather with this domain.
-    handle /.well-known/assetlinks.json {
-        header Content-Type application/json
-        respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"net.ro_z.flyfun_weather","sha256_cert_fingerprints":["00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"]}}]`
-    }
+    # Kept commented until the real Play App Signing SHA-256 fingerprint (plus
+    # upload key if desired) is created in Google Play Console — serving an
+    # all-zero placeholder fails verification and publishes a bogus statement.
+    # handle /.well-known/assetlinks.json {
+    #     header Content-Type application/json
+    #     respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"net.ro_z.flyfun_weather","sha256_cert_fingerprints":["<PLAY_APP_SIGNING_SHA256_FINGERPRINT>"]}}]`
+    # }
 
     # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party
     # apps treat weather.flyfun.aero as the issuer and discover the OAuth endpoints.

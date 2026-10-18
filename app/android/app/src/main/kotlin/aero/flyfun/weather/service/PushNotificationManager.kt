@@ -42,8 +42,10 @@ data class PushAlertPayload(
  */
 object PushNotificationManager {
 
-    const val CHANNEL_BRIEFING_ALERTS: String = "briefing_alerts"
-    const val CHANNEL_LIVE_WEATHER_ALERTS: String = "live_weather_alerts"
+    const val CHANNEL_BRIEFING_ALERTS: String = "flyfun_briefing_updates"
+    const val CHANNEL_FLIGHT_DAY: String = "flyfun_flight_day"
+    const val CHANNEL_LIVE_WEATHER_ALERTS: String = "flyfun_live_alerts"
+    const val CHANNEL_LIVE_CLEAR: String = "flyfun_live_clear"
 
     const val EXTRA_FLIGHT_ID: String = "flight_id"
     const val EXTRA_PACK_TIMESTAMP: String = "pack_timestamp"
@@ -59,7 +61,8 @@ object PushNotificationManager {
     val registeredToken: StateFlow<String?> = _registeredToken.asStateFlow()
 
     /**
-     * Create the `briefing_alerts` and `live_weather_alerts` notification channels on Android O+.
+     * Create the FCM notification channels (`flyfun_briefing_updates`, `flyfun_flight_day`,
+     * `flyfun_live_alerts`, `flyfun_live_clear`) on Android O+.
      */
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -74,17 +77,37 @@ object PushNotificationManager {
             setShowBadge(true)
         }
 
+        val flightDayChannel = NotificationChannel(
+            CHANNEL_FLIGHT_DAY,
+            "Flight-Day Preflight Brief",
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "T-2h preflight briefing and observed weather summary"
+            setShowBadge(true)
+        }
+
         val liveChannel = NotificationChannel(
             CHANNEL_LIVE_WEATHER_ALERTS,
             "Live Weather Alerts",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Significant live METAR/TAF/SIGMET/convective changes along your route"
-            setShowBadge(true)
+            description = "Time-sensitive live METAR/TAF/SIGMET/convective alerts along your route"
+            setShowBadge(false)
+        }
+
+        val liveClearChannel = NotificationChannel(
+            CHANNEL_LIVE_CLEAR,
+            "Live Weather Cleared",
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "Notifications when an active flight-day weather alert clears"
+            setShowBadge(false)
         }
 
         nm.createNotificationChannel(briefingChannel)
+        nm.createNotificationChannel(flightDayChannel)
         nm.createNotificationChannel(liveChannel)
+        nm.createNotificationChannel(liveClearChannel)
     }
 
     /**

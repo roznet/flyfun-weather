@@ -285,8 +285,9 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `RESEND_API_KEY` | No | — | Resend email API key (falls back to SMTP if absent) |
 | `RESEND_FROM` | No | — | Resend sender address |
 | `RESEND_REPLY_TO` | No | — | Resend reply-to address |
-| `APNS_KEY_P8` / `APNS_KEY_P8_PATH` | For push | — | .p8 signing key, inline or by path (either one) |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | For push | — | All three required; push is a no-op if any is missing |
+| `APNS_KEY_P8` / `APNS_KEY_P8_PATH` | For iOS push | — | .p8 signing key, inline (raw or base64) or by path |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` | For iOS push | — | All three required; iOS push is a no-op if any is missing |
+| `FCM_SERVICE_ACCOUNT_JSON` / `FCM_SERVICE_ACCOUNT_PATH` | For Android push | — | Firebase service-account JSON (raw or base64) or path; alternatively set discrete `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`. Android push is a no-op if missing |
 | `HOST_DATA_DIR` / `HOST_ECMWF_GRIB_DIR` / `HOST_SNAPSHOT_INBOX` | Prod only | `./data…` | Host paths bind-mounted into the container (prod: under `/mnt/flyfun_data`, NOT the project dir) |
 | `SNAPSHOT_INBOX_DIR` | No | `/app/snapshot_inbox` | Where `verify ingest-artifact` reads compute-node snapshots |
 | `HOST_CELLS_INBOX` | Prod, with cells | `./data/cells_inbox` | Host dir the home node's cells loop rsyncs display files into (#656). Prod `/mnt/flyfun_data/weather/cells_inbox`, `dockerapp:dockerapp` mode 2770 like the snapshot inbox (the ssh user is in `dockerapp`, not `weatherdata`) — the app moves files out of it |

@@ -361,8 +361,10 @@ def eligible(db_session, dev_user):
 
 
 def test_eligible_flight(db_session, eligible):
+    from weatherbrief.notify.push import PushDevice
+
     reason, devices = skip_reason(db_session, eligible, trigger="tick")
-    assert reason is None and devices == [("zz-token", "sandbox")]
+    assert reason is None and devices == [PushDevice("zz-token", "sandbox", "ios")]
 
 
 def test_live_alerts_default_on_without_the_key(db_session, dev_user):
@@ -475,9 +477,7 @@ def test_send_mode_dispatches_once_with_expiry_and_records_delivery(
     dispatch.assert_called_once()
     kwargs = dispatch.call_args.kwargs
     assert kwargs["push_type"] == "alert" and kwargs["priority"] == 10
-    assert kwargs["extra_headers"] == {
-        "apns-expiration": str(int((now + timedelta(minutes=30)).timestamp())),
-    }
+    assert kwargs["expires_at"] == now + timedelta(minutes=30)
     payload = dispatch.call_args.args[2]
     assert payload["type"] == "live_alert" and payload["keys"] == ["metar:ZZDS"]
     rows = db_session.query(LiveDeliveryRow).filter_by(flight_id="zz-flight").all()

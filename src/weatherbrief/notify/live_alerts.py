@@ -39,8 +39,12 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from weatherbrief.notify.push import PushDevice
 
 from weatherbrief.models.live import (
     LiveChange,
@@ -352,8 +356,8 @@ def push_expiry(flight_row, now: datetime, events: tuple = ()) -> datetime:
 # --- Eligibility --------------------------------------------------------------
 
 
-def skip_reason(db: Session, flight_row, *, trigger: str) -> tuple[str | None, list[tuple[str, str]]]:
-    """(why this flight's user gets no live push, or None; their devices).
+def skip_reason(db: Session, flight_row, *, trigger: str) -> tuple[str | None, list[PushDevice]]:
+    """(why this flight's user gets no live push, or None; their ``PushDevice`` list).
 
     All must hold: a tick (not a ↻ press), the flight's or its trip's
     auto-refresh on, the bell not muted (the flight's, else its trip's — the

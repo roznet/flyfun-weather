@@ -1,8 +1,9 @@
-name: Android UI (nightly)
+name: Android Build (nightly)
 
-# Nightly Android APK assembly + instrumented/UI verification. Mirrors
-# ios-ui-nightly.yml: skips when HEAD is unchanged since the last green run,
-# and always runs on manual workflow_dispatch.
+# Nightly Android debug APK assembly, lint check, and full JVM unit suite.
+# Skips when HEAD is unchanged since the last green run, and always runs on
+# manual workflow_dispatch. Does not run :app:assembleRelease (which requires
+# production signing secrets not stored in CI).
 
 on:
   schedule:
@@ -43,7 +44,7 @@ jobs:
           fi
 
   build-and-verify:
-    name: Assemble APK & Full Verification
+    name: Assemble Debug APK & Lint
     needs: changed
     if: github.event_name == 'workflow_dispatch' || needs.changed.outputs.should_run == 'true'
     runs-on: ubuntu-latest
@@ -63,9 +64,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run full unit test suite & assemble Debug/Release APKs
+      - name: Run full unit test suite, lint, and assemble Debug APK
         working-directory: app/android
-        run: ./gradlew test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease --stacktrace
+        run: ./gradlew test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4

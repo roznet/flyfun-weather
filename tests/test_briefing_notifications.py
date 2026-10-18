@@ -870,8 +870,12 @@ def test_register_android_device_long_fcm_token(client, app_db):
     s.close()
 
 
-def test_apns_payload_to_fcm_message():
-    payload = {
+def test_apns_payload_to_fcm_message_channels_and_ttl():
+    now = datetime(2026, 7, 8, 10, 0, tzinfo=timezone.utc)
+    expires = datetime(2026, 7, 8, 10, 30, tzinfo=timezone.utc)
+
+    # 1. Briefing refresh alert -> flyfun_briefing_updates channel
+    briefing_payload = {
         "aps": {
             "alert": {"title": "EGTF → LFAT", "body": "Now AMBER — icing"},
             "sound": "default",
@@ -880,12 +884,378 @@ def test_apns_payload_to_fcm_message():
         "flight_id": "f1",
         "timestamp": "2026-07-08T10:00:00+00:00",
     }
-    msg = push_mod._apns_payload_to_fcm_message("fcm_123", payload, push_type="alert")["message"]
+    msg = push_mod._apns_payload_to_fcm_message(
+        "fcm_123", briefing_payload, push_type="alert"
+    )["message"]
     assert msg["token"] == "fcm_123"
     assert msg["notification"] == {"title": "EGTF → LFAT", "body": "Now AMBER — icing"}
     assert msg["data"]["flight_id"] == "f1"
     assert msg["data"]["badge"] == "2"
     assert msg["android"]["priority"] == "HIGH"
+    assert msg["android"]["notification"]["channel_id"] == "flyfun_briefing_updates"
+    assert "ttl" not in msg["android"]
+
+    # 2. Live alert with time-sensitive interruption & expiry -> flyfun_live_alerts + ttl
+    live_payload = {
+        "aps": {
+            "alert": {"title": "EGTF → LFAT", "body": "LFAT METAR: VFR → IFR"},
+            "sound": "default",
+            "interruption-level": "time-sensitive",
+        },
+        "type": "live_alert",
+        "flight_id": "f1",
+        "keys": ["metar:LFAT"],
+    }
+    live_msg = push_mod._apns_payload_to_fcm_message(
+        "fcm_123", live_payload, push_type="alert", expires_at=expires, now=now
+    )["message"]
+    assert live_msg["android"]["notification"]["channel_id"] == "flyfun_live_alerts"
+    assert live_msg["android"]["ttl"] == "1800s"
+    assert live_msg["data"]["interruption_level"] == "time-sensitive"
+
+    # 3. Live clear with active interruption -> flyfun_live_clear + NORMAL priority
+    clear_payload = {
+        "aps": {
+            "alert": {"title": "EGTF → LFAT", "body": "Cleared: LFAT METAR VFR"},
+            "sound": "default",
+            "interruption-level": "active",
+        },
+        "type": "live_clear",
+        "flight_id": "f1",
+        "keys": ["metar:LFAT"],
+    }
+    clear_msg = push_mod._apns_payload_to_fcm_message(
+        "fcm_123", clear_payload, push_type="alert", expires_at=expires, now=now
+    )["message"]
+    assert clear_msg["android"]["notification"]["channel_id"] == "flyfun_live_clear"
+    assert clear_msg["android"]["priority"] == "NORMAL"
+    assert clear_msg["android"]["ttl"] == "1800s"
+    assert clear_msg["data"]["interruption_level"] == "active"
+
+    # 4. Flight-day brief -> flyfun_flight_day channel
+    fd_payload = {
+        "aps": {"alert": {"title": "Flight day", "body": "AMBER"}},
+        "type": "flight_day",
+        "flight_id": "f1",
+    }
+    fd_msg = push_mod._apns_payload_to_fcm_message(
+        "fcm_123", fd_payload, push_type="alert"
+    )["message"]
+    assert fd_msg["android"]["notification"]["channel_id"] == "flyfun_flight_day"
+
+
+def test_fcm_config_from_env_variants(monkeypatch, tmp_path):
+    import base64
+    import json as _json
+
+    for k in (
+        "FCM_SERVICE_ACCOUNT_JSON",
+        "FCM_SERVICE_ACCOUNT_PATH",
+        "FCM_PROJECT_ID",
+        "FCM_CLIENT_EMAIL",
+        "FCM_PRIVATE_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    # Unconfigured -> raises ValueError
+    with pytest.raises(ValueError, match="FCM not configured"):
+        push_mod.FcmConfig.from_env()
+
+    sa_dict = {
+        "project_id": "flyfun-proj",
+        "client_email": "fcm@flyfun-proj.iam.gserviceaccount.com",
+        "private_key": "-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    sa_json = _json.dumps(sa_dict)
+
+    # 1. Raw JSON
+    monkeypatch.setenv("FCM_SERVICE_ACCOUNT_JSON", sa_json)
+    cfg = push_mod.FcmConfig.from_env()
+    assert cfg.project_id == "flyfun-proj"
+    assert cfg.client_email == "fcm@flyfun-proj.iam.gserviceaccount.com"
+    assert "\nabc\n" in cfg.private_key
+
+    # 2. Base64 JSON
+    b64_json = base64.b64encode(sa_json.encode("utf-8")).decode("ascii")
+    monkeypatch.setenv("FCM_SERVICE_ACCOUNT_JSON", b64_json)
+    cfg_b64 = push_mod.FcmConfig.from_env()
+    assert cfg_b64.project_id == "flyfun-proj"
+
+    # 3. File path
+    monkeypatch.delenv("FCM_SERVICE_ACCOUNT_JSON")
+    sa_file = tmp_path / "sa.json"
+    sa_file.write_text(sa_json, encoding="utf-8")
+    monkeypatch.setenv("FCM_SERVICE_ACCOUNT_PATH", str(sa_file))
+    cfg_path = push_mod.FcmConfig.from_env()
+    assert cfg_path.project_id == "flyfun-proj"
+
+    # 4. Discrete env vars
+    monkeypatch.delenv("FCM_SERVICE_ACCOUNT_PATH")
+    monkeypatch.setenv("FCM_PROJECT_ID", "discrete-proj")
+    monkeypatch.setenv("FCM_CLIENT_EMAIL", "svc@discrete.iam.gserviceaccount.com")
+    monkeypatch.setenv(
+        "FCM_PRIVATE_KEY",
+        base64.b64encode(b"-----BEGIN PRIVATE KEY-----\nxyz\n-----END PRIVATE KEY-----").decode("ascii"),
+    )
+    cfg_disc = push_mod.FcmConfig.from_env()
+    assert cfg_disc.project_id == "discrete-proj"
+    assert "\nxyz\n" in cfg_disc.private_key
+
+
+def test_send_fcm_one_error_parsing_and_cache_eviction(monkeypatch):
+    cfg = push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")
+    payload = {"aps": {"alert": {"title": "T", "body": "B"}}}
+
+    class _FakeResp:
+        def __init__(self, status_code: int, json_body=None, text: str = ""):
+            self.status_code = status_code
+            self._json = json_body
+            self.text = text
+
+        def json(self):
+            if self._json is None:
+                raise ValueError("not JSON")
+            return self._json
+
+    class _FakeClient:
+        def __init__(self, resp: _FakeResp):
+            self.resp = resp
+            self.last_body = None
+
+        def post(self, url, headers=None, content=None):
+            import json as _json
+
+            self.last_body = _json.loads(content.decode("utf-8"))
+            return self.resp
+
+    # 1. 404 UNREGISTERED -> dead=True
+    r_unreg = push_mod._send_fcm_one(
+        _FakeClient(
+            _FakeResp(
+                404,
+                {
+                    "error": {
+                        "status": "NOT_FOUND",
+                        "details": [{"errorCode": "UNREGISTERED"}],
+                    }
+                },
+            )
+        ),
+        cfg,
+        "tok1",
+        payload,
+        push_type="alert",
+        access_token="tok",
+    )
+    assert r_unreg.ok is False and r_unreg.dead is True and r_unreg.reason == "UNREGISTERED"
+
+    # 2. 403 SENDER_ID_MISMATCH -> dead=True
+    r_mismatch = push_mod._send_fcm_one(
+        _FakeClient(
+            _FakeResp(
+                403,
+                {
+                    "error": {
+                        "status": "PERMISSION_DENIED",
+                        "details": [{"errorCode": "SENDER_ID_MISMATCH"}],
+                    }
+                },
+            )
+        ),
+        cfg,
+        "tok2",
+        payload,
+        push_type="alert",
+        access_token="tok",
+    )
+    assert r_mismatch.ok is False and r_mismatch.dead is True and r_mismatch.reason == "SENDER_ID_MISMATCH"
+
+    # 3. 400 INVALID_ARGUMENT -> dead=False
+    r_invalid = push_mod._send_fcm_one(
+        _FakeClient(
+            _FakeResp(
+                400,
+                {
+                    "error": {
+                        "status": "INVALID_ARGUMENT",
+                        "details": [{"errorCode": "INVALID_ARGUMENT"}],
+                    }
+                },
+            )
+        ),
+        cfg,
+        "tok3",
+        payload,
+        push_type="alert",
+        access_token="tok",
+    )
+    assert r_invalid.ok is False and r_invalid.dead is False and r_invalid.reason == "INVALID_ARGUMENT"
+
+    # 4. 401 UNAUTHENTICATED -> evicts cached access token
+    push_mod._fcm_token_cache[cfg.client_email] = ("cached_tok", 999999.0)
+    r_401 = push_mod._send_fcm_one(
+        _FakeClient(_FakeResp(401, {"error": {"status": "UNAUTHENTICATED"}})),
+        cfg,
+        "tok4",
+        payload,
+        push_type="alert",
+        access_token="cached_tok",
+    )
+    assert r_401.ok is False and r_401.dead is False
+    assert cfg.client_email not in push_mod._fcm_token_cache
+
+    # 5. 502 non-JSON body -> dead=False, reason falls back to raw text
+    r_502 = push_mod._send_fcm_one(
+        _FakeClient(_FakeResp(502, json_body=None, text="Bad Gateway")),
+        cfg,
+        "tok5",
+        payload,
+        push_type="alert",
+        access_token="tok",
+    )
+    assert r_502.ok is False and r_502.dead is False and r_502.reason == "Bad Gateway"
+
+
+def test_fcm_oauth_mint_failure_attempts_once_per_batch(db_session, dev_user, monkeypatch):
+    cfg = push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")
+    mint_calls = []
+
+    def _boom_mint(client, config):
+        mint_calls.append(1)
+        raise RuntimeError("oauth down")
+
+    monkeypatch.setattr(push_mod, "_fcm_access_token", _boom_mint)
+    devices = [
+        push_mod.PushDevice("and_1", "production", "android"),
+        push_mod.PushDevice("and_2", "production", "android"),
+        push_mod.PushDevice("and_3", "production", "android"),
+    ]
+    sent = push_mod._dispatch(
+        db_session,
+        devices,
+        {"aps": {"alert": {"title": "T", "body": "B"}}},
+        push_type="alert",
+        priority=10,
+        fcm_config=cfg,
+    )
+    assert sent == 0
+    assert len(mint_calls) == 1  # Minted once before the loop, not 3 times
+
+
+def test_mixed_ios_and_android_dispatch_and_live_alert_ttl(
+    db_session, dev_user, apns_env, monkeypatch
+):
+    prefs = db_session.get(UserPreferencesRow, DEV_USER_ID)
+    prefs.app_prefs_json = '{"notify_push": true, "notify_email": false, "notify_scope": "all"}'
+    db_session.add(
+        DeviceTokenRow(user_id=DEV_USER_ID, token="ios_ok", environment="sandbox", platform="ios")
+    )
+    db_session.add(
+        DeviceTokenRow(
+            user_id=DEV_USER_ID, token="and_dead", environment="production", platform="android"
+        )
+    )
+    db_session.flush()
+
+    apns_calls = []
+    fcm_calls = []
+
+    def _fake_apns(client, config, token, env, payload, **kw):
+        apns_calls.append((token, kw.get("extra_headers")))
+        return push_mod.ApnsResult(ok=True, status_code=200)
+
+    def _fake_fcm(client, config, token, payload, **kw):
+        fcm_calls.append((token, kw.get("expires_at")))
+        return push_mod.ApnsResult(ok=False, status_code=404, reason="UNREGISTERED", dead=True)
+
+    monkeypatch.setattr(push_mod, "_send_one", _fake_apns)
+    monkeypatch.setattr(push_mod, "_send_fcm_one", _fake_fcm)
+    monkeypatch.setattr(push_mod, "_fcm_access_token", lambda c, cfg: "fcm_bearer")
+    monkeypatch.setattr(
+        push_mod.FcmConfig,
+        "from_env",
+        classmethod(lambda cls: push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")),
+    )
+
+    expires = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    sent = push_mod.send_live_alert_push(
+        db_session,
+        DEV_USER_ID,
+        {"aps": {"alert": {"title": "Live", "body": "IFR"}}, "type": "live_alert"},
+        expires_at=expires,
+    )
+    db_session.flush()
+
+    assert sent == 1
+    assert apns_calls == [("ios_ok", {"apns-expiration": str(int(expires.timestamp()))})]
+    assert fcm_calls == [("and_dead", expires)]
+    # Dead Android token was pruned, but iOS device remains so decay did NOT fire.
+    assert db_session.query(DeviceTokenRow).filter_by(token="and_dead").first() is None
+    assert db_session.query(DeviceTokenRow).filter_by(token="ios_ok").first() is not None
+    import json as _json
+
+    data = _json.loads(db_session.get(UserPreferencesRow, DEV_USER_ID).app_prefs_json)
+    assert data["notify_email"] is False
+
+
+def test_mixed_user_when_only_one_transport_configured(db_session, dev_user, monkeypatch):
+    """A mixed iOS+Android user where only one transport is configured should
+    still reach the configured platform's devices and prune dead tokens."""
+    for k in (
+        "APNS_KEY_P8",
+        "APNS_KEY_P8_PATH",
+        "APNS_KEY_ID",
+        "APNS_TEAM_ID",
+        "APNS_BUNDLE_ID",
+        "FCM_SERVICE_ACCOUNT_JSON",
+        "FCM_SERVICE_ACCOUNT_PATH",
+        "FCM_PROJECT_ID",
+        "FCM_CLIENT_EMAIL",
+        "FCM_PRIVATE_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    db_session.add(
+        DeviceTokenRow(user_id=DEV_USER_ID, token="ios_1", environment="sandbox", platform="ios")
+    )
+    db_session.add(
+        DeviceTokenRow(user_id=DEV_USER_ID, token="and_ok", environment="production", platform="android")
+    )
+    db_session.add(
+        DeviceTokenRow(user_id=DEV_USER_ID, token="and_dead", environment="production", platform="android")
+    )
+    db_session.flush()
+
+    # Only FCM is configured (APNs unconfigured): Android devices are reached and pruned.
+    monkeypatch.setattr(
+        push_mod.FcmConfig,
+        "from_env",
+        classmethod(lambda cls: push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")),
+    )
+    monkeypatch.setattr(push_mod, "_fcm_access_token", lambda c, cfg: "fcm_bearer")
+
+    def _fake_fcm(client, config, token, payload, **kw):
+        if token == "and_dead":
+            return push_mod.ApnsResult(ok=False, status_code=404, reason="UNREGISTERED", dead=True)
+        return push_mod.ApnsResult(ok=True, status_code=200)
+
+    monkeypatch.setattr(push_mod, "_send_fcm_one", _fake_fcm)
+
+    devices = push_mod._load_devices(db_session, DEV_USER_ID)
+    sent = push_mod._dispatch(
+        db_session,
+        devices,
+        {"aps": {"alert": {"title": "T", "body": "B"}}},
+        push_type="alert",
+        priority=10,
+        user_id=DEV_USER_ID,
+    )
+    db_session.flush()
+    assert sent == 1
+    assert db_session.query(DeviceTokenRow).filter_by(token="and_dead").first() is None
+    assert db_session.query(DeviceTokenRow).filter_by(token="and_ok").first() is not None
+    assert db_session.query(DeviceTokenRow).filter_by(token="ios_1").first() is not None
 
 
 def test_fcm_dispatch_and_dead_token_prune(db_session, dev_user, monkeypatch):
@@ -906,6 +1276,7 @@ def test_fcm_dispatch_and_dead_token_prune(db_session, dev_user, monkeypatch):
         "from_env",
         classmethod(lambda cls: push_mod.FcmConfig("proj", "svc@proj.iam.gserviceaccount.com", "key")),
     )
+    monkeypatch.setattr(push_mod, "_fcm_access_token", lambda c, cfg: "fcm_bearer")
     monkeypatch.setattr(
         push_mod,
         "_send_fcm_one",
@@ -941,4 +1312,6 @@ def test_fcm_dispatch_and_dead_token_prune(db_session, dev_user, monkeypatch):
     data = _json.loads(db_session.get(UserPreferencesRow, DEV_USER_ID).app_prefs_json)
     assert data["notify_email"] is True
     assert data["notify_decay_notice"] is True
+
+
 

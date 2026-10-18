@@ -1,25 +1,28 @@
-"""Token-based APNs sender for briefing-refresh push notifications.
+"""Token-based APNs (iOS) and FCM HTTP v1 (Android) sender for push notifications.
 
-APNs is just HTTP/2 + a provider token (an ES256 JWT signed with the account's
-``.p8`` key, cached ~50 min). We roll it on ``httpx`` (already a dependency) +
-``PyJWT`` rather than pulling in a heavier client — full control over retries
-and dead-token cleanup, no bit-rot risk from an unmaintained transport (see
-ios-app-briefing-notifications.md → "APNs provider library").
+APNs is HTTP/2 + a provider token (an ES256 JWT signed with the account's
+``.p8`` key, cached ~50 min). FCM HTTP v1 is HTTPS + a short-lived Google OAuth2
+access token exchanged from an RS256 service-account JWT assertion (also cached
+~50 min). We roll both on ``httpx`` (already a dependency) + ``PyJWT`` rather
+than pulling in heavier SDKs — full control over retries and dead-token cleanup,
+no bit-rot risk from unmaintained transports (see
+ios-app-briefing-notifications.md → "APNs provider library" & "Android FCM").
 
 Two payload shapes:
 
 - **alert** — the visible "briefing updated" banner (``send_briefing_push``).
-- **background** — a silent ``content-available`` badge sync so a read on the
-  web drops the app badge (``send_silent_badge_push``).
+- **background** — a silent ``content-available`` / data-only badge sync so a
+  read on the web drops the app badge (``send_silent_badge_push``).
 
 Live alerts on flight day (#754, ``send_live_alert_push``) are an alert push
-of their own: no badge, grouped per flight, with an expiry.
+of their own: no badge, grouped per flight, with an expiry (``apns-expiration``
+on iOS, ``android.ttl`` on Android).
 
-Routing is per **token**, from the ``environment`` the client reported at
-register time (a TestFlight/App-Store build → ``production``; an Xcode debug
-build → ``sandbox``). A single ``.p8`` token-auth key serves both hosts. On a
-``BadDeviceToken`` / ``Unregistered`` response the offending row is deleted so
-the table self-heals.
+Routing is per **device** row (`PushDevice(token, environment, platform)`):
+iOS rows route to APNs (``production`` vs ``sandbox`` host), Android rows route
+to FCM HTTP v1. On a dead-token response (APNs ``BadDeviceToken`` /
+``Unregistered`` / ``DeviceTokenNotForTopic``, or FCM ``UNREGISTERED`` /
+``SENDER_ID_MISMATCH``) the offending row is deleted so the table self-heals.
 
 Everything here is best-effort: a push must NEVER break a refresh, so the
 high-level senders log-and-skip on any failure and the caller wraps them too.
@@ -28,6 +31,7 @@ high-level senders log-and-skip on any failure and the caller wraps them too.
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 import json
 import logging
 import os
@@ -35,6 +39,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import httpx
 import jwt
@@ -286,7 +291,24 @@ class FcmConfig:
         )
 
 
+class PushDevice(NamedTuple):
+    """A registered push target from ``device_tokens``."""
+
+    token: str
+    environment: str
+    platform: str = "ios"
+
+
 _fcm_token_cache: dict[str, tuple[str, float]] = {}
+
+# Android notification channels (created by PushNotificationManager.kt on startup).
+_FCM_CHANNEL_BRIEFING = "flyfun_briefing_updates"
+_FCM_CHANNEL_FLIGHT_DAY = "flyfun_flight_day"
+_FCM_CHANNEL_LIVE_ALERTS = "flyfun_live_alerts"
+_FCM_CHANNEL_LIVE_CLEAR = "flyfun_live_clear"
+
+# FCM errorCode values that mean this registration token will never succeed.
+_FCM_DEAD_ERROR_CODES = {"UNREGISTERED", "SENDER_ID_MISMATCH"}
 
 
 def _fcm_access_token(client: httpx.Client, config: FcmConfig) -> str:
@@ -323,10 +345,40 @@ def _fcm_access_token(client: httpx.Client, config: FcmConfig) -> str:
     return access_token
 
 
-def _apns_payload_to_fcm_message(token: str, payload: dict, *, push_type: str) -> dict:
+def _evict_fcm_token(config: FcmConfig) -> None:
+    """Evict a cached FCM OAuth token after a 401 rejection (e.g. key rotation)."""
+    with _token_lock:
+        _fcm_token_cache.pop(config.client_email, None)
+
+
+def _fcm_channel_id_for_payload(payload: dict) -> str:
+    """Pick the Android notification channel for an alert payload so pilots can
+    mute briefing updates without muting flight-day live alerts, and so active
+    clears don't use the high-urgency time-sensitive live-alert channel."""
+    msg_type = payload.get("type")
+    aps = payload.get("aps") or {}
+    interruption = aps.get("interruption-level")
+    if msg_type == "live_clear" or (msg_type == "live_alert" and interruption == "active"):
+        return _FCM_CHANNEL_LIVE_CLEAR
+    if msg_type == "live_alert" or interruption == "time-sensitive":
+        return _FCM_CHANNEL_LIVE_ALERTS
+    if msg_type == "flight_day":
+        return _FCM_CHANNEL_FLIGHT_DAY
+    return _FCM_CHANNEL_BRIEFING
+
+
+def _apns_payload_to_fcm_message(
+    token: str,
+    payload: dict,
+    *,
+    push_type: str,
+    expires_at: datetime | None = None,
+    now: datetime | None = None,
+) -> dict:
     """Convert our canonical ``aps`` + custom keys dict into an FCM v1 ``message``."""
     aps = payload.get("aps") or {}
     alert = aps.get("alert") if isinstance(aps.get("alert"), dict) else {}
+    interruption = aps.get("interruption-level")
     data: dict[str, str] = {}
     for k, v in payload.items():
         if k == "aps" or v is None:
@@ -334,18 +386,30 @@ def _apns_payload_to_fcm_message(token: str, payload: dict, *, push_type: str) -
         data[str(k)] = v if isinstance(v, str) else json.dumps(v)
     if "badge" in aps and aps["badge"] is not None:
         data["badge"] = str(aps["badge"])
+    if interruption:
+        data["interruption_level"] = str(interruption)
+
+    is_high = push_type == "alert" and interruption != "active"
+    android_block: dict = {
+        "priority": "HIGH" if is_high else "NORMAL",
+    }
+    if expires_at is not None:
+        ref_now = now or datetime.now(timezone.utc)
+        ttl_s = max(0, int((expires_at - ref_now).total_seconds()))
+        android_block["ttl"] = f"{ttl_s}s"
 
     msg: dict = {
         "token": token,
         "data": data,
-        "android": {
-            "priority": "HIGH" if push_type == "alert" else "NORMAL",
-        },
+        "android": android_block,
     }
     if push_type == "alert" and (alert.get("title") or alert.get("body")):
         msg["notification"] = {
             "title": alert.get("title") or "",
             "body": alert.get("body") or "",
+        }
+        android_block["notification"] = {
+            "channel_id": _fcm_channel_id_for_payload(payload),
         }
     return {"message": msg}
 
@@ -357,33 +421,47 @@ def _send_fcm_one(
     payload: dict,
     *,
     push_type: str,
+    access_token: str | None = None,
+    expires_at: datetime | None = None,
 ) -> ApnsResult:
     """POST one notification to FCM HTTP v1 for an Android device token."""
+    bearer = access_token if access_token is not None else _fcm_access_token(client, config)
     url = f"https://fcm.googleapis.com/v1/projects/{config.project_id}/messages:send"
     headers = {
-        "authorization": f"Bearer {_fcm_access_token(client, config)}",
+        "authorization": f"Bearer {bearer}",
         "content-type": "application/json",
     }
-    body = _apns_payload_to_fcm_message(token, payload, push_type=push_type)
+    body = _apns_payload_to_fcm_message(
+        token, payload, push_type=push_type, expires_at=expires_at,
+    )
     resp = client.post(url, headers=headers, content=json.dumps(body).encode())
     if resp.status_code == 200:
         return ApnsResult(ok=True, status_code=200)
 
+    if resp.status_code == 401:
+        _evict_fcm_token(config)
+
     reason: str | None = None
-    dead = resp.status_code == 404
+    dead = resp.status_code in {404, 410}
     try:
         err = resp.json().get("error") or {}
         reason = err.get("status") or err.get("message")
         for detail in err.get("details") or []:
-            if detail.get("errorCode") in {"UNREGISTERED", "INVALID_ARGUMENT"}:
-                if detail.get("errorCode") == "UNREGISTERED":
+            code = detail.get("errorCode")
+            if code in _FCM_DEAD_ERROR_CODES or code == "INVALID_ARGUMENT":
+                if code in _FCM_DEAD_ERROR_CODES:
                     dead = True
-                reason = detail.get("errorCode")
+                reason = code
     except Exception:
         reason = resp.text or None
-    if reason == "UNREGISTERED" or resp.status_code == 410:
+    if reason in _FCM_DEAD_ERROR_CODES:
         dead = True
-    logger.warning("FCM send failed: status=%d reason=%s", resp.status_code, reason)
+    if reason == "SENDER_ID_MISMATCH":
+        logger.warning(
+            "FCM token belongs to a different Firebase project (SENDER_ID_MISMATCH) — pruning"
+        )
+    else:
+        logger.warning("FCM send failed: status=%d reason=%s", resp.status_code, reason)
     return ApnsResult(ok=False, status_code=resp.status_code, reason=reason, dead=dead)
 
 
@@ -401,7 +479,7 @@ def _delete_dead_tokens(db: Session, tokens: list[str]) -> None:
 
 def _dispatch(
     db: Session,
-    devices: list[tuple[str, ...]],
+    devices: Sequence[PushDevice],
     payload: dict,
     *,
     push_type: str,
@@ -409,27 +487,34 @@ def _dispatch(
     config: ApnsConfig | None = None,
     fcm_config: FcmConfig | None = None,
     user_id: str | None = None,
+    expires_at: datetime | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> int:
     """Send ``payload`` to each device (APNs for iOS, FCM for Android); prune dead ones.
 
-    Accepts 2-tuples ``(token, environment)`` (defaults to ``ios``) or 3-tuples
-    ``(token, environment, platform)``. Returns the number of successful sends.
-    Never raises — the whole thing is best-effort (a push must not break a refresh).
+    Returns the number of successful sends. Never raises — the whole thing is
+    best-effort (a push must not break a refresh).
+
+    ``expires_at`` (when given) becomes ``apns-expiration`` on iOS and
+    ``android.ttl`` on Android so stale flight-day live alerts are dropped if a
+    phone was offline for the whole leg.
+
+    ``user_id`` (when known) lets the channel-invariant decay fail-safe fire if
+    pruning a dead token removes the user's LAST device — the far more common way
+    a device disappears (app deleted without signing out) than an explicit
+    unregister. Mirrors ``api/devices.py::unregister_device`` so the invariant
+    holds on both device-loss paths.
     """
     if not devices:
         return 0
 
     ios_devices: list[tuple[str, str]] = []
     android_tokens: list[str] = []
-    for entry in devices:
-        token = entry[0]
-        environment = entry[1] if len(entry) > 1 else "production"
-        platform = entry[2] if len(entry) > 2 else "ios"
-        if platform == "android":
-            android_tokens.append(token)
+    for dev in devices:
+        if dev.platform == "android":
+            android_tokens.append(dev.token)
         else:
-            ios_devices.append((token, environment))
+            ios_devices.append((dev.token, dev.environment))
 
     sent = 0
     dead: list[str] = []
@@ -442,6 +527,9 @@ def _dispatch(
             except ValueError:
                 logger.debug("APNs not configured — skipping iOS push")
         if apns_cfg is not None:
+            apns_headers = dict(extra_headers) if extra_headers else {}
+            if expires_at is not None:
+                apns_headers["apns-expiration"] = str(int(expires_at.timestamp()))
             try:
                 with httpx.Client(http2=True, timeout=15.0) as client:
                     for token, environment in ios_devices:
@@ -449,7 +537,7 @@ def _dispatch(
                             result = _send_one(
                                 client, apns_cfg, token, environment, payload,
                                 push_type=push_type, priority=priority,
-                                extra_headers=extra_headers,
+                                extra_headers=apns_headers or None,
                             )
                         except Exception:
                             logger.warning("APNs send raised for a device", exc_info=True)
@@ -471,24 +559,39 @@ def _dispatch(
         if fcm_cfg is not None:
             try:
                 with httpx.Client(timeout=15.0) as client:
-                    for token in android_tokens:
-                        try:
-                            result = _send_fcm_one(
-                                client, fcm_cfg, token, payload, push_type=push_type,
-                            )
-                        except Exception:
-                            logger.warning("FCM send raised for a device", exc_info=True)
-                            continue
-                        if result.ok:
-                            sent += 1
-                        elif result.dead:
-                            dead.append(token)
+                    try:
+                        access_token = _fcm_access_token(client, fcm_cfg)
+                    except Exception:
+                        logger.warning(
+                            "FCM OAuth token mint failed — skipping Android push batch",
+                            exc_info=True,
+                        )
+                        access_token = None
+                    if access_token is not None:
+                        for token in android_tokens:
+                            try:
+                                result = _send_fcm_one(
+                                    client, fcm_cfg, token, payload,
+                                    push_type=push_type,
+                                    access_token=access_token,
+                                    expires_at=expires_at,
+                                )
+                            except Exception:
+                                logger.warning("FCM send raised for a device", exc_info=True)
+                                continue
+                            if result.ok:
+                                sent += 1
+                            elif result.dead:
+                                dead.append(token)
             except Exception:
                 logger.warning("FCM dispatch failed", exc_info=True)
 
     if dead:
         try:
             _delete_dead_tokens(db, dead)
+            # If pruning dropped the user's last device, apply the same decay
+            # fail-safe as an explicit unregister — otherwise a push-only user
+            # who deleted the app (email off) is silently stranded.
             if user_id is not None and count_user_devices(db, user_id) == 0:
                 from weatherbrief.api.preferences import apply_last_device_decay
 
@@ -502,22 +605,17 @@ def _dispatch(
     return sent
 
 
-def _load_devices(db: Session, user_id: str) -> list[tuple[str, ...]]:
-    """Return ``(token, environment)`` for iOS devices and
-    ``(token, environment, 'android')`` for Android devices."""
+def _load_devices(db: Session, user_id: str) -> list[PushDevice]:
+    """Return ``PushDevice(token, environment, platform)`` for all of a user's
+    registered devices."""
     from weatherbrief.db.models import DeviceTokenRow
 
     rows = db.query(DeviceTokenRow).filter(DeviceTokenRow.user_id == user_id).all()
-    return [
-        (r.token, r.environment, r.platform)
-        if getattr(r, "platform", "ios") != "ios"
-        else (r.token, r.environment)
-        for r in rows
-    ]
+    return [PushDevice(r.token, r.environment, r.platform) for r in rows]
 
 
 def count_user_devices(db: Session, user_id: str) -> int:
-    """Count a user's registered APNs device tokens.
+    """Count a user's registered push device tokens.
 
     Single source of truth for the "how many devices?" query used by the
     conditional-push UI, the sign-out decay path, and the dead-token-prune decay
@@ -595,10 +693,10 @@ def send_briefing_push(
     delta: RefreshDelta | None = None,
     badge: int | None = None,
 ) -> int:
-    """Send the visible "briefing updated" alert to all the user's iOS devices.
+    """Send the visible "briefing updated" alert to all the user's registered devices.
 
     Mirrors ``send_briefing_email``. Returns the number of devices reached
-    (0 when APNs is not configured or the user has no registered devices).
+    (0 when APNs/FCM is not configured or the user has no registered devices).
     Best-effort: logs and returns 0 on any failure.
     """
     devices = _load_devices(db, user_id)
@@ -663,24 +761,23 @@ def send_live_alert_push(
     payload: dict,
     *,
     expires_at: datetime,
-    devices: list[tuple[str, str]] | None = None,
+    devices: Sequence[PushDevice] | None = None,
 ) -> int:
     """Send one flight-day live-alert push (#754) to all the user's devices.
 
     The payload is built by ``notify/live_alerts.py`` (one push per flight per
-    tick). ``apns-expiration`` = ``expires_at``: APNs keeps only the newest
-    pending push per app and device, and drops it after this, so a phone
-    offline for a whole leg lands to nothing stale. No ``apns-collapse-id``:
+    tick). ``expires_at`` becomes ``apns-expiration`` on iOS and ``android.ttl``
+    on Android: both transports drop a pending push after this timestamp, so a
+    phone offline for a whole leg lands to nothing stale. No ``apns-collapse-id``:
     each push stays its own entry in Notification Center. Best-effort, like
     every sender here; returns the number of devices reached.
     """
     devices = devices if devices is not None else _load_devices(db, user_id)
     if not devices:
         return 0
-    headers = {"apns-expiration": str(int(expires_at.timestamp()))}
     return _dispatch(
         db, devices, payload, push_type="alert", priority=10,
-        user_id=user_id, extra_headers=headers,
+        user_id=user_id, expires_at=expires_at,
     )
 
 

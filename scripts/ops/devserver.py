@@ -116,6 +116,25 @@ def health(url: str, timeout: float = 3) -> tuple[bool, str]:
         return False, str(getattr(exc, "reason", exc))
 
 
+def ipv4_https_health(port: int = HTTPS_PORT, timeout: float = 3) -> tuple[bool, str]:
+    """Probe the 127.0.0.1:<port> -> [::1]:<port> relay over TLS with SNI."""
+    ctx = ssl.create_default_context()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=HTTPS_HOST) as tls:
+                req = (
+                    f"GET /health HTTP/1.1\r\nHost: {HTTPS_HOST}:{port}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode("ascii")
+                tls.sendall(req)
+                first_line = tls.makefile("r", encoding="utf-8", errors="replace").readline().strip()
+                if " 200 " in first_line:
+                    return True, "HTTP 200"
+                return False, first_line or "empty response"
+    except OSError as exc:
+        return False, str(exc)
+
+
 # --- alembic --------------------------------------------------------------------------
 
 _REV = re.compile(r"^([0-9a-f]{3,40}|[0-9]{3,}[0-9a-z_]*)\b", re.M)
@@ -193,18 +212,18 @@ def run_ipv4_loopback_relay(port: int) -> int:
             while data := await reader.read(65536):
                 writer.write(data)
                 await writer.drain()
-        except Exception:
+        except (ConnectionError, asyncio.IncompleteReadError, OSError):
             pass
         finally:
             try:
                 writer.close()
-            except Exception:
+            except OSError:
                 pass
 
     async def handle(r1: asyncio.StreamReader, w1: asyncio.StreamWriter) -> None:
         try:
             r2, w2 = await asyncio.open_connection("::1", port)
-        except Exception:
+        except OSError:
             w1.close()
             return
         await asyncio.gather(pipe(r1, w2), pipe(r2, w1))
@@ -235,12 +254,16 @@ def start(root: Path, session: str, port: int, https: bool) -> None:
     tmux("send-keys", "-t", f"={session}:0.1", "npm run dev", "Enter")
 
 
-def wait_healthy(rep: Report, session: str, url: str, seconds: int) -> None:
+def wait_healthy(rep: Report, session: str, url: str, seconds: int, https: bool = False) -> None:
     deadline, detail = time.time() + seconds, ""
     while time.time() < deadline:
         ok, detail = health(url)
         if ok:
             rep.add("health", OK, url, detail, export="URL")
+            if https:
+                v4_ok, v4_detail = ipv4_https_health(HTTPS_PORT)
+                rep.add("ipv4 relay", OK if v4_ok else PROBLEM,
+                        f"127.0.0.1:{HTTPS_PORT}", v4_detail)
             return
         time.sleep(1)
     pane = tmux("capture-pane", "-p", "-t", f"={session}:0.0").stdout.strip().splitlines()
@@ -258,7 +281,11 @@ def cmd_status() -> int:
         url = (f"https://{HTTPS_HOST}:{HTTPS_PORT}" if name == HTTPS_SESSION
                else f"http://localhost:{port}" if port else "port unknown")
         ok, detail = health(url + "/health") if port or name == HTTPS_SESSION else (False, "")
-        print(f"{name:<24} {root or '?':<60} {url}  ({'up' if ok else detail or 'unknown'})")
+        extra = ""
+        if name == HTTPS_SESSION:
+            v4_ok, v4_detail = ipv4_https_health(HTTPS_PORT)
+            extra = f", ipv4-relay={'up' if v4_ok else v4_detail}"
+        print(f"{name:<24} {root or '?':<60} {url}  ({'up' if ok else detail or 'unknown'}{extra})")
     return 0
 
 
@@ -305,6 +332,10 @@ def main(argv: list[str] | None = None) -> int:
                 ok, detail = health(url + "/health")
                 rep.add("session", OK if ok else PROBLEM, session,
                         f"already running here, not restarted; {url} {detail}")
+                if args.https:
+                    v4_ok, v4_detail = ipv4_https_health(HTTPS_PORT)
+                    rep.add("ipv4 relay", OK if v4_ok else PROBLEM,
+                            f"127.0.0.1:{HTTPS_PORT}", v4_detail)
                 if ok:
                     rep.values["URL"] = url
             else:
@@ -350,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
             print(rep.render())
             return 1
         start(root, session, port, args.https)
-        wait_healthy(rep, session, url + "/health", args.wait)
+        wait_healthy(rep, session, url + "/health", args.wait, https=args.https)
 
     if not args.https and session_exists(HTTPS_SESSION):
         owner, _ = session_info(HTTPS_SESSION)
