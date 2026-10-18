@@ -12,7 +12,9 @@
     <application
         android:name=".FlyFunWeatherApp"
         android:allowBackup="false"
-        android:label="WeatherBrief"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="FlyFun Weather"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
