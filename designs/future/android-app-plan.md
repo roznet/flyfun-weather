@@ -1,480 +1,228 @@
-# Android Client: Feasibility, Structure, and Phase 1 Scope
+# Native Android App: Scope, Architecture, UX & Full-Parity Plan
 
-> **Status: exploratory. Nothing built. Written 2026-09-11.**
+> **Status: design & roadmap. Updated 2026-10-18.**
 >
-> This is a decision document, not a commitment. It answers three questions:
-> what a native Android app looks like structurally, how it would sit in this
-> repo, and which parts of a Phase 1 are safely delegable to a coding agent
-> versus which need a human with Android judgement. Written for a reader with
-> **zero Android experience**, so it maps every concept onto the iOS app that
-> already exists in `app/flyfun-weather/`.
->
-> Decision gates are marked **GATE** and are deliberately placed before the
-> expensive parts. Read "Option chosen" and "Phase 1 scope split" first; the
-> rest is supporting detail.
+> Full-parity plan for replicating the iOS companion app (`app/flyfun-weather/`) as a native Android client (`app/android/`), covering the complete Oct 2026 feature set, the multi-language strategy for first-party libraries (`flyfun-common`, `rzflight`, `rzskewt`), native Android / Material 3 cockpit UX, verification oracles, and a 4-phase execution roadmap.
 
-## Related docs
+## Related Docs
 
-- [iOS Architecture](../ios-app-architecture.md): the reference implementation this would mirror
-- [iOS Server API](../ios-app-server-api.md): the endpoint contract a third client would consume
-- [iOS Overview](../ios-app-overview.md): as-built feature status, the scope baseline
-- [iOS/Web known gaps](./ios-web-known-gaps.md): existing two-client drift, which a third client multiplies
+- [iOS Overview](../ios-app-overview.md) — as-built feature baseline
+- [iOS Architecture](../ios-app-architecture.md) — MVVM + Repository, auth flow, library reuse
+- [iOS Data Models](../ios-app-data-models.md) — API DTOs, `Viz*` domain structs, JSON-on-disk caches
+- [iOS UI](../ios-app-ui.md) — cockpit constraints, 5-tab layout, cross-section layer bar
+- [iOS Server API](../ios-app-server-api.md) — REST + SSE contract consumed by mobile clients
+- [Briefing Charts on iOS](../briefing-charts-ios.md) — surface charts manifest + GRAMET caching (#799)
+- [Live Observation Layer](../live-observation-layer.md) — flight-day `/live`, nutshell, ribbon, runway/wind dials, GPS progress (#637–#790)
 
 ---
 
-## 1. The cost picture, measured
+## 1. Current iOS Scope (Oct 2026 Baseline)
 
-Before any structural discussion, the size of the thing being proposed.
-Measured 2026-09-11 on `main`:
+The iOS app is a full-featured, offline-first native client—not a thin web wrapper.
 
-| Surface | Size |
-|---|---|
-| iOS app, total Swift | **42,224 lines** across 205 files |
-| of which `Views/` | 18,388 lines |
-| of which `Views/CrossSection/` | 5,471 lines across 32 files |
-| Web client (TypeScript) | 58,264 lines |
+- **Main app codebase**: **~51,500 lines of Swift** across 228 files (`app/flyfun-weather/flyfun-weather/`)
+- **Test suites**: **~17,300 lines of Swift** across 56 unit test files (`flyfun-weatherTests/`) and 6 UI test suites (`flyfun-weatherUITests/`)
 
-Plus three Swift dependencies with **no Android counterpart whatsoever**:
+### 1.1 Module Breakdown
 
-| Package | What it does | Android consequence |
-|---|---|---|
-| `RZSkewT` (own repo, `roznet/rztskew`) | Skew-T log-P thermodynamics + Canvas rendering, 47 unit tests | Full re-implementation in Kotlin, including the meteorology |
-| `FlyFunCommon` (`roznet/flyfun-common`) | Auth service, session, keychain, rolling bearer token | Re-implementation; the OAuth hardening (`state` nonce, `/auth/exchange`) must be reproduced exactly |
-| `RZFlight` | Airport data, `KnownAirports`, FMDB access to `airports.db` | Re-implementation over Room or raw SQLite |
-
-**A native Android app is therefore not a port. It is a second complete client
-plus three libraries, in an unfamiliar ecosystem.** Realistic order of magnitude
-for full parity: 6 to 12 months part-time, and a permanent increase in
-maintenance surface.
-
-### The drift multiplier
-
-This repo already contains a skill (`.claude/skills/sync-ios-web/`) whose entire
-reason for existing is that two hand-written clients of the same backend drift
-apart on hand-copied surfaces (`metrics-catalog.json`, cross-section preset
-tables, debrief taxonomy, API DTOs).
-
-Two clients is one pair to audit. Three clients is **three pairs**. The
-`sync-ios-web` skill would need to become a three-way audit, and the
-`metrics-catalog.json` byte-compare step would need a third copy under
-`app/android/app/src/main/assets/`.
-
-This is a real, recurring, permanent cost and it should be priced in before,
-not after.
+| Area | iOS Size | Scope & Features |
+| :--- | :---: | :--- |
+| **Views — Briefing & Observed** (`Views/Briefing/`) | ~8.8k LOC | 5-tab briefing viewer (`Advisory`, `Discussion`, `Cross-Section`, `Map`, plus flight-day `Observed`), live changes trail, route ribbon, METAR/TAF, runway/wind dials, SIGMETs, surface charts + route overlay, PDF GRAMET viewer, weather alternates, timing scenarios, post-flight debrief, PIREPs. |
+| **Views — Cross-Section & Route Graph** (`Views/CrossSection/`, `Views/RouteGraph/`) | ~7.7k LOC | Immediate-mode 2D Canvas cross-section renderer (soft/natural clouds, Ogimet/SFIP icing, CAT, inversions, convective towers, terrain, live METAR/SIGMET columns, advisory highlight scrims), 3-mode responsive layer family/lens/emulation bar, synchronized dual-axis route graph, embedded Skew-T. |
+| **Views — Maps** (`Views/Map/`, `Views/ForecastMap/`) | ~5.2k LOC | Briefing route map + pan-European Forecast & Historical maps (~620 airport markers), custom raster tile overlays (OPERA radar over EUMETView IR satellite), age-faded lightning bolt glyphs, radar cell contours + motion vectors, live aircraft marker. |
+| **Views — Flights, Trips, Aircraft, Auth, Shared** (`Views/Flights/`, `Trips/`, `Aircraft/`, `Auth/`, `Help/`, `Shared/`) | ~6.0k LOC | Flight CRUD, multi-leg Trips feasibility chains, ICAO route autocomplete, Autorouter in-app OAuth linking, aircraft registry CRUD, multi-select bulk delete, shared-flight preview, What's New stream, `MarkdownLite`, scroll-spy bars. |
+| **Models & Pure Rules** (`Models/API/`, `Models/Domain/`) | ~6.9k LOC | 1:1 API DTOs, `Viz*` domain rendering structs, pure mirrored rule engines (`RouteRibbonRules`, `RunwayWindRules`, `CellsOverlay`, `LivePositionRules`). |
+| **ViewModels** (`ViewModels/`) | ~6.8k LOC | Screen state, SSE refresh progress, D-0 live-layer polling, cross-tab `FocusIntent` deep-linking, route autocomplete. |
+| **Services & Offline Cache** (`Services/`) | ~6.1k LOC | `BriefingRepository` (Online / Caching / Fixture), gzipped `/bundle` streaming download, LRU + mark-and-sweep chart cache, `FlightTrackingService` (GPS), `LivePositionService`, `PirepOfflineStore`, `AirportDatabase`. |
+| **System Surfaces** (`App/`, `AppIntents/`, `Tips/`) | ~2.5k LOC | Siri / App Intents, Spotlight indexing, APNs push + server-derived badge sync, Universal Links. |
 
 ---
 
-## 2. Options considered
+## 2. First-Party Library Strategy (`flyfun-common`, `rzflight`, `rzskewt`)
 
-| Option | Effort | What you get | What you lose |
-|---|---|---|---|
-| **A. Full native parity** | 6-12 months part-time | Everything iOS has | Time; three-way drift forever; three Swift libs reimplemented |
-| **B. Scoped native Phase 1** ✅ | ~6-10 weeks part-time, much of it delegable | Flight list, advisory tab, digest, push. A real app, on a bounded surface | No cross-section, no map, no Skew-T, no offline bundle |
-| **C. Wrapped web (TWA / WebView)** | ~1-2 weeks | "There is an Android app" cheaply. Android supports web push, unlike iOS, so the notification loop closes | No offline pack cache, no background location, no native feel. **The web app currently has no service worker and no manifest**, so it is not PWA-ready: that is prerequisite work |
-| **D. Kotlin Multiplatform** | Very high | Shared data layer across both platforms | Requires rewriting the *working* Swift data layer in Kotlin to share it. Right answer from zero, wrong answer from here |
+The iOS app links three first-party Swift packages (`RZUtils` is linked in `Package.resolved` but unused in source). Instead of rewriting everything monolithic inside `flyfun-weather`, we should add a **`kotlin/` directory** to each of those three repositories, matching how `rzflight` and `flyfun-common` already house **Python + Swift** side by side.
 
-### Option chosen: **B, scoped native Phase 1**
+### 2.1 Actual Surface Used by `flyfun-weather`
 
-Rationale:
+| Repository | Current Languages | Exact Surface Consumed by `flyfun-weather` | Kotlin Port Scope |
+| :--- | :--- | :--- | :--- |
+| **`flyfun-common`** (`roznet/flyfun-common`) | Python + Swift | • `FlyFunAuthService` (Google OAuth state/code flow via `/auth/exchange`, email magic-link)<br>• `RollingBearerSession` (attaches `Bearer` JWT, updates from `X-Renewed-Token` response header, triggers `onUnauthorized` on `401`)<br>• `KeychainBearerTokenStore` | **Small (~500 LOC)**.<br>OkHttp `Interceptor` for rolling bearer tokens, Jetpack `EncryptedSharedPreferences` / Tink + Android Keystore for storage, Chrome Custom Tabs (`androidx.browser`) + App Links for `/auth/exchange`. |
+| **`rzflight`** (`roznet/rzflight`) | Python (`euro_aip`) + Swift (`RZFlight`) | • `AirportDatabase.swift`: `KnownAirports(db:)` (`rankedSearch(needle:limit:)`, `airport(icao:ensureRunway: false)`) over the downloaded `airports.db` SQLite<br>• `FlightTrackingService.swift`: `RouteGeometry.directDistanceNm` and `RouteGeometry.perpendicularDistanceAndRatio` | **Very small slice (~400 LOC)**.<br>Only needs `Airport`, `KnownAirports` (reading the slim `airports.db` via Android `SQLiteDatabase`), and `RouteGeometry` (pure spherical trig). Can expand later if other FlyFun apps need full AIP/runway hydration. |
+| **`rzskewt`** (`roznet/rzskewt`) | Swift (`RZSkewT`) | • `SkewTDetailView.swift` & `SkewTVariableCatalog.swift`: `SoundingProfile`, `SoundingLevel`, `SkewTIndices`, `SkewTOverlays`, `SkewTConfiguration`, `Thermodynamics`, `SkewTView`, `SkewTVariablePanel` | **Medium (~1,800 LOC)**.<br>Pure thermodynamic math + Jetpack Compose `Canvas` plot and side-panel renderer, verified against the existing 47 unit tests. |
 
-- It bounds the risk. If Phase 1 lands and feels good, extend. If it stalls,
-  the loss is weeks, not a year.
-- It teaches the ecosystem on real code rather than a tutorial.
-- The Phase 1 surface (flight list, advisory, digest, push) is the part with
-  the **best verification story**, see §7. The excluded parts (cross-section
-  Canvas, 620-annotation map, Skew-T) are precisely the ones with no automated
-  oracle.
-- Option D is explicitly rejected rather than deferred: its payoff is sharing a
-  data layer that, on iOS, already exists and works.
+### 2.2 How Kotlin Packages Fit into Multi-Language Repos
 
-Option C stays on the table as a fallback and is **not** mutually exclusive
-with B: a TWA could ship first while native Phase 1 is built. If chosen, the
-prerequisite is a service worker and web manifest in `web/`, which benefits the
-web client regardless.
+While Swift Package Manager requires `Package.swift` at the repository root, Gradle works cleanly from a `kotlin/` subdirectory (with an optional root `jitpack.yml` pointing into `kotlin/`).
 
----
-
-## 3. Android project structure
-
-Android uses Gradle, not a project file. Canonical modern layout:
-
-```
-app/android/                              # repo root of the Android project
-├── settings.gradle.kts                   # declares modules + dependency repos
-├── build.gradle.kts                      # root: plugin versions only
-├── gradle.properties
-├── gradle/
-│   ├── libs.versions.toml                # version catalog: pins every dependency
-│   └── wrapper/
-│       ├── gradle-wrapper.jar            # COMMITTED, pins the Gradle version
-│       └── gradle-wrapper.properties
-├── gradlew, gradlew.bat                  # COMMITTED wrapper scripts
-└── app/                                  # the application module
-    ├── build.gradle.kts
-    └── src/
-        ├── main/
-        │   ├── AndroidManifest.xml
-        │   ├── kotlin/aero/flyfun/weather/
-        │   │   ├── FlyFunApp.kt, MainActivity.kt
-        │   │   ├── data/                 # APIClient, repositories, stores
-        │   │   ├── model/                # DTOs + domain types
-        │   │   ├── ui/                   # Compose screens, mirrors Views/
-        │   │   └── viewmodel/
-        │   ├── res/                      # icons, strings, themes
-        │   └── assets/                   # raw files, e.g. metrics-catalog.json
-        ├── test/                         # JVM unit tests, NO emulator
-        └── androidTest/                  # instrumented/UI tests, needs emulator
+```text
+rzflight/
+├── Package.swift                 # Root manifest for Xcode / SPM
+├── pyproject.toml                # Python package (euro_aip)
+├── python/                       # Python sources & tests
+├── Sources/RZFlight/             # Swift sources
+├── Tests/RZFlightTests/          # Swift tests
+├── shared-fixtures/              # Shared test fixtures (sample airports.db, geometry JSON cases)
+└── kotlin/                       # Kotlin / Android library project
+    ├── settings.gradle.kts       # rootProject.name = "rzflight"
+    ├── build.gradle.kts          # com.android.library / kotlin.jvm + maven-publish
+    └── rzflight/
+        └── src/
+            ├── main/kotlin/aero/flyfun/rzflight/
+            │   ├── Airport.kt
+            │   ├── KnownAirports.kt
+            │   └── RouteGeometry.kt
+            └── test/kotlin/aero/flyfun/rzflight/
+                ├── KnownAirportsTest.kt
+                └── RouteGeometryTest.kt
 ```
 
-### Mapping to the iOS app you already have
+### 2.3 Consuming First-Party Kotlin Libraries (The SPM Equivalents)
 
-| iOS | Android | Note |
-|---|---|---|
-| `flyfun-weather.xcodeproj` | `settings.gradle.kts` + `build.gradle.kts` | Plain text and genuinely mergeable, unlike `project.pbxproj` |
-| Xcode target | Gradle module | |
-| `flyfun-weather/` | `app/src/main/kotlin/` | |
-| `flyfun-weatherTests/` (hermetic, **gated** in `ios.yml`) | `src/test/` | JVM, hermetic, fast. The gateable half |
-| `flyfun-weatherUITests/` (simulator, **nightly** in `ios-ui-nightly.yml`) | `src/androidTest/` | Emulator, slow, flaky. The nightly half |
-| `Package.resolved` | `gradle/libs.versions.toml` | Hand-written rather than generated |
-| SPM | Gradle + Maven Central | |
-| `Resources/` | `res/` (platform assets) + `assets/` (raw files) | `metrics-catalog.json` goes in `assets/` |
-
-**The unit/UI split this repo already codified for iOS maps one-to-one onto
-Android.** The reasoning in the header comments of `.github/workflows/ios.yml`
-and `ios-ui-nightly.yml` transfers verbatim: gate the hermetic target, run the
-device-driving target nightly, never let a launch hiccup fail a PR.
+1. **Remote consumption via JitPack or GitHub Packages**:
+   - With the Gradle `maven-publish` plugin, JitPack (`https://jitpack.io`) builds public GitHub repos on demand from Git tags or commit hashes (`implementation("com.github.roznet:rzflight:1.0.0")`)—the closest 1:1 equivalent to SPM Git URLs in `Package.resolved`.
+2. **Local side-by-side development via Gradle Composite Builds**:
+   - In `app/android/settings.gradle.kts`, adding `includeBuild("../../../rzflight/kotlin")` (gated on directory existence or a local gradle property) substitutes the remote Maven coordinates with the local source folder automatically—identical to dragging a local Swift package into Xcode.
+3. **Shared Cross-Language Test Fixtures**:
+   - Python (`pytest`), Swift (`swift test`), and Kotlin (`./gradlew test`) can all read the same JSON/SQLite test fixtures inside each library repo, guaranteeing mathematical and schema parity across backend, iOS, and Android.
 
 ---
 
-## 4. Stack decisions
+## 3. Technical Difficulty & Stack Mapping
 
-**Kotlin, not Java.** Java on Android is legacy; new APIs, samples and docs are
-Kotlin-first. **Jetpack Compose**, not XML layouts: it is the direct SwiftUI
-analogue (declarative, `@Composable` ≈ `View`, state-driven recomposition).
+**Overall difficulty: Medium-High, but roughly 60–70% of the effort of the original iOS build** because the server API, offline caching model, edge cases, and pure domain rules are already designed and tested.
 
-| iOS choice | Android equivalent | Confidence |
-|---|---|---|
-| SwiftUI | Jetpack Compose + Material 3 | Settled |
-| `@Observable` + MVVM | `androidx.lifecycle.ViewModel` + `StateFlow` | Settled |
-| `async/await` | Kotlin coroutines + `Flow` | Settled |
-| `URLSession`, SSE via `URLSession.bytes` | Ktor client (native SSE support) | Settled. Retrofit/OkHttp is the alternative but SSE is clumsier |
-| `Codable` | `kotlinx.serialization` | Settled |
-| `UserDefaults` | Jetpack DataStore | Settled |
-| JSON-on-disk cache stores | Same shape, `java.io.File` + kotlinx.serialization | Settled. The file-based design ports directly |
-| `AirportDatabase` (FMDB, downloaded SQLite) | Room, or raw `SQLiteOpenHelper` | Settled. The downloaded `airports.db` works unchanged |
-| SwiftUI `Canvas` | Compose `Canvas` | Settled. Both immediate-mode; cross-section renderer maps over reasonably |
-| MapKit / `MKMapView` | Google Maps Compose **or** MapLibre | **GATE, see below** |
-| Swift Charts | Vico (third party) | **Gap.** No first-party equivalent |
-| APNs | Firebase Cloud Messaging | Settled, but requires server work (§6) |
-| Sign in with Apple + Google | Credential Manager (Google); Apple via web flow | Settled |
-| App Intents / Siri / Spotlight | App Actions / `ShortcutManager` | **Weak.** Do not expect parity |
+### 3.1 Stack Mapping (iOS → Android)
 
-### GATE: maps
+| Layer | iOS (`app/flyfun-weather/`) | Android (`app/android/`) | Parity Notes |
+| :--- | :--- | :--- | :--- |
+| **Min OS** | iOS 26.2 | **API 31 (Android 12+)** | Avoids legacy compat shims; modern Compose, runtime permissions, and native splash/blur APIs. |
+| **UI Framework** | SwiftUI | **Jetpack Compose + Material 3** | Direct declarative 1:1 counterpart (`View` ↔ `@Composable`). |
+| **State & MVVM** | `@Observable` + `@MainActor` | **AndroidX `ViewModel` + `StateFlow`** | Coroutines `viewModelScope` replaces Swift `Task`. |
+| **Networking & SSE** | `URLSession` + `URLSession.bytes` | **OkHttp + `okhttp-sse` (or Ktor)** | Handles REST, streaming byte progress for `/bundle`, and SSE for `/packs/refresh`. |
+| **JSON Serialization** | `Codable` (`Models/API/*.swift`) | **`kotlinx.serialization` (`@Serializable`)** | Compile-time codegen, no reflection overhead. |
+| **On-Disk Cache** | `BriefingCacheStore` (`actor`, JSON files) | **Coroutine `Mutex` / IO dispatcher + JSON files** | The iOS app avoided SwiftData/CoreData and uses a file tree (`BriefingCache/users/<scope>/<flightId>/<ts>/<endpoint>.json`). This ports 1:1. |
+| **Preferences** | `UserDefaults` | **Jetpack DataStore (Preferences)** | Typed, coroutine-safe key-value persistence. |
+| **Cross-Section & Skew-T** | SwiftUI `Canvas` (`GraphicsContext`) | **Compose `Canvas` (`DrawScope`)** | Both are immediate-mode 2D canvases; paths, gradients, clipping, and text measurement map directly. |
+| **Route Graph** | `Swift Charts` | **Custom Compose `Canvas`** | Only ~770 lines on iOS. Drawing directly on Compose `Canvas` (instead of a 3rd-party chart library) shares the exact X-axis transform with the Cross-Section above it and guarantees lag-free scrub sync. |
+| **Maps** | `MKMapView` (`UIViewRepresentable`) | **Google Maps SDK (`maps-compose`) or MapLibre** | Must use bitmap caching for the ~620 forecast airport markers, `TileOverlay` for OPERA radar/IR, and custom overlays for lightning & storm cells. |
+| **PDF GRAMET** | `PDFKit` | **`android.graphics.pdf.PdfRenderer` / `androidx.pdf`** | Renders single-page GRAMET PDFs with pinch-to-zoom, falling back to `gramet.png` for legacy packs. |
+| **Push Notifications** | APNs (`UNUserNotificationCenter`) | **Firebase Cloud Messaging (FCM)** | Requires server-side FCM sender alongside APNs (§5). |
+| **Voice / Shortcuts** | `AppIntents` + `FoundationModels` | **Android App Actions (`shortcuts.xml`)** | Android lacks an exact on-device equivalent to iOS 26 `FoundationModels` intent phrase resolution; scope to standard shortcuts or an in-app voice action. |
 
-Not a Phase 1 decision (Phase 1 excludes maps), but it is the single largest
-downstream risk, so record it now:
+### 3.2 Where the Real Engineering Effort Sits
 
-- **Google Maps Compose** needs an API key and a billing account on file
-  (generous free tier, but a card is required).
-- **MapLibre** is free but you build the tile source and style pipeline
-  yourself.
+1. **🔴 Tier 1 — High Effort (Custom Visuals & Maps)**
+   - **Cross-Section Canvas (`~7k LOC`) & `RZSkewT`**: Translating the 10+ atmospheric layers (soft/natural clouds, SFIP/Ogimet icing, CAT, inversions, convective towers, terrain, live METAR/SIGMET columns, advisory highlight scrims) and theme/emulation resolution.
+   - **Map Overlays (`~5.2k LOC`)**: Keeping 60fps with ~620 custom-drawn airport forecast markers, live OPERA radar + EUMETView satellite IR raster tiles, age-faded lightning bolts, and storm cell contours/vectors.
+   - **Scrub vs. Scroll Gesture Disambiguation**: Replicating `ScrubPanGesture` in Compose `pointerInput` so horizontal drags scrub the cross-section cursor, hold-then-drag scrubs in any direction, and vertical drags pass through cleanly to the parent vertical scroll.
 
-Either way, the forecast map renders **~620 annotations**. That is exactly the
-scale that pushed the iOS app off the SwiftUI `Map` API onto `MKMapView`
-(#428). Assume naive Compose markers will hit the same wall and budget for a
-custom marker layer.
+2. **🟡 Tier 2 — Medium Effort (Platform & OS Integration)**
+   - **OAuth & Deep Links**: Chrome Custom Tabs + Android App Links (`assetlinks.json`) adhering strictly to the `state` nonce + `/auth/exchange` flow and App Store/Play Store reviewer token rules.
+   - **In-Flight GPS Tracking**: Android aggressively kills background location unless backed by a **Foreground Service (`foregroundServiceType="location"`)** with a persistent notification.
+   - **FCM Push & Badge Reconciliation**: Wiring Firebase Messaging, foreground suppression, and deep-linking on notification tap.
 
-### GATE: minimum SDK
-
-iOS targets 26.2 with an explicit "no legacy burden" stance. The Android
-equivalent decision is `minSdk`. Suggest **API 31 (Android 12)** or higher:
-it keeps Compose modern and avoids a long tail of compatibility shims, at the
-cost of excluding older devices. Confirm against whatever device mix matters
-before writing the manifest.
+3. **🟢 Tier 3 — Straightforward (Mechanical 1:1 Port)**
+   - **DTOs, Pure Rules & Repositories (`~20k LOC`)**: `Models/API/`, `RouteRibbonRules`, `RunwayWindRules`, `CellsOverlay`, `LivePositionRules`, `BriefingCacheStore`, `PirepOfflineStore`, `HelpCatalogStore`, and `WhatsNewStore` have zero UI/OS coupling and port almost mechanically from Swift to Kotlin with their existing unit test suites.
 
 ---
 
-## 5. Repo integration, and the trap
+## 4. Native Android UX & Material 3 Cockpit Design
 
-`app/android/` alongside `app/flyfun-weather/` works, but **three things must be
-fixed first**:
+To feel like a first-class Android app across phones, foldables (Pixel Fold / Galaxy Z Fold), and cockpit tablets (Galaxy Tab Active), the UI should adopt Material 3 Adaptive conventions while preserving cockpit safety constraints:
 
-### 5.1 `ios.yml` triggers on `app/**`, fix before adding anything
+### 4.1 Adaptive Layouts (`ListDetailPaneScaffold` & `NavigationSuiteScaffold`)
+- **Flight List + Briefing Split View**: Replace iOS `NavigationSplitView` with Material 3 `ListDetailPaneScaffold`. On compact phones it pushes full-screen; on tablets and unfolded foldables it renders a two-pane list-detail layout automatically.
+- **5-Tab Briefing Navigation**:
+  - Keep the exact tab order and flight-day rules from iOS (`Advisory`, `Discussion`, `Cross-Section`, `Map`, with `Observed` appended at index 4 on flight day and auto-selected once when entering the live window).
+  - On phones in portrait, render a bottom Material 3 `NavigationBar` (5 items is the M3 maximum for bottom bars—matching iOS's 5-tab limit before "More").
+  - On tablets / landscape, use `PrimaryScrollableTabRow` at the top of the detail pane or a compact side `NavigationRail`.
 
-```yaml
-# .github/workflows/ios.yml
-    paths: &paths
-      - 'app/**'                 # <- becomes wrong the moment app/android/ exists
-      - '.github/workflows/ios.yml'
-```
+### 4.2 Predictive Back Gesture (`BackHandler`)
+- Android users rely heavily on the system back swipe (left/right edge).
+- Wire `BackHandler` across multi-state screens so swiping back:
+  1. Closes an expanded cross-section family detail row or active `FocusIntent` lens before leaving the tab.
+  2. Exits fullscreen chart/GRAMET zoom before popping the briefing.
+  3. Exits multi-select bulk-delete mode on the flight list before closing the app.
 
-Today `app/` is synonymous with "the iOS app". The moment `app/android/` exists,
-**every Android-only commit spins a `macos-26` runner and rebuilds the iOS
-app.** Narrow the filter to `app/flyfun-weather/**` first. Same for
-`ios-ui-nightly.yml`.
-
-This is cheap to do now and annoying to notice later, so it is listed as step
-zero in §8.
-
-### 5.2 `tests.yml` `paths-ignore` comment goes stale
-
-```yaml
-    paths-ignore: &ignored
-      - 'app/**'           # iOS/iPadOS app — has its own toolchain (xcodebuild)
-```
-
-The *behaviour* stays correct (Android also has its own toolchain), but the
-comment becomes misleading. Update it to say "native clients, each with its own
-toolchain".
-
-### 5.3 Naming
-
-Recommendation: **keep `app/flyfun-weather/` where it is** and add
-`app/android/`. Asymmetric, but renaming the iOS directory churns every path in
-`project.pbxproj`, the two workflows, `CLAUDE.md`, the `sync-ios-web` skill and
-several design docs for pure cosmetics.
-
-If symmetry matters, do the rename (`app/ios/` + `app/android/`) as a **separate
-commit before any Android code lands**, never mixed in.
-
-### 5.4 Three-way drift
-
-Add `app/android/app/src/main/assets/metrics-catalog.json` to the `sync-ios-web`
-skill's surface list and rename the skill (`sync-clients`?). Do this when the
-first copied surface lands, not later.
+### 4.3 Cockpit-Safe Controls & Replacing iOS Idioms
+- **Flight Row Actions & Bulk Delete**: Avoid hair-trigger swipe-to-delete on flight rows (error-prone in turbulence). Use a trailing `⋮` icon button (`DropdownMenu`: Edit, Share, Unsubscribe, Delete) plus standard Android **long-press multi-select** with a contextual TopAppBar ("3 selected · Delete") instead of iOS's separate modal selection sheet.
+- **Intra-Tab Scroll-Spy (`SectionSpyBar`)**: Implement as a Compose `LazyColumn` `stickyHeader` containing horizontally scrollable `FilterChip` pills synced with `LazyListState.firstVisibleItemIndex`.
+- **Disable Material You Dynamic Color on Weather Semantics**: Do **not** let Android 12+ wallpaper-based `dynamicDarkColorScheme` / `dynamicLightColorScheme` alter safety-critical colors. Lock `Assessment` (`GREEN` / `AMBER` / `RED`), VIP radar reflectivity ramps, and cross-section theme palettes to the exact hex values in `cross-section-themes.json` and `metrics-catalog.json`.
+- **Foreground Service Notification for "Start Flight"**: When the pilot taps "Start Flight", start a location Foreground Service showing an ongoing compact notification (*"Tracking LFAT → LFMD · 85 NM along · FL065"* with a *"Stop"* action button). This prevents Android OEM battery savers from dropping GPS fixes when the pilot switches to SkyDemon/Garmin Pilot and gives instant glanceability from the lock screen or notification shade.
 
 ---
 
-## 6. Server-side work (outside `app/`)
+## 5. Server & Repository Changes Required
 
-Phase 1 cannot ship without these. They are Python work in `src/weatherbrief/`,
-not Kotlin, and they are **fully testable by the existing pytest suite**, which
-makes them good early delegable work.
+### 5.1 Backend Additions (`src/weatherbrief/`)
+95% of the FastAPI server works out of the box. Only four small additions are needed:
+1. **Device Tokens Migration (`api/devices.py` + Alembic)**:
+   - Add a `platform` column (`"ios"` | `"android"`, default `"ios"`) to `device_tokens` using `batch_alter_table` (per `designs/migrations.md`).
+2. **FCM Push Transport (`notify/push.py` & `notify/dispatch.py`)**:
+   - Add an async FCM HTTP v1 sender (using service-account JWT via `httpx`, matching the lightweight dependency-free style of the existing APNs sender) and route tokens in `dispatch.py` by `platform`.
+3. **OAuth Platform Handling (`flyfun-common` / auth routes)**:
+   - Support `?platform=android` on `/auth/login/google` and `/autorouter/link-ticket`, redirecting to `flyfunweather://auth/callback` / `flyfunweather://autorouter/callback` (or verified HTTPS App Links) with the `state` + `code` exchange flow.
+4. **Android Digital Asset Links (`deploy/weather.flyfun.aero.caddy`)**:
+   - Serve `/.well-known/assetlinks.json` alongside `/.well-known/apple-app-site-association` so `/briefing.html`, `/maps.html`, `/s/{code}`, and `/t/{code}` open directly in the Android app.
 
-| Area | Current state | Android needs |
-|---|---|---|
-| Push | `notify/push.py` is APNs-only (token-based, httpx HTTP/2 + PyJWT) | FCM transport alongside APNs; `dispatch.py` picks by platform |
-| Device registry | `api/devices.py`, `device_tokens` table | A `platform` column (`ios` / `android`), plus an Alembic migration. **See `designs/migrations.md`: `batch_alter_table` is mandatory** |
-| Auth | `?platform=ios`, callback scheme `flyfunweather://` | An Android equivalent: App Links (preferred) or a custom scheme. The `state` nonce + `/auth/exchange` hardening must be reproduced exactly, see `flyfun-common/designs/oauth-deeplink-hardening.md` |
-| Apple Sign In | `POST /auth/apple/token`, bundle ID in `APPLE_APP_IDS` | Not applicable on Android; Google only |
-
-### DTO generation
-
-FastAPI serves an OpenAPI schema, but **`openapi_url` is disabled outside dev
-mode** (`api/app.py`, `docs_kwargs`). So schema-driven Kotlin DTO generation
-must run against a **dev server**, not production. Worth knowing before someone
-tries to point a generator at `weather.flyfun.aero`.
-
----
-
-## 7. Build the oracle before the app
-
-This is the most important section in the document.
-
-An agent loop is only as good as its feedback signal. The parts of this project
-an agent can build unattended are exactly the parts where **a test can tell it
-the truth**. The parts it will get plausibly, confidently wrong are the ones
-where only a human can judge.
-
-So the verification apparatus is not a follow-up task. It is step one.
-
-| Order | Build this | Gives an oracle for |
-|---|---|---|
-| 1 | `./gradlew testDebugUnitTest` green in CI on `ubuntu-latest`, **with the vacuous-pass guard already written into `ios.yml`** (a filter matching zero tests must fail, not silently pass) | Data layer, DTOs, repositories, stores |
-| 2 | **Screenshot testing (Roborazzi or Paparazzi)** | Compose layout. Runs on the JVM, no emulator. Turns "does this screen look right" from a human-only question into a diffable artifact |
-| 3 | Round-trip serialization tests against captured real API responses | DTO correctness against the live contract |
-| 4 | `androidTest` journeys on a nightly emulator workflow (`reactivecircus/android-emulator-runner`) | End-to-end flows. Nightly, **not** gated, exactly per `ios-ui-nightly.yml`'s reasoning |
-
-Step 2 is the highest-leverage item on this list and the easiest to skip. Skip
-it and every Compose screen becomes human-review-only, which is what makes
-UI work slow and undelegable.
-
-**CI note, and it is good news:** Android unit tests run on `ubuntu-latest` with
-no emulator. Unlike the iOS split, the gating workflow is fast and free, and
-the agent can run the full hermetic suite locally in seconds.
+### 5.2 CI & Repo Hygiene (Do Before Adding `app/android/`)
+- **Narrow `.github/workflows/ios.yml` and `ios-ui-nightly.yml` path filters**:
+  - Currently both trigger on `app/**`. Narrow them to `app/flyfun-weather/**` before creating `app/android/` so Android commits don't spin up expensive `macos-26` Xcode runners.
+- **Extend `sync-ios-web` into a 3-way parity check**:
+  - Add `app/android/app/src/main/assets/metrics-catalog.json` and `cross-section-themes.json` to the parity check so catalog updates never leave Android behind.
 
 ---
 
-## 8. Phase 1 scope split
+## 6. Verification & Testing Strategy ("Build the Oracle First")
 
-**Phase 1 target:** sign in, see your flights, open a briefing, read the
-advisory verdict and the LLM discussion, get a push when a refresh finishes.
-Nothing else.
+An agentic workflow moves fast when it has a fast, truthful automated oracle. Unlike iOS (which requires `macos` runners and `xcodebuild` simulator boot), **Android unit and screenshot tests run hermetically on standard `ubuntu-latest` JVM in seconds**.
 
-Column meanings:
-
-- **Est.**: rough Kotlin line count. Estimates, not measurements.
-- **Oracle**: what tells us it is correct. This drives the next column.
-- **Owner**: `agent` = safely delegable given the oracle exists;
-  `human` = needs Android judgement or visual assessment;
-  `pair` = agent drafts, human reviews with a device in hand.
-
-### 8.0 Prerequisites (do these first, in order)
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 0a | Narrow `ios.yml` + `ios-ui-nightly.yml` path filters to `app/flyfun-weather/**` | ~4 lines | CI still fires correctly on an iOS-only commit | agent |
-| 0b | Server: `platform` column on `device_tokens` + Alembic migration | ~60 py | pytest; migration up/down on SQLite **and** MySQL | agent |
-| 0c | Server: FCM transport in `notify/push.py`, dispatch by platform | ~150 py | pytest with a mocked FCM endpoint | agent |
-| 0d | Server: Android auth callback (App Links), `?platform=android` | ~80 py | pytest; manual end-to-end once the app exists | pair |
-
-### 8.1 Scaffolding and infrastructure
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 1a | Gradle project, version catalog, wrapper, `minSdk` decision | ~200 | `./gradlew assembleDebug` succeeds | agent |
-| 1b | `.github/workflows/android.yml`, `ubuntu-latest`, unit tests, **vacuous-pass guard** | ~80 | Workflow green; deliberately broken test goes red | agent |
-| 1c | Roborazzi screenshot-test harness wired in | ~120 | A known-good screen produces a stable golden image | agent |
-| 1d | App shell: `MainActivity`, theme, navigation skeleton | ~300 | Compiles, launches, screenshot golden | pair |
-
-### 8.2 Data layer (the well-verified part)
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 2a | DTOs for Phase 1 endpoints, `kotlinx.serialization`, generated from dev-server OpenAPI | ~1,200 | Round-trip tests against captured real responses | **agent** |
-| 2b | `ApiClient` over Ktor: bearer token, rolling refresh, error mapping | ~400 | Unit tests with `MockEngine` | **agent** |
-| 2c | `BriefingRepository` interface + `OnlineBriefingRepository` (Phase 1 subset only) | ~350 | Unit tests | **agent** |
-| 2d | `CachingBriefingRepository` + on-disk JSON pack cache | ~450 | Unit tests over a temp dir | **agent** |
-| 2e | `FixtureBriefingRepository` (canned fixtures, mirrors the iOS `FLYFUN_MOCK=1` pattern) | ~500 | It *is* test infrastructure | **agent** |
-| 2f | DataStore preferences store | ~200 | Unit tests | **agent** |
-| 2g | `NetworkMonitor` (connectivity state) | ~120 | Unit tests + one manual airplane-mode check | pair |
-
-**§8.2 is ~3,200 lines, essentially all agent-suitable, because every row has a
-real oracle.** This is the single biggest delegable block in Phase 1 and the
-reason Option B is attractive.
-
-### 8.3 Auth
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 3a | Google sign-in via Credential Manager | ~300 | Manual. No meaningful automated test | **human** |
-| 3b | Token exchange (`state` nonce → `/auth/exchange`), keychain-equivalent storage (EncryptedSharedPreferences) | ~250 | Unit-testable logic; the OS integration is not | pair |
-| 3c | App Links deep-link handling for the OAuth callback | ~150 | Manual; `adb shell am start` can drive it | **human** |
-
-Auth is small in lines and large in frustration. It is OS-integration work with
-device-specific failure modes, a security-sensitive protocol that must match
-`oauth-deeplink-hardening.md` exactly, and almost no automated oracle. **Budget
-disproportionate human time here.**
-
-### 8.4 UI (Compose)
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 4a | Flight list screen: sections (future/recent/past), unseen dot, pull-to-refresh | ~700 | Screenshot goldens + ViewModel unit tests | pair |
-| 4b | `FlightListViewModel` (grouping, badge, refresh state) | ~350 | Unit tests. Port `FlightGroupingTests.swift` logic | **agent** |
-| 4c | Briefing container + two tabs (Advisory, Discussion) | ~400 | Screenshot goldens | pair |
-| 4d | Advisory tab: hero verdict, advisory grid, GREEN collapse strip | ~900 | Screenshot goldens; severity is server-computed so no logic risk | pair |
-| 4e | Discussion tab: LLM digest rendering, markdown-lite | ~450 | Screenshot goldens + parser unit tests | pair |
-| 4f | Theme, typography, colour tokens, **cockpit legibility** | ~300 | Human eye. No oracle exists | **human** |
-| 4g | Error, empty, offline and loading states across all screens | ~400 | Screenshot goldens per state | pair |
-
-Note 4d: advisory severity and all weather maths are **server-computed**
-(`sync-ios-web` explicitly scopes them out of drift audits). The client only
-renders. That removes the entire class of "the agent got the meteorology wrong"
-risk from Phase 1, which is a significant part of why this scope was chosen.
-
-### 8.5 Push
-
-| # | Task | Est. | Oracle | Owner |
-|---|---|---|---|---|
-| 5a | FCM integration, token upload, `FirebaseMessagingService` | ~300 | Manual, on a real device | **human** |
-| 5b | Foreground suppression, badge sync, tap → deep link (`PendingNavigation` equivalent) | ~250 | Unit-testable routing logic; delivery is not | pair |
-| 5c | Firebase project setup, `google-services.json`, signing config | config only | It works or it does not | **human** |
-
-### 8.6 Rough totals
-
-| Owner | Est. Kotlin | Share |
-|---|---|---|
-| **agent** (real oracle, delegable) | ~3,900 | **~40%** |
-| **pair** (agent drafts, human reviews on device) | ~4,200 | ~43% |
-| **human** (judgement or OS integration) | ~1,700 | ~17% |
-| **Total Phase 1** | **~9,800 Kotlin** + ~290 Python | |
-
-Against 42,224 lines of Swift for the full iOS app, Phase 1 is roughly **a
-quarter of the surface** and deliberately the quarter with the best oracles.
+1. **JVM Unit Tests (`./gradlew testDebugUnitTest`) + Vacuous-Pass Guard**:
+   - Runs all DTO serialization tests (against captured server JSON fixtures), `BriefingCacheStore` tests, and pure rule tests (`RouteRibbonRulesTest`, `RunwayWindRulesTest`, `CellsOverlayTest`, `LivePositionRulesTest`, `FlightGroupingTest`).
+2. **`FixtureBriefingRepository` (`FLYFUN_MOCK=1` Equivalent)**:
+   - Port the iOS fixture repository using the **exact same JSON fixture files** so every UI state (D-0 live observed, multi-leg trips, stale packs, offline read-only banner) can be rendered deterministically without a backend.
+3. **JVM Screenshot Testing via Roborazzi (`@GraphicsMode(Mode.NATIVE)`)**:
+   - Renders Jetpack Compose screens **and custom Compose `Canvas` views (Cross-Section, Route Graph, Skew-T, Runway Wind Dials)** directly on the JVM into PNGs.
+   - Gives an immediate visual oracle for the Cross-Section and Skew-T renderers that can be compared side-by-side against the iOS/Web reference renders during development.
+4. **Nightly Instrumented Emulator Journeys (`android-ui-nightly.yml`)**:
+   - Mirrors `ios-ui-nightly.yml`: runs Compose UI end-to-end tests (`src/androidTest/`) against `FixtureBriefingRepository` on a nightly schedule rather than blocking PR merges on emulator boot flake.
 
 ---
 
-## 9. Explicitly out of scope for Phase 1
+## 7. Phased Execution Plan
 
-Recorded so that scope creep is a visible decision rather than a drift:
+### Phase 0: Repo Prep, Server Plumbing & First-Party Kotlin Slices
+- [ ] Narrow `ios.yml` and `ios-ui-nightly.yml` triggers from `app/**` to `app/flyfun-weather/**`.
+- [ ] Server: Add `platform` to `device_tokens` (Alembic migration with `batch_alter_table`), FCM HTTP v1 sender in `notify/push.py`, `?platform=android` auth callback support, and `/.well-known/assetlinks.json`.
+- [ ] Create `kotlin/` library module in **`flyfun-common`** (`FlyFunAuthService`, `RollingBearerInterceptor`, `TokenStore`).
+- [ ] Create `kotlin/` library module in **`rzflight`** (`Airport`, `KnownAirports` SQLite reader, `RouteGeometry` + shared unit tests).
+- [ ] Bootstrap `app/android/` Gradle project (`minSdk = 31`, Kotlin 2.x, Compose BOM, `kotlinx.serialization`, OkHttp, Roborazzi) and `.github/workflows/android.yml` on `ubuntu-latest`.
 
-- **Cross-section Canvas renderer.** 5,471 lines on iOS. Correctness is "does
-  this look like the atmosphere a pilot expects", which is a meteorological
-  judgement with no automated oracle.
-- **Forecast map and route map.** ~620 annotations, an unresolved
-  Google-Maps-vs-MapLibre gate, and a known performance cliff.
-- **Skew-T.** Requires porting `RZSkewT` including its thermodynamics.
-- **Offline bundle, auto-download, eviction.**
-- **PIREPs** (submit, offline queue, list).
-- **Live flight tracking.** Background location on Android is materially harder
-  than on iOS: foreground services, per-OEM battery killers, a permission
-  model that changed across several releases.
-- **Debrief, sharing, timing scenarios, alternates, What's New, help catalog.**
-- **App Actions / Shortcuts** (the App Intents equivalent).
+### Phase 1: Core Data Layer, Auth, Flights, Trips & Text Briefing Tabs
+- [ ] Port `Models/API/*.kt` DTOs and round-trip serialization tests against captured server JSONs.
+- [ ] Implement `BriefingRepository` (`OnlineBriefingRepository`, `CachingBriefingRepository` with `BriefingCacheStore` JSON file tree, `/bundle` streaming download, and `FixtureBriefingRepository`).
+- [ ] Implement `HelpCatalogStore`, `WhatsNewStore`, `AirportDatabase` (ETag download + `rzflight` `KnownAirports`), and DataStore preferences.
+- [ ] Build Auth screens (Google Sign-In / Chrome Custom Tabs OAuth exchange, email magic-link, dev login for emulator).
+- [ ] Build Adaptive Flight List (`ListDetailPaneScaffold`), Trips chain view (`Views/Trips`), Add/Edit Flight sheet (with ICAO autocomplete, Autorouter OAuth link, Move vs. Duplicate, aircraft & profile pickers), Aircraft Registry CRUD (`Settings → My Aircraft`), Shared Flight preview (`/s/{code}`), and bulk delete.
+- [ ] Build `BriefingContainerScreen` with `AdvisoryTab` (verdict hero, advisory grid, green strip, airport conditions, alternates, timing scenarios, debrief card, scroll-spy) and `DiscussionTab` (LLM digest sections, Surface Charts manifest + route Canvas overlay + zoom viewer, PDF GRAMET viewer, chart LRU/mark-and-sweep cache).
 
-If Phase 1 succeeds, the natural Phase 2 is PIREPs plus the offline bundle
-(both have good oracles), and the natural Phase 3 is the cross-section (poor
-oracle, high value, do it with a human at the wheel).
+### Phase 2: Custom Canvas Visualizations (`Cross-Section`, `Route Graph`, `RZSkewT`)
+- [ ] Port `Models/Domain/VizData.kt`, `extractVizData`, `CrossSectionThemes`, and `CrossSectionPresets` (Focus lenses × Emulate GRAMET/Windy/ForeFlight/FlyFun).
+- [ ] Build Compose `Canvas` **Cross-Section Renderer** and all layer renderers (soft/natural clouds, NWP/Ogimet/SFIP icing, CAT, inversions, thermo/NWP convective towers, terrain, reference/temperature lines, `CurrentConditionsLayer`, and `HighlightLayer` scrims).
+- [ ] Build the 3-mode responsive layer family bar (phone portrait chips below chart, tablet full bar above chart, phone landscape immersive mode) and directional scrub-vs-scroll gesture handler.
+- [ ] Build Compose `Canvas` **Route Graph** (`RouteGraphView` + 14 scalar metrics registry) with synchronized scrub cursor.
+- [ ] Port **`rzskewt` (`kotlin/`)**: atmospheric thermodynamics, `SkewTView` Compose Canvas, `SkewTVariablePanel`, and `SkewTDetailView` folded below the cross-section. Verify with the 47 thermodynamic unit tests + Roborazzi golden PNGs.
 
----
+### Phase 3: Maps, Flight-Day `Observed` Tab, Live Tracking & PIREPs
+- [ ] Build **Briefing Route Map**, **Pan-European Forecast Map**, and **Historical Map** (`maps-compose` / MapLibre) with bitmap-cached ~620 airport markers, metric pickers, altitude slider, and day/hour/lead selectors.
+- [ ] Port pure rule engines (`RouteRibbonRules`, `RunwayWindRules`, `CellsOverlay`, `LivePositionRules`) with 1:1 unit tests matching Swift and TypeScript.
+- [ ] Add Map Observed overlays: OPERA radar + EUMETView IR satellite `TileOverlay`, age-faded lightning bolt glyphs, and radar cell contours + motion arrows (`RouteCellsModel`).
+- [ ] Build the flight-day **`ObservedTab`**: Haiku highlight + 👍/👎 rating, nutshell glance card, interactive route ribbon, departure/destination runway + wind dials, *"Since this briefing"* live changes + history trails, radar storms list, METAR/TAF with observation proxies, and route SIGMETs.
+- [ ] Implement **In-Flight GPS Tracking (`FlightTrackingService`)** as an Android Foreground Service (`foregroundServiceType="location"`) with ongoing notification, route projection, live aircraft icon on Map & Cross-Section, and sparse GPS fix reporting (`LivePositionService` → `POST /flights/{id}/live/position`).
+- [ ] Port `PirepOfflineStore` and `PirepReportingSheet` (behind `PirepFeature.isEnabled`).
 
-## 10. Decision gates
-
-| Gate | Question | Decide before |
-|---|---|---|
-| G1 | Native Phase 1 at all, or ship a TWA/PWA wrapper first? | Any Kotlin is written |
-| G2 | `minSdk` floor | The manifest exists |
-| G3 | Directory naming: keep `app/flyfun-weather/`, or rename to `app/ios/`? | Any Android file lands |
-| G4 | Firebase account, project and billing posture for FCM | §8.0c |
-| G5 | Google Maps (API key + billing) vs MapLibre | **Phase 2**, not Phase 1 |
-| G6 | Does `sync-ios-web` become `sync-clients` (three-way)? | The first copied surface lands |
-
-G1 is the real one. Everything below it is mechanical.
-
----
-
-## 11. Why the "one prompt builds a compiler" demos do not transfer directly
-
-Recorded because it will come up again, and because it explains the shape of
-§8's ownership column.
-
-Those demos are favourable on four axes that this project is not:
-
-1. **The spec is public and precise.** A Scheme subset has a published grammar
-   and thousands of reference implementations. "An Android client for FlyFun
-   Weather" has requirements living in 42k lines of Swift and in what European
-   GA pilots need in a cockpit.
-2. **Verification is free, instant and truthful.** The compiler compiles or it
-   does not. Compose layout quality has no such signal, which is exactly why §7
-   comes before §8.
-3. **Nothing outside the artifact matters.** No production backend, no live
-   users, no auth, no AIRAC cycle, no existing client whose conventions must be
-   matched.
-4. **The bar is demo-grade.** "It built a compiler" means it compiles the twelve
-   examples, not that it has usable error messages.
-
-Cost is **not** the limiting factor. A long autonomous run is tens of dollars,
-which against months of evenings is noise. The limiting factor is the oracle.
-
-Where this repo is *better* than average for agent work: the design docs,
-`CLAUDE.md` conventions, the code-review skill, and the existing iOS app as a
-reference implementation together constitute a specification and a verification
-apparatus. That is the thing the flashy demos manufacture artificially, and
-here it already exists.
-
----
-
-## 12. References
-
-- `app/flyfun-weather/`: the iOS reference implementation
-- `.github/workflows/ios.yml`: the gated hermetic unit job, including the
-  vacuous-pass guard worth copying verbatim
-- `.github/workflows/ios-ui-nightly.yml`: the non-gated device-driving job and
-  the reasoning for the split
-- `.claude/skills/sync-ios-web/SKILL.md`: the hand-copied surfaces that would
-  become three-way
-- `designs/migrations.md`: `batch_alter_table` is mandatory for §8.0b
-- `designs/ios-app-server-api.md`: the endpoint contract
-- `flyfun-common/designs/oauth-deeplink-hardening.md`: the auth protocol §8.3b
-  must reproduce
+### Phase 4: Push Notifications, Deep Links, Polish & Play Store Release
+- [ ] Wire `FirebaseMessagingService` for briefing-refresh and flight-day pushes, foreground suppression, server badge sync (`/flights/badge`, `/flights/{id}/seen`), and cold-start `PendingNavigation` routing.
+- [ ] Verify Android App Links (`weather.flyfun.aero/briefing.html`, `/maps.html`, `/s/*`, `/t/*`) and Predictive Back transitions across all drill-downs.
+- [ ] Add Android App Actions / pinned shortcuts for quick flight access.
+- [ ] Set up Play Store signing, release build pipeline (`bundleRelease`), and nightly Compose UI emulator workflow (`android-ui-nightly.yml`).
