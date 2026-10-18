@@ -2377,7 +2377,7 @@ async function init(): Promise<void> {
               focusMapOn(storm.focus ?? null);
             });
         },
-      }, airports);
+      }, airports, glance?.flight?.marker_label ?? null);
     }
   }
 

@@ -204,6 +204,7 @@ export function ribbonSvg(
   corridorNm: number,
   width: number,
   segmentsInteractive = false,
+  markerLabel = 'Planned position now',
 ): string {
   const bands = weatherAvailable(ribbon);
   const corridor = corridorOf(ribbon, corridorNm);
@@ -267,10 +268,12 @@ export function ribbonSvg(
       + `<circle cx="${at.x.toFixed(1)}" cy="${at.y.toFixed(1)}" r="${STATION_HIT_RADIUS}" fill="transparent"/></g>`;
   }).join('');
 
-  // Planned position now, on the line.
+  // The position used, on the line: captioned by the server's flight strip
+  // (#816: "You · 4 min ago", "Estimated position", "Planned position").
   if (ribbon.flown_nm != null && ribbon.flown_nm > 0) {
     const x = xForNm(ribbon.flown_nm, routeNm, width);
-    inner += `<g role="img" aria-label="Planned position now">`
+    inner += `<g role="img" aria-label="${escapeHtml(markerLabel)}" data-testid="ribbon-position">`
+      + `<title>${escapeHtml(markerLabel)}</title>`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="9" fill="var(--surface)"/>`
       + `<circle cx="${x.toFixed(1)}" cy="${TRACK_Y}" r="4.5" fill="var(--primary)"/></g>`;
   }
@@ -386,6 +389,8 @@ export function mountRibbon(
   storms: LiveStorms | null | undefined,
   handlers: RibbonHandlers,
   airports: AirportObservation[] | null = null,
+  /** `glance.flight.marker_label` (#816); absent → "Planned position now". */
+  markerLabel: string | null = null,
 ): () => void {
   const list = storms?.status === 'available' ? storms.storms ?? [] : [];
   const corridorNm = storms?.corridor_nm ?? 30;
@@ -400,8 +405,14 @@ export function mountRibbon(
     // route". (The iOS card carries one because it has no section header.)
     el.innerHTML =
       `<div class="ribbon-head">`
-      + `<span class="ribbon-caption">${escapeHtml(ribbonCaption(ribbon, corridorNm, formatHhmmZ))}</span></div>`
-      + `<div class="ribbon-plot">${ribbonSvg(ribbon, list, corridorNm, width, !!handlers.onSegment)}</div>`
+      + `<span class="ribbon-caption">${escapeHtml(ribbonCaption(ribbon, corridorNm, formatHhmmZ))}</span>`
+      + (markerLabel && ribbon.flown_nm != null && ribbon.flown_nm > 0
+        ? `<span class="ribbon-position" data-testid="ribbon-position-label">● ${escapeHtml(markerLabel)}</span>`
+        : '')
+      + '</div>'
+      + `<div class="ribbon-plot">${ribbonSvg(
+        ribbon, list, corridorNm, width, !!handlers.onSegment, markerLabel ?? undefined,
+      )}</div>`
       + (bands ? ''
         : '<p class="ribbon-fallback-note">Rain and cells unavailable: radar strip within '
           + `${Math.round(ribbon.radar_radius_nm ?? 10)} NM of the route</p>`)

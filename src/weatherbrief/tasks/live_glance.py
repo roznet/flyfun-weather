@@ -38,8 +38,11 @@ from weatherbrief.models.analysis import RouteConfig
 from weatherbrief.models.live import (
     ChangeRole,
     LiveChanges,
+    LiveDestinationCell,
     LiveFocus,
     LiveGlance,
+    LiveGlanceDestination,
+    LiveGlanceFlight,
     LiveGlanceLine,
     LiveLayer,
     LiveRibbon,
@@ -503,6 +506,210 @@ def _headline(changes: LiveChanges | None, as_of: datetime) -> tuple[str, str]:
     return f"{head} · {', '.join(parts)}", comparison
 
 
+# --- Flight strip and destination at ETA (#816) -------------------------------
+
+
+def _delay_words(minutes: int | None) -> str:
+    """" (+12 min vs plan)"; nothing when on the plan or not measured."""
+    return f" ({minutes:+d} min vs plan)" if minutes else ""
+
+
+def _ago(age_min: float) -> str:
+    n = round(age_min)
+    return "now" if n < 1 else f"{n} min ago"
+
+
+def flight_strip(progress: FlightProgress, dep_icao: str, dest_icao: str) -> LiveGlanceFlight | None:
+    """The flight strip (#816): where the flight is and when it lands, worded
+    by what is known. None when the flight is not timed (no departure).
+
+    - ``planned``: nothing observed. "Planned · departure 09:00Z · ETA LPPT
+      10:30Z", then "Planned · 120 of 280 NM · ETA …", then "Planned ·
+      arrival LPPT 10:30Z". Never "Landed" from a schedule.
+    - ``ground``: an app fix on the ground at the departure, before the
+      take-off it implies: "On the ground at LPPR 08:52Z · take-off ~09:02Z ·
+      ETA LPPT 10:32Z (+2 min vs plan)". The server has no "Start Flight"
+      event; the ground fix is what it knows.
+    - ``enroute``: "120 of 280 NM · ETA LPPT 10:32Z (+12 min vs plan) ·
+      position 4 min ago", with ", estimated" once the fix is older than
+      ``STALE_FIX``, "estimated from take-off HH:MMZ" without a fix.
+    - ``landed``: "Landed LPPT 10:35Z", "~" when inferred from a fix.
+    """
+    from weatherbrief.analysis.flight_progress import SOURCE_APP, SOURCE_PLAN
+
+    if not progress.timed:
+        return None
+    eta = progress.arrival
+    planned_arrival = progress.planned_arrival
+    source = progress.source
+    delay = None
+    if source != SOURCE_PLAN and eta is not None and planned_arrival is not None:
+        delay = round((eta - planned_arrival).total_seconds() / 60.0)
+    flown, total = progress.flown_nm, progress.total_nm
+    dist = f"{flown:.0f} of {total:.0f} NM" if flown is not None and total > 0 else None
+    eta_text = f"ETA {dest_icao} {_hhmm(eta)}{_delay_words(delay)}"
+    age = progress.fix_age_min
+    ground = progress.ground_fix if progress.takeoff_at is None else None
+    fresh_app = source == SOURCE_APP and age is not None and not progress.estimated
+
+    if progress.landed_at is not None:
+        phase = "landed"
+        approx = "" if progress.landing_event_at is not None else "~"
+        text = f"Landed {dest_icao} {approx}{_hhmm(progress.landed_at)}{_delay_words(delay)}"
+        marker = "Landed"
+    elif source == SOURCE_PLAN:
+        phase = "planned"
+        if not progress.departed:
+            text = f"Planned · departure {_hhmm(progress.departed_at)} · {eta_text}"
+        elif not progress.arrived and dist is not None:
+            text = f"Planned · {dist} · {eta_text}"
+        else:
+            text = f"Planned · arrival {dest_icao} {_hhmm(eta)}"
+        marker = "Planned position"
+    elif ground is not None and not progress.departed:
+        phase = "ground"
+        text = (f"On the ground at {dep_icao} {_hhmm(ground.at)} · take-off ~{_hhmm(progress.departed_at)}"
+                f" · {eta_text}")
+        marker = f"You · {_ago(age)}" if fresh_app else "Estimated position"
+    else:
+        phase = "enroute"
+        parts = [dist] if dist is not None else []
+        parts.append(eta_text)
+        if ground is not None:
+            # Past the take-off a ground fix implies, with nothing airborne
+            # since: the position runs on the plan from it.
+            parts.append(f"last fix on the ground {_hhmm(ground.at)}, estimated")
+            fresh_app = False
+        elif progress.fix is not None and age is not None:
+            parts.append(f"position {_ago(age)}" + (", estimated" if progress.estimated else ""))
+        elif progress.takeoff_at is not None:
+            parts.append(f"estimated from take-off {_hhmm(progress.takeoff_at)}")
+        else:
+            parts.append("estimated")
+        if progress.off_route:
+            parts.append("off route")
+        text = " · ".join(parts)
+        marker = f"You · {_ago(age)}" if fresh_app else "Estimated position"
+
+    return LiveGlanceFlight(
+        phase=phase, text=text, source=source, eta=eta, eta_delay_min=delay,
+        along_nm=round(flown, 1) if flown is not None else None,
+        route_nm=round(total, 1) if total > 0 else None,
+        fix_age_min=round(age, 1) if age is not None else None,
+        estimated=progress.estimated,
+        departed_at=progress.takeoff_at, landed_at=progress.landed_at,
+        marker_label=marker,
+    )
+
+
+def _wind_words(direction: int | None, speed: int | None, gust: int | None) -> str | None:
+    if speed is None:
+        return None
+    if speed == 0:
+        return "calm"
+    head = "VRB" if direction is None else f"{direction:03d}°"
+    return f"{head} {speed}" + (f"G{gust}" if gust else "") + " kt"
+
+
+def _destination_wind(obs: AirportObservation | None) -> tuple[str | None, str | None]:
+    """"Wind at ETA 240° 18G28 kt · RWY 27 crosswind 12 kt" from the TAF at
+    the ETA, else "Wind now …" from the METAR; the advisory tier is the
+    server's own (``compute_wind_advisory``), never a new threshold."""
+    if obs is None:
+        return None, None
+    taf_ok = (obs.has_taf or bool(obs.taf_raw)) and obs.taf_valid_at_eta is not False
+    for kind, label, ok in (("taf", "Wind at ETA", taf_ok), ("metar", "Wind now", obs.has_metar or bool(obs.metar_raw))):
+        if not ok:
+            continue
+        words = _wind_words(
+            getattr(obs, f"{kind}_wind_dir"), getattr(obs, f"{kind}_wind_speed_kt"),
+            getattr(obs, f"{kind}_wind_gust_kt"),
+        )
+        if words is None:
+            continue
+        text = f"{label} {words}"
+        rwy, xw = getattr(obs, f"{kind}_best_runway_id"), getattr(obs, f"{kind}_crosswind_kt")
+        if rwy and xw is not None:
+            text += f" · RWY {rwy} crosswind {abs(xw):.0f} kt"
+        return text, getattr(obs, f"{kind}_wind_advisory")
+    return None, None
+
+
+def destination_block(
+    layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *, alert: bool, obs_stale: bool,
+) -> LiveGlanceDestination:
+    """"Destination at your ETA" (#816): METAR now, TAF at ETA, the wind on
+    the best runway and the cells within ``TERMINAL_NM``, each clause as the
+    arrival line words it (same helpers), split into fields so a client can
+    lay them out without parsing."""
+    icao = flight.dest_icao
+    now = flight.now
+    route_obs = layer.route_observations
+    term = route_obs.terminal(icao) if route_obs is not None else None
+    obs = term.effective() if term is not None else None
+    label = term.label if term is not None and term.proxied else None
+    unavailable: list[str] = []
+
+    metar_text, missing, _ = _metar_clause(icao, obs, now, label)
+    if missing:
+        unavailable.append("metar")
+    elif obs_stale:
+        metar_text += f" (METARs as of {_hhmm(layer.observations_updated_at)})"
+    taf_text = _taf_text(obs) if obs is not None else None
+    if taf_text is None:
+        taf_text = "no TAF for ETA"
+        unavailable.append("taf")
+    wind_text, wind_adv = _destination_wind(obs)
+
+    storms = layer.storms
+    cells_text, missing, _ = _terminal_storms(storms, flight.dest_pos, " now")
+    if missing:
+        unavailable.append("storms")
+    cells: list[LiveDestinationCell] = []
+    if storms is not None and storms.status == "available":
+        lat, lon = flight.dest_pos
+        near = sorted(
+            ((haversine_nm(lat, lon, st.lat, st.lon), st) for st in storms.storms),
+            key=lambda x: x[0],
+        )
+        for d, st in near:
+            if d > TERMINAL_NM:
+                break
+            flash = ", lightning" if st.flashes else ""
+            cells.append(LiveDestinationCell(
+                id=st.id,
+                text=(f"{d:.0f} NM {_compass(_bearing(lat, lon, st.lat, st.lon))} · "
+                      f"{st.peak_dbz:.0f} dBZ{flash} · {_storm_motion_words(st)}"),
+                focus=focus_by_storm.get(st.id),
+            ))
+
+    lightning_text, missing = _lightning_at(
+        layer.observed_conditions, _terminal_station(layer.observed_conditions, flight.total_nm),
+    )
+    if missing:
+        unavailable.append("lightning")
+
+    field = route_obs.airport(icao) if route_obs is not None else None
+    name = (flight.locator.names.get(icao) if flight.locator is not None else None) or (
+        town_name(field.municipality) if field is not None else None
+    )
+    return LiveGlanceDestination(
+        icao=icao, name=name, eta=flight.progress.arrival,
+        metar_text=metar_text,
+        metar_category=obs.metar_flight_category if obs is not None else None,
+        metar_time=obs.metar_time if obs is not None else None,
+        proxy_caption=term.caption if term is not None else None,
+        taf_text=taf_text,
+        taf_category=(
+            (obs.taf_prevailing_category_at_eta or obs.taf_flight_category_at_eta)
+            if obs is not None and "taf" not in unavailable else None
+        ),
+        wind_text=wind_text, wind_advisory=wind_adv,
+        cells_text=cells_text, cells=cells, lightning_text=lightning_text,
+        alert=alert, unavailable=unavailable, focus=_terminal_focus(flight, "arrival"),
+    )
+
+
 # --- Ribbon -------------------------------------------------------------------
 
 
@@ -816,7 +1023,13 @@ def build_glance(
     ))
 
     headline, comparison = _headline(layer.changes, now)
-    glance = LiveGlance(as_of=now, headline=headline, comparison=comparison, lines=lines)
+    glance = LiveGlance(
+        as_of=now, headline=headline, comparison=comparison, lines=lines,
+        flight=flight_strip(progress, flight.dep_icao, flight.dest_icao),
+        destination=destination_block(
+            layer, flight, focus_by_storm, alert="arrival" in alert_phases, obs_stale=obs_stale,
+        ),
+    )
     if storms is not None:
         for st in storms.storms:
             st.focus = focus_by_storm.get(st.id)

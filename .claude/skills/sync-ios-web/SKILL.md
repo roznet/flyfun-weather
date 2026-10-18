@@ -187,6 +187,27 @@ same exported `/live` ticks the iOS UI test feeds the app
 consumers must still pass — re-run `scripts/export_live_scenario_ios.py` and
 `pytest tests/test_live_scenarios.py` first.
 
+### 5a. Observed reading order — flight strip and destination at ETA (#816)
+
+The strip (`glance.flight`) and the "Destination at your ETA" block
+(`glance.destination`) are server-worded (`tasks/live_glance.py::flight_strip`,
+`destination_block`), so their text cannot drift. What is hand-copied is the
+**layout rule**:
+
+| Platform | Where |
+|---|---|
+| Web | `nutshellHtml` / `flightStripHtml` / `destinationHtml` in `web/ts/visualization/observed/nutshell-view.ts` |
+| iOS | `LiveGlance.aheadItems` / `passedItems` (`Models/API/LiveGlance.swift`), `ObservedTabView`, `ObservedFlightStripView.swift` |
+
+Check: the order (strip → alert lines → highlight or headline → lines not
+passed → destination block → passed lines); the destination block stands in
+for a **non-alert** arrival line only; the ribbon marker reads
+`glance.flight.marker_label` (fallback "Planned position now"). Tests:
+`web/tests/unit/observed-flight-strip.test.ts` + `observed-highlight.test.ts`
+↔ `ObservedFlightStripTests.swift`. Known divergence, do not re-flag: iOS
+folds the passed lines (and the headline under a highlight) into "Details";
+the web shows them unfolded, dimmed, at the bottom.
+
 ### 5b. Runway + wind widget rules — a mirrored pure pair (#758)
 
 The departure/destination runway + wind dials draw from the server's

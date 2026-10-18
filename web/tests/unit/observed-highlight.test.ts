@@ -36,7 +36,7 @@ describe('observed highlight', () => {
     expect(highlightFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(highlightFiles)('%s: the highlight, then the alert lines, then the rest', (name) => {
+  it.each(highlightFiles)('%s: strip, alert lines, highlight, ahead, destination, passed (#816)', (name) => {
     const glance = load(name).glance!;
     const hl = glance.highlight!;
     expect(hl.text).toBeTruthy();
@@ -45,17 +45,30 @@ describe('observed highlight', () => {
     const at = (needle: string): number => plain(html).indexOf(needle);
     const highlightAt = at(hl.text);
     expect(highlightAt).toBeGreaterThan(-1);
+    // The flight strip leads.
+    expect(glance.flight).toBeTruthy();
+    expect(at(glance.flight!.text)).toBeGreaterThan(-1);
+    expect(at(glance.flight!.text)).toBeLessThan(highlightAt);
+    const destAt = html.indexOf('data-testid="glance-destination"');
+    expect(destAt).toBeGreaterThan(-1);
     for (const line of glance.lines) {
       const lineAt = at(line.text);
-      expect(lineAt).toBeGreaterThan(-1);
-      expect(lineAt).toBeGreaterThan(highlightAt);
+      if (line.alert) {
+        // Alert lines sit above the highlight, never folded.
+        expect(lineAt).toBeGreaterThan(at(glance.flight!.text));
+        expect(lineAt).toBeLessThan(highlightAt);
+      } else if (line.phase === 'arrival') {
+        // The destination block stands in for a non-alert arrival line.
+        expect(lineAt).toBe(-1);
+      } else {
+        expect(lineAt).toBeGreaterThan(highlightAt);
+        if (line.passed) expect(html.indexOf(`glance-line-${line.phase}`)).toBeGreaterThan(destAt);
+        else expect(html.indexOf(`glance-line-${line.phase}`)).toBeLessThan(destAt);
+      }
     }
     // The headline stays (it carries the observation time), under the
-    // highlight and the alert lines.
+    // highlight.
     expect(at(glance.headline)).toBeGreaterThan(highlightAt);
-    for (const line of glance.lines.filter((l) => l.alert)) {
-      expect(at(glance.headline)).toBeGreaterThan(at(line.text));
-    }
     // Caption with the written time, and the thumbs.
     expect(html).toContain('Experimental, still being calibrated. Thanks for flagging issues.');
     expect(html).toContain('written 08:20Z');

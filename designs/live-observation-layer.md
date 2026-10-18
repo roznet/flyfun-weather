@@ -791,6 +791,50 @@ toned by the server's advisory (amber/red); no new threshold. Sizes `compact`
 / `regular` / `inline` (inline unused in v1). The web re-renders only when the
 HTML changed, so an open "All runways" survives an unchanged poll.
 
+### Flight strip and destination at ETA (#816)
+
+The Observed top reorganised around the pilot's in-flight questions (plan in
+`future/observed-tab-presentation.md`). Two more glance blocks, built in the
+same `build_glance` call, so they inherit its "never raises" guard:
+
+- **`glance.flight`** (`LiveGlanceFlight`, `live_glance.flight_strip`): the
+  `progress` block in words, null when the flight is untimed. `phase`:
+  `planned` (nothing observed: "Planned · departure 09:00Z · ETA LPPT 10:30Z",
+  then "Planned · 120 of 280 NM · …", then "Planned · arrival …", never
+  "Landed" from a schedule), `ground` (an app fix on the ground at the
+  departure before the take-off it implies: "On the ground at LPPR 08:52Z ·
+  take-off ~09:02Z · ETA …"), `enroute` (take-off entered or seen: "120 of
+  280 NM · ETA LPPT 10:32Z (+12 min vs plan) · position 4 min ago", ",
+  estimated" past `STALE_FIX`, "estimated from take-off HH:MMZ" without a
+  fix, "last fix on the ground HH:MMZ, estimated" once past a ground fix's
+  take-off, "off route"), `landed` ("Landed LPPT 10:35Z", "~" when inferred).
+  "vs plan" is the ETA (or landing) minus `FlightProgress.planned_arrival`,
+  shown only off the plan. `marker_label` captions the ribbon's position mark
+  ("You · 4 min ago" for a fresh app fix, "Estimated position", "Planned
+  position", "Landed"). **Choice:** the server has no "Start Flight" event, so
+  the issue's "Started HH:MM" is the ground fix's time.
+- **`glance.destination`** (`LiveGlanceDestination`, `destination_block`):
+  the arrival line split into fields (same helpers, so the same words): METAR
+  now with the proxy caption, TAF at ETA with TEMPO/PROB, `wind_text` (TAF wind
+  at ETA, else METAR wind now, with the best runway's crosswind and the
+  server's existing `*_wind_advisory` tier; no new threshold), the cells
+  within `TERMINAL_NM` each with its storm focus, lightning. Clients show it
+  **in place of a non-alert arrival line** (an alert one stays in the alert
+  group); the arrival line itself is unchanged for the agent and the highlight.
+- **Redaction:** `position_sharing=none` drops `glance.flight` (it is the
+  progress block in words) and nulls `destination.eta`; `along_route` keeps both.
+- **Agent:** `summarize_live` adds `glance.flight` `{phase, text}`.
+- **Reading order, both clients:** strip → alert lines (and on iOS alert
+  change rows) → highlight or headline → lines not yet `passed` → destination
+  → (iOS) winds, ribbon, Details with the passed lines / (web) passed lines
+  dimmed. **This reverses the 2026-10-09 "highlight above alerts" order**: the
+  issue's target layout puts alerts second. iOS spy pills gain "Ahead"; the
+  highlight caption adds its age, orange past `LiveTime.staleAfter` (30 min).
+- **Not done in #816's first PR** (follow-ups): the iOS Cells list on `/live`
+  storms, the offline banner, tappable change rows (`storm_ids` is decoded),
+  changes collapsed to a count, phase emphasis beyond the strip, the XCUI
+  before/en route/after-landing journey.
+
 ## Observed highlight (#697)
 
 One or two sentences above the nutshell saying what deserves attention on the
@@ -805,7 +849,8 @@ further calibration gate, no What's New entry).
 
 ### Display and feedback (#697 slices 1–3)
 
-- **Reading order, both clients:** the highlight first, at body size, with
+- **Reading order, both clients** (superseded by #816 above: strip and alert
+  lines now come before the highlight): the highlight first, at body size, with
   one gray caption "Experimental, still being calibrated. Thanks for flagging
   issues. · written HH:MMZ" (the written time stays: a carried-forward line
   can be older than the layer) and 👍/👎; then the alert-tier nutshell lines
@@ -1438,7 +1483,7 @@ old "N NM along" wording (a layer or pack written before #790, a locator failure
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix stream and with occasional one-shot fixes), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
-- `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690)
+- `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690); `flight_strip`, `destination_block` (#816, tests `tests/test_live_glance_strip.py`)
 - `analysis/route_locator.py`: `RouteLocator` (`build`, `locate`, `locate_along`, `span`, `ladder`, `from_ladder`), `for_route`, `display_names`, `town_name`, `short_airport_name`, `when_text`; `analysis/coastline.py`: `is_land`, `coast_crossings` (#790); tests `tests/test_route_locator.py`, `tests/test_route_locator_wiring.py`
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`, `POST /flights/{id}/live/position`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`

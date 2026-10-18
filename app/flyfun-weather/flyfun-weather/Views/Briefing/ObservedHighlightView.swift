@@ -1,14 +1,19 @@
 import SwiftUI
 
-// The top of the Observed tab once the server sends a nutshell (#697):
+// The top of the Observed tab once the server sends a nutshell (#697,
+// reordered around the pilot's in-flight questions in #816):
 //
-//   1. highlight   — the model-written line, its caption and 👍/👎; the
-//                    nutshell headline stands in its place when there is none;
-//   2. alerts      — alert-tier nutshell lines and alert-tier change rows,
-//                    never folded;
-//   3. ribbon      — (RouteRibbonCard, unchanged);
-//   4. Details     — collapsed by default and remembered: the headline, the
-//                    other nutshell lines, the other change rows.
+//   1. flight strip — where the flight is and its ETA (ObservedFlightStrip);
+//   2. alerts       — alert-tier nutshell lines and alert-tier change rows,
+//                     never folded;
+//   3. highlight    — the model-written line, its caption (written time and
+//                     age, orange once stale) and 👍/👎; the nutshell
+//                     headline stands in its place when there is none;
+//   4. ahead        — the lines not yet passed, unfolded, then "Destination
+//                     at your ETA" (DestinationAtETACard);
+//   5. ribbon       — (RouteRibbonCard, its marker captioned by the strip);
+//   6. Details      — collapsed by default and remembered: the headline, the
+//                     passed lines, the other change rows.
 //
 // Every word is the server's: the client never re-words the highlight, and
 // it is never styled as an alert.
@@ -71,11 +76,15 @@ struct ObservedHighlightCard: View {
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("observedHighlightText")
-                Text(Self.caption(highlight))
-                    .font(.caption)
-                    .foregroundStyle(Theme.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("observedHighlightCaption")
+                // #816: the age, re-read each minute; orange once stale (a
+                // line carried forward over unchanged ticks gets old).
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(Self.caption(highlight, now: context.date))
+                        .font(.caption)
+                        .foregroundStyle(Self.isStale(highlight, now: context.date) ? Color.orange : Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("observedHighlightCaption")
+                }
                 if let packTimestamp = viewModel.liveLayerForPack?.packTimestamp {
                     DigestFeedbackView(target: .highlight(
                         flightId: viewModel.flight.id, packTimestamp: packTimestamp, highlight: highlight
@@ -99,20 +108,30 @@ struct ObservedHighlightCard: View {
     }
 
     /// The experimental note, then the written time when it parses: a line
-    /// carried forward over unchanged ticks is older than the layer.
-    static func caption(_ highlight: LiveHighlight) -> String {
+    /// carried forward over unchanged ticks is older than the layer. With
+    /// `now`, also its age ("written 08:20Z · 12 min ago", #816).
+    static func caption(_ highlight: LiveHighlight, now: Date? = nil) -> String {
         let note = String(localized: "Experimental, still being calibrated. Thanks for flagging issues.")
         guard let written = highlight.generatedAt.flatMap(Date.parseISO8601) else { return note }
-        return note + " · " + String(localized: "written \(LiveTime.zulu(written))")
+        var text = note + " · " + String(localized: "written \(LiveTime.zulu(written))")
+        if let now { text += " · " + LiveTime.ageLabel(from: written, now: now) }
+        return text
+    }
+
+    /// Older than the observations' stale age (`LiveTime.staleAfter`).
+    static func isStale(_ highlight: LiveHighlight, now: Date) -> Bool {
+        guard let written = highlight.generatedAt.flatMap(Date.parseISO8601) else { return false }
+        return now.timeIntervalSince(written) > LiveTime.staleAfter
     }
 }
 
 // MARK: - Details fold
 
 /// Everything below the ribbon that a pilot reads only when the top raised a
-/// question: the headline (when the highlight took its slot), the non-alert
-/// nutshell lines, the non-alert change rows. Collapsed by default; the
-/// state is remembered across launches.
+/// question: the headline (when the highlight took its slot), the lines the
+/// flight has passed (#816: the lines ahead are unfolded above), the
+/// non-alert change rows. Collapsed by default; the state is remembered
+/// across launches.
 ///
 /// A plain button rather than a `DisclosureGroup`, so the toggle carries an
 /// `expanded` / `collapsed` accessibility value a UI test can read before it
@@ -150,7 +169,7 @@ struct ObservedDetailsFold: View {
             if expanded {
                 ObservedNutshellCard(
                     viewModel: viewModel, glance: glance,
-                    lines: glance.otherItems, showsHeadline: glance.highlight != nil
+                    lines: glance.passedItems, showsHeadline: glance.highlight != nil
                 )
                 if let changes {
                     LiveChangesView(changes: changes, baseline: baseline, excludesAlerts: true)

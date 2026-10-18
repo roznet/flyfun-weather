@@ -51,6 +51,10 @@ nonisolated struct LiveLayerResponse: Codable, Sendable {
     var storms: LiveStorms? = nil
     var glance: LiveGlance? = nil
     var ribbon: LiveRibbon? = nil
+    /// #760/#816: where the tick placed the flight. nil from an older server,
+    /// without a route, or for a viewer the owner does not share it with.
+    /// The flight strip (`glance.flight`) is its wording; this is the data.
+    var progress: LiveProgress? = nil
 
     /// Whether this layer carries any live data at all.
     var hasData: Bool { liveUpdatedAt != nil }
@@ -173,6 +177,9 @@ nonisolated struct LiveChange: Codable, Sendable, Identifiable {
     /// #790: where the change sits on the route, when it has a position
     /// (`message` already carries the words). Display only.
     var place: RoutePlace? = nil
+    /// #688/#816: the radar storms a storm row is about (their `LiveStorm.id`),
+    /// so the row can open the map on them. nil on other kinds.
+    var stormIds: [String]? = nil
 
     /// `key` alone is not unique if the server ever emits the same key twice
     /// (e.g. a worse and a better reading), so fold the direction in.
@@ -344,6 +351,27 @@ nonisolated enum LiveTrailText {
         let zulu = LiveTime.zulu(date)
         return zulu.hasSuffix("Z") ? String(zulu.dropLast()) : zulu
     }
+}
+
+/// Where the live layer places the flight, and from what (#760, #761).
+/// Mirrors `models/live.py::LiveProgress`. `departedAt` / `landedAt` are
+/// observed (entered or seen by the GPS), never the plan alone.
+nonisolated struct LiveProgress: Codable, Sendable, Equatable {
+    /// plan / plan+takeoff / app.
+    let source: String?
+    let asOf: String?
+    let alongNm: Double?
+    let routeNm: Double?
+    let lat: Double?
+    let lon: Double?
+    let fixAt: String?
+    let fixAgeMin: Double?
+    let estimated: Bool?
+    let offRoute: Bool?
+    let departedAt: String?
+    let etaDestination: String?
+    let landedAt: String?
+    let delayMin: Double?
 }
 
 /// What got *worse* in the last realtime refresh — the pre-#637 banner shape,

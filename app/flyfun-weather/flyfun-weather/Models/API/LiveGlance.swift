@@ -60,11 +60,80 @@ nonisolated struct LiveGlance: Codable, Sendable {
     /// generation lands, after a rejected one and after arrival: show
     /// `headline` in its place then.
     var highlight: LiveHighlight? = nil
+    /// #816: the flight strip and "Destination at your ETA". nil from an older
+    /// server; `flight` also nil for a viewer the owner hides position from.
+    var flight: LiveGlanceFlight? = nil
+    var destination: LiveGlanceDestination? = nil
 
     var items: [LiveGlanceLine] { lines ?? [] }
-    /// Alert-tier lines sit above the highlight and are never folded (#697).
+    /// Alert-tier lines sit above the highlight and are never folded (#697, #816).
     var alertItems: [LiveGlanceLine] { items.filter { $0.alert == true } }
     var otherItems: [LiveGlanceLine] { items.filter { $0.alert != true } }
+
+    /// The non-alert lines the tab lays out itself (#816): the destination
+    /// block stands in for a non-alert arrival line.
+    /// SYNC — `nutshellHtml` in web/ts/visualization/observed/nutshell-view.ts.
+    private var restItems: [LiveGlanceLine] {
+        otherItems.filter { !(destination != nil && $0.phase == "arrival") }
+    }
+    /// Lines still ahead of the flight: shown unfolded, above the destination.
+    var aheadItems: [LiveGlanceLine] { restItems.filter { $0.passed != true } }
+    /// Lines the flight has passed: in the Details fold, dimmed.
+    var passedItems: [LiveGlanceLine] { restItems.filter { $0.passed == true } }
+}
+
+/// The flight strip (#816), `models/live.py::LiveGlanceFlight`: where the
+/// flight is and its ETA, in the server's words.
+nonisolated struct LiveGlanceFlight: Codable, Sendable, Equatable {
+    /// planned / ground / enroute / landed.
+    let phase: String?
+    /// "120 of 280 NM · ETA LPPT 10:32Z (+12 min vs plan) · position 4 min ago".
+    let text: String?
+    let source: String?
+    let eta: String?
+    let etaDelayMin: Int?
+    let alongNm: Double?
+    let routeNm: Double?
+    let fixAgeMin: Double?
+    let estimated: Bool?
+    let departedAt: String?
+    let landedAt: String?
+    /// The ribbon marker's caption: "You · 4 min ago", "Estimated position",
+    /// "Planned position" or "Landed".
+    let markerLabel: String?
+
+    var isLanded: Bool { phase == "landed" }
+}
+
+/// One storm within 20 NM of the destination (#816).
+nonisolated struct LiveDestinationCell: Codable, Sendable, Equatable, Identifiable {
+    let id: String
+    /// "9 NM NE · 45 dBZ, lightning · closing 8 kt".
+    let text: String?
+    let focus: LiveFocus?
+}
+
+/// "Destination at your ETA" (#816), `models/live.py::LiveGlanceDestination`.
+/// Every clause is the server's.
+nonisolated struct LiveGlanceDestination: Codable, Sendable, Equatable {
+    let icao: String?
+    let name: String?
+    let eta: String?
+    let metarText: String?
+    let metarCategory: String?
+    let metarTime: String?
+    let proxyCaption: String?
+    let tafText: String?
+    let tafCategory: String?
+    let windText: String?
+    /// green / amber / red: the server's own wind advisory.
+    let windAdvisory: String?
+    let cellsText: String?
+    let cells: [LiveDestinationCell]?
+    let lightningText: String?
+    let alert: Bool?
+    let unavailable: [String]?
+    let focus: LiveFocus?
 }
 
 /// `glance.highlight` as `/live` serves it (the server's regeneration gate is

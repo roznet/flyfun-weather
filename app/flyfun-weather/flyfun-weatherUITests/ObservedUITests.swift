@@ -184,11 +184,11 @@ final class ObservedUITests: FlyfunUITestCase {
         XCTAssertTrue(app.buttons["highlightThumb-up"].firstMatch.exists, "the highlight should offer 👍")
         XCTAssertTrue(app.buttons["highlightThumb-down"].firstMatch.exists, "the highlight should offer 👎")
 
-        // Alerts just under the highlight, never folded: every alert-tier line
-        // and change row is on screen without opening Details.
+        // Alerts just above the highlight (#816), never folded: every
+        // alert-tier line and change row is on screen without opening Details.
         let alerts = app.descendants(matching: .any)["observedAlerts"].firstMatch
-        XCTAssertTrue(alerts.exists, "the alert block should render under the highlight")
-        XCTAssertGreaterThan(alerts.frame.minY, card.frame.minY, "the highlight comes first, alerts under it")
+        XCTAssertTrue(alerts.exists, "the alert block should render above the highlight")
+        XCTAssertLessThan(alerts.frame.minY, card.frame.minY, "alerts come first, the highlight under them")
         for line in (glance["lines"] as? [[String: Any]]) ?? [] where line["alert"] as? Bool == true {
             let phase = line["phase"] as? String ?? ""
             XCTAssertTrue(app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch.exists,

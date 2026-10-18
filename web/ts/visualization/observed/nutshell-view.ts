@@ -7,12 +7,13 @@
  * (#697). Documented divergence: iOS folds the headline and the non-alert
  * lines under "Details"; the web leaves them unfolded (the desktop has room).
  *
- * Reading order (#697): the model-written highlight first, with its
- * "experimental · written HH:MMZ" caption and 👍/👎, then the alert-tier
- * lines, then the headline and the other lines. With no highlight (before the
- * first generation, a rejected one, after arrival) the headline takes its
- * slot, with no caption and no thumbs. The highlight is never styled as an
- * alert.
+ * Reading order (#816, around the pilot's in-flight questions): the flight
+ * strip (where the flight is, ETA), the alert-tier lines, the model-written
+ * highlight with its "experimental · written HH:MMZ" caption and 👍/👎 (the
+ * headline in its slot when there is none, #697), the lines still ahead, the
+ * "Destination at your ETA" block (it stands in for a non-alert arrival
+ * line), then the passed lines, dimmed. After landing the strip says so and
+ * the rest reads as it was. The highlight is never styled as an alert.
  *
  * The headline comparing with the briefing, then one line per phase
  * (departure / en route / arrival). **Every word is the server's**
@@ -26,7 +27,9 @@
 import { escapeHtml } from '../../utils';
 import { t } from '../../i18n/i18n';
 import { formatHhmmZ } from '../../helpers/live-layer';
-import type { LiveFocus, LiveGlance, LiveGlanceLine, LiveHighlight } from '../../store/types';
+import type {
+  LiveFocus, LiveGlance, LiveGlanceDestination, LiveGlanceFlight, LiveGlanceLine, LiveHighlight,
+} from '../../store/types';
 import { phaseLabel } from './ribbon-core';
 
 export type HighlightSentiment = 'up' | 'down';
@@ -116,6 +119,48 @@ function lineHtml(line: LiveGlanceLine, index: number): string {
     + `</${tappable ? 'button' : 'div'}>`;
 }
 
+/** The flight strip (#816): the server's line, a phase class for colour. */
+export function flightStripHtml(flight: LiveGlanceFlight): string {
+  return `<div class="glance-flight glance-flight-${escapeHtml(flight.phase)}" data-testid="glance-flight">`
+    + `<span class="glance-flight-icon" aria-hidden="true">${flight.phase === 'landed' ? '🛬' : '✈︎'}</span>`
+    + `<span class="glance-flight-text">${escapeHtml(flight.text)}</span>`
+    + '</div>';
+}
+
+/** "Destination at your ETA" (#816): every clause is the server's; the
+ *  client adds the title, the ETA and the wind advisory's colour. Cells with
+ *  a focus are buttons (`data-dest-cell`), the title opens the field. */
+export function destinationHtml(dest: LiveGlanceDestination): string {
+  const eta = formatHhmmZ(dest.eta ?? null);
+  const title = `${t('observed.destination.title')} · ${dest.icao}${dest.name ? ` ${dest.name}` : ''}`
+    + (eta ? ` · ${eta}` : '');
+  const row = (label: string, text: string, extra = '') =>
+    `<div class="glance-dest-row${extra}"><span class="glance-dest-label">${escapeHtml(label)}</span>`
+    + `<span class="glance-dest-text">${escapeHtml(text)}</span></div>`;
+  const cells = (dest.cells ?? []).map((c, i) => (c.focus
+    ? `<button type="button" class="glance-dest-cell" data-dest-cell="${i}">${escapeHtml(c.text)}`
+      + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
+    : `<div class="glance-dest-cell">${escapeHtml(c.text)}</div>`)).join('');
+  const missing = (dest.unavailable ?? []).length > 0
+    ? `<span class="glance-missing">${escapeHtml((dest.unavailable ?? []).join(', '))} unavailable</span>`
+    : '';
+  const advisory = dest.wind_advisory ? ` glance-dest-wind-${escapeHtml(dest.wind_advisory)}` : '';
+  return `<div class="glance-dest${dest.alert ? ' glance-dest-alert' : ''}" data-testid="glance-destination">`
+    + (dest.focus
+      ? `<button type="button" class="glance-dest-title" data-dest-focus>${escapeHtml(title)}`
+        + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
+      : `<div class="glance-dest-title">${escapeHtml(title)}</div>`)
+    + row('METAR', dest.metar_text)
+    + (dest.proxy_caption ? `<span class="glance-proxy">${escapeHtml(dest.proxy_caption)}</span>` : '')
+    + row('TAF', dest.taf_text)
+    + (dest.wind_text ? row('Wind', dest.wind_text, advisory) : '')
+    + row('Cells', dest.cells_text)
+    + (cells ? `<div class="glance-dest-cells">${cells}</div>` : '')
+    + (dest.lightning_text ? row('Lightning', dest.lightning_text) : '')
+    + missing
+    + '</div>';
+}
+
 /** The nutshell card's markup. Pure, so the wording and the alert/passed
  *  states can be asserted without a DOM. */
 export function nutshellHtml(
@@ -123,8 +168,13 @@ export function nutshellHtml(
 ): string {
   // Indices stay those of `glance.lines`: the focus taps look them up there.
   const indexed = (glance.lines ?? []).map((line, i) => ({ line, i }));
-  const alertLines = indexed.filter(({ line }) => line.alert).map(({ line, i }) => lineHtml(line, i)).join('');
-  const otherLines = indexed.filter(({ line }) => !line.alert).map(({ line, i }) => lineHtml(line, i)).join('');
+  const dest = glance.destination ?? null;
+  const html = (list: typeof indexed) => list.map(({ line, i }) => lineHtml(line, i)).join('');
+  const alertLines = html(indexed.filter(({ line }) => line.alert));
+  // The destination block stands in for a non-alert arrival line (#816).
+  const rest = indexed.filter(({ line }) => !line.alert && !(dest && line.phase === 'arrival'));
+  const aheadLines = html(rest.filter(({ line }) => !line.passed));
+  const passedLines = html(rest.filter(({ line }) => line.passed));
   // `data-live-age`, not `data-live-asof`: the headline already opens with
   // "Observed HH:MMZ", so this adds only the age, which `refreshLiveAges`
   // rewrites in place each minute. The as-of variant would restate the time.
@@ -135,11 +185,14 @@ export function nutshellHtml(
   const headline = `<div class="glance-headline" data-testid="glance-headline">`
     + `${escapeHtml(glance.headline ?? '')}${asOf}</div>`;
   return '<div class="glance-card" data-testid="observed-nutshell">'
-    + (highlight ? highlightHtml(highlight, opts) : headline)
+    + (glance.flight ? flightStripHtml(glance.flight) : '')
     + (alertLines ? `<div class="glance-lines glance-lines-alert">${alertLines}</div>` : '')
+    + (highlight ? highlightHtml(highlight, opts) : headline)
     // Kept under the highlight too: it carries the observation time and age.
     + (highlight ? headline : '')
-    + (otherLines ? `<div class="glance-lines">${otherLines}</div>` : '')
+    + (aheadLines ? `<div class="glance-lines" data-testid="glance-ahead">${aheadLines}</div>` : '')
+    + (dest ? destinationHtml(dest) : '')
+    + (passedLines ? `<div class="glance-lines glance-lines-passed">${passedLines}</div>` : '')
     + (showMapButton
       ? '<button type="button" class="btn-secondary glance-map-btn" data-glance-showmap>'
         + 'Show radar &amp; cells on map</button>'
@@ -164,6 +217,16 @@ export function mountNutshell(
   el.querySelectorAll<HTMLElement>('[data-glance-focus]').forEach((node) => {
     node.addEventListener('click', () => {
       const focus = (glance.lines ?? [])[Number(node.dataset.glanceFocus)]?.focus;
+      if (focus) handlers.onFocus(focus);
+    });
+  });
+  const dest = glance.destination ?? null;
+  el.querySelector<HTMLElement>('[data-dest-focus]')?.addEventListener('click', () => {
+    if (dest?.focus) handlers.onFocus(dest.focus);
+  });
+  el.querySelectorAll<HTMLElement>('[data-dest-cell]').forEach((node) => {
+    node.addEventListener('click', () => {
+      const focus = (dest?.cells ?? [])[Number(node.dataset.destCell)]?.focus;
       if (focus) handlers.onFocus(focus);
     });
   });

@@ -415,16 +415,100 @@ class LiveHighlight(BaseModel):
     latency_ms: int | None = None
 
 
+FlightStripPhase = Literal["planned", "ground", "enroute", "landed"]
+
+
+class LiveGlanceFlight(BaseModel):
+    """The flight strip at the top of the Observed tab (#816): where the
+    flight is and when it lands, from the tick's ``progress``, in one line.
+
+    Server-built (``live_glance.flight_strip``) so both clients and the agent
+    say the same thing. ``phase`` says what the strip is based on:
+    ``planned`` (the plan alone: nothing observed), ``ground`` (an app fix on
+    the ground at the departure, no take-off yet), ``enroute`` (a take-off
+    entered or seen by a fix), ``landed`` (a landing entered, detected or
+    inferred). Dropped for viewers whose ``position_sharing`` is ``none``.
+    """
+
+    phase: FlightStripPhase
+    # "120 of 280 NM · ETA LPPT 10:32Z (+12 min vs plan) · position 4 min ago".
+    text: str
+    # The progress source behind it ("plan" / "plan+takeoff" / "app").
+    source: str
+    eta: datetime | None = None
+    # ETA (or landing) minus the planned arrival, whole minutes (+ = late).
+    # None on the plan, where it is 0 by construction.
+    eta_delay_min: int | None = None
+    along_nm: float | None = None
+    route_nm: float | None = None
+    fix_age_min: float | None = None
+    estimated: bool = True
+    departed_at: datetime | None = None
+    landed_at: datetime | None = None
+    # The ribbon's position marker caption: "You · 4 min ago",
+    # "Estimated position", "Planned position" or "Landed".
+    marker_label: str
+
+
+class LiveDestinationCell(BaseModel):
+    """One storm near the destination, for the destination-at-ETA block."""
+
+    id: str
+    # "9 NM NE · 45 dBZ, lightning · closing 8 kt".
+    text: str
+    focus: LiveFocus | None = None
+
+
+class LiveGlanceDestination(BaseModel):
+    """"Destination at your ETA" (#816): the in-flight question, unfolded.
+
+    METAR now, the TAF at the ETA with its TEMPO/PROB, the wind on the best
+    runway (the server's own advisory tier, no new threshold), and the radar
+    cells within ``TERMINAL_NM`` of the field. Observations and the TAF only:
+    no verdict, missing data says "unavailable". Server-built
+    (``live_glance.destination_block``)."""
+
+    icao: str
+    name: str | None = None
+    # The ETA the TAF was read at (the effective arrival). None untimed.
+    eta: datetime | None = None
+    metar_text: str
+    metar_category: str | None = None
+    metar_time: datetime | None = None
+    # "using EGLL as proxy · 8 NM NE" (#767), None when the field reports itself.
+    proxy_caption: str | None = None
+    # "TAF at ETA VFR, PROB30 MVFR TS CB", or "no TAF for ETA".
+    taf_text: str
+    taf_category: str | None = None
+    # "Wind at ETA 240° 18G28 kt · RWY 27 crosswind 12 kt", None without a wind.
+    wind_text: str | None = None
+    # The advisory of that wind on that runway ("green" / "amber" / "red").
+    wind_advisory: str | None = None
+    # "no cell within 20 NM now", "nearest cell 9 NM NE (45 dBZ), closing 8 kt".
+    cells_text: str
+    cells: list[LiveDestinationCell] = Field(default_factory=list)
+    # "no lightning ≤20 NM", as on the arrival line (the block stands in for it).
+    lightning_text: str | None = None
+    # An alert-tier change belongs to the arrival phase (styling only).
+    alert: bool = False
+    unavailable: list[str] = Field(default_factory=list)
+    focus: LiveFocus | None = None
+
+
 class LiveGlance(BaseModel):
     """The Observed tab's top block (#690, observed-tab-presentation §3):
     one "as of" time, one line comparing with the briefing, then one line per
-    phase."""
+    phase. Since #816 also the flight strip and the destination at ETA."""
 
     as_of: datetime
     # "Observed 14:29Z · as briefed" — the comparison line.
     headline: str
     comparison: Literal["as_briefed", "worse", "better", "mixed", "unavailable"]
     lines: list[LiveGlanceLine] = Field(default_factory=list)
+    # The flight strip and the destination at ETA (#816). None on a tick
+    # without progress / a layer written before #816.
+    flight: LiveGlanceFlight | None = None
+    destination: LiveGlanceDestination | None = None
     # The model-written highlight (#697), patched in after the tick commits.
     # None whenever it was not generated, not reusable, or rejected by the
     # grounding check — readers fall back to ``headline``.

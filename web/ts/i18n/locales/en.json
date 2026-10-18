@@ -1166,6 +1166,7 @@
   "observed.noCoverage": "No coverage",
   "observed.unavailable": "Not collected",
   "observed.highlight.experimental": "Experimental, still being calibrated. Thanks for flagging issues.",
+  "observed.destination.title": "Destination at your ETA",
   "observed.highlight.written": "written {time}",
   "observed.highlight.up": "This summary matched what I saw",
   "observed.highlight.down": "Something in this summary seemed off",

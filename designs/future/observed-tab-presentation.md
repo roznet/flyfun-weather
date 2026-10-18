@@ -33,6 +33,14 @@ time and a 👍/👎 recorded as `highlight_rating` feedback; iOS folds the
 headline, other lines and other change rows under "Details" (collapsed,
 remembered), web leaves them unfolded; the agent `live` block quotes it.
 As-built in `live-observation-layer.md` ("Display and feedback").
+#816 (2026-10-18, first PR): the tab reorganised around the in-flight
+questions: a server-built flight strip (`glance.flight`) on top, alert lines
+above the highlight, the lines not yet passed unfolded, a "Destination at
+your ETA" block (`glance.destination`), the ribbon marker captioned from
+progress. Still open from #816: the iOS Cells list on `/live` storms, offline
+banner, tappable change rows, changes collapsed to a count, the XCUI phase
+journey. As-built in `live-observation-layer.md` ("Flight strip and
+destination at ETA").
 Builds on `designs/live-observation-layer.md`.
 
 ## 1. Premise

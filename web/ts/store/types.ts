@@ -1354,10 +1354,64 @@ export interface LiveGlance {
   headline: string;
   comparison: 'as_briefed' | 'worse' | 'better' | 'mixed' | 'unavailable';
   lines: LiveGlanceLine[];
+  /** The flight strip (#816); absent on an older server or without
+   *  progress, null for a viewer the owner does not share position with. */
+  flight?: LiveGlanceFlight | null;
+  /** "Destination at your ETA" (#816); absent on an older server. */
+  destination?: LiveGlanceDestination | null;
   /** The model-written one-glance highlight (#697); null/absent until the
    *  first generation lands, after a rejected generation and after arrival —
    *  show `headline` in its place then. */
   highlight?: LiveHighlight | null;
+}
+
+/** The flight strip (#816), `models/live.py::LiveGlanceFlight`. Every word
+ *  is the server's. */
+export interface LiveGlanceFlight {
+  phase: 'planned' | 'ground' | 'enroute' | 'landed';
+  /** "120 of 280 NM · ETA LPPT 10:32Z (+12 min vs plan) · position 4 min ago". */
+  text: string;
+  source: string;
+  eta?: string | null;
+  eta_delay_min?: number | null;
+  along_nm?: number | null;
+  route_nm?: number | null;
+  fix_age_min?: number | null;
+  estimated?: boolean;
+  departed_at?: string | null;
+  landed_at?: string | null;
+  /** The ribbon marker's caption: "You · 4 min ago", "Estimated position",
+   *  "Planned position" or "Landed". */
+  marker_label: string;
+}
+
+export interface LiveDestinationCell {
+  id: string;
+  /** "9 NM NE · 45 dBZ, lightning · closing 8 kt". */
+  text: string;
+  focus?: LiveFocus | null;
+}
+
+/** "Destination at your ETA" (#816), `models/live.py::LiveGlanceDestination`. */
+export interface LiveGlanceDestination {
+  icao: string;
+  name?: string | null;
+  eta?: string | null;
+  metar_text: string;
+  metar_category?: string | null;
+  metar_time?: string | null;
+  proxy_caption?: string | null;
+  taf_text: string;
+  taf_category?: string | null;
+  wind_text?: string | null;
+  /** green / amber / red: the server's own wind advisory. */
+  wind_advisory?: string | null;
+  cells_text: string;
+  cells?: LiveDestinationCell[];
+  lightning_text?: string | null;
+  alert?: boolean;
+  unavailable?: string[];
+  focus?: LiveFocus | null;
 }
 
 /** `glance.highlight` as `/live` serves it (the server's gate is stripped).

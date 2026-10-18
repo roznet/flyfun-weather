@@ -988,6 +988,7 @@
   "observed.noCoverage": "Keine Abdeckung",
   "observed.unavailable": "Nicht erfasst",
   "observed.highlight.experimental": "Experimentell, wird noch kalibriert. Danke für jeden Hinweis auf Fehler.",
+  "observed.destination.title": "Ziel zu Ihrer ETA",
   "observed.highlight.written": "verfasst {time}",
   "observed.highlight.up": "Diese Zusammenfassung passte zu dem, was ich sah",
   "observed.highlight.down": "Etwas an dieser Zusammenfassung schien falsch",

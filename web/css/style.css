@@ -9335,6 +9335,117 @@ button.glance-line:hover {
   color: var(--amber);
 }
 
+/* #816: the flight strip — where the flight is and its ETA, always first. */
+.glance-flight {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.glance-flight-planned {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  font-weight: 500;
+}
+
+.glance-flight-landed {
+  opacity: 0.8;
+}
+
+/* #816: "Destination at your ETA", unfolded. */
+.glance-dest {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.glance-dest-alert {
+  border-left-color: var(--red);
+}
+
+.glance-dest-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+button.glance-dest-title,
+button.glance-dest-cell {
+  cursor: pointer;
+}
+
+.glance-dest-row {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.glance-dest-label {
+  flex: 0 0 4.5rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding-top: 0.15rem;
+}
+
+.glance-dest-wind-amber .glance-dest-text {
+  color: var(--amber);
+}
+
+.glance-dest-wind-red .glance-dest-text {
+  color: var(--red);
+}
+
+.glance-dest-cells {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-left: 5rem;
+}
+
+.glance-dest-cell {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.ribbon-position {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
 /* #767: a terminal read through a nearby station ("using EGLL as proxy"). */
 .glance-proxy,
 .rw-proxy,

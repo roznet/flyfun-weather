@@ -46,10 +46,19 @@ describe('observed live fixtures', () => {
   it.each(all)('$name renders the nutshell with the server\'s own words', ({ layer }) => {
     const html = nutshellHtml(layer.glance!, true);
     // The text is the server's: not re-worded, not re-ordered, not dropped.
+    // Compare on a decoration-free form: the markup escapes `&` and `<`.
+    const plain = html.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    const dest = layer.glance!.destination;
     for (const line of layer.glance!.lines) {
-      // Compare on a decoration-free form: the markup escapes `&` and `<`.
-      const plain = html.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+      // The destination block stands in for a non-alert arrival line (#816).
+      if (dest && line.phase === 'arrival' && !line.alert) continue;
       expect(plain).toContain(line.text);
+    }
+    // #816: the strip and every destination clause, verbatim.
+    expect(plain).toContain(layer.glance!.flight!.text);
+    expect(dest).toBeTruthy();
+    for (const text of [dest!.metar_text, dest!.taf_text, dest!.cells_text, dest!.wind_text, dest!.lightning_text]) {
+      if (text) expect(plain).toContain(text);
     }
     expect(html).not.toMatch(/undefined|NaN|\[object/);
   });

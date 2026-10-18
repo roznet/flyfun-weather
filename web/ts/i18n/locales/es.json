@@ -988,6 +988,7 @@
   "observed.noCoverage": "Sin cobertura",
   "observed.unavailable": "No recopilado",
   "observed.highlight.experimental": "Experimental, todavía en calibración. Gracias por señalar problemas.",
+  "observed.destination.title": "Destino a su ETA",
   "observed.highlight.written": "redactado a las {time}",
   "observed.highlight.up": "Este resumen coincidía con lo que vi",
   "observed.highlight.down": "Algo en este resumen parecía incorrecto",

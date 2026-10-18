@@ -1181,6 +1181,10 @@ def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
     if out.glance is not None:
         for ln in out.glance.lines:
             ln.text = strip_eta_text(ln.text)
+        # The strip is the progress block in words (#816).
+        out.glance.flight = None
+        if out.glance.destination is not None:
+            out.glance.destination.eta = None
         # Model-written: its times may not match the ~HH:MMZ pattern.
         out.glance.highlight = None
     if out.changes is not None:
@@ -1200,6 +1204,8 @@ def redact_summary(summary: dict | None, sharing: str) -> dict | None:
     progress = out.get("progress")
     if sharing == "none":
         out["progress"] = None
+        if out.get("glance"):
+            out["glance"]["flight"] = None
         for ln in (out.get("glance") or {}).get("lines") or []:
             ln["text"] = strip_eta_text(ln["text"])
         out["highlight"] = None  # model-written, as in redact_live
@@ -1223,7 +1229,8 @@ LIVE_NOTE = (
     "digest predates it rather than reconciling the two. glance holds the "
     "same at-a-glance lines the app shows (one per flight phase, observations "
     "only, 'unavailable' means the source could not be read, not clear): use "
-    "them as the overview. highlight is the one-line summary the app shows "
+    "them as the overview; glance.flight is the app's flight strip (where the "
+    "flight is and its ETA, in words). highlight is the one-line summary the app shows "
     "above them (null when there is none): quote it like the glance lines, and "
     "say it was written at its written_at, which can be older than "
     "live_updated_at. progress is where the layer places the flight: source "
@@ -1303,6 +1310,12 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
                 "as_of": _iso(layer.glance.as_of),
                 "headline": layer.glance.headline,
                 "lines": [{"phase": ln.phase, "text": ln.text} for ln in layer.glance.lines],
+                # The flight strip (#816), as the apps show it; dropped by
+                # :func:`redact_summary` when position sharing is off.
+                "flight": (
+                    {"phase": layer.glance.flight.phase, "text": layer.glance.flight.text}
+                    if layer.glance.flight is not None else None
+                ),
             }
             if layer.glance is not None else None
         ),
