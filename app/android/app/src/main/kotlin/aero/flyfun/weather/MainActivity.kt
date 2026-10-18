@@ -115,7 +115,10 @@ fun FlyFunWeatherRoot(
     val unseenWhatsNew by (appState.whatsNewStore?.unseenCount?.collectAsState() ?: remember { mutableStateOf(0) })
 
     if (!isAuthenticated) {
-        LoginScreen(appState = appState)
+        LoginScreen(
+            appState = appState,
+            showDevLogin = BuildConfig.DEBUG,
+        )
         return
     }
 

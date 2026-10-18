@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
@@ -110,6 +111,7 @@ fun ObservedNutshellCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -118,11 +120,13 @@ fun ObservedNutshellCard(
                             .size(10.dp)
                             .background(statusColor, CircleShape),
                     )
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Observed Route Nutshell",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         val routeStr = waypoints.takeIf { it.isNotEmpty() }?.joinToString(" → ")
                         if (!routeStr.isNullOrBlank()) {
@@ -131,6 +135,8 @@ fun ObservedNutshellCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }

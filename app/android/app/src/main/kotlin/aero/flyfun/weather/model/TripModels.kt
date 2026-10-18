@@ -80,6 +80,12 @@ enum class TripLegState(val wireValue: String) {
 data class TripSummaryResponse(
     val id: String,
     val title: String = "",
+    @SerialName("name")
+    val rawName: String = "",
+    @SerialName("display_name")
+    val displayName: String? = null,
+    @SerialName("flight_ids")
+    val flightIds: List<String> = emptyList(),
     @SerialName("leg_count")
     val legCount: Int = 0,
     @SerialName("first_departure_time")
@@ -147,10 +153,12 @@ data class TripSummaryResponse(
         get() = (staleLegCount ?: 0) > 0 || (missingLegCount ?: 0) > 0 || (missingCount ?: 0) > 0
 
     val name: String
-        get() = title
+        get() = title.ifBlank {
+            displayName?.takeIf { it.isNotBlank() } ?: rawName.ifBlank { routeLabel ?: "Trip" }
+        }
 
     val flightCount: Int
-        get() = legCount
+        get() = if (legCount > 0) legCount else flightIds.size
 }
 
 typealias TripSummary = TripSummaryResponse

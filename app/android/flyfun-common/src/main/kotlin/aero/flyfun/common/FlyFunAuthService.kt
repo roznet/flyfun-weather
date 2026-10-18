@@ -113,6 +113,24 @@ object JwtClaims {
 }
 
 /**
+ * OkHttp DNS resolver that maps `localhost.ro-z.me` to IPv4 loopback (`127.0.0.1`)
+ * and the Android Emulator host-loopback alias (`10.0.2.2`) so TLS connections to
+ * `https://localhost.ro-z.me:8443` work seamlessly on both host JVM and Android emulators
+ * while preserving `localhost.ro-z.me` SNI and Let's Encrypt certificate verification.
+ */
+object LocalhostRozMeDns : okhttp3.Dns {
+    override fun lookup(hostname: String): List<java.net.InetAddress> {
+        if (hostname.equals("localhost.ro-z.me", ignoreCase = true)) {
+            return listOf(
+                java.net.InetAddress.getByAddress(hostname, byteArrayOf(127, 0, 0, 1)),
+                java.net.InetAddress.getByAddress(hostname, byteArrayOf(10, 0, 2, 2)),
+            )
+        }
+        return okhttp3.Dns.SYSTEM.lookup(hostname)
+    }
+}
+
+/**
  * Shared authentication service for FlyFun apps:
  * - Native OAuth authorization-code flow with `state` nonce and `POST /auth/exchange`
  * - Email magic-link & 6-digit OTP code flow
@@ -120,7 +138,7 @@ object JwtClaims {
  */
 class FlyFunAuthService(
     val config: AuthConfig,
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = OkHttpClient.Builder().dns(LocalhostRozMeDns).build(),
 ) {
     private val secureRandom = SecureRandom()
     private val json = Json { ignoreUnknownKeys = true }

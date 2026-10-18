@@ -49,6 +49,7 @@ class ApiClient(
         }
 
     val httpClient: OkHttpClient = httpClient ?: OkHttpClient.Builder()
+        .dns(aero.flyfun.common.LocalhostRozMeDns)
         .addInterceptor(RollingBearerInterceptor(tokenStore = tokenStore, onUnauthorized = onUnauthorized))
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -365,7 +366,7 @@ class ApiClient(
     ): AdvisoryDetailResponse {
         val base = if (alt) "advisories/alt" else "advisories"
         return get(
-            "/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/$base/${encodePathSegment(advisoryId)}"
+            "/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/$base/${encodePathSegment(advisoryId)}/detail"
         )
     }
 
@@ -373,7 +374,7 @@ class ApiClient(
         get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/alternates")
 
     suspend fun getDigest(flightId: String, timestamp: String): DigestResponse =
-        get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/digest")
+        get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/digest/json")
 
     suspend fun getElevation(flightId: String, timestamp: String): ElevationResponse =
         get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/elevation")
@@ -751,9 +752,13 @@ class ApiClient(
         get("/api/airports/${encodePathSegment(icao)}/weather", listOf("day" to day.toString()))
 
     suspend fun getFrequentAirports(): FrequentAirportsResponse =
-        get("/api/airports/frequent")
+        get("/api/flights/frequent-airports")
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://weather.flyfun.aero"
+        val DEFAULT_BASE_URL: String = if (aero.flyfun.weather.BuildConfig.DEBUG) {
+            "https://localhost.ro-z.me:8443"
+        } else {
+            "https://weather.flyfun.aero"
+        }
     }
 }

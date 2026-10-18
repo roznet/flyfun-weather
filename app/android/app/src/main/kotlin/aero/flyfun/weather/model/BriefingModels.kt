@@ -908,7 +908,7 @@ data class ObservedFlashField(
     @SerialName("valid_time")
     val validTime: String? = null,
     @SerialName("window_minutes")
-    val windowMinutes: Int? = null,
+    val windowMinutes: Double? = null,
     val status: String? = null,
     val annuli: List<ObservedFlashAnnulus>? = null,
     @SerialName("along_route_flash_count")
@@ -950,6 +950,13 @@ data class ObservedSummaryEntry(
 
 @Serializable
 data class ObservedSourceStatus(
+    val source: String = "",
+    val available: Boolean = true,
+    val reason: String? = null,
+    @SerialName("latest_valid_time")
+    val latestValidTime: String? = null,
+    @SerialName("covered_fraction")
+    val coveredFraction: Double? = null,
     val status: String = "",
     @SerialName("valid_time")
     val validTime: String? = null,
@@ -961,28 +968,42 @@ data class ObservedSourceStatus(
 data class ObservedAttribution(
     val id: String = "",
     val name: String = "",
+    val producer: String? = null,
     val license: String? = null,
     val url: String? = null,
+    val text: String? = null,
 )
 
 @Serializable
 data class ObservedConditions(
+    @SerialName("computed_at")
+    val computedAt: String? = null,
     @SerialName("fetch_time")
     val fetchTime: String? = null,
     @SerialName("corridor_nm")
     val corridorNm: Double? = null,
+    @SerialName("radii_nm")
+    val radiiNm: List<Double>? = null,
     @SerialName("cruise_altitude_ft")
     val cruiseAltitudeFt: Int? = null,
+    val reflectivity: ObservedField? = null,
+    @SerialName("rain_rate")
+    val rainRate: ObservedField? = null,
     val radar: ObservedField? = null,
     @SerialName("cloud_tops")
     val cloudTops: ObservedTopsField? = null,
     val lightning: ObservedFlashField? = null,
     val stations: List<ObservedStationRef>? = null,
+    @Serializable(with = FlexibleStringListSerializer::class)
     val summary: List<String>? = null,
+    @SerialName("summary_lines")
+    val summaryLines: List<String>? = null,
     @SerialName("summary_entries")
     val summaryEntries: List<ObservedSummaryEntry>? = null,
-    val sources: Map<String, ObservedSourceStatus>? = null,
+    val sources: List<ObservedSourceStatus>? = null,
     val attribution: List<ObservedAttribution>? = null,
+    @SerialName("has_any_field")
+    val hasAnyField: Boolean? = null,
 )
 
 @Serializable
@@ -1011,7 +1032,7 @@ data class ObservedFlashesResponse(
     @SerialName("valid_time")
     val validTime: String? = null,
     @SerialName("window_minutes")
-    val windowMinutes: Int? = null,
+    val windowMinutes: Double? = null,
     val flashes: List<List<Double>> = emptyList(),
 )
 

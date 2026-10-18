@@ -183,10 +183,47 @@ def preflight(rep: Report, root: Path, https: bool) -> None:
                     f"sudo chmod -R a+rX /usr/local/etc/letsencrypt/{{live,archive}}/ro-z.me")
 
 
+def run_ipv4_loopback_relay(port: int) -> int:
+    """Relay 127.0.0.1:<port> -> [::1]:<port> so Android Emulator (10.0.2.2 / adb reverse)
+    and curl --ipv4 reach uvicorn on ::1 without ever binding 0.0.0.0 or ::."""
+    import asyncio
+
+    async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while data := await reader.read(65536):
+                writer.write(data)
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def handle(r1: asyncio.StreamReader, w1: asyncio.StreamWriter) -> None:
+        try:
+            r2, w2 = await asyncio.open_connection("::1", port)
+        except Exception:
+            w1.close()
+            return
+        await asyncio.gather(pipe(r1, w2), pipe(r2, w1))
+
+    async def serve() -> None:
+        srv = await asyncio.start_server(handle, "127.0.0.1", port)
+        async with srv:
+            await srv.serve_forever()
+
+    asyncio.run(serve())
+    return 0
+
+
 def start(root: Path, session: str, port: int, https: bool) -> None:
     venv = root / "venv" / "bin"
+    script = Path(__file__).resolve()
     if https:
-        cmd = (f"{venv}/uvicorn weatherbrief.api.app:app --reload --host ::1 --port {port} "
+        relay = f"{venv}/python {script} --ipv4-loopback-relay {port} &"
+        cmd = (f"{relay} {venv}/uvicorn weatherbrief.api.app:app --reload --host ::1 --port {port} "
                f"--ssl-keyfile {CERT_DIR}/privkey.pem --ssl-certfile {CERT_DIR}/fullchain.pem")
     else:
         cmd = f"{venv}/uvicorn weatherbrief.api.app:app --reload --port {port}"
@@ -228,6 +265,7 @@ def cmd_status() -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--https", "--simulator", dest="https", action="store_true")
+    ap.add_argument("--ipv4-loopback-relay", type=int, default=None, help=argparse.SUPPRESS)
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--stop", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
@@ -236,6 +274,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--wait", type=int, default=45, help="seconds to wait for /health")
     args = ap.parse_args(argv)
 
+    if args.ipv4_loopback_relay is not None:
+        return run_ipv4_loopback_relay(args.ipv4_loopback_relay)
     if args.status:
         return cmd_status()
     top = run(["git", "rev-parse", "--show-toplevel"], cwd=args.root or Path.cwd())
