@@ -154,6 +154,11 @@ fun RouteGraphCanvas(
     val rightMetric = RouteGraphMetrics.byId(rightMetricId)
     val viewConfig = LocalViewConfiguration.current
     val touchSlop = viewConfig.touchSlop
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val marginLeftPx = with(density) { 46.dp.toPx() }
+    val marginRightPx = with(density) { 40.dp.toPx() }
+    val marginTopPx = with(density) { 12.dp.toPx() }
+    val marginBottomPx = with(density) { 16.dp.toPx() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -177,10 +182,10 @@ fun RouteGraphCanvas(
                             height = size.height.toFloat(),
                             totalDistanceNm = vizData.totalDistanceNm,
                             maxAltitudeFt = 100.0,
-                            marginLeft = 52f,
-                            marginRight = 44f,
-                            marginTop = 16f,
-                            marginBottom = 20f,
+                            marginLeft = marginLeftPx,
+                            marginRight = marginRightPx,
+                            marginTop = marginTopPx,
+                            marginBottom = marginBottomPx,
                         )
 
                         while (true) {
@@ -234,10 +239,10 @@ fun RouteGraphCanvas(
                 height = size.height,
                 totalDistanceNm = max(1.0, vizData.totalDistanceNm),
                 maxAltitudeFt = 100.0,
-                marginLeft = 52f,
-                marginRight = 44f,
-                marginTop = 16f,
-                marginBottom = 20f,
+                marginLeft = marginLeftPx,
+                marginRight = marginRightPx,
+                marginTop = marginTopPx,
+                marginBottom = marginBottomPx,
             )
 
             val points = vizData.points

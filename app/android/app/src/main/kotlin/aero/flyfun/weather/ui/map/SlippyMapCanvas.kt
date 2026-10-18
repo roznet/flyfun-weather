@@ -369,7 +369,6 @@ fun SlippyMapCanvas(
             val minTileY = latToTileY(max(topLeftLatLon.lat, bottomRightLatLon.lat), nTiles).coerceIn(0, nTiles - 1)
             val maxTileY = latToTileY(min(topLeftLatLon.lat, bottomRightLatLon.lat), nTiles).coerceIn(0, nTiles - 1)
 
-            val themeStyle = if (isDark) "dark_all" else "light_all"
             for (tx in minTileX..maxTileX) {
                 for (ty in minTileY..maxTileY) {
                     val nwLon = tileXToLon(tx, nTiles)
@@ -378,17 +377,17 @@ fun SlippyMapCanvas(
                     val dstOffset = IntOffset(topLeftScreen.x.roundToInt(), topLeftScreen.y.roundToInt())
                     val dstSize = IntSize(tileSizeOnScreen.roundToInt() + 1, tileSizeOnScreen.roundToInt() + 1)
 
-                    val baseKey = "carto:$themeStyle:$tileZoom:$tx:$ty"
+                    val baseKey = "osm:$tileZoom:$tx:$ty"
                     val baseBmp = MapTileCache.get(baseKey)
                     if (baseBmp != null) {
                         drawImage(
                             image = baseBmp,
                             dstOffset = dstOffset,
                             dstSize = dstSize,
-                            alpha = 0.88f,
+                            alpha = if (isDark) 0.72f else 0.92f,
                         )
                     } else if (MapTileCache.markInFlight(baseKey)) {
-                        val url = "https://a.basemaps.cartocdn.com/$themeStyle/$tileZoom/$tx/$ty.png"
+                        val url = "https://tile.openstreetmap.org/$tileZoom/$tx/$ty.png"
                         scope.launch(Dispatchers.IO) {
                             try {
                                 fetchHttpBitmap(url)?.let { bmp ->

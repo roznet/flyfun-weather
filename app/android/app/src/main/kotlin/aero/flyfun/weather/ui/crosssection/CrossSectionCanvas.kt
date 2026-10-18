@@ -88,6 +88,11 @@ fun CrossSectionCanvas(
 ) {
     val viewConfig = LocalViewConfiguration.current
     val touchSlop = viewConfig.touchSlop
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val marginLeftPx = with(density) { 46.dp.toPx() }
+    val marginRightPx = with(density) { 40.dp.toPx() }
+    val marginTopPx = with(density) { 14.dp.toPx() }
+    val marginBottomPx = with(density) { 26.dp.toPx() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -111,10 +116,10 @@ fun CrossSectionCanvas(
                             height = size.height.toFloat(),
                             totalDistanceNm = max(1.0, vizData.totalDistanceNm),
                             maxAltitudeFt = max(5000.0, vizData.maxAltitudeFt),
-                            marginLeft = 52f,
-                            marginRight = 44f,
-                            marginTop = 18f,
-                            marginBottom = 36f,
+                            marginLeft = marginLeftPx,
+                            marginRight = marginRightPx,
+                            marginTop = marginTopPx,
+                            marginBottom = marginBottomPx,
                         )
 
                         while (true) {
@@ -172,10 +177,10 @@ fun CrossSectionCanvas(
                 height = size.height,
                 totalDistanceNm = max(1.0, vizData.totalDistanceNm),
                 maxAltitudeFt = max(5000.0, vizData.maxAltitudeFt),
-                marginLeft = 52f,
-                marginRight = 44f,
-                marginTop = 18f,
-                marginBottom = 36f,
+                marginLeft = marginLeftPx,
+                marginRight = marginRightPx,
+                marginTop = marginTopPx,
+                marginBottom = marginBottomPx,
             )
 
             // 1. Sky gradient + Night shading

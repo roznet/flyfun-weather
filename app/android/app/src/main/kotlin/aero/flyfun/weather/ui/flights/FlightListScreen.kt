@@ -151,45 +151,93 @@ fun FlightListScreen(
                     },
                 )
             } else {
+                var showOverflowMenu by remember { mutableStateOf(false) }
                 TopAppBar(
                     title = {
                         Text(
                             text = "Flights",
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     },
                     actions = {
                         IconButton(onClick = { showSearch = !showSearch }) {
                             Icon(Icons.Default.Search, contentDescription = "Search flights")
                         }
-                        IconButton(onClick = { viewModel.toggleOrder() }) {
-                            Icon(
-                                imageVector = Icons.Default.SwapVert,
-                                contentDescription = "Sort (${order.title})",
-                            )
+                        IconButton(onClick = onOpenMapsClick) {
+                            Icon(Icons.Default.Map, contentDescription = "Explore Maps")
                         }
                         IconButton(onClick = { viewModel.loadFlights() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh flights")
                         }
-                        IconButton(onClick = onOpenMapsClick) {
-                            Icon(Icons.Default.Map, contentDescription = "Explore Maps")
-                        }
-                        IconButton(onClick = onOpenAircraftClick) {
-                            Icon(Icons.Default.AirplanemodeActive, contentDescription = "Aircraft")
-                        }
-                        IconButton(onClick = onOpenWhatsNewClick) {
-                            BadgedBox(
-                                badge = {
-                                    if (unseenWhatsNewCount > 0) {
-                                        Badge { Text(unseenWhatsNewCount.toString()) }
-                                    }
-                                },
-                            ) {
-                                Icon(Icons.Default.NewReleases, contentDescription = "What's New")
+                        Box {
+                            IconButton(onClick = { showOverflowMenu = true }) {
+                                BadgedBox(
+                                    badge = {
+                                        if (unseenWhatsNewCount > 0) {
+                                            Badge { Text(unseenWhatsNewCount.toString()) }
+                                        }
+                                    },
+                                ) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                                }
                             }
-                        }
-                        IconButton(onClick = onOpenSettingsClick) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                            DropdownMenu(
+                                expanded = showOverflowMenu,
+                                onDismissRequest = { showOverflowMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Sort (${order.title})") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.SwapVert, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.toggleOrder()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("My Aircraft") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.AirplanemodeActive, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onOpenAircraftClick()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            Text("What's New")
+                                            if (unseenWhatsNewCount > 0) {
+                                                Badge { Text(unseenWhatsNewCount.toString()) }
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.NewReleases, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onOpenWhatsNewClick()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Settings") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Settings, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onOpenSettingsClick()
+                                    },
+                                )
+                            }
                         }
                     },
                 )
