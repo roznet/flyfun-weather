@@ -415,6 +415,9 @@ export interface PackMeta {
    *  live layer (the latest pack). A realtime refresh does not change
    *  fetch_timestamp, so compare this to detect new observations. */
   live_updated_at?: string | null;
+  /** #815: moves when a highlight lands after its tick's commit, which leaves
+   *  `live_updated_at` alone. Compare it too, or that highlight never shows. */
+  highlight_updated_at?: string | null;
 }
 
 export interface ModelDivergence {
@@ -1507,6 +1510,9 @@ export interface LiveLayer {
   pack_timestamp: string;
   /** null => no live data yet; keep the pack's own observations. */
   live_updated_at: string | null;
+  /** #815: when the highlight was patched in after this tick's commit;
+   *  null/absent since the last commit (or from an older server). */
+  highlight_updated_at?: string | null;
   route_observations: RouteObservations | null;
   observations_updated_at: string | null;
   route_sigmets: RouteSigmets | null;

@@ -135,3 +135,43 @@ describe('briefing store: syncLatest', () => {
     expect(fetchLive).not.toHaveBeenCalled();
   });
 });
+
+describe('briefing store: a highlight patched in after its tick (#815)', () => {
+  const TICK = '2026-10-01T11:00:00Z';
+  function withHighlight(text: string | null, stamp: string | null): LiveLayer {
+    return {
+      ...live(TICK, 'ZZNEW'),
+      highlight_updated_at: stamp,
+      glance: {
+        as_of: TICK, headline: 'Quiet', comparison: 'as_briefed', lines: [],
+        highlight: text ? { text, model: 'm', facts_hash: 'h', generated_at: '2026-10-01T11:00:50Z' } : null,
+      } as never,
+    };
+  }
+
+  it('fetches /live when only highlight_updated_at moved, and takes the same tick', async () => {
+    briefingStore.setState({
+      snapshot: { ...baseSnapshot, live_updated_at: TICK },
+      live: withHighlight(null, null),
+    });
+    fetchLatestPack.mockResolvedValueOnce({
+      ...pack(PACK_TS), live_updated_at: TICK, highlight_updated_at: '2026-10-01T11:00:50Z',
+    });
+    fetchLive.mockResolvedValueOnce(withHighlight('ZZBB IFR in rain.', '2026-10-01T11:00:50Z'));
+    await briefingStore.getState().syncLatest();
+    expect(fetchLive).toHaveBeenCalledTimes(1);
+    expect(briefingStore.getState().live!.glance!.highlight!.text).toBe('ZZBB IFR in rain.');
+  });
+
+  it('does not refetch once that highlight is applied', async () => {
+    briefingStore.setState({
+      snapshot: { ...baseSnapshot, live_updated_at: TICK },
+      live: withHighlight('ZZBB IFR in rain.', '2026-10-01T11:00:50Z'),
+    });
+    fetchLatestPack.mockResolvedValueOnce({
+      ...pack(PACK_TS), live_updated_at: TICK, highlight_updated_at: '2026-10-01T11:00:50+00:00',
+    });
+    await briefingStore.getState().syncLatest();
+    expect(fetchLive).not.toHaveBeenCalled();
+  });
+});

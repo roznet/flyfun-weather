@@ -56,7 +56,7 @@ The glance line carries `proxy_caption`, the ribbon station `via`.
 DATA_DIR/packs/{user}/{flight}/
 ├── {pack_ts}/briefing.json   ← immutable: what the assessment saw (the baseline)
 ├── live.json                 ← LiveLayer (models/live.py)
-├── live_meta.json            ← {pack_dir_name, pack_timestamp, live_updated_at}
+├── live_meta.json            ← {pack_dir_name, pack_timestamp, live_updated_at, highlight_updated_at?}
 ├── live_history.jsonl        ← append-only timeline of the flight day (#643)
 └── live_snapshots.jsonl.gz   ← per-tick display snapshot, for replay + recap (#711, debrief-recap.md)
 ```
@@ -897,6 +897,19 @@ in ~1.2 s, so the tick grows by one call's latency, not by the flight count.
 different pack, or a newer `glance.as_of`): the text was written from *those*
 facts, and the next tick generates its own.
 
+**The patch has its own stamp, `highlight_updated_at` (#815).** Clients fetch
+`/live` only when a stamp on `/packs/latest` moved, and iOS `applyLive` / web
+`loadLive` refused an equal `live_updated_at`, so a client that fetched in the
+~50 s between commit and patch never saw that tick's highlight (in flight the
+gate moves almost every tick, so nearly every one). The patch does **not** bump
+`live_updated_at`: that is the tick's identity, read by `commit_live_update`'s
+"a newer write landed first" check (a bumped stamp would drop the next tick),
+the latency join (`live_delivery` → tick by version) and the snapshots. Instead
+it sets `LiveLayer.highlight_updated_at` (reset to null by every commit) and
+writes it into `live_meta.json`; `/packs/latest` and `/live` serve it, and both
+clients fetch when it moves and take the same tick when only the highlight
+differs (iOS `refreshesHighlight`, web `highlightChanged`).
+
 ### What counts as "changed" (the regeneration gate, #706)
 
 The first real flight day (2026-10-08, 17 flights) made **311** calls where a
@@ -937,10 +950,19 @@ figure). Cost of the rule: the model can no longer place a cell along the
 route or quote its dBZ; if that turns out to matter, add a position to the
 gate (e.g. thirds of the route) and to the facts together, never one alone.
 
-**After the planned arrival nothing is generated or carried** (item 6): 34 of
-the 311 calls came after it, about "ahead" cells already abeam in the past.
-The layer falls back to the nutshell headline. "Arrived" is the plan's
-(`flown` is interpolated from it), not a landing.
+**After arrival nothing is generated or carried** (item 6): 34 of the 311
+calls came after the planned arrival, about "ahead" cells already abeam in the
+past. The layer falls back to the nutshell headline. Since #760/#761 `flown`
+follows `FlightProgress`, and since #815 `_phase` reads the layer's `progress`
+block so the plan alone never arrives (two late legs lost the highlight before
+take-off): a landing (entered, app, or inferred from a fix) is arrived at once;
+an effective arrival from a take-off or fix is "arriving" for `ARRIVAL_GRACE`
+(20 min) and then arrived; plan only (`source == "plan"`) past the planned
+arrival is "position unknown" and the facts measure "ahead" from 0, so the
+whole route (departure included) is shown until the live window closes. A
+layer without a `progress` block keeps the old plan rule. The glance's own
+"flight arrived at plan" nutshell line (`live_glance`) still reads the plan;
+it is not gated by this.
 
 `main_rain_area` reads only rain bands still ahead (it once said "moving
 toward the route from behind" with no rain ahead). A highlight written before
@@ -1278,11 +1300,14 @@ file, which must stay byte-for-byte reproducible by a replay. After a restart
 it is null until new frames arrive (the tick reads frames < 25 min old).
 
 **Never fails the caller.** Rows are written in a savepoint and every writer
-catches and logs. The tick now commits its session right after the highlight
-pass, so `charge_highlight`'s ledger rows land on their own before the
-latency insert (whose failure must not roll them back): before #751 nothing
-committed that session after the tick, so tick-written highlight costs were
-flushed and dropped. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
+catches and logs. `charge_highlight` writes and commits each ledger row on its
+own session on the tick's engine (#815): on the tick's session, open across the
+whole tick, an earlier failure surfaced as a recurring "Live highlight cost
+charge failed" MySQL traceback (the highlight itself written), and a failed
+ledger flush left that session needing a rollback. A failure is now one warning
+line naming the error, traceback at DEBUG. Before #751 nothing committed that
+session after the tick, so tick-written highlight costs were flushed and
+dropped; the tick still commits it before the latency insert. Retention: `LIVE_LATENCY_RETENTION_DAYS` (180), purged with the daily
 analytics rollup. Account deletion removes the user's deliveries and their
 flights' tick rows; the account export includes `live_deliveries`.
 

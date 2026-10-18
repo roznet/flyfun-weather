@@ -384,6 +384,33 @@ private func makeSnapshot(liveUpdatedAt: String? = nil, daysOut: Int = 0) throws
         let d1 = try makeSnapshot(daysOut: 1)
         #expect(BriefingViewModel.observedAsOfDate(for: d1) == nil)
     }
+
+    /// #815: the server patches the highlight in after the tick's commit
+    /// without moving `liveUpdatedAt`. The same tick with a new highlight is
+    /// taken (the glance), even though `applyLive` refuses the equal stamp.
+    @Test func sameTickWithANewHighlightRefreshesTheGlance() throws {
+        func withHighlight(_ text: String?, liveUpdatedAt: String = "2026-06-24T10:00:00Z") throws -> LiveLayerResponse {
+            var layer = try makeLiveLayer(liveUpdatedAt: liveUpdatedAt)
+            layer.glance = LiveGlance(
+                asOf: liveUpdatedAt, headline: "Quiet", comparison: nil, lines: [],
+                highlight: text.map { LiveHighlight(text: $0, model: "m", factsHash: "h", generatedAt: "2026-06-24T10:00:50Z") })
+            return layer
+        }
+        let fetchedEarly = try withHighlight(nil)
+        let patched = try withHighlight("ZZBB IFR in rain.")
+        let snapshot = try makeSnapshot(liveUpdatedAt: "2026-06-24T10:00:00Z")
+        #expect(BriefingViewModel.applyLive(patched, to: snapshot, packTimestamp: packTS) == nil)
+        #expect(BriefingViewModel.refreshesHighlight(current: fetchedEarly, incoming: patched, packTimestamp: packTS))
+        // Same highlight → nothing to do.
+        #expect(!BriefingViewModel.refreshesHighlight(current: patched, incoming: patched, packTimestamp: packTS))
+        // A different tick is `applyLive`'s business, not this gate's.
+        let older = try withHighlight("Old.", liveUpdatedAt: "2026-06-24T09:50:00Z")
+        #expect(!BriefingViewModel.refreshesHighlight(current: patched, incoming: older, packTimestamp: packTS))
+        // Another pack never.
+        #expect(!BriefingViewModel.refreshesHighlight(current: fetchedEarly, incoming: patched,
+                                                      packTimestamp: "2026-06-25T09:00:00Z"))
+        #expect(!BriefingViewModel.refreshesHighlight(current: nil, incoming: patched, packTimestamp: packTS))
+    }
 }
 
 // MARK: - Caching repository (network-first, newest-wins, survives relaunch)

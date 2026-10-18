@@ -137,6 +137,30 @@ class TestInitialMarker:
         assert init == _utc(2026, 5, 2, 18)
         assert nxt == _utc(2026, 5, 3, 0) + timedelta(hours=6, minutes=40)
 
+    def test_bootstrap_steps_back_past_undue_prior_cycle(self):
+        # #815: UKMO via Open-Meteo lands ~8h30 after init. At 07:00Z the 06Z
+        # cycle is not due (14:30Z) and neither is 00Z (08:30Z), so the
+        # bootstrap must go back to yesterday's 18Z (due 02:30Z).
+        init, nxt = initial_marker_for("ukmo:openmeteo", now=_utc(2026, 5, 3, 7))
+        assert init == _utc(2026, 5, 2, 18)
+        assert nxt == _utc(2026, 5, 3, 8, 30)
+
+    def test_bootstrap_ecmwf_direct_offset_above_cycle_spacing(self):
+        # ECMWF direct (+6h40): at 06:20Z neither 06Z nor 00Z (06:40Z) is due.
+        init, nxt = initial_marker_for("ecmwf:direct", now=_utc(2026, 5, 3, 6, 20))
+        assert init == _utc(2026, 5, 2, 18)
+        assert nxt == _utc(2026, 5, 3, 6, 40)
+
+    def test_bootstrap_never_claims_an_undelivered_run(self):
+        # Every source, every 10 minutes of a day: the claimed init is due.
+        start = _utc(2026, 5, 3, 0)
+        for key, cfg in SOURCE_REGISTRY.items():
+            for step in range(0, 24 * 60, 10):
+                now = start + timedelta(minutes=step)
+                init, nxt = initial_marker_for(key, now=now)
+                assert init + cfg.offset_for(init.hour) <= now, (key, now)
+                assert nxt > now, (key, now)
+
     def test_bootstrap_for_each_registered_source(self):
         # Smoke: every registered source produces a valid (init, next_expected).
         now = _utc(2026, 5, 3, 12)

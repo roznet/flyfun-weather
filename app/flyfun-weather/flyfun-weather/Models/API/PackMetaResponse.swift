@@ -33,6 +33,10 @@ nonisolated struct PackMetaResponse: Codable, Sendable {
     /// keeps `fetchTimestamp`, so this is how a client notices new observations
     /// on an unchanged pack.
     let liveUpdatedAt: String?
+    /// #815: moves when the highlight lands after its tick's commit, which
+    /// leaves `liveUpdatedAt` alone. nil since the last commit, or from an
+    /// older server.
+    var highlightUpdatedAt: String? = nil
     /// Surface charts (DWD / Met Office / TEMSI) for the Discussion tab (#799).
     /// nil from servers that predate the manifest — the Charts section then
     /// stays hidden.

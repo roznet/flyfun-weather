@@ -201,6 +201,34 @@ def live_updated_at_for_pack(pack_dir: Path | str | None) -> datetime | None:
     return _parse_dt(meta.get("live_updated_at"))
 
 
+def highlight_updated_at_for_pack(pack_dir: Path | str | None) -> datetime | None:
+    """``highlight_updated_at`` (#815) when the flight's live layer belongs to
+    this pack: when a highlight was last patched in after its tick's commit,
+    None since the last commit. Reads only the small meta file."""
+    if not pack_dir:
+        return None
+    pack_dir = Path(pack_dir)
+    meta = load_live_meta(flight_dir_for_pack(pack_dir))
+    if not meta or meta.get("pack_dir_name") != pack_dir.name:
+        return None
+    return _parse_dt(meta.get("highlight_updated_at"))
+
+
+def highlight_updated_at_iso(artifact_path: str | None) -> str | None:
+    """ISO :func:`highlight_updated_at_for_pack` for a stored ``artifact_path``;
+    never raises, like :func:`live_updated_at_iso`."""
+    if not artifact_path:
+        return None
+    try:
+        from weatherbrief.storage.flights import _resolve_artifact_path
+
+        ts = highlight_updated_at_for_pack(_resolve_artifact_path(artifact_path))
+        return ts.isoformat() if ts is not None else None
+    except Exception:
+        logger.warning("highlight_updated_at lookup failed for %s", artifact_path, exc_info=True)
+        return None
+
+
 def live_updated_at_iso(artifact_path: str | None) -> str | None:
     """ISO ``live_updated_at`` for a stored ``artifact_path``, or None.
 
@@ -995,6 +1023,7 @@ def commit_live_update(
         layer.alerted = memory.alerted
         layer.sigmet_traces = list(memory.sigmets.values())
         layer.live_updated_at = now
+        layer.highlight_updated_at = None
 
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
         _atomic_write(flight_dir / LIVE_META_FILE, json.dumps({
@@ -1052,7 +1081,16 @@ def patch_highlight(
             # A newer tick committed: its own highlight is on the way.
             return False
         layer.glance.highlight = highlight
+        # Not ``live_updated_at``: that is the tick's identity (the stale-write
+        # check above, the latency join, snapshots). Clients fetch ``/live``
+        # only when a stamp moves, so the late highlight carries its own, in
+        # the meta file too, which ``/packs/latest`` reads (#815).
+        layer.highlight_updated_at = datetime.now(timezone.utc)
         _atomic_write(flight_dir / LIVE_FILE, layer.model_dump_json(exclude={"changes": TRAIL_EXCLUDE}))
+        meta = load_live_meta(flight_dir) or {}
+        if meta.get("pack_dir_name") == layer.pack_dir_name:
+            meta["highlight_updated_at"] = layer.highlight_updated_at.isoformat()
+            _atomic_write(flight_dir / LIVE_META_FILE, json.dumps(meta))
         if layer.live_updated_at is not None:
             append_highlight(flight_dir, highlight, tick_at=layer.live_updated_at)
         return True

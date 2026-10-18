@@ -33,6 +33,10 @@ nonisolated struct LiveLayerResponse: Codable, Sendable {
     let packTimestamp: String?
     /// nil ⇒ no live data yet.
     let liveUpdatedAt: String?
+    /// #815: when the highlight was patched in after this tick's commit (nil
+    /// since the last commit, or from an older server). Compared with the
+    /// pack meta's to fetch a late highlight `liveUpdatedAt` never announces.
+    var highlightUpdatedAt: String? = nil
     let routeObservations: RouteObservations?
     let observationsUpdatedAt: String?
     let routeSigmets: RouteSigmets?

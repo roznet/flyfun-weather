@@ -83,6 +83,18 @@ export function addsTrails(
   return incoming?.recently_cleared != null && current?.recently_cleared == null;
 }
 
+/** The same tick, but `incoming` carries a different highlight (#815): the
+ *  server patches it in ~50 s after the commit without moving
+ *  `live_updated_at`, so a client that fetched in between must still take it. */
+export function highlightChanged(
+  current: LiveLayer | null | undefined,
+  incoming: LiveLayer | null | undefined,
+): boolean {
+  const a = current?.glance?.highlight ?? null;
+  const b = incoming?.glance?.highlight ?? null;
+  return (a?.text ?? null) !== (b?.text ?? null) || (a?.generated_at ?? null) !== (b?.generated_at ?? null);
+}
+
 /** Departure as epoch ms, from an ISO `departure_time` or the legacy
  *  target_date + target_time_utc pair. */
 export function departureMs(
