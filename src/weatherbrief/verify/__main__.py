@@ -470,6 +470,7 @@ def cmd_convective_score(args):
 
     params = ConvectiveScoreParams(
         risk_threshold=args.risk,
+        risk_source=args.risk_source,
         dbz_threshold=args.dbz,
         since=_day(args.since),
         until=_day(args.until),
@@ -483,7 +484,7 @@ def cmd_convective_score(args):
         return "   -" if v is None else f"{100 * v:4.0f}"
 
     print(
-        f"risk >= {args.risk} vs >= {args.dbz:g} dBZ within "
+        f"{args.risk_source} risk >= {args.risk} vs >= {args.dbz:g} dBZ within "
         f"{params.radar_radius_nm:g} NM or lightning within "
         f"{params.lightning_radius_nm:g} NM"
     )
@@ -1320,7 +1321,14 @@ def main():
     p_conv.add_argument(
         "--risk", default="moderate",
         choices=["marginal", "low", "moderate", "high", "extreme"],
-        help="Forecast 'yes' at or above this sounding_convective_risk (default moderate)",
+        help="Forecast 'yes' at or above this risk (default moderate)",
+    )
+    p_conv.add_argument(
+        "--risk-source", default="thermo", choices=["thermo", "nwp", "graded"],
+        help="Which verdict to score: thermo (sounding_convective_risk), nwp "
+             "(nwp_conv_risk, migration 108 on), or graded (nwp where the row "
+             "has a native assessment, else thermo — the grader's fallback). "
+             "Default thermo",
     )
     p_conv.add_argument(
         "--dbz", type=float, default=41.0,

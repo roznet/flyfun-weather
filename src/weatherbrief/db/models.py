@@ -1054,6 +1054,14 @@ class AirportForecastSnapshotRow(Base):
     #   source set, ceiling set  -> new ceiling = min(this, nwp_ceiling_ft)
     nwp_layer_ceiling_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_layer_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Lowest base of *any* layer (FEW/SCT/BKN/OVC), DD and model-native, beside
+    # the BKN/OVC-only `sounding_cloud_base_ft` / `nwp_layer_ceiling_ft`: the
+    # FEW/SCT bases the METAR `lowest_cloud_base_ft` (107) is compared with,
+    # and the only base ICON rows carry (its GRIB has no `cloud_base_ft`).
+    # Same datum as the two columns they sit beside. NULL before 108, and when
+    # the profile has no layer at all.
+    sounding_lowest_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nwp_layer_lowest_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     freezing_level_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cape_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
     sounding_cin_jkg: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1069,6 +1077,12 @@ class AirportForecastSnapshotRow(Base):
     # scored over this history — a verdict answers only the question already
     # asked, and snapshots prune at 10 days so nothing here is backfillable.
     nwp_conv_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The native track's verdict (`convective_nwp.risk_level`), beside the
+    # thermo one in `sounding_convective_risk`. The grader reads this track by
+    # default, and the explicit-convection path decides on inputs not stored
+    # here, so the verdict cannot be re-derived from the ingredients. Set
+    # exactly when `nwp_conv_method` is; NULL on every row before 108.
+    nwp_conv_risk: Mapped[str | None] = mapped_column(String(16), nullable=True)
     nwp_conv_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_conv_base_ft: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_conv_top_ft: Mapped[float | None] = mapped_column(Float, nullable=True)

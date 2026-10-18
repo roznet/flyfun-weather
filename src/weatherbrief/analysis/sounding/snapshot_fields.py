@@ -97,6 +97,11 @@ def compute_snapshot_sounding_fields(
         if bkn_ovc:
             lowest = min(bkn_ovc, key=lambda cl: cl.base_ft)
             fields["sounding_cloud_base_ft"] = lowest.base_ft
+        # Any coverage: the FEW/SCT bases the ceiling above drops (#798).
+        if sounding.dd_cloud_layers:
+            fields["sounding_lowest_base_ft"] = min(
+                cl.base_ft for cl in sounding.dd_cloud_layers
+            )
 
         # Model-native cloud-layer ceiling — the third ceiling estimate, so DD
         # vs layer vs the model's own diagnostic can be scored against METARs
@@ -138,6 +143,10 @@ def compute_snapshot_sounding_fields(
                 fields["nwp_layer_ceiling_ft"] = min(
                     nwp_decks, key=lambda cl: cl.base_ft
                 ).base_ft
+            if nwp_layers:
+                fields["nwp_layer_lowest_base_ft"] = min(
+                    cl.base_ft for cl in nwp_layers
+                )
 
         if sounding.convective and sounding.convective.risk_level is not None:
             fields["sounding_convective_risk"] = sounding.convective.risk_level.value
@@ -151,6 +160,8 @@ def compute_snapshot_sounding_fields(
         conv_nwp = getattr(sounding, "convective_nwp", None)
         if conv_nwp is not None:
             fields["nwp_conv_method"] = getattr(conv_nwp, "method", None)
+            nwp_risk = getattr(conv_nwp, "risk_level", None)
+            fields["nwp_conv_risk"] = getattr(nwp_risk, "value", nwp_risk)
             fields["nwp_conv_cover_pct"] = getattr(conv_nwp, "cover_pct", None)
             fields["nwp_conv_base_ft"] = getattr(conv_nwp, "base_ft", None)
             fields["nwp_conv_top_ft"] = getattr(conv_nwp, "top_ft", None)
