@@ -117,7 +117,7 @@ fun FlyFunWeatherRoot(
     if (!isAuthenticated) {
         LoginScreen(
             appState = appState,
-            showDevLogin = BuildConfig.DEBUG,
+            showDevLogin = BuildConfig.DEBUG && aero.flyfun.weather.data.ApiClient.isRunningOnEmulator(),
         )
         return
     }

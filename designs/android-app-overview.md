@@ -27,7 +27,7 @@ All four implementation phases are built and verified against both offline fixtu
 - Driven by `FlyFunAuthService` (`aero.flyfun.common`):
   - **Sign in with Google**: Chrome Custom Tabs OAuth (`/auth/login/google?platform=android&state=<nonce>`) → `flyfunweather://auth/callback?code=...&state=...` → `POST /auth/exchange`.
   - **Sign in with Email**: magic-link request (`POST /auth/magic-link`) + code verification sheet.
-  - **Dev Login**: `GET /auth/dev-token` in debug builds (`BuildConfig.DEBUG`), connected by default to `https://localhost.ro-z.me:8443`.
+  - **Dev Login**: `GET /auth/dev-token` in debug builds on the Android Emulator (`BuildConfig.DEBUG && ApiClient.isRunningOnEmulator()`), connected to `https://localhost.ro-z.me:8443` (real devices connect to `https://weather.flyfun.aero`).
   - **Demo Mode (`Try Demo Mode`)**: switches `AppStateViewModel` to `FixtureBriefingRepository` + `FixtureTripRepository` so the full app can be explored offline without a server.
 - Session JWT is stored via `EncryptedSharedPreferences` (`AndroidTokenStore` in `MainActivity.kt`) and rotated automatically via `RollingBearerInterceptor` whenever the server returns `X-Renewed-Token`.
 - Reviewer deep-link carve-out (`JwtClaims.shouldAcceptDeepLinkToken`) accepts a bare token in a deep link only when signed out and the token payload carries `"scope": "review"`.

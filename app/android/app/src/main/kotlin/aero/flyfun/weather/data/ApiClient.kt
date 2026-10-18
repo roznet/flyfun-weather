@@ -755,7 +755,34 @@ class ApiClient(
         get("/api/flights/frequent-airports")
 
     companion object {
-        val DEFAULT_BASE_URL: String = if (aero.flyfun.weather.BuildConfig.DEBUG) {
+        /**
+         * Returns `true` when running inside the Android Emulator (mirroring iOS
+         * `#if targetEnvironment(simulator)`), and `false` on physical devices or JVM unit tests.
+         */
+        fun isRunningOnEmulator(): Boolean {
+            val fingerprint = android.os.Build.FINGERPRINT.orEmpty()
+            val model = android.os.Build.MODEL.orEmpty()
+            val manufacturer = android.os.Build.MANUFACTURER.orEmpty()
+            val brand = android.os.Build.BRAND.orEmpty()
+            val device = android.os.Build.DEVICE.orEmpty()
+            val product = android.os.Build.PRODUCT.orEmpty()
+            val hardware = android.os.Build.HARDWARE.orEmpty()
+            return fingerprint.startsWith("generic") ||
+                fingerprint.startsWith("unknown") ||
+                model.contains("google_sdk") ||
+                model.contains("Emulator") ||
+                model.contains("Android SDK built for") ||
+                model.contains("sdk_gphone") ||
+                manufacturer.contains("Genymotion") ||
+                (brand.startsWith("generic") && device.startsWith("generic")) ||
+                product.contains("sdk") ||
+                product.contains("emulator") ||
+                product.contains("simulator") ||
+                hardware.contains("goldfish") ||
+                hardware.contains("ranchu")
+        }
+
+        val DEFAULT_BASE_URL: String = if (aero.flyfun.weather.BuildConfig.DEBUG && isRunningOnEmulator()) {
             "https://localhost.ro-z.me:8443"
         } else {
             "https://weather.flyfun.aero"

@@ -81,7 +81,7 @@ class FixtureBriefingRepository : BriefingRepository // Used when isMockMode / F
 
 ## Local HTTPS Dev Server & Emulator Networking
 
-Debug builds (`BuildConfig.DEBUG`) default to `https://localhost.ro-z.me:8443` (`FlyFunWeatherApp.DEFAULT_SERVER_URL`).
+`ApiClient.DEFAULT_BASE_URL` selects `https://localhost.ro-z.me:8443` when `BuildConfig.DEBUG && ApiClient.isRunningOnEmulator()`, and `https://weather.flyfun.aero` on physical devices and release builds (mirroring iOS `#if targetEnvironment(simulator)`).
 
 1. **Hostname rewrite + TLS trust (`ApiClient.kt`, `FlyFunAuthService.kt`)**:
    - On an Android emulator without `adb reverse`, `localhost.ro-z.me` resolves in public DNS to `127.0.0.1` (the emulator's own loopback).
