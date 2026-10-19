@@ -1,0 +1,32 @@
+FlyFun Weather gives GA pilots an early, multi-model picture of the weather for a cross-country flight in Europe, from a week out to the day you fly.
+
+Enter your route, date and cruise altitude. FlyFun Weather pulls forecasts from several weather models (ECMWF, DWD ICON, GFS, UK Met Office, Météo-France), analyses them along your route and shows where they agree and where they don't.
+
+THE BRIEFING
+• A short AI summary of the day, with the concerns worth watching and how the forecast is trending
+• Route advisories for icing, cloud, visibility, turbulence, convection, winds, fronts and airport conditions, graded per model so you see the consensus and the outliers
+• Weather-based alternates when the destination looks marginal
+• Surface charts and GRAMET for your route
+
+SEE IT ALONG THE ROUTE
+• A cross-section of your flight with cloud, icing, turbulence, convection and terrain
+• Route graph of winds, temperatures and other metrics, synced with the cross-section
+• Skew-T diagrams at any point, with model comparison
+• Route map with radar, satellite, SIGMETs, fronts and storm cells
+
+ON FLIGHT DAY
+• Live METARs and TAFs, SIGMETs, lightning and storm cells along your route, with what changed since your briefing
+• Your aircraft's position on the route as you fly
+
+ALSO
+• Briefings refresh as new model runs arrive
+• Download a briefing to read it offline
+• Trips: plan multi-leg journeys and see which leg is driving the decision
+• Your aircraft, with their performance and service ceiling
+• Works on phones, tablets and foldables
+
+Sign in with Google or your email. Your flights stay in sync with the FlyFun Weather web app and iPhone/iPad app.
+
+Important: FlyFun Weather supports flight planning. It relies on automated analysis and AI, which can make mistakes or miss things, and it is not a substitute for official weather briefings or professional meteorological advice. Always consult official sources before flying. The pilot in command remains the sole decision-maker.
+
+FlyFun Weather is a free hobby project, provided as is.

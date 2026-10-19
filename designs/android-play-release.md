@@ -59,8 +59,10 @@ OAuth sign-in itself uses the `flyfunweather://` scheme and does not depend on i
 
 ## Owner checklist (Play Console)
 
-1. Create the app: package `aero.flyfun.weather` (permanent once uploaded), name
-   "FlyFun Weather", free, default language en-GB.
+1. Create the app (done 2026-10-19): name "FlyFun Weather", free. The package
+   name comes from the first upload (1.0 (1), internal, draft) and is now fixed
+   as `aero.flyfun.weather`. The default language is en-US, so `default/` and
+   the release notes land there.
 2. Users and permissions → invite the service account with release and store
    listing access to this app. `play.py status` then answers instead of
    "Package not found".
@@ -68,9 +70,11 @@ OAuth sign-in itself uses the `flyfunweather://` scheme and does not depend on i
    forms' tester Google Group: `play.py testers --track closed --group …`.
 4. App content forms — drafted below.
 5. Store listing: `app/android/play/listing/default/` (title, short and full
-   description, `icon.png` 512², `feature-graphic.png` 1024×500, `phone/*.png`,
-   `tablet/*.png`), pushed with `play.py listing --images`. Not made yet;
-   screenshots from the emulator in Demo Mode (fictional data only).
+   description, `icon.png` 512² from the iOS `AppLogo.png`, `feature-graphic.png`
+   1024×500, `phone/*.png`), pushed with `play.py listing --images`. Screenshots
+   are the release build on the `flyfun_pixel10_api37` emulator in Demo Mode
+   (fixture data only). The demo fixture's cross-section and Observed tab are
+   too sparse to show, so those two are missing; no tablet set yet.
 
 ## App content (drafted answers)
 
@@ -103,4 +107,4 @@ OAuth sign-in itself uses the `flyfunweather://` scheme and does not depend on i
 - FCM client (`firebase-messaging`, `google-services.json`): push is inactive on
   Android; adding it changes the Data safety answers.
 - R8 (`isMinifyEnabled`) off: enable only with a full drive of the release build.
-- Listing assets and the `app/android/play/listing/` tree.
+- Cross-section, Observed and tablet screenshots (needs a richer demo fixture).
