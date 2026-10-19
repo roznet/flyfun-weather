@@ -81,3 +81,11 @@ deploy/mysql-baseline.json
 # Local scratch exports (icons, storyboards, screenshots) from working
 # sessions. Never part of the repo.
 artifacts/
+
+# Android Play upload key: app/android/keystore.properties is a symlink to
+# ~/.googleplaystore/flyfun-weather-keystore.properties. Neither the key nor
+# its passwords are ever committed (public repo); google-services.json likewise.
+app/android/keystore.properties
+*.jks
+*.keystore
+google-services.json

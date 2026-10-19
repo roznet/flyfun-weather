@@ -610,7 +610,7 @@ private fun fetchTileBitmap(urlString: String, cacheDir: java.io.File?): ImageBi
         val client = MapTileCache.httpClient(cacheDir)
         val reqBuilder = okhttp3.Request.Builder()
             .url(urlString)
-            .header("User-Agent", "FlyFunWeather-Android/1.5 (https://weather.flyfun.aero)")
+            .header("User-Agent", "FlyFunWeather-Android/${aero.flyfun.weather.BuildConfig.VERSION_NAME} (https://weather.flyfun.aero)")
         if (urlString.contains("stadiamaps.com")) {
             reqBuilder.header("Referer", "https://weather.flyfun.aero/")
         }

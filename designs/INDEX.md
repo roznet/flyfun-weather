@@ -212,6 +212,11 @@ Native Android phone/tablet/foldable companion app (`app/android/`, Kotlin 2.0 +
 Key exports: `AppStateViewModel`, `BriefingViewModel`, `CrossSectionViewModel`, `BriefingCacheStore`, `CachingBriefingRepository`, `CrossSectionCanvas`, `RouteGraphCanvas`, `SkewTCanvas`, `SlippyMapCanvas`, `ObservedTabScreen`, `FlightTrackingService`, `PushNotificationManager`, `FcmPushSender`
 → Full doc: android-app-overview.md
 
+### android-play-release
+Google Play release path for `aero.flyfun.weather`, ported from flyfun-forms: `scripts/play.py` (Play Developer API v3 — upload/promote/rollout/listing/testers inside a Play edit, `--dry-run` validates then discards, production needs `--yes-production`) and `/release-android` (the `/archive` counterpart). Upload key + passwords outside the repo in `~/.googleplaystore/`, `bundleRelease` signs via a gitignored `keystore.properties` symlink; first bundle goes through the API too. Owner checklist (create app, grant service account, 12×14-day closed test, App content forms), drafted Data safety answers, and the `assetlinks.json` step.
+Key exports: `scripts/play.py`, `.claude/skills/release-android/SKILL.md`
+→ Full doc: android-play-release.md
+
 ## Verification, evaluation & pilot feedback
 
 ### metar-taf-accuracy [project]

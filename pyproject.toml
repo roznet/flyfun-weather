@@ -97,6 +97,9 @@ dependencies = [
 # duckdb in dev so CI runs the convective-score SQL (tests/test_convective_verification.py).
 dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "pytest-mock>=3.0", "pytest-xdist>=3.5", "responses>=0.25", "duckdb>=1.0"]
 frontal-dev = ["cartopy>=0.22"]
+# Developer machine only: scripts/play.py (Google Play Developer API). requests and
+# python-dotenv are already core dependencies.
+release = ["google-auth>=2.20"]
 # Offline archive analysis (`verify convective-score`, #793). Not needed by the server.
 analysis = ["duckdb>=1.0"]
 
