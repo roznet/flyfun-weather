@@ -26,16 +26,19 @@ data class GradedMethods(
     val cloudExtent: String = "nwp",
     val cloudScale: String = "coverage",
     val icing: String = "ogimet_nwp",
-    val convective: String = "thermo",
+    val convective: String = "nwp",
 )
 
 /**
  * Cross-section layer registry, family mappings, emulation presets, and focus presets.
  *
- * SYNC: Kept in lockstep with `web/ts/visualization/controls/presets.ts` and
- * `web/ts/visualization/controls/family-bar.ts` (7 canonical families, `Basic / Learn`
- * defaults, and NWP preferred methods). Note: iOS `CrossSectionPresets.swift`
- * still uses 5 families and omits `thermo-convective-bg` from `basic_learn`.
+ * SYNC: Kept in lockstep with `web/ts/visualization/cross-section/advisory-presets.ts`
+ * (focus presets) and `web/ts/visualization/cross-section/layer-registry.ts`
+ * (PREFERRED_METHOD_LAYER / METHOD_GROUPS). `Basic / Learn` shows one layer per
+ * method group on its preferred method; for convection that is NWP
+ * (`nwp-convective-bg`, Web's default-on layer), and `NwpFallback` swaps in Thermo
+ * where the model has no native convective field. iOS `CrossSectionPresets.swift`
+ * (`methodGroups`) and `LayerFamily.swift` follow the same model.
  */
 object CrossSectionPresets {
 

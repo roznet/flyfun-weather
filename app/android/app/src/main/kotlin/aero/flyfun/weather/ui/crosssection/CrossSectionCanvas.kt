@@ -498,7 +498,9 @@ private fun DrawScope.drawGridAndAxes(
     headerPaint.textAlign = Paint.Align.LEFT
     drawContext.canvas.nativeCanvas.drawText("hPa", transform.plotRight + 6.dp.toPx(), transform.plotTop - 4.dp.toPx(), headerPaint)
 
-    // Altitude horizontal grid lines + Left (ft / FL) and Right (ISA hPa) labels
+    // Altitude horizontal grid lines + Left (ft / FL) and Right (ISA hPa) labels.
+    // The hPa scale is the ISA standard atmosphere (as Web axes.ts), not model or
+    // QNH pressure, so it is a reading aid rather than the actual pressure level.
     var alt = 0.0
     while (alt <= vizData.maxAltitudeFt) {
         val y = transform.altitudeToY(alt)
@@ -1015,6 +1017,9 @@ private fun DrawScope.drawNwpConvectiveBg(
     }
 }
 
+// Mirrors Web layers/thermo-convective-bg.ts: points without a base and top are
+// skipped rather than drawn full-height, and a shallow EL is stretched to a
+// freezing / −10 / −20 °C proxy top.
 private fun estimateThermoTowerTop(pt: VizPoint, baseFt: Double, thermodynamicElFt: Double): Double {
     val towerDepth = thermodynamicElFt - baseFt
     if (towerDepth >= 3000.0) return thermodynamicElFt
@@ -1668,8 +1673,16 @@ private fun DrawScope.drawAltitudeLinesLayer(
     }
 
     // Reference lines: Cruise Altitude & Flight Ceiling (labels left-aligned inside plotLeft + 6dp, matching Web reference-lines.ts)
+    val pillHeightPx = 15.dp.toPx()
+    val showCeiling = isLayerOn(effectiveLayers, "flight-ceiling", "reference-lines", "cruise") &&
+        vizData.flightCeilingFt > 0.0 && vizData.flightCeilingFt < vizData.maxAltitudeFt - 200.0
     if (isLayerOn(effectiveLayers, "cruise-altitude", "cruise", "reference-lines", defaultOn = true)) {
         val cruiseY = transform.altitudeToY(vizData.cruiseAltitudeFt)
+        // Both pills sit above their line at the same x; when the ceiling is
+        // within a pill height of cruise, drop the cruise pill below its line.
+        val ceilingCollides = showCeiling &&
+            abs(cruiseY - transform.altitudeToY(vizData.flightCeilingFt)) < pillHeightPx + 2.dp.toPx()
+        val cruiseTopY = if (ceilingCollides) cruiseY + 2.dp.toPx() else cruiseY - pillHeightPx
         val cruiseColor = Color(theme.cruiseLineColor)
         drawLine(
             color = cruiseColor,
@@ -1682,32 +1695,30 @@ private fun DrawScope.drawAltitudeLinesLayer(
         drawPillLabelLeftAligned(
             text = cruiseLabel,
             leftX = transform.plotLeft + 6.dp.toPx(),
-            topY = (cruiseY - 15.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 15.dp.toPx()),
+            topY = cruiseTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
             bgColor = Color(0xCC0F172A),
             textColor = cruiseColor,
         )
     }
 
-    if (isLayerOn(effectiveLayers, "flight-ceiling", "reference-lines", "cruise")) {
-        if (vizData.flightCeilingFt > 0.0 && vizData.flightCeilingFt < vizData.maxAltitudeFt - 200.0) {
-            val ceilY = transform.altitudeToY(vizData.flightCeilingFt)
-            val ceilColor = Color(0xFF94A3B8)
-            drawLine(
-                color = ceilColor.copy(alpha = 0.85f),
-                start = Offset(transform.plotLeft, ceilY),
-                end = Offset(transform.plotRight, ceilY),
-                strokeWidth = 1.5f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
-            )
-            val ceilLabel = "Flight ceiling ${String.format(Locale.US, "%,d", vizData.flightCeilingFt.roundToInt())} ft"
-            drawPillLabelLeftAligned(
-                text = ceilLabel,
-                leftX = transform.plotLeft + 6.dp.toPx(),
-                topY = (ceilY - 15.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 15.dp.toPx()),
-                bgColor = Color(0xCC0F172A),
-                textColor = ceilColor,
-            )
-        }
+    if (showCeiling) {
+        val ceilY = transform.altitudeToY(vizData.flightCeilingFt)
+        val ceilColor = Color(0xFF94A3B8)
+        drawLine(
+            color = ceilColor.copy(alpha = 0.85f),
+            start = Offset(transform.plotLeft, ceilY),
+            end = Offset(transform.plotRight, ceilY),
+            strokeWidth = 1.5f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
+        )
+        val ceilLabel = "Flight ceiling ${String.format(Locale.US, "%,d", vizData.flightCeilingFt.roundToInt())} ft"
+        drawPillLabelLeftAligned(
+            text = ceilLabel,
+            leftX = transform.plotLeft + 6.dp.toPx(),
+            topY = (ceilY - pillHeightPx).coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
+            bgColor = Color(0xCC0F172A),
+            textColor = ceilColor,
+        )
     }
 }
 

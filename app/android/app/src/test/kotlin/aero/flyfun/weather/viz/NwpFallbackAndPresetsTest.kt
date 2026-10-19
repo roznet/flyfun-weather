@@ -145,6 +145,28 @@ class NwpFallbackAndPresetsTest {
     }
 
     @Test
+    fun `Basic shows NWP convection and falls back to Thermo when the model has none`() {
+        val defaults = CrossSectionPresets.defaultEnabledLayers()
+        assertEquals("nwp", CrossSectionPresets.deriveGradedMethods(defaults).convective)
+
+        val basic = CrossSectionPresets.resolveAdvisoryPreset("basic")
+        assertTrue(basic["convective-nwp"] == true)
+        assertFalse(basic["convective"] == true)
+
+        val routeWithoutNwpConvective = VizRouteData(
+            points = listOf(emptyPoint(hasNwpClouds = true, hasNwpCeiling = true)),
+            cruiseAltitudeFt = 8000.0,
+            flightCeilingFt = 18000.0,
+            maxAltitudeFt = 20000.0,
+            totalDistanceNm = 100.0,
+        )
+        val unavailable = NwpFallback.getUnavailableLayers(routeWithoutNwpConvective)
+        val effective = NwpFallback.applyNwpFallback(basic, unavailable)
+        assertFalse(effective["convective-nwp"] == true)
+        assertTrue(effective["convective"] == true)
+    }
+
+    @Test
     fun `getCompactLayerOverrides toggles family off and back on preserving preferred method`() {
         val initial = CrossSectionPresets.defaultEnabledLayers().toMutableMap().apply {
             this["clouds-nwp"] = false
