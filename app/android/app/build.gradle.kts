@@ -9,7 +9,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "net.ro_z.flyfun_weather"
+        applicationId = "aero.flyfun.weather"
         minSdk = 31
         targetSdk = 36
         versionCode = 11

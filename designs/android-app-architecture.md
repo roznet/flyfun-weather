@@ -26,7 +26,7 @@ app/android/
 │   └── Coord, Airport, RouteGeometry (Haversine + cross-track projection), KnownAirports (SQLite search)
 ├── rzskewt/                   # App-local pure Kotlin JVM port (aero.flyfun.rzskewt)
 │   └── Thermodynamics (ISA, Bolton, LCL, dry/moist adiabats, HW/XW), SkewTTransform (log-P + skewed-T)
-└── app/                       # Android application module (net.ro_z.flyfun_weather / aero.flyfun.weather)
+└── app/                       # Android application module (applicationId + namespace aero.flyfun.weather)
     └── src/main/kotlin/aero/flyfun/weather/
         ├── model/             # @Serializable API DTOs, VizData, Assessment, rules/
         ├── data/              # ApiClient, AndroidTokenStore, BriefingRepository, BriefingCache, PirepOfflineStore
