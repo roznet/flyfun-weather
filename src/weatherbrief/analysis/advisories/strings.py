@@ -513,6 +513,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "; Ausweg unter {alt} ft",
         "es": "; escape por debajo de {alt} ft",
     },
+    "aircraft_icing.escape_down_varies": {
+        "en": "; escape below the freezing level or cloud base (level varies with terrain)",
+        "fr": " ; échappée sous l'isotherme 0°C ou la base des nuages (niveau variable selon le relief)",
+        "de": "; Ausweg unter Frostgrenze oder Wolkenbasis (Höhe je nach Gelände)",
+        "es": "; escape bajo la isoterma 0°C o la base de nubes (nivel variable según el terreno)",
+    },
     "aircraft_icing.escape_up": {
         "en": "; escape available (above the tops)",
         "fr": " ; échappée possible (au-dessus des sommets)",

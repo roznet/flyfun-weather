@@ -287,3 +287,30 @@ def test_settings_migration(enabled, expected):
 def test_settings_migration_leaves_uncustomized_profiles():
     for settings in ({}, {"advisories": {}}, {"advisories": {"enabled": {}}}):
         assert migrate_icing_enabled(settings) == (settings, False)
+
+
+def test_no_single_escape_level_quoted_into_higher_terrain():
+    """Point A escapes below 4,500 ft over 500 ft terrain; point B only below
+    6,500 ft over 4,000 ft terrain. "Descend below 4,500 ft" would be into B's
+    hill, so no single level is quoted, yet the escape still exists."""
+    from weatherbrief.models import ElevationPoint, ElevationProfile
+
+    iced = {
+        5: {"freezing_level_ft": 5000, "icing_zones": [_zone()]},
+        6: {"freezing_level_ft": 7000, "icing_zones": [_zone()]},
+    }
+    ctx = _ctx(iced, NON_FIKI)
+    elev = ElevationProfile(
+        route_name="t", total_distance_nm=200.0, max_elevation_ft=4000,
+        points=[
+            ElevationPoint(distance_nm=d, elevation_ft=4000 if 56 <= d <= 64 else 500, lat=0, lon=0)
+            for d in range(0, 201, 2)
+        ],
+    )
+    ctx = RouteContext(**{**ctx.__dict__, "elevation": elev})
+    params = {**resolve_aircraft_icing_params(ctx), "short_other_min": 60}
+    grade = grade_aircraft_icing_model(ctx, "gfs", params)
+    assert grade.status == AdvisoryStatus.AMBER
+    assert "level varies with terrain" in grade.detail
+    result = AircraftIcingEvaluator.evaluate(ctx, params)
+    assert not [m for m in result.aggregate_mitigations if m.addresses == "icing_escape"]

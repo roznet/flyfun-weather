@@ -133,6 +133,8 @@ class IcingPoint:
     column_zones: tuple[IcingZone, ...] = ()
     warm_at_cruise: bool = False
     escape_down_ft: float | None = None
+    # Lowest altitude the down-escape may use here (terrain + margin).
+    escape_floor_ft: float | None = None
     down_block: str | None = None  # freezing_rain | terrain | terrain_unknown | no_level
     escape_up_ft: float | None = None
     method_id: str | None = None
@@ -225,10 +227,11 @@ def icing_picture(
         )
         fz = sounding.indices.freezing_level_ft if sounding.indices else None
         warm = not cruise_zones and fz is not None and cruise < fz
-        down_ft = down_block = up_ft = None
+        down_ft = down_block = up_ft = floor_ft = None
         relevant = list(cruise_zones or column_zones)
         if relevant:
             terrain = max_terrain_near_point(ctx.elevation, dist)
+            floor_ft = None if terrain is None else terrain + terrain_margin
             down_ft, down_block = _escape_down(
                 sounding, zones, relevant, terrain, terrain_margin,
             )
@@ -237,7 +240,8 @@ def icing_picture(
         points.append(IcingPoint(
             index=idx, distance_nm=dist, assessed=True,
             cruise_zones=cruise_zones, column_zones=column_zones,
-            warm_at_cruise=warm, escape_down_ft=down_ft, down_block=down_block,
+            warm_at_cruise=warm, escape_down_ft=down_ft, escape_floor_ft=floor_ft,
+            down_block=down_block,
             escape_up_ft=up_ft, method_id=sounding.icing_method_effective,
         ))
     return points
@@ -427,9 +431,12 @@ def _stretch_sentence(stretch: _Stretch, reason: str, fiki: bool, count: int, lo
             risk=adv_t(f"aircraft_icing.risk.{stretch.worst_risk.value}", loc),
             minutes=max(1, round(stretch.minutes)), phases=phases,
         )
-        down = [p.escape_down_ft for p in stretch.points if p.escape_down_ft is not None]
-        if stretch.escape and len(down) == len(stretch.points):
-            text += adv_t("aircraft_icing.escape_down", loc, alt=_floor500(min(down)))
+        down_all = all(p.escape_down_ft is not None for p in stretch.points)
+        common = common_escape_down_ft(stretch)
+        if stretch.escape and common is not None:
+            text += adv_t("aircraft_icing.escape_down", loc, alt=common)
+        elif stretch.escape and down_all:
+            text += adv_t("aircraft_icing.escape_down_varies", loc)
         elif stretch.escape:
             text += adv_t("aircraft_icing.escape_up", loc)
         else:
@@ -437,6 +444,22 @@ def _stretch_sentence(stretch: _Stretch, reason: str, fiki: bool, count: int, lo
     if count > 1:
         text += adv_t("aircraft_icing.more_stretches", loc, n=count - 1)
     return text
+
+
+def common_escape_down_ft(stretch: _Stretch) -> int | None:
+    """One descent level that works at every point of the stretch, if any.
+
+    Each point's escape clears its own terrain; quoting the lowest of them as
+    "descend below X" would send the pilot into the hill at a higher-terrain
+    point of the same stretch. So a single level is quoted only when it also
+    clears every point's floor; otherwise the escape exists point by point.
+    """
+    down = [p.escape_down_ft for p in stretch.points]
+    floors = [p.escape_floor_ft for p in stretch.points]
+    if not down or any(v is None for v in down) or any(f is None for f in floors):
+        return None
+    level = _floor500(min(down))
+    return level if level >= max(floors) else None
 
 
 def _floor500(alt: float) -> int:
@@ -551,14 +574,16 @@ def _mitigations(
     out: list[Mitigation] = []
 
     worst = grade.worst
+    alt: int | None = None
     if worst is not None and worst.escape and worst.points:
-        down = [p.escape_down_ft for p in worst.points if p.escape_down_ft is not None]
-        if len(down) == len(worst.points):
-            alt = _floor500(min(down))
+        common = common_escape_down_ft(worst)
+        if common is not None:
+            alt = common
             detail = adv_t("aircraft_icing.mitigation.escape_down", loc, alt=alt)
-        else:
-            alt = _ceil500(max(p.escape_up_ft or 0.0 for p in worst.points))
+        elif fiki and all(p.escape_up_ft is not None for p in worst.points):
+            alt = _ceil500(max(p.escape_up_ft for p in worst.points))
             detail = adv_t("aircraft_icing.mitigation.escape_up", loc, alt=alt)
+    if alt is not None:
         out.append(Mitigation(
             kind=MitigationKind.ALTITUDE, addresses="icing_escape", detail=detail,
             # Escaping ends the exposure but does not undo the ice already on.
