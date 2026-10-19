@@ -314,5 +314,46 @@ class ViewModelTest {
             aero.flyfun.weather.ui.map.MapTileCache.baseTileUrl(z = 6, x = 32, y = 21, dark = false, muted = false),
         )
     }
-}
 
+    @Test
+    fun androidTokenStore_readsLegacyPlaintextAndClearsCleanly() {
+        val tempDir = java.nio.file.Files.createTempDirectory("flyfun_token_store_test").toFile()
+        try {
+            val legacyFile = java.io.File(tempDir, aero.flyfun.weather.data.AndroidTokenStore.LEGACY_FILE_NAME)
+            legacyFile.writeText("  legacy-jwt-token  ")
+
+            val store = aero.flyfun.weather.data.AndroidTokenStore(tempDir)
+            assertEquals("legacy-jwt-token", store.readToken())
+
+            store.writeToken("updated-jwt-token")
+            assertEquals("updated-jwt-token", store.readToken())
+
+            store.clearToken()
+            assertNull(store.readToken())
+            assertFalse(legacyFile.exists())
+            assertFalse(java.io.File(tempDir, aero.flyfun.weather.data.AndroidTokenStore.ENCRYPTED_FILE_NAME).exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun briefingViewModel_applyLaunchOptionsUpdatesExistingInstance() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = FixtureBriefingRepository(mockLive = true)
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(preferredTimestamp = null, openObserved = false)
+        testScope.advanceUntilIdle()
+        assertEquals(BriefingTab.ADVISORY, vm.selectedTab.value)
+
+        // Re-invoking applyLaunchOptions with openObserved = true on an already-loaded ViewModel switches tabs
+        vm.applyLaunchOptions(preferredTimestamp = FixtureBriefingData.TIMESTAMP, openObserved = true)
+        testScope.advanceUntilIdle()
+        assertEquals(BriefingTab.OBSERVED, vm.selectedTab.value)
+    }
+}

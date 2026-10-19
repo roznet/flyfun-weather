@@ -90,6 +90,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class RootRoute {
+    FLIGHTS,
+    BRIEFING,
+    TRIP,
+    MAP_FORECAST,
+    MAP_HISTORICAL,
+    AIRCRAFT,
+    WHATS_NEW,
+    SETTINGS,
+}
+
 private sealed interface RootScreen {
     data object Flights : RootScreen
     data class Briefing(
@@ -160,38 +171,49 @@ fun FlyFunWeatherRoot(
     }
 
     val mapCatalog by (appState.helpStore?.mapCatalog?.collectAsState() ?: remember { mutableStateOf(null) })
+    val allFlights by flightListViewModel.flights.collectAsState()
 
     // Persist navigation state across configuration changes (rotation, foldable transitions, dark mode)
-    var currentRoute by rememberSaveable(sessionKey) { mutableStateOf("flights") }
+    var currentRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
     var activeFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeTripId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activePackTimestamp by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeOpenObserved by rememberSaveable(sessionKey) { mutableStateOf(false) }
     var cachedFlightForBriefing by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
 
+    val resolvedFlightForBriefing = cachedFlightForBriefing?.takeIf { it.id == activeFlightId }
+        ?: allFlights.firstOrNull { it.id == activeFlightId }
+
     val selectedBriefingVm: BriefingViewModel? = activeFlightId?.let { fId ->
         viewModel(key = "briefing:$sessionKey:$fId") {
             BriefingViewModel(
                 flightId = fId,
                 repository = appState.repository,
-                initialFlight = cachedFlightForBriefing?.takeIf { it.id == fId },
+                initialFlight = resolvedFlightForBriefing,
                 helpStore = appState.helpStore,
-            ).also { vm ->
-                if (activeOpenObserved) {
-                    vm.selectTab(BriefingTab.OBSERVED)
-                }
-                vm.loadInitialBriefing(preferredTimestamp = activePackTimestamp)
-            }
+            )
+        }
+    }
+
+    LaunchedEffect(selectedBriefingVm, activeFlightId, activePackTimestamp, activeOpenObserved) {
+        val vm = selectedBriefingVm ?: return@LaunchedEffect
+        vm.applyLaunchOptions(
+            preferredTimestamp = activePackTimestamp,
+            openObserved = activeOpenObserved,
+        )
+        if (activeOpenObserved) {
+            activeOpenObserved = false
         }
     }
 
     val currentScreen: RootScreen = when (currentRoute) {
-        "briefing" -> {
+        RootRoute.FLIGHTS -> RootScreen.Flights
+        RootRoute.BRIEFING -> {
             val fId = activeFlightId
             if (fId != null) {
                 RootScreen.Briefing(
                     flightId = fId,
-                    flight = cachedFlightForBriefing,
+                    flight = resolvedFlightForBriefing,
                     initialTimestamp = activePackTimestamp,
                     openObserved = activeOpenObserved,
                 )
@@ -199,22 +221,28 @@ fun FlyFunWeatherRoot(
                 RootScreen.Flights
             }
         }
-        "trip" -> {
+        RootRoute.TRIP -> {
             val tId = activeTripId
             if (tId != null) RootScreen.TripDetail(tId) else RootScreen.Flights
         }
-        "map_forecast" -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
-        "map_historical" -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.HISTORICAL)
-        "aircraft" -> RootScreen.AircraftList
-        "whats_new" -> RootScreen.WhatsNew
-        "settings" -> RootScreen.Settings
-        else -> RootScreen.Flights
+        RootRoute.MAP_FORECAST -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
+        RootRoute.MAP_HISTORICAL -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.HISTORICAL)
+        RootRoute.AIRCRAFT -> RootScreen.AircraftList
+        RootRoute.WHATS_NEW -> RootScreen.WhatsNew
+        RootRoute.SETTINGS -> RootScreen.Settings
     }
 
-    // Add / Edit Flight modal sheet state
+    // Add / Edit Flight modal sheet state (flight IDs saved across rotation)
     var showAddFlightSheet by rememberSaveable(sessionKey) { mutableStateOf(false) }
-    var editingFlight by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
-    var nextLegSourceFlight by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
+    var editingFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+    var nextLegSourceFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+    var editingFlightMem by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
+    var nextLegSourceFlightMem by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
+
+    val resolvedEditingFlight = editingFlightMem?.takeIf { it.id == editingFlightId }
+        ?: editingFlightId?.let { id -> allFlights.firstOrNull { it.id == id } }
+    val resolvedNextLegSourceFlight = nextLegSourceFlightMem?.takeIf { it.id == nextLegSourceFlightId }
+        ?: nextLegSourceFlightId?.let { id -> allFlights.firstOrNull { it.id == id } }
 
     val sharedPreview by flightListViewModel.sharedPreview.collectAsState()
 
@@ -228,7 +256,14 @@ fun FlyFunWeatherRoot(
         activeFlightId = flightId
         activePackTimestamp = packTimestamp
         activeOpenObserved = openObserved
-        currentRoute = "briefing"
+        currentRoute = RootRoute.BRIEFING
+    }
+
+    fun closeBriefingToFlights() {
+        activeFlightId = null
+        activePackTimestamp = null
+        activeOpenObserved = false
+        currentRoute = RootRoute.FLIGHTS
     }
 
     // Consume deep-link / universal-link navigation target
@@ -244,22 +279,22 @@ fun FlyFunWeatherRoot(
             }
             is NavigationTarget.Trip -> {
                 activeTripId = target.tripId
-                currentRoute = "trip"
+                currentRoute = RootRoute.TRIP
             }
             is NavigationTarget.SharedFlight -> {
                 flightListViewModel.loadSharedFlightPreview(target.code)
             }
             is NavigationTarget.SharedTrip -> {
                 activeTripId = target.code
-                currentRoute = "trip"
+                currentRoute = RootRoute.TRIP
             }
             is NavigationTarget.ForecastMap -> {
                 forecastMapViewModel.applyDeepLinkTarget(target)
-                currentRoute = "map_forecast"
+                currentRoute = RootRoute.MAP_FORECAST
             }
             is NavigationTarget.HistoricalMap -> {
                 historicalMapViewModel.applyDeepLinkTarget(target)
-                currentRoute = "map_historical"
+                currentRoute = RootRoute.MAP_HISTORICAL
             }
         }
     }
@@ -274,10 +309,18 @@ fun FlyFunWeatherRoot(
         else -> true
     }
     BackHandler(enabled = shouldInterceptBack) {
-        if (currentScreen is RootScreen.TripDetail) {
-            flightListViewModel.loadFlights()
+        when (currentScreen) {
+            is RootScreen.TripDetail -> {
+                flightListViewModel.loadFlights()
+                currentRoute = RootRoute.FLIGHTS
+            }
+            is RootScreen.Briefing -> {
+                closeBriefingToFlights()
+            }
+            else -> {
+                currentRoute = RootRoute.FLIGHTS
+            }
         }
-        currentRoute = "flights"
     }
 
     when (val screen = currentScreen) {
@@ -287,28 +330,28 @@ fun FlyFunWeatherRoot(
                 historicalViewModel = historicalMapViewModel,
                 initialMode = screen.initialMode,
                 mapCatalog = mapCatalog,
-                onBack = { currentRoute = "flights" },
+                onBack = { currentRoute = RootRoute.FLIGHTS },
             )
         }
         RootScreen.AircraftList -> {
             AircraftListScreen(
                 viewModel = aircraftViewModel,
-                onBack = { currentRoute = "flights" },
+                onBack = { currentRoute = RootRoute.FLIGHTS },
             )
         }
         RootScreen.WhatsNew -> {
             WhatsNewScreen(
                 whatsNewStore = appState.whatsNewStore,
                 apiClient = appState.apiClient,
-                onBack = { currentRoute = "flights" },
+                onBack = { currentRoute = RootRoute.FLIGHTS },
             )
         }
         RootScreen.Settings -> {
             SettingsScreen(
                 appState = appState,
-                onBack = { currentRoute = "flights" },
-                onOpenAircraft = { currentRoute = "aircraft" },
-                onOpenWhatsNew = { currentRoute = "whats_new" },
+                onBack = { currentRoute = RootRoute.FLIGHTS },
+                onOpenAircraft = { currentRoute = RootRoute.AIRCRAFT },
+                onOpenWhatsNew = { currentRoute = RootRoute.WHATS_NEW },
             )
         }
         is RootScreen.TripDetail -> {
@@ -317,14 +360,16 @@ fun FlyFunWeatherRoot(
                 viewModel = tripsViewModel,
                 onBack = {
                     flightListViewModel.loadFlights()
-                    currentRoute = "flights"
+                    currentRoute = RootRoute.FLIGHTS
                 },
                 onOpenFlight = { flight ->
                     openBriefing(flightId = flight.id, flight = flight)
                 },
                 onAddNextLeg = { prevLeg ->
-                    editingFlight = null
-                    nextLegSourceFlight = prevLeg
+                    editingFlightId = null
+                    editingFlightMem = null
+                    nextLegSourceFlightId = prevLeg?.id
+                    nextLegSourceFlightMem = prevLeg
                     showAddFlightSheet = true
                 },
             )
@@ -343,35 +388,41 @@ fun FlyFunWeatherRoot(
                             openBriefing(flightId = flight.id, flight = flight)
                         },
                         onAddFlightClick = {
-                            editingFlight = null
-                            nextLegSourceFlight = null
+                            editingFlightId = null
+                            editingFlightMem = null
+                            nextLegSourceFlightId = null
+                            nextLegSourceFlightMem = null
                             showAddFlightSheet = true
                         },
                         onEditFlightClick = { flight ->
-                            editingFlight = flight
-                            nextLegSourceFlight = null
+                            editingFlightId = flight.id
+                            editingFlightMem = flight
+                            nextLegSourceFlightId = null
+                            nextLegSourceFlightMem = null
                             showAddFlightSheet = true
                         },
                         onAddNextLegClick = { flight ->
-                            editingFlight = null
-                            nextLegSourceFlight = flight
+                            editingFlightId = null
+                            editingFlightMem = null
+                            nextLegSourceFlightId = flight.id
+                            nextLegSourceFlightMem = flight
                             showAddFlightSheet = true
                         },
                         onOpenTripClick = { tripId ->
                             activeTripId = tripId
-                            currentRoute = "trip"
+                            currentRoute = RootRoute.TRIP
                         },
                         onOpenMapsClick = {
-                            currentRoute = "map_forecast"
+                            currentRoute = RootRoute.MAP_FORECAST
                         },
                         onOpenAircraftClick = {
-                            currentRoute = "aircraft"
+                            currentRoute = RootRoute.AIRCRAFT
                         },
                         onOpenWhatsNewClick = {
-                            currentRoute = "whats_new"
+                            currentRoute = RootRoute.WHATS_NEW
                         },
                         onOpenSettingsClick = {
-                            currentRoute = "settings"
+                            currentRoute = RootRoute.SETTINGS
                         },
                         modifier = Modifier
                             .width(380.dp)
@@ -384,8 +435,7 @@ fun FlyFunWeatherRoot(
                             BriefingContainerScreen(
                                 viewModel = vm,
                                 onBack = {
-                                    activeFlightId = null
-                                    currentRoute = "flights"
+                                    closeBriefingToFlights()
                                 },
                                 showBackButton = false,
                             )
@@ -413,7 +463,7 @@ fun FlyFunWeatherRoot(
                     BriefingContainerScreen(
                         viewModel = vm,
                         onBack = {
-                            currentRoute = "flights"
+                            closeBriefingToFlights()
                         },
                         showBackButton = true,
                     )
@@ -426,35 +476,41 @@ fun FlyFunWeatherRoot(
                             openBriefing(flightId = flight.id, flight = flight)
                         },
                         onAddFlightClick = {
-                            editingFlight = null
-                            nextLegSourceFlight = null
+                            editingFlightId = null
+                            editingFlightMem = null
+                            nextLegSourceFlightId = null
+                            nextLegSourceFlightMem = null
                             showAddFlightSheet = true
                         },
                         onEditFlightClick = { flight ->
-                            editingFlight = flight
-                            nextLegSourceFlight = null
+                            editingFlightId = flight.id
+                            editingFlightMem = flight
+                            nextLegSourceFlightId = null
+                            nextLegSourceFlightMem = null
                             showAddFlightSheet = true
                         },
                         onAddNextLegClick = { flight ->
-                            editingFlight = null
-                            nextLegSourceFlight = flight
+                            editingFlightId = null
+                            editingFlightMem = null
+                            nextLegSourceFlightId = flight.id
+                            nextLegSourceFlightMem = flight
                             showAddFlightSheet = true
                         },
                         onOpenTripClick = { tripId ->
                             activeTripId = tripId
-                            currentRoute = "trip"
+                            currentRoute = RootRoute.TRIP
                         },
                         onOpenMapsClick = {
-                            currentRoute = "map_forecast"
+                            currentRoute = RootRoute.MAP_FORECAST
                         },
                         onOpenAircraftClick = {
-                            currentRoute = "aircraft"
+                            currentRoute = RootRoute.AIRCRAFT
                         },
                         onOpenWhatsNewClick = {
-                            currentRoute = "whats_new"
+                            currentRoute = RootRoute.WHATS_NEW
                         },
                         onOpenSettingsClick = {
-                            currentRoute = "settings"
+                            currentRoute = RootRoute.SETTINGS
                         },
                     )
                 }
@@ -463,15 +519,15 @@ fun FlyFunWeatherRoot(
     }
 
     if (showAddFlightSheet) {
-        val addVm = remember(editingFlight, nextLegSourceFlight) {
+        val addVm = remember(editingFlightId, nextLegSourceFlightId) {
             AddFlightViewModel(
                 repository = appState.repository,
                 apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
                 tripRepository = appState.tripRepository,
                 airportDb = appState.airportDb,
             ).also { vm ->
-                editingFlight?.let { vm.loadExistingFlight(it) }
-                nextLegSourceFlight?.let { vm.populateNextLeg(it) }
+                resolvedEditingFlight?.let { vm.loadExistingFlight(it) }
+                resolvedNextLegSourceFlight?.let { vm.populateNextLeg(it) }
             }
         }
         AddFlightSheet(

@@ -266,8 +266,10 @@ fun rememberSlippyMapCameraState(
  * - Standard light theme: OpenStreetMap
  */
 internal object MapTileCache {
+    private const val FAILURE_COOLDOWN_MS = 30_000L
     private val cache = object : LruCache<String, ImageBitmap>(180) {}
     private val inFlight: MutableSet<String> = Collections.synchronizedSet(HashSet())
+    private val failedUntilMs: MutableMap<String, Long> = Collections.synchronizedMap(HashMap())
 
     @Volatile
     private var diskHttpClient: okhttp3.OkHttpClient? = null
@@ -303,9 +305,22 @@ internal object MapTileCache {
 
     fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
 
-    fun put(key: String, bitmap: ImageBitmap) = synchronized(cache) { cache.put(key, bitmap) }
+    fun put(key: String, bitmap: ImageBitmap) = synchronized(cache) {
+        failedUntilMs.remove(key)
+        cache.put(key, bitmap)
+    }
 
-    fun markInFlight(key: String): Boolean = inFlight.add(key)
+    fun markInFlight(key: String): Boolean {
+        val cooldownUntil = failedUntilMs[key]
+        if (cooldownUntil != null && System.currentTimeMillis() < cooldownUntil) {
+            return false
+        }
+        return inFlight.add(key)
+    }
+
+    fun markFailed(key: String) {
+        failedUntilMs[key] = System.currentTimeMillis() + FAILURE_COOLDOWN_MS
+    }
 
     fun unmarkInFlight(key: String) {
         inFlight.remove(key)
@@ -439,6 +454,8 @@ fun SlippyMapCanvas(
                                 if (bmp != null) {
                                     MapTileCache.put(baseKey, bmp)
                                     withContext(Dispatchers.Main) { tileTick++ }
+                                } else {
+                                    MapTileCache.markFailed(baseKey)
                                 }
                             } finally {
                                 MapTileCache.unmarkInFlight(baseKey)
@@ -463,12 +480,16 @@ fun SlippyMapCanvas(
                             scope.launch(Dispatchers.IO) {
                                 try {
                                     val bytes = runCatching { apiClient.requestRaw(path) }.getOrNull()
-                                    if (bytes != null && bytes.isNotEmpty()) {
-                                        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                        if (decoded != null) {
-                                            MapTileCache.put(obsKey, decoded.asImageBitmap())
-                                            withContext(Dispatchers.Main) { tileTick++ }
-                                        }
+                                    val decoded = if (bytes != null && bytes.isNotEmpty()) {
+                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    } else {
+                                        null
+                                    }
+                                    if (decoded != null) {
+                                        MapTileCache.put(obsKey, decoded.asImageBitmap())
+                                        withContext(Dispatchers.Main) { tileTick++ }
+                                    } else {
+                                        MapTileCache.markFailed(obsKey)
                                     }
                                 } finally {
                                     MapTileCache.unmarkInFlight(obsKey)
@@ -571,16 +592,20 @@ private fun tileYToLat(y: Int, nTiles: Int): Double {
 private fun fetchTileBitmap(urlString: String, cacheDir: java.io.File?): ImageBitmap? {
     return runCatching {
         val client = MapTileCache.httpClient(cacheDir)
-        val request = okhttp3.Request.Builder()
+        val reqBuilder = okhttp3.Request.Builder()
             .url(urlString)
             .header("User-Agent", "FlyFunWeather-Android/1.5 (https://weather.flyfun.aero)")
-            .header("Referer", "https://weather.flyfun.aero/")
-            .build()
-        client.newCall(request).execute().use { response ->
+        if (urlString.contains("stadiamaps.com")) {
+            reqBuilder.header("Referer", "https://weather.flyfun.aero/")
+        }
+        client.newCall(reqBuilder.build()).execute().use { response ->
             if (response.isSuccessful) {
                 val bytes = response.body?.bytes() ?: return null
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
             } else {
+                runCatching {
+                    android.util.Log.w("SlippyMapCanvas", "Tile fetch HTTP ${response.code} for $urlString")
+                }
                 null
             }
         }
