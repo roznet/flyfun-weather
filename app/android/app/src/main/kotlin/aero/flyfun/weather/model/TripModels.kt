@@ -232,11 +232,70 @@ data class TripLegResponse(
 typealias TripLeg = TripLegResponse
 
 @Serializable
+data class ServerTripLeg(
+    @SerialName("flight_id")
+    val flightId: String = "",
+    val label: String = "",
+    val origin: String? = null,
+    val destination: String? = null,
+    @SerialName("departure_time")
+    val departureTime: String = "",
+    @SerialName("duration_hours")
+    val durationHours: Double = 0.0,
+    val state: String? = null,
+    val assessment: String? = null,
+    @SerialName("assessment_reason")
+    val assessmentReason: String? = null,
+    @SerialName("advisory_summary")
+    val advisorySummary: AdvisorySummary? = null,
+) {
+    fun toFlightResponse(): FlightResponse {
+        val wps = buildList {
+            if (!origin.isNullOrBlank()) add(origin)
+            if (!destination.isNullOrBlank()) add(destination)
+        }.ifEmpty {
+            label.split("→").map { it.trim() }.filter { it.isNotEmpty() }
+        }
+        return FlightResponse(
+            id = flightId,
+            routeName = label,
+            waypoints = wps,
+            departureTime = departureTime,
+            flightDurationHours = durationHours,
+            briefingStatus = BriefingStatusInfo(assessment = assessment),
+            advisorySummary = advisorySummary,
+        )
+    }
+}
+
+@Serializable
+data class ServerTripSummary(
+    @SerialName("trip_id")
+    val tripId: String = "",
+    val name: String = "",
+    val legs: List<ServerTripLeg> = emptyList(),
+    @SerialName("total_legs")
+    val totalLegs: Int = 0,
+    @SerialName("chain_status")
+    val chainStatus: String? = null,
+    @SerialName("chain_label")
+    val chainLabel: String = "",
+    val headline: String = "",
+)
+
+@Serializable
 data class TripResponse(
     val id: String,
     @SerialName("user_id")
     val userId: String? = null,
     val title: String = "",
+    @SerialName("name")
+    val rawName: String = "",
+    @SerialName("display_name")
+    val displayName: String? = null,
+    @SerialName("flight_ids")
+    val flightIds: List<String> = emptyList(),
+    val summary: ServerTripSummary? = null,
     @SerialName("leg_count")
     val legCount: Int = 0,
     @SerialName("first_departure_time")
@@ -278,7 +337,7 @@ data class TripResponse(
     @SerialName("continuity_warnings")
     val continuityWarnings: List<ContinuityWarning> = emptyList(),
     val legs: List<TripLegResponse> = emptyList(),
-    val role: TripRole? = null,
+    val role: String? = null,
     @SerialName("owner_display_name")
     val ownerDisplayName: String? = null,
     @SerialName("subscriber_count")
@@ -289,19 +348,29 @@ data class TripResponse(
     val aiSummary: String? = null,
     @SerialName("ai_summary_generated_at")
     val aiSummaryGeneratedAt: String? = null,
+    @SerialName("ai_summary_at")
+    val aiSummaryAt: String? = null,
     @SerialName("ai_summary_stale")
     val aiSummaryStale: Boolean? = null,
     @SerialName("created_at")
     val createdAt: String? = null,
 ) {
     val name: String
-        get() = title
+        get() = title.ifBlank {
+            displayName?.takeIf { it.isNotBlank() }
+                ?: summary?.name?.takeIf { it.isNotBlank() }
+                ?: rawName.ifBlank { summary?.chainLabel?.takeIf { it.isNotBlank() } ?: routeLabel ?: "Trip" }
+        }
 
     val flights: List<FlightResponse>
-        get() = legs.map { it.flight }
+        get() = if (legs.isNotEmpty()) {
+            legs.map { it.flight }
+        } else {
+            summary?.legs?.map { it.toFlightResponse() }.orEmpty()
+        }
 
     val resolvedAssessment: Assessment
-        get() = Assessment.fromString(overallAssessment)
+        get() = Assessment.fromString(overallAssessment ?: summary?.chainStatus)
 
     val resolvedEcmwfAssessment: Assessment
         get() = Assessment.fromString(ecmwfAssessment)
@@ -310,7 +379,7 @@ data class TripResponse(
         get() = Assessment.fromString(gfsAssessment)
 
     val isEditable: Boolean
-        get() = role != TripRole.SUBSCRIBER
+        get() = role != "subscriber" && role != "viewer"
 
     val routeLabel: String?
         get() {
@@ -322,6 +391,7 @@ data class TripResponse(
 
 @Serializable
 data class CreateTripRequest(
+    val name: String = "",
     val title: String = "",
     @SerialName("flight_ids")
     val flightIds: List<String> = emptyList(),
@@ -330,7 +400,7 @@ data class CreateTripRequest(
     constructor(
         name: String,
         flightIds: List<String> = emptyList(),
-    ) : this(title = name, flightIds = flightIds, legs = null)
+    ) : this(name = name, title = name, flightIds = flightIds, legs = null)
 }
 
 @Serializable
@@ -342,13 +412,14 @@ data class AddTripLegsRequest(
 
 @Serializable
 data class UpdateTripRequest(
+    val name: String? = null,
     val title: String? = null,
     @SerialName("flight_ids")
     val flightIds: List<String>? = null,
 ) {
     constructor(
         name: String?,
-    ) : this(title = name, flightIds = null)
+    ) : this(name = name, title = name, flightIds = null)
 }
 
 @Serializable

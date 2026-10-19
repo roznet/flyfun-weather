@@ -306,7 +306,7 @@ fun FlyFunWeatherRoot(
     }
 
     val configuration = LocalConfiguration.current
-    val isExpandedScreen = configuration.screenWidthDp >= 840
+    val isExpandedScreen = configuration.screenWidthDp >= 840 && configuration.smallestScreenWidthDp >= 600
 
     // Predictive back / system Back button handling for single-pane and modal screens
     val shouldInterceptBack = when (currentScreen) {

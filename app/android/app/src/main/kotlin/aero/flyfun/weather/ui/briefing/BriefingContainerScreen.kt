@@ -121,7 +121,7 @@ fun BriefingContainerScreen(
     }
 
     val configuration = LocalConfiguration.current
-    val isWideScreen = configuration.screenWidthDp >= 600
+    val isWideScreen = configuration.screenWidthDp >= 600 && configuration.smallestScreenWidthDp >= 600
 
     Scaffold(
         modifier = modifier.fillMaxSize(),

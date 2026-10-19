@@ -115,7 +115,7 @@ fun SkewTDetailSection(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // 1. Header Bar: Point Selector, Mode Toggle, Help Button
+            // 1. Header Bar: Point Selector + Help Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -143,11 +143,13 @@ fun SkewTDetailSection(
                             text = "Sounding",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
                         )
                         Text(
                             text = pointTitle,
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
                         )
                     }
                     IconButton(
@@ -164,44 +166,26 @@ fun SkewTDetailSection(
                     }
                 }
 
-                // Dynamic vs Compare Models toggle + Help Button
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                TextButton(
+                    onClick = { showHelpDialog = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
-                    if (availableModels.size > 1 || compareProfiles.size > 1) {
-                        FilterChip(
-                            selected = !isCompareMode,
-                            onClick = { isCompareMode = false },
-                            label = { Text("Dynamic", style = MaterialTheme.typography.labelSmall) },
-                        )
-                        FilterChip(
-                            selected = isCompareMode,
-                            onClick = { isCompareMode = true },
-                            label = { Text("Compare Models", style = MaterialTheme.typography.labelSmall) },
-                        )
-                    }
-
-                    TextButton(
-                        onClick = { showHelpDialog = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                            contentDescription = "Help me read this graph",
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Help me read this graph",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                        contentDescription = "Help me read this graph",
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Help me read this graph",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                    )
                 }
             }
 
-            // Model selector row when multiple models exist
-            if (availableModels.size > 1) {
+            // Mode & Model selector row when multiple models exist
+            if (availableModels.size > 1 || compareProfiles.size > 1) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -209,24 +193,39 @@ fun SkewTDetailSection(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Text(
-                        text = if (isCompareMode) "Primary model:" else "Model:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    FilterChip(
+                        selected = !isCompareMode,
+                        onClick = { isCompareMode = false },
+                        label = { Text("Dynamic", style = MaterialTheme.typography.labelSmall, maxLines = 1) },
                     )
-                    availableModels.forEach { model ->
-                        val isSelected = model.equals(selectedModel, ignoreCase = true)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSelectModel(model) },
-                            label = {
-                                Text(
-                                    text = model.uppercase(Locale.US) + if (isCompareMode && isSelected) " ★" else "",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                )
-                            },
+                    FilterChip(
+                        selected = isCompareMode,
+                        onClick = { isCompareMode = true },
+                        label = { Text("Compare Models", style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+                    )
+                    if (availableModels.size > 1) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (isCompareMode) "Primary:" else "Model:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
                         )
+                        availableModels.forEach { model ->
+                            val isSelected = model.equals(selectedModel, ignoreCase = true)
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectModel(model) },
+                                label = {
+                                    Text(
+                                        text = model.uppercase(Locale.US) + if (isCompareMode && isSelected) " ★" else "",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }

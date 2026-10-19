@@ -146,19 +146,41 @@ data class AdvisoryChip(
 
 @Serializable
 data class TripLegRef(
+    val id: String = "",
     @SerialName("trip_id")
-    val tripId: String = "",
+    val legacyTripId: String = "",
+    val name: String = "",
     val title: String = "",
     val role: String? = null,
+    val position: Int = 0,
     @SerialName("leg_index")
-    val legIndex: Int = 1,
+    val legacyLegIndex: Int = 1,
+    val total: Int = 0,
     @SerialName("leg_count")
-    val legCount: Int = 1,
+    val legacyLegCount: Int = 1,
+    @SerialName("auto_refresh")
+    val autoRefresh: Boolean = false,
     @SerialName("continuity_warning")
     val continuityWarning: String? = null,
 ) {
+    val tripId: String
+        get() = id.ifBlank { legacyTripId }
+
+    val resolvedTitle: String
+        get() = name.ifBlank { title }
+
+    val legIndex: Int
+        get() = if (position > 0) position else legacyLegIndex
+
+    val legCount: Int
+        get() = if (total > 0) total else legacyLegCount
+
     val badgeText: String
-        get() = "$title · Leg $legIndex/$legCount"
+        get() = if (resolvedTitle.isNotBlank()) {
+            "$resolvedTitle · Leg $legIndex/$legCount"
+        } else {
+            "Leg $legIndex/$legCount"
+        }
 }
 
 @Serializable
@@ -271,10 +293,10 @@ data class FlightResponse(
         get() = briefingStatus?.assessment
 
     val tripId: String?
-        get() = trip?.tripId
+        get() = trip?.tripId?.takeIf { it.isNotBlank() }
 
     val tripName: String?
-        get() = trip?.title
+        get() = trip?.resolvedTitle?.takeIf { it.isNotBlank() }
 
     val departureWindowEnd: String?
         get() = altDepartureTime

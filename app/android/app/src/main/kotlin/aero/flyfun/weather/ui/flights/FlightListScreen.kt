@@ -6,6 +6,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -506,6 +508,7 @@ private fun TripsQuickStrip(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -516,7 +519,7 @@ private fun TripsQuickStrip(
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(18.dp),
         )
-        trips.take(3).forEach { (id, label) ->
+        trips.forEach { (id, label) ->
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -526,6 +529,8 @@ private fun TripsQuickStrip(
                     text = label,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
@@ -641,6 +646,7 @@ private fun FlightRowCard(
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (flight.role != null && flight.role != FlightRole.OWNER) {
                         Surface(
@@ -650,6 +656,7 @@ private fun FlightRowCard(
                             Text(
                                 text = flight.role.name,
                                 style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
@@ -666,45 +673,56 @@ private fun FlightRowCard(
                         text = depFormatted,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                     Text(
                         text = "• ${FlightDuration.label(flight.flightDurationHours)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                     Text(
                         text = "• ${flight.cruiseAltitudeFt} ft",
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
 
-                if (flight.tripName != null || flight.aircraft != null) {
+                val tripBadgeText = flight.trip?.badgeText?.takeIf { it.isNotBlank() } ?: flight.tripName
+                val aircraftLabel = flight.aircraft?.displayLabel?.takeIf { it.isNotBlank() }
+                if (tripBadgeText != null || aircraftLabel != null) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        flight.tripName?.let { tripName ->
+                        if (tripBadgeText != null) {
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier.clickable(onClick = onTripBadgeClick),
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .clickable(onClick = onTripBadgeClick),
                             ) {
                                 Text(
-                                    text = tripName,
+                                    text = tripBadgeText,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
                             }
                         }
-                        flight.aircraft?.let { ac ->
+                        if (aircraftLabel != null) {
                             Text(
-                                text = ac.displayLabel,
+                                text = aircraftLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
