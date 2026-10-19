@@ -6495,6 +6495,9 @@ equipage". The aircraft wins over the profile (#777).
   no warm air intervenes; the descent joins any open stretch.
 - *Escape level clamped below the iced zone*, so a freezing level above an iced cruise
   never reads "escape below a level higher than you are".
+- *One quoted escape level per stretch only if it clears every point's terrain floor*;
+  otherwise the card says the level varies with terrain and emits no single-level
+  mitigation. The grade still counts the escape (it exists at every point).
 - *No aircraft ceiling* → the flight ceiling caps the FIKI up-escape.
 - *Ribbon*: every point of a stretch takes the stretch's grade.
 - *Retired cards are not rewritten*: old packs keep their stored cards; a recalculate
