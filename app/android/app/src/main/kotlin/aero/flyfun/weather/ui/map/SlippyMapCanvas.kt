@@ -54,8 +54,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import aero.flyfun.weather.data.ApiClient
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Collections
 import java.util.Locale
 import kotlin.math.PI
@@ -261,11 +259,47 @@ fun rememberSlippyMapCameraState(
 }
 
 /**
- * Shared in-memory tile cache across map instances.
+ * Shared in-memory + on-disk HTTP tile cache across map instances.
+ * Mirrors `web/ts/visualization/map-tiles.ts`:
+ * - Dark theme: Stadia Maps `alidade_smooth_dark`
+ * - Muted light theme (when observed radar/satellite imagery is active): Stadia Maps `alidade_smooth`
+ * - Standard light theme: OpenStreetMap
  */
-private object MapTileCache {
+internal object MapTileCache {
     private val cache = object : LruCache<String, ImageBitmap>(180) {}
     private val inFlight: MutableSet<String> = Collections.synchronizedSet(HashSet())
+
+    @Volatile
+    private var diskHttpClient: okhttp3.OkHttpClient? = null
+
+    fun httpClient(cacheDir: java.io.File?): okhttp3.OkHttpClient {
+        diskHttpClient?.let { return it }
+        return synchronized(this) {
+            diskHttpClient ?: okhttp3.OkHttpClient.Builder()
+                .apply {
+                    if (cacheDir != null) {
+                        val tileDir = java.io.File(cacheDir, "http_map_tiles")
+                        cache(okhttp3.Cache(tileDir, 30L * 1024L * 1024L))
+                    }
+                }
+                .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+                .also { diskHttpClient = it }
+        }
+    }
+
+    fun baseTileStyle(dark: Boolean, muted: Boolean): String = when {
+        dark -> "stadia-dark"
+        muted -> "stadia-muted"
+        else -> "osm-light"
+    }
+
+    fun baseTileUrl(dark: Boolean, muted: Boolean, z: Int, x: Int, y: Int): String = when {
+        dark -> "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/$z/$x/$y.png"
+        muted -> "https://tiles.stadiamaps.com/tiles/alidade_smooth/$z/$x/$y.png"
+        else -> "https://tile.openstreetmap.org/$z/$x/$y.png"
+    }
 
     fun get(key: String): ImageBitmap? = synchronized(cache) { cache.get(key) }
 
@@ -292,7 +326,9 @@ fun SlippyMapCanvas(
     onTap: ((Offset, LatLon, SlippyMapProjection) -> Unit)? = null,
     overlayDraw: DrawScope.(SlippyMapProjection) -> Unit = {},
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val isDark = isSystemInDarkTheme()
+    val isMuted = observedRasterLayer != null && observedRasterLayer.stamp.isNotBlank()
     val scope = rememberCoroutineScope()
     var tileTick by remember { mutableIntStateOf(0) }
     var hasFittedInitialBounds by remember { mutableIntStateOf(0) }
@@ -355,7 +391,7 @@ fun SlippyMapCanvas(
             // 1. Draw ocean/land background + lat/lon graticule + European outline fallback
             drawFallbackBasemap(projection = projection, isDark = isDark)
 
-            // 2. Draw Carto OSM raster tiles (if cached, or schedule async fetch)
+            // 2. Draw Stadia Maps (dark/muted) or OSM (light) raster tiles
             val tileZoom = floor(cameraState.zoom.toDouble()).toInt().coerceIn(3, 11)
             val nTiles = 1 shl tileZoom
             val scaleFactor = 2.0.pow(cameraState.zoom.toDouble() - tileZoom)
@@ -369,6 +405,8 @@ fun SlippyMapCanvas(
             val minTileY = latToTileY(max(topLeftLatLon.lat, bottomRightLatLon.lat), nTiles).coerceIn(0, nTiles - 1)
             val maxTileY = latToTileY(min(topLeftLatLon.lat, bottomRightLatLon.lat), nTiles).coerceIn(0, nTiles - 1)
 
+            val styleId = MapTileCache.baseTileStyle(isDark, isMuted)
+
             for (tx in minTileX..maxTileX) {
                 for (ty in minTileY..maxTileY) {
                     val nwLon = tileXToLon(tx, nTiles)
@@ -377,20 +415,28 @@ fun SlippyMapCanvas(
                     val dstOffset = IntOffset(topLeftScreen.x.roundToInt(), topLeftScreen.y.roundToInt())
                     val dstSize = IntSize(tileSizeOnScreen.roundToInt() + 1, tileSizeOnScreen.roundToInt() + 1)
 
-                    val baseKey = "osm:$tileZoom:$tx:$ty"
+                    val baseKey = "$styleId:$tileZoom:$tx:$ty"
                     val baseBmp = MapTileCache.get(baseKey)
                     if (baseBmp != null) {
                         drawImage(
                             image = baseBmp,
                             dstOffset = dstOffset,
                             dstSize = dstSize,
-                            alpha = if (isDark) 0.72f else 0.92f,
+                            alpha = 0.94f,
                         )
                     } else if (MapTileCache.markInFlight(baseKey)) {
-                        val url = "https://tile.openstreetmap.org/$tileZoom/$tx/$ty.png"
+                        val url = MapTileCache.baseTileUrl(isDark, isMuted, tileZoom, tx, ty)
+                        val fallbackUrl = if (isDark || isMuted) {
+                            MapTileCache.baseTileUrl(dark = false, muted = false, tileZoom, tx, ty)
+                        } else {
+                            null
+                        }
+                        val appCacheDir = context.applicationContext?.cacheDir
                         scope.launch(Dispatchers.IO) {
                             try {
-                                fetchHttpBitmap(url)?.let { bmp ->
+                                val bmp = fetchTileBitmap(url, appCacheDir)
+                                    ?: fallbackUrl?.let { fetchTileBitmap(it, appCacheDir) }
+                                if (bmp != null) {
                                     MapTileCache.put(baseKey, bmp)
                                     withContext(Dispatchers.Main) { tileTick++ }
                                 }
@@ -522,22 +568,21 @@ private fun tileYToLat(y: Int, nTiles: Int): Double {
     return 180.0 / PI * atan(0.5 * (exp(n) - exp(-n)))
 }
 
-private fun fetchHttpBitmap(urlString: String): ImageBitmap? {
+private fun fetchTileBitmap(urlString: String, cacheDir: java.io.File?): ImageBitmap? {
     return runCatching {
-        val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 3500
-            readTimeout = 3500
-            setRequestProperty("User-Agent", "FlyFunWeather-Android/1.0")
-        }
-        try {
-            if (conn.responseCode in 200..299) {
-                val bytes = conn.inputStream.use { it.readBytes() }
+        val client = MapTileCache.httpClient(cacheDir)
+        val request = okhttp3.Request.Builder()
+            .url(urlString)
+            .header("User-Agent", "FlyFunWeather-Android/1.5 (https://weather.flyfun.aero)")
+            .header("Referer", "https://weather.flyfun.aero/")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val bytes = response.body?.bytes() ?: return null
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
             } else {
                 null
             }
-        } finally {
-            conn.disconnect()
         }
     }.getOrNull()
 }

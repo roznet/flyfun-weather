@@ -10,6 +10,7 @@ import aero.flyfun.common.InMemoryTokenStore
 import aero.flyfun.common.JwtClaims
 import aero.flyfun.common.TokenStore
 import aero.flyfun.weather.data.AirportDatabaseService
+import aero.flyfun.weather.data.AndroidTokenStore
 import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.data.BriefingCache
 import aero.flyfun.weather.data.BriefingRepository
@@ -44,6 +45,7 @@ class AppStateViewModel(
     private val context: Context? = null,
     val baseUrl: String = ApiClient.DEFAULT_BASE_URL,
     tokenStoreOverride: TokenStore? = null,
+    private val cacheRootOverride: File? = null,
     val authService: FlyFunAuthService = FlyFunAuthService(
         AuthConfig(baseUrl = baseUrl, callbackScheme = "flyfunweather"),
     ),
@@ -56,7 +58,7 @@ class AppStateViewModel(
 
     val tokenStore: TokenStore = tokenStoreOverride ?: run {
         if (context != null) {
-            FileTokenStore(File(context.filesDir, "flyfun_auth_token.jwt"))
+            AndroidTokenStore(context)
         } else {
             InMemoryTokenStore()
         }
@@ -110,32 +112,20 @@ class AppStateViewModel(
     private var pendingOAuthVerifier: String? = null
     private var pendingPkceVerifier: String? = null
 
-    val briefingCache: BriefingCache? by lazy {
-        val dir = context?.cacheDir ?: return@lazy null
-        val scopeKey = tokenStore.getToken()?.let { JwtClaims.cacheScope(it) } ?: "default"
-        BriefingCache(File(dir, "briefing_cache"), scope = scopeKey)
-    }
+    private val cacheRootDir: File?
+        get() = cacheRootOverride ?: context?.filesDir?.let { File(it, "BriefingCache") }
+
+    private val _cacheScope = MutableStateFlow("anon")
+    val cacheScope: StateFlow<String> = _cacheScope.asStateFlow()
+
+    var briefingCache: BriefingCache? = null
+        private set
 
     private val fixtureBriefingRepo = FixtureBriefingRepository(mockLive = true)
     private val fixtureTripRepo = FixtureTripRepository()
 
-    private val onlineBriefingRepo: BriefingRepository by lazy {
-        val online = OnlineBriefingRepository(apiClient)
-        val cache = briefingCache
-        if (cache != null) {
-            CachingBriefingRepository(
-                online = online,
-                cache = cache,
-                isOnline = { !_isOfflineMode.value },
-            )
-        } else {
-            online
-        }
-    }
-
-    private val onlineTripRepo: TripRepository by lazy {
-        OnlineTripRepository(apiClient, briefingCache)
-    }
+    private var onlineBriefingRepo: BriefingRepository = OnlineBriefingRepository(apiClient)
+    private var onlineTripRepo: TripRepository = OnlineTripRepository(apiClient, null)
 
     val repository: BriefingRepository
         get() = if (_isMockMode.value || _isGuestBrowsing.value) fixtureBriefingRepo else onlineBriefingRepo
@@ -150,12 +140,35 @@ class AppStateViewModel(
     init {
         val existingToken = tokenStore.getToken()
         if (!existingToken.isNullOrBlank()) {
+            rebuildUserScopedRepositories(existingToken)
             _isAuthenticated.value = true
             _userEmail.value = extractEmailFromToken(existingToken)
             refreshUserSupportData()
-        } else if (initialMockMode) {
-            _isAuthenticated.value = true
+        } else {
+            rebuildUserScopedRepositories(null)
+            if (initialMockMode) {
+                _isAuthenticated.value = true
+            }
         }
+    }
+
+    private fun rebuildUserScopedRepositories(token: String?) {
+        val scopeKey = token?.takeIf { it.isNotBlank() }?.let { JwtClaims.cacheScope(it) } ?: "anon"
+        _cacheScope.value = scopeKey
+        val root = cacheRootDir
+        val cache = if (root != null) BriefingCache(root, scope = scopeKey) else null
+        briefingCache = cache
+        val online = OnlineBriefingRepository(apiClient)
+        onlineBriefingRepo = if (cache != null) {
+            CachingBriefingRepository(
+                online = online,
+                cache = cache,
+                isOnline = { !_isOfflineMode.value },
+            )
+        } else {
+            online
+        }
+        onlineTripRepo = OnlineTripRepository(apiClient, cache)
     }
 
     private fun extractEmailFromToken(token: String): String? {
@@ -286,6 +299,7 @@ class AppStateViewModel(
     /** Directly accept a JWT token (e.g. from OAuth callback or deep link). */
     fun completeLogin(jwt: String) {
         tokenStore.setToken(jwt)
+        rebuildUserScopedRepositories(jwt)
         _isGuestBrowsing.value = false
         _isMockMode.value = false
         _isAuthenticated.value = true
@@ -399,7 +413,11 @@ class AppStateViewModel(
     }
 
     fun logout() {
+        context?.let { ctx ->
+            runCatching { aero.flyfun.weather.service.FlightTrackingService.stopTracking(ctx) }
+        }
         tokenStore.clearToken()
+        rebuildUserScopedRepositories(null)
         _isAuthenticated.value = false
         _isGuestBrowsing.value = false
         _isMockMode.value = false

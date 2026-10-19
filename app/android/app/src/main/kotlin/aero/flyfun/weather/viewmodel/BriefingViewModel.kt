@@ -10,6 +10,9 @@ import aero.flyfun.weather.model.*
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,13 +27,20 @@ class BriefingViewModel(
     val flightId: String? = null,
     initialFlight: FlightResponse? = null,
     val helpStore: aero.flyfun.weather.data.HelpCatalogStore? = null,
-    private val apiClient: ApiClient? = (repository as? OnlineBriefingRepository)?.api
+    val apiClient: ApiClient? = (repository as? OnlineBriefingRepository)?.api
         ?: ((repository as? CachingBriefingRepository)?.online as? OnlineBriefingRepository)?.api,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
-    scopeOverride: CoroutineScope? = null,
+    private val scopeOverride: CoroutineScope? = null,
 ) : ViewModel() {
 
     private val scope: CoroutineScope = scopeOverride ?: viewModelScope
+
+    /** Cancel any in-flight coroutines when this ViewModel is replaced or closed. */
+    fun dispose() {
+        if (scopeOverride == null) {
+            runCatching { viewModelScope.cancel() }
+        }
+    }
 
     private val _flight = MutableStateFlow<FlightResponse?>(initialFlight)
     val flight: StateFlow<FlightResponse?> = _flight.asStateFlow()
@@ -139,13 +149,22 @@ class BriefingViewModel(
         _isLoading.value = true
         _errorMessage.value = null
         try {
-            val loadedFlight = runCatching { repository.getFlight(flightId) }.getOrElse {
-                runCatching { repository.listFlights().firstOrNull { it.id == flightId } }.getOrNull()
+            val (loadedFlight, packList, latest) = coroutineScope {
+                val flightDeferred = async {
+                    runCatching { repository.getFlight(flightId) }.getOrElse {
+                        runCatching { repository.listFlights().firstOrNull { it.id == flightId } }.getOrNull()
+                    }
+                }
+                val packsDeferred = async {
+                    runCatching { repository.listPacks(flightId) }.getOrDefault(emptyList())
+                }
+                val latestDeferred = async {
+                    runCatching { repository.latestPack(flightId) }.getOrNull()
+                }
+                Triple(flightDeferred.await(), packsDeferred.await(), latestDeferred.await())
             }
             _flight.value = loadedFlight
 
-            val packList = runCatching { repository.listPacks(flightId) }.getOrDefault(emptyList())
-            val latest = runCatching { repository.latestPack(flightId) }.getOrNull()
             val mergedPacks = buildList {
                 if (latest != null && packList.none { it.fetchTimestamp == latest.fetchTimestamp }) {
                     add(latest)
@@ -184,25 +203,50 @@ class BriefingViewModel(
         _selectedPack.value = pack
         val ts = pack.fetchTimestamp
 
-        val adv = runCatching { repository.advisories(flightId, ts) }.getOrNull()
-        val dig = runCatching { repository.digest(flightId, ts) }.getOrNull()
-        val snap = runCatching { repository.snapshot(flightId, ts) }.getOrNull()
-        val analyses = runCatching { repository.routeAnalyses(flightId, ts) }.getOrNull()
-        val elev = runCatching { repository.elevation(flightId, ts) }.getOrNull()
-        val alts = runCatching { repository.alternates(flightId, ts) }.getOrNull() ?: adv?.alternates
-        val times = runCatching { repository.timeOptions(flightId) }.getOrNull()
-        val deb = runCatching { repository.debrief(flightId) }.getOrNull()
-        val live = runCatching { repository.liveLayer(flightId) }.getOrNull()
+        // Fetch all 9 pack/flight endpoints concurrently instead of sequentially
+        var adv: AdvisoriesResponse? = null
+        var dig: DigestResponse? = null
+        var snap: SnapshotResponse? = null
+        var analyses: RouteAnalysesResponse? = null
+        var elev: ElevationResponse? = null
+        var alts: AlternatesResponse? = null
+        var times: TimeOptionsResponse? = null
+        var deb: DebriefResponse? = null
+        var live: LiveLayerResponse? = null
 
+        coroutineScope {
+            val advD = async { runCatching { repository.advisories(flightId, ts) }.getOrNull() }
+            val digD = async { runCatching { repository.digest(flightId, ts) }.getOrNull() }
+            val snapD = async { runCatching { repository.snapshot(flightId, ts) }.getOrNull() }
+            val analysesD = async { runCatching { repository.routeAnalyses(flightId, ts) }.getOrNull() }
+            val elevD = async { runCatching { repository.elevation(flightId, ts) }.getOrNull() }
+            val altsD = async { runCatching { repository.alternates(flightId, ts) }.getOrNull() }
+            val timesD = async { runCatching { repository.timeOptions(flightId) }.getOrNull() }
+            val debD = async { runCatching { repository.debrief(flightId) }.getOrNull() }
+            val liveD = async { runCatching { repository.liveLayer(flightId) }.getOrNull() }
+
+            adv = advD.await()
+            dig = digD.await()
+            snap = snapD.await()
+            analyses = analysesD.await()
+            elev = elevD.await()
+            alts = altsD.await() ?: adv?.alternates
+            times = timesD.await()
+            deb = debD.await()
+            live = liveD.await()
+        }
+
+        val resolvedSnap = snap
+        val resolvedLive = live
         // Overlay live observation blocks onto snapshot when live layer is newer
-        val effectiveSnapshot = if (snap != null && live != null && live.hasObservationOverlay) {
-            snap.copy(
-                routeObservations = live.routeObservations ?: snap.routeObservations,
-                routeSigmets = live.routeSigmets ?: snap.routeSigmets,
-                observedConditions = live.observedConditions ?: snap.observedConditions,
+        val effectiveSnapshot = if (resolvedSnap != null && resolvedLive != null && resolvedLive.hasObservationOverlay) {
+            resolvedSnap.copy(
+                routeObservations = resolvedLive.routeObservations ?: resolvedSnap.routeObservations,
+                routeSigmets = resolvedLive.routeSigmets ?: resolvedSnap.routeSigmets,
+                observedConditions = resolvedLive.observedConditions ?: resolvedSnap.observedConditions,
             )
         } else {
-            snap
+            resolvedSnap
         }
 
         _advisories.value = adv
@@ -213,12 +257,13 @@ class BriefingViewModel(
         _alternates.value = alts
         _timeOptions.value = times
         _debrief.value = deb
-        if (deb != null && (deb.taxonomy.categories.isNotEmpty() || deb.taxonomy.severities.isNotEmpty())) {
-            _debriefTaxonomy.value = deb.taxonomy
+        val resolvedDeb = deb
+        if (resolvedDeb != null && (resolvedDeb.taxonomy.categories.isNotEmpty() || resolvedDeb.taxonomy.severities.isNotEmpty())) {
+            _debriefTaxonomy.value = resolvedDeb.taxonomy
         } else if (_debriefTaxonomy.value == null) {
             _debriefTaxonomy.value = defaultTaxonomy()
         }
-        _liveLayer.value = if (live != null && isLiveLayerMeaningful(live)) live else live
+        _liveLayer.value = resolvedLive
 
         val models = buildList {
             analyses?.models?.let { addAll(it) }

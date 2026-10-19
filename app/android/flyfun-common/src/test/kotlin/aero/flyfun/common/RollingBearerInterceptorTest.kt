@@ -144,4 +144,37 @@ class RollingBearerInterceptorTest {
             tempDir.deleteRecursively()
         }
     }
+
+    @Test
+    fun doesNotAttachTokenOrClearOn401ForDisallowedHost() {
+        val store = InMemoryTokenStore("secret-jwt")
+        var unauthorizedCount = 0
+        val client = OkHttpClient.Builder()
+            .addInterceptor(
+                RollingBearerInterceptor(
+                    tokenStore = store,
+                    allowedHostProvider = { "weather.flyfun.aero" },
+                    onUnauthorized = { unauthorizedCount += 1 },
+                )
+            )
+            .build()
+
+        // MockWebServer runs on localhost / 127.0.0.1, which does not match weather.flyfun.aero
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(401)
+                .addHeader("X-Renewed-Token", "evil-token")
+                .setBody("""{"detail":"Unauthorized"}""")
+        )
+
+        val request = Request.Builder().url(server.url("/external/tile.png")).build()
+        client.newCall(request).execute().use { response ->
+            assertEquals(401, response.code)
+        }
+
+        val recorded = server.takeRequest()
+        assertNull(recorded.getHeader("Authorization"))
+        assertEquals("secret-jwt", store.readToken())
+        assertEquals(0, unauthorizedCount)
+    }
 }

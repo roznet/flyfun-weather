@@ -238,4 +238,81 @@ class ViewModelTest {
         testScope.advanceUntilIdle()
         assertEquals("Provence Weekend", tripsVm.currentTrip.value?.name)
     }
+
+    @Test
+    fun appStateViewModel_isolatesPerUserCacheScopeOnAccountSwitch() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val tokenStore = InMemoryTokenStore()
+        val tempRoot = java.nio.file.Files.createTempDirectory("flyfun_cache_scope_test").toFile()
+        try {
+            val appState = AppStateViewModel(
+                context = null,
+                baseUrl = "https://weather.flyfun.aero",
+                tokenStoreOverride = tokenStore,
+                initialMockMode = false,
+                scopeOverride = testScope,
+                cacheRootOverride = tempRoot,
+            )
+
+            // Craft two distinct JWTs with different `sub` claims
+            fun fakeJwt(sub: String): String {
+                val header = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString("""{"alg":"HS256","typ":"JWT"}""".toByteArray())
+                val payload = java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString("""{"sub":"$sub"}""".toByteArray())
+                return "$header.$payload.sig"
+            }
+
+            val jwtAlice = fakeJwt("user-alice")
+            val jwtBob = fakeJwt("user-bob")
+
+            appState.completeLogin(jwtAlice)
+            val aliceScope = aero.flyfun.common.JwtClaims.cacheScope(jwtAlice)
+            assertEquals(aliceScope, appState.cacheScope.value)
+            val aliceCache = appState.briefingCache
+            assertNotNull(aliceCache)
+            aliceCache!!.writeData(
+                bytes = """{"test":"alice"}""".toByteArray(),
+                flightId = "flight-1",
+                timestamp = "2099-06-30T06:00:00Z",
+                endpoint = "advisories",
+            )
+            assertNotNull(aliceCache.readData("flight-1", "2099-06-30T06:00:00Z", "advisories"))
+
+            // Sign out and sign in as Bob in the same process session
+            appState.logout()
+            assertEquals("anon", appState.cacheScope.value)
+
+            appState.completeLogin(jwtBob)
+            val bobScope = aero.flyfun.common.JwtClaims.cacheScope(jwtBob)
+            assertEquals(bobScope, appState.cacheScope.value)
+            assertFalse(aliceScope == bobScope)
+            val bobCache = appState.briefingCache
+            assertNotNull(bobCache)
+            // Bob must not see Alice's cached pack data
+            assertNull(bobCache!!.readData("flight-1", "2099-06-30T06:00:00Z", "advisories"))
+        } finally {
+            tempRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun mapTileCache_selectsStadiaAndOsmStylesMatchingProjectConvention() {
+        assertEquals("stadia-dark", aero.flyfun.weather.ui.map.MapTileCache.baseTileStyle(dark = true, muted = false))
+        assertEquals(
+            "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/6/32/21.png",
+            aero.flyfun.weather.ui.map.MapTileCache.baseTileUrl(z = 6, x = 32, y = 21, dark = true, muted = false),
+        )
+        assertEquals("stadia-muted", aero.flyfun.weather.ui.map.MapTileCache.baseTileStyle(dark = false, muted = true))
+        assertEquals(
+            "https://tiles.stadiamaps.com/tiles/alidade_smooth/6/32/21.png",
+            aero.flyfun.weather.ui.map.MapTileCache.baseTileUrl(z = 6, x = 32, y = 21, dark = false, muted = true),
+        )
+        assertEquals("osm-light", aero.flyfun.weather.ui.map.MapTileCache.baseTileStyle(dark = false, muted = false))
+        assertEquals(
+            "https://tile.openstreetmap.org/6/32/21.png",
+            aero.flyfun.weather.ui.map.MapTileCache.baseTileUrl(z = 6, x = 32, y = 21, dark = false, muted = false),
+        )
+    }
 }
+

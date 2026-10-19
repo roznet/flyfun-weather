@@ -143,7 +143,11 @@ object LocalhostRozMeDns : okhttp3.Dns {
  */
 class FlyFunAuthService(
     val config: AuthConfig,
-    private val httpClient: OkHttpClient = OkHttpClient.Builder().dns(LocalhostRozMeDns).build(),
+    private val httpClient: OkHttpClient = OkHttpClient.Builder().apply {
+        if (config.baseUrl.contains("localhost.ro-z.me", ignoreCase = true)) {
+            dns(LocalhostRozMeDns)
+        }
+    }.build(),
 ) {
     private val secureRandom = SecureRandom()
     private val json = Json { ignoreUnknownKeys = true }
