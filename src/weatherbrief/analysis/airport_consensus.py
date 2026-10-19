@@ -219,10 +219,7 @@ def consensus(per_model: dict[str, dict], mode: str = "majority") -> dict[str, A
     cats = [FlightCategory(m["flight_category"]) for m in per_model.values()]
 
     if mode == "majority":
-        counts = Counter(cats)
-        max_count = max(counts.values())
-        tied = [c for c, n in counts.items() if n == max_count]
-        consensus_cat = FlightCategory.worst(tied).value
+        consensus_cat = FlightCategory.majority(cats).value
     else:
         consensus_cat = FlightCategory.worst(cats).value
 

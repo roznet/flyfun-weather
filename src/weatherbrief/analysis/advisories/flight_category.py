@@ -19,6 +19,7 @@ from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AirportClause,
     ConvectiveRisk,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
@@ -218,6 +219,7 @@ class FlightCategoryEvaluator:
                 continue
 
             parts = []
+            clauses: list[AirportClause] = []
             worst = AdvisoryStatus.GREEN
             for label_key, icao, cond, end in [
                 ("airport.dep", dep.icao, dep_cond, "dep"),
@@ -229,20 +231,26 @@ class FlightCategoryEvaluator:
                     cond, amber_ceiling_ft, amber_vis_sm,
                     red_ceiling_ft, red_vis_sm,
                 )
-                cat_label = cond.flight_category.value
                 label = adv_t(label_key, loc)
-                part = f"{label} {icao}: {cat_label}"
+                suffix = ""
 
                 conv_risk = _terminal_convective_risk(ctx, model, end, conv_radius_nm)
                 conv_status = _terminal_convective_status(conv_risk)
                 if conv_status != AdvisoryStatus.GREEN:
-                    part += adv_t(
+                    suffix = adv_t(
                         "flight_category.conv", loc,
                         risk=conv_risk.value.upper(),
                     )
                     status = AdvisoryStatus.worst([status, conv_status])
 
-                parts.append(part)
+                # The category is structured so the aggregate prints the
+                # cross-model consensus rather than this model's (#823).
+                clause = AirportClause(
+                    end=end, category=cond.flight_category, printed=True,
+                    head=f"{label} {icao}: ", suffix=suffix, locale=loc,
+                )
+                clauses.append(clause)
+                parts.append(clause.text)
                 worst = AdvisoryStatus.worst([worst, status])
 
             detail = " | ".join(parts)
@@ -252,6 +260,7 @@ class FlightCategoryEvaluator:
                 affected=1 if worst != AdvisoryStatus.GREEN else 0,
                 total=1,
                 total_distance_nm=ctx.total_distance_nm,
+                airport_clauses=clauses,
             ))
 
         return RouteAdvisoryResult.from_per_model("flight_category", per_model, params)

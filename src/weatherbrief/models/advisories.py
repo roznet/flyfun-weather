@@ -18,7 +18,10 @@ if TYPE_CHECKING:
     # keeps the annotation a string.
     from weatherbrief.analysis.route_geometry import RouteExtent
 
-from weatherbrief.models.airport_conditions import AirportConditions  # noqa: F401
+from weatherbrief.models.airport_conditions import (  # noqa: F401
+    AirportConditions,
+    FlightCategory,
+)
 
 
 class AdvisoryAggregation(str, Enum):
@@ -392,6 +395,47 @@ def published_pct(nm: float, domain_nm: float) -> float:
     return 0.1 if pct == 0.0 and raw > 0 else pct
 
 
+AirportEnd = Literal["dep", "arr"]
+
+
+class AirportClause(BaseModel):
+    """One model's flight category at one airport, as an advisory read it (#823).
+
+    The category itself is the same for every advisory (they all read
+    ``ctx.airport_conditions.<end>.condition_for_model(model)``); what used to
+    differ was *which model* each advisory's aggregate sentence spoke for. So
+    the airport-reading evaluators record each model's category here as data,
+    beside the sentence, and :meth:`RouteAdvisoryResult.from_per_model` swaps
+    the representative's airport clause for the cross-model consensus.
+
+    Every model with a condition records a clause, printed or not: the
+    consensus counts all of them, so an advisory that only prints non-VFR
+    airports (VFR feasibility) still agrees with one that prints every airport.
+    ``category=None`` means the model has no condition there (UNAVAILABLE) and
+    is never counted.
+
+    When ``printed``, ``head + category.value + suffix`` is a substring of the
+    model's ``detail``, exactly as the evaluator wrote it: ``head`` is the
+    "Arr EDQC: " lead-in, ``suffix`` the model-specific text after the category
+    (", convective MODERATE nearby", the LIFR-below-minima ceiling, the
+    approach clause). ``locale`` is the evaluator's, for the dissent note.
+    """
+
+    end: AirportEnd
+    category: FlightCategory | None = None
+    printed: bool = False
+    head: str = ""
+    suffix: str = ""
+    locale: str | None = None
+
+    @property
+    def text(self) -> str:
+        """The clause as it appears in the per-model detail ("" if not printed)."""
+        if not self.printed or self.category is None:
+            return ""
+        return f"{self.head}{self.category.value}{self.suffix}"
+
+
 class ModelAdvisoryResult(BaseModel):
     """Result of one advisory evaluated against one model's data."""
 
@@ -440,6 +484,11 @@ class ModelAdvisoryResult(BaseModel):
     # may differ from the one that drove the result. None when the evaluator has
     # no selectable method, and on old packs (legacy-safe).
     primary_method_id: str | None = None
+    # This model's flight category at each airport the advisory reads (#823),
+    # whether or not the sentence prints it. Feeds the cross-model airport
+    # consensus in ``from_per_model``; never affects ``status`` or ``detail``.
+    # Empty for advisories that don't read airports, and on old packs.
+    airport_clauses: list[AirportClause] = Field(default_factory=list)
 
     @classmethod
     def build(
@@ -461,6 +510,7 @@ class ModelAdvisoryResult(BaseModel):
         highlights: AdvisoryHighlights | None = None,
         primary_method_id: str | None = None,
         affected_nm: float | None = None,
+        airport_clauses: list[AirportClause] | None = None,
     ) -> ModelAdvisoryResult:
         """Build a result, computing pct and nm from point counts.
 
@@ -599,7 +649,101 @@ class ModelAdvisoryResult(BaseModel):
             mitigations=mitigations if mitigations is not None else [],
             highlights=highlights,
             primary_method_id=primary_method_id,
+            airport_clauses=airport_clauses if airport_clauses is not None else [],
         )
+
+
+def airport_category_consensus(
+    categories: list[tuple[str, FlightCategory | None]],
+    aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
+) -> tuple[FlightCategory | None, list[tuple[str, FlightCategory]]]:
+    """One flight category for an airport across models, plus who dissents (#823).
+
+    Same rule as the grades: MAJORITY is the most common category, ties to the
+    worst (a 1-1-1 split is the worst of the three); WORST is the worst. A model
+    with no condition (``None``) is UNAVAILABLE and never counted, in
+    particular never as VFR. ``categories`` is ``(model, category)`` in model
+    order; the dissent keeps that order. ``(None, [])`` when no model has one.
+    """
+    valid = [(m, c) for m, c in categories if c is not None]
+    if not valid:
+        return None, []
+    cats = [c for _, c in valid]
+    if aggregation == AdvisoryAggregation.WORST:
+        consensus = FlightCategory.worst(cats)
+    else:
+        consensus = FlightCategory.majority(cats)
+    return consensus, [(m, c) for m, c in valid if c != consensus]
+
+
+def _airport_consensus(
+    per_model: list[ModelAdvisoryResult],
+    aggregation: AdvisoryAggregation,
+) -> dict[str, tuple[FlightCategory, list[tuple[str, FlightCategory]]]]:
+    """Consensus category and dissent per airport end, from the clauses."""
+    out: dict[str, tuple[FlightCategory, list[tuple[str, FlightCategory]]]] = {}
+    for end in ("dep", "arr"):
+        cats = [
+            (m.model, c.category)
+            for m in per_model for c in m.airport_clauses if c.end == end
+        ]
+        consensus, dissent = airport_category_consensus(cats, aggregation)
+        if consensus is not None:
+            out[end] = (consensus, dissent)
+    return out
+
+
+def _consensus_clause(
+    clause: AirportClause,
+    rep_model: str,
+    consensus: FlightCategory,
+    dissent: list[tuple[str, FlightCategory]],
+) -> str:
+    """Render ``clause`` with the consensus category and the dissent named.
+
+    The suffix belongs to the representative's own reading (its ceiling, its
+    approach verdict), so it stays with that reading: after the consensus when
+    the representative agrees ("Arr EDQC: IFR (gfs MVFR) — ..."), inside the
+    dissent entry when it does not ("Arr EDQC IFR (gfs LIFR ceiling 200ft ...)").
+    """
+    # Lazy: the strings catalog lives in the analysis layer, which imports models.
+    from weatherbrief.analysis.advisories.strings import adv_t
+
+    rep_dissents = clause.category != consensus
+    # A dissenting representative leads the note: the rest of the sentence is its.
+    ordered = sorted(dissent, key=lambda mc: mc[0] != rep_model) if rep_dissents else dissent
+    entries = [
+        f"{m} {c.value}{clause.suffix if m == rep_model else ''}" for m, c in ordered
+    ]
+    note = ""
+    if entries:
+        sep = "; " if rep_dissents and clause.suffix else ", "
+        note = " " + adv_t("airport.dissent", clause.locale, entries=sep.join(entries))
+    tail = "" if rep_dissents else clause.suffix
+    return f"{clause.head}{consensus.value}{note}{tail}"
+
+
+def _consensus_detail(
+    representative: ModelAdvisoryResult,
+    consensus: dict[str, tuple[FlightCategory, list[tuple[str, FlightCategory]]]],
+) -> str:
+    """The representative's detail with each airport clause made the consensus.
+
+    Only clauses the representative printed are rewritten: an advisory that did
+    not mention an airport (VFR feasibility on a VFR field) still does not. The
+    rest of the sentence (route extents, corridor decks, ...) stays the
+    representative's, as before.
+    """
+    detail = representative.detail
+    for clause in representative.airport_clauses:
+        text = clause.text
+        if not text or clause.end not in consensus or text not in detail:
+            continue
+        cat, dissent = consensus[clause.end]
+        detail = detail.replace(
+            text, _consensus_clause(clause, representative.model, cat, dissent), 1,
+        )
+    return detail
 
 
 def _representative(
@@ -681,6 +825,12 @@ class RouteAdvisoryResult(BaseModel):
     # ``representativeModel()`` copy). None only when there are no per-model
     # results, and on old packs (legacy-safe).
     representative_model: str | None = None
+    # One flight category per airport end across models (#823), under the same
+    # aggregation mode as the grade. Every airport-reading advisory computes it
+    # from the same per-model categories, so on one briefing they all agree;
+    # ``aggregate_detail`` prints this, not the representative's own category.
+    # Empty for advisories that don't read airports, and on old packs.
+    airport_consensus: dict[AirportEnd, FlightCategory] = Field(default_factory=dict)
 
     @classmethod
     def from_per_model(
@@ -695,6 +845,10 @@ class RouteAdvisoryResult(BaseModel):
         Aggregation mode controls how per-model statuses combine:
         - MAJORITY: most common status; ties broken by worst among tied (default)
         - WORST: most severe status wins
+
+        ``aggregate_detail`` is the representative's sentence, except that any
+        airport clause it prints carries the cross-model consensus category (same
+        mode), with dissenting models named (#823).
         """
         statuses = [m.status for m in per_model]
         if aggregation == AdvisoryAggregation.MAJORITY:
@@ -702,10 +856,14 @@ class RouteAdvisoryResult(BaseModel):
         else:
             agg = AdvisoryStatus.worst(statuses)
         representative = _representative(per_model, agg)
+        consensus = _airport_consensus(per_model, aggregation)
         return cls(
             advisory_id=advisory_id,
             aggregate_status=agg,
-            aggregate_detail=representative.detail if representative else "",
+            aggregate_detail=(
+                _consensus_detail(representative, consensus) if representative else ""
+            ),
+            airport_consensus={end: cat for end, (cat, _) in consensus.items()},
             per_model=per_model,
             parameters_used=params,
             aggregate_mitigations=_aggregate_mitigations(representative, agg),

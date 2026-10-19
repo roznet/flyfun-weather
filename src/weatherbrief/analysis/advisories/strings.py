@@ -592,17 +592,13 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
 
     # --- ifr_feasibility ---
+    # Suffix after "{label} {icao} LIFR": the category is printed separately so
+    # the aggregate can swap in the cross-model consensus (#823).
     "ifr.lifr_below_min": {
-        "en": "{label} {icao} LIFR ceiling {ceiling}ft < {min}ft min",
-        "fr": "{label} {icao} LIFR plafond {ceiling}ft < {min}ft min",
-        "de": "{label} {icao} LIFR Decke {ceiling}ft < {min}ft min",
-        "es": "{label} {icao} LIFR techo {ceiling}ft < {min}ft mín",
-    },
-    "ifr.lifr": {
-        "en": "{label} {icao} LIFR",
-        "fr": "{label} {icao} LIFR",
-        "de": "{label} {icao} LIFR",
-        "es": "{label} {icao} LIFR",
+        "en": " ceiling {ceiling}ft < {min}ft min",
+        "fr": " plafond {ceiling}ft < {min}ft min",
+        "de": " Decke {ceiling}ft < {min}ft min",
+        "es": " techo {ceiling}ft < {min}ft mín",
     },
     "ifr.icing_over": {
         "en": "Icing over {extent}",
@@ -929,6 +925,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "Arr",
         "de": "Ank",
         "es": "Lleg",
+    },
+    # Models whose flight category differs from the cross-model consensus,
+    # after the consensus category: "Arr EDQC: IFR (gfs MVFR)" (#823).
+    # {entries} is "<model> <category>[, ...]".
+    "airport.dissent": {
+        "en": "({entries})",
+        "fr": "({entries})",
+        "de": "({entries})",
+        "es": "({entries})",
     },
 
     # --- sun ---

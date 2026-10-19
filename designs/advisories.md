@@ -79,7 +79,16 @@ Every evaluator follows the same pattern:
 
 Aggregation is controlled by `AdvisoryAggregation` enum (`WORST` or `MAJORITY`). The registry passes the aggregation mode; individual evaluators always produce per-model results without knowing the aggregation strategy.
 
-Detail text comes from the worst-performing model. Shared classmethods on the models eliminated ~115 lines of boilerplate.
+Detail text comes from the representative model (`_representative`: the model holding the aggregate status with the largest flagged extent), **except the airport clause** (below). Shared classmethods on the models eliminated ~115 lines of boilerplate.
+
+**The airport clause is the cross-model consensus (#823).** Four advisories print a flight category per airport (Airport Weather, VFR/IFR Feasibility, Approach Feasibility). All read the same `condition_for_model(model).flight_category`, but each picks its representative on its own (Airport Weather: first model, everything ties; VFR Feasibility: largest en-route IMC extent), so one briefing printed `Arr EDQC: IFR` on one card and `Arr EDQC MVFR` on the next (27/84 prod packs on 2026-10-19). Now:
+
+- Each of those evaluators records an `AirportClause` per end on every per-model result (category, `head` "Arr EDQC: ", model-specific `suffix`, `printed`), including ends it doesn't print and models graded UNAVAILABLE, so the consensus counts every model with a condition and is identical across advisories.
+- `from_per_model` computes `airport_category_consensus` per end under the **same mode as the grade** (MAJORITY: most common, ties to worst, so 1-1-1 → worst; WORST: worst; no condition = not counted, never VFR) and publishes it as `airport_consensus`.
+- `aggregate_detail` = representative's detail with each *printed* airport clause rewritten to the consensus, dissenters named: `Arr EDQC: IFR (gfs MVFR)` (`airport.dissent`). The suffix (convective note, LIFR-below-minima ceiling, approach verdict) belongs to the representative's reading: after the note when it agrees, inside its own dissent entry when it doesn't (`Arr EDQC IFR (gfs LIFR ceiling 200ft < 500ft min)`).
+- Per-model `detail`, every status and the representative are unchanged; only aggregate text moves.
+
+Choices: the representative is *not* forced across advisories (VFR Feasibility's extent-based pick is right for its route clause); fixing only the digest context was rejected (cards would still disagree). An advisory whose representative didn't print an airport (VFR Feasibility on a field its model sees VFR) still doesn't, so a card can be silent about an airport the consensus calls IFR; silence isn't a contradiction, but it isn't a mention either. A dissenting approach representative reads awkwardly on a GREEN card (`Arr EDQC: IFR (ecmwf VFR — VFR — reachable visually…; gfs MVFR)`): honest, the verdict is ecmwf's.
 
 **Localized detail text** (`strings.py`): evaluators build detail strings via `adv_t(key, locale, **params)` against the `_STRINGS` catalog (en/fr/de/es), keyed `<evaluator>.<msg>`. Aviation abbreviations (VFR, OVC, BKN, FL, kt, ICAO codes…) are never translated. `ctx.locale` flows in from the flight profile and is honored on recalc.
 
@@ -110,7 +119,9 @@ its own decision — not an edited assertion.
 **Invariants over the published result** (`analysis/advisories/invariants.py`):
 one set of predicates — the #571 extent rules, "flagged ⇒ non-zero coverage", and
 the aggregate-layer rules (the aggregate holds a grade some model holds; it names
-the representative it speaks for; any extent it prints is that model's) — shared
+the representative it speaks for; any extent it prints is that model's; its
+airport clause prints `airport_consensus`, not the representative's category,
+and every advisory on a briefing has the same `airport_consensus`, #823) — shared
 by the unit tests, a real-corpus test and the replay script, so a new evaluator
 is covered without anyone remembering to add it. The coverage rule applies only
 to results that publish an extent at all: `fronts` builds its result directly

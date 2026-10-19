@@ -77,6 +77,7 @@ from weatherbrief.models import (
     AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AirportClause,
     CloudCoverage,
     ConvectiveCharacter,
     HighlightSeverity,
@@ -146,14 +147,16 @@ def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
 def _check_airport_vfr(
     ctx: RouteContext,
     model: str,
-) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus]:
+) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus, list[AirportClause]]:
     """Check departure and arrival airport conditions for VFR feasibility.
 
     Uses the flight category (VFR/MVFR/IFR/LIFR) which already encodes
     ceiling and visibility thresholds per aviation standards.
 
-    Returns (status, detail_fragment, dep_status, arr_status). The per-airport
-    statuses colour the endpoint ribbon segments of the highlight (#375).
+    Returns (status, detail_fragment, dep_status, arr_status, clauses). The
+    per-airport statuses colour the endpoint ribbon segments of the highlight
+    (#375). ``clauses`` records the category at every airport with a condition,
+    printed (non-VFR) or not, for the aggregate's cross-model consensus (#823).
 
     Missing airport data is UNAVAILABLE, never a hardcoded clear GREEN (#391):
     the airport axis then simply doesn't contribute to the composite's ``worst``
@@ -163,7 +166,7 @@ def _check_airport_vfr(
     if ctx.airport_conditions is None:
         return (
             AdvisoryStatus.UNAVAILABLE, "",
-            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE,
+            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE, [],
         )
 
     dep = ctx.airport_conditions.departure
@@ -173,9 +176,13 @@ def _check_airport_vfr(
 
     parts: list[str] = []
     per_airport: list[AdvisoryStatus] = []
+    clauses: list[AirportClause] = []
 
     loc = ctx.locale
-    for label_key, icao, cond in [("airport.dep", dep.icao, dep_cond), ("airport.arr", arr.icao, arr_cond)]:
+    for label_key, icao, cond, end in [
+        ("airport.dep", dep.icao, dep_cond, "dep"),
+        ("airport.arr", arr.icao, arr_cond, "arr"),
+    ]:
         if cond is None:
             # No condition for this model at this airport — unassessable, not clear.
             per_airport.append(AdvisoryStatus.UNAVAILABLE)
@@ -185,15 +192,20 @@ def _check_airport_vfr(
         cat = cond.flight_category
         if cat in (FlightCategory.IFR, FlightCategory.LIFR):
             status = AdvisoryStatus.RED
-            parts.append(f"{label} {icao} {cat.value}")
         elif cat == FlightCategory.MVFR:
             status = AdvisoryStatus.AMBER
-            parts.append(f"{label} {icao} MVFR")
+        clause = AirportClause(
+            end=end, category=cat, printed=status != AdvisoryStatus.GREEN,
+            head=f"{label} {icao} ", locale=loc,
+        )
+        clauses.append(clause)
+        if clause.printed:
+            parts.append(clause.text)
         per_airport.append(status)
 
     detail = " | ".join(parts) if parts else ""
     worst = _worst_status(*per_airport)
-    return worst, detail, per_airport[0], per_airport[1]
+    return worst, detail, per_airport[0], per_airport[1], clauses
 
 
 def _point_enroute_vfr(
@@ -1052,7 +1064,7 @@ class VFRFeasibilityEvaluator:
 
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail, dep_status, arr_status = (
+            airport_status, airport_detail, dep_status, arr_status, airport_clauses = (
                 _check_airport_vfr(ctx, model)
             )
 
@@ -1080,6 +1092,9 @@ class VFRFeasibilityEvaluator:
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
                     detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
+                    # Still counted in the airport consensus (#823): the
+                    # category is the airport's, whatever this grade could do.
+                    airport_clauses=airport_clauses,
                 ))
                 continue
 
@@ -1365,6 +1380,7 @@ class VFRFeasibilityEvaluator:
                 mitigations=mitigations,
                 highlights=highlights,
                 primary_method_id=primary_method_id,
+                airport_clauses=airport_clauses,
             ))
 
         return RouteAdvisoryResult.from_per_model("vfr_feasibility", per_model, params)
