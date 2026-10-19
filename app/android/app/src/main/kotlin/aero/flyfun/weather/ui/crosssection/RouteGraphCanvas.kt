@@ -156,20 +156,20 @@ fun RouteGraphCanvas(
     val touchSlop = viewConfig.touchSlop
     val density = androidx.compose.ui.platform.LocalDensity.current
     val marginLeftPx = with(density) { 46.dp.toPx() }
-    val marginRightPx = with(density) { 40.dp.toPx() }
+    val marginRightPx = with(density) { 38.dp.toPx() }
     val marginTopPx = with(density) { 12.dp.toPx() }
-    val marginBottomPx = with(density) { 16.dp.toPx() }
+    val marginBottomPx = with(density) { 8.dp.toPx() }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
-        color = Color(theme.skyBottomColor).copy(alpha = 0.22f),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(150.dp)
+                .height(130.dp)
                 .pointerInput(vizData.totalDistanceNm, vizData.points.size) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -384,12 +384,11 @@ private fun RouteGraphControlsBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 5.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // [▼ Route Graph] toggle chip
+            // [▼ Graph] toggle chip
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
@@ -398,21 +397,21 @@ private fun RouteGraphControlsBar(
                     .clickable(onClick = onToggleVisible),
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Icon(
                         imageVector = if (visible) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(15.dp),
+                        modifier = Modifier.size(14.dp),
                     )
                     Text(
-                        text = "Route Graph",
+                        text = if (visible) "Graph" else "Route Graph",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
+                            fontSize = 10.5.sp,
                         ),
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -420,23 +419,27 @@ private fun RouteGraphControlsBar(
             }
 
             if (visible) {
-                // Left Metric Picker
-                MetricDropdownPicker(
-                    axisLabel = "Left",
-                    selectedMetric = leftMetric,
-                    allMetrics = allMetrics,
-                    allowNone = false,
-                    onSelectMetricId = onSelectLeftMetric,
-                )
+                // Left Metric Picker (weight 1f so both Left & Right fit on phone screen without clipping!)
+                Box(modifier = Modifier.weight(1f)) {
+                    MetricDropdownPicker(
+                        axisLabel = "L",
+                        selectedMetric = leftMetric,
+                        allMetrics = allMetrics,
+                        allowNone = false,
+                        onSelectMetricId = onSelectLeftMetric,
+                    )
+                }
 
                 // Right Metric Picker
-                MetricDropdownPicker(
-                    axisLabel = "Right",
-                    selectedMetric = rightMetric,
-                    allMetrics = allMetrics,
-                    allowNone = true,
-                    onSelectMetricId = onSelectRightMetric,
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    MetricDropdownPicker(
+                        axisLabel = "R",
+                        selectedMetric = rightMetric,
+                        allMetrics = allMetrics,
+                        allowNone = true,
+                        onSelectMetricId = onSelectRightMetric,
+                    )
+                }
             }
         }
     }
@@ -453,29 +456,30 @@ private fun MetricDropdownPicker(
     var expanded by remember { mutableStateOf(false) }
     val dotColor = selectedMetric?.let { Color(it.colorHex) } ?: Color.Transparent
 
-    Box {
+    Box(modifier = Modifier.fillMaxWidth()) {
         Surface(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier
+                .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .clickable { expanded = true },
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = "$axisLabel:",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (selectedMetric != null) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(6.5.dp)
                             .clip(CircleShape)
                             .background(dotColor),
                     )
@@ -484,15 +488,18 @@ private fun MetricDropdownPicker(
                     text = selectedMetric?.label ?: "None",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                     ),
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(13.dp),
                 )
             }
         }
@@ -570,11 +577,11 @@ private fun DrawScope.drawRouteGraphGrid(
     theme: CrossSectionTheme,
 ) {
     val gridColor = Color(theme.gridLineColor)
-    val borderColor = gridColor.copy(alpha = 0.55f)
+    val borderColor = gridColor.copy(alpha = 0.65f)
 
     // Plot frame
     drawRect(
-        color = Color(0x220F172A),
+        color = Color(0x140F172A),
         topLeft = Offset(transform.plotLeft, transform.plotTop),
         size = Size(transform.plotWidth, transform.plotHeight),
     )
@@ -590,15 +597,9 @@ private fun DrawScope.drawRouteGraphGrid(
         )
     }
 
-    // Distance vertical grid lines
+    // Distance vertical grid lines (aligned with CrossSectionCanvas above; no redundant bottom numbers)
     val stepNm = chooseDistanceGridStep(vizData.totalDistanceNm)
     var d = stepNm
-    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(180, 148, 163, 184)
-        textSize = 9.sp.toPx()
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.MONOSPACE
-    }
     while (d < vizData.totalDistanceNm) {
         val x = transform.distanceToX(d)
         drawLine(
@@ -606,12 +607,6 @@ private fun DrawScope.drawRouteGraphGrid(
             start = Offset(x, transform.plotTop),
             end = Offset(x, transform.plotBottom),
             strokeWidth = 0.8f,
-        )
-        drawContext.canvas.nativeCanvas.drawText(
-            "${d.roundToInt()}",
-            x,
-            transform.plotBottom + 13f,
-            textPaint,
         )
         d += stepNm
     }
@@ -636,16 +631,16 @@ private fun DrawScope.drawZeroLine(
     val labels = metric.zeroLineLabels ?: return
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color(metric.colorHex).copy(alpha = 0.85f).toArgb()
-        textSize = 8.5.sp.toPx()
+        textSize = 8.sp.toPx()
         textAlign = if (isLeft) Paint.Align.LEFT else Paint.Align.RIGHT
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
-    val x = if (isLeft) transform.plotLeft + 4f else transform.plotRight - 4f
-    if (y0 - 4f > transform.plotTop + 8f) {
-        drawContext.canvas.nativeCanvas.drawText(labels.first, x, y0 - 3f, paint)
+    val x = if (isLeft) transform.plotLeft + 4.dp.toPx() else transform.plotRight - 4.dp.toPx()
+    if (y0 - 4.dp.toPx() > transform.plotTop + 8.dp.toPx()) {
+        drawContext.canvas.nativeCanvas.drawText(labels.first, x, y0 - 4.dp.toPx(), paint)
     }
-    if (y0 + 10f < transform.plotBottom - 2f) {
-        drawContext.canvas.nativeCanvas.drawText(labels.second, x, y0 + 10f, paint)
+    if (y0 + 10.dp.toPx() < transform.plotBottom - 2.dp.toPx()) {
+        drawContext.canvas.nativeCanvas.drawText(labels.second, x, y0 + 10.dp.toPx(), paint)
     }
 }
 
@@ -817,19 +812,20 @@ private fun DrawScope.drawYAxisLabels(
     val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = axisColor.copy(alpha = 0.85f).toArgb()
         textSize = 8.5.sp.toPx()
-        textAlign = if (isLeft) Paint.Align.RIGHT else Paint.Align.LEFT
+        textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
 
     val x = if (isLeft) transform.plotLeft - 5f else transform.plotRight + 5f
 
-    // Unit header at top margin
-    drawContext.canvas.nativeCanvas.drawText(
-        metric.unit,
-        x,
-        transform.plotTop - 4f,
-        unitPaint,
-    )
+    // Rotated unit label in outer margin (matching Web axes.ts)
+    val unitX = if (isLeft) 10.dp.toPx() else size.width - 5.dp.toPx()
+    val midY = transform.plotTop + transform.plotHeight * 0.5f
+    drawContext.canvas.nativeCanvas.save()
+    drawContext.canvas.nativeCanvas.translate(unitX, midY)
+    drawContext.canvas.nativeCanvas.rotate(-90f)
+    drawContext.canvas.nativeCanvas.drawText(metric.unit, 0f, 0f, unitPaint)
+    drawContext.canvas.nativeCanvas.restore()
 
     // 3 tick labels: bottom (min), middle, top (max)
     val ticks = listOf(scale.first, (scale.first + scale.second) * 0.5, scale.second)

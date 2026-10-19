@@ -1079,6 +1079,21 @@ data class DisplayCell(
 // ============================================================================
 
 @Serializable
+data class RouteNightInterval(
+    @SerialName("start_distance_nm")
+    val startDistanceNm: Double = 0.0,
+    @SerialName("end_distance_nm")
+    val endDistanceNm: Double = 0.0,
+    val phase: String = "night",
+)
+
+@Serializable
+data class RouteSunAnalysis(
+    @SerialName("night_intervals")
+    val nightIntervals: List<RouteNightInterval> = emptyList(),
+)
+
+@Serializable
 data class RouteAnalysesResponse(
     @SerialName("route_name")
     val routeName: String = "",
@@ -1096,6 +1111,7 @@ data class RouteAnalysesResponse(
     val flightCeilingFt: Int? = null,
     val models: List<String> = emptyList(),
     val analyses: List<RoutePointAnalysis> = emptyList(),
+    val sun: RouteSunAnalysis? = null,
 )
 
 @Serializable
@@ -1121,10 +1137,22 @@ data class RoutePointAnalysis(
     val sounding: Map<String, SoundingAnalysis> = emptyMap(),
     @SerialName("model_divergence")
     val modelDivergence: List<ModelDivergence> = emptyList(),
+    @SerialName("cruise_temperature_c")
+    val cruiseTemperatureC: Map<String, Double>? = null,
 ) {
     val id: Int
         get() = pointIndex
 }
+
+@Serializable
+data class SldZone(
+    @SerialName("base_ft")
+    val baseFt: Double = 0.0,
+    @SerialName("top_ft")
+    val topFt: Double = 0.0,
+    val risk: String = "light",
+    val mechanism: String? = null,
+)
 
 @Serializable
 data class SoundingAnalysis(
@@ -1139,6 +1167,10 @@ data class SoundingAnalysis(
     val icingOgimetNwpZones: List<IcingZone>? = null,
     @SerialName("sfip_zones")
     val sfipZones: List<SfipZone>? = null,
+    @SerialName("ieng_icing_zones")
+    val iengIcingZones: List<IcingZone>? = null,
+    @SerialName("sld_zones")
+    val sldZones: List<SldZone>? = null,
     @SerialName("inversion_layers")
     val inversionLayers: List<InversionLayer>? = null,
     val convective: ConvectiveAssessment? = null,
@@ -1347,6 +1379,8 @@ data class VerticalMotionAssessment(
     val maxWLevelFt: Double? = null,
     @SerialName("cat_risk_layers")
     val catRiskLayers: List<CATRiskLayer>? = null,
+    @SerialName("e_shear_layers")
+    val eShearLayers: List<CATRiskLayer>? = null,
 )
 
 @Serializable

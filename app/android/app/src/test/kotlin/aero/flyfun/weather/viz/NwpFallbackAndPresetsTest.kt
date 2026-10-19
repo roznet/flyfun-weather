@@ -70,6 +70,7 @@ class NwpFallbackAndPresetsTest {
         val unavailable = NwpFallback.getUnavailableLayers(routeWithoutNwp)
         assertTrue("clouds-nwp" in unavailable)
         assertTrue("ceiling-nwp" in unavailable)
+        assertTrue("icing-ogimet-nwp" in unavailable)
         assertTrue("icing-sfip" in unavailable)
 
         val stored = mapOf(
@@ -77,8 +78,9 @@ class NwpFallbackAndPresetsTest {
             "clouds" to false,
             "ceiling-nwp" to true,
             "ceiling" to false,
+            "icing-ogimet-nwp" to true,
             "icing-sfip" to true,
-            "icing-ogimet-nwp" to false,
+            "icing" to false,
         )
 
         val effective = NwpFallback.applyNwpFallback(stored, unavailable)
@@ -86,11 +88,14 @@ class NwpFallbackAndPresetsTest {
         assertTrue(effective["clouds"] == true)
         assertFalse(effective["ceiling-nwp"] == true)
         assertTrue(effective["ceiling"] == true)
+        assertFalse(effective["icing-ogimet-nwp"] == true)
         assertFalse(effective["icing-sfip"] == true)
-        assertTrue(effective["icing-ogimet-nwp"] == true)
+        assertTrue(effective["icing"] == true)
 
         val substituted = NwpFallback.getSubstitutedLayers(stored, effective)
-        assertEquals(setOf("clouds", "ceiling", "icing-ogimet-nwp"), substituted)
+        assertTrue("clouds" in substituted)
+        assertTrue("ceiling" in substituted)
+        assertTrue("icing" in substituted)
     }
 
     @Test

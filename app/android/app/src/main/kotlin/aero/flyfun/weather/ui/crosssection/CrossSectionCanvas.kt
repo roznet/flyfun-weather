@@ -53,6 +53,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -60,7 +61,7 @@ import kotlin.math.sqrt
 /**
  * Full Jetpack Compose [Canvas] renderer drawing all cross-section layers in exact back-to-front order:
  * 1. Sky gradient + `night-shading` (twilight & night column washes)
- * 2. Altitude horizontal grid lines (with `ft` / `FL` labels in left & right margins) and distance vertical grid lines
+ * 2. Altitude horizontal grid lines (left: `ft`/`FL`, right: `hPa`), top waypoint ICAO markers, and bottom distance/time labels
  * 3. Cloud bands (`square`, `soft`, and `natural` styles for NWP & DD clouds)
  * 4. Convective backgrounds (`nwp-convective-bg` + `thermo-convective-bg` CAPE towers with hatching & `TCU`/`CB`/`+TS` top pill)
  * 5. Icing bands (`icing-ogimet-nwp-bands`, `icing-bands`, `sfip-bands`, `ieng-icing-bands`, `sld-bands`)
@@ -69,7 +70,7 @@ import kotlin.math.sqrt
  * 8. Current conditions (`current-conditions`: D-0 METAR flight-category columns + SIGMET hatched boxes) & Front markers (`fronts-markers`)
  * 9. Smooth monotone cubic spline lines (`0°C`, `-10°C`, `-20°C`, `lcl`, `lfc`, `el`, `cruise-altitude`, `flight-ceiling`)
  * 10. Advisory Highlight (`highlight-layer`): translucent dim scrim with cutout windows + 6dp bottom verdict ribbon
- * 11. Waypoint markers along the bottom axis, active scrub vertical crosshair, selected route point indicator, and linked Skew-T hover altitude dashed line.
+ * 11. Top waypoint markers, active scrub vertical crosshair, selected route point indicator, and linked Skew-T hover altitude dashed line.
  */
 @Composable
 fun CrossSectionCanvas(
@@ -90,20 +91,22 @@ fun CrossSectionCanvas(
     val touchSlop = viewConfig.touchSlop
     val density = androidx.compose.ui.platform.LocalDensity.current
     val marginLeftPx = with(density) { 46.dp.toPx() }
-    val marginRightPx = with(density) { 40.dp.toPx() }
-    val marginTopPx = with(density) { 14.dp.toPx() }
-    val marginBottomPx = with(density) { 26.dp.toPx() }
+    val marginRightPx = with(density) { 38.dp.toPx() }
+    val marginTopPx = with(density) { 20.dp.toPx() }
+    val marginBottomPx = with(density) { 30.dp.toPx() }
+    val axisTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val waypointTextColor = MaterialTheme.colorScheme.onSurface
 
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
-        color = Color(theme.skyTopColor),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(290.dp)
+                .height(295.dp)
                 .pointerInput(vizData.totalDistanceNm, vizData.maxAltitudeFt, vizData.points.size) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -196,6 +199,7 @@ fun CrossSectionCanvas(
                 transform = transform,
                 vizData = vizData,
                 theme = theme,
+                axisTextColor = axisTextColor,
             )
 
             // Clip all weather layers to the plot rectangle
@@ -370,13 +374,14 @@ fun CrossSectionCanvas(
                 )
             }
 
-            // 11. Waypoint markers, selected point indicator, active scrub crosshair, and linked Skew-T hover altitude line
+            // 11. Top waypoint markers, selected point indicator, active scrub crosshair, and linked Skew-T hover altitude line
             drawWaypointsAndOverlays(
                 transform = transform,
                 vizData = vizData,
                 scrubDistanceNm = scrubDistanceNm,
                 selectedPointIndex = selectedPointIndex,
                 hoverAltitudeFt = hoverAltitudeFt,
+                waypointTextColor = waypointTextColor,
             )
         }
     }
@@ -462,39 +467,38 @@ private fun DrawScope.drawGridAndAxes(
     transform: CoordTransform,
     vizData: VizRouteData,
     theme: CrossSectionTheme,
+    axisTextColor: Color,
 ) {
     val gridColor = Color(theme.gridLineColor)
-    val altStep = when {
-        vizData.maxAltitudeFt <= 12000.0 -> 2000.0
-        vizData.maxAltitudeFt <= 26000.0 -> 4000.0
-        else -> 5000.0
-    }
+    val altStep = if (vizData.maxAltitudeFt <= 10000.0) 2000.0 else 5000.0
+    val axisArgb = axisTextColor.toArgb()
+    val mutedAxisArgb = axisTextColor.copy(alpha = 0.78f).toArgb()
 
     val leftTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(215, 203, 213, 225)
+        color = axisArgb
         textSize = 9.sp.toPx()
         textAlign = Paint.Align.RIGHT
         typeface = Typeface.MONOSPACE
     }
     val rightTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(215, 203, 213, 225)
+        color = mutedAxisArgb
         textSize = 9.sp.toPx()
         textAlign = Paint.Align.LEFT
         typeface = Typeface.MONOSPACE
     }
     val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(180, 148, 163, 184)
+        color = mutedAxisArgb
         textSize = 8.5.sp.toPx()
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
 
-    // Top axis headers: "ft" on left, "FL" on right
+    // Top axis headers: "ft" on left, "hPa" on right (matching Web axes.ts)
     headerPaint.textAlign = Paint.Align.RIGHT
-    drawContext.canvas.nativeCanvas.drawText("ft", transform.plotLeft - 5f, transform.plotTop - 4f, headerPaint)
+    drawContext.canvas.nativeCanvas.drawText("ft", transform.plotLeft - 8.dp.toPx(), transform.plotTop - 4.dp.toPx(), headerPaint)
     headerPaint.textAlign = Paint.Align.LEFT
-    drawContext.canvas.nativeCanvas.drawText("FL", transform.plotRight + 5f, transform.plotTop - 4f, headerPaint)
+    drawContext.canvas.nativeCanvas.drawText("hPa", transform.plotRight + 6.dp.toPx(), transform.plotTop - 4.dp.toPx(), headerPaint)
 
-    // Altitude horizontal grid lines
+    // Altitude horizontal grid lines + Left (ft / FL) and Right (ISA hPa) labels
     var alt = 0.0
     while (alt <= vizData.maxAltitudeFt) {
         val y = transform.altitudeToY(alt)
@@ -504,16 +508,30 @@ private fun DrawScope.drawGridAndAxes(
             end = Offset(transform.plotRight, y),
             strokeWidth = if (alt == 0.0) 1.2f else 0.8f,
         )
+        val hpa = (1013.25 * (1.0 - 6.8755856e-6 * alt).pow(5.2558797)).roundToInt()
+        drawContext.canvas.nativeCanvas.drawText(
+            hpa.toString(),
+            transform.plotRight + 5f,
+            y + 3.5f,
+            rightTextPaint,
+        )
         if (alt > 0.0) {
-            val ftLabel = String.format(Locale.US, "%,d", alt.roundToInt())
-            val flLabel = String.format(Locale.US, "FL%03d", (alt / 100.0).roundToInt())
-            drawContext.canvas.nativeCanvas.drawText(ftLabel, transform.plotLeft - 5f, y + 3.5f, leftTextPaint)
-            drawContext.canvas.nativeCanvas.drawText(flLabel, transform.plotRight + 5f, y + 3.5f, rightTextPaint)
+            val leftLabel = if (alt >= 10000.0) {
+                String.format(Locale.US, "FL%03d", (alt / 100.0).roundToInt())
+            } else {
+                String.format(Locale.US, "%,d", alt.roundToInt())
+            }
+            drawContext.canvas.nativeCanvas.drawText(
+                leftLabel,
+                transform.plotLeft - 5f,
+                y + 3.5f,
+                leftTextPaint,
+            )
         }
         alt += altStep
     }
 
-    // Distance vertical grid lines
+    // Distance vertical grid lines + Bottom distance ticks ("0 nm", "25 nm", "50 nm"...)
     val distStep = when {
         vizData.totalDistanceNm <= 80.0 -> 10.0
         vizData.totalDistanceNm <= 200.0 -> 25.0
@@ -521,32 +539,66 @@ private fun DrawScope.drawGridAndAxes(
         else -> 100.0
     }
     val distPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(185, 148, 163, 184)
+        color = axisArgb
         textSize = 8.5.sp.toPx()
         textAlign = Paint.Align.CENTER
         typeface = Typeface.MONOSPACE
     }
-    var dist = distStep
-    while (dist < vizData.totalDistanceNm) {
+    val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = mutedAxisArgb
+        textSize = 8.sp.toPx()
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.MONOSPACE
+    }
+
+    val distBaselineY = transform.plotBottom + 12.dp.toPx()
+    var dist = 0.0
+    while (dist <= vizData.totalDistanceNm) {
         val x = transform.distanceToX(dist)
-        drawLine(
-            color = gridColor,
-            start = Offset(x, transform.plotTop),
-            end = Offset(x, transform.plotBottom),
-            strokeWidth = 0.8f,
-        )
+        if (dist > 0.0 && dist < vizData.totalDistanceNm) {
+            drawLine(
+                color = gridColor,
+                start = Offset(x, transform.plotTop),
+                end = Offset(x, transform.plotBottom),
+                strokeWidth = 0.8f,
+            )
+        }
+        val clampedX = x.coerceIn(transform.plotLeft + 14f, transform.plotRight - 14f)
         drawContext.canvas.nativeCanvas.drawText(
-            "${dist.roundToInt()}nm",
-            x,
-            transform.plotBottom + 28f,
+            "${dist.roundToInt()} nm",
+            clampedX,
+            distBaselineY,
             distPaint,
         )
         dist += distStep
     }
 
+    // Bottom waypoint UTC times ("08:00Z", "08:10Z", "08:45Z") with greedy non-overlapping culling
+    val timeBaselineY = transform.plotBottom + 24.dp.toPx()
+    var lastTimeRightX = -1000f
+    val minTimeGapPx = 6.dp.toPx()
+    for (wp in vizData.waypoints) {
+        val wpPoint = vizData.points.minByOrNull { abs(it.distanceNm - wp.distanceNm) } ?: continue
+        val iso = wpPoint.flightTimeIso.orEmpty()
+        val tIdx = iso.indexOf('T')
+        val timeText = if (tIdx >= 0 && iso.length >= tIdx + 6) {
+            iso.substring(tIdx + 1, tIdx + 6) + "Z"
+        } else {
+            ""
+        }
+        if (timeText.isEmpty()) continue
+        val halfW = timePaint.measureText(timeText) * 0.5f
+        val x = transform.distanceToX(wp.distanceNm)
+            .coerceIn(transform.plotLeft + halfW, transform.plotRight - halfW)
+        if (x - halfW >= lastTimeRightX + minTimeGapPx) {
+            drawContext.canvas.nativeCanvas.drawText(timeText, x, timeBaselineY, timePaint)
+            lastTimeRightX = x + halfW
+        }
+    }
+
     // Plot outline
     drawRect(
-        color = gridColor.copy(alpha = 0.65f),
+        color = gridColor.copy(alpha = 0.75f),
         topLeft = Offset(transform.plotLeft, transform.plotTop),
         size = Size(transform.plotWidth, transform.plotHeight),
         style = Stroke(width = 1f),
@@ -566,42 +618,40 @@ private fun DrawScope.drawAllCloudLayers(
 ) {
     if (points.isEmpty()) return
 
-    // Check explicit web/iOS layer IDs first; otherwise use CrossSectionPresets short IDs + cloudStyle
-    val hasExplicitSquareNwp = effectiveLayers["square-nwp-clouds"] == true || effectiveLayers["square-nwp-cloud-bands"] == true
-    val hasExplicitSquareDd = effectiveLayers["square-dd-clouds"] == true || effectiveLayers["square-cloud-bands"] == true
-    val hasExplicitSoftNwp = effectiveLayers["soft-nwp-clouds"] == true || effectiveLayers["soft-nwp-cloud-bands"] == true
-    val hasExplicitSoftDd = effectiveLayers["soft-dd-clouds"] == true || effectiveLayers["soft-cloud-bands"] == true
-    val hasExplicitNaturalNwp = effectiveLayers["nwp-cloud-bands"] == true
-    val hasExplicitNaturalDd = effectiveLayers["dd-cloud-bands"] == true || effectiveLayers["cloud-bands"] == true
-
-    val shortNwpOn = effectiveLayers["clouds-nwp"] == true ||
+    val nwpOn = effectiveLayers["clouds-nwp"] == true ||
         effectiveLayers["clouds-icing-nwp"] == true ||
         effectiveLayers["clouds-diag-nwp"] == true ||
-        effectiveLayers["clouds-band-nwp"] == true
-    val shortDdOn = effectiveLayers["clouds"] == true ||
+        effectiveLayers["clouds-band-nwp"] == true ||
+        effectiveLayers["nwp-cloud-bands"] == true ||
+        effectiveLayers["soft-nwp-clouds"] == true ||
+        effectiveLayers["soft-nwp-cloud-bands"] == true ||
+        effectiveLayers["square-nwp-clouds"] == true ||
+        effectiveLayers["square-nwp-cloud-bands"] == true
+
+    val ddOn = effectiveLayers["clouds"] == true ||
         effectiveLayers["clouds-icing"] == true ||
         effectiveLayers["clouds-diag"] == true ||
-        effectiveLayers["clouds-band"] == true
+        effectiveLayers["clouds-band"] == true ||
+        effectiveLayers["dd-cloud-bands"] == true ||
+        effectiveLayers["cloud-bands"] == true ||
+        effectiveLayers["soft-dd-clouds"] == true ||
+        effectiveLayers["soft-cloud-bands"] == true ||
+        effectiveLayers["square-dd-clouds"] == true ||
+        effectiveLayers["square-cloud-bands"] == true
 
-    if (hasExplicitSquareNwp || (shortNwpOn && cloudStyle == CloudStyle.SQUARE)) {
-        drawSquareCloudBands(transform, points, useNwp = true, theme = theme)
-    }
-    if (hasExplicitSquareDd || (shortDdOn && cloudStyle == CloudStyle.SQUARE)) {
-        drawSquareCloudBands(transform, points, useNwp = false, theme = theme)
-    }
-
-    if (hasExplicitSoftNwp || (shortNwpOn && cloudStyle == CloudStyle.SOFT)) {
-        drawSoftCloudBands(transform, points, useNwp = true, theme = theme)
-    }
-    if (hasExplicitSoftDd || (shortDdOn && cloudStyle == CloudStyle.SOFT)) {
-        drawSoftCloudBands(transform, points, useNwp = false, theme = theme)
-    }
-
-    if (hasExplicitNaturalNwp || (shortNwpOn && cloudStyle == CloudStyle.NATURAL)) {
-        drawNaturalCloudBands(transform, points, useNwp = true, theme = theme)
-    }
-    if (hasExplicitNaturalDd || (shortDdOn && cloudStyle == CloudStyle.NATURAL)) {
-        drawNaturalCloudBands(transform, points, useNwp = false, theme = theme)
+    when (cloudStyle) {
+        CloudStyle.SQUARE -> {
+            if (nwpOn) drawSquareCloudBands(transform, points, useNwp = true, theme = theme)
+            if (ddOn) drawSquareCloudBands(transform, points, useNwp = false, theme = theme)
+        }
+        CloudStyle.SOFT -> {
+            if (nwpOn) drawSoftCloudBands(transform, points, useNwp = true, theme = theme)
+            if (ddOn) drawSoftCloudBands(transform, points, useNwp = false, theme = theme)
+        }
+        CloudStyle.NATURAL -> {
+            if (nwpOn) drawNaturalCloudBands(transform, points, useNwp = true, theme = theme)
+            if (ddOn) drawNaturalCloudBands(transform, points, useNwp = false, theme = theme)
+        }
     }
 }
 
@@ -649,12 +699,6 @@ private fun DrawScope.drawSquareCloudBands(
                 color = fill,
                 topLeft = Offset(xLeft, yTop),
                 size = Size(w, h),
-            )
-            drawRect(
-                color = Color(theme.cloudStrokeColor).copy(alpha = fill.alpha * 0.55f),
-                topLeft = Offset(xLeft, yTop),
-                size = Size(w, h),
-                style = Stroke(width = 0.7f),
             )
         }
     }
@@ -971,14 +1015,22 @@ private fun DrawScope.drawNwpConvectiveBg(
     }
 }
 
-private fun estimateThermoTowerTop(pt: VizPoint): Double? {
-    val conv = pt.thermoConvective
-    conv.elFt?.let { if (it > 0.0) return it }
-    conv.topFt?.let { if (it > 0.0) return it }
-    val cape = conv.capeJkg ?: pt.capeSurfaceJkg ?: return null
-    if (cape <= 25.0) return null
-    val base = conv.lfcFt ?: conv.lclFt ?: conv.baseFt ?: (pt.terrainElevationFt + 3000.0)
-    return base + min(28000.0, 2500.0 + sqrt(cape) * 420.0)
+private fun estimateThermoTowerTop(pt: VizPoint, baseFt: Double, thermodynamicElFt: Double): Double {
+    val towerDepth = thermodynamicElFt - baseFt
+    if (towerDepth >= 3000.0) return thermodynamicElFt
+
+    val alt = pt.altitudeLines
+    val risk = pt.thermoConvective.riskLevel.lowercase(Locale.US)
+    if (risk == "low") {
+        alt.freezingLevelFt?.let { fz ->
+            return max(thermodynamicElFt, fz + 2000.0)
+        }
+    }
+    if (risk == "moderate" || risk == "high" || risk == "extreme") {
+        alt.minus20cLevelFt?.let { return max(thermodynamicElFt, it) }
+        alt.minus10cLevelFt?.let { return max(thermodynamicElFt, it) }
+    }
+    return max(thermodynamicElFt, baseFt + 4000.0)
 }
 
 private fun DrawScope.drawThermoConvectiveBg(
@@ -990,18 +1042,12 @@ private fun DrawScope.drawThermoConvectiveBg(
         val pt = points[i]
         val conv = pt.thermoConvective
         val risk = conv.riskLevel.lowercase(Locale.US)
-        val cape = conv.capeJkg ?: pt.capeSurfaceJkg ?: 0.0
-        if ((risk == "none" || risk.isBlank()) && cape < 80.0) continue
+        if (risk == "none" || risk == "marginal" || risk.isBlank()) continue
 
-        val effectiveRisk = if (risk != "none" && risk.isNotBlank()) {
-            risk
-        } else {
-            when {
-                cape >= 1500.0 -> "high"
-                cape >= 500.0 -> "moderate"
-                else -> "marginal"
-            }
-        }
+        val rawBaseFt = conv.baseFt ?: conv.lfcFt ?: continue
+        val rawTopFt = conv.topFt ?: conv.elFt ?: continue
+        val topFt = estimateThermoTowerTop(pt, rawBaseFt, rawTopFt)
+        if (topFt <= rawBaseFt) continue
 
         val xLeft = if (i == 0) {
             transform.plotLeft
@@ -1014,64 +1060,103 @@ private fun DrawScope.drawThermoConvectiveBg(
             transform.distanceToX((pt.distanceNm + points[i + 1].distanceNm) * 0.5)
         }
         val w = max(2f, xRight - xLeft)
-        val baseColor = ColorScales.convectiveRiskColor(effectiveRisk, theme.id)
+        val baseColor = ColorScales.convectiveRiskColor(risk, theme.id)
 
-        // Subtle column background wash
+        val washAlpha = when (risk) {
+            "low" -> 0.06f
+            "moderate" -> 0.08f
+            "high", "severe" -> 0.10f
+            "extreme" -> 0.14f
+            else -> 0.06f
+        }
+        val fillAlpha = when (risk) {
+            "low" -> 0.18f
+            "moderate" -> 0.25f
+            "high", "severe" -> 0.30f
+            "extreme" -> 0.35f
+            else -> 0.18f
+        }
+        val hatchAlpha = when (risk) {
+            "low" -> 0.22f
+            "moderate" -> 0.35f
+            "high", "severe" -> 0.42f
+            "extreme" -> 0.50f
+            else -> 0.22f
+        }
+        val edgeAlpha = when (risk) {
+            "low" -> 0.30f
+            "moderate" -> 0.50f
+            "high", "severe" -> 0.60f
+            "extreme" -> 0.70f
+            else -> 0.30f
+        }
+        val stripAlpha = when (risk) {
+            "low" -> 0.50f
+            "moderate" -> 0.75f
+            "high", "severe" -> 0.85f
+            "extreme" -> 0.90f
+            else -> 0.50f
+        }
+
+        // 1. Subtle column background wash
         drawRect(
-            color = baseColor.copy(alpha = 0.12f),
+            color = baseColor.copy(alpha = washAlpha),
             topLeft = Offset(xLeft, transform.plotTop),
             size = Size(w, transform.plotHeight),
         )
 
-        val baseFt = conv.lfcFt ?: conv.baseFt ?: conv.lclFt ?: (pt.terrainElevationFt + 2500.0)
-        val topFt = estimateThermoTowerTop(pt) ?: (baseFt + 8000.0)
-        if (topFt <= baseFt) continue
-
         val yTop = transform.altitudeToY(topFt)
-        val yBot = transform.altitudeToY(baseFt)
+        val yBot = transform.altitudeToY(rawBaseFt)
         val h = max(4f, yBot - yTop)
 
         val towerRect = Rect(xLeft, yTop, xRight, yBot)
         val towerPath = Path().apply { addRect(towerRect) }
 
-        // Tower fill + 45-degree diagonal hatching
+        // 2. Tower body fill + 3. Diagonal hatching
         drawRect(
-            color = baseColor.copy(alpha = 0.36f),
+            color = baseColor.copy(alpha = fillAlpha),
             topLeft = Offset(xLeft, yTop),
             size = Size(w, h),
         )
         drawDiagonalHatching(
             bounds = towerRect,
             clip = towerPath,
-            color = baseColor.copy(alpha = 0.72f),
-            spacingPx = 7.dp.toPx(),
+            color = baseColor.copy(alpha = hatchAlpha),
+            spacingPx = 6.dp.toPx(),
         )
+        // 4. Tower edge outline
         drawRect(
-            color = baseColor.copy(alpha = 0.9f),
+            color = baseColor.copy(alpha = edgeAlpha),
             topLeft = Offset(xLeft, yTop),
             size = Size(w, h),
-            style = Stroke(width = 1.2f),
+            style = Stroke(width = 1f),
         )
 
-        // Anvil cap near EL + TCU/CB/+TS pill label
-        val anvilH = min(8f, h * 0.12f)
+        // 5. Anvil top indicator strip at EL
+        val anvilExtend = min(w * 0.2f, 6.dp.toPx())
         drawRect(
-            color = baseColor.copy(alpha = 0.65f),
-            topLeft = Offset(max(transform.plotLeft, xLeft - 3f), yTop),
-            size = Size(min(transform.plotRight - transform.plotLeft, w + 6f), anvilH),
+            color = baseColor.copy(alpha = stripAlpha),
+            topLeft = Offset(max(transform.plotLeft, xLeft - anvilExtend), yTop),
+            size = Size(min(transform.plotRight - transform.plotLeft, w + anvilExtend * 2f), 4.dp.toPx()),
         )
 
-        val badgeLabel = when (effectiveRisk) {
-            "extreme" -> "+TS"
-            "high", "severe" -> "CB"
-            else -> "TCU"
+        // 6. Convection label inside tower (moderate+ only — low towers don't warrant marking, matching Web)
+        if (risk != "low" && risk != "marginal" && w > 18f) {
+            val badgeLabel = when (risk) {
+                "extreme" -> "+TS"
+                "high", "severe" -> "CB"
+                else -> "TCU"
+            }
+            val visTop = max(yTop, transform.plotTop)
+            val visBase = min(yBot, transform.plotBottom)
+            val cy = visTop + (visBase - visTop) * 0.25f
+            drawPillLabel(
+                text = badgeLabel,
+                centerX = (xLeft + xRight) * 0.5f,
+                topY = max(transform.plotTop + 2f, cy - 7.dp.toPx()),
+                bgColor = baseColor.copy(alpha = 0.88f),
+            )
         }
-        drawPillLabel(
-            text = badgeLabel,
-            centerX = (xLeft + xRight) * 0.5f,
-            topY = max(transform.plotTop + 2f, yTop - 14f),
-            bgColor = baseColor.copy(alpha = 0.92f),
-        )
     }
 }
 
@@ -1582,7 +1667,7 @@ private fun DrawScope.drawAltitudeLinesLayer(
         )
     }
 
-    // Reference lines: Cruise Altitude & Flight Ceiling
+    // Reference lines: Cruise Altitude & Flight Ceiling (labels left-aligned inside plotLeft + 6dp, matching Web reference-lines.ts)
     if (isLayerOn(effectiveLayers, "cruise-altitude", "cruise", "reference-lines", defaultOn = true)) {
         val cruiseY = transform.altitudeToY(vizData.cruiseAltitudeFt)
         val cruiseColor = Color(theme.cruiseLineColor)
@@ -1593,24 +1678,20 @@ private fun DrawScope.drawAltitudeLinesLayer(
             strokeWidth = 2.0f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f),
         )
-        val cruiseLabel = if (vizData.cruiseAltitudeFt >= 10000.0) {
-            String.format(Locale.US, "FL%03d", (vizData.cruiseAltitudeFt / 100.0).roundToInt())
-        } else {
-            "${String.format(Locale.US, "%,d", vizData.cruiseAltitudeFt.roundToInt())} ft"
-        }
-        drawPillLabel(
+        val cruiseLabel = "Cruise ${String.format(Locale.US, "%,d", vizData.cruiseAltitudeFt.roundToInt())} ft"
+        drawPillLabelLeftAligned(
             text = cruiseLabel,
-            centerX = transform.plotLeft + 28f,
-            topY = max(transform.plotTop + 2f, cruiseY - 15f),
+            leftX = transform.plotLeft + 6.dp.toPx(),
+            topY = (cruiseY - 15.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 15.dp.toPx()),
             bgColor = Color(0xCC0F172A),
             textColor = cruiseColor,
         )
     }
 
     if (isLayerOn(effectiveLayers, "flight-ceiling", "reference-lines", "cruise")) {
-        if (vizData.flightCeilingFt > 0.0 && vizData.flightCeilingFt < vizData.maxAltitudeFt - 500.0) {
+        if (vizData.flightCeilingFt > 0.0 && vizData.flightCeilingFt < vizData.maxAltitudeFt - 200.0) {
             val ceilY = transform.altitudeToY(vizData.flightCeilingFt)
-            val ceilColor = Color(0xFFA855F7)
+            val ceilColor = Color(0xFF94A3B8)
             drawLine(
                 color = ceilColor.copy(alpha = 0.85f),
                 start = Offset(transform.plotLeft, ceilY),
@@ -1618,11 +1699,13 @@ private fun DrawScope.drawAltitudeLinesLayer(
                 strokeWidth = 1.5f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f),
             )
-            drawPillLabel(
-                text = "Ceil ${String.format(Locale.US, "FL%03d", (vizData.flightCeilingFt / 100.0).roundToInt())}",
-                centerX = transform.plotRight - 32f,
-                topY = max(transform.plotTop + 2f, ceilY - 15f),
-                bgColor = ceilColor.copy(alpha = 0.85f),
+            val ceilLabel = "Flight ceiling ${String.format(Locale.US, "%,d", vizData.flightCeilingFt.roundToInt())} ft"
+            drawPillLabelLeftAligned(
+                text = ceilLabel,
+                leftX = transform.plotLeft + 6.dp.toPx(),
+                topY = (ceilY - 15.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 15.dp.toPx()),
+                bgColor = Color(0xCC0F172A),
+                textColor = ceilColor,
             )
         }
     }
@@ -1689,10 +1772,10 @@ private fun DrawScope.drawSmoothAltitudeLine(
     }
 
     lastPointOffset?.let { endOffset ->
-        drawPillLabel(
+        drawPillLabelRightAligned(
             text = label,
-            centerX = (endOffset.x - 18f).coerceIn(transform.plotLeft + 18f, transform.plotRight - 18f),
-            topY = (endOffset.y - 14f).coerceIn(transform.plotTop + 2f, transform.plotBottom - 16f),
+            rightX = (endOffset.x - 4.dp.toPx()).coerceIn(transform.plotLeft + 36.dp.toPx(), transform.plotRight - 4.dp.toPx()),
+            topY = (endOffset.y - 14.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 15.dp.toPx()),
             bgColor = Color(0xCC0F172A),
             textColor = color,
         )
@@ -1784,7 +1867,7 @@ private fun DrawScope.drawAdvisoryRibbon(
 }
 
 // ============================================================================
-// 11. Waypoint Markers, Scrub Crosshair, Selected Point & Skew-T Hover Altitude
+// 11. Top Waypoint Markers, Scrub Crosshair, Selected Point & Skew-T Hover Altitude
 // ============================================================================
 
 private fun DrawScope.drawWaypointsAndOverlays(
@@ -1793,16 +1876,19 @@ private fun DrawScope.drawWaypointsAndOverlays(
     scrubDistanceNm: Double?,
     selectedPointIndex: Int,
     hoverAltitudeFt: Double?,
+    waypointTextColor: Color,
 ) {
-    // Waypoint markers along the bottom axis
+    // Top waypoint ICAO markers + vertical dashed drop lines (matching Web axes.ts)
     val wpPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
+        color = waypointTextColor.toArgb()
         textSize = 9.5.sp.toPx()
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
 
-    var lastWpLabelX = -100f
+    var lastWpRightX = -1000f
+    val minWpGapPx = 4.dp.toPx()
+    val wpBaselineY = transform.plotTop - 5.dp.toPx()
     for (wp in vizData.waypoints) {
         val x = transform.distanceToX(wp.distanceNm)
         drawLine(
@@ -1810,24 +1896,25 @@ private fun DrawScope.drawWaypointsAndOverlays(
             start = Offset(x, transform.plotTop),
             end = Offset(x, transform.plotBottom),
             strokeWidth = 0.9f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 5f), 0f),
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f),
         )
-        // Small tick at bottom of plot
+        // Small tick at top of plot
         drawLine(
-            color = Color.White,
-            start = Offset(x, transform.plotBottom),
-            end = Offset(x, transform.plotBottom + 5f),
-            strokeWidth = 1.4f,
+            color = waypointTextColor.copy(alpha = 0.7f),
+            start = Offset(x, transform.plotTop - 3.dp.toPx()),
+            end = Offset(x, transform.plotTop),
+            strokeWidth = 1.2f,
         )
-        if (abs(x - lastWpLabelX) >= 28f) {
-            val clampedX = x.coerceIn(transform.plotLeft + 14f, transform.plotRight - 14f)
+        val halfW = wpPaint.measureText(wp.icao) * 0.5f
+        val clampedX = x.coerceIn(transform.plotLeft + halfW, transform.plotRight - halfW)
+        if (clampedX - halfW >= lastWpRightX + minWpGapPx) {
             drawContext.canvas.nativeCanvas.drawText(
                 wp.icao,
                 clampedX,
-                transform.plotBottom + 16f,
+                wpBaselineY,
                 wpPaint,
             )
-            lastWpLabelX = clampedX
+            lastWpRightX = clampedX + halfW
         }
     }
 
@@ -1881,10 +1968,10 @@ private fun DrawScope.drawWaypointsAndOverlays(
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f),
         )
         val altText = String.format(Locale.US, "%,d ft", ((hoverAltitudeFt / 100.0).roundToInt() * 100))
-        drawPillLabel(
+        drawPillLabelRightAligned(
             text = altText,
-            centerX = transform.plotRight - 28f,
-            topY = (hoverY - 14f).coerceIn(transform.plotTop + 2f, transform.plotBottom - 16f),
+            rightX = transform.plotRight - 4.dp.toPx(),
+            topY = (hoverY - 14.dp.toPx()).coerceIn(transform.plotTop + 2f, transform.plotBottom - 16f),
             bgColor = Color(0xDD854D0E),
             textColor = Color(0xFFFEF08A),
         )
@@ -1943,6 +2030,69 @@ private fun DrawScope.drawPillLabel(
     drawContext.canvas.nativeCanvas.drawText(
         text,
         left + padH,
+        topY + pillH - 3.5f,
+        paint,
+    )
+}
+
+private fun DrawScope.drawPillLabelLeftAligned(
+    text: String,
+    leftX: Float,
+    topY: Float,
+    bgColor: Color,
+    textColor: Color = Color.White,
+) {
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = textColor.toArgb()
+        textSize = 8.5.sp.toPx()
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+    val textW = paint.measureText(text)
+    val padH = 4.dp.toPx()
+    val pillW = textW + padH * 2f
+    val pillH = 13.dp.toPx()
+
+    drawRoundRect(
+        color = bgColor,
+        topLeft = Offset(leftX, topY),
+        size = Size(pillW, pillH),
+        cornerRadius = CornerRadius(3.5.dp.toPx(), 3.5.dp.toPx()),
+    )
+    drawContext.canvas.nativeCanvas.drawText(
+        text,
+        leftX + padH,
+        topY + pillH - 3.5f,
+        paint,
+    )
+}
+
+private fun DrawScope.drawPillLabelRightAligned(
+    text: String,
+    rightX: Float,
+    topY: Float,
+    bgColor: Color,
+    textColor: Color = Color.White,
+) {
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = textColor.toArgb()
+        textSize = 8.5.sp.toPx()
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+    val textW = paint.measureText(text)
+    val padH = 4.dp.toPx()
+    val pillW = textW + padH * 2f
+    val pillH = 13.dp.toPx()
+    val leftX = rightX - pillW
+
+    drawRoundRect(
+        color = bgColor,
+        topLeft = Offset(leftX, topY),
+        size = Size(pillW, pillH),
+        cornerRadius = CornerRadius(3.5.dp.toPx(), 3.5.dp.toPx()),
+    )
+    drawContext.canvas.nativeCanvas.drawText(
+        text,
+        leftX + padH,
         topY + pillH - 3.5f,
         paint,
     )

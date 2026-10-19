@@ -24,8 +24,10 @@ object NwpFallback {
         "convective-nwp" to "convective",
         "nwp-convective-bg" to "thermo-convective-bg",
         "ceiling-nwp" to "ceiling",
-        "icing-sfip" to "icing-ogimet-nwp",
-        "sfip-bands" to "icing-ogimet-nwp-bands",
+        "icing-ogimet-nwp" to "icing",
+        "icing-ogimet-nwp-bands" to "icing-bands",
+        "icing-sfip" to "icing",
+        "sfip-bands" to "icing-bands",
     )
 
     fun getUnavailableLayers(data: VizRouteData): Set<String> {
@@ -39,10 +41,13 @@ object NwpFallback {
             unavailable.addAll(NWP_CLOUD_LAYERS)
         }
 
-        val hasNwpConvective = points.any {
-            val nc = it.nwpConvective
-            nc != null && nc.baseFt != null && nc.topFt != null
+        val hasOgimetNwp = hasNwpClouds && points.any { it.icingOgimetNwpZones.isNotEmpty() }
+        if (!hasOgimetNwp) {
+            unavailable.add("icing-ogimet-nwp")
+            unavailable.add("icing-ogimet-nwp-bands")
         }
+
+        val hasNwpConvective = points.any { it.nwpConvective != null }
         if (!hasNwpConvective) {
             unavailable.add("convective-nwp")
             unavailable.add("nwp-convective-bg")
@@ -59,7 +64,7 @@ object NwpFallback {
             unavailable.add("sfip-bands")
         }
 
-        val hasIeng = points.any { it.iengIcingZones.isNotEmpty() }
+        val hasIeng = hasNwpClouds && points.any { it.iengIcingZones.isNotEmpty() }
         if (!hasIeng) {
             unavailable.add("icing-ieng")
             unavailable.add("ieng-icing-bands")
@@ -69,6 +74,12 @@ object NwpFallback {
         if (!hasSld) {
             unavailable.add("sld")
             unavailable.add("sld-bands")
+        }
+
+        val hasEShear = points.any { it.eShearLayers.isNotEmpty() }
+        if (!hasEShear) {
+            unavailable.add("e-shear")
+            unavailable.add("e-shear-bands")
         }
 
         return unavailable

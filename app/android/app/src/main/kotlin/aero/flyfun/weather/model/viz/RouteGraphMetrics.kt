@@ -40,10 +40,10 @@ object RouteGraphMetrics {
         label = "Headwind / Tailwind",
         unit = "kt",
         renderType = RouteGraphRenderType.LINE,
-        colorHex = 0xFF3B82F6L,
+        colorHex = 0xFF2563EBL,
         suggestedRange = -30.0 to 30.0,
         showZeroLine = true,
-        zeroLineLabels = "HW" to "TW",
+        zeroLineLabels = "Headwind ↑" to "Tailwind ↓",
         getValue = { it.headwindKt },
         formatValue = { v ->
             val rounded = round(v).toInt()
@@ -73,7 +73,7 @@ object RouteGraphMetrics {
         label = "Temperature (2m)",
         unit = "°C",
         renderType = RouteGraphRenderType.LINE,
-        colorHex = 0xFFF97316L,
+        colorHex = 0xFFDC2626L,
         suggestedRange = -10.0 to 30.0,
         showZeroLine = true,
         getValue = { it.temperatureC },
