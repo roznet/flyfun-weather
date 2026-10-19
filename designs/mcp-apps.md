@@ -85,7 +85,10 @@ or a host failure says so.
   `getLayerGroups()` minus `highlight`, no advisories here), selected-point
   label, "Open full briefing" (`openLink(web_url)`), Fullscreen (only when the
   host's `availableDisplayModes` has it). Inline chart 320 px, capped by the
-  host's `containerDimensions.maxHeight`; `autoResize` reports the size.
+  host's `containerDimensions.maxHeight`; `autoResize` reports the size, so a
+  host-context change redraws only when theme, display mode or chart height
+  changed (not on every size echo). A failed first load resets the widget, so
+  the next tool result starts over instead of staying on the error.
 - **Layers:** `show_cross_section(layers=…)` switches layers on **on top of the
   briefing defaults** (`layersWithExtra`), unlike the embed's exact list, so the
   model can't hand the pilot a bare chart. Ids are validated against
@@ -99,13 +102,16 @@ or a host failure says so.
   semantics). It ends by saying the widget shows the briefing data and never
   re-grades.
 - **Host context:** `theme` dark → cross-section `standard` theme, light →
-  `light`, plus `data-theme` on `<html>` for the toolbar CSS; `locale` (BCP 47)
-  → `initI18n(locale)`; later `host-context-changed` re-applies.
+  `light`, plus `data-theme` on `<html>` for the toolbar CSS; later
+  `host-context-changed` re-applies. The host's `locale` is ignored: the widget
+  is **English only** (the resource is one static file fetched before the
+  locale is known, and each extra locale costs ~70 KB).
 
 ### Build
 
 `web/scripts/build-mcp-app.mjs` (esbuild JS API, `write: false`, IIFE, minified,
-no splitting so the locale JSON is inlined) writes **one** file,
+no splitting so the locale JSON is inlined; the `english-only` plugin stubs
+`fr`/`de`/`es` to `{}`) writes **one** file,
 `web/dist/mcp-cross-section.html`, from `web/mcp-app/cross-section.html` +
 `cross-section.css`, inlining JS (with `</script` escaped) and CSS.
 `npm run build` / `npm run dev` include it (`build:mcp-app`, `dev:mcp-app`
@@ -113,8 +119,8 @@ watches the TS graph, the template and the CSS). `web/dist/` is gitignored like
 the other bundles. The Docker image builds it in the node stage and the MCP
 container (same image) reads it.
 
-Size: ~1 MB (zod pulled in by the ext-apps SDK ~440 KB, the four locale files
-~290 KB, the cross-section ~80 KB). Sent once per widget render; the server
+Size: ~760 KB (zod pulled in by the ext-apps SDK ~440 KB, the English locale
+~70 KB, the cross-section ~80 KB). Sent once per widget render; the server
 reads the file once per process (`_widget_html`, a stub HTML when missing so
 the tool still works in an unbuilt test env, not cached).
 

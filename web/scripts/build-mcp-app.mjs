@@ -29,8 +29,23 @@ function assemble(template, js, css) {
     .replace('/*__INLINE_JS__*/', () => safeJs);
 }
 
+/** The widget is English only: i18n.ts's dynamic `./locales/${locale}.json`
+ *  import would inline every locale (~70 KB each), so the non-English ones
+ *  become empty objects and `t()` falls back to English. */
+const englishOnly = {
+  name: 'english-only',
+  setup(build) {
+    // esbuild filters are Go regexps (no lookahead): name the other locales.
+    build.onLoad({ filter: /[\\/]i18n[\\/]locales[\\/](fr|de|es)\.json$/ }, () => ({
+      contents: '{}',
+      loader: 'json',
+    }));
+  },
+};
+
 const options = {
   entryPoints: [resolve(web, 'ts/mcp-app/cross-section-main.ts')],
+  plugins: [englishOnly],
   bundle: true,
   write: false,
   format: 'iife',
@@ -51,7 +66,7 @@ if (process.argv.includes('--watch')) {
   let lastJs = '';
   const ctx = await esbuild.context({
     ...options,
-    plugins: [{
+    plugins: [englishOnly, {
       name: 'write-page',
       setup(build) {
         build.onEnd((result) => {

@@ -112,4 +112,16 @@ describe('XsectionLoader', () => {
     await expect(loader.load('gfs')).resolves.toMatchObject({ model: 'gfs' });
     expect(call).toHaveBeenCalledTimes(2);
   });
+
+  it('rejects a malformed reply with a message', async () => {
+    const bad = [
+      { structuredContent: { model: 'gfs', route_analyses: {} } },
+      { structuredContent: { model: 3, route_analyses: manifest } },
+      { structuredContent: { model: 'gfs', route_analyses: { analyses: 'x' } } },
+    ];
+    for (const r of bad) {
+      const loader = new XsectionLoader(vi.fn().mockResolvedValue(r), 'f1', 't1');
+      await expect(loader.load('gfs')).rejects.toThrow('No cross-section data');
+    }
+  });
 });

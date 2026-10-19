@@ -21,6 +21,9 @@ import { buildModelContext, describePoint, utc } from './model-context';
 import { parseViewParams, XsectionLoader, type ToolCallResult, type ViewParams } from './loader';
 
 const CONTEXT_DEBOUNCE_MS = 500;
+/** The widget bundles English only (build-mcp-app.mjs stubs the other
+ *  locales to keep the HTML small), whatever the host's locale. */
+const WIDGET_LOCALE = 'en';
 /** Chart height inline; fullscreen takes the viewport. */
 const INLINE_CHART_PX = 320;
 
@@ -32,8 +35,8 @@ const status = document.getElementById('xs-status')!;
 
 const app = new App({ name: 'flyfun-weather-cross-section', version: '1.0.0' }, {}, { autoResize: true });
 let started = false;
-// Settles once messages are loaded in the host's locale (known only after the
-// handshake); a tool result that arrives first waits for it.
+// Settles once messages are loaded (after the handshake); a tool result that
+// arrives first waits for it.
 let i18nDone!: () => void;
 const i18nReady = new Promise<void>((resolve) => { i18nDone = resolve; });
 let view: XsectionView | null = null;
@@ -41,6 +44,8 @@ let loader: XsectionLoader | null = null;
 let interaction: InteractionHandle | null = null;
 let params: ViewParams | null = null;
 let contextTimer: ReturnType<typeof setTimeout> | undefined;
+/** What the last host-context redraw was for: theme, display mode, chart height. */
+let drawnLayoutKey = '';
 
 function showStatus(text: string | null): void {
   status.textContent = text ?? '';
@@ -64,7 +69,13 @@ function applyHostContext(ctx: McpUiHostContext | undefined): void {
   const dims = ctx.containerDimensions as { maxHeight?: number } | undefined;
   const cap = !fullscreen && dims?.maxHeight ? Math.max(160, dims.maxHeight - 90) : INLINE_CHART_PX;
   chart.style.height = fullscreen ? '' : `${Math.min(INLINE_CHART_PX, cap)}px`;
-  if (view?.data) redraw();
+  // Hosts send containerDimensions as autoResize reports our size: redraw only
+  // when the look or the chart height changed, not on every size echo.
+  const key = `${document.documentElement.dataset.theme}|${fullscreen}|${chart.style.height}`;
+  if (view?.data && key !== drawnLayoutKey) {
+    drawnLayoutKey = key;
+    redraw();
+  }
 }
 
 function routeLabel(): string {
@@ -221,6 +232,7 @@ async function start(result: ToolCallResult): Promise<void> {
   try {
     params = parseViewParams(result);
   } catch (err) {
+    started = false; // a later tool result may carry a flight
     showStatus((err as Error).message);
     return;
   }
@@ -250,6 +262,16 @@ async function start(result: ToolCallResult): Promise<void> {
     updateInfo();
     scheduleContext();
   } catch (err) {
+    // Not stuck on the error (e.g. a host rejecting a large result): the next
+    // tool result starts over from a clean chart.
+    started = false;
+    view = null;
+    loader = null;
+    interaction = null;
+    drawnLayoutKey = '';
+    chart.replaceChildren();
+    toolbar.replaceChildren(info);
+    document.getElementById('xs-layers')!.replaceChildren();
     showStatus((err as Error).message);
   }
 }
@@ -262,12 +284,12 @@ app.onhostcontextchanged = (ctx) => applyHostContext({ ...app.getHostContext(), 
 app.connect()
   .then(async () => {
     const ctx = app.getHostContext();
-    await initI18n(ctx?.locale);
+    await initI18n(WIDGET_LOCALE);
     i18nDone();
     applyHostContext(ctx);
     if (!started) showStatus(t('mcpApp.loading'));
   })
   .catch((err: Error) => {
     showStatus(`Could not connect to the chat host: ${err.message}`);
-    void initI18n().then(i18nDone);
+    void initI18n(WIDGET_LOCALE).then(i18nDone);
   });

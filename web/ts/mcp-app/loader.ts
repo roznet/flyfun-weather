@@ -84,16 +84,20 @@ export class XsectionLoader {
     const result = await this.call({ name: 'xsection_data', arguments: args });
     const problem = resultProblem(result);
     if (problem) throw new Error(problem);
-    const sc = result.structuredContent as Record<string, any> | undefined;
-    if (!sc?.route_analyses) throw new Error('No cross-section data in the reply.');
+    const sc = result.structuredContent;
+    const ra = sc?.route_analyses as { analyses?: unknown } | undefined;
+    // Checked here so a malformed reply shows a message, not a draw-time exception.
+    if (!sc || typeof sc.model !== 'string' || !ra || !Array.isArray(ra.analyses)) {
+      throw new Error('No cross-section data in the reply.');
+    }
     return {
       model: sc.model,
       data: {
-        manifest: sc.route_analyses,
-        ceilingFt: sc.ceiling_ft ?? undefined,
-        snapshot: sc.snapshot ?? null,
-        elevation: sc.elevation ?? null,
-        fronts: sc.fronts ?? null,
+        manifest: ra as unknown as EmbedData['manifest'],
+        ceilingFt: typeof sc.ceiling_ft === 'number' ? sc.ceiling_ft : undefined,
+        snapshot: (sc.snapshot ?? null) as EmbedData['snapshot'],
+        elevation: (sc.elevation ?? null) as EmbedData['elevation'],
+        fronts: (sc.fronts ?? null) as EmbedData['fronts'],
       },
     };
   }

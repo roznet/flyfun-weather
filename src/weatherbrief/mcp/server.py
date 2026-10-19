@@ -1255,7 +1255,7 @@ def show_cross_section(
         f"Cross-section for {route}, briefing of {timestamp}, "
         f"model {model or 'default (ECMWF when available)'}"
         + (f", extra layers {', '.join(view['layers'])}" if view["layers"] else "")
-        + (f", point {point_index} selected" if point_index is not None else "")
+        + (f", point {point_index} requested" if point_index is not None else "")
         + ". If the chat shows the interactive widget, the pilot can switch model, "
         "toggle layers and select a point; their current selection arrives as model "
         "context. If it does not, give the pilot the full briefing link: "
