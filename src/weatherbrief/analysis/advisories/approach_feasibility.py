@@ -76,6 +76,7 @@ from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AirportClause,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
 )
@@ -643,13 +644,20 @@ class ApproachFeasibilityEvaluator:
             else:
                 status, detail = _grade_mvfr(approaches, loc)
 
-            label = adv_t("airport.arr", loc)
+            # The category is structured so the aggregate prints the
+            # cross-model consensus rather than this model's (#823).
+            clause = AirportClause(
+                end="arr", category=cond.flight_category, printed=True,
+                head=f"{adv_t('airport.arr', loc)} {arr.icao}: ",
+                suffix=f" — {detail}", locale=loc,
+            )
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status,
-                detail=f"{label} {arr.icao}: {cond.flight_category.value} — {detail}",
+                detail=clause.text,
                 affected=1 if status != AdvisoryStatus.GREEN else 0,
                 total=1,
                 total_distance_nm=ctx.total_distance_nm,
+                airport_clauses=[clause],
             ))
 
         return RouteAdvisoryResult.from_per_model(ADVISORY_ID, per_model, params)

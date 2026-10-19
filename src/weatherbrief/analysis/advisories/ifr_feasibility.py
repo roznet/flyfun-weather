@@ -41,6 +41,7 @@ from weatherbrief.models import (
     AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AirportClause,
     ConvectiveCharacter,
     HighlightSeverity,
     ModelAdvisoryResult,
@@ -67,14 +68,16 @@ def _check_airport_ifr(
     model: str,
     min_dep_ceiling_ft: float,
     min_arr_ceiling_ft: float,
-) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus]:
+) -> tuple[AdvisoryStatus, str, AdvisoryStatus, AdvisoryStatus, list[AirportClause]]:
     """Check departure and arrival airport conditions for IFR feasibility.
 
     IFR flights accept IFR conditions, but LIFR triggers amber and
     ceilings below configurable minimums trigger red.
 
-    Returns (status, detail_fragment, dep_status, arr_status). The per-airport
-    statuses colour the endpoint ribbon segments of the highlight (#375).
+    Returns (status, detail_fragment, dep_status, arr_status, clauses). The
+    per-airport statuses colour the endpoint ribbon segments of the highlight
+    (#375). ``clauses`` records the category at every airport with a condition,
+    printed (LIFR) or not, for the aggregate's cross-model consensus (#823).
 
     Missing airport data is UNAVAILABLE, never a hardcoded clear GREEN (#391):
     the airport axis then simply doesn't contribute to the composite's ``worst``
@@ -83,7 +86,7 @@ def _check_airport_ifr(
     if ctx.airport_conditions is None:
         return (
             AdvisoryStatus.UNAVAILABLE, "",
-            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE,
+            AdvisoryStatus.UNAVAILABLE, AdvisoryStatus.UNAVAILABLE, [],
         )
 
     dep = ctx.airport_conditions.departure
@@ -94,35 +97,42 @@ def _check_airport_ifr(
     loc = ctx.locale
     parts: list[str] = []
     per_airport: list[AdvisoryStatus] = []
+    clauses: list[AirportClause] = []
 
-    for label_key, icao, cond, min_ceil in [
-        ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft),
-        ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft),
+    for label_key, icao, cond, min_ceil, end in [
+        ("airport.dep", dep.icao, dep_cond, min_dep_ceiling_ft, "dep"),
+        ("airport.arr", arr.icao, arr_cond, min_arr_ceiling_ft, "arr"),
     ]:
         if cond is None:
             # No condition for this model at this airport — unassessable, not clear.
             per_airport.append(AdvisoryStatus.UNAVAILABLE)
             continue
         status = AdvisoryStatus.GREEN
+        suffix = ""
         # LIFR is concerning for IFR
         if cond.flight_category == FlightCategory.LIFR:
-            label = adv_t(label_key, loc)
             # Check against minimum ceiling
             if cond.ceiling_ft is not None and cond.ceiling_ft < min_ceil:
                 status = AdvisoryStatus.RED
-                parts.append(adv_t(
+                suffix = adv_t(
                     "ifr.lifr_below_min", loc,
-                    label=label, icao=icao,
                     ceiling=cond.ceiling_ft, min=int(min_ceil),
-                ))
+                )
             else:
                 status = AdvisoryStatus.AMBER
-                parts.append(adv_t("ifr.lifr", loc, label=label, icao=icao))
+        clause = AirportClause(
+            end=end, category=cond.flight_category,
+            printed=status != AdvisoryStatus.GREEN,
+            head=f"{adv_t(label_key, loc)} {icao} ", suffix=suffix, locale=loc,
+        )
+        clauses.append(clause)
+        if clause.printed:
+            parts.append(clause.text)
         per_airport.append(status)
 
     detail = " | ".join(parts) if parts else ""
     worst = _worst_status(*per_airport)
-    return worst, detail, per_airport[0], per_airport[1]
+    return worst, detail, per_airport[0], per_airport[1], clauses
 
 
 def _check_enroute_hazards(
@@ -394,7 +404,7 @@ class IFRFeasibilityEvaluator:
 
         for model in ctx.models:
             # 1. Airport conditions
-            airport_status, airport_detail, dep_status, arr_status = (
+            airport_status, airport_detail, dep_status, arr_status, airport_clauses = (
                 _check_airport_ifr(
                     ctx, model, min_dep_ceiling_ft, min_arr_ceiling_ft
                 )
@@ -426,6 +436,8 @@ class IFRFeasibilityEvaluator:
                     model=model, status=AdvisoryStatus.UNAVAILABLE,
                     detail=adv_t("no_data", loc), affected=0, total=0,
                     total_distance_nm=ctx.total_distance_nm,
+                    # Still counted in the airport consensus (#823).
+                    airport_clauses=airport_clauses,
                 ))
                 continue
 
@@ -574,6 +586,7 @@ class IFRFeasibilityEvaluator:
                 extent=affected_extent,
                 highlights=highlights,
                 primary_method_id=primary_method_id,
+                airport_clauses=airport_clauses,
             ))
 
         return RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, params)

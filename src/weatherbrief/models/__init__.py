@@ -86,6 +86,7 @@ from weatherbrief.models.advisories import (  # noqa: F401
     AdvisoryHighlights,
     AdvisoryParameterDef,
     AdvisoryStatus,
+    AirportClause,
     AltitudeAdvisoryChange,
     AltitudeAdvisoryDelta,
     AltitudeAdvisoryRow,

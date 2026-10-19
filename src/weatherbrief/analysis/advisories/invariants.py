@@ -160,7 +160,10 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
     The aggregate publishes no extent fields of its own — its numbers reach the
     reader through ``aggregate_detail``, sourced from the representative model.
     So "the aggregate is self-consistent" means: it grades what a model graded,
-    it names which one, and any extent it prints is that model's.
+    it names which one, and any extent it prints is that model's. The one
+    exception is the airport clause (#823): its flight category is the
+    cross-model consensus (``airport_consensus``), not the representative's,
+    so every advisory on a briefing prints the same category for an airport.
     """
     out: list[Violation] = []
     for m in a.per_model:
@@ -223,14 +226,44 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
                 f"{agg.value} model's domain ({sorted(domains)}) — "
                 f"{a.aggregate_detail!r}",
             )
+
+    # Any airport clause the representative printed reaches the aggregate with
+    # the consensus category, not the representative's own (#823).
+    if rep is not None:
+        for clause in rep.airport_clauses:
+            cat = a.airport_consensus.get(clause.end)
+            if not clause.text or cat is None or clause.text not in rep.detail:
+                continue
+            if f"{clause.head}{cat.value}" not in a.aggregate_detail:
+                fail(
+                    "aggregate_airport_is_the_consensus",
+                    f"{clause.end} consensus is {cat.value} but the aggregate "
+                    f"does not print {clause.head}{cat.value} — "
+                    f"{a.aggregate_detail!r}",
+                )
     return out
 
 
 def check_advisories(advisories: list[RouteAdvisoryResult]) -> list[Violation]:
-    """Every invariant over a list of results (what ``evaluate_all`` returns)."""
+    """Every invariant over a list of results (what ``evaluate_all`` returns).
+
+    Plus the one rule that spans advisories: on one briefing, every advisory
+    that reads an airport agrees on its consensus flight category (#823).
+    """
     out: list[Violation] = []
     for a in advisories:
         out.extend(check_advisory(a))
+    first: dict[str, tuple[str, str]] = {}
+    for a in advisories:
+        for end, cat in a.airport_consensus.items():
+            if end not in first:
+                first[end] = (a.advisory_id, cat.value)
+            elif first[end][1] != cat.value:
+                out.append(Violation(
+                    a.advisory_id, None, "airport_consensus_agrees_across_advisories",
+                    f"{end} consensus {cat.value} but {first[end][0]} has "
+                    f"{first[end][1]}",
+                ))
     return out
 
 

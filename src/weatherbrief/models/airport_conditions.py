@@ -33,6 +33,23 @@ class FlightCategory(str, Enum):
                 result = c
         return result
 
+    @classmethod
+    def majority(cls, categories: list[FlightCategory]) -> FlightCategory:
+        """Most common category, ties to the most restrictive among the tied.
+
+        The same rule as ``AdvisoryStatus.majority``, so a 1-1-1 split is the
+        worst of the three. Shared by the forecast-map / alternates consensus and
+        the advisories' airport clause (#823). Empty → VFR, like :meth:`worst`;
+        callers that must not read "no data" as VFR filter first.
+        """
+        counts: dict[FlightCategory, int] = {}
+        for c in categories:
+            counts[c] = counts.get(c, 0) + 1
+        if not counts:
+            return cls.VFR
+        top = max(counts.values())
+        return cls.worst([c for c, n in counts.items() if n == top])
+
     @property
     def color(self) -> str:
         """Display color for this flight category."""
