@@ -436,6 +436,7 @@ object FlexibleStringListSerializer : KSerializer<List<String>?> {
         }
     }
 
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     override fun serialize(encoder: Encoder, value: List<String>?) {
         if (value == null) {
             encoder.encodeNull()

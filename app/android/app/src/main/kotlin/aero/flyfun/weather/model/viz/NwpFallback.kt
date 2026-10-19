@@ -36,15 +36,20 @@ object NwpFallback {
 
         val unavailable = mutableSetOf<String>()
 
+        // Mirror web/ts/visualization/data-extract.ts:711-729:
+        // Ogimet-NWP and IENG backends return [] when no native NWP cloud layers
+        // exist, OR when the route is genuinely clear of icing on an NWP-capable
+        // model. Gate their availability strictly on hasNwpClouds so a clear route
+        // on GFS/ICON does not falsely mark Ogimet-NWP/IENG unavailable or swap in
+        // Ogimet-DD. Both Android canonical IDs ("icing-ogimet-nwp", "icing-ieng")
+        // and Web band aliases ("-bands") are recorded for syncLayerAliases parity.
         val hasNwpClouds = points.any { it.hasNativeNwpClouds || it.nwpCloudLayers.isNotEmpty() }
         if (!hasNwpClouds) {
             unavailable.addAll(NWP_CLOUD_LAYERS)
-        }
-
-        val hasOgimetNwp = hasNwpClouds && points.any { it.icingOgimetNwpZones.isNotEmpty() }
-        if (!hasOgimetNwp) {
             unavailable.add("icing-ogimet-nwp")
             unavailable.add("icing-ogimet-nwp-bands")
+            unavailable.add("icing-ieng")
+            unavailable.add("ieng-icing-bands")
         }
 
         val hasNwpConvective = points.any { it.nwpConvective != null }
@@ -62,12 +67,6 @@ object NwpFallback {
         if (!hasSfip) {
             unavailable.add("icing-sfip")
             unavailable.add("sfip-bands")
-        }
-
-        val hasIeng = hasNwpClouds && points.any { it.iengIcingZones.isNotEmpty() }
-        if (!hasIeng) {
-            unavailable.add("icing-ieng")
-            unavailable.add("ieng-icing-bands")
         }
 
         val hasSld = points.any { it.sldZones.isNotEmpty() }

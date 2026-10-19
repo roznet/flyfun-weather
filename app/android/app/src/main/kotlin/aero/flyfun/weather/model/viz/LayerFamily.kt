@@ -12,11 +12,7 @@ enum class LayerFamily(
     TURBULENCE("turbulence", "Turbulence", "CAT & vertical motion", 0xFFFB923CL),
     LEVELS("levels", "Levels", "0°C, −10°C, −20°C & cruise levels", 0xFF00BCD4L),
     STABILITY("stability", "Stability", "LCL, LFC, EL & inversions", 0xFF4CAF50L),
-    OBSERVED("observed", "Observed", "Airports, radar, cloud tops & night", 0xFF38BDF8L);
-
-    companion object {
-        val LINES: LayerFamily get() = LEVELS
-    }
+    OBSERVED("observed", "Observed", "Airports, radar, cloud tops & night", 0xFF38BDF8L),
 }
 
 data class CrossSectionLayerDef(
