@@ -96,6 +96,7 @@ NOTE_MAX_LENGTH = 300
 # cover more than one phenomenon. ``model`` advisories aren't weather → no entry.
 # Mirrors ADVISORY_TAG_MAP in ``web/ts/components/debrief-taxonomy.ts``.
 ADVISORY_TAG_MAP: dict[str, ConditionTag] = {
+    "aircraft_icing": ConditionTag.ICE,
     "icing_escape": ConditionTag.ICE,
     "fiki_icing": ConditionTag.ICE,
     "vmc_cruise": ConditionTag.IMC,

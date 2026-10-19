@@ -398,6 +398,47 @@ class TestCruiseIasResolution:
         s.close()
 
 
+class TestEquipageResolution:
+    """``_resolve_equipage`` (#827): the aircraft decides FIKI, unknown is non-FIKI."""
+
+    def _flight(self, aircraft_id=None):
+        return Flight(id="x", user_id=DEV_USER_ID, route_name="r",
+                      departure_time=datetime.now(timezone.utc),
+                      created_at=datetime.now(timezone.utc), aircraft_id=aircraft_id)
+
+    def test_fiki_aircraft(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        aid = _add_aircraft(app_db, icao_type="SR22", is_default=True, is_fiki=True, ceiling_ft=25000)
+        s = app_db()
+        eq = _resolve_equipage(s, self._flight(aid))
+        assert (eq.known, eq.fiki, eq.ceiling_ft, eq.graded_fiki) == (True, True, 25000, True)
+        s.close()
+
+    def test_null_aircraft_uses_default(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        _add_aircraft(app_db, icao_type="C172", is_default=True, is_fiki=False)
+        s = app_db()
+        eq = _resolve_equipage(s, self._flight())
+        assert (eq.known, eq.graded_fiki) == (True, False)
+        s.close()
+
+    def test_placeholder_is_unknown(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        aid = _add_aircraft(app_db, icao_type="ZZZZ", is_default=True, is_fiki=True, is_placeholder=True)
+        s = app_db()
+        eq = _resolve_equipage(s, self._flight(aid))
+        assert eq.known is False and eq.graded_fiki is False
+        s.close()
+
+    def test_no_db_is_unknown(self):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        assert _resolve_equipage(None, self._flight()).known is False
+
+
 class TestReviewFollowUps:
     def test_extra_defaults_collapse_to_oldest(self, app_db):
         first = _add_aircraft(app_db, icao_type="C172", is_default=True)

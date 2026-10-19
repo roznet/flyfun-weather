@@ -328,6 +328,11 @@ data shape is shipped, the canvas layer is not).
   cruise has no climb-to-cruise transition to suppress). **Kept as a presentation filter:**
   the `mitigation_max_reposition_nm` cap (a pure distance heuristic on the reported break,
   no floor conflict).
+- **Icing consumer since #827 is `aircraft_icing`** (`icing_cell_cost`, `addresses=
+  "icing_cruise"`, emitted only when the profile is ice-free, cost 0). Its cost is zone
+  membership only: the old `icing_escape` cost read 0 below the freezing level even under a
+  warm nose. Non-FIKI keeps the LIGHT+RIME soft wall below; FIKI may also be priced through
+  light (1) and moderate (3) ice; SEVERE/SLD are walls for both. `icing_escape` is retired.
 - **Consumers:** `vfr_feasibility` (hard wall) and `icing_escape` (soft wall) both ported;
   icing gains the climb-on-top / climb-over-then-descend maneuver the old single-transition
   code could not express. Both attach the structured `MitigationProfile` for the future

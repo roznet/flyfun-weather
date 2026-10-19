@@ -1,4 +1,4 @@
-"""Icing escape advisory — can escape icing by descending to warm air (non-FIKI)."""
+"""Retired by ``aircraft_icing`` (#827). Icing escape advisory — can escape icing by descending to warm air (non-FIKI)."""
 
 from __future__ import annotations
 
@@ -180,6 +180,9 @@ class IcingEscapeEvaluator:
             category="icing",
             timing_class="scan",
             altitude_dependent=True,
+            # Replaced by ``aircraft_icing`` (#827); kept so old packs and
+            # tests can still import it, never evaluated for a new briefing.
+            retired=True,
             parameters=[
                 AdvisoryParameterDef(
                     key="terrain_margin_ft",

@@ -566,3 +566,65 @@ def test_good_empty_sigmet_fetch_adds_no_section(sample_snapshot):
     ):
         context = build_digest_context(sample_snapshot.model_copy(update={"route_sigmets": block}), dep)
         assert "SIGMETs ALONG ROUTE" not in context
+
+
+# --- aircraft equipage and icing escape (#827) -----------------------------
+
+
+def _icing_manifest(aircraft, mitigations=()):
+    from weatherbrief.models import (
+        AdvisoryStatus,
+        RouteAdvisoriesManifest,
+        RouteAdvisoryResult,
+    )
+
+    result = RouteAdvisoryResult(
+        advisory_id="aircraft_icing", aggregate_status=AdvisoryStatus.AMBER,
+        aggregate_detail="Graded for FIKI: moderate icing for about 4 min (cruise)",
+        aggregate_mitigations=list(mitigations),
+    )
+    return RouteAdvisoriesManifest(advisories=[result], aircraft=aircraft)
+
+
+@pytest.mark.parametrize(("aircraft", "line"), [
+    ("fiki", "AIRCRAFT: FIKI, ceiling 25,000 ft"),
+    ("non_fiki", "AIRCRAFT: not FIKI"),
+    ("unknown", "AIRCRAFT: equipage not set (icing graded as not FIKI)"),
+])
+def test_header_names_the_equipage(sample_snapshot, aircraft, line):
+    from weatherbrief.models import AircraftEquipage
+
+    eq = {
+        "fiki": AircraftEquipage(known=True, fiki=True, ceiling_ft=25000),
+        "non_fiki": AircraftEquipage(known=True, fiki=False),
+        "unknown": AircraftEquipage(),
+    }[aircraft]
+    target = datetime.fromisoformat(sample_snapshot.target_date)
+    ctx = build_digest_context(sample_snapshot, target, route_advisories=_icing_manifest(eq))
+    assert line in ctx.split("\n")
+
+
+def test_header_has_no_aircraft_line_for_old_packs(sample_snapshot):
+    target = datetime.fromisoformat(sample_snapshot.target_date)
+    ctx = build_digest_context(sample_snapshot, target, route_advisories=_icing_manifest(None))
+    assert "AIRCRAFT:" not in ctx
+
+
+def test_icing_escape_reaches_the_context(sample_snapshot):
+    from weatherbrief.models import (
+        AdvisoryStatus,
+        AircraftEquipage,
+        Mitigation,
+        MitigationKind,
+    )
+
+    escape = Mitigation(
+        kind=MitigationKind.ALTITUDE, addresses="icing_escape",
+        detail="If iced, descend below 4500 ft (below the freezing level or cloud base)",
+        mitigated_status=AdvisoryStatus.AMBER, altitude_ft=4500,
+    )
+    manifest = _icing_manifest(AircraftEquipage(known=True, fiki=True), [escape])
+    target = datetime.fromisoformat(sample_snapshot.target_date)
+    ctx = build_digest_context(sample_snapshot, target, route_advisories=manifest)
+    assert "Icing escape (contingency if iced, not a planned altitude):" in ctx
+    assert "descend below 4500 ft" in ctx

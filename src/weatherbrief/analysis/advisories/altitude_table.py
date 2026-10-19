@@ -9,6 +9,7 @@ import logging
 from typing import Callable
 
 from weatherbrief.models import (
+    AircraftEquipage,
     AdvisoryAggregation,
     AdvisoryStatus,
     AirportConditions,
@@ -111,6 +112,7 @@ def compute_altitude_table(
     aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    equipage: AircraftEquipage | None = None,
     flight_duration_hours: float = 0.0,
 ) -> AltitudeTableResult:
     """Sweep altitude-dependent advisories across a range of altitudes.
@@ -191,6 +193,7 @@ def compute_altitude_table(
             airport_conditions=airport_conditions,
             locale=locale,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
+            equipage=equipage,
             flight_duration_hours=flight_duration_hours,
         )
         results = evaluate_all(ctx, enabled_ids=alt_dep_ids, user_params=user_params, aggregation=aggregation)

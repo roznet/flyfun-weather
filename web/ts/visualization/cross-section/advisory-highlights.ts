@@ -53,6 +53,7 @@ const ADVISORY_METHOD_GROUP: Record<string, 'clouds' | 'icing' | 'convection'> =
   vmc_cruise: 'clouds',
   cloud_top: 'clouds',
   vfr_feasibility: 'clouds',   // composite; clouds are its only method-bearing axis
+  aircraft_icing: 'icing',
   icing_escape: 'icing',
   fiki_icing: 'icing',
   ifr_feasibility: 'icing',    // composite; icing is the axis it badges
@@ -221,7 +222,7 @@ export function ribbonSeverityAt(
 /**
  * The `reason_code` of the flagged region covering a route distance, or `null`.
  *
- * `reason_code` is emitted only by `icing_escape` / `fiki_icing` / `convective`
+ * `reason_code` is emitted only by `aircraft_icing` / `icing_escape` / `fiki_icing` / `convective`
  * and only on flagged (amber/red) regions — every other region carries `null`,
  * because its reason IS the advisory's definition (see `HighlightRegion` in
  * `models/advisories.py`). Those single-kind evaluators produce regions that
@@ -265,6 +266,8 @@ const RIBBON_REASON_CODES = new Set<string>([
   'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
   // fiki_icing
   'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
+  // aircraft_icing (#827; also emits `sld` / `severe_icing` above)
+  'long_no_escape', 'long_escape', 'short_no_escape', 'short_escape',
   // convective — `dd_trigger` was renamed from `thermo_floor` in #442 and this
   // set was never updated, so the tooltip has shown no reason on a DD-raised
   // point since. `dd_fallback` is the #568 sibling: no native track at all.

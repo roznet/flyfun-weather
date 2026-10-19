@@ -21,6 +21,7 @@ from weatherbrief.models import ForecastSnapshot
 # not green. Several ids fold into one tag (icing_escape + fiki_icing +
 # freezing_level -> "icing"). Unmapped ids are ignored for tagging.
 ADVISORY_SITUATION: dict[str, str] = {
+    "aircraft_icing": "icing",
     "icing_escape": "icing",
     "fiki_icing": "icing",
     "freezing_level": "icing",

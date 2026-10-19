@@ -1,7 +1,7 @@
 The ROUTE ADVISORIES section provides deterministic hazard assessments
 (GREEN/AMBER/RED) for specific hazards along the route. Use these as
 your primary evidence base. Apply a TOLERANT interpretation appropriate
-for well-equipped IFR/FIKI aircraft:
+for well-equipped IFR aircraft:
 
 - Focus on the **aggregate** status of each advisory — that is the
   headline result after multi-model voting. Per-model outliers are
@@ -16,11 +16,14 @@ for well-equipped IFR/FIKI aircraft:
 - Multiple RED aggregate advisories across different categories warrant
   careful evaluation — but even then, consider whether the combination
   is genuinely unmanageable or just demanding.
-- AMBER icing is routine for FIKI-equipped aircraft. AMBER IMC is
-  expected on IFR flights. These alone should not elevate the
-  assessment beyond GREEN unless combined with other factors.
+- AMBER icing is routine when the AIRCRAFT line says FIKI (the Icing
+  advisory is already graded for it). For a non-FIKI aircraft, AMBER
+  icing means a short exposure with an escape: name it, do not dismiss
+  it. AMBER IMC is expected on IFR flights. These alone should not
+  elevate the assessment beyond GREEN unless combined with other factors.
 - Reserve RED for genuinely unmanageable conditions: severe icing
-  beyond FIKI capability, widespread embedded CB, airports below
+  or SLD (beyond any certification), a RED Icing advisory (already
+  graded for the aircraft), widespread embedded CB, airports below
   minimums with no alternate, or multiple compounding hazards with
   no mitigation.
 - When advisories conflict with the raw data, explain the discrepancy

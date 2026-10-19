@@ -28,7 +28,17 @@ from weatherbrief.analysis.advisories.registry import get_catalog
 
 
 def _catalog_keys() -> dict[str, set[str]]:
-    return {e.id: {p.key for p in e.parameters} for e in get_catalog()}
+    """Every key a stored profile may legitimately hold after migration 093.
+
+    Includes the retired cards (#827) and the icing keys ``ifr_feasibility``
+    stopped declaring when it took the icing card's grade (#827): 093 renamed
+    them before that, and the values stay stored, inert.
+    """
+    from weatherbrief.analysis.advisories.ifr_feasibility import _RETIRED_ICING_PARAMS
+
+    keys = {e.id: {p.key for p in e.parameters} for e in get_catalog(include_retired=True)}
+    keys["ifr_feasibility"] |= _RETIRED_ICING_PARAMS
+    return keys
 
 
 class TestRenameRule:
@@ -46,7 +56,7 @@ class TestRenameRule:
 
     def test_no_old_key_survives_in_the_catalog(self):
         """A renamed key must be gone from the catalog, or the rename is a lie."""
-        catalog = _catalog_keys()
+        catalog = {e.id: {p.key for p in e.parameters} for e in get_catalog(include_retired=True)}
         for adv_id, renames in EXTENT_KEY_RENAMES.items():
             for old in renames:
                 assert old not in catalog[adv_id], f"{adv_id}:{old} still declared"
@@ -161,7 +171,10 @@ class TestLossless:
         stored params, per advisory. If this is identical before and after, no
         grade can move — which is what makes the rename safe to ship without a
         pack replay."""
-        catalog = {e.id: {p.key: p.default for p in e.parameters} for e in get_catalog()}
+        catalog = {
+            e.id: {p.key: p.default for p in e.parameters}
+            for e in get_catalog(include_retired=True)
+        }
         user = (settings.get("advisories") or {}).get("params") or {}
         return {
             adv_id: {**defaults, **user.get(adv_id, {})}

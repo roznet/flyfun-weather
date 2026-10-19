@@ -1036,7 +1036,7 @@ class TestTimingClassRegistry:
         from weatherbrief.analysis.advisories.registry import get_scan_class_ids
 
         assert get_scan_class_ids() == {
-            "convective", "convective_character", "icing_escape", "fiki_icing",
+            "convective", "convective_character", "aircraft_icing",
             "cloud_top", "vmc_cruise", "vfr_feasibility", "ifr_feasibility",
             "freezing_precip",
         }

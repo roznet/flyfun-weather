@@ -462,6 +462,127 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Ascender por encima y luego descender bajo el engelamiento lo mantiene libre (ver perfil)",
     },
 
+    # --- aircraft_icing (#827) ---
+    # The label names the column that graded the card, so a pilot can never
+    # read a non-FIKI RED as if it applied to a FIKI aircraft, or the reverse.
+    "aircraft_icing.graded_fiki": {
+        "en": "Graded for FIKI",
+        "fr": "Évalué pour FIKI",
+        "de": "Bewertet für FIKI",
+        "es": "Evaluado para FIKI",
+    },
+    "aircraft_icing.graded_non_fiki": {
+        "en": "Graded for non-FIKI",
+        "fr": "Évalué pour non-FIKI",
+        "de": "Bewertet für Nicht-FIKI",
+        "es": "Evaluado para no FIKI",
+    },
+    "aircraft_icing.graded_unknown": {
+        "en": "Graded as non-FIKI (set your aircraft's equipage)",
+        "fr": "Évalué comme non-FIKI (renseignez l'équipement de votre avion)",
+        "de": "Als Nicht-FIKI bewertet (Ausrüstung Ihres Flugzeugs angeben)",
+        "es": "Evaluado como no FIKI (indique el equipamiento de su avión)",
+    },
+    "aircraft_icing.no_icing": {
+        "en": "no icing on the planned profile",
+        "fr": "pas de givrage sur le profil prévu",
+        "de": "keine Vereisung im geplanten Profil",
+        "es": "sin engelamiento en el perfil previsto",
+    },
+    "aircraft_icing.exposure": {
+        "en": "{risk} icing for about {minutes} min ({phases})",
+        "fr": "givrage {risk} pendant environ {minutes} min ({phases})",
+        "de": "{risk} Vereisung für etwa {minutes} min ({phases})",
+        "es": "engelamiento {risk} durante unos {minutes} min ({phases})",
+    },
+    "aircraft_icing.severe": {
+        "en": "severe icing ({phases}), beyond certification",
+        "fr": "givrage sévère ({phases}), hors certification",
+        "de": "schwere Vereisung ({phases}), außerhalb der Zulassung",
+        "es": "engelamiento severo ({phases}), fuera de certificación",
+    },
+    "aircraft_icing.sld": {
+        "en": "SLD risk ({phases}), beyond certification",
+        "fr": "risque SLD ({phases}), hors certification",
+        "de": "SLD-Risiko ({phases}), außerhalb der Zulassung",
+        "es": "riesgo SLD ({phases}), fuera de certificación",
+    },
+    "aircraft_icing.escape_down": {
+        "en": "; escape below {alt} ft",
+        "fr": " ; échappée sous {alt} ft",
+        "de": "; Ausweg unter {alt} ft",
+        "es": "; escape por debajo de {alt} ft",
+    },
+    "aircraft_icing.escape_up": {
+        "en": "; escape available (above the tops)",
+        "fr": " ; échappée possible (au-dessus des sommets)",
+        "de": "; Ausweg möglich (über den Tops)",
+        "es": "; escape posible (por encima de los topes)",
+    },
+    "aircraft_icing.no_escape": {
+        "en": "; no escape",
+        "fr": " ; pas d'échappée",
+        "de": "; kein Ausweg",
+        "es": "; sin escape",
+    },
+    "aircraft_icing.more_stretches": {
+        "en": " (+{n} more icing stretch(es))",
+        "fr": " (+{n} autre(s) zone(s) de givrage)",
+        "de": " (+{n} weitere Vereisungsabschnitt(e))",
+        "es": " (+{n} tramo(s) de engelamiento más)",
+    },
+    "aircraft_icing.phase.climb": {
+        "en": "climb", "fr": "montée", "de": "Steigflug", "es": "ascenso",
+    },
+    "aircraft_icing.phase.cruise": {
+        "en": "cruise", "fr": "croisière", "de": "Reiseflug", "es": "crucero",
+    },
+    "aircraft_icing.phase.descent": {
+        "en": "descent", "fr": "descente", "de": "Sinkflug", "es": "descenso",
+    },
+    "aircraft_icing.risk.light": {
+        "en": "light", "fr": "léger", "de": "leichte", "es": "ligero",
+    },
+    "aircraft_icing.risk.moderate": {
+        "en": "moderate", "fr": "modéré", "de": "mäßige", "es": "moderado",
+    },
+    "aircraft_icing.risk.severe": {
+        "en": "severe", "fr": "sévère", "de": "schwere", "es": "severo",
+    },
+    "aircraft_icing.risk.none": {
+        "en": "", "fr": "", "de": "", "es": "",
+    },
+    "aircraft_icing.mitigation.escape_down": {
+        "en": "If iced, descend below {alt} ft (below the freezing level or cloud base)",
+        "fr": "En cas de givrage, descendre sous {alt} ft (sous l'isotherme 0°C ou la base des nuages)",
+        "de": "Bei Vereisung unter {alt} ft sinken (unter die Frostgrenze oder Wolkenbasis)",
+        "es": "Si hay engelamiento, descender por debajo de {alt} ft (bajo la isoterma 0°C o la base de nubes)",
+    },
+    "aircraft_icing.mitigation.escape_up": {
+        "en": "If iced, climb above {alt} ft (above the icing tops)",
+        "fr": "En cas de givrage, monter au-dessus de {alt} ft (au-dessus des sommets givrants)",
+        "de": "Bei Vereisung über {alt} ft steigen (über die Vereisungsobergrenze)",
+        "es": "Si hay engelamiento, ascender por encima de {alt} ft (sobre los topes de engelamiento)",
+    },
+    "aircraft_icing.mitigation.cruise_descend": {
+        "en": "Cruising at {alt} ft keeps you clear of icing",
+        "fr": "Une croisière à {alt} ft vous maintient hors givrage",
+        "de": "Reiseflug in {alt} ft hält Sie frei von Vereisung",
+        "es": "Un crucero a {alt} ft lo mantiene libre de engelamiento",
+    },
+    "aircraft_icing.mitigation.cruise_climb": {
+        "en": "Cruising at {alt} ft (on top) keeps you clear of icing",
+        "fr": "Une croisière à {alt} ft (au-dessus) vous maintient hors givrage",
+        "de": "Reiseflug in {alt} ft (obenauf) hält Sie frei von Vereisung",
+        "es": "Un crucero a {alt} ft (por encima) lo mantiene libre de engelamiento",
+    },
+    "aircraft_icing.mitigation.cruise_profile": {
+        "en": "An icing-free profile exists (see profile)",
+        "fr": "Un profil sans givrage existe (voir profil)",
+        "de": "Ein vereisungsfreies Profil existiert (siehe Profil)",
+        "es": "Existe un perfil sin engelamiento (ver perfil)",
+    },
+
     # --- vmc_cruise ---
     "vmc_cruise.ovc": {
         "en": "OVC at cruise over {extent}",

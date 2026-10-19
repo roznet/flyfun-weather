@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import (
-    EXTENT_MIN_NM,
-    extent_min_nm_param,
     FlaggedCell,
     apply_airport_endpoints,
     below_coverage,
@@ -18,12 +16,14 @@ from weatherbrief.analysis.advisories._helpers import (
     driving_method_id,
     RouteExtent,
     format_extent,
-    grade_extent,
     route_extent,
-    hazardous_icing_zones,
-    min_icing_clearance,
     ribbon_peak,
     worst_severity,
+)
+from weatherbrief.analysis.advisories.aircraft_icing import (
+    IcingModelGrade,
+    grade_aircraft_icing_model,
+    resolve_aircraft_icing_params,
 )
 from weatherbrief.analysis.advisories.convective_character import (
     classify_route_character,
@@ -49,13 +49,12 @@ from weatherbrief.models import (
 )
 from weatherbrief.models.airport_conditions import FlightCategory
 
-# Default icing-exposure thresholds (route % with icing near cruise altitude).
-# Single source of truth shared by catalog_entry() parameter defaults and the
-# evaluate() fallbacks so the two cannot drift. They previously disagreed —
-# catalog advertised 20/50 while evaluate() fell back to 15/30 — meaning a call
-# without explicit params graded icing more aggressively than the UI showed.
-_ICING_PCT_AMBER_DEFAULT = 20
-_ICING_PCT_RED_DEFAULT = 50
+# Parameters this composite used to grade its own icing axis with, before it
+# took the ``aircraft_icing`` card's grade (#827). Stored profiles may still
+# carry them; they are ignored and not echoed back as if they had been applied.
+_RETIRED_ICING_PARAMS = frozenset({
+    "extent_pct_amber", "extent_pct_red", "extent_min_nm", "icing_altitude_buffer_ft",
+})
 
 
 def _worst_status(*statuses: AdvisoryStatus) -> AdvisoryStatus:
@@ -139,154 +138,66 @@ def _check_enroute_hazards(
     ctx: RouteContext,
     model: str,
     conv_grade: ConvectiveModelGrade,
-    cruise_altitude_ft: float,
-    icing_altitude_buffer_ft: float,
+    icing_grade: IcingModelGrade,
 ) -> tuple[
     int, int, int,
     list[tuple[float, HighlightSeverity]],
     list[tuple[float, FlaggedCell | None]],
     RouteExtent,
-    RouteExtent,
 ]:
-    """Check en-route icing, and merge it with the already-graded convection.
+    """Merge the already-graded icing and convection into the composite's geometry.
 
-    Icing is assessed here (it is this composite's own axis, with its own
-    altitude buffer). Convection is **not** re-derived: ``conv_grade`` comes from
-    the shared ``grade_convective_model`` — the identical call the ``convective``
-    advisory grades with — so the two advisories cannot disagree about the same
-    sounding (meteorology-decisions §22). This function only merges the two axes
-    into the composite's ribbon and counts.
-
-    Uses the same clearance-based icing check as the FIKI advisory: a point
-    counts as "icing affected" only when an icing zone is within
-    *icing_altitude_buffer_ft* of cruise altitude.
+    Neither axis is re-derived here. Convection comes from the shared
+    ``grade_convective_model`` (meteorology-decisions §22) and icing from the
+    ``aircraft_icing`` card's own per-model grade (§52), so this composite can
+    never call icing RED while the icing card says "escape available", which is
+    what it did before #827. This function only merges the two axes into the
+    composite's ribbon and counts.
 
     Returns (icing_total, affected, icing_count, ribbon_points, icing_cells,
-    icing_extent, affected_extent).
-    - icing_total: points where the active icing method could run (the icing
-      denominator) — a point on Ogimet-NWP with no native cloud envelope cannot
-      assess icing and is excluded so absent icing is not graded clear (#391)
-    - affected: number of unique points with icing OR convective risk
-    - icing_count: icing-affected points, for the detail message. There is no
-      convective counterpart: ``conv_grade.affected`` is that count by
-      construction — ``grade_convective_model`` appends a ``FlaggedCell`` for
-      exactly the points it increments ``affected`` on, in the same block after
-      every filter — so re-counting the cells here would be a second walk over
-      a number the grade already carries.
-    - icing_extent: the geometry-accurate extent of the icing-affected points
-      (#571). The icing sentence prints this rather than the route length scaled
-      by ``icing_count / icing_total``, which described neither the points nor
-      the miles it claimed.
-    - affected_extent: the same geometry over the icing-OR-convective union, so
-      the published ``affected_nm`` measures the points ``affected`` counts.
-    - ribbon_points: per-point worst of the two axes (#375). The convective
-      cutouts come straight off ``conv_grade.region_cells``, which is
-      index-aligned with ``ctx.analyses``, so the geometry the composite draws is
-      literally the geometry the convective advisory draws.
+    affected_extent):
+
+    - icing_total: points where the icing card could assess icing (#391).
+    - affected: points with icing OR convective risk.
+    - icing_count: points the icing card flagged.
+    - ribbon_points: per-point worst of the two axes (#375); both cutout lists
+      are index-aligned with ``ctx.analyses``.
+    - affected_extent: the geometry of the icing-OR-convective union, so the
+      published ``affected_nm`` measures the points ``affected`` counts.
     """
-    icing_total = 0
+    icing_total = sum(icing_grade.assessed)
     affected = 0
     icing_count = 0
     ribbon_points: list[tuple[float, HighlightSeverity]] = []
-    icing_cells: list[tuple[float, FlaggedCell | None]] = []
-    icing_flags: list[bool] = []
     union_flags: list[bool] = []
-    # Denominators (#391): the icing axis speaks only for points where the
-    # active icing method could run; the composite's union axis for points with
-    # a sounding.
-    icing_assessed: list[bool] = []
     sounding_flags: list[bool] = []
 
     for idx, rpa in enumerate(ctx.analyses):
         dist = rpa.distance_from_origin_nm or 0.0
-        icing_flags.append(False)
-        union_flags.append(False)
-        icing_assessed.append(False)
-        sounding_flags.append(False)
-        # Index-aligned with the grade (both walk ctx.analyses in order and
-        # always append exactly one entry per point).
         conv_cell = conv_grade.region_cells[idx][1]
-        conv_sev = (
-            conv_cell.severity if conv_cell is not None else HighlightSeverity.GREEN
-        )
-        has_convective = conv_cell is not None
-
-        sounding = rpa.sounding.get(model)
-        if sounding is None:
-            ribbon_points.append((dist, HighlightSeverity.UNAVAILABLE))
-            icing_cells.append((dist, None))
-            continue
-
-        # The active icing method may be unable to run here (Ogimet-NWP with no
-        # native cloud envelope): then its empty icing_zones is absent data, not
-        # "no icing". Assess icing only when it could run, and keep a separate
-        # denominator so absent icing never dilutes toward a clear grade (#391).
-        sounding_flags[-1] = True
-        icing_available = sounding.active_icing_available
-        if icing_available:
-            icing_total += 1
-            icing_assessed[-1] = True
-        # Only zones the pilot would actually meet: an Ogimet zone at risk NONE
-        # is the method reporting "assessed, no icing", and counting it made this
-        # composite flag — and go RED on — icing that does not exist.
-        icing_zones = hazardous_icing_zones(sounding.icing_zones)
-        has_icing = (
-            icing_available
-            and bool(icing_zones)
-            and min_icing_clearance(icing_zones, cruise_altitude_ft)
-            < icing_altitude_buffer_ft
-        )
-
-        if has_icing:
+        icing_cell = icing_grade.region_cells[idx][1]
+        sounding_flags.append(rpa.sounding.get(model) is not None)
+        union_flags.append(conv_cell is not None or icing_cell is not None)
+        if icing_cell is not None:
             icing_count += 1
-            icing_flags[-1] = True
-            # The triggering zones: those within the buffer of cruise.
-            band = [
-                z for z in icing_zones
-                if z.base_ft < cruise_altitude_ft + icing_altitude_buffer_ft
-                and z.top_ft > cruise_altitude_ft - icing_altitude_buffer_ft
-            ]
-            icing_cells.append((dist, FlaggedCell(
-                kind="icing_band",
-                severity=HighlightSeverity.AMBER,
-                base_ft=int(min(z.base_ft for z in band)) if band else None,
-                top_ft=int(max(z.top_ft for z in band)) if band else None,
-                metric_id="icing",
-                # Icing is the axis this composite *badges* (see
-                # primary_method_id below): it is the only one gated against the
-                # grade. The convective cells carry their own method too — a
-                # region's provenance is about that region, not about which axis
-                # won.
-                method_id=sounding.icing_method_effective,
-            )))
-        else:
-            icing_cells.append((dist, None))
-
-        if has_icing or has_convective:
+        if union_flags[-1]:
             affected += 1
-            union_flags[-1] = True
-
-        if not icing_available:
-            icing_sev = HighlightSeverity.UNAVAILABLE
-        elif has_icing:
-            icing_sev = HighlightSeverity.AMBER
-        else:
-            icing_sev = HighlightSeverity.GREEN
+        icing_sev = (
+            icing_cell.severity if icing_cell is not None
+            else HighlightSeverity.GREEN if icing_grade.assessed[idx]
+            else HighlightSeverity.UNAVAILABLE
+        )
+        conv_sev = conv_cell.severity if conv_cell is not None else HighlightSeverity.GREEN
         ribbon_points.append((dist, worst_severity(icing_sev, conv_sev)))
 
     dists = [rpa.distance_from_origin_nm or 0.0 for rpa in ctx.analyses]
-    speed_kt = ctx.cruise_groundspeed_kt
-    icing_extent = route_extent(
-        dists, ctx.total_distance_nm, icing_flags, icing_assessed,
-        speed_kt=speed_kt,
-    )
     affected_extent = route_extent(
         dists, ctx.total_distance_nm, union_flags, sounding_flags,
-        speed_kt=speed_kt,
+        speed_kt=ctx.cruise_groundspeed_kt,
     )
     return (
-        icing_total, affected, icing_count, ribbon_points, icing_cells,
-        icing_extent, affected_extent,
+        icing_total, affected, icing_count, ribbon_points,
+        icing_grade.region_cells, affected_extent,
     )
 
 
@@ -309,11 +220,11 @@ class IFRFeasibilityEvaluator:
             description=(
                 "Composite assessment of IFR flight feasibility. Checks airport "
                 "conditions (LIFR triggers amber, below-minimums triggers red), "
-                "en-route icing exposure percentage, and convective activity. "
-                "IFR or better at airports is GREEN. Icing exceeding the "
-                "threshold percentage triggers RED. The convective axis is the "
-                "Convective Activity advisory's own grade — tune it there; this "
-                "composite never grades convection differently."
+                "en-route icing and convective activity. IFR or better at "
+                "airports is GREEN. The icing axis is the Icing advisory's own "
+                "grade for your aircraft, and the convective axis the "
+                "Convective Activity advisory's: tune them there, this "
+                "composite never grades either differently."
             ),
             category="flight_rules",
             timing_class="scan",
@@ -343,43 +254,6 @@ class IFRFeasibilityEvaluator:
                     step=100,
                     audience="pilot",
                 ),
-                AdvisoryParameterDef(
-                    key="extent_pct_amber",
-                    label="% of route with icing near cruise (amber)",
-                    description="Route percentage with icing near cruise for amber",
-                    type="percent",
-                    unit="%",
-                    default=_ICING_PCT_AMBER_DEFAULT,
-                    min=5,
-                    max=50,
-                    step=5,
-                ),
-                AdvisoryParameterDef(
-                    key="extent_pct_red",
-                    label="% of route with icing near cruise (red)",
-                    description="Route percentage with icing near cruise for red",
-                    type="percent",
-                    unit="%",
-                    default=_ICING_PCT_RED_DEFAULT,
-                    min=10,
-                    max=80,
-                    step=5,
-                ),
-                extent_min_nm_param(),
-                AdvisoryParameterDef(
-                    key="icing_altitude_buffer_ft",
-                    label="Icing alt buffer",
-                    description=(
-                        "Icing above cruise + buffer is ignored "
-                        "(irrelevant altitude)"
-                    ),
-                    type="altitude",
-                    unit="ft",
-                    default=2000,
-                    min=500,
-                    max=5000,
-                    step=500,
-                ),
             ],
         )
 
@@ -387,17 +261,15 @@ class IFRFeasibilityEvaluator:
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
         min_dep_ceiling_ft = params.get("min_dep_ceiling_ft", 200)
         min_arr_ceiling_ft = params.get("min_arr_ceiling_ft", 400)
-        extent_pct_amber = params.get("extent_pct_amber", _ICING_PCT_AMBER_DEFAULT)
-        extent_pct_red = params.get("extent_pct_red", _ICING_PCT_RED_DEFAULT)
-        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
-        icing_altitude_buffer_ft = params.get("icing_altitude_buffer_ft", 2000)
-        # The convective axis is graded by the Convective Activity advisory's
-        # own parameters, not by a second set here (§22). Resolved once per
-        # evaluation: the user's overrides for ``convective`` if it is enabled,
+        params = {k: v for k, v in params.items() if k not in _RETIRED_ICING_PARAMS}
+        # Both hazard axes are graded by their owning advisories' parameters,
+        # not by a second set here (§22 convection, §52 icing). Resolved once
+        # per evaluation: the user's overrides if that advisory is enabled,
         # catalog defaults otherwise.
         conv_params = resolve_convective_params(ctx)
+        icing_params = resolve_aircraft_icing_params(ctx)
         # Character is read (not re-derived) for the EMBEDDED escalation below,
-        # through the character advisory's own parameters — same §22 rule.
+        # through the character advisory's own parameters, same §22 rule.
         char_params = resolve_character_params(ctx)
 
         per_model: list[ModelAdvisoryResult] = []
@@ -416,15 +288,14 @@ class IFRFeasibilityEvaluator:
             conv_grade = grade_convective_model(ctx, model, conv_params)
             total = conv_grade.total
 
-            # 3. En-route icing, merged with the graded convection into the
-            # composite's per-point highlight geometry (#375).
+            # 3. Icing: the SAME call the aircraft_icing card grades with, so
+            # this composite's icing axis is that card's per-model status by
+            # construction (§52), FIKI or not.
+            icing_grade = grade_aircraft_icing_model(ctx, model, icing_params)
             (
                 icing_total, affected, icing_count,
-                ribbon_points, icing_cells, icing_extent, affected_extent,
-            ) = _check_enroute_hazards(
-                ctx, model, conv_grade,
-                ctx.cruise_altitude_ft, icing_altitude_buffer_ft,
-            )
+                ribbon_points, icing_cells, affected_extent,
+            ) = _check_enroute_hazards(ctx, model, conv_grade, icing_grade)
 
             loc = ctx.locale
             if (
@@ -441,30 +312,19 @@ class IFRFeasibilityEvaluator:
                 ))
                 continue
 
-            # 4. Determine icing status
-            icing_status = AdvisoryStatus.GREEN
-            icing_detail = ""
-            if total > 0 and icing_total == 0:
-                # Points exist but the active icing method could run at none of
-                # them → the icing axis is unassessable, not clear (#391). It
-                # contributes UNAVAILABLE (ignored by `worst`) instead of GREEN.
-                icing_status = AdvisoryStatus.UNAVAILABLE
-            elif icing_total > 0 and icing_count > 0:
-                icing_status = grade_extent(
-                    icing_extent,
-                    amber_pct=extent_pct_amber, red_pct=extent_pct_red,
-                    min_nm=extent_min_nm,
-                )
-                if icing_status != AdvisoryStatus.GREEN:
-                    icing_detail = adv_t(
-                        "ifr.icing_over", loc,
-                        extent=format_extent(icing_extent),
-                    )
+            # 4. Icing status, verbatim from the card (its detail already names
+            # the column it graded with).
+            icing_status = icing_grade.status
+            icing_detail = (
+                icing_grade.detail
+                if icing_status in (AdvisoryStatus.AMBER, AdvisoryStatus.RED) else ""
+            )
 
             # Coverage tolerance (#391): a no-icing verdict from icing-assessable
             # points at too small a share of the route is UNAVAILABLE, not clear
             # (contributes nothing to the composite's `worst` rather than a false
-            # GREEN). Flagged icing verdicts always stand.
+            # GREEN). Flagged icing verdicts always stand. The card applies the
+            # same guard, so the two still agree.
             if icing_status == AdvisoryStatus.GREEN and below_coverage(icing_total, len(ctx.analyses)):
                 icing_status = AdvisoryStatus.UNAVAILABLE
 

@@ -451,6 +451,7 @@ object CrossSectionPresets {
     )
 
     val ADVISORY_TO_PRESET: Map<String, String> = mapOf(
+        "aircraft_icing" to "icing",
         "icing_escape" to "icing",
         "fiki_icing" to "icing",
         "icing" to "icing",

@@ -16,6 +16,7 @@ from typing import Callable
 from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
 from weatherbrief.analysis.sounding import compute_sounding_ceiling_ft
 from weatherbrief.models import (
+    AircraftEquipage,
     AdvisoryAggregation,
     AdvisoryChip,
     AdvisoryStatus,
@@ -464,6 +465,7 @@ def run_advisories(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    equipage: AircraftEquipage | None = None,
     altitude_table_step_ft: int | None = None,
     declared_approach_icaos: list[str] | None = None,
 ) -> AdvisoryResult:
@@ -515,6 +517,7 @@ def run_advisories(
                 route.destination.icao, airports_db_path, declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
+            equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
@@ -529,6 +532,7 @@ def run_advisories(
             models=advisory_model_names,
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
+            aircraft=equipage,
         )
         logger.info("Route advisories: %d evaluated (%d models)",
                      len(advisory_results), len(advisory_model_names))
@@ -564,6 +568,7 @@ def run_advisories(
                     aggregation=effective_aggregation,
                     locale=locale,
                     cruise_speed_ias_kt=cruise_speed_ias_kt,
+                    equipage=equipage,
                     flight_duration_hours=route.flight_duration_hours,
                 )
                 if pack_dir and altitude_table is not None:
@@ -602,6 +607,7 @@ def run_advisories_from_pack(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    equipage: AircraftEquipage | None = None,
     flight_duration_hours: float = 0.0,
     persist: bool = True,
     declared_approach_icaos: list[str] | None = None,
@@ -694,6 +700,7 @@ def run_advisories_from_pack(
                 declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
+            equipage=equipage,
             flight_duration_hours=flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
@@ -708,6 +715,7 @@ def run_advisories_from_pack(
             models=advisory_model_names,
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
+            aircraft=equipage,
         )
 
         if persist:
@@ -756,6 +764,7 @@ def run_altitude_table_from_pack(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    equipage: AircraftEquipage | None = None,
     flight_duration_hours: float = 0.0,
 ) -> AltitudeTableResult:
     """Compute altitude advisory table from persisted pack artifacts.
@@ -803,6 +812,7 @@ def run_altitude_table_from_pack(
         aggregation=effective_aggregation,
         locale=locale,
         cruise_speed_ias_kt=cruise_speed_ias_kt,
+        equipage=equipage,
         flight_duration_hours=flight_duration_hours,
     )
 
@@ -972,6 +982,7 @@ def run_alt_from_pack(
     convective_method: str | None = None,
     locale: str | None = None,
     cruise_speed_ias_kt: float | None = None,
+    equipage: AircraftEquipage | None = None,
     cross_sections: list[RouteCrossSection] | None = None,
     persist: bool = True,
     detect_fronts: bool = True,
@@ -1093,6 +1104,7 @@ def run_alt_from_pack(
                 declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
+            equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
@@ -1107,6 +1119,7 @@ def run_alt_from_pack(
             models=advisory_model_names,
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
+            aircraft=equipage,
         )
 
         if persist:

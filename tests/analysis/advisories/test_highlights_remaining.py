@@ -450,7 +450,10 @@ class TestIFRFeasibilityHighlights:
         assert kinds == {"icing_band", "tower"}
         icing = next(r for r in h.regions if r.kind == "icing_band")
         tower = next(r for r in h.regions if r.kind == "tower")
-        assert icing.severity == S.AMBER
+        # The icing cutout is the aircraft_icing card's own (#827): an unknown
+        # aircraft grades non-FIKI, and a route-long light-rime stretch with no
+        # known terrain to descend over is RED.
+        assert icing.severity == S.RED
         assert icing.base_ft == 7000 and icing.top_ft == 9000
         assert tower.severity == S.RED
         assert tower.base_ft == 4000 and tower.top_ft == 35000

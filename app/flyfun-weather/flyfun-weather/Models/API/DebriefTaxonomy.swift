@@ -110,6 +110,7 @@ nonisolated struct DebriefTaxonomy: Codable, Sendable, Equatable {
             .init(id: "worse", label: "Worse than forecast"),
         ],
         advisoryTagMap: [
+            "aircraft_icing": "ICE",
             "icing_escape": "ICE",
             "fiki_icing": "ICE",
             "vmc_cruise": "IMC",

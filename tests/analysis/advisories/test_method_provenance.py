@@ -13,6 +13,7 @@ Two halves finally joined:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -32,6 +33,7 @@ from weatherbrief.analysis.advisories.vfr_feasibility import VFRFeasibilityEvalu
 from weatherbrief.analysis.advisories.vmc_cruise import VMCCruiseEvaluator
 from weatherbrief.tasks.advise import _resolve_analyses
 from weatherbrief.models import (
+    AircraftEquipage,
     AdvisoryHighlights,
     AdvisoryStatus,
     CloudCoverage,
@@ -459,23 +461,23 @@ class TestIcingEvaluatorsBadgeEffective:
             nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
             convective_nwp=high_conv,
         )
-        # 2 iced of 6 → icing_pct ~33% (AMBER band, below RED 50); HIGH conv → RED.
-        ctx = _ctx([iced, iced, clear, clear, clear, clear], icing_method="ogimet_nwp")
+        # A FIKI aircraft with a climb-out above the tops: icing AMBER (#827);
+        # HIGH conv → RED.
+        ctx = replace(
+            _ctx([iced, iced, clear, clear, clear, clear], icing_method="ogimet_nwp"),
+            equipage=AircraftEquipage(known=True, fiki=True, ceiling_ft=20000),
+        )
         result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
         assert result.aggregate_status == AdvisoryStatus.RED
         rep = next(m for m in result.per_model if m.model == result.representative_model)
         assert rep.primary_method_id is None
 
-    def test_ifr_below_threshold_icing_does_not_borrow_method_for_conv_amber(self):
-        """The pooled-region trap (#409 round 2): icing under its own threshold.
-
-        1/20 points has in-buffer icing → an AMBER icing_band region IS emitted
-        (geometry is per-point), but icing_pct=5% is below extent_pct_amber (20),
-        so the icing axis grades GREEN and contributes nothing. A single MODERATE
-        convective point drives the composite to AMBER. The badge must NOT report
-        the icing method just because an AMBER icing region sorts first in the
-        pooled list — convective (method-less) drove it.
-        """
+    def test_ifr_icing_tied_with_convection_badges_icing(self):
+        """Since #827 the icing axis is the aircraft_icing card's grade, so an
+        icing region exists only when that axis is flagged: the old "icing
+        below its own threshold" trap cannot arise. When the flagged icing ties
+        the convective AMBER, icing drove (tied for) the grade and its method is
+        badged, per the #409 rule."""
         envelope = [EnhancedCloudLayer(base_ft=4000, top_ft=10000, coverage=CloudCoverage.OVC)]
         plain = SoundingAnalysis(
             indices=ThermodynamicIndices(freezing_level_ft=6000),
@@ -493,18 +495,15 @@ class TestIcingEvaluatorsBadgeEffective:
             nwp_cloud_layers=envelope, icing_ogimet_nwp_zones=[],
             convective=ConvectiveAssessment(risk_level=ConvectiveRisk.MODERATE, cape_jkg=1400),
         )
-        soundings = [iced, moderate_conv] + [plain] * 18  # 1/20 iced, 1/20 conv
-        ctx = _ctx(soundings, icing_method="ogimet_nwp")
-        result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
-        assert result.aggregate_status == AdvisoryStatus.AMBER  # convective-driven
-        # An AMBER icing region exists (per-point geometry), stamped ogimet_nwp…
-        assert any(
-            r.kind == "icing_band" and r.method_id == "ogimet_nwp"
-            for m in result.per_model if m.highlights for r in m.highlights.regions
+        soundings = [iced, moderate_conv] + [plain] * 18
+        ctx = replace(
+            _ctx(soundings, icing_method="ogimet_nwp"),
+            equipage=AircraftEquipage(known=True, fiki=True, ceiling_ft=20000),
         )
-        # …but the badge must not borrow it — icing never crossed its threshold.
+        result = IFRFeasibilityEvaluator.evaluate(ctx, _defaults(IFRFeasibilityEvaluator))
+        assert result.aggregate_status == AdvisoryStatus.AMBER
         rep = next(m for m in result.per_model if m.model == result.representative_model)
-        assert rep.primary_method_id is None
+        assert rep.primary_method_id == "ogimet_nwp"
 
 
 class TestBuildRegionsMethodSplit:

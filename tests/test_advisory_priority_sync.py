@@ -30,7 +30,8 @@ def _parse_priority_ids() -> list[str]:
 
 
 def test_advisory_priority_list_covers_all_registered_advisories():
-    registered = {e.id for e in get_catalog()}
+    # Retired advisories (#827) still render on old packs, so they keep a slot.
+    registered = {e.id for e in get_catalog(include_retired=True)}
     priority = _parse_priority_ids()
 
     missing = registered - set(priority)

@@ -331,6 +331,11 @@ class AdvisoryCatalogEntry(BaseModel):
     # fog/ceiling burn-off is OM/TAF-graded but a classic timing case). The
     # hint set is scan-class ∪ {timing_hint=True}.
     timing_hint: bool = False
+    # Retired advisories (#827) stay registered so their code and strings remain
+    # importable, but are never evaluated for a new briefing and are left out of
+    # the served catalog (settings, help, a new pack's manifest). Old packs keep
+    # rendering their stored cards from the catalog saved in their own manifest.
+    retired: bool = False
     parameters: list[AdvisoryParameterDef] = Field(default_factory=list)
 
 
@@ -873,6 +878,31 @@ class RouteAdvisoryResult(BaseModel):
         )
 
 
+class AircraftEquipage(BaseModel):
+    """What the flight's aircraft can do, as the advisory engine sees it (#827).
+
+    Resolved from the flight's aircraft (its own, else the owner's default —
+    ``storage.aircraft.resolve_flight_aircraft``), the same path the cruise
+    speed takes. ``known=False`` is "no real aircraft": none resolved, or the
+    synthesised placeholder. An unknown aircraft is graded as **non-FIKI** — the
+    conservative column — and the icing card says so.
+
+    The aircraft wins over profile settings (#777: aircraft = what the machine
+    can do; profile = how the pilot likes to fly it).
+    """
+
+    known: bool = False
+    fiki: bool = False
+    # Service ceiling (ft MSL) from the aircraft form. None when not entered;
+    # the icing card then caps a FIKI climb-out escape at the flight ceiling.
+    ceiling_ft: int | None = None
+
+    @property
+    def graded_fiki(self) -> bool:
+        """The column the icing card grades with: FIKI only when known to be."""
+        return self.known and self.fiki
+
+
 class RouteAdvisoriesManifest(BaseModel):
     """Top-level container for all route advisory results."""
 
@@ -885,6 +915,9 @@ class RouteAdvisoriesManifest(BaseModel):
     models: list[str] = Field(default_factory=list)
     aggregation: str = "worst"
     airport_conditions: AirportConditions | None = None
+    # The equipage the advisories were graded for (#827). None on packs built
+    # before #827 and on paths that never resolved an aircraft.
+    aircraft: AircraftEquipage | None = None
 
 
 class AltitudeAdvisoryRow(BaseModel):

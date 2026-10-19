@@ -256,6 +256,7 @@ enum CrossSectionPresets {
         "vmc_cruise": .clouds,
         "cloud_top": .clouds,
         "vfr_feasibility": .clouds,     // composite; clouds are its only method axis
+        "aircraft_icing": .icing,
         "icing_escape": .icing,
         "fiki_icing": .icing,
         "ifr_feasibility": .icing,      // composite; icing is the axis it badges
@@ -357,7 +358,8 @@ enum CrossSectionPresets {
 
     /// advisory_id → lens id (card chips). Mirrors web ADVISORY_TO_PRESET.
     static let advisoryToPreset: [String: String] = [
-        "icing_escape": "icing", "fiki_icing": "icing", "freezing_precip": "icing",
+        "aircraft_icing": "icing", "icing_escape": "icing", "fiki_icing": "icing",
+        "freezing_precip": "icing",
         "cloud_top": "clouds", "vmc_cruise": "clouds",
         "convective": "convective",
         "turbulence": "turbulence", "mountain_wind": "turbulence",
@@ -373,6 +375,7 @@ enum CrossSectionPresets {
     /// time.
     static let advisoryOverrides: [String: (groups: [LayerGroup], lines: [String])] = [
         "fiki_icing": (groups: [], lines: ["minus-10c", "minus-20c", "sld-bands"]),
+        "aircraft_icing": (groups: [], lines: ["minus-10c", "minus-20c", "sld-bands"]),
         "freezing_precip": (groups: [], lines: ["sld-bands"]),
     ]
 

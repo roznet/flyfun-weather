@@ -20,8 +20,7 @@
         "digest_guidance": "conservative",
         "advisories": {
           "enabled": {
-            "icing_escape": true,
-            "fiki_icing": false,
+            "aircraft_icing": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,
@@ -50,10 +49,10 @@
       "key": "ifr_conservative",
       "name": "IFR Conservative",
       "descriptions": {
-        "en": "For IFR-rated pilots preferring conservative assessments. Uses worst-case aggregation across models. All advisories enabled including IFR feasibility with tighter icing and ceiling thresholds.",
-        "fr": "Pour les pilotes IFR préférant des évaluations conservatrices. Utilise l'agrégation au pire cas entre les modèles. Tous les avis activés, y compris la faisabilité IFR avec des seuils de givrage et de plafond plus stricts.",
-        "de": "Für IFR-Piloten mit konservativer Bewertung. Worst-Case-Aggregation über alle Modelle. Alle Warnungen aktiviert, einschließlich IFR-Machbarkeit mit strengeren Vereisungs- und Deckenschwellen.",
-        "es": "Para pilotos IFR que prefieren evaluaciones conservadoras. Usa agregación de peor caso entre modelos. Todos los avisos activados, incluyendo factibilidad IFR con umbrales más estrictos de engelamiento y techo."
+        "en": "For IFR-rated pilots preferring conservative assessments. Uses worst-case aggregation across models. All advisories enabled including IFR feasibility with tighter ceiling thresholds.",
+        "fr": "Pour les pilotes IFR préférant des évaluations conservatrices. Utilise l'agrégation au pire cas entre les modèles. Tous les avis activés, y compris la faisabilité IFR avec des seuils de plafond plus stricts.",
+        "de": "Für IFR-Piloten mit konservativer Bewertung. Worst-Case-Aggregation über alle Modelle. Alle Warnungen aktiviert, einschließlich IFR-Machbarkeit mit strengeren Deckenschwellen.",
+        "es": "Para pilotos IFR que prefieren evaluaciones conservadoras. Usa agregación de peor caso entre modelos. Todos los avisos activados, incluyendo factibilidad IFR con umbrales de techo más estrictos."
       },
       "settings": {
         "cruise_altitude_ft": 8000,
@@ -66,8 +65,7 @@
         "digest_guidance": "balanced",
         "advisories": {
           "enabled": {
-            "icing_escape": true,
-            "fiki_icing": false,
+            "aircraft_icing": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,
@@ -79,13 +77,7 @@
             "ifr_feasibility": true
           },
           "params": {
-            "icing_escape": {
-              "icing_coverage_pct_amber": 10,
-              "no_escape_pct_red": 10
-            },
             "ifr_feasibility": {
-              "icing_pct_amber": 10,
-              "icing_pct_red": 20,
               "min_dep_ceiling_ft": 600,
               "min_arr_ceiling_ft": 800
             }
@@ -98,10 +90,10 @@
       "key": "ifr_fiki",
       "name": "IFR FIKI",
       "descriptions": {
-        "en": "For FIKI-equipped IFR aircraft. Enables FIKI icing advisory (layer thickness evaluation) alongside icing escape with relaxed thresholds. Majority aggregation for balanced assessments.",
-        "fr": "Pour les avions IFR équipés FIKI. Active l'avis de givrage FIKI (évaluation d'épaisseur des couches) ainsi que l'évasion de givrage avec des seuils assouplis. Agrégation majoritaire pour des évaluations équilibrées.",
-        "de": "Für FIKI-ausgerüstete IFR-Flugzeuge. Aktiviert die FIKI-Vereisungswarnung (Schichtdickenauswertung) sowie die Vereisungsflucht mit gelockerten Schwellen. Mehrheitsaggregation für ausgewogene Bewertungen.",
-        "es": "Para aeronaves IFR equipadas con FIKI. Activa el aviso de engelamiento FIKI (evaluación de espesor de capas) junto con escape de engelamiento con umbrales relajados. Agregación por mayoría para evaluaciones equilibradas."
+        "en": "For FIKI-equipped IFR aircraft. Tolerant digest guidance and majority aggregation for balanced assessments. Icing is graded for the aircraft you fly: mark it FIKI on the aircraft form.",
+        "fr": "Pour les avions IFR équipés FIKI. Consignes de synthèse tolérantes et agrégation majoritaire pour des évaluations équilibrées. Le givrage est évalué pour l'avion que vous pilotez : indiquez FIKI dans la fiche avion.",
+        "de": "Für FIKI-ausgerüstete IFR-Flugzeuge. Tolerante Digest-Vorgaben und Mehrheitsaggregation für ausgewogene Bewertungen. Vereisung wird für das geflogene Flugzeug bewertet: FIKI im Flugzeugformular angeben.",
+        "es": "Para aeronaves IFR equipadas con FIKI. Pautas de resumen tolerantes y agregación por mayoría para evaluaciones equilibradas. El engelamiento se evalúa para el avión que vuela: indique FIKI en la ficha del avión."
       },
       "settings": {
         "cruise_altitude_ft": 10000,
@@ -114,8 +106,7 @@
         "digest_guidance": "tolerant",
         "advisories": {
           "enabled": {
-            "icing_escape": true,
-            "fiki_icing": true,
+            "aircraft_icing": true,
             "cloud_top": true,
             "vmc_cruise": true,
             "turbulence": true,
@@ -126,12 +117,7 @@
             "vfr_feasibility": true,
             "ifr_feasibility": true
           },
-          "params": {
-            "icing_escape": {
-              "icing_coverage_pct_amber": 40,
-              "no_escape_pct_red": 20
-            }
-          },
+          "params": {},
           "aggregation": "majority"
         }
       }

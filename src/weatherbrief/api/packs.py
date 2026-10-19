@@ -1467,6 +1467,29 @@ def _resolve_cruise_ias_kt(db, flight):
     return resolve_cruise_speed_ias(aircraft_speed)
 
 
+def _resolve_equipage(db, flight):
+    """The flight's aircraft equipage for the icing card (#827).
+
+    Same resolution path as the cruise speed (``resolve_flight_aircraft``). No
+    DB, no aircraft, the synthesised placeholder, or a failed lookup all give an
+    *unknown* aircraft, which the card grades as non-FIKI and labels so.
+    """
+    from weatherbrief.models import AircraftEquipage
+
+    if db is not None:
+        try:
+            from weatherbrief.storage.aircraft import resolve_flight_aircraft
+
+            ac = resolve_flight_aircraft(db, flight)
+            if ac is not None and not ac.is_placeholder:
+                return AircraftEquipage(
+                    known=True, fiki=bool(ac.is_fiki), ceiling_ft=ac.ceiling_ft,
+                )
+        except Exception:
+            logger.warning("equipage: aircraft lookup failed", exc_info=True)
+    return AircraftEquipage()
+
+
 def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privileged=False, as_of_time=None):
     """Shared setup for both sync and streaming refresh endpoints.
 
@@ -1627,6 +1650,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     options.profile_id = flight.profile_id
     options.profile_name = profile_name_for_digest
     options.cruise_speed_ias_kt = _resolve_cruise_ias_kt(db, flight)
+    options.equipage = _resolve_equipage(db, flight)
     if digest_guidance:
         options.guidance_key = digest_guidance
 
@@ -3972,6 +3996,7 @@ def recalculate_advisories(
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        equipage=_resolve_equipage(db, flight),
         flight_duration_hours=flight.flight_duration_hours,
     )
 
@@ -4110,6 +4135,7 @@ def preview_advisories(
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        equipage=_resolve_equipage(db, flight),
         flight_duration_hours=flight.flight_duration_hours,
         persist=False,
     )
@@ -4365,6 +4391,7 @@ def altitude_table(
         convective_method=convective_method,
         locale=locale,
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
+        equipage=_resolve_equipage(db, flight),
         flight_duration_hours=flight.flight_duration_hours,
     )
 
