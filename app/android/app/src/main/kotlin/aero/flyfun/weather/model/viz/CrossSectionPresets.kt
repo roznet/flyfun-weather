@@ -29,6 +29,14 @@ data class GradedMethods(
     val convective: String = "thermo",
 )
 
+/**
+ * Cross-section layer registry, family mappings, emulation presets, and focus presets.
+ *
+ * SYNC: Kept in lockstep with `web/ts/visualization/controls/presets.ts` and
+ * `web/ts/visualization/controls/family-bar.ts` (7 canonical families, `Basic / Learn`
+ * defaults, and NWP preferred methods). Note: iOS `CrossSectionPresets.swift`
+ * still uses 5 families and omits `thermo-convective-bg` from `basic_learn`.
+ */
 object CrossSectionPresets {
 
     val ALL_LAYERS: List<CrossSectionLayerDef> = listOf(
@@ -192,6 +200,20 @@ object CrossSectionPresets {
         )
     }
 
+    val LEVEL_LAYER_IDS: Set<String> = setOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")
+    val STABILITY_LAYER_IDS: Set<String> = setOf("lcl", "lfc", "el", "inversions")
+    val OBSERVED_LAYER_IDS: Set<String> = setOf("current-conditions", "fronts", "day-night")
+
+    fun familyLayerIds(family: LayerFamily): Set<String> = when (family) {
+        LayerFamily.CLOUDS -> MUTUALLY_EXCLUSIVE_GROUPS["clouds"].orEmpty()
+        LayerFamily.ICING -> MUTUALLY_EXCLUSIVE_GROUPS["icing"].orEmpty() + setOf("sld", "sld-bands")
+        LayerFamily.TURBULENCE -> setOf("cat", "vertical-motion", "cat-bands", "e-shear-bands", "e-shear")
+        LayerFamily.CONVECTION -> MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty()
+        LayerFamily.LEVELS -> LEVEL_LAYER_IDS + setOf("freezing-level", "minus-10c", "minus-20c", "cruise-altitude")
+        LayerFamily.STABILITY -> STABILITY_LAYER_IDS + setOf("inversion-bands")
+        LayerFamily.OBSERVED -> OBSERVED_LAYER_IDS + setOf("fronts-markers", "night-shading")
+    }
+
     fun getCompactLayerOverrides(
         family: LayerFamily,
         currentlyEnabled: Map<String, Boolean>,
@@ -201,7 +223,7 @@ object CrossSectionPresets {
         val isFamilyActive = isFamilyEnabled(family, currentlyEnabled)
         when (family) {
             LayerFamily.CLOUDS -> {
-                for (id in MUTUALLY_EXCLUSIVE_GROUPS["clouds"].orEmpty()) {
+                for (id in familyLayerIds(LayerFamily.CLOUDS)) {
                     next[id] = false
                 }
                 if (!isFamilyActive) {
@@ -212,11 +234,9 @@ object CrossSectionPresets {
                 }
             }
             LayerFamily.ICING -> {
-                for (id in MUTUALLY_EXCLUSIVE_GROUPS["icing"].orEmpty()) {
+                for (id in familyLayerIds(LayerFamily.ICING)) {
                     next[id] = false
                 }
-                next["sld"] = false
-                next["sld-bands"] = false
                 if (!isFamilyActive) {
                     val target = when (preferredMethods.icing) {
                         "ogimet_dd" -> "icing"
@@ -233,7 +253,7 @@ object CrossSectionPresets {
                 if (!active) next["vertical-motion"] = false
             }
             LayerFamily.CONVECTION -> {
-                for (id in MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty()) {
+                for (id in familyLayerIds(LayerFamily.CONVECTION)) {
                     next[id] = false
                 }
                 if (!isFamilyActive) {
@@ -242,9 +262,8 @@ object CrossSectionPresets {
                 }
             }
             LayerFamily.LEVELS -> {
-                val levelIds = listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")
                 if (isFamilyActive) {
-                    for (id in levelIds) next[id] = false
+                    for (id in LEVEL_LAYER_IDS) next[id] = false
                 } else {
                     next["freezing"] = true
                     next["minus-10"] = true
@@ -253,9 +272,8 @@ object CrossSectionPresets {
                 }
             }
             LayerFamily.STABILITY -> {
-                val stabIds = listOf("lcl", "lfc", "el", "inversions")
                 if (isFamilyActive) {
-                    for (id in stabIds) next[id] = false
+                    for (id in STABILITY_LAYER_IDS) next[id] = false
                 } else {
                     next["lcl"] = true
                     next["lfc"] = true
@@ -263,9 +281,8 @@ object CrossSectionPresets {
                 }
             }
             LayerFamily.OBSERVED -> {
-                val obsIds = listOf("current-conditions", "fronts", "day-night")
                 if (isFamilyActive) {
-                    for (id in obsIds) next[id] = false
+                    for (id in OBSERVED_LAYER_IDS) next[id] = false
                 } else {
                     next["current-conditions"] = true
                     next["day-night"] = true
@@ -275,16 +292,8 @@ object CrossSectionPresets {
         return syncLayerAliases(next)
     }
 
-    fun isFamilyEnabled(family: LayerFamily, enabled: Map<String, Boolean>): Boolean = when (family) {
-        LayerFamily.CLOUDS -> MUTUALLY_EXCLUSIVE_GROUPS["clouds"].orEmpty().any { enabled[it] == true }
-        LayerFamily.ICING -> MUTUALLY_EXCLUSIVE_GROUPS["icing"].orEmpty().any { enabled[it] == true } || enabled["sld"] == true || enabled["sld-bands"] == true
-        LayerFamily.TURBULENCE -> enabled["cat"] == true || enabled["vertical-motion"] == true ||
-            enabled["cat-bands"] == true || enabled["e-shear-bands"] == true
-        LayerFamily.CONVECTION -> MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty().any { enabled[it] == true }
-        LayerFamily.LEVELS -> listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp", "freezing-level", "minus-10c", "minus-20c", "cruise-altitude").any { enabled[it] == true }
-        LayerFamily.STABILITY -> listOf("lcl", "lfc", "el", "inversions", "inversion-bands").any { enabled[it] == true }
-        LayerFamily.OBSERVED -> listOf("current-conditions", "fronts", "fronts-markers", "day-night", "night-shading").any { enabled[it] == true }
-    }
+    fun isFamilyEnabled(family: LayerFamily, enabled: Map<String, Boolean>): Boolean =
+        familyLayerIds(family).any { enabled[it] == true }
 
     val GRAMET = EmulationPreset(
         id = "gramet",

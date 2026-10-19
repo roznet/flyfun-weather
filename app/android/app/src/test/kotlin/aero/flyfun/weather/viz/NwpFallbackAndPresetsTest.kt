@@ -99,6 +99,34 @@ class NwpFallbackAndPresetsTest {
     }
 
     @Test
+    fun `NwpFallback keeps Ogimet-NWP and IENG available on NWP-capable model when icing zones are empty`() {
+        val clearNwpRoute = VizRouteData(
+            points = listOf(emptyPoint(hasNwpClouds = true, hasNwpCeiling = true)),
+            cruiseAltitudeFt = 8000.0,
+            flightCeilingFt = 18000.0,
+            maxAltitudeFt = 20000.0,
+            totalDistanceNm = 100.0,
+        )
+
+        val unavailable = NwpFallback.getUnavailableLayers(clearNwpRoute)
+        assertFalse("clouds-nwp" in unavailable)
+        assertFalse("icing-ogimet-nwp" in unavailable)
+        assertFalse("icing-ogimet-nwp-bands" in unavailable)
+        assertFalse("icing-ieng" in unavailable)
+        assertFalse("ieng-icing-bands" in unavailable)
+
+        val stored = mapOf(
+            "clouds-nwp" to true,
+            "icing-ogimet-nwp" to true,
+            "icing" to false,
+        )
+        val effective = NwpFallback.applyNwpFallback(stored, unavailable)
+        assertTrue(effective["icing-ogimet-nwp"] == true)
+        assertFalse(effective["icing"] == true)
+        assertTrue(NwpFallback.getSubstitutedLayers(stored, effective).isEmpty())
+    }
+
+    @Test
     fun `resolveAdvisoryPreset maps advisory IDs and configures expected layers`() {
         val icingLayers = CrossSectionPresets.resolveAdvisoryPreset("fiki_icing")
         assertTrue(icingLayers["clouds-icing-nwp"] == true)

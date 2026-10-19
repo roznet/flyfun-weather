@@ -207,29 +207,9 @@ class CrossSectionViewModel : ViewModel() {
                     current[CrossSectionPresets.normalizeLayerId(methodOrLayer)] = true
                 }
             }
-            LayerFamily.LEVELS -> {
+            LayerFamily.LEVELS, LayerFamily.STABILITY, LayerFamily.OBSERVED -> {
                 if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
-                    for (id in listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")) {
-                        current[id] = false
-                    }
-                } else {
-                    toggleLayer(methodOrLayer)
-                    return
-                }
-            }
-            LayerFamily.STABILITY -> {
-                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
-                    for (id in listOf("lcl", "lfc", "el", "inversions")) {
-                        current[id] = false
-                    }
-                } else {
-                    toggleLayer(methodOrLayer)
-                    return
-                }
-            }
-            LayerFamily.OBSERVED -> {
-                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
-                    for (id in listOf("current-conditions", "fronts", "day-night")) {
+                    for (id in CrossSectionPresets.familyLayerIds(family)) {
                         current[id] = false
                     }
                 } else {
