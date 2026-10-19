@@ -49,8 +49,18 @@ class ApiClient(
         }
 
     val httpClient: OkHttpClient = httpClient ?: OkHttpClient.Builder()
-        .dns(aero.flyfun.common.LocalhostRozMeDns)
-        .addInterceptor(RollingBearerInterceptor(tokenStore = tokenStore, onUnauthorized = onUnauthorized))
+        .apply {
+            if (aero.flyfun.weather.BuildConfig.DEBUG || baseUrl.contains("localhost.ro-z.me", ignoreCase = true)) {
+                dns(aero.flyfun.common.LocalhostRozMeDns)
+            }
+        }
+        .addInterceptor(
+            RollingBearerInterceptor(
+                tokenStore = tokenStore,
+                allowedHostProvider = { runCatching { this.baseUrl.toHttpUrl().host }.getOrNull() },
+                onUnauthorized = onUnauthorized,
+            )
+        )
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)

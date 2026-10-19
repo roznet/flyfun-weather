@@ -11,12 +11,17 @@ import okhttp3.Response
  */
 class RollingBearerInterceptor(
     private val tokenStore: TokenStore,
+    private val allowedHostProvider: (() -> String?)? = null,
     private val onUnauthorized: () -> Unit = {},
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
-        val token = tokenStore.readToken()?.trim()
+        val expectedHost = allowedHostProvider?.invoke()?.takeIf { it.isNotBlank() }
+        val isAllowedHost = expectedHost == null ||
+            originalRequest.url.host.equals(expectedHost, ignoreCase = true)
+
+        val token = if (isAllowedHost) tokenStore.readToken()?.trim() else null
 
         val request = if (!token.isNullOrEmpty() && originalRequest.header(HEADER_AUTHORIZATION) == null) {
             originalRequest.newBuilder()
@@ -28,14 +33,16 @@ class RollingBearerInterceptor(
 
         val response = chain.proceed(request)
 
-        val renewedToken = response.header(HEADER_RENEWED_TOKEN)?.trim()
-        if (!renewedToken.isNullOrEmpty()) {
-            tokenStore.writeToken(renewedToken)
-        }
+        if (isAllowedHost) {
+            val renewedToken = response.header(HEADER_RENEWED_TOKEN)?.trim()
+            if (!renewedToken.isNullOrEmpty()) {
+                tokenStore.writeToken(renewedToken)
+            }
 
-        if (response.code == HTTP_UNAUTHORIZED) {
-            tokenStore.clearToken()
-            onUnauthorized()
+            if (response.code == HTTP_UNAUTHORIZED) {
+                tokenStore.clearToken()
+                onUnauthorized()
+            }
         }
 
         return response

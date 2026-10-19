@@ -1,8 +1,14 @@
 package aero.flyfun.weather.ui.observed
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.LiveFocus
+import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.briefing.SectionSpyBar
 import aero.flyfun.weather.ui.briefing.SpySection
 import aero.flyfun.weather.ui.theme.AssessmentAmber
@@ -83,6 +89,7 @@ fun ObservedTabScreen(
     onOpenMapTab: () -> Unit = { viewModel.selectTab(BriefingTab.MAP) },
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val flight by viewModel.flight.collectAsState()
     val selectedPack by viewModel.selectedPack.collectAsState()
     val advisories by viewModel.advisories.collectAsState()
@@ -92,6 +99,13 @@ fun ObservedTabScreen(
     val liveLayer by viewModel.liveLayer.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+
+    val serviceTracking by FlightTrackingService.isTracking.collectAsState()
+    val serviceFlightId by FlightTrackingService.activeFlightId.collectAsState()
+    val serviceProjectedPos by FlightTrackingService.currentPosition.collectAsState()
+
+    val isDemoMode = viewModel.repository is FixtureBriefingRepository
+    val currentFlightId = flight?.id ?: viewModel.flightId.orEmpty()
 
     val listState = rememberLazyListState()
 
@@ -112,29 +126,123 @@ fun ObservedTabScreen(
         }
     }
 
-    // In-flight GPS tracking state
-    var isTrackingActive by rememberSaveable { mutableStateOf(false) }
-    var trackedFraction by rememberSaveable { mutableFloatStateOf(0.28f) }
+    val routeCoordinates = remember(snapshot, elevation) {
+        val wpCoords = snapshot?.route?.waypoints
+            ?.filter { it.lat != 0.0 || it.lon != 0.0 }
+            ?.map { it.lat to it.lon }
+            .orEmpty()
+        if (wpCoords.size >= 2) {
+            wpCoords
+        } else {
+            elevation?.points
+                ?.filter { it.lat != 0.0 || it.lon != 0.0 }
+                ?.map { it.lat to it.lon }
+                .orEmpty()
+        }
+    }
 
-    val flightProgress = remember(isTrackingActive, trackedFraction, totalDistanceNm, flight) {
-        if (isTrackingActive) {
-            val flownNm = totalDistanceNm * trackedFraction.toDouble()
+    // Demo-mode simulation state (used only when repository is FixtureBriefingRepository)
+    var demoTrackingActive by rememberSaveable { mutableStateOf(false) }
+    var demoTrackedFraction by rememberSaveable { mutableFloatStateOf(0.28f) }
+
+    val isTrackingThisFlight = if (isDemoMode) {
+        demoTrackingActive
+    } else {
+        serviceTracking && (serviceFlightId == null || serviceFlightId == currentFlightId)
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted && currentFlightId.isNotBlank()) {
+            FlightTrackingService.startTracking(
+                context = context,
+                flightId = currentFlightId,
+                waypoints = routeCoordinates,
+                apiClient = viewModel.apiClient,
+            )
+        }
+    }
+
+    val toggleTracking: () -> Unit = {
+        if (isDemoMode) {
+            demoTrackingActive = !demoTrackingActive
+        } else if (isTrackingThisFlight) {
+            FlightTrackingService.stopTracking(context)
+        } else if (currentFlightId.isNotBlank()) {
+            if (FlightTrackingService.hasLocationPermission(context)) {
+                FlightTrackingService.startTracking(
+                    context = context,
+                    flightId = currentFlightId,
+                    waypoints = routeCoordinates,
+                    apiClient = viewModel.apiClient,
+                )
+            } else {
+                locationPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ),
+                )
+            }
+        }
+    }
+
+    val flightProgress = remember(
+        isDemoMode,
+        isTrackingThisFlight,
+        demoTrackedFraction,
+        serviceProjectedPos,
+        totalDistanceNm,
+        flight,
+    ) {
+        if (!isTrackingThisFlight) {
+            null
+        } else if (isDemoMode) {
+            val flownNm = totalDistanceNm * demoTrackedFraction.toDouble()
             val cruiseFt = (flight?.cruiseAltitudeFt ?: 6500).toDouble()
             FlightProgress(
-                flownFraction = trackedFraction.toDouble(),
+                flownFraction = demoTrackedFraction.toDouble(),
                 flownNm = flownNm,
                 totalNm = totalDistanceNm,
                 groundSpeedKt = 122.0,
                 altitudeFt = cruiseFt,
                 phase = when {
-                    trackedFraction < 0.12f -> "Climb"
-                    trackedFraction > 0.88f -> "Descent"
+                    demoTrackedFraction < 0.12f -> "Climb"
+                    demoTrackedFraction > 0.88f -> "Descent"
                     else -> "En route"
                 },
                 isTrackingActive = true,
             )
         } else {
-            null
+            val pos = serviceProjectedPos
+            if (pos != null) {
+                FlightProgress(
+                    flownFraction = pos.routeFraction.coerceIn(0.0, 1.0),
+                    flownNm = pos.distanceAlongRouteNm,
+                    totalNm = totalDistanceNm,
+                    groundSpeedKt = pos.groundSpeedKt,
+                    altitudeFt = pos.altitudeFt,
+                    phase = when {
+                        pos.routeFraction < 0.12 -> "Climb"
+                        pos.routeFraction > 0.88 -> "Descent"
+                        else -> "En route"
+                    },
+                    isTrackingActive = true,
+                )
+            } else {
+                FlightProgress(
+                    flownFraction = 0.0,
+                    flownNm = 0.0,
+                    totalNm = totalDistanceNm,
+                    groundSpeedKt = null,
+                    altitudeFt = null,
+                    phase = "Acquiring GPS…",
+                    isTrackingActive = true,
+                )
+            }
         }
     }
 
@@ -172,12 +280,13 @@ fun ObservedTabScreen(
             liveUpdatedAt = liveLayer?.liveUpdatedAt,
             packTimestamp = liveLayer?.packTimestamp ?: selectedPack?.fetchTimestamp,
             isLoading = isLoading || isRefreshing,
-            isTrackingActive = isTrackingActive,
+            isTrackingActive = isTrackingThisFlight,
             progress = flightProgress,
             totalDistanceNm = totalDistanceNm,
+            showScrubSlider = isDemoMode,
             onRefreshLive = { viewModel.loadInitialBriefing(selectedPack?.fetchTimestamp) },
-            onToggleTracking = { isTrackingActive = !isTrackingActive },
-            onScrubFraction = { trackedFraction = it },
+            onToggleTracking = toggleTracking,
+            onScrubFraction = { demoTrackedFraction = it },
         )
 
         // 2. Sticky SectionSpyBar
@@ -286,6 +395,7 @@ private fun ObservedTopStatusAndTrackingBar(
     isTrackingActive: Boolean,
     progress: FlightProgress?,
     totalDistanceNm: Double,
+    showScrubSlider: Boolean = false,
     onRefreshLive: () -> Unit,
     onToggleTracking: () -> Unit,
     onScrubFraction: (Float) -> Unit,
@@ -469,14 +579,16 @@ private fun ObservedTopStatusAndTrackingBar(
                                 }
                             }
 
-                            Slider(
-                                value = progress.flownFraction.toFloat(),
-                                onValueChange = onScrubFraction,
-                                valueRange = 0f..1f,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(24.dp),
-                            )
+                            if (showScrubSlider) {
+                                Slider(
+                                    value = progress.flownFraction.toFloat(),
+                                    onValueChange = onScrubFraction,
+                                    valueRange = 0f..1f,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(24.dp),
+                                )
+                            }
                         }
                     }
                 }
