@@ -10,6 +10,7 @@ dissenting models; per-model text and every status are unchanged.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 import pytest
@@ -183,6 +184,17 @@ class TestAggregateClause:
         assert r.aggregate_detail == "Arr EDQC IFR"
         assert r.airport_consensus == {}
 
+    def test_ambiguous_clause_text_is_left_alone(self):
+        # The clause text appears twice: rewriting the first occurrence could hit
+        # the wrong span, so the representative's sentence stands as written.
+        per_model = [self._result(m, AdvisoryStatus.RED, c) for m, c in
+                     [("gfs", LIFR), ("ecmwf", IFR), ("icon", IFR)]]
+        rep = per_model[0]
+        per_model[0] = rep.model_copy(update={"detail": f"{rep.detail} | {rep.airport_clauses[0].text}"})
+        r = RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, {})
+        assert r.representative_model == "gfs"
+        assert r.aggregate_detail == per_model[0].detail
+
     def test_dissent_note_is_localized(self):
         from weatherbrief.analysis.advisories.strings import _STRINGS
         assert set(_STRINGS["airport.dissent"]) == {"en", "fr", "de", "es"}
@@ -248,6 +260,16 @@ class TestAcrossAdvisories:
         approach = r["approach_feasibility"].aggregate_detail
         assert approach.startswith("Arr EDQC: IFR (gfs VFR")
         assert "ecmwf" not in approach
+
+    @pytest.mark.parametrize("locale, word", [
+        ("en", "ceiling"), ("fr", "plafond"), ("de", "Decke"), ("es", "techo"),
+    ])
+    def test_lifr_below_min_suffix_reads_in_every_locale(self, locale, word):
+        """``ifr.lifr_below_min`` is a suffix after "{label} {icao} LIFR"."""
+        ctx = dataclasses.replace(_ctx({"ecmwf": IFR, "gfs": IFR, "icon": LIFR}), locale=locale)
+        ifr = _run(ctx)["ifr_feasibility"]
+        icon = next(m for m in ifr.per_model if m.model == "icon")
+        assert f"EDQC LIFR {word} 300ft" in icon.detail
 
     @pytest.mark.parametrize("aggregation", list(AdvisoryAggregation))
     def test_statuses_do_not_depend_on_the_clause(self, aggregation):

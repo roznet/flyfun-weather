@@ -737,7 +737,10 @@ def _consensus_detail(
     detail = representative.detail
     for clause in representative.airport_clauses:
         text = clause.text
-        if not text or clause.end not in consensus or text not in detail:
+        # Exactly once: an ambiguous match could rewrite the wrong span, so it
+        # keeps the representative's category and the
+        # ``aggregate_airport_is_the_consensus`` invariant flags it.
+        if not text or clause.end not in consensus or detail.count(text) != 1:
             continue
         cat, dissent = consensus[clause.end]
         detail = detail.replace(

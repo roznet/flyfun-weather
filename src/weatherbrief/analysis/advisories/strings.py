@@ -774,11 +774,12 @@ _STRINGS: dict[str, dict[str, str]] = {
     # geometry ("wind favours 24, the ILS serves 06") and never issues a
     # usability verdict. Runway designators and approach classes are aviation
     # abbreviations and stay untranslated.
+    # Follows "Arr {icao}: VFR — " (the category is the clause head, #823).
     "approach_feasibility.vfr": {
-        "en": "VFR — reachable visually, approach not a factor",
-        "fr": "VFR — accessible à vue, l'approche n'est pas un facteur",
-        "de": "VFR — visuell erreichbar, Anflug nicht entscheidend",
-        "es": "VFR — alcanzable visualmente, la aproximación no es un factor",
+        "en": "Reachable visually, approach not a factor",
+        "fr": "Accessible à vue, l'approche n'est pas un facteur",
+        "de": "Visuell erreichbar, Anflug nicht entscheidend",
+        "es": "Alcanzable visualmente, la aproximación no es un factor",
     },
     "approach_feasibility.mvfr_ok": {
         "en": "{count} published approach(es) — landing can still be completed visually",
