@@ -145,7 +145,7 @@ class TestAggregateClause:
             affected=1, total=1, total_distance_nm=200, airport_clauses=[clause],
         )
 
-    def test_dissenting_representative_keeps_its_suffix_in_the_note(self):
+    def test_dissenting_representative_drops_its_suffix(self):
         # All tied on extent, so the first (gfs) speaks for the aggregate.
         per_model = [
             self._result("gfs", AdvisoryStatus.RED, LIFR, suffix=" ceiling 200ft < 500ft min"),
@@ -155,7 +155,7 @@ class TestAggregateClause:
         r = RouteAdvisoryResult.from_per_model("ifr_feasibility", per_model, {})
         assert r.representative_model == "gfs"
         assert r.aggregate_detail == (
-            "Arr EDQC IFR (gfs LIFR ceiling 200ft < 500ft min) | IMC over 50nm/200nm (25%)"
+            "Arr EDQC IFR (gfs LIFR) | IMC over 50nm/200nm (25%)"
         )
         assert r.airport_consensus == {"arr": IFR}
         # Per-model text untouched.
@@ -231,12 +231,11 @@ class TestAcrossAdvisories:
         assert "Arr EDQC: IFR (ecmwf VFR, gfs MVFR)" in fc
         assert "Arr EDQC IFR (ecmwf VFR, gfs MVFR)" in r["vfr_feasibility"].aggregate_detail
         # Approach Feasibility is GREEN in all three, so ecmwf (VFR) speaks for
-        # it: its verdict travels inside its own dissent entry, not after the
-        # consensus it was never computed for.
+        # it: its verdict was never computed for the consensus, so it is named
+        # by category only and its reason stays in its per-model row.
         approach = r["approach_feasibility"]
         assert approach.representative_model == "ecmwf"
-        assert approach.aggregate_detail.startswith("Arr EDQC: IFR (ecmwf VFR — ")
-        assert approach.aggregate_detail.endswith("; gfs MVFR)")
+        assert approach.aggregate_detail == "Arr EDQC: IFR (ecmwf VFR, gfs MVFR)"
 
     def test_worst_aggregation(self):
         cats = {"ecmwf": VFR, "gfs": VFR, "icon": LIFR}

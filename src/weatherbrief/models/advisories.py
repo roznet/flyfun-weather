@@ -702,23 +702,22 @@ def _consensus_clause(
     """Render ``clause`` with the consensus category and the dissent named.
 
     The suffix belongs to the representative's own reading (its ceiling, its
-    approach verdict), so it stays with that reading: after the consensus when
-    the representative agrees ("Arr EDQC: IFR (gfs MVFR) — ..."), inside the
-    dissent entry when it does not ("Arr EDQC IFR (gfs LIFR ceiling 200ft ...)").
+    approach verdict), so it is printed only when that reading is the
+    consensus ("Arr EDQC: IFR (gfs MVFR) — ..."). A dissenting representative
+    is named by category alone ("Arr EDQC IFR (gfs LIFR)"): its reason stays in
+    its per-model row, and the bracket stays one short entry per model rather
+    than carrying a whole verdict.
     """
     # Lazy: the strings catalog lives in the analysis layer, which imports models.
     from weatherbrief.analysis.advisories.strings import adv_t
 
     rep_dissents = clause.category != consensus
-    # A dissenting representative leads the note: the rest of the sentence is its.
+    # A dissenting representative leads the note: the card's sentence is its.
     ordered = sorted(dissent, key=lambda mc: mc[0] != rep_model) if rep_dissents else dissent
-    entries = [
-        f"{m} {c.value}{clause.suffix if m == rep_model else ''}" for m, c in ordered
-    ]
     note = ""
-    if entries:
-        sep = "; " if rep_dissents and clause.suffix else ", "
-        note = " " + adv_t("airport.dissent", clause.locale, entries=sep.join(entries))
+    if ordered:
+        entries = ", ".join(f"{m} {c.value}" for m, c in ordered)
+        note = " " + adv_t("airport.dissent", clause.locale, entries=entries)
     tail = "" if rep_dissents else clause.suffix
     return f"{clause.head}{consensus.value}{note}{tail}"
 
