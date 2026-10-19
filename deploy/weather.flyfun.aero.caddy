@@ -22,13 +22,13 @@ weather.flyfun.aero {
     }
 
     # Android App Links — associate aero.flyfun.weather with this domain.
-    # Kept commented until the real Play App Signing SHA-256 fingerprint (plus
-    # upload key if desired) is created in Google Play Console — serving an
-    # all-zero placeholder fails verification and publishes a bogus statement.
-    # handle /.well-known/assetlinks.json {
-    #     header Content-Type application/json
-    #     respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"aero.flyfun.weather","sha256_cert_fingerprints":["<PLAY_APP_SIGNING_SHA256_FINGERPRINT>"]}}]`
-    # }
+    # Fingerprints: Google's Play App Signing certificate (what Play installs are
+    # signed with), then our upload key (locally built release APKs). Android
+    # verifies per-install, so deploy before a build that relies on a new path.
+    handle /.well-known/assetlinks.json {
+        header Content-Type application/json
+        respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"aero.flyfun.weather","sha256_cert_fingerprints":["62:E1:FC:6E:F2:7F:3A:4D:2C:41:BD:31:A0:46:78:17:D1:82:A7:F1:D3:7D:5C:F0:20:8D:16:61:53:6E:51:BE","91:D5:8A:76:69:4C:99:5F:6A:48:A5:43:DD:9F:EE:3E:20:24:03:C2:B4:C2:85:41:B9:6F:10:FC:3B:09:67:CC"]}}]`
+    }
 
     # OAuth 2.1 Authorization Server metadata (RFC 8414) — lets native/third-party
     # apps treat weather.flyfun.aero as the issuer and discover the OAuth endpoints.
