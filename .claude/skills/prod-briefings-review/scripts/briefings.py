@@ -52,6 +52,7 @@ SUBJECT = {
     "vfr_feasibility": r"VFR|IMC|VMC|cloud|Wolk|overcast|OVC|BKN|ceiling|Decke",
     "vmc_cruise": r"IMC|VMC|cloud|Wolk|overcast|OVC|BKN",
     "cloud_top": r"cloud|Wolk|tops|Obergrenze",
+    "aircraft_icing": r"icing|Vereisung|freezing|Nullgrad",
     "icing_escape": r"icing|Vereisung|freezing|Nullgrad",
     "fiki_icing": r"icing|Vereisung|freezing|Nullgrad",
     "convective": r"convect|Konvekt|CB|TCU|thunder|Gewitter|shower|Schauer|CAPE",

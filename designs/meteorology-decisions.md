@@ -6444,3 +6444,67 @@ those builders own (ICON convective base, HRRR overall base). Convective
   stencil mixes the fill with a real ceiling still gets a blended height that
   can fall below the cut-off (ECMWF's seam path has a sentinel-aware blend for
   this; the main per-point path relies on cfgrib NaN). Not addressed here.
+
+## 56. One icing card, graded for the aircraft flown (FIKI or not)
+
+**Date:** 2026-10-19 · **Issue:** #827 · **Design agreed with the owner; the numbers
+marked *agent choice* were made unattended and are the owner's to confirm.** Code:
+`analysis/advisories/aircraft_icing.py`.
+
+**Context.** Three advisories graded the same icing three ways. `ifr_feasibility`
+counted hazardous icing within ±2,000 ft of cruise by % of route; `icing_escape` graded
+non-FIKI escape on the freezing level alone (its solver cost read 0 below the freezing
+level even under a warm nose); `fiki_icing` graded transit thickness and clear-cruise %.
+On 2026-10-19 prod, 12 of 13 packs with IFR Feasibility RED for icing also showed Icing
+Escape AMBER "warm escape available". `aircraft.is_fiki` never reached the engine; 26 of
+84 packs ran both icing cards.
+
+**Decision.** `aircraft_icing` replaces `icing_escape` and `fiki_icing` (retired, kept
+for old packs) and is the icing axis of `ifr_feasibility` (the §22 pattern). The
+aircraft picks the column: `RouteContext.equipage` from `resolve_flight_aircraft`; none
+or the placeholder is unknown and grades **non-FIKI**, labelled "set your aircraft's
+equipage". The aircraft wins over the profile (#777).
+
+| Stretch | FIKI | non-FIKI |
+|---|---|---|
+| no icing | GREEN | GREEN |
+| short, escape | AMBER | AMBER |
+| short, no escape | AMBER | RED |
+| long, escape | AMBER | RED |
+| long, no escape | RED | RED |
+| SEVERE or SLD | RED | RED |
+
+- **Exposure is time.** Minutes in icing, reset only by an above-freezing cruise point
+  (ice does not shed in cold clear air); unassessed points neither add nor reset. Short:
+  light rime ≤ 15 min, anything else ≤ 5 min (tunable). SEVERE/SLD not tunable (§51c).
+- **Escape** must exist at every iced point of a stretch. Down (both): §8a level
+  `max(fz, lowest icing cloud base) - 500`, ≥ terrain + 1,000; unknown terrain blocks
+  (§51b); none under freezing rain or a warm nose. Up (FIKI only): highest icing top +
+  500 ≤ aircraft ceiling - 1,000. Non-FIKI never escapes up; on-top stays a planning
+  mitigation (`icing_cruise`).
+- **Freezing rain** stays `freezing_precip`'s grade; here it only removes the down escape.
+- **Mitigations** (advice only): `icing_escape` (the escape level) and `icing_cruise`
+  (solver profile at cost 0). The escape reaches the digest as a contingency line.
+
+**Agent choices (owner to confirm).**
+- *Cruise band 1,000 ft* (tunable `cruise_band_ft`): icing "at cruise" is a zone within
+  1,000 ft. The old cards used 2,000 ft; 1,000 still absorbs the models' vertical
+  spacing without flagging a layer well above or below the flown level.
+- *Climb/descent at 500 fpm, at the first/last assessed point*: the column from the
+  ground to cruise there, converted to minutes. A climb stretch carries into cruise if
+  no warm air intervenes; the descent joins any open stretch.
+- *Escape level clamped below the iced zone*, so a freezing level above an iced cruise
+  never reads "escape below a level higher than you are".
+- *No aircraft ceiling* → the flight ceiling caps the FIKI up-escape.
+- *Ribbon*: every point of a stretch takes the stretch's grade.
+- *Retired cards are not rewritten*: old packs keep their stored cards; a recalculate
+  on an old pack produces the new card.
+
+**Expected direction.** More warnings for non-FIKI (any icing at cruise is at least
+AMBER; no 20 % route floor), fewer for FIKI in light icing (escape-available exposure
+stays AMBER however long). Validation on the last ~5 days of prod packs is the owner's
+step before landing (#827 "Validation").
+
+**Rejected.** Keeping the profile enable map as the FIKI switch (it contradicted itself:
+the interview made the two cards exclusive, the "IFR FIKI" template enabled both).
+Counting % of route (a 5-minute pass and a 40-minute loiter graded the same).

@@ -516,7 +516,7 @@ def get_advisory_detail(
     flight_id: str,
     advisory_id: Annotated[
         str,
-        PathParam(description="Advisory id to drill into, e.g. 'convective', 'fiki_icing', 'cloud_top'."),
+        PathParam(description="Advisory id to drill into, e.g. 'convective', 'aircraft_icing', 'cloud_top'."),
     ],
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db, scope="function"),

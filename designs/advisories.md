@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 22 hazard evaluators (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 21 hazard evaluators (plus 2 retired ones kept for old packs) (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -17,13 +17,15 @@ RouteContext (immutable)
   ├── arrival_approaches: AirportApproaches | None  (destination IAPs, #509)
   ├── sun: RouteSunAnalysis | None  ├── route_fronts: RouteFrontsManifest | None
   ├── cruise_speed_ias_kt, flight_duration_hours  (headwind trip-time inputs)
+  ├── equipage: AircraftEquipage | None  (FIKI?, ceiling; from the flight's aircraft, #827)
   ├── models, cruise_altitude_ft, flight_ceiling_ft, total_distance_nm, locale
       ↓
 Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   │   (publishes user_params on ctx.advisory_params so a composite can grade a
   │    sub-axis with the OWNING advisory's parameters — see §22)
-  ├── @register IcingEscapeEvaluator       # en-route icing
-  ├── @register FIKIIcingEvaluator
+  ├── @register AircraftIcingEvaluator     # icing, graded for the aircraft (FIKI or not, #827)
+  ├── @register IcingEscapeEvaluator       # RETIRED (#827): never evaluated, old packs only
+  ├── @register FIKIIcingEvaluator         # RETIRED (#827)
   ├── @register FreezingPrecipEvaluator
   ├── @register CloudTopEvaluator          # en-route cloud
   ├── @register VMCCruiseEvaluator
@@ -41,7 +43,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register DensityAltitudeEvaluator
   ├── @register LLWSEvaluator
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
-  ├── @register IFRFeasibilityEvaluator     # convective axis = ConvectiveEvaluator's grade (§22)
+  ├── @register IFRFeasibilityEvaluator     # convective axis = ConvectiveEvaluator's grade (§22), icing axis = AircraftIcingEvaluator's (§52)
   ├── @register ApproachFeasibilityEvaluator  # arrival: approach vs wind vs ceiling
   ├── @register FrontsEvaluator            # fronts (experimental, gated on artifact)
   └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
@@ -130,14 +132,14 @@ not a span of route, so its extent fields stay zero even on a graded AMBER —
 nothing published, nothing to contradict. Publish an extent and it comes back
 under the rule with no edit to the invariants.
 
-## The 22 Evaluators
+## The Evaluators
 
 ### Icing
 
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
-| `IcingEscapeEvaluator` | icing | Non-FIKI: can we descend below freezing to escape icing? Checks FZ level vs terrain + margin. Altitude-aware: ignores icing above cruise + buffer. Any no-escape point → amber; `extent_pct_red` escalates to red. `extent_pct_amber` warns when escapable icing covers a significant portion of the route | `terrain_margin_ft`, `tight_margin_ft`, `icing_altitude_buffer_ft`, `extent_pct_amber` (20%), `extent_pct_red` (15%), `extent_min_nm` (30nm) |
-| `FIKIIcingEvaluator` | icing | FIKI-equipped: evaluates icing layer thickness and severity (transit OK, loiter not). **SEVERE icing or SLD is always RED** (#807) — in the climb/descent column of a terminal corridor, or within `cruise_icing_buffer_ft` of cruise at **any** assessed route point (any-point, deliberately not extent-gated: FIKI certification has no extent allowance for severe). Transit thickness stays corridor-scoped (it measures the surface→cruise column climbed/descended through). `severe_is_red` was **retired** as a tunable: stored profiles carrying it are tolerated and ignored (stripped from `parameters_used`) | `proximity_nm`, `cruise_icing_buffer_ft`, `transit_thickness_amber_ft`, `transit_thickness_red_ft`, `extent_pct_amber` (20), `extent_pct_red` (50), `extent_min_nm` (30nm) |
+| `AircraftIcingEvaluator` (`aircraft_icing`) | icing | **One icing card graded for the aircraft flown (#827, meteorology-decisions §52).** `RouteContext.equipage` picks the column; unknown aircraft (none, placeholder) grades non-FIKI and the detail opens "Graded as non-FIKI (set your aircraft's equipage)", otherwise "Graded for FIKI / non-FIKI". Per model, `icing_picture` builds one `IcingPoint` per route point (hazardous zones within `cruise_band_ft` of cruise, the ground-to-cruise column, escape down/up); `build_stretches` walks the planned profile (climb column at the first assessed point, cruise cells, descent column at the last) with an exposure clock in minutes (cells at `ctx.cruise_groundspeed_kt`, columns at 500 fpm) reset only by an above-freezing cruise point; `grade_stretch` applies the table: FIKI RED only for long with no escape, non-FIKI AMBER only for short with escape, SEVERE/SLD RED for both. Escape down: `max(fz, lowest icing cloud base) - 500` (§8a), clamped below the iced zone, ≥ terrain + `terrain_margin_ft`, none under freezing rain / warm nose, unknown terrain blocks. Escape up (FIKI only): highest top + 500 ≤ aircraft ceiling (else flight ceiling) - 1000. Mitigations (advice only): `icing_escape` (the escape level) and `icing_cruise` (a cost-0 profile from the solver with `icing_cell_cost`, zone membership only, no freezing-level shortcut). `grade_aircraft_icing_model` is shared with `ifr_feasibility` | `short_light_rime_min` (15), `short_other_min` (5), `terrain_margin_ft` (1000), `cruise_band_ft` (1000) |
+| `IcingEscapeEvaluator`, `FIKIIcingEvaluator` | icing | **Retired (#827)**: `retired=True` on the catalog entry, so `evaluate_all` never runs them and `get_catalog()` leaves them out (pass `include_retired=True` to see them). Old packs render their stored cards from their own manifest catalog. Modules kept for that history and their tests | (unchanged, inert) |
 | `FreezingPrecipEvaluator` | icing | Freezing rain / ice pellets: active FZRA/PL surface phase anywhere → RED (exceeds all icing certification, incl. FIKI; below-cloud hazard invisible to in-cloud icing methods). Freezing-rain-shaped profile without active precip (warm nose over sub-zero surface, via `detect_warm_nose`) → AMBER above coverage threshold | `extent_pct_amber` (5%), `extent_min_nm` (30nm) |
 
 ### Cloud
@@ -186,7 +188,7 @@ under the rule with no edit to the invariants.
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `VFRFeasibilityEvaluator` | flight_rules | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage), climb-out/descent corridor decks (BKN/OVC fully below cruise within `terminal_corridor_nm` of either end — OVC→RED, BKN→AMBER, see meteorology-decisions §10), and en-route precipitation (shared `classify_enroute_precip`, capped at AMBER in the composite). Worst of sub-assessments wins | `cloud_clearance_ft`, `extent_pct_amber` (15), `extent_pct_red` (30), `extent_min_nm` (30nm), `terminal_corridor_nm` (5) |
-| `IFRFeasibilityEvaluator` | flight_rules | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), en-route icing exposure (uses shared `icing_zones_in_altitude_range()` helper over `[0, cruise + icing_altitude_buffer_ft]`, aligned with FIKI advisory), and the convective axis. **The convective axis is not graded here (§22):** it is `ConvectiveEvaluator`'s per-model status verbatim, obtained from the shared `convective_grading.grade_convective_model` — the identical call the convective advisory grades with — using the *convective advisory's* parameters resolved via `resolve_convective_params(ctx)` (`ctx.advisory_params["convective"]` over `CONVECTIVE_PARAM_DEFAULTS`; catalog defaults when that advisory is disabled). It therefore inherits the §18 NWP-native grade, the DD-trigger AMBER cap and the tops-below-cruise filter for free. Its own `convective_min_risk` / `convective_pct_red` were **retired** — they were a second formula that diverged from the first in both directions and, aggregated under MAJORITY-ties-to-worst, inverted a briefing headline from AMBER to RED. Exactly two deviations are sanctioned: *abstention* (the #391 thin-coverage guard may turn a would-be-GREEN convective axis UNAVAILABLE — contributes nothing to `worst`, never a different grade), and the **EMBEDDED escalation** — `convective_character` EMBEDDED for that model bumps the convective axis one step, AMBER→RED only, detail `ifr.conv_embedded`. ISOLATED/SCATTERED are see-and-avoid statements that do not transfer to IMC; WIDESPREAD/ORGANIZED are realized-coverage bands the convective advisory already prices, so escalating on them would double-count. EMBEDDED is orthogonal (the deck *hiding* the cells) and the one band genuinely worse under IFR than VFR. Character is read via `classify_route_character` with `resolve_character_params(ctx)` — that advisory's own tuning, never a duplicate | `min_dep_ceiling_ft`, `min_arr_ceiling_ft`, `extent_pct_amber` (20), `extent_pct_red` (50), `extent_min_nm` (30nm), `icing_altitude_buffer_ft` |
+| `IFRFeasibilityEvaluator` | flight_rules | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), the icing axis and the convective axis. **The icing axis is not graded here (§52, #827):** it is `aircraft_icing`'s per-model status and detail verbatim, from the shared `grade_aircraft_icing_model` with that card's parameters (`resolve_aircraft_icing_params`, catalog defaults when the card is off). Its own `extent_pct_*` / `extent_min_nm` / `icing_altitude_buffer_ft` were retired (ignored, stripped from `parameters_used`): they counted icing within ±2,000 ft by % of route, so 12 of 13 IFR-RED-for-icing packs on 2026-10-19 sat beside an Icing Escape AMBER "warm escape available". **The convective axis is not graded here (§22):** it is `ConvectiveEvaluator`'s per-model status verbatim, obtained from the shared `convective_grading.grade_convective_model` — the identical call the convective advisory grades with — using the *convective advisory's* parameters resolved via `resolve_convective_params(ctx)` (`ctx.advisory_params["convective"]` over `CONVECTIVE_PARAM_DEFAULTS`; catalog defaults when that advisory is disabled). It therefore inherits the §18 NWP-native grade, the DD-trigger AMBER cap and the tops-below-cruise filter for free. Its own `convective_min_risk` / `convective_pct_red` were **retired** — they were a second formula that diverged from the first in both directions and, aggregated under MAJORITY-ties-to-worst, inverted a briefing headline from AMBER to RED. Exactly two deviations are sanctioned: *abstention* (the #391 thin-coverage guard may turn a would-be-GREEN convective axis UNAVAILABLE — contributes nothing to `worst`, never a different grade), and the **EMBEDDED escalation** — `convective_character` EMBEDDED for that model bumps the convective axis one step, AMBER→RED only, detail `ifr.conv_embedded`. ISOLATED/SCATTERED are see-and-avoid statements that do not transfer to IMC; WIDESPREAD/ORGANIZED are realized-coverage bands the convective advisory already prices, so escalating on them would double-count. EMBEDDED is orthogonal (the deck *hiding* the cells) and the one band genuinely worse under IFR than VFR. Character is read via `classify_route_character` with `resolve_character_params(ctx)` — that advisory's own tuning, never a duplicate | `min_dep_ceiling_ft`, `min_arr_ceiling_ft` |
 | `ApproachFeasibilityEvaluator` | flight_rules | **The arrival question no other evaluator owns (#509):** *can I get in, on a runway I can also land on?* Joins the destination's ceiling, the runway the wind favours, and which runways actually have a published approach — a joint function of ceiling **and** wind **and** infrastructure. See the dedicated section below | `tailwind_limit_kt` (10), `crosswind_limit_kt` (20), `circling_ceiling_ft` (1000) |
 
 ### Sun
@@ -562,8 +564,9 @@ to `[]`, so old packs deserialize cleanly.
 **Producers.** Two evaluators emit mitigations, both via the shared
 `vertical_profile.py` min-cost path-finder (`solve`/`CostModel`, design in
 [vertical-profile-solver.md](./vertical-profile-solver.md)):
-`icing_escape.py` emits an `ALTITUDE` mitigation (`addresses="icing_escape"` —
-"climb/descend to an ice-free band") off its own cost grid, and
+`aircraft_icing.py` emits an `ALTITUDE` mitigation (`addresses="icing_cruise"`,
+an ice-free cruise level or profile) off its own cost grid (the retired
+`icing_escape.py` did the same under `addresses="icing_escape"`), and
 `vfr_feasibility.py` emits the cloud/corridor tips below. A consumer builds a
 hazard→cost `CostModel` and reads the returned profile; the same solver backs both.
 
@@ -737,8 +740,9 @@ ribbon-GREEN ("not relevant to your flight here" reads as clear); unless noted,
 |-----------|----------------------------|--------------|
 | `vmc_cruise` | OVC→red, BKN→amber, else green | `cruise_imc` — envelope of the layer(s) containing cruise |
 | `convective` | HIGH/EXTREME→red, ≥`min_risk`→amber, below floor / tops-below-cruise→green | `tower` when both bounds are the graded track's own; `tower_estimated` when either was borrowed, ungated, from the thermo track (#592 — dashed outline, the depth is an estimate); `tower_unresolved` when neither track has both, drawn as a narrow depth-unknown marker and never a full-height box. Geometry is resolved separately from `filter_top_ft` (the tops-below-cruise input, unchanged), so widening it cannot move a grade. Peak = worst graded risk, ties → highest CAPE (matches the MCP deep-link) |
-| `icing_escape` | green = no *relevant* icing (post `icing_zones_in_altitude_range` over `[0, cruise+buffer]` — icing above cruise+buffer is deliberately green) · amber = icing with viable warm-air escape (incl. tight-margin) · red = no escape (fz below terrain+margin, or fz/terrain unknown at an affected point) | `icing_band` — envelope of the relevant zones |
-| `fiki_icing` | corridor points grade the transit column exactly as the route grade (SLD / SEVERE / thickness ≥ red → red; thickness ≥ amber → amber); every point grades SLD / SEVERE within the cruise buffer → red (#807); everywhere, other icing within the cruise buffer → amber; thin transit-able icing away from cruise stays green | `icing_band` — envelope of zones overlapping `[0, cruise+buffer]` |
+| `aircraft_icing` | each point takes the grade of the icing stretch it belongs to (the table in §52), with `reason_code` `sld` / `severe_icing` / `long_no_escape` / `long_escape` / `short_no_escape` / `short_escape`; points not iced at cruise (and not a climb/descent column) stay green | `icing_band` — envelope of the cruise-band zones, or of the column zones at a climb/descent point |
+| `icing_escape` | green = no *relevant* icing (post `icing_zones_in_altitude_range` over `[0, cruise+buffer]` — icing above cruise+buffer is deliberately green) · amber = icing with viable warm-air escape (incl. tight-margin) · red = no escape (fz below terrain+margin, or fz/terrain unknown at an affected point) | `icing_band` — envelope of the relevant zones | (retired, old packs)
+| `fiki_icing` | corridor points grade the transit column exactly as the route grade (SLD / SEVERE / thickness ≥ red → red; thickness ≥ amber → amber); every point grades SLD / SEVERE within the cruise buffer → red (#807); everywhere, other icing within the cruise buffer → amber; thin transit-able icing away from cruise stays green | `icing_band` — envelope of zones overlapping `[0, cruise+buffer]` | (retired, old packs)
 | `turbulence` | red = SEVERE CAT **anywhere in the column** (the cutout showing where it sits is the ambiguity the highlight resolves — may exceed the badge, which keys on the cruise band) · amber = MODERATE CAT overlapping cruise or strong updraft near cruise · LIGHT stays green | `cat_layer` — envelope of the triggering layers. Strong-w resolves to a single level, not a band → no `strong_updraft` cutout (skip rather than invent geometry) |
 | `cloud_top` | binary: amber = can't get on top here, else green (the *amount* of amber tells the story) | `blocking_deck` — reachable layers whose `top + margin > ceiling` |
 | `vfr_feasibility` | worst firing sub-axis per x: cruise IMC→red / marginal clearance→amber (ribbon only), corridor deck OVC→red / BKN→amber, en-route precip per shared classifier **capped amber**; airport flight-category colours only the endpoint segments | `cruise_imc` + `climb_deck` / `descent_deck` (deck envelope over its corridor span) — the multi-kind case |
@@ -955,7 +959,7 @@ User overrides stored in `flight_profiles.settings_json` under `advisories: {ena
 
 ### Setup interview presets (#387)
 
-`analysis/advisories/interview.py:get_interview()` returns a declarative `Interview` (in `models/advisories.py`): ordered `InterviewQuestion`s, each `InterviewOption` a patch `{enabled: {id: bool}, params: {id: {key: val}}}`. It **cannot** be derived from `audience` — one answer spans advisories (FIKI enables `fiki_icing` AND disables `icing_escape`). Invariants relied on by clients: every option of a question declares the **same key set** (re-answering is reversible) and sibling questions declare **disjoint keys** (answers never conflict). Built off the live catalog so the "standard"/default options carry real catalog defaults. v1 questions: flight rules (VFR-only hides `ifr_feasibility`), icing equipage (FIKI pair), minimums style (standard vs conservative personal minima). The client stores chosen answers under `settings_json.interview` for idempotent re-runs.
+`analysis/advisories/interview.py:get_interview()` returns a declarative `Interview` (in `models/advisories.py`): ordered `InterviewQuestion`s, each `InterviewOption` a patch `{enabled: {id: bool}, params: {id: {key: val}}}`. It **cannot** be derived from `audience` — one answer can span advisories. Invariants relied on by clients: every option of a question declares the **same key set** (re-answering is reversible) and sibling questions declare **disjoint keys** (answers never conflict). Built off the live catalog so the "standard"/default options carry real catalog defaults. Questions: flight rules (VFR-only hides `ifr_feasibility`), minimums style (standard vs conservative personal minima). The FIKI question was removed in #827: equipage is the aircraft's (`user_aircraft.is_fiki`), and a stored `interview.icing_equipage` answer is simply no longer asked. The client stores chosen answers under `settings_json.interview` for idempotent re-runs.
 
 ## Pipeline Integration
 
@@ -1070,7 +1074,7 @@ Recalculate loads route analyses + elevation + cross-sections from disk, applies
 - **Immutable RouteContext** — frozen dataclass prevents accidental mutation across evaluators.
 - **Configurable aggregation** — MAJORITY (default, most common status, ties→worst) or WORST (conservative). Set per-profile in `advisories.aggregation`.
 - **Lazy evaluation** — advisories evaluated fresh each time, not cached. Enables fast parameter tuning.
-- **Altitude-aware icing** — IFR feasibility, icing escape, and FIKI all filter icing by altitude relevance. Icing above `cruise_altitude_ft + buffer` (default 2000ft) is ignored. Prevents false alerts from high-altitude icing a pilot will never encounter. Buffer is tunable per evaluator via `icing_altitude_buffer_ft`.
+- **One icing grade, for the aircraft** (#827, §52) — `aircraft_icing` is the only evaluator that grades icing; `ifr_feasibility` reads its per-model grade, the altitude table sweeps it alone (the retired cards no longer triple-count one layer). Icing counts when within `cruise_band_ft` (1,000 ft) of cruise, or in the climb/descent column; exposure is minutes, not % of route.
 - **Cloud top filtering** — only considers layers pilot would enter (base ≤ ceiling). High cirrus above ceiling is irrelevant.
 - **Mountain wind: GREEN not UNAVAILABLE** — if no mountains on route, "no hazard" is better UX than "N/A".
 - **Model agreement evaluated once** — inherently cross-model, returned as single "all" model result.

@@ -89,6 +89,9 @@ def rerun_manifest(
             flight_ceiling_ft=(baseline.flight_ceiling_ft or None) if baseline else None,
             advisory_models=(baseline.models or None) if baseline else None,
             aggregation=aggregation,
+            # Grade the icing card for the aircraft the baseline was graded
+            # for (#827). Pre-#827 baselines carry none: unknown, non-FIKI.
+            equipage=baseline.aircraft if baseline else None,
             persist=False,
         )
     except Exception as exc:  # noqa: BLE001 — any failure becomes a clean 422
@@ -194,6 +197,9 @@ def rerun_manifest_deep(
             flight_ceiling_ft=(baseline.flight_ceiling_ft or None) if baseline else None,
             advisory_models=(baseline.models or None) if baseline else None,
             aggregation=aggregation,
+            # Grade the icing card for the aircraft the baseline was graded
+            # for (#827). Pre-#827 baselines carry none: unknown, non-FIKI.
+            equipage=baseline.aircraft if baseline else None,
             persist=False,
         )
     finally:

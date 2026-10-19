@@ -1,10 +1,13 @@
 """Setup-interview presets (#387, slice 3).
 
 A small declarative structure mapping identity-level questions ("VFR only?",
-"FIKI-equipped?", "how conservative are your minimums?") to patches over advisory
-settings. It cannot be derived from the ``audience`` tier because a single answer
-spans several advisories (FIKI enables ``fiki_icing`` AND disables
-``icing_escape``).
+"how conservative are your minimums?") to patches over advisory settings. It
+cannot be derived from the ``audience`` tier because a single answer can span
+several advisories.
+
+There is no FIKI question (#827): equipage is a property of the aircraft, set on
+the aircraft form, and the ``aircraft_icing`` card reads it from there. A stored
+``interview.icing_equipage`` answer from before is simply no longer asked.
 
 Invariants (relied on by clients for idempotent, conflict-free application):
 
@@ -35,7 +38,7 @@ def _param_default(catalog: dict, advisory_id: str, key: str) -> float:
 
 
 def get_interview() -> Interview:
-    """Return the setup-interview structure (v1 — 3 questions)."""
+    """Return the setup-interview structure (2 questions)."""
     catalog = {e.id: e for e in get_catalog()}
 
     # --- Q3 owned params: the conservative-minima set (pilot-choice values). ---
@@ -71,25 +74,6 @@ def get_interview() -> Interview:
                         label="VFR only",
                         description="No IFR — hide the IFR feasibility advisory.",
                         enabled={"ifr_feasibility": False},
-                    ),
-                ],
-            ),
-            InterviewQuestion(
-                id="icing_equipage",
-                title="Is your aircraft FIKI-certified?",
-                help="Picks the icing advisory that matches your certification.",
-                options=[
-                    InterviewOption(
-                        id="not_fiki",
-                        label="Not FIKI",
-                        description="No known-icing certification — use the icing-escape advisory.",
-                        enabled={"fiki_icing": False, "icing_escape": True},
-                    ),
-                    InterviewOption(
-                        id="fiki",
-                        label="FIKI",
-                        description="Certified for flight into known icing — use the FIKI icing advisory.",
-                        enabled={"fiki_icing": True, "icing_escape": False},
                     ),
                 ],
             ),

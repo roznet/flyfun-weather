@@ -1,4 +1,4 @@
-"""FIKI icing advisory — icing manageable for FIKI-equipped aircraft.
+"""Retired by ``aircraft_icing`` (#827). FIKI icing advisory — icing manageable for FIKI-equipped aircraft.
 
 Evaluates three flight phases:
 - Departure: total icing thickness to transit during climb (near origin)
@@ -124,6 +124,9 @@ class FIKIIcingEvaluator:
             category="icing",
             timing_class="scan",
             default_enabled=False,  # opt-in for FIKI operators
+            # Replaced by ``aircraft_icing`` (#827); kept so old packs and
+            # tests can still import it, never evaluated for a new briefing.
+            retired=True,
             altitude_dependent=True,
             parameters=[
                 AdvisoryParameterDef(

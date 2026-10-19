@@ -176,6 +176,7 @@ export const ROUTE_WEATHER_ADVISORIES: ReadonlySet<string> = new Set([
   'vmc_cruise',
   'convective',
   'convective_character',
+  'aircraft_icing',
   'enroute_precip',
   'fiki_icing',
   'freezing_precip',

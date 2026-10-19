@@ -122,6 +122,7 @@ def build_digest_context(
         f"ALTITUDE: {snapshot.route.cruise_altitude_ft}ft "
         f"(~{snapshot.route.cruise_pressure_hpa}hPa)\n"
         f"PILOT CAPABILITY: {capability}"
+        + _aircraft_header_line(route_advisories)
     )
 
     # --- Forecast confidence note (long-range only, code-computed) ---
@@ -949,6 +950,43 @@ def _format_tactical_mitigations_context(
     return "\n".join(["Tactical (per-advisory, no altitude change):", *lines])
 
 
+def _aircraft_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
+    """``\nAIRCRAFT: ...`` from the equipage the advisories were graded for (#827).
+
+    Empty for packs graded before #827 (no equipage recorded), so their
+    replayed context is unchanged.
+    """
+    eq = manifest.aircraft if manifest is not None else None
+    if eq is None:
+        return ""
+    if not eq.known:
+        return "\nAIRCRAFT: equipage not set (icing graded as not FIKI)"
+    line = "FIKI" if eq.fiki else "not FIKI"
+    if eq.ceiling_ft:
+        line += f", ceiling {eq.ceiling_ft:,} ft"
+    return f"\nAIRCRAFT: {line}"
+
+
+def _format_icing_escape_context(manifest: RouteAdvisoriesManifest) -> str | None:
+    """The icing card's escape level, as a contingency line (#827).
+
+    Kept apart from the Altitude sub-block on purpose: the altitude table
+    compares *planned* cruise levels, while this is where an iced aircraft can
+    go to shed the exposure. Folding it into the tactical list (which excludes
+    ALTITUDE mitigations) dropped it from the context entirely.
+    """
+    for result in manifest.advisories:
+        if result.advisory_id != "aircraft_icing":
+            continue
+        escapes = [m for m in result.aggregate_mitigations if m.addresses == "icing_escape"]
+        if escapes:
+            return "\n".join(
+                ["Icing escape (contingency if iced, not a planned altitude):"]
+                + [f"  {m.detail}" for m in escapes]
+            )
+    return None
+
+
 def _format_options_to_improve_context(
     altitude_table: AltitudeTableResult | None,
     route_advisories: RouteAdvisoriesManifest | None,
@@ -970,6 +1008,9 @@ def _format_options_to_improve_context(
         tactical = _format_tactical_mitigations_context(route_advisories)
         if tactical:
             sub_blocks.append(tactical)
+        escape = _format_icing_escape_context(route_advisories)
+        if escape:
+            sub_blocks.append(escape)
     if not sub_blocks:
         return None
     header = "=== OPTIONS TO IMPROVE (advice only — do NOT change the assessment) ==="

@@ -24,6 +24,7 @@ from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._helpers import hazardous_icing_zones
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
+from weatherbrief.analysis.advisories.aircraft_icing import AircraftIcingEvaluator
 from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
 from weatherbrief.models import (
     AdvisoryStatus,
@@ -106,7 +107,8 @@ def test_hazardous_filter_keeps_sld_despite_none_risk_contract_only():
 
 
 @pytest.mark.parametrize(
-    "evaluator", [IcingEscapeEvaluator, FIKIIcingEvaluator, IFRFeasibilityEvaluator]
+    "evaluator",
+    [IcingEscapeEvaluator, FIKIIcingEvaluator, IFRFeasibilityEvaluator, AircraftIcingEvaluator],
 )
 def test_none_risk_zones_do_not_flag_icing(evaluator):
     """A route where every point carries only risk=NONE zones grades GREEN."""
@@ -116,9 +118,11 @@ def test_none_risk_zones_do_not_flag_icing(evaluator):
     assert result.per_model[0].affected_points == 0
 
 
-@pytest.mark.parametrize(
-    "evaluator", [IcingEscapeEvaluator, FIKIIcingEvaluator, IFRFeasibilityEvaluator]
-)
+# IFRFeasibilityEvaluator is not here since #827: its icing axis is the
+# aircraft_icing card, whose cruise band (1,000 ft) does not reach this zone
+# 1,600 ft above cruise in above-freezing cruise air. The NONE-risk test above
+# still covers it, and test_aircraft_icing covers real icing at cruise.
+@pytest.mark.parametrize("evaluator", [IcingEscapeEvaluator, FIKIIcingEvaluator])
 def test_real_icing_still_flags(evaluator):
     """No over-correction: MODERATE zones on the same geometry still flag."""
     ctx = _ctx([_sounding([_zone(IcingRisk.MODERATE)]) for _ in range(10)])

@@ -18,6 +18,7 @@ from typing import Callable
 
 from weatherbrief.fetch.variables import MODEL_ENDPOINTS
 from weatherbrief.models import (
+    AircraftEquipage,
     AdvisoryCode,
     Diagnostic,
     ForecastSnapshot,
@@ -93,6 +94,7 @@ class BriefingOptions:
     advisory_enabled: dict[str, bool] | None = None  # {advisory_id: enabled}
     advisory_params: dict[str, dict[str, float]] | None = None  # {advisory_id: {param: value}}
     cruise_speed_ias_kt: float | None = None  # resolved aircraft/profile cruise IAS for headwind TAS
+    equipage: AircraftEquipage | None = None  # resolved aircraft equipage for the icing card (#827)
     auto_front_detection: bool = False  # experimental: write route_fronts.json (#195)
     compute_alternates: bool = True  # default-on: weather-based divert candidates, D-2 inward (#210, graduated)
     historical_mode: bool = False  # Use archived NWP data for past departure times
@@ -454,6 +456,7 @@ def _execute_briefing_stages(
             pack_dir=pack_dir,
             progress_callback=progress_callback,
             cruise_speed_ias_kt=options.cruise_speed_ias_kt,
+            equipage=options.equipage,
             icing_method=options.icing_method,
             cloud_source=options.cloud_source,
             convective_method=options.convective_method,
@@ -517,6 +520,7 @@ def _execute_briefing_stages(
                 convective_method=options.convective_method,
                 locale=options.locale,
                 cruise_speed_ias_kt=options.cruise_speed_ias_kt,
+                equipage=options.equipage,
                 declared_approach_icaos=options.declared_approach_icaos,
             )
         except Exception:

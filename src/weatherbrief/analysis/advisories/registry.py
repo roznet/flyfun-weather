@@ -55,7 +55,7 @@ ENTRY_ORDER: dict[str, list[str]] = {
     "airport": ["flight_category", "airport_wind", "density_altitude", "llws"],
     "flight_rules": ["vfr_feasibility", "ifr_feasibility", "approach_feasibility"],
     "wind": ["headwind"],
-    "icing": ["icing_escape", "fiki_icing", "freezing_precip"],
+    "icing": ["aircraft_icing", "freezing_precip", "icing_escape", "fiki_icing"],
     "cloud": ["cloud_top", "vmc_cruise"],
     "convective": ["convective", "convective_character"],
     "precipitation": ["enroute_precip"],
@@ -92,10 +92,18 @@ def _catalog_sort_key(
     return (cat_idx, entry_idx, registration_index)
 
 
-def get_catalog() -> list[AdvisoryCatalogEntry]:
-    """Return catalog entries for all registered evaluators, in display order."""
+def get_catalog(*, include_retired: bool = False) -> list[AdvisoryCatalogEntry]:
+    """Return catalog entries for all registered evaluators, in display order.
+
+    Retired advisories (#827) are left out unless ``include_retired``: they are
+    never evaluated, so a settings toggle or a new pack's catalog entry for one
+    would describe a card that cannot appear.
+    """
     _ensure_loaded()
-    indexed = list(enumerate(cls.catalog_entry() for cls in _EVALUATORS.values()))
+    indexed = list(enumerate(
+        entry for entry in (cls.catalog_entry() for cls in _EVALUATORS.values())
+        if include_retired or not entry.retired
+    ))
     indexed.sort(key=lambda pair: _catalog_sort_key(pair[1], pair[0]))
     return [entry for _, entry in indexed]
 
@@ -116,7 +124,7 @@ def get_category_order(
     """
     _ensure_loaded()
     if entries is None:
-        present = {cls.catalog_entry().category for cls in _EVALUATORS.values()}
+        present = {e.category for e in get_catalog()}
     else:
         present = {e.category for e in entries}
     ordered = [c for c in CATEGORY_ORDER if c in present]
@@ -130,7 +138,7 @@ def get_category_order(
 def get_altitude_dependent_ids() -> set[str]:
     """Return IDs of evaluators that depend on cruise altitude."""
     _ensure_loaded()
-    return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().altitude_dependent}
+    return {e.id for e in get_catalog() if e.altitude_dependent}
 
 
 def get_scan_class_ids() -> set[str]:
@@ -141,7 +149,7 @@ def get_scan_class_ids() -> set[str]:
     graded on the *full* advisory set).
     """
     _ensure_loaded()
-    return {aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().timing_class == "scan"}
+    return {e.id for e in get_catalog() if e.timing_class == "scan"}
 
 
 def get_timing_hint_ids() -> set[str]:
@@ -156,9 +164,7 @@ def get_timing_hint_ids() -> set[str]:
     fog/ceiling burn-off is a classic timing case worth hinting on).
     """
     _ensure_loaded()
-    return get_scan_class_ids() | {
-        aid for aid, cls in _EVALUATORS.items() if cls.catalog_entry().timing_hint
-    }
+    return get_scan_class_ids() | {e.id for e in get_catalog() if e.timing_hint}
 
 
 def resolve_enabled_ids(enabled_map: dict[str, bool] | None) -> set[str] | None:
@@ -212,10 +218,16 @@ def evaluate_all(
     entries = {aid: cls.catalog_entry() for aid, cls in _EVALUATORS.items()}
 
     def _is_enabled(adv_id: str) -> bool:
-        """Enabled set when given, else the advisory's own default_enabled."""
+        """Enabled set when given, else the advisory's own default_enabled.
+
+        A retired advisory (#827) is never in play, whatever a stored profile
+        or an explicit id set says.
+        """
+        entry = entries.get(adv_id)
+        if entry is not None and entry.retired:
+            return False
         if enabled_ids is not None:
             return adv_id in enabled_ids
-        entry = entries.get(adv_id)
         return entry is not None and entry.default_enabled
 
     # Publish the override map on the context so a composite evaluator can grade

@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
+    AircraftEquipage,
     AirportApproaches,
     AirportConditions,
     ElevationProfile,
@@ -80,6 +81,11 @@ class RouteContext:
     # through a helper that falls back to catalog defaults (see
     # ``convective_grading.resolve_convective_params``).
     advisory_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    # The flight's aircraft (#827): FIKI or not, and its ceiling. None — and a
+    # present object with ``known=False`` — mean "no real aircraft", which the
+    # icing card grades as non-FIKI and labels as such. Read through
+    # ``aircraft_icing.equipage_of`` rather than directly.
+    equipage: AircraftEquipage | None = None
 
     @cached_property
     def cruise_groundspeed_kt(self) -> float:

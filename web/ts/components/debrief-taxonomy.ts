@@ -92,6 +92,7 @@ export function matchTagsInText(text: string): Set<ConditionTagId> {
  *  experienced them. Either add advisory ids covering freezing precip /
  *  visibility, or surface those two tags via a separate hookup path. */
 const ADVISORY_TAG_MAP: Record<string, ConditionTagId> = {
+  aircraft_icing:    'ICE',
   icing_escape:      'ICE',
   fiki_icing:        'ICE',
   vmc_cruise:        'IMC',

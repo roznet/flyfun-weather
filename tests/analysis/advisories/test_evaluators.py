@@ -1730,8 +1730,7 @@ class TestVFRFeasibility:
 _IFR_DEFAULTS = {
     "min_dep_ceiling_ft": 200,
     "min_arr_ceiling_ft": 400,
-    "extent_pct_amber": 15,
-    "extent_pct_red": 30,
+    # No icing keys: #827 retired them (the icing card's grade is the axis).
     # No convective keys: §22 retired them. The convective axis is graded by the
     # convective advisory's parameters, resolved off ``ctx.advisory_params``.
 }
@@ -1866,11 +1865,10 @@ class TestIFRFeasibility:
         entry = IFRFeasibilityEvaluator.catalog_entry()
         assert entry.id == "ifr_feasibility"
         assert entry.category == "flight_rules"
-        # 6, not 8: `convective_min_risk` and `convective_pct_red` were retired
-        # in §22 — the convective axis is now graded by the convective
-        # advisory's own parameters, so a second set here could only let the two
-        # diverge again. The 6th is the shared `extent_min_nm` floor (#571 S3).
-        assert len(entry.parameters) == 6
+        # 2: the convective axis is the convective advisory's own grade (§22)
+        # and the icing axis the aircraft_icing card's (#827), so the
+        # composite keeps only its airport minimums.
+        assert len(entry.parameters) == 2
         assert not {"convective_min_risk", "convective_pct_red"} & {
             p.key for p in entry.parameters
         }
@@ -1904,13 +1902,15 @@ class TestIFRFeasibility:
         )
         assert result.aggregate_status == AdvisoryStatus.RED
 
-    def test_tunable_icing_altitude_buffer(
+    def test_retired_icing_params_are_ignored(
         self, ifr_high_altitude_icing_context: RouteContext,
     ):
-        """With large buffer (10000ft), icing at 14000ft becomes relevant for cruise 6000ft."""
+        """The composite's own icing knobs were retired in #827: a stored
+        ``icing_altitude_buffer_ft`` no longer pulls icing well above cruise
+        into the grade, and is not echoed back as applied."""
         params = {**_IFR_DEFAULTS, "icing_altitude_buffer_ft": 10000}
         result = IFRFeasibilityEvaluator.evaluate(
             ifr_high_altitude_icing_context, params,
         )
-        # 14000 < 6000 + 10000 = 16000 → relevant → 100% icing > 30% → RED
-        assert result.aggregate_status == AdvisoryStatus.RED
+        assert result.aggregate_status != AdvisoryStatus.RED
+        assert "icing_altitude_buffer_ft" not in result.parameters_used

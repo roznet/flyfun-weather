@@ -18,7 +18,7 @@ def test_get_catalog_returns_entries():
     catalog = get_catalog()
     assert len(catalog) >= 3  # at least the 3 core ones
     ids = {e.id for e in catalog}
-    assert "icing_escape" in ids
+    assert "aircraft_icing" in ids
     assert "vmc_cruise" in ids
     assert "turbulence" in ids
 
@@ -34,9 +34,9 @@ def test_evaluate_all_clear_sky(clear_context: RouteContext):
 
 def test_evaluate_all_respects_enabled_ids(clear_context: RouteContext):
     """Only evaluates advisories in the enabled set."""
-    results = evaluate_all(clear_context, enabled_ids={"icing_escape"})
+    results = evaluate_all(clear_context, enabled_ids={"aircraft_icing"})
     assert len(results) == 1
-    assert results[0].advisory_id == "icing_escape"
+    assert results[0].advisory_id == "aircraft_icing"
 
 
 def test_throwing_evaluator_yields_unavailable_not_vanishing(clear_context, monkeypatch):
@@ -67,8 +67,8 @@ def test_evaluate_all_user_params(clear_context: RouteContext):
     """User parameter overrides are applied."""
     results = evaluate_all(
         clear_context,
-        enabled_ids={"icing_escape"},
-        user_params={"icing_escape": {"terrain_margin_ft": 2000}},
+        enabled_ids={"aircraft_icing"},
+        user_params={"aircraft_icing": {"terrain_margin_ft": 2000}},
     )
     assert results[0].parameters_used["terrain_margin_ft"] == 2000
 
@@ -92,7 +92,7 @@ def test_resolve_enabled_ids_absent_key_falls_back_to_default():
     default_off = next(e.id for e in catalog.values() if not e.default_enabled)
 
     # Saved map mentions only one unrelated advisory; everything else is absent.
-    resolved = resolve_enabled_ids({"icing_escape": True})
+    resolved = resolve_enabled_ids({"aircraft_icing": True})
 
     # Absent default-on advisory is still evaluated...
     assert default_on in resolved

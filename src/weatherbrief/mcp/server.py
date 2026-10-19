@@ -945,7 +945,7 @@ def get_advisory_detail(
     ],
     advisory_id: Annotated[
         str,
-        Field(description="Advisory id to drill into, e.g. 'convective', 'fiki_icing', 'cloud_top' (the 'id' field from get_briefing's advisories)"),
+        Field(description="Advisory id to drill into, e.g. 'convective', 'aircraft_icing', 'cloud_top' (the 'id' field from get_briefing's advisories)"),
     ],
 ) -> dict[str, Any]:
     """Drill into ONE advisory to explain WHY it is red/amber (or any grade).

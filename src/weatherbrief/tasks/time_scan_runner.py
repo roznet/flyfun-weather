@@ -102,7 +102,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
     try:
         db = SessionLocal()
         try:
-            from weatherbrief.api.packs import _build_route_config, _load_advisory_profile
+            from weatherbrief.api.packs import _build_route_config, _load_advisory_profile, _resolve_equipage
             from weatherbrief.storage.flights import load_flight
             from weatherbrief.tasks.advise import derive_assessment_from_advisories
             from weatherbrief.tasks.artifacts import save_time_options
@@ -156,6 +156,7 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
                 cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
+                equipage=_resolve_equipage(db, flight),
                 declared_approach_icaos=declared_approaches,
             )
             if scan is None:
@@ -263,7 +264,7 @@ def _run_confirm_job(
     try:
         db = SessionLocal()
         try:
-            from weatherbrief.api.packs import _build_route_config, _load_advisory_profile
+            from weatherbrief.api.packs import _build_route_config, _load_advisory_profile, _resolve_equipage
             from weatherbrief.storage.flights import load_flight
             from weatherbrief.tasks.artifacts import load_time_options, save_time_options
             from weatherbrief.tasks.time_scan import confirm_candidate
@@ -292,6 +293,7 @@ def _run_confirm_job(
                 cloud_source=cloud_source,
                 convective_method=convective_method,
                 locale=locale,
+                equipage=_resolve_equipage(db, flight),
                 declared_approach_icaos=declared_approaches,
             )
 

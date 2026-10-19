@@ -38,6 +38,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'convective',
   'convective_character',  // VFR avoidability — sits beside Convective Activity
   'fronts',
+  'aircraft_icing',
   'fiki_icing',
   'icing_escape',
   'freezing_precip',

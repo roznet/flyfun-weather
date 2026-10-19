@@ -110,6 +110,7 @@ def test_apply_any_answer_combination_is_valid():
 
 
 def test_interview_has_expected_questions():
-    """v1 ships the three designed questions in order."""
+    """The designed questions, in order. No FIKI question: equipage lives on
+    the aircraft since #827."""
     ids = [q.id for q in get_interview().questions]
-    assert ids == ["flight_rules", "icing_equipage", "minimums"]
+    assert ids == ["flight_rules", "minimums"]

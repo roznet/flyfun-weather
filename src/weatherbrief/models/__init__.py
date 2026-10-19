@@ -81,6 +81,7 @@ from weatherbrief.models.diagnostic_codes import (  # noqa: F401
     SkewtCode,
 )
 from weatherbrief.models.advisories import (  # noqa: F401
+    AircraftEquipage,
     AdvisoryAggregation,
     AdvisoryCatalogEntry,
     AdvisoryHighlights,
