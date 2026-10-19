@@ -338,6 +338,9 @@ class ApiClient(
 
     suspend fun unlinkAutorouter() = delete("/api/autorouter/link")
 
+    /** Permanently deletes the signed-in user's account (flyfun-common `DELETE /auth/account`). */
+    suspend fun deleteAccount() = delete("/auth/account")
+
     // ========================================================================
     // Packs & Briefing Data
     // ========================================================================

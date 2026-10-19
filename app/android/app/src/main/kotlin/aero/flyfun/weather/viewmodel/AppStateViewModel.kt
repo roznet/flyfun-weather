@@ -20,6 +20,7 @@ import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.data.HelpCatalogStore
 import aero.flyfun.weather.data.OnlineBriefingRepository
 import aero.flyfun.weather.data.OnlineTripRepository
+import aero.flyfun.weather.data.PirepOfflineStore
 import aero.flyfun.weather.data.TripRepository
 import aero.flyfun.weather.data.WhatsNewStore
 import aero.flyfun.weather.model.NavigationTarget
@@ -439,6 +440,19 @@ class AppStateViewModel(
         _userPreferences.value = null
         _autorouterLinked.value = false
         _authError.value = null
+    }
+
+    /**
+     * Delete the user's account on the server, then log out locally. Mirrors iOS
+     * `AppState.deleteAccount()`: the account is gone, so this user's cache and the
+     * offline PIREP queue go too rather than waiting for the janitor. Throws on a
+     * server failure, leaving the user signed in.
+     */
+    suspend fun deleteAccount() {
+        apiClient.deleteAccount()
+        runCatching { briefingCache?.clearAll() }
+        context?.let { ctx -> runCatching { PirepOfflineStore(ctx.filesDir).clear() } }
+        logout()
     }
 
     private fun handleUnauthorized() {

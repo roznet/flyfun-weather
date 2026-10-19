@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -16,10 +17,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AirplanemodeActive
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -30,6 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -69,6 +75,11 @@ fun SettingsScreen(
     val autorouterLinked by appState.autorouterLinked.collectAsState()
 
     var showFeedbackSheet by remember { mutableStateOf(false) }
+    // Account deletion: two confirmations, as on iOS (Settings > Delete Account).
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var showFinalConfirmation by remember { mutableStateOf(false) }
+    var isDeleting by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         modifier = modifier,
@@ -120,6 +131,39 @@ fun SettingsScreen(
                         Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
                         Spacer(modifier = Modifier.padding(horizontal = 4.dp))
                         Text(if (isGuest) "Exit Demo Mode & Sign In" else "Sign Out")
+                    }
+                    if (!isGuest && !isMockMode) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { showDeleteConfirmation = true },
+                            enabled = !isDeleting,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            if (isDeleting) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Delete, contentDescription = null)
+                            }
+                            Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                            Text("Delete Account")
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Permanently deletes your account and all associated data (flights, briefings, preferences). This cannot be undone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        deleteError?.let { message ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
             }
@@ -263,6 +307,53 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Delete Account?") },
+            text = { Text("All your flights, briefings, and settings will be permanently removed.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        showFinalConfirmation = true
+                    },
+                ) { Text("Delete Account", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showFinalConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showFinalConfirmation = false },
+            title = { Text("Are you sure?") },
+            text = { Text("This action cannot be undone. Your account and all data will be permanently deleted.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showFinalConfirmation = false
+                        isDeleting = true
+                        deleteError = null
+                        scope.launch {
+                            runCatching { appState.deleteAccount() }
+                                .onSuccess { onBack() }
+                                .onFailure { err ->
+                                    deleteError = "Failed to delete account: ${err.message ?: "unknown error"}"
+                                    isDeleting = false
+                                }
+                        }
+                    },
+                ) { Text("Permanently Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFinalConfirmation = false }) { Text("Cancel") }
+            },
+        )
     }
 
     if (showFeedbackSheet) {
