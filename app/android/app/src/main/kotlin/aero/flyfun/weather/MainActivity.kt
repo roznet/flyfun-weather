@@ -179,6 +179,8 @@ fun FlyFunWeatherRoot(
     var activeTripId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activePackTimestamp by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeOpenObserved by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    // Bumped on each fresh open so a cached briefing ViewModel reloads (rotation keeps it)
+    var briefingOpenSequence by rememberSaveable(sessionKey) { mutableStateOf(0) }
     var cachedFlightForBriefing by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
 
     val resolvedFlightForBriefing = cachedFlightForBriefing?.takeIf { it.id == activeFlightId }
@@ -195,11 +197,12 @@ fun FlyFunWeatherRoot(
         }
     }
 
-    LaunchedEffect(selectedBriefingVm, activeFlightId, activePackTimestamp, activeOpenObserved) {
+    LaunchedEffect(selectedBriefingVm, activeFlightId, activePackTimestamp, activeOpenObserved, briefingOpenSequence) {
         val vm = selectedBriefingVm ?: return@LaunchedEffect
         vm.applyLaunchOptions(
             preferredTimestamp = activePackTimestamp,
             openObserved = activeOpenObserved,
+            openSequence = briefingOpenSequence,
         )
         if (activeOpenObserved) {
             activeOpenObserved = false
@@ -253,6 +256,9 @@ fun FlyFunWeatherRoot(
         openObserved: Boolean = false,
     ) {
         cachedFlightForBriefing = flight
+        if (activeFlightId != flightId || currentRoute != RootRoute.BRIEFING) {
+            briefingOpenSequence++
+        }
         activeFlightId = flightId
         activePackTimestamp = packTimestamp
         activeOpenObserved = openObserved

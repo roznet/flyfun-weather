@@ -20,8 +20,9 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Automatically migrates and deletes any legacy plaintext `flyfun_auth_token.jwt` file on first read.
  * Falls back to [FileTokenStore] **only** in plain JVM unit test environments where the
- * `AndroidKeyStore` security provider is not registered; on Android devices, encryption failure
- * clears the token rather than silently writing plaintext.
+ * `AndroidKeyStore` security provider is not registered; on Android devices, an encryption failure
+ * keeps the previously stored token (never a plaintext copy of the new one), so a transient Keystore
+ * error during an `X-Renewed-Token` rotation doesn't sign the pilot out.
  */
 class AndroidTokenStore(
     private val storageDir: File,
@@ -44,6 +45,8 @@ class AndroidTokenStore(
             if (isAndroidKeyStoreAvailable()) {
                 if (encryptToFile(legacyToken)) {
                     legacyFileStore.clearToken()
+                } else {
+                    logWarning("Legacy token migration to AndroidKeyStore failed; will retry on next read")
                 }
             }
             return legacyToken
@@ -62,8 +65,9 @@ class AndroidTokenStore(
             if (encryptToFile(trimmed)) {
                 legacyFileStore.clearToken()
             } else {
-                runCatching { Log.w(TAG, "AndroidKeyStore encryption failed; refusing plaintext fallback") }
-                clearToken()
+                // Keep the previous (still encrypted) token rather than signing the pilot out;
+                // the server keeps renewing, so the next rotation retries the write.
+                logWarning("AndroidKeyStore encryption failed; keeping previous token, refusing plaintext fallback")
             }
         } else {
             // Pure JVM unit test environment without AndroidKeyStore provider
@@ -86,6 +90,11 @@ class AndroidTokenStore(
         return Security.getProvider(ANDROID_KEYSTORE) != null
     }
 
+    private fun logWarning(message: String, error: Throwable? = null) {
+        // android.util.Log is a stub in plain JVM unit tests
+        runCatching { Log.w(TAG, message, error) }
+    }
+
     private fun encryptToFile(plaintext: String): Boolean = runCatching {
         val secretKey = getOrCreateSecretKey() ?: return false
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -106,7 +115,7 @@ class AndroidTokenStore(
             tempEncryptedFile.delete()
         }
         true
-    }.getOrDefault(false)
+    }.onFailure { logWarning("Token encryption failed", it) }.getOrDefault(false)
 
     private fun decryptFromFile(): String? = runCatching {
         val payload = encryptedFile.readBytes()
@@ -122,7 +131,7 @@ class AndroidTokenStore(
         cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
         val plainBytes = cipher.doFinal(cipherBytes)
         String(plainBytes, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
-    }.getOrNull()
+    }.onFailure { logWarning("Token decryption failed", it) }.getOrNull()
 
     private fun getSecretKey(): SecretKey? = runCatching {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -143,7 +152,7 @@ class AndroidTokenStore(
             .build()
         keyGenerator.init(spec)
         keyGenerator.generateKey()
-    }.getOrNull()
+    }.onFailure { logWarning("AndroidKeyStore key creation failed", it) }.getOrNull()
 
     companion object {
         private const val TAG = "AndroidTokenStore"

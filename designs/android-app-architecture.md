@@ -41,8 +41,9 @@ The upstream `flyfun-common`, `RZFlight`, and `RZSkewT` repositories are Swift-o
 ## Security, Auth & Lifecycle Architecture
 
 1. **Hardware-Backed Token Encryption (`AndroidTokenStore`)**:
-   - `AndroidTokenStore` (`data/AndroidTokenStore.kt`) generates a non-exportable 256-bit AES key in Android's `AndroidKeyStore` (`alias = "flyfun_auth_jwt_aes_key"`) and encrypts the session JWT with `AES/GCM/NoPadding` (12-byte random IV prefixed to the ciphertext) at `filesDir/flyfun_auth_token.enc`.
+   - `AndroidTokenStore` (`data/AndroidTokenStore.kt`) generates a non-exportable 256-bit AES key in Android's `AndroidKeyStore` (`alias = "aero.flyfun.weather.jwt_key_v1"`) and encrypts the session JWT with `AES/GCM/NoPadding` (12-byte random IV prefixed to the ciphertext) at `filesDir/flyfun_auth_token.enc`.
    - Automatically migrates and deletes any legacy plaintext `filesDir/flyfun_auth_token.jwt` file on first read.
+   - On a device, an encryption failure never writes plaintext and never signs the pilot out: `writeToken` keeps the previously stored token (the next `X-Renewed-Token` retries) and logs a warning. The plaintext `FileTokenStore` path runs only when the `AndroidKeyStore` provider is absent (plain JVM unit tests).
 2. **Host-Scoped Bearer Token & Renewal (`RollingBearerInterceptor`)**:
    - `ApiClient` passes `allowedHostProvider = { runCatching { this.baseUrl.toHttpUrl().host }.getOrNull() }` into `RollingBearerInterceptor`.
    - Even if `ApiClient.buildUrl` is called with an absolute URL, `Authorization: Bearer <jwt>`, `X-Renewed-Token` acceptance, and HTTP 401 token clearing / logout only execute when `request.url.host` matches the configured API host.
@@ -53,6 +54,7 @@ The upstream `flyfun-common`, `RZFlight`, and `RZSkewT` repositories are Swift-o
 4. **ViewModel Lifecycle & Configuration Survival (`MainActivity.kt`)**:
    - All screen ViewModels (`FlightListViewModel`, `TripsViewModel`, `BriefingViewModel`, `AircraftListViewModel`, `PanEuropeanMapViewModel`) are scoped via AndroidX `viewModel(key = ...)` keyed on `sessionKey` (`"$cacheScope:$isMockMode:$isGuestBrowsing"`) and `flightId`.
    - Navigation state (`currentScreen`, `selectedFlightId`, `selectedPackTimestamp`, `openObservedOnLaunch`, `selectedTripId`) uses `rememberSaveable` so tablet rotation, foldable posture changes, and dark-mode toggles preserve both the active screen and in-flight ViewModel coroutines.
+   - Keyed `BriefingViewModel`s stay in the activity `ViewModelStore` after the briefing closes, so reopening a flight reuses the instance. A saveable `briefingOpenSequence`, bumped by `openBriefing` (not by rotation), is passed to `applyLaunchOptions(openSequence = …)` so a reopened instance reloads the latest pack.
    - Root `BackHandler` pops back from secondary screens (`My Aircraft`, `Explore Maps`, `What's New`, `Settings`, `Feedback`, `Trip Detail`) and, on single-pane phones (`maxWidth < 840.dp`), pops from an open briefing back to the Flight List instead of exiting the activity.
 
 ## Repository Pattern & Offline Cache

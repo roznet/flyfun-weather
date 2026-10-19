@@ -121,6 +121,7 @@ class BriefingViewModel(
     private var currentFlightId: String? = flightId
     private var openObservedRequested: Boolean = false
     private var hasStartedInitialLoad: Boolean = false
+    private var lastOpenSequence: Int? = null
 
     fun loadInitialBriefing(preferredTimestamp: String? = null) {
         val id = currentFlightId ?: _flight.value?.id ?: return
@@ -134,16 +135,27 @@ class BriefingViewModel(
 
     /**
      * Apply launch/deep-link parameters to either a newly created or an already-cached [BriefingViewModel].
+     *
+     * [openSequence] changes each time the pilot opens the briefing (not on rotation): a cached
+     * instance reopened later reloads the latest pack instead of showing what it held last time.
      */
     fun applyLaunchOptions(
         preferredTimestamp: String? = null,
         openObserved: Boolean = false,
+        openSequence: Int = 0,
     ) {
+        val isReopen = lastOpenSequence != null && lastOpenSequence != openSequence
+        lastOpenSequence = openSequence
         if (openObserved) {
             selectTab(BriefingTab.OBSERVED)
         }
         if (!hasStartedInitialLoad) {
             loadInitialBriefing(preferredTimestamp = preferredTimestamp)
+            return
+        }
+        if (isReopen && preferredTimestamp.isNullOrBlank()) {
+            val id = currentFlightId ?: _flight.value?.id ?: return
+            load(flightId = id, openObserved = _selectedTab.value == BriefingTab.OBSERVED)
             return
         }
         if (!preferredTimestamp.isNullOrBlank() && _selectedPack.value?.fetchTimestamp != preferredTimestamp) {

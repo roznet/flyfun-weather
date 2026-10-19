@@ -148,7 +148,7 @@ fun ObservedTabScreen(
     val isTrackingThisFlight = if (isDemoMode) {
         demoTrackingActive
     } else {
-        serviceTracking && (serviceFlightId == null || serviceFlightId == currentFlightId)
+        serviceTracking && serviceFlightId == currentFlightId
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(

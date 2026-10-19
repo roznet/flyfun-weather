@@ -1,6 +1,7 @@
 package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.common.InMemoryTokenStore
+import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.FixtureBriefingData
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.data.FixtureTripRepository
@@ -10,6 +11,7 @@ import aero.flyfun.weather.model.FlightOrder
 import aero.flyfun.weather.model.FlightSection
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.NavigationTarget
+import aero.flyfun.weather.model.PackMetaResponse
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -355,5 +357,41 @@ class ViewModelTest {
         vm.applyLaunchOptions(preferredTimestamp = FixtureBriefingData.TIMESTAMP, openObserved = true)
         testScope.advanceUntilIdle()
         assertEquals(BriefingTab.OBSERVED, vm.selectedTab.value)
+    }
+
+    @Test
+    fun briefingViewModel_reopenReloadsButRotationDoesNot() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = CountingBriefingRepository(FixtureBriefingRepository())
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.advanceUntilIdle()
+        assertEquals(1, repo.listPacksCalls)
+
+        // Same open (rotation re-runs the effect): no reload
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.advanceUntilIdle()
+        assertEquals(1, repo.listPacksCalls)
+
+        // Pilot closes and reopens the same flight: reload the latest pack
+        vm.applyLaunchOptions(openSequence = 2)
+        testScope.advanceUntilIdle()
+        assertEquals(2, repo.listPacksCalls)
+    }
+
+    private class CountingBriefingRepository(
+        private val inner: BriefingRepository,
+    ) : BriefingRepository by inner {
+        var listPacksCalls = 0
+
+        override suspend fun listPacks(flightId: String): List<PackMetaResponse> {
+            listPacksCalls++
+            return inner.listPacks(flightId)
+        }
     }
 }

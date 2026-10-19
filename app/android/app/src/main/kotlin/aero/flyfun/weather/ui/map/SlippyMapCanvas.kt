@@ -319,7 +319,13 @@ internal object MapTileCache {
     }
 
     fun markFailed(key: String) {
-        failedUntilMs[key] = System.currentTimeMillis() + FAILURE_COOLDOWN_MS
+        val now = System.currentTimeMillis()
+        synchronized(failedUntilMs) {
+            if (failedUntilMs.size > 512) {
+                failedUntilMs.values.removeAll { it <= now }
+            }
+            failedUntilMs[key] = now + FAILURE_COOLDOWN_MS
+        }
     }
 
     fun unmarkInFlight(key: String) {
@@ -431,7 +437,11 @@ fun SlippyMapCanvas(
                     val dstSize = IntSize(tileSizeOnScreen.roundToInt() + 1, tileSizeOnScreen.roundToInt() + 1)
 
                     val baseKey = "$styleId:$tileZoom:$tx:$ty"
-                    val baseBmp = MapTileCache.get(baseKey)
+                    // OSM light tile stands in while a failed Stadia tile cools down, cached under its
+                    // own key so dark/muted mode retries Stadia rather than keeping the light tile
+                    val fallbackKey = if (isDark || isMuted) "osm-light:$tileZoom:$tx:$ty" else null
+                    val primaryBmp = MapTileCache.get(baseKey)
+                    val baseBmp = primaryBmp ?: fallbackKey?.let { MapTileCache.get(it) }
                     if (baseBmp != null) {
                         drawImage(
                             image = baseBmp,
@@ -439,9 +449,10 @@ fun SlippyMapCanvas(
                             dstSize = dstSize,
                             alpha = 0.94f,
                         )
-                    } else if (MapTileCache.markInFlight(baseKey)) {
+                    }
+                    if (primaryBmp == null && MapTileCache.markInFlight(baseKey)) {
                         val url = MapTileCache.baseTileUrl(isDark, isMuted, tileZoom, tx, ty)
-                        val fallbackUrl = if (isDark || isMuted) {
+                        val fallbackUrl = if (fallbackKey != null) {
                             MapTileCache.baseTileUrl(dark = false, muted = false, tileZoom, tx, ty)
                         } else {
                             null
@@ -450,12 +461,17 @@ fun SlippyMapCanvas(
                         scope.launch(Dispatchers.IO) {
                             try {
                                 val bmp = fetchTileBitmap(url, appCacheDir)
-                                    ?: fallbackUrl?.let { fetchTileBitmap(it, appCacheDir) }
                                 if (bmp != null) {
                                     MapTileCache.put(baseKey, bmp)
                                     withContext(Dispatchers.Main) { tileTick++ }
                                 } else {
                                     MapTileCache.markFailed(baseKey)
+                                    if (fallbackKey != null && fallbackUrl != null && MapTileCache.get(fallbackKey) == null) {
+                                        fetchTileBitmap(fallbackUrl, appCacheDir)?.let {
+                                            MapTileCache.put(fallbackKey, it)
+                                            withContext(Dispatchers.Main) { tileTick++ }
+                                        }
+                                    }
                                 }
                             } finally {
                                 MapTileCache.unmarkInFlight(baseKey)
