@@ -155,7 +155,8 @@ fun ObservedTabScreen(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
         val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+            FlightTrackingService.hasLocationPermission(context)
         if (granted && currentFlightId.isNotBlank()) {
             FlightTrackingService.startTracking(
                 context = context,
@@ -180,12 +181,14 @@ fun ObservedTabScreen(
                     apiClient = viewModel.apiClient,
                 )
             } else {
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ),
-                )
+                val permissions = buildList {
+                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }.toTypedArray()
+                locationPermissionLauncher.launch(permissions)
             }
         }
     }

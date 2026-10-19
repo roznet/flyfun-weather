@@ -3,10 +3,12 @@ package aero.flyfun.weather.data
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.Log
 import aero.flyfun.common.FileTokenStore
 import aero.flyfun.common.TokenStore
 import java.io.File
 import java.security.KeyStore
+import java.security.Security
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -16,25 +18,33 @@ import javax.crypto.spec.GCMParameterSpec
  * Android Keystore-backed [TokenStore] that encrypts the session Bearer JWT at rest
  * using 256-bit `AES/GCM/NoPadding` (`filesDir/flyfun_auth_token.enc`).
  *
- * Automatically migrates any legacy plaintext `flyfun_auth_token.jwt` file on first read,
- * and falls back to [FileTokenStore] when running in plain JVM unit test environments
- * where `AndroidKeyStore` is not registered.
+ * Automatically migrates and deletes any legacy plaintext `flyfun_auth_token.jwt` file on first read.
+ * Falls back to [FileTokenStore] **only** in plain JVM unit test environments where the
+ * `AndroidKeyStore` security provider is not registered; on Android devices, encryption failure
+ * clears the token rather than silently writing plaintext.
  */
-class AndroidTokenStore(context: Context) : TokenStore {
+class AndroidTokenStore(
+    private val storageDir: File,
+) : TokenStore {
 
-    private val encryptedFile = File(context.filesDir, ENCRYPTED_FILE_NAME)
-    private val legacyFileStore = FileTokenStore(File(context.filesDir, LEGACY_FILE_NAME))
+    constructor(context: Context) : this(context.filesDir)
+
+    private val encryptedFile = File(storageDir, ENCRYPTED_FILE_NAME)
+    private val tempEncryptedFile = File(storageDir, "$ENCRYPTED_FILE_NAME.tmp")
+    private val legacyFileStore = FileTokenStore(File(storageDir, LEGACY_FILE_NAME))
 
     @Synchronized
     override fun readToken(): String? {
         if (encryptedFile.isFile) {
             decryptFromFile()?.let { return it }
         }
-        // Migrate or fall back to legacy plaintext file if present
+        // Migrate legacy plaintext file if present
         val legacyToken = legacyFileStore.readToken()
         if (!legacyToken.isNullOrBlank()) {
-            if (encryptToFile(legacyToken)) {
-                legacyFileStore.clearToken()
+            if (isAndroidKeyStoreAvailable()) {
+                if (encryptToFile(legacyToken)) {
+                    legacyFileStore.clearToken()
+                }
             }
             return legacyToken
         }
@@ -48,19 +58,32 @@ class AndroidTokenStore(context: Context) : TokenStore {
             clearToken()
             return
         }
-        if (encryptToFile(trimmed)) {
-            legacyFileStore.clearToken()
+        if (isAndroidKeyStoreAvailable()) {
+            if (encryptToFile(trimmed)) {
+                legacyFileStore.clearToken()
+            } else {
+                runCatching { Log.w(TAG, "AndroidKeyStore encryption failed; refusing plaintext fallback") }
+                clearToken()
+            }
         } else {
+            // Pure JVM unit test environment without AndroidKeyStore provider
             legacyFileStore.writeToken(trimmed)
         }
     }
 
     @Synchronized
     override fun clearToken() {
+        if (tempEncryptedFile.exists()) {
+            tempEncryptedFile.delete()
+        }
         if (encryptedFile.exists()) {
             encryptedFile.delete()
         }
         legacyFileStore.clearToken()
+    }
+
+    private fun isAndroidKeyStoreAvailable(): Boolean {
+        return Security.getProvider(ANDROID_KEYSTORE) != null
     }
 
     private fun encryptToFile(plaintext: String): Boolean = runCatching {
@@ -71,12 +94,17 @@ class AndroidTokenStore(context: Context) : TokenStore {
         if (iv == null || iv.isEmpty() || iv.size > 255) return false
         val cipherBytes = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
 
-        encryptedFile.parentFile?.mkdirs()
+        storageDir.mkdirs()
         val payload = ByteArray(1 + iv.size + cipherBytes.size)
         payload[0] = iv.size.toByte()
         System.arraycopy(iv, 0, payload, 1, iv.size)
         System.arraycopy(cipherBytes, 0, payload, 1 + iv.size, cipherBytes.size)
-        encryptedFile.writeBytes(payload)
+
+        tempEncryptedFile.writeBytes(payload)
+        if (!tempEncryptedFile.renameTo(encryptedFile)) {
+            encryptedFile.writeBytes(payload)
+            tempEncryptedFile.delete()
+        }
         true
     }.getOrDefault(false)
 
@@ -118,11 +146,12 @@ class AndroidTokenStore(context: Context) : TokenStore {
     }.getOrNull()
 
     companion object {
+        private const val TAG = "AndroidTokenStore"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "aero.flyfun.weather.jwt_key_v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_LENGTH_BITS = 128
-        private const val ENCRYPTED_FILE_NAME = "flyfun_auth_token.enc"
-        private const val LEGACY_FILE_NAME = "flyfun_auth_token.jwt"
+        internal const val ENCRYPTED_FILE_NAME = "flyfun_auth_token.enc"
+        internal const val LEGACY_FILE_NAME = "flyfun_auth_token.jwt"
     }
 }

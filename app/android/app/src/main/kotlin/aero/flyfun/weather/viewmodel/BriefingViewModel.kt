@@ -7,11 +7,11 @@ import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.CachingBriefingRepository
 import aero.flyfun.weather.data.OnlineBriefingRepository
 import aero.flyfun.weather.model.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,11 +35,12 @@ class BriefingViewModel(
 
     private val scope: CoroutineScope = scopeOverride ?: viewModelScope
 
-    /** Cancel any in-flight coroutines when this ViewModel is replaced or closed. */
-    fun dispose() {
-        if (scopeOverride == null) {
-            runCatching { viewModelScope.cancel() }
-        }
+    private inline fun <T> runSuspendCatching(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Result.failure(t)
     }
 
     private val _flight = MutableStateFlow<FlightResponse?>(initialFlight)
@@ -119,14 +120,41 @@ class BriefingViewModel(
 
     private var currentFlightId: String? = flightId
     private var openObservedRequested: Boolean = false
+    private var hasStartedInitialLoad: Boolean = false
 
     fun loadInitialBriefing(preferredTimestamp: String? = null) {
         val id = currentFlightId ?: _flight.value?.id ?: return
+        hasStartedInitialLoad = true
         load(
             flightId = id,
             initialPackTimestamp = preferredTimestamp,
             openObserved = _selectedTab.value == BriefingTab.OBSERVED,
         )
+    }
+
+    /**
+     * Apply launch/deep-link parameters to either a newly created or an already-cached [BriefingViewModel].
+     */
+    fun applyLaunchOptions(
+        preferredTimestamp: String? = null,
+        openObserved: Boolean = false,
+    ) {
+        if (openObserved) {
+            selectTab(BriefingTab.OBSERVED)
+        }
+        if (!hasStartedInitialLoad) {
+            loadInitialBriefing(preferredTimestamp = preferredTimestamp)
+            return
+        }
+        if (!preferredTimestamp.isNullOrBlank() && _selectedPack.value?.fetchTimestamp != preferredTimestamp) {
+            val matchingPack = _packs.value.firstOrNull { it.fetchTimestamp == preferredTimestamp }
+            if (matchingPack != null) {
+                selectPack(matchingPack)
+            } else {
+                val id = currentFlightId ?: _flight.value?.id ?: return
+                load(flightId = id, initialPackTimestamp = preferredTimestamp, openObserved = openObserved)
+            }
+        }
     }
 
     fun load(
@@ -136,6 +164,7 @@ class BriefingViewModel(
     ) {
         currentFlightId = flightId
         openObservedRequested = openObserved
+        hasStartedInitialLoad = true
         scope.launch {
             loadInternal(flightId, initialPackTimestamp, openObserved)
         }
@@ -151,15 +180,15 @@ class BriefingViewModel(
         try {
             val (loadedFlight, packList, latest) = coroutineScope {
                 val flightDeferred = async {
-                    runCatching { repository.getFlight(flightId) }.getOrElse {
-                        runCatching { repository.listFlights().firstOrNull { it.id == flightId } }.getOrNull()
+                    runSuspendCatching { repository.getFlight(flightId) }.getOrElse {
+                        runSuspendCatching { repository.listFlights().firstOrNull { it.id == flightId } }.getOrNull()
                     }
                 }
                 val packsDeferred = async {
-                    runCatching { repository.listPacks(flightId) }.getOrDefault(emptyList())
+                    runSuspendCatching { repository.listPacks(flightId) }.getOrDefault(emptyList())
                 }
                 val latestDeferred = async {
-                    runCatching { repository.latestPack(flightId) }.getOrNull()
+                    runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
                 }
                 Triple(flightDeferred.await(), packsDeferred.await(), latestDeferred.await())
             }
@@ -188,6 +217,8 @@ class BriefingViewModel(
                 reconcileTabs(openObserved = openObserved)
                 refreshBriefingInternal(flightId)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             _errorMessage.value = e.message ?: "Failed to load briefing"
         } finally {
@@ -215,15 +246,15 @@ class BriefingViewModel(
         var live: LiveLayerResponse? = null
 
         coroutineScope {
-            val advD = async { runCatching { repository.advisories(flightId, ts) }.getOrNull() }
-            val digD = async { runCatching { repository.digest(flightId, ts) }.getOrNull() }
-            val snapD = async { runCatching { repository.snapshot(flightId, ts) }.getOrNull() }
-            val analysesD = async { runCatching { repository.routeAnalyses(flightId, ts) }.getOrNull() }
-            val elevD = async { runCatching { repository.elevation(flightId, ts) }.getOrNull() }
-            val altsD = async { runCatching { repository.alternates(flightId, ts) }.getOrNull() }
-            val timesD = async { runCatching { repository.timeOptions(flightId) }.getOrNull() }
-            val debD = async { runCatching { repository.debrief(flightId) }.getOrNull() }
-            val liveD = async { runCatching { repository.liveLayer(flightId) }.getOrNull() }
+            val advD = async { runSuspendCatching { repository.advisories(flightId, ts) }.getOrNull() }
+            val digD = async { runSuspendCatching { repository.digest(flightId, ts) }.getOrNull() }
+            val snapD = async { runSuspendCatching { repository.snapshot(flightId, ts) }.getOrNull() }
+            val analysesD = async { runSuspendCatching { repository.routeAnalyses(flightId, ts) }.getOrNull() }
+            val elevD = async { runSuspendCatching { repository.elevation(flightId, ts) }.getOrNull() }
+            val altsD = async { runSuspendCatching { repository.alternates(flightId, ts) }.getOrNull() }
+            val timesD = async { runSuspendCatching { repository.timeOptions(flightId) }.getOrNull() }
+            val debD = async { runSuspendCatching { repository.debrief(flightId) }.getOrNull() }
+            val liveD = async { runSuspendCatching { repository.liveLayer(flightId) }.getOrNull() }
 
             adv = advD.await()
             dig = digD.await()

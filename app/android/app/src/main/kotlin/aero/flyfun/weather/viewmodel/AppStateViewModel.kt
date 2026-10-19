@@ -118,13 +118,17 @@ class AppStateViewModel(
     private val _cacheScope = MutableStateFlow("anon")
     val cacheScope: StateFlow<String> = _cacheScope.asStateFlow()
 
+    @Volatile
     var briefingCache: BriefingCache? = null
         private set
 
     private val fixtureBriefingRepo = FixtureBriefingRepository(mockLive = true)
     private val fixtureTripRepo = FixtureTripRepository()
 
+    @Volatile
     private var onlineBriefingRepo: BriefingRepository = OnlineBriefingRepository(apiClient)
+
+    @Volatile
     private var onlineTripRepo: TripRepository = OnlineTripRepository(apiClient, null)
 
     val repository: BriefingRepository
@@ -138,6 +142,15 @@ class AppStateViewModel(
     val whatsNewStore: WhatsNewStore? = context?.let { WhatsNewStore(it) }
 
     init {
+        // Clean up legacy cacheDir-based briefing cache directories if present from older builds
+        context?.cacheDir?.let { legacyCacheParent ->
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    File(legacyCacheParent, "briefing_cache").takeIf { it.exists() }?.deleteRecursively()
+                    File(legacyCacheParent, "BriefingCache").takeIf { it.exists() }?.deleteRecursively()
+                }
+            }
+        }
         val existingToken = tokenStore.getToken()
         if (!existingToken.isNullOrBlank()) {
             rebuildUserScopedRepositories(existingToken)
