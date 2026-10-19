@@ -33,7 +33,7 @@ object CrossSectionPresets {
 
     val ALL_LAYERS: List<CrossSectionLayerDef> = listOf(
         // 1. Background / day-night
-        CrossSectionLayerDef("day-night", "Day / Night Shading", "reference", true, "Solar elevation day, twilight & night background tint."),
+        CrossSectionLayerDef("day-night", "Day / Night Shading", "reference", false, "Solar elevation day, twilight & night background tint."),
         // 2. Terrain
         CrossSectionLayerDef("terrain", "Terrain Profile", "terrain", true, "Route terrain elevation profile in feet MSL."),
         // 3. Clouds (mutually exclusive)
@@ -53,46 +53,46 @@ object CrossSectionPresets {
         CrossSectionLayerDef("sld", "SLD Zones", "icing", false, "Supercooled Large Droplet warm-nose hazard zones."),
         // 5. Turbulence
         CrossSectionLayerDef("cat", "Clear Air Turbulence (CAT)", "turbulence", true, "Richardson-number vertical wind shear turbulence."),
-        CrossSectionLayerDef("inversions", "Temperature Inversions", "turbulence", true, "Stable temperature inversion layers."),
+        CrossSectionLayerDef("inversions", "Temperature Inversions", "stability", false, "Stable temperature inversion layers."),
         CrossSectionLayerDef("vertical-motion", "Vertical Motion", "turbulence", false, "Synoptic vertical velocity / E-Shear layers."),
         // 6. Convection (mutually exclusive)
-        CrossSectionLayerDef("convective", "Convective Risk (Thermo)", "convection", true, "Thermodynamic CAPE / LFC-to-EL convective towers."),
-        CrossSectionLayerDef("convective-nwp", "Convective Clouds (NWP)", "convection", false, "Model parameterized convective cloud column."),
-        // 7. Lines
+        CrossSectionLayerDef("convective", "Convective Risk (Thermo)", "convection", false, "Thermodynamic CAPE / LFC-to-EL convective towers."),
+        CrossSectionLayerDef("convective-nwp", "Convective Clouds (NWP)", "convection", true, "Model parameterized convective cloud column."),
+        // 7. Levels & Stability Lines
         CrossSectionLayerDef("cruise", "Cruise Altitude", "reference", true, "Planned cruise altitude and flight ceiling reference line."),
         CrossSectionLayerDef("freezing", "0°C Freezing Level", "temperature", true, "0°C isotherm altitude along the route."),
-        CrossSectionLayerDef("minus-10", "-10°C Isotherm", "temperature", true, "-10°C prime dendritic icing growth isotherm."),
-        CrossSectionLayerDef("minus-20", "-20°C Isotherm", "temperature", true, "-20°C upper icing boundary isotherm."),
+        CrossSectionLayerDef("minus-10", "-10°C Isotherm", "temperature", false, "-10°C prime dendritic icing growth isotherm."),
+        CrossSectionLayerDef("minus-20", "-20°C Isotherm", "temperature", false, "-20°C upper icing boundary isotherm."),
         CrossSectionLayerDef("lcl", "LCL (Cloud Base)", "stability", false, "Lifted Condensation Level (convective cloud base)."),
-        CrossSectionLayerDef("ceiling", "DD Ceiling", "stability", false, "Sounding dewpoint-depression BKN/OVC ceiling."),
-        CrossSectionLayerDef("ceiling-nwp", "NWP Ceiling", "stability", false, "Model NWP diagnostic ceiling altitude."),
+        CrossSectionLayerDef("ceiling", "DD Ceiling", "temperature", false, "Sounding dewpoint-depression BKN/OVC ceiling."),
+        CrossSectionLayerDef("ceiling-nwp", "NWP Ceiling", "temperature", false, "Model NWP diagnostic ceiling altitude."),
         CrossSectionLayerDef("lfc", "LFC (Free Convection)", "stability", false, "Level of Free Convection."),
         CrossSectionLayerDef("el", "EL (Equilibrium Level)", "stability", false, "Convective Equilibrium Level (anvil top)."),
-        // 8. Reference / Overlays
-        CrossSectionLayerDef("current-conditions", "Current Conditions (METAR/TAF/SIGMET)", "reference", true, "Airport flight category dots and active SIGMET boxes."),
-        CrossSectionLayerDef("fronts", "Frontal Boundaries", "reference", true, "Surface frontal boundary markers."),
+        // 8. Observed / Overlays
+        CrossSectionLayerDef("current-conditions", "Current Conditions (METAR/TAF/SIGMET)", "conditions", false, "Airport flight category dots and active SIGMET boxes."),
+        CrossSectionLayerDef("fronts", "Frontal Boundaries", "conditions", false, "Surface frontal boundary markers."),
     )
 
     /**
      * Bidirectional alias mapping between web canonical layer IDs and iOS/Android band IDs.
      */
     val CANONICAL_TO_ALIAS: Map<String, List<String>> = mapOf(
-        "clouds-nwp" to listOf("nwp-cloud-bands", "soft-nwp-clouds"),
-        "clouds" to listOf("dd-cloud-bands", "cloud-bands", "soft-dd-clouds"),
+        "clouds-nwp" to listOf("nwp-cloud-bands", "soft-nwp-clouds", "square-nwp-clouds", "soft-nwp-cloud-bands", "square-nwp-cloud-bands"),
+        "clouds" to listOf("dd-cloud-bands", "cloud-bands", "soft-dd-clouds", "square-dd-clouds", "soft-cloud-bands", "square-cloud-bands"),
         "icing-ogimet-nwp" to listOf("icing-ogimet-nwp-bands"),
         "icing" to listOf("icing-bands"),
         "icing-sfip" to listOf("sfip-bands"),
         "icing-ieng" to listOf("ieng-icing-bands"),
         "sld" to listOf("sld-bands"),
         "cat" to listOf("cat-bands"),
-        "vertical-motion" to listOf("e-shear-bands"),
+        "vertical-motion" to listOf("e-shear-bands", "e-shear"),
         "inversions" to listOf("inversion-bands"),
         "convective" to listOf("thermo-convective-bg"),
         "convective-nwp" to listOf("nwp-convective-bg"),
         "freezing" to listOf("freezing-level"),
         "minus-10" to listOf("minus-10c"),
         "minus-20" to listOf("minus-20c"),
-        "cruise" to listOf("cruise-altitude", "reference-lines"),
+        "cruise" to listOf("cruise-altitude", "reference-lines", "ceiling-line"),
         "fronts" to listOf("fronts-markers"),
         "day-night" to listOf("night-shading"),
     )
@@ -128,8 +128,8 @@ object CrossSectionPresets {
             "clouds-icing", "clouds-icing-nwp",
             "clouds-diag", "clouds-diag-nwp",
             "clouds-band", "clouds-band-nwp",
-            "nwp-cloud-bands", "soft-nwp-clouds", "square-nwp-clouds",
-            "dd-cloud-bands", "cloud-bands", "soft-dd-clouds", "square-dd-clouds",
+            "nwp-cloud-bands", "soft-nwp-clouds", "square-nwp-clouds", "soft-nwp-cloud-bands", "square-nwp-cloud-bands",
+            "dd-cloud-bands", "cloud-bands", "soft-dd-clouds", "square-dd-clouds", "soft-cloud-bands", "square-cloud-bands",
         ),
         "icing" to setOf(
             "icing", "icing-ogimet-nwp", "icing-sfip", "icing-ieng",
@@ -159,7 +159,7 @@ object CrossSectionPresets {
     val PREFERRED_METHOD_LAYER: Map<String, String> = mapOf(
         "clouds" to "clouds-nwp",
         "icing" to "icing-ogimet-nwp",
-        "convection" to "convective",
+        "convection" to "convective-nwp",
         "turbulence" to "cat",
     )
 
@@ -183,7 +183,7 @@ object CrossSectionPresets {
             enabledLayers["icing-ieng"] == true -> "ieng_nwp"
             else -> "ogimet_nwp"
         }
-        val convective = if (enabledLayers["convective-nwp"] == true) "nwp" else "thermo"
+        val convective = if (enabledLayers["convective"] == true && enabledLayers["convective-nwp"] != true) "thermo" else "nwp"
         return GradedMethods(
             cloudExtent = cloudExtent,
             cloudScale = cloudScale,
@@ -230,7 +230,6 @@ object CrossSectionPresets {
             LayerFamily.TURBULENCE -> {
                 val active = !isFamilyActive
                 next["cat"] = active
-                next["inversions"] = active
                 if (!active) next["vertical-motion"] = false
             }
             LayerFamily.CONVECTION -> {
@@ -238,19 +237,38 @@ object CrossSectionPresets {
                     next[id] = false
                 }
                 if (!isFamilyActive) {
-                    val target = if (preferredMethods.convective == "nwp") "convective-nwp" else "convective"
+                    val target = if (preferredMethods.convective == "thermo") "convective" else "convective-nwp"
                     next[target] = true
                 }
             }
-            LayerFamily.LINES -> {
-                val lineIds = listOf("freezing", "minus-10", "minus-20", "lcl", "ceiling", "ceiling-nwp", "lfc", "el")
-                val anyLineActive = lineIds.any { currentlyEnabled[it] == true }
-                if (anyLineActive) {
-                    for (id in lineIds) next[id] = false
+            LayerFamily.LEVELS -> {
+                val levelIds = listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")
+                if (isFamilyActive) {
+                    for (id in levelIds) next[id] = false
                 } else {
                     next["freezing"] = true
                     next["minus-10"] = true
                     next["minus-20"] = true
+                    next["cruise"] = true
+                }
+            }
+            LayerFamily.STABILITY -> {
+                val stabIds = listOf("lcl", "lfc", "el", "inversions")
+                if (isFamilyActive) {
+                    for (id in stabIds) next[id] = false
+                } else {
+                    next["lcl"] = true
+                    next["lfc"] = true
+                    next["el"] = true
+                }
+            }
+            LayerFamily.OBSERVED -> {
+                val obsIds = listOf("current-conditions", "fronts", "day-night")
+                if (isFamilyActive) {
+                    for (id in obsIds) next[id] = false
+                } else {
+                    next["current-conditions"] = true
+                    next["day-night"] = true
                 }
             }
         }
@@ -260,17 +278,19 @@ object CrossSectionPresets {
     fun isFamilyEnabled(family: LayerFamily, enabled: Map<String, Boolean>): Boolean = when (family) {
         LayerFamily.CLOUDS -> MUTUALLY_EXCLUSIVE_GROUPS["clouds"].orEmpty().any { enabled[it] == true }
         LayerFamily.ICING -> MUTUALLY_EXCLUSIVE_GROUPS["icing"].orEmpty().any { enabled[it] == true } || enabled["sld"] == true || enabled["sld-bands"] == true
-        LayerFamily.TURBULENCE -> enabled["cat"] == true || enabled["inversions"] == true || enabled["vertical-motion"] == true ||
-            enabled["cat-bands"] == true || enabled["inversion-bands"] == true || enabled["e-shear-bands"] == true
+        LayerFamily.TURBULENCE -> enabled["cat"] == true || enabled["vertical-motion"] == true ||
+            enabled["cat-bands"] == true || enabled["e-shear-bands"] == true
         LayerFamily.CONVECTION -> MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty().any { enabled[it] == true }
-        LayerFamily.LINES -> listOf("freezing", "minus-10", "minus-20", "lcl", "ceiling", "ceiling-nwp", "lfc", "el").any { enabled[it] == true }
+        LayerFamily.LEVELS -> listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp", "freezing-level", "minus-10c", "minus-20c", "cruise-altitude").any { enabled[it] == true }
+        LayerFamily.STABILITY -> listOf("lcl", "lfc", "el", "inversions", "inversion-bands").any { enabled[it] == true }
+        LayerFamily.OBSERVED -> listOf("current-conditions", "fronts", "fronts-markers", "day-night", "night-shading").any { enabled[it] == true }
     }
 
     val GRAMET = EmulationPreset(
         id = "gramet",
         label = "GRAMET",
         themeId = "gramet",
-        cloudStyle = CloudStyle.SOFT,
+        cloudStyle = CloudStyle.NATURAL,
         enabledLayers = syncLayerAliases(
             ALL_LAYERS.associate { it.id to false }.toMutableMap().apply {
                 this["day-night"] = true
@@ -278,12 +298,9 @@ object CrossSectionPresets {
                 this["clouds-nwp"] = true
                 this["icing-ogimet-nwp"] = true
                 this["cat"] = true
-                this["convective"] = true
+                this["convective-nwp"] = true
                 this["cruise"] = true
                 this["freezing"] = true
-                this["minus-10"] = true
-                this["minus-20"] = true
-                this["fronts"] = true
             }
         ),
     )
@@ -328,13 +345,13 @@ object CrossSectionPresets {
 
     val BASIC = AdvisoryPreset(
         id = "basic",
-        label = "Basic Overview",
-        caption = "Clouds, icing, turbulence & thermal lines",
-        interpretation = "Standard cross-section overview with NWP clouds, Ogimet-NWP icing, CAT, inversions, and key isotherms.",
+        label = "Basic / Learn",
+        caption = "Clouds, icing, turbulence & freezing level",
+        interpretation = "Standard cross-section overview with NWP clouds, Ogimet-NWP icing, CAT, convection, and 0°C freezing level.",
         groups = listOf("clouds", "icing", "turbulence", "convection"),
-        lines = listOf("cruise", "freezing", "minus-10", "minus-20"),
+        lines = listOf("cruise", "freezing"),
         routeGraphLeft = "headwind",
-        routeGraphRight = "crosswind",
+        routeGraphRight = "temperature",
         skewtOverlays = listOf("clouds-nwp", "icing-ogimet-nwp"),
         skewtPrimaryVar = "hw_xw",
     )
@@ -449,10 +466,11 @@ object CrossSectionPresets {
         val preset = ADVISORY_PRESETS.firstOrNull { it.id == normalizedId } ?: BASIC
 
         val layers = ALL_LAYERS.associate { it.id to false }.toMutableMap()
-        layers["day-night"] = true
         layers["terrain"] = true
-        layers["current-conditions"] = true
-        layers["fronts"] = true
+        if (normalizedId == "vfr") {
+            layers["current-conditions"] = true
+            layers["day-night"] = true
+        }
 
         for (group in preset.groups) {
             when (group) {
@@ -479,13 +497,17 @@ object CrossSectionPresets {
                 }
                 "turbulence" -> {
                     layers["cat"] = true
-                    layers["inversions"] = true
                     if (normalizedId == "turbulence") {
+                        layers["inversions"] = true
                         layers["vertical-motion"] = true
                     }
                 }
                 "convection" -> {
-                    val convLayer = if (preferredMethods.convective == "nwp") "convective-nwp" else "convective"
+                    val convLayer = if (normalizedId == "convective" || preferredMethods.convective == "thermo") {
+                        "convective"
+                    } else {
+                        "convective-nwp"
+                    }
                     layers[convLayer] = true
                 }
             }

@@ -342,6 +342,14 @@ object VizDataExtractor {
             advisories?.advisories?.firstOrNull { it.advisoryId == highlightId }?.highlights
         }
 
+        val nightIntervals = routeAnalyses.sun?.nightIntervals.orEmpty().map { ni ->
+            VizNightInterval(
+                startDistanceNm = ni.startDistanceNm,
+                endDistanceNm = ni.endDistanceNm,
+                kind = ni.phase.lowercase(),
+            )
+        }
+
         return VizRouteData(
             model = model,
             availableModels = availableModels,
@@ -352,7 +360,7 @@ object VizDataExtractor {
             points = points,
             terrainProfile = terrainProfile,
             waypoints = waypoints,
-            nightIntervals = emptyList(),
+            nightIntervals = nightIntervals,
             fronts = emptyList(),
             currentConditions = currentConditions,
             advisoryHighlights = advisoryHighlights,
@@ -432,7 +440,35 @@ object VizDataExtractor {
             )
         }
 
+        val iengIcingZones = sounding?.iengIcingZones.orEmpty().map { iz ->
+            VizIcingZone(
+                baseFt = iz.baseFt,
+                topFt = iz.topFt,
+                risk = iz.risk.lowercase(),
+                type = iz.icingType.lowercase(),
+                meanIndex = iz.meanIcingIndex,
+            )
+        }
+
+        val sldZones = sounding?.sldZones.orEmpty().map { sz ->
+            VizSldZone(
+                baseFt = sz.baseFt,
+                topFt = sz.topFt,
+                risk = sz.risk.lowercase(),
+                mechanism = sz.mechanism ?: "warm_nose",
+            )
+        }
+
         val catLayers = sounding?.verticalMotion?.catRiskLayers.orEmpty().map { cl ->
+            VizCatLayer(
+                baseFt = cl.baseFt,
+                topFt = cl.topFt,
+                risk = cl.risk.lowercase(),
+                meanRi = cl.richardsonNumber,
+            )
+        }
+
+        val eShearLayers = sounding?.verticalMotion?.eShearLayers.orEmpty().map { cl ->
             VizCatLayer(
                 baseFt = cl.baseFt,
                 topFt = cl.topFt,
@@ -491,7 +527,8 @@ object VizDataExtractor {
         }
 
         val temperatureC = divergenceValue(rpa.modelDivergence, "temperature_c", model)
-        val temperatureCruiseC = divergenceValue(rpa.modelDivergence, "cruise_temperature_c", model)
+        val temperatureCruiseC = rpa.cruiseTemperatureC?.get(model)
+            ?: divergenceValue(rpa.modelDivergence, "cruise_temperature_c", model)
             ?: divergenceValue(rpa.modelDivergence, "temperature_cruise_c", model)
         val isaDevC = temperatureCruiseC?.let { it - isaTemperatureC(cruiseAltitudeFt) }
             ?: divergenceValue(rpa.modelDivergence, "isa_dev_c", model)
@@ -526,10 +563,10 @@ object VizDataExtractor {
             icingZones = icingZones,
             icingOgimetNwpZones = icingOgimetNwpZones,
             sfipZones = sfipZones,
-            iengIcingZones = emptyList(),
-            sldZones = emptyList(),
+            iengIcingZones = iengIcingZones,
+            sldZones = sldZones,
             catLayers = catLayers,
-            eShearLayers = emptyList(),
+            eShearLayers = eShearLayers,
             inversionLayers = inversionLayers,
             thermoConvective = thermoConvective,
             nwpConvective = nwpConvective,

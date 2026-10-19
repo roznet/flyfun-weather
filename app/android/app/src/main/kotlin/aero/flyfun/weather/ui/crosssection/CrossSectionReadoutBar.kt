@@ -2,6 +2,7 @@ package aero.flyfun.weather.ui.crosssection
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,7 +49,7 @@ import kotlin.math.roundToInt
 
 /**
  * Compact cockpit readout strip displaying the scrubbed or selected [VizPoint]:
- * - Waypoint / Distance (`42 NM · FL080`)
+ * - Waypoint / Distance (`42 NM · FL080`) + `Sounding ›` jump button
  * - Terrain (`1,450 ft`)
  * - Cloud layers (e.g. `BKN 4,200–7,800 ft`)
  * - Icing risk (e.g. `MOD 5,000–8,500 ft`)
@@ -63,6 +64,7 @@ fun CrossSectionReadoutBar(
     scrubDistanceNm: Double?,
     hoverAltitudeFt: Double?,
     effectiveLayers: Map<String, Boolean>,
+    onOpenSounding: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val points = vizData.points
@@ -122,10 +124,10 @@ fun CrossSectionReadoutBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 7.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            // Top header row: Position · Waypoint · Cruise FL · Time · Hover Altitude
+            // Top header row: Position · Waypoint · Cruise FL · Time · Hover Altitude · Sounding ›
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -134,6 +136,7 @@ fun CrossSectionReadoutBar(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f),
                 ) {
                     Box(
                         modifier = Modifier
@@ -166,7 +169,7 @@ fun CrossSectionReadoutBar(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (hoverAltitudeFt != null) {
                         Surface(
@@ -191,10 +194,30 @@ fun CrossSectionReadoutBar(
                             text = timeLabel,
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
+                                fontSize = 10.5.sp,
                             ),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    if (onOpenSounding != null) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(onClick = onOpenSounding),
+                        ) {
+                            Text(
+                                text = "Sounding ›",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
+                                ),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
                     }
                 }
             }

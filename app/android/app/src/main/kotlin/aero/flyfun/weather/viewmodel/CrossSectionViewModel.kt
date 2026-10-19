@@ -68,7 +68,7 @@ class CrossSectionViewModel : ViewModel() {
     private val _selectedTheme = MutableStateFlow(CrossSectionThemes.STANDARD)
     val selectedTheme: StateFlow<CrossSectionTheme> = _selectedTheme.asStateFlow()
 
-    private val _cloudStyle = MutableStateFlow(CloudStyle.SOFT)
+    private val _cloudStyle = MutableStateFlow(CloudStyle.SQUARE)
     val cloudStyle: StateFlow<CloudStyle> = _cloudStyle.asStateFlow()
 
     private val _activePresetId = MutableStateFlow<String?>("basic")
@@ -86,7 +86,7 @@ class CrossSectionViewModel : ViewModel() {
     private val _leftMetricId = MutableStateFlow("headwind")
     val leftMetricId: StateFlow<String> = _leftMetricId.asStateFlow()
 
-    private val _rightMetricId = MutableStateFlow("crosswind")
+    private val _rightMetricId = MutableStateFlow("temperature")
     val rightMetricId: StateFlow<String> = _rightMetricId.asStateFlow()
 
     private val _showDetailSheet = MutableStateFlow(false)
@@ -176,7 +176,7 @@ class CrossSectionViewModel : ViewModel() {
                 when (methodOrLayer.lowercase()) {
                     "nwp" -> current["clouds-nwp"] = true
                     "dd" -> current["clouds"] = true
-                    "off" -> Unit
+                    "off", "none" -> Unit
                     else -> current[CrossSectionPresets.normalizeLayerId(methodOrLayer)] = true
                 }
             }
@@ -184,17 +184,16 @@ class CrossSectionViewModel : ViewModel() {
                 for (id in CrossSectionPresets.MUTUALLY_EXCLUSIVE_GROUPS["icing"].orEmpty()) {
                     current[id] = false
                 }
-                if (methodOrLayer.equals("off", ignoreCase = true)) {
+                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
                     current["sld"] = false
                 } else {
                     current[CrossSectionPresets.normalizeLayerId(methodOrLayer)] = true
                 }
             }
             LayerFamily.TURBULENCE -> {
-                if (methodOrLayer.equals("off", ignoreCase = true)) {
+                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
                     current["cat"] = false
                     current["vertical-motion"] = false
-                    current["inversions"] = false
                 } else {
                     val canonical = CrossSectionPresets.normalizeLayerId(methodOrLayer)
                     current[canonical] = !(current[canonical] == true)
@@ -204,13 +203,39 @@ class CrossSectionViewModel : ViewModel() {
                 for (id in CrossSectionPresets.MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty()) {
                     current[id] = false
                 }
-                if (!methodOrLayer.equals("off", ignoreCase = true)) {
+                if (!methodOrLayer.equals("off", ignoreCase = true) && !methodOrLayer.equals("none", ignoreCase = true)) {
                     current[CrossSectionPresets.normalizeLayerId(methodOrLayer)] = true
                 }
             }
-            LayerFamily.LINES -> {
-                toggleLayer(methodOrLayer)
-                return
+            LayerFamily.LEVELS -> {
+                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
+                    for (id in listOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")) {
+                        current[id] = false
+                    }
+                } else {
+                    toggleLayer(methodOrLayer)
+                    return
+                }
+            }
+            LayerFamily.STABILITY -> {
+                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
+                    for (id in listOf("lcl", "lfc", "el", "inversions")) {
+                        current[id] = false
+                    }
+                } else {
+                    toggleLayer(methodOrLayer)
+                    return
+                }
+            }
+            LayerFamily.OBSERVED -> {
+                if (methodOrLayer.equals("off", ignoreCase = true) || methodOrLayer.equals("none", ignoreCase = true)) {
+                    for (id in listOf("current-conditions", "fronts", "day-night")) {
+                        current[id] = false
+                    }
+                } else {
+                    toggleLayer(methodOrLayer)
+                    return
+                }
             }
         }
         _enabledLayers.value = CrossSectionPresets.syncLayerAliases(current)
@@ -231,8 +256,10 @@ class CrossSectionViewModel : ViewModel() {
         if (emulationId.isNullOrBlank() || emulationId.equals("flyfun", ignoreCase = true)) {
             _activeEmulationId.value = null
             _selectedTheme.value = CrossSectionThemes.STANDARD
-            _cloudStyle.value = CloudStyle.SOFT
-            applyAdvisoryPreset(CrossSectionPresets.BASIC)
+            _cloudStyle.value = CloudStyle.SQUARE
+            _enabledLayers.value = CrossSectionPresets.defaultEnabledLayers()
+            _activePresetId.value = null
+            recomputeEffectiveLayers()
             return
         }
         val preset = CrossSectionPresets.EMULATION_PRESETS.firstOrNull {
@@ -241,7 +268,13 @@ class CrossSectionViewModel : ViewModel() {
         applyEmulationPreset(preset)
     }
 
-    fun applyAdvisoryPreset(preset: AdvisoryPreset) {
+    fun applyAdvisoryPreset(preset: AdvisoryPreset?) {
+        if (preset == null) {
+            _enabledLayers.value = CrossSectionPresets.defaultEnabledLayers()
+            _activePresetId.value = null
+            recomputeEffectiveLayers()
+            return
+        }
         val preferred = CrossSectionPresets.deriveGradedMethods(_enabledLayers.value)
         _enabledLayers.value = CrossSectionPresets.resolveAdvisoryPreset(preset.id, preferred)
         _activePresetId.value = preset.id

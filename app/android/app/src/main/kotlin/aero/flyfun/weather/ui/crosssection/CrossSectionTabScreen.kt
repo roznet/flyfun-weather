@@ -44,6 +44,7 @@ import aero.flyfun.weather.ui.briefing.shortModelName
 import aero.flyfun.weather.ui.skewt.SkewTDetailSection
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import aero.flyfun.weather.viewmodel.CrossSectionViewModel
+import kotlinx.coroutines.launch
 
 /**
  * Full Cross-Section & Skew-T tab screen inside the 5-tab Briefing container:
@@ -219,64 +220,17 @@ fun CrossSectionTabScreen(
         }
     }
 
+    val scrollState = rememberScrollState()
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .verticalScroll(scrollState)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 1. Model Selector Strip (ECMWF, GFS, ICON-EU, etc.)
-        if (availableModels.size > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Model:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                availableModels.forEach { model ->
-                    val isSelected = model.equals(activeModel, ignoreCase = true)
-                    FilterChip(
-                        selected = isSelected,
-                        onClick = {
-                            crossSectionViewModel.selectModel(model)
-                            briefingViewModel.selectModel(model)
-                        },
-                        label = {
-                            Text(
-                                text = model.shortModelName(),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize = 11.sp,
-                                ),
-                            )
-                        },
-                        leadingIcon = if (isSelected) {
-                            {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(13.dp),
-                                )
-                            }
-                        } else null,
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ),
-                        modifier = Modifier.height(28.dp),
-                    )
-                }
-            }
-        }
-
-        // 2. 3-Mode Responsive Layer Bar
+        // 1. Unified Layer Bar (Model pills + Focus/Emulate/Theme + Pinned Options button + Wrapping 7-Family Grid)
         LayerBarView(
             enabledLayers = enabledLayers,
             effectiveLayers = effectiveLayers,
@@ -287,6 +241,12 @@ fun CrossSectionTabScreen(
             activeEmulationId = activeEmulationId,
             activePresetId = activePresetId,
             expandedFamily = expandedFamily,
+            availableModels = availableModels,
+            selectedModel = activeModel,
+            onSelectModel = { model ->
+                crossSectionViewModel.selectModel(model)
+                briefingViewModel.selectModel(model)
+            },
             onApplyAdvisoryPreset = { presetId ->
                 val preset = CrossSectionPresets.ADVISORY_PRESETS.firstOrNull { it.id == presetId }
                 if (preset != null) {
@@ -313,13 +273,18 @@ fun CrossSectionTabScreen(
             },
         )
 
-        // 3. Cockpit Readout Strip
+        // 2. Cockpit Readout Strip (with Sounding › quick-jump pill)
         CrossSectionReadoutBar(
             vizData = currentVizData,
             selectedPointIndex = pointIndex,
             scrubDistanceNm = scrubDistanceNm,
             hoverAltitudeFt = hoverAltitudeFt,
             effectiveLayers = effectiveLayers,
+            onOpenSounding = {
+                coroutineScope.launch {
+                    scrollState.animateScrollTo(scrollState.maxValue)
+                }
+            },
         )
 
         // 4. Interactive Cross-Section Canvas

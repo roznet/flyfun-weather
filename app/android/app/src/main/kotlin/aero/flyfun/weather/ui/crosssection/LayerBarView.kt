@@ -11,7 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -33,7 +32,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
@@ -73,14 +71,21 @@ import aero.flyfun.weather.model.viz.CrossSectionLayerDef
 import aero.flyfun.weather.model.viz.CrossSectionPresets
 import aero.flyfun.weather.model.viz.CrossSectionThemes
 import aero.flyfun.weather.model.viz.LayerFamily
+import aero.flyfun.weather.ui.briefing.shortModelName
 
 /**
- * 3-mode responsive layer bar for the Cross-Section visualization:
- * - [LensMenusRow]: Focus dropdown + Emulate dropdown + Theme picker + Gear icon opening [CrossSectionConfigSheet].
- * - [FamilyPillsRow]: 5 compact pills (`Clouds`, `Icing`, `Turbulence`, `Convection`, `Lines`) showing active state and method badge.
- * - [FamilyDetailRow]: Animated expandable detail strip when a family pill is tapped (method radio chips,
- *   `Square`/`Soft`/`Natural` cloud style selector for Clouds, line toggles for Lines, and `ⓘ` About dialog).
+ * Low-friction, phone-friendly Layer Bar for the Cross-Section visualization:
+ * - **Top Chrome Row (Never clips off-screen)**:
+ *   - Left: Model segmented pills (`ECMWF`, `GFS`, `ICON-EU`) when multiple models are available.
+ *   - Right (pinned): `Focus` lens dropdown + `Emulate` dropdown + `Theme` / `Options` button opening [CrossSectionConfigSheet].
+ * - **Wrapping 7-Family Grid ([FamilyPillsFlowGrid])**:
+ *   - All 7 canonical families (`Clouds`, `Convection`, `Icing`, `Turbulence`, `Levels`, `Stability`, `Observed`)
+ *     are visible simultaneously in a wrapping [FlowRow] without horizontal clipping.
+ * - **Expandable [FamilyDetailRow]**:
+ *   - Tapping any family pill opens its inline method/layer selector strip + `Square`/`Soft`/`Natural`
+ *     cloud style selector + `ⓘ About` meteorological guide.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LayerBarView(
     enabledLayers: Map<String, Boolean>,
@@ -99,119 +104,72 @@ fun LayerBarView(
     onSelectFamilyMethod: (LayerFamily, String) -> Unit,
     onSetCloudStyle: (CloudStyle) -> Unit,
     onToggleLayer: (String) -> Unit,
+    availableModels: List<String> = emptyList(),
+    selectedModel: String = "",
+    onSelectModel: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showConfigSheet by remember { mutableStateOf(false) }
     var aboutFamily by remember { mutableStateOf<LayerFamily?>(null) }
 
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val isWide = maxWidth >= 680.dp
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            // Row 1: Model selector pills (left) + Focus / Emulate / Options (right, always visible)
+            TopChromeRow(
+                availableModels = availableModels,
+                selectedModel = selectedModel,
+                onSelectModel = onSelectModel,
+                activePresetId = activePresetId,
+                activeEmulationId = activeEmulationId,
+                userThemeId = userThemeId,
+                onApplyAdvisoryPreset = onApplyAdvisoryPreset,
+                onApplyEmulation = onApplyEmulation,
+                onSetUserTheme = onSetUserTheme,
+                onOpenConfigSheet = { showConfigSheet = true },
+            )
+
+            // Row 2: Wrapping FlowRow of all 7 canonical LayerFamilies (no horizontal scrolling needed!)
+            FamilyPillsFlowGrid(
+                effectiveLayers = effectiveLayers,
+                substitutedLayers = substitutedLayers,
+                cloudStyle = cloudStyle,
+                expandedFamily = expandedFamily,
+                onToggleExpandedFamily = onToggleExpandedFamily,
+            )
+
+            // Row 3: Expandable Family Detail Row
+            AnimatedVisibility(
+                visible = expandedFamily != null,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
             ) {
-                if (isWide) {
-                    // Wide (tablet/landscape) mode: Lens menus + Family pills on a single coordinated strip
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        LensMenusRow(
-                            activePresetId = activePresetId,
-                            activeEmulationId = activeEmulationId,
-                            userThemeId = userThemeId,
-                            onApplyAdvisoryPreset = onApplyAdvisoryPreset,
-                            onApplyEmulation = onApplyEmulation,
-                            onSetUserTheme = onSetUserTheme,
-                            onOpenConfigSheet = { showConfigSheet = true },
-                        )
-                        Box(
-                            modifier = Modifier
-                                .height(20.dp)
-                                .width(1.dp)
-                                .background(MaterialTheme.colorScheme.outlineVariant),
-                        )
-                        FamilyPillsRow(
-                            effectiveLayers = effectiveLayers,
-                            substitutedLayers = substitutedLayers,
-                            cloudStyle = cloudStyle,
-                            expandedFamily = expandedFamily,
-                            onToggleExpandedFamily = onToggleExpandedFamily,
-                        )
-                    }
-                } else {
-                    // Compact / Medium mode: Row 1 = LensMenus, Row 2 = FamilyPills
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        LensMenusRow(
-                            activePresetId = activePresetId,
-                            activeEmulationId = activeEmulationId,
-                            userThemeId = userThemeId,
-                            onApplyAdvisoryPreset = onApplyAdvisoryPreset,
-                            onApplyEmulation = onApplyEmulation,
-                            onSetUserTheme = onSetUserTheme,
-                            onOpenConfigSheet = { showConfigSheet = true },
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FamilyPillsRow(
-                            effectiveLayers = effectiveLayers,
-                            substitutedLayers = substitutedLayers,
-                            cloudStyle = cloudStyle,
-                            expandedFamily = expandedFamily,
-                            onToggleExpandedFamily = onToggleExpandedFamily,
-                        )
-                    }
-                }
-
-                // Expandable Family Detail Row
-                AnimatedVisibility(
-                    visible = expandedFamily != null,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    val family = expandedFamily
-                    if (family != null) {
-                        FamilyDetailRow(
-                            family = family,
-                            enabledLayers = enabledLayers,
-                            effectiveLayers = effectiveLayers,
-                            unavailableLayers = unavailableLayers,
-                            substitutedLayers = substitutedLayers,
-                            cloudStyle = cloudStyle,
-                            onSelectFamilyMethod = { methodOrLayer ->
-                                onSelectFamilyMethod(family, methodOrLayer)
-                            },
-                            onSetCloudStyle = onSetCloudStyle,
-                            onToggleLayer = onToggleLayer,
-                            onShowAbout = { aboutFamily = family },
-                            onClose = { onToggleExpandedFamily(family) },
-                        )
-                    }
+                val family = expandedFamily
+                if (family != null) {
+                    FamilyDetailRow(
+                        family = family,
+                        enabledLayers = enabledLayers,
+                        effectiveLayers = effectiveLayers,
+                        unavailableLayers = unavailableLayers,
+                        substitutedLayers = substitutedLayers,
+                        cloudStyle = cloudStyle,
+                        onSelectFamilyMethod = { methodOrLayer ->
+                            onSelectFamilyMethod(family, methodOrLayer)
+                        },
+                        onSetCloudStyle = onSetCloudStyle,
+                        onToggleLayer = onToggleLayer,
+                        onShowAbout = { aboutFamily = family },
+                        onClose = { onToggleExpandedFamily(family) },
+                    )
                 }
             }
         }
@@ -225,6 +183,10 @@ fun LayerBarView(
             substitutedLayers = substitutedLayers,
             cloudStyle = cloudStyle,
             userThemeId = userThemeId,
+            activePresetId = activePresetId,
+            activeEmulationId = activeEmulationId,
+            onApplyAdvisoryPreset = onApplyAdvisoryPreset,
+            onApplyEmulation = onApplyEmulation,
             onSetUserTheme = onSetUserTheme,
             onSetCloudStyle = onSetCloudStyle,
             onToggleLayer = onToggleLayer,
@@ -242,7 +204,10 @@ fun LayerBarView(
 }
 
 @Composable
-private fun LensMenusRow(
+private fun TopChromeRow(
+    availableModels: List<String>,
+    selectedModel: String,
+    onSelectModel: ((String) -> Unit)?,
     activePresetId: String?,
     activeEmulationId: String?,
     userThemeId: String,
@@ -270,157 +235,228 @@ private fun LensMenusRow(
         ?.label
         ?: "Standard"
 
-    // 1. Focus Dropdown
-    Box {
-        LensMenuChip(
-            icon = Icons.Default.Visibility,
-            title = "Focus",
-            value = focusLabel,
-            onClick = { focusExpanded = true },
-        )
-        DropdownMenu(
-            expanded = focusExpanded,
-            onDismissRequest = { focusExpanded = false },
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        // Left scrollable strip: Model segmented pills (if > 1 model) + Focus + Emulate + Theme
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            CrossSectionPresets.ADVISORY_PRESETS.forEach { preset ->
-                val isSelected = preset.id == activePresetId
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(
-                                text = preset.label,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            )
-                            if (preset.caption.isNotBlank()) {
+            if (availableModels.size > 1 && onSelectModel != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 3.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        availableModels.forEach { model ->
+                            val isSelected = model.equals(selectedModel, ignoreCase = true)
+                            Surface(
+                                shape = RoundedCornerShape(11.dp),
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color.Transparent
+                                },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(11.dp))
+                                    .clickable { onSelectModel(model) },
+                            ) {
                                 Text(
-                                    text = preset.caption,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
+                                    text = model.shortModelName(),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        fontSize = 10.5.sp,
+                                    ),
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onPrimary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                 )
                             }
                         }
-                    },
-                    leadingIcon = if (isSelected) {
-                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null,
-                    onClick = {
-                        focusExpanded = false
-                        onApplyAdvisoryPreset(preset.id)
-                    },
-                )
+                    }
+                }
             }
-        }
-    }
 
-    // 2. Emulate Dropdown
-    Box {
-        LensMenuChip(
-            icon = Icons.Default.Tune,
-            title = "Emulate",
-            value = emulateLabel,
-            onClick = { emulateExpanded = true },
-        )
-        DropdownMenu(
-            expanded = emulateExpanded,
-            onDismissRequest = { emulateExpanded = false },
-        ) {
-            // FlyFun (default / null emulation)
-            val isFlyFun = activeEmulationId == null || activeEmulationId == "flyfun"
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(
-                            text = "FlyFun",
-                            fontWeight = if (isFlyFun) FontWeight.Bold else FontWeight.Normal,
-                        )
-                        Text(
-                            text = "Briefing graded methods (NWP clouds + Ogimet-NWP icing)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // 1. Focus Dropdown
+            Box {
+                LensMenuChip(
+                    icon = Icons.Default.Visibility,
+                    title = "Focus",
+                    value = focusLabel,
+                    onClick = { focusExpanded = true },
+                )
+                DropdownMenu(
+                    expanded = focusExpanded,
+                    onDismissRequest = { focusExpanded = false },
+                ) {
+                    CrossSectionPresets.ADVISORY_PRESETS.forEach { preset ->
+                        val isSelected = preset.id == activePresetId
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        text = preset.label,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                    if (preset.caption.isNotBlank()) {
+                                        Text(
+                                            text = preset.caption,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                        )
+                                    }
+                                }
+                            },
+                            leadingIcon = if (isSelected) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            onClick = {
+                                focusExpanded = false
+                                onApplyAdvisoryPreset(preset.id)
+                            },
                         )
                     }
-                },
-                leadingIcon = if (isFlyFun) {
-                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                } else null,
-                onClick = {
-                    emulateExpanded = false
-                    onApplyEmulation(null)
-                },
-            )
-            CrossSectionPresets.EMULATION_PRESETS
-                .filter { it.id != "flyfun" }
-                .forEach { preset ->
-                    val isSelected = preset.id == activeEmulationId
+                }
+            }
+
+            // 2. Emulate Dropdown
+            Box {
+                LensMenuChip(
+                    icon = Icons.Default.Tune,
+                    title = "Emulate",
+                    value = emulateLabel,
+                    onClick = { emulateExpanded = true },
+                )
+                DropdownMenu(
+                    expanded = emulateExpanded,
+                    onDismissRequest = { emulateExpanded = false },
+                ) {
+                    val isFlyFun = activeEmulationId == null || activeEmulationId == "flyfun"
                     DropdownMenuItem(
                         text = {
-                            Text(
-                                text = preset.label,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            )
+                            Column {
+                                Text(
+                                    text = "FlyFun",
+                                    fontWeight = if (isFlyFun) FontWeight.Bold else FontWeight.Normal,
+                                )
+                                Text(
+                                    text = "Briefing graded methods (NWP clouds + Ogimet-NWP icing)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         },
-                        leadingIcon = if (isSelected) {
+                        leadingIcon = if (isFlyFun) {
                             { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                         } else null,
                         onClick = {
                             emulateExpanded = false
-                            onApplyEmulation(preset.id)
+                            onApplyEmulation(null)
                         },
                     )
+                    CrossSectionPresets.EMULATION_PRESETS
+                        .filter { it.id != "flyfun" }
+                        .forEach { preset ->
+                            val isSelected = preset.id == activeEmulationId
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = preset.label,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                },
+                                leadingIcon = if (isSelected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null,
+                                onClick = {
+                                    emulateExpanded = false
+                                    onApplyEmulation(preset.id)
+                                },
+                            )
+                        }
                 }
-        }
-    }
+            }
 
-    // 3. Theme Picker
-    Box {
-        LensMenuChip(
-            icon = Icons.Default.Palette,
-            title = "Theme",
-            value = themeLabel,
-            onClick = { themeExpanded = true },
-        )
-        DropdownMenu(
-            expanded = themeExpanded,
-            onDismissRequest = { themeExpanded = false },
-        ) {
-            CrossSectionThemes.ALL.forEach { theme ->
-                val isSelected = theme.id == userThemeId
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = theme.label,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        )
-                    },
-                    leadingIcon = if (isSelected) {
-                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null,
-                    onClick = {
-                        themeExpanded = false
-                        onSetUserTheme(theme.id)
-                    },
+            // 3. Theme Picker
+            Box {
+                LensMenuChip(
+                    icon = Icons.Default.Palette,
+                    title = "Theme",
+                    value = themeLabel,
+                    onClick = { themeExpanded = true },
                 )
+                DropdownMenu(
+                    expanded = themeExpanded,
+                    onDismissRequest = { themeExpanded = false },
+                ) {
+                    CrossSectionThemes.ALL.forEach { theme ->
+                        val isSelected = theme.id == userThemeId
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = theme.label,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                )
+                            },
+                            leadingIcon = if (isSelected) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            onClick = {
+                                themeExpanded = false
+                                onSetUserTheme(theme.id)
+                            },
+                        )
+                    }
+                }
             }
         }
-    }
 
-    // 4. Gear button opening CrossSectionConfigSheet
-    Surface(
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-        modifier = Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onOpenConfigSheet),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = "Chart options",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(15.dp),
-            )
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // Pinned right-hand "Options" pill button — ALWAYS visible on phone screens!
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onOpenConfigSheet),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = "All layers & options",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = "Options",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.5.sp,
+                    ),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
         }
     }
 }
@@ -433,34 +469,34 @@ private fun LensMenuChip(
     onClick: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
         modifier = Modifier
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(13.dp),
+                modifier = Modifier.size(12.dp),
             )
             Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                text = "$title:",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 text = value,
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
+                    fontSize = 10.5.sp,
                 ),
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
@@ -469,79 +505,86 @@ private fun LensMenuChip(
                 imageVector = Icons.Default.ArrowDropDown,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(13.dp),
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FamilyPillsRow(
+private fun FamilyPillsFlowGrid(
     effectiveLayers: Map<String, Boolean>,
     substitutedLayers: Set<String>,
     cloudStyle: CloudStyle,
     expandedFamily: LayerFamily?,
     onToggleExpandedFamily: (LayerFamily) -> Unit,
 ) {
-    LayerFamily.entries.forEach { family ->
-        val badgeInfo = familyMethodBadge(family, effectiveLayers, substitutedLayers, cloudStyle)
-        val isExpanded = expandedFamily == family
-        val dotColor = familyDotColor(family)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        LayerFamily.entries.forEach { family ->
+            val badgeInfo = familyMethodBadge(family, effectiveLayers, substitutedLayers, cloudStyle)
+            val isExpanded = expandedFamily == family
+            val dotColor = familyDotColor(family)
 
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = when {
-                isExpanded -> MaterialTheme.colorScheme.primaryContainer
-                badgeInfo.isActive -> MaterialTheme.colorScheme.surface
-                else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
-            },
-            border = BorderStroke(
-                width = if (isExpanded) 1.5.dp else 0.75.dp,
+            Surface(
+                shape = RoundedCornerShape(14.dp),
                 color = when {
-                    isExpanded -> MaterialTheme.colorScheme.primary
-                    badgeInfo.isActive -> dotColor.copy(alpha = 0.65f)
-                    else -> MaterialTheme.colorScheme.outlineVariant
+                    isExpanded -> MaterialTheme.colorScheme.primaryContainer
+                    badgeInfo.isActive -> MaterialTheme.colorScheme.surface
+                    else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
                 },
-            ),
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onToggleExpandedFamily(family) },
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                border = BorderStroke(
+                    width = if (isExpanded) 1.5.dp else 0.75.dp,
+                    color = when {
+                        isExpanded -> MaterialTheme.colorScheme.primary
+                        badgeInfo.isActive -> dotColor.copy(alpha = 0.65f)
+                        else -> MaterialTheme.colorScheme.outlineVariant
+                    },
+                ),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onToggleExpandedFamily(family) },
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(if (badgeInfo.isActive) dotColor else dotColor.copy(alpha = 0.3f)),
-                )
-                Text(
-                    text = family.label,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = if (badgeInfo.isActive || isExpanded) FontWeight.SemiBold else FontWeight.Normal,
-                        fontSize = 11.sp,
-                    ),
-                    color = if (badgeInfo.isActive || isExpanded) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                Text(
-                    text = badgeInfo.badgeText,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                    ),
-                    color = if (badgeInfo.isSubstituted) {
-                        Color(0xFFD97706)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.5.dp)
+                            .clip(CircleShape)
+                            .background(if (badgeInfo.isActive) dotColor else dotColor.copy(alpha = 0.3f)),
+                    )
+                    Text(
+                        text = family.label,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (badgeInfo.isActive || isExpanded) FontWeight.SemiBold else FontWeight.Normal,
+                            fontSize = 10.5.sp,
+                        ),
+                        color = if (badgeInfo.isActive || isExpanded) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Text(
+                        text = badgeInfo.badgeText,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.5.sp,
+                        ),
+                        color = if (badgeInfo.isSubstituted) {
+                            Color(0xFFD97706)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
     }
@@ -565,7 +608,7 @@ private fun FamilyDetailRow(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
@@ -629,21 +672,13 @@ private fun FamilyDetailRow(
                 }
             }
 
-            // Family-specific controls
+            // Family-specific controls for all 7 canonical families
             when (family) {
                 LayerFamily.CLOUDS -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(
-                            text = "Source:",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         val nwpOn = isNwpCloudActive(effectiveLayers)
                         val ddOn = isDdCloudActive(effectiveLayers)
                         val nwpUnavailable = isNwpCloudUnavailable(unavailableLayers)
@@ -661,26 +696,57 @@ private fun FamilyDetailRow(
                             onClick = { onSelectFamilyMethod("clouds") },
                         )
                         MethodRadioChip(
-                            label = "Off",
+                            label = "None",
                             selected = !nwpOn && !ddOn,
                             enabled = true,
                             onClick = { onSelectFamilyMethod("off") },
                         )
 
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Style:",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         CloudStyle.entries.forEach { style ->
                             MethodRadioChip(
-                                label = style.label,
+                                label = "Style: ${style.label}",
                                 selected = cloudStyle == style,
                                 enabled = true,
                                 onClick = { onSetCloudStyle(style) },
                             )
                         }
+                    }
+                }
+
+                LayerFamily.CONVECTION -> {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val convOptions = listOf(
+                            Triple("convective-nwp", "nwp-convective-bg", "NWP Convective"),
+                            Triple("convective", "thermo-convective-bg", "Thermo (CAPE/LFC→EL)"),
+                        )
+                        convOptions.forEach { (shortId, altId, label) ->
+                            val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
+                            val isUnavail = shortId in unavailableLayers || altId in unavailableLayers
+                            val isSub = shortId in substitutedLayers || altId in substitutedLayers
+                            val displayLabel = when {
+                                isSub -> "$label (Auto)"
+                                isUnavail -> "$label (N/A)"
+                                else -> label
+                            }
+                            MethodRadioChip(
+                                label = displayLabel,
+                                selected = isOn,
+                                enabled = !isUnavail,
+                                onClick = { onSelectFamilyMethod(shortId) },
+                            )
+                        }
+                        val anyConvOn = convOptions.any {
+                            effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
+                        }
+                        MethodRadioChip(
+                            label = "None",
+                            selected = !anyConvOn,
+                            enabled = true,
+                            onClick = { onSelectFamilyMethod("off") },
+                        )
                     }
                 }
 
@@ -722,7 +788,7 @@ private fun FamilyDetailRow(
                             effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
                         }
                         MethodRadioChip(
-                            label = "Off",
+                            label = "None",
                             selected = !anyIcingOn,
                             enabled = true,
                             onClick = { onSelectFamilyMethod("off") },
@@ -738,7 +804,6 @@ private fun FamilyDetailRow(
                         val turbOptions = listOf(
                             Triple("cat", "cat-bands", "CAT (Richardson)"),
                             Triple("vertical-motion", "e-shear-bands", "E-Shear / Vert Motion"),
-                            Triple("inversions", "inversion-bands", "Inversions"),
                         )
                         turbOptions.forEach { (shortId, altId, label) ->
                             val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
@@ -747,20 +812,14 @@ private fun FamilyDetailRow(
                                 label = label,
                                 selected = isOn,
                                 enabled = !isUnavail,
-                                onClick = {
-                                    if (shortId == "inversions") {
-                                        onToggleLayer(shortId)
-                                    } else {
-                                        onSelectFamilyMethod(shortId)
-                                    }
-                                },
+                                onClick = { onSelectFamilyMethod(shortId) },
                             )
                         }
                         val anyTurbOn = turbOptions.any {
                             effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
                         }
                         MethodRadioChip(
-                            label = "Off",
+                            label = "None",
                             selected = !anyTurbOn,
                             enabled = true,
                             onClick = { onSelectFamilyMethod("off") },
@@ -768,63 +827,20 @@ private fun FamilyDetailRow(
                     }
                 }
 
-                LayerFamily.CONVECTION -> {
+                LayerFamily.LEVELS -> {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        val convOptions = listOf(
-                            Triple("convective-nwp", "nwp-convective-bg", "NWP Convective"),
-                            Triple("convective", "thermo-convective-bg", "Thermo (CAPE/LFC→EL)"),
-                        )
-                        convOptions.forEach { (shortId, altId, label) ->
-                            val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
-                            val isUnavail = shortId in unavailableLayers || altId in unavailableLayers
-                            val isSub = shortId in substitutedLayers || altId in substitutedLayers
-                            val displayLabel = when {
-                                isSub -> "$label (Auto)"
-                                isUnavail -> "$label (N/A)"
-                                else -> label
-                            }
-                            MethodRadioChip(
-                                label = displayLabel,
-                                selected = isOn,
-                                enabled = !isUnavail,
-                                onClick = { onSelectFamilyMethod(shortId) },
-                            )
-                        }
-                        val anyConvOn = convOptions.any {
-                            effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
-                        }
-                        MethodRadioChip(
-                            label = "Off",
-                            selected = !anyConvOn,
-                            enabled = true,
-                            onClick = { onSelectFamilyMethod("off") },
-                        )
-                    }
-                }
-
-                LayerFamily.LINES -> {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        val lineLayers = listOf(
+                        val levelLayers = listOf(
                             Triple("freezing", "freezing-level", "0°C Freezing"),
                             Triple("minus-10", "minus-10c", "−10°C"),
                             Triple("minus-20", "minus-20c", "−20°C"),
-                            Triple("lcl", "lcl", "LCL"),
-                            Triple("lfc", "lfc", "LFC"),
-                            Triple("el", "el", "EL"),
+                            Triple("cruise", "cruise-altitude", "Cruise / Ceiling"),
                             Triple("ceiling", "ceiling", "DD Ceiling"),
                             Triple("ceiling-nwp", "ceiling-nwp", "NWP Ceiling"),
-                            Triple("cruise", "cruise-altitude", "Cruise / Ceiling"),
-                            Triple("fronts", "fronts-markers", "Fronts"),
-                            Triple("day-night", "night-shading", "Night Shading"),
-                            Triple("current-conditions", "current-conditions", "METAR / SIGMET"),
                         )
-                        lineLayers.forEach { (shortId, altId, label) ->
+                        levelLayers.forEach { (shortId, altId, label) ->
                             val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
                             val targetId = if (shortId in enabledLayers) shortId else altId
                             MethodRadioChip(
@@ -834,6 +850,80 @@ private fun FamilyDetailRow(
                                 onClick = { onToggleLayer(targetId) },
                             )
                         }
+                        val anyLevelsOn = levelLayers.any {
+                            effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
+                        }
+                        MethodRadioChip(
+                            label = "None",
+                            selected = !anyLevelsOn,
+                            enabled = true,
+                            onClick = { onSelectFamilyMethod("off") },
+                        )
+                    }
+                }
+
+                LayerFamily.STABILITY -> {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val stabilityLayers = listOf(
+                            Triple("lcl", "lcl", "LCL"),
+                            Triple("lfc", "lfc", "LFC"),
+                            Triple("el", "el", "EL"),
+                            Triple("inversions", "inversion-bands", "Inversions"),
+                        )
+                        stabilityLayers.forEach { (shortId, altId, label) ->
+                            val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
+                            val targetId = if (shortId in enabledLayers) shortId else altId
+                            MethodRadioChip(
+                                label = label,
+                                selected = isOn,
+                                enabled = shortId !in unavailableLayers && altId !in unavailableLayers,
+                                onClick = { onToggleLayer(targetId) },
+                            )
+                        }
+                        val anyStabOn = stabilityLayers.any {
+                            effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
+                        }
+                        MethodRadioChip(
+                            label = "None",
+                            selected = !anyStabOn,
+                            enabled = true,
+                            onClick = { onSelectFamilyMethod("off") },
+                        )
+                    }
+                }
+
+                LayerFamily.OBSERVED -> {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        val observedLayers = listOf(
+                            Triple("current-conditions", "current-conditions", "METAR / SIGMET (D-0)"),
+                            Triple("fronts", "fronts-markers", "Synoptic Fronts"),
+                            Triple("day-night", "night-shading", "Day / Night Shading"),
+                        )
+                        observedLayers.forEach { (shortId, altId, label) ->
+                            val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
+                            val targetId = if (shortId in enabledLayers) shortId else altId
+                            MethodRadioChip(
+                                label = label,
+                                selected = isOn,
+                                enabled = shortId !in unavailableLayers && altId !in unavailableLayers,
+                                onClick = { onToggleLayer(targetId) },
+                            )
+                        }
+                        val anyObsOn = observedLayers.any {
+                            effectiveLayers[it.first] == true || effectiveLayers[it.second] == true
+                        }
+                        MethodRadioChip(
+                            label = "None",
+                            selected = !anyObsOn,
+                            enabled = true,
+                            onClick = { onSelectFamilyMethod("off") },
+                        )
                     }
                 }
             }
@@ -884,6 +974,10 @@ private fun CrossSectionConfigSheet(
     substitutedLayers: Set<String>,
     cloudStyle: CloudStyle,
     userThemeId: String,
+    activePresetId: String?,
+    activeEmulationId: String?,
+    onApplyAdvisoryPreset: (String) -> Unit,
+    onApplyEmulation: (String?) -> Unit,
     onSetUserTheme: (String) -> Unit,
     onSetCloudStyle: (CloudStyle) -> Unit,
     onToggleLayer: (String) -> Unit,
@@ -903,12 +997,87 @@ private fun CrossSectionConfigSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = "Cross-Section Layer Configuration",
+                text = "Cross-Section Options & Layers",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
 
-            // Cloud Style selector
+            // 1. Focus Preset selector
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Focus Lens Preset",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    CrossSectionPresets.ADVISORY_PRESETS.forEach { preset ->
+                        MethodRadioChip(
+                            label = preset.label,
+                            selected = preset.id == activePresetId,
+                            enabled = true,
+                            onClick = { onApplyAdvisoryPreset(preset.id) },
+                        )
+                    }
+                }
+            }
+
+            // 2. Emulate External Tool selector
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Emulate External Tool",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val isFlyFun = activeEmulationId == null || activeEmulationId == "flyfun"
+                    MethodRadioChip(
+                        label = "FlyFun (Default)",
+                        selected = isFlyFun,
+                        enabled = true,
+                        onClick = { onApplyEmulation(null) },
+                    )
+                    CrossSectionPresets.EMULATION_PRESETS
+                        .filter { it.id != "flyfun" }
+                        .forEach { preset ->
+                            MethodRadioChip(
+                                label = preset.label,
+                                selected = preset.id == activeEmulationId,
+                                enabled = true,
+                                onClick = { onApplyEmulation(preset.id) },
+                            )
+                        }
+                }
+            }
+
+            // 3. Visual Theme selector
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Visual Theme",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    CrossSectionThemes.ALL.forEach { theme ->
+                        MethodRadioChip(
+                            label = theme.label,
+                            selected = theme.id == userThemeId,
+                            enabled = true,
+                            onClick = { onSetUserTheme(theme.id) },
+                        )
+                    }
+                }
+            }
+
+            // 4. Cloud Style selector
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = "Cloud Rendering Style",
@@ -927,31 +1096,9 @@ private fun CrossSectionConfigSheet(
                 }
             }
 
-            // Theme selector
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "Visual Theme",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    CrossSectionThemes.ALL.forEach { theme ->
-                        MethodRadioChip(
-                            label = theme.label,
-                            selected = theme.id == userThemeId,
-                            enabled = true,
-                            onClick = { onSetUserTheme(theme.id) },
-                        )
-                    }
-                }
-            }
-
             HorizontalDivider()
 
-            // Full Layer Checklist grouped by LayerFamily
+            // 5. Full Layer Checklist grouped by the 7 canonical LayerFamilies
             Text(
                 text = "All Visualization Layers",
                 style = MaterialTheme.typography.labelMedium,
@@ -1102,10 +1249,12 @@ private fun FamilyAboutDialog(
 
 private fun layerFamilyForDef(def: CrossSectionLayerDef): LayerFamily = when (def.group.lowercase()) {
     "clouds" -> LayerFamily.CLOUDS
+    "convection" -> LayerFamily.CONVECTION
     "icing" -> LayerFamily.ICING
     "turbulence" -> LayerFamily.TURBULENCE
-    "convection" -> LayerFamily.CONVECTION
-    else -> LayerFamily.LINES
+    "stability" -> LayerFamily.STABILITY
+    "observed", "context" -> LayerFamily.OBSERVED
+    else -> LayerFamily.LEVELS
 }
 
 private data class FamilyBadgeInfo(
@@ -1161,6 +1310,18 @@ private fun familyMethodBadge(
         }
     }
 
+    LayerFamily.CONVECTION -> {
+        val nwp = effectiveLayers["convective-nwp"] == true || effectiveLayers["nwp-convective-bg"] == true
+        val thermo = effectiveLayers["convective"] == true || effectiveLayers["thermo-convective-bg"] == true
+        val sub = "convective" in substitutedLayers || "thermo-convective-bg" in substitutedLayers
+        when {
+            nwp && thermo -> FamilyBadgeInfo("NWP+Thermo", true, sub)
+            nwp -> FamilyBadgeInfo("NWP", true, sub)
+            thermo -> FamilyBadgeInfo("Thermo", true, sub)
+            else -> FamilyBadgeInfo("off", false, false)
+        }
+    }
+
     LayerFamily.ICING -> {
         val activeNames = mutableListOf<String>()
         if (effectiveLayers["icing-ogimet-nwp"] == true || effectiveLayers["icing-ogimet-nwp-bands"] == true) activeNames.add("Ogimet-NWP")
@@ -1178,9 +1339,8 @@ private fun familyMethodBadge(
 
     LayerFamily.TURBULENCE -> {
         val activeNames = mutableListOf<String>()
-        if (effectiveLayers["cat"] == true || effectiveLayers["cat-bands"] == true) activeNames.add("Ri")
+        if (effectiveLayers["cat"] == true || effectiveLayers["cat-bands"] == true) activeNames.add("CAT (Ri)")
         if (effectiveLayers["vertical-motion"] == true || effectiveLayers["e-shear-bands"] == true) activeNames.add("E-Shear")
-        if (effectiveLayers["inversions"] == true || effectiveLayers["inversion-bands"] == true) activeNames.add("Inv")
         if (activeNames.isEmpty()) {
             FamilyBadgeInfo("off", false, false)
         } else {
@@ -1188,62 +1348,92 @@ private fun familyMethodBadge(
         }
     }
 
-    LayerFamily.CONVECTION -> {
-        val nwp = effectiveLayers["convective-nwp"] == true || effectiveLayers["nwp-convective-bg"] == true
-        val thermo = effectiveLayers["convective"] == true || effectiveLayers["thermo-convective-bg"] == true
-        val sub = "convective" in substitutedLayers || "thermo-convective-bg" in substitutedLayers
+    LayerFamily.LEVELS -> {
+        val levelPairs = listOf(
+            "0°C" to listOf("freezing", "freezing-level"),
+            "−10°C" to listOf("minus-10", "minus-10c"),
+            "−20°C" to listOf("minus-20", "minus-20c"),
+            "Cruise" to listOf("cruise", "cruise-altitude", "reference-lines"),
+            "DD Ceil" to listOf("ceiling"),
+            "NWP Ceil" to listOf("ceiling-nwp"),
+        )
+        val active = levelPairs.mapNotNull { (label, keys) ->
+            if (keys.any { effectiveLayers[it] == true }) label else null
+        }
         when {
-            nwp && thermo -> FamilyBadgeInfo("NWP+Thermo", true, sub)
-            nwp -> FamilyBadgeInfo("NWP", true, sub)
-            thermo -> FamilyBadgeInfo("Thermo", true, sub)
-            else -> FamilyBadgeInfo("off", false, false)
+            active.isEmpty() -> FamilyBadgeInfo("off", false, false)
+            active.size <= 2 -> FamilyBadgeInfo(active.joinToString(" + "), true, false)
+            else -> FamilyBadgeInfo("${active.size} on", true, false)
         }
     }
 
-    LayerFamily.LINES -> {
-        val lineIds = listOf(
-            "freezing", "freezing-level",
-            "minus-10", "minus-10c",
-            "minus-20", "minus-20c",
-            "lcl", "lfc", "el",
-            "ceiling", "ceiling-nwp",
-            "cruise", "cruise-altitude", "reference-lines", "flight-ceiling",
-            "surface-obscuration-bands", "fronts", "fronts-markers", "day-night", "night-shading", "current-conditions",
+    LayerFamily.STABILITY -> {
+        val stabPairs = listOf(
+            "LCL" to listOf("lcl"),
+            "LFC" to listOf("lfc"),
+            "EL" to listOf("el"),
+            "Inv" to listOf("inversions", "inversion-bands"),
         )
-        val count = lineIds.count { effectiveLayers[it] == true }
-        if (count == 0) {
-            FamilyBadgeInfo("off", false, false)
-        } else {
-            FamilyBadgeInfo("$count on", true, false)
+        val active = stabPairs.mapNotNull { (label, keys) ->
+            if (keys.any { effectiveLayers[it] == true }) label else null
+        }
+        when {
+            active.isEmpty() -> FamilyBadgeInfo("off", false, false)
+            active.size <= 2 -> FamilyBadgeInfo(active.joinToString(" + "), true, false)
+            else -> FamilyBadgeInfo("${active.size} on", true, false)
+        }
+    }
+
+    LayerFamily.OBSERVED -> {
+        val obsPairs = listOf(
+            "Airports" to listOf("current-conditions"),
+            "Fronts" to listOf("fronts", "fronts-markers"),
+            "Night" to listOf("day-night", "night-shading"),
+        )
+        val active = obsPairs.mapNotNull { (label, keys) ->
+            if (keys.any { effectiveLayers[it] == true }) label else null
+        }
+        when {
+            active.isEmpty() -> FamilyBadgeInfo("off", false, false)
+            active.size <= 2 -> FamilyBadgeInfo(active.joinToString(" + "), true, false)
+            else -> FamilyBadgeInfo("${active.size} on", true, false)
         }
     }
 }
 
 private fun familyDotColor(family: LayerFamily): Color = when (family) {
     LayerFamily.CLOUDS -> Color(0xFF8C8C99)
+    LayerFamily.CONVECTION -> ColorScales.convectiveRiskColor("high")
     LayerFamily.ICING -> ColorScales.icingRiskColor("moderate")
     LayerFamily.TURBULENCE -> ColorScales.catRiskColor("moderate")
-    LayerFamily.CONVECTION -> ColorScales.convectiveRiskColor("high")
-    LayerFamily.LINES -> Color(CrossSectionThemes.STANDARD.freezingLineColor)
+    LayerFamily.LEVELS -> Color(CrossSectionThemes.STANDARD.freezingLineColor)
+    LayerFamily.STABILITY -> Color(CrossSectionThemes.STANDARD.lclLineColor)
+    LayerFamily.OBSERVED -> Color(0xFF0EA5E9)
 }
 
 private fun familyHint(family: LayerFamily): String = when (family) {
     LayerFamily.CLOUDS -> "Model cloud along the route — NWP vs Sounding DD."
-    LayerFamily.ICING -> "Airframe icing indices: Ogimet-NWP, Ogimet-DD, SFIP, IENG & SLD."
-    LayerFamily.TURBULENCE -> "Clear-air turbulence (Richardson / E-Shear) & temperature inversions."
     LayerFamily.CONVECTION -> "Model convective background vs thermodynamic CAPE/LFC→EL towers."
-    LayerFamily.LINES -> "Isotherms (0°C/−10°C/−20°C), stability levels (LCL/LFC/EL), fronts & reference lines."
+    LayerFamily.ICING -> "Airframe icing indices: Ogimet-NWP, Ogimet-DD, SFIP, IENG & SLD."
+    LayerFamily.TURBULENCE -> "Clear-air turbulence (Richardson number & E-Shear)."
+    LayerFamily.LEVELS -> "Isotherms (0°C/−10°C/−20°C), cruise altitude, flight ceiling & cloud ceilings."
+    LayerFamily.STABILITY -> "Parcel stability levels (LCL, LFC, EL) & temperature inversions."
+    LayerFamily.OBSERVED -> "D-0 airport METAR / SIGMET overlays, synoptic fronts & night shading."
 }
 
 private fun familyAboutIntro(family: LayerFamily): String = when (family) {
     LayerFamily.CLOUDS ->
         "Neither source is the sole truth. DD infers cloud from dewpoint depression in the sounding; NWP uses the model's native cloud-fraction field. Comparing both reveals where the sounding and cloud scheme agree."
+    LayerFamily.CONVECTION ->
+        "NWP Convective reflects the model's sub-grid convective parameterization; Thermo Convective builds parcel towers from LFC to EL scaled by CAPE."
     LayerFamily.ICING ->
         "Icing methods split on where cloud liquid water comes from: Ogimet-DD and IENG read moisture from the sounding, while Ogimet-NWP and SFIP use the model's cloud field. SLD highlights warm-nose freezing rain hazards."
     LayerFamily.TURBULENCE ->
-        "CAT (Ri) diagnoses vertical wind-shear instability via the Richardson number, while E-Shear combines vertical and horizontal shear. Inversions mark stable layers that trap haze or induce low-level wind shear."
-    LayerFamily.CONVECTION ->
-        "NWP Convective reflects the model's sub-grid convective parameterization; Thermo Convective builds parcel towers from LFC to EL scaled by CAPE."
-    LayerFamily.LINES ->
-        "Reference altitudes, isotherms (0°C, −10°C, −20°C), parcel stability levels (LCL, LFC, EL), synoptic fronts, and day/twilight/night shading."
+        "CAT (Ri) diagnoses vertical wind-shear instability via the Richardson number, while E-Shear combines vertical and horizontal shear."
+    LayerFamily.LEVELS ->
+        "Reference altitudes (cruise & flight ceiling), key icing isotherms (0°C, −10°C, −20°C), and DD/NWP cloud ceiling curves."
+    LayerFamily.STABILITY ->
+        "Parcel stability heights: LCL (cumulus cloud base), LFC (level of free convection), EL (equilibrium/anvil top), and stable temperature inversion bands."
+    LayerFamily.OBSERVED ->
+        "Live D-0 airport METAR flight-category columns and active SIGMET regions along the route, plus synoptic fronts and solar twilight/night shading."
 }
