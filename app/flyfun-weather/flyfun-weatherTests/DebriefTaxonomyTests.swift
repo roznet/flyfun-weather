@@ -70,7 +70,7 @@ struct DebriefTaxonomyTests {
         // whole key set against Python's ADVISORY_TAG_MAP rather than spot-checks.
         #expect(
             Set(DebriefTaxonomy.bundledBaseline.advisoryTagMap.keys) == [
-                "icing_escape", "fiki_icing", "vmc_cruise", "cloud_top",
+                "aircraft_icing", "icing_escape", "fiki_icing", "vmc_cruise", "cloud_top",
                 "vfr_feasibility", "ifr_feasibility", "approach_feasibility",
                 "flight_category", "turbulence", "mountain_wind", "convective",
                 "airport_wind",

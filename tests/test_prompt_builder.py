@@ -589,7 +589,7 @@ def _icing_manifest(aircraft, mitigations=()):
 @pytest.mark.parametrize(("aircraft", "line"), [
     ("fiki", "AIRCRAFT: FIKI, ceiling 25,000 ft"),
     ("non_fiki", "AIRCRAFT: not FIKI"),
-    ("unknown", "AIRCRAFT: equipage not set (icing graded as not FIKI)"),
+    ("unknown", "AIRCRAFT: FIKI not set (icing graded as not FIKI)"),
 ])
 def test_header_names_the_equipage(sample_snapshot, aircraft, line):
     from weatherbrief.models import AircraftEquipage

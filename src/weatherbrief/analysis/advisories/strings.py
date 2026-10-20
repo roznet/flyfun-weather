@@ -478,10 +478,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "Evaluado para no FIKI",
     },
     "aircraft_icing.graded_unknown": {
-        "en": "Graded as non-FIKI (set your aircraft's equipage)",
-        "fr": "Évalué comme non-FIKI (renseignez l'équipement de votre avion)",
-        "de": "Als Nicht-FIKI bewertet (Ausrüstung Ihres Flugzeugs angeben)",
-        "es": "Evaluado como no FIKI (indique el equipamiento de su avión)",
+        "en": "Graded as non-FIKI (mark your aircraft as FIKI if it is)",
+        "fr": "Évalué comme non-FIKI (indiquez FIKI sur votre avion s'il l'est)",
+        "de": "Als Nicht-FIKI bewertet (Flugzeug als FIKI markieren, falls zutreffend)",
+        "es": "Evaluado como no FIKI (marque su avión como FIKI si lo es)",
     },
     "aircraft_icing.no_icing": {
         "en": "no icing on the planned profile",

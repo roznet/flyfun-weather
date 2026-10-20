@@ -651,7 +651,7 @@ class AircraftIcingEvaluator:
                 "aircraft can reach: down below the freezing level or cloud "
                 "base and clear of terrain, or (FIKI only) up above the tops "
                 "within the aircraft ceiling. Severe icing and SLD are always "
-                "red. An aircraft with no equipage set is graded as non-FIKI."
+                "red. An aircraft not marked FIKI is graded as non-FIKI."
             ),
             category="icing",
             timing_class="scan",

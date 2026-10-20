@@ -213,8 +213,8 @@ def test_climb_through_cloud_counts():
 @pytest.mark.parametrize(("equipage", "label"), [
     (FIKI, "Graded for FIKI"),
     (NON_FIKI, "Graded for non-FIKI"),
-    (None, "Graded as non-FIKI (set your aircraft's equipage)"),
-    (AircraftEquipage(known=False, fiki=True), "Graded as non-FIKI (set your aircraft's equipage)"),
+    (None, "Graded as non-FIKI (mark your aircraft as FIKI if it is)"),
+    (AircraftEquipage(known=False, fiki=True), "Graded as non-FIKI (mark your aircraft as FIKI if it is)"),
 ])
 def test_card_states_its_column(equipage, label):
     ctx = _ctx(_stretch(5, 1, **ESCAPE), equipage)
