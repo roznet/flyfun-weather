@@ -6462,8 +6462,8 @@ Escape AMBER "warm escape available". `aircraft.is_fiki` never reached the engin
 **Decision.** `aircraft_icing` replaces `icing_escape` and `fiki_icing` (retired, kept
 for old packs) and is the icing axis of `ifr_feasibility` (the §22 pattern). The
 aircraft picks the column: `RouteContext.equipage` from `resolve_flight_aircraft`; none
-or the placeholder is unknown and grades **non-FIKI**, labelled "set your aircraft's
-equipage". The aircraft wins over the profile (#777).
+or the placeholder is unknown and grades **non-FIKI**, labelled "mark your aircraft as FIKI
+if it is". The aircraft wins over the profile (#777).
 
 | Stretch | FIKI | non-FIKI |
 |---|---|---|

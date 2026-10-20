@@ -211,7 +211,7 @@ Structure your response as JSON with these exact fields:
   When the aircraft is not FIKI, any icing at cruise or in the climb or descent
   is a hazard to name. When the options list an icing escape, state the escape
   level in one clause where icing is discussed ("if ice builds, descending below
-  4,000 ft gets you into above-freezing air"). When the equipage is not set,
+  4,000 ft gets you into above-freezing air"). When FIKI is not set,
   the card was graded as non-FIKI: do not speculate about the aircraft.
 - **Read PILOT CAPABILITY before choosing the colour.** With "VFR + IFR", a RED
   that only concerns VFR flight (VFR Feasibility, cloud below a VFR cruise)

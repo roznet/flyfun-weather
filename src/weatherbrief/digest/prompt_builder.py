@@ -960,7 +960,7 @@ def _aircraft_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
     if eq is None:
         return ""
     if not eq.known:
-        return "\nAIRCRAFT: equipage not set (icing graded as not FIKI)"
+        return "\nAIRCRAFT: FIKI not set (icing graded as not FIKI)"
     line = "FIKI" if eq.fiki else "not FIKI"
     if eq.ceiling_ft:
         line += f", ceiling {eq.ceiling_ft:,} ft"
