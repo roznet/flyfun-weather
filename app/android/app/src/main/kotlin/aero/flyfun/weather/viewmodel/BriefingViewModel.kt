@@ -227,8 +227,11 @@ class BriefingViewModel(
                 loadPackContents(flightId, targetPack, openObserved = openObserved)
                 // A refresh started elsewhere (web, another device) is still running:
                 // show its progress and load the new pack when it lands (iOS `checkActiveRefresh`).
-                if (activeRefreshStatus(flightId) != null) {
-                    scope.launch { pollActiveRefresh(flightId) }
+                // Checked off the load path so the shown pack never waits on it.
+                scope.launch {
+                    if (activeRefreshStatus(flightId) != null) {
+                        pollActiveRefresh(flightId)
+                    }
                 }
             } else {
                 // No pack yet: the normal state right after creation (POST /api/flights only
@@ -417,10 +420,7 @@ class BriefingViewModel(
             repository.refreshPack(flightId, force = false, notifyEmail = false).collect { event ->
                 when (event.type) {
                     "progress", "stage" -> {
-                        val stage = event.stage ?: "Refreshing"
-                        val detail = event.detail?.takeIf { it.isNotBlank() }
-                        val pct = event.progress?.let { "${(it * 100).toInt()}%" }
-                        _refreshProgressText.value = listOfNotNull(stage, detail, pct).joinToString(" · ")
+                        _refreshProgressText.value = refreshProgressLabel(event.stage, event.detail, event.progress)
                     }
                     "complete" -> {
                         completedPack = event.pack
@@ -461,25 +461,40 @@ class BriefingViewModel(
      * Follow a refresh this screen did not start (web, another device) by polling
      * `/refresh/status`, driving the same banner as the SSE stream, then load the new pack.
      * Mirrors iOS `pollRefreshStatus`: 3 s cadence, 100 polls (~5 min) cap.
+     *
+     * Any end without a new pack (lost status, cap reached, run produced nothing) is reported
+     * when no pack is on screen, so a new flight never sits on a blank briefing.
      */
     private suspend fun pollActiveRefresh(flightId: String) {
         if (_isRefreshing.value) return
         _isRefreshing.value = true
+        var failure: String? = "Briefing is still generating. Tap refresh to check again."
         try {
-            repeat(ACTIVE_REFRESH_MAX_POLLS) {
-                val status = runSuspendCatching { repository.refreshStatus(flightId) }.getOrNull() ?: return
-                if (!status.active) {
-                    runSuspendCatching { repository.latestPack(flightId) }.getOrNull()?.let {
-                        adoptNewPack(flightId, it)
-                    }
-                    return
+            for (attempt in 0 until ACTIVE_REFRESH_MAX_POLLS) {
+                val status = runSuspendCatching { repository.refreshStatus(flightId) }.getOrNull()
+                if (status == null) {
+                    failure = "Lost track of the briefing refresh. Tap refresh to try again."
+                    break
                 }
-                _refreshProgressText.value = refreshProgressLabel(status)
+                if (!status.active) {
+                    val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
+                    failure = if (pack != null) {
+                        adoptNewPack(flightId, pack)
+                        null
+                    } else {
+                        "The briefing refresh did not produce a briefing. Tap refresh to try again."
+                    }
+                    break
+                }
+                _refreshProgressText.value = refreshProgressLabel(status.label ?: status.stage, status.detail, status.progress)
                 delay(ACTIVE_REFRESH_POLL_MS)
             }
         } finally {
             _isRefreshing.value = false
             _refreshProgressText.value = null
+        }
+        if (failure != null && _selectedPack.value == null) {
+            _errorMessage.value = failure
         }
     }
 
@@ -653,11 +668,11 @@ class BriefingViewModel(
         const val ACTIVE_REFRESH_POLL_MS = 3_000L
         const val ACTIVE_REFRESH_MAX_POLLS = 100
 
-        fun refreshProgressLabel(status: ActiveRefreshResponse): String {
-            val stage = status.label ?: status.stage ?: "Refreshing"
-            val detail = status.detail?.takeIf { it.isNotBlank() }
-            val pct = status.progress?.takeIf { it > 0 }?.let { "${(it * 100).toInt()}%" }
-            return listOfNotNull(stage, detail, pct).joinToString(" · ")
+        /** Refresh banner text, shared by the SSE stream and the status poll. */
+        fun refreshProgressLabel(stage: String?, detail: String?, progress: Double?): String {
+            val pct = progress?.takeIf { it > 0 }?.let { "${(it * 100).toInt()}%" }
+            return listOfNotNull(stage ?: "Refreshing", detail?.takeIf { it.isNotBlank() }, pct)
+                .joinToString(" · ")
         }
 
         fun isLiveLayerMeaningful(live: LiveLayerResponse?): Boolean {

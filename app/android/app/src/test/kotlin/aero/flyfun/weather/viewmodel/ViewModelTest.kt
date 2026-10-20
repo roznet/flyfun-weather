@@ -15,6 +15,7 @@ import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.ActiveRefreshResponse
 import aero.flyfun.weather.model.PackMetaResponse
 import aero.flyfun.weather.model.RefreshEvent
+import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -431,25 +432,73 @@ class ViewModelTest {
         assertNull(vm.refreshProgressText.value)
     }
 
-    /** A just-created flight: no pack until the server's refresh finishes. */
+    @Test
+    fun briefingViewModel_shownPackFollowsRefreshStartedElsewhere() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // Existing briefing, and a web refresh running for the check plus one poll.
+        val repo = NewFlightRepository(FixtureBriefingRepository(), activePolls = 2, hasPack = true)
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.runCurrent()
+        assertNotNull(vm.selectedPack.value)
+        assertTrue(vm.isRefreshing.value)
+
+        testScope.advanceUntilIdle()
+        assertEquals(0, repo.refreshPackCalls)
+        assertEquals(3, repo.refreshStatusCalls)
+        assertFalse(vm.isRefreshing.value)
+        assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun briefingViewModel_newFlightReportsLostRefresh() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // Running for the check plus one poll, then the status call fails.
+        val repo = NewFlightRepository(FixtureBriefingRepository(), activePolls = 2, failWhenDone = true)
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.advanceUntilIdle()
+
+        // Not left on a blank briefing with no explanation.
+        assertNull(vm.selectedPack.value)
+        assertNotNull(vm.errorMessage.value)
+        assertFalse(vm.isRefreshing.value)
+        assertEquals(0, repo.refreshPackCalls)
+    }
+
+    /** A flight whose server refresh state is scripted: [activePolls] "running" answers, then done. */
     private class NewFlightRepository(
         private val inner: BriefingRepository,
         private var activePolls: Int,
+        private var hasPack: Boolean = false,
+        private val failWhenDone: Boolean = false,
     ) : BriefingRepository by inner {
         var refreshPackCalls = 0
-        private var hasPack = false
+        var refreshStatusCalls = 0
         private var sawActive = false
 
-        override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse =
+        override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse {
+            refreshStatusCalls++
             if (activePolls > 0) {
                 activePolls--
                 sawActive = true
-                ActiveRefreshResponse(active = true, label = "Fetching", progress = 0.4)
-            } else {
-                // The server's run finished: its pack is now there.
-                if (sawActive) hasPack = true
-                ActiveRefreshResponse(active = false)
+                return ActiveRefreshResponse(active = true, label = "Fetching", progress = 0.4)
             }
+            if (failWhenDone) throw IOException("offline")
+            // The server's run finished: its pack is now there.
+            if (sawActive) hasPack = true
+            return ActiveRefreshResponse(active = false)
+        }
 
         override suspend fun latestPack(flightId: String): PackMetaResponse =
             if (hasPack) inner.latestPack(flightId) else throw ApiError.NotFound
