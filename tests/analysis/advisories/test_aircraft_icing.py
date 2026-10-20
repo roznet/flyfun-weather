@@ -314,3 +314,32 @@ def test_no_single_escape_level_quoted_into_higher_terrain():
     assert "level varies with terrain" in grade.detail
     result = AircraftIcingEvaluator.evaluate(ctx, params)
     assert not [m for m in result.aggregate_mitigations if m.addresses == "icing_escape"]
+
+
+def test_climb_and_cruise_at_the_first_point_are_not_counted_twice():
+    """Point 0 is iced at cruise and in its column: the first cell is flown
+    climbing, so the stretch is max(climb, cell), not their sum."""
+    from weatherbrief.analysis.advisories.aircraft_icing import (
+        _cell_minutes,
+        build_stretches,
+        icing_picture,
+    )
+
+    ctx = _ctx({0: {"freezing_level_ft": 1000, "icing_zones": [_zone(base=6000, top=9000)]}}, NON_FIKI)
+    params = resolve_aircraft_icing_params(ctx)
+    picture = icing_picture(ctx, "gfs", params)
+    stretches = build_stretches(picture, 200.0, ctx.cruise_groundspeed_kt, fiki=False)
+    climb = (8000 - 6000) / 500  # the zone clipped to cruise, at 500 fpm
+    cell = _cell_minutes(sorted(picture, key=lambda p: p.distance_nm), 0, 200.0, ctx.cruise_groundspeed_kt)
+    assert len(stretches) == 1
+    assert stretches[0].minutes == pytest.approx(max(climb, cell))
+    assert stretches[0].phases == ["climb", "cruise"]
+
+
+def test_warm_nose_without_freezing_rain_has_its_own_block_code():
+    from weatherbrief.analysis.advisories.aircraft_icing import icing_picture
+
+    nose = PrecipitationAssessment(freezing_rain_risk=False, warm_nose_base_ft=10000)
+    ctx = _ctx(_stretch(5, 1, _precip=nose, **ESCAPE), NON_FIKI)
+    point = icing_picture(ctx, "gfs", resolve_aircraft_icing_params(ctx))[5]
+    assert point.escape_down_ft is None and point.down_block == "warm_nose"
