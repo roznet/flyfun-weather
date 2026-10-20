@@ -453,11 +453,14 @@ class ApiClient(
     suspend fun activeRefreshes(): Map<String, ActiveRefreshResponse> =
         requestDecoded(
             serializer = MapSerializer(String.serializer(), ActiveRefreshResponse.serializer()),
-            path = "/api/flights/refresh/active",
+            path = "/api/refresh/active",
         )
 
     /**
-     * Streams SSE [RefreshEvent]s for a briefing refresh via `GET /api/flights/{id}/packs/refresh/stream`.
+     * Streams SSE [RefreshEvent]s for a briefing refresh via `POST /api/flights/{id}/packs/refresh/stream`.
+     *
+     * The endpoint is POST-only (it starts a pipeline run); a GET is answered 405 and the
+     * stream fails before any event, which is how a newly created flight never briefed.
      */
     fun refreshPackStream(
         flightId: String,
@@ -472,7 +475,7 @@ class ApiClient(
         val request = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
-            .get()
+            .post(ByteArray(0).toRequestBody(null))
             .build()
 
         val listener = object : EventSourceListener() {

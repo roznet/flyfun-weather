@@ -1,6 +1,7 @@
 package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.common.InMemoryTokenStore
+import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.FixtureBriefingData
 import aero.flyfun.weather.data.FixtureBriefingRepository
@@ -11,13 +12,17 @@ import aero.flyfun.weather.model.FlightOrder
 import aero.flyfun.weather.model.FlightSection
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.NavigationTarget
+import aero.flyfun.weather.model.ActiveRefreshResponse
 import aero.flyfun.weather.model.PackMetaResponse
+import aero.flyfun.weather.model.RefreshEvent
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -382,6 +387,81 @@ class ViewModelTest {
         vm.applyLaunchOptions(openSequence = 2)
         testScope.advanceUntilIdle()
         assertEquals(2, repo.listPacksCalls)
+    }
+
+    @Test
+    fun briefingViewModel_newFlightStartsFirstBriefing() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = NewFlightRepository(FixtureBriefingRepository(), activePolls = 0)
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.advanceUntilIdle()
+
+        assertEquals(1, repo.refreshPackCalls)
+        assertNotNull(vm.selectedPack.value)
+        assertFalse(vm.isRefreshing.value)
+    }
+
+    @Test
+    fun briefingViewModel_newFlightAdoptsRefreshAlreadyRunning() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // Started on the web: running for the open's check plus two polls, then done.
+        val repo = NewFlightRepository(FixtureBriefingRepository(), activePolls = 3)
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions(openSequence = 1)
+        testScope.runCurrent()
+        assertTrue(vm.isRefreshing.value)
+        assertEquals("Fetching · 40%", vm.refreshProgressText.value)
+
+        testScope.advanceUntilIdle()
+        // Followed the server's run instead of starting a second one (which would 409).
+        assertEquals(0, repo.refreshPackCalls)
+        assertNotNull(vm.selectedPack.value)
+        assertFalse(vm.isRefreshing.value)
+        assertNull(vm.refreshProgressText.value)
+    }
+
+    /** A just-created flight: no pack until the server's refresh finishes. */
+    private class NewFlightRepository(
+        private val inner: BriefingRepository,
+        private var activePolls: Int,
+    ) : BriefingRepository by inner {
+        var refreshPackCalls = 0
+        private var hasPack = false
+        private var sawActive = false
+
+        override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse =
+            if (activePolls > 0) {
+                activePolls--
+                sawActive = true
+                ActiveRefreshResponse(active = true, label = "Fetching", progress = 0.4)
+            } else {
+                // The server's run finished: its pack is now there.
+                if (sawActive) hasPack = true
+                ActiveRefreshResponse(active = false)
+            }
+
+        override suspend fun latestPack(flightId: String): PackMetaResponse =
+            if (hasPack) inner.latestPack(flightId) else throw ApiError.NotFound
+
+        override suspend fun listPacks(flightId: String): List<PackMetaResponse> =
+            if (hasPack) inner.listPacks(flightId) else emptyList()
+
+        override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> {
+            refreshPackCalls++
+            hasPack = true
+            return inner.refreshPack(flightId, force, notifyEmail)
+        }
     }
 
     private class CountingBriefingRepository(

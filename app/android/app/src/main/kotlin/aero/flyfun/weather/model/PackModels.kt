@@ -214,7 +214,11 @@ data class RefreshStatusResponse(
 data class ActiveRefreshResponse(
     val active: Boolean = false,
     val stage: String? = null,
+    /** Human-readable stage label (per-flight `/refresh/status` only). */
+    val label: String? = null,
     val detail: String? = null,
+    /** 0..1, mirrors the SSE stream's stage fraction (per-flight `/refresh/status` only). */
+    val progress: Double? = null,
     @SerialName("triggered_by")
     val triggeredBy: String? = null,
 )
