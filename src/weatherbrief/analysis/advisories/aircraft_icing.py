@@ -135,7 +135,7 @@ class IcingPoint:
     escape_down_ft: float | None = None
     # Lowest altitude the down-escape may use here (terrain + margin).
     escape_floor_ft: float | None = None
-    down_block: str | None = None  # freezing_rain | terrain | terrain_unknown | no_level
+    down_block: str | None = None  # freezing_rain | warm_nose | terrain | terrain_unknown | no_level
     escape_up_ft: float | None = None
     method_id: str | None = None
 
@@ -170,10 +170,13 @@ def _escape_down(
     aircraft is in (at cruise, or in the climb/descent column).
     """
     precip = sounding.precipitation
-    if precip is not None and (precip.freezing_rain_risk or precip.warm_nose_base_ft is not None):
-        # Below a warm nose the air is sub-zero again and may carry freezing
-        # rain: descending stays in, or enters, icing.
+    if precip is not None and precip.freezing_rain_risk:
         return None, "freezing_rain"
+    if precip is not None and precip.warm_nose_base_ft is not None:
+        # §52 (as agreed in #827): no descent escape under a warm nose either.
+        # Below it the air is sub-zero again, and any precipitation falling
+        # through it arrives supercooled, even with no freezing-rain flag yet.
+        return None, "warm_nose"
     fz = sounding.indices.freezing_level_ft if sounding.indices else None
     candidates = [v for v in (fz, _lowest_icing_cloud_base(sounding, zones)) if v is not None]
     if candidates:
@@ -337,9 +340,19 @@ def build_stretches(
     first = next((p for p in ordered if p.assessed), None)
     last = next((p for p in reversed(ordered) if p.assessed), None)
 
+    # The first and last cells are flown climbing and descending, not at
+    # cruise: their column minutes already cover that time, so the cruise
+    # cell there only adds what the column does not (max of the two, not the
+    # sum, which counted the same minutes twice).
+    column_min: dict[int, float] = {}
+    descent_min = 0.0
     if first is not None and first.column_zones:
         current = _Stretch()
-        current.add(first, first.column_zones, _column_minutes(first.column_zones), "climb", fiki)
+        column_min[first.index] = _column_minutes(first.column_zones)
+        current.add(first, first.column_zones, column_min[first.index], "climb", fiki)
+    if last is not None and last.column_zones:
+        descent_min = _column_minutes(last.column_zones)
+        column_min[last.index] = column_min.get(last.index, 0.0) + descent_min
 
     for i, point in enumerate(ordered):
         if not point.assessed:
@@ -347,9 +360,10 @@ def build_stretches(
         if point.iced_at_cruise:
             if current is None:
                 current = _Stretch()
+            cell = _cell_minutes(ordered, i, total_nm, speed_kt)
             current.add(
                 point, point.cruise_zones,
-                _cell_minutes(ordered, i, total_nm, speed_kt), "cruise", fiki,
+                max(cell - column_min.get(point.index, 0.0), 0.0), "cruise", fiki,
             )
         elif point.warm_at_cruise and current is not None:
             stretches.append(current)
@@ -358,7 +372,7 @@ def build_stretches(
     if last is not None and last.column_zones:
         if current is None:
             current = _Stretch()
-        current.add(last, last.column_zones, _column_minutes(last.column_zones), "descent", fiki)
+        current.add(last, last.column_zones, descent_min, "descent", fiki)
     if current is not None:
         stretches.append(current)
     return stretches

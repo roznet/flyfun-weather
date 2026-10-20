@@ -6492,7 +6492,11 @@ equipage". The aircraft wins over the profile (#777).
   spacing without flagging a layer well above or below the flown level.
 - *Climb/descent at 500 fpm, at the first/last assessed point*: the column from the
   ground to cruise there, converted to minutes. A climb stretch carries into cruise if
-  no warm air intervenes; the descent joins any open stretch.
+  no warm air intervenes; the descent joins any open stretch. The first and last cells
+  are flown climbing/descending, so an iced cruise cell there counts only its excess
+  over the column minutes (max, not sum: the same time is not counted twice).
+  A warm nose blocks the descent escape even without a freezing-rain flag (block code
+  `warm_nose`, distinct from `freezing_rain`).
 - *Escape level clamped below the iced zone*, so a freezing level above an iced cruise
   never reads "escape below a level higher than you are".
 - *One quoted escape level per stretch only if it clears every point's terrain floor*;
