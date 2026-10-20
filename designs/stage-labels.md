@@ -106,6 +106,28 @@ the inconsistencies: open items with no stage, `implementing` with no open
 PR, PRs that reference no issue, and whatever `sync` would change. Run it
 when the lists look wrong, or after a session died mid-flight.
 
+## Plan mode: when gh cannot write (cloud sessions)
+
+A cloud session's `gh` has no valid token; its GitHub writes go through the
+agent's GitHub connector, which a script cannot call. The script still owns the
+decision: when `gh auth status` fails (or `--plan` / `STAGE_LABELS_PLAN=1`), it
+reads labels **without a token** (fine for this public repo, 60 requests/hour),
+applies the same one-stage rules, changes nothing, and exits **3** after
+printing `STAGE_LABELS_MANUAL` and `STAGE_LABELS_PLAN_JSON: [{number, add,
+remove, labels}]`. The agent then sets each item's labels to `labels` (the full
+set) with the connector. If the anonymous read fails too, it exits 3 with the
+change to make by hand. `pr-issues` and `status` are read-only and exit 0;
+`event` refuses plan mode (it only runs in Actions).
+
+- **One call at a time.** Each plan is computed from the labels as they are now.
+  Run, apply, then run the next call; two plans computed before either is
+  applied would overwrite each other's labels.
+- Exit 3 is never success. A skill that cannot apply the plan reports the step
+  as not done in its next message, not in a footnote at the end (#827: the issue
+  stayed `to-start` while its PR was open).
+- `sync` / `status` in plan mode read per PR (commit, comments, files), so a
+  repo-wide run can hit the anonymous rate limit; prefer the targeted commands.
+
 ## Gotchas
 
 - The review action skips itself on a PR that edits `claude-code-review.yml`

@@ -194,3 +194,76 @@ def test_pr_merged_strips_implementing_only_from_issues_left_open(monkeypatch, t
     run_event(monkeypatch, tmp_path, gh, "pull_request", ev)
     assert gh.labels[1] == {"implementing"}  # closed by the merge; untouched
     assert gh.labels[2] == set()
+
+
+# --- plan mode: gh cannot write (cloud sessions) --------------------------------
+
+@pytest.fixture
+def anon(monkeypatch):
+    """Anonymous reads served from a dict of path -> labels; no network."""
+    labels: dict[int, list[str]] = {}
+
+    def fake_get(path, paginate=False):
+        if "/issues/" in path and path.endswith("/labels?per_page=100"):
+            n = int(path.split("/issues/")[1].split("/")[0])
+            if n in labels:
+                return [{"name": l} for l in labels[n]]
+        raise sl.PlanReadError(f"GET {path}: HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(sl, "anonymous_get", fake_get)
+    monkeypatch.setattr(sl, "gh_can_write", lambda: False)
+    monkeypatch.setenv("GH_REPO", "o/r")
+    return labels
+
+
+def test_plan_mode_decides_but_never_writes(anon, capsys):
+    anon[827] = ["to-start", "mac"]
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["issue", "827", "implementing"])
+    assert exc.value.code == sl.EXIT_PLAN
+    out = capsys.readouterr().out
+    assert "STAGE_LABELS_MANUAL" in out
+    plan = json.loads(out.split("STAGE_LABELS_PLAN_JSON: ")[1])
+    # One stage at a time holds in plan mode too: to-start goes, the flag stays.
+    assert plan == [{"number": 827, "add": ["implementing"], "remove": ["to-start"],
+                     "labels": ["implementing", "mac"]}]
+
+
+def test_plan_mode_nothing_to_apply_is_success(anon, capsys):
+    anon[827] = ["implementing"]
+    sl.main(["issue", "827", "implementing"])  # no SystemExit: exit 0
+    assert "already correct" in capsys.readouterr().out
+
+
+def test_plan_mode_failed_read_names_the_change(anon, capsys):
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["pr", "830", "to-land"])  # #830 unknown to the fake: the read fails
+    assert exc.value.code == sl.EXIT_PLAN
+    out = capsys.readouterr().out
+    assert "anonymous read failed" in out and "pr 830 to-land" in out
+
+
+def test_plan_mode_forced_even_when_gh_works(anon, monkeypatch, capsys):
+    monkeypatch.setattr(sl, "gh_can_write", lambda: True)
+    monkeypatch.setenv("STAGE_LABELS_PLAN", "1")
+    anon[5] = []
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["flag", "5", "question"])
+    assert exc.value.code == sl.EXIT_PLAN
+
+
+def test_plan_mode_never_calls_gh_for_writes():
+    gh = sl.Gh("o/r", plan=True)
+    with pytest.raises(AssertionError):
+        gh.api("issues/1/labels", "PUT", {"labels": []})
+
+
+@pytest.mark.parametrize("url,expect", [
+    ("https://github.com/roznet/flyfun-weather", "roznet/flyfun-weather"),
+    ("https://github.com/roznet/flyfun-weather.git\n", "roznet/flyfun-weather"),
+    ("git@github.com:roznet/flyfun-weather.git", "roznet/flyfun-weather"),
+    ("http://local_proxy@127.0.0.1:41000/git/roznet/flyfun-weather", "roznet/flyfun-weather"),
+    ("https://example.com/not-a-repo", None),
+])
+def test_repo_from_remote(url, expect):
+    assert sl.repo_from_remote(url) == expect

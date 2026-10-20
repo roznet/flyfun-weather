@@ -88,7 +88,9 @@ Pick by the Step 0 environment:
   checkouts).
 - Mark the issue as taken: `python3 scripts/ops/stage_labels.py issue <n> implementing`.
   The PR-opened Action does this too; doing it at branch time stops a second session
-  starting the same issue (`designs/stage-labels.md`).
+  starting the same issue (`designs/stage-labels.md`). Exit 3 means `gh` cannot write
+  here: apply the printed plan with the GitHub connector now (CLAUDE.md, "Exit 3"). Do
+  not carry an unapplied label step to the brief; the Action may not run either.
 
 ## Step 3 — Implement
 

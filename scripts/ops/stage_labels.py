@@ -18,7 +18,16 @@ clearing afterwards. Rationale and the full table: designs/stage-labels.md.
 
 Needs `gh` logged in (locally: run with the sandbox disabled, else gh returns
 empty with exit 0). Repo from --repo, else $GH_REPO / $GITHUB_REPOSITORY, else
-the checkout's `gh repo view`. Only this script and the workflows that call it
+the checkout's `gh repo view` (or its `origin` remote when gh cannot run).
+
+**Plan mode, when gh cannot write.** A cloud session has no working `gh` (its
+GitHub writes go through the agent's GitHub connector, which a script cannot
+call). When `gh auth status` fails, or with `--plan` / STAGE_LABELS_PLAN=1, the
+script still decides: it reads the current labels without a token (public repo),
+applies the same one-stage rules, changes nothing, prints the label sets to
+apply and exits 3. The agent applies them with the connector (replace each
+item's labels with the printed set). Exit 3 is never success: if the reads fail
+too, the message says so and names the change to make by hand. Only this script and the workflows that call it
 touch stage labels; skills call it rather than `gh issue edit` so one-stage-
 at-a-time holds everywhere.
 """
@@ -63,13 +72,64 @@ PUSH_GRACE = timedelta(minutes=2)
 
 # --------------------------------------------------------------------------- gh
 
+# Commands that never change labels: plan mode has nothing to report for them.
+READ_ONLY_CMDS = ("pr-issues", "status")
+
+# Exit code for "decided, not applied: apply the printed plan with the connector".
+EXIT_PLAN = 3
+
+
+class PlanReadError(Exception):
+    """Plan mode could not read GitHub without a token either."""
+
+
+def gh_can_write() -> bool:
+    """True when `gh` is installed and authenticated (Actions, a logged-in Mac)."""
+    try:
+        out = subprocess.run(["gh", "auth", "status"], text=True, capture_output=True)
+    except FileNotFoundError:
+        return False
+    return out.returncode == 0
+
+
+def anonymous_get(path: str, paginate: bool = False):
+    """GET a GitHub REST path without a token (enough for a public repo)."""
+    import urllib.error
+    import urllib.request
+
+    url: str | None = f"https://api.github.com/{path.lstrip('/')}"
+    pages = []
+    while url:
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json", "User-Agent": "stage_labels.py",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                pages.append(json.loads(resp.read() or b"null"))
+                link = resp.headers.get("Link") or ""
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise PlanReadError(f"GET {path}: {exc}") from exc
+        nxt = re.search(r'<([^>]+)>;\s*rel="next"', link)
+        url = nxt.group(1) if (paginate and nxt) else None
+    if paginate:
+        return [item for page in pages for item in page]
+    return pages[0]
+
+
 class Gh:
-    def __init__(self, repo: str, dry_run: bool = False, quiet: bool = False):
+    def __init__(self, repo: str, dry_run: bool = False, quiet: bool = False, plan: bool = False):
         self.repo = repo
         self.dry_run = dry_run
         self.quiet = quiet
+        # Plan mode: read anonymously, record writes in ``pending`` instead.
+        self.plan = plan
+        self.pending: list[dict] = []
 
     def api(self, path: str, method: str = "GET", body: dict | None = None, paginate: bool = False):
+        if self.plan:
+            if method != "GET":
+                raise AssertionError(f"plan mode never writes ({method} {path})")
+            return anonymous_get(path if path.startswith("/") else f"repos/{self.repo}/{path}", paginate)
         cmd = ["gh", "api", "-X", method, path if path.startswith("/") else f"repos/{self.repo}/{path}"]
         if body is not None:
             cmd += ["--input", "-"]
@@ -93,23 +153,44 @@ class Gh:
         if labels == before:
             return
         added, removed = sorted(labels - before), sorted(before - labels)
+        if self.plan:
+            self.pending.append({"number": number, "add": added, "remove": removed,
+                                 "labels": sorted(labels)})
+            return
         if not self.quiet:
             print(f"#{number}: +{added} -{removed}" if not self.dry_run else f"#{number}: would +{added} -{removed}")
         if not self.dry_run:
             self.api(f"issues/{number}/labels", "PUT", {"labels": sorted(labels)})
 
 
-def repo_from_env(explicit: str | None) -> str:
+REMOTE_RE = re.compile(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$|/git/([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def repo_from_remote(url: str) -> str | None:
+    """owner/name from an origin URL (github.com, ssh form, or a cloud git proxy)."""
+    m = REMOTE_RE.search(url.strip())
+    if not m:
+        return None
+    owner, name = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+    return f"{owner}/{name}"
+
+
+def repo_from_env(explicit: str | None, use_gh: bool = True) -> str:
     if explicit:
         return explicit
     for key in ("GH_REPO", "GITHUB_REPOSITORY"):
         if os.environ.get(key):
             return os.environ[key]
-    out = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-                         text=True, capture_output=True)
-    if out.returncode != 0 or not out.stdout.strip():
+    if use_gh:
+        out = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+                             text=True, capture_output=True)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    out = subprocess.run(["git", "remote", "get-url", "origin"], text=True, capture_output=True)
+    repo = repo_from_remote(out.stdout) if out.returncode == 0 else None
+    if not repo:
         sys.exit("cannot determine the repo: pass --repo owner/name")
-    return out.stdout.strip()
+    return repo
 
 
 # ------------------------------------------------------------------ mutations
@@ -141,6 +222,12 @@ def set_flag(gh: Gh, number: int, flag: str, on: bool) -> None:
 def ensure_labels(gh: Gh) -> None:
     existing = {l["name"]: l for l in gh.api("labels?per_page=100", paginate=True)}
     for name, (colour, desc) in LABELS.items():
+        if gh.plan:
+            cur = existing.get(name)
+            if cur is None or cur.get("color") != colour or cur.get("description") != desc:
+                gh.pending.append({"label": name, "color": colour, "description": desc,
+                                   "action": "update" if cur else "create"})
+            continue
         if name in existing:
             cur = existing[name]
             if cur.get("color") == colour and cur.get("description") == desc:
@@ -287,7 +374,7 @@ def status(gh: Gh) -> None:
     for p in prs:
         if not referenced_issues(p):
             problems.append(f"PR #{p['number']} references no issue (no close keyword, branch not issue-N-*)")
-    dry = Gh(gh.repo, dry_run=True, quiet=True)
+    dry = Gh(gh.repo, dry_run=True, quiet=True, plan=gh.plan)
     problems += [n for n in sync(dry) if n not in problems]
     print("  none" if not problems else "\n".join(f"  - {p}" for p in problems))
 
@@ -352,9 +439,42 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("event")
     s = sub.add_parser("sync"); s.add_argument("--dry-run", action="store_true")
     sub.add_parser("status")
+    p.add_argument("--plan", action="store_true",
+                   help="decide but change nothing: print the labels to apply and exit 3")
     a = p.parse_args(argv)
 
-    gh = Gh(repo_from_env(a.repo), dry_run=getattr(a, "dry_run", False))
+    plan = a.plan or os.environ.get("STAGE_LABELS_PLAN") == "1" or not gh_can_write()
+    if plan and a.cmd == "event":
+        sys.exit("event runs inside GitHub Actions, where gh is authenticated")
+    gh = Gh(repo_from_env(a.repo, use_gh=not plan), dry_run=getattr(a, "dry_run", False), plan=plan)
+    try:
+        run(gh, a)
+    except PlanReadError as exc:
+        print(f"STAGE_LABELS_MANUAL: gh cannot write here and the anonymous read failed ({exc}).\n"
+              f"Nothing was changed. Make this change by hand, one stage per family "
+              f"(designs/stage-labels.md): {' '.join(sys.argv[1:] if argv is None else argv)}")
+        sys.exit(EXIT_PLAN)
+    if gh.plan and a.cmd not in READ_ONLY_CMDS:
+        report_plan(gh)
+
+
+def report_plan(gh: Gh) -> None:
+    """Print what plan mode decided; exit 3 if anything is left to apply."""
+    if not gh.pending:
+        print("STAGE_LABELS_PLAN: labels already correct, nothing to apply")
+        return
+    print("STAGE_LABELS_MANUAL: gh cannot write here; nothing was changed.")
+    print("Apply with the GitHub connector (set each item's labels to the full list):")
+    for item in gh.pending:
+        if "number" in item:
+            print(f"  #{item['number']}: labels {item['labels']}  (add {item['add']}, remove {item['remove']})")
+        else:
+            print(f"  {item['action']} label {item['label']} (color {item['color']}): {item['description']}")
+    print("STAGE_LABELS_PLAN_JSON: " + json.dumps(gh.pending))
+    sys.exit(EXIT_PLAN)
+
+
+def run(gh: Gh, a: argparse.Namespace) -> None:
     if a.cmd == "labels":
         ensure_labels(gh)
     elif a.cmd == "issue":
