@@ -33,6 +33,18 @@ Because it is a top-level comment, it is **not** a GitHub "Review": `gh pr view 
 
 Never manually re-trigger the bot; pushing is what triggers it.
 
+## Step 0 — Can the review run at all? (before waiting)
+
+The review Action, Tests and the stage-labels Action all trigger on `pull_request`, and **GitHub creates no `pull_request` run while the PR has a merge conflict**: no run, not even a queued one, so waiting for the review would wait for something that will never come (PR #830 waited 26 min on exactly this). Check first:
+
+`gh pr view <num> --json mergeable,mergeStateStatus` (via the GitHub connector: `pull_request_read` `get`, fields `mergeable` / `mergeable_state`).
+
+- `CONFLICTING` / `dirty` → **do not watch.** Name the conflicting files (`git fetch origin main && git merge-tree --write-tree --name-only origin/main HEAD`), tell me the review cannot run until the conflict is resolved, and offer the rebase as in Step 2 (wait for my go-ahead). After the rebase is pushed, start Step 1 from the new head.
+- `UNKNOWN` / `null` → GitHub computes mergeability lazily; query again after ~30 s before deciding.
+- `MERGEABLE` (any `mergeStateStatus` other than `DIRTY`) → go on to Step 1.
+
+Also, if a few minutes into Step 1 there is still **no workflow run for the head commit** (Actions list for the branch, or `gh run list --branch <head>`), re-check mergeability before waiting any longer: `main` may have moved into a conflict after the push.
+
 ## Step 1 — Wait for the review (watch)
 
 "Ready" = a comment by `claude` whose **first line contains "Code Review"** (any markdown decoration) that was created **after the latest commit on the PR branch**. This is a PR-branch-freshness check (so we don't act on a stale review from a previous round) — it is *not* about whether `main` has moved; that's handled separately in Step 2.
@@ -52,14 +64,14 @@ gh pr view <num> --json comments | jq -r --arg t "<head-date>" \
 ```
 Poll about every 60s. **Do not block on a foreground `sleep`** (the harness blocks it) — run the poll as a background Bash loop that exits 0 once the comment is found, or use ScheduleWakeup to re-check.
 
-**Either path:** give up after ~20 min and report that no review appeared (the Action may not have run — tell me so I can look).
+**Either path:** give up after ~20 min and report that no review appeared. Before reporting, re-run the Step 0 check and say which it was: a conflict (name the files), or no run for the head with the PR mergeable (the Action did not fire — tell me so I can look).
 
 ## Step 2 — Check for main divergence (before fixing)
 
 Before making any blocker fixes, check whether the PR branch is behind `main`:
 `gh pr view <num> --json mergeStateStatus,baseRefName` and/or `git fetch origin main && git rev-list --left-right --count origin/main...HEAD`.
 
-If `main` has moved ahead, **warn me and offer to rebase the PR branch onto `main` first** (I prefer `--rebase`) so fixes land on top of current main and don't reintroduce resolved conflicts. **Do not auto-rebase** — wait for my go-ahead, since a rebase can need conflict resolution. If the branch is up to date, proceed.
+If the PR is conflicting, Step 0 has already stopped the watch and asked; this step is for a branch that is behind but still mergeable. If `main` has moved ahead, **warn me and offer to rebase the PR branch onto `main` first** (I prefer `--rebase`) so fixes land on top of current main and don't reintroduce resolved conflicts. **Do not auto-rebase** — wait for my go-ahead, since a rebase can need conflict resolution. If the branch is up to date, proceed.
 
 ## Step 3 — Triage
 
