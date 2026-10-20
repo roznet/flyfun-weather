@@ -479,7 +479,10 @@ class BriefingViewModel(
                 if (!status.active) {
                     val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
                     failure = if (pack != null) {
-                        adoptNewPack(flightId, pack)
+                        // A run that produced nothing new leaves the reader where they are.
+                        if (pack.fetchTimestamp != _selectedPack.value?.fetchTimestamp) {
+                            adoptNewPack(flightId, pack)
+                        }
                         null
                     } else {
                         "The briefing refresh did not produce a briefing. Tap refresh to try again."
@@ -670,7 +673,7 @@ class BriefingViewModel(
 
         /** Refresh banner text, shared by the SSE stream and the status poll. */
         fun refreshProgressLabel(stage: String?, detail: String?, progress: Double?): String {
-            val pct = progress?.takeIf { it > 0 }?.let { "${(it * 100).toInt()}%" }
+            val pct = progress?.let { "${(it * 100).toInt()}%" }
             return listOfNotNull(stage ?: "Refreshing", detail?.takeIf { it.isNotBlank() }, pct)
                 .joinToString(" · ")
         }

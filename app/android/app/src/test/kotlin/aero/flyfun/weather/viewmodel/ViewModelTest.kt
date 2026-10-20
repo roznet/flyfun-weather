@@ -445,14 +445,20 @@ class ViewModelTest {
 
         vm.applyLaunchOptions(openSequence = 1)
         testScope.runCurrent()
-        assertNotNull(vm.selectedPack.value)
+        val shown = vm.selectedPack.value
+        assertNotNull(shown)
         assertTrue(vm.isRefreshing.value)
+        val listPacksAfterLoad = repo.listPacksCalls
 
         testScope.advanceUntilIdle()
         assertEquals(0, repo.refreshPackCalls)
         assertEquals(3, repo.refreshStatusCalls)
         assertFalse(vm.isRefreshing.value)
+        assertNull(vm.refreshProgressText.value)
         assertNull(vm.errorMessage.value)
+        // The run's latest pack is the one already shown: not reloaded under the reader.
+        assertEquals(listPacksAfterLoad, repo.listPacksCalls)
+        assertEquals(shown?.fetchTimestamp, vm.selectedPack.value?.fetchTimestamp)
     }
 
     @Test
@@ -485,6 +491,7 @@ class ViewModelTest {
     ) : BriefingRepository by inner {
         var refreshPackCalls = 0
         var refreshStatusCalls = 0
+        var listPacksCalls = 0
         private var sawActive = false
 
         override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse {
@@ -503,8 +510,10 @@ class ViewModelTest {
         override suspend fun latestPack(flightId: String): PackMetaResponse =
             if (hasPack) inner.latestPack(flightId) else throw ApiError.NotFound
 
-        override suspend fun listPacks(flightId: String): List<PackMetaResponse> =
-            if (hasPack) inner.listPacks(flightId) else emptyList()
+        override suspend fun listPacks(flightId: String): List<PackMetaResponse> {
+            listPacksCalls++
+            return if (hasPack) inner.listPacks(flightId) else emptyList()
+        }
 
         override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> {
             refreshPackCalls++
