@@ -5690,9 +5690,9 @@ def post_live_position(
     The first fix on the ground at the departure is the app's Start (#812):
     it re-times the flight, and the live layer is updated at once
     (``live_tick.run_start_update``, after the response). Other fixes wait
-    for the next tick. A fix on the ground at this flight's departure that
-    is also at the destination of the owner's previous flight, still in its
-    live window, is recorded on that flight too, where it infers the landing
+    for the next tick. The Start fix, when it is also at the destination of
+    the owner's previous flight, still in its live window, is recorded on
+    that flight too, where it infers the landing
     (#812: pilots rarely open the app after landing). 409 when the latest
     pack cannot be read (nothing written).
     """
@@ -5814,7 +5814,9 @@ def post_live_position(
         # After the response: the app gets its confirmation now, and the
         # updated /live a few seconds later.
         background_tasks.add_task(live_tick.run_start_update, flight_id, db_path)
-    if accepted:
+    if started:
+        # On the Start fix only: one fix is enough to land the previous
+        # flight, and later apron fixes would only repeat the lookup.
         try:
             _close_previous_flight(db, flight, accepted, now)
         except Exception:

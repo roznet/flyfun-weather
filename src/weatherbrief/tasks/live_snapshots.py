@@ -393,9 +393,9 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     """``snapshot`` as the fields of a ``GET /live`` response: the stored
     blocks, the change trails as of that tick, and the METAR/TAF rows rebuilt
     from the history (:func:`observations_as_of`)."""
+    from weatherbrief.analysis.flight_progress import progress_events
     from weatherbrief.models.live import LiveChanges
     from weatherbrief.tasks.artifacts import load_briefing
-    from weatherbrief.analysis.flight_progress import progress_events
     from weatherbrief.tasks.live_layer import flight_progress, load_live_history
     from weatherbrief.tasks.live_trail import route_context, trails_for_pack
 
