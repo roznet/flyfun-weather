@@ -23,24 +23,33 @@ minute.
    or a security hole the moment it's live.
 
 When you pause, **never run `/process-review` or anything else yourself.** Flag the
-PR (`python3 scripts/ops/stage_labels.py flag <n> question`), report what you found
+PR (`python3 scripts/ops/stage_labels.py flag <n> question`; in the cloud add
+`--repo roznet/flyfun-weather`), report what you found
 and offer the options (fix on the branch, land anyway and fix on main, send it back
 through `/process-review`), with your recommendation. The user decides.
 
 Run heavy jobs (xcodebuild, gradle, full pytest) one at a time, never concurrently.
 
+## Inputs
+
+- `<pr-number>` — required; if missing, use the PR for the current branch, else ask
+  and stop.
+
 ## Step 0 — Know where you are
 
-Detect, don't assume:
+Detect, don't assume. The gate is about **what this machine can verify**, not
+where the checkout lives:
 
-- **Cloud (Claude Code on the web)** if `CLAUDE_CODE_REMOTE=true`, or, as a fallback,
-  the checkout is not under `~/Developer/public/flyfun-weather/` and has no sibling
-  `main/` worktree. Otherwise **Mac**.
+- **Cloud (Claude Code on the web)** if `CLAUDE_CODE_REMOTE=true`.
+- Otherwise, **Mac** only if it is macOS with Xcode (`uname` is `Darwin` and
+  `command -v xcodebuild` succeeds). Any other machine can't run Step 2 either, so
+  treat it like the cloud for the gate, whatever folder the checkout is in.
 
 **On the Mac:** everything below applies as written. `gh` must run with the sandbox
 disabled, otherwise it returns empty with exit 0.
 
-**In the cloud: the gate.** Before Step 1, list the PR's changed files and labels.
+**In the cloud (or any machine that isn't the Mac): the gate.** Before Step 1,
+list the PR's changed files and labels.
 **Stop** if any of these hold:
 - a changed path under `app/` (`app/flyfun-weather/` is iOS, `app/android/` is Android);
 - the PR carries the `mac` label (set automatically for `app/`, by hand for GRIB or
@@ -54,7 +63,8 @@ Mac (which paths or which label) and that the server side looked ready if it did
 and that `/land-pr <n>` on the Mac finishes it. The user can't waive this from the
 cloud; on the Mac it's an ordinary run.
 
-**Cloud mechanics** when the gate passes:
+**Cloud mechanics** when the gate passes. They apply to **every** `gh` command and
+`stage_labels.py` call below, including the pause note, Step 1 and Step 4:
 - No `gh`: use the GitHub MCP tools (`pull_request_read` for state, files, checks
   and comments, `issue_read`, `merge_pull_request`, `issue_write`). If they're
   missing, stop and say so rather than guessing.
@@ -64,18 +74,16 @@ cloud; on the Mac it's an ordinary run.
 - The container doesn't outlive the session: everything ends up pushed or in an
   issue, nothing left local.
 
-## Inputs
-
-- `<pr-number>` — required; if missing, use the PR for the current branch, else ask
-  and stop.
-
 ## Step 1 — Pre-merge checks
 
 Mechanical checks first; only the cases marked **pause** stop the merge:
 
 1. **State:** open, not draft, `mergeStateStatus` not `DIRTY` (conflicts).
    `gh pr view <n> --json state,isDraft,mergeStateStatus,headRefOid,baseRefName,body,commits`
-2. **CI on the head commit:** `gh pr checks <n>`. Pending → wait for it (poll in the
+   (cloud: `pull_request_read` `get`; `mergeable_state` `dirty` = conflicts).
+2. **CI on the head commit:** `gh pr checks <n>` (cloud: `get_check_runs`). A
+   workflow skipped by its own `paths-ignore` (e.g. `tests.yml` on a docs- or
+   skills-only PR) isn't missing CI. Pending → wait for it (poll in the
    background, ~10 min max), never call a pending run green. A failing check → **pause**
    only if it's a build/test failure in the PR's own code; a flaky or unrelated job
    can be noted and landed.
@@ -86,7 +94,7 @@ Mechanical checks first; only the cases marked **pause** stop the merge:
    "issue (needs design)" or "skip (why)". **Pause** only for the narrow case above,
    data loss or security on going live. Regular bugs are fixed on main.
 5. **Close keyword.** For each linked issue, check the author
-   (`gh issue view <N> --json author`). Issues filed by the user (`roznet`) → `Closes #N`.
+   (`gh issue view <N> --json author`; cloud: `issue_read`). Issues filed by the user (`roznet`) → `Closes #N`.
    Issues from an **outside reporter** → must be `Addresses #N`, in the PR body
    **and** every commit body, because GitHub acts on the commit:
    `git log origin/<base>..<head> --format=%B | grep -inE "close[sd]?|fixe?s?|resolve[sd]?"`.
@@ -122,13 +130,15 @@ main, not the PR). If no UI test covers the change, say so.
 
 ## Step 3 — Merge
 
-`gh pr merge <n> --rebase --delete-branch`. If the rebase doesn't apply, fall back
-to `--merge` and say so. In the cloud: `merge_pull_request` with `rebase`
-and the head SHA you checked. The cloud **can't delete the branch**: its git proxy
-refuses ref deletion and the GitHub tools have no delete call. Leave it and list it
-under "Left open" in the summary, unless the repo's "Automatically delete head
-branches" setting already removed it. Confirm that the linked issues closed (or deliberately did
-not, for `Addresses`).
+- **Mac:** `gh pr merge <n> --rebase --delete-branch`. If the rebase doesn't apply,
+  fall back to `--merge` and say so.
+- **Cloud:** `merge_pull_request` with `rebase` and the head SHA you checked (same
+  fallback). The cloud **can't delete the branch**: its git proxy refuses ref
+  deletion and the GitHub tools have no delete call. Leave it and list it under
+  "Left open" in the summary, unless the repo's "Automatically delete head
+  branches" setting already removed it.
+- Either way, confirm that the linked issues closed (or deliberately did not, for
+  `Addresses`).
 
 ## Step 4 — Finish it on main
 
@@ -139,7 +149,8 @@ not, for `Addresses`).
   brief. Anything that genuinely needs design thought gets a
   **detailed issue** (root cause, call sites, acceptance criteria) for an
   implementation agent, not an in-session fix. Such an issue is born ready:
-  `gh issue create --label to-start …` (a vaguer follow-up gets no label and the
+  `gh issue create --label to-start …` (cloud: `issue_write` with
+  `labels: ["to-start"]`; a vaguer follow-up gets no label and the
   Action marks it `to-plan`; `designs/stage-labels.md`).
 - Run the targeted tests for what you touched (web: `npx tsc --noEmit` / vitest in
   `web/`; Python: targeted pytest). **Swift / Kotlin:** build, unit tests, and the
