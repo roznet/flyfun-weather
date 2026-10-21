@@ -635,6 +635,9 @@ def compute_outlook(
 ) -> dict[str, Any]:
     """Pure core: grade, aggregate and pair. See module docstring.
 
+    ``slot_data`` is read-only: its payloads can be shared with other
+    requests through the slot LRU in ``map_queries.load_forecast_slots``.
+
     With ``map_base_url``, the result, each best slot and each pair's
     outbound slot carry a ``map_url`` to the forecast map at that time.
     """

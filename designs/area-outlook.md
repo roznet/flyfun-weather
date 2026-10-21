@@ -37,7 +37,7 @@ One call may want up to 35 slots (7 days × 5 hours). Looping `load_forecast_slo
 
 - Entries are matched on the **absolute** hour they hold (`computed_at` date + relative day, confirmed by the payload's `forecast_time`), so after midnight yesterday's `day=4` serves today's D+3. Only the new horizon day is uncovered.
 - An entry older than the newest snapshots is **served and reported** (`stale_slots`): the previous model run beats recomputation. Uncovered slots past the live budget go to `missing_slots`.
-- Parsed blobs (~1.4 MB JSON each) are projected to what grading reads (`project_slot`) and kept in a per-process LRU of 20 slots keyed by `(projection version, cache_key, computed_at)`. A generation is immutable, so repeat calls read no blobs (2 queries). Bump `SLOT_PROJECTION_VERSION` when the projection changes.
+- Parsed blobs (~1.4 MB JSON each) are projected to what grading reads (`project_slot`) and kept in a per-process LRU sized to the map grid (`len(day_hour_pairs())`, so a full-horizon call never evicts itself), keyed by `(projection version, cache_key, computed_at)` and guarded by a lock (sync endpoints share it across the threadpool). A generation is immutable, so repeat calls read no blobs (2 queries). Entries are shared between requests: `compute_outlook` treats `slot_data` as read-only, pinned by a test. Bump `SLOT_PROJECTION_VERSION` when the projection changes.
 - `tests/test_area_outlook.py` counts statements on SQLite: 3 for an all-cached call, 2 on a repeat.
 - No new index needed. The live path's `MAX(model_init_time)` per model is the costliest step and is now capped at one slot per call.
 

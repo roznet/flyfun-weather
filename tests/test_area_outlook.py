@@ -646,3 +646,54 @@ def test_projection_keeps_grading_identical():
     for rules in ("vfr", "ifr"):
         for mode in ("worst", "majority"):
             assert _grade(full, rules=rules, mode=mode) == _grade(slim, rules=rules, mode=mode)
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: shared-LRU safety
+# ---------------------------------------------------------------------------
+
+
+def test_compute_outlook_does_not_mutate_shared_slot_data():
+    import copy
+
+    slots = [(0, 9), (0, 15)]
+    shared = ao.project_slot(_slot([_entry(i) for i in COORDS]))
+    data = {s: shared for s in slots}
+    before = copy.deepcopy(shared)
+    for rules in ("vfr", "ifr"):
+        q = _radius_query(slots, destination="ZZDE")
+        q.rules = rules
+        ao.compute_outlook(q, data, _times(slots), map_base_url="https://wx.example")
+    assert shared == before
+
+
+def test_slot_lru_holds_whole_grid_and_is_thread_safe():
+    import threading
+
+    from weatherbrief.tasks import map_queries
+    from weatherbrief.tasks.forecast_grid import day_hour_pairs
+
+    map_queries._SLOT_LRU.clear()
+    n = len(day_hour_pairs())
+    for i in range(n):
+        map_queries._lru_put(("p", f"k{i}", "t"), {"i": i})
+    assert len(map_queries._SLOT_LRU) == n and map_queries._lru_get(("p", "k0", "t")) == {"i": 0}
+
+    errors: list[BaseException] = []
+
+    def hammer(offset):
+        try:
+            for i in range(2000):
+                k = ("p", f"k{(i + offset) % (n + 5)}", "t")
+                if map_queries._lru_get(k) is None:
+                    map_queries._lru_put(k, {"i": i})
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=hammer, args=(o,)) for o in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and len(map_queries._SLOT_LRU) <= n
+    map_queries._SLOT_LRU.clear()
