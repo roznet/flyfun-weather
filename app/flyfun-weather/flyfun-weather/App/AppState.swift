@@ -520,7 +520,8 @@ final class AppState {
     }
 
     /// Read the forecast map's `fc.*` share-state keys from a `/maps.html` query.
-    /// `fc.day`/`fc.hour` stay relative integers so existing share links resolve.
+    /// `fc.day`/`fc.hour` stay relative integers so existing share links resolve;
+    /// `fc.date` (#840), when well-formed, is the absolute date that wins over `fc.day`.
     /// A link to a web tab iOS doesn't have (`now`, `synoptic`, `climatology`)
     /// still lands here, positioned on that tab's own `*.view` so the recipient
     /// sees the sender's area; `fc.view` is the fallback.
@@ -543,7 +544,8 @@ final class AppState {
             model: value("fc.model"),
             metric: value("fc.metric"),
             airport: value("fc.apt"),
-            view: view
+            view: view,
+            date: value("fc.date").flatMap { ForecastMapViewModel.isoDayStart($0) != nil ? $0 : nil }
         )
     }
 

@@ -206,6 +206,42 @@ struct ForecastMapTests {
         #expect(target == .forecastMap(MapDeepLink(day: 3, hour: 15, model: "majority", metric: "crosswind_kt", airport: "LFMD")))
     }
 
+    /// `fc.date` (#840) is carried through; a malformed one is dropped so `fc.day` applies.
+    @Test func mapsLinkCarriesAbsoluteDate() {
+        let url = URL(string: "https://weather.flyfun.aero/maps.html?fc.day=3&fc.hour=15&fc.date=2026-10-24")!
+        #expect(AppState.navigationTarget(for: url)
+                == .forecastMap(MapDeepLink(day: 3, hour: 15, date: "2026-10-24")))
+        for bad in ["2026-02-30", "2026-10-2", "tomorrow"] {
+            let u = URL(string: "https://weather.flyfun.aero/maps.html?fc.day=3&fc.date=\(bad)")!
+            guard case .forecastMap(let dl) = AppState.navigationTarget(for: u) else {
+                Issue.record("expected forecastMap"); return
+            }
+            #expect(dl.date == nil, "\(bad)")
+            #expect(dl.day == 3)
+        }
+    }
+
+    /// Same precedence and fallback rules as the web's `resolveLinkedDate`.
+    @Test func linkedDateResolvesAgainstOfferedDays() {
+        // Late in the UTC day, so a local-time slip would show up as the wrong date.
+        let today = ISO8601DateFormatter().date(from: "2026-10-21T23:30:00Z")!
+        let all = Array(0...6)
+        func resolve(_ d: String, _ offered: [Int] = all, _ now: Date = today) -> [String] {
+            guard let r = ForecastMapViewModel.resolveLinkedDate(d, offered: offered, today: now) else { return ["nil"] }
+            return ["\(r.day)", r.fallback.map { "\($0)" } ?? "exact"]
+        }
+        #expect(resolve("2026-10-24") == ["3", "exact"])
+        // Made Wednesday for Saturday; opened Thursday it is still Saturday.
+        let thursday = ISO8601DateFormatter().date(from: "2026-10-22T08:00:00Z")!
+        #expect(resolve("2026-10-24", all, thursday) == ["2", "exact"])
+        #expect(resolve("2026-10-19") == ["0", "past"])
+        #expect(resolve("2026-10-30") == ["6", "beyond"])
+        #expect(resolve("2026-10-24", [0, 1, 2, 5, 6]) == ["2", "unavailable"])
+        #expect(resolve("2026-10-25", [0, 1, 2, 5, 6]) == ["5", "unavailable"])
+        #expect(resolve("2026-02-30") == ["nil"])
+        #expect(resolve("2026-10-24", []) == ["nil"])
+    }
+
     @Test func bareMapsLinkIsEmptyDeepLink() {
         let target = AppState.navigationTarget(for: URL(string: "https://weather.flyfun.aero/maps.html")!)
         guard case .forecastMap(let dl) = target else { Issue.record("expected forecastMap"); return }
@@ -274,6 +310,34 @@ struct ForecastMapTests {
         #expect(pinned.selectedHour == 18)
     }
 
+    /// A linked `fc.date` wins over `fc.day` once the grid loads, and an
+    /// out-of-horizon one falls back visibly (#840). The mock grid fails, so the
+    /// VM uses its D+0…D+3 fallback.
+    @MainActor
+    @Test func linkedDateWinsOverDayAndFallsBackVisibly() async throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func iso(_ offset: Int) -> String {
+            let d = utc.date(byAdding: .day, value: offset, to: utc.startOfDay(for: Date()))!
+            let c = utc.dateComponents([.year, .month, .day], from: d)
+            return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+        }
+        let repo = MockBriefingRepository()
+        let inRange = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 0, date: iso(2)))
+        let beyond = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 1, date: iso(5)))
+        let noDate = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 1))
+        inRange.start(); beyond.start(); noDate.start()
+        for _ in 0..<200 where !(inRange.didLoadOnce && beyond.didLoadOnce && noDate.didLoadOnce) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(inRange.selectedDay == 2)
+        #expect(inRange.linkedDateNotice == nil)
+        #expect(beyond.selectedDay == 3)
+        #expect(beyond.linkedDateNotice?.contains("beyond the forecast range") == true)
+        #expect(noDate.selectedDay == 1)
+        #expect(noDate.linkedDateNotice == nil)
+    }
+
     @MainActor
     @Test func viewModelAppliesViewportAtInit() {
         let vm = ForecastMapViewModel(
@@ -296,7 +360,7 @@ struct ForecastMapTests {
         let store = PendingNavigationStore.testStore(#function)
         defer { PendingNavigationStore.removeTestStore(#function) }
         let dl = MapDeepLink(day: 2, hour: 6, model: "gfs", metric: "ceiling_ft", airport: "EGLL",
-                             view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7))
+                             view: MapViewport(lat: 51.5, lon: -0.12, zoom: 7), date: "2026-10-23")
         store.set(.forecastMap(dl))
         #expect(store.take() == .forecastMap(dl))
         #expect(store.take() == nil, "take() consumes the target")

@@ -54,6 +54,9 @@ final class ForecastMapViewModel {
     private(set) var payloadRevision = 0
     private(set) var isLoading = false
     private(set) var loadError: String?
+    /// Set when a linked `fc.date` couldn't be shown as is (#840): says which
+    /// day is shown instead. Cleared when the pilot picks a day.
+    private(set) var linkedDateNotice: String?
     /// True once the grid + first payload have loaded (drives the placeholder).
     private(set) var didLoadOnce = false
 
@@ -79,6 +82,8 @@ final class ForecastMapViewModel {
     /// The link pinned `fc.hour`. Without it the cold-open smart hour still
     /// applies, as on the web (a view- or metric-only link keeps it).
     private var hourFromLink = false
+    /// A linked absolute date (`fc.date`), resolved against the grid once it loads.
+    private var linkedDate: String?
     /// Set once the user pans/zooms the map, so a late-resolving cold-open target
     /// never yanks the camera out from under them.
     private var userDidInteract = false
@@ -97,6 +102,7 @@ final class ForecastMapViewModel {
             hasExplicitLocation = true
             if let d = deepLink.day { selectedDay = d }
             if let h = deepLink.hour { selectedHour = h; hourFromLink = true }
+            linkedDate = deepLink.date
             if let m = deepLink.model { mode = ForecastModelMode(token: m) }
             if let mt = deepLink.metric { metric = mt }
             pendingOpenIcao = deepLink.airport
@@ -125,7 +131,9 @@ final class ForecastMapViewModel {
             Self.logger.warning("forecast days failed: \(error.localizedDescription)")
             days = Self.fallbackDays()
         }
-        // 2. Snap the selection into the real grid (deep link may be off-grid).
+        // 2. A linked absolute date wins over `fc.day` (#840); then snap the
+        //    selection into the real grid (deep link may be off-grid).
+        applyLinkedDate()
         snapSelectionIntoGrid(smartDefaultHour: !hourFromLink)
         // 3. Cold-open centring target (non-blocking, non-fatal).
         if !hasExplicitLocation {
@@ -150,6 +158,7 @@ final class ForecastMapViewModel {
     func selectDay(_ day: Int) {
         guard day != selectedDay else { return }
         selectedDay = day
+        linkedDateNotice = nil
         selectedHour = Self.snapHour(selectedHour, into: hours(forDay: day))
         snapModeIntoDay()
         Task { await loadSlot(day: selectedDay, hour: selectedHour, moveCamera: false) }
@@ -281,6 +290,84 @@ final class ForecastMapViewModel {
     /// read as agreement, so the picker disables (not hides) absent ones.
     func modelAvailable(_ model: String, day: Int) -> Bool {
         models(forDay: day).contains(model)
+    }
+
+    // MARK: - Linked date (fc.date, #840)
+
+    /// Why a linked date could not be shown as is.
+    nonisolated enum LinkedDateFallback: Equatable, Sendable {
+        case past, beyond, unavailable
+    }
+
+    /// Resolve a linked `YYYY-MM-DD` to a relative day against the offered
+    /// (available) days. Not offered → nearest offered day, never silently: a
+    /// past date shows the first offered day (today), one beyond the horizon
+    /// the last, one inside it but not fetched yet the nearest (ties to the
+    /// earlier). Nil for a malformed date or an empty grid (`fc.day` applies).
+    /// Same rules as the web's `resolveLinkedDate` (`forecast-url.ts`).
+    nonisolated static func resolveLinkedDate(
+        _ date: String, offered: [Int], today: Date
+    ) -> (day: Int, fallback: LinkedDateFallback?)? {
+        guard let linked = isoDayStart(date), !offered.isEmpty else { return nil }
+        let todayStart = utcCalendar.startOfDay(for: today)
+        let day = Int((linked.timeIntervalSince(todayStart) / 86_400).rounded())
+        let sorted = offered.sorted()
+        if sorted.contains(day) { return (day, nil) }
+        if day < sorted[0] { return (sorted[0], .past) }
+        if day > sorted[sorted.count - 1] { return (sorted[sorted.count - 1], .beyond) }
+        let nearest = sorted.reduce(sorted[0]) { abs($1 - day) < abs($0 - day) ? $1 : $0 }
+        return (nearest, .unavailable)
+    }
+
+    /// UTC midnight of a strict `YYYY-MM-DD`, or nil (bad shape, or a date like
+    /// 2026-02-30 that the calendar would roll forward).
+    nonisolated static func isoDayStart(_ s: String) -> Date? {
+        let parts = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else { return nil }
+        let comps = DateComponents(year: y, month: m, day: d)
+        guard let date = utcCalendar.date(from: comps) else { return nil }
+        let back = utcCalendar.dateComponents([.year, .month, .day], from: date)
+        guard back.year == y, back.month == m, back.day == d else { return nil }
+        return date
+    }
+
+    private nonisolated static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }()
+
+    private func applyLinkedDate() {
+        guard let linked = linkedDate else { return }
+        linkedDate = nil
+        let offered = days.filter(\.available).map(\.day)
+        guard let resolved = Self.resolveLinkedDate(linked, offered: offered, today: Date()) else { return }
+        selectedDay = resolved.day
+        if let fallback = resolved.fallback {
+            linkedDateNotice = Self.linkedDateNotice(linked: linked, shownDay: resolved.day, fallback: fallback)
+        }
+    }
+
+    /// "This link was for Sat 25 Oct, which has passed: showing Tue 28 Oct instead."
+    nonisolated static func linkedDateNotice(
+        linked: String, shownDay: Int, fallback: LinkedDateFallback, today: Date = Date()
+    ) -> String {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.dateFormat = "EEE d MMM"
+        let linkedLabel = isoDayStart(linked).map(fmt.string(from:)) ?? linked
+        let shown = utcCalendar.date(byAdding: .day, value: shownDay, to: utcCalendar.startOfDay(for: today))
+        let shownLabel = shown.map(fmt.string(from:)) ?? "D+\(shownDay)"
+        switch fallback {
+        case .past:
+            return "This link was for \(linkedLabel), which has passed: showing \(shownLabel) instead."
+        case .beyond:
+            return "This link was for \(linkedLabel), beyond the forecast range: showing \(shownLabel), the last forecast day."
+        case .unavailable:
+            return "This link was for \(linkedLabel), not forecast yet: showing \(shownLabel) instead."
+        }
     }
 
     private func snapSelectionIntoGrid(smartDefaultHour: Bool) {

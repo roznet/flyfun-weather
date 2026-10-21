@@ -34,7 +34,7 @@ describe('maps page URL schemas', () => {
   });
 
   it('keep the keys the iOS app reads by name', () => {
-    for (const k of ['fc.day', 'fc.hour', 'fc.model', 'fc.metric', 'fc.apt']) {
+    for (const k of ['fc.day', 'fc.hour', 'fc.date', 'fc.model', 'fc.metric', 'fc.apt']) {
       expect(Object.keys(FORECAST_URL_SCHEMA)).toContain(k);
     }
     for (const k of ['hist.date', 'hist.time', 'hist.lead', 'hist.source', 'hist.metric', 'hist.apt']) {

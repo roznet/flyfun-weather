@@ -60,9 +60,13 @@ nonisolated struct MapDeepLink: Equatable, Sendable {
     var airport: String?
     /// The shared map position (`fc.view`, or the linked tab's own `*.view`).
     var view: MapViewport?
+    /// Absolute UTC date `YYYY-MM-DD` (`fc.date`, #840). Wins over the relative
+    /// `day` so a link opened later still shows the same calendar date.
+    var date: String?
 
     var isEmpty: Bool {
         day == nil && hour == nil && model == nil && metric == nil && airport == nil && view == nil
+            && date == nil
     }
 }
 
@@ -231,6 +235,7 @@ struct PendingNavigationStore {
         if let mt = dl.metric { parts.append("metric=\(mt)") }
         if let a = dl.airport { parts.append("apt=\(a)") }
         if let v = dl.view { parts.append("view=\(v.token)") }
+        if let dt = dl.date { parts.append("date=\(dt)") }
         return parts.joined(separator: "&")
     }
 
@@ -279,6 +284,7 @@ struct PendingNavigationStore {
             case "metric": dl.metric = value
             case "apt": dl.airport = value
             case "view": dl.view = MapViewport(token: value)
+            case "date": dl.date = value
             default: break
             }
         }

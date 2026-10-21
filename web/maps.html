@@ -45,6 +45,13 @@
       border-radius: 4px;
     }
 
+    .forecast-date-notice {
+      font-size: 0.75rem; color: var(--text);
+      padding: 0.25rem 0.6rem; border: 1px solid #f59e0b; background: rgba(245, 158, 11, 0.12);
+      border-radius: 4px;
+    }
+    .forecast-date-notice[hidden] { display: none; }
+
     #map-container, #map-container-historical, #map-container-now {
       width: 100%; height: calc(100vh - 280px); min-height: 400px;
       border-radius: 8px; border: 1px solid var(--border); overflow: hidden;
@@ -518,6 +525,8 @@
         <label>Hour</label>
         <div class="btn-group" id="hour-picker"></div>
         <span class="forecast-datetime" id="forecast-datetime"></span>
+        <!-- A linked fc.date the grid can't show (#840): says which day is shown instead. -->
+        <span class="forecast-date-notice" id="forecast-date-notice" role="status" hidden></span>
         <label>Model</label>
         <div class="btn-group" id="model-picker">
           <button class="btn-toggle active" data-model="worst">Worst</button>

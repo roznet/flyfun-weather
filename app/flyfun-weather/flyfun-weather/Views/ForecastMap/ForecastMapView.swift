@@ -161,6 +161,17 @@ struct ForecastMapView: View {
                 }
                 Spacer()
             }
+            // A linked date the grid can't show (#840): say which day is shown instead.
+            if let notice = viewModel.linkedDateNotice {
+                Label(notice, systemImage: "calendar.badge.exclamationmark")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(2)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("mapLinkedDateNotice")
+            }
         }
         .padding(.horizontal, Theme.spacingM)
         .padding(.top, isCompact ? Theme.spacingM : Theme.spacingS)
