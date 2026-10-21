@@ -76,3 +76,26 @@ def test_only_both_off_profiles_lose_the_card(conn):
         # Nothing else moves; the old keys stay, inert.
         after["advisories"]["enabled"].pop("aircraft_icing")
         assert after == before, pid
+
+
+@pytest.mark.parametrize(("enabled", "expected"), [
+    ({"icing_escape": False}, False),                       # fiki default off
+    ({"icing_escape": False, "fiki_icing": False}, False),
+    ({"icing_escape": False, "fiki_icing": True}, None),    # FIKI card was on
+    ({"icing_escape": True}, None),
+    ({"cloud_top": False}, None),                           # icing_escape default on
+    ({"icing_escape": False, "aircraft_icing": True}, True),  # already decided
+])
+def test_settings_migration(enabled, expected):
+    settings = {"advisories": {"enabled": dict(enabled)}}
+    new, changed = _load_migration().migrate_icing_enabled(settings)
+    assert new["advisories"]["enabled"].get("aircraft_icing") == expected
+    assert changed == (expected is False and "aircraft_icing" not in enabled)
+    # Old keys are kept, inert.
+    for k, v in enabled.items():
+        assert new["advisories"]["enabled"][k] == v
+
+
+def test_settings_migration_leaves_uncustomized_profiles():
+    for settings in ({}, {"advisories": {}}, {"advisories": {"enabled": {}}}):
+        assert _load_migration().migrate_icing_enabled(settings) == (settings, False)

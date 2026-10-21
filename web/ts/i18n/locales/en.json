@@ -436,7 +436,7 @@
   "advisories.reason.no_escape_unknown": "Escape unknown — freezing level or terrain not known here",
   "advisories.reason.tight_margin": "Ice-free descent is marginal",
   "advisories.reason.warm_escape": "Above-freezing air below — you have an out",
-  "advisories.reason.sld": "SLD — outside FIKI certification",
+  "advisories.reason.sld": "SLD — supercooled large drops",
   "advisories.reason.severe_icing": "Severe icing — beyond aircraft capability",
   "advisories.reason.thick_transit": "Thick layer — long exposure to transit",
   "advisories.reason.icing_at_cruise": "Ice at cruise — you would be loitering in it",

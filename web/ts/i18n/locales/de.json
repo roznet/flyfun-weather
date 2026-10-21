@@ -365,7 +365,7 @@
   "advisories.reason.no_escape_unknown": "Ausweg unbekannt — Nullgradgrenze oder Gelände hier unbekannt",
   "advisories.reason.tight_margin": "Eisfreier Sinkflug knapp",
   "advisories.reason.warm_escape": "Wärmere Luft darunter — ein Ausweg besteht",
-  "advisories.reason.sld": "SLD — außerhalb der FIKI-Zulassung",
+  "advisories.reason.sld": "SLD — unterkühlte große Tropfen",
   "advisories.reason.severe_icing": "Starke Vereisung — jenseits der Flugzeugfähigkeit",
   "advisories.reason.thick_transit": "Dicke Schicht — lange Durchflugexposition",
   "advisories.reason.icing_at_cruise": "Vereisung in Reiseflughöhe — Sie würden darin verweilen",

@@ -9,6 +9,8 @@ from weatherbrief.analysis.advisories.altitude_table import (
     diff_altitude_rows,
     row_for_altitude,
 )
+from weatherbrief.analysis.advisories.aircraft_icing import ADVISORY_ID as AIRCRAFT_ICING_ID
+from weatherbrief.analysis.advisories.aircraft_icing import ESCAPE_MITIGATION
 from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.analysis.sounding.convective import convective_cross_check
@@ -976,9 +978,9 @@ def _format_icing_escape_context(manifest: RouteAdvisoriesManifest) -> str | Non
     ALTITUDE mitigations) dropped it from the context entirely.
     """
     for result in manifest.advisories:
-        if result.advisory_id != "aircraft_icing":
+        if result.advisory_id != AIRCRAFT_ICING_ID:
             continue
-        escapes = [m for m in result.aggregate_mitigations if m.addresses == "icing_escape"]
+        escapes = [m for m in result.aggregate_mitigations if m.addresses == ESCAPE_MITIGATION]
         if escapes:
             return "\n".join(
                 ["Icing escape (contingency if iced, not a planned altitude):"]

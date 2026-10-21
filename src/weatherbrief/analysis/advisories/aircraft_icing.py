@@ -60,6 +60,7 @@ from weatherbrief.analysis.advisories._helpers import (
     hazardous_icing_zones,
     max_terrain_near_point,
     summarize_evidence,
+    terrain_at_distance,
     to_mitigation_profile,
 )
 from weatherbrief.analysis.advisories.registry import register
@@ -82,6 +83,9 @@ from weatherbrief.models import (
 )
 
 ADVISORY_ID = "aircraft_icing"
+# ``Mitigation.addresses`` of the escape level. Keeps the retired card's id so
+# clients keyed on it still find it; the digest matches on this constant.
+ESCAPE_MITIGATION = "icing_escape"
 
 # §8a: the escape level sits this far below the freezing level / icing cloud base.
 ESCAPE_MARGIN_FT = 500
@@ -223,10 +227,12 @@ def icing_picture(
         cruise_zones = tuple(
             z for z in zones if z.base_ft <= cruise + band and z.top_ft >= cruise - band
         )
-        # Clipped to the column a climb or descent here flies through.
+        # Clipped to the column a climb or descent here flies through: from
+        # the ground at this point (sea level when terrain is unknown) to cruise.
+        ground = terrain_at_distance(ctx.elevation, dist) or 0.0
         column_zones = tuple(
-            z.model_copy(update={"base_ft": max(z.base_ft, 0.0), "top_ft": min(z.top_ft, cruise)})
-            for z in zones if z.base_ft < cruise and z.top_ft > 0
+            z.model_copy(update={"base_ft": max(z.base_ft, ground), "top_ft": min(z.top_ft, cruise)})
+            for z in zones if z.base_ft < cruise and z.top_ft > ground
         )
         fz = sounding.indices.freezing_level_ft if sounding.indices else None
         warm = not cruise_zones and fz is not None and cruise < fz
@@ -292,7 +298,7 @@ class _Stretch:
         self.minutes += minutes
         if all(p.index != point.index for p in self.points):
             self.points.append(point)
-        self.zones.extend(zones)
+        self.zones.extend(z for z in zones if z not in self.zones)
         if phase not in self.phases:
             self.phases.append(phase)
         self.escape = self.escape and point.has_escape(fiki)
@@ -599,7 +605,7 @@ def _mitigations(
             detail = adv_t("aircraft_icing.mitigation.escape_up", loc, alt=alt)
     if alt is not None:
         out.append(Mitigation(
-            kind=MitigationKind.ALTITUDE, addresses="icing_escape", detail=detail,
+            kind=MitigationKind.ALTITUDE, addresses=ESCAPE_MITIGATION, detail=detail,
             # Escaping ends the exposure but does not undo the ice already on.
             mitigated_status=AdvisoryStatus.AMBER, altitude_ft=alt,
         ))

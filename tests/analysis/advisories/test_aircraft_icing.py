@@ -12,7 +12,6 @@ from weatherbrief.analysis.advisories.aircraft_icing import (
     grade_aircraft_icing_model,
     resolve_aircraft_icing_params,
 )
-from weatherbrief.analysis.advisories.icing_settings_migration import migrate_icing_enabled
 from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
 from weatherbrief.models import (
     AdvisoryStatus,
@@ -263,32 +262,6 @@ def test_retired_cards_are_never_evaluated():
     assert [r.advisory_id for r in results] == ["aircraft_icing"]
 
 
-# --- settings migration ----------------------------------------------------
-
-
-@pytest.mark.parametrize(("enabled", "expected"), [
-    ({"icing_escape": False}, False),                       # fiki default off
-    ({"icing_escape": False, "fiki_icing": False}, False),
-    ({"icing_escape": False, "fiki_icing": True}, None),    # FIKI card was on
-    ({"icing_escape": True}, None),
-    ({"cloud_top": False}, None),                           # icing_escape default on
-    ({"icing_escape": False, "aircraft_icing": True}, True),  # already decided
-])
-def test_settings_migration(enabled, expected):
-    settings = {"advisories": {"enabled": dict(enabled)}}
-    new, changed = migrate_icing_enabled(settings)
-    assert new["advisories"]["enabled"].get("aircraft_icing") == expected
-    assert changed == (expected is False and "aircraft_icing" not in enabled)
-    # Old keys are kept, inert.
-    for k, v in enabled.items():
-        assert new["advisories"]["enabled"][k] == v
-
-
-def test_settings_migration_leaves_uncustomized_profiles():
-    for settings in ({}, {"advisories": {}}, {"advisories": {"enabled": {}}}):
-        assert migrate_icing_enabled(settings) == (settings, False)
-
-
 def test_no_single_escape_level_quoted_into_higher_terrain():
     """Point A escapes below 4,500 ft over 500 ft terrain; point B only below
     6,500 ft over 4,000 ft terrain. "Descend below 4,500 ft" would be into B's
@@ -343,3 +316,13 @@ def test_warm_nose_without_freezing_rain_has_its_own_block_code():
     ctx = _ctx(_stretch(5, 1, _precip=nose, **ESCAPE), NON_FIKI)
     point = icing_picture(ctx, "gfs", resolve_aircraft_icing_params(ctx))[5]
     assert point.escape_down_ft is None and point.down_block == "warm_nose"
+
+
+def test_climb_column_starts_at_the_ground():
+    """A zone reaching below the airfield is charged only from the ground up:
+    500 ft terrain, zone 0-3,000 ft -> 2,500 ft of column at 500 fpm."""
+    from weatherbrief.analysis.advisories.aircraft_icing import icing_picture
+
+    ctx = _ctx({0: {"freezing_level_ft": 9000, "icing_zones": [_zone(base=0, top=3000)]}}, NON_FIKI)
+    point = icing_picture(ctx, "gfs", resolve_aircraft_icing_params(ctx))[0]
+    assert [(z.base_ft, z.top_ft) for z in point.column_zones] == [(500, 3000)]

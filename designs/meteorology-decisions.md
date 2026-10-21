@@ -6475,7 +6475,10 @@ if it is". The aircraft wins over the profile (#777).
 | SEVERE or SLD | RED | RED |
 
 - **Exposure is time.** Minutes in icing, reset only by an above-freezing cruise point
-  (ice does not shed in cold clear air); unassessed points neither add nor reset. Short:
+  (ice does not shed in cold clear air); unassessed points neither add nor reset. A point
+  with no freezing level cannot prove warm air, so it never resets either: stretches
+  either side of it merge (conservative, rare). The climb/descent column runs from the
+  ground at that point (sea level if terrain is unknown) to cruise. Short:
   light rime ≤ 15 min, anything else ≤ 5 min (tunable). SEVERE/SLD not tunable (§51c).
 - **Escape** must exist at every iced point of a stretch. Down (both): §8a level
   `max(fz, lowest icing cloud base) - 500`, ≥ terrain + 1,000; unknown terrain blocks

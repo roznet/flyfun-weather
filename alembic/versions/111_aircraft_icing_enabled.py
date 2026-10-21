@@ -2,10 +2,11 @@
 
 ``icing_escape`` and ``fiki_icing`` are retired in favour of one icing card
 graded for the flight's aircraft, on by default. Without this rewrite, a pilot
-who had switched icing off entirely would see it come back. The rule lives in
-:mod:`weatherbrief.analysis.advisories.icing_settings_migration` (imported, not
-re-implemented): off only if *both* old cards were off; uncustomized profiles
-are not touched.
+who had switched icing off entirely would see it come back. The rule: off
+only if *both* old cards were off (absent keys read as their old catalog
+defaults); uncustomized profiles are not touched; the old ids stay in the map,
+inert. It is written out here, not imported from application code, so a later
+change to the app cannot change what this revision does.
 
 Pure Python data update over the JSON ``settings_json`` Text column (cf. 093):
 raw SQL with named binds, dialect-agnostic, no ALTER / batch mode. A malformed
@@ -23,7 +24,7 @@ Create Date: 2026-10-19
 from __future__ import annotations
 
 import json
-from typing import Sequence, Union
+from typing import Any, Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
@@ -34,11 +35,30 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    from weatherbrief.analysis.advisories.icing_settings_migration import (
-        migrate_icing_enabled,
-    )
+NEW_ID = "aircraft_icing"
+_OLD_DEFAULTS = {"icing_escape": True, "fiki_icing": False}
 
+
+def migrate_icing_enabled(settings: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Return ``(settings, changed)`` with ``aircraft_icing`` set off where due.
+
+    Writes only ``advisories.enabled.aircraft_icing = False``, and only when the
+    map is a customized dict, does not already decide the new card, and leaves
+    both old cards off.
+    """
+    adv = settings.get("advisories")
+    if not isinstance(adv, dict):
+        return settings, False
+    enabled = adv.get("enabled")
+    if not isinstance(enabled, dict) or not enabled or NEW_ID in enabled:
+        return settings, False
+    if any(bool(enabled.get(k, default)) for k, default in _OLD_DEFAULTS.items()):
+        return settings, False
+    new_enabled = {**enabled, NEW_ID: False}
+    return {**settings, "advisories": {**adv, "enabled": new_enabled}}, True
+
+
+def upgrade() -> None:
     conn = op.get_bind()
     rows = conn.execute(sa.text("SELECT id, settings_json FROM flight_profiles")).fetchall()
     changed = 0
