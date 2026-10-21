@@ -3,15 +3,17 @@
 An indicative, pre-briefing read of the forecast-map snapshots around a base
 airport (radius mode) or along a route corridor (route mode), over a few days
 and sample hours. Everything heavy happens here so the calling LLM only
-narrates: airport selection, a GO / MARGINAL / NO-GO grade per airport and
-slot, per-sector or per-route summaries, out-and-back pairing, best slots and
-a per-day trend.
+narrates: airport selection, a PROMISING / MARGINAL / UNLIKELY grade (NIGHT
+for VFR after civil twilight) per airport and slot, per-sector or per-route
+summaries, out-and-back pairing, best slots and a per-day trend.
 
-Posture: an attention-director, never a briefing. Grades are point forecasts
-at monitored airports at 3-hourly snapshots, nothing between airports, no
-en-route icing grade, no operational suitability. IFR output shows the lowest
-freezing level per slot / sector / corridor for information only (#841): the
-snapshots carry it, but freezing level alone isn't icing.
+Posture: an attention-director, never a briefing and never a go/no-go
+decision (#851): the grade words answer "is this slot worth briefing?".
+Grades are point forecasts at monitored airports at 3-hourly snapshots,
+nothing between airports, no en-route icing grade, no operational
+suitability. IFR output shows the lowest freezing level per slot / sector /
+corridor for information only (#841): the snapshots carry it, but freezing
+level alone isn't icing.
 The output says so and points to ``create_flight`` for the slot the pilot
 picks.
 
@@ -45,12 +47,17 @@ from weatherbrief.analysis.route_geometry import RouteTrack
 Rules = Literal["vfr", "ifr"]
 Mode = Literal["worst", "majority"]
 
-GO, MARGINAL, NOGO = "GO", "MARGINAL", "NO-GO"
-_GRADE_RANK = {GO: 0, MARGINAL: 1, NOGO: 2}
+PROMISING, MARGINAL, UNLIKELY = "PROMISING", "MARGINAL", "UNLIKELY"
+# VFR after civil twilight: a rules matter, not a weather judgement (#851), so
+# it gets its own label. For ranking, trend and pairs it counts as UNLIKELY.
+NIGHT = "NIGHT"
+_GRADE_RANK = {PROMISING: 0, MARGINAL: 1, UNLIKELY: 2, NIGHT: 2}
+_GRADE_SCORE = {PROMISING: 1.0, MARGINAL: 0.5, UNLIKELY: 0.0, NIGHT: 0.0}
+_RANK_GRADE = (PROMISING, MARGINAL, UNLIKELY)
 _CONF_RANK = {"high": 0, "medium": 1, "low": 2}
 _WEEKDAY = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 
-# Selection caps: keep the answer compact (target ≤ ~4k tokens for a weekend).
+# Selection caps: keep the answer compact (~4k tokens for a weekend).
 MAX_AREA_AIRPORTS = 16
 MAX_CORRIDOR_AIRPORTS = 12
 # A base/destination resolved further than this from the requested airport is
@@ -63,7 +70,7 @@ DEFAULT_TAS_KT = 110.0
 # Convective risk (``airport_consensus._RISK_ORDER``): "marginal" is the
 # benign floor the map shows for small CAPE, so it does not cost a grade.
 _CONVECTIVE_MARGINAL = frozenset({"low"})
-_CONVECTIVE_NOGO = frozenset({"moderate", "high", "extreme"})
+_CONVECTIVE_UNLIKELY = frozenset({"moderate", "high", "extreme"})
 
 # Freezing level shown when the surface itself is sub-zero (IFR only, #841).
 FZL_SURFACE = "SFC"
@@ -76,12 +83,13 @@ FZL_SURFACE = "SFC"
 
 @dataclass(frozen=True)
 class Minima:
-    """GO / NO-GO lines. Between the two is MARGINAL.
+    """PROMISING / UNLIKELY lines. Between the two is MARGINAL.
 
-    ``ceiling_go_ft`` / ``vis_go_m``: at or above → GO on cloud/visibility.
-    ``ceiling_floor_ft`` / ``vis_floor_m``: below → NO-GO.
-    Wind follows the Airport Wind advisory: below ``*_green`` GO, at or above
-    ``*_red`` NO-GO, between MARGINAL.
+    ``ceiling_go_ft`` / ``vis_go_m``: at or above → PROMISING on cloud/vis.
+    ``ceiling_floor_ft`` / ``vis_floor_m``: below → UNLIKELY.
+    Wind follows the Airport Wind advisory: below ``*_green`` PROMISING, at or
+    above ``*_red`` UNLIKELY, between MARGINAL. (Field names predate #851's
+    wording; the output keys in :func:`describe_query` use the new words.)
     """
 
     ceiling_go_ft: float
@@ -104,7 +112,7 @@ def _airport_wind_defaults() -> dict[str, float]:
     }
 
 
-# VFR preset (issue #836): GO at 1500 ft / 5 km, NO-GO in IFR-category cloud
+# VFR preset (issue #836): PROMISING at 1500 ft / 5 km, UNLIKELY in IFR-category cloud
 # (< 1000 ft) or below 3 km. Presets for an indicative tool, not new
 # meteorology — see designs/meteorology-decisions.md (area outlook pointer).
 VFR_CEILING_GO_FT = 1500.0
@@ -123,7 +131,7 @@ def minima_for(
 ) -> Minima:
     """The preset for ``rules`` with the caller's overrides applied.
 
-    Overrides move the GO line (ceiling/vis) or the NO-GO line (wind); the
+    Overrides move the PROMISING line (ceiling/vis) or the UNLIKELY line (wind); the
     other line is clamped so the MARGINAL band never inverts. For IFR the
     ceiling/visibility lines are per-airport (approach-based, see
     :func:`_grade_ifr_cloud`), so ``min_ceiling_ft`` / ``min_visibility_m``
@@ -408,14 +416,14 @@ def sun_phase(lat: float, lon: float, when: datetime) -> str:
 
 
 def _grade_band(value: float | None, go: float, floor: float) -> str:
-    """Higher-is-better value against GO / NO-GO lines; None = not limiting."""
+    """Higher-is-better value against PROMISING / UNLIKELY lines; None = not limiting."""
     if value is None:
-        return GO
+        return PROMISING
     if value < floor:
-        return NOGO
+        return UNLIKELY
     if value < go:
         return MARGINAL
-    return GO
+    return PROMISING
 
 
 def _grade_ifr_cloud(
@@ -424,8 +432,8 @@ def _grade_ifr_cloud(
 ) -> tuple[str, str | None]:
     """IFR terminal grade: approach-class minima floor, alternate trigger band.
 
-    NO-GO below the approach class's worst-case published minima (DH/MDH and
-    visibility, ``alternate_requirement.APPROACH_CLASS_PROXY`` hi ends); GO
+    UNLIKELY below the approach class's worst-case published minima (DH/MDH and
+    visibility, ``alternate_requirement.APPROACH_CLASS_PROXY`` hi ends); PROMISING
     when no destination alternate would be required (FAA/EASA); MARGINAL in
     between. An airport with no instrument approach is graded as VFR; one
     with an approach of unknown class gets the most demanding (non-precision)
@@ -437,12 +445,12 @@ def _grade_ifr_cloud(
     if proxy is None:
         g = _worse(_grade_band(ceiling, m.ceiling_go_ft, m.ceiling_floor_ft),
                    _grade_band(vis, m.vis_go_m, m.vis_floor_m))
-        return g, ("no approach: VFR minima" if g != GO else None)
+        return g, ("no approach: VFR minima" if g != PROMISING else None)
     if (ceiling is not None and ceiling < proxy.dh_hi) or (vis is not None and vis < proxy.vis_hi):
-        return NOGO, f"below est. {approach_type or 'approach'} minima"
+        return UNLIKELY, f"below est. {approach_type or 'approach'} minima"
     if alt_req:
         return MARGINAL, "alternate required"
-    return GO, None
+    return PROMISING, None
 
 
 def grade_airport(
@@ -485,28 +493,28 @@ def grade_airport(
         g_ceil = _grade_band(ceiling, minima.ceiling_go_ft, minima.ceiling_floor_ft)
         g_vis = _grade_band(vis, minima.vis_go_m, minima.vis_floor_m)
         grade = _worse(g_ceil, g_vis)
-        if g_ceil != GO:
+        if g_ceil != PROMISING:
             reasons.append(f"ceiling {int(ceiling)}ft")
-        if g_vis != GO:
+        if g_vis != PROMISING:
             reasons.append(f"vis {int(vis)}m")
 
     if xwind is not None:
         if xwind >= minima.crosswind_red_kt:
-            grade = NOGO
+            grade = UNLIKELY
             reasons.append(f"xwind {xwind:.0f}kt")
         elif xwind >= minima.crosswind_green_kt:
             grade = _worse(grade, MARGINAL)
             reasons.append(f"xwind {xwind:.0f}kt")
     if gust is not None:
         if gust >= minima.gust_red_kt:
-            grade = NOGO
+            grade = UNLIKELY
             reasons.append(f"gust {gust:.0f}kt")
         elif gust >= minima.gust_green_kt:
             grade = _worse(grade, MARGINAL)
             reasons.append(f"gust {gust:.0f}kt")
 
-    if risk in _CONVECTIVE_NOGO:
-        grade = NOGO
+    if risk in _CONVECTIVE_UNLIKELY:
+        grade = UNLIKELY
         reasons.append(f"convective {risk}")
     elif risk in _CONVECTIVE_MARGINAL:
         grade = _worse(grade, MARGINAL)
@@ -515,7 +523,9 @@ def grade_airport(
     lat, lon = entry.get("lat"), entry.get("lon")
     phase = sun_phase(lat, lon, valid_time) if lat is not None and lon is not None else "day"
     if phase == "night" and rules == "vfr":
-        grade = NOGO
+        # Overrides the weather grade: the reasons above still say what the
+        # weather would be, but the label says why the slot is out.
+        grade = NIGHT
         reasons.append("night")
     elif phase != "day":
         reasons.append(phase)
@@ -571,7 +581,7 @@ def slot_label(valid: datetime) -> str:
 
 
 def _grade_counts(grades: list[dict[str, Any]]) -> dict[str, int]:
-    out = {GO: 0, MARGINAL: 0, NOGO: 0}
+    out = {PROMISING: 0, MARGINAL: 0, UNLIKELY: 0, NIGHT: 0}
     for g in grades:
         if g.get("grade") in out:
             out[g["grade"]] += 1
@@ -587,7 +597,7 @@ def _summary(grades: list[dict[str, Any]]) -> dict[str, Any] | None:
     gusts = [g["gust_kt"] for g in graded if g.get("gust_kt") is not None]
     c = _grade_counts(graded)
     out: dict[str, Any] = {
-        "go/marg/nogo": f"{c[GO]}/{c[MARGINAL]}/{c[NOGO]}",
+        "promising/marginal/unlikely": f"{c[PROMISING]}/{c[MARGINAL]}/{c[UNLIKELY]}",
         "min_ceiling_ft": int(min(ceilings)) if ceilings else None,
         "max_gust_kt": round(max(gusts)) if gusts else None,
         "conf": max((g["conf"] for g in graded), key=lambda c: _CONF_RANK[c]),
@@ -595,16 +605,18 @@ def _summary(grades: list[dict[str, Any]]) -> dict[str, Any] | None:
     fzl = lowest_freezing_level([g.get("fzl_ft") for g in graded])
     if fzl is not None:
         out["min_fzl_ft"] = fzl
-    if worst["grade"] != GO:
+    if c[NIGHT]:
+        out["night"] = c[NIGHT]
+    if worst["grade"] != PROMISING:
         out["worst"] = f"{worst['icao']} {worst['grade']}"
     return out
 
 
-def _go_fraction(grades: list[dict[str, Any]]) -> float:
+def _promising_fraction(grades: list[dict[str, Any]]) -> float:
     graded = [g for g in grades if g.get("grade")]
     if not graded:
         return 0.0
-    score = sum({GO: 1.0, MARGINAL: 0.5, NOGO: 0.0}[g["grade"]] for g in graded)
+    score = sum(_GRADE_SCORE[g["grade"]] for g in graded)
     return score / len(graded)
 
 
@@ -622,10 +634,10 @@ def _trend(scores: list[float]) -> str:
 
 
 def _leg_ok(*grades: dict[str, Any] | None) -> str | None:
-    """Worst grade over the leg's points, or None if any is NO-GO / missing."""
-    worst = GO
+    """Worst grade over the leg's points, or None if any is UNLIKELY / NIGHT / missing."""
+    worst = PROMISING
     for g in grades:
-        if g is None or g.get("grade") is None or g["grade"] == NOGO:
+        if g is None or g.get("grade") is None or _GRADE_RANK[g["grade"]] >= _GRADE_RANK[UNLIKELY]:
             return None
         worst = _worse(worst, g["grade"])
     return worst
@@ -635,16 +647,17 @@ def corridor_point(grades: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The corridor as one point of a leg, or None when it has no airports.
 
     A corridor airport can sit up to ``corridor_nm`` off track, and a pilot
-    can route around one bad field, so a minority of NO-GO airports makes the
-    leg MARGINAL; it blocks the leg only when at least half are NO-GO.
+    can route around one bad field, so a minority of UNLIKELY (or NIGHT)
+    airports makes the leg MARGINAL; it blocks the leg only when at least half
+    are UNLIKELY / NIGHT.
     """
     graded = [g for g in grades if g.get("grade")]
     if not graded:
         return None
-    n_nogo = sum(1 for g in graded if g["grade"] == NOGO)
-    if n_nogo * 2 >= len(graded):
-        grade = NOGO
-    elif n_nogo:
+    n_out = sum(1 for g in graded if _GRADE_RANK[g["grade"]] >= _GRADE_RANK[UNLIKELY])
+    if n_out * 2 >= len(graded):
+        grade = UNLIKELY
+    elif n_out:
         grade = MARGINAL
     else:
         grade = max((g["grade"] for g in graded), key=lambda x: _GRADE_RANK[x])
@@ -741,7 +754,7 @@ def compute_outlook(
         airports_out.append({"icao": c.icao, "at": at, "rows": rows})
 
     # Best slots + trend. Radius: base grade (worse of base and destination
-    # when one is given) first, then the area GO fraction. Route: the
+    # when one is given) first, then the area PROMISING fraction. Route: the
     # outbound leg (departure, corridor, destination) worst grade.
     def slot_score(slot: tuple[int, int]) -> tuple[int, float, int]:
         # ``focus`` decides the grade and confidence (the airports the pilot
@@ -755,20 +768,20 @@ def compute_outlook(
                 key = (focus[0] or {}).get("grade")
             else:
                 # A trip: the slot is only as good as the worse of the two
-                # ends, like route mode (a NO-GO destination never ranks).
+                # ends, like route mode (an UNLIKELY destination never ranks).
                 focus = [g.get(q.base.icao), g.get(q.destination.icao)]
-                key = _leg_ok(*focus) or NOGO
+                key = _leg_ok(*focus) or UNLIKELY
                 pool = [x for x in focus if x] + pool
         else:
             ends = [g.get(q.departure.icao), g.get(q.destination.icao)]
             corridor = [g[c.icao] for c in q.candidates if c.icao in g]
             cp = corridor_point(corridor)
             focus = ends + ([cp] if cp else [])
-            key = _leg_ok(*focus) or NOGO
+            key = _leg_ok(*focus) or UNLIKELY
             pool = [x for x in ends if x] + corridor
         graded = [x for x in focus if x and x.get("grade")]
         conf = max((x["conf"] for x in graded), key=lambda c: _CONF_RANK[c]) if graded else "low"
-        return (_GRADE_RANK.get(key, 2), -_go_fraction(pool), _CONF_RANK[conf])
+        return (_GRADE_RANK.get(key, 2), -_promising_fraction(pool), _CONF_RANK[conf])
 
     ranked = sorted(available, key=lambda s: (slot_score(s), s))
     best: list[dict[str, Any]] = []
@@ -778,15 +791,15 @@ def compute_outlook(
             break
         b = {
             "slot": slot_label(valid_times[s]),
-            "grade": [GO, MARGINAL, NOGO][sc[0]],
-            "area_go_score": round(-sc[1], 2),
+            "grade": _RANK_GRADE[sc[0]],
+            "area_promising_score": round(-sc[1], 2),
             "conf": ("high", "medium", "low")[sc[2]],
         }
         if map_base_url:
             b["map_url"] = map_url(map_base_url, q, s)
         best.append(b)
 
-    # Trend over daylight only: VFR grades every airport NO-GO at night, so
+    # Trend over daylight only: VFR labels every airport NIGHT after dark, so
     # dark 06Z/18Z slots would read as "improving"/"deteriorating" on a flat
     # day. A slot with no daylight airport is left out of the sequence.
     days = sorted({d for d, _ in available})
@@ -797,7 +810,7 @@ def compute_outlook(
         for s in ds:
             pool = [x for x in grades[s].values() if x.get("phase") != "night"]
             if any(x.get("grade") for x in pool):
-                pool_scores.append(_go_fraction(pool))
+                pool_scores.append(_promising_fraction(pool))
         trend[_WEEKDAY[valid_times[ds[0]].weekday()]] = _trend(pool_scores)
 
     result: dict[str, Any] = {
@@ -968,9 +981,17 @@ def map_url(base_url: str, q: OutlookQuery, slot: tuple[int, int]) -> str:
 # I/O shell
 # ---------------------------------------------------------------------------
 
+GUIDANCE = (
+    "Indicative outlook from airport point forecasts, to help choose when and "
+    "where to look. Not a briefing and not a go/no-go decision: before flying "
+    "any slot, run a full briefing (create_flight)."
+)
+
 LEGEND = (
     "airport row (airports[].rows follow slot_order): GRADE CAT ceiling vis "
     "wind[Ggust] xw<crosswind> conf [night|twilight]; "
+    "GRADE is PROMISING / MARGINAL / UNLIKELY (is the slot worth briefing?), "
+    "or NIGHT for VFR after civil twilight (a rules matter, not weather); "
     "ceiling 'nocig' = no ceiling; vis capped at 9999m; "
     "conf from model agreement (divergent = low)"
 )
@@ -983,8 +1004,8 @@ NOTE = (
 )
 
 NEXT_STEP = (
-    "To confirm a slot, call create_flight with that departure time for the "
-    "full route briefing (en-route cloud, icing, convection, advisories)."
+    "Before flying any slot, call create_flight with that departure time for "
+    "the full route briefing (en-route cloud, icing, convection, advisories)."
 )
 
 IFR_SCOPE_NOTE = (
@@ -1174,19 +1195,22 @@ def describe_query(q: OutlookQuery) -> dict[str, Any]:
         "rules": q.rules,
         "consensus": q.consensus,
         "minima": {
-            "ceiling_go_ft": m.ceiling_go_ft, "ceiling_nogo_below_ft": m.ceiling_floor_ft,
-            "vis_go_m": m.vis_go_m, "vis_nogo_below_m": m.vis_floor_m,
-            "crosswind_marginal_kt": m.crosswind_green_kt, "crosswind_nogo_kt": m.crosswind_red_kt,
-            "gust_marginal_kt": m.gust_green_kt, "gust_nogo_kt": m.gust_red_kt,
+            "ceiling_promising_ft": m.ceiling_go_ft,
+            "ceiling_unlikely_below_ft": m.ceiling_floor_ft,
+            "vis_promising_m": m.vis_go_m, "vis_unlikely_below_m": m.vis_floor_m,
+            "crosswind_marginal_kt": m.crosswind_green_kt,
+            "crosswind_unlikely_kt": m.crosswind_red_kt,
+            "gust_marginal_kt": m.gust_green_kt, "gust_unlikely_kt": m.gust_red_kt,
         },
     }
     if q.rules == "ifr":
         # The ceiling/vis lines above only apply at airports without an
         # approach; say so, so they're never quoted as the IFR minima.
         cloud = {k: out["minima"].pop(k) for k in (
-            "ceiling_go_ft", "ceiling_nogo_below_ft", "vis_go_m", "vis_nogo_below_m")}
+            "ceiling_promising_ft", "ceiling_unlikely_below_ft",
+            "vis_promising_m", "vis_unlikely_below_m")}
         out["minima"]["ifr_cloud"] = (
-            "per airport: NO-GO below estimated approach minima, MARGINAL when a "
+            "per airport: UNLIKELY below estimated approach minima, MARGINAL when a "
             "destination alternate would be required"
         )
         out["minima"]["no_approach_airports_only"] = cloud
@@ -1270,6 +1294,8 @@ def build_area_outlook(
         project=project_slot, project_id=f"area_outlook:{SLOT_PROJECTION_VERSION}",
     )
     result = {
+        # First key, so the framing leads whatever part of the payload is quoted.
+        "guidance": GUIDANCE,
         "query": describe_query(q),
         **compute_outlook(q, slot_data, valid_times, map_base_url=map_base_url),
     }
