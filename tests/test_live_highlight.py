@@ -1330,3 +1330,47 @@ def test_patch_moves_highlight_updated_at_not_live_updated_at(tmp_path):
     assert back.highlight_updated_at is not None and back.highlight_updated_at > as_of
     assert live_updated_at_for_pack(pack_dir) == as_of
     assert highlight_updated_at_for_pack(pack_dir) == back.highlight_updated_at
+
+
+# --- Start re-times the flight (#812) -----------------------------------------
+
+
+def test_start_regenerates_a_carried_highlight_and_says_nothing_changed(monkeypatch, tmp_path):
+    """On Start the pilot is looking: a new highlight whatever the gate says,
+    told whether anything changed at the new times."""
+    import weatherbrief.tasks.live_layer as live_layer
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    seen = []
+    monkeypatch.setattr(lh, "generate", lambda f, **k: seen.append(f) or (
+        "No change at your new times. Quiet route ahead.", {"model": "claude-haiku-5-5"}, 900))
+    monkeypatch.setattr(live_layer, "patch_highlight", lambda *a, **k: True)
+    layer = _Layer(glance=_glance(highlight=_highlight(text="carried", gate=_fg()[1])))
+    out = lh.ensure_highlight(tmp_path, layer, retimed_from=_fg()[1])
+    assert out.outcome == "written" and out.text.startswith("No change at your new times")
+    assert seen[0]["at_new_times"] == "no change"
+
+
+def test_start_says_what_changed_at_the_new_times(monkeypatch, tmp_path):
+    import weatherbrief.tasks.live_layer as live_layer
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    monkeypatch.setattr(lh, "facts_and_gate_for", lambda layer: _fg())
+    seen = []
+    monkeypatch.setattr(lh, "generate", lambda f, **k: seen.append(f) or ("Quiet route ahead.", {}, 900))
+    monkeypatch.setattr(live_layer, "patch_highlight", lambda *a, **k: True)
+    before = _fg(sigmets_ahead=[{"what": "EMBD TS", "id": "LECB 2"}])[1]
+    lh.ensure_highlight(tmp_path, _Layer(glance=_glance()), retimed_from=before)
+    assert seen[0]["at_new_times"] == "changed: sigmets_ahead"
+    # No highlight before Start: an ordinary one, nothing to compare with.
+    lh.ensure_highlight(tmp_path, _Layer(glance=_glance()), retimed_from={})
+    assert "at_new_times" not in seen[1]
+
+
+def test_on_the_ground_after_start_the_phase_shows_no_moving_figure():
+    phase, key, _ = lh._phase({"departure_at": "2026-10-02T08:00:00+00:00"}, 0.0, 276.0,
+                              {"source": "app", "departed_at": None})
+    assert key == "before departure" and "Start" in phase and "08:00" not in phase
+    plan, _, _ = lh._phase({"departure_at": "2026-10-02T08:00:00+00:00"}, 0.0, 276.0, {"source": "plan"})
+    assert "08:00Z" in plan

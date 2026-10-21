@@ -20,7 +20,19 @@ a late take-off pushes it back, a recorded landing closes it.
    once per tick and shared the same way.
 
 So a tick costs at most two METAR/TAF batches and one SIGMET call, whatever
-the number of flights. Observed radar/lightning/tops are re-sampled from local
+the number of flights.
+
+**Started flights every 5 min (#812).** Between two verification cycles the
+loop runs a lighter pass over the started flights only (``started_only``:
+Start pressed or a take-off known, not yet arrived). It has no verification
+fetch to share, so it costs one METAR/TAF batch and one SIGMET call, again
+whatever the number of flights. Started flights also ride the 10-min tick, so
+they tick every 5 min; the others stay on 10.
+
+**Start (#812).** The first ground fix at the departure (the app posts one
+right after Start) runs :func:`run_start_update` at once, from the position
+endpoint: the ↻ path with a fresh fetch, and the highlight regenerated at the
+new times. Like a ↻ press it never pushes. Observed radar/lightning/tops are re-sampled from local
 frames as usual (no network).
 
 After the commits, each committed flight's new alerts (and pushed alerts that
@@ -104,19 +116,25 @@ def live_window_end(
 ) -> datetime:
     """When the live window closes (#760), as known at ``now``.
 
-    The effective arrival (the planned one, shifted by a manual take-off) +
-    ``after_h``; once a landing is recorded, ``LANDED_GRACE`` after the later
-    of the landing and the moment it was entered.
+    The effective arrival (the planned one, moved by a take-off or fix) +
+    ``after_h``, never before the planned arrival + ``after_h``: a Start
+    pressed well before the planned time moves the departure earlier
+    (#812), which must not close the window before the flight could have
+    flown. Once a landing is known (entered, app-detected or inferred from a
+    fix), ``LANDED_GRACE`` after the later of the landing and the moment the
+    server learned it.
     """
     from weatherbrief.analysis.flight_progress import EVENT_LANDED, FlightProgress
 
     dep = _as_utc(departure)
     progress = FlightProgress.schedule(dep, duration_h, now or datetime.now(timezone.utc), events)
     if progress.landed_at is not None:
-        known = progress.latest_event(EVENT_LANDED).recorded_at
+        evidence = progress.latest_event(EVENT_LANDED) if progress.landing_event_at is not None else progress.fix
+        known = evidence.recorded_at if evidence is not None else progress.landed_at
         return max(progress.landed_at, known) + LANDED_GRACE
     arrival = progress.arrival or progress.departed_at or dep
-    return arrival + timedelta(hours=after_h)
+    planned = progress.planned_arrival or dep
+    return max(arrival, planned) + timedelta(hours=after_h)
 
 
 def in_live_window(
@@ -129,8 +147,23 @@ def in_live_window(
     return now <= live_window_end(dep, duration_h, after_h, events, now)
 
 
-def find_live_flights(db: Session, now: datetime | None = None) -> list[FlightRow]:
-    """Flights with at least one pack whose live window contains ``now``.
+def is_started(flight: FlightRow, events: tuple, now: datetime) -> bool:
+    """The flight is started and not yet arrived (#812,
+    ``FlightProgress.started``), by its stored fix projections."""
+    from weatherbrief.analysis.flight_progress import FlightProgress
+
+    if flight.departure_time is None:
+        return False
+    return FlightProgress.schedule(
+        _as_utc(flight.departure_time), flight.flight_duration_hours, now, events,
+    ).started
+
+
+def find_live_flights(
+    db: Session, now: datetime | None = None, *, started_only: bool = False,
+) -> list[FlightRow]:
+    """Flights with at least one pack whose live window contains ``now``;
+    with ``started_only``, only the started ones (#812, :func:`is_started`).
 
     The planned window, widened by ``MAX_TAKEOFF_DELAY_H``, picks the
     candidates; only those read their progress events (#760) for the real
@@ -161,8 +194,11 @@ def find_live_flights(db: Session, now: datetime | None = None) -> list[FlightRo
             .limit(1)
         ).scalar()
         events = load_progress_events(flight_dir_for_pack(_resolve_artifact_path(artifact))) if artifact else ()
-        if in_live_window(row.departure_time, row.flight_duration_hours, now, before_h, after_h, events):
-            out.append(row)
+        if not in_live_window(row.departure_time, row.flight_duration_hours, now, before_h, after_h, events):
+            continue
+        if started_only and not is_started(row, events, now):
+            continue
+        out.append(row)
     return out
 
 
@@ -326,8 +362,13 @@ class LiveTick:
             self._covered.update(chunk)
         return len(missing)
 
-    def run(self, db: Session, airports_db_path: str, now: datetime | None = None) -> dict:
-        """Refresh the live layer of every flight in its live window."""
+    def run(
+        self, db: Session, airports_db_path: str, now: datetime | None = None,
+        *, started_only: bool = False,
+    ) -> dict:
+        """Refresh the live layer of every flight in its live window; with
+        ``started_only``, of the started ones only (#812: the 5-min pass
+        between two verification cycles, which fetches its own reports)."""
         from euro_aip.briefing.weather.route_weather import RouteWeatherService
 
         from weatherbrief.airports import _load_airport_model, route_navpoints
@@ -339,7 +380,7 @@ class LiveTick:
 
         t0 = time.monotonic()
         tick_started_at = datetime.now(timezone.utc)
-        flights = find_live_flights(db, now)
+        flights = find_live_flights(db, now, started_only=started_only)
         if not flights:
             return {"flights": 0, "updated": 0, "fetched": 0}
         if len(flights) > _SCALE_WARN_FLIGHTS:
@@ -452,8 +493,8 @@ class LiveTick:
         write_tick_rows(db, rows)
 
         logger.info(
-            "Live tick: %d flight(s) in window, %d updated, %d highlighted, %d airport(s) topped up, %d ms",
-            len(flights), updated, highlighted, fetched, tick_ms,
+            "Live tick%s: %d flight(s) in window, %d updated, %d highlighted, %d airport(s) topped up, %d ms",
+            " (started)" if started_only else "", len(flights), updated, highlighted, fetched, tick_ms,
         )
         return {"flights": len(flights), "updated": updated, "fetched": fetched,
                 "highlighted": highlighted, "pushed": pushed}
@@ -577,3 +618,68 @@ def _cloud_source(db: Session, flight: FlightRow) -> str | None:
     from weatherbrief.api.packs import _profile_cloud_source
 
     return _profile_cloud_source(db, flight, flight.user_id)
+
+
+def run_start_update(flight_id: str, airports_db_path: str) -> bool:
+    """The immediate update a Start triggers (#812): the first ground fix at
+    the departure re-times the flight, so the pilot, who is looking at that
+    moment, gets the live layer recomputed at the new times instead of
+    waiting for the next tick.
+
+    The ↻ path (``run_realtime_refresh``, persisting, fresh METAR/TAF and
+    SIGMET fetch, no model run), then the highlight written anew whatever
+    the gate says, with what changed at the new times against the one the
+    pilot had (``ensure_highlight(retimed_from=…)``). Never pushes, like a
+    ↻ press. Own session: runs after the position endpoint has answered.
+    Never raises; returns True when the layer was refreshed.
+    """
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.storage.flights import _resolve_artifact_path, list_packs
+    from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE, flight_dir_for_pack, live_for_pack
+    from weatherbrief.tasks.route_weather import run_realtime_refresh
+
+    db = None
+    try:
+        db = SessionLocal()
+        flight = db.get(FlightRow, flight_id)
+        packs = list_packs(db, flight_id) if flight is not None else []
+        if not packs or not packs[0].artifact_path or packs[0].is_historical:
+            return False
+        latest = packs[0]
+        pack_dir = Path(_resolve_artifact_path(latest.artifact_path))
+        flight_dir = flight_dir_for_pack(pack_dir)
+        if (flight_dir / LIVE_FROZEN_FILE).exists():
+            return False
+        before = live_for_pack(pack_dir)
+        previous = before.glance.highlight if before is not None and before.glance is not None else None
+        retimed_from = (previous.gate or {}) if previous is not None else {}
+        try:
+            run_realtime_refresh(
+                pack_dir, airports_db_path,
+                cloud_source=_cloud_source(db, flight),
+                flight_id=flight_id,
+                pack_timestamp=_as_utc(latest.fetch_timestamp).isoformat(),
+            )
+        except Exception:
+            logger.warning("Start update: refresh failed for flight %s", flight_id, exc_info=True)
+            return False
+        try:
+            from weatherbrief.tasks.live_highlight import charge_highlight, ensure_highlight, highlight_enabled
+
+            layer = live_for_pack(pack_dir)
+            if highlight_enabled() and layer is not None:
+                outcome = ensure_highlight(flight_dir, layer, retimed_from=retimed_from)
+                charge_highlight(db, flight.user_id, flight_id, outcome.usage)
+                db.commit()
+        except Exception:
+            logger.warning("Start update: highlight failed for flight %s", flight_id, exc_info=True)
+            db.rollback()
+        logger.info("LIVE_START flight=%s refreshed", flight_id)
+        return True
+    except Exception:
+        logger.warning("Start update failed for flight %s", flight_id, exc_info=True)
+        return False
+    finally:
+        if db is not None:
+            db.close()

@@ -108,6 +108,7 @@ Rules:
 - Say how weather moves relative to the route when the facts give it (crossing it, moving away, closing).
 - Prefer the big picture over a list: one rain area crossing the route matters more than its parts.
 - When nothing notable is ahead, say so plainly in one short sentence (for example "Quiet route ahead: VFR at both ends, no cells near the track.").
+- When the facts give "at_new_times", the pilot just pressed Start and the times were re-estimated from it: open with whether anything changed at the new times. "no change" is "No change at your new times." followed by the usual highlight; otherwise say what changed first.
 - Output only the highlight text, no preamble, no quotes, no markdown."""
 
 
@@ -592,6 +593,11 @@ def _phase(r: dict, flown: float, route_nm: float, progress: dict | None = None)
     if progress and progress.get("landed_at"):
         return f"arrived (landed {_hhmm(progress['landed_at'])})", "arrived", flown
     if flown <= 0:
+        if progress and progress.get("source") == "app" and not progress.get("departed_at"):
+            # On the ground after Start (#812): the take-off estimate moves
+            # with every ground fix and the gate ignores it, so no figure.
+            return ("before departure, on the ground at the departure, times estimated from the pilot's Start",
+                    "before departure", flown)
         return f"before departure (departure planned {_hhmm(r.get('departure_at'))})", "before departure", flown
     if flown >= route_nm - 1:
         if not progress:
@@ -1209,8 +1215,15 @@ def ensure_highlight(
     layer,
     *,
     model: str = DEFAULT_MODEL,
+    retimed_from: dict | None = None,
 ) -> HighlightOutcome:
     """Generate this tick's highlight and patch it in.
+
+    ``retimed_from`` is the Start update's (#812): the gate state of the
+    highlight the pilot had before Start re-timed the flight (``{}`` when
+    there was none). The highlight is then written even when the gate would
+    carry the old one forward, and the facts say what changed at the new
+    times (``at_new_times``), or that nothing did.
 
     Call **after** ``commit_live_update`` has returned: the layer is already on
     disk and servable, so nothing a pilot reads waits on the model. Never
@@ -1236,7 +1249,7 @@ def ensure_highlight(
         # whose glance build failed, must not be paid for or logged as a
         # highlight that "came out wrong".
         return HighlightOutcome("skipped")
-    if layer.glance.highlight is not None:
+    if layer.glance.highlight is not None and retimed_from is None:
         # Carried forward during the commit: unchanged facts, nothing to pay.
         return HighlightOutcome("reused", text=layer.glance.highlight.text)
 
@@ -1252,6 +1265,11 @@ def ensure_highlight(
         # #706 item 6: 34 of a flight day's 311 attempts came after the planned
         # arrival, about "ahead" cells already abeam in the past.
         return HighlightOutcome("skipped", reason="after arrival")
+    if retimed_from:
+        # Not gated: the gate state stored with the new highlight is the
+        # baseline from here on, as for any generation.
+        reasons = gate_changes(retimed_from, gate)
+        f = {**f, "at_new_times": ("changed: " + ", ".join(reasons)) if reasons else "no change"}
 
     # The retry cap counts per gate state, so a rejected state is not retried
     # on a change the gate ignores (a rain-motion word, an airport passed).

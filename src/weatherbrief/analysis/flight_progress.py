@@ -79,13 +79,23 @@ and nothing for an hour. A fix never makes things worse than the plan.
   It is inferred, never observed: :attr:`time_base` reads ``partial``.
 - On the ground at the departure (the newest fix, within
   ``NEAR_DEPARTURE_NM``, nothing airborne since): the departure is
-  ``max(planned, fix + TAXI_MARGIN)``. A ground fix well before the planned
-  time changes nothing; one after it moves the departure to a little after
-  it, and the flight is taken to leave then if nothing newer comes.
+  ``fix + TAXI_MARGIN``, **earlier than the plan too** (#812). This is the
+  app's Start: pilots press it early in the preflight for a last weather
+  check, and taking the time then beats waiting for a better one, since the
+  planned time is rarely kept precise. The first airborne fix corrects the
+  take-off as above; with nothing newer, the flight is taken to leave then
+  and to land the planned duration later.
+- Started (:attr:`FlightProgress.started`): a ground fix at the departure
+  or a take-off is known, and the flight has not arrived. The live tick
+  follows a started flight more often, and the first ground fix at the
+  departure (:attr:`FlightProgress.start_fix`) is the pilot's consent to
+  live alerts (#812).
 - Landing: the first fix not airborne within ``NEAR_DESTINATION_NM`` of the
   destination, once flying there at the top of ``SPEED_RATIO`` could have
   got there, lands the flight at the earlier of the fix and the expected
-  arrival. An entered or app-detected landing wins over it.
+  arrival. An entered or app-detected landing wins over it. The app's own
+  ``landed`` is timed at the first such fix of its batch
+  (:func:`first_landing_at`), not its newest fix (#812).
 """
 
 from __future__ import annotations
@@ -318,6 +328,29 @@ class _Seen:
         return not self.airborne and self.at_destination(total)
 
 
+def _stored_seen(events) -> list[_Seen]:
+    """``events``' fixes read by their stored projection."""
+    return [_Seen(e, e.fix.along_nm, abs(e.fix.cross_nm), e.fix.course_deg) for e in events
+            if e.kind == EVENT_FIX and e.at is not None and e.fix is not None
+            and e.fix.along_nm is not None and e.fix.cross_nm is not None]
+
+
+def on_ground_at_departure(event: ProgressEvent) -> bool:
+    """A fix showing the aircraft on the ground at the departure, by its
+    stored projection (what Start posts, #812)."""
+    return any(s.on_ground_at_departure for s in _stored_seen([event]))
+
+
+def first_landing_at(events, route_nm: float) -> datetime | None:
+    """The time of the first fix in ``events`` showing a landing at the
+    destination (not airborne within ``NEAR_DESTINATION_NM`` of the end of a
+    ``route_nm`` route), read from each fix's stored projection; None when
+    none does. The app's ``landed`` is timed here rather than at its newest
+    fix, which can come minutes later on the apron (#812)."""
+    landed = [s.at for s in _stored_seen(events) if s.landing(route_nm)]
+    return min(landed) if landed else None
+
+
 @dataclass(frozen=True)
 class _Anchor:
     """The fix the position is extrapolated from, and the floor the
@@ -538,6 +571,25 @@ class FlightProgress:
         return self._ground_fix
 
     @property
+    def start_fix(self) -> ProgressEvent | None:
+        """The first fix on the ground at the departure: the app's Start
+        (#812), which posts one right after the press. Stays once set, also
+        after the take-off: it is the pilot's consent to live alerts."""
+        for s in self._fixes:
+            if s.on_ground_at_departure:
+                return s.event
+        return None
+
+    @property
+    def started(self) -> bool:
+        """Started and not yet arrived (#812): on the ground at the
+        departure after Start, or a take-off known (entered or inferred).
+        What the live tick follows every 5 min instead of 10."""
+        if self.start_fix is None and self.takeoff_at is None:
+            return False
+        return not self.arrived
+
+    @property
     def planned_arrival(self) -> datetime | None:
         """The arrival on the plan alone (no events): what an ETA's "vs plan"
         is measured against (#816)."""
@@ -640,9 +692,8 @@ class FlightProgress:
             return self._inferred_landing[1]
         if self._anchor is not None:
             return self._anchor.seen.event
-        g, planned = self._ground_fix, self.planned_departure
-        if g is not None and planned is not None and g.at + TAXI_MARGIN > planned:
-            return g
+        if self._ground_fix is not None:
+            return self._ground_fix
         if self._latest(EVENT_TAKEOFF) is None and self._inferred_takeoff is not None:
             return self._inferred_takeoff[1]
         return None
@@ -672,15 +723,16 @@ class FlightProgress:
     @property
     def departed_at(self) -> datetime | None:
         """The effective departure every schedule computation measures from:
-        the take-off, else the plan (moved to ``TAXI_MARGIN`` after a ground
-        fix at the departure). Read this, never ``planned_departure``, so a
-        better source moves them all."""
+        the take-off, else ``TAXI_MARGIN`` after a ground fix at the
+        departure (earlier than the plan too, #812), else the plan. Read
+        this, never ``planned_departure``, so a better source moves them
+        all."""
         if self.takeoff_at is not None:
             return self.takeoff_at
-        planned, g = self.planned_departure, self._ground_fix
-        if g is not None and planned is not None:
-            return max(planned, g.at + TAXI_MARGIN)
-        return planned
+        g = self._ground_fix
+        if g is not None and self.planned_departure is not None:
+            return g.at + TAXI_MARGIN
+        return self.planned_departure
 
     @property
     def _duration_h(self) -> float:

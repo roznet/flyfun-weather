@@ -73,6 +73,9 @@ _MODEL_UPDATE_MAX_WAIT = timedelta(hours=2, minutes=30)
 _RETENTION_INTERVAL_SECONDS = 86_400  # 24 hours
 _RETENTION_STARTUP_DELAY_SECONDS = 120  # let auto-refresh settle first
 _VERIF_POLL_SECONDS = 600  # 10 minutes
+# Started flights (#812) tick every 5 min: a lighter started-only live pass
+# runs half-way between two verification cycles.
+_STARTED_TICK_SECONDS = _VERIF_POLL_SECONDS // 2
 _VERIF_STARTUP_DELAY_SECONDS = 60  # let auto-refresh settle first
 _DIGEST_INTERVAL_SECONDS = 86_400  # 24 hours
 _DIGEST_STARTUP_DELAY_SECONDS = 180  # let verification settle first
@@ -856,7 +859,9 @@ async def run_verification_loop(app_state) -> None:
     """Collect METAR/TAF observations for active flights.
 
     Polls every 10 minutes for flights in their observation window
-    (departure-1h to flight_end+1h) and archives METAR/TAF data.
+    (departure-1h to flight_end+1h) and archives METAR/TAF data. Half-way
+    between two cycles, the live tick runs again for the started flights
+    only (#812), so they tick every 5 minutes.
     """
     logger.info("Verification loop started (poll every %ds)", _VERIF_POLL_SECONDS)
     await asyncio.sleep(_VERIF_STARTUP_DELAY_SECONDS)
@@ -866,7 +871,34 @@ async def run_verification_loop(app_state) -> None:
             await asyncio.to_thread(_run_verification_once, app_state)
         except Exception:
             logger.error("Verification cycle failed", exc_info=True)
-        await asyncio.sleep(_VERIF_POLL_SECONDS)
+        await asyncio.sleep(_STARTED_TICK_SECONDS)
+        try:
+            await asyncio.to_thread(_run_started_tick_once, app_state)
+        except Exception:
+            logger.error("Started-flights live tick failed", exc_info=True)
+        await asyncio.sleep(_VERIF_POLL_SECONDS - _STARTED_TICK_SECONDS)
+
+
+def _run_started_tick_once(app_state) -> None:
+    """The live tick for started flights only (#812; called in a thread).
+    No verification fetch to share: the tick fetches its own reports, one
+    batch whatever the number of flights."""
+    db_path = getattr(app_state, "db_path", "")
+    if not db_path:
+        return
+
+    from weatherbrief.tasks.live_tick import LiveTick, live_enabled
+
+    if not live_enabled():
+        return
+    db = SessionLocal()
+    try:
+        LiveTick().run(db, db_path, started_only=True)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _run_verification_once(app_state) -> None:

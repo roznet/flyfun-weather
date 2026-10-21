@@ -356,11 +356,14 @@ def push_expiry(flight_row, now: datetime, events: tuple = ()) -> datetime:
 # --- Eligibility --------------------------------------------------------------
 
 
-def skip_reason(db: Session, flight_row, *, trigger: str) -> tuple[str | None, list[PushDevice]]:
+def skip_reason(
+    db: Session, flight_row, *, trigger: str, started: bool = False,
+) -> tuple[str | None, list[PushDevice]]:
     """(why this flight's user gets no live push, or None; their ``PushDevice`` list).
 
     All must hold: a tick (not a ↻ press), the flight's or its trip's
-    auto-refresh on, the bell not muted (the flight's, else its trip's — the
+    auto-refresh on or the flight ``started`` (#812: pressing Start is
+    consent to live alerts for that flight), the bell not muted (the flight's, else its trip's — the
     same precedence as briefing pushes), ``notify_live_alerts`` on,
     ``notify_push`` on and at least one device. ``notify_scope`` and
     ``notify_change_only`` govern briefing updates and do not apply.
@@ -372,7 +375,7 @@ def skip_reason(db: Session, flight_row, *, trigger: str) -> tuple[str | None, l
         from weatherbrief.db.models import FlightTripRow
 
         trip = db.get(FlightTripRow, flight_row.trip_id)
-    if not (flight_row.auto_refresh or (trip is not None and trip.auto_refresh)):
+    if not (started or flight_row.auto_refresh or (trip is not None and trip.auto_refresh)):
         return "not_auto_refresh", []
     override = flight_row.notify_override or "default"
     if override == "default" and trip is not None:
@@ -392,6 +395,25 @@ def skip_reason(db: Session, flight_row, *, trigger: str) -> tuple[str | None, l
     if not devices:
         return "no_device", []
     return None, devices
+
+
+def _pressed_start(flight_row, pack_dir: Path | str, now: datetime) -> bool:
+    """The app's Start was seen on this flight: a fix on the ground at the
+    departure (#812, ``FlightProgress.start_fix``). Never raises."""
+    try:
+        from weatherbrief.analysis.flight_progress import FlightProgress
+        from weatherbrief.storage.flights import ensure_utc
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        if flight_row.departure_time is None:
+            return False
+        events = load_progress_events(flight_dir_for_pack(pack_dir))
+        return FlightProgress.schedule(
+            ensure_utc(flight_row.departure_time), flight_row.flight_duration_hours, now, events,
+        ).start_fix is not None
+    except Exception:
+        logger.warning("Live push: could not read Start for %s", flight_row.id, exc_info=True)
+        return False
 
 
 # --- The sink -----------------------------------------------------------------
@@ -446,7 +468,8 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
     if not decision.empty:
         alert_keys = [c.key for c in decision.alerts]
         cleared_keys = [p.key for p, _ in decision.clears]
-        reason, devices = skip_reason(db, flight_row, trigger=trigger)
+        reason, devices = skip_reason(db, flight_row, trigger=trigger,
+                                      started=_pressed_start(flight_row, pack_dir, now))
         if reason is not None:
             logger.info(
                 "LIVE_PUSH_SKIPPED flight=%s user=%s reason=%s alerts=%s cleared=%s",

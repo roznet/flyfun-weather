@@ -72,7 +72,9 @@ Choices:
 `find_tick` serves the tick at `tick`, else the last one before it (a client
 maps a route point to a time). Response is `LiveTickResponse` (the `/live`
 shape + `tick_at`, `radar_time`, `progress`); change trails are computed as of
-the tick (`trails_for_pack(now=tick_at)`). Round trip pinned in
+the tick (`trails_for_pack(now=tick_at)`), and the TAF rows read at the ETAs
+of a `FlightProgress` built with the progress events recorded by `tick_at`
+(#812), so `/live/at` TAF-at-ETA matches what the tick showed. Round trip pinned in
 `tests/test_live_recap.py` against `live_scenario_replay.live_response` for
 every block except `route_observations`, which matches on raw text, time,
 category and TAF per airport.
