@@ -74,6 +74,7 @@
     .cat-mvfr { color: #b45309; }
     .cat-ifr { color: #dc2626; }
     .cat-lifr { color: #7f1d1d; background: #fecaca; }
+    .obs-proxy { font-size: 8.5pt; color: #888; margin: 0.1em 0; }
 
     /* Advisories table */
     .adv-status { font-weight: 600; text-transform: uppercase; }
@@ -173,6 +174,11 @@
   {% if route_observations.has_conflicts %}
   <div class="assessment assessment-amber" style="margin-top:0.4em;">Observation/model conflicts detected</div>
   {% endif %}
+  {# #776: a field with no METAR/TAF of its own reads a nearby station's (#767);
+     its row has no report, so name the stand-in above the table, as the web does. #}
+  {% for apt in route_observations.airports if apt.proxy_caption %}
+  <p class="obs-proxy">{{ apt.icao }}: {{ apt.proxy_caption }}</p>
+  {% endfor %}
   <table>
     <thead>
       <tr>
