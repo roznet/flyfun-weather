@@ -1868,6 +1868,38 @@ def test_character_k_nudge_plus_forcing_organizes_scattered():
     )
 
 
+def test_point_embedded_gfs_low_deck_at_8000ft_reads_lcdc():
+    """GFS covers are NCEP pressure bands: an ~8,000 ft (750 hPa) deck is LOW
+    cloud (surface–642 hPa). The ICAO split read MCDC = 0 % there and refused
+    to corroborate an overcast deck containing cruise (#834)."""
+    from weatherbrief.models import DerivedLevel, NWPCloudDiagnostics, NWPCloudLayerDiag
+
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=100.0),
+        mid=NWPCloudLayerDiag(cover_pct=0.0),
+        high=NWPCloudLayerDiag(cover_pct=0.0),
+        band_definition="ncep",
+    )
+    levels = [DerivedLevel(pressure_hpa=p, altitude_ft=a)
+              for p, a in ((850, 4_800), (750, 8_000), (650, 11_500), (500, 18_300))]
+    snd = _sounding([_layer(6_000, 10_000)], low=100.0, mid=0.0, diag=diag, levels=levels)
+    assert _point_embedded(snd, 8_000.0) is True
+
+
+def test_point_embedded_prefers_grib_band_cover_over_bulk():
+    """ECMWF/ICON shape (band cover, no geometry): the GRIB band cover
+    corroborates, not the Open-Meteo bulk value (#844)."""
+    from weatherbrief.models import NWPCloudDiagnostics, NWPCloudLayerDiag
+
+    diag = NWPCloudDiagnostics(
+        low=NWPCloudLayerDiag(cover_pct=20.0),
+        mid=NWPCloudLayerDiag(cover_pct=95.0),
+        high=NWPCloudLayerDiag(cover_pct=0.0),
+    )
+    snd = _sounding([_layer(12_000, 24_000, CloudCoverage.BKN)], mid=0.0, diag=diag)
+    assert _point_embedded(snd, 18_000.0) is True
+
+
 # ---------------------------------------------------------------------------
 # Below-base clearance + VMC gate (#298) — annotate-only avoidability geometry
 # ---------------------------------------------------------------------------
@@ -1899,13 +1931,15 @@ def _geo_pt(base_ft, *, top_ft=25_000.0, vmc=True, realized=True, is_conv=True):
     )
 
 
-def _sounding(layers, *, low=None, mid=None, high=None):
+def _sounding(layers, *, low=None, mid=None, high=None, diag=None, levels=()):
     """Minimal stand-in exposing the fields _vmc_below_base / _point_embedded read."""
     return SimpleNamespace(
         cloud_layers=layers,
         cloud_cover_low_pct=low,
         cloud_cover_mid_pct=mid,
         cloud_cover_high_pct=high,
+        nwp_cloud_diagnostics=diag,
+        derived_levels=list(levels),
     )
 
 

@@ -298,12 +298,74 @@ def _nwp_cloud_for_altitude(
     nwp_cloud_mid_pct: float | None,
     nwp_cloud_high_pct: float | None = None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+    *,
+    pressure_hpa: float | None = None,
 ) -> float | None:
     """Delegates to ``icing_common.nwp_cloud_cover_at_altitude``."""
     return nwp_cloud_cover_at_altitude(
         altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
         nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        pressure_hpa=pressure_hpa,
     )
+
+
+def _envelope_cover_pct(
+    lv: DerivedLevel, clouds: list[EnhancedCloudLayer],
+) -> float | None:
+    """Highest known ``mean_cloud_cover_pct`` of the NWP layers containing *lv*.
+
+    The cover of the very deck the NWP envelope admitted the level on — ECMWF/
+    ICON 3D cloud fraction, GFS band cover, HRRR NCEP band cover — so it is
+    the model's own, local answer at this level. A band lookup can disagree
+    with it (an areal band cover, or a band picked on a different split), and
+    a known 0 % from that lookup used to drop the level inside a deck the
+    model drew (#844). ``None`` when no containing layer has a cover.
+    """
+    alt = lv.altitude_ft
+    if alt is None:
+        return None
+    pcts = [
+        cl.mean_cloud_cover_pct
+        for cl in clouds
+        if cl.mean_cloud_cover_pct is not None
+        and (cl.base_ft - CLOUD_MARGIN_FT) <= alt <= (cl.top_ft + CLOUD_MARGIN_FT)
+    ]
+    return max(pcts) if pcts else None
+
+
+def _level_nwp_cover_pct(
+    lv: DerivedLevel,
+    clouds: list[EnhancedCloudLayer],
+    nwp_cloud_low_pct: float | None,
+    nwp_cloud_mid_pct: float | None,
+    nwp_cloud_high_pct: float | None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None,
+) -> float | None:
+    """NWP cover (%) scaling icing at a level the NWP envelope admitted (#844).
+
+    The higher of two model-native answers: the band cover
+    (``nwp_cloud_cover_at_altitude`` — the model's GRIB band cover, Open-Meteo
+    bulk only when there is none) and the gating deck's own
+    ``mean_cloud_cover_pct`` (``_envelope_cover_pct``). Taking the max means a
+    known 0 % band answer can no longer erase a deck the model drew, and a
+    deck's *mean* fraction — usually below the band cover — never scales
+    icing down on its own. Deck-cover-first was measured and rejected: it
+    lowered ECMWF/ICON icing on ~5 % of GRIB-hour soundings (decisions §54).
+    ``None`` only when neither is known.
+    """
+    known = [
+        pct
+        for pct in (
+            _nwp_cloud_for_altitude(
+                lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+                nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+                pressure_hpa=lv.pressure_hpa,
+            ),
+            _envelope_cover_pct(lv, clouds),
+        )
+        if pct is not None
+    ]
+    return max(known) if known else None
 
 
 def _cloud_fraction_for_level(
@@ -331,16 +393,9 @@ def _cloud_fraction_for_level(
     """
     if nwp_cloud_pct is not None:
         return nwp_cloud_pct / 100.0
-    alt = lv.altitude_ft
-    layer_pcts = [
-        cl.mean_cloud_cover_pct
-        for cl in clouds
-        if cl.mean_cloud_cover_pct is not None
-        and alt is not None
-        and (cl.base_ft - CLOUD_MARGIN_FT) <= alt <= (cl.top_ft + CLOUD_MARGIN_FT)
-    ]
-    if layer_pcts:
-        return max(layer_pcts) / 100.0
+    layer_pct = _envelope_cover_pct(lv, clouds)
+    if layer_pct is not None:
+        return layer_pct / 100.0
     return 1.0
 
 
@@ -439,6 +494,7 @@ def _zone_nwp_cloud_pct(
             enhance.nwp_cloud_mid_pct,
             enhance.nwp_cloud_high_pct,
             nwp_cloud_diagnostics=enhance.nwp_cloud_diagnostics,
+            pressure_hpa=lv.pressure_hpa,
         )) is not None
     ]
     return max(known) if known else None
@@ -594,10 +650,10 @@ def assess_icing_zones_ogimet_nwp(
         if raw_index <= 0:
             continue
 
-        # NWP cloud cover for severity modulation
-        nwp_cloud = _nwp_cloud_for_altitude(
-            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
-            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        # NWP cloud cover for severity modulation (#844).
+        nwp_cloud = _level_nwp_cover_pct(
+            lv, clouds, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics,
         )
         # Known 0 % → no cloud at this altitude per the model; skip. Unknown
         # (None) is NOT clear — see ``_cloud_fraction_for_level`` (#807).
@@ -670,10 +726,10 @@ def assess_icing_zones_ieng(
         if raw_index <= 0:
             continue
 
-        # NWP cloud cover for severity modulation
-        nwp_cloud = _nwp_cloud_for_altitude(
-            lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
-            nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        # NWP cloud cover for severity modulation (#844).
+        nwp_cloud = _level_nwp_cover_pct(
+            lv, clouds, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+            nwp_cloud_diagnostics,
         )
         # Known 0 % → no cloud at this altitude per the model; skip. Unknown
         # (None) is NOT clear — see ``_cloud_fraction_for_level`` (#807).

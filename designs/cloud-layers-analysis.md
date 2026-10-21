@@ -237,16 +237,22 @@ This function (`icing_common.py:134-181`) is the shared altitude-aware cloud cov
 3. Returns highest matching cloud cover percentage
 
 **Path B — Without band base/top (ECMWF, ICON-EU, HRRR, MétéoFr, UKMO, GEM):**
-- Simple ICAO band mapping: `< 6500ft → low`, `< 20000ft → mid`, `≥ 20000ft → high`
-- No vertical constraint within the band
+`clouds.nwp_band_cover_pct` (#844):
+- Diagnostics carry any band cover (ECMWF `lcc/mcc/hcc`, ICON `clcl/clcm/clch`, HRRR NCEP) → that model's own band cover, banded by its `band_definition` (`cloud_band_index`: NCEP pressure bands 642/350 hPa for GFS/HRRR when the level pressure is known, ICAO 6,500/20,000 ft otherwise). A band the diagnostics leave empty is `None`, never bulk.
+- No diagnostic band cover at all (UKMO, MétéoFr, ECMWF outside GRIB) → Open-Meteo bulk on the ICAO slabs.
+- No vertical constraint within the band.
+
+**Icing scaling** (Ogimet-NWP, IENG) uses `max(band cover, gating deck's mean_cloud_cover_pct)` (`icing._level_nwp_cover_pct`), so a 0 % band answer cannot drop a level inside a deck the model drew (decisions §54).
 
 ---
 
 ## Bugs Found
 
-### 1. `nwp_cloud_cover_at_altitude` uses Open-Meteo bulk percentage instead of GRIB diagnostic cover_pct
+### 1. ~~`nwp_cloud_cover_at_altitude` uses Open-Meteo bulk percentage instead of GRIB diagnostic cover_pct~~ ✓ FIXED
 
-**Still open (re-verified 2026-08-15).** With GFS diagnostics the function matches altitude against the GRIB layer boundaries but takes the *amount* from Open-Meteo (`pct = bulk_pct or 0.0`), while `_build_grib_layers` prefers `diag.cover_pct` with the bulk value only as fallback. So icing and the drawn cloud layer can carry different cover % for the same band and point.
+**Fixed:** Path A by #807 (diag layer cover first); Path B by #844 (GRIB band cover first, bulk only when the diagnostics carry none). The text below is the pre-#807 record, kept for the June decision's context.
+
+**Was open (re-verified 2026-08-15).** With GFS diagnostics the function matches altitude against the GRIB layer boundaries but takes the *amount* from Open-Meteo (`pct = bulk_pct or 0.0`), while `_build_grib_layers` prefers `diag.cover_pct` with the bulk value only as fallback. So icing and the drawn cloud layer can carry different cover % for the same band and point.
 
 **Status (decision 2026-06-06, unchanged):** **code kept as-is** — not a briefing-correctness defect (both numbers are "cloud cover", from slightly different post-processing). The one-line fix is `pct = diag_layer.cover_pct if diag_layer.cover_pct is not None else (bulk_pct or 0.0)`, to apply only if calibration ever shows it matters.
 
@@ -274,9 +280,9 @@ Two server-side consumers of cloud cover use different sources for the same data
 | Consumer | With GFS Diagnostics | Without Diagnostics |
 |----------|---------------------|---------------------|
 | **`build_nwp_cloud_layers`** (cloud detection) | GRIB `diag.cover_pct` (preferred) → Open-Meteo fallback | N/A (returns None, or condensate tier for HRRR) |
-| **`nwp_cloud_cover_at_altitude`** (icing) | Open-Meteo `bulk_pct` (always) | Open-Meteo `bulk_pct` |
+| **`nwp_cloud_cover_at_altitude`** (icing) | GRIB `diag.cover_pct` (#807 / #844) | Open-Meteo `bulk_pct` |
 
-Both should prefer GRIB diagnostic cover_pct when available, falling back to Open-Meteo (see bug 1 — kept as-is by decision).
+Resolved: both prefer the GRIB diagnostic cover (bug 1).
 
 ### 2. Ogimet-DD pass-2 NWP fallback uses different cloud source than Ogimet-NWP
 
@@ -292,7 +298,7 @@ This is by design (different methods) but means the same atmospheric level can b
 
 ICON-EU gets an `NWPCloudDiagnostics` object, but its low/mid/high bands lack `base_ft`/`top_ft`:
 - `build_nwp_cloud_layers` — never reaches the GRIB tier at all for ICON: the 3D `clc` tier returns first, so nothing from the diag object (convective included) becomes a cloud layer
-- `nwp_cloud_cover_at_altitude` — `any_diag = False`, falls through to ICAO band fallback
+- `nwp_cloud_cover_at_altitude` — `any_diag = False` (no geometry), but since #844 the band covers ARE read (`nwp_band_cover_pct`), not the Open-Meteo bulk
 
 The ceiling and convective base/top from ICON-EU diagnostics ARE used elsewhere (convective assessment, ceiling display) — not wasted, just not used for cloud layers or the cloud-cover altitude lookup.
 

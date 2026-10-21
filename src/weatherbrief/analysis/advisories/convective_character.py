@@ -27,7 +27,10 @@ from weatherbrief.analysis.advisories._helpers import (
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
-from weatherbrief.analysis.sounding.clouds import cloud_cover_band_pct
+from weatherbrief.analysis.sounding.clouds import (
+    nwp_band_cover_pct,
+    pressure_near_altitude,
+)
 from weatherbrief.analysis.sounding.convective import (
     character_extent,
     CHAR_COVER_REALIZED_PCT,
@@ -135,19 +138,22 @@ def resolve_character_params(ctx: RouteContext) -> dict[str, float]:
 
 
 def _bulk_cover_at(sounding: SoundingAnalysis, altitude_ft: float) -> float | None:
-    """Bulk NWP cloud cover (%) for the ICAO band *containing* ``altitude_ft``.
+    """The model's band cover (%) for the band *containing* ``altitude_ft``.
 
-    Thin adapter over ``clouds.cloud_cover_band_pct`` — the band split lives
-    there, with the boundary constants, so it cannot drift. ``None`` when the
-    model publishes no bulk cover for that band (ECMWF via Open-Meteo), which
-    :func:`_point_embedded` reads as "no corroboration available", never as
-    "clear".
+    Thin adapter over ``clouds.nwp_band_cover_pct``: the model's own GRIB band
+    cover first (banded by its definition — GFS/HRRR by NCEP pressure, so an
+    ~8,000 ft deck reads LCDC, #834), the Open-Meteo bulk triple only when the
+    diagnostics carry none (#844). ``None`` when the model publishes no cover
+    for that band, which :func:`_point_embedded` reads as "no corroboration
+    available", never as "clear".
     """
-    return cloud_cover_band_pct(
+    return nwp_band_cover_pct(
         altitude_ft,
         sounding.cloud_cover_low_pct,
         sounding.cloud_cover_mid_pct,
         sounding.cloud_cover_high_pct,
+        sounding.nwp_cloud_diagnostics,
+        pressure_hpa=pressure_near_altitude(sounding.derived_levels, altitude_ft),
     )
 
 
@@ -176,8 +182,8 @@ def _point_embedded(
        ``max(low, mid)`` meant a 100 %-covered *low* deck corroborated a "deck"
        at FL180, which is in the mid band.
 
-    When the model publishes no bulk cover for that band (ECMWF via Open-Meteo),
-    fall back to requiring OVC as the stronger standalone evidence — unchanged.
+    When the model publishes no cover for that band, fall back to requiring
+    OVC as the stronger standalone evidence — unchanged.
     """
     containing = [
         cl

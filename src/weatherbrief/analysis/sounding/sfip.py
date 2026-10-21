@@ -187,6 +187,8 @@ def _cloud_cover_for_level(
     nwp_cloud_mid_pct: float | None,
     nwp_cloud_high_pct: float | None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+    *,
+    pressure_hpa: float | None = None,
 ) -> float:
     """Return altitude-aware NWP cloud cover % for a level.
 
@@ -205,6 +207,7 @@ def _cloud_cover_for_level(
     result = nwp_cloud_cover_at_altitude(
         altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
         nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+        pressure_hpa=pressure_hpa,
     )
     return result or 0.0
 
@@ -371,6 +374,7 @@ def assess_sfip_zones(
         cloud_cover = _cloud_cover_for_level(
             lv.altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
             nwp_cloud_diagnostics=nwp_cloud_diagnostics,
+            pressure_hpa=lv.pressure_hpa,
         )
 
         sfip_raw, sfip_100, severity, variant = compute_sfip_level(
