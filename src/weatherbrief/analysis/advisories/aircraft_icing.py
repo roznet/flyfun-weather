@@ -3,7 +3,7 @@
 Replaces ``icing_escape`` (non-FIKI), ``fiki_icing`` and the icing axis of
 ``ifr_feasibility``, which graded the same icing three different ways and could
 show "RED for icing" next to "warm escape available" on one briefing. The
-design and every number in it are recorded in meteorology-decisions §52.
+design and every number in it are recorded in meteorology-decisions §56.
 
 The flight's aircraft picks the column (``RouteContext.equipage``):
 
@@ -173,7 +173,7 @@ def _escape_down(
     if precip is not None and precip.freezing_rain_risk:
         return None, "freezing_rain"
     if precip is not None and precip.warm_nose_base_ft is not None:
-        # §52 (as agreed in #827): no descent escape under a warm nose either.
+        # §56 (as agreed in #827): no descent escape under a warm nose either.
         # Below it the air is sub-zero again, and any precipitation falling
         # through it arrives supercooled, even with no freezing-rain flag yet.
         return None, "warm_nose"

@@ -149,7 +149,7 @@ def _check_enroute_hazards(
 
     Neither axis is re-derived here. Convection comes from the shared
     ``grade_convective_model`` (meteorology-decisions §22) and icing from the
-    ``aircraft_icing`` card's own per-model grade (§52), so this composite can
+    ``aircraft_icing`` card's own per-model grade (§56), so this composite can
     never call icing RED while the icing card says "escape available", which is
     what it did before #827. This function only merges the two axes into the
     composite's ribbon and counts.
@@ -263,7 +263,7 @@ class IFRFeasibilityEvaluator:
         min_arr_ceiling_ft = params.get("min_arr_ceiling_ft", 400)
         params = {k: v for k, v in params.items() if k not in _RETIRED_ICING_PARAMS}
         # Both hazard axes are graded by their owning advisories' parameters,
-        # not by a second set here (§22 convection, §52 icing). Resolved once
+        # not by a second set here (§22 convection, §56 icing). Resolved once
         # per evaluation: the user's overrides if that advisory is enabled,
         # catalog defaults otherwise.
         conv_params = resolve_convective_params(ctx)
@@ -290,7 +290,7 @@ class IFRFeasibilityEvaluator:
 
             # 3. Icing: the SAME call the aircraft_icing card grades with, so
             # this composite's icing axis is that card's per-model status by
-            # construction (§52), FIKI or not.
+            # construction (§56), FIKI or not.
             icing_grade = grade_aircraft_icing_model(ctx, model, icing_params)
             (
                 icing_total, affected, icing_count,
