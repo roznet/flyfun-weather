@@ -23,9 +23,14 @@ from weatherbrief.models.observed import (
     ObservedStationRef,
     ObservedStationSamples,
 )
-from weatherbrief.analysis.flight_progress import FlightProgress
+from weatherbrief.analysis.flight_progress import (
+    EVENT_LANDED,
+    TIME_BASE_PLANNED,
+    FlightProgress,
+    ProgressEvent,
+)
 from weatherbrief.observed.storms import CellFrames, build_storms, group_storms, load_cell_frames
-from weatherbrief.tasks.live_significance import classify_changes
+from weatherbrief.tasks.live_significance import classify_changes, storm_alerts
 
 DEP = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
 ROUTE = RouteConfig(
@@ -77,7 +82,7 @@ def storms_at(now, cells, *, earlier=(), flown=None):
     return build_storms(frames, progress, end_icaos=("ZZDP", "ZZDS"))
 
 
-def rows(storms, *, now, latest_obs=None, observed=None, departure_at=DEP):
+def rows(storms, *, now, latest_obs=None, observed=None, departure_at=DEP, progress_observed=False):
     baseline = None
     if latest_obs is not None:
         baseline = _obs(*(a.model_copy(update={"metar_raw": "METAR ZZRT 061130Z 27010KT 9999 FEW040 19/12 Q1013",
@@ -87,6 +92,7 @@ def rows(storms, *, now, latest_obs=None, observed=None, departure_at=DEP):
         baseline_obs=baseline, latest_obs=latest_obs,
         baseline_sigmets=None, latest_sigmets=None,
         latest_observed=observed, departure_at=departure_at, now=now, storms=storms,
+        progress_observed=progress_observed,
     )
     return changes.changes
 
@@ -246,6 +252,49 @@ def test_storm_near_destination_is_the_approach():
     [row] = rows(storms_at(now, [c]), now=now)
     assert (row.role, row.tier) == ("destination", "alert")
     assert "of ZZDS, arrival ~13:30Z" in row.message
+
+
+def _destination_storm():
+    c = cell("core35-a", "core35", flashes=3, speed=12, toward=270.0)
+    c.update(lat=50.05, lon=4.1)  # just past ZZDS
+    return c
+
+
+@pytest.mark.parametrize("after_arrival_min,observed,tier", [
+    (51, False, "highlight"),   # #854: EDGS→EDMA, 51 min after the planned arrival
+    (7, False, "alert"),        # plan only: within the 30 min allowance (a late pilot)
+    (7, True, "highlight"),     # observed progress: past is past
+    (-10, True, "alert"),       # still inbound
+])
+def test_storm_past_its_abeam_time_does_not_alert(after_arrival_min, observed, tier):
+    arrival = DEP + timedelta(hours=1.5)
+    now = arrival + timedelta(minutes=after_arrival_min)
+    [row] = rows(storms_at(now, [_destination_storm()]), now=now, progress_observed=observed)
+    assert (row.role, row.tier) == ("destination", tier)
+
+
+def test_storm_after_an_observed_landing_does_not_alert():
+    landed = DEP + timedelta(hours=1, minutes=20)
+    now = landed + timedelta(minutes=5)
+    progress = FlightProgress(TRACK, DEP, 1.5, now, events=(
+        ProgressEvent(EVENT_LANDED, landed, recorded_at=landed),
+    ))
+    assert progress.time_base != TIME_BASE_PLANNED
+    frames = CellFrames("available", newest=frame(now - timedelta(minutes=5), [_destination_storm()]), earlier=[])
+    storms = build_storms(frames, progress, end_icaos=("ZZDP", "ZZDS"))
+    [st] = storms.storms
+    assert st.minutes_to_abeam < 0
+    assert not storm_alerts(st, progress_observed=True)
+    # The plan alone would still have the flight inbound (arrival 13:30Z).
+    assert storm_alerts(st.model_copy(update={"minutes_to_abeam": 5.0}))
+
+
+def test_storm_ahead_and_closing_still_alerts():
+    now = DEP + timedelta(minutes=10)
+    st = storms_at(now, [cell("core35-a", "core35", along=50, cross=6, speed=10, toward=0.0)])
+    [s0] = st.storms
+    assert 0 < s0.minutes_to_abeam <= 30 and s0.relative_motion == "closing"
+    assert storm_alerts(s0) and storm_alerts(s0, progress_observed=True)
 
 
 def test_lightning_pending_and_withheld_motion_wording():

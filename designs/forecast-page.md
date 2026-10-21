@@ -166,7 +166,7 @@ Both map endpoints use a `verification_cache` table (see [metar-taf-accuracy.md]
 1. Find latest `model_init_time` per model that has data for the target forecast_hour
 2. Fetch all `AirportForecastSnapshotRow` for those (model, init_time, hour) combos
 3. Derive `flight_category` from ceiling + visibility via `classify_flight_category()`
-4. Enrich each snapshot with runway crosswind/headwind: load runway headings from airports DB, compute `compute_runway_winds()` per model, select best runway (min crosswind, max headwind), attach `crosswind_kt`, `headwind_kt`, `best_runway_id`, and gust equivalents
+4. Enrich each snapshot with runway crosswind/headwind: load runway headings from airports DB, compute `compute_runway_winds()` per model, select best runway via `best_runway_of` (lowest crosswind within a tolerance, then most headwind; meteorology-decisions §57), attach `crosswind_kt`, `headwind_kt`, `best_runway_id`, and gust equivalents
 5. Group by airport → per-model data + computed consensus
 
 ## Color Scales

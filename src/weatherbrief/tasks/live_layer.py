@@ -38,6 +38,7 @@ from weatherbrief.analysis.flight_progress import (
     HISTORY_TYPE as PROGRESS_HISTORY_TYPE,
 )
 from weatherbrief.analysis.flight_progress import (
+    TIME_BASE_PLANNED,
     FlightProgress,
     ProgressEvent,
     progress_events,
@@ -1008,6 +1009,7 @@ def commit_live_update(
             now=now,
             storms=layer.storms,
             locator=locator,
+            progress_observed=progress is not None and progress.time_base != TIME_BASE_PLANNED,
         )
         if seeded:
             changes.baseline_source = "live_start"

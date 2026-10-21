@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from weatherbrief.analysis.wind import compute_wind_components
@@ -122,16 +123,42 @@ def compute_runway_winds(
     return results
 
 
-def best_runway_of(all_runways: list[RunwayWind]) -> RunwayWind | None:
-    """Pick the wind-best runway from precomputed winds: min crosswind, then max headwind.
+#: Crosswinds this close to the lowest one count as equal when picking the
+#: wind-best runway end, so the headwind decides between them (#854): the
+#: larger of an absolute floor and a fraction of the wind speed. The two ends
+#: of one runway are often a few degrees off reciprocal in nav.db (EHRD
+#: 56°/235°T), which splits their crosswinds by about wind × misalignment;
+#: without a tolerance the tailwind end won whenever it came out 0.2 kt lower.
+#: 10 % of the wind covers ends up to ~5° off reciprocal at any wind speed.
+BEST_RUNWAY_CROSSWIND_TOLERANCE_KT = 1.0
+BEST_RUNWAY_CROSSWIND_TOLERANCE_FRACTION = 0.1
 
-    Single source of truth for the selection criterion, so callers that already
-    have the per-runway winds (e.g. the airport-conditions table, which also
-    keeps ``all_runways``) don't recompute them.
+
+def best_runway_of(all_runways: list[RunwayWind]) -> RunwayWind | None:
+    """Pick the wind-best runway end from precomputed winds.
+
+    Lowest crosswind, with crosswinds within a tolerance of it treated as
+    equal (:data:`BEST_RUNWAY_CROSSWIND_TOLERANCE_KT`, or
+    :data:`BEST_RUNWAY_CROSSWIND_TOLERANCE_FRACTION` of the wind speed when
+    larger); among those, the most headwind. A tailwind end therefore wins
+    only when its crosswind is materially lower than every headwind end's,
+    or every end has a tailwind (#854).
+
+    Single source of truth for the selection criterion: the airport-conditions
+    table, the airport consensus, the Airport Wind advisory and the live wind
+    advisory all pick through it.
     """
     if not all_runways:
         return None
-    return min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
+    lowest = min(r.crosswind_kt for r in all_runways)
+    # The wind speed, from any end's components (the same wind for all).
+    speed = math.hypot(all_runways[0].crosswind_kt, all_runways[0].headwind_kt)
+    tolerance = max(
+        BEST_RUNWAY_CROSSWIND_TOLERANCE_KT, BEST_RUNWAY_CROSSWIND_TOLERANCE_FRACTION * speed,
+    )
+    close = [r for r in all_runways if r.crosswind_kt <= lowest + tolerance]
+    # min() keeps the first of equals, so ties resolve as before.
+    return min(close, key=lambda r: (-r.headwind_kt, r.crosswind_kt))
 
 
 def _ceiling_from_sounding(sounding: SoundingAnalysis) -> float | None:

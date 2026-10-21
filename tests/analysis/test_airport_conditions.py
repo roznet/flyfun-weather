@@ -9,6 +9,7 @@ import pytest
 
 from weatherbrief.analysis.airport_conditions import (
     _ceiling_from_sounding,
+    best_runway_of,
     reconcile_ceiling,
     classify_flight_category,
     compute_airport_conditions,
@@ -163,6 +164,55 @@ class TestRunwayWinds:
         # Both should have equal crosswind (20kt from perpendicular)
         assert result[0].crosswind_kt == pytest.approx(result[1].crosswind_kt, abs=0.5)
 
+
+
+class TestBestRunwayOf:
+    """The wind-best end (#854): a tailwind end never wins on a few tenths of
+    crosswind from ends a few degrees off reciprocal."""
+
+    @staticmethod
+    def _pick(ends: list[tuple[str, float]], speed: float, direction: float):
+        winds = compute_runway_winds([RunwayEnd(id=i, heading_deg=h) for i, h in ends], speed, direction)
+        return best_runway_of(winds)
+
+    def test_ends_off_reciprocal_pick_the_headwind_end(self):
+        # EHRD in nav.db: 56°T / 235°T. At 249@12 RW06 has 0.2 kt less
+        # crosswind than RW24 but an 11 kt tailwind.
+        best = self._pick([("06", 56.0), ("24", 235.0)], 12.0, 249.0)
+        assert best.runway_id == "24"
+        assert best.headwind_kt == pytest.approx(11.6, abs=0.5)
+
+    def test_off_reciprocal_strong_wind_still_headwind_end(self):
+        # 3° off reciprocal at 40 kt splits the crosswinds by ~2 kt: still
+        # within 10 % of the wind.
+        best = self._pick([("09", 90.0), ("27", 273.0)], 40.0, 300.0)
+        assert best.runway_id == "27"
+        assert best.headwind_kt > 0
+
+    def test_exact_reciprocals_unchanged(self):
+        for direction, expected in ((100.0, "09"), (260.0, "27"), (10.0, "09"), (190.0, "27")):
+            best = self._pick([("09", 90.0), ("27", 270.0)], 15.0, direction)
+            assert best.runway_id == expected, direction
+            assert best.headwind_kt >= 0
+
+    def test_crossing_runways_lowest_crosswind_wins(self):
+        best = self._pick([("09", 90.0), ("27", 270.0), ("14", 140.0), ("32", 320.0)], 20.0, 130.0)
+        assert best.runway_id == "14"
+
+    def test_materially_lower_crosswind_beats_headwind(self):
+        # A single-direction end with almost no crosswind but a light tailwind
+        # against a headwind end with a strong crosswind: the crosswind wins.
+        best = self._pick([("04", 40.0), ("28", 280.0)], 10.0, 105.0)
+        assert best.runway_id == "28"
+        assert best.headwind_kt < 0
+        assert best.crosswind_kt < 1.0
+
+    def test_all_tailwind_picks_least_crosswind(self):
+        best = self._pick([("18", 180.0)], 10.0, 0.0)
+        assert best.runway_id == "18"
+
+    def test_empty(self):
+        assert best_runway_of([]) is None
 
 # --- ceiling_from_sounding ---
 
