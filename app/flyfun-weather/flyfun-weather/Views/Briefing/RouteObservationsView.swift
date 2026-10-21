@@ -50,6 +50,7 @@ struct RouteObservationsView: View {
                 if obs.hasConflicts == true {
                     conflictBanner
                 }
+                proxyLines(obs)
                 if !showsBothAxes {
                     axisPicker
                 }
@@ -106,6 +107,26 @@ struct RouteObservationsView: View {
                     .foregroundStyle(Theme.amber)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    /// #776: name the station standing in for a field with no report of its
+    /// own (#767) — its row is absent from the table, so without this line
+    /// nothing says EGLL is reading for EGTF. Mirrors the web's `.obs-proxy`.
+    @ViewBuilder
+    private func proxyLines(_ obs: RouteObservations) -> some View {
+        let lines = obs.proxyLines
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("routeObservationsProxy")
         }
     }
 

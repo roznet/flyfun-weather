@@ -175,6 +175,50 @@ class TestRenderHtml:
         assert "SIGMETs unavailable" not in html
 
 
+    def _with_observations(self, pack_dir, airports):
+        from weatherbrief.models.observations import RouteObservations
+
+        obs = RouteObservations(
+            corridor_nm=30.0, fetch_time=datetime(2026, 2, 21, 7, 0, tzinfo=timezone.utc),
+            airports_found=len(airports),
+            airports_with_metar=sum(a.has_metar for a in airports),
+            airports_with_taf=sum(a.has_taf for a in airports),
+            airports=airports,
+        )
+        path = pack_dir / "briefing.json"
+        briefing = json.loads(path.read_text())
+        # As the pipeline writes it: model_dump serializes the computed caption.
+        briefing["route_observations"] = obs.model_dump(mode="json")
+        path.write_text(json.dumps(briefing))
+
+    def test_proxied_field_names_its_stand_in(self, pack_dir, sample_flight, sample_pack):
+        """#776: a field with no METAR/TAF has no row, so the report names the
+        station reading for it above the table, worded as the web does."""
+        from weatherbrief.models.observations import AirportObservation, ObsProxy
+
+        proxy = ObsProxy(icao="ZZPX", distance_nm=8.2, bearing_deg=45)
+        self._with_observations(pack_dir, [
+            AirportObservation(icao="ZZFD", distance_from_route_nm=0.0, nearest_waypoint_icao="ZZFD",
+                               metar_proxy=proxy, taf_proxy=proxy),
+            AirportObservation(icao="ZZPX", distance_from_route_nm=6.0, nearest_waypoint_icao="ZZFD",
+                               has_metar=True, metar_raw="ZZPX 210650Z 24008KT CAVOK 08/02 Q1022"),
+        ])
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
+        assert '<p class="obs-proxy">ZZFD: using ZZPX as proxy · 8 NM NE</p>' in html
+        assert html.count('class="obs-proxy"') == 1
+
+    def test_no_proxy_line_when_fields_report_themselves(self, pack_dir, sample_flight, sample_pack):
+        from weatherbrief.models.observations import AirportObservation
+
+        self._with_observations(pack_dir, [
+            AirportObservation(icao="ZZPX", distance_from_route_nm=6.0, nearest_waypoint_icao="ZZFD",
+                               has_metar=True, metar_raw="ZZPX 210650Z 24008KT CAVOK 08/02 Q1022"),
+        ])
+        html = render_html(pack_dir, sample_flight, sample_pack, position_sharing="full")
+        assert "METAR/TAF Observations" in html
+        assert '<p class="obs-proxy">' not in html
+
+
 class TestRenderPdf:
     def test_renders_pdf_bytes(self, pack_dir, sample_flight, sample_pack):
         """PDF rendering produces bytes (mocking WeasyPrint)."""

@@ -127,6 +127,16 @@ nonisolated struct RouteObservations: Codable, Sendable {
         (airports ?? []).filter { $0.hasMetar == true || $0.hasTaf == true }
     }
 
+    /// #776: one gray line per field reading a nearby station's METAR/TAF
+    /// (#767), shown above the table: "EGTF: using EGLL as proxy · 8 NM NE".
+    /// The caption is the server's string; only the "ICAO: " prefix is added
+    /// here, exactly as the web (`renderRouteObservations`) and the PDF report do.
+    var proxyLines: [String] {
+        (airports ?? []).compactMap { apt in
+            apt.proxyCaption.map { "\(apt.icao): \($0)" }
+        }
+    }
+
     /// The subset a phone-width table shows before "Show all": the `limit`
     /// airports nearest the route, **plus** any airport whose model comparison
     /// is CONFLICTING — the conflict banner must never point at a row the cap
