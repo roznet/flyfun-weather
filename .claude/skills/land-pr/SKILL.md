@@ -124,8 +124,10 @@ main, not the PR). If no UI test covers the change, say so.
 
 `gh pr merge <n> --rebase --delete-branch`. If the rebase doesn't apply, fall back
 to `--merge` and say so. In the cloud: `merge_pull_request` with `rebase`
-and the head SHA you checked, then delete the branch (`git push origin --delete
-<branch>`). Confirm that the linked issues closed (or deliberately did
+and the head SHA you checked. The cloud **can't delete the branch**: its git proxy
+refuses ref deletion and the GitHub tools have no delete call. Leave it and list it
+under "Left open" in the summary, unless the repo's "Automatically delete head
+branches" setting already removed it. Confirm that the linked issues closed (or deliberately did
 not, for `Addresses`).
 
 ## Step 4 — Finish it on main
