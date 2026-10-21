@@ -6297,10 +6297,11 @@ ECMWF pack hours). Sign flipped, magnitude ~10× too small, so:
 ### Decision
 
 Convert once, at ingestion (`fetch/open_meteo.py`): ω = −ρ·g·w with
-ρ = p / (Rd·T) at the level — the same formula and constants as the ICON GRIB
-path. The unit is read from each response's `hourly_units`:
-`m/s` → convert, `Pa/s` → as-is, `undefined`/absent → no data, anything else →
-**logged as an error and dropped**. A misread omega flips the convective gates;
+ρ = p / (Rd·T) at the level, via `fetch/omega.py` — the one helper the ICON GRIB
+decode also uses. The unit is read from each response's `hourly_units`:
+`m/s` → convert, `Pa/s` → as-is, `undefined` → no data; values with no unit
+(warning) or an unrecognised unit (error) are **dropped**, each problem logged
+once per process. A misread omega flips the convective gates;
 no omega only removes a modifier, so dropping is the safe failure.
 
 Thresholds (`OMEGA_ASCENT` −0.1, `OMEGA_SUBSIDENCE` +0.05, the vertical-motion
@@ -6359,8 +6360,12 @@ and its siblings in the advisory labels and embedded-convection check):
    unknown (`None`), never filled from bulk — the condensate builder's rule
    (§23). The bulk triple answers only when the diagnostics carry no band cover.
 2. **Icing scales by `max(band cover, gating deck's mean cover)`**
-   (`icing._level_nwp_cover_pct`, Ogimet-NWP and IENG). A 0 % band answer can no
-   longer drop a level inside a deck the model drew.
+   (`icing._level_nwp_cover_pct`, Ogimet-NWP and IENG, and the opt-in
+   severity-enhance corroboration). A 0 % band answer can no longer drop a level
+   inside a deck the model drew. SFIP-proxy reads the band cover alone; an
+   unknown band (one the GRIB diagnostics leave empty) is "no NWP boost" there —
+   its `max(sounding_score, nwp_score)` falls back to the sounding's own
+   evidence, never to clear (#807).
 3. **The bulk fallback keeps the ICAO slabs.** After (1), the models that still
    reach it are UKMO, Météo-France and ECMWF outside GRIB coverage, whose bands
    sit near the ICAO split; GFS always carries NCEP-marked diagnostics. GFS

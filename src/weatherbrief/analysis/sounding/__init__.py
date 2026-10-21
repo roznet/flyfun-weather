@@ -578,6 +578,7 @@ def _analyze_sounding_heavy(
             nwp_cloud_mid_pct=hourly.cloud_cover_mid_pct if hourly else None,
             nwp_cloud_high_pct=hourly.cloud_cover_high_pct if hourly else None,
             nwp_cloud_diagnostics=hourly.nwp_cloud_diagnostics if hourly else None,
+            nwp_cloud_layers=nwp_cloud_layers,
         )
         if icing_severity_enhance
         else None

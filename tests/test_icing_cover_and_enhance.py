@@ -190,6 +190,17 @@ class TestSeverityEnhance:
         )
         assert [z.risk for z in zones] == [IcingRisk.SEVERE]
 
+    def test_enhance_corroborated_by_the_nwp_deck_cover(self):
+        """The corroboration check reads max(band, deck) like per-level icing:
+        a 0 % band answer doesn't veto a deck the model drew (#844)."""
+        deck = [EnhancedCloudLayer(base_ft=8500, top_ft=11500,
+                                   coverage=CloudCoverage.OVC, mean_cloud_cover_pct=90.0)]
+        enhance = SeverityEnhanceInputs(nwp_cloud_mid_pct=0.0, nwp_cloud_layers=deck)
+        zones = assess_icing_zones_ogimet_dd(
+            _saturated_cold_levels(), _deck(), severity_enhance=enhance,
+        )
+        assert [z.risk for z in zones] == [IcingRisk.SEVERE]
+
     def test_enhance_without_nwp_corroboration_does_nothing(self):
         """Unknown cover never corroborates (no upgrade on missing data)."""
         enhance = SeverityEnhanceInputs()

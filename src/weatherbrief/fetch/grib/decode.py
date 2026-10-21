@@ -3156,11 +3156,10 @@ def _convert_raw_sounding(
             out["wind_direction_deg"] = 0.0
 
     # Physical vertical velocity (m/s, ICON) → omega (Pa/s)
-    # omega = -ρ·g·w, where ρ = P/(Rd·T_k)
     w_ms = raw.get("raw_w_m_s")
     if w_ms is not None and t_k is not None:
-        rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * t_k)
-        out["vertical_velocity_pa_s"] = -rho * _G * w_ms
+        from weatherbrief.fetch.omega import w_to_omega_pa_s
+        out["vertical_velocity_pa_s"] = w_to_omega_pa_s(w_ms, pressure_hpa, t_k)
 
     return out
 

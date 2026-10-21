@@ -494,11 +494,11 @@ def _vv_response(unit: str) -> dict:
 
 def test_w_to_omega_sign_and_scale():
     """Upward w is negative omega, ~10x larger in magnitude at 700 hPa."""
-    from weatherbrief.fetch.open_meteo import w_to_omega_pa_s
+    from weatherbrief.fetch.omega import w_to_omega_pa_s
 
-    assert w_to_omega_pa_s(0.1, 700, -5.0) == pytest.approx(-0.892, abs=1e-3)
-    assert w_to_omega_pa_s(-0.1, 700, -5.0) == pytest.approx(0.892, abs=1e-3)
-    assert w_to_omega_pa_s(0.0, 700, -5.0) == 0.0
+    assert w_to_omega_pa_s(0.1, 700, 268.15) == pytest.approx(-0.892, abs=1e-3)
+    assert w_to_omega_pa_s(-0.1, 700, 268.15) == pytest.approx(0.892, abs=1e-3)
+    assert w_to_omega_pa_s(0.0, 700, 268.15) == 0.0
 
 
 @responses.activate
@@ -544,11 +544,11 @@ def test_omega_unit_passes_through():
 
 @responses.activate
 @pytest.mark.parametrize("units", [{"vertical_velocity_700hPa": "cm/s"}, {}])
-def test_unknown_or_missing_unit_drops_vertical_velocity(units, caplog):
+def test_unknown_or_missing_unit_drops_vertical_velocity(units, caplog, _fresh_vv_log):
     """No recognised unit → vertical velocity is dropped, never guessed.
 
-    An unrecognised unit is logged as an error; a response with no unit for
-    it (absent ``hourly_units``) is dropped silently.
+    An unrecognised unit is logged as an error; values with no unit at all
+    (absent ``hourly_units``) only warn — see ``test_values_without_unit_warn_once``.
     """
     body = {"hourly": _VV_HOURLY}
     if units:
@@ -566,12 +566,43 @@ def test_unknown_or_missing_unit_drops_vertical_velocity(units, caplog):
     assert ("not recognised" in caplog.text) == bool(units)
 
 
-def test_undefined_unit_is_no_data_not_an_error(caplog):
+@pytest.fixture
+def _fresh_vv_log(monkeypatch):
+    """Unit problems log once per process; give each test a clean slate."""
+    import weatherbrief.fetch.open_meteo as om
+
+    monkeypatch.setattr(om, "_VV_UNIT_PROBLEMS_LOGGED", set())
+
+
+def test_undefined_unit_is_no_data_not_an_error(caplog, _fresh_vv_log):
     """Models without vertical velocity report 'undefined' — not an error."""
     from weatherbrief.fetch.open_meteo import vertical_velocity_unit
 
-    with caplog.at_level("ERROR", logger="weatherbrief.fetch.open_meteo"):
-        assert vertical_velocity_unit(
-            {"vertical_velocity_700hPa": "undefined"}
-        ) is None
+    with caplog.at_level("WARNING", logger="weatherbrief.fetch.open_meteo"):
+        assert vertical_velocity_unit({
+            "hourly_units": {"vertical_velocity_700hPa": "undefined"},
+            "hourly": {"vertical_velocity_700hPa": [None]},
+        }) is None
     assert caplog.text == ""
+
+
+def test_values_without_unit_warn_once(caplog, _fresh_vv_log):
+    """Values present but no unit declared → dropped, with one warning."""
+    from weatherbrief.fetch.open_meteo import vertical_velocity_unit
+
+    body = {"hourly": {"vertical_velocity_700hPa": [0.1]}}
+    with caplog.at_level("WARNING", logger="weatherbrief.fetch.open_meteo"):
+        assert vertical_velocity_unit(body) is None
+        assert vertical_velocity_unit(body) is None
+    assert caplog.text.count("no unit") == 1
+
+
+def test_unrecognised_unit_logs_once(caplog, _fresh_vv_log):
+    from weatherbrief.fetch.open_meteo import vertical_velocity_unit
+
+    body = {"hourly_units": {"vertical_velocity_700hPa": "cm/s"},
+            "hourly": {"vertical_velocity_700hPa": [10.0]}}
+    with caplog.at_level("ERROR", logger="weatherbrief.fetch.open_meteo"):
+        for _ in range(3):
+            assert vertical_velocity_unit(body) is None
+    assert caplog.text.count("not recognised") == 1

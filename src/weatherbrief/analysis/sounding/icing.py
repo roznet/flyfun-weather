@@ -478,6 +478,9 @@ class SeverityEnhanceInputs:
     nwp_cloud_mid_pct: float | None = None
     nwp_cloud_high_pct: float | None = None
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None
+    # The model-native NWP cloud envelope, so the corroboration check reads
+    # the same max(band cover, deck cover) that scales per-level icing (#844).
+    nwp_cloud_layers: list[EnhancedCloudLayer] | None = None
 
 
 def _zone_nwp_cloud_pct(
@@ -488,13 +491,13 @@ def _zone_nwp_cloud_pct(
         pct
         for lv in levels_in_zone
         if lv.altitude_ft is not None
-        and (pct := _nwp_cloud_for_altitude(
-            lv.altitude_ft,
+        and (pct := _level_nwp_cover_pct(
+            lv,
+            enhance.nwp_cloud_layers or [],
             enhance.nwp_cloud_low_pct,
             enhance.nwp_cloud_mid_pct,
             enhance.nwp_cloud_high_pct,
-            nwp_cloud_diagnostics=enhance.nwp_cloud_diagnostics,
-            pressure_hpa=lv.pressure_hpa,
+            enhance.nwp_cloud_diagnostics,
         )) is not None
     ]
     return max(known) if known else None

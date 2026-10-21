@@ -12,6 +12,7 @@ import os
 
 import requests
 
+from weatherbrief.fetch.omega import w_to_omega_pa_s
 from weatherbrief.fetch.variables import (
     MODEL_ENDPOINTS,
     PRESSURE_LEVEL_VARIABLES,
@@ -83,46 +84,61 @@ def magnus_dewpoint(temp_c: float, rh_pct: float) -> float:
 # declared in ``hourly_units``, verified against same-run GRIB in #833).
 # ``PressureLevelData.vertical_velocity_pa_s`` and every consumer (convective
 # ω₇₀₀ gates, SFIP, the sounding w_fpm display) are omega in Pa/s, negative =
-# ascent, so it is converted once here: ω = −ρ·g·w with ρ = p / (Rd·T).
-# Same constants and formula as the ICON GRIB conversion in ``grib/decode.py``.
-_G = 9.80665  # m/s²
-_RD_DRY_AIR = 287.05  # J/(kg·K)
+# ascent, so it is converted once at parse time (``fetch.omega``).
 _VV_UNIT_W = "m/s"
 _VV_UNIT_OMEGA = "Pa/s"
 # Units Open-Meteo reports for a variable a model doesn't have; the values
 # are then all null, so there is nothing to convert or reject.
 _VV_UNITS_NO_DATA = {"undefined", ""}
+# Unit problems already logged this process. A persistent format change would
+# otherwise log once per fetch chunk; once per distinct problem is enough.
+_VV_UNIT_PROBLEMS_LOGGED: set[tuple[str, ...]] = set()
 
 
-def w_to_omega_pa_s(
-    w_ms: float, pressure_hpa: float, temperature_c: float,
-) -> float:
-    """Geometric vertical velocity w (m/s, up positive) → omega (Pa/s, ascent negative)."""
-    rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * (temperature_c + 273.15))
-    return -rho * _G * w_ms
+def _log_vv_unit_problem_once(key: tuple[str, ...], level: int, msg: str, *args) -> None:
+    if key in _VV_UNIT_PROBLEMS_LOGGED:
+        return
+    _VV_UNIT_PROBLEMS_LOGGED.add(key)
+    logger.log(level, msg, *args)
 
 
-def vertical_velocity_unit(hourly_units: dict | None) -> str | None:
+def vertical_velocity_unit(response: dict) -> str | None:
     """The unit Open-Meteo declares for ``vertical_velocity_*`` in a response.
 
+    *response* is one location's response object (``hourly`` + ``hourly_units``).
     Returns ``"m/s"`` or ``"Pa/s"`` (the two we know how to read), or ``None``
     when the response carries no usable vertical velocity — not requested, the
-    model doesn't have it (``undefined``), or an unrecognised unit. The last
-    case is logged as an error and the values are dropped rather than guessed:
-    a misread omega flips ascent and subsidence in the convective gates (#833),
-    which is worse than the gates seeing no omega at all.
+    model doesn't have it (``undefined``), or no recognised unit. Values with
+    an unrecognised unit, or with no unit at all, are dropped rather than
+    guessed and the problem is logged (once per process): a misread omega flips
+    ascent and subsidence in the convective gates (#833), which is worse than
+    the gates seeing no omega at all.
     """
+    hourly_units = response.get("hourly_units") or {}
     units = {
-        u for k, u in (hourly_units or {}).items()
+        u for k, u in hourly_units.items()
         if k.startswith("vertical_velocity_")
     } - _VV_UNITS_NO_DATA
     if not units:
+        hourly = response.get("hourly") or {}
+        if not any(k in hourly_units for k in hourly if k.startswith("vertical_velocity_")) \
+                and any(
+                    any(v is not None for v in vals)
+                    for k, vals in hourly.items()
+                    if k.startswith("vertical_velocity_") and vals
+                ):
+            _log_vv_unit_problem_once(
+                ("<missing>",), logging.WARNING,
+                "Open-Meteo returned vertical_velocity values with no unit in "
+                "hourly_units — dropping vertical velocity",
+            )
         return None
     if len(units) == 1 and next(iter(units)) in (_VV_UNIT_W, _VV_UNIT_OMEGA):
         return next(iter(units))
-    logger.error(
+    _log_vv_unit_problem_once(
+        tuple(sorted(units)), logging.ERROR,
         "Open-Meteo vertical_velocity unit(s) %s not recognised — "
-        "dropping vertical velocity for this response", sorted(units),
+        "dropping vertical velocity", sorted(units),
     )
     return None
 
@@ -272,7 +288,7 @@ class OpenMeteoClient:
 
         hourly_data = data.get("hourly", {})
         timestamps = hourly_data.get("time", [])
-        vv_unit = vertical_velocity_unit(data.get("hourly_units"))
+        vv_unit = vertical_velocity_unit(data)
         forecasts = []
 
         for i, ts in enumerate(timestamps):
@@ -432,7 +448,7 @@ class OpenMeteoClient:
         for point, point_data in zip(points, response_json):
             hourly_data = point_data.get("hourly", {})
             timestamps = hourly_data.get("time", [])
-            vv_unit = vertical_velocity_unit(point_data.get("hourly_units"))
+            vv_unit = vertical_velocity_unit(point_data)
 
             hourly_list = [
                 self._parse_hourly(
@@ -508,7 +524,7 @@ class OpenMeteoClient:
                 if vv_unit == _VV_UNIT_OMEGA:
                     omega = vv
                 elif temp is not None:
-                    omega = w_to_omega_pa_s(vv, level, temp)
+                    omega = w_to_omega_pa_s(vv, level, temp + 273.15)
 
             pressure_levels.append(
                 PressureLevelData(

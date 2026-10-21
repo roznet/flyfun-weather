@@ -648,7 +648,6 @@ def build_nwp_cloud_layers_from_fraction(
 _CONDENSATE_CLOUDY_KG_KG = 1e-7
 
 
-
 def build_nwp_cloud_layers_from_condensate(
     pressure_levels: list[PressureLevelData],
     nwp_cloud_low_pct: float | None = None,
