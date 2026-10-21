@@ -6268,6 +6268,17 @@ outlook. Real-world validation needed: whether worst-of consensus with these
 lines is too pessimistic at D+3..D+6 (pilot feedback on "outlook said NO-GO,
 briefing said fine").
 
+**Freezing level (#841, owner's choice: option (a)).** IFR output shows the
+lowest freezing level per slot, sector and corridor (`min_fzl_ft`, ft MSL) for
+information only; it never changes a grade. Freezing level alone isn't icing
+(icing needs visible moisture below 0 °C), and an airport-point tool has no
+cloud tops or en-route data. Rejected: (b) an `icing_possible` hint from
+freezing level below a cruise altitude plus consensus cloud (revisit only if
+pilots ask), and (c) grading icing (the briefing's icing advisories do it).
+A 2 m temperature ≤ 0 °C reads `SFC`, overriding the snapshot value, because
+that value is the sounding's first 0 °C crossing going up: the base of a warm
+layer over a sub-zero surface, or missing when the whole column is sub-zero.
+
 ## 53. Open-Meteo vertical velocity is w (m/s), converted to omega at ingestion (#833)
 
 **Date:** 2026-10-21

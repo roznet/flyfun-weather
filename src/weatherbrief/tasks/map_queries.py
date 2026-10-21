@@ -197,6 +197,7 @@ _SNAPSHOT_DICT_FIELDS = (
     "cape_jkg",
     "sounding_convective_risk",
     "temperature_2m_c",
+    "freezing_level_ft",
 )
 
 

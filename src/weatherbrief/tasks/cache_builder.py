@@ -63,8 +63,9 @@ from weatherbrief.tasks.forecast_grid import forecast_days, sample_hours_for_day
 # fallback would show a ~12-hour half-outage until the next standalone cycle
 # rebuilt the cache. v2 (#419): added the baked ``consensus_majority`` block.
 # v3 (#520): observation timestamps became TZDateTime reads, so the baked
-# ``observation_time`` strings gained a ``+00:00`` offset.
-FORECAST_MAP_CACHE_VERSION = "v3"
+# ``observation_time`` strings gained a ``+00:00`` offset. v4 (#841): per-model
+# and consensus ``freezing_level_ft`` (the area outlook reads it).
+FORECAST_MAP_CACHE_VERSION = "v4"
 
 
 def forecast_map_cache_key(day: int, hour: int) -> str:

@@ -64,11 +64,13 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 - Wind lines are the **Airport Wind advisory's catalog defaults**, read from `AirportWindEvaluator.catalog_entry()`: one source of truth with the briefing. (The issue first said 20 kt from `approach_feasibility`; that is the approach-alignment limit, not the wind-severity one.)
 - IFR at an airport with no instrument approach uses the VFR cloud lines.
 - Overrides (`min_ceiling_ft`, `min_visibility_m`, `max_crosswind_kt`, `max_gust_kt`) move the GO line (cloud) or the NO-GO line (wind); the other line clamps so the band never inverts. Not stored in the profile.
+- **Freezing level (IFR only, informative, #841)**: each airport-slot gets `fzl_ft`, the map consensus `freezing_level_ft` (worst = lowest model, majority = median of the winning pool, so it matches the map), or `SFC` when the 2 m temperature is ≤ 0 °C (worst: coldest model, majority: median of all models). `SFC` wins because the snapshot value is the sounding's *first* 0 °C crossing going up: under a sub-zero surface that is the base of a warm layer aloft, or missing when the whole column is sub-zero. It never changes a grade (option (a) of #841, owner's choice); grading icing from a point freezing level was rejected (no cloud tops, no en-route data; the briefing's icing advisories do it properly).
 - **Confidence**: `low` if category or ceiling agreement is divergent (or < 2 models), `medium` if mixed or a two-model day (D+5/D+6), else `high`. Disagreement is reported, never averaged away.
 
 ## Aggregation
 
 - **Radius**: per slot, base row + per-sector `go/marg/nogo`, min ceiling, max gust, worst-confidence, and `worst` only when it isn't GO.
+- **IFR freezing level**: each sector / corridor summary carries `min_fzl_ft`, and each slot row a `min_fzl_ft` over every airport in it (focus airports included, since their compact rows don't print it). Rounded to 100 ft, `SFC` lowest. Not in the per-airport compact rows: it would add ~1 KB to a weekend for little gain. Absent for VFR.
 - **Route**: per slot, departure + destination rows + a corridor summary. For legs the corridor counts as one point: NO-GO only when **at least half** its airports are NO-GO, MARGINAL for a minority (an airport can be 20 nm off track and a pilot can avoid one field).
 - `best_slots` (top 3, never a NO-GO slot): radius ranks the base grade (the worse of base and destination when a destination is given, so a NO-GO destination never ranks) then the area GO fraction; route ranks the outbound leg.
 - `best_slots` confidence comes from the airports the pilot would use (base; base + destination; route ends + corridor), not the whole area: one divergent far-off field doesn't make a solid slot read "low". The area GO fraction only breaks ties.
@@ -81,11 +83,11 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 
 ## Output budget
 
-Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination, with map links) is ~14 KB (~3.5k tokens), asserted < 16 KB in `tests/test_area_outlook.py`.
+Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination, with map links) is ~14 KB (~3.5k tokens), asserted < 16 KB in `tests/test_area_outlook.py` for VFR and for IFR with the freezing level.
 
 ## Gotchas
 
-- Snapshots carry **no freezing level / cloud tops**: IFR output has `scope: terminal_only` and the note says en-route icing is not assessed. Adding a freezing-level column to the snapshot table is the way to lift that.
+- Snapshots carry a freezing level (`freezing_level_ft`, ft MSL, from the sounding) but **no cloud tops**: IFR output has `scope: terminal_only`, shows the freezing level as information and the note says icing is not graded. The map payload has carried it since forecast-map cache `v4`; the outlook's projection keeps it plus each model's `temperature_c` (`SLOT_PROJECTION_VERSION` `v2`).
 - Slots come from the map grid: out-of-grid hours snap to the nearest offered; D+6 is 06/12/18Z only. A slot with no data lands in `missing_slots` rather than failing the call. D+0 slots more than an hour gone are dropped (`past_slots_skipped`); if nothing is left the call is a 400.
 - Great-circle maths goes through `great_circle` → euro_aip `NavPoint.haversine_distance`, the same source `tasks/alternates` uses.
 - With `rules=ifr`, `query.minima` moves the VFR cloud lines under `no_approach_airports_only`, so an LLM never quotes them as the IFR minima.
