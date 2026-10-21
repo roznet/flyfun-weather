@@ -1,6 +1,6 @@
 ---
 name: land-pr
-description: Land a PR the user has judged ready — check CI and the review bot, verify iOS code locally (build, unit and the affected UI journeys) when CI didn't, merge with rebase, finish every remaining finding directly on main, tidy bookkeeping, and finish with a short landing summary and what /deploy will need. Invoke with the PR number. Never deploys.
+description: Land a PR the user has judged ready — check CI and the review bot, verify native app code locally (iOS and Android build, unit and the affected UI journeys) when CI didn't, merge with rebase, finish every remaining finding directly on main, tidy bookkeeping, and finish with a short landing summary and what /deploy will need. Runs on the Mac, or in the cloud (Claude Code on the web) for PRs with no native or Mac-only work — in the cloud it stops before merging anything else. Invoke with the PR number. Never deploys.
 disable-model-invocation: true
 ---
 
@@ -12,9 +12,13 @@ direct commits on `main` after the merge, not by another PR round. Your job is t
 land it cleanly, finish it on main, and hand back a summary they can absorb in a
 minute.
 
-**Only two things pause before the merge:**
-1. iOS code that **doesn't compile or whose tests fail** (Step 2).
-2. Something that **can't be fixed after the merge**: a close keyword that would
+**Only three things pause before the merge:**
+1. **In the cloud, a PR with native-app or Mac-only work** (Step 0). This one is a
+   hard stop, not an option to override: the checks and the on-main fixes it needs
+   can't be done there.
+2. Native app code (iOS or Android) that **doesn't compile or whose tests fail**
+   (Step 2).
+3. Something that **can't be fixed after the merge**: a close keyword that would
    wrongly close an outside reporter's issue, or a finding that would cause data loss
    or a security hole the moment it's live.
 
@@ -23,9 +27,42 @@ PR (`python3 scripts/ops/stage_labels.py flag <n> question`), report what you fo
 and offer the options (fix on the branch, land anyway and fix on main, send it back
 through `/process-review`), with your recommendation. The user decides.
 
-Run locally on the Mac (iOS verification needs Xcode). `gh` must run with the
-sandbox disabled, otherwise it returns empty with exit 0. Run heavy jobs (xcodebuild, full pytest) one
-at a time, never concurrently.
+Run heavy jobs (xcodebuild, gradle, full pytest) one at a time, never concurrently.
+
+## Step 0 — Know where you are
+
+Detect, don't assume:
+
+- **Cloud (Claude Code on the web)** if `CLAUDE_CODE_REMOTE=true`, or, as a fallback,
+  the checkout is not under `~/Developer/public/flyfun-weather/` and has no sibling
+  `main/` worktree. Otherwise **Mac**.
+
+**On the Mac:** everything below applies as written. `gh` must run with the sandbox
+disabled, otherwise it returns empty with exit 0.
+
+**In the cloud: the gate.** Before Step 1, list the PR's changed files and labels.
+**Stop** if any of these hold:
+- a changed path under `app/` (`app/flyfun-weather/` is iOS, `app/android/` is Android);
+- the PR carries the `mac` label (set automatically for `app/`, by hand for GRIB or
+  prod-data tests that need the Mac).
+
+The cloud has no Xcode, no Android SDK or emulator, and no prod data, so Step 2
+can't run, and Step 4 couldn't build a Swift or Kotlin fix before pushing it to main.
+A green CI doesn't cover it either: CI never runs the UI journeys. When you stop:
+don't merge, push, comment or relabel. Tell the user in two lines what needs the
+Mac (which paths or which label) and that the server side looked ready if it did,
+and that `/land-pr <n>` on the Mac finishes it. The user can't waive this from the
+cloud; on the Mac it's an ordinary run.
+
+**Cloud mechanics** when the gate passes:
+- No `gh`: use the GitHub MCP tools (`pull_request_read` for state, files, checks
+  and comments, `issue_read`, `merge_pull_request`, `issue_write`). If they're
+  missing, stop and say so rather than guessing.
+- `scripts/ops/stage_labels.py` needs `--repo roznet/flyfun-weather` (no `gh` to
+  infer it).
+- No worktrees, `main/` checkout or devserver: the container is a throwaway clone.
+- The container doesn't outlive the session: everything ends up pushed or in an
+  issue, nothing left local.
 
 ## Inputs
 
@@ -56,7 +93,12 @@ Mechanical checks first; only the cases marked **pause** stop the merge:
    A stray `closes #N` for an outside reporter → **pause** (merging would close their
    issue before they can use the fix, and that can't be undone quietly).
 
-## Step 2 — iOS verification (only if the PR touches `app/`)
+## Step 2 — Native app verification (Mac only; only if the PR touches `app/`)
+
+iOS (`app/flyfun-weather/`) below; for Android (`app/android/`) do the same with
+the Android CI workflow (`android.yml`), a gradle build and unit tests, and the
+affected instrumented UI tests (the nightly `android-ui-nightly.yml` covers them on
+main, not the PR). If no UI test covers the change, say so.
 
 1. **What CI already proved:** if the iOS workflow ran on the head commit and
    passed, the app **compiles** and the **unit** target passed — don't redo that.
@@ -81,7 +123,9 @@ Mechanical checks first; only the cases marked **pause** stop the merge:
 ## Step 3 — Merge
 
 `gh pr merge <n> --rebase --delete-branch`. If the rebase doesn't apply, fall back
-to `--merge` and say so. Confirm that the linked issues closed (or deliberately did
+to `--merge` and say so. In the cloud: `merge_pull_request` with `rebase`
+and the head SHA you checked, then delete the branch (`git push origin --delete
+<branch>`). Confirm that the linked issues closed (or deliberately did
 not, for `Addresses`).
 
 ## Step 4 — Finish it on main
@@ -96,14 +140,16 @@ not, for `Addresses`).
   `gh issue create --label to-start …` (a vaguer follow-up gets no label and the
   Action marks it `to-plan`; `designs/stage-labels.md`).
 - Run the targeted tests for what you touched (web: `npx tsc --noEmit` / vitest in
-  `web/`; Python: targeted pytest). **Swift:** build, unit tests, and the affected UI
-  journey, on this Mac before pushing.
+  `web/`; Python: targeted pytest). **Swift / Kotlin:** build, unit tests, and the
+  affected UI journey, on this Mac before pushing. **In the cloud,** run the full
+  Python suite before pushing: `tests.yml` re-runs it on the push to main, but only
+  after the commit has landed, and the review bot never sees a direct commit.
 - One commit, `Follow-up to #<pr>: …`, specific paths only, attribution trailer.
   Push.
 
 ## Step 5 — Bookkeeping
 
-- **Memory:** grep the memory dir for the issue/PR numbers. Any note that still
+- **Memory** (skip in the cloud, which has none): grep the memory dir for the issue/PR numbers. Any note that still
   calls this work pending, open, unmerged or "approved, not started" → update it to
   the landed state, or delete it if it's now only history.
 - **Design docs (safety net):** `/implement-issue` should have updated the docs in
@@ -111,7 +157,7 @@ not, for `Addresses`).
   behaviour or choices, update the affected docs in the follow-up commit, scoped to
   what changed (locally `/sync-designs <doc path>`, never a full sync). Also fix any
   `designs/future/` status line the work made stale.
-- **Local worktree** for the PR branch: if it's clean and merged, remove it
+- **Local worktree** (Mac) for the PR branch: if it's clean and merged, remove it
   (`git worktree remove`); if it's dirty, leave it and say so.
 
 ## Step 6 — Landing summary
@@ -125,7 +171,7 @@ brief, updated with what actually happened here:
 **What it does:** <one line, pilot/owner terms>
 **For the pilot:** <visible change, or "nothing visible">
 **Fixed on main after merge:** <commit sha — what; or "none">
-**Verified:** CI <green on sha> · iOS unit <CI / local> · UI journeys <which, N passed | none cover it>
+**Verified:** <Mac | cloud> · CI <green on sha> · native unit <iOS/Android: CI / local | no app/ change> · UI journeys <which, N passed | none cover it | n/a>
 **Your simulator check:** <specific screens/states, or "none needed">
 **Deploy will need:** <migration / env var + container recreate / flag / prod command / app release — or "nothing special">
 **User-facing (What's New candidate):** yes — <one-line pilot wording> | no

@@ -43,7 +43,7 @@ Flags, zero or more, on either:
 
 | Label | Owner's action |
 |---|---|
-| `mac` | On the Mac, run the "Pick up on a Mac" checklist in the PR body |
+| `mac` | On the Mac, run the "Pick up on a Mac" checklist in the PR body. A cloud `/land-pr` stops on it (and on any `app/` change): land those on the Mac |
 | `question` | Answer in the thread, an agent could not proceed |
 | `blocked` | Nothing, waiting on something external |
 
