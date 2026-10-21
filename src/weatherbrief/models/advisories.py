@@ -896,6 +896,10 @@ class AircraftEquipage(BaseModel):
     # Service ceiling (ft MSL) from the aircraft form. None when not entered;
     # the icing card then caps a FIKI climb-out escape at the flight ceiling.
     ceiling_ft: int | None = None
+    # The flight's profile still says FIKI (the IFR FIKI template, or the
+    # retired FIKI Icing card switched on) while the aircraft is not marked
+    # FIKI. Never changes the grade: it only lets the card say why (#850).
+    profile_fiki: bool = False
 
     @property
     def graded_fiki(self) -> bool:

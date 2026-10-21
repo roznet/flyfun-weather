@@ -431,12 +431,26 @@ class IcingModelGrade:
     worst_reason: str | None
 
 
+def profile_declares_fiki(settings: dict, template_key: str | None) -> bool:
+    """Whether a profile still says FIKI, now that FIKI belongs to the aircraft (#850).
+
+    True for the IFR FIKI template, or a profile with the retired FIKI Icing card
+    on: a pilot who chose either may not have ticked FIKI on the aircraft form.
+    """
+    if template_key == "ifr_fiki":
+        return True
+    enabled = (settings.get("advisories") or {}).get("enabled") or {}
+    return isinstance(enabled, dict) and enabled.get("fiki_icing") is True
+
+
 def _graded_label(equipage: AircraftEquipage, loc: str | None) -> str:
     if not equipage.known:
         return adv_t("aircraft_icing.graded_unknown", loc)
-    return adv_t(
-        "aircraft_icing.graded_fiki" if equipage.fiki else "aircraft_icing.graded_non_fiki", loc,
-    )
+    if equipage.fiki:
+        return adv_t("aircraft_icing.graded_fiki", loc)
+    if equipage.profile_fiki:
+        return adv_t("aircraft_icing.graded_non_fiki_profile", loc)
+    return adv_t("aircraft_icing.graded_non_fiki", loc)
 
 
 def _stretch_sentence(stretch: _Stretch, reason: str, fiki: bool, count: int, loc: str | None) -> str:

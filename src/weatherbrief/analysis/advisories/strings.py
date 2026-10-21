@@ -477,6 +477,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Bewertet für Nicht-FIKI",
         "es": "Evaluado para no FIKI",
     },
+    # A known non-FIKI aircraft flown with a profile that still says FIKI (#850).
+    "aircraft_icing.graded_non_fiki_profile": {
+        "en": "Graded for non-FIKI (your profile is FIKI: mark the aircraft as FIKI if it is)",
+        "fr": "Évalué pour non-FIKI (votre profil est FIKI : indiquez FIKI sur votre avion s'il l'est)",
+        "de": "Bewertet für Nicht-FIKI (Ihr Profil ist FIKI: Flugzeug als FIKI markieren, falls zutreffend)",
+        "es": "Evaluado para no FIKI (su perfil es FIKI: marque su avión como FIKI si lo es)",
+    },
     "aircraft_icing.graded_unknown": {
         "en": "Graded as non-FIKI (mark your aircraft as FIKI if it is)",
         "fr": "Évalué comme non-FIKI (indiquez FIKI sur votre avion s'il l'est)",

@@ -214,6 +214,9 @@ def test_climb_through_cloud_counts():
     (NON_FIKI, "Graded for non-FIKI"),
     (None, "Graded as non-FIKI (mark your aircraft as FIKI if it is)"),
     (AircraftEquipage(known=False, fiki=True), "Graded as non-FIKI (mark your aircraft as FIKI if it is)"),
+    (AircraftEquipage(known=True, fiki=False, profile_fiki=True),
+     "Graded for non-FIKI (your profile is FIKI: mark the aircraft as FIKI if it is)"),
+    (AircraftEquipage(known=True, fiki=True, profile_fiki=True), "Graded for FIKI"),
 ])
 def test_card_states_its_column(equipage, label):
     ctx = _ctx(_stretch(5, 1, **ESCAPE), equipage)

@@ -1467,6 +1467,21 @@ def _resolve_cruise_ias_kt(db, flight):
     return resolve_cruise_speed_ias(aircraft_speed)
 
 
+def _flight_profile_says_fiki(db, flight) -> bool:
+    """The flight's profile (its own, else the owner's default) still says FIKI (#850)."""
+    from weatherbrief.analysis.advisories.aircraft_icing import profile_declares_fiki
+    from weatherbrief.api.profiles import _get_default_profile
+    from weatherbrief.storage.flights import load_profile
+
+    try:
+        profile = load_profile(db, flight.profile_id) if flight.profile_id else None
+        if profile is None or profile.user_id != flight.user_id:
+            profile = _get_default_profile(db, flight.user_id)
+    except KeyError:
+        profile = _get_default_profile(db, flight.user_id)
+    return profile is not None and profile_declares_fiki(profile.settings, profile.system_template_key)
+
+
 def _resolve_equipage(db, flight):
     """The flight's aircraft equipage for the icing card (#827).
 
@@ -1482,8 +1497,10 @@ def _resolve_equipage(db, flight):
 
             ac = resolve_flight_aircraft(db, flight)
             if ac is not None and not ac.is_placeholder:
+                fiki = bool(ac.is_fiki)
                 return AircraftEquipage(
-                    known=True, fiki=bool(ac.is_fiki), ceiling_ft=ac.ceiling_ft,
+                    known=True, fiki=fiki, ceiling_ft=ac.ceiling_ft,
+                    profile_fiki=not fiki and _flight_profile_says_fiki(db, flight),
                 )
         except Exception:
             logger.warning("equipage: aircraft lookup failed", exc_info=True)

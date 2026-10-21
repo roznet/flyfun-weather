@@ -433,6 +433,39 @@ class TestEquipageResolution:
         assert eq.known is False and eq.graded_fiki is False
         s.close()
 
+    def test_fiki_profile_on_non_fiki_aircraft_is_flagged(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        _add_profile(app_db, {"advisories": {"enabled": {"fiki_icing": True}}})
+        aid = _add_aircraft(app_db, icao_type="C172", is_default=True, is_fiki=False)
+        s = app_db()
+        eq = _resolve_equipage(s, self._flight(aid))
+        # The hint only: the grade stays non-FIKI.
+        assert (eq.known, eq.graded_fiki, eq.profile_fiki) == (True, False, True)
+        s.close()
+
+    def test_fiki_template_profile_is_flagged(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        s = app_db()
+        s.add(FlightProfileRow(user_id=DEV_USER_ID, name="IFR FIKI", is_default=True,
+                               settings_json="{}", system_template_key="ifr_fiki"))
+        s.commit()
+        s.close()
+        aid = _add_aircraft(app_db, icao_type="PA28", is_default=True, is_fiki=False)
+        s = app_db()
+        assert _resolve_equipage(s, self._flight(aid)).profile_fiki is True
+        s.close()
+
+    def test_plain_profile_is_not_flagged(self, app_db):
+        from weatherbrief.api.packs import _resolve_equipage
+
+        _add_profile(app_db, {"advisories": {"enabled": {"fiki_icing": False}}})
+        aid = _add_aircraft(app_db, icao_type="C172", is_default=True, is_fiki=False)
+        s = app_db()
+        assert _resolve_equipage(s, self._flight(aid)).profile_fiki is False
+        s.close()
+
     def test_no_db_is_unknown(self):
         from weatherbrief.api.packs import _resolve_equipage
 
