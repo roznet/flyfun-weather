@@ -38,6 +38,7 @@ from weatherbrief.tasks.forecast_grid import (
 )
 
 
+from weatherbrief.api.deps import WEATHER_BASE_URL
 from weatherbrief.api.deps import airports_db as _airports_db
 
 
@@ -429,8 +430,6 @@ def area_outlook_response(db: Session, airports_db: str, **kwargs: Any) -> dict[
     maps bad input to 400.
     """
     from weatherbrief.tasks.area_outlook import OutlookInputError, build_area_outlook
-
-    from weatherbrief.api.deps import WEATHER_BASE_URL
 
     try:
         return build_area_outlook(db, airports_db, map_base_url=WEATHER_BASE_URL, **kwargs)

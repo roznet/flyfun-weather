@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -422,11 +423,36 @@ def load_forecast_slot(
     return data
 
 
-# Parsed, caller-projected slot payloads keyed by (cache_key, computed_at):
-# a cache generation is immutable once written, so a hit is always valid.
-# Bounded so a process holds at most a weekend-and-a-bit of slots.
+# Parsed, caller-projected slot payloads keyed by (project_id, cache_key,
+# computed_at): a cache generation is immutable once written, so a hit is
+# always valid. Sized to the whole map grid so a full-horizon call never
+# evicts its own slots; shared across the endpoint threadpool, hence the
+# lock. Entries are shared between callers and must be treated read-only.
 _SLOT_LRU: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
-_SLOT_LRU_MAX = 20
+_SLOT_LRU_LOCK = threading.Lock()
+
+
+def _slot_lru_max() -> int:
+    from weatherbrief.tasks.forecast_grid import day_hour_pairs
+
+    return len(day_hour_pairs())
+
+
+def _lru_get(key: tuple[str, str, str]) -> dict[str, Any] | None:
+    with _SLOT_LRU_LOCK:
+        hit = _SLOT_LRU.get(key)
+        if hit is not None:
+            _SLOT_LRU.move_to_end(key)
+        return hit
+
+
+def _lru_put(key: tuple[str, str, str], value: dict[str, Any]) -> None:
+    with _SLOT_LRU_LOCK:
+        _SLOT_LRU[key] = value
+        _SLOT_LRU.move_to_end(key)
+        limit = _slot_lru_max()
+        while len(_SLOT_LRU) > limit:
+            _SLOT_LRU.popitem(last=False)
 
 
 def load_forecast_slots(
@@ -463,8 +489,9 @@ def load_forecast_slots(
     keys (unique-key IN list), one blob read for the slots not already in the
     in-process LRU, plus at most ``max_live`` live computations. Parsed blobs
     go through ``project`` (keep only what the caller needs) and are cached
-    per ``project_id`` in a small LRU, so repeat calls in the same cache
-    generation read no blobs at all.
+    per ``project_id`` in an LRU the size of the grid, so repeat calls in the
+    same cache generation read no blobs at all. Returned payloads may be
+    shared with other requests: read-only.
     """
     from weatherbrief.tasks.cache_builder import (
         forecast_map_cache_key,
@@ -488,7 +515,9 @@ def load_forecast_slots(
     for key, computed_at, smax in meta:
         if computed_at is None:
             continue
-        _, _, d, h = key.split(":")
+        _, d, h = key.rsplit(":", 2)
+        if computed_at.tzinfo is None:  # TZDateTime returns aware; be safe
+            computed_at = computed_at.replace(tzinfo=timezone.utc)
         date = computed_at.astimezone(timezone.utc).date() + timedelta(days=int(d))
         t = datetime(date.year, date.month, date.day, int(h), tzinfo=timezone.utc)
         stale = smax is None or (live_max is not None and live_max > smax)
@@ -507,9 +536,9 @@ def load_forecast_slots(
             continue
         key, computed_at, stale = hit
         lru_key = (project_id, key, computed_at.isoformat())
-        if lru_key in _SLOT_LRU:
-            _SLOT_LRU.move_to_end(lru_key)
-            out[k] = _SLOT_LRU[lru_key]
+        cached = _lru_get(lru_key)
+        if cached is not None:
+            out[k] = cached
             if stale:
                 status["stale"].append(k)
             continue
@@ -529,10 +558,7 @@ def load_forecast_slots(
                     uncovered.append(k)
                     continue
                 slim = project(data)
-                _SLOT_LRU[lru_key] = slim
-                _SLOT_LRU.move_to_end(lru_key)
-                while len(_SLOT_LRU) > _SLOT_LRU_MAX:
-                    _SLOT_LRU.popitem(last=False)
+                _lru_put(lru_key, slim)
                 out[k] = slim
                 if stale:
                     status["stale"].append(k)
