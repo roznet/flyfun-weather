@@ -258,10 +258,6 @@ class FlyfunUITestCase: XCTestCase {
                       "the edit form should appear")
     }
 
-    /// Scroll a `Form` row into view. `Form` is backed by a lazy `List`, so a
-    /// section below the fold is not merely off-screen — it is absent from the
-    /// accessibility tree entirely, and `waitForExistence` on it fails no matter
-    /// how long it waits. Swipe until it materializes.
     /// Swipe `element` into view, then tap it once the scroll has stopped:
     /// a tap that lands while a swipe is still decelerating only stops the
     /// scroll, so the control never sees it (#748: "More" stayed collapsed).
@@ -284,6 +280,10 @@ class FlyfunUITestCase: XCTestCase {
         element.tap()
     }
 
+    /// Scroll a `Form` row into view. `Form` is backed by a lazy `List`, so a
+    /// section below the fold is not merely off-screen — it is absent from the
+    /// accessibility tree entirely, and `waitForExistence` on it fails no matter
+    /// how long it waits. Swipe until it materializes.
     @MainActor
     func scrollToFormRow(_ app: XCUIApplication, _ element: XCUIElement, maxSwipes: Int = 8) {
         var swipes = 0
@@ -335,8 +335,17 @@ class FlyfunUITestCase: XCTestCase {
         }
         let content = app.descendants(matching: .any)["observedNutshell"].firstMatch
         guard !content.exists else { return }
-        let opened = { (timeout: TimeInterval) in XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true"), object: content)], timeout: timeout) == .completed }
+        // Either signal counts as open: the content, or the toggle's own
+        // value (in case a fold ever opens onto content that isn't exposed).
+        // Polled here on the main actor rather than in a block predicate,
+        // which XCTWaiter may evaluate off it.
+        let opened = { (timeout: TimeInterval) -> Bool in
+            let deadline = Date().addingTimeInterval(timeout)
+            repeat {
+                if content.waitForExistence(timeout: 0.5) || (toggle.value as? String) == "expanded" { return true }
+            } while Date() < deadline
+            return false
+        }
         // Below the ribbon: bring it on screen, let the last swipe settle, and
         // tap clear of the iPhone's bottom tab bar (`tapAfterScrolling`).
         var swiped = false
