@@ -125,6 +125,7 @@ def build_digest_context(
         f"(~{snapshot.route.cruise_pressure_hpa}hPa)\n"
         f"PILOT CAPABILITY: {capability}"
         + _aircraft_header_line(route_advisories)
+        + _models_header_line(route_advisories)
     )
 
     # --- Forecast confidence note (long-range only, code-computed) ---
@@ -950,6 +951,25 @@ def _format_tactical_mitigations_context(
     if not lines:
         return None
     return "\n".join(["Tactical (per-advisory, no altitude change):", *lines])
+
+
+def _models_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
+    """``\nMODELS: ...`` naming models that failed to fetch (#835).
+
+    Empty when every requested model arrived (and on packs built before #835),
+    so a normal briefing's context is unchanged. When one is missing the
+    briefer is told which models the data covers, so "the models agree" never
+    silently includes a model it never had.
+    """
+    failed = manifest.models_failed if manifest is not None else {}
+    if not failed:
+        return ""
+    used = ", ".join(m.upper() for m in manifest.models) or "none"
+    missing = ", ".join(f"{m.upper()} ({r})" for m, r in sorted(failed.items()))
+    return (
+        f"\nMODELS: {used}. UNAVAILABLE: {missing}: fetch failed, not in this "
+        "data. Any statement about model agreement covers only the models listed."
+    )
 
 
 def _aircraft_header_line(manifest: RouteAdvisoriesManifest | None) -> str:

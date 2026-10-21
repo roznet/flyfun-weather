@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+import requests
+
 from weatherbrief.fetch.open_meteo import EmptyForecastError, OpenMeteoClient
 from weatherbrief.fetch.route_points import interpolate_route
 from weatherbrief.fetch.variables import (
@@ -78,6 +80,24 @@ def _open_meteo_live_horizons() -> dict[str, datetime]:
     return out
 
 
+def model_failure_reason(exc: BaseException) -> str:
+    """Short, stable reason for a failed model fetch (#835).
+
+    One of ``timeout``, ``connection``, ``http_<code>`` or ``error``. Read by
+    the fetch diagnostic, the digest context and the model-agreement summary,
+    so keep the vocabulary small.
+    """
+    # Timeout first: ConnectTimeout is both a Timeout and a ConnectionError.
+    if isinstance(exc, requests.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.ConnectionError):
+        return "connection"
+    if isinstance(exc, requests.HTTPError):
+        code = getattr(exc.response, "status_code", None)
+        return f"http_{code}" if code is not None else "error"
+    return "error"
+
+
 def _should_skip_for_region(endpoint, route_region: ModelRegion, route=None) -> bool:
     """Return True if a model's coverage doesn't match the route.
 
@@ -131,6 +151,9 @@ class FetchResult:
     elevation_profile: ElevationProfile | None
     models_fetched: list[str]
     models_skipped_region: list[str] = field(default_factory=list)
+    # model → short reason (see `model_failure_reason`) for every requested
+    # model whose fetch raised after retries (#835). Skips are not failures.
+    models_failed: dict[str, str] = field(default_factory=dict)
     grib_enriched: bool = False
     grib_enrichment_failed: bool = False
     grib_init_times: dict[str, int] = field(default_factory=dict)
@@ -149,6 +172,7 @@ def _build_fetch_diagnostics(
     models_skipped_range: list[tuple[str, int, int]] | None = None,
     models_skipped_horizon: list[tuple[str, datetime]] | None = None,
     models_returned_empty: list[str] | None = None,
+    models_failed: dict[str, str] | None = None,
     enrich_grib: bool,
     grib_enriched: bool,
     grib_enrichment_failed: bool,
@@ -162,13 +186,24 @@ def _build_fetch_diagnostics(
     horizon_skipped_names = {m for m, _ in (models_skipped_horizon or [])}
     empty_names = set(models_returned_empty or [])
 
-    # Models that failed to fetch (requested but neither fetched nor skipped)
+    # Models that failed to fetch, with the reason recorded where the
+    # exception was caught. The subtraction below stays as a fallback for
+    # any requested model that is neither fetched, skipped nor recorded.
+    failed = models_failed or {}
+    for m in requested_models:
+        if m in failed:
+            diags.append(Diagnostic.create(
+                level="warn", stage="fetch",
+                code=FetchCode.MODEL_FETCH_FAILED,
+                message=f"{m.upper()} forecast fetch failed ({failed[m]})",
+            ))
     fetched_or_skipped = (
         set(models_fetched)
         | set(models_skipped_region)
         | range_skipped_names
         | horizon_skipped_names
         | empty_names
+        | set(failed)
     )
     for m in requested_models:
         if m not in fetched_or_skipped:
@@ -320,6 +355,7 @@ def run_fetch(
     models_skipped_range: list[tuple[str, int, int]] = []
     models_skipped_horizon: list[tuple[str, datetime]] = []
     models_returned_empty: list[str] = []
+    models_failed: dict[str, str] = {}
 
     route_region = detect_model_region(route)
     window_end_dt = departure_time + timedelta(
@@ -431,6 +467,7 @@ def run_fetch(
                             "Failed to fetch %s", model.value,
                             exc_info=(type(exc), exc, exc.__traceback__),
                         )
+                        models_failed[model.value] = model_failure_reason(exc)
                         continue
                     _record_success(model, point_forecasts)
             # Replace the racy aggregate with the summed per-thread totals.
@@ -450,8 +487,9 @@ def run_fetch(
                     logger.warning("%s returned no values: %s", model.value, exc)
                     models_returned_empty.append(model.value)
                     continue
-                except Exception:
+                except Exception as exc:
                     logger.warning("Failed to fetch %s", model.value, exc_info=True)
+                    models_failed[model.value] = model_failure_reason(exc)
                     continue
                 _record_success(model, point_forecasts)
 
@@ -494,6 +532,7 @@ def run_fetch(
         models_skipped_range=models_skipped_range,
         models_skipped_horizon=models_skipped_horizon,
         models_returned_empty=models_returned_empty,
+        models_failed=models_failed,
         enrich_grib=enrich_grib,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
@@ -508,6 +547,7 @@ def run_fetch(
         save_fetch_artifacts(
             pack_dir, cross_sections, elevation_profile, route_points,
             models_fetched=models_fetched_names,
+            models_failed=models_failed,
             diagnostics=diagnostics,
         )
 
@@ -526,6 +566,7 @@ def run_fetch(
         elevation_profile=elevation_profile,
         models_fetched=models_fetched_names,
         models_skipped_region=all_skipped,
+        models_failed=models_failed,
         grib_enriched=grib_enriched,
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,

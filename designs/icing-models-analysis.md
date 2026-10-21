@@ -180,9 +180,9 @@ Used by all three methods (previously SFIP used dry-bulb only with different thr
 
 ### `group_icing_levels(icing_levels, build_zone_fn, *, all_levels=None)`
 
-Shared adjacency grouping. Two icing entries merge into the same zone iff **both**:
-1. They are directly consecutive in *all_levels* (the pre-gated input the caller iterated over) — guarantees the grouper never bridges a level filtered out by the caller's gate (e.g. an NWP cloud-band gap).
-2. Their pressure gap is ≤ `ZONE_MAX_PRESSURE_GAP_HPA` (100 hPa) — guarantees sparse inputs (e.g. only two levels far apart) still split.
+Shared adjacency grouping. With *all_levels* (the pre-gated input the caller iterated over), two icing entries merge into the same zone iff they are directly consecutive in it: a level filtered out by the caller's gate (e.g. an NWP cloud-band gap, or a measured level that isn't icing) splits the zone. The model's level spacing does not (#835, meteorology-decisions §58): Open-Meteo ECMWF's 850 → 700 hPa (150 hPa) neighbours merge. `ZONE_MAX_NATIVE_GAP_HPA = 200` is only a sanity cap for degraded soundings and must stay ≥ 150.
+
+Levels dropped by `prepare_profile` (no T, or no Td/RH) never reach *all_levels*, so an icing layer bridges across them (within the cap): unknown is not clear.
 
 When *all_levels* is omitted the function falls back to the legacy pressure-only check; this path is preserved for backward compatibility but should not be used by new callers (it's vulnerable to bug #7 below).
 

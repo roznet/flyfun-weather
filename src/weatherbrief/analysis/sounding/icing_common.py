@@ -310,8 +310,16 @@ def classify_icing_type(
 # ── Zone grouping ───────────────────────────────────────────────────
 
 
-# Maximum pressure gap between adjacent levels to be grouped in same zone.
+# Maximum pressure gap between adjacent levels to be grouped in same zone on
+# the legacy pressure-only path (no ``all_levels``).
 ZONE_MAX_PRESSURE_GAP_HPA = 100
+
+# Sanity cap on the native-adjacency path (#835). Neighbours in the model's
+# own level table merge whatever their spacing — Open-Meteo's 13-level ECMWF
+# table has nothing between 850 and 700 hPa (150 hPa), and splitting there put
+# FL080 "clear" inside one continuous layer. The cap only guards a degraded
+# sounding (several levels dropped by ``prepare_profile``); it must stay ≥ 150.
+ZONE_MAX_NATIVE_GAP_HPA = 200
 
 # Minimum half-thickness for single-level zones (cross-section visibility).
 MIN_ZONE_HALF_THICKNESS_FT = 500
@@ -326,11 +334,19 @@ def group_icing_levels(
     """Group adjacent icing levels into zones using shared adjacency logic.
 
     With *all_levels* (the pre-gated input the caller iterated), two
-    icing entries merge iff (a) directly consecutive in *all_levels*
-    so no level was filtered between them, AND (b) pressure gap ≤
-    ``ZONE_MAX_PRESSURE_GAP_HPA``. Without *all_levels*, falls back to
-    pressure-only (legacy, vulnerable to cloud-gap bridging — see
-    bug #7 in designs/icing-models-analysis.md).
+    icing entries merge iff they are directly consecutive in *all_levels*:
+    no measured level between them was judged non-icing. The model's
+    level spacing is not a reason to split (#835) — only a sanity cap of
+    ``ZONE_MAX_NATIVE_GAP_HPA`` guards a degraded sounding. Without
+    *all_levels*, falls back to pressure-only with
+    ``ZONE_MAX_PRESSURE_GAP_HPA`` (legacy, vulnerable to cloud-gap
+    bridging — see bug #7 in designs/icing-models-analysis.md).
+
+    *Missing* levels: ``prepare_profile`` drops a level with no temperature
+    or no dewpoint/RH before ``all_levels`` exists, so its neighbours become
+    consecutive here and an icing layer bridges across it (bounded by the
+    cap). That is deliberate: a level with no data is unknown, and unknown
+    must not read as a clear gap inside an icing layer (#391/#393).
 
     Args:
         icing_levels: Tuples of (level, icing_type, risk, index_value),
@@ -357,14 +373,18 @@ def group_icing_levels(
         pos: dict[int, int] = {id(lv): i for i, lv in enumerate(all_levels)}
 
         def _adjacent(prev_lv: DerivedLevel, this_lv: DerivedLevel) -> bool:
-            # Merge requires BOTH: directly consecutive in the pre-gated
-            # input (so we don't bridge a filtered-out gap), AND close in
-            # pressure (so we don't merge across a sparse-input jump).
+            # Merge iff directly consecutive in the pre-gated input, so a
+            # measured non-icing level between them still splits the zone.
+            # Native spacing doesn't split (#835); the cap only catches a
+            # degraded sounding.
             ip = pos.get(id(prev_lv), -2)
             it = pos.get(id(this_lv), -1)
             if ip < 0 or it < 0 or (it - ip) != 1:
                 return False
-            return _pressure_close(prev_lv, this_lv)
+            return (
+                abs(prev_lv.pressure_hpa - this_lv.pressure_hpa)
+                <= ZONE_MAX_NATIVE_GAP_HPA
+            )
     else:
         _adjacent = _pressure_close
 

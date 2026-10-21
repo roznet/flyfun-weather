@@ -56,6 +56,7 @@ def save_fetch_artifacts(
     route_points: list[RoutePoint],
     *,
     models_fetched: list[str] | None = None,
+    models_failed: dict[str, str] | None = None,
     diagnostics: list[Diagnostic] | None = None,
 ) -> None:
     """Persist fetch-stage artifacts to *pack_dir*.
@@ -84,6 +85,7 @@ def save_fetch_artifacts(
     write_pack_meta(
         pack_dir,
         models_fetched=models_fetched or [],
+        models_failed=models_failed or {},
         diagnostics=diagnostics or [],
     )
 
@@ -93,6 +95,7 @@ def write_pack_meta(
     *,
     models_fetched: list[str],
     diagnostics: list[Diagnostic],
+    models_failed: dict[str, str] | None = None,
     fetched_at: datetime | None = None,
 ) -> None:
     """Write or rewrite ``fetch_meta.json`` with the given diagnostics.
@@ -105,6 +108,9 @@ def write_pack_meta(
     meta = {
         "fetched_at": (fetched_at or datetime.now(timezone.utc)).isoformat(),
         "models_fetched": models_fetched,
+        # model → reason for requested models whose fetch failed (#835).
+        # Absent in packs written before it; readers default to {}.
+        "models_failed": models_failed or {},
         "diagnostics": [d.model_dump(mode="json") for d in diagnostics],
     }
     meta_path = pack_dir / "fetch_meta.json"

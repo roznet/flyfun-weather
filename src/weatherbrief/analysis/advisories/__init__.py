@@ -86,6 +86,11 @@ class RouteContext:
     # icing card grades as non-FIKI and labels as such. Read through
     # ``aircraft_icing.equipage_of`` rather than directly.
     equipage: AircraftEquipage | None = None
+    # Requested models whose fetch failed after retries, model → short reason
+    # (``timeout``, ``connection``, ``http_<code>``, ``error``; #835). Read by
+    # the model-agreement advisory so its summary never says "models agree"
+    # across a model it never had. Empty on old packs and outside the pipeline.
+    models_failed: dict[str, str] = field(default_factory=dict)
 
     @cached_property
     def cruise_groundspeed_kt(self) -> float:

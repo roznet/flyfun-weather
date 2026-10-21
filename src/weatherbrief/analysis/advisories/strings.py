@@ -647,6 +647,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Schlechte Modellübereinstimmung über {extent}",
         "es": "Mala concordancia de modelos sobre {extent}",
     },
+    "model_agreement.good_partial": {
+        "en": "Good agreement across the models available",
+        "fr": "Bon accord entre les modèles disponibles",
+        "de": "Gute Übereinstimmung der verfügbaren Modelle",
+        "es": "Buena concordancia entre los modelos disponibles",
+    },
+    "model_agreement.partial": {
+        "en": "{n} of {m} models; {missing} unavailable",
+        "fr": "{n} modèles sur {m} ; {missing} indisponible(s)",
+        "de": "{n} von {m} Modellen; {missing} nicht verfügbar",
+        "es": "{n} de {m} modelos; {missing} no disponible(s)",
+    },
 
     # --- vfr_feasibility ---
     "vfr.imc_over": {

@@ -319,7 +319,7 @@ Codes live in `models/diagnostic_codes.py`, one `StrEnum` per stage: `FetchCode`
 ### Persistence
 
 - **DB**: `BriefingPackRow.diagnostics_json` (`Text` column). `_meta_to_row` serializes via `model_dump(mode="json")`; `_parse_diagnostics` validates per-item and skips malformed entries (logs at debug) so one bad row doesn't break a whole flight listing.
-- **Disk**: `fetch_meta.json` in the pack directory. Written once by `save_fetch_artifacts` (fetch-stage subset), then rewritten at end of `execute_briefing` with the full merged set across all stages — preserving the original `fetched_at`.
+- **Disk**: `fetch_meta.json` in the pack directory. Written once by `save_fetch_artifacts` (fetch-stage subset), then rewritten at end of `execute_briefing` with the full merged set across all stages — preserving the original `fetched_at`. It also carries `models_fetched` and `models_failed` (#835): model → short reason (`timeout` / `connection` / `http_<code>` / `error`) for each requested model whose fetch raised after retries. Skips (region, range, horizon, empty) are not failures. Absent on older packs, read as `{}`. Advisory evaluation reads it into `RouteContext.models_failed` and `RouteAdvisoriesManifest.models_failed`, from which the model-agreement summary ("N of M models; X unavailable") and the digest's `MODELS:` header line are built.
 - **Detail cap**: 4 KB per entry, with light redaction for Bearer tokens and `sk-`/`sk-ant-` API key prefixes. Applied in a `field_validator(mode="before")` so it fires on both fresh construction and round-trip.
 
 See [digest.md](./digest.md) for the digest-stage classifier (`classify_llm_exception`) that maps Anthropic exceptions to typed `DigestCode` values.
