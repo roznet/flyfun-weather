@@ -281,7 +281,8 @@ def test_weekend_payload_stays_compact():
         e.update(icao=icao, lat=lat, lon=lon)
         entries.append(e)
     data = {s: _slot(entries) for s in slots}
-    out = {"query": ao.describe_query(q), **ao.compute_outlook(q, data, _times(slots)),
+    out = {"query": ao.describe_query(q),
+           **ao.compute_outlook(q, data, _times(slots), map_base_url="https://weather.flyfun.aero"),
            "legend": ao.LEGEND, "note": ao.NOTE, "next_step": ao.NEXT_STEP}
     size = len(json.dumps(out, separators=(",", ":")))
     assert size < 16_000, size  # ~4 chars/token
@@ -341,6 +342,7 @@ def test_maps_endpoint_radius_with_substituted_base(api):
     assert body["query"]["base"] == {"icao": "ZZBA", "requested": "ZZXX", "substituted_nm": 1.4}
     assert body["slots"][0]["sectors"]
     assert "create_flight" in body["next_step"]
+    assert "/maps.html?tab=forecast&fc.day=1&fc.hour=12" in body["map_url"]
     assert api.calls == [(1, 12)]
 
 
@@ -416,3 +418,43 @@ def test_plan_local_flight_prompt_points_at_area_outlook():
     text = server.plan_local_flight(base="EGTF", destination="LFAT", days="this weekend")
     assert "area_outlook" in text and "route='EGTF LFAT'" in text and "not a briefing" in text
     assert "base='EGTF'" in server.plan_local_flight(base="EGTF")
+
+
+# ---------------------------------------------------------------------------
+# Forecast-map links
+# ---------------------------------------------------------------------------
+
+
+def test_map_url_uses_forecast_tab_contract():
+    from urllib.parse import parse_qs, urlparse
+
+    q = _radius_query([(3, 15)], destination="ZZDE")
+    url = ao.map_url("https://wx.example/", q, (3, 15))
+    u = urlparse(url)
+    assert u.path == "/maps.html"
+    qs = {k: v[0] for k, v in parse_qs(u.query).items()}
+    assert qs["tab"] == "forecast" and qs["fc.day"] == "3" and qs["fc.hour"] == "15"
+    assert qs["fc.apt"] == "ZZDE" and "fc.model" not in qs
+    lat, lon, zoom = qs["fc.view"].split(",")
+    assert (lat, lon) == ("51.00", "0.00") and 4 <= int(zoom) <= 10
+
+
+def test_map_view_zooms_out_for_larger_area():
+    small = _radius_query([(0, 12)])
+    big = _radius_query([(0, 12)])
+    small.radius_nm, big.radius_nm = 20, 150
+    assert int(ao.map_view(small).split(",")[2]) > int(ao.map_view(big).split(",")[2])
+
+
+def test_map_urls_on_best_slots_pairs_and_top_level():
+    slots = [(0, 9), (0, 15)]
+    good = _slot([_entry(i) for i in COORDS])
+    q = _radius_query(slots, destination="ZZDE")
+    q.consensus = "majority"
+    out = ao.compute_outlook(q, {s: good for s in slots}, _times(slots), map_base_url="https://wx.example")
+    assert "fc.day=0&fc.hour=9" in out["map_url"] and "fc.model=majority" in out["map_url"]
+    assert all("maps.html" in b["map_url"] for b in out["best_slots"])
+    assert out["pairs"] and "fc.hour=9" in out["pairs"][0]["map_url"]
+    # No base URL → no links (pure core stays usable without config).
+    out = ao.compute_outlook(q, {s: good for s in slots}, _times(slots))
+    assert "map_url" not in out and "map_url" not in out["best_slots"][0]
