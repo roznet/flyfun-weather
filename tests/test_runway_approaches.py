@@ -172,6 +172,18 @@ class TestGetRunwayApproaches:
         assert result.has_procedure_data is False
         assert result.has_iap is False
 
+    def test_carries_the_airport_country(self):
+        """departure_feasibility's exempt-country rule reads it (#829)."""
+        airports = {
+            "EGTF": _airport("EGTF", [_runway("06", "24")], [], iso_country="GB"),
+            "LSZG": _airport("LSZG", [_runway("07", "25")],
+                             [_approach("RWY25 ILS", "ILS", "25")], iso_country="CH"),
+        }
+        result = _lookup(airports, ["EGTF", "LSZG", "ZZZZ"])
+        assert result["EGTF"].iso_country == "GB"
+        assert result["LSZG"].iso_country == "CH"
+        assert result["ZZZZ"].iso_country is None
+
     def test_departure_procedures_are_not_approaches(self):
         sid = Procedure(name="RWY02 SID", procedure_type="departure", runway_ident="02")
         airports = {"EGKA": _airport("EGKA", [_runway("02", "20")], [sid])}
@@ -335,6 +347,7 @@ class TestProcedureCoverageGate:
         assert result.lookup_failed is True
         assert result.coverage_gap is True
         assert result.has_iap is False
+        assert result.iso_country == "US"
 
     def test_surveyed_country_still_grades_an_empty_field(self):
         """EGTF must keep grading — #510 exists precisely for this case.

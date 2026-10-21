@@ -394,34 +394,48 @@ def _arrival_icao(
     return None
 
 
-def _collect_arrival_approaches(
-    arr_icao: str | None,
+def _departure_icao(
+    route: RouteConfig | None,
+    airport_conds: AirportConditions | None,
+) -> str | None:
+    """Origin ICAO from the route, falling back to the airport conditions."""
+    if route is not None:
+        return route.origin.icao
+    if airport_conds is not None:
+        return airport_conds.departure.icao
+    return None
+
+
+def _collect_airport_approaches(
+    icao: str | None,
     airports_db_path: str | None,
     declared_approach_icaos: list[str] | None = None,
 ) -> AirportApproaches | None:
-    """Published approaches at the destination, for ``approach_feasibility`` (#509).
+    """Published approaches at one airport, for the feasibility advisories.
 
-    Deliberately keyed on the ICAO rather than a ``RouteConfig`` so the recalc
-    path (which has airport conditions but often no resolved route) can call it
-    with exactly the same code. Returns ``None`` when the lookup could not run at
-    all — the evaluator then reports UNAVAILABLE rather than "no approach".
+    Read at the destination by ``approach_feasibility`` (#509) and at the origin
+    by ``departure_feasibility`` (#829). Deliberately keyed on the ICAO rather
+    than a ``RouteConfig`` so the recalc path (which has airport conditions but
+    often no resolved route) can call it with exactly the same code. Returns
+    ``None`` when the lookup could not run at all — the evaluator then reports
+    UNAVAILABLE rather than "no approach".
 
     ``declared_approach_icaos`` carries the user's unpublished-approach
     declarations (#510). Every caller of this helper must supply it: the
     briefing, the recalculate/preview re-run, the alt-departure re-run and the
-    timing scan all render the same advisory, so one that omits it would grade
-    a declared field RED beside a briefing that grades it AMBER.
+    timing scan all render the same advisories, so one that omits it would grade
+    a declared field differently from the briefing beside it.
     """
-    if not arr_icao or not airports_db_path:
+    if not icao or not airports_db_path:
         return None
     try:
         from weatherbrief.airports import get_runway_approaches
 
         return get_runway_approaches(
-            [arr_icao], airports_db_path, declared_approach_icaos,
-        ).get(arr_icao)
+            [icao], airports_db_path, declared_approach_icaos,
+        ).get(icao)
     except Exception:
-        logger.warning("Arrival approach lookup failed for %s", arr_icao, exc_info=True)
+        logger.warning("Approach lookup failed for %s", icao, exc_info=True)
         return None
 
 
@@ -513,8 +527,11 @@ def run_advisories(
             locale=locale,
             route_fronts=route_fronts,
             sun=_compute_route_sun(rp_analyses, airport_conds),
-            arrival_approaches=_collect_arrival_approaches(
+            arrival_approaches=_collect_airport_approaches(
                 route.destination.icao, airports_db_path, declared_approach_icaos,
+            ),
+            departure_approaches=_collect_airport_approaches(
+                route.origin.icao, airports_db_path, declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             equipage=equipage,
@@ -691,12 +708,16 @@ def run_advisories_from_pack(
             locale=locale,
             route_fronts=route_fronts,
             sun=route_sun,
-            # Recalc has no resolved route on the API path, so the destination
-            # comes from the (re)computed airport conditions — the same ICAO the
-            # advisory grades against, which is what keeps this wiring point from
-            # silently dropping the advisory on recalculate (#509).
-            arrival_approaches=_collect_arrival_approaches(
+            # Recalc has no resolved route on the API path, so both ends come
+            # from the (re)computed airport conditions — the same ICAOs the
+            # advisories grade against, which is what keeps this wiring point
+            # from silently dropping them on recalculate (#509, #829).
+            arrival_approaches=_collect_airport_approaches(
                 _arrival_icao(route, airport_conds), airports_db_path,
+                declared_approach_icaos,
+            ),
+            departure_approaches=_collect_airport_approaches(
+                _departure_icao(route, airport_conds), airports_db_path,
                 declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,
@@ -1099,8 +1120,12 @@ def run_alt_from_pack(
             # low-sun intervals move with the departure — exactly what a
             # timing scenario is asking about (review 2026-08 §3.8, #807).
             sun=_compute_route_sun(rp_analyses, airport_conds),
-            arrival_approaches=_collect_arrival_approaches(
+            arrival_approaches=_collect_airport_approaches(
                 _arrival_icao(route, airport_conds), airports_db_path,
+                declared_approach_icaos,
+            ),
+            departure_approaches=_collect_airport_approaches(
+                _departure_icao(route, airport_conds), airports_db_path,
                 declared_approach_icaos,
             ),
             cruise_speed_ias_kt=cruise_speed_ias_kt,

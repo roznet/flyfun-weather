@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 21 hazard evaluators (plus 2 retired ones kept for old packs) (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 22 hazard evaluators (plus 2 retired ones kept for old packs) (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -15,6 +15,7 @@ RouteContext (immutable)
   ├── elevation: ElevationProfile | None
   ├── airport_conditions: AirportConditions | None  (dep + arr weather)
   ├── arrival_approaches: AirportApproaches | None  (destination IAPs, #509)
+  ├── departure_approaches: AirportApproaches | None  (origin IAPs, #829)
   ├── sun: RouteSunAnalysis | None  ├── route_fronts: RouteFrontsManifest | None
   ├── cruise_speed_ias_kt, flight_duration_hours  (headwind trip-time inputs)
   ├── equipage: AircraftEquipage | None  (FIKI?, ceiling; from the flight's aircraft, #827)
@@ -45,6 +46,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
   ├── @register IFRFeasibilityEvaluator     # convective axis = ConvectiveEvaluator's grade (§22), icing axis = AircraftIcingEvaluator's (§56)
   ├── @register ApproachFeasibilityEvaluator  # arrival: approach vs wind vs ceiling
+  ├── @register DepartureFeasibilityEvaluator # departure: any IFR procedure at the origin?
   ├── @register FrontsEvaluator            # fronts (experimental, gated on artifact)
   └── @register SunEvaluator               # sun (glare + night-proximity + seating note)
       ↓
@@ -190,6 +192,7 @@ under the rule with no edit to the invariants.
 | `VFRFeasibilityEvaluator` | flight_rules | Composite VFR go/no-go combining: airport flight category, en-route cloud clearance (base vs cruise), VMC compliance (BKN/OVC percentage), climb-out/descent corridor decks (BKN/OVC fully below cruise within `terminal_corridor_nm` of either end — OVC→RED, BKN→AMBER, see meteorology-decisions §10), and en-route precipitation (shared `classify_enroute_precip`, capped at AMBER in the composite). Worst of sub-assessments wins | `cloud_clearance_ft`, `extent_pct_amber` (15), `extent_pct_red` (30), `extent_min_nm` (30nm), `terminal_corridor_nm` (5) |
 | `IFRFeasibilityEvaluator` | flight_rules | Composite IFR go/no-go combining: airport IFR viability (LIFR→amber, below minimums→red), the icing axis and the convective axis. **The icing axis is not graded here (§56, #827):** it is `aircraft_icing`'s per-model status and detail verbatim, from the shared `grade_aircraft_icing_model` with that card's parameters (`resolve_aircraft_icing_params`, catalog defaults when the card is off). Its own `extent_pct_*` / `extent_min_nm` / `icing_altitude_buffer_ft` were retired (ignored, stripped from `parameters_used`): they counted icing within ±2,000 ft by % of route, so 12 of 13 IFR-RED-for-icing packs on 2026-10-19 sat beside an Icing Escape AMBER "warm escape available". **The convective axis is not graded here (§22):** it is `ConvectiveEvaluator`'s per-model status verbatim, obtained from the shared `convective_grading.grade_convective_model` — the identical call the convective advisory grades with — using the *convective advisory's* parameters resolved via `resolve_convective_params(ctx)` (`ctx.advisory_params["convective"]` over `CONVECTIVE_PARAM_DEFAULTS`; catalog defaults when that advisory is disabled). It therefore inherits the §18 NWP-native grade, the DD-trigger AMBER cap and the tops-below-cruise filter for free. Its own `convective_min_risk` / `convective_pct_red` were **retired** — they were a second formula that diverged from the first in both directions and, aggregated under MAJORITY-ties-to-worst, inverted a briefing headline from AMBER to RED. Exactly two deviations are sanctioned: *abstention* (the #391 thin-coverage guard may turn a would-be-GREEN convective axis UNAVAILABLE — contributes nothing to `worst`, never a different grade), and the **EMBEDDED escalation** — `convective_character` EMBEDDED for that model bumps the convective axis one step, AMBER→RED only, detail `ifr.conv_embedded`. ISOLATED/SCATTERED are see-and-avoid statements that do not transfer to IMC; WIDESPREAD/ORGANIZED are realized-coverage bands the convective advisory already prices, so escalating on them would double-count. EMBEDDED is orthogonal (the deck *hiding* the cells) and the one band genuinely worse under IFR than VFR. Character is read via `classify_route_character` with `resolve_character_params(ctx)` — that advisory's own tuning, never a duplicate | `min_dep_ceiling_ft`, `min_arr_ceiling_ft` |
 | `ApproachFeasibilityEvaluator` | flight_rules | **The arrival question no other evaluator owns (#509):** *can I get in, on a runway I can also land on?* Joins the destination's ceiling, the runway the wind favours, and which runways actually have a published approach — a joint function of ceiling **and** wind **and** infrastructure. See the dedicated section below | `tailwind_limit_kt` (10), `crosswind_limit_kt` (20), `circling_ceiling_ft` (1000) |
+| `DepartureFeasibilityEvaluator` | flight_rules | **The departure counterpart (#829):** below VFR at an origin with no published (or declared) approach, AMBER — IFR there means a VFR departure and a pick-up in the air. Never RED. GB exempt (GREEN with a note). See "Departure feasibility" below | none |
 
 ### Sun
 
@@ -534,6 +537,67 @@ Out of scope, deliberately: declaring approach type, minima or runway alignment;
 per-runway declarations (circling-equivalent confers no alignment credit either
 way); sharing the list between users; viewer-scoped re-grading of shared
 briefings.
+
+## Departure feasibility — is IFR available from the origin? (#829)
+
+Pilot report on LSZF (Birrfeld): MVFR at departure, `ifr_feasibility` GREEN, and
+the digest said IFR was unproblematic — but LSZF has no IFR procedures, so in
+CH/DE (and most of continental Europe) IFR from it is a Z flight plan: a VFR
+departure and a pick-up in the air. Nothing in the advisory set knew whether IFR
+was available *from the departure field*. `departure_feasibility` answers only
+that; it deliberately has none of `approach_feasibility`'s runway/wind/minima
+logic.
+
+**Signal.** The same `get_runway_approaches` lookup, at the origin
+(`RouteContext.departure_approaches`). "Has IFR procedures" ⇔ at least one
+approach row **or** a #510 declaration. Approach rows only: SIDs are not
+counted (the owner scoped the signal to approach rows). AIP field 207 ("IFR/VFR traffic permitted") was
+rejected: absent from `nav.db`, and in the full `airports.db` wrong in both
+directions (IFR on military fields with no approach, junk on fields that have
+one; Swiss VFR fields are not in the eAIP at all).
+
+**Grade map** (per model, on `airport_conditions.departure.condition_for_model`,
+the value `flight_category` grades, so the two cards cannot disagree):
+
+| Origin | Departure category | Status |
+|---|---|---|
+| published or declared approach | any | GREEN |
+| none | VFR | GREEN |
+| none, country in `EXEMPT_COUNTRIES` (`{"GB"}`) | MVFR / IFR / LIFR | GREEN + note |
+| none | MVFR / IFR / LIFR | AMBER |
+| `departure_approaches` None / `lookup_failed` (incl. `coverage_gap`) / no condition | — | UNAVAILABLE |
+
+**Never RED** (owner's call): local departure rules are not verified, and
+delaying is always an option. Unknown country (`iso_country=None`, now carried
+on `AirportApproaches`) is **not** exempt. VFR wins over the GB note: a VFR
+departure needs no IFR caveat. The detail follows the `Dep ICAO: CAT — ` clause
+head (#823), so the copy repeats neither the ICAO nor the category; the
+consensus swap then keeps the printed category right when models disagree.
+
+**Wiring.** `tasks/advise.py::_collect_airport_approaches` (renamed from
+`_collect_arrival_approaches`) serves both ends; `_departure_icao` mirrors
+`_arrival_icao` for the recalc path. All three `RouteContext` builders in
+`advise.py` set it; the timing scan reuses `run_alt_from_pack`, whose route is
+the same origin at another departure *time* (there is no alternate departure
+airport). The altitude table builds its own context but sweeps only
+altitude-dependent advisories, so it needs neither field.
+
+**Audience.** The interview's `flight_rules` question toggles it with
+`ifr_feasibility` (both options carry the key). Saved interview answers are
+**not** re-applied: the client writes the `enabled` patch when the assistant is
+run, so a pilot who answered "VFR only" before #829 sees the card until they
+re-run the assistant. Accepted, not migrated.
+
+**Hand-maintained tables** updated like #509: `ENTRY_ORDER`, `ADVISORY_PRIORITY`
+(web), `ADVISORY_TAG_MAP` (Python, web, iOS baseline + its test) → IMC,
+`ADVISORY_SITUATION` → `ifr_marginal`, and `eval_workbench/rerun.py`'s
+DB-dependent set. The #510 guardrail test now lists this evaluator as the second
+consumer of declarations, and the settings hint
+(`settings.declaredApproaches.scope`, 4 locales) says so.
+
+**Follow-up (not done):** fold departure and arrival infrastructure into
+`ifr_feasibility`'s endpoints through a shared function (the §22 pattern), so
+the IFR composite stops saying GREEN while one end is not workable.
 
 ## Mitigations (advice only — #328/#330)
 

@@ -38,6 +38,8 @@ ADVISORY_SITUATION: dict[str, str] = {
     # change the coverage-matrix denominator every corpus fixture is scored
     # against (parent #252 / #254).
     "approach_feasibility": "ifr_marginal",
+    # Same cell for the departure counterpart (#829): it only bites below VFR.
+    "departure_feasibility": "ifr_marginal",
     "ifr_feasibility": "ifr_marginal",
 }
 

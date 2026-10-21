@@ -100,6 +100,7 @@ const ADVISORY_TAG_MAP: Record<string, ConditionTagId> = {
   vfr_feasibility:   'IMC',
   ifr_feasibility:   'IMC',
   approach_feasibility: 'IMC',
+  departure_feasibility: 'IMC',
   flight_category:   'IMC',
   turbulence:        'TURB',
   mountain_wind:     'TURB',

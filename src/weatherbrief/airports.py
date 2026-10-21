@@ -476,7 +476,8 @@ def get_runway_approaches(
     Mirrors :func:`get_runway_ends`, which supplies the wind side of the same
     question ("which runway does the wind favour?"). This supplies the
     infrastructure side ("which runway can I actually shoot an approach to?"),
-    consumed by the ``approach_feasibility`` advisory (issue #509).
+    consumed by the ``approach_feasibility`` advisory (issue #509) at the
+    destination and by ``departure_feasibility`` (#829) at the origin.
 
     Each :class:`RunwayApproach` resolves into exactly one of three states:
 
@@ -560,10 +561,12 @@ def get_runway_approaches(
         # grade map's most severe input — on the strength of a coverage gap.
         # A surveyed country with no rows at this field is the opposite case
         # and still falls through to grade (EGTF Fairoaks, #510).
-        if not has_procedure_data and getattr(airport, "iso_country", None) \
+        iso_country = getattr(airport, "iso_country", None) or None
+        if not has_procedure_data and iso_country \
                 not in _procedure_coverage_countries(db_path):
             result[icao] = AirportApproaches(
                 icao=icao, lookup_failed=True, coverage_gap=True,
+                iso_country=iso_country,
             )
             continue
 
@@ -592,6 +595,7 @@ def get_runway_approaches(
         result[icao] = AirportApproaches(
             icao=icao,
             has_procedure_data=has_procedure_data,
+            iso_country=iso_country,
             approaches=approaches,
         )
 

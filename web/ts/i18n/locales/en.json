@@ -1143,7 +1143,7 @@
   "settings.declaredApproaches.hint": "Airports where you have an approach available to you that is not published in the AIP — a cloud break procedure or a private/unpublished GNSS approach. This is a personal operational declaration about your own currency and procedures, not a published procedure.",
   "settings.declaredApproaches.label": "Airports (ICAO)",
   "settings.declaredApproaches.fieldHint": "Separate codes with spaces or commas.",
-  "settings.declaredApproaches.scope": "Used only by the Approach Feasibility advisory: at a destination with no published instrument approach, an IFR arrival reads amber rather than red — never green, and never in LIFR, where there are no published minima to fly to. It never affects alternate-minima calculations or whether a field qualifies as a filed alternate.",
+  "settings.declaredApproaches.scope": "Used by the Approach Feasibility advisory: at a destination with no published instrument approach, an IFR arrival reads amber rather than red — never green, and never in LIFR, where there are no published minima to fly to. The Departure Feasibility advisory also counts it as an IFR procedure at your departure field. It never affects alternate-minima calculations or whether a field qualifies as a filed alternate.",
   "settings.declaredApproaches.unknown": "Not recognised as airport codes: {codes}. Nothing was saved — check the spelling.",
   "graph.observed-rain-rate": "Observed Rain Rate (radar)",
   "graph.observed-flash-rate": "Observed Lightning (flash rate)",

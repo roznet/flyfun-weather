@@ -61,19 +61,19 @@ def get_interview() -> Interview:
             InterviewQuestion(
                 id="flight_rules",
                 title="What kind of flying do you do?",
-                help="Controls whether the IFR feasibility advisory is shown.",
+                help="Controls whether the IFR and departure feasibility advisories are shown.",
                 options=[
                     InterviewOption(
                         id="ifr_capable",
                         label="IFR capable",
-                        description="Instrument-rated and equipped — keep IFR feasibility.",
-                        enabled={"ifr_feasibility": True},
+                        description="Instrument-rated and equipped — keep IFR and departure feasibility.",
+                        enabled={"ifr_feasibility": True, "departure_feasibility": True},
                     ),
                     InterviewOption(
                         id="vfr_only",
                         label="VFR only",
-                        description="No IFR — hide the IFR feasibility advisory.",
-                        enabled={"ifr_feasibility": False},
+                        description="No IFR — hide the IFR and departure feasibility advisories.",
+                        enabled={"ifr_feasibility": False, "departure_feasibility": False},
                     ),
                 ],
             ),

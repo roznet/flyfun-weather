@@ -30,6 +30,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'ifr_feasibility',
   'vfr_feasibility',
   'approach_feasibility',  // Can you get in, on a runway you can land on?
+  'departure_feasibility', // Is IFR available from the departure field?
   'flight_category',     // Airport Weather
   'airport_wind',
   'cloud_top',

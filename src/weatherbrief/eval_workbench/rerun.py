@@ -29,9 +29,10 @@ from weatherbrief.models import AdvisoryAggregation, RouteAdvisoriesManifest
 # Advisories whose re-run needs a DB-backed recompute we intentionally skip
 # here; flagged so a diff consumer can discount them.
 #
-# ``approach_feasibility`` (#509) belongs here for a second reason: it also
-# needs ``airports_db_path`` (nav.db procedures), which this module never passes
-# to ``run_advisories_from_pack``, so its re-run is always UNAVAILABLE.
+# ``approach_feasibility`` (#509) and ``departure_feasibility`` (#829) belong
+# here for a second reason: they also need ``airports_db_path`` (nav.db
+# procedures), which this module never passes to ``run_advisories_from_pack``,
+# so their re-run is always UNAVAILABLE.
 #
 # NB ``airport_conditions`` matches no registered advisory id — the airport
 # category is flight_category / airport_wind / density_altitude / llws — so the
@@ -39,6 +40,7 @@ from weatherbrief.models import AdvisoryAggregation, RouteAdvisoriesManifest
 # silently changing diff output for advisories this change does not touch.
 _AIRPORT_CONDITION_ADVISORIES = {
     "airport_conditions", "density_altitude", "llws", "approach_feasibility",
+    "departure_feasibility",
 }
 
 
