@@ -236,9 +236,23 @@ Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
    (10 min), for flights in `departure − 3 h … departure + duration + 1 h`
    (`WB_LIVE_WINDOW_BEFORE_H` / `WB_LIVE_WINDOW_AFTER_H`). Every flight with a
    pack, not only auto-refresh flights. Only this writer pushes (below). The
-   end follows the manual entries (`live_window_end`, #760): the effective
-   arrival + 1 h, or `LANDED_GRACE` (15 min) after a recorded landing became
-   known (one tick commits the landed state, then the flight leaves).
+   end follows the progress (`live_window_end`, #760, #812): the effective
+   arrival + 1 h, never before the planned arrival + 1 h (an early Start must
+   not close the window before the flight could have flown), or
+   `LANDED_GRACE` (15 min) after a landing (entered, app-detected or inferred
+   from a fix) became known (one tick commits the landed state, then the
+   flight leaves). **Started flights tick every 5 min** (#812): half-way
+   between two verification cycles the loop runs `LiveTick.run(…,
+   started_only=True)` (`scheduler._run_started_tick_once`) over the flights
+   `FlightProgress.started` holds for (Start pressed or a take-off known, not
+   yet arrived). It has no verification fetch to share, so it fetches its own:
+   one METAR/TAF batch and one SIGMET fetch, whatever the number of flights.
+   Their `live_tick_timing` rows show the 5-min cadence.
+3. **The Start update** (`live_tick.run_start_update`, #812): the first fix
+   on the ground at the departure (the app posts one right after Start)
+   schedules it from `POST …/live/position`, after the response. The ↻ path
+   with a fresh fetch, then the highlight regenerated whatever the gate says,
+   with `at_new_times` in its facts (below). Never pushes, like a ↻ press.
    `find_live_flights` picks candidates by the planned window widened by
    `MAX_TAKEOFF_DELAY_H` (6 h) and reads only their progress records.
    `push_expiry` uses the same end.
@@ -390,20 +404,38 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
     recap's `time_base` is `observed` only with an entered take-off and an
     entered (or app-detected) landing; anything a fix infers makes it
     `partial` ("partly observed", "flown 08:29"), never the plan's wording.
-  - *On the ground at the departure*: the newest telling fix on the ground
-    within 3 NM of the departure, no take-off known: `departed_at =
-    max(planned, fix + TAXI_MARGIN)` (10 min). A check at the airfield well
-    before the planned time changes nothing; one after it moves the
-    departure to just after it, and with nothing newer the flight is taken
-    to leave then. (Replaces the first cut's 20-min "not departed, ETAs from
-    now" hold.)
-  - *Landing*: the app's auto-stop posts `landed` (`source: app`) at its last
-    fix's time. A fix not airborne within 5 NM of the destination, once
+  - *On the ground at the departure (Start, #812)*: the newest telling fix
+    on the ground within 3 NM of the departure, no take-off known:
+    `departed_at = fix + TAXI_MARGIN` (10 min), **earlier than the plan
+    too**. Pilots press Start early in the preflight for a last weather
+    check (Start → take-off 10–30 min) and don't keep the planned time
+    precise; taking the time then beats waiting for a better one, and the
+    first airborne fix corrects it. With nothing newer the flight is taken
+    to leave then and land the planned duration later (the common case:
+    no fix after Start). Accepted cost: a check at the airfield an hour
+    early moves every ETA an hour early until the next fix. (Was
+    `max(planned, fix + 10 min)`, #761.)
+  - *Started* (`FlightProgress.started`): a ground fix at the departure or
+    a take-off known, not yet arrived; `start_fix` is the first ground fix
+    at the departure, which stays after the take-off (push consent).
+  - *Landing*: the app's auto-stop posts `landed` (`source: app`), timed at
+    the batch's **first** fix on the ground at the destination
+    (`first_landing_at`, #812; the newest fix's time when none is), not its
+    newest fix (+8 min against +1.4 min in the test). A fix not airborne
+    within 5 NM of the destination, once
     flying there at 1.4× the plan could have got there, infers the landing at
     the earlier of the fix and the expected arrival (the apron one-shot after
     landing). Entered and app landings win over it (`landing_event_at`); a
     manual landing wins over the app's but an app one counts after a manual
     clear.
+  - *The next flight closes the previous one* (#812): a fix on the ground at
+    a flight's departure is also recorded on the owner's previous flight
+    (departed in the 24 h before, newest first) when it is at that flight's
+    destination, that flight is in its live window and has no landing. It
+    is that flight's fix from then on (projected on its route, its terrain),
+    so its own rule infers the landing, never later than the fix. Pilots
+    rarely open the app after landing; the next leg's Start is often the
+    first fix after it.
   - *Projection*: done once at receipt against the latest pack's route and
     stored; re-done here only when the route in hand differs in length by
     > 0.5 NM (a pack with another route). The live window and push expiry
@@ -422,7 +454,9 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   location), `duplicate` (an app fix at the same time is recorded; the app
   resends unsent fixes), `too_close` (< 30 s from a recorded one: the
   server's own spacing, not trusting the client's) or `limit` (600 app fixes
-  per flight). No refetch; the response is the progress block as of now. A
+  per flight). The response is the progress block as of now; the first
+  ground fix at the departure also schedules the Start update (Writers,
+  above), any other fix waits for the tick. A
   device along more than 5 NM off the server's is logged
   (`LIVE_POSITION_XCHECK`); each post logs `LIVE_POSITION` with the newest
   fix's age.
@@ -466,7 +500,9 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   passed flags, storm `abeam_eta` and estimates, trails, TAF-at-ETA (the ↻ path
   passes the effective departure as `run_route_weather`'s `target_time`, which
   only places airport ETAs; observation-vs-model comparison and SIGMET windows
-  stay on the plan), the live window and push expiry. A landing puts `flown_nm`
+  stay on the plan; since #812 each airport's TAF is read at
+  `progress.eta(along)`, the ribbon's own ETA, not the effective departure
+  plus a share of the planned duration), the live window and push expiry. A landing puts `flown_nm`
   at the route's end, so the highlight gate reads "arrived" and generates
   nothing. A shifted ETA can itself make a TAF-at-ETA row appear (the baseline
   was read at the planned ETA): that is the TAF at the actual ETA, intended.
@@ -964,6 +1000,20 @@ clients fetch when it moves and take the same tick when only the highlight
 differs (iOS `refreshesHighlight`, web `highlightChanged`). A moved stamp with
 the same text counts as a change too: adopting it is what advances the held
 stamp, otherwise every poll would refetch.
+
+### Regenerated on Start (#812)
+
+The Start update (Writers, 3.) calls `ensure_highlight(…, retimed_from=gate)`
+with the gate state of the highlight the pilot had before (`{}` without one):
+a new highlight is written even when the gate would carry the old one, since
+Start is the moment the pilot is looking (in the test it was 23-37 min old).
+The facts get `at_new_times`: `"no change"` or `"changed: <gate keys>"`
+(`gate_changes` against that state), and one prompt rule makes the line open
+with "No change at your new times." or what changed. Not in the gate: the
+stored gate state is the new baseline as for any generation. While on the
+ground after Start the phase reads "on the ground at the departure, times
+estimated from the pilot's Start", with no take-off figure: it moves with
+each ground fix and the gate ignores it (item 5 below).
 
 ### What counts as "changed" (the regeneration gate, #706)
 

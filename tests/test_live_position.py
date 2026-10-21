@@ -198,3 +198,22 @@ def test_occasional_fixes_correct_the_plan(runs, truth):
     landed = _at(ticks, "11:00").layer.progress
     assert landed.landed_at is not None and _minutes_off(landed.landed_at, arrival) < 15
     assert landed.along_nm == pytest.approx(landed.route_nm, abs=0.1)
+
+
+def test_replay_reads_taf_at_the_times_the_tick_knew(tmp_path, monkeypatch):
+    """#812: ``/live/at`` rebuilds a tick's TAF rows with the progress events
+    known at that tick, so its TAF-at-ETA is read at the times the tick
+    showed (the taxi fix's departure), not the plan's."""
+    from weatherbrief.tasks import live_snapshots
+    from weatherbrief.tasks.live_snapshots import find_tick, load_snapshots, tick_view
+
+    flight_dir = tmp_path / "u" / "flight"
+    ticks = replay(_stream(), flight_dir)
+    seen = []
+    real = live_snapshots.observations_as_of
+    monkeypatch.setattr(live_snapshots, "observations_as_of",
+                        lambda history, snap, progress: seen.append(progress) or real(history, snap, progress))
+    tick = _at(ticks, "08:20")
+    tick_view(flight_dir, find_tick(load_snapshots(flight_dir), tick.at))
+    assert seen[0].departed_at == tick.layer.progress.eta_destination - timedelta(hours=2)
+    assert seen[0].departed_at != DEP

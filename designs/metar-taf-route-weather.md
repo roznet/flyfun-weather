@@ -185,7 +185,7 @@ For each airport with a METAR:
 Three callers share this seam:
 - `POST .../observations/refresh` — the standalone METAR/TAF refresh button (a thin endpoint wrapper that adds auth + the D-0 400 guard; persists only for the flight's latest pack).
 - The tiered refresh gate's `realtime` mode (`api/packs.decide_refresh`) — when a D-0 manual refresh isn't worth a full pipeline run, both refresh-button endpoints invoke `run_realtime_refresh` instead so a D-0 press is always at least cheap-useful. See [freshness-markers.md](freshness-markers.md) for the gate.
-- The server live-window tick (`tasks/live_tick.py`), every 10 min from departure − 3 h to arrival + 1 h.
+- The server live-window tick (`tasks/live_tick.py`), every 10 min from departure − 3 h to arrival + 1 h (5 min for started flights, #812).
 
 `run_route_weather` also records, per airport, the latest report's type (`METAR`/`SPECI`) and the previous report's category and time from the 3 h fetch window, plus the TAF issue time (the hysteresis inputs before §35; the type still labels a SPECI change).
 

@@ -357,12 +357,52 @@ def test_a_ground_fix_at_the_departure_moves_the_departure():
     assert late(15, apron).departed_at == apron.at + TAXI_MARGIN
 
 
-def test_a_ground_fix_well_before_the_planned_time_changes_nothing():
-    """A weather check at the airfield an hour before: still the plan."""
-    p = late(-20, fix(-60, 0.01, gs=0))
-    assert p.departed_at == DEP and p.source == "plan"
-    # Just before it: the take-off is at least TAXI_MARGIN after the fix.
+def test_start_earlier_than_planned_moves_the_departure_earlier():
+    """#812: Start pressed an hour before the planned time, early in the
+    preflight: the take-off is taken at Start + TAXI_MARGIN, not the plan."""
+    start = fix(-60, 0.01, gs=0)
+    p = late(-55, start)
+    assert p.departed_at == mins(-50) and p.source == SOURCE_APP and p.takeoff_at is None
+    assert p.arrival == mins(-50) + timedelta(hours=1.5)
+    assert p.eta(p.total_nm / 2) == mins(-50) + timedelta(minutes=45)
+    assert p.start_fix is start and p.started
+    # Just before the planned time: the same rule.
     assert late(-2, fix(-5, 0.01, gs=0)).departed_at == mins(5)
+
+
+def test_start_later_than_planned_moves_the_departure_later():
+    start = fix(25, 0.01, gs=0)
+    p = late(27, start)
+    assert p.departed_at == mins(35) and not p.departed and p.started
+    assert p.arrival == mins(35) + timedelta(hours=1.5)
+
+
+def test_no_fix_after_start_lands_the_planned_duration_later():
+    """#812: pilots don't open the app after landing. With Start alone the
+    arrival is the take-off it gives plus the planned duration."""
+    start = fix(-40, 0.01, gs=0)
+    p = late(40, start)
+    assert p.departed and p.landed_at is None and p.started
+    assert p.arrival == mins(-30) + timedelta(hours=1.5)
+    assert p.flown_nm == pytest.approx(p.total_nm * 70 / 90)
+    after = late(61, start)
+    assert after.arrived and not after.started and after.landed_at is None
+
+
+def test_the_first_airborne_fix_corrects_a_start_take_off():
+    start, climb = fix(-40, 0.01, gs=0), fix(10, 0.3, gs=120)
+    p = late(15, start, climb)
+    assert p.takeoff_at is not None and p.takeoff_at >= mins(-40)
+    assert p.departed_at == p.takeoff_at != mins(-30)
+    assert p.start_fix is start and p.started  # still started once airborne
+
+
+def test_started_needs_start_or_a_take_off():
+    assert not at(30).started
+    assert late(50, fix(40, 0.5)).started  # an inferred take-off
+    assert late(10, ev("takeoff", 5)).started
+    # A fix that shows nothing at the departure is not a Start.
+    assert not late(-30, fix(-40, 0.01, gs=None)).started
 
 
 def test_takeoff_never_before_the_last_ground_fix():
@@ -443,3 +483,24 @@ def test_fixes_count_only_once_recorded():
     p = late(45, fix(40, 0.5, rec_min=50))
     assert p.source == "plan"
     assert p.at(mins(55)).source == SOURCE_APP
+
+
+from weatherbrief.analysis.flight_progress import first_landing_at, on_ground_at_departure  # noqa: E402
+
+
+def _stored(e):
+    """``e`` with the server's projection stored, as the endpoint records it."""
+    from dataclasses import replace
+
+    p = FlightProgress.from_route(ROUTE, DEP, DEP).track.project(e.lat, e.lon)
+    return replace(e, fix=replace(e.fix, along_nm=p.along_nm, cross_nm=p.offtrack_nm, route_nm=TOTAL_NM))
+
+
+def test_first_landing_at_is_the_first_ground_fix_at_the_destination():
+    """#812: the app's batch runs on past the landing; its landing is the
+    first fix on the ground at the destination, not the newest."""
+    batch = [_stored(f) for f in (fix(80, 3.8, gs=110), fix(88, 3.99, gs=20), fix(96, 3.995, gs=0))]
+    assert first_landing_at(batch, TOTAL_NM) == mins(88)
+    assert first_landing_at(batch[:1], TOTAL_NM) is None
+    assert on_ground_at_departure(_stored(fix(-5, 0.01, gs=0)))
+    assert not on_ground_at_departure(_stored(fix(-5, 0.01, gs=120)))

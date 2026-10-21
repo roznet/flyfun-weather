@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncGenerator, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func as sa_func
@@ -5554,11 +5554,119 @@ MAX_FIXES_PER_FLIGHT = 600
 _FIX_XCHECK_NM = 5.0
 
 
+def _fix_event(f: LivePositionFix, track, elevation, now: datetime):
+    """``f`` as an app fix event projected on ``track``, with the terrain
+    under it from ``elevation`` (None: no heights, read by speed)."""
+    from weatherbrief.analysis.advisories._helpers import terrain_at_distance
+    from weatherbrief.analysis.flight_progress import EVENT_FIX, SOURCE_APP, FixData, ProgressEvent
+
+    p = track.project(f.lat, f.lon)
+    terrain = terrain_at_distance(elevation, p.along_nm)
+    return ProgressEvent(
+        kind=EVENT_FIX, at=ensure_utc(f.at), recorded_at=now, source=SOURCE_APP, lat=f.lat, lon=f.lon,
+        fix=FixData(
+            alt_ft=f.alt_ft, gs_kt=f.gs_kt, track_deg=f.track_deg, h_accuracy_m=f.h_accuracy_m,
+            terrain_ft=round(terrain) if terrain is not None else None,
+            along_nm=round(p.along_nm, 2), cross_nm=round(p.offtrack_nm, 2),
+            course_deg=round(p.track_deg, 1), route_nm=round(track.total_nm, 2),
+            client_along_nm=f.along_nm, client_cross_nm=f.cross_track_nm,
+        ),
+    )
+
+
+#: How far back the owner's previous flight may have departed for a fix on
+#: the ground at this one's departure to close it (#812).
+_PREVIOUS_FLIGHT_LOOKBACK = timedelta(hours=24)
+
+
+def _close_previous_flight(db: Session, flight, fixes: list, now: datetime) -> bool:
+    """Record ``fixes`` on the owner's previous flight when one of them is on
+    the ground at this flight's departure and at that flight's destination,
+    and that flight is still in its live window without a landing (#812).
+    There the fix infers the landing by that flight's own rule (the earlier
+    of the fix and its expected arrival), as if the app had posted it to it.
+    Only the newest such flight. Returns True when a fix was recorded.
+    """
+    from sqlalchemy import select as sa_select
+
+    from weatherbrief.analysis.flight_progress import (
+        EVENT_FIX,
+        SOURCE_APP,
+        FlightProgress,
+        first_landing_at,
+        on_ground_at_departure,
+    )
+    from weatherbrief.analysis.route_geometry import RouteTrack
+    from weatherbrief.db.models import FlightRow
+    from weatherbrief.models.analysis import RouteConfig
+    from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks.artifacts import load_briefing, load_elevation_profile
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, record_progress_events
+    from weatherbrief.tasks.live_tick import live_window_end, live_window_hours
+
+    at_departure = [e for e in fixes if on_ground_at_departure(e)]
+    if not at_departure or flight.departure_time is None:
+        return False
+    departure = ensure_utc(flight.departure_time)
+    rows = db.execute(
+        sa_select(FlightRow)
+        .where(FlightRow.user_id == flight.user_id, FlightRow.id != flight.id,
+               FlightRow.departure_time < departure,
+               FlightRow.departure_time >= departure - _PREVIOUS_FLIGHT_LOOKBACK)
+        .order_by(FlightRow.departure_time.desc())
+    ).scalars().all()
+    before_h, after_h = live_window_hours()
+    for row in rows:
+        packs = list_packs(db, row.id)
+        if not packs or not packs[0].artifact_path:
+            continue
+        pack_dir = Path(_resolve_artifact_path(packs[0].artifact_path))
+        try:
+            briefing = load_briefing(pack_dir) or {}
+            route = RouteConfig.model_validate(briefing["route"])
+            planned = _parse_target_time(briefing)
+            track = RouteTrack.from_route(route)
+        except (KeyError, TypeError, ValueError, ValidationError, OSError):
+            continue
+        try:
+            elevation = load_elevation_profile(pack_dir)
+        except (ValueError, ValidationError, OSError):
+            elevation = None
+        candidates = [_fix_event(
+            LivePositionFix(at=e.at, lat=e.lat, lon=e.lon, alt_ft=e.fix.alt_ft, gs_kt=e.fix.gs_kt,
+                            track_deg=e.fix.track_deg, h_accuracy_m=e.fix.h_accuracy_m),
+            track, elevation, now) for e in at_departure]
+        landing = first_landing_at(candidates, track.total_nm)
+        if landing is None:
+            continue
+        event = next(e for e in candidates if e.at == landing)
+
+        def select_landing(recorded, event=event, route=route, planned=planned):
+            progress = FlightProgress.from_route(route, planned, now, recorded)
+            window_end = live_window_end(planned, route.flight_duration_hours, after_h, recorded, now)
+            known = {e.at for e in recorded if e.kind == EVENT_FIX and e.source == SOURCE_APP}
+            if (progress.landed_at is not None or event.at in known
+                    or not planned - timedelta(hours=before_h) <= event.at <= window_end):
+                return [], False
+            return [event], True
+
+        try:
+            recorded = record_progress_events(flight_dir_for_pack(pack_dir), select_landing)
+        except OSError:
+            logger.warning("Live position: could not record the landing fix on %s", row.id, exc_info=True)
+            return False
+        logger.info("LIVE_POSITION_PREVIOUS flight=%s previous=%s at=%s recorded=%s",
+                    flight.id, row.id, event.at.isoformat(), recorded)
+        return recorded
+    return False
+
+
 @live_router.post("/{flight_id}/live/position", response_model=LivePositionResult)
 def post_live_position(
     flight_id: str,
     req: LivePositionRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db, scope="function"),
 ):
@@ -5574,24 +5682,32 @@ def post_live_position(
     or past ``MAX_FIXES_PER_FLIGHT``. The app only reads ``accepted``: a fix
     ignored here (``too_close`` included, under the app's own 60 s spacing
     only when two sources post close together) is simply not resent.
-    ``landed`` records an app landing at the newest fix's time, unless a
-    landing is already in effect or it would not follow the departure; a
-    manual landing always wins over it. No refetch: the next tick (10 min)
-    measures from them. 409 when the latest pack cannot be read (nothing
-    written).
+    ``landed`` records an app landing at the first fix of the batch on the
+    ground at the destination (#812; the newest fix's time when none is),
+    unless a landing is already in effect or it would not follow the
+    departure; a manual landing always wins over it.
+
+    The first fix on the ground at the departure is the app's Start (#812):
+    it re-times the flight, and the live layer is updated at once
+    (``live_tick.run_start_update``, after the response). Other fixes wait
+    for the next tick. A fix on the ground at this flight's departure that
+    is also at the destination of the owner's previous flight, still in its
+    live window, is recorded on that flight too, where it infers the landing
+    (#812: pilots rarely open the app after landing). 409 when the latest
+    pack cannot be read (nothing written).
     """
     from weatherbrief.analysis.flight_progress import (
         EVENT_FIX,
         EVENT_LANDED,
         SOURCE_APP,
-        FixData,
         FlightProgress,
         ProgressEvent,
+        first_landing_at,
     )
-    from weatherbrief.analysis.advisories._helpers import terrain_at_distance
     from weatherbrief.analysis.route_geometry import RouteTrack
     from weatherbrief.models.analysis import RouteConfig
     from weatherbrief.storage.flights import _resolve_artifact_path
+    from weatherbrief.tasks import live_tick
     from weatherbrief.tasks.artifacts import load_briefing, load_elevation_profile
     from weatherbrief.tasks.live_layer import (
         flight_dir_for_pack,
@@ -5600,7 +5716,7 @@ def post_live_position(
     )
     from weatherbrief.tasks.live_tick import live_window_end, live_window_hours
 
-    _load_owned_flight(db, flight_id, user_id)  # authz: owner only
+    flight = _load_owned_flight(db, flight_id, user_id)  # authz: owner only
     audit_pack_access(user_id, flight_id, "post_live_position", request)
     packs = list_packs(db, flight_id)
     if not packs or not packs[0].artifact_path:
@@ -5625,11 +5741,7 @@ def post_live_position(
     before_h, after_h = live_window_hours()
     # Projected (and the terrain looked up) before taking the flight's lock;
     # only the checks against what is recorded run under it.
-    projected = {}
-    for f in req.fixes:
-        p = track.project(f.lat, f.lon)
-        terrain = terrain_at_distance(elevation, p.along_nm)
-        projected[id(f)] = (p, round(terrain) if terrain is not None else None)
+    projected = {id(f): _fix_event(f, track, elevation, now) for f in req.fixes}
 
     def select(recorded):
         """The fixes worth recording, against what is already recorded;
@@ -5657,25 +5769,19 @@ def post_live_position(
                 ignored.append(IgnoredFix(at=at, reason=reason))
                 continue
             known.add(at)
-            p, terrain = projected[id(f)]
-            if f.along_nm is not None and abs(f.along_nm - p.along_nm) > _FIX_XCHECK_NM:
+            event = projected[id(f)]
+            if f.along_nm is not None and abs(f.along_nm - event.fix.along_nm) > _FIX_XCHECK_NM:
                 logger.info("LIVE_POSITION_XCHECK flight=%s at=%s server_along=%.1f client_along=%.1f",
-                            flight_id, at.isoformat(), p.along_nm, f.along_nm)
-            accepted.append(ProgressEvent(
-                kind=EVENT_FIX, at=at, recorded_at=now, source=SOURCE_APP, lat=f.lat, lon=f.lon,
-                fix=FixData(
-                    alt_ft=f.alt_ft, gs_kt=f.gs_kt, track_deg=f.track_deg, h_accuracy_m=f.h_accuracy_m,
-                    terrain_ft=terrain,
-                    along_nm=round(p.along_nm, 2), cross_nm=round(p.offtrack_nm, 2),
-                    course_deg=round(p.track_deg, 1), route_nm=round(track.total_nm, 2),
-                    client_along_nm=f.along_nm, client_cross_nm=f.cross_track_nm,
-                ),
-            ))
+                            flight_id, at.isoformat(), event.fix.along_nm, f.along_nm)
+            accepted.append(event)
         events = [*recorded, *accepted]
         landed_event = None
         if req.landed:
+            # The first fix on the ground at the destination, not the newest
+            # (#812): the app's batch can run on minutes past the landing.
+            usable = [projected[id(f)] for f in req.fixes if f.h_accuracy_m <= MAX_FIX_ACCURACY_M]
             newest = max((ensure_utc(f.at) for f in req.fixes), default=now)
-            at = min(newest, now)
+            at = min(first_landing_at(usable, track.total_nm) or newest, now)
             before = FlightProgress.from_route(route, planned, now, events)
             candidate = ProgressEvent(kind=EVENT_LANDED, at=at, recorded_at=now, source=SOURCE_APP)
             after = FlightProgress.from_route(route, planned, now, (*events, candidate))
@@ -5687,19 +5793,34 @@ def post_live_position(
                 events.append(candidate)
         new = accepted + ([landed_event] if landed_event is not None else [])
         progress = FlightProgress.from_route(route, planned, now, events)
-        return new, (accepted, ignored, landed_event is not None, progress)
+        # Start (#812): the first ground fix at the departure.
+        started = (FlightProgress.from_route(route, planned, now, recorded).start_fix is None
+                   and progress.start_fix is not None)
+        return new, (accepted, ignored, landed_event is not None, progress, started)
 
     try:
-        accepted, ignored, landed, progress = record_progress_events(flight_dir, select)
+        accepted, ignored, landed, progress, started = record_progress_events(flight_dir, select)
     except OSError:
         logger.exception("Live position write failed for flight %s", flight_id)
         raise HTTPException(status_code=500, detail="Could not record the fixes")
     newest_age = (now - accepted[-1].at).total_seconds() / 60.0 if accepted else None
     logger.info(
-        "LIVE_POSITION flight=%s accepted=%d ignored=%s landed=%s newest_age_min=%s source=%s",
+        "LIVE_POSITION flight=%s accepted=%d ignored=%s landed=%s newest_age_min=%s source=%s started=%s",
         flight_id, len(accepted), ",".join(i.reason for i in ignored) or "-", landed,
-        f"{newest_age:.1f}" if newest_age is not None else "-", progress.source,
+        f"{newest_age:.1f}" if newest_age is not None else "-", progress.source, started,
     )
+    db_path = getattr(request.app.state, "db_path", "")
+    if started and db_path:
+        # After the response: the app gets its confirmation now, and the
+        # updated /live a few seconds later.
+        background_tasks.add_task(live_tick.run_start_update, flight_id, db_path)
+    if accepted:
+        try:
+            _close_previous_flight(db, flight, accepted, now)
+        except Exception:
+            # Never worth the fixes just recorded on this flight.
+            logger.warning("Live position: previous-flight landing check failed for %s", flight_id,
+                           exc_info=True)
     return LivePositionResult(
         flight_id=flight_id, accepted=len(accepted), ignored=ignored, landed_recorded=landed,
         progress=progress_block(progress),

@@ -347,7 +347,7 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
             obs.has_taf = True
             obs.taf_raw = taf_rec["raw"]
             obs.taf_issue_time = parse_utc(taf_rec.get("issued_at"))
-            eta = progress.eta(obs.enroute_distance_nm) if progress is not None else None
+            eta = progress.eta(obs.along_nm) if progress is not None else None
             taf = WeatherParser.parse_taf(taf_rec["raw"], source="live_history",
                                           reference=parse_utc(taf_rec.get("issued_at")) or at)
             if taf is not None and eta is not None:
@@ -395,6 +395,7 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     from the history (:func:`observations_as_of`)."""
     from weatherbrief.models.live import LiveChanges
     from weatherbrief.tasks.artifacts import load_briefing
+    from weatherbrief.analysis.flight_progress import progress_events
     from weatherbrief.tasks.live_layer import flight_progress, load_live_history
     from weatherbrief.tasks.live_trail import route_context, trails_for_pack
 
@@ -405,8 +406,12 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
     pack_dir = flight_dir / name if name else None
     briefing = (load_briefing(pack_dir) if pack_dir is not None and pack_dir.is_dir() else None) or {}
     route, departure = route_context(briefing)
-    progress = flight_progress(route, departure, tick_at) if tick_at is not None else None
     history = history if history is not None else load_live_history(flight_dir)
+    # With the progress events known at that tick (#812), so the TAF rows
+    # match what the tick showed (``FlightProgress`` counts only those
+    # recorded by ``tick_at``).
+    progress = (flight_progress(route, departure, tick_at, progress_events(history))
+                if tick_at is not None else None)
     try:
         observations = observations_as_of(history, snapshot, progress)
     except Exception:

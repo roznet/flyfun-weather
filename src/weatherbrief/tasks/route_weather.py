@@ -229,6 +229,7 @@ def run_route_weather(
     *,
     source=None,
     pinned_proxies: dict[str, tuple[str | None, str | None]] | None = None,
+    eta=None,
 ) -> RouteObservations:
     """Fetch METAR/TAF for airports along a route via euro_aip RouteWeatherService.
 
@@ -242,6 +243,11 @@ def run_route_weather(
             one shared fetch; default is aviationweather.gov.
         pinned_proxies: The previous observation-proxy pick per terminal
             (#767, ``obs_proxy.pins_from``), kept while it still qualifies.
+        eta: Optional ``along_nm -> datetime | None``, the flight's own ETA
+            at a point (``FlightProgress.eta``, #812), so TAF-at-ETA is read
+            at the time the ribbon shows. Without it (or when it gives
+            None), ``target_time`` plus the airport's share of the planned
+            duration.
 
     Returns:
         RouteObservations with per-airport METAR/TAF data.
@@ -279,8 +285,8 @@ def run_route_weather(
         nearest_wp = _find_nearest_waypoint(along, route, route_distances)
 
         # Compute per-airport ETA based on its position along the route
-        airport_time = _interpolate_airport_time(
-            target_time, duration_hours, along, total_distance,
+        airport_time = (eta(along) if eta is not None and along is not None else None) or (
+            _interpolate_airport_time(target_time, duration_hours, along, total_distance)
         )
         if duration_hours > 0 and along is not None:
             offset_hours = (airport_time - target_time).total_seconds() / 3600
@@ -987,6 +993,9 @@ def run_realtime_refresh(
         airports_db_path=db_path,
         source=report_source,
         pinned_proxies=_previous_proxies(pack_dir, stored_obs),
+        # The ribbon's own ETAs (#812): a fix's delay or speed moves them,
+        # not only the departure.
+        eta=progress_now.eta if progress_now is not None and progress_now.timed else None,
     )
 
     # Compare observations against the pack's *stored* forecasts.

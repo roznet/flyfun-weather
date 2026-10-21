@@ -2833,6 +2833,67 @@ class TestLivePosition:
         assert self._post(client, flight, [self._fix(datetime.now(timezone.utc), 0.5)]).status_code == 409
         assert load_progress_events(flight_dir_for_pack(pack_dir)) == ()
 
+    def test_start_triggers_one_immediate_update(self, client, app_db, monkeypatch):
+        """#812: the first ground fix at the departure updates the flight at
+        once (after the response); later ground fixes wait for the tick."""
+        from weatherbrief.tasks import live_tick
+
+        flight, _ = self._flight(app_db, departure=(_NOW + timedelta(minutes=40)).replace(microsecond=0))
+        monkeypatch.setattr(client.app.state, "db_path", "/fake/db", raising=False)
+        calls = []
+        monkeypatch.setattr(live_tick, "run_start_update", lambda fid, path: calls.append((fid, path)))
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        # A fix away from the departure is not a Start.
+        assert self._post(client, flight, [self._fix(now - timedelta(minutes=8), 0.5)]).json()["accepted"] == 1
+        assert calls == []
+        body = self._post(client, flight, [self._fix(now - timedelta(minutes=3), 0.01, gs=0.0)]).json()
+        assert calls == [(flight.id, "/fake/db")]
+        # Departure at the fix + 10 min, though the plan says 40 min from now.
+        assert datetime.fromisoformat(body["progress"]["eta_destination"]) == (
+            now - timedelta(minutes=3) + timedelta(minutes=10, hours=2))
+        self._post(client, flight, [self._fix(now - timedelta(minutes=1), 0.01, gs=0.0)])
+        assert len(calls) == 1
+
+    def test_app_landing_is_timed_at_the_first_ground_fix_at_the_destination(self, client, app_db):
+        """#812: the batch runs on past the landing (taxi, apron); the landing
+        is its first fix on the ground at the destination."""
+        flight, _ = self._flight(app_db, departure=(_NOW - timedelta(minutes=110)).replace(microsecond=0))
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        fixes = [self._fix(now - timedelta(minutes=12), 3.9, gs=100.0),
+                 self._fix(now - timedelta(minutes=8), 3.99, gs=15.0),
+                 self._fix(now - timedelta(minutes=1), 3.995, gs=0.0)]
+        body = self._post(client, flight, fixes, landed=True).json()
+        assert body["landed_recorded"] is True
+        assert datetime.fromisoformat(body["progress"]["landed_at"]) == now - timedelta(minutes=8)
+
+    def test_next_flight_start_lands_the_previous_flight(self, client, app_db):
+        """#812: pilots rarely open the app after landing. Start on the next
+        leg, at the previous leg's destination, lands the previous leg."""
+        from types import SimpleNamespace
+
+        from weatherbrief.analysis.flight_progress import FlightProgress
+        from weatherbrief.models.analysis import RouteConfig
+        from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+        first, first_dir = self._flight(app_db, departure=(_NOW - timedelta(minutes=130)).replace(microsecond=0))
+        onward = {"name": "ZZDS-ZZDT", "flight_duration_hours": 1.0,
+                  "waypoints": [{"icao": "ZZDS", "name": "ZZDS", "lat": 50.0, "lon": 4.0},
+                                {"icao": "ZZDT", "name": "ZZDT", "lat": 50.0, "lon": 6.0}]}
+        second, _ = TestLiveProgress._flight(SimpleNamespace(ROUTE=onward), app_db,
+                                             departure=(_NOW + timedelta(minutes=30)).replace(microsecond=0))
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        assert self._post(client, second, [self._fix(now - timedelta(minutes=1), 4.0, gs=0.0)]).status_code == 200
+        events = load_progress_events(flight_dir_for_pack(first_dir))
+        assert [e.kind for e in events] == ["fix"]
+        progress = FlightProgress.from_route(RouteConfig.model_validate(self.ROUTE), first.departure_time,
+                                             now + timedelta(minutes=1), events)
+        # Landed by the first leg's own rule: the earlier of the fix and its
+        # expected arrival (10 min ago), never later than the fix.
+        assert progress.landed_at == first.departure_time + timedelta(hours=2)
+        # Once landed, a later fix records nothing more on it.
+        self._post(client, second, [self._fix(now, 4.0, gs=0.0)])
+        assert len(load_progress_events(flight_dir_for_pack(first_dir))) == 1
+
     def test_along_route_viewer_sees_the_fix_age_not_the_position(self, client, app_db):
         from weatherbrief.analysis.flight_progress import SOURCE_APP, FixData, ProgressEvent
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, record_progress_event

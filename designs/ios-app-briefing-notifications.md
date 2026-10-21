@@ -380,13 +380,15 @@ keeping:
 ## Live-alert push (#754)
 
 A second push stream, separate from briefing updates: on flight day, the live
-layer's alerts (and their clearing) for auto-refresh flights. Push only, never
+layer's alerts (and their clearing) for auto-refresh or started flights. Push only, never
 email. Server: `notify/live_alerts.py`; the decision and memory are in
 live-observation-layer.md → "Live-alert push", the cleared/re-arm rule in
 meteorology-decisions §47.
 
 - **Gate** (`skip_reason`, all must hold): a tick, not a ↻ press; the flight's
-  or its trip's `auto_refresh`; the bell not Mute (the flight's, else its
+  or its trip's `auto_refresh`, or Start pressed on the flight (#812: a fix on
+  the ground at the departure, `FlightProgress.start_fix`, is consent to live
+  alerts for that flight); the bell not Mute (the flight's, else its
   trip's, as for briefing pushes); `notify_live_alerts` (account pref, default
   **on**, the opt-out); `notify_push` on and ≥1 device. `notify_scope` /
   `notify_change_only` do **not** apply. The pref is a content toggle, not a
