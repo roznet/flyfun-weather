@@ -50,12 +50,11 @@ and can never go down. Tags are `android/<versionName>`.
 
 ## App Links
 
-`deploy/weather.flyfun.aero.caddy` has `/.well-known/assetlinks.json` commented
-out. Once the app exists in Play Console, take the **app signing** key's SHA-256
-from Setup → App integrity (Google's key, not the upload key above), uncomment
-the block with it, and deploy **before** shipping a production build — otherwise
-`/briefing.html`, `/s/…`, `/t/…` and `/auth/callback` links open in the browser.
-OAuth sign-in itself uses the `flyfunweather://` scheme and does not depend on it.
+`deploy/weather.flyfun.aero.caddy` serves `/.well-known/assetlinks.json` with both
+the Play App Signing certificate and the upload key. Keep `/auth/callback` out of
+the `https` App Links `<intent-filter>` in `AndroidManifest.xml` (`pathPrefix="/auth/callback"`
+would intercept Google's redirect to `https://weather.flyfun.aero/auth/callback/google`
+before it reaches the server). OAuth sign-in uses the `flyfunweather://` scheme.
 
 ## Owner checklist (Play Console)
 

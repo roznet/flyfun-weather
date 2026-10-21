@@ -48,12 +48,11 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/briefing.html" />
-                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/maps.html" />
-                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/trip.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:path="/briefing.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:path="/maps.html" />
+                <data android:scheme="https" android:host="weather.flyfun.aero" android:path="/trip.html" />
                 <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/s/" />
                 <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/t/" />
-                <data android:scheme="https" android:host="weather.flyfun.aero" android:pathPrefix="/auth/callback" />
             </intent-filter>
         </activity>
     </application>
