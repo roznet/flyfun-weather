@@ -90,6 +90,7 @@ and ChatGPT cannot drift.
 | `getDigestContext` | `GET /agent/v1/flights/{id}/digest-context` | `get_digest_context` |
 | `getAlternates` | `GET /agent/v1/flights/{id}/alternates` | `get_alternates` |
 | `getAirportWeather` | `GET /agent/v1/airport-weather` | `get_airport_weather` |
+| `getAreaOutlook` | `GET /agent/v1/area-outlook` | `area_outlook` (#836, see `area-outlook.md`) |
 
 **Route input (#745, #749).** Both `createFlight` and MCP `create_flight` take a
 single `route` string (filed Field-15 or a plain waypoint list, airports included,

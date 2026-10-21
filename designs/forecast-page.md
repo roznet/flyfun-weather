@@ -24,6 +24,10 @@ api/maps.py                                maps.html (template)
 │     models have data (D+0..D+6)          ├── fetchForecastMap(day,hour)
 ├── GET /maps/airport-weather             └── fetchAvailableDays()
 │   → forecast+obs for specific ICAOs      visualization/weather-map.ts (Leaflet map)
+│     (map_queries.load_forecast_slot,
+│      cache-first; D+0..D+6)
+├── GET /maps/area-outlook (#836, agents;
+│   see area-outlook.md)
 ├── GET /flights/frequent-airports        ├── setForecastData()
 │   → top-5 dep/dest from history (#419;   └── weather-map-format.ts
 │     consumed by the iOS map only)

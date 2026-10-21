@@ -34,6 +34,11 @@ TOOLS & TYPICAL WORKFLOW
 - getDigestContext — the exact text the AI digest was built from (deepest context).
 - getAlternates — weather-improvement divert candidates for the destination.
 - getAirportWeather — quick multi-model forecast + METAR/TAF for specific airports.
+- getAreaOutlook — BEFORE a flight exists, for "when / where is it worth flying"
+  over the coming days: grades airports around a base or along a route as
+  GO/MARGINAL/NO-GO with best slots, trend, sectors and out-and-back pairs. Lead
+  with best_slots, keep the confidence labels, say it is an outlook not a
+  briefing, then createFlight for the slot the pilot picks.
 
 WHEN THE USER QUESTIONS AN ADVISORY
 (e.g. "why is convective red when it looks like blue sky?") call getAdvisoryDetail

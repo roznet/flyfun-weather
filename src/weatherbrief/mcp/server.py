@@ -42,6 +42,7 @@ from weatherbrief.connectors.views import (
     summarize_altitude_table as _summarize_altitude_table,
 )
 from weatherbrief.mcp.client import API_BASE, WeatherbriefClient
+from weatherbrief.tasks.forecast_grid import MAX_FORECAST_DAY, day_coverage_note
 
 # Configure logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -50,6 +51,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+_DAY_DESCRIPTION = day_coverage_note()
 
 WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
 MCP_BASE_URL = os.getenv("MCP_BASE_URL", "https://mcp.flyfun.aero")
@@ -137,6 +140,16 @@ mcp = FastMCP(
         "3. get_briefing — retrieve weather assessment, advisories, and AI digest\n"
         "4. refresh_briefing — update stale briefings (checks model freshness first)\n"
         "5. get_airport_weather — quick forecast + METAR for specific airports\n\n"
+        "Before a flight exists: for 'when / where is it worth flying' questions "
+        "(e.g. 'is Saturday or Sunday better for Le Touquet?', 'which direction "
+        "is flyable from my base this weekend?'), call area_outlook FIRST, not "
+        "create_flight. It grades monitored airports around a base or along a "
+        "route over several days and returns best_slots, trend, per-sector or "
+        "corridor summaries and out-and-back pairs. Lead with those, keep the "
+        "confidence labels (divergent models = low confidence, never average it "
+        "away), and never call it a briefing: it is airport point forecasts only "
+        "(IFR: terminal only, no en-route icing). Once the pilot picks a slot, "
+        "create_flight for the full briefing.\n\n"
         "Briefing generation takes ~2 minutes. If get_briefing returns "
         "status='processing', tell the user and check again shortly.\n\n"
         "Flight day: get_briefing's 'live' block (null when the flight has none) "
@@ -764,7 +777,7 @@ def get_airport_weather(
     ],
     day: Annotated[
         int,
-        Field(description="Days from today: 0=today, 1=tomorrow, 2=D+2, 3=D+3", ge=0, le=3),
+        Field(description=_DAY_DESCRIPTION, ge=0, le=MAX_FORECAST_DAY),
     ] = 0,
     hour_utc: Annotated[
         int,
@@ -772,6 +785,9 @@ def get_airport_weather(
     ] = 12,
 ) -> dict[str, Any]:
     """Get weather forecasts and observations for specific airports.
+
+    For "when/where is it worth flying" over an area or a route, prefer
+    area_outlook (one call, graded and summarised server-side).
 
     Returns multi-model predictions (GFS, ICON, ECMWF) with consensus
     flight category and agreement scoring. For today (day=0), also
@@ -786,6 +802,117 @@ def get_airport_weather(
     try:
         with _get_client() as client:
             return client.get_airport_weather(icao_codes, day=day, hour_utc=hour_utc)
+    except httpx.HTTPStatusError as e:
+        return _error_result(f"API error: {e.response.text}", e.response.status_code)
+    except ValueError as e:
+        return _error_result(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Tool: area_outlook
+# ---------------------------------------------------------------------------
+
+@mcp.tool(
+    title="Area Outlook",
+    annotations=ToolAnnotations(
+        title="Area Outlook",
+        readOnlyHint=True,
+        destructiveHint=False,
+        openWorldHint=True,
+    ),
+)
+def area_outlook(
+    days: Annotated[
+        list[int],
+        Field(description=(
+            f"Relative days to scan, 0..{MAX_FORECAST_DAY} (0=today). E.g. on a "
+            "Wednesday, [3, 4] is Saturday and Sunday."
+        )),
+    ],
+    base: Annotated[
+        str | None,
+        Field(description="Base airport ICAO for radius mode, e.g. 'EGTF'. Give base OR route."),
+    ] = None,
+    radius_nm: Annotated[
+        float | None, Field(description="Radius around base (default 60 nm)", gt=0, le=200),
+    ] = None,
+    destination: Annotated[
+        str | None,
+        Field(description="Optional destination ICAO in radius mode; enables out-and-back pairs"),
+    ] = None,
+    route: Annotated[
+        str | None,
+        Field(description=(
+            "Route mode: 'DEP [waypoints] DEST', e.g. 'EGTF LFAT'. Grades the "
+            "endpoints and monitored airports in the corridor; enables pairs."
+        ), max_length=2000),
+    ] = None,
+    corridor_nm: Annotated[
+        float | None, Field(description="Corridor half-width (default 20 nm)", gt=0, le=60),
+    ] = None,
+    hours: Annotated[
+        list[int] | None,
+        Field(description="UTC sample hours (6, 9, 12, 15, 18); default all offered that day"),
+    ] = None,
+    rules: Annotated[
+        str, Field(description="'vfr' (default) or 'ifr'", pattern="^(vfr|ifr)$"),
+    ] = "vfr",
+    consensus: Annotated[
+        str,
+        Field(description="'worst' (default, most restrictive model) or 'majority'", pattern="^(worst|majority)$"),
+    ] = "worst",
+    min_ceiling_ft: Annotated[
+        float | None, Field(description="Override the GO ceiling (VFR default 1500 ft)", ge=0),
+    ] = None,
+    min_visibility_m: Annotated[
+        float | None, Field(description="Override the GO visibility (VFR default 5000 m)", ge=0),
+    ] = None,
+    max_crosswind_kt: Annotated[
+        float | None, Field(description="Override the NO-GO crosswind (default 25 kt)", ge=0),
+    ] = None,
+    max_gust_kt: Annotated[
+        float | None, Field(description="Override the NO-GO gust (default 35 kt)", ge=0),
+    ] = None,
+    tas_kt: Annotated[
+        float | None, Field(description="Cruise TAS for out-and-back leg time (default 110 kt)", gt=30, le=400),
+    ] = None,
+) -> dict[str, Any]:
+    """Indicative "is a flight worth briefing?" outlook over an area or route.
+
+    Use this BEFORE create_flight when the pilot asks when or where it is worth
+    flying over the coming days. One call grades every monitored airport
+    around a base (radius mode) or along a route corridor (route mode) at each
+    sample hour as GO / MARGINAL / NO-GO for VFR or IFR, then summarises:
+
+    - best_slots: the top slots, with grade and confidence. Lead with these.
+    - trend: per day, improving / deteriorating / steady.
+    - slots: per slot, the base (or departure/destination) row plus per-sector
+      (N/E/S/W from base) or corridor summaries: counts, worst airport, lowest
+      ceiling, max gust. Use sectors to say which direction is good or bad.
+    - pairs / round_trip (when a destination is known): same-day out-and-back
+      slot pairs, and days that only work one way.
+    - airports: one compact row per airport per slot (see 'legend').
+
+    Reading it: 'worst' consensus takes the most restrictive model; conf
+    'low' means the models disagree (often frontal timing) — say so, never
+    average it away. D+5/D+6 have two models only. VFR night slots are NO-GO.
+    query.base/destination 'substituted_nm' means the airport is not
+    monitored and a nearby one stands in ('unrepresentative' if > 20 nm).
+
+    This is NOT a briefing: point forecasts at monitored airports, nothing
+    between them, no operational checks; IFR grades are terminal only (no
+    en-route icing). When the pilot picks a slot, call create_flight with
+    that departure time for the full briefing.
+    """
+    try:
+        with _get_client() as client:
+            return client.area_outlook(
+                days=days, base=base, radius_nm=radius_nm, destination=destination,
+                route=route, corridor_nm=corridor_nm, hours=hours, rules=rules,
+                consensus=consensus, min_ceiling_ft=min_ceiling_ft,
+                min_visibility_m=min_visibility_m, max_crosswind_kt=max_crosswind_kt,
+                max_gust_kt=max_gust_kt, tas_kt=tas_kt,
+            )
     except httpx.HTTPStatusError as e:
         return _error_result(f"API error: {e.response.text}", e.response.status_code)
     except ValueError as e:
@@ -1102,6 +1229,41 @@ def explain_advisory(
         "that evidence, including when high CAPE drives a red while the model's own "
         "convective scheme is quiet. Treat the cross-check as context for the "
         "discussion, not a reason to downgrade the advisory."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prompt: plan_local_flight
+# ---------------------------------------------------------------------------
+
+@mcp.prompt(title="Plan a Local Flight")
+def plan_local_flight(
+    base: Annotated[str, Field(description="Base airport ICAO, e.g. 'EGTF'")],
+    destination: Annotated[
+        str, Field(description="Optional destination ICAO; empty for a local flight"),
+    ] = "",
+    days: Annotated[
+        str, Field(description="Which days, in words or offsets, e.g. 'this weekend' or '3,4'"),
+    ] = "the next three days",
+    rules: Annotated[str, Field(description="vfr or ifr")] = "vfr",
+) -> str:
+    """On-ramp: when and where is it worth flying from a base over the next days."""
+    where = (
+        f"a trip from {base} to {destination} and back" if destination
+        else f"a local flight from {base}"
+    )
+    route_hint = (
+        f"route='{base} {destination}'" if destination else f"base='{base}'"
+    )
+    return (
+        f"I'm considering {where} ({rules.upper()}) {days}. Work out the relative "
+        "day offsets from today's date, then call area_outlook with "
+        f"{route_hint}, those days and rules='{rules}'. Answer in a few lines: "
+        "which day and time look best and why, which directions or legs are "
+        "worse, how confident the models are (say when they disagree), and for "
+        "a trip whether a same-day out-and-back works. Make clear this is an "
+        "indicative outlook, not a briefing, and offer to create_flight for the "
+        "slot I pick."
     )
 
 
