@@ -57,9 +57,13 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 - `trend` per day: GO fraction (GO 1, MARGINAL 0.5) of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating.
 - **Pairs** (destination known): leg time = great-circle / TAS (default 110 kt). Outbound graded at take-off slot for the departure end and corridor, at the slot nearest arrival for the landing end; return must start ≥ outbound slot + leg time, same day. `round_trip` per day: possible / outbound only / return only / no. Top 5 pairs, one per outbound slot.
 
+## Map links
+
+`map_url` (top level = best slot, plus each best slot and each pair's outbound slot) opens `/maps.html?tab=forecast&fc.day=&fc.hour=&fc.apt=&fc.view=` (`fc.model=majority` when asked): the forecast tab's URL contract (`web/ts/visualization/forecast-url.ts`), which the iOS app also opens natively. `fc.view` frames the radius, or the route's bounding box plus the corridor, for a ~700 px map (zoom 4..10); `fc.apt` opens the destination's (else the base's) summary card. Origin is `WEATHER_BASE_URL`, like the agent's briefing links. `fc.day` is **relative**, so a link opened on a later day shows a later date: the map has no absolute-date key yet.
+
 ## Output budget
 
-Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination) is ~13 KB (~3.3k tokens), asserted < 16 KB in `tests/test_area_outlook.py`.
+Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination, with map links) is ~14 KB (~3.5k tokens), asserted < 16 KB in `tests/test_area_outlook.py`.
 
 ## Gotchas
 

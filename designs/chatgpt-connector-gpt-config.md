@@ -37,7 +37,8 @@ TOOLS & TYPICAL WORKFLOW
 - getAreaOutlook — BEFORE a flight exists, for "when / where is it worth flying"
   over the coming days: grades airports around a base or along a route as
   GO/MARGINAL/NO-GO with best slots, trend, sectors and out-and-back pairs. Lead
-  with best_slots, keep the confidence labels, say it is an outlook not a
+  with best_slots and share the map_url of the slot you recommend (the forecast
+  map at that time), keep the confidence labels, say it is an outlook not a
   briefing, then createFlight for the slot the pilot picks.
 
 WHEN THE USER QUESTIONS AN ADVISORY

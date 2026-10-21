@@ -145,7 +145,9 @@ mcp = FastMCP(
         "is flyable from my base this weekend?'), call area_outlook FIRST, not "
         "create_flight. It grades monitored airports around a base or along a "
         "route over several days and returns best_slots, trend, per-sector or "
-        "corridor summaries and out-and-back pairs. Lead with those, keep the "
+        "corridor summaries and out-and-back pairs, each with a map_url to the "
+        "forecast map at that time. Lead with those, share the map_url of the "
+        "slot you recommend, keep the "
         "confidence labels (divergent models = low confidence, never average it "
         "away), and never call it a briefing: it is airport point forecasts only "
         "(IFR: terminal only, no en-route icing). Once the pilot picks a slot, "
@@ -892,6 +894,10 @@ def area_outlook(
     - pairs / round_trip (when a destination is known): same-day out-and-back
       slot pairs, and days that only work one way.
     - airports: one compact row per airport per slot (see 'legend').
+    - map_url (top level, on each best slot and each pair): the forecast map
+      opened at that day and hour, framed on the area or route with the
+      base/destination panel open. Give the pilot the link for the slot you
+      recommend so they can see the picture themselves.
 
     Reading it: 'worst' consensus takes the most restrictive model; conf
     'low' means the models disagree (often frontal timing) — say so, never

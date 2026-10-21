@@ -616,8 +616,13 @@ def compute_outlook(
     q: OutlookQuery,
     slot_data: dict[tuple[int, int], dict[str, Any]],
     valid_times: dict[tuple[int, int], datetime],
+    map_base_url: str | None = None,
 ) -> dict[str, Any]:
-    """Pure core: grade, aggregate and pair. See module docstring."""
+    """Pure core: grade, aggregate and pair. See module docstring.
+
+    With ``map_base_url``, the result, each best slot and each pair's
+    outbound slot carry a ``map_url`` to the forecast map at that time.
+    """
     focus: list[Place] = [p for p in (q.base, q.departure, q.destination) if p is not None]
     focus_icaos = list(dict.fromkeys(p.icao for p in focus))
     all_icaos = focus_icaos + [c.icao for c in q.candidates if c.icao not in focus_icaos]
@@ -703,12 +708,15 @@ def compute_outlook(
         sc = slot_score(s)
         if sc[0] == 2:
             break
-        best.append({
+        b = {
             "slot": slot_label(valid_times[s]),
             "grade": [GO, MARGINAL, NOGO][sc[0]],
             "area_go_score": round(-sc[1], 2),
             "conf": ("high", "medium", "low")[sc[2]],
-        })
+        }
+        if map_base_url:
+            b["map_url"] = map_url(map_base_url, q, s)
+        best.append(b)
 
     days = sorted({d for d, _ in available})
     trend: dict[str, str] = {}
@@ -739,6 +747,15 @@ def compute_outlook(
     dest = q.destination
     if dep is not None and dest is not None:
         result["pairs"], result["round_trip"] = _pairs(q, dep, dest, available, grades, valid_times)
+        if map_base_url:
+            by_label = {slot_label(valid_times[s]): s for s in available}
+            for p in result["pairs"]:
+                p["map_url"] = map_url(map_base_url, q, by_label[p["out"]])
+
+    # The forecast map at the best slot (or the first one), framed on the query.
+    if map_base_url and available:
+        top = ranked[0] if best else available[0]
+        result["map_url"] = map_url(map_base_url, q, top)
     return result
 
 
@@ -816,6 +833,55 @@ def _pairs(
         if len(top) == 5:
             break
     return top, round_trip
+
+
+# ---------------------------------------------------------------------------
+# Forecast-map deep links
+# ---------------------------------------------------------------------------
+
+# Leaflet: 256 px tiles, a world of 256·2^z px is 21600 NM of longitude. Size
+# the zoom so the area spans about this many pixels of the viewer's map.
+_MAP_VIEW_PX = 700.0
+_MAP_MIN_ZOOM, _MAP_MAX_ZOOM = 4, 10
+
+
+def map_view(q: OutlookQuery) -> str:
+    """``lat,lon,zoom`` (the web/iOS ``fc.view`` format) framing the query."""
+    if q.mode == "radius":
+        lat, lon = q.base.lat, q.base.lon
+        span_nm = 2 * (q.radius_nm or DEFAULT_RADIUS_NM)
+    else:
+        lats = [p[0] for p in q.route_points]
+        lons = [p[1] for p in q.route_points]
+        lat, lon = (min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2
+        span_nm = max(
+            (max(lats) - min(lats)) * 60.0,
+            (max(lons) - min(lons)) * 60.0 * math.cos(math.radians(lat)),
+        ) + 2 * (q.corridor_nm or DEFAULT_CORRIDOR_NM)
+    px_per_nm_z0 = 256.0 / (21600.0 * math.cos(math.radians(lat)))
+    zoom = math.floor(math.log2(_MAP_VIEW_PX / (max(span_nm, 1.0) * px_per_nm_z0)))
+    zoom = max(_MAP_MIN_ZOOM, min(_MAP_MAX_ZOOM, zoom))
+    return f"{lat:.2f},{lon:.2f},{zoom}"
+
+
+def map_url(base_url: str, q: OutlookQuery, slot: tuple[int, int]) -> str:
+    """Forecast-map link at ``slot``, framed on the query, panel open.
+
+    Keys are the forecast tab's URL contract (``web/ts/visualization/
+    forecast-url.ts``, also read by the iOS app). ``fc.day`` is relative to
+    the day the link is opened, like every forecast-map link: a link opened
+    on a later day shows a later date.
+    """
+    from urllib.parse import urlencode
+
+    params = {"tab": "forecast", "fc.day": slot[0], "fc.hour": slot[1]}
+    if q.consensus != "worst":
+        params["fc.model"] = q.consensus
+    focus = q.destination or q.base
+    if focus is not None:
+        params["fc.apt"] = focus.icao
+    params["fc.view"] = map_view(q)
+    return f"{base_url.rstrip('/')}/maps.html?{urlencode(params, safe=',')}"
 
 
 # ---------------------------------------------------------------------------
@@ -1032,8 +1098,12 @@ def build_area_outlook(
     max_crosswind_kt: float | None = None,
     max_gust_kt: float | None = None,
     tas_kt: float | None = None,
+    map_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Resolve, load each slot (cache first) and compute the outlook.
+
+    ``map_base_url`` (the web app's origin) adds forecast-map ``map_url``
+    links; see :func:`map_url`.
 
     Plain function, no FastAPI dependencies: the ``/maps`` and ``/agent/v1``
     endpoints both call it. Raises :class:`OutlookInputError` on bad input.
@@ -1051,7 +1121,10 @@ def build_area_outlook(
     )
     slot_data = {s: load_forecast_slot(db, s[0], s[1], airports_db_path) for s in q.slots}
     valid_times = {s: forecast_hour_for(*s) for s in q.slots}
-    result = {"query": describe_query(q), **compute_outlook(q, slot_data, valid_times)}
+    result = {
+        "query": describe_query(q),
+        **compute_outlook(q, slot_data, valid_times, map_base_url=map_base_url),
+    }
     result["legend"] = LEGEND
     result["note"] = NOTE + (" " + IFR_SCOPE_NOTE if rules == "ifr" else "")
     result["next_step"] = NEXT_STEP

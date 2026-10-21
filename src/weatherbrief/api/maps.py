@@ -16,6 +16,7 @@ removed in #154. Use the optimistic-bias leaderboard endpoint instead
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -435,7 +436,8 @@ def area_outlook_response(db: Session, airports_db: str, **kwargs: Any) -> dict[
     """
     from weatherbrief.tasks.area_outlook import OutlookInputError, build_area_outlook
 
+    base_url = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
     try:
-        return build_area_outlook(db, airports_db, **kwargs)
+        return build_area_outlook(db, airports_db, map_base_url=base_url, **kwargs)
     except OutlookInputError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
