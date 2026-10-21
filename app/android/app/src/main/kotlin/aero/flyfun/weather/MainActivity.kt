@@ -17,6 +17,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -28,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
@@ -52,6 +55,7 @@ import aero.flyfun.weather.viewmodel.FlightListViewModel
 import aero.flyfun.weather.viewmodel.ForecastMapViewModel
 import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
 import aero.flyfun.weather.viewmodel.TripsViewModel
+import aero.flyfun.weather.viewmodel.ViewModelScopes
 
 /**
  * Main activity for FlyFun Weather Android.
@@ -129,7 +133,11 @@ fun FlyFunWeatherRoot(
     val pendingNav by appState.pendingNavTarget.collectAsState()
     val unseenWhatsNew by (appState.whatsNewStore?.unseenCount?.collectAsState() ?: remember { mutableStateOf(0) })
 
+    // Session and briefing ViewModels live in these owners, cleared when no longer on screen
+    val viewModelScopes: ViewModelScopes = viewModel(key = "viewModelScopes") { ViewModelScopes() }
+
     if (!isAuthenticated) {
+        LaunchedEffect(Unit) { viewModelScopes.retainOnly(emptySet()) }
         LoginScreen(
             appState = appState,
             showDevLogin = BuildConfig.DEBUG && aero.flyfun.weather.data.ApiClient.isRunningOnEmulator(),
@@ -138,32 +146,33 @@ fun FlyFunWeatherRoot(
     }
 
     val sessionKey = "$cacheScope:$isMockMode:$isGuestBrowsing"
+    val sessionOwner = viewModelScopes.owner(ViewModelScopes.sessionKey(sessionKey))
 
-    val flightListViewModel: FlightListViewModel = viewModel(key = "flightList:$sessionKey") {
+    val flightListViewModel: FlightListViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "flightList") {
         FlightListViewModel(
             repository = appState.repository,
             tripRepository = appState.tripRepository,
         ).also { it.loadFlights() }
     }
 
-    val tripsViewModel: TripsViewModel = viewModel(key = "trips:$sessionKey") {
+    val tripsViewModel: TripsViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "trips") {
         TripsViewModel(tripRepository = appState.tripRepository)
     }
 
-    val aircraftViewModel: AircraftListViewModel = viewModel(key = "aircraft:$sessionKey") {
+    val aircraftViewModel: AircraftListViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "aircraft") {
         AircraftListViewModel(
             apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
         )
     }
 
-    val forecastMapViewModel: ForecastMapViewModel = viewModel(key = "forecastMap:$sessionKey") {
+    val forecastMapViewModel: ForecastMapViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "forecastMap") {
         ForecastMapViewModel(
             apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
             isMockModeProvider = { isMockMode || isGuestBrowsing },
         )
     }
 
-    val historicalMapViewModel: HistoricalMapViewModel = viewModel(key = "historicalMap:$sessionKey") {
+    val historicalMapViewModel: HistoricalMapViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "historicalMap") {
         HistoricalMapViewModel(
             apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
             isMockModeProvider = { isMockMode || isGuestBrowsing },
@@ -179,15 +188,25 @@ fun FlyFunWeatherRoot(
     var activeTripId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activePackTimestamp by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeOpenObserved by rememberSaveable(sessionKey) { mutableStateOf(false) }
-    // Bumped on each fresh open so a cached briefing ViewModel reloads (rotation keeps it)
-    var briefingOpenSequence by rememberSaveable(sessionKey) { mutableStateOf(0) }
     var cachedFlightForBriefing by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
 
     val resolvedFlightForBriefing = cachedFlightForBriefing?.takeIf { it.id == activeFlightId }
         ?: allFlights.firstOrNull { it.id == activeFlightId }
 
+    // Each open briefing gets its own owner; closing it (or switching flight / session) clears
+    // that owner, so a reopened briefing is a fresh ViewModel. Rotation keeps the key, so the VM.
+    val briefingOwner = activeFlightId?.let { viewModelScopes.owner(ViewModelScopes.briefingKey(sessionKey, it)) }
+    LaunchedEffect(sessionKey, activeFlightId) {
+        viewModelScopes.retainOnly(
+            setOfNotNull(
+                ViewModelScopes.sessionKey(sessionKey),
+                activeFlightId?.let { ViewModelScopes.briefingKey(sessionKey, it) },
+            ),
+        )
+    }
+
     val selectedBriefingVm: BriefingViewModel? = activeFlightId?.let { fId ->
-        viewModel(key = "briefing:$sessionKey:$fId") {
+        viewModel(viewModelStoreOwner = checkNotNull(briefingOwner), key = "briefing") {
             BriefingViewModel(
                 flightId = fId,
                 repository = appState.repository,
@@ -197,12 +216,11 @@ fun FlyFunWeatherRoot(
         }
     }
 
-    LaunchedEffect(selectedBriefingVm, activeFlightId, activePackTimestamp, activeOpenObserved, briefingOpenSequence) {
+    LaunchedEffect(selectedBriefingVm, activeFlightId, activePackTimestamp, activeOpenObserved) {
         val vm = selectedBriefingVm ?: return@LaunchedEffect
         vm.applyLaunchOptions(
             preferredTimestamp = activePackTimestamp,
             openObserved = activeOpenObserved,
-            openSequence = briefingOpenSequence,
         )
         if (activeOpenObserved) {
             activeOpenObserved = false
@@ -256,8 +274,9 @@ fun FlyFunWeatherRoot(
         openObserved: Boolean = false,
     ) {
         cachedFlightForBriefing = flight
-        if (activeFlightId != flightId || currentRoute != RootRoute.BRIEFING) {
-            briefingOpenSequence++
+        // Tapping the selected flight again from another screen is a fresh open: reload it
+        if (activeFlightId == flightId && currentRoute != RootRoute.BRIEFING) {
+            viewModelScopes.clear(ViewModelScopes.briefingKey(sessionKey, flightId))
         }
         activeFlightId = flightId
         activePackTimestamp = packTimestamp
@@ -438,14 +457,8 @@ fun FlyFunWeatherRoot(
                     VerticalDivider()
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         val vm = selectedBriefingVm
-                        if (vm != null) {
-                            BriefingContainerScreen(
-                                viewModel = vm,
-                                onBack = {
-                                    closeBriefingToFlights()
-                                },
-                                showBackButton = false,
-                            )
+                        if (vm != null && briefingOwner != null) {
+                            BriefingPane(vm, briefingOwner, onBack = { closeBriefingToFlights() }, showBackButton = false)
                         } else {
                             Surface(
                                 modifier = Modifier.fillMaxSize(),
@@ -466,14 +479,8 @@ fun FlyFunWeatherRoot(
             } else {
                 // Phone single-pane layout
                 val vm = selectedBriefingVm
-                if (screen is RootScreen.Briefing && vm != null) {
-                    BriefingContainerScreen(
-                        viewModel = vm,
-                        onBack = {
-                            closeBriefingToFlights()
-                        },
-                        showBackButton = true,
-                    )
+                if (screen is RootScreen.Briefing && vm != null && briefingOwner != null) {
+                    BriefingPane(vm, briefingOwner, onBack = { closeBriefingToFlights() }, showBackButton = true)
                 } else {
                     FlightListScreen(
                         viewModel = flightListViewModel,
@@ -567,5 +574,18 @@ fun FlyFunWeatherRoot(
             },
             onDismiss = { flightListViewModel.clearSharedPreview() },
         )
+    }
+}
+
+/** The briefing, with nested `viewModel()` calls (cross-section) scoped to the briefing's own owner. */
+@Composable
+private fun BriefingPane(
+    viewModel: BriefingViewModel,
+    owner: ViewModelStoreOwner,
+    onBack: () -> Unit,
+    showBackButton: Boolean,
+) {
+    CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
+        BriefingContainerScreen(viewModel = viewModel, onBack = onBack, showBackButton = showBackButton)
     }
 }

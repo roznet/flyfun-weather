@@ -15,20 +15,33 @@ import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.ActiveRefreshResponse
 import aero.flyfun.weather.model.PackMetaResponse
 import aero.flyfun.weather.model.RefreshEvent
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalTime
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -366,29 +379,68 @@ class ViewModelTest {
     }
 
     @Test
-    fun briefingViewModel_reopenReloadsButRotationDoesNot() = runTest {
-        val testScope = TestScope(StandardTestDispatcher(testScheduler))
-        val repo = CountingBriefingRepository(FixtureBriefingRepository())
-        val vm = BriefingViewModel(
-            flightId = FixtureBriefingData.FLIGHT_ID,
-            repository = repo,
-            scopeOverride = testScope,
+    fun viewModelScopes_clearDroppedOwnersAndKeepRetainedOnes() {
+        val scopes = ViewModelScopes()
+        val session = ViewModelScopes.sessionKey("scope-a:false:false")
+        val briefing = ViewModelScopes.briefingKey("scope-a:false:false", "flight-1")
+        val sessionVm = ViewModelProvider.create(scopes.owner(session), clearTrackingFactory)[ClearTrackingViewModel::class]
+        val briefingVm = ViewModelProvider.create(scopes.owner(briefing), clearTrackingFactory)[ClearTrackingViewModel::class]
+
+        // Rotation recomposes with the same keys: same owners, same ViewModels
+        scopes.retainOnly(setOf(session, briefing))
+        assertFalse(briefingVm.cleared)
+        assertSame(
+            briefingVm,
+            ViewModelProvider.create(scopes.owner(briefing), clearTrackingFactory)[ClearTrackingViewModel::class],
         )
 
-        vm.applyLaunchOptions(openSequence = 1)
-        testScope.advanceUntilIdle()
-        assertEquals(1, repo.listPacksCalls)
+        // Closing the briefing clears its ViewModel; reopening gets a fresh one
+        scopes.retainOnly(setOf(session))
+        assertTrue(briefingVm.cleared)
+        assertFalse(sessionVm.cleared)
+        assertEquals(setOf(session), scopes.keys)
+        val reopened = ViewModelProvider.create(scopes.owner(briefing), clearTrackingFactory)[ClearTrackingViewModel::class]
+        assertNotSame(briefingVm, reopened)
 
-        // Same open (rotation re-runs the effect): no reload
-        vm.applyLaunchOptions(openSequence = 1)
-        testScope.advanceUntilIdle()
-        assertEquals(1, repo.listPacksCalls)
-
-        // Pilot closes and reopens the same flight: reload the latest pack
-        vm.applyLaunchOptions(openSequence = 2)
-        testScope.advanceUntilIdle()
-        assertEquals(2, repo.listPacksCalls)
+        // A session change clears everything from the old session
+        scopes.retainOnly(setOf(ViewModelScopes.sessionKey("scope-b:false:false")))
+        assertTrue(sessionVm.cleared)
+        assertTrue(reopened.cleared)
     }
+
+    @Test
+    fun viewModelScopes_clearingCancelsBriefingWork() {
+        // Held like MainActivity holds it: in the activity's ViewModelStore
+        val activityStore = ViewModelStore()
+        val scopes = ViewModelProvider.create(
+            activityStore,
+            viewModelFactory { initializer { ViewModelScopes() } },
+        )[ViewModelScopes::class]
+        val key = ViewModelScopes.briefingKey("scope-a:false:false", "flight-1")
+        val vm = ViewModelProvider.create(scopes.owner(key), clearTrackingFactory)[ClearTrackingViewModel::class]
+        val job = vm.startWork()
+        assertTrue(job.isActive)
+
+        // The activity going away for good clears every owner it holds
+        activityStore.clear()
+        assertTrue(vm.cleared)
+        assertTrue(job.isCancelled)
+        assertTrue(scopes.keys.isEmpty())
+    }
+
+    private class ClearTrackingViewModel : ViewModel() {
+        private val scope = CoroutineScope(SupervisorJob()).also { s -> addCloseable { s.cancel() } }
+        var cleared = false
+            private set
+
+        fun startWork(): Job = scope.launch { awaitCancellation() }
+
+        override fun onCleared() {
+            cleared = true
+        }
+    }
+
+    private val clearTrackingFactory = viewModelFactory { initializer { ClearTrackingViewModel() } }
 
     @Test
     fun briefingViewModel_newFlightStartsFirstBriefing() = runTest {
@@ -400,7 +452,7 @@ class ViewModelTest {
             scopeOverride = testScope,
         )
 
-        vm.applyLaunchOptions(openSequence = 1)
+        vm.applyLaunchOptions()
         testScope.advanceUntilIdle()
 
         assertEquals(1, repo.refreshPackCalls)
@@ -419,7 +471,7 @@ class ViewModelTest {
             scopeOverride = testScope,
         )
 
-        vm.applyLaunchOptions(openSequence = 1)
+        vm.applyLaunchOptions()
         testScope.runCurrent()
         assertTrue(vm.isRefreshing.value)
         assertEquals("Fetching · 40%", vm.refreshProgressText.value)
@@ -443,7 +495,7 @@ class ViewModelTest {
             scopeOverride = testScope,
         )
 
-        vm.applyLaunchOptions(openSequence = 1)
+        vm.applyLaunchOptions()
         testScope.runCurrent()
         val shown = vm.selectedPack.value
         assertNotNull(shown)
@@ -472,7 +524,7 @@ class ViewModelTest {
             scopeOverride = testScope,
         )
 
-        vm.applyLaunchOptions(openSequence = 1)
+        vm.applyLaunchOptions()
         testScope.advanceUntilIdle()
 
         // Not left on a blank briefing with no explanation.
@@ -681,17 +733,6 @@ class ViewModelTest {
             refreshPackCalls++
             hasPack = true
             return inner.refreshPack(flightId, force, notifyEmail)
-        }
-    }
-
-    private class CountingBriefingRepository(
-        private val inner: BriefingRepository,
-    ) : BriefingRepository by inner {
-        var listPacksCalls = 0
-
-        override suspend fun listPacks(flightId: String): List<PackMetaResponse> {
-            listPacksCalls++
-            return inner.listPacks(flightId)
         }
     }
 }
