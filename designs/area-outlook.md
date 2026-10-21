@@ -70,7 +70,7 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 
 - **Radius**: per slot, base row + per-sector `go/marg/nogo`, min ceiling, max gust, worst-confidence, and `worst` only when it isn't GO.
 - **Route**: per slot, departure + destination rows + a corridor summary. For legs the corridor counts as one point: NO-GO only when **at least half** its airports are NO-GO, MARGINAL for a minority (an airport can be 20 nm off track and a pilot can avoid one field).
-- `best_slots` (top 3, never a NO-GO slot): radius ranks the base grade then the area GO fraction; route ranks the outbound leg.
+- `best_slots` (top 3, never a NO-GO slot): radius ranks the base grade (the worse of base and destination when a destination is given, so a NO-GO destination never ranks) then the area GO fraction; route ranks the outbound leg.
 - `trend` per day: GO fraction (GO 1, MARGINAL 0.5) of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating.
 - **Pairs** (destination known): leg time = great-circle / TAS (default 110 kt). Outbound graded at take-off slot for the departure end and corridor, at the slot nearest arrival for the landing end; return must start ≥ outbound slot + leg time, same day. `round_trip` per day: possible / outbound only / return only / no. Top 5 pairs, one per outbound slot.
 

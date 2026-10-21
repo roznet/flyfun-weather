@@ -490,8 +490,10 @@ def load_forecast_slots(
     in-process LRU, plus at most ``max_live`` live computations. Parsed blobs
     go through ``project`` (keep only what the caller needs) and are cached
     per ``project_id`` in an LRU the size of the grid, so repeat calls in the
-    same cache generation read no blobs at all. Returned payloads may be
-    shared with other requests: read-only.
+    same cache generation read no blobs at all. Slots computed live are not
+    cached (they have no cache generation to key on) and are recomputed,
+    within ``max_live``, on the next call. Returned payloads may be shared
+    with other requests: read-only.
     """
     from weatherbrief.tasks.cache_builder import (
         forecast_map_cache_key,

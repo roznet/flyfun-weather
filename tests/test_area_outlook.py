@@ -697,3 +697,29 @@ def test_slot_lru_holds_whole_grid_and_is_thread_safe():
         t.join()
     assert errors == [] and len(map_queries._SLOT_LRU) <= n
     map_queries._SLOT_LRU.clear()
+
+
+# ---------------------------------------------------------------------------
+# Review round 3: radius mode with a destination ranks on both ends
+# ---------------------------------------------------------------------------
+
+
+def test_radius_best_slot_never_nogo_at_destination():
+    slots = [(0, 9), (0, 15)]
+    good = _slot([_entry(i) for i in COORDS])
+    # 09Z: base and area perfect, destination IFR. 15Z: everything MARGINAL-ish.
+    dest_bad = _slot([_entry(i) for i in COORDS if i != "ZZDE"]
+                     + [_entry("ZZDE", cat="IFR", ceiling=600.0)])
+    meh = _slot([_entry(i, cat="MVFR", ceiling=1200.0) for i in COORDS])
+    q = _radius_query(slots, destination="ZZDE")
+    out = ao.compute_outlook(q, {(0, 9): dest_bad, (0, 15): meh}, _times(slots))
+    assert [b["slot"] for b in out["best_slots"]] == ["Sa15"]
+    assert out["best_slots"][0]["grade"] == ao.MARGINAL
+    # Without a destination, 09Z wins on the base alone.
+    q = _radius_query(slots)
+    out = ao.compute_outlook(q, {(0, 9): dest_bad, (0, 15): meh}, _times(slots))
+    assert out["best_slots"][0]["slot"] == "Sa09"
+    # And a GO destination keeps 09Z on top in the trip case.
+    q = _radius_query(slots, destination="ZZDE")
+    out = ao.compute_outlook(q, {(0, 9): good, (0, 15): meh}, _times(slots))
+    assert out["best_slots"][0]["slot"] == "Sa09"
