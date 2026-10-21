@@ -703,13 +703,21 @@ def compute_outlook(
               else f"{c.along_nm:.0f}nm along, {c.offtrack_nm:.0f}nm off")
         airports_out.append({"icao": c.icao, "at": at, "rows": rows})
 
-    # Best slots + trend. Radius: base grade first, then the area GO fraction.
-    # Route: the outbound leg (departure, corridor, destination) worst grade.
+    # Best slots + trend. Radius: base grade (worse of base and destination
+    # when one is given) first, then the area GO fraction. Route: the
+    # outbound leg (departure, corridor, destination) worst grade.
     def slot_score(slot: tuple[int, int]) -> tuple[int, float, int]:
         g = grades[slot]
         if q.mode == "radius":
-            key = g.get(q.base.icao, {}).get("grade")
             pool = [g[c.icao] for c in q.candidates if c.icao in g]
+            if q.destination is None:
+                key = g.get(q.base.icao, {}).get("grade")
+            else:
+                # A trip: the slot is only as good as the worse of the two
+                # ends, like route mode (a NO-GO destination never ranks).
+                ends = [g.get(q.base.icao), g.get(q.destination.icao)]
+                key = _leg_ok(*ends) or NOGO
+                pool = [x for x in ends if x] + pool
         else:
             ends = [g.get(q.departure.icao), g.get(q.destination.icao)]
             corridor = [g[c.icao] for c in q.candidates if c.icao in g]
