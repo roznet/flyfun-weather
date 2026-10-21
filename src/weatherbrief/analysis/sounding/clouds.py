@@ -23,17 +23,46 @@ logger = logging.getLogger(__name__)
 
 _M_TO_FT = 3.28084
 
-# Fixed ICAO cloud-band boundaries (ft). Defined here, in the cloud module,
-# and imported by `advisories.py` so the two cannot drift — they were separate
-# literals until the condensate envelope needed the same split (PR #508
-# review). `icing_common.nwp_cloud_cover_at_altitude` still inlines 6500/20000
-# and is a candidate for the same treatment.
+# Cloud-band boundaries. Every low/mid/high pick in the sounding package goes
+# through ``cloud_band_index`` below so the boundaries cannot drift — they were
+# separate literals until the condensate envelope needed the same split (PR
+# #508 review), and ``icing_common`` inlined its own copy until #844.
+#
+# Two definitions are in use, and a band cover must be read with the one it
+# was computed under (decisions §54):
+#   - ICAO altitude slabs, 6,500 / 20,000 ft — close to ECMWF ``lcc/mcc/hcc``
+#     (σ 0.8 / 0.45) and ICON ``clcl/clcm/clch`` (800 / 400 hPa), and to the
+#     Open-Meteo bulk fields of the models that reach the bulk fallback (UKMO,
+#     Météo-France, ECMWF outside GRIB coverage);
+#   - NCEP pressure bands, LCDC surface–642 hPa, MCDC 642–350 hPa, HCDC 350
+#     hPa–top (rapidrefresh.noaa.gov/RAP_var_diagnosis.html) — GFS and HRRR,
+#     marked ``band_definition == "ncep"`` at decode. 642 hPa sits near
+#     12,000 ft, so an ~8,000 ft deck is LOW cloud here (PR #508 round 5, #834).
 _CLOUD_LOW_CEILING_FT = 6500
 _CLOUD_MID_CEILING_FT = 20000
+_NCEP_LOW_BAND_FLOOR_HPA = 642.0
+_NCEP_MID_BAND_FLOOR_HPA = 350.0
+BAND_DEFINITION_NCEP = "ncep"
 
 
-def cloud_band_index(altitude_ft: float) -> int:
-    """ICAO band an altitude falls in: 0 = low, 1 = mid, 2 = high."""
+def cloud_band_index(
+    altitude_ft: float,
+    *,
+    pressure_hpa: float | None = None,
+    band_definition: str | None = None,
+) -> int:
+    """Band an altitude falls in: 0 = low, 1 = mid, 2 = high.
+
+    NCEP-defined covers (``band_definition == "ncep"``) are banded by
+    *pressure_hpa*; everything else — and an NCEP pick with no pressure to
+    hand — by the ICAO altitude slabs.
+    """
+    if band_definition == BAND_DEFINITION_NCEP and pressure_hpa is not None:
+        if pressure_hpa > _NCEP_LOW_BAND_FLOOR_HPA:
+            return 0
+        if pressure_hpa > _NCEP_MID_BAND_FLOOR_HPA:
+            return 1
+        return 2
     if altitude_ft < _CLOUD_LOW_CEILING_FT:
         return 0
     if altitude_ft < _CLOUD_MID_CEILING_FT:
@@ -60,6 +89,55 @@ def cloud_cover_band_pct(
     cover here", which callers must read as *unknown*, never as *clear*.
     """
     return (low_pct, mid_pct, high_pct)[cloud_band_index(altitude_ft)]
+
+
+def pressure_near_altitude(
+    levels: list[DerivedLevel], altitude_ft: float,
+) -> float | None:
+    """Pressure (hPa) of the level nearest *altitude_ft*, for a band pick.
+
+    Only an NCEP band pick needs it; nearest-level is enough there (levels are
+    ≤ 50 hPa apart against band edges at 642 / 350 hPa). ``None`` when no
+    level has an altitude.
+    """
+    placed = [lv for lv in levels if lv.altitude_ft is not None]
+    if not placed:
+        return None
+    return min(placed, key=lambda lv: abs(lv.altitude_ft - altitude_ft)).pressure_hpa
+
+
+def nwp_band_cover_pct(
+    altitude_ft: float,
+    low_pct: float | None,
+    mid_pct: float | None,
+    high_pct: float | None,
+    nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+    *,
+    pressure_hpa: float | None = None,
+) -> float | None:
+    """The model's band cover (%) at an altitude — its own GRIB band first.
+
+    When the GRIB diagnostics carry any band cover (ECMWF ``lcc/mcc/hcc``,
+    ICON ``clcl/clcm/clch``, GFS/HRRR ``LCDC/MCDC/HCDC``), the answer comes
+    from them alone, banded by the diagnostics' own ``band_definition``; a band
+    they leave empty is ``None`` (unknown), never filled from the Open-Meteo
+    bulk triple, which is measured over a different slab — the condensate
+    builder's rule (PR #508 round 6). Only when the diagnostics have no band
+    cover at all does the bulk triple answer, on the ICAO slabs (#844).
+    """
+    if nwp_cloud_diagnostics is not None:
+        diag = (
+            nwp_cloud_diagnostics.low.cover_pct,
+            nwp_cloud_diagnostics.mid.cover_pct,
+            nwp_cloud_diagnostics.high.cover_pct,
+        )
+        if any(c is not None for c in diag):
+            return diag[cloud_band_index(
+                altitude_ft,
+                pressure_hpa=pressure_hpa,
+                band_definition=nwp_cloud_diagnostics.band_definition,
+            )]
+    return cloud_cover_band_pct(altitude_ft, low_pct, mid_pct, high_pct)
 
 # Dewpoint depression threshold for "in cloud" (degrees C)
 IN_CLOUD_DD_THRESHOLD = 3.0
@@ -569,13 +647,6 @@ def build_nwp_cloud_layers_from_fraction(
 # still excludes the measured residue floor. See meteorology-decisions §23.
 _CONDENSATE_CLOUDY_KG_KG = 1e-7
 
-# NCEP low/middle/high cloud-fraction band boundaries (pressure, hPa):
-# LCDC surface–642 hPa, MCDC 642–350 hPa, HCDC 350 hPa–top
-# (rapidrefresh.noaa.gov/RAP_var_diagnosis.html). These — not the ICAO
-# 6,500/20,000 ft bands — are the vertical definitions of the HRRR
-# diagnostic covers the condensate builder consumes (PR #508 round 5).
-_NCEP_LOW_BAND_FLOOR_HPA = 642.0
-_NCEP_MID_BAND_FLOOR_HPA = 350.0
 
 
 def build_nwp_cloud_layers_from_condensate(
@@ -659,7 +730,7 @@ def build_nwp_cloud_layers_from_condensate(
     # products fall back to the self-consistent ICAO/bulk pairing instead.
     diag_covers: tuple[float | None, float | None, float | None] | None = None
     if nwp_cloud_diagnostics is not None and (
-        nwp_cloud_diagnostics.band_definition == "ncep"
+        nwp_cloud_diagnostics.band_definition == BAND_DEFINITION_NCEP
     ):
         diag_covers = (
             nwp_cloud_diagnostics.low.cover_pct,
@@ -710,16 +781,13 @@ def build_nwp_cloud_layers_from_condensate(
     # ICAO 6,500/20,000 ft bands. Selecting an ~8,000 ft deck's cover with
     # the ICAO rule read MCDC for a column NCEP files under LCDC, turning a
     # native overcast low deck into FEW (PR #508 review round 5). The bulk
-    # Open-Meteo fallback keeps ICAO-style altitude bands — its own product
-    # semantics.
+    # Open-Meteo fallback keeps the ICAO slabs (see ``cloud_band_index``).
     def _level_band(lv: PressureLevelData) -> int:
-        if use_pressure_bands:
-            if lv.pressure_hpa > _NCEP_LOW_BAND_FLOOR_HPA:
-                return 0
-            if lv.pressure_hpa > _NCEP_MID_BAND_FLOOR_HPA:
-                return 1
-            return 2
-        return cloud_band_index((lv.geopotential_height_m or 0.0) * _M_TO_FT)
+        return cloud_band_index(
+            (lv.geopotential_height_m or 0.0) * _M_TO_FT,
+            pressure_hpa=lv.pressure_hpa,
+            band_definition=BAND_DEFINITION_NCEP if use_pressure_bands else None,
+        )
 
     band_eff = (low_eff, mid_eff, high_eff)
 

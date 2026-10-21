@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from weatherbrief.analysis.sounding.clouds import (
+    cloud_band_index,
+    nwp_band_cover_pct,
+)
 from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
@@ -137,6 +141,8 @@ def nwp_cloud_cover_at_altitude(
     nwp_cloud_mid_pct: float | None,
     nwp_cloud_high_pct: float | None = None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None = None,
+    *,
+    pressure_hpa: float | None = None,
 ) -> float | None:
     """Return the NWP cloud cover percentage for a given altitude.
 
@@ -161,13 +167,18 @@ def nwp_cloud_cover_at_altitude(
 
     * altitude inside one or more diagnosed layers → the highest known cover
       among them; ``None`` if none of them has any cover value;
-    * altitude outside every diagnosed layer → ``0.0`` when the ICAO band the
+    * altitude outside every diagnosed layer → ``0.0`` when the band the
       altitude falls in has its own geometry (the model drew that band's deck
       elsewhere — genuinely clear here); otherwise that band has no geometry
-      to rule on, so its bulk percentage is returned (``None`` if absent).
+      to rule on, so the band's cover is returned per
+      ``clouds.nwp_band_cover_pct``.
 
-    When diagnostics are ``None`` or no band has base/top, fall back to the
-    bulk ICAO band percentage (``None`` when the model publishes none).
+    With no band geometry at all, the answer is ``clouds.nwp_band_cover_pct``:
+    the model's own GRIB band cover when the diagnostics carry any (ECMWF,
+    ICON, HRRR — cover without base/top), banded by the diagnostics'
+    ``band_definition`` (NCEP pressure bands need *pressure_hpa*), and the
+    Open-Meteo bulk triple only when they carry none. Before #844 this read
+    the bulk triple whenever geometry was missing, ignoring the GRIB cover.
     """
     margin = _NWP_CLOUD_ALTITUDE_MARGIN_FT
 
@@ -200,18 +211,18 @@ def nwp_cloud_cover_at_altitude(
         if any_diag:
             if inside_any:
                 return best  # None when no matching layer had any cover value
-            band_idx = 0 if altitude_ft < 6500 else (1 if altitude_ft < 20000 else 2)
+            band_idx = cloud_band_index(
+                altitude_ft,
+                pressure_hpa=pressure_hpa,
+                band_definition=nwp_cloud_diagnostics.band_definition,
+            )
             if band_has_geometry[band_idx]:
                 return 0.0
-            return candidates[band_idx][0]
 
-    # No diagnostics available — fall back to bulk ICAO band percentages
-    if altitude_ft < 6500:
-        return nwp_cloud_low_pct
-    elif altitude_ft < 20000:
-        return nwp_cloud_mid_pct
-    else:
-        return nwp_cloud_high_pct
+    return nwp_band_cover_pct(
+        altitude_ft, nwp_cloud_low_pct, nwp_cloud_mid_pct, nwp_cloud_high_pct,
+        nwp_cloud_diagnostics, pressure_hpa=pressure_hpa,
+    )
 
 
 # ── Glaciation floor ───────────────────────────────────────────────

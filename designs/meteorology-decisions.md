@@ -3048,8 +3048,9 @@ by pressure, and a condensate run crossing 642 or 350 hPa is SPLIT so each
 segment takes its own band's cover. The first wiring selected by the ICAO
 6,500/20,000 ft bands, which read MCDC for an ~8,000 ft column NCEP files
 under LCDC — turning a native overcast low deck into FEW (PR #508 round 5).
-The bulk Open-Meteo fallback keeps ICAO-style altitude bands, its own
-product semantics.
+The bulk Open-Meteo fallback uses the ICAO slabs — an approximation, not
+Open-Meteo's definition, which is per model (GFS bulk is NCEP's
+LCDC/MCDC/HCDC); see §54.
 
 **The NCEP rule is gated on provenance, not inferred from shape**
 (#508 follow-up). Routing into this builder is by data shape — 3D fraction
@@ -6267,7 +6268,6 @@ outlook. Real-world validation needed: whether worst-of consensus with these
 lines is too pessimistic at D+3..D+6 (pilot feedback on "outlook said NO-GO,
 briefing said fine").
 
-
 ## 53. Open-Meteo vertical velocity is w (m/s), converted to omega at ingestion (#833)
 
 **Date:** 2026-10-21
@@ -6325,3 +6325,79 @@ re-grades stored analyses and cannot see an ingestion fix.
 
 Stored packs keep the old values; no backfill (packs are regenerated on
 refresh). Any eval baseline built from GFS/UKMO soundings shifts.
+
+## 54. Cloud cover by the model's own bands; icing never drops a drawn deck (#834, #844)
+
+**Date:** 2026-10-21
+
+### Context
+
+Two reports on the same lookup (`icing_common.nwp_cloud_cover_at_altitude`,
+and its siblings in the advisory labels and embedded-convection check):
+
+- **#834** (outside report): Open-Meteo's bulk `cloud_cover_low/mid/high` are
+  not ICAO slabs. They follow each model's own definition — GFS is NCEP's
+  LCDC/MCDC/HCDC (surface–642 / 642–350 / 350 hPa–top), so an ~8,000 ft deck is
+  *low* cloud; ECMWF on Open-Meteo is derived from RH on fixed levels (low =
+  1000–850 hPa). We split everything at 6,500 / 20,000 ft. The earlier note in
+  §23 calling the ICAO split the bulk fallback's "own product semantics" was
+  wrong.
+- **#844** (found triaging #834): with no band *geometry*, the lookup ignored
+  the GRIB band *cover* entirely and read the Open-Meteo bulk triple. Only the
+  GFS decoder writes band base and top; ECMWF, ICON and HRRR write cover only.
+  So ECMWF/ICON/HRRR icing was scaled by Open-Meteo's proxy, and a known 0 %
+  from it skipped the level — even inside a cloud deck the model's own 3D
+  fraction drew.
+
+### Decision
+
+1. **The model's own band cover first** (`clouds.nwp_band_cover_pct`): when the
+   GRIB diagnostics carry any band cover, answer from them alone, banded by
+   their `band_definition` (`clouds.cloud_band_index`: NCEP pressure bands for
+   GFS/HRRR when the level pressure is known, ICAO 6,500 / 20,000 ft otherwise —
+   close to ECMWF σ 0.8/0.45 and ICON 800/400 hPa). A band they leave empty is
+   unknown (`None`), never filled from bulk — the condensate builder's rule
+   (§23). The bulk triple answers only when the diagnostics carry no band cover.
+2. **Icing scales by `max(band cover, gating deck's mean cover)`**
+   (`icing._level_nwp_cover_pct`, Ogimet-NWP and IENG). A 0 % band answer can no
+   longer drop a level inside a deck the model drew.
+3. **The bulk fallback keeps the ICAO slabs.** After (1), the models that still
+   reach it are UKMO, Météo-France and ECMWF outside GRIB coverage, whose bands
+   sit near the ICAO split; GFS always carries NCEP-marked diagnostics. GFS
+   without GRIB (an enrichment failure) is the accepted approximation.
+4. **Not done:** per-level `cloud_cover_{N}hPa` from Open-Meteo — native only
+   for GFS and ICON (both already covered by GRIB); for ECMWF/UKMO Open-Meteo
+   derives it from the RH we already fetch (Sundqvist), so it adds nothing.
+
+### Rejected: deck cover first
+
+Scaling by the gating deck's mean 3D fraction *instead of* the band cover was
+measured and rejected. A deck's mean fraction is usually below the band cover,
+so it lowered icing on the main models: on GRIB-hour ECMWF soundings
+Ogimet-NWP went 13 up / 84 down and IENG 32 up / 98 down (ICON similar). The
+max keeps the "never erase a drawn deck" fix without that drift. Revisit with
+verification data if the band cover over-states icing.
+
+### Measured effect (sounding replay, old vs new code, identical inputs)
+
+Dev packs + eval corpus, 21,025 sampled soundings, worst icing risk per
+sounding, (up / down):
+
+- ECMWF GRIB hours (1,708): Ogimet-NWP 47 / 21, IENG 69 / 31.
+- ECMWF non-GRIB hours (4,152): Ogimet-NWP 65 / 0, IENG 122 / 0.
+- ICON GRIB hours (566): Ogimet-NWP 10 / 3, IENG 19 / 3.
+- GFS (6,028): Ogimet-NWP 56 / 5, IENG 91 / 10, SFIP 2 changed (no tier change).
+- UKMO, Météo-France: no change (no NWP envelope, so these icing methods don't
+  run; the SFIP proxy's bulk read is unchanged).
+
+The remaining downs are where Open-Meteo's bulk was higher than both the
+model's own band cover and the deck cover. Advisory-label and
+embedded-convection consumers were switched to the same lookup but not
+replayed (they act at advisory level).
+
+### Upstream note
+
+Open-Meteo's `MeteoFranceVariableDownloadable.swift` maps `cloud_cover_mid` to
+`HIGH_CLOUD_COVER` and `cloud_cover_high` to `MEDIUM_CLOUD_COVER` for the AROME
+domains. Not corrected here: the seamless endpoint can't tell AROME hours from
+ARPEGE hours, so a local swap would be wrong half the time.

@@ -63,6 +63,21 @@ class TestNWPCloudCoverFallthrough:
         result = _nwp_cloud_cover_at(25000, analysis)
         assert result == 15.0
 
+    def test_ecmwf_band_cover_without_geometry_beats_bulk(self):
+        """ECMWF lcc/mcc/hcc carry cover but no base/top: the GRIB band cover
+        answers, not the Open-Meteo bulk value (#844)."""
+        analysis = SoundingAnalysis(
+            cloud_cover_low_pct=80.0,
+            cloud_cover_mid_pct=0.0,
+            cloud_cover_high_pct=10.0,
+            nwp_cloud_diagnostics=NWPCloudDiagnostics(
+                low=NWPCloudLayerDiag(cover_pct=60.0, base_ft=1500),
+                mid=NWPCloudLayerDiag(cover_pct=85.0),
+                high=NWPCloudLayerDiag(cover_pct=5.0),
+            ),
+        )
+        assert _nwp_cloud_cover_at(10000, analysis) == 85.0
+
     def test_gfs_diag_with_cover_still_works(self):
         """GFS diag with full cover data uses actual cloud boundaries."""
         analysis = SoundingAnalysis(
@@ -115,7 +130,7 @@ class TestNWPCloudCoverFallthrough:
         assert result is None
 
     def test_cover_without_geometry_uses_icao_bands(self):
-        """Band cover with NO base/top must fall back to the ICAO bands.
+        """Band cover with NO base/top is read by band, never as a confident 0 %.
 
         This is the shape ECMWF (lcc/mcc/hcc) and HRRR publish, and the
         partial-ICON case. The branch keys on GEOMETRY, not on cover: without
@@ -127,9 +142,13 @@ class TestNWPCloudCoverFallthrough:
         defect as if it were the design (PR #508 review). Under that
         behaviour an overcast ECMWF column reported 0 % cover at every
         altitude.
+
+        Since #844 the band's answer is the model's OWN band cover (85 % here),
+        not the Open-Meteo bulk value for that band (50 %) — bulk is read only
+        when the diagnostics carry no band cover at all.
         """
         analysis = SoundingAnalysis(
-            cloud_cover_low_pct=50.0,  # ICAO band fallback
+            cloud_cover_low_pct=50.0,  # Open-Meteo bulk — ignored (#844)
             nwp_cloud_diagnostics=NWPCloudDiagnostics(
                 low=NWPCloudLayerDiag(cover_pct=85.0),
                 mid=NWPCloudLayerDiag(cover_pct=20.0),
@@ -137,7 +156,7 @@ class TestNWPCloudCoverFallthrough:
                 ceiling_ft=2000,
             ),
         )
-        assert _nwp_cloud_cover_at(3000, analysis) == 50.0
+        assert _nwp_cloud_cover_at(3000, analysis) == 85.0
 
     def test_geometry_present_still_uses_boundaries(self):
         """A GFS-shaped diag (real base/top) keeps the boundary behaviour,

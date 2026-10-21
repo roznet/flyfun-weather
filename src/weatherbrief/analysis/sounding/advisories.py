@@ -30,7 +30,8 @@ _TERRAIN_CLEARANCE_FT = 1000
 from weatherbrief.analysis.sounding.clouds import (  # noqa: E402
     _CLOUD_LOW_CEILING_FT,
     _CLOUD_MID_CEILING_FT,
-    cloud_cover_band_pct,
+    nwp_band_cover_pct,
+    pressure_near_altitude,
 )
 
 
@@ -307,8 +308,9 @@ def _nwp_cloud_cover_at(
     """Return the NWP cloud cover % for the band containing the altitude.
 
     When the diagnostics carry real cloud base/top boundaries, uses them to
-    decide whether the altitude falls inside a diagnosed layer. Falls back to
-    fixed ICAO bands (SFC–6500ft, 6500–20000ft, 20000ft+) otherwise.
+    decide whether the altitude falls inside a diagnosed layer. Otherwise the
+    band cover from ``clouds.nwp_band_cover_pct`` (GRIB band cover first,
+    Open-Meteo bulk only when there is none).
 
     **The geometry branch is gated on GEOMETRY, not on cover** (PR #508
     review). Band covers without base/top are common — ECMWF publishes
@@ -347,18 +349,18 @@ def _nwp_cloud_cover_at(
                 return diag.convective_cover_pct
             # Altitude doesn't fall within any diagnosed cloud layer
             return 0.0
-        # No usable geometry (ECMWF, HRRR, partial ICON-EU) — ICAO bands.
+        # No usable geometry (ECMWF, HRRR, partial ICON-EU) — band cover.
 
-    # Fallback to ICAO bands with Open-Meteo cloud cover. The low-band check is
-    # a "does this model publish bulk cover at all?" gate, not a band pick —
-    # keep it ahead of the shared band lookup.
-    if analysis.cloud_cover_low_pct is None:
-        return None
-    return cloud_cover_band_pct(
+    # The model's own GRIB band cover when the diagnostics carry any, banded
+    # by their definition; the Open-Meteo bulk triple only when they carry
+    # none (#844 — this used to read bulk whenever geometry was missing).
+    return nwp_band_cover_pct(
         altitude_ft,
         analysis.cloud_cover_low_pct,
         analysis.cloud_cover_mid_pct,
         analysis.cloud_cover_high_pct,
+        diag,
+        pressure_hpa=pressure_near_altitude(analysis.derived_levels, altitude_ft),
     )
 
 

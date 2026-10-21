@@ -53,19 +53,112 @@ class TestCoverLookup:
         )
         assert nwp_cloud_cover_at_altitude(5000, 90.0, None, None, diag) == 0.0
 
-    def test_outside_layers_band_without_geometry_uses_its_bulk(self):
-        """The mid band has no geometry to rule on 10,000 ft — its bulk value
-        stands (was 0 %), and absent bulk is unknown (None)."""
+    def test_outside_layers_band_without_geometry_uses_its_diag_cover(self):
+        """The mid band has no geometry to rule on 10,000 ft — its own band
+        cover answers (was 0 %, then the bulk value until #844)."""
+        diag = self._diag(
+            low=NWPCloudLayerDiag(cover_pct=90.0, base_ft=1000, top_ft=3000),
+            mid=NWPCloudLayerDiag(cover_pct=40.0),
+        )
+        assert nwp_cloud_cover_at_altitude(10000, 90.0, 70.0, None, diag) == 40.0
+
+    def test_band_missing_from_diag_is_unknown_not_bulk(self):
+        """Diagnostics carry band covers but not this band's → unknown. The
+        bulk triple is measured over a different slab and is never mixed in
+        per band (#844, the condensate builder's rule)."""
         diag = self._diag(
             low=NWPCloudLayerDiag(cover_pct=90.0, base_ft=1000, top_ft=3000),
         )
-        assert nwp_cloud_cover_at_altitude(10000, 90.0, 70.0, None, diag) == 70.0
-        assert nwp_cloud_cover_at_altitude(10000, 90.0, None, None, diag) is None
+        assert nwp_cloud_cover_at_altitude(10000, 90.0, 70.0, None, diag) is None
 
-    def test_no_diag_geometry_falls_back_to_bulk(self):
-        diag = self._diag(low=NWPCloudLayerDiag(cover_pct=50.0, base_ft=1000))
-        assert nwp_cloud_cover_at_altitude(10000, 50.0, 30.0, None, diag) == 30.0
+    def test_cover_without_geometry_reads_diag_not_bulk(self):
+        """ECMWF/ICON/HRRR shape: band covers, no base/top (#844). The GRIB
+        band cover answers; the Open-Meteo bulk value is ignored."""
+        ecmwf = self._diag(
+            low=NWPCloudLayerDiag(cover_pct=50.0, base_ft=1000),
+            mid=NWPCloudLayerDiag(cover_pct=80.0),
+            high=NWPCloudLayerDiag(cover_pct=0.0),
+        )
+        assert nwp_cloud_cover_at_altitude(10000, 50.0, 0.0, None, ecmwf) == 80.0
+        icon = self._diag(
+            low=NWPCloudLayerDiag(cover_pct=100.0),
+            mid=NWPCloudLayerDiag(cover_pct=10.0),
+        )
+        assert nwp_cloud_cover_at_altitude(4000, 0.0, 0.0, None, icon) == 100.0
+
+    def test_ncep_bands_pick_by_pressure(self):
+        """GFS/HRRR covers are NCEP pressure bands: ~8,000 ft at 750 hPa is
+        LOW cloud (surface–642 hPa), not the ICAO mid band (#834)."""
+        diag = NWPCloudDiagnostics(
+            low=NWPCloudLayerDiag(cover_pct=100.0),
+            mid=NWPCloudLayerDiag(cover_pct=0.0),
+            high=NWPCloudLayerDiag(cover_pct=0.0),
+            band_definition="ncep",
+        )
+        assert nwp_cloud_cover_at_altitude(
+            8000, 100.0, 0.0, 0.0, diag, pressure_hpa=750,
+        ) == 100.0
+        # No pressure to hand → the ICAO slab is the honest approximation.
+        assert nwp_cloud_cover_at_altitude(8000, 100.0, 0.0, 0.0, diag) == 0.0
+
+    def test_no_diag_falls_back_to_bulk(self):
+        assert nwp_cloud_cover_at_altitude(10000, 50.0, 30.0, None, None) == 30.0
         assert nwp_cloud_cover_at_altitude(10000, 50.0, None, None, None) is None
+        empty = self._diag()  # diagnostics present, but no band cover at all
+        assert nwp_cloud_cover_at_altitude(10000, 50.0, 30.0, None, empty) == 30.0
+
+
+# ── Envelope cover first (#844) ─────────────────────────────────────
+
+
+class TestEnvelopeCover:
+    """Inside an NWP deck, icing scales by max(deck cover, band cover) — a band
+    lookup that says 0 % no longer drops a level the model's deck contains."""
+
+    def _deck_3d(self, pct: float | None) -> list[EnhancedCloudLayer]:
+        return [EnhancedCloudLayer(
+            base_ft=8500, top_ft=11500, coverage=CloudCoverage.BKN,
+            mean_cloud_cover_pct=pct,
+        )]
+
+    def test_known_zero_band_cover_no_longer_erases_a_drawn_deck(self):
+        from weatherbrief.analysis.sounding.icing import assess_icing_zones_ieng
+
+        for assess in (assess_icing_zones_ogimet_nwp, assess_icing_zones_ieng):
+            zones = assess(
+                _saturated_cold_levels(), self._deck_3d(70.0),
+                nwp_cloud_low_pct=100.0, nwp_cloud_mid_pct=0.0,
+            )
+            assert zones, assess.__name__
+
+    def test_deck_cover_scales_the_index_when_band_says_less(self):
+        thin = assess_icing_zones_ogimet_nwp(
+            _saturated_cold_levels(), self._deck_3d(30.0), nwp_cloud_mid_pct=0.0,
+        )
+        thick = assess_icing_zones_ogimet_nwp(
+            _saturated_cold_levels(), self._deck_3d(90.0), nwp_cloud_mid_pct=0.0,
+        )
+        assert thin and thick
+        assert thick[0].mean_icing_index > thin[0].mean_icing_index
+
+    def test_thin_deck_never_scales_below_the_band_cover(self):
+        """max(deck, band): a deck's mean fraction alone never lowers icing."""
+        band_only = assess_icing_zones_ogimet_nwp(
+            _saturated_cold_levels(), self._deck_3d(None), nwp_cloud_mid_pct=100.0,
+        )
+        thin_deck = assess_icing_zones_ogimet_nwp(
+            _saturated_cold_levels(), self._deck_3d(30.0), nwp_cloud_mid_pct=100.0,
+        )
+        assert thin_deck[0].mean_icing_index == pytest.approx(
+            band_only[0].mean_icing_index,
+        )
+
+    def test_deck_without_cover_falls_back_to_lookup(self):
+        """No deck cover → the band lookup still decides; a known 0 % skips."""
+        zones = assess_icing_zones_ogimet_nwp(
+            _saturated_cold_levels(), self._deck_3d(None), nwp_cloud_mid_pct=0.0,
+        )
+        assert zones == []
 
 
 # ── icing_severity_enhance ──────────────────────────────────────────
