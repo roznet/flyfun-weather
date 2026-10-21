@@ -281,6 +281,54 @@ def test_metric_tempo_8000_is_not_an_mvfr_crossing():
     assert [c.kind for c in changes.changes] == ["taf_category"]
 
 
+def _taf_obs(raw, issued, eta, icao="EGJB"):
+    from euro_aip.briefing.weather.models import WeatherReport
+
+    from weatherbrief.tasks.route_weather import _apply_taf_at_eta
+
+    obs = _apt(icao)
+    obs.has_taf = True
+    _apply_taf_at_eta(obs, WeatherReport.from_taf(raw, reference=issued), eta)
+    return obs
+
+
+def test_taf_row_names_the_temporary_group_that_sets_the_category():
+    """EGJB 2026-10-21 (#854): only the PROB30 TEMPO makes it IFR, and the row
+    must not read as if the main forecast changed."""
+    issued, eta = datetime(2026, 10, 21, 7, 54, tzinfo=timezone.utc), datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+    raw = ("TAF EGJB 210754Z 2109/2118 24012KT 9999 FEW020 SCT030 "
+           "PROB40 TEMPO 2109/2118 8000 SHRA SCT016TCU PROB30 TEMPO 2109/2118 4000 TSRAGS BKN012CB")
+    latest = _taf_obs(raw, issued, eta)
+    assert (latest.taf_prevailing_category_at_eta, latest.taf_flight_category_at_eta) == ("VFR", "IFR")
+    assert latest.taf_temporary_type == "PROB30 TEMPO"
+    changes, _ = _classify(_obs([_apt("EGJB", taf="MVFR")]), _obs([latest]), roles=airport_roles(["ZZDP", "EGJB"]))
+    [c] = changes.changes
+    assert c.message == "EGJB TAF at ETA: MVFR → PROB30 TEMPO IFR"
+    # The category itself, its key and tier are unchanged.
+    assert (c.key, c.from_value, c.to_value, c.tier) == ("taf:EGJB", "MVFR", "IFR", "alert")
+
+
+def test_taf_row_names_the_group_on_both_sides():
+    base = _apt("ZZDS", taf="MVFR").model_copy(update={
+        "taf_prevailing_category_at_eta": "VFR", "taf_temporary_category_at_eta": "MVFR",
+        "taf_temporary_type": "TEMPO"})
+    latest = _apt("ZZDS", taf="LIFR").model_copy(update={
+        "taf_prevailing_category_at_eta": "VFR", "taf_temporary_category_at_eta": "LIFR",
+        "taf_temporary_type": "PROB40 TEMPO"})
+    changes, _ = _classify(_obs([base]), _obs([latest]))
+    [c] = changes.changes
+    assert c.message == "ZZDS TAF at ETA: TEMPO MVFR → PROB40 TEMPO LIFR"
+
+
+def test_taf_row_unchanged_when_the_prevailing_forecast_changes():
+    # A BECMG/FM or main-forecast change: no temporary group governs.
+    latest = _apt("ZZDS", taf="IFR").model_copy(update={
+        "taf_prevailing_category_at_eta": "IFR", "taf_trend_type": "BECMG"})
+    changes, _ = _classify(_obs([_apt("ZZDS", taf="VFR")]), _obs([latest]))
+    [c] = changes.changes
+    assert c.message == "ZZDS TAF at ETA: VFR → IFR"
+
+
 # --- SIGMETs ----------------------------------------------------------------
 
 

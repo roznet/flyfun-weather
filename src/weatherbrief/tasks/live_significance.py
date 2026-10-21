@@ -142,6 +142,15 @@ STORM_NEAR_MINUTES = 60.0
 #: persistence at 30 min, core41 only modestly, and neither at 60; the
 #: route-relative ``score-estimates`` is what should move this number.
 STORM_MOTION_HORIZON_MINUTES = 30.0
+#: A storm whose abeam time is already past cannot be reached: it is a
+#: highlight at most (#854). With observed progress (a take-off or landing
+#: entered or detected, or GPS fixes), "past" is the progress's own abeam
+#: time; on the plan alone it is this long past the planned abeam time, the
+#: same allowance as a SIGMET starting after arrival (§40): a hold, a
+#: go-around, a short divert. Pilots also leave late (#811), and the plan
+#: cannot see that, so a shorter allowance would drop the destination's
+#: storm for a late pilot still on approach.
+STORM_PASSED_PLAN_MARGIN_MINUTES = 30.0
 #: A storm this close to the route's first / last point is the departure's /
 #: destination's (the approach), for the row's role.
 STORM_TERMINAL_NM = 10.0
@@ -505,6 +514,18 @@ def _airport_metar_changes(
     return out, unknown
 
 
+def taf_eta_words(a: AirportObservation) -> str | None:
+    """The TAF-at-ETA category as a change row says it: "IFR", or
+    "PROB30 TEMPO IFR" when a temporary group sets it (#854), in the order of
+    the digest's TAF line (§32, "[VFR], PROB30 TEMPO [IFR]"). The category
+    itself (the row's ``to_value``, its key and tier) is unchanged."""
+    cat = a.taf_flight_category_at_eta
+    temp = a.taf_temporary_category_at_eta
+    if cat is None or temp is None or temp != cat:
+        return cat
+    return f"{a.taf_temporary_type or 'TEMPO'} {cat}"
+
+
 _KEY_PREFIX = {
     "metar_category": "metar",
     "metar_convective": "conv",
@@ -592,10 +613,7 @@ def _airport_changes(
             icao=a.icao,
             from_value=base.taf_flight_category_at_eta, to_value=a.taf_flight_category_at_eta,
             observed_at=a.taf_issue_time, enroute_distance_nm=a.along_nm,
-            message=(
-                f"{label or a.icao} TAF at ETA: {base.taf_flight_category_at_eta}"
-                f" → {a.taf_flight_category_at_eta}"
-            ),
+            message=f"{label or a.icao} TAF at ETA: {taf_eta_words(base)} → {taf_eta_words(a)}",
         ))
     return out
 
@@ -1505,16 +1523,32 @@ def cluster_message(group: list[LiveStorm], locator: RouteLocator | None = None)
     return text
 
 
-def storm_alerts(storm: LiveStorm) -> bool:
+def storm_passed(storm: LiveStorm, *, progress_observed: bool = False) -> bool:
+    """The flight is already past the storm's abeam point (#854): a
+    destination storm after landing, typically. ``progress_observed`` says the
+    abeam time comes from observed progress (take-off, landing, fixes), which
+    is trusted as is; on the plan alone it gets
+    :data:`STORM_PASSED_PLAN_MARGIN_MINUTES`."""
+    m = storm.minutes_to_abeam
+    if m is None:
+        return False
+    return m < 0 if progress_observed else m < -STORM_PASSED_PLAN_MARGIN_MINUTES
+
+
+def storm_alerts(storm: LiveStorm, *, progress_observed: bool = False) -> bool:
     """The alert rule (§41): a heavy core within :data:`STORM_ALERT_NM` of the
-    track ahead, reached within :data:`STORM_NEAR_MINUTES`, **and** at least
-    one of: lightning; developing within :data:`STORM_DEVELOPING_ALERT_NM`;
-    closing on the track, counted only when the flight gets there within the
-    motion horizon."""
+    track ahead, reached within :data:`STORM_NEAR_MINUTES` and not already
+    passed (:func:`storm_passed`, #854), **and** at least one of: lightning;
+    developing within :data:`STORM_DEVELOPING_ALERT_NM`; closing on the
+    track, counted only when the flight gets there within the motion
+    horizon."""
     if storm.peak_dbz < RADAR_SIGNIFICANT_DBZ or storm.offtrack_nm > STORM_ALERT_NM:
         return False
     m = storm.minutes_to_abeam
     if m is not None and m > STORM_NEAR_MINUTES:
+        return False
+    if storm_passed(storm, progress_observed=progress_observed):
+        logger.debug("Live storm %s abeam %.0f min ago: highlight, not alert", storm.id, -m)
         return False
     closing = storm.relative_motion == "closing" and m is not None and m <= STORM_MOTION_HORIZON_MINUTES
     developing_near = storm.trend == "developing" and storm.offtrack_nm <= STORM_DEVELOPING_ALERT_NM
@@ -1552,13 +1586,14 @@ def storm_clusters(storms: list[LiveStorm]) -> list[list[LiveStorm]]:
 
 def _storm_row(
     group: list[LiveStorm], storms: LiveStorms, departed: bool, locator: RouteLocator | None = None,
+    *, progress_observed: bool = False,
 ) -> LiveChange:
     """One row for one storm or one cluster. Keyed on the cluster's oldest
     lineage (ids carry their first frame), the member most likely to persist,
     so the row keeps its key as cells come and go; the alert-once memory
     is per storm, so a key change never alerts twice."""
     anchor = min(group, key=lambda s: s.id)
-    alerting = [s.id for s in group if storm_alerts(s)]
+    alerting = [s.id for s in group if storm_alerts(s, progress_observed=progress_observed)]
     # The stretch the alert covers: its alerting members, else the whole row.
     spanned = [s for s in group if s.id in alerting] or group
     heavy = any(s.peak_dbz >= RADAR_SIGNIFICANT_DBZ for s in group)
@@ -1577,7 +1612,10 @@ def _storm_row(
     )
 
 
-def _storm_changes(storms: LiveStorms, *, departed: bool, locator: RouteLocator | None = None) -> list[LiveChange]:
+def _storm_changes(
+    storms: LiveStorms, *, departed: bool, locator: RouteLocator | None = None,
+    progress_observed: bool = False,
+) -> list[LiveChange]:
     """One row per storm ahead near the track (§41), plus one highlight for
     the heavy storms reached later than :data:`STORM_NEAR_MINUTES`."""
     out: list[LiveChange] = []
@@ -1592,7 +1630,7 @@ def _storm_changes(storms: LiveStorms, *, departed: bool, locator: RouteLocator 
             continue
         rowed.append(st)
     for group in storm_clusters(rowed):
-        out.append(_storm_row(group, storms, departed, locator))
+        out.append(_storm_row(group, storms, departed, locator, progress_observed=progress_observed))
     if later:
         lo, hi = min(s.along_nm for s in later), max(s.along_nm for s in later)
         if locator is not None:
@@ -1644,6 +1682,7 @@ def classify_changes(
     now: datetime | None = None,
     storms: LiveStorms | None = None,
     locator: RouteLocator | None = None,
+    progress_observed: bool = False,
 ) -> tuple[LiveChanges, ClassifierMemory]:
     """Everything significant since the briefing, plus the updated memory.
 
@@ -1659,6 +1698,9 @@ def classify_changes(
     (None, or a dark feed) the ring rows and the station CB/TCU alerts are
     the fallback (§41). ``locator`` (#790) words the positions in the
     storm and radar/lightning rows; without one they read "N NM along".
+    ``progress_observed`` says the storms' abeam times come from observed
+    progress rather than the plan alone, which decides when a storm counts as
+    passed (#854, :func:`storm_passed`).
     """
     roles = roles or {}
     memory = memory or ClassifierMemory()
@@ -1708,7 +1750,9 @@ def classify_changes(
             for st in storms.storms
         ]
     if storms_available(storms):
-        changes += _storm_changes(storms, departed=departed, locator=locator)
+        changes += _storm_changes(
+            storms, departed=departed, locator=locator, progress_observed=progress_observed,
+        )
         evaluated |= {"storm:", "storms:"}
     else:
         changes += _observed_changes(baseline_observed, latest_observed, flown_nm, locator)

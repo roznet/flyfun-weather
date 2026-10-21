@@ -163,13 +163,13 @@ def compute_wind_advisory(
     if wind_dir is None or wind_speed_kt is None or not runway_ends:
         return None, None, None, None
 
-    from weatherbrief.analysis.airport_conditions import compute_runway_winds
+    from weatherbrief.analysis.airport_conditions import best_runway_of, compute_runway_winds
 
     all_runways = compute_runway_winds(runway_ends, float(wind_speed_kt), float(wind_dir))
-    if not all_runways:
+    best = best_runway_of(all_runways)
+    if best is None:
         return None, None, None, None
 
-    best = min(all_runways, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
     advisory = _wind_advisory_status(best.crosswind_kt, wind_gust_kt)
     return advisory, best.runway_id, best.crosswind_kt, best.headwind_kt
 

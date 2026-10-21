@@ -5356,6 +5356,7 @@ is trusted.
   qualified); closing on the track, counted only when the flight gets there
   within 30 min (`STORM_MOTION_HORIZON_MINUTES`, "measured horizon only"). A
   cluster row is an alert when any member meets the rule.
+  A storm whose abeam time is already past never alerts (§57, #854).
 - **Alert once per phenomenon** (calibrated): a storm that has alerted never
   alerts again during the flight (`storm-alerted:<id>` in the alert memory),
   whatever its row does (tier bounce, new key, regrouping), and new cells in a
@@ -6530,3 +6531,62 @@ step before landing (#827 "Validation").
 **Rejected.** Keeping the profile enable map as the FIKI switch (it contradicted itself:
 the interview made the two cards exclusive, the "IFR FIKI" template enabled both).
 Counting % of route (a 5-minute pass and a 40-minute loiter graded the same).
+
+## 57. Wind-best runway end, storms already passed, and the TAF group in the live row (#854)
+
+**Date:** 2026-10-21 · **Issue:** #854 · **Amends:** §32 (live row wording), §41 (alert rule).
+Three pilot-facing bugs from the 2026-10-21 prod briefings review. Made unattended;
+the margins are agent choices for the owner to confirm.
+
+### Wind-best runway end
+
+- `best_runway_of` (`analysis/airport_conditions.py`) used to rank by
+  `(crosswind, -headwind)` with no tolerance. nav.db ends are often a few degrees
+  off reciprocal (EHRD 56°/235°T; 222 of 8,462 open runways ≥ 0.5°), so the
+  tailwind end won whenever its crosswind came out a few tenths lower
+  (EHRD 249@12: RW06, 11 kt tailwind).
+- **Now:** ends whose crosswind is within `max(1 kt, 10 % of the wind)` of the
+  lowest count as equal, and the most headwind wins among them. The 10 % term
+  covers ends up to ~5° off reciprocal at any wind speed (the split is about
+  wind × misalignment, so a fixed 1 kt stops covering 3° at ~20 kt). A tailwind
+  end still wins when its crosswind is materially lower than every headwind
+  end's (e.g. a single-direction end) or every end has a tailwind.
+- Exact reciprocals and crossing runways pick as before (among headwind ends,
+  lower crosswind and higher headwind are the same order).
+- One picker: the per-model consensus (`airport_consensus.enrich_wind`) and the
+  observed wind advisory (`route_weather.compute_wind_advisory`, which feeds the
+  runway-wind picture's best end) had their own copy of the old key; both now
+  call `best_runway_of`.
+
+### A storm already passed does not alert
+
+- `storm_alerts` let a negative `minutes_to_abeam` through both gates, and a
+  storm past the destination is clamped to the route's end and stays "ahead",
+  so destination storms pinged 7–57 min after the planned arrival.
+- **Now** `storm_passed` blocks the alert (the row stays, as a highlight):
+  - with **observed progress** (`FlightProgress.time_base` is not `planned`:
+    a take-off or landing entered or detected, or GPS fixes) the abeam time
+    already follows the progress, so `minutes_to_abeam < 0` is past;
+  - on the **plan alone**, past is more than `STORM_PASSED_PLAN_MARGIN_MINUTES`
+    (30 min) after the planned abeam time: the §40 SIGMET allowance (hold,
+    go-around, short divert). Pilots leave late (#811) and the plan cannot see
+    it; a shorter margin would drop the destination storm for a late pilot
+    still inbound, which is the alert that matters most.
+- `classify_changes(progress_observed=...)` carries the distinction; the live
+  layer sets it from the tick's progress.
+- **Consequence:** on plan-only flights, pings 7–30 min after the planned
+  arrival still fire. Of the 10-21 cases (+51, +57, +7, +8, +14 min), the first
+  two drop either way; the last three drop only if those flights had progress.
+- Not changed: the wording of a storm clamped past the destination ("near LFAT"
+  for cells past the field).
+
+### The TAF group in the live row
+
+- The "TAF at ETA" change row now names the temporary group when it sets the
+  category, in the digest's order (§32, "[VFR], PROB30 TEMPO [IFR]"):
+  `EGJB TAF at ETA: MVFR → PROB30 TEMPO IFR` (either side). A prevailing change
+  (main forecast, BECMG, FM) reads as before. `live_significance.taf_eta_words`.
+- Key, `from_value` / `to_value` and tier are unchanged (scope agreed on the
+  issue: name the group, don't change the tier rule). Clients, push text and the
+  highlight facts all show the row's `message` verbatim.
+

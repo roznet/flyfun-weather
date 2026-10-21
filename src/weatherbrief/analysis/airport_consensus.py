@@ -23,6 +23,7 @@ from typing import Any
 
 from weatherbrief.analysis.airport_conditions import (
     _nwp_ceiling_is_agl,
+    best_runway_of,
     classify_flight_category,
     compute_runway_winds,
     to_agl_ceiling,
@@ -124,10 +125,9 @@ def enrich_wind(d: dict, runway_ends: list[RunwayEnd]) -> None:
     ws, wd = d.get("wind_speed_kt"), d.get("wind_dir_deg")
     if not runway_ends or ws is None or wd is None:
         return
-    all_rwy = compute_runway_winds(runway_ends, ws, wd)
-    if not all_rwy:
+    best = best_runway_of(compute_runway_winds(runway_ends, ws, wd))
+    if best is None:
         return
-    best = min(all_rwy, key=lambda r: (r.crosswind_kt, -r.headwind_kt))
     d["crosswind_kt"] = best.crosswind_kt
     d["headwind_kt"] = round(best.headwind_kt, 1)
     d["best_runway_id"] = best.runway_id
