@@ -94,7 +94,7 @@ Pressure levels vary by model (range 1000–150 hPa, ~SFC to ~FL450):
 | `wind_speed` | kt | yes | yes | yes | yes | yes | yes | Wind at level for headwind/crosswind and shear calculations. |
 | `wind_direction` | ° | yes | yes | yes | yes | yes | yes | Wind direction at level. |
 | `geopotential_height` | m | yes | yes | yes | yes | yes | yes | Height of pressure surface. Converts pressure levels to altitude. |
-| `vertical_velocity` | Pa/s | yes | yes | **no**† | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. From Open-Meteo API: GFS, ECMWF, UKMO. †ICON has no API omega, but ICON-EU GRIB now supplies it (derived from model `w`) inside the EU domain — so ICON gets vertical-motion/CAT analysis there. |
+| `vertical_velocity` | Pa/s | yes | yes | **no**† | **no** | yes | **no** | Omega (ω). Negative = ascent, positive = subsidence. Key for vertical motion and turbulence analysis. From Open-Meteo API: GFS, ECMWF, UKMO — Open-Meteo serves geometric **w in m/s**, converted to ω at ingestion (`fetch/open_meteo.py`, ω = −ρ·g·w; unit read from `hourly_units`, unknown unit → dropped; #833, decisions §53). †ICON has no API omega, but ICON-EU GRIB now supplies it (derived from model `w`) inside the EU domain — so ICON gets vertical-motion/CAT analysis there. |
 
 ### 1.3 GRIB2 Enrichment Variables
 
@@ -477,12 +477,12 @@ The `_no_vv` suffix indicates omega (vertical velocity) is unavailable for the m
 
 | Model | Variant | CLW Source | VV Source | Glaciation |
 |-------|---------|-----------|-----------|-----------|
-| GFS | `full`/`interp` (SFIP_O) | CLWMR from GFS GRIB2 (interp where gaps filled) | ω from API | Yes (ICMR from GRIB2) |
+| GFS | `full`/`interp` (SFIP_O) | CLWMR from GFS GRIB2 (interp where gaps filled) | ω from API (w → ω at ingestion) | Yes (ICMR from GRIB2) |
 | GFS slot from HRRR (CONUS) | `full` (SFIP_O) | CLMR from HRRR GRIB2 (whole sounding, no patching) | VVEL from HRRR GRIB2 | Yes (CIMIXR) |
 | ICON | `full`/`interp` (SFIP_O)* | QC from ICON-EU GRIB2 (interp where gaps filled) | ω from ICON-EU GRIB (derived from `w`) | Yes (QI from ICON-EU) |
 | ECMWF | `full`/`interp` (SFIP_O)† | clwc from ECMWF GRIB2 | w from ECMWF GRIB2 (replaces Open-Meteo ω) | Yes (ciwc from GRIB2) |
 | MétéoFr | `proxy_no_vv` (SFIP_4) | DD + cloud proxy | **None** (ω unavailable) | No |
-| UKMO | `proxy` (SFIP_4) | DD + cloud proxy | ω from API | No |
+| UKMO | `proxy` (SFIP_4) | DD + cloud proxy | ω from API (w → ω at ingestion) | No |
 | GEM | `proxy_no_vv` (SFIP_4) | DD + cloud proxy | **None** (ω unavailable) | No |
 
 \* ICON uses full variant only when route is within ICON-EU domain (Europe). Falls back to proxy for routes outside the domain.
