@@ -6267,3 +6267,61 @@ outlook. Real-world validation needed: whether worst-of consensus with these
 lines is too pessimistic at D+3..D+6 (pilot feedback on "outlook said NO-GO,
 briefing said fine").
 
+
+## 53. Open-Meteo vertical velocity is w (m/s), converted to omega at ingestion (#833)
+
+**Date:** 2026-10-21
+
+### Context
+
+Open-Meteo's `vertical_velocity_{N}hPa` is geometric **w in m/s, positive up**
+for every model that has it (ECMWF, GFS, UKMO — declared in `hourly_units`;
+ICON and Météo-France have none). We stored it unconverted in
+`PressureLevelData.vertical_velocity_pa_s`, which every consumer reads as
+**omega in Pa/s, negative = ascent**. An outside report (#833) showed it with
+same-run GRIB: Open-Meteo correlates +0.89…+0.98 with GFS `DZDT` (w) and
+−0.86…−0.98 with GFS `VVEL` / ECMWF `w` (omega), at the ρ·g ratio. The GRIB
+paths were always right (ECMWF/HRRR omega native; ICON `w` converted).
+
+Affected: GFS and UKMO on every European route (no GRIB sounding
+replacement), and ECMWF hours outside direct-GRIB coverage (~¾ of sampled
+ECMWF pack hours). Sign flipped, magnitude ~10× too small, so:
+
+- convective `_realizable_risk` / loaded-gun notes swapped ascent and
+  subsidence, and mostly read as "no large-scale ascent";
+- vertical-motion classification read ~80 % of GFS/UKMO soundings as
+  *quiescent* (`|ω| < 0.1`), against ~1–4 % for GRIB ECMWF/ICON;
+- the turbulence strong-updraft flag (`|w| > 200 fpm`) was unreachable;
+- the SFIP `M_VV` term sat in its ±0.5 Pa/s dead zone (inert, not inverted).
+
+### Decision
+
+Convert once, at ingestion (`fetch/open_meteo.py`): ω = −ρ·g·w with
+ρ = p / (Rd·T) at the level — the same formula and constants as the ICON GRIB
+path. The unit is read from each response's `hourly_units`:
+`m/s` → convert, `Pa/s` → as-is, `undefined`/absent → no data, anything else →
+**logged as an error and dropped**. A misread omega flips the convective gates;
+no omega only removes a modifier, so dropping is the safe failure.
+
+Thresholds (`OMEGA_ASCENT` −0.1, `OMEGA_SUBSIDENCE` +0.05, the vertical-motion
+classes, SFIP `M_VV`) are **unchanged**: they were written for real omega and
+now finally receive it on these models.
+
+### Measured effect (sounding replay, stored packs, as-stored vs converted)
+
+- **Vertical motion** (full analysis; dev packs + eval corpus, 2,716 GFS /
+  1,232 UKMO sampled soundings): the class distribution now matches the GRIB
+  models — GFS quiescent 79 % → 0.1 %, oscillating 5 % → 71 %, convective
+  0.6 % → 10 % (GRIB-hour ECMWF 1 % / 58 % / 6 %, ICON 4 % / 31 % / 22 %).
+  Convective contamination 1 % → 22 %. Strong updraft (> 200 fpm) 1 → 14.
+- **Convective risk** (lite analysis; dev packs, 7,864 GFS / 3,640 UKMO
+  sampled soundings): changed on 1.5 % of GFS and 5 % of UKMO, mostly **up**
+  one tier (GFS 107 up / 8 down, UKMO 153 up / 29 down) — real ascent now
+  erodes a cap or reinforces lift. Eval corpus: 1 of 160 GFS soundings changed.
+
+These are per-sounding counts, not route advisories (which also pool
+ECMWF/ICON); the advisory-level effect was not measured — the pack replay
+re-grades stored analyses and cannot see an ingestion fix.
+
+Stored packs keep the old values; no backfill (packs are regenerated on
+refresh). Any eval baseline built from GFS/UKMO soundings shifts.

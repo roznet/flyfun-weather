@@ -461,3 +461,117 @@ def test_fetch_multi_point_single_point_dict_response():
 
     assert len(results) == 1
     assert results[0].waypoint.icao == "EGTK"
+
+
+# ── Vertical velocity units (#833) ──────────────────────────────────
+#
+# Open-Meteo serves vertical_velocity_{N}hPa as geometric w (m/s, up
+# positive) for every model that has it; we store omega (Pa/s, ascent
+# negative). At 700 hPa / −5 °C, ρ = 70000 / (287.05 · 268.15) ≈ 0.9094 kg/m³,
+# so w = +0.1 m/s → ω ≈ −0.892 Pa/s.
+
+_VV_HOURLY = {
+    "time": ["2026-02-21T09:00"],
+    "temperature_2m": [5.0],
+    "temperature_700hPa": [-5.0],
+    "vertical_velocity_700hPa": [0.1],
+}
+
+# Real endpoint per model that publishes vertical velocity on Open-Meteo.
+_VV_SOURCES = [
+    (ModelSource.GFS, "https://api.open-meteo.com/v1/gfs"),
+    (ModelSource.ECMWF, "https://api.open-meteo.com/v1/ecmwf"),
+    (ModelSource.UKMO, "https://api.open-meteo.com/v1/forecast"),
+]
+
+
+def _vv_response(unit: str) -> dict:
+    return {
+        "hourly_units": {"time": "iso8601", "vertical_velocity_700hPa": unit},
+        "hourly": _VV_HOURLY,
+    }
+
+
+def test_w_to_omega_sign_and_scale():
+    """Upward w is negative omega, ~10x larger in magnitude at 700 hPa."""
+    from weatherbrief.fetch.open_meteo import w_to_omega_pa_s
+
+    assert w_to_omega_pa_s(0.1, 700, -5.0) == pytest.approx(-0.892, abs=1e-3)
+    assert w_to_omega_pa_s(-0.1, 700, -5.0) == pytest.approx(0.892, abs=1e-3)
+    assert w_to_omega_pa_s(0.0, 700, -5.0) == 0.0
+
+
+@responses.activate
+@pytest.mark.parametrize("model,url", _VV_SOURCES)
+def test_fetch_forecast_converts_w_to_omega(model, url):
+    """Each source's m/s vertical velocity is stored as omega in Pa/s."""
+    responses.add(responses.GET, url, json=_vv_response("m/s"), status=200)
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.836, lon=-1.32)
+    result = OpenMeteoClient().fetch_forecast(wp, model)
+
+    lv = result.hourly[0].level_at(700)
+    assert lv.vertical_velocity_pa_s == pytest.approx(-0.892, abs=1e-3)
+
+
+@responses.activate
+@pytest.mark.parametrize("model,url", _VV_SOURCES)
+def test_fetch_multi_point_converts_w_to_omega(model, url):
+    """The route (multi-point) path converts per point, using each point's units."""
+    responses.add(
+        responses.GET, url,
+        json=[_vv_response("m/s"), _vv_response("m/s")], status=200,
+    )
+    points = _make_route_points()[:2]
+    results = OpenMeteoClient().fetch_multi_point(points, model)
+
+    for r in results:
+        lv = r.hourly[0].level_at(700)
+        assert lv.vertical_velocity_pa_s == pytest.approx(-0.892, abs=1e-3)
+
+
+@responses.activate
+def test_omega_unit_passes_through():
+    """If Open-Meteo ever serves omega itself, it is stored unchanged."""
+    responses.add(
+        responses.GET, "https://api.open-meteo.com/v1/gfs",
+        json=_vv_response("Pa/s"), status=200,
+    )
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.836, lon=-1.32)
+    result = OpenMeteoClient().fetch_forecast(wp, ModelSource.GFS)
+
+    assert result.hourly[0].level_at(700).vertical_velocity_pa_s == 0.1
+
+
+@responses.activate
+@pytest.mark.parametrize("units", [{"vertical_velocity_700hPa": "cm/s"}, {}])
+def test_unknown_or_missing_unit_drops_vertical_velocity(units, caplog):
+    """No recognised unit → vertical velocity is dropped, never guessed.
+
+    An unrecognised unit is logged as an error; a response with no unit for
+    it (absent ``hourly_units``) is dropped silently.
+    """
+    body = {"hourly": _VV_HOURLY}
+    if units:
+        body["hourly_units"] = units
+    responses.add(
+        responses.GET, "https://api.open-meteo.com/v1/gfs", json=body, status=200,
+    )
+    wp = Waypoint(icao="EGTK", name="Oxford", lat=51.836, lon=-1.32)
+    with caplog.at_level("ERROR", logger="weatherbrief.fetch.open_meteo"):
+        result = OpenMeteoClient().fetch_forecast(wp, ModelSource.GFS)
+
+    lv = result.hourly[0].level_at(700)
+    assert lv.vertical_velocity_pa_s is None
+    assert lv.temperature_c == -5.0  # the rest of the level is unaffected
+    assert ("not recognised" in caplog.text) == bool(units)
+
+
+def test_undefined_unit_is_no_data_not_an_error(caplog):
+    """Models without vertical velocity report 'undefined' — not an error."""
+    from weatherbrief.fetch.open_meteo import vertical_velocity_unit
+
+    with caplog.at_level("ERROR", logger="weatherbrief.fetch.open_meteo"):
+        assert vertical_velocity_unit(
+            {"vertical_velocity_700hPa": "undefined"}
+        ) is None
+    assert caplog.text == ""

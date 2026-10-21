@@ -78,6 +78,55 @@ def magnus_dewpoint(temp_c: float, rh_pct: float) -> float:
     return (MAGNUS_C * gamma) / (MAGNUS_B - gamma)
 
 
+# Open-Meteo serves ``vertical_velocity_{level}hPa`` as geometric w in m/s
+# (positive up) — NOT omega — for every model that has it (ECMWF, GFS, UKMO;
+# declared in ``hourly_units``, verified against same-run GRIB in #833).
+# ``PressureLevelData.vertical_velocity_pa_s`` and every consumer (convective
+# ω₇₀₀ gates, SFIP, the sounding w_fpm display) are omega in Pa/s, negative =
+# ascent, so it is converted once here: ω = −ρ·g·w with ρ = p / (Rd·T).
+# Same constants and formula as the ICON GRIB conversion in ``grib/decode.py``.
+_G = 9.80665  # m/s²
+_RD_DRY_AIR = 287.05  # J/(kg·K)
+_VV_UNIT_W = "m/s"
+_VV_UNIT_OMEGA = "Pa/s"
+# Units Open-Meteo reports for a variable a model doesn't have; the values
+# are then all null, so there is nothing to convert or reject.
+_VV_UNITS_NO_DATA = {"undefined", ""}
+
+
+def w_to_omega_pa_s(
+    w_ms: float, pressure_hpa: float, temperature_c: float,
+) -> float:
+    """Geometric vertical velocity w (m/s, up positive) → omega (Pa/s, ascent negative)."""
+    rho = (pressure_hpa * 100.0) / (_RD_DRY_AIR * (temperature_c + 273.15))
+    return -rho * _G * w_ms
+
+
+def vertical_velocity_unit(hourly_units: dict | None) -> str | None:
+    """The unit Open-Meteo declares for ``vertical_velocity_*`` in a response.
+
+    Returns ``"m/s"`` or ``"Pa/s"`` (the two we know how to read), or ``None``
+    when the response carries no usable vertical velocity — not requested, the
+    model doesn't have it (``undefined``), or an unrecognised unit. The last
+    case is logged as an error and the values are dropped rather than guessed:
+    a misread omega flips ascent and subsidence in the convective gates (#833),
+    which is worse than the gates seeing no omega at all.
+    """
+    units = {
+        u for k, u in (hourly_units or {}).items()
+        if k.startswith("vertical_velocity_")
+    } - _VV_UNITS_NO_DATA
+    if not units:
+        return None
+    if len(units) == 1 and next(iter(units)) in (_VV_UNIT_W, _VV_UNIT_OMEGA):
+        return next(iter(units))
+    logger.error(
+        "Open-Meteo vertical_velocity unit(s) %s not recognised — "
+        "dropping vertical velocity for this response", sorted(units),
+    )
+    return None
+
+
 _MAX_RETRIES = 4
 _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
 
@@ -223,12 +272,13 @@ class OpenMeteoClient:
 
         hourly_data = data.get("hourly", {})
         timestamps = hourly_data.get("time", [])
+        vv_unit = vertical_velocity_unit(data.get("hourly_units"))
         forecasts = []
 
         for i, ts in enumerate(timestamps):
             forecast = self._parse_hourly(
                 hourly_data, i, ts, endpoint.unavailable_pressure,
-                endpoint.pressure_levels,
+                endpoint.pressure_levels, vv_unit,
             )
             forecasts.append(forecast)
 
@@ -382,11 +432,12 @@ class OpenMeteoClient:
         for point, point_data in zip(points, response_json):
             hourly_data = point_data.get("hourly", {})
             timestamps = hourly_data.get("time", [])
+            vv_unit = vertical_velocity_unit(point_data.get("hourly_units"))
 
             hourly_list = [
                 self._parse_hourly(
                     hourly_data, i, ts, endpoint.unavailable_pressure,
-                    endpoint.pressure_levels,
+                    endpoint.pressure_levels, vv_unit,
                 )
                 for i, ts in enumerate(timestamps)
                 # Slice instead of fromisoformat: timestamps are always ISO
@@ -426,8 +477,13 @@ class OpenMeteoClient:
         timestamp: str,
         unavailable_pressure: list[str],
         pressure_levels_list: list[int],
+        vv_unit: str | None = None,
     ) -> HourlyForecast:
-        """Parse one hourly time step from the flat API response."""
+        """Parse one hourly time step from the flat API response.
+
+        *vv_unit* is the response's ``vertical_velocity_unit`` — computed once
+        per response by the caller; ``None`` drops vertical velocity.
+        """
 
         def get(key: str) -> float | None:
             arr = data.get(key)
@@ -446,6 +502,14 @@ class OpenMeteoClient:
             if dp is None and temp is not None and rh is not None:
                 dp = magnus_dewpoint(temp, rh)
 
+            omega = None
+            vv = get(f"vertical_velocity_{level}hPa") if vv_unit else None
+            if vv is not None:
+                if vv_unit == _VV_UNIT_OMEGA:
+                    omega = vv
+                elif temp is not None:
+                    omega = w_to_omega_pa_s(vv, level, temp)
+
             pressure_levels.append(
                 PressureLevelData(
                     pressure_hpa=level,
@@ -455,7 +519,7 @@ class OpenMeteoClient:
                     wind_speed_kt=get(f"wind_speed_{level}hPa"),
                     wind_direction_deg=get(f"wind_direction_{level}hPa"),
                     geopotential_height_m=get(f"geopotential_height_{level}hPa"),
-                    vertical_velocity_pa_s=get(f"vertical_velocity_{level}hPa"),
+                    vertical_velocity_pa_s=omega,
                 )
             )
 
