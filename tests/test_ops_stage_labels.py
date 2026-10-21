@@ -267,3 +267,46 @@ def test_plan_mode_never_calls_gh_for_writes():
 ])
 def test_repo_from_remote(url, expect):
     assert sl.repo_from_remote(url) == expect
+
+
+def test_plan_flag_parses_after_the_subcommand(anon, monkeypatch, capsys):
+    monkeypatch.setattr(sl, "gh_can_write", lambda: True)
+    anon[5] = []
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["flag", "5", "question", "--plan"])
+    assert exc.value.code == sl.EXIT_PLAN
+    assert "--plan" in capsys.readouterr().err  # the reason is named
+
+
+def test_plan_mode_second_change_to_same_item_builds_on_the_first(anon):
+    anon[7] = ["to-start"]
+    gh = sl.Gh("o/r", plan=True)
+    sl.set_issue_stage(gh, 7, "implementing")
+    sl.set_flag(gh, 7, "mac", True)
+    # One entry, diffed against GitHub's labels: the flag does not resurrect to-start.
+    assert gh.pending == [{"number": 7, "add": ["implementing", "mac"], "remove": ["to-start"],
+                           "labels": ["implementing", "mac"]}]
+
+
+def test_plan_mode_labels_command_lists_label_changes(monkeypatch, capsys):
+    monkeypatch.setattr(sl, "gh_can_write", lambda: False)
+    monkeypatch.setenv("GH_REPO", "o/r")
+    monkeypatch.setattr(sl, "anonymous_get", lambda path, paginate=False: [])
+    with pytest.raises(SystemExit) as exc:
+        sl.main(["labels"])
+    assert exc.value.code == sl.EXIT_PLAN
+    plan = json.loads(capsys.readouterr().out.split("STAGE_LABELS_PLAN_JSON: ")[1])
+    assert {i["label"] for i in plan} == set(sl.LABELS)
+    assert all(i["action"] == "create" for i in plan)
+
+
+def test_plan_mode_sync_dry_run_reports_and_exits_zero(monkeypatch, capsys):
+    monkeypatch.setattr(sl, "gh_can_write", lambda: False)
+    monkeypatch.setenv("GH_REPO", "o/r")
+    monkeypatch.setattr(sl, "open_prs", lambda gh: [])
+    monkeypatch.setattr(sl, "open_issues", lambda gh: [{"number": 3, "labels": []}])
+    monkeypatch.setattr(sl, "anonymous_get", lambda path, paginate=False: [
+        {"name": n, "color": c, "description": d} for n, (c, d) in sl.LABELS.items()])
+    sl.main(["sync", "--dry-run"])  # no SystemExit: a dry run is a report
+    out = capsys.readouterr().out
+    assert "dry run" in out and '"number": 3' in out

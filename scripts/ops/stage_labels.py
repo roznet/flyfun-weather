@@ -27,9 +27,12 @@ script still decides: it reads the current labels without a token (public repo),
 applies the same one-stage rules, changes nothing, prints the label sets to
 apply and exits 3. The agent applies them with the connector (replace each
 item's labels with the printed set). Exit 3 is never success: if the reads fail
-too, the message says so and names the change to make by hand. Only this script and the workflows that call it
-touch stage labels; skills call it rather than `gh issue edit` so one-stage-
-at-a-time holds everywhere.
+too, the message says so and names the change to make by hand. `--plan` goes
+before or after the subcommand; `sync --dry-run` in plan mode only reports
+(exit 0).
+
+Only this script and the workflows that call it touch stage labels; skills
+call it rather than `gh issue edit` so one-stage-at-a-time holds everywhere.
 """
 
 from __future__ import annotations
@@ -124,6 +127,10 @@ class Gh:
         # Plan mode: read anonymously, record writes in ``pending`` instead.
         self.plan = plan
         self.pending: list[dict] = []
+        # Plan mode: labels as GitHub has them, and as already planned, per item,
+        # so a second change to the same item builds on the first.
+        self._read: dict[int, set[str]] = {}
+        self._planned: dict[int, set[str]] = {}
 
     def api(self, path: str, method: str = "GET", body: dict | None = None, paginate: bool = False):
         if self.plan:
@@ -147,16 +154,23 @@ class Gh:
         return data
 
     def labels_of(self, number: int) -> set[str]:
+        if self.plan and number in self._planned:
+            return set(self._planned[number])
         return {l["name"] for l in self.api(f"issues/{number}/labels?per_page=100")}
 
     def set_labels(self, number: int, labels: set[str], before: set[str]) -> None:
+        if self.plan:
+            # One entry per item, diffed against GitHub's labels, not a stale step.
+            orig = self._read.setdefault(number, set(before))
+            self._planned[number] = set(labels)
+            self.pending = [i for i in self.pending if i.get("number") != number]
+            if labels != orig:
+                self.pending.append({"number": number, "add": sorted(labels - orig),
+                                     "remove": sorted(orig - labels), "labels": sorted(labels)})
+            return
         if labels == before:
             return
         added, removed = sorted(labels - before), sorted(before - labels)
-        if self.plan:
-            self.pending.append({"number": number, "add": added, "remove": removed,
-                                 "labels": sorted(labels)})
-            return
         if not self.quiet:
             print(f"#{number}: +{added} -{removed}" if not self.dry_run else f"#{number}: would +{added} -{removed}")
         if not self.dry_run:
@@ -427,26 +441,36 @@ def handle_event(gh: Gh) -> None:
 # ------------------------------------------------------------------------ main
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # --plan is accepted before or after the subcommand.
+    plan_opt = argparse.ArgumentParser(add_help=False)
+    plan_opt.add_argument("--plan", action="store_true", default=argparse.SUPPRESS,
+                          help="decide but change nothing: print the labels to apply and exit 3")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                parents=[plan_opt])
     p.add_argument("--repo", help="owner/name (default: $GH_REPO, $GITHUB_REPOSITORY, or the checkout)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("labels")
-    s = sub.add_parser("issue"); s.add_argument("number", type=int); s.add_argument("stage", choices=ISSUE_STAGES + ("none",)); s.add_argument("--if-unstaged", action="store_true")
-    s = sub.add_parser("pr"); s.add_argument("number", type=int); s.add_argument("stage", choices=PR_STAGES)
-    s = sub.add_parser("flag"); s.add_argument("number", type=int); s.add_argument("flag", choices=FLAGS)
-    s = sub.add_parser("unflag"); s.add_argument("number", type=int); s.add_argument("flag", choices=FLAGS)
-    s = sub.add_parser("pr-issues"); s.add_argument("number", type=int)
-    sub.add_parser("event")
-    s = sub.add_parser("sync"); s.add_argument("--dry-run", action="store_true")
-    sub.add_parser("status")
-    p.add_argument("--plan", action="store_true",
-                   help="decide but change nothing: print the labels to apply and exit 3")
+
+    def cmd(name: str) -> argparse.ArgumentParser:
+        return sub.add_parser(name, parents=[plan_opt])
+
+    cmd("labels")
+    s = cmd("issue"); s.add_argument("number", type=int); s.add_argument("stage", choices=ISSUE_STAGES + ("none",)); s.add_argument("--if-unstaged", action="store_true")
+    s = cmd("pr"); s.add_argument("number", type=int); s.add_argument("stage", choices=PR_STAGES)
+    s = cmd("flag"); s.add_argument("number", type=int); s.add_argument("flag", choices=FLAGS)
+    s = cmd("unflag"); s.add_argument("number", type=int); s.add_argument("flag", choices=FLAGS)
+    s = cmd("pr-issues"); s.add_argument("number", type=int)
+    cmd("event")
+    s = cmd("sync"); s.add_argument("--dry-run", action="store_true")
+    cmd("status")
     a = p.parse_args(argv)
 
-    plan = a.plan or os.environ.get("STAGE_LABELS_PLAN") == "1" or not gh_can_write()
+    reason = plan_reason(getattr(a, "plan", False))
+    plan = reason is not None
     if plan and a.cmd == "event":
         sys.exit("event runs inside GitHub Actions, where gh is authenticated")
     gh = Gh(repo_from_env(a.repo, use_gh=not plan), dry_run=getattr(a, "dry_run", False), plan=plan)
+    if plan:
+        print(f"STAGE_LABELS_PLAN: plan mode ({reason})", file=sys.stderr)
     try:
         run(gh, a)
     except PlanReadError as exc:
@@ -458,20 +482,36 @@ def main(argv: list[str] | None = None) -> None:
         report_plan(gh)
 
 
+def plan_reason(flag: bool) -> str | None:
+    """Why plan mode is on, or None when gh writes directly."""
+    if flag:
+        return "--plan"
+    if os.environ.get("STAGE_LABELS_PLAN") == "1":
+        return "STAGE_LABELS_PLAN=1"
+    if not gh_can_write():
+        return ("`gh auth status` failed: gh missing or not logged in; "
+                "on the Mac, run with the sandbox disabled")
+    return None
+
+
 def report_plan(gh: Gh) -> None:
-    """Print what plan mode decided; exit 3 if anything is left to apply."""
+    """Print what plan mode decided; exit 3 if anything is left to apply (not on a dry run)."""
     if not gh.pending:
         print("STAGE_LABELS_PLAN: labels already correct, nothing to apply")
         return
-    print("STAGE_LABELS_MANUAL: gh cannot write here; nothing was changed.")
-    print("Apply with the GitHub connector (set each item's labels to the full list):")
+    if gh.dry_run:
+        print("STAGE_LABELS_PLAN: dry run; would apply:")
+    else:
+        print("STAGE_LABELS_MANUAL: gh cannot write here; nothing was changed.")
+        print("Apply with the GitHub connector (set each item's labels to the full list):")
     for item in gh.pending:
         if "number" in item:
             print(f"  #{item['number']}: labels {item['labels']}  (add {item['add']}, remove {item['remove']})")
         else:
             print(f"  {item['action']} label {item['label']} (color {item['color']}): {item['description']}")
     print("STAGE_LABELS_PLAN_JSON: " + json.dumps(gh.pending))
-    sys.exit(EXIT_PLAN)
+    if not gh.dry_run:
+        sys.exit(EXIT_PLAN)
 
 
 def run(gh: Gh, a: argparse.Namespace) -> None:

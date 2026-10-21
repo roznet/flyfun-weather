@@ -125,6 +125,12 @@ change to make by hand. `pr-issues` and `status` are read-only and exit 0;
 - Exit 3 is never success. A skill that cannot apply the plan reports the step
   as not done in its next message, not in a footnote at the end (#827: the issue
   stayed `to-start` while its PR was open).
+- The first stderr line, `STAGE_LABELS_PLAN: plan mode (<reason>)`, says why
+  (`--plan`, the env var, or `gh auth status` failing; on the Mac that usually
+  means the sandbox is on). `--plan` goes before or after the subcommand.
+- Several changes to one item in a run collapse into one entry, diffed against
+  the labels GitHub has. `sync --dry-run` prints the plan and exits 0: a dry
+  run is a report, there is nothing to apply.
 - `sync` / `status` in plan mode read per PR (commit, comments, files), so a
   repo-wide run can hit the anonymous rate limit; prefer the targeted commands.
 

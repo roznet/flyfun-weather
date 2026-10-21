@@ -39,7 +39,7 @@ The review Action, Tests and the stage-labels Action all trigger on `pull_reques
 
 `gh pr view <num> --json mergeable,mergeStateStatus` (via the GitHub connector: `pull_request_read` `get`, fields `mergeable` / `mergeable_state`).
 
-- `CONFLICTING` / `dirty` → **do not watch.** Name the conflicting files (`git fetch origin main && git merge-tree --write-tree --name-only origin/main HEAD`), tell me the review cannot run until the conflict is resolved, and offer the rebase as in Step 2 (wait for my go-ahead). After the rebase is pushed, start Step 1 from the new head.
+- `CONFLICTING` / `dirty` → **do not watch.** Name the conflicting files (`git fetch origin main && git merge-tree --write-tree --name-only origin/main HEAD`; needs git ≥ 2.38, else do a throwaway `git merge --no-commit --no-ff origin/main`, read `git diff --name-only --diff-filter=U`, then `git merge --abort`), tell me the review cannot run until the conflict is resolved, and offer the rebase as in Step 2 (wait for my go-ahead). After the rebase is pushed, start Step 1 from the new head.
 - `UNKNOWN` / `null` → GitHub computes mergeability lazily; query again after ~30 s before deciding.
 - `MERGEABLE` (any `mergeStateStatus` other than `DIRTY`) → go on to Step 1.
 
