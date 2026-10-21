@@ -33,6 +33,7 @@ router = APIRouter(prefix="/maps", tags=["maps"])
 from weatherbrief.tasks.forecast_grid import (
     MAX_FORECAST_DAY,
     forecast_days,
+    forecast_hour_for,
     sample_hours_for_day,
 )
 
@@ -41,18 +42,8 @@ from weatherbrief.api.deps import airports_db as _airports_db
 
 
 def _forecast_hour(day: int, hour: int) -> datetime:
-    """Absolute UTC datetime for a relative ``(day, hour)`` selection.
-
-    ``day`` is days from today (0 = today). This mirrors the client's date
-    labelling (``now + day``) so cache and live queries resolve to the same
-    calendar date the UI displays — the relative-day cache key alone is
-    ambiguous across a UTC-midnight rollover.
-    """
-    target_date = (datetime.now(timezone.utc) + timedelta(days=day)).date()
-    return datetime(
-        target_date.year, target_date.month, target_date.day,
-        hour, 0, 0, tzinfo=timezone.utc,
-    )
+    """Absolute UTC datetime for a relative ``(day, hour)`` selection."""
+    return forecast_hour_for(day, hour)
 
 
 @router.get("/forecast")
@@ -360,43 +351,20 @@ def get_airport_weather(
             "note": "No supported European airports found. Coverage: Western, Central, and Eastern Europe.",
         }
 
-    # Prefer the pre-built cache (rebuilt frequently by the background
-    # scheduler) to avoid expensive full-map queries when only a few airports
-    # are needed. ``is_stale`` also rejects an entry whose relative-day index
-    # no longer maps to today's date (post-midnight, before the next model
-    # run); in that case compute live for the correct absolute date so the
-    # response date stays consistent with the requested day/hour.
-    from weatherbrief.tasks.cache_builder import (
-        forecast_map_cache_key,
-        get_cached,
-        is_stale,
-    )
-    from weatherbrief.tasks.map_queries import (
-        enrich_with_observations,
-        get_forecast_map_data,
-    )
+    from weatherbrief.tasks.map_queries import load_forecast_slot
 
     offered = sample_hours_for_day(day)
     if hour not in offered:
         hour = min(offered, key=lambda h: abs(h - hour))
 
-    cache_key = forecast_map_cache_key(day, hour)
-    data = None
-    if not is_stale(db, cache_key, "snapshot"):
-        data = get_cached(db, cache_key)
-
-    if data is None:
-        forecast_hour = _forecast_hour(day, hour)
-        data = get_forecast_map_data(db, forecast_hour, airports_db)
-        if day == 0:
-            data = enrich_with_observations(db, forecast_hour, data)
-        if not data.get("airports"):
-            raise HTTPException(
-                status_code=503,
-                detail=f"Forecast data for day={day} hour={hour} is not yet "
-                "available — the day may be beyond the current model horizon. "
-                "The next model run extends it; try again shortly.",
-            )
+    data = load_forecast_slot(db, day, hour, airports_db, with_observations=True)
+    if not data.get("airports"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Forecast data for day={day} hour={hour} is not yet "
+            "available — the day may be beyond the current model horizon. "
+            "The next model run extends it; try again shortly.",
+        )
 
     # Filter to requested airports
     resolution_map = {r["icao"]: r for r in resolved if "requested_icao" in r}
@@ -423,3 +391,51 @@ def get_airport_weather(
         "airports": airports_out,
         "unsupported": unsupported,
     }
+
+
+@router.get("/area-outlook")
+def get_area_outlook(
+    days: list[int] = Query(description=f"Relative days 0..{MAX_FORECAST_DAY}, e.g. [3, 4]"),
+    base: str | None = Query(default=None, description="Base airport ICAO (radius mode)"),
+    radius_nm: float | None = Query(default=None, gt=0, le=200),
+    destination: str | None = Query(default=None, description="Optional destination in radius mode"),
+    route: str | None = Query(default=None, max_length=2000, description="Route string 'DEP ... DEST' (route mode)"),
+    corridor_nm: float | None = Query(default=None, gt=0, le=60),
+    hours: list[int] | None = Query(default=None, description="UTC sample hours; default all offered"),
+    rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
+    consensus: str = Query(default="worst", pattern="^(worst|majority)$"),
+    min_ceiling_ft: float | None = Query(default=None, ge=0),
+    min_visibility_m: float | None = Query(default=None, ge=0),
+    max_crosswind_kt: float | None = Query(default=None, ge=0),
+    max_gust_kt: float | None = Query(default=None, ge=0),
+    tas_kt: float | None = Query(default=None, gt=30, le=400),
+    _user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+    airports_db: str = Depends(_airports_db),
+):
+    """Indicative GO/MARGINAL/NO-GO outlook around a base or along a route (#836).
+
+    See ``tasks/area_outlook.py``. Not a briefing: point forecasts at
+    monitored airports from the forecast-map snapshots.
+    """
+    return area_outlook_response(
+        db, airports_db, days=days, base=base, radius_nm=radius_nm,
+        destination=destination, route=route, corridor_nm=corridor_nm, hours=hours,
+        rules=rules, consensus=consensus, min_ceiling_ft=min_ceiling_ft,
+        min_visibility_m=min_visibility_m, max_crosswind_kt=max_crosswind_kt,
+        max_gust_kt=max_gust_kt, tas_kt=tas_kt,
+    )
+
+
+def area_outlook_response(db: Session, airports_db: str, **kwargs: Any) -> dict[str, Any]:
+    """Shared by ``/maps/area-outlook`` and ``/agent/v1/area-outlook``.
+
+    Plain function (no ``Depends`` defaults) so both routes call it directly;
+    maps bad input to 400.
+    """
+    from weatherbrief.tasks.area_outlook import OutlookInputError, build_area_outlook
+
+    try:
+        return build_area_outlook(db, airports_db, **kwargs)
+    except OutlookInputError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e

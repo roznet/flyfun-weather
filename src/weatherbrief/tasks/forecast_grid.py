@@ -35,6 +35,8 @@ slots would leave two of them permanently ECMWF-less.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 # ECMWF operational delivery (00Z/12Z runs). These two numbers are the facts;
 # everything below is derived from them, so that a change to the contract moves
 # the grid rather than silently leaving it sampling steps nobody delivers.
@@ -105,3 +107,39 @@ def all_sample_hours() -> tuple[int, ...]:
 def day_hour_pairs() -> list[tuple[int, int]]:
     """Every (day, hour) slot the map can hold, in display order."""
     return [(d, h) for d in forecast_days() for h in sample_hours_for_day(d)]
+
+
+def forecast_hour_for(day: int, hour: int, now: datetime | None = None) -> datetime:
+    """Absolute UTC datetime for a relative ``(day, hour)`` slot.
+
+    ``day`` is days from today (0 = today, in UTC). This mirrors the client's
+    date labelling (``now + day``) so cache and live queries resolve to the
+    same calendar date the UI displays — the relative-day cache key alone is
+    ambiguous across a UTC-midnight rollover.
+    """
+    now = now or datetime.now(timezone.utc)
+    target_date = (now + timedelta(days=day)).date()
+    return datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour, 0, 0, tzinfo=timezone.utc,
+    )
+
+
+def day_coverage_note() -> str:
+    """One-line "which models on which day" note for agent tool descriptions.
+
+    Derived from ``MAP_FORECAST_DAYS`` and the coarse-grid day, so it moves
+    with the grid.
+    """
+    n_by_day = [
+        sum(1 for last in MAP_FORECAST_DAYS.values() if d <= last) for d in forecast_days()
+    ]
+    full = max(n_by_day)
+    last_full = max(d for d, n in enumerate(n_by_day) if n == full)
+    coarse = ", ".join(f"{h:02d}" for h in COARSE_SAMPLE_HOURS)
+    return (
+        f"Days from today: 0=today, 1=tomorrow ... {MAX_FORECAST_DAY}. "
+        f"D+0..D+{last_full} have {full} models, later days fewer "
+        f"(D+{last_full + 1}..D+{MAX_FORECAST_DAY}: {n_by_day[-1]}); "
+        f"from D+{COARSE_FROM_DAY} only {coarse}Z."
+    )

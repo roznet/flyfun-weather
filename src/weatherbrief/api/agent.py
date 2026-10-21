@@ -43,6 +43,7 @@ from weatherbrief.api import maps as maps_api
 from weatherbrief.api import packs as packs_api
 from weatherbrief.connectors import views
 from weatherbrief.db.models import FLIGHT_DESCRIPTION_MAX_LEN
+from weatherbrief.tasks.forecast_grid import MAX_FORECAST_DAY, day_coverage_note
 
 WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
 
@@ -657,6 +658,9 @@ def get_alternates(
     return result
 
 
+_DAY_DESCRIPTION = day_coverage_note()
+
+
 # ---------------------------------------------------------------------------
 # GET /agent/v1/airport-weather  — get_airport_weather
 # ---------------------------------------------------------------------------
@@ -668,7 +672,7 @@ def get_airport_weather(
         Query(description="Airport ICAO codes, e.g. ['LFBO', 'LFML']. Max 20. European airports only."),
     ],
     day: Annotated[
-        int, Query(description="Days from today: 0=today, 1=tomorrow, 2=D+2, 3=D+3", ge=0, le=3),
+        int, Query(description=_DAY_DESCRIPTION, ge=0, le=MAX_FORECAST_DAY),
     ] = 0,
     hour: Annotated[
         int, Query(description="Forecast hour in UTC: 6, 9, 12, 15, or 18", ge=0, le=23),
@@ -685,4 +689,45 @@ def get_airport_weather(
     """
     return maps_api.get_airport_weather(
         icao=icao, day=day, hour=hour, _user_id=user_id, db=db, airports_db=airports_db,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /agent/v1/area-outlook  — area_outlook
+# ---------------------------------------------------------------------------
+
+@router.get("/area-outlook", operation_id="getAreaOutlook")
+def get_area_outlook(
+    days: Annotated[
+        list[int],
+        Query(description=f"Relative days to scan, 0..{MAX_FORECAST_DAY}, e.g. [3, 4] for a weekend"),
+    ],
+    base: Annotated[str | None, Query(description="Base airport ICAO (radius mode). Give base OR route.")] = None,
+    radius_nm: Annotated[float | None, Query(description="Radius around base, default 60", gt=0, le=200)] = None,
+    destination: Annotated[str | None, Query(description="Optional destination ICAO in radius mode (enables out-and-back pairs)")] = None,
+    route: Annotated[str | None, Query(description="Route 'DEP [waypoints] DEST' (route mode)", max_length=2000)] = None,
+    corridor_nm: Annotated[float | None, Query(description="Corridor half-width, default 20", gt=0, le=60)] = None,
+    hours: Annotated[list[int] | None, Query(description="UTC sample hours; default every offered hour")] = None,
+    rules: Annotated[str, Query(description="vfr or ifr", pattern="^(vfr|ifr)$")] = "vfr",
+    consensus: Annotated[str, Query(description="worst (default) or majority", pattern="^(worst|majority)$")] = "worst",
+    min_ceiling_ft: Annotated[float | None, Query(ge=0)] = None,
+    min_visibility_m: Annotated[float | None, Query(ge=0)] = None,
+    max_crosswind_kt: Annotated[float | None, Query(ge=0)] = None,
+    max_gust_kt: Annotated[float | None, Query(ge=0)] = None,
+    tas_kt: Annotated[float | None, Query(description="For out-and-back leg time, default 110", gt=30, le=400)] = None,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+    airports_db: str = Depends(maps_api._airports_db),
+) -> dict[str, Any]:
+    """Indicative GO/MARGINAL/NO-GO outlook around a base or along a route:
+    sectors, best slots, trend, out-and-back pairs. Use before createFlight
+    for "when/where is it worth flying"; then createFlight the chosen slot.
+    Airport forecasts only, not a briefing.
+    """
+    return maps_api.area_outlook_response(
+        db, airports_db, days=days, base=base, radius_nm=radius_nm,
+        destination=destination, route=route, corridor_nm=corridor_nm, hours=hours,
+        rules=rules, consensus=consensus, min_ceiling_ft=min_ceiling_ft,
+        min_visibility_m=min_visibility_m, max_crosswind_kt=max_crosswind_kt,
+        max_gust_kt=max_gust_kt, tas_kt=tas_kt,
     )

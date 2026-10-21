@@ -366,6 +366,48 @@ def get_forecast_map_data(
     }
 
 
+def watchlist_coords(airports_db_path: str) -> dict[str, tuple[float, float]]:
+    """ICAO → (lat, lon) for every airport the forecast map monitors."""
+    return _get_coords(airports_db_path)
+
+
+def load_forecast_slot(
+    db: Session,
+    day: int,
+    hour: int,
+    airports_db_path: str,
+    *,
+    with_observations: bool = False,
+) -> dict[str, Any]:
+    """Forecast-map payload for one ``(day, hour)`` slot, cache first.
+
+    Prefers the pre-built cache (rebuilt by the background scheduler).
+    ``is_stale`` also rejects an entry whose relative-day index no longer maps
+    to today's date (post-midnight, before the next model run); in that case
+    compute live for the correct absolute date. ``hour`` must already be one
+    of ``sample_hours_for_day(day)``. ``with_observations`` adds METAR/TAF on
+    a live D-0 computation (the cached D-0 entry already carries them).
+    """
+    from weatherbrief.tasks.cache_builder import (
+        forecast_map_cache_key,
+        get_cached,
+        is_stale,
+    )
+    from weatherbrief.tasks.forecast_grid import forecast_hour_for
+
+    cache_key = forecast_map_cache_key(day, hour)
+    if not is_stale(db, cache_key, "snapshot"):
+        cached = get_cached(db, cache_key)
+        if cached is not None:
+            return cached
+
+    forecast_hour = forecast_hour_for(day, hour)
+    data = get_forecast_map_data(db, forecast_hour, airports_db_path)
+    if with_observations and day == 0:
+        data = enrich_with_observations(db, forecast_hour, data)
+    return data
+
+
 def enrich_with_observations(
     db: Session,
     forecast_hour: datetime,

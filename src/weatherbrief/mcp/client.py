@@ -220,3 +220,10 @@ class WeatherbriefClient:
             "/maps/airport-weather",
             params={"icao": icao_codes, "day": day, "hour": hour_utc},
         )
+
+    def area_outlook(self, **params: Any) -> dict:
+        """``/maps/area-outlook``; ``None`` params are left out."""
+        return self._get(
+            "/maps/area-outlook",
+            params={k: v for k, v in params.items() if v is not None},
+        )
