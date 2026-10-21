@@ -143,6 +143,10 @@ class AirportApproaches(BaseModel):
     # explains WHY, so a coverage gap is distinguishable from a parse failure
     # in logs and admin views.
     coverage_gap: bool = False
+    # ISO country of the airport, when ``nav.db`` knows it. Read by
+    # ``departure_feasibility`` (#829) for its exempt-country rule (GB). None on
+    # old packs and for an unknown ICAO; a consumer must not read None as exempt.
+    iso_country: str | None = None
     approaches: list[RunwayApproach] = Field(default_factory=list)
 
     @property

@@ -965,7 +965,7 @@
   "settings.declaredApproaches.hint": "Aérodromes où vous disposez d'une approche non publiée à l'AIP — une percée sous les nuages (cloud break) ou une approche GNSS privée. Il s'agit d'une déclaration opérationnelle personnelle sur vos propres procédures et votre expérience récente, non d'une procédure publiée.",
   "settings.declaredApproaches.label": "Aérodromes (OACI)",
   "settings.declaredApproaches.fieldHint": "Séparez les codes par des espaces ou des virgules.",
-  "settings.declaredApproaches.scope": "Utilisé uniquement par l'avis Faisabilité de l'approche : à une destination sans approche aux instruments publiée, une arrivée IFR passe en orange plutôt qu'en rouge — jamais en vert, et jamais en LIFR, faute de minima publiés. N'affecte jamais le calcul des minima de dégagement ni l'éligibilité d'un terrain comme dégagement déposé.",
+  "settings.declaredApproaches.scope": "Utilisé par l'avis Faisabilité de l'approche : à une destination sans approche aux instruments publiée, une arrivée IFR passe en orange plutôt qu'en rouge — jamais en vert, et jamais en LIFR, faute de minima publiés. L'avis Faisabilité du départ le compte aussi comme procédure IFR à votre terrain de départ. N'affecte jamais le calcul des minima de dégagement ni l'éligibilité d'un terrain comme dégagement déposé.",
   "settings.declaredApproaches.unknown": "Codes d'aérodrome non reconnus : {codes}. Rien n'a été enregistré — vérifiez l'orthographe.",
   "graph.observed-rain-rate": "Précipitations observées (radar)",
   "graph.observed-flash-rate": "Foudre observée (taux d'éclairs)",

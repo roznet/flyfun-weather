@@ -106,7 +106,8 @@ class BriefingOptions:
     profile_name: str | None = None  # flight profile name for digest tracking
     guidance_key: str | None = None  # digest guidance preset (conservative/balanced/tolerant)
     # Airports where the user declared an unpublished/self-briefed approach
-    # (#510). Read only by ``approach_feasibility`` — never by the alternates
+    # (#510). Read only by ``approach_feasibility`` / ``departure_feasibility``
+    # — never by the alternates
     # or alternate-requirement stages, where a personal declaration would be
     # making a regulatory claim.
     declared_approach_icaos: list[str] | None = None

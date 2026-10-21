@@ -53,7 +53,9 @@ _DIAGNOSTICS_CATEGORIES: frozenset[str] = frozenset({"model"})
 # registry, not the client.
 ENTRY_ORDER: dict[str, list[str]] = {
     "airport": ["flight_category", "airport_wind", "density_altitude", "llws"],
-    "flight_rules": ["vfr_feasibility", "ifr_feasibility", "approach_feasibility"],
+    "flight_rules": [
+        "vfr_feasibility", "ifr_feasibility", "approach_feasibility", "departure_feasibility",
+    ],
     "wind": ["headwind"],
     "icing": ["aircraft_icing", "freezing_precip", "icing_escape", "fiki_icing"],
     "cloud": ["cloud_top", "vmc_cruise"],

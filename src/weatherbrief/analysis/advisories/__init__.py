@@ -71,6 +71,10 @@ class RouteContext:
     # the "airport has no approach" signal: that is a present object with an
     # empty ``approaches`` list.
     arrival_approaches: AirportApproaches | None = None
+    # The same lookup at the ORIGIN (issue #829), read by
+    # DepartureFeasibilityEvaluator: does the departure field have any IFR
+    # procedure at all? Same ``None`` ⇒ UNAVAILABLE contract as above.
+    departure_approaches: AirportApproaches | None = None
     # Every advisory's user parameter overrides, keyed by advisory id — threaded
     # in by ``evaluate_all`` so a *composite* evaluator can grade a sub-axis with
     # the owning advisory's tuning instead of duplicating its thresholds. Today

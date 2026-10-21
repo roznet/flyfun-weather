@@ -334,7 +334,8 @@ def test_alt_departure_context_carries_recomputed_sun(monkeypatch, tmp_path):
 
     route = SimpleNamespace(
         name="t", flight_duration_hours=1.0, cruise_altitude_ft=8000,
-        flight_ceiling_ft=14000, destination=SimpleNamespace(icao="BBBB"),
+        flight_ceiling_ft=14000, origin=SimpleNamespace(icao="AAAA"),
+        destination=SimpleNamespace(icao="BBBB"),
     )
     advise.run_alt_from_pack(
         tmp_path, datetime(2026, 3, 1, 15, 0), route, persist=False, detect_fronts=False,

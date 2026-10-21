@@ -77,7 +77,10 @@ def test_only_the_advisory_evaluator_consumes_the_declaration():
     }
     assert consumers == {
         "models/airport_conditions.py",              # defines it
-        "analysis/advisories/approach_feasibility.py",  # the sole consumer
+        "analysis/advisories/approach_feasibility.py",  # arrival consumer
+        # Departure consumer (#829): the owner decided a declaration counts as
+        # "has IFR procedures" at the origin too. Advisory-only, like the above.
+        "analysis/advisories/departure_feasibility.py",
     }, consumers
 
 

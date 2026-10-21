@@ -1060,6 +1060,43 @@ _STRINGS: dict[str, dict[str, str]] = {
         "es": "las condiciones no permiten circling",
     },
 
+    # --- departure_feasibility (#829) ---
+    # Same register as approach_feasibility: directs attention, never a
+    # regulatory verdict. Follows "Dep {icao}: MVFR — " (the category is the
+    # clause head, #823), so neither the ICAO nor the category is repeated.
+    "departure_feasibility.has_procedures": {
+        "en": "{count} published approach(es) — IFR procedures available",
+        "fr": "{count} approche(s) publiée(s) — procédures IFR disponibles",
+        "de": "{count} veröffentlichte Anflüge — IFR-Verfahren vorhanden",
+        "es": "{count} aproximación(es) publicada(s) — procedimientos IFR disponibles",
+    },
+    # Names the basis, as every #510 string does: the grade rests on the
+    # pilot's own declaration.
+    "departure_feasibility.declared": {
+        "en": "No published IFR procedures — graded against your declared unpublished approach at {icao}; check your own departure plan",
+        "fr": "Aucune procédure IFR publiée — évalué d'après votre approche non publiée déclarée à {icao} ; vérifiez votre propre plan de départ",
+        "de": "Keine veröffentlichten IFR-Verfahren — bewertet anhand Ihres angegebenen nicht veröffentlichten Anflugs in {icao}; prüfen Sie Ihren eigenen Abflugplan",
+        "es": "Sin procedimientos IFR publicados — evaluado con su aproximación no publicada declarada en {icao}; verifique su propio plan de salida",
+    },
+    "departure_feasibility.vfr": {
+        "en": "VFR at departure — the departure can be flown visually",
+        "fr": "VFR au départ — le départ peut se faire à vue",
+        "de": "VFR beim Abflug — der Abflug kann nach Sicht erfolgen",
+        "es": "VFR en la salida — la salida puede realizarse visualmente",
+    },
+    "departure_feasibility.no_procedures": {
+        "en": "No published IFR procedures — IFR here means a VFR departure and a pick-up in the air; check the pick-up altitude against the cloud",
+        "fr": "Aucune procédure IFR publiée — l'IFR ici implique un départ VFR et une prise en charge en vol ; vérifiez l'altitude de prise en charge par rapport aux nuages",
+        "de": "Keine veröffentlichten IFR-Verfahren — IFR bedeutet hier einen VFR-Abflug mit Übernahme in der Luft; prüfen Sie die Übernahmehöhe gegenüber der Bewölkung",
+        "es": "Sin procedimientos IFR publicados — el IFR aquí implica una salida VFR y una incorporación en vuelo; verifique la altitud de incorporación respecto a las nubes",
+    },
+    "departure_feasibility.exempt": {
+        "en": "No published IFR procedures — IFR departures outside controlled airspace are common in the UK; check your departure plan",
+        "fr": "Aucune procédure IFR publiée — les départs IFR hors espace contrôlé sont courants au Royaume-Uni ; vérifiez votre plan de départ",
+        "de": "Keine veröffentlichten IFR-Verfahren — IFR-Abflüge außerhalb des kontrollierten Luftraums sind im Vereinigten Königreich üblich; prüfen Sie Ihren Abflugplan",
+        "es": "Sin procedimientos IFR publicados — las salidas IFR fuera del espacio aéreo controlado son habituales en el Reino Unido; verifique su plan de salida",
+    },
+
     # --- shared airport labels ---
     "airport.dep": {
         "en": "Dep",

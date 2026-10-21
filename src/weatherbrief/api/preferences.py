@@ -157,7 +157,8 @@ class PreferencesResponse(BaseModel):
     # cloud break procedure or a private GNSS approach (#510). A fact about the
     # pilot and the airport, entered once and applied everywhere, which is why
     # it lives here rather than in a flight profile's advisory params. Consumed
-    # ONLY by the approach_feasibility advisory: it must never reach the
+    # ONLY by the approach_feasibility and departure_feasibility (#829)
+    # advisories: it must never reach the
     # alternate-minima calculations, where a personal assertion would turn into
     # a regulatory claim.
     declared_approach_icaos: list[str] = Field(default_factory=list)
@@ -591,7 +592,8 @@ def load_declared_approaches(db: Session, user_id: str) -> list[str]:
     stack consumes. Returns ``[]`` for a user with no row or no declaration, so
     every caller can pass the result straight through without a None check.
 
-    Consumers must be limited to ``approach_feasibility``. This list is a
+    Consumers must be limited to ``approach_feasibility`` and
+    ``departure_feasibility`` (#829). This list is a
     personal operational assertion and carries no regulatory weight: a
     self-briefed approach cannot make a field qualify as a filed alternate under
     EASA NCO.OP.143, nor relieve the NCO.OP.140 trigger, so it must never reach

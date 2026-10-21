@@ -107,6 +107,8 @@ ADVISORY_TAG_MAP: dict[str, ConditionTag] = {
     # amber on IAP presence), so the pilot-facing outcome to grade it against is
     # the IMC one, even though a tailwind can be what tips it.
     "approach_feasibility": ConditionTag.IMC,
+    # Only bites below VFR at the departure, so it is graded against IMC too.
+    "departure_feasibility": ConditionTag.IMC,
     "flight_category": ConditionTag.IMC,
     "turbulence": ConditionTag.TURB,
     "mountain_wind": ConditionTag.TURB,

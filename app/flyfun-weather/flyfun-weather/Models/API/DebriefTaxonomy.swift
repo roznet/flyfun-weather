@@ -118,6 +118,7 @@ nonisolated struct DebriefTaxonomy: Codable, Sendable, Equatable {
             "vfr_feasibility": "IMC",
             "ifr_feasibility": "IMC",
             "approach_feasibility": "IMC",
+            "departure_feasibility": "IMC",
             "flight_category": "IMC",
             "turbulence": "TURB",
             "mountain_wind": "TURB",
