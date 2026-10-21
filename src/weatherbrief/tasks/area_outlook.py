@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from euro_aip.utils.solar import CIVIL_TWILIGHT_DEG, solar_elevation
@@ -203,6 +203,9 @@ class OutlookQuery:
     candidates: list[Candidate] = field(default_factory=list)
     tas_kt: float = DEFAULT_TAS_KT
     dropped_waypoints: list[str] = field(default_factory=list)
+    # Airports with an instrument approach whose class the map entry may not
+    # name (``approach_type`` None): graded on the conservative default proxy.
+    iap_icaos: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +250,7 @@ def select_radius(
     base: Place,
     radius_nm: float,
     coords: dict[str, tuple[float, float]],
-    exclude: set[str] = frozenset(),
+    exclude: frozenset[str] | set[str] = frozenset(),
     cap: int = MAX_AREA_AIRPORTS,
 ) -> list[Candidate]:
     """Monitored airports within ``radius_nm`` of the base, spread over sectors.
@@ -289,14 +292,16 @@ def select_corridor(
     points: list[tuple[float, float]],
     corridor_nm: float,
     coords: dict[str, tuple[float, float]],
-    exclude: set[str] = frozenset(),
+    exclude: frozenset[str] | set[str] = frozenset(),
     cap: int = MAX_CORRIDOR_AIRPORTS,
 ) -> list[Candidate]:
     """Monitored airports within ``corridor_nm`` of the route, by along-track.
 
     Points past either end of the route are skipped (they are near an
-    endpoint, which is graded on its own). Over the cap, the closest to the
-    track are kept.
+    endpoint, which is graded on its own). Over the cap, the route is cut
+    into ``cap`` equal along-track bins and the airport closest to the track
+    in each bin is kept first, so a long route keeps its middle; leftover
+    places go to the closest remaining airports.
     """
     track = route_track(points)
     found: list[Candidate] = []
@@ -308,7 +313,13 @@ def select_corridor(
             continue
         found.append(Candidate(icao, lat, lon, along_nm=p.along_nm, offtrack_nm=p.offtrack_nm))
     if len(found) > cap:
-        found = sorted(found, key=lambda c: c.offtrack_nm)[:cap]
+        bin_nm = max(track.total_nm, 1e-6) / cap
+        best_in_bin: dict[int, Candidate] = {}
+        for c in sorted(found, key=lambda c: c.offtrack_nm):
+            best_in_bin.setdefault(min(int(c.along_nm // bin_nm), cap - 1), c)
+        picked = list(best_in_bin.values())
+        rest = [c for c in sorted(found, key=lambda c: c.offtrack_nm) if c not in picked]
+        found = picked + rest[: cap - len(picked)]
     found.sort(key=lambda c: c.along_nm)
     return found
 
@@ -382,24 +393,26 @@ def _grade_band(value: float | None, go: float, floor: float) -> str:
 
 def _grade_ifr_cloud(
     ceiling: float | None, vis: float | None, alt_req: bool | None,
-    approach_type: str | None, m: Minima,
+    approach_type: str | None, has_iap: bool, m: Minima,
 ) -> tuple[str, str | None]:
     """IFR terminal grade: approach-class minima floor, alternate trigger band.
 
     NO-GO below the approach class's worst-case published minima (DH/MDH and
     visibility, ``alternate_requirement.APPROACH_CLASS_PROXY`` hi ends); GO
     when no destination alternate would be required (FAA/EASA); MARGINAL in
-    between. An airport with no instrument approach is graded as VFR.
+    between. An airport with no instrument approach is graded as VFR; one
+    with an approach of unknown class gets the most demanding (non-precision)
+    estimate, as ``proxy_for_approach`` does everywhere else.
     """
     from weatherbrief.analysis.alternate_requirement import proxy_for_approach
 
-    proxy = proxy_for_approach(approach_type, has_iap=approach_type is not None)
+    proxy = proxy_for_approach(approach_type, has_iap=has_iap or approach_type is not None)
     if proxy is None:
         g = _worse(_grade_band(ceiling, m.ceiling_go_ft, m.ceiling_floor_ft),
                    _grade_band(vis, m.vis_go_m, m.vis_floor_m))
         return g, ("no approach: VFR minima" if g != GO else None)
     if (ceiling is not None and ceiling < proxy.dh_hi) or (vis is not None and vis < proxy.vis_hi):
-        return NOGO, f"below est. {approach_type} minima"
+        return NOGO, f"below est. {approach_type or 'approach'} minima"
     if alt_req:
         return MARGINAL, "alternate required"
     return GO, None
@@ -412,6 +425,7 @@ def grade_airport(
     mode: Mode,
     minima: Minima,
     valid_time: datetime,
+    has_iap: bool = False,
 ) -> dict[str, Any]:
     """Grade one map airport entry at one slot.
 
@@ -435,7 +449,8 @@ def grade_airport(
 
     if rules == "ifr":
         grade, why = _grade_ifr_cloud(
-            ceiling, vis, _alt_required(models, mode), entry.get("approach_type"), minima,
+            ceiling, vis, _alt_required(models, mode), entry.get("approach_type"),
+            has_iap, minima,
         )
         if why:
             reasons.append(why)
@@ -642,7 +657,7 @@ def compute_outlook(
         grades[slot] = {
             icao: grade_airport(
                 entries[icao], rules=q.rules, mode=q.consensus, minima=q.minima,
-                valid_time=valid_times[slot],
+                valid_time=valid_times[slot], has_iap=icao in q.iap_icaos,
             )
             for icao in all_icaos if icao in entries
         }
@@ -913,6 +928,50 @@ IFR_SCOPE_NOTE = (
 )
 
 
+# Slots more than this far in the past are dropped (a D+0 06Z at 15Z).
+PAST_SLOT_GRACE = timedelta(hours=1)
+
+# Bump when ``project_slot`` changes shape: it keys the slot LRU.
+SLOT_PROJECTION_VERSION = "v1"
+_CONSENSUS_KEEP = (
+    "flight_category", "ceiling_ft", "visibility_m", "crosswind_kt",
+    "convective_risk", "wind_dir_deg", "wind_speed_kt",
+)
+
+
+def _slim_consensus(c: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not c:
+        return c
+    out = {k: c[k] for k in _CONSENSUS_KEEP if k in c}
+    agr = c.get("agreement") or {}
+    out["agreement"] = {k: agr[k] for k in ("flight_category", "ceiling_ft") if k in agr}
+    return out
+
+
+def project_slot(data: dict[str, Any]) -> dict[str, Any]:
+    """Keep only what :func:`grade_airport` reads from a map payload.
+
+    A full map slot is ~1.4 MB of JSON (every model's every field for ~620
+    airports); the projection is a fraction of that, which is what makes the
+    per-process slot LRU in ``load_forecast_slots`` affordable.
+    """
+    airports = []
+    for a in data.get("airports") or []:
+        airports.append({
+            "icao": a.get("icao"),
+            "lat": a.get("lat"),
+            "lon": a.get("lon"),
+            "approach_type": a.get("approach_type"),
+            "models": {
+                m: {"wind_gust_kt": v.get("wind_gust_kt"), "alt_required": v.get("alt_required")}
+                for m, v in (a.get("models") or {}).items()
+            },
+            "consensus": _slim_consensus(a.get("consensus")),
+            "consensus_majority": _slim_consensus(a.get("consensus_majority")),
+        })
+    return {"model_init_times": data.get("model_init_times") or {}, "airports": airports}
+
+
 class OutlookInputError(ValueError):
     """Bad query (unknown airport, empty route, nothing monitored nearby)."""
 
@@ -1056,10 +1115,15 @@ def describe_query(q: OutlookQuery) -> dict[str, Any]:
         },
     }
     if q.rules == "ifr":
+        # The ceiling/vis lines above only apply at airports without an
+        # approach; say so, so they're never quoted as the IFR minima.
+        cloud = {k: out["minima"].pop(k) for k in (
+            "ceiling_go_ft", "ceiling_nogo_below_ft", "vis_go_m", "vis_nogo_below_m")}
         out["minima"]["ifr_cloud"] = (
             "per airport: NO-GO below estimated approach minima, MARGINAL when a "
-            "destination alternate would be required, VFR lines if no approach"
+            "destination alternate would be required"
         )
+        out["minima"]["no_approach_airports_only"] = cloud
         out["scope"] = "terminal_only"
     if q.mode == "radius":
         out["base"] = q.base.describe()
@@ -1109,7 +1173,11 @@ def build_area_outlook(
     endpoints both call it. Raises :class:`OutlookInputError` on bad input.
     """
     from weatherbrief.tasks.forecast_grid import forecast_hour_for
-    from weatherbrief.tasks.map_queries import load_forecast_slot, watchlist_coords
+    from weatherbrief.tasks.map_queries import (
+        approach_classes,
+        load_forecast_slots,
+        watchlist_coords,
+    )
 
     coords = watchlist_coords(airports_db_path)
     q = resolve_query(
@@ -1119,12 +1187,26 @@ def build_area_outlook(
         min_ceiling_ft=min_ceiling_ft, min_visibility_m=min_visibility_m,
         max_crosswind_kt=max_crosswind_kt, max_gust_kt=max_gust_kt, tas_kt=tas_kt,
     )
-    slot_data = {s: load_forecast_slot(db, s[0], s[1], airports_db_path) for s in q.slots}
-    valid_times = {s: forecast_hour_for(*s) for s in q.slots}
+    q.iap_icaos = frozenset(
+        icao for icao, (_, has_iap) in approach_classes(airports_db_path).items() if has_iap
+    )
+    now = datetime.now(timezone.utc)
+    valid_times = {s: forecast_hour_for(*s, now=now) for s in q.slots}
+    # A slot more than an hour gone can't be flown; don't grade or rank it.
+    past = [s for s in q.slots if valid_times[s] < now - PAST_SLOT_GRACE]
+    q.slots = [s for s in q.slots if s not in past]
+    slot_data, status = load_forecast_slots(
+        db, {s: valid_times[s] for s in q.slots}, airports_db_path,
+        project=project_slot, project_id=f"area_outlook:{SLOT_PROJECTION_VERSION}",
+    )
     result = {
         "query": describe_query(q),
         **compute_outlook(q, slot_data, valid_times, map_base_url=map_base_url),
     }
+    if status["stale"]:
+        result["stale_slots"] = [slot_label(valid_times[s]) for s in status["stale"]]
+    if past:
+        result["past_slots_skipped"] = [f"D+{d} {h:02d}Z" for d, h in past]
     result["legend"] = LEGEND
     result["note"] = NOTE + (" " + IFR_SCOPE_NOTE if rules == "ifr" else "")
     result["next_step"] = NEXT_STEP

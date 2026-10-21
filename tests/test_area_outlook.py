@@ -319,13 +319,15 @@ def api(monkeypatch):
                         lambda *a, **k: mock_model(airports))
     monitored = {k: v for k, v in COORDS.items()}
     monkeypatch.setattr(map_queries, "watchlist_coords", lambda _db: monitored)
-    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(map_queries, "approach_classes", lambda _db: {})
+    calls: list[datetime] = []
 
-    def _slot_loader(db, day, hour, airports_db, **kw):
-        calls.append((day, hour))
-        return _slot([_entry(i) for i in COORDS])
+    def _slots_loader(db, targets, airports_db, *, project, project_id, max_live=1):
+        calls.extend(targets.values())
+        data = project(_slot([_entry(i) for i in COORDS]))
+        return {k: data for k in targets}, {"stale": [], "live": [], "missing": []}
 
-    monkeypatch.setattr(map_queries, "load_forecast_slot", _slot_loader)
+    monkeypatch.setattr(map_queries, "load_forecast_slots", _slots_loader)
     app = create_app()
     app.dependency_overrides[get_db] = lambda: iter([None])
     app.dependency_overrides[current_user_id] = lambda: DEV_USER_ID
@@ -343,7 +345,7 @@ def test_maps_endpoint_radius_with_substituted_base(api):
     assert body["slots"][0]["sectors"]
     assert "create_flight" in body["next_step"]
     assert "/maps.html?tab=forecast&fc.day=1&fc.hour=12" in body["map_url"]
-    assert api.calls == [(1, 12)]
+    assert [t.hour for t in api.calls] == [12] and len(api.calls) == 1
 
 
 def test_agent_endpoint_route_mode(api):
@@ -458,3 +460,189 @@ def test_map_urls_on_best_slots_pairs_and_top_level():
     # No base URL → no links (pure core stays usable without config).
     out = ao.compute_outlook(q, {s: good for s in slots}, _times(slots))
     assert "map_url" not in out and "map_url" not in out["best_slots"][0]
+
+
+# ---------------------------------------------------------------------------
+# Review round 1: has_iap, IFR minima labelling, corridor spread, past slots
+# ---------------------------------------------------------------------------
+
+
+def test_ifr_unknown_approach_class_uses_conservative_proxy_not_vfr():
+    # approach_type None but an IAP exists: non-precision estimate (DH hi 900 ft),
+    # so 950 ft with an alternate required is MARGINAL, not VFR-line NO-GO.
+    e = _entry("ZZBA", approach=None, cat="IFR", ceiling=950.0, alt=True)
+    assert _grade(e, rules="ifr")["grade"] == ao.NOGO  # no IAP → VFR lines
+    g = ao.grade_airport(e, rules="ifr", mode="worst", minima=ao.minima_for("ifr"),
+                         valid_time=SUMMER_NOON, has_iap=True)
+    assert g["grade"] == ao.MARGINAL
+    e = _entry("ZZBA", approach=None, cat="IFR", ceiling=800.0, alt=True)
+    g = ao.grade_airport(e, rules="ifr", mode="worst", minima=ao.minima_for("ifr"),
+                         valid_time=SUMMER_NOON, has_iap=True)
+    assert g["grade"] == ao.NOGO and "below est. approach minima" in g["reasons"]
+
+
+def test_describe_query_ifr_does_not_present_vfr_lines_as_minima():
+    q = _radius_query([(0, 12)])
+    q.rules = "ifr"
+    m = ao.describe_query(q)["minima"]
+    assert "ceiling_go_ft" not in m and m["no_approach_airports_only"]["ceiling_go_ft"] == 1500
+
+
+def test_select_corridor_over_cap_keeps_middle_of_route():
+    pts = [(51.0, 0.0), (51.0, 6.0)]  # ~226 nm east
+    coords = {f"ZE{i:02d}": (51.01, 0.3 + i * 0.05) for i in range(10)}  # bunched near start
+    coords["ZMID"] = (51.15, 3.0)  # one in the middle, further off track
+    picked = ao.select_corridor(pts, 20, coords, cap=4)
+    assert "ZMID" in {c.icao for c in picked}
+
+
+def test_past_slots_are_skipped_and_reported(monkeypatch):
+    from weatherbrief.tasks import map_queries
+
+    monkeypatch.setattr(map_queries, "watchlist_coords", lambda _db: dict(COORDS))
+    monkeypatch.setattr(map_queries, "approach_classes", lambda _db: {})
+    seen: list = []
+
+    def _loader(db, targets, airports_db, *, project, project_id, max_live=1):
+        seen.extend(targets)
+        return {}, {"stale": [], "live": [], "missing": list(targets)}
+
+    monkeypatch.setattr(map_queries, "load_forecast_slots", _loader)
+    out = ao.build_area_outlook(None, "/fake", days=[0], hours=[6, 18], base="ZZBA")
+    now_h = datetime.now(timezone.utc).hour
+    if now_h >= 8:  # 06Z is more than an hour gone
+        assert "D+0 06Z" in out["past_slots_skipped"] and (0, 6) not in seen
+
+
+# ---------------------------------------------------------------------------
+# load_forecast_slots: bounded queries against a real (SQLite) database
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def slot_db(monkeypatch):
+    from sqlalchemy import event
+    from sqlalchemy.orm import sessionmaker
+
+    from conftest import make_app_engine
+    from weatherbrief.tasks import map_queries
+
+    map_queries._SLOT_LRU.clear()
+    engine = make_app_engine()
+    statements: list[str] = []
+    event.listen(engine, "before_cursor_execute",
+                 lambda conn, cur, stmt, *a: statements.append(stmt))
+    session = sessionmaker(bind=engine)()
+    live_calls: list[datetime] = []
+
+    def _live(db, forecast_hour, airports_db):
+        live_calls.append(forecast_hour)
+        return {"forecast_time": forecast_hour.isoformat(), "model_init_times": {},
+                "airports": [_entry("ZZBA")]}
+
+    monkeypatch.setattr(map_queries, "get_forecast_map_data", _live)
+    session.statements = statements
+    session.live_calls = live_calls
+    yield session
+    session.close()
+    map_queries._SLOT_LRU.clear()
+
+
+_COMPUTED = datetime(2026, 6, 19, 7, 30, tzinfo=timezone.utc)  # yesterday's cycle
+_FETCHED = datetime(2026, 6, 19, 7, 0, tzinfo=timezone.utc)
+
+
+def _seed(db, *, day, hour, computed=_COMPUTED, source_max=_FETCHED, forecast_time=None):
+    from datetime import timedelta
+
+    from weatherbrief.db.models import VerificationCacheRow
+    from weatherbrief.tasks.cache_builder import forecast_map_cache_key
+
+    t = forecast_time or datetime(
+        *(computed.date() + timedelta(days=day)).timetuple()[:3], hour, tzinfo=timezone.utc)
+    db.add(VerificationCacheRow(
+        cache_key=forecast_map_cache_key(day, hour), computed_at=computed,
+        source_max_time=source_max,
+        data_json=json.dumps({"forecast_time": t.isoformat(), "model_init_times": {"gfs": "x"},
+                              "airports": [_entry("ZZBA")]}),
+    ))
+
+
+def _snapshot(db, fetched=_FETCHED):
+    from weatherbrief.db.models import AirportForecastSnapshotRow
+
+    db.add(AirportForecastSnapshotRow(
+        icao="ZZBA", model="gfs", model_init_time=fetched, forecast_hour=fetched,
+        fetched_at=fetched,
+    ))
+
+
+def _load(db, targets, **kw):
+    from weatherbrief.tasks import map_queries
+
+    return map_queries.load_forecast_slots(
+        db, targets, "/fake", project=ao.project_slot, project_id="t", **kw)
+
+
+def test_rollover_reuses_yesterdays_cache_without_live_queries(slot_db):
+    # Computed yesterday (06-19): day=4 holds 06-23, which is today's D+3.
+    for h in (9, 12, 15):
+        _seed(slot_db, day=4, hour=h)
+    _snapshot(slot_db)
+    slot_db.commit()
+    targets = {h: datetime(2026, 6, 23, h, tzinfo=timezone.utc) for h in (9, 12, 15)}
+    slot_db.statements.clear()
+    data, status = _load(slot_db, targets)
+    assert set(data) == {9, 12, 15} and slot_db.live_calls == []
+    assert status == {"stale": [], "live": [], "missing": []}
+    # Fixed budget: MAX(fetched_at) + one meta read + one blob read.
+    assert len(slot_db.statements) == 3, slot_db.statements
+
+
+def test_repeat_call_reads_no_blobs(slot_db):
+    _seed(slot_db, day=1, hour=12)
+    _snapshot(slot_db)
+    slot_db.commit()
+    targets = {"a": datetime(2026, 6, 20, 12, tzinfo=timezone.utc)}
+    _load(slot_db, targets)
+    slot_db.statements.clear()
+    data, _ = _load(slot_db, targets)
+    assert "a" in data
+    assert len(slot_db.statements) == 2  # MAX + meta; blob served from the LRU
+    assert not any("data_json" in s for s in slot_db.statements)
+
+
+def test_stale_cache_served_and_reported(slot_db):
+    _seed(slot_db, day=1, hour=12, source_max=_FETCHED)
+    _snapshot(slot_db, fetched=datetime(2026, 6, 19, 19, tzinfo=timezone.utc))  # newer run landed
+    slot_db.commit()
+    data, status = _load(slot_db, {"a": datetime(2026, 6, 20, 12, tzinfo=timezone.utc)})
+    assert "a" in data and status["stale"] == ["a"] and slot_db.live_calls == []
+
+
+def test_uncovered_slots_live_capped_rest_missing(slot_db):
+    _snapshot(slot_db)
+    slot_db.commit()
+    targets = {h: datetime(2026, 6, 25, h, tzinfo=timezone.utc) for h in (6, 12, 18)}
+    data, status = _load(slot_db, targets, max_live=1)
+    assert len(slot_db.live_calls) == 1 and status["live"] == [6]
+    assert status["missing"] == [12, 18] and set(data) == {6}
+
+
+def test_payload_time_mismatch_is_not_trusted(slot_db):
+    wrong = datetime(2026, 6, 21, 12, tzinfo=timezone.utc)
+    _seed(slot_db, day=1, hour=12, forecast_time=wrong)  # claims 06-20 by key, holds 06-21
+    _snapshot(slot_db)
+    slot_db.commit()
+    data, status = _load(slot_db, {"a": datetime(2026, 6, 20, 12, tzinfo=timezone.utc)}, max_live=0)
+    assert status["missing"] == ["a"] and data == {}
+
+
+def test_projection_keeps_grading_identical():
+    models = {"gfs": _model(), "icon": _model(cat="MVFR", ceiling=1800.0, gust=28.0),
+              "ecmwf": _model(cat="IFR", ceiling=900.0, alt=True)}
+    full = _entry("ZZBA", models=models, approach="ILS")
+    slim = ao.project_slot(_slot([full]))["airports"][0]
+    for rules in ("vfr", "ifr"):
+        for mode in ("worst", "majority"):
+            assert _grade(full, rules=rules, mode=mode) == _grade(slim, rules=rules, mode=mode)

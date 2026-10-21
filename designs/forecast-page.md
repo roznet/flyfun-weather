@@ -27,7 +27,9 @@ api/maps.py                                maps.html (template)
 │     (map_queries.load_forecast_slot,
 │      cache-first; D+0..D+6)
 ├── GET /maps/area-outlook (#836, agents;
-│   see area-outlook.md)
+│   map_queries.load_forecast_slots: many
+│   slots, fixed query budget; see
+│   area-outlook.md)
 ├── GET /flights/frequent-airports        ├── setForecastData()
 │   → top-5 dep/dest from history (#419;   └── weather-map-format.ts
 │     consumed by the iOS map only)
