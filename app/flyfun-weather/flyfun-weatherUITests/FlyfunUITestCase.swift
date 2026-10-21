@@ -320,9 +320,12 @@ class FlyfunUITestCase: XCTestCase {
         field.typeText(text)
     }
 
-    /// Open the Observed tab's "Details" fold (#697) unless it already is:
-    /// the expanded state is remembered across launches, so read the toggle's
-    /// value before tapping rather than toggling blind.
+    /// Open the Observed tab's "Details" fold (#697). UI-test launches start
+    /// it collapsed (`AppState.setupUITestSession` clears the remembered
+    /// state), so one tap is deterministic. Open/closed is read from the fold's
+    /// content (`observedNutshell`, only rendered inside it), not from the
+    /// toggle's value alone: a retap on a value that merely lagged would close
+    /// a fold the first tap had opened (#803).
     @MainActor
     func openObservedDetails(_ app: XCUIApplication) {
         let toggle = app.buttons["observedDetailsToggle"].firstMatch
@@ -330,19 +333,27 @@ class FlyfunUITestCase: XCTestCase {
             XCTFail("the Observed tab should have a Details fold")
             return
         }
-        guard (toggle.value as? String) != "expanded" else { return }
-        // Below the ribbon: bring it on screen before tapping.
-        for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
-        // The value flips inside an animation, and a tap landing while the
-        // swipe's scroll is still settling can be dropped: wait for it, and
-        // tap once more only if it never opened.
-        let expanded = { (timeout: TimeInterval) in XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "expanded"), object: toggle)], timeout: timeout) }
-        toggle.tap()
-        if expanded(5) != .completed {
-            toggle.tap()
-            XCTAssertEqual(expanded(Self.uiTimeout), .completed, "tapping Details should open it")
+        let content = app.descendants(matching: .any)["observedNutshell"].firstMatch
+        guard !content.exists else { return }
+        let opened = { (timeout: TimeInterval) in XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true"), object: content)], timeout: timeout) == .completed }
+        // Below the ribbon: bring it on screen, let the last swipe settle, and
+        // tap clear of the iPhone's bottom tab bar (`tapAfterScrolling`).
+        var swiped = false
+        for _ in 0..<4 where !toggle.isHittable {
+            app.swipeUp()
+            swiped = true
         }
+        if swiped { Thread.sleep(forTimeInterval: 1.0) }
+        tapAfterScrolling(app, toggle)
+        if opened(5) { return }
+        // Retap only when the tap was really lost: no content and the toggle
+        // agrees it is still collapsed.
+        if (toggle.value as? String) == "collapsed" {
+            tapAfterScrolling(app, toggle)
+        }
+        XCTAssertTrue(opened(Self.uiTimeout),
+                      "tapping Details should open it (toggle reads \(toggle.value as? String ?? "nil"))")
     }
 
     @MainActor

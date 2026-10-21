@@ -867,7 +867,11 @@ further calibration gate, no What's New entry).
   holds the headline (when the highlight took its slot), the other nutshell
   lines, the map button and the other "Since this briefing" rows
   (`LiveChangesView(excludesAlerts:)`). A plain button, not `DisclosureGroup`,
-  so the toggle exposes `expanded`/`collapsed` to the XCUI helper.
+  so the toggle exposes `expanded`/`collapsed` to the XCUI helper. UI-test
+  launches clear the remembered state (`AppState.setupUITestSession`), and the
+  helper `openObservedDetails` judges "open" by the fold's content
+  (`observedNutshell`), retapping only if that is absent and the toggle still
+  reads collapsed: a blind retap on a lagging value closed it again (#803).
 - **Web** (`nutshellHtml`): the highlight (or the headline), alert lines, then
   the headline and the other lines **unfolded** (documented divergence: the
   desktop has room).

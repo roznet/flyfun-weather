@@ -253,6 +253,9 @@ final class AppState {
     /// fixtures; otherwise it points at the selected server so tests can run
     /// against a live dev backend. Never writes to the keychain.
     private func setupUITestSession() {
+        // Remembered UI state that a journey toggles: start every launch from
+        // the default so one tap is deterministic (#803).
+        UserDefaults.standard.removeObject(forKey: ObservedDetailsFold.expandedDefaultsKey)
         if Self.isUITestMockMode {
             // Fixtures need no real auth — a fake gate token is enough to render
             // past LoginView, and it lives on the observable mirror only.
