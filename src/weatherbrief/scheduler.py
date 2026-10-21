@@ -1429,19 +1429,45 @@ async def run_forecast_fetch_loop(app_state) -> None:
     )
     await asyncio.sleep(_STANDALONE_STARTUP_DELAY_SECONDS)
 
+    # A restart inside a fetch hour's artifact window (a deploy at 19:02, say)
+    # would otherwise sleep to the NEXT fetch hour and silently drop this one:
+    # the node's artifact sits in the inbox un-ingested, no local fallback runs
+    # and no healthcheck fails. Resume the interrupted slot instead.
+    resume_slot = _forecast_slot_in_window(FORECAST_FETCH_HOURS_UTC)
+    if resume_slot is not None and await asyncio.to_thread(
+        _forecast_slot_done, resume_slot,
+    ):
+        resume_slot = None
+
     while True:
         try:
-            sleep_secs = _seconds_until_next_sample_hour(FORECAST_FETCH_HOURS_UTC)
-            logger.info(
-                "Forecast fetch: sleeping %ds until next fetch hour", sleep_secs,
-            )
-            await asyncio.sleep(sleep_secs)
-            hour_start = time.monotonic()
+            if resume_slot is not None:
+                elapsed = (datetime.now(timezone.utc) - resume_slot).total_seconds()
+                logger.warning(
+                    "Forecast fetch: resuming the %s slot interrupted by a "
+                    "restart (%d min in)",
+                    resume_slot.strftime("%H:%MZ"), elapsed // 60,
+                )
+                resume_slot = None
+            else:
+                sleep_secs = _seconds_until_next_sample_hour(
+                    FORECAST_FETCH_HOURS_UTC,
+                )
+                logger.info(
+                    "Forecast fetch: sleeping %ds until next fetch hour", sleep_secs,
+                )
+                await asyncio.sleep(sleep_secs)
+                elapsed = 0.0
+            # Anchored to the top of the hour even when resuming, so both the
+            # artifact deadline and the fallback offset keep their HH:MM marks.
+            hour_start = time.monotonic() - elapsed
             # Compute offload first: if a node delivers this cycle's artifact,
             # ingesting it replaces the local cycle entirely. Polls from the top
             # of the hour, so the node's HH:15 start has the whole window to
             # land. A no-op (returns immediately) when no inbox is mounted.
-            if not await _try_ingest_snapshot_artifact():
+            if not await _try_ingest_snapshot_artifact(
+                wait_seconds=max(0.0, _ARTIFACT_WAIT_MAX_SECONDS - elapsed),
+            ):
                 # Sleep only the REMAINDER of the offset. Waiting for an artifact
                 # has usually already consumed it, and the offset exists solely to
                 # let the publishers land by HH:15 — sleeping a further 15 min at
@@ -1541,13 +1567,56 @@ async def _ping_ingest_healthcheck(
         logger.warning("Ingest healthcheck ping failed (non-fatal)", exc_info=True)
 
 
-async def _try_ingest_snapshot_artifact() -> bool:
+def _forecast_slot_in_window(
+    fetch_hours: list[int], now: datetime | None = None,
+) -> datetime | None:
+    """The fetch hour whose artifact-wait window ``now`` falls inside, or None.
+
+    The window runs from the top of the fetch hour for
+    ``_ARTIFACT_WAIT_MAX_SECONDS`` — the span a restart can interrupt.
+    """
+    now = now or datetime.now(timezone.utc)
+    for hour in fetch_hours:
+        slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if slot <= now < slot + timedelta(seconds=_ARTIFACT_WAIT_MAX_SECONDS):
+            return slot
+    return None
+
+
+def _forecast_slot_done(slot: datetime) -> bool:
+    """Whether a forecast cycle (imported or local) already completed for ``slot``.
+
+    Both write their ``verification_cycles`` row on success only, so a cycle the
+    restart killed leaves nothing and the slot is correctly re-run.
+    """
+    from weatherbrief.db.models import VerificationCycleRow
+    from weatherbrief.tasks.snapshot_artifact import IMPORT_CYCLE_SOURCE
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(VerificationCycleRow.id).where(
+                VerificationCycleRow.source.in_(
+                    (IMPORT_CYCLE_SOURCE, "standalone_forecast"),
+                ),
+                VerificationCycleRow.started_at >= slot.replace(tzinfo=None),
+            ).limit(1)
+        ).first()
+        return row is not None
+    finally:
+        db.close()
+
+
+async def _try_ingest_snapshot_artifact(
+    wait_seconds: float = _ARTIFACT_WAIT_MAX_SECONDS,
+) -> bool:
     """Wait for an off-box node's artifact for this cycle and ingest it.
 
     Returns True when snapshots were ingested (so the caller skips the local
     cycle), False to fall back to computing locally. Returns False *immediately*
     when no inbox is configured, so deployments without compute offload keep
-    their existing timing.
+    their existing timing. ``wait_seconds`` is shorter than the full window when
+    resuming a slot a restart interrupted, so the deadline stays at HH:50.
     """
     from weatherbrief.tasks.snapshot_artifact import (
         ArtifactValidationError,
@@ -1559,13 +1628,13 @@ async def _try_ingest_snapshot_artifact() -> bool:
         return False
 
     min_init = _expected_cycle_init()
-    deadline = time.monotonic() + _ARTIFACT_WAIT_MAX_SECONDS
+    deadline = time.monotonic() + wait_seconds
     # A corrupt drop must not be retried forever, nor block a good artifact that
     # arrives later in the same window.
     rejected: set[str] = set()
     logger.info(
         "Snapshot inbox %s: waiting up to %d min for an artifact with init >= %s",
-        inbox, _ARTIFACT_WAIT_MAX_SECONDS // 60, min_init,
+        inbox, int(wait_seconds) // 60, min_init,
     )
 
     while True:
@@ -1608,7 +1677,7 @@ async def _try_ingest_snapshot_artifact() -> bool:
             logger.warning(
                 "No artifact with init >= %s after %d min — running the local "
                 "forecast cycle as fallback", min_init,
-                _ARTIFACT_WAIT_MAX_SECONDS // 60,
+                int(wait_seconds) // 60,
             )
             # /fail rather than letting the period lapse: falling back is a
             # definite event, so alert now instead of waiting out the grace

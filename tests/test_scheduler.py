@@ -1123,3 +1123,124 @@ class TestIngestHealthcheck:
         monkeypatch.setitem(__import__("sys").modules, "httpx", _Boom)
         # Must return normally, not raise.
         asyncio.run(sched._ping_ingest_healthcheck())
+
+
+class TestForecastSlotResume:
+    """A restart inside a fetch hour's artifact window resumes that slot.
+
+    Before this, the loop slept to the NEXT fetch hour, so a deploy at 19:02
+    left the node's 19:23 artifact un-ingested with no fallback and no alert.
+    """
+
+    def test_window_bounds(self):
+        from weatherbrief import scheduler as sched
+
+        day = datetime(2026, 10, 21, tzinfo=timezone.utc)
+        slot = day.replace(hour=19)
+        window = timedelta(seconds=sched._ARTIFACT_WAIT_MAX_SECONDS)
+        assert sched._forecast_slot_in_window([7, 19], slot) == slot
+        assert sched._forecast_slot_in_window(
+            [7, 19], slot + timedelta(minutes=2, seconds=36),
+        ) == slot
+        assert sched._forecast_slot_in_window(
+            [7, 19], slot + window - timedelta(seconds=1),
+        ) == slot
+        assert sched._forecast_slot_in_window([7, 19], slot + window) is None
+        assert sched._forecast_slot_in_window(
+            [7, 19], slot - timedelta(seconds=1),
+        ) is None
+        assert sched._forecast_slot_in_window(
+            [7, 19], day.replace(hour=7, minute=10),
+        ) == day.replace(hour=7)
+
+    @staticmethod
+    def _drive_loop(monkeypatch, *, slot, done):
+        """Run the loop until its first post-cycle sleep; return what it did."""
+        import asyncio
+
+        from weatherbrief import scheduler as sched
+
+        class _Stop(BaseException):
+            pass
+
+        calls: dict = {"sleeps": [], "wait_seconds": None}
+
+        async def fake_sleep(secs):
+            calls["sleeps"].append(secs)
+            if secs == 60:  # "advance past the current hour" — one pass done
+                raise _Stop
+
+        async def fake_ingest(wait_seconds=sched._ARTIFACT_WAIT_MAX_SECONDS):
+            calls["wait_seconds"] = wait_seconds
+            return True
+
+        monkeypatch.delenv("DISABLE_FORECAST_FETCH", raising=False)
+        monkeypatch.setattr(sched, "_forecast_slot_in_window", lambda hours: slot)
+        monkeypatch.setattr(sched, "_forecast_slot_done", lambda s: done)
+        monkeypatch.setattr(sched, "_try_ingest_snapshot_artifact", fake_ingest)
+        monkeypatch.setattr(
+            sched, "_seconds_until_next_sample_hour", lambda hours: 12345,
+        )
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(_Stop):
+                asyncio.run(sched.run_forecast_fetch_loop(SimpleNamespace()))
+        return calls
+
+    def test_resumes_interrupted_slot_with_remaining_wait(self, monkeypatch):
+        from weatherbrief import scheduler as sched
+
+        slot = datetime.now(timezone.utc) - timedelta(minutes=20)
+        calls = self._drive_loop(monkeypatch, slot=slot, done=False)
+        # No sleep to the next fetch hour before ingesting.
+        assert 12345 not in calls["sleeps"]
+        # Deadline kept at HH:50: ~30 of the 50 min remain.
+        remaining = sched._ARTIFACT_WAIT_MAX_SECONDS - 20 * 60
+        assert remaining - 5 <= calls["wait_seconds"] <= remaining
+
+    def test_completed_slot_is_not_rerun(self, monkeypatch):
+        from weatherbrief import scheduler as sched
+
+        slot = datetime.now(timezone.utc) - timedelta(minutes=40)
+        calls = self._drive_loop(monkeypatch, slot=slot, done=True)
+        assert calls["sleeps"][:2] == [sched._STANDALONE_STARTUP_DELAY_SECONDS, 12345]
+        assert calls["wait_seconds"] == sched._ARTIFACT_WAIT_MAX_SECONDS
+
+    def test_outside_window_sleeps_to_next_hour(self, monkeypatch):
+        from weatherbrief import scheduler as sched
+
+        calls = self._drive_loop(monkeypatch, slot=None, done=False)
+        assert calls["sleeps"][:2] == [sched._STANDALONE_STARTUP_DELAY_SECONDS, 12345]
+        assert calls["wait_seconds"] == sched._ARTIFACT_WAIT_MAX_SECONDS
+
+    def test_slot_done_reads_forecast_cycle_rows(self, db_engine, monkeypatch):
+        """Only a forecast cycle (imported or local) at/after the slot counts."""
+        from sqlalchemy.orm import sessionmaker
+
+        from weatherbrief import scheduler as sched
+        from weatherbrief.db.models import VerificationCycleRow
+
+        Session = sessionmaker(bind=db_engine)
+        monkeypatch.setattr(sched, "SessionLocal", Session)
+        slot = datetime(2031, 3, 4, 19, tzinfo=timezone.utc)
+
+        def add(source, at):
+            with Session() as s:
+                s.add(VerificationCycleRow(
+                    started_at=at.replace(tzinfo=None), duration_ms=1, source=source,
+                ))
+                s.commit()
+
+        try:
+            # Earlier cycles and non-forecast sources don't count.
+            add("standalone_imported", slot - timedelta(hours=12))
+            add("standalone_light", slot + timedelta(minutes=5))
+            add("metar_ingest", slot + timedelta(minutes=30))
+            assert sched._forecast_slot_done(slot) is False
+            add("standalone_imported", slot + timedelta(minutes=24))
+            assert sched._forecast_slot_done(slot) is True
+        finally:
+            with Session() as s:
+                s.query(VerificationCycleRow).filter(
+                    VerificationCycleRow.started_at >= datetime(2031, 3, 4),
+                ).delete()
+                s.commit()
