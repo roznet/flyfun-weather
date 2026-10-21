@@ -509,10 +509,16 @@ def test_past_slots_are_skipped_and_reported(monkeypatch):
         return {}, {"stale": [], "live": [], "missing": list(targets)}
 
     monkeypatch.setattr(map_queries, "load_forecast_slots", _loader)
+
+    class _Noon(datetime):  # pin the clock: 06Z is gone, 18Z is still ahead
+        @classmethod
+        def now(cls, tz=None):
+            return SUMMER_NOON
+
+    monkeypatch.setattr(ao, "datetime", _Noon)
     out = ao.build_area_outlook(None, "/fake", days=[0], hours=[6, 18], base="ZZBA")
-    now_h = datetime.now(timezone.utc).hour
-    if now_h >= 8:  # 06Z is more than an hour gone
-        assert "D+0 06Z" in out["past_slots_skipped"] and (0, 6) not in seen
+    assert "D+0 06Z" in out["past_slots_skipped"] and (0, 6) not in seen
+    assert (0, 18) in seen
 
 
 # ---------------------------------------------------------------------------
