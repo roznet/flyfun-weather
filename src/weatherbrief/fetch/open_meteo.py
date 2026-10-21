@@ -145,6 +145,9 @@ def vertical_velocity_unit(response: dict) -> str | None:
 
 _MAX_RETRIES = 4
 _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
+# Timeouts / connection errors get their own, shorter schedule: a briefing is
+# waiting on the call, and a stalled request already cost `timeout` seconds.
+_NETWORK_RETRY_BACKOFF = [5, 15]  # seconds — len() is the number of retries
 
 
 _FREE_HOST = "api.open-meteo.com"
@@ -231,11 +234,15 @@ class OpenMeteoClient:
     _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
     def _get_with_retry(self, url: str, params: dict) -> requests.Response:
-        """GET with retry on 429 rate-limit and 5xx server error responses."""
+        """GET with retry on 429 rate-limit and 5xx server error responses.
+
+        Each GET also retries a read timeout or connection error
+        (`_send_with_network_retry`), so a stalled request doesn't drop a
+        model on its first attempt.
+        """
         url, params = self._prepare_request(url, params)
         for attempt in range(_MAX_RETRIES):
-            self._record_call()
-            resp = self.session.get(url, params=params, timeout=self.timeout)
+            resp = self._send_with_network_retry(url, params)
             if resp.status_code not in self._RETRYABLE_STATUS_CODES:
                 resp.raise_for_status()
                 return resp
@@ -249,10 +256,31 @@ class OpenMeteoClient:
             )
             time.sleep(wait)
         # Final attempt — let it raise on any error
-        self._record_call()
-        resp = self.session.get(url, params=params, timeout=self.timeout)
+        resp = self._send_with_network_retry(url, params)
         resp.raise_for_status()
         return resp
+
+    def _send_with_network_retry(self, url: str, params: dict) -> requests.Response:
+        """One GET, retried on `requests.Timeout` / `requests.ConnectionError`.
+
+        Retries `len(_NETWORK_RETRY_BACKOFF)` times; the last failure
+        propagates so the caller's per-model handler records it.
+        """
+        for attempt in range(len(_NETWORK_RETRY_BACKOFF) + 1):
+            self._record_call()
+            try:
+                return self.session.get(url, params=params, timeout=self.timeout)
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                if attempt >= len(_NETWORK_RETRY_BACKOFF):
+                    raise
+                wait = _NETWORK_RETRY_BACKOFF[attempt]
+                logger.warning(
+                    "%s on attempt %d/%d, retrying in %ds: %s",
+                    type(exc).__name__, attempt + 1, len(_NETWORK_RETRY_BACKOFF) + 1,
+                    wait, url.split("/")[-1],
+                )
+                time.sleep(wait)
+        raise AssertionError("unreachable")
 
     def get_json(self, url: str, params: dict) -> dict:
         """Public GET-with-retry returning parsed JSON.

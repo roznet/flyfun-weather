@@ -94,6 +94,10 @@ class ModelAgreementEvaluator:
         # ribbon severity is bookkeeping only.
         moderate_count = 0
         samples: list[EvidenceSample] = []
+        # Requested models whose fetch failed (#835): the comparison below only
+        # covers the models that arrived, so the summary says so and names the
+        # missing ones. Grading is unchanged.
+        missing = sorted(m for m in ctx.models_failed if m not in ctx.models)
 
         for rpa in ctx.analyses:
             dist = rpa.distance_from_origin_nm or 0.0
@@ -140,7 +144,11 @@ class ModelAgreementEvaluator:
             detail = adv_t("model_agreement.no_data", loc)
         elif poor_count == 0 and moderate_count == 0:
             status = AdvisoryStatus.GREEN
-            detail = adv_t("model_agreement.good", loc)
+            # "across all models" would be false with a model missing (#835).
+            detail = adv_t(
+                "model_agreement.good_partial" if missing else "model_agreement.good",
+                loc,
+            )
         else:
             status = grade_extent(
                 summary.extent,
@@ -162,6 +170,15 @@ class ModelAgreementEvaluator:
         if status == AdvisoryStatus.GREEN and summary.below_coverage:
             status = AdvisoryStatus.UNAVAILABLE
             detail = adv_t("model_agreement.no_data", loc)
+
+        if missing:
+            n_avail = len(ctx.models)
+            partial = adv_t(
+                "model_agreement.partial", loc,
+                n=n_avail, m=n_avail + len(missing),
+                missing=", ".join(m.upper() for m in missing),
+            )
+            detail = f"{detail} ({partial})"
 
         per_model = [ModelAdvisoryResult.build(
             model="all", status=status, detail=detail,

@@ -294,6 +294,29 @@ def _compute_advisory_model_names(
     return filtered if filtered else model_names
 
 
+def _models_failed_for_ctx(
+    pack_dir: Path | None,
+    advisory_models: list[str] | None,
+) -> dict[str, str]:
+    """Failed models (#835) from the pack's fetch meta, for ``RouteContext``.
+
+    Restricted to the user's advisory model selection when there is one, so a
+    model they excluded on purpose isn't reported missing. ``{}`` on old packs.
+    """
+    if pack_dir is None:
+        return {}
+    try:
+        from weatherbrief.tasks.artifacts import load_fetch_meta
+
+        failed = (load_fetch_meta(pack_dir) or {}).get("models_failed") or {}
+    except (OSError, ValueError):
+        logger.debug("Could not read models_failed from pack meta", exc_info=True)
+        return {}
+    if advisory_models:
+        failed = {m: r for m, r in failed.items() if m in advisory_models}
+    return dict(failed)
+
+
 def _front_context(
     pack_dir: Path | None,
     enabled_ids: set[str] | None,
@@ -468,6 +491,7 @@ def run_advisories(
     equipage: AircraftEquipage | None = None,
     altitude_table_step_ft: int | None = None,
     declared_approach_icaos: list[str] | None = None,
+    models_failed: dict[str, str] | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
 
@@ -501,6 +525,11 @@ def run_advisories(
         # pipeline, so it is on disk by the time we get here when the pref is on.
         route_fronts, enabled_ids = _front_context(pack_dir, enabled_ids, advisory_enabled)
 
+        # The pipeline passes the fetch stage's record; otherwise read the pack.
+        if models_failed is None:
+            models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
+        elif advisory_models:
+            models_failed = {m: r for m, r in models_failed.items() if m in advisory_models}
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
@@ -519,6 +548,7 @@ def run_advisories(
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
+            models_failed=models_failed,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -533,6 +563,7 @@ def run_advisories(
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
             aircraft=equipage,
+            models_failed=models_failed,
         )
         logger.info("Route advisories: %d evaluated (%d models)",
                      len(advisory_results), len(advisory_model_names))
@@ -679,6 +710,7 @@ def run_advisories_from_pack(
         if route_sun is None:
             route_sun = manifest.sun
 
+        models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
         ctx = RouteContext(
             analyses=analyses,
             cross_sections=cross_sections,
@@ -702,6 +734,7 @@ def run_advisories_from_pack(
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             equipage=equipage,
             flight_duration_hours=flight_duration_hours,
+            models_failed=models_failed,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -716,6 +749,7 @@ def run_advisories_from_pack(
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
             aircraft=equipage,
+            models_failed=models_failed,
         )
 
         if persist:
@@ -1083,6 +1117,7 @@ def run_alt_from_pack(
             pack_dir, enabled_ids, advisory_enabled, filename="route_fronts_alt.json",
         )
 
+        models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
@@ -1106,6 +1141,7 @@ def run_alt_from_pack(
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
+            models_failed=models_failed,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -1120,6 +1156,7 @@ def run_alt_from_pack(
             aggregation=effective_aggregation.value,
             airport_conditions=airport_conds,
             aircraft=equipage,
+            models_failed=models_failed,
         )
 
         if persist:

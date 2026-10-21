@@ -6590,3 +6590,29 @@ the margins are agent choices for the owner to confirm.
   issue: name the group, don't change the tier rule). Clients, push text and the
   highlight facts all show the row's `message` verbatim.
 
+## 58. Icing zones merge on native-table adjacency, not a fixed hPa gap (#835)
+
+`group_icing_levels` merged two icing levels only when they were consecutive in
+the sounding **and** ≤ 100 hPa apart. Open-Meteo's 13-level ECMWF table has
+nothing between 850 and 700 hPa (150 hPa), so a saturated sub-zero layer across
+both became two ±500 ft zones (~4,600–5,600 ft and ~9,600–10,600 ft) with FL080
+clear between them: 0 minutes of icing in the per-altitude rows. GRIB ECMWF
+(800 hPa present), ICON and GFS were unaffected.
+
+**Decision.** On the `all_levels` path (every caller), two icing levels merge iff
+they are consecutive in the sounding: only a *measured* level judged non-icing
+between them splits a zone. Model level spacing is not a reason to split. A
+sanity cap `ZONE_MAX_NATIVE_GAP_HPA = 200` remains for degraded soundings (it
+must stay ≥ 150 or the bug returns). The legacy pressure-only path keeps 100 hPa.
+
+**Missing levels bridge.** `prepare_profile` drops a level with no temperature or
+no dewpoint/RH before the sounding exists, so its neighbours become consecutive
+and an icing layer continues across it (within the cap). Chosen over splitting
+because a level with no data is unknown, and unknown must not read as a clear gap
+inside an icing layer (#391/#393).
+
+**Effect.** Coarse-table soundings (mostly Open-Meteo ECMWF beyond the GRIB
+horizon, or when GRIB is skipped) get one thicker zone where they had two thin
+ones, so more icing minutes at levels between table entries. Dense tables are
+unchanged. Zone edges are still level altitudes (±500 ft for a single level); no
+interpolation at the 0 / −15 °C or threshold crossings.

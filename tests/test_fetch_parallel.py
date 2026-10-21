@@ -131,6 +131,8 @@ def test_paid_path_partial_failure(paid_api_key):
 
     assert sorted(result.models_fetched) == ["gfs", "icon"]
     assert "ecmwf" not in result.models_fetched
+    # The failure is recorded per model with its reason (#835).
+    assert result.models_failed == {"ecmwf": "error"}
     fetched_models = {cs.model for cs in result.cross_sections}
     assert fetched_models == {ModelSource.GFS, ModelSource.ICON}
     # Two successful workers, each recorded one call; failed worker recorded none.
@@ -270,3 +272,4 @@ def test_free_tier_partial_failure(free_tier, monkeypatch):
         )
 
     assert result.models_fetched == ["gfs", "icon"]
+    assert result.models_failed == {"ecmwf": "error"}

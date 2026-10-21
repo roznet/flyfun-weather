@@ -922,6 +922,11 @@ class RouteAdvisoriesManifest(BaseModel):
     # The equipage the advisories were graded for (#827). None on packs built
     # before #827 and on paths that never resolved an aircraft.
     aircraft: AircraftEquipage | None = None
+    # Requested models whose fetch failed after retries, model → short reason
+    # (#835). ``models`` lists only what arrived; this says what didn't, so the
+    # digest and MCP never imply agreement across a missing model. {} on old
+    # packs.
+    models_failed: dict[str, str] = Field(default_factory=dict)
 
 
 class AltitudeAdvisoryRow(BaseModel):

@@ -173,6 +173,8 @@ class BriefingResult:
     grib_sources: dict[str, str] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
     models_skipped_region: list[str] = field(default_factory=list)
+    # model → reason for requested models whose fetch failed (#835).
+    models_failed: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     alt_advisory_result: AdvisoryResult | None = None
     # DWD Surface Analysis & Forecast — references into the shared chart
@@ -466,6 +468,7 @@ def _execute_briefing_stages(
             # in memory (cleared just below). Feeds the digest's ALTITUDE OPTIONS
             # block and the client-side lever; default 2000ft step (#259).
             altitude_table_step_ft=2000,
+            models_failed=fetch_result.models_failed,
         )
         route_advisories_manifest = advisory_result.manifest
         altitude_table_manifest = advisory_result.altitude_table
@@ -736,6 +739,7 @@ def _execute_briefing_stages(
     result.grib_sources = fetch_result.grib_sources
     result.models_fetched = fetch_result.models_fetched
     result.models_skipped_region = fetch_result.models_skipped_region
+    result.models_failed = fetch_result.models_failed
     result.diagnostics = fetch_result.diagnostics
     # Merge any earlier-buffered diagnostics from stages that ran before
     # `result` existed (alt-advisories runs before snapshot construction).
@@ -970,6 +974,7 @@ def _execute_briefing_stages(
             write_pack_meta(
                 pack_dir,
                 models_fetched=result.models_fetched,
+                models_failed=result.models_failed,
                 diagnostics=result.diagnostics,
                 fetched_at=fetched_at,
             )
