@@ -131,17 +131,18 @@ struct ObservedHighlightCard: View {
 /// question: the headline (when the highlight took its slot), the lines the
 /// flight has passed (#816: the lines ahead are unfolded above), the
 /// non-alert change rows. Collapsed by default; the state is remembered
-/// across launches.
+/// across launches, except under UI tests, which start collapsed (#803).
 ///
 /// A plain button rather than a `DisclosureGroup`, so the toggle carries an
-/// `expanded` / `collapsed` accessibility value a UI test can read before it
-/// taps (the remembered state survives between test launches).
+/// `expanded` / `collapsed` accessibility value a UI test can read.
 struct ObservedDetailsFold: View {
     let viewModel: BriefingViewModel
     let glance: LiveGlance
     let changes: LiveChanges?
     let baseline: Date?
-    @AppStorage("observedDetailsExpanded") private var expanded = false
+    /// Cleared on every UI-test launch (`AppState.setupUITestSession`).
+    static let expandedDefaultsKey = "observedDetailsExpanded"
+    @AppStorage(ObservedDetailsFold.expandedDefaultsKey) private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
