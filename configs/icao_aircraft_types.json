@@ -94,6 +94,7 @@
     {"icao": "GLID", "manufacturer": "Generic", "model": "Glider", "category": "SEP"},
     {"icao": "GX", "manufacturer": "Grumman American", "model": "Cougar", "category": "MEP"},
     {"icao": "H25B", "manufacturer": "Hawker Beechcraft", "model": "Hawker 800 / 850 / 900", "category": "JET"},
+    {"icao": "HUSK", "manufacturer": "Aviat", "model": "A-1 Husky", "category": "SEP"},
     {"icao": "J3", "manufacturer": "Piper", "model": "J-3 Cub", "category": "SEP"},
     {"icao": "JCOM", "manufacturer": "Robin", "model": "Jodel / DR1050", "category": "SEP"},
     {"icao": "KOAL", "manufacturer": "Elixir Aircraft", "model": "Elixir", "category": "SEP"},
