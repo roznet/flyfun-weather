@@ -438,7 +438,8 @@ def test_map_url_uses_forecast_tab_contract():
     assert qs["tab"] == "forecast" and qs["fc.day"] == "3" and qs["fc.hour"] == "15"
     assert qs["fc.apt"] == "ZZDE" and "fc.model" not in qs
     lat, lon, zoom = qs["fc.view"].split(",")
-    assert (lat, lon) == ("51.00", "0.00") and 4 <= int(zoom) <= 10
+    # Destination (~75 nm) is outside the 60 nm radius: framed between the two.
+    assert (lat, lon) == ("51.00", "1.00") and 4 <= int(zoom) <= 10
 
 
 def test_map_view_zooms_out_for_larger_area():
@@ -723,3 +724,60 @@ def test_radius_best_slot_never_nogo_at_destination():
     q = _radius_query(slots, destination="ZZDE")
     out = ao.compute_outlook(q, {(0, 9): good, (0, 15): meh}, _times(slots))
     assert out["best_slots"][0]["slot"] == "Sa09"
+
+
+# ---------------------------------------------------------------------------
+# Review round 4 (follow-up on main)
+# ---------------------------------------------------------------------------
+
+
+def test_great_circle_matches_euro_aip_navpoint():
+    from euro_aip.models.navpoint import NavPoint
+
+    b, d = ao.great_circle(51.348, -0.559, 50.518, 1.622)
+    nb, nd = NavPoint(latitude=51.348, longitude=-0.559).haversine_distance(
+        NavPoint(latitude=50.518, longitude=1.622))
+    assert (b, d) == (nb, nd) and 96 < d < 97
+
+
+def test_trend_ignores_night_slots():
+    # Winter: 06Z is night (every VFR grade NO-GO), 09..15Z identical GO.
+    slots = [(0, 6), (0, 9), (0, 12), (0, 15)]
+    times = {s: datetime(2026, 12, 19, s[1], tzinfo=timezone.utc) for s in slots}
+    good = _slot([_entry(i) for i in COORDS])
+    out = ao.compute_outlook(_radius_query(slots), {s: good for s in slots}, times)
+    assert out["trend"] == {"Sa": "steady"}
+
+
+def test_best_slot_confidence_from_ends_not_far_area():
+    split = {"gfs": _model(), "icon": _model(cat="IFR", ceiling=800.0),
+             "ecmwf": _model(cat="LIFR", ceiling=300.0)}
+    entries = [_entry(i) for i in COORDS if i != "ZZNO"] + [_entry("ZZNO", models=split)]
+    slots = [(0, 12)]
+    out = ao.compute_outlook(_radius_query(slots, destination="ZZDE"),
+                             {(0, 12): _slot(entries)}, _times(slots))
+    assert out["best_slots"][0]["conf"] == "high"
+
+
+def test_map_view_frames_destination_outside_radius():
+    q = _radius_query([(0, 12)], destination="ZZDE")  # ~75 nm east, radius 60
+    q.radius_nm = 20
+    lat, lon, _ = ao.map_view(q).split(",")
+    assert 0.5 < float(lon) < 1.5  # centred between base (0E) and destination (2E)
+    q.radius_nm = 120  # destination inside: stays on the base
+    assert ao.map_view(q).startswith("51.00,0.00,")
+
+
+def test_all_past_slots_is_input_error(monkeypatch):
+    from weatherbrief.tasks import map_queries
+
+    monkeypatch.setattr(map_queries, "watchlist_coords", lambda _db: dict(COORDS))
+    monkeypatch.setattr(map_queries, "approach_classes", lambda _db: {})
+    monkeypatch.setattr(ao, "PAST_SLOT_GRACE", __import__("datetime").timedelta(hours=-48))
+    with pytest.raises(ao.OutlookInputError, match="in the past"):
+        ao.build_area_outlook(None, "/fake", days=[0], hours=[18], base="ZZBA")
+
+
+def test_endpoint_rejects_too_many_days(api):
+    r = api.get("/api/maps/area-outlook", params={"base": "ZZBA", "days": list(range(9))})
+    assert r.status_code == 422

@@ -698,14 +698,15 @@ def get_airport_weather(
 def get_area_outlook(
     days: Annotated[
         list[int],
-        Query(description=f"Relative days to scan, 0..{MAX_FORECAST_DAY}, e.g. [3, 4] for a weekend"),
+        Query(description=f"Relative days to scan, 0..{MAX_FORECAST_DAY}, e.g. [3, 4] for a weekend",
+              max_length=MAX_FORECAST_DAY + 1),
     ],
     base: Annotated[str | None, Query(description="Base airport ICAO (radius mode). Give base OR route.")] = None,
     radius_nm: Annotated[float | None, Query(description="Radius around base, default 60", gt=0, le=200)] = None,
     destination: Annotated[str | None, Query(description="Optional destination ICAO in radius mode (enables out-and-back pairs)")] = None,
     route: Annotated[str | None, Query(description="Route 'DEP [waypoints] DEST' (route mode)", max_length=2000)] = None,
     corridor_nm: Annotated[float | None, Query(description="Corridor half-width, default 20", gt=0, le=60)] = None,
-    hours: Annotated[list[int] | None, Query(description="UTC sample hours; default every offered hour")] = None,
+    hours: Annotated[list[int] | None, Query(description="UTC sample hours; default every offered hour", max_length=24)] = None,
     rules: Annotated[str, Query(description="vfr or ifr", pattern="^(vfr|ifr)$")] = "vfr",
     consensus: Annotated[str, Query(description="worst (default) or majority", pattern="^(worst|majority)$")] = "worst",
     min_ceiling_ft: Annotated[float | None, Query(ge=0)] = None,

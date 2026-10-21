@@ -38,8 +38,7 @@ from weatherbrief.tasks.forecast_grid import (
 )
 
 
-from weatherbrief.api.deps import WEATHER_BASE_URL
-from weatherbrief.api.deps import airports_db as _airports_db
+from weatherbrief.api.deps import WEATHER_BASE_URL, airports_db as _airports_db
 
 
 @router.get("/forecast")
@@ -391,13 +390,13 @@ def get_airport_weather(
 
 @router.get("/area-outlook")
 def get_area_outlook(
-    days: list[int] = Query(description=f"Relative days 0..{MAX_FORECAST_DAY}, e.g. [3, 4]"),
+    days: list[int] = Query(description=f"Relative days 0..{MAX_FORECAST_DAY}, e.g. [3, 4]", max_length=MAX_FORECAST_DAY + 1),
     base: str | None = Query(default=None, description="Base airport ICAO (radius mode)"),
     radius_nm: float | None = Query(default=None, gt=0, le=200),
     destination: str | None = Query(default=None, description="Optional destination in radius mode"),
     route: str | None = Query(default=None, max_length=2000, description="Route string 'DEP ... DEST' (route mode)"),
     corridor_nm: float | None = Query(default=None, gt=0, le=60),
-    hours: list[int] | None = Query(default=None, description="UTC sample hours; default all offered"),
+    hours: list[int] | None = Query(default=None, description="UTC sample hours; default all offered", max_length=24),
     rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
     consensus: str = Query(default="worst", pattern="^(worst|majority)$"),
     min_ceiling_ft: float | None = Query(default=None, ge=0),

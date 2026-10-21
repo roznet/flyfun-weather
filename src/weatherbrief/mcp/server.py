@@ -829,7 +829,7 @@ def area_outlook(
         Field(description=(
             f"Relative days to scan, 0..{MAX_FORECAST_DAY} (0=today). E.g. on a "
             "Wednesday, [3, 4] is Saturday and Sunday."
-        )),
+        ), min_length=1, max_length=MAX_FORECAST_DAY + 1),
     ],
     base: Annotated[
         str | None,
@@ -854,7 +854,7 @@ def area_outlook(
     ] = None,
     hours: Annotated[
         list[int] | None,
-        Field(description="UTC sample hours (6, 9, 12, 15, 18); default all offered that day"),
+        Field(description="UTC sample hours (6, 9, 12, 15, 18); default all offered that day", max_length=24),
     ] = None,
     rules: Annotated[
         str, Field(description="'vfr' (default) or 'ifr'", pattern="^(vfr|ifr)$"),

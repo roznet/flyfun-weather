@@ -71,12 +71,13 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 - **Radius**: per slot, base row + per-sector `go/marg/nogo`, min ceiling, max gust, worst-confidence, and `worst` only when it isn't GO.
 - **Route**: per slot, departure + destination rows + a corridor summary. For legs the corridor counts as one point: NO-GO only when **at least half** its airports are NO-GO, MARGINAL for a minority (an airport can be 20 nm off track and a pilot can avoid one field).
 - `best_slots` (top 3, never a NO-GO slot): radius ranks the base grade (the worse of base and destination when a destination is given, so a NO-GO destination never ranks) then the area GO fraction; route ranks the outbound leg.
-- `trend` per day: GO fraction (GO 1, MARGINAL 0.5) of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating.
+- `best_slots` confidence comes from the airports the pilot would use (base; base + destination; route ends + corridor), not the whole area: one divergent far-off field doesn't make a solid slot read "low". The area GO fraction only breaks ties.
+- `trend` per day: GO fraction (GO 1, MARGINAL 0.5) of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating, over **daylight grades only**. VFR makes every airport NO-GO at night, so dark 06Z/18Z slots in winter would otherwise read as a trend on a flat day.
 - **Pairs** (destination known): leg time = great-circle / TAS (default 110 kt). Outbound graded at take-off slot for the departure end and corridor, at the slot nearest arrival for the landing end; return must start ≥ outbound slot + leg time, same day. `round_trip` per day: possible / outbound only / return only / no. Top 5 pairs, one per outbound slot.
 
 ## Map links
 
-`map_url` (top level = best slot, plus each best slot and each pair's outbound slot) opens `/maps.html?tab=forecast&fc.day=&fc.hour=&fc.apt=&fc.view=` (`fc.model=majority` when asked): the forecast tab's URL contract (`web/ts/visualization/forecast-url.ts`), which the iOS app also opens natively. `fc.view` frames the radius, or the route's bounding box plus the corridor, for a ~700 px map (zoom 4..10); `fc.apt` opens the destination's (else the base's) summary card. Origin is `WEATHER_BASE_URL`, like the agent's briefing links. `fc.day` is **relative**, so a link opened on a later day shows a later date: the map has no absolute-date key yet.
+`map_url` (top level = best slot, plus each best slot and each pair's outbound slot) opens `/maps.html?tab=forecast&fc.day=&fc.hour=&fc.apt=&fc.view=` (`fc.model=majority` when asked): the forecast tab's URL contract (`web/ts/visualization/forecast-url.ts`), which the iOS app also opens natively. `fc.view` frames the radius (widened to include a destination outside it), or the route's bounding box plus the corridor, for a ~700 px map (zoom 4..10); `fc.apt` opens the destination's (else the base's) summary card. Origin is `WEATHER_BASE_URL`, like the agent's briefing links. `fc.day` is **relative**, so a link opened on a later day shows a later date: the map has no absolute-date key yet.
 
 ## Output budget
 
@@ -85,6 +86,7 @@ Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` 
 ## Gotchas
 
 - Snapshots carry **no freezing level / cloud tops**: IFR output has `scope: terminal_only` and the note says en-route icing is not assessed. Adding a freezing-level column to the snapshot table is the way to lift that.
-- Slots come from the map grid: out-of-grid hours snap to the nearest offered; D+6 is 06/12/18Z only. A slot with no data lands in `missing_slots` rather than failing the call. D+0 slots more than an hour gone are dropped (`past_slots_skipped`).
+- Slots come from the map grid: out-of-grid hours snap to the nearest offered; D+6 is 06/12/18Z only. A slot with no data lands in `missing_slots` rather than failing the call. D+0 slots more than an hour gone are dropped (`past_slots_skipped`); if nothing is left the call is a 400.
+- Great-circle maths goes through `great_circle` → euro_aip `NavPoint.haversine_distance`, the same source `tasks/alternates` uses.
 - With `rules=ifr`, `query.minima` moves the VFR cloud lines under `no_approach_airports_only`, so an LLM never quotes them as the IFR minima.
 - Thresholds are presets for an indicative tool, not briefing meteorology; changing them doesn't touch any advisory (see `meteorology-decisions.md` §52).

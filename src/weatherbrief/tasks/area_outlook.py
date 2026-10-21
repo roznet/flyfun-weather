@@ -212,22 +212,18 @@ class OutlookQuery:
 # Geometry
 # ---------------------------------------------------------------------------
 
-_EARTH_NM = 3440.065
+def great_circle(lat1: float, lon1: float, lat2: float, lon2: float) -> tuple[float, float]:
+    """(initial bearing °, distance NM) via euro_aip's ``NavPoint`` (the same
+    source of truth ``tasks/alternates`` uses)."""
+    from euro_aip.models.navpoint import NavPoint
+
+    return NavPoint(latitude=lat1, longitude=lon1).haversine_distance(
+        NavPoint(latitude=lat2, longitude=lon2)
+    )
 
 
 def distance_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = p2 - p1, math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * _EARTH_NM * math.asin(min(1.0, math.sqrt(a)))
-
-
-def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dl = math.radians(lon2 - lon1)
-    x = math.sin(dl) * math.cos(p2)
-    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
-    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+    return great_circle(lat1, lon1, lat2, lon2)[1]
 
 
 def sector_for(bearing: float) -> str:
@@ -262,10 +258,9 @@ def select_radius(
     for icao, (lat, lon) in coords.items():
         if icao == base.icao or icao in exclude:
             continue
-        d = distance_nm(base.lat, base.lon, lat, lon)
+        b, d = great_circle(base.lat, base.lon, lat, lon)
         if d > radius_nm:
             continue
-        b = bearing_deg(base.lat, base.lon, lat, lon)
         s = sector_for(b)
         by_sector[s].append(Candidate(icao, lat, lon, distance_nm=d, bearing_deg=b, sector=s))
     for lst in by_sector.values():
@@ -707,25 +702,30 @@ def compute_outlook(
     # when one is given) first, then the area GO fraction. Route: the
     # outbound leg (departure, corridor, destination) worst grade.
     def slot_score(slot: tuple[int, int]) -> tuple[int, float, int]:
+        # ``focus`` decides the grade and confidence (the airports the pilot
+        # would use); ``pool`` only breaks ties by how good the area is, so
+        # one divergent far-off field doesn't make a solid slot read "low".
         g = grades[slot]
         if q.mode == "radius":
             pool = [g[c.icao] for c in q.candidates if c.icao in g]
             if q.destination is None:
-                key = g.get(q.base.icao, {}).get("grade")
+                focus = [g.get(q.base.icao)]
+                key = (focus[0] or {}).get("grade")
             else:
                 # A trip: the slot is only as good as the worse of the two
                 # ends, like route mode (a NO-GO destination never ranks).
-                ends = [g.get(q.base.icao), g.get(q.destination.icao)]
-                key = _leg_ok(*ends) or NOGO
-                pool = [x for x in ends if x] + pool
+                focus = [g.get(q.base.icao), g.get(q.destination.icao)]
+                key = _leg_ok(*focus) or NOGO
+                pool = [x for x in focus if x] + pool
         else:
             ends = [g.get(q.departure.icao), g.get(q.destination.icao)]
             corridor = [g[c.icao] for c in q.candidates if c.icao in g]
             cp = corridor_point(corridor)
-            key = _leg_ok(*ends, *([cp] if cp else [])) or NOGO
+            focus = ends + ([cp] if cp else [])
+            key = _leg_ok(*focus) or NOGO
             pool = [x for x in ends if x] + corridor
-        focus_g = [x for x in pool if x.get("grade")]
-        conf = max((x["conf"] for x in focus_g), key=lambda c: _CONF_RANK[c]) if focus_g else "low"
+        graded = [x for x in focus if x and x.get("grade")]
+        conf = max((x["conf"] for x in graded), key=lambda c: _CONF_RANK[c]) if graded else "low"
         return (_GRADE_RANK.get(key, 2), -_go_fraction(pool), _CONF_RANK[conf])
 
     ranked = sorted(available, key=lambda s: (slot_score(s), s))
@@ -744,14 +744,18 @@ def compute_outlook(
             b["map_url"] = map_url(map_base_url, q, s)
         best.append(b)
 
+    # Trend over daylight only: VFR grades every airport NO-GO at night, so
+    # dark 06Z/18Z slots would read as "improving"/"deteriorating" on a flat
+    # day. A slot with no daylight airport is left out of the sequence.
     days = sorted({d for d, _ in available})
     trend: dict[str, str] = {}
     for d in days:
         ds = [s for s in available if s[0] == d]
         pool_scores = []
         for s in ds:
-            pool = list(grades[s].values())
-            pool_scores.append(_go_fraction(pool))
+            pool = [x for x in grades[s].values() if x.get("phase") != "night"]
+            if any(x.get("grade") for x in pool):
+                pool_scores.append(_go_fraction(pool))
         trend[_WEEKDAY[valid_times[ds[0]].weekday()]] = _trend(pool_scores)
 
     result: dict[str, Any] = {
@@ -874,8 +878,16 @@ _MAP_MIN_ZOOM, _MAP_MAX_ZOOM = 4, 10
 def map_view(q: OutlookQuery) -> str:
     """``lat,lon,zoom`` (the web/iOS ``fc.view`` format) framing the query."""
     if q.mode == "radius":
+        radius = q.radius_nm or DEFAULT_RADIUS_NM
         lat, lon = q.base.lat, q.base.lon
-        span_nm = 2 * (q.radius_nm or DEFAULT_RADIUS_NM)
+        span_nm = 2 * radius
+        if q.destination is not None:
+            # Keep the destination (whose card the link opens) on screen.
+            d = distance_nm(q.base.lat, q.base.lon, q.destination.lat, q.destination.lon)
+            if d > radius:
+                lat = (q.base.lat + q.destination.lat) / 2
+                lon = (q.base.lon + q.destination.lon) / 2
+                span_nm = d + 2 * radius
     else:
         lats = [p[0] for p in q.route_points]
         lons = [p[1] for p in q.route_points]
@@ -1206,6 +1218,10 @@ def build_area_outlook(
     # A slot more than an hour gone can't be flown; don't grade or rank it.
     past = [s for s in q.slots if valid_times[s] < now - PAST_SLOT_GRACE]
     q.slots = [s for s in q.slots if s not in past]
+    if not q.slots:
+        raise OutlookInputError(
+            "every requested slot is already in the past; ask for later hours or days"
+        )
     slot_data, status = load_forecast_slots(
         db, {s: valid_times[s] for s in q.slots}, airports_db_path,
         project=project_slot, project_id=f"area_outlook:{SLOT_PROJECTION_VERSION}",
