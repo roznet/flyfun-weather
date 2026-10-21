@@ -86,3 +86,22 @@ def test_packs_after_live_leaves_out_newer_packs(mod):
     assert mod.packs_after_live(packs, "2026-01-01T12") == {"2026-01-01T18"}
     assert mod.packs_after_live(packs, None) == set()
     assert mod.packs_after_live(packs, "2026-01-01T18") == set()
+
+
+def test_local_aircraft_copies_grading_fields_once(mod, db_session):
+    from flyfun_common.db.models import UserRow
+
+    from weatherbrief.db.models import UserAircraftRow
+
+    db_session.add(UserRow(id="dev-ac", email="dev-ac@example.com"))
+    db_session.flush()
+    prod = {"id": 77, "user_id": "prod-user", "icao_type": "S22T", "tail_number": "ZZ-ABC",
+            "nickname": "mine", "is_ifr": 1, "is_fiki": 1, "cruise_speed_kt": 180,
+            "ceiling_ft": 25000, "is_default": 1, "is_placeholder": 0}
+    first = mod.local_aircraft_id(db_session, prod, "dev-ac")
+    row = db_session.get(UserAircraftRow, first)
+    assert (row.icao_type, row.is_fiki, row.ceiling_ft, row.cruise_speed_kt) == ("S22T", True, 25000, 180)
+    assert row.tail_number is None and row.is_default is False and row.nickname == "import:77"
+    # A re-import reuses the copy and follows a changed prod flag.
+    assert mod.local_aircraft_id(db_session, {**prod, "is_fiki": 0}, "dev-ac") == first
+    assert db_session.get(UserAircraftRow, first).is_fiki is False

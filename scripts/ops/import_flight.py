@@ -6,6 +6,7 @@
     venv/bin/python scripts/ops/import_flight.py --live            # import all of those
     venv/bin/python scripts/ops/import_flight.py FLIGHT_ID --highlight-at 14:20Z
     venv/bin/python scripts/ops/import_flight.py FLIGHT_ID --dry-run | --no-freeze
+    venv/bin/python scripts/ops/import_flight.py FLIGHT_ID --with-aircraft
 
 The one way to bring a prod flight to the devserver (debrief recap / tick
 replay, live-layer display, any UI or iOS check on a real briefing). Accepts a
@@ -23,6 +24,11 @@ What is copied, and how it is remapped (``remap_flight`` / ``remap_pack``):
   ``<DATA_DIR>/packs/<local user>/<flight>/<ts>``; ``integrity_hmac``
   recomputed with the local key (it covers the path).
 * ``flight_debriefs`` — as is (the recap reads it).
+* ``user_aircraft`` (only with ``--with-aircraft``) — the aircraft the flight
+  resolves to on prod (its own, else the owner's default), copied for the local
+  owner without tail number or nickname, and the flight pointed at it, so the
+  icing card grades with the same FIKI / non-FIKI column (#827). A re-import
+  reuses the copy (matched on the nickname ``import:<prod id>``).
 * The whole flight dir (packs, live files, per-tick snapshots, forecast lanes),
   tar-streamed out of the container into a staging dir, then swapped in.
 
@@ -121,6 +127,10 @@ with fdb.get_engine().connect() as c:
         out["flights"] = rows(c, "SELECT * FROM flights WHERE id = :f", fid)
         out["briefing_packs"] = rows(c, "SELECT * FROM briefing_packs WHERE flight_id = :f ORDER BY fetch_timestamp", fid)
         out["flight_debriefs"] = rows(c, "SELECT * FROM flight_debriefs WHERE flight_id = :f", fid)
+        out["aircraft"] = rows(c, "SELECT a.* FROM user_aircraft a JOIN flights f ON f.id = :f "
+                                  "WHERE a.id = f.aircraft_id "
+                                  "OR (f.aircraft_id IS NULL AND a.user_id = f.user_id AND a.is_default = 1) "
+                                  "ORDER BY a.id = f.aircraft_id DESC LIMIT 1", fid)
         size = files = 0
         out["dir_exists"], out["live_pack"] = False, None
         if out["flights"]:
@@ -206,6 +216,33 @@ def remap_flight(row: dict, local_user_id: str) -> dict:
     out["auto_refresh_hour"] = None
     out["last_auto_refresh_at"] = None
     return out
+
+
+#: Aircraft columns carried over by ``--with-aircraft``: what the engine grades
+#: with, nothing that identifies the owner's machine.
+AIRCRAFT_FIELDS = ("icao_type", "is_ifr", "is_fiki", "cruise_speed_kt", "ceiling_ft", "is_placeholder")
+
+
+def local_aircraft_id(s, prod_aircraft: dict, local_user_id: str) -> int:
+    """The local copy of a prod aircraft for ``local_user_id``, created on first use."""
+    from sqlalchemy import select
+
+    from weatherbrief.db.models import UserAircraftRow
+
+    tag = f"import:{prod_aircraft['id']}"
+    row = s.execute(select(UserAircraftRow).where(
+        UserAircraftRow.user_id == local_user_id, UserAircraftRow.nickname == tag,
+    )).scalars().first()
+    fields = {k: (bool(v) if k.startswith("is_") else v)
+              for k, v in prod_aircraft.items() if k in AIRCRAFT_FIELDS}
+    if row is None:
+        row = UserAircraftRow(user_id=local_user_id, nickname=tag, is_default=False, **fields)
+        s.add(row)
+    else:
+        for k, v in fields.items():
+            setattr(row, k, v)
+    s.flush()
+    return row.id
 
 
 def local_artifact_path(prod_path: str | None, packs_root: Path, local_user_id: str, flight_id: str) -> str:
@@ -414,6 +451,14 @@ def import_one(s, dump: dict, user_id: str, packs_root: Path, args) -> bool:
     staged.rename(local_dir)
     shutil.rmtree(staging)
 
+    if args.with_aircraft:
+        if dump.get("aircraft"):
+            ac = dump["aircraft"][0]
+            frow["aircraft_id"] = local_aircraft_id(s, ac, user_id)
+            print(f"  aircraft: {ac['icao_type']} fiki={bool(ac['is_fiki'])} ceiling={ac['ceiling_ft']}"
+                  f"{' (placeholder)' if ac.get('is_placeholder') else ''} → local {frow['aircraft_id']}")
+        else:
+            print("  aircraft: none on prod (graded as unknown)")
     s.add(FlightRow(**frow))
     s.flush()
     for prow in packs:
@@ -465,6 +510,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="show what would be copied, write nothing")
     ap.add_argument("--no-freeze", action="store_true",
                     help="keep every pack and let the local live tick run on the flight")
+    ap.add_argument("--with-aircraft", action="store_true",
+                    help="also copy the flight's aircraft (type, IFR/FIKI, speed, ceiling) "
+                         "and point the flight at it")
     ap.add_argument("--highlight-at", metavar="HH:MMZ",
                     help="patch the highlight written by then onto the layer (finished flights)")
     a = ap.parse_args(argv)
