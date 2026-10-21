@@ -259,8 +259,12 @@ function dayTabLabel(day: number): string {
 }
 
 /** Say, next to the date readout, that a linked `fc.date` isn't what the map
- *  shows (#840); `null` clears it. Never a silent swap of dates. */
-function setLinkedDateNotice(linked: string | null, fallback: LinkedDateFallback | null = null): void {
+ *  shows (#840); `null` clears it. Never a silent swap of dates. `shown` is the
+ *  ISO date actually shown, computed from the same clock reading that resolved
+ *  the link so a UTC-midnight rollover in between can't mislabel it. */
+function setLinkedDateNotice(
+  linked: string | null, fallback: LinkedDateFallback | null = null, shown = '',
+): void {
   const el = $('forecast-date-notice');
   if (!el) return;
   if (!linked || !fallback) {
@@ -270,7 +274,7 @@ function setLinkedDateNotice(linked: string | null, fallback: LinkedDateFallback
   }
   const key = fallback === 'past' ? 'maps.linkedDatePast'
     : fallback === 'beyond' ? 'maps.linkedDateBeyond' : 'maps.linkedDateUnavailable';
-  el.textContent = t(key, { linked: isoDateLabel(linked), shown: dayDateLabel(fcDay) });
+  el.textContent = t(key, { linked: isoDateLabel(linked), shown: shown ? isoDateLabel(shown) : dayDateLabel(fcDay) });
   el.hidden = false;
 }
 
@@ -398,14 +402,17 @@ function fallbackDayGrid(): DayAvailability[] {
  *  or hour fell outside it — after a UTC-midnight rollover before the next
  *  model run, or from a hand-edited URL naming an hour the day doesn't offer. */
 async function refreshDayAvailability(): Promise<void> {
+  let gridIsFallback = false;
   try {
     const { days } = await fetchAvailableDays();
     // A 200 carrying an unexpected shape (stale cache, proxy, version skew) is
     // as useless as a failed request, and must be treated like one: reading
     // `.filter` off a non-array here would throw past this try/catch and take
     // the rest of page init — pickers, first map load — down with it.
-    dayGrid = Array.isArray(days) && days.length > 0 ? days : fallbackDayGrid();
+    gridIsFallback = !(Array.isArray(days) && days.length > 0);
+    dayGrid = gridIsFallback ? fallbackDayGrid() : days;
   } catch {
+    gridIsFallback = true;
     dayGrid = fallbackDayGrid();
   }
 
@@ -414,10 +421,14 @@ async function refreshDayAvailability(): Promise<void> {
 
   const avail = availableDaysSet();
   // A linked absolute date wins over `fc.day` (#840), resolved once.
-  const linked = fcLinkedDate ? resolveLinkedDate(fcLinkedDate, [...avail], new Date()) : null;
+  const now = new Date();
+  const linked = fcLinkedDate ? resolveLinkedDate(fcLinkedDate, [...avail], now) : null;
   if (linked) {
     fcDay = linked.day;
-    setLinkedDateNotice(fcLinkedDate, linked.fallback);
+    // The offline grid is a guess (D+0…D+3), so only "has passed" is a true
+    // claim against it; "beyond" / "not forecast yet" would be invented.
+    const fallback = gridIsFallback && linked.fallback !== 'past' ? null : linked.fallback;
+    setLinkedDateNotice(fcLinkedDate, fallback, forecastDayIsoDate(linked.day, now));
   }
   fcLinkedDate = '';
   if (!avail.has(fcDay)) {

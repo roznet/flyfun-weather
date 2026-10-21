@@ -53,6 +53,8 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// Set a closure to model a partial result (`not_found`) or a server failure.
     var bulkDeleteHandler: (@Sendable ([String]) throws -> BulkDeleteResponse)?
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
+    /// Unstubbed by default, so the forecast map VM falls back to its D+0…D+3 grid.
+    var forecastDaysResult: Result<ForecastDaysResponse, Error> = .failure(MockError.notStubbed("forecastDays"))
     var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
     /// Queued outcomes for successive `postLivePosition` calls (#761); empty
     /// means the call is not stubbed. Every request is recorded.
@@ -271,7 +273,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func airportWeather(icao: String, day: Int, hour: Int) async throws -> AirportWeatherResponse { throw MockError.notStubbed("airportWeather") }
     func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse { throw MockError.notStubbed("forecastMap") }
-    func forecastDays() async throws -> ForecastDaysResponse { throw MockError.notStubbed("forecastDays") }
+    func forecastDays() async throws -> ForecastDaysResponse { try forecastDaysResult.get() }
     func frequentAirports() async throws -> FrequentAirportsResponse { throw MockError.notStubbed("frequentAirports") }
     /// Stub for the historical map VM tests; records every (at, lead) requested.
     var historicalMapHandler: (@Sendable (Date, Int) throws -> HistoricalMapResponse)?

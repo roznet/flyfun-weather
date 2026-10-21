@@ -211,7 +211,7 @@ struct ForecastMapTests {
         let url = URL(string: "https://weather.flyfun.aero/maps.html?fc.day=3&fc.hour=15&fc.date=2026-10-24")!
         #expect(AppState.navigationTarget(for: url)
                 == .forecastMap(MapDeepLink(day: 3, hour: 15, date: "2026-10-24")))
-        for bad in ["2026-02-30", "2026-10-2", "tomorrow"] {
+        for bad in ["2026-02-30", "2026-10-2", "tomorrow", "+026-10-21"] {
             let u = URL(string: "https://weather.flyfun.aero/maps.html?fc.day=3&fc.date=\(bad)")!
             guard case .forecastMap(let dl) = AppState.navigationTarget(for: u) else {
                 Issue.record("expected forecastMap"); return
@@ -310,32 +310,60 @@ struct ForecastMapTests {
         #expect(pinned.selectedHour == 18)
     }
 
-    /// A linked `fc.date` wins over `fc.day` once the grid loads, and an
-    /// out-of-horizon one falls back visibly (#840). The mock grid fails, so the
-    /// VM uses its D+0…D+3 fallback.
+    /// A linked date wins over `fc.day` when the grid offers it; a date past the
+    /// last offered day falls back to it visibly (#840). Grid: D+0…D+4 fetched,
+    /// D+5/D+6 inside the horizon but not yet.
     @MainActor
     @Test func linkedDateWinsOverDayAndFallsBackVisibly() async throws {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        func iso(_ offset: Int) -> String {
-            let d = utc.date(byAdding: .day, value: offset, to: utc.startOfDay(for: Date()))!
-            let c = utc.dateComponents([.year, .month, .day], from: d)
-            return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
-        }
         let repo = MockBriefingRepository()
-        let inRange = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 0, date: iso(2)))
-        let beyond = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 1, date: iso(5)))
+        repo.forecastDaysResult = .success(ForecastDaysResponse(
+            days: (0...6).map { d in
+                ForecastDay(day: d, date: "", available: d <= 4,
+                            hours: [6, 12, 18], models: ["ecmwf", "gfs", "icon"])
+            },
+            maxDay: 6))
+        let inRange = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 0, date: Self.isoDay(2)))
+        let beyond = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 1, date: Self.isoDay(9)))
         let noDate = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(day: 1))
-        inRange.start(); beyond.start(); noDate.start()
-        for _ in 0..<200 where !(inRange.didLoadOnce && beyond.didLoadOnce && noDate.didLoadOnce) {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await Self.load(inRange, beyond, noDate)
         #expect(inRange.selectedDay == 2)
         #expect(inRange.linkedDateNotice == nil)
-        #expect(beyond.selectedDay == 3)
+        #expect(beyond.selectedDay == 4)
         #expect(beyond.linkedDateNotice?.contains("beyond the forecast range") == true)
         #expect(noDate.selectedDay == 1)
         #expect(noDate.linkedDateNotice == nil)
+    }
+
+    /// When the days request fails the VM guesses D+0…D+3, which says nothing
+    /// about the horizon: an in-horizon D+5 must not be called "beyond the
+    /// forecast range". A past date is still a true claim and keeps its notice.
+    @MainActor
+    @Test func fallbackGridOnlyClaimsPastDates() async throws {
+        let repo = MockBriefingRepository()  // forecastDays unstubbed → fallback grid
+        let farDay = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(date: Self.isoDay(5)))
+        let past = ForecastMapViewModel(repository: repo, deepLink: MapDeepLink(date: Self.isoDay(-2)))
+        try await Self.load(farDay, past)
+        #expect(farDay.selectedDay == 3)
+        #expect(farDay.linkedDateNotice == nil)
+        #expect(past.selectedDay == 0)
+        #expect(past.linkedDateNotice?.contains("has passed") == true)
+    }
+
+    /// `YYYY-MM-DD` of today (UTC) + `offset` days.
+    private static func isoDay(_ offset: Int) -> String {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let d = utc.date(byAdding: .day, value: offset, to: utc.startOfDay(for: Date()))!
+        let c = utc.dateComponents([.year, .month, .day], from: d)
+        return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+    }
+
+    @MainActor
+    private static func load(_ vms: ForecastMapViewModel...) async throws {
+        vms.forEach { $0.start() }
+        for _ in 0..<200 where !vms.allSatisfy(\.didLoadOnce) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     @MainActor

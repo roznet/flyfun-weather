@@ -91,6 +91,9 @@ final class ForecastMapViewModel {
     /// same (day, hour) don't both hit the network.
     private var inFlight: Set<SlotKey> = []
     private var loadTask: Task<Void, Never>?
+    /// The grid is `fallbackDays()` (the days request failed), so it says
+    /// nothing about which days really exist.
+    private var gridIsFallback = false
 
     /// `deepLink` is the parsed `/maps.html?fc.*` share state (`MapDeepLink`), or
     /// nil for a plain "open the map" (toolbar button). It's applied once at init;
@@ -130,6 +133,7 @@ final class ForecastMapViewModel {
         } catch {
             Self.logger.warning("forecast days failed: \(error.localizedDescription)")
             days = Self.fallbackDays()
+            gridIsFallback = true
         }
         // 2. A linked absolute date wins over `fc.day` (#840); then snap the
         //    selection into the real grid (deep link may be off-grid).
@@ -319,9 +323,10 @@ final class ForecastMapViewModel {
         return (nearest, .unavailable)
     }
 
-    /// UTC midnight of a strict `YYYY-MM-DD`, or nil (bad shape, or a date like
-    /// 2026-02-30 that the calendar would roll forward).
+    /// UTC midnight of a strict `YYYY-MM-DD`, or nil (bad shape, a sign such as
+    /// `+026`, or a date like 2026-02-30 that the calendar would roll forward).
     nonisolated static func isoDayStart(_ s: String) -> Date? {
+        guard s.allSatisfy({ $0 == "-" || ("0"..."9").contains($0) }) else { return nil }
         let parts = s.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
               let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else { return nil }
@@ -342,10 +347,16 @@ final class ForecastMapViewModel {
         guard let linked = linkedDate else { return }
         linkedDate = nil
         let offered = days.filter(\.available).map(\.day)
-        guard let resolved = Self.resolveLinkedDate(linked, offered: offered, today: Date()) else { return }
+        // One clock reading for both the resolution and the notice's label, so a
+        // UTC-midnight rollover in between can't mislabel the shown day.
+        let now = Date()
+        guard let resolved = Self.resolveLinkedDate(linked, offered: offered, today: now) else { return }
         selectedDay = resolved.day
-        if let fallback = resolved.fallback {
-            linkedDateNotice = Self.linkedDateNotice(linked: linked, shownDay: resolved.day, fallback: fallback)
+        // Against the fallback grid only "has passed" is a true claim; "beyond"
+        // or "not forecast yet" would be invented by the guessed D+0…D+3.
+        if let fallback = resolved.fallback, !gridIsFallback || fallback == .past {
+            linkedDateNotice = Self.linkedDateNotice(
+                linked: linked, shownDay: resolved.day, fallback: fallback, today: now)
         }
     }
 
