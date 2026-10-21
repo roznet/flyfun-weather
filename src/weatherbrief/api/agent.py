@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -41,11 +40,10 @@ from flyfun_common.db import current_user_id, get_db
 from weatherbrief.api import flights as flights_api
 from weatherbrief.api import maps as maps_api
 from weatherbrief.api import packs as packs_api
+from weatherbrief.api.deps import WEATHER_BASE_URL
 from weatherbrief.connectors import views
 from weatherbrief.db.models import FLIGHT_DESCRIPTION_MAX_LEN
 from weatherbrief.tasks.forecast_grid import MAX_FORECAST_DAY, day_coverage_note
-
-WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
 
 logger = logging.getLogger(__name__)
 

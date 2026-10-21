@@ -16,7 +16,6 @@ removed in #154. Use the optimistic-bias leaderboard endpoint instead
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -40,11 +39,6 @@ from weatherbrief.tasks.forecast_grid import (
 
 
 from weatherbrief.api.deps import airports_db as _airports_db
-
-
-def _forecast_hour(day: int, hour: int) -> datetime:
-    """Absolute UTC datetime for a relative ``(day, hour)`` selection."""
-    return forecast_hour_for(day, hour)
 
 
 @router.get("/forecast")
@@ -82,7 +76,7 @@ def get_forecast_map(
         if cached is not None:
             return cached
 
-    forecast_hour = _forecast_hour(day, hour)
+    forecast_hour = forecast_hour_for(day, hour)
     return get_forecast_map_data(db, forecast_hour, airports_db)
 
 
@@ -436,8 +430,9 @@ def area_outlook_response(db: Session, airports_db: str, **kwargs: Any) -> dict[
     """
     from weatherbrief.tasks.area_outlook import OutlookInputError, build_area_outlook
 
-    base_url = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
+    from weatherbrief.api.deps import WEATHER_BASE_URL
+
     try:
-        return build_area_outlook(db, airports_db, map_base_url=base_url, **kwargs)
+        return build_area_outlook(db, airports_db, map_base_url=WEATHER_BASE_URL, **kwargs)
     except OutlookInputError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

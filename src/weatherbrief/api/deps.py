@@ -11,10 +11,15 @@ must not hold a pooled DB connection while they wait (#719).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import Request
 from flyfun_common.db import SessionLocal, current_user_id
+
+# Public web-app origin for links the API hands to agents (briefing pages,
+# forecast-map deep links).
+WEATHER_BASE_URL = os.getenv("WEATHER_BASE_URL", "https://weather.flyfun.aero")
 
 
 def airports_db(request: Request) -> str:

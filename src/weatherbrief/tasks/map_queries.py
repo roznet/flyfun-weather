@@ -7,7 +7,10 @@ Two query types:
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import OrderedDict
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -28,6 +31,7 @@ from weatherbrief.analysis.alternate_requirement import (
 )
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
+    VerificationCacheRow,
     VerificationObservationRow,
     VerificationScoreRow,
 )
@@ -371,6 +375,11 @@ def watchlist_coords(airports_db_path: str) -> dict[str, tuple[float, float]]:
     return _get_coords(airports_db_path)
 
 
+def approach_classes(airports_db_path: str) -> dict[str, tuple[str | None, bool]]:
+    """ICAO → (most-precise approach_type, has_iap) for monitored airports."""
+    return _get_approach_classes(airports_db_path)
+
+
 def load_forecast_slot(
     db: Session,
     day: int,
@@ -387,6 +396,11 @@ def load_forecast_slot(
     compute live for the correct absolute date. ``hour`` must already be one
     of ``sample_hours_for_day(day)``. ``with_observations`` adds METAR/TAF on
     a live D-0 computation (the cached D-0 entry already carries them).
+
+    The result may be a freshly parsed cache blob or a live computation:
+    callers own it, but treat it as read-only so the contract holds if a
+    cache layer starts sharing objects. For many slots at once use
+    :func:`load_forecast_slots`, which bounds the live work.
     """
     from weatherbrief.tasks.cache_builder import (
         forecast_map_cache_key,
@@ -406,6 +420,132 @@ def load_forecast_slot(
     if with_observations and day == 0:
         data = enrich_with_observations(db, forecast_hour, data)
     return data
+
+
+# Parsed, caller-projected slot payloads keyed by (cache_key, computed_at):
+# a cache generation is immutable once written, so a hit is always valid.
+# Bounded so a process holds at most a weekend-and-a-bit of slots.
+_SLOT_LRU: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
+_SLOT_LRU_MAX = 20
+
+
+def load_forecast_slots(
+    db: Session,
+    targets: dict[Any, datetime],
+    airports_db_path: str,
+    *,
+    project: Callable[[dict[str, Any]], dict[str, Any]],
+    project_id: str,
+    max_live: int = 1,
+) -> tuple[dict[Any, dict[str, Any]], dict[str, list[Any]]]:
+    """Load many forecast-map slots with a fixed, small query budget.
+
+    ``targets`` maps a caller key to the absolute UTC forecast hour wanted.
+    Returns ``(data_by_key, status)``; ``status`` lists keys that were
+    ``stale`` (served from the previous model cycle's cache), computed
+    ``live``, or ``missing``.
+
+    Unlike calling :func:`load_forecast_slot` in a loop, this never fans out
+    into one full-map live query per slot:
+
+    * The cache is matched on the **absolute** forecast time each entry
+      holds (``computed_at`` date + its relative day, confirmed against the
+      payload's ``forecast_time``). After a UTC-midnight rollover yesterday's
+      ``day=4`` entry is today's D+3 and is still served; ``is_stale``'s date
+      rule would force the live path for every slot until the next cycle.
+    * An entry older than the newest snapshots is served anyway and reported
+      ``stale``: a previous model run beats a live recomputation.
+    * Only slots no cache entry covers (the newest horizon day after
+      midnight) are computed live, at most ``max_live`` of them; the rest
+      are ``missing``.
+
+    Queries: one indexed MAX(fetched_at), one cache-meta read over the grid's
+    keys (unique-key IN list), one blob read for the slots not already in the
+    in-process LRU, plus at most ``max_live`` live computations. Parsed blobs
+    go through ``project`` (keep only what the caller needs) and are cached
+    per ``project_id`` in a small LRU, so repeat calls in the same cache
+    generation read no blobs at all.
+    """
+    from weatherbrief.tasks.cache_builder import (
+        forecast_map_cache_key,
+        get_snapshot_max_time,
+    )
+    from weatherbrief.tasks.forecast_grid import day_hour_pairs
+
+    live_max = get_snapshot_max_time(db)
+    keys = [forecast_map_cache_key(d, h) for d, h in day_hour_pairs()]
+    meta = db.execute(
+        select(
+            VerificationCacheRow.cache_key,
+            VerificationCacheRow.computed_at,
+            VerificationCacheRow.source_max_time,
+        ).where(VerificationCacheRow.cache_key.in_(keys))
+    ).all()
+
+    # Absolute forecast hour → (cache_key, computed_at, stale). When two
+    # entries claim the same hour (mid-rollover), the newer computation wins.
+    by_time: dict[datetime, tuple[str, datetime, bool]] = {}
+    for key, computed_at, smax in meta:
+        if computed_at is None:
+            continue
+        _, _, d, h = key.split(":")
+        date = computed_at.astimezone(timezone.utc).date() + timedelta(days=int(d))
+        t = datetime(date.year, date.month, date.day, int(h), tzinfo=timezone.utc)
+        stale = smax is None or (live_max is not None and live_max > smax)
+        prev = by_time.get(t)
+        if prev is None or computed_at > prev[1]:
+            by_time[t] = (key, computed_at, stale)
+
+    out: dict[Any, dict[str, Any]] = {}
+    status: dict[str, list[Any]] = {"stale": [], "live": [], "missing": []}
+    uncovered: list[Any] = []
+    to_read: dict[str, list[tuple[Any, datetime, tuple[str, str, str], bool]]] = {}
+    for k, t in targets.items():
+        hit = by_time.get(t)
+        if hit is None:
+            uncovered.append(k)
+            continue
+        key, computed_at, stale = hit
+        lru_key = (project_id, key, computed_at.isoformat())
+        if lru_key in _SLOT_LRU:
+            _SLOT_LRU.move_to_end(lru_key)
+            out[k] = _SLOT_LRU[lru_key]
+            if stale:
+                status["stale"].append(k)
+            continue
+        to_read.setdefault(key, []).append((k, t, lru_key, stale))
+
+    if to_read:
+        blobs = dict(db.execute(
+            select(VerificationCacheRow.cache_key, VerificationCacheRow.data_json)
+            .where(VerificationCacheRow.cache_key.in_(list(to_read)))
+        ).all())
+        for key, wanted in to_read.items():
+            raw = blobs.get(key)
+            data = json.loads(raw) if raw else None
+            for k, t, lru_key, stale in wanted:
+                # The payload is the authority on which hour it holds.
+                if data is None or data.get("forecast_time") != t.isoformat():
+                    uncovered.append(k)
+                    continue
+                slim = project(data)
+                _SLOT_LRU[lru_key] = slim
+                _SLOT_LRU.move_to_end(lru_key)
+                while len(_SLOT_LRU) > _SLOT_LRU_MAX:
+                    _SLOT_LRU.popitem(last=False)
+                out[k] = slim
+                if stale:
+                    status["stale"].append(k)
+
+    for k in uncovered:
+        if len(status["live"]) < max_live:
+            data = get_forecast_map_data(db, targets[k], airports_db_path)
+            if data.get("airports"):
+                out[k] = project(data)
+                status["live"].append(k)
+                continue
+        status["missing"].append(k)
+    return out, status
 
 
 def enrich_with_observations(
