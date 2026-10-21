@@ -1817,7 +1817,8 @@ def build_cloud_diagnostics(
     Unit conversions applied:
     - Pressure (Pa) → altitude (ft) via standard atmosphere
     - Temperature (K) → °C
-    - Geopotential height (gpm) → ft (× 3.28084)
+    - Geopotential height (gpm) → ft (× 3.28084); a ceiling ≥ 9,999 gpm is
+      the 20,000 gpm "no ceiling" fill → None (#847)
     - Cloud cover (%) → kept as-is
 
     Returns None if the raw dict is empty.
@@ -1844,7 +1845,7 @@ def build_cloud_diagnostics(
         return round(val - 273.15, 1)
 
     def _gpm_to_ft(key: str) -> float | None:
-        val = raw.get(key)
+        val = _drop_no_ceiling_fill(raw.get(key))
         if val is None:
             return None
         return round(val * 3.28084)
@@ -1957,6 +1958,22 @@ def decode_icon_eu_cloud_diag_per_point(
 
 _M_TO_FT = 3.28084
 
+# One "no ceiling" cut-off for every model (#847). ICON's CEILING (~16 km,
+# not a single constant) and the NCEP HGT cloudCeiling (20,000 gpm) report
+# "no ceiling" as a large fill value, not missing; ECMWF's 9999 m is already
+# dropped in ``build_ecmwf_cloud_diagnostics``. Same rule and rationale: a
+# ceiling (or cloud base) at or above 9,999 m (~FL330) is operationally no
+# ceiling, so it reads as None. Convective TOPS are not cut: real towers
+# exceed it (#807).
+_NO_CEILING_FLOOR_M = 9999.0
+
+
+def _drop_no_ceiling_fill(val: float | None) -> float | None:
+    """Height in m / gpm, or None when it is the "no ceiling" fill (#847)."""
+    if val is None or val >= _NO_CEILING_FLOOR_M:
+        return None
+    return val
+
 
 def _opt_float(raw: dict[str, float], key: str) -> float | None:
     """Pass a raw GRIB value through as a float, or None when absent.
@@ -2037,7 +2054,8 @@ def build_icon_cloud_diagnostics(
     Cloud cover percentages (CLCL/CLCM/CLCH/CLCT) are 0–100 and kept as-is.
 
     Unit conversions applied:
-    - meters → feet (× 3.28084)
+    - meters → feet (× 3.28084); ceiling / convective base ≥ 9,999 m are the
+      ~16 km "no ceiling" fill → None (#847)
 
     Returns None if the raw dict is empty or no fields are populated.
     """
@@ -2049,8 +2067,10 @@ def build_icon_cloud_diagnostics(
     if not raw:
         return None
 
-    def _m_to_ft(key: str) -> float | None:
+    def _m_to_ft(key: str, *, no_ceiling_fill: bool = False) -> float | None:
         val = raw.get(key)
+        if no_ceiling_fill:
+            val = _drop_no_ceiling_fill(val)
         if val is None or val < 0:
             return None
         return round(val * _M_TO_FT)
@@ -2058,8 +2078,10 @@ def build_icon_cloud_diagnostics(
     def _pct(key: str) -> float | None:
         return raw.get(key)
 
-    ceiling_ft = _m_to_ft("ceiling_m")
-    convective_base_ft = _m_to_ft("convective_cloud_base_m")
+    # Ceiling and base drop the ~16 km "no ceiling" fill (#847); the
+    # convective top keeps genuine tower heights.
+    ceiling_ft = _m_to_ft("ceiling_m", no_ceiling_fill=True)
+    convective_base_ft = _m_to_ft("convective_cloud_base_m", no_ceiling_fill=True)
     convective_top_ft = _m_to_ft("convective_cloud_top_m")
     low_cover = _pct("low_cover_pct")
     mid_cover = _pct("mid_cover_pct")
@@ -3031,7 +3053,8 @@ def build_hrrr_cloud_diagnostics(
         return None
 
     def _gpm_to_ft(key: str) -> float | None:
-        val = raw.get(key)
+        # Shares the NCEP HGT cloudCeiling encoding with GFS (#847).
+        val = _drop_no_ceiling_fill(raw.get(key))
         if val is None:
             return None
         return round(val * _M_TO_FT)

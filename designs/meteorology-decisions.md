@@ -6406,3 +6406,41 @@ Open-Meteo's `MeteoFranceVariableDownloadable.swift` maps `cloud_cover_mid` to
 `HIGH_CLOUD_COVER` and `cloud_cover_high` to `MEDIUM_CLOUD_COVER` for the AROME
 domains. Not corrected here: the seamless endpoint can't tell AROME hours from
 ARPEGE hours, so a local swap would be wrong half the time.
+
+## 55. "No ceiling" is one cut-off for every model: ceiling ≥ 9,999 m → None (#847)
+
+ICON reports "no ceiling" in `CEILING` as a ~16 km fill (not one constant) and
+GFS / HRRR as 20,000 gpm in HGT `cloudCeiling`. The decoders passed these
+through as heights, so a cloud-free slot read ~52,500 ft (ICON) or ~65,500 ft
+(GFS) where ECMWF, which already dropped its 9,999 m sentinel, read None.
+
+**Decision.** `_drop_no_ceiling_fill` in `fetch/grib/decode.py` maps any ceiling
+at or above `_NO_CEILING_FLOOR_M = 9999.0` to None in the GFS, ICON and HRRR
+builders, same rule and rationale as ECMWF: a ceiling above ~FL330 is
+operationally no ceiling. A single cut-off, not per-model exact sentinels,
+because ICON's fill varies. The same cut-off applies to the cloud-base heights
+those builders own (ICON convective base, HRRR overall base). Convective
+**tops** are not cut: real towers exceed 9,999 m (#807).
+
+**Effect.**
+- Display: worst-of consensus took the min, so with ECMWF at None the ICON fill
+  surfaced on `area_outlook` (`52490ft` instead of `nocig`), the forecast map
+  and `get_airport_weather`.
+- Confidence (the larger one): ceiling agreement uses absolute tolerances, so a
+  fill against a real ceiling was `divergent` and dragged outlook confidence to
+  low. A slot where one model sees a ceiling and the others see none no longer
+  counts as ceiling divergence, so some labels rise from low to medium/high.
+  Whether that disagreement should itself lower confidence is a separate,
+  open question.
+- Grades and flight category: none (the fill and None both grade VFR on
+  ceiling; `reconcile_ceiling = min(sounding, nwp)` only let the fill win when
+  there was no real ceiling).
+
+**Gotchas.**
+- Fixes new decodes only. Stored snapshots and the map response cache keep old
+  values until the next cycle; the verification Parquet archive keeps the
+  fills, so offline ceiling-agreement analyses need the same ≥ 9,999 m filter.
+- The GFS / ICON / HRRR per-point decoders sample bilinearly, so a point whose
+  stencil mixes the fill with a real ceiling still gets a blended height that
+  can fall below the cut-off (ECMWF's seam path has a sentinel-aware blend for
+  this; the main per-point path relies on cfgrib NaN). Not addressed here.

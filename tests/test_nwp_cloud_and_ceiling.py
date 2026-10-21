@@ -705,3 +705,74 @@ class TestCondensateCloudEnvelope:
         assert result.nwp_cloud_layers[0].source == "nwp_condensate"
         assert result.icing_ogimet_nwp_zones, "default ogimet_nwp must grade HRRR"
         assert result.sfip_zones, "native SFIP must grade HRRR CLW"
+
+
+# --- "no ceiling" fill values (#847) ---
+
+
+class TestNoCeilingFillValues:
+    """ICON / GFS / HRRR report "no ceiling" as a large fill value; one
+    cut-off (≥ 9,999 m, same as ECMWF) maps it to None for every model."""
+
+    def test_icon_fill_value_is_no_ceiling(self):
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        diag = build_icon_cloud_diagnostics(
+            {"ceiling_m": 16004.0, "low_cover_pct": 0.0}
+        )
+        assert diag is not None
+        assert diag.ceiling_ft is None
+
+    def test_icon_real_ceiling_unchanged(self):
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        diag = build_icon_cloud_diagnostics({"ceiling_m": 3000.0})
+        assert diag.ceiling_ft == round(3000.0 * 3.28084)
+
+    @pytest.mark.parametrize("ceiling_m, expected_none", [
+        (9998.0, False), (9999.0, True), (10000.0, True),
+    ])
+    def test_icon_boundary(self, ceiling_m, expected_none):
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        diag = build_icon_cloud_diagnostics({"ceiling_m": ceiling_m, "low_cover_pct": 50.0})
+        assert (diag.ceiling_ft is None) is expected_none
+
+    def test_icon_convective_base_fill_dropped_top_kept(self):
+        """Base takes the cut-off; a genuine tower top above it survives (#807)."""
+        from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
+
+        diag = build_icon_cloud_diagnostics({
+            "convective_cloud_base_m": 16000.0,
+            "convective_cloud_top_m": 11000.0,
+        })
+        assert diag.convective_base_ft is None
+        assert diag.convective_top_ft == round(11000.0 * 3.28084)
+
+    def test_gfs_fill_value_is_no_ceiling(self):
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+
+        diag = build_cloud_diagnostics({"ceiling_gpm": 20000.0, "low_cover_pct": 0.0})
+        assert diag.ceiling_ft is None
+
+    def test_gfs_real_ceiling_unchanged(self):
+        from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
+
+        diag = build_cloud_diagnostics({"ceiling_gpm": 3000.0})
+        assert diag.ceiling_ft == round(3000.0 * 3.28084)
+
+    def test_hrrr_fill_values_are_none(self):
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics({
+            "ceiling_gpm": 20000.0, "cloud_base_gpm": 20000.0, "low_cover_pct": 0.0,
+        })
+        assert diag.ceiling_ft is None
+        assert diag.low.base_ft is None
+
+    def test_hrrr_real_values_unchanged(self):
+        from weatherbrief.fetch.grib.decode import build_hrrr_cloud_diagnostics
+
+        diag = build_hrrr_cloud_diagnostics({"ceiling_gpm": 3000.0, "cloud_base_gpm": 900.0})
+        assert diag.ceiling_ft == round(3000.0 * 3.28084)
+        assert diag.low.base_ft == round(900.0 * 3.28084)
