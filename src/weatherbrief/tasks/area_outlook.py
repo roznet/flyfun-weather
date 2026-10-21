@@ -9,7 +9,9 @@ a per-day trend.
 
 Posture: an attention-director, never a briefing. Grades are point forecasts
 at monitored airports at 3-hourly snapshots, nothing between airports, no
-en-route icing (snapshots carry no freezing level), no operational suitability.
+en-route icing grade, no operational suitability. IFR output shows the lowest
+freezing level per slot / sector / corridor for information only (#841): the
+snapshots carry it, but freezing level alone isn't icing.
 The output says so and points to ``create_flight`` for the slot the pilot
 picks.
 
@@ -62,6 +64,9 @@ DEFAULT_TAS_KT = 110.0
 # benign floor the map shows for small CAPE, so it does not cost a grade.
 _CONVECTIVE_MARGINAL = frozenset({"low"})
 _CONVECTIVE_NOGO = frozenset({"moderate", "high", "extreme"})
+
+# Freezing level shown when the surface itself is sub-zero (IFR only, #841).
+FZL_SURFACE = "SFC"
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +353,33 @@ def _alt_required(models: dict[str, dict], mode: Mode) -> bool | None:
     return sum(flags) * 2 > len(flags)
 
 
+def freezing_level(models: dict[str, dict], cons: dict[str, Any], mode: Mode) -> float | str | None:
+    """Freezing level for one airport-slot: ft MSL, ``FZL_SURFACE`` or None.
+
+    The number is the map consensus ``freezing_level_ft`` (each model's lowest
+    0 °C crossing of its sounding; worst = lowest, majority = median of the
+    winning pool), so it matches the map. When the 2 m temperature is already
+    at or below 0 °C (worst: coldest model; majority: median of all models)
+    the answer is the surface: the sounding's first crossing would then be the
+    bottom of a warm layer aloft, or missing when the whole column is sub-zero.
+    Informative only: it never touches a grade.
+    """
+    temps = [m["temperature_c"] for m in models.values() if m.get("temperature_c") is not None]
+    if temps and (min(temps) if mode == "worst" else statistics.median(temps)) <= 0:
+        return FZL_SURFACE
+    return cons.get("freezing_level_ft")
+
+
+def lowest_freezing_level(values: list[float | str | None]) -> int | str | None:
+    """Lowest of several :func:`freezing_level` values, ft rounded to 100."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    if FZL_SURFACE in vals:
+        return FZL_SURFACE
+    return int(round(min(vals), -2))
+
+
 def confidence(cons: dict[str, Any], n_models: int) -> str:
     """high / medium / low from model agreement and coverage.
 
@@ -501,6 +533,8 @@ def grade_airport(
         xwind_kt=xwind,
         phase=phase,
     )
+    if rules == "ifr":
+        out["fzl_ft"] = freezing_level(models, cons, mode)
     return out
 
 
@@ -558,6 +592,9 @@ def _summary(grades: list[dict[str, Any]]) -> dict[str, Any] | None:
         "max_gust_kt": round(max(gusts)) if gusts else None,
         "conf": max((g["conf"] for g in graded), key=lambda c: _CONF_RANK[c]),
     }
+    fzl = lowest_freezing_level([g.get("fzl_ft") for g in graded])
+    if fzl is not None:
+        out["min_fzl_ft"] = fzl
     if worst["grade"] != GO:
         out["worst"] = f"{worst['icao']} {worst['grade']}"
     return out
@@ -681,6 +718,11 @@ def compute_outlook(
             corridor = _summary([g[c.icao] for c in q.candidates if c.icao in g])
             if corridor:
                 row["corridor"] = corridor
+        # IFR: lowest freezing level over every airport in the slot, focus
+        # airports included (absent for VFR, where grades carry no fzl_ft).
+        fzl = lowest_freezing_level([x.get("fzl_ft") for x in g.values() if x.get("grade")])
+        if fzl is not None:
+            row["min_fzl_ft"] = fzl
         slots_out.append(row)
 
     # Compact per-airport rows for the area / corridor airports (the base,
@@ -946,8 +988,8 @@ NEXT_STEP = (
 )
 
 IFR_SCOPE_NOTE = (
-    "IFR grades are terminal only: map snapshots carry no freezing level or "
-    "cloud tops, so en-route icing is NOT assessed."
+    "IFR grades are terminal only. min_fzl_ft = lowest freezing level, ft MSL "
+    "('SFC' = sub-zero at the surface), for information: icing is NOT graded."
 )
 
 
@@ -955,10 +997,10 @@ IFR_SCOPE_NOTE = (
 PAST_SLOT_GRACE = timedelta(hours=1)
 
 # Bump when ``project_slot`` changes shape: it keys the slot LRU.
-SLOT_PROJECTION_VERSION = "v1"
+SLOT_PROJECTION_VERSION = "v2"  # v2 (#841): freezing level + 2 m temperature
 _CONSENSUS_KEEP = (
     "flight_category", "ceiling_ft", "visibility_m", "crosswind_kt",
-    "convective_risk", "wind_dir_deg", "wind_speed_kt",
+    "convective_risk", "wind_dir_deg", "wind_speed_kt", "freezing_level_ft",
 )
 
 
@@ -986,7 +1028,8 @@ def project_slot(data: dict[str, Any]) -> dict[str, Any]:
             "lon": a.get("lon"),
             "approach_type": a.get("approach_type"),
             "models": {
-                m: {"wind_gust_kt": v.get("wind_gust_kt"), "alt_required": v.get("alt_required")}
+                m: {"wind_gust_kt": v.get("wind_gust_kt"), "alt_required": v.get("alt_required"),
+                    "temperature_c": v.get("temperature_c")}
                 for m, v in (a.get("models") or {}).items()
             },
             "consensus": _slim_consensus(a.get("consensus")),

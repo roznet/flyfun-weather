@@ -37,3 +37,26 @@ def test_consensus_matches_shared_vector(case, mode):
     assert result["headwind_kt"] == pytest.approx(expected["headwind_kt"])
     assert result["convective_risk"] == expected["convective_risk"]
     assert result["cloud_cover_pct"] == pytest.approx(expected["cloud_cover_pct"])
+
+
+# Freezing level (#841): not in the retired client's vectors, so pinned here.
+def test_freezing_level_lowest_in_worst_median_of_pool_in_majority():
+    per_model = {
+        "gfs": {"flight_category": "VFR", "freezing_level_ft": 5000.0},
+        "icon": {"flight_category": "VFR", "freezing_level_ft": 7000.0},
+        "ecmwf": {"flight_category": "IFR", "freezing_level_ft": 2000.0},
+        "meteofrance": {"flight_category": "VFR", "freezing_level_ft": None},
+    }
+    assert consensus(per_model, mode="worst")["freezing_level_ft"] == 2000.0
+    # Majority: the VFR pool only, None ignored.
+    assert consensus(per_model, mode="majority")["freezing_level_ft"] == 6000.0
+
+
+def test_snap_to_dict_and_map_row_adapter_carry_freezing_level():
+    from types import SimpleNamespace
+
+    from weatherbrief.analysis.airport_consensus import snap_to_dict
+    from weatherbrief.tasks.map_queries import _row_to_snapshot_dict
+
+    row = SimpleNamespace(model="gfs", freezing_level_ft=4321.0)
+    assert snap_to_dict(_row_to_snapshot_dict(row))["freezing_level_ft"] == 4321.0

@@ -150,7 +150,7 @@ mcp = FastMCP(
         "slot you recommend, keep the "
         "confidence labels (divergent models = low confidence, never average it "
         "away), and never call it a briefing: it is airport point forecasts only "
-        "(IFR: terminal only, no en-route icing). Once the pilot picks a slot, "
+        "(IFR: terminal only; freezing level shown, icing not graded). Once the pilot picks a slot, "
         "create_flight for the full briefing.\n\n"
         "Briefing generation takes ~2 minutes. If get_briefing returns "
         "status='processing', tell the user and check again shortly.\n\n"
@@ -890,7 +890,8 @@ def area_outlook(
     - trend: per day, improving / deteriorating / steady.
     - slots: per slot, the base (or departure/destination) row plus per-sector
       (N/E/S/W from base) or corridor summaries: counts, worst airport, lowest
-      ceiling, max gust. Use sectors to say which direction is good or bad.
+      ceiling, max gust; IFR adds min_fzl_ft, the lowest freezing level per
+      slot / sector / corridor. Use sectors to say which direction is good or bad.
     - pairs / round_trip (when a destination is known): same-day out-and-back
       slot pairs, and days that only work one way.
     - airports: one compact row per airport per slot (see 'legend').
@@ -906,8 +907,8 @@ def area_outlook(
     monitored and a nearby one stands in ('unrepresentative' if > 20 nm).
 
     This is NOT a briefing: point forecasts at monitored airports, nothing
-    between them, no operational checks; IFR grades are terminal only (no
-    en-route icing). When the pilot picks a slot, call create_flight with
+    between them, no operational checks; IFR grades are terminal only and the
+    freezing level is information, not an icing grade. When the pilot picks a slot, call create_flight with
     that departure time for the full briefing.
     """
     try:

@@ -26,13 +26,14 @@ SUMMER_NOON = datetime(2026, 6, 20, 12, tzinfo=timezone.utc)
 
 
 def _model(cat="VFR", ceiling=4000.0, vis=20000.0, wind=8.0, wdir=240.0, gust=15.0,
-           xwind=5.0, risk="none", alt=False):
+           xwind=5.0, risk="none", alt=False, fzl=6000.0, temp=12.0):
     return {
         "flight_category": cat, "ceiling_ft": ceiling, "visibility_m": vis,
         "wind_speed_kt": wind, "wind_dir_deg": wdir, "wind_gust_kt": gust,
         "crosswind_kt": xwind, "headwind_kt": 5.0, "cape_jkg": 10.0,
         "cloud_cover_pct": 50.0, "convective_risk": risk,
         "alt_required": {"faa": alt, "easa": alt},
+        "freezing_level_ft": fzl, "temperature_c": temp,
     }
 
 
@@ -286,6 +287,101 @@ def test_weekend_payload_stays_compact():
            "legend": ao.LEGEND, "note": ao.NOTE, "next_step": ao.NEXT_STEP}
     size = len(json.dumps(out, separators=(",", ":")))
     assert size < 16_000, size  # ~4 chars/token
+
+
+def test_ifr_weekend_payload_with_freezing_level_stays_compact():
+    coords = dict(COORDS)
+    for i in range(16):
+        coords[f"ZQ{i:02d}"] = (51.0 + 0.6 * ((i % 4) - 1.5) / 1.5, 0.8 * ((i // 4) - 1.5) / 1.5)
+    slots = [(d, h) for d in (0, 1) for h in (6, 9, 12, 15, 18)]
+    q = ao.OutlookQuery(mode="radius", rules="ifr", consensus="worst", minima=ao.minima_for("ifr"),
+                        slots=slots, base=ao.Place(*BASE), radius_nm=60,
+                        destination=ao.Place("ZZDE", *COORDS["ZZDE"]))
+    q.candidates = ao.select_radius(q.base, 60, coords, {"ZZBA", "ZZDE"})
+    entries = []
+    for icao, (lat, lon) in coords.items():
+        e = _entry("ZZBA", approach="ILS", wind=14.0, gust=24.0, fzl=3150.0)
+        e.update(icao=icao, lat=lat, lon=lon)
+        entries.append(e)
+    data = {s: _slot(entries) for s in slots}
+    out = {"query": ao.describe_query(q),
+           **ao.compute_outlook(q, data, _times(slots), map_base_url="https://weather.flyfun.aero"),
+           "legend": ao.LEGEND, "note": ao.NOTE + " " + ao.IFR_SCOPE_NOTE, "next_step": ao.NEXT_STEP}
+    assert out["slots"][0]["min_fzl_ft"] == 3200
+    size = len(json.dumps(out, separators=(",", ":")))
+    assert size < 16_000, size
+
+
+# ---------------------------------------------------------------------------
+# Freezing level (#841): IFR, informative only
+# ---------------------------------------------------------------------------
+
+
+def test_ifr_freezing_level_follows_map_consensus_and_never_grades():
+    models = {"gfs": _model(fzl=5000.0), "icon": _model(fzl=3000.0), "ecmwf": _model(fzl=7000.0)}
+    e = _entry("ZZBA", models=models, approach="ILS")
+    worst = _grade(e, rules="ifr", mode="worst")
+    assert worst["fzl_ft"] == 3000.0 == e["consensus"]["freezing_level_ft"]
+    assert _grade(e, rules="ifr", mode="majority")["fzl_ft"] == 5000.0
+    low = {m: _model(fzl=500.0) for m in models}
+    assert _grade(_entry("ZZBA", models=low, approach="ILS"), rules="ifr")["grade"] == worst["grade"]
+    # VFR rows carry no freezing level.
+    assert "fzl_ft" not in _grade(e, rules="vfr")
+
+
+def test_freezing_level_reads_surface_when_sub_zero_at_2m():
+    # A sub-zero surface under a warm layer: the sounding's first crossing is
+    # the warm-layer base (4000 ft), but it is freezing at the surface.
+    models = {"gfs": _model(temp=-2.0, fzl=4000.0), "icon": _model(temp=3.0),
+              "ecmwf": _model(temp=4.0, fzl=None)}
+    e = _entry("ZZBA", models=models, approach="ILS")
+    assert _grade(e, rules="ifr", mode="worst")["fzl_ft"] == ao.FZL_SURFACE
+    # Majority: median 2 m temperature is +3 °C → the consensus number.
+    assert _grade(e, rules="ifr", mode="majority")["fzl_ft"] == e["consensus_majority"]["freezing_level_ft"]
+    # Whole column sub-zero: no crossing at all, still the surface.
+    cold = {m: _model(temp=-5.0, fzl=None) for m in models}
+    assert _grade(_entry("ZZBA", models=cold, approach="ILS"), rules="ifr")["fzl_ft"] == ao.FZL_SURFACE
+
+
+def test_lowest_freezing_level():
+    assert ao.lowest_freezing_level([None, None]) is None
+    assert ao.lowest_freezing_level([4120.0, None, 3260.0]) == 3300
+    assert ao.lowest_freezing_level([4120.0, ao.FZL_SURFACE]) == ao.FZL_SURFACE
+
+
+def test_ifr_outlook_shows_min_freezing_level_per_slot_sector_and_corridor():
+    slots = [(0, 9)]
+    entries = [_entry(i, approach="ILS") for i in COORDS if i != "ZZNO"]
+    entries.append(_entry("ZZNO", approach="ILS", fzl=2400.0))
+    q = _radius_query(slots)
+    q.rules = "ifr"
+    q.minima = ao.minima_for("ifr")
+    row = ao.compute_outlook(q, {(0, 9): _slot(entries)}, _times(slots))["slots"][0]
+    assert row["min_fzl_ft"] == 2400
+    assert row["sectors"]["N"]["min_fzl_ft"] == 2400
+    assert row["sectors"]["S"]["min_fzl_ft"] == 6000
+
+    rq = ao.OutlookQuery(mode="route", rules="ifr", consensus="worst", minima=ao.minima_for("ifr"),
+                         slots=slots, departure=ao.Place(*BASE),
+                         destination=ao.Place("ZZDE", *COORDS["ZZDE"]),
+                         corridor_nm=20, route_points=[COORDS["ZZBA"], COORDS["ZZDE"]])
+    rq.candidates = ao.select_corridor(rq.route_points, 20, COORDS, {"ZZBA", "ZZDE"})
+    entries = [_entry(i, approach="ILS") for i in COORDS if i != "ZZMI"]
+    entries.append(_entry("ZZMI", approach="ILS", temp=-1.0))
+    row = ao.compute_outlook(rq, {(0, 9): _slot(entries)}, _times(slots))["slots"][0]
+    assert row["corridor"]["min_fzl_ft"] == ao.FZL_SURFACE == row["min_fzl_ft"]
+
+
+def test_vfr_outlook_has_no_freezing_level():
+    slots = [(0, 9)]
+    out = ao.compute_outlook(_radius_query(slots), {(0, 9): _slot([_entry(i) for i in COORDS])},
+                             _times(slots))
+    assert "min_fzl_ft" not in json.dumps(out)
+
+
+def test_ifr_note_no_longer_claims_snapshots_lack_freezing_level():
+    assert "no freezing level" not in ao.IFR_SCOPE_NOTE
+    assert "min_fzl_ft" in ao.IFR_SCOPE_NOTE and "NOT graded" in ao.IFR_SCOPE_NOTE
 
 
 # ---------------------------------------------------------------------------
@@ -646,8 +742,8 @@ def test_payload_time_mismatch_is_not_trusted(slot_db):
 
 
 def test_projection_keeps_grading_identical():
-    models = {"gfs": _model(), "icon": _model(cat="MVFR", ceiling=1800.0, gust=28.0),
-              "ecmwf": _model(cat="IFR", ceiling=900.0, alt=True)}
+    models = {"gfs": _model(), "icon": _model(cat="MVFR", ceiling=1800.0, gust=28.0, fzl=3200.0),
+              "ecmwf": _model(cat="IFR", ceiling=900.0, alt=True, temp=-1.0)}
     full = _entry("ZZBA", models=models, approach="ILS")
     slim = ao.project_slot(_slot([full]))["airports"][0]
     for rules in ("vfr", "ifr"):

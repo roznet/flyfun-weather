@@ -70,8 +70,9 @@ mode is the **user's advisory aggregation preference** (`majority` app-default, 
 `worst`. One canonical rule per numeric field:
 - **flight category** — `worst` mode → `FlightCategory.worst(...)`; `majority`
   mode → modal category, worst as tiebreak.
-- **numeric fields** (ceiling, visibility, wind speed, crosswind, headwind, CAPE)
-  — `worst` mode → least-favourable across all models (min ceiling/vis, max
+- **numeric fields** (ceiling, visibility, wind speed, crosswind, headwind, CAPE,
+  cloud cover, freezing level since #841)
+  — `worst` mode → least-favourable across all models (min ceiling/vis/freezing level, max
   crosswind, min headwind); `majority` mode → **median within the winning-category
   pool** (so the numbers can't contradict the category badge).
 - **wind direction** — circular mean of the pool (never a min/max/median).

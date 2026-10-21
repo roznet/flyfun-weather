@@ -112,6 +112,9 @@ def snap_to_dict(
         "cape_jkg": snap.get("cape_jkg"),
         "convective_risk": snap.get("sounding_convective_risk") or "none",
         "temperature_c": snap.get("temperature_2m_c"),
+        # Lowest 0 °C crossing of the model sounding, ft MSL (#841). None when
+        # the model has no pressure levels or the column never crosses 0 °C.
+        "freezing_level_ft": snap.get("freezing_level_ft"),
         "flight_category": flight_category(snap, field_elevation_ft=field_elevation_ft),
     }
 
@@ -150,12 +153,12 @@ def agreement_label(level: str) -> str:
 # NOT here — it is not a more/less quantity and is always a circular mean.
 #   * lower is worse → ``min`` in worst mode (ceiling, visibility, headwind —
 #     a positive headwind helps, so the weakest headwind / strongest tailwind
-#     is the conservative pick).
+#     is the conservative pick — and freezing level, #841).
 #   * higher is worse → ``max`` in worst mode (wind speed, crosswind, CAPE).
-_WORST_IS_MIN = frozenset({"ceiling_ft", "visibility_m", "headwind_kt"})
+_WORST_IS_MIN = frozenset({"ceiling_ft", "visibility_m", "headwind_kt", "freezing_level_ft"})
 _NUMERIC_FIELDS = (
     "wind_speed_kt", "ceiling_ft", "cape_jkg", "visibility_m", "crosswind_kt",
-    "headwind_kt", "cloud_cover_pct",
+    "headwind_kt", "cloud_cover_pct", "freezing_level_ft",
 )
 
 # Convective-risk severity, low→high. Mirrors the client's ``RISK_ORDER`` in
@@ -207,7 +210,7 @@ def consensus(per_model: dict[str, dict], mode: str = "majority") -> dict[str, A
         majority's intent. Wind direction is a circular mean of the pool.
 
     The same rule applies uniformly to every numeric field (ceiling, visibility,
-    wind speed, crosswind, headwind, CAPE, cloud cover). Convective risk is an
+    wind speed, crosswind, headwind, CAPE, cloud cover, freezing level). Convective risk is an
     ordinal reduced over all models (worst rank / modal-with-worst-tiebreak),
     and wind direction is a circular mean — both special-cased. Returns
     per-variable agreement labels alongside consensus values.
