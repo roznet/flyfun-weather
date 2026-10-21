@@ -85,16 +85,16 @@ FZL_SURFACE = "SFC"
 class Minima:
     """PROMISING / UNLIKELY lines. Between the two is MARGINAL.
 
-    ``ceiling_go_ft`` / ``vis_go_m``: at or above → PROMISING on cloud/vis.
-    ``ceiling_floor_ft`` / ``vis_floor_m``: below → UNLIKELY.
-    Wind follows the Airport Wind advisory: below ``*_green`` PROMISING, at or
-    above ``*_red`` UNLIKELY, between MARGINAL. (Field names predate #851's
-    wording; the output keys in :func:`describe_query` use the new words.)
+    ``ceiling_promising_ft`` / ``vis_promising_m``: at or above → PROMISING on
+    cloud/vis. ``ceiling_floor_ft`` / ``vis_floor_m``: below → UNLIKELY.
+    Wind follows the Airport Wind advisory (its ``*_green`` / ``*_red`` config
+    names): below ``*_green`` PROMISING, at or above ``*_red`` UNLIKELY,
+    between MARGINAL.
     """
 
-    ceiling_go_ft: float
+    ceiling_promising_ft: float
     ceiling_floor_ft: float
-    vis_go_m: float
+    vis_promising_m: float
     vis_floor_m: float
     crosswind_green_kt: float
     crosswind_red_kt: float
@@ -115,9 +115,9 @@ def _airport_wind_defaults() -> dict[str, float]:
 # VFR preset (issue #836): PROMISING at 1500 ft / 5 km, UNLIKELY in IFR-category cloud
 # (< 1000 ft) or below 3 km. Presets for an indicative tool, not new
 # meteorology — see designs/meteorology-decisions.md (area outlook pointer).
-VFR_CEILING_GO_FT = 1500.0
+VFR_CEILING_PROMISING_FT = 1500.0
 VFR_CEILING_FLOOR_FT = 1000.0
-VFR_VIS_GO_M = 5000.0
+VFR_VIS_PROMISING_M = 5000.0
 VFR_VIS_FLOOR_M = 3000.0
 
 
@@ -139,9 +139,9 @@ def minima_for(
     """
     w = _airport_wind_defaults()
     m = Minima(
-        ceiling_go_ft=VFR_CEILING_GO_FT,
+        ceiling_promising_ft=VFR_CEILING_PROMISING_FT,
         ceiling_floor_ft=VFR_CEILING_FLOOR_FT,
-        vis_go_m=VFR_VIS_GO_M,
+        vis_promising_m=VFR_VIS_PROMISING_M,
         vis_floor_m=VFR_VIS_FLOOR_M,
         crosswind_green_kt=w.get("crosswind_green_kt", 15.0),
         crosswind_red_kt=w.get("crosswind_red_kt", 25.0),
@@ -149,10 +149,10 @@ def minima_for(
         gust_red_kt=w.get("gust_red_kt", 35.0),
     )
     if min_ceiling_ft is not None:
-        m = replace(m, ceiling_go_ft=min_ceiling_ft,
+        m = replace(m, ceiling_promising_ft=min_ceiling_ft,
                     ceiling_floor_ft=min(m.ceiling_floor_ft, min_ceiling_ft))
     if min_visibility_m is not None:
-        m = replace(m, vis_go_m=min_visibility_m,
+        m = replace(m, vis_promising_m=min_visibility_m,
                     vis_floor_m=min(m.vis_floor_m, min_visibility_m))
     if max_crosswind_kt is not None:
         m = replace(m, crosswind_red_kt=max_crosswind_kt,
@@ -415,13 +415,13 @@ def sun_phase(lat: float, lon: float, when: datetime) -> str:
     return "night"
 
 
-def _grade_band(value: float | None, go: float, floor: float) -> str:
+def _grade_band(value: float | None, promising: float, floor: float) -> str:
     """Higher-is-better value against PROMISING / UNLIKELY lines; None = not limiting."""
     if value is None:
         return PROMISING
     if value < floor:
         return UNLIKELY
-    if value < go:
+    if value < promising:
         return MARGINAL
     return PROMISING
 
@@ -443,8 +443,8 @@ def _grade_ifr_cloud(
 
     proxy = proxy_for_approach(approach_type, has_iap=has_iap or approach_type is not None)
     if proxy is None:
-        g = _worse(_grade_band(ceiling, m.ceiling_go_ft, m.ceiling_floor_ft),
-                   _grade_band(vis, m.vis_go_m, m.vis_floor_m))
+        g = _worse(_grade_band(ceiling, m.ceiling_promising_ft, m.ceiling_floor_ft),
+                   _grade_band(vis, m.vis_promising_m, m.vis_floor_m))
         return g, ("no approach: VFR minima" if g != PROMISING else None)
     if (ceiling is not None and ceiling < proxy.dh_hi) or (vis is not None and vis < proxy.vis_hi):
         return UNLIKELY, f"below est. {approach_type or 'approach'} minima"
@@ -490,8 +490,8 @@ def grade_airport(
         if why:
             reasons.append(why)
     else:
-        g_ceil = _grade_band(ceiling, minima.ceiling_go_ft, minima.ceiling_floor_ft)
-        g_vis = _grade_band(vis, minima.vis_go_m, minima.vis_floor_m)
+        g_ceil = _grade_band(ceiling, minima.ceiling_promising_ft, minima.ceiling_floor_ft)
+        g_vis = _grade_band(vis, minima.vis_promising_m, minima.vis_floor_m)
         grade = _worse(g_ceil, g_vis)
         if g_ceil != PROMISING:
             reasons.append(f"ceiling {int(ceiling)}ft")
@@ -1195,9 +1195,9 @@ def describe_query(q: OutlookQuery) -> dict[str, Any]:
         "rules": q.rules,
         "consensus": q.consensus,
         "minima": {
-            "ceiling_promising_ft": m.ceiling_go_ft,
+            "ceiling_promising_ft": m.ceiling_promising_ft,
             "ceiling_unlikely_below_ft": m.ceiling_floor_ft,
-            "vis_promising_m": m.vis_go_m, "vis_unlikely_below_m": m.vis_floor_m,
+            "vis_promising_m": m.vis_promising_m, "vis_unlikely_below_m": m.vis_floor_m,
             "crosswind_marginal_kt": m.crosswind_green_kt,
             "crosswind_unlikely_kt": m.crosswind_red_kt,
             "gust_marginal_kt": m.gust_green_kt, "gust_unlikely_kt": m.gust_red_kt,

@@ -137,7 +137,7 @@ def test_wind_thresholds_come_from_airport_wind_advisory():
 
 def test_overrides_move_lines_without_inverting_band():
     m = ao.minima_for("vfr", min_ceiling_ft=800, max_crosswind_kt=10)
-    assert m.ceiling_go_ft == 800 and m.ceiling_floor_ft == 800
+    assert m.ceiling_promising_ft == 800 and m.ceiling_floor_ft == 800
     assert m.crosswind_red_kt == 10 and m.crosswind_green_kt <= 10
     g = _grade(_entry("ZZBA", cat="IFR", ceiling=900.0), minima=m)
     assert g["grade"] == ao.PROMISING
