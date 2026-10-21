@@ -119,9 +119,11 @@ def test_start_update_refreshes_and_regenerates_the_highlight(db_session, dev_us
 
     pack_dir = tt._write_pack(tmp_path)
     tt._flight(db_session, dev_user, "zz-soon", tt.NOW + timedelta(hours=1), artifact_path=str(pack_dir))
-    db_session.commit()
+    # The test's own session, never committed: the engine is shared with
+    # later tests, and the fixture rolls back.
     monkeypatch.setattr("flyfun_common.db.SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(db_session, "commit", lambda: None)
     gate = {"phase": "before departure"}
     before = SimpleNamespace(glance=LiveGlance(
         as_of=tt.NOW, headline="h", comparison="as_briefed", lines=[],

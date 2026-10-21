@@ -428,8 +428,10 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
     landing). Entered and app landings win over it (`landing_event_at`); a
     manual landing wins over the app's but an app one counts after a manual
     clear.
-  - *The next flight closes the previous one* (#812): a fix on the ground at
-    a flight's departure is also recorded on the owner's previous flight
+  - *The next flight closes the previous one* (#812): the Start fix (the
+    first on the ground at a flight's departure; later apron fixes would only
+    repeat the lookup, which runs in the request) is also recorded on the
+    owner's previous flight
     (departed in the 24 h before, newest first) when it is at that flight's
     destination, that flight is in its live window and has no landing. It
     is that flight's fix from then on (projected on its route, its terrain),
