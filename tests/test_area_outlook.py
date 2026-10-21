@@ -449,7 +449,7 @@ def test_maps_endpoint_radius_with_substituted_base(api):
     assert body["query"]["base"] == {"icao": "ZZBA", "requested": "ZZXX", "substituted_nm": 1.4}
     assert body["slots"][0]["sectors"]
     assert "create_flight" in body["next_step"]
-    assert "/maps.html?tab=forecast&fc.day=1&fc.hour=12" in body["map_url"]
+    assert "/maps.html?tab=forecast&fc.day=1&fc.hour=12&fc.date=" in body["map_url"]
     # #851: framing leads the payload, and no go/no-go wording anywhere.
     assert next(iter(body)) == "guidance" and "not a go/no-go decision" in body["guidance"]
     text = json.dumps({k: v for k, v in body.items() if k != "guidance"})
@@ -544,11 +544,13 @@ def test_map_url_uses_forecast_tab_contract():
     from urllib.parse import parse_qs, urlparse
 
     q = _radius_query([(3, 15)], destination="ZZDE")
-    url = ao.map_url("https://wx.example/", q, (3, 15))
+    url = ao.map_url("https://wx.example/", q, (3, 15), datetime(2026, 6, 23, 15, tzinfo=timezone.utc))
     u = urlparse(url)
     assert u.path == "/maps.html"
     qs = {k: v[0] for k, v in parse_qs(u.query).items()}
     assert qs["tab"] == "forecast" and qs["fc.day"] == "3" and qs["fc.hour"] == "15"
+    # Absolute date alongside the relative day, so the link can't drift (#840).
+    assert qs["fc.date"] == "2026-06-23"
     assert qs["fc.apt"] == "ZZDE" and "fc.model" not in qs
     lat, lon, zoom = qs["fc.view"].split(",")
     # Destination (~75 nm) is outside the 60 nm radius: framed between the two.
@@ -568,8 +570,8 @@ def test_map_urls_on_best_slots_pairs_and_top_level():
     q = _radius_query(slots, destination="ZZDE")
     q.consensus = "majority"
     out = ao.compute_outlook(q, {s: good for s in slots}, _times(slots), map_base_url="https://wx.example")
-    assert "fc.day=0&fc.hour=9" in out["map_url"] and "fc.model=majority" in out["map_url"]
-    assert all("maps.html" in b["map_url"] for b in out["best_slots"])
+    assert "fc.day=0&fc.hour=9&fc.date=2026-06-20" in out["map_url"] and "fc.model=majority" in out["map_url"]
+    assert all("maps.html" in b["map_url"] and "fc.date=2026-06-20" in b["map_url"] for b in out["best_slots"])
     assert out["pairs"] and "fc.hour=9" in out["pairs"][0]["map_url"]
     # No base URL → no links (pure core stays usable without config).
     out = ao.compute_outlook(q, {s: good for s in slots}, _times(slots))

@@ -84,7 +84,7 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 
 ## Map links
 
-`map_url` (top level = best slot, plus each best slot and each pair's outbound slot) opens `/maps.html?tab=forecast&fc.day=&fc.hour=&fc.apt=&fc.view=` (`fc.model=majority` when asked): the forecast tab's URL contract (`web/ts/visualization/forecast-url.ts`), which the iOS app also opens natively. `fc.view` frames the radius (widened to include a destination outside it), or the route's bounding box plus the corridor, for a ~700 px map (zoom 4..10); `fc.apt` opens the destination's (else the base's) summary card. Origin is `WEATHER_BASE_URL`, like the agent's briefing links. `fc.day` is **relative**, so a link opened on a later day shows a later date: the map has no absolute-date key yet.
+`map_url` (top level = best slot, plus each best slot and each pair's outbound slot) opens `/maps.html?tab=forecast&fc.day=&fc.hour=&fc.date=&fc.apt=&fc.view=` (`fc.model=majority` when asked): the forecast tab's URL contract (`web/ts/visualization/forecast-url.ts`), which the iOS app also opens natively. `fc.view` frames the radius (widened to include a destination outside it), or the route's bounding box plus the corridor, for a ~700 px map (zoom 4..10); `fc.apt` opens the destination's (else the base's) summary card. Origin is `WEATHER_BASE_URL`, like the agent's briefing links. `fc.date` is the slot's absolute UTC date and wins over the relative `fc.day` on web and iOS (#840), so a link opened a day later still shows the same date; outside the horizon by then (e.g. a past date) the map falls back to the nearest offered day and says so. `fc.day` stays for older app builds, which still drift.
 
 ## Output budget
 

@@ -19,6 +19,9 @@ export interface ForecastOverlaySlot {
   /** Models that have airport data for this day/hour (server-advertised). Used
    *  to decide whether the briefing's selected model can be drawn. */
   models: string[];
+  /** Absolute UTC date of `day` (`YYYY-MM-DD`) from the server grid; empty on
+   *  the offline fallback grid. Goes into the deep link as `fc.date` (#840). */
+  date?: string;
 }
 
 /** Relative (day, hour) in UTC for a departure ISO string, matching the forecast
@@ -60,7 +63,7 @@ export function resolveOverlaySlot(
   if (!entry) return null;
   const hour = nearestHour(entry.hours, rel.hour);
   if (hour == null) return null;
-  return { day: rel.day, hour, models: entry.models };
+  return { day: rel.day, hour, models: entry.models, date: entry.date };
 }
 
 /** Short UTC label for a forecast valid-time ISO string, e.g. "Wed 12Z". */
@@ -73,11 +76,14 @@ export function formatForecastTime(iso: string): string {
 
 /** Deep-link to the full forecast map seeded with the same slot/model/metric.
  *  `fc.model` is set only for a supported individual model (shared list);
- *  consensus/other models fall back to the full map's default. */
+ *  consensus/other models fall back to the full map's default. `fc.date` pins
+ *  the calendar date, so a page left open past midnight still links the
+ *  flight's day (`fc.day` stays for old clients). */
 export function forecastMapUrl(slot: ForecastOverlaySlot, model: string, metric: string): string {
   const p = new URLSearchParams();
   p.set('fc.day', String(slot.day));
   p.set('fc.hour', String(slot.hour));
+  if (slot.date) p.set('fc.date', slot.date);
   if (FORECAST_INDIVIDUAL_MODELS.includes(model)) p.set('fc.model', model);
   p.set('fc.metric', metric);
   return `maps.html?${p.toString()}`;

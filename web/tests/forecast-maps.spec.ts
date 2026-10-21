@@ -212,6 +212,45 @@ test.describe('Maps page', () => {
     await expect(icon).not.toHaveClass(/active/);
   });
 
+  // fc.date (#840): an absolute date wins over the relative fc.day, and a date
+  // the grid can't show falls back visibly, never silently.
+  test('a linked fc.date wins over fc.day and falls back visibly', async ({ page }) => {
+    const iso = (offset: number) => {
+      const now = new Date();
+      return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offset))
+        .toISOString().slice(0, 10);
+    };
+    const notice = page.locator('#forecast-date-notice');
+
+    // In range: the date decides the day, whatever fc.day says.
+    await page.goto(`/maps.html?fc.day=1&fc.hour=12&fc.date=${iso(3)}`);
+    await expect(page.locator('#day-picker .btn-toggle[data-day="3"]')).toHaveClass(/active/);
+    await expect(notice).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get('fc.day')).toBe('3');
+    expect(new URL(page.url()).searchParams.get('fc.date')).toBe(iso(3));
+
+    // Past: today, said so; the URL follows what is shown.
+    await page.goto(`/maps.html?fc.day=2&fc.hour=12&fc.date=${iso(-2)}`);
+    await expect(page.locator('#day-picker .btn-toggle[data-day="0"]')).toHaveClass(/active/);
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('has passed');
+    await expect.poll(() => new URL(page.url()).searchParams.get('fc.date')).toBe(iso(0));
+
+    // Beyond the horizon: the last offered day, said so. Picking a day clears it.
+    await page.goto(`/maps.html?fc.day=1&fc.hour=12&fc.date=${iso(9)}`);
+    await expect(page.locator('#day-picker .btn-toggle[data-day="6"]')).toHaveClass(/active/);
+    await expect(notice).toContainText('beyond the forecast range');
+    await page.click('#day-picker .btn-toggle[data-day="2"]');
+    await expect(notice).toBeHidden();
+    expect(new URL(page.url()).searchParams.get('fc.date')).toBe(iso(2));
+  });
+
+  test('a link without fc.date still follows fc.day', async ({ page }) => {
+    await page.goto('/maps.html?fc.day=2&fc.hour=12');
+    await expect(page.locator('#day-picker .btn-toggle[data-day="2"]')).toHaveClass(/active/);
+    await expect(page.locator('#forecast-date-notice')).toBeHidden();
+  });
+
   test('survives a 200 from /forecast/days carrying the wrong shape', async ({ page }) => {
     // Stale cache, a proxy, or version skew can return 200 with a body that has
     // no `days`. That must degrade to the offline fallback, not throw partway

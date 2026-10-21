@@ -796,7 +796,7 @@ def compute_outlook(
             "conf": ("high", "medium", "low")[sc[2]],
         }
         if map_base_url:
-            b["map_url"] = map_url(map_base_url, q, s)
+            b["map_url"] = map_url(map_base_url, q, s, valid_times[s])
         best.append(b)
 
     # Trend over daylight only: VFR labels every airport NIGHT after dark, so
@@ -835,12 +835,13 @@ def compute_outlook(
         if map_base_url:
             by_label = {slot_label(valid_times[s]): s for s in available}
             for p in result["pairs"]:
-                p["map_url"] = map_url(map_base_url, q, by_label[p["out"]])
+                out = by_label[p["out"]]
+                p["map_url"] = map_url(map_base_url, q, out, valid_times[out])
 
     # The forecast map at the best slot (or the first one), framed on the query.
     if map_base_url and available:
         top = ranked[0] if best else available[0]
-        result["map_url"] = map_url(map_base_url, q, top)
+        result["map_url"] = map_url(map_base_url, q, top, valid_times[top])
     return result
 
 
@@ -957,17 +958,21 @@ def map_view(q: OutlookQuery) -> str:
     return f"{lat:.2f},{lon:.2f},{zoom}"
 
 
-def map_url(base_url: str, q: OutlookQuery, slot: tuple[int, int]) -> str:
-    """Forecast-map link at ``slot``, framed on the query, panel open.
+def map_url(base_url: str, q: OutlookQuery, slot: tuple[int, int], valid: datetime) -> str:
+    """Forecast-map link at ``slot`` (valid at ``valid``), framed on the query, panel open.
 
     Keys are the forecast tab's URL contract (``web/ts/visualization/
-    forecast-url.ts``, also read by the iOS app). ``fc.day`` is relative to
-    the day the link is opened, like every forecast-map link: a link opened
-    on a later day shows a later date.
+    forecast-url.ts``, also read by the iOS app). ``fc.date`` is the slot's
+    absolute UTC date and wins over ``fc.day`` (relative to the day the link
+    is opened), so a link opened a day later still shows the same date (#840);
+    ``fc.day`` stays for clients that predate ``fc.date``.
     """
     from urllib.parse import urlencode
 
-    params = {"tab": "forecast", "fc.day": slot[0], "fc.hour": slot[1]}
+    params = {
+        "tab": "forecast", "fc.day": slot[0], "fc.hour": slot[1],
+        "fc.date": valid.date().isoformat(),
+    }
     if q.consensus != "worst":
         params["fc.model"] = q.consensus
     focus = q.destination or q.base

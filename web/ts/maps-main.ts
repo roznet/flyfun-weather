@@ -26,7 +26,7 @@ import { makeChartProjection } from './visualization/chart-projection';
 import { ClimatologyTab } from './visualization/climatology-tab';
 import { NowTab } from './visualization/now-tab';
 import { HistoricalTab } from './visualization/historical-tab';
-import { FORECAST_URL_SCHEMA } from './visualization/forecast-url';
+import { FORECAST_URL_SCHEMA, forecastDayIsoDate, resolveLinkedDate, type LinkedDateFallback } from './visualization/forecast-url';
 import { HISTORICAL_URL_SCHEMA, type HistoricalUrlValues } from './visualization/historical-url';
 import { NOW_URL_SCHEMA, type NowUrlValues } from './visualization/now-url';
 import { SYNOPTIC_URL_SCHEMA, type SynopticUrlValues } from './visualization/synoptic-url';
@@ -98,6 +98,13 @@ let fcDay = 0;
 let fcHour = 12;
 let fcModel = 'worst';
 let fcMetric: ForecastMetric = 'flight_category';
+// `fc.date` (#840): written whenever `fc.day` is (day != 0), and also for
+// today once pinned (the link carried a date, or the view was shared), so a
+// shared "today" doesn't become tomorrow. A bare URL stays bare and means
+// "today, whenever opened".
+let fcDatePinned = false;
+// A linked `fc.date`, resolved against the day grid once it loads.
+let fcLinkedDate = '';
 
 // Number of forward hours the airport-profile panel requests beyond the
 // selected start hour. Mirror of `_DEFAULT_WINDOW_H` in the Python
@@ -159,6 +166,7 @@ function forecastUrlValues(): UrlValues<typeof FORECAST_URL_SCHEMA> {
   return {
     'fc.day':    fcDay,
     'fc.hour':   fcHour,
+    'fc.date':   fcDay !== 0 || fcDatePinned ? forecastDayIsoDate(fcDay, new Date()) : '',
     'fc.model':  fcModel,
     'fc.metric': fcMetric,
     'fc.apt':    airportPanelIcao ?? '',
@@ -224,7 +232,15 @@ function dayOffsetDate(day: number): Date {
 
 /** "Sat 13-Jun-26" — the full valid-date readout. */
 function dayDateLabel(day: number): string {
-  const target = dayOffsetDate(day);
+  return dateLabel(dayOffsetDate(day));
+}
+
+/** `dayDateLabel` for a `YYYY-MM-DD` (a linked `fc.date`, already validated). */
+function isoDateLabel(iso: string): string {
+  return dateLabel(new Date(`${iso}T00:00:00Z`));
+}
+
+function dateLabel(target: Date): string {
   const dow = _DAYS[target.getUTCDay()];
   const dd = String(target.getUTCDate()).padStart(2, '0');
   const mon = _MONTHS[target.getUTCMonth()];
@@ -240,6 +256,22 @@ function dayTabLabel(day: number): string {
   if (day === 0) return t('maps.today');
   const target = dayOffsetDate(day);
   return `${_DAYS[target.getUTCDay()]} ${target.getUTCDate()}`;
+}
+
+/** Say, next to the date readout, that a linked `fc.date` isn't what the map
+ *  shows (#840); `null` clears it. Never a silent swap of dates. */
+function setLinkedDateNotice(linked: string | null, fallback: LinkedDateFallback | null = null): void {
+  const el = $('forecast-date-notice');
+  if (!el) return;
+  if (!linked || !fallback) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  const key = fallback === 'past' ? 'maps.linkedDatePast'
+    : fallback === 'beyond' ? 'maps.linkedDateBeyond' : 'maps.linkedDateUnavailable';
+  el.textContent = t(key, { linked: isoDateLabel(linked), shown: dayDateLabel(fcDay) });
+  el.hidden = false;
 }
 
 function updateForecastDatetime(): void {
@@ -381,6 +413,13 @@ async function refreshDayAvailability(): Promise<void> {
   const beforeHour = fcHour;
 
   const avail = availableDaysSet();
+  // A linked absolute date wins over `fc.day` (#840), resolved once.
+  const linked = fcLinkedDate ? resolveLinkedDate(fcLinkedDate, [...avail], new Date()) : null;
+  if (linked) {
+    fcDay = linked.day;
+    setLinkedDateNotice(fcLinkedDate, linked.fallback);
+  }
+  fcLinkedDate = '';
   if (!avail.has(fcDay)) {
     fcDay = [...avail].sort((a, b) => b - a)[0] ?? 0;
   }
@@ -390,8 +429,9 @@ async function refreshDayAvailability(): Promise<void> {
 
   // Snapping on this hydration path must reach the address bar too, or a
   // shared link like ?fc.day=6&fc.hour=9 (09Z isn't offered on the far day)
-  // would keep showing an hour the view isn't actually displaying.
-  if (fcDay !== beforeDay || fcHour !== beforeHour) syncUrl();
+  // would keep showing an hour the view isn't actually displaying. A linked
+  // date always rewrites, so `fc.day` and `fc.date` agree with what's shown.
+  if (fcDay !== beforeDay || fcHour !== beforeHour || linked) syncUrl();
 }
 
 // --- Data loading ---
@@ -557,6 +597,7 @@ function wireForecastControls(): void {
     for (const b of dayGroup.querySelectorAll('button')) b.classList.remove('active');
     btn.classList.add('active');
     fcDay = d;
+    setLinkedDateNotice(null);
     // The hour and model buttons both depend on the day: the far day offers
     // three slots not five, and two models not three.
     syncPickersForDay();
@@ -1315,6 +1356,8 @@ async function main(): Promise<void> {
   if (currentTab === 'stats' && !user.is_admin) currentTab = 'forecast';
   fcDay       = init['fc.day'];
   fcHour      = init['fc.hour'];
+  fcLinkedDate = init['fc.date'];
+  fcDatePinned = fcLinkedDate !== '';
   fcModel     = init['fc.model'];
   fcMetric    = init['fc.metric'];
   urlInit = init;
@@ -1350,6 +1393,8 @@ async function main(): Promise<void> {
       // Flush current state to the URL before sharing — covers the
       // first-load case where the smart-default fcHour was assigned
       // but no control has been touched yet, so the URL is still bare.
+      // A shared view names its date, so it can't drift a day (#840).
+      fcDatePinned = true;
       syncUrl();
       const result = await shareCurrentUrl(document.title);
       // 'shared' = OS share sheet handled it (no flash, nothing was copied).

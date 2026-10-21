@@ -49,12 +49,12 @@ describe('nearestHour', () => {
 describe('resolveOverlaySlot', () => {
   it('snaps the departure hour to the day’s offered hours', () => {
     expect(resolveOverlaySlot('2026-07-15T14:00:00Z', DAYS, NOW))
-      .toEqual({ day: 0, hour: 15, models: ['gfs', 'icon', 'ecmwf'] });
+      .toEqual({ day: 0, hour: 15, models: ['gfs', 'icon', 'ecmwf'], date: '2026-07-15' });
   });
   it('honours the coarse hour grid on the far day (not the fine set)', () => {
     // A D+6 flight at 14Z must snap to 12 (the coarse grid), never 15.
     expect(resolveOverlaySlot('2026-07-21T14:00:00Z', DAYS, NOW))
-      .toEqual({ day: 6, hour: 12, models: ['gfs', 'ecmwf'] });
+      .toEqual({ day: 6, hour: 12, models: ['gfs', 'ecmwf'], date: '2026-07-21' });
   });
   it('returns null beyond the advertised horizon', () => {
     expect(resolveOverlaySlot('2026-07-22T12:00:00Z', DAYS, NOW)).toBeNull(); // day 7 absent
@@ -88,5 +88,9 @@ describe('forecastMapUrl', () => {
       .toBe('maps.html?fc.day=2&fc.hour=12&fc.metric=wind_speed_kt');
     expect(forecastMapUrl(slot, 'worst', 'flight_category'))
       .toBe('maps.html?fc.day=2&fc.hour=12&fc.metric=flight_category');
+  });
+  it('pins the calendar date as fc.date when the grid gave one (#840)', () => {
+    expect(forecastMapUrl({ ...slot, date: '2026-07-17' }, 'gfs', 'flight_category'))
+      .toBe('maps.html?fc.day=2&fc.hour=12&fc.date=2026-07-17&fc.model=gfs&fc.metric=flight_category');
   });
 });
