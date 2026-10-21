@@ -6251,21 +6251,22 @@ K-index/TT/Showalter become `None` where the ground is above 850 hPa.
 ## 52. Area outlook grades are presets for an indicative tool, not briefing meteorology (#836)
 
 The agent-only area outlook (`tasks/area_outlook.py`, `area-outlook.md`) grades
-monitored airports GO / MARGINAL / NO-GO from the forecast map. Its lines are
+monitored airports PROMISING / MARGINAL / UNLIKELY from the forecast map (renamed
+from GO / MARGINAL / NO-GO in #851: guidance, not a verdict; lines unchanged). Its lines are
 deliberately simple and live in one constants block there:
 
-- **VFR**: GO at ceiling ≥ 1500 ft and visibility ≥ 5 km; NO-GO below 1000 ft or
-  3 km; night (sun < −6°) NO-GO.
-- **IFR**: NO-GO below the approach class's worst-case DH/vis from
+- **VFR**: PROMISING at ceiling ≥ 1500 ft and visibility ≥ 5 km; UNLIKELY below
+  1000 ft or 3 km; night (sun < −6°) labelled NIGHT, ranked like UNLIKELY.
+- **IFR**: UNLIKELY below the approach class's worst-case DH/vis from
   `APPROACH_CLASS_PROXY`; MARGINAL when the FAA or EASA destination-alternate
   trigger fires; no approach → VFR lines.
 - **Wind**: the Airport Wind advisory's catalog defaults (15/25 kt crosswind,
   25/35 kt gust), read from the catalog, so they move together.
-- **Corridor**: a leg is blocked only when ≥ half the corridor airports are NO-GO.
+- **Corridor**: a leg is blocked only when ≥ half the corridor airports are UNLIKELY/NIGHT.
 
 These never feed an advisory or a briefing grade. Changing them changes only the
 outlook. Real-world validation needed: whether worst-of consensus with these
-lines is too pessimistic at D+3..D+6 (pilot feedback on "outlook said NO-GO,
+lines is too pessimistic at D+3..D+6 (pilot feedback on "outlook said UNLIKELY,
 briefing said fine").
 
 **Freezing level (#841, owner's choice: option (a)).** IFR output shows the

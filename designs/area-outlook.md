@@ -6,6 +6,10 @@
 
 Pilots ask agents "is Saturday or Sunday better for Le Touquet?" or "which direction is flyable from my base this weekend?". Creating a flight per candidate is slow and expensive, and `get_airport_weather` by hand is one slot per call, ~2 KB per airport, no spatial selection. The outlook does the selection, grading and aggregation on the server so the LLM only narrates. It is an **attention-director, never a briefing**: the output says so and points to `create_flight` for the slot the pilot picks.
 
+### Wording: guidance, not a verdict (#851)
+
+Grades are **PROMISING / MARGINAL / UNLIKELY**, plus **NIGHT** for VFR after civil twilight. The first shipped words were GO / MARGINAL / NO-GO, and agents relayed them as decisions ("the only slot FlyFun grades GO"). FlyFun informs judgement and this tool can't support a decision anyway (point forecasts, no en-route, no operational checks), so the words answer "is this slot worth briefing?". Rejected: "possible / difficult" (a 400 ft / 35 kt slot isn't "difficult", it isn't VFR weather) and GREEN / AMBER / RED (collides with the briefing's grades for the same slot). NIGHT is a rules matter, not weather, so it gets its own label but ranks, scores and pairs exactly like UNLIKELY. The framing is in three places so it survives whichever part an agent quotes: a top-level `guidance` string (first key of the response), the MCP / ChatGPT tool descriptions, and the MCP server instructions' outlook paragraph. Internal `Minima` field names (`ceiling_go_ft` …) kept the old words; the output keys don't.
+
 ## Structure
 
 ```
@@ -51,7 +55,7 @@ One call may want up to 35 slots (7 days × 5 hours). Looping `load_forecast_slo
 
 Reads the map's baked `consensus` / `consensus_majority` (same mode the caller picks), so category, ceiling, visibility and crosswind are exactly what the forecast map shows. Gust and alternate-required aren't in the consensus block: gust is max (worst) / median (majority) of the models; alternate-required is any / strict majority.
 
-| Axis | GO | MARGINAL | NO-GO |
+| Axis | PROMISING | MARGINAL | UNLIKELY |
 |---|---|---|---|
 | VFR ceiling | ≥ 1500 ft | 1000–1500 | < 1000 ft |
 | VFR visibility | ≥ 5000 m | 3000–5000 | < 3000 m |
@@ -59,22 +63,23 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 | Crosswind | < 15 kt | 15–25 | ≥ 25 kt |
 | Gust | < 25 kt | 25–35 | ≥ 35 kt |
 | Convective risk | none / marginal | low | moderate+ |
-| Sun (VFR) | day / civil twilight | | night (< −6°) |
+| Sun (VFR) | day / civil twilight | | night (< −6°) → labelled `NIGHT`, overriding the weather grade (weather reasons still listed) |
 
 - Wind lines are the **Airport Wind advisory's catalog defaults**, read from `AirportWindEvaluator.catalog_entry()`: one source of truth with the briefing. (The issue first said 20 kt from `approach_feasibility`; that is the approach-alignment limit, not the wind-severity one.)
 - IFR at an airport with no instrument approach uses the VFR cloud lines.
-- Overrides (`min_ceiling_ft`, `min_visibility_m`, `max_crosswind_kt`, `max_gust_kt`) move the GO line (cloud) or the NO-GO line (wind); the other line clamps so the band never inverts. Not stored in the profile.
+- Overrides (`min_ceiling_ft`, `min_visibility_m`, `max_crosswind_kt`, `max_gust_kt`) move the PROMISING line (cloud) or the UNLIKELY line (wind); the other line clamps so the band never inverts. Not stored in the profile.
+- `query.minima` keys: `ceiling_promising_ft`, `ceiling_unlikely_below_ft`, `vis_promising_m`, `vis_unlikely_below_m`, `crosswind_marginal_kt`, `crosswind_unlikely_kt`, `gust_marginal_kt`, `gust_unlikely_kt`.
 - **Freezing level (IFR only, informative, #841)**: each airport-slot gets `fzl_ft`, the map consensus `freezing_level_ft` (worst = lowest model, majority = median of the winning pool, so it matches the map), or `SFC` when the 2 m temperature is ≤ 0 °C (worst: coldest model, majority: median of all models). `SFC` wins because the snapshot value is the sounding's *first* 0 °C crossing going up: under a sub-zero surface that is the base of a warm layer aloft, or missing when the whole column is sub-zero. It never changes a grade (option (a) of #841, owner's choice); grading icing from a point freezing level was rejected (no cloud tops, no en-route data; the briefing's icing advisories do it properly).
 - **Confidence**: `low` if category or ceiling agreement is divergent (or < 2 models), `medium` if mixed or a two-model day (D+5/D+6), else `high`. Disagreement is reported, never averaged away.
 
 ## Aggregation
 
-- **Radius**: per slot, base row + per-sector `go/marg/nogo`, min ceiling, max gust, worst-confidence, and `worst` only when it isn't GO.
+- **Radius**: per slot, base row + per-sector `promising/marginal/unlikely` counts (plus `night: n` when any airport is NIGHT), min ceiling, max gust, worst-confidence, and `worst` only when it isn't PROMISING.
 - **IFR freezing level**: each sector / corridor summary carries `min_fzl_ft`, and each slot row a `min_fzl_ft` over every airport in it (focus airports included, since their compact rows don't print it). Rounded to 100 ft, `SFC` lowest. Not in the per-airport compact rows: it would add ~1 KB to a weekend for little gain. Absent for VFR.
-- **Route**: per slot, departure + destination rows + a corridor summary. For legs the corridor counts as one point: NO-GO only when **at least half** its airports are NO-GO, MARGINAL for a minority (an airport can be 20 nm off track and a pilot can avoid one field).
-- `best_slots` (top 3, never a NO-GO slot): radius ranks the base grade (the worse of base and destination when a destination is given, so a NO-GO destination never ranks) then the area GO fraction; route ranks the outbound leg.
-- `best_slots` confidence comes from the airports the pilot would use (base; base + destination; route ends + corridor), not the whole area: one divergent far-off field doesn't make a solid slot read "low". The area GO fraction only breaks ties.
-- `trend` per day: GO fraction (GO 1, MARGINAL 0.5) of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating, over **daylight grades only**. VFR makes every airport NO-GO at night, so dark 06Z/18Z slots in winter would otherwise read as a trend on a flat day.
+- **Route**: per slot, departure + destination rows + a corridor summary. For legs the corridor counts as one point: UNLIKELY only when **at least half** its airports are UNLIKELY or NIGHT, MARGINAL for a minority (an airport can be 20 nm off track and a pilot can avoid one field).
+- `best_slots` (top 3, never an UNLIKELY / NIGHT slot): radius ranks the base grade (the worse of base and destination when a destination is given, so an UNLIKELY destination never ranks) then `area_promising_score` (PROMISING 1, MARGINAL 0.5, else 0); route ranks the outbound leg.
+- `best_slots` confidence comes from the airports the pilot would use (base; base + destination; route ends + corridor), not the whole area: one divergent far-off field doesn't make a solid slot read "low". The area score only breaks ties.
+- `trend` per day: the same score of the first half vs last half of the day's slots, ±0.25 → improving / deteriorating, over **daylight grades only**. VFR makes every airport NIGHT after dark, so dark 06Z/18Z slots in winter would otherwise read as a trend on a flat day.
 - **Pairs** (destination known): leg time = great-circle / TAS (default 110 kt). Outbound graded at take-off slot for the departure end and corridor, at the slot nearest arrival for the landing end; return must start ≥ outbound slot + leg time, same day. `round_trip` per day: possible / outbound only / return only / no. Top 5 pairs, one per outbound slot.
 
 ## Map links
@@ -83,7 +88,7 @@ Reads the map's baked `consensus` / `consensus_majority` (same mode the caller p
 
 ## Output budget
 
-Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination, with map links) is ~14 KB (~3.5k tokens), asserted < 16 KB in `tests/test_area_outlook.py` for VFR and for IFR with the freezing level.
+Compact strings, not raw model output: one `GRADE CAT ceiling vis wind xw conf` row per airport per slot in `airports[].rows` (order = `slot_order`); focus airports appear only in `slots`. A worst-case weekend (16 airports, 2 days × 5 hours, destination, with map links) is ~17 KB (~4.2k tokens), asserted < 18 KB in `tests/test_area_outlook.py`; the IFR case with the freezing level is ~18.2 KB, asserted < 19 KB. #851's longer grade words (PROMISING vs GO in every row) and the `guidance` line cost ~2.3 KB over the original ~14.7 KB; kept, since short codes would get relayed verbatim.
 
 ## Gotchas
 

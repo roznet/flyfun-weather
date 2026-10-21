@@ -150,8 +150,11 @@ mcp = FastMCP(
         "slot you recommend, keep the "
         "confidence labels (divergent models = low confidence, never average it "
         "away), and never call it a briefing: it is airport point forecasts only "
-        "(IFR: terminal only; freezing level shown, icing not graded). Once the pilot picks a slot, "
-        "create_flight for the full briefing.\n\n"
+        "(IFR: terminal only; freezing level shown, icing not graded). Its grades are PROMISING / "
+        "MARGINAL / UNLIKELY (NIGHT for VFR after dark): say a slot 'looks "
+        "promising / marginal / unlikely', never turn them into go / no-go "
+        "verdicts, and recommend a full briefing before any flight. Once the "
+        "pilot picks a slot, create_flight for the full briefing.\n\n"
         "Briefing generation takes ~2 minutes. If get_briefing returns "
         "status='processing', tell the user and check again shortly.\n\n"
         "Flight day: get_briefing's 'live' block (null when the flight has none) "
@@ -864,16 +867,16 @@ def area_outlook(
         Field(description="'worst' (default, most restrictive model) or 'majority'", pattern="^(worst|majority)$"),
     ] = "worst",
     min_ceiling_ft: Annotated[
-        float | None, Field(description="Override the GO ceiling (VFR default 1500 ft)", ge=0),
+        float | None, Field(description="Override the PROMISING ceiling (VFR default 1500 ft)", ge=0),
     ] = None,
     min_visibility_m: Annotated[
-        float | None, Field(description="Override the GO visibility (VFR default 5000 m)", ge=0),
+        float | None, Field(description="Override the PROMISING visibility (VFR default 5000 m)", ge=0),
     ] = None,
     max_crosswind_kt: Annotated[
-        float | None, Field(description="Override the NO-GO crosswind (default 25 kt)", ge=0),
+        float | None, Field(description="Override the UNLIKELY crosswind (default 25 kt)", ge=0),
     ] = None,
     max_gust_kt: Annotated[
-        float | None, Field(description="Override the NO-GO gust (default 35 kt)", ge=0),
+        float | None, Field(description="Override the UNLIKELY gust (default 35 kt)", ge=0),
     ] = None,
     tas_kt: Annotated[
         float | None, Field(description="Cruise TAS for out-and-back leg time (default 110 kt)", gt=30, le=400),
@@ -884,7 +887,8 @@ def area_outlook(
     Use this BEFORE create_flight when the pilot asks when or where it is worth
     flying over the coming days. One call grades every monitored airport
     around a base (radius mode) or along a route corridor (route mode) at each
-    sample hour as GO / MARGINAL / NO-GO for VFR or IFR, then summarises:
+    sample hour as PROMISING / MARGINAL / UNLIKELY for VFR or IFR (NIGHT for
+    VFR after civil twilight: a rules matter, not weather), then summarises:
 
     - best_slots: the top slots, with grade and confidence. Lead with these.
     - trend: per day, improving / deteriorating / steady.
@@ -902,14 +906,16 @@ def area_outlook(
 
     Reading it: 'worst' consensus takes the most restrictive model; conf
     'low' means the models disagree (often frontal timing) — say so, never
-    average it away. D+5/D+6 have two models only. VFR night slots are NO-GO.
+    average it away. D+5/D+6 have two models only. VFR night slots are NIGHT.
     query.base/destination 'substituted_nm' means the airport is not
     monitored and a nearby one stands in ('unrepresentative' if > 20 nm).
 
-    This is NOT a briefing: point forecasts at monitored airports, nothing
-    between them, no operational checks; IFR grades are terminal only and the
-    freezing level is information, not an icing grade. When the pilot picks a slot, call create_flight with
-    that departure time for the full briefing.
+    Grades answer "is this slot worth briefing?", never "go / no-go": present
+    them as "looks promising / marginal / unlikely", never as a go / no-go
+    verdict. This is NOT a briefing: point forecasts at monitored airports,
+    nothing between them, no operational checks; IFR grades are terminal only
+    and the freezing level is information, not an icing grade. Always end by suggesting a full briefing
+    (create_flight with that departure time) for the slot the pilot likes.
     """
     try:
         with _get_client() as client:
@@ -1269,8 +1275,9 @@ def plan_local_flight(
         "which day and time look best and why, which directions or legs are "
         "worse, how confident the models are (say when they disagree), and for "
         "a trip whether a same-day out-and-back works. Make clear this is an "
-        "indicative outlook, not a briefing, and offer to create_flight for the "
-        "slot I pick."
+        "indicative outlook, not a briefing or a go / no-go decision (say a slot "
+        "looks promising / marginal / unlikely), and offer to create_flight for "
+        "the slot I pick."
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -114,11 +115,11 @@ def _grade(entry, rules="vfr", mode="worst", when=SUMMER_NOON, minima=None):
 
 
 def test_vfr_bands():
-    assert _grade(_entry("ZZBA"))["grade"] == ao.GO
+    assert _grade(_entry("ZZBA"))["grade"] == ao.PROMISING
     assert _grade(_entry("ZZBA", cat="MVFR", ceiling=1200.0))["grade"] == ao.MARGINAL
-    assert _grade(_entry("ZZBA", cat="IFR", ceiling=800.0))["grade"] == ao.NOGO
+    assert _grade(_entry("ZZBA", cat="IFR", ceiling=800.0))["grade"] == ao.UNLIKELY
     assert _grade(_entry("ZZBA", vis=4000.0, cat="MVFR"))["grade"] == ao.MARGINAL
-    assert _grade(_entry("ZZBA", vis=2000.0, cat="IFR"))["grade"] == ao.NOGO
+    assert _grade(_entry("ZZBA", vis=2000.0, cat="IFR"))["grade"] == ao.UNLIKELY
 
 
 def test_wind_thresholds_come_from_airport_wind_advisory():
@@ -130,8 +131,8 @@ def test_wind_thresholds_come_from_airport_wind_advisory():
     assert m.crosswind_red_kt == defaults["crosswind_red_kt"]
     assert m.gust_red_kt == defaults["gust_red_kt"]
     assert _grade(_entry("ZZBA", xwind=m.crosswind_green_kt))["grade"] == ao.MARGINAL
-    assert _grade(_entry("ZZBA", xwind=m.crosswind_red_kt))["grade"] == ao.NOGO
-    assert _grade(_entry("ZZBA", gust=m.gust_red_kt, wind=20.0))["grade"] == ao.NOGO
+    assert _grade(_entry("ZZBA", xwind=m.crosswind_red_kt))["grade"] == ao.UNLIKELY
+    assert _grade(_entry("ZZBA", gust=m.gust_red_kt, wind=20.0))["grade"] == ao.UNLIKELY
 
 
 def test_overrides_move_lines_without_inverting_band():
@@ -139,35 +140,38 @@ def test_overrides_move_lines_without_inverting_band():
     assert m.ceiling_go_ft == 800 and m.ceiling_floor_ft == 800
     assert m.crosswind_red_kt == 10 and m.crosswind_green_kt <= 10
     g = _grade(_entry("ZZBA", cat="IFR", ceiling=900.0), minima=m)
-    assert g["grade"] == ao.GO
+    assert g["grade"] == ao.PROMISING
 
 
 def test_convective_risk():
-    assert _grade(_entry("ZZBA", risk="marginal"))["grade"] == ao.GO
+    assert _grade(_entry("ZZBA", risk="marginal"))["grade"] == ao.PROMISING
     assert _grade(_entry("ZZBA", risk="low"))["grade"] == ao.MARGINAL
-    assert _grade(_entry("ZZBA", risk="moderate"))["grade"] == ao.NOGO
+    assert _grade(_entry("ZZBA", risk="moderate"))["grade"] == ao.UNLIKELY
 
 
-def test_vfr_night_is_nogo_ifr_only_flagged():
+def test_vfr_night_is_labelled_night_ifr_only_flagged():
     winter_dawn = datetime(2026, 12, 21, 6, tzinfo=timezone.utc)
     g = _grade(_entry("ZZBA"), when=winter_dawn)
-    assert g["grade"] == ao.NOGO and "night" in g["reasons"]
+    assert g["grade"] == ao.NIGHT and "night" in g["reasons"]
+    # NIGHT overrides the weather grade; the weather reasons still show.
+    g = _grade(_entry("ZZBA", cat="IFR", ceiling=800.0), when=winter_dawn)
+    assert g["grade"] == ao.NIGHT and "ceiling 800ft" in g["reasons"]
     g = _grade(_entry("ZZBA", approach="ILS"), rules="ifr", when=winter_dawn)
-    assert g["grade"] == ao.GO and g["phase"] == "night"
+    assert g["grade"] == ao.PROMISING and g["phase"] == "night"
 
 
 def test_ifr_uses_approach_minima_and_alternate_trigger():
-    # ILS: NO-GO below the class's worst-case DH (300 ft).
+    # ILS: UNLIKELY below the class's worst-case DH (300 ft).
     assert _grade(_entry("ZZBA", approach="ILS", cat="LIFR", ceiling=250.0, alt=True),
-                  rules="ifr")["grade"] == ao.NOGO
+                  rules="ifr")["grade"] == ao.UNLIKELY
     # Above minima but an alternate would be required → MARGINAL.
     assert _grade(_entry("ZZBA", approach="ILS", cat="IFR", ceiling=700.0, alt=True),
                   rules="ifr")["grade"] == ao.MARGINAL
     assert _grade(_entry("ZZBA", approach="ILS", cat="MVFR", ceiling=2500.0, alt=False),
-                  rules="ifr")["grade"] == ao.GO
+                  rules="ifr")["grade"] == ao.PROMISING
     # No approach → graded on the VFR lines.
     assert _grade(_entry("ZZBA", approach=None, cat="IFR", ceiling=800.0),
-                  rules="ifr")["grade"] == ao.NOGO
+                  rules="ifr")["grade"] == ao.UNLIKELY
 
 
 def test_confidence_from_agreement_and_model_count():
@@ -212,10 +216,10 @@ def test_radius_sectors_show_bad_west():
     entries = [_entry(i) for i in COORDS if i != "ZZWE"] + [_entry("ZZWE", cat="IFR", ceiling=600.0)]
     out = ao.compute_outlook(_radius_query(slots), {(0, 12): _slot(entries)}, _times(slots))
     sectors = out["slots"][0]["sectors"]
-    assert sectors["W"]["go/marg/nogo"] == "0/0/1"
-    assert sectors["E"]["go/marg/nogo"].endswith("/0")
-    assert sectors["W"]["worst"] == "ZZWE NO-GO"
-    assert "worst" not in sectors["E"]  # all GO: no worst line
+    assert sectors["W"]["promising/marginal/unlikely"] == "0/0/1"
+    assert sectors["E"]["promising/marginal/unlikely"].endswith("/0")
+    assert sectors["W"]["worst"] == "ZZWE UNLIKELY"
+    assert "worst" not in sectors["E"]  # all PROMISING: no worst line
 
 
 def test_best_slots_and_trend_improving():
@@ -244,7 +248,7 @@ def test_pairs_and_one_way_days():
     data = {(0, 9): good, (0, 15): good, (1, 9): good, (1, 15): base_bad}
     out = ao.compute_outlook(_radius_query(slots, destination="ZZDE"), data, _times(slots))
     assert out["round_trip"] == {"Sa": "possible", "Su": "outbound only"}
-    assert out["pairs"][0] == {"out": "Sa09", "back": "Sa15", "grade": ao.GO, "conf": "high"}
+    assert out["pairs"][0] == {"out": "Sa09", "back": "Sa15", "grade": ao.PROMISING, "conf": "high"}
     # Destination bad all day → no.
     data = {s: dest_bad for s in slots}
     out = ao.compute_outlook(_radius_query(slots, destination="ZZDE"), data, _times(slots))
@@ -260,7 +264,7 @@ def test_route_mode_corridor_blocks_leg():
     good = _slot([_entry(i) for i in COORDS])
     mid_bad = _slot([_entry(i) for i in COORDS if i != "ZZMI"] + [_entry("ZZMI", cat="IFR", ceiling=500.0)])
     out = ao.compute_outlook(q, {(0, 9): mid_bad, (0, 15): good}, _times(slots))
-    assert out["slots"][0]["corridor"]["worst"] == "ZZMI NO-GO"
+    assert out["slots"][0]["corridor"]["worst"] == "ZZMI UNLIKELY"
     assert out["best_slots"][0]["slot"] == "Sa15"
     # Outbound at 09 blocked by the corridor; at 15 there is no later return.
     assert out["round_trip"] == {"Sa": "outbound only"}
@@ -284,9 +288,12 @@ def test_weekend_payload_stays_compact():
     data = {s: _slot(entries) for s in slots}
     out = {"query": ao.describe_query(q),
            **ao.compute_outlook(q, data, _times(slots), map_base_url="https://weather.flyfun.aero"),
-           "legend": ao.LEGEND, "note": ao.NOTE, "next_step": ao.NEXT_STEP}
+           "legend": ao.LEGEND, "note": ao.NOTE, "next_step": ao.NEXT_STEP,
+           "guidance": ao.GUIDANCE}
     size = len(json.dumps(out, separators=(",", ":")))
-    assert size < 16_000, size  # ~4 chars/token
+    # ~4 chars/token. Was 16 KB; #851's longer grade words and the guidance
+    # line put the case at ~17 KB.
+    assert size < 18_000, size
 
 
 def test_ifr_weekend_payload_with_freezing_level_stays_compact():
@@ -306,10 +313,12 @@ def test_ifr_weekend_payload_with_freezing_level_stays_compact():
     data = {s: _slot(entries) for s in slots}
     out = {"query": ao.describe_query(q),
            **ao.compute_outlook(q, data, _times(slots), map_base_url="https://weather.flyfun.aero"),
-           "legend": ao.LEGEND, "note": ao.NOTE + " " + ao.IFR_SCOPE_NOTE, "next_step": ao.NEXT_STEP}
+           "legend": ao.LEGEND, "note": ao.NOTE + " " + ao.IFR_SCOPE_NOTE, "next_step": ao.NEXT_STEP,
+           "guidance": ao.GUIDANCE}
     assert out["slots"][0]["min_fzl_ft"] == 3200
     size = len(json.dumps(out, separators=(",", ":")))
-    assert size < 16_000, size
+    # Was 16 KB; #851's grade words and guidance line put it at ~18.2 KB.
+    assert size < 19_000, size
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +450,10 @@ def test_maps_endpoint_radius_with_substituted_base(api):
     assert body["slots"][0]["sectors"]
     assert "create_flight" in body["next_step"]
     assert "/maps.html?tab=forecast&fc.day=1&fc.hour=12" in body["map_url"]
+    # #851: framing leads the payload, and no go/no-go wording anywhere.
+    assert next(iter(body)) == "guidance" and "not a go/no-go decision" in body["guidance"]
+    text = json.dumps({k: v for k, v in body.items() if k != "guidance"})
+    assert not re.search(r"\bGO\b|NO-GO|NOGO|\bgo_|_go\b|nogo", text), text
     assert [t.hour for t in api.calls] == [12] and len(api.calls) == 1
 
 
@@ -461,11 +474,15 @@ def test_endpoint_rejects_bad_input(api):
     assert r.status_code == 400 and "Unknown airport" in r.json()["detail"]
 
 
-def test_corridor_minority_nogo_is_marginal_majority_blocks():
-    go, nogo = {"grade": ao.GO, "conf": "high"}, {"grade": ao.NOGO, "conf": "medium"}
-    assert ao.corridor_point([go, go, nogo]) == {"grade": ao.MARGINAL, "conf": "medium"}
-    assert ao.corridor_point([go, nogo])["grade"] == ao.NOGO
-    assert ao.corridor_point([go, go]) == {"grade": ao.GO, "conf": "high"}
+def test_corridor_minority_unlikely_is_marginal_majority_blocks():
+    ok, out = {"grade": ao.PROMISING, "conf": "high"}, {"grade": ao.UNLIKELY, "conf": "medium"}
+    assert ao.corridor_point([ok, ok, out]) == {"grade": ao.MARGINAL, "conf": "medium"}
+    assert ao.corridor_point([ok, out])["grade"] == ao.UNLIKELY
+    assert ao.corridor_point([ok, ok]) == {"grade": ao.PROMISING, "conf": "high"}
+    # NIGHT counts like UNLIKELY.
+    night = {"grade": ao.NIGHT, "conf": "high"}
+    assert ao.corridor_point([ok, ok, night])["grade"] == ao.MARGINAL
+    assert ao.corridor_point([ok, night])["grade"] == ao.UNLIKELY
     assert ao.corridor_point([]) is None
 
 
@@ -566,23 +583,24 @@ def test_map_urls_on_best_slots_pairs_and_top_level():
 
 def test_ifr_unknown_approach_class_uses_conservative_proxy_not_vfr():
     # approach_type None but an IAP exists: non-precision estimate (DH hi 900 ft),
-    # so 950 ft with an alternate required is MARGINAL, not VFR-line NO-GO.
+    # so 950 ft with an alternate required is MARGINAL, not VFR-line UNLIKELY.
     e = _entry("ZZBA", approach=None, cat="IFR", ceiling=950.0, alt=True)
-    assert _grade(e, rules="ifr")["grade"] == ao.NOGO  # no IAP → VFR lines
+    assert _grade(e, rules="ifr")["grade"] == ao.UNLIKELY  # no IAP → VFR lines
     g = ao.grade_airport(e, rules="ifr", mode="worst", minima=ao.minima_for("ifr"),
                          valid_time=SUMMER_NOON, has_iap=True)
     assert g["grade"] == ao.MARGINAL
     e = _entry("ZZBA", approach=None, cat="IFR", ceiling=800.0, alt=True)
     g = ao.grade_airport(e, rules="ifr", mode="worst", minima=ao.minima_for("ifr"),
                          valid_time=SUMMER_NOON, has_iap=True)
-    assert g["grade"] == ao.NOGO and "below est. approach minima" in g["reasons"]
+    assert g["grade"] == ao.UNLIKELY and "below est. approach minima" in g["reasons"]
 
 
 def test_describe_query_ifr_does_not_present_vfr_lines_as_minima():
     q = _radius_query([(0, 12)])
     q.rules = "ifr"
     m = ao.describe_query(q)["minima"]
-    assert "ceiling_go_ft" not in m and m["no_approach_airports_only"]["ceiling_go_ft"] == 1500
+    assert "ceiling_promising_ft" not in m
+    assert m["no_approach_airports_only"]["ceiling_promising_ft"] == 1500
 
 
 def test_select_corridor_over_cap_keeps_middle_of_route():
@@ -807,7 +825,7 @@ def test_slot_lru_holds_whole_grid_and_is_thread_safe():
 # ---------------------------------------------------------------------------
 
 
-def test_radius_best_slot_never_nogo_at_destination():
+def test_radius_best_slot_never_unlikely_at_destination():
     slots = [(0, 9), (0, 15)]
     good = _slot([_entry(i) for i in COORDS])
     # 09Z: base and area perfect, destination IFR. 15Z: everything MARGINAL-ish.
@@ -822,7 +840,7 @@ def test_radius_best_slot_never_nogo_at_destination():
     q = _radius_query(slots)
     out = ao.compute_outlook(q, {(0, 9): dest_bad, (0, 15): meh}, _times(slots))
     assert out["best_slots"][0]["slot"] == "Sa09"
-    # And a GO destination keeps 09Z on top in the trip case.
+    # And a PROMISING destination keeps 09Z on top in the trip case.
     q = _radius_query(slots, destination="ZZDE")
     out = ao.compute_outlook(q, {(0, 9): good, (0, 15): meh}, _times(slots))
     assert out["best_slots"][0]["slot"] == "Sa09"
@@ -843,12 +861,36 @@ def test_great_circle_matches_euro_aip_navpoint():
 
 
 def test_trend_ignores_night_slots():
-    # Winter: 06Z is night (every VFR grade NO-GO), 09..15Z identical GO.
+    # Winter: 06Z is night (every VFR grade NIGHT), 09..15Z identical PROMISING.
     slots = [(0, 6), (0, 9), (0, 12), (0, 15)]
     times = {s: datetime(2026, 12, 19, s[1], tzinfo=timezone.utc) for s in slots}
     good = _slot([_entry(i) for i in COORDS])
     out = ao.compute_outlook(_radius_query(slots), {s: good for s in slots}, times)
     assert out["trend"] == {"Sa": "steady"}
+
+
+def test_night_slot_ranks_like_unlikely():
+    # #851: a VFR night slot is labelled NIGHT and ranks, scores and pairs
+    # exactly like an UNLIKELY one. Winter 06Z is night everywhere.
+    slots = [(0, 6), (0, 12)]
+    times = {s: datetime(2026, 12, 19, s[1], tzinfo=timezone.utc) for s in slots}
+    good = _slot([_entry(i) for i in COORDS])
+    q = _radius_query(slots, destination="ZZDE")
+    out = ao.compute_outlook(q, {s: good for s in slots}, times)
+    dawn = out["slots"][0]
+    assert dawn["base"].startswith("NIGHT ")
+    assert all(sec["night"] and sec["promising/marginal/unlikely"] == "0/0/0"
+               for sec in dawn["sectors"].values())
+    assert "night" not in out["slots"][1]["sectors"]["E"]
+    assert [b["slot"] for b in out["best_slots"]] == ["Sa12"]
+    assert all(p["out"] != "Sa06" for p in out["pairs"])
+    # Same order an UNLIKELY dawn would give.
+    bad = _slot([_entry(i, cat="IFR", ceiling=600.0) for i in COORDS])
+    times_day = {s: datetime(2026, 6, 20, s[1], tzinfo=timezone.utc) for s in slots}
+    ref = ao.compute_outlook(q, {(0, 6): bad, (0, 12): good}, times_day)
+    assert [b["slot"] for b in ref["best_slots"]] == ["Sa12"]
+    assert ao._GRADE_RANK[ao.NIGHT] == ao._GRADE_RANK[ao.UNLIKELY]
+    assert ao._leg_ok({"grade": ao.NIGHT, "conf": "high"}) is None
 
 
 def test_best_slot_confidence_from_ends_not_far_area():

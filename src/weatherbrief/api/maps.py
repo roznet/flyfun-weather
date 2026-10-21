@@ -408,7 +408,7 @@ def get_area_outlook(
     db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(_airports_db),
 ):
-    """Indicative GO/MARGINAL/NO-GO outlook around a base or along a route (#836).
+    """Indicative PROMISING/MARGINAL/UNLIKELY outlook around a base or along a route (#836).
 
     See ``tasks/area_outlook.py``. Not a briefing: point forecasts at
     monitored airports from the forecast-map snapshots.

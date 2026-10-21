@@ -718,10 +718,10 @@ def get_area_outlook(
     db: Session = Depends(get_db, scope="function"),
     airports_db: str = Depends(maps_api._airports_db),
 ) -> dict[str, Any]:
-    """Indicative GO/MARGINAL/NO-GO outlook around a base or along a route:
-    sectors, best slots, trend, out-and-back pairs. Use before createFlight
-    for "when/where is it worth flying"; then createFlight the chosen slot.
-    Airport forecasts only, not a briefing.
+    """Indicative PROMISING/MARGINAL/UNLIKELY outlook (NIGHT: VFR after dark)
+    by base or route, for "when/where is it worth flying": best slots, trend,
+    sectors, pairs. Say "looks promising/marginal/unlikely", never go/no-go;
+    not a briefing or a decision. End by offering createFlight for the slot.
     """
     return maps_api.area_outlook_response(
         db, airports_db, days=days, base=base, radius_nm=radius_nm,
