@@ -5627,6 +5627,8 @@ def _close_previous_flight(db: Session, flight, fixes: list, now: datetime) -> b
             planned = _parse_target_time(briefing)
             track = RouteTrack.from_route(route)
         except (KeyError, TypeError, ValueError, ValidationError, OSError):
+            logger.warning("Live position: previous flight %s unreadable, not checked for a landing",
+                           row.id, exc_info=True)
             continue
         try:
             elevation = load_elevation_profile(pack_dir)

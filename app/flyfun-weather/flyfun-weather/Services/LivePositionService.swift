@@ -76,8 +76,10 @@ nonisolated enum LivePositionRules {
 ///
 /// Every source feeds it: Start Flight tracking (with each live poll and on
 /// return to the foreground), the landing auto-stop (with `landed`), and any
-/// one-shot fix during the flight's live window (the PIREP form, the map's
-/// locate button, the fix taken when the flight is opened). Owner only (the
+/// one-shot fix during the flight's live window once Start was pressed for it
+/// (the PIREP form, the map's locate button, the fix taken when the flight is
+/// opened; before Start they are not sent, #812: the server reads the first
+/// ground fix at the departure as Start). Owner only (the
 /// server refuses anyone else). A post that fails for want of data (or a
 /// server hiccup) keeps its fixes queued, and the next submit, live poll or
 /// reconnect resends them: in flight there is often no data, and a late fix

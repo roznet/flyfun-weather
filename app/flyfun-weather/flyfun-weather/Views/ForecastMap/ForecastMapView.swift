@@ -68,7 +68,12 @@ struct ForecastMapView: View {
         .task { viewModel.start() }
         .onChange(of: locator.located) {
             guard let c = locator.located else { return }
-            if let flightId = liveFlightId, let loc = locator.location,
+            // Sent only once Start was pressed for the flight (#812): the
+            // server reads the first fix on the ground at the departure as
+            // Start, so a locate on the apron must not stand in for it. The
+            // map still centres on the position either way.
+            if let flightId = liveFlightId, appState.livePositions?.hasConsent(flightId: flightId) == true,
+               let loc = locator.location,
                let fix = FlightTrackingService.fix(from: loc, alongNm: nil, crossTrackNm: nil) {
                 appState.livePositions?.submit([fix], flightId: flightId)
             }

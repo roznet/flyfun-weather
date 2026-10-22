@@ -388,7 +388,8 @@ meteorology-decisions §47.
 - **Gate** (`skip_reason`, all must hold): a tick, not a ↻ press; the flight's
   or its trip's `auto_refresh`, or Start pressed on the flight (#812: a fix on
   the ground at the departure, `FlightProgress.start_fix`, is consent to live
-  alerts for that flight); the bell not Mute (the flight's, else its
+  alerts for that flight, within its live window only, like every live push; the
+  app sends no fix before the Start press, so a weather check never grants it); the bell not Mute (the flight's, else its
   trip's, as for briefing pushes); `notify_live_alerts` (account pref, default
   **on**, the opt-out); `notify_push` on and ≥1 device. `notify_scope` /
   `notify_change_only` do **not** apply. The pref is a content toggle, not a
