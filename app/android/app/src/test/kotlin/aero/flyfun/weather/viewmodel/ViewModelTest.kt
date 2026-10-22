@@ -529,17 +529,92 @@ class ViewModelTest {
         assertFalse(vm.isRefreshing.value)
     }
 
+    @Test
+    fun briefingViewModel_sseDropWithTransientStatusFailureRetriesViaPolling() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // SSE stream drops and the first two status checks also fail (e.g. screen-off socket abort),
+        // then status succeeds once as active and finishes.
+        val repo = InterruptedSseRepository(
+            inner = FixtureBriefingRepository(),
+            activePollsAfterStreamDrop = 1,
+            statusFailuresAfterStreamDrop = 2,
+        )
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions()
+        testScope.advanceUntilIdle()
+
+        assertEquals(1, repo.refreshPackCalls)
+        assertNotNull(vm.selectedPack.value)
+        assertNull(vm.errorMessage.value)
+        assertFalse(vm.isRefreshing.value)
+    }
+
+    @Test
+    fun briefingViewModel_onForegroundResumeRecoversAfterBackgroundAbort() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // Simulate a long screen-off where all status polls fail while asleep, then
+        // network comes back when the user unlocks the phone (`onForegroundResume`).
+        val repo = InterruptedSseRepository(
+            inner = FixtureBriefingRepository(),
+            activePollsAfterStreamDrop = 0,
+            statusFailuresAfterStreamDrop = 10,
+            failLatestUntilUnlocked = true,
+        )
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        // Calling onForegroundResume before initial load is a no-op
+        vm.onForegroundResume()
+        testScope.advanceUntilIdle()
+        assertEquals(0, repo.refreshPackCalls)
+
+        vm.applyLaunchOptions()
+        testScope.advanceUntilIdle()
+        // While phone remained offline across all background retries, no pack could be loaded
+        assertNull(vm.selectedPack.value)
+        assertNotNull(vm.errorMessage.value)
+
+        // Phone wakes up and network is restored
+        repo.unlockNetworkWithFinishedPack()
+        vm.onForegroundResume()
+        testScope.advanceUntilIdle()
+
+        assertNotNull(vm.selectedPack.value)
+        assertNull(vm.errorMessage.value)
+        assertFalse(vm.isRefreshing.value)
+    }
+
     private class InterruptedSseRepository(
         private val inner: BriefingRepository,
         private var activePollsAfterStreamDrop: Int,
+        private var statusFailuresAfterStreamDrop: Int = 0,
+        private var failLatestUntilUnlocked: Boolean = false,
     ) : BriefingRepository by inner {
         var refreshPackCalls = 0
         private var streamStarted = false
         private var packReady = false
 
+        fun unlockNetworkWithFinishedPack() {
+            statusFailuresAfterStreamDrop = 0
+            failLatestUntilUnlocked = false
+            packReady = true
+        }
+
         override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse {
             if (!streamStarted) {
                 return ActiveRefreshResponse(active = false)
+            }
+            if (statusFailuresAfterStreamDrop > 0) {
+                statusFailuresAfterStreamDrop--
+                throw IOException("Software caused connection abort")
             }
             if (activePollsAfterStreamDrop > 0) {
                 activePollsAfterStreamDrop--
@@ -549,17 +624,19 @@ class ViewModelTest {
             return ActiveRefreshResponse(active = false)
         }
 
-        override suspend fun latestPack(flightId: String): PackMetaResponse =
-            if (packReady) inner.latestPack(flightId) else throw ApiError.NotFound
+        override suspend fun latestPack(flightId: String): PackMetaResponse {
+            if (failLatestUntilUnlocked) throw IOException("Software caused connection abort")
+            return if (packReady) inner.latestPack(flightId) else throw ApiError.NotFound
+        }
 
         override suspend fun listPacks(flightId: String): List<PackMetaResponse> =
-            if (packReady) inner.listPacks(flightId) else emptyList()
+            if (packReady && !failLatestUntilUnlocked) inner.listPacks(flightId) else emptyList()
 
         override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> =
             kotlinx.coroutines.flow.flow {
                 refreshPackCalls++
                 streamStarted = true
-                if (activePollsAfterStreamDrop == 0) {
+                if (activePollsAfterStreamDrop == 0 && statusFailuresAfterStreamDrop == 0 && !failLatestUntilUnlocked) {
                     packReady = true
                 }
                 emit(RefreshEvent(type = "progress", label = "Fetching weather", progress = 0.5))

@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -410,6 +411,8 @@ class BriefingViewModel(
         }
     }
 
+    private var resumeJob: Job? = null
+
     /**
      * Called when the briefing screen returns to `ON_RESUME` (e.g. after the phone screen
      * turned off during a refresh and Android aborted the background SSE socket, or after
@@ -418,8 +421,9 @@ class BriefingViewModel(
      */
     fun onForegroundResume() {
         val flightId = currentFlightId ?: _flight.value?.id ?: return
-        if (_isLoading.value || _isRefreshing.value) return
-        scope.launch {
+        if (!hasStartedInitialLoad || _isLoading.value || _isRefreshing.value) return
+        if (resumeJob?.isActive == true) return
+        resumeJob = scope.launch {
             val needsRecovery = _selectedPack.value == null ||
                 _errorMessage.value != null ||
                 _advisories.value == null ||
@@ -464,12 +468,9 @@ class BriefingViewModel(
         var provisionalPack: PackMetaResponse? = null
         var streamErrorEvent: String? = null
         var streamException: Throwable? = null
-        var sawStreamEvent = false
-        var handoffToPolling = false
         try {
             try {
                 repository.refreshPack(flightId, force = false, notifyEmail = false).collect { event ->
-                    sawStreamEvent = true
                     when (event.type) {
                         "progress", "stage" -> {
                             _refreshProgressText.value = refreshProgressLabel(
@@ -503,12 +504,18 @@ class BriefingViewModel(
                 streamException = e
             }
 
+            val finalPack = completedPack
+            val errorEvent = streamErrorEvent
+            val provisional = provisionalPack
             when {
-                completedPack != null -> {
-                    adoptNewPack(flightId, completedPack!!)
+                finalPack != null -> {
+                    adoptNewPack(flightId, finalPack)
                 }
-                streamErrorEvent != null -> {
-                    _errorMessage.value = streamErrorEvent
+                errorEvent != null -> {
+                    if (provisional != null) {
+                        adoptNewPack(flightId, provisional)
+                    }
+                    _errorMessage.value = errorEvent
                 }
                 else -> {
                     // If the SSE connection dropped while the server pipeline is still running in the
@@ -522,18 +529,18 @@ class BriefingViewModel(
                             active.detail,
                             active.progress,
                         )
-                        handoffToPolling = true
-                    } else if (statusResult.isFailure && sawStreamEvent && provisionalPack == null) {
-                        // The SSE stream was already underway when the device's socket was aborted
-                        // (e.g. screen turned off), so the immediate status check also failed;
-                        // hand off to polling which retries with backoff.
-                        handoffToPolling = true
+                        pollActiveRefreshLoop(flightId)
+                    } else if (statusResult.isFailure && provisional == null) {
+                        // A status-check failure means the server state is unknown (e.g. socket was
+                        // aborted when the screen turned off); hand off to polling which retries with
+                        // backoff before concluding the run was lost.
+                        pollActiveRefreshLoop(flightId)
                     } else {
                         // Server is no longer active — check whether the refresh already produced a pack.
                         val latest = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
                         val recoveredPack = when {
-                            latest != null && (streamException == null || latest.fetchTimestamp != _selectedPack.value?.fetchTimestamp) -> latest
-                            provisionalPack != null -> provisionalPack
+                            latest != null && latest.fetchTimestamp != _selectedPack.value?.fetchTimestamp -> latest
+                            provisional != null -> provisional
                             else -> null
                         }
                         if (recoveredPack != null) {
@@ -548,12 +555,7 @@ class BriefingViewModel(
             }
         } finally {
             _isRefreshing.value = false
-            if (!handoffToPolling) {
-                _refreshProgressText.value = null
-            }
-        }
-        if (handoffToPolling) {
-            pollActiveRefresh(flightId)
+            _refreshProgressText.value = null
         }
     }
 
@@ -583,46 +585,50 @@ class BriefingViewModel(
     private suspend fun pollActiveRefresh(flightId: String) {
         if (_isRefreshing.value) return
         _isRefreshing.value = true
-        var failure: String? = "Briefing is still generating. Tap refresh to check again."
-        var consecutiveStatusFailures = 0
         try {
-            for (attempt in 0 until ACTIVE_REFRESH_MAX_POLLS) {
-                val status = runSuspendCatching { repository.refreshStatus(flightId) }.getOrNull()
-                if (status == null) {
-                    consecutiveStatusFailures++
-                    if (consecutiveStatusFailures <= 3) {
-                        delay(ACTIVE_REFRESH_POLL_MS)
-                        continue
-                    }
-                    val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
-                    if (pack != null && pack.fetchTimestamp != _selectedPack.value?.fetchTimestamp) {
-                        adoptNewPack(flightId, pack)
-                        failure = null
-                    } else {
-                        failure = "Lost track of the briefing refresh. Tap refresh to try again."
-                    }
-                    break
-                }
-                consecutiveStatusFailures = 0
-                if (!status.active) {
-                    val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
-                    failure = if (pack != null) {
-                        // A run that produced nothing new leaves the reader where they are.
-                        if (pack.fetchTimestamp != _selectedPack.value?.fetchTimestamp) {
-                            adoptNewPack(flightId, pack)
-                        }
-                        null
-                    } else {
-                        "The briefing refresh did not produce a briefing. Tap refresh to try again."
-                    }
-                    break
-                }
-                _refreshProgressText.value = refreshProgressLabel(status.label ?: status.stage, status.detail, status.progress)
-                delay(ACTIVE_REFRESH_POLL_MS)
-            }
+            pollActiveRefreshLoop(flightId)
         } finally {
             _isRefreshing.value = false
             _refreshProgressText.value = null
+        }
+    }
+
+    private suspend fun pollActiveRefreshLoop(flightId: String) {
+        var failure: String? = "Briefing is still generating. Tap refresh to check again."
+        var consecutiveStatusFailures = 0
+        for (attempt in 0 until ACTIVE_REFRESH_MAX_POLLS) {
+            val status = runSuspendCatching { repository.refreshStatus(flightId) }.getOrNull()
+            if (status == null) {
+                consecutiveStatusFailures++
+                if (consecutiveStatusFailures <= 3) {
+                    delay(ACTIVE_REFRESH_POLL_MS)
+                    continue
+                }
+                val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
+                if (pack != null && pack.fetchTimestamp != _selectedPack.value?.fetchTimestamp) {
+                    adoptNewPack(flightId, pack)
+                    failure = null
+                } else {
+                    failure = "Lost track of the briefing refresh. Tap refresh to try again."
+                }
+                break
+            }
+            consecutiveStatusFailures = 0
+            if (!status.active) {
+                val pack = runSuspendCatching { repository.latestPack(flightId) }.getOrNull()
+                failure = if (pack != null) {
+                    // A run that produced nothing new leaves the reader where they are.
+                    if (pack.fetchTimestamp != _selectedPack.value?.fetchTimestamp) {
+                        adoptNewPack(flightId, pack)
+                    }
+                    null
+                } else {
+                    "The briefing refresh did not produce a briefing. Tap refresh to try again."
+                }
+                break
+            }
+            _refreshProgressText.value = refreshProgressLabel(status.label ?: status.stage, status.detail, status.progress)
+            delay(ACTIVE_REFRESH_POLL_MS)
         }
         if (failure != null && _selectedPack.value == null) {
             _errorMessage.value = failure
