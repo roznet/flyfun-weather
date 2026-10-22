@@ -13,6 +13,7 @@ import math
 import metpy.calc as mpcalc
 import numpy as np
 
+from weatherbrief.analysis.sounding.icing_common import ZONE_MAX_NATIVE_GAP_HPA
 from weatherbrief.analysis.sounding.prepare import PreparedProfile
 from weatherbrief.analysis.sounding.thermodynamics import M_TO_FT, _pressure_to_altitude_ft
 from weatherbrief.models import (
@@ -74,6 +75,12 @@ _RI_LIGHT = 1.0
 # the tiers without limit.
 _RI_DZ_REF_FT = 1000.0
 _RI_DZ_SCALE_MAX = 2.0
+
+# Pressure limit for CAT Ri layers across a gap that is NOT plain native
+# adjacency: grouping across a skipped level, and extending a layer's base
+# down to the level below. Native neighbours group up to
+# ``ZONE_MAX_NATIVE_GAP_HPA`` instead (#861).
+_CAT_MAX_SKIP_GAP_HPA = 100
 
 # Surface well-mixed (convective boundary) layer detection (#533).
 #
@@ -566,11 +573,13 @@ def _build_cat_layers(
     """Group adjacent low-Ri levels into CAT risk layers, split by severity.
 
     Qualifying levels (Ri below the LIGHT tier for their altitude) are merged
-    when both the pressure gap
-    (≤ 100 hPa) **and** the original-index gap (≤ *max_index_gap*) are
-    small enough.  The index-gap check prevents chaining scattered low-Ri
-    levels across large stable gaps that the pressure-only check misses
-    (e.g. GFS 25 hPa spacing where stable levels are simply skipped).
+    when they are neighbours in *derived_levels* (index gap 1) and within
+    ``ZONE_MAX_NATIVE_GAP_HPA``, so native table spacing never splits a layer
+    (#861). Across a skipped level the old rule stays: index gap
+    ≤ *max_index_gap* **and** pressure gap ≤ 100 hPa. The index-gap check
+    prevents chaining scattered low-Ri levels across large stable gaps that
+    the pressure-only check misses (e.g. GFS 25 hPa spacing where stable
+    levels are simply skipped).
 
     After adjacency grouping, each group is split into sub-layers by
     severity tier so that e.g. boundary-layer SEVERE shear doesn't paint
@@ -661,13 +670,14 @@ def _build_cat_layers(
         if idx > 0:
             below = derived_levels[idx - 1]
             thickness_ft = _layer_thickness_ft(below, lv)
-            # Same 100 hPa adjacency criterion as the grouping below: across a
-            # sparse column (missing levels), extending the base would paint a
+            # 100 hPa base-extension limit, deliberately NOT relaxed to the
+            # native cap with the grouping below (#861): across a sparse
+            # column (missing levels), extending the base would paint a
             # multi-thousand-ft band from one Ri of dubious meaning — keep the
             # old upper-bound-only behaviour there.
             if (
                 below.altitude_ft is not None
-                and (below.pressure_hpa - lv.pressure_hpa) <= 100
+                and (below.pressure_hpa - lv.pressure_hpa) <= _CAT_MAX_SKIP_GAP_HPA
             ):
                 base_lv = below
         risk = _classify_cat_risk(lv.richardson_number, thickness_ft)
@@ -678,16 +688,23 @@ def _build_cat_layers(
     if not cat_levels:
         return []
 
-    # Group adjacent levels (pressure gap <= 100 hPa AND index gap <= max_index_gap)
+    # Group adjacent levels. Neighbours in the model's own table merge up to
+    # the native sanity cap whatever their spacing (#861, as icing in #835):
+    # Open-Meteo's 13-level ECMWF table has 850 → 700 hPa as neighbours, and
+    # the old 100 hPa term split one shear layer there. Skipping up to
+    # *max_index_gap* - 1 levels keeps the old 100 hPa limit, so a coarse
+    # table does not newly bridge a level judged smooth.
     groups: list[list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]]] = []
     current: list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
     for item in cat_levels[1:]:
         prev_idx, prev_lv = current[-1][0], current[-1][2]
         this_idx, this_lv = item[0], item[2]
+        idx_gap = this_idx - prev_idx
+        dp = abs(prev_lv.pressure_hpa - this_lv.pressure_hpa)
         if (
-            (this_idx - prev_idx) <= max_index_gap
-            and abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= 100
+            (idx_gap == 1 and dp <= ZONE_MAX_NATIVE_GAP_HPA)
+            or (idx_gap <= max_index_gap and dp <= _CAT_MAX_SKIP_GAP_HPA)
         ):
             current.append(item)
         else:

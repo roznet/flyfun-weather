@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 
+from weatherbrief.analysis.sounding.icing_common import ZONE_MAX_NATIVE_GAP_HPA
 from weatherbrief.models import CATRiskLayer, CATRiskLevel, DerivedLevel
 
 # E-parameter thresholds
@@ -44,8 +45,6 @@ _HWS_SCALE = _MS_TO_KT * 185200.0  # (m/s per m) → kt per 100 nm   (= 360000)
 
 # Min zone half-thickness for visibility
 _MIN_ZONE_HALF_FT = 500
-# Max pressure gap for grouping
-_ZONE_MAX_PRESSURE_GAP_HPA = 100
 
 
 def _e_parameter(hws: float, vws: float) -> float:
@@ -93,8 +92,12 @@ def compute_e_shear_per_sounding(
     if len(levels) < 2:
         return []
 
-    # Compute VWS between adjacent levels and E parameter per level
-    e_levels: list[tuple[DerivedLevel, CATRiskLevel, float]] = []
+    # Compute VWS between adjacent levels and E parameter per level. Each
+    # risk level keeps its index in *levels*; *calm_idx* records the levels
+    # where E was computed and came out NONE, which is what splits a layer
+    # (#861). Levels skipped for missing data are in neither.
+    e_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]] = []
+    calm_idx: set[int] = set()
 
     for i in range(1, len(levels)):
         lv = levels[i]
@@ -128,11 +131,12 @@ def compute_e_shear_per_sounding(
 
         risk = _classify_e_risk(e_val)
         if risk == CATRiskLevel.NONE:
+            calm_idx.add(i)
             continue
 
-        e_levels.append((lv, risk, e_val))
+        e_levels.append((i, lv, risk, e_val))
 
-    return _group_e_shear_levels(e_levels)
+    return _group_e_shear_levels(e_levels, calm_idx)
 
 
 def compute_hws_between_points(
@@ -175,28 +179,49 @@ def compute_hws_between_points(
 
 
 def _group_e_shear_levels(
-    e_levels: list[tuple[DerivedLevel, CATRiskLevel, float]],
+    e_levels: list[tuple[int, DerivedLevel, CATRiskLevel, float]],
+    calm_idx: set[int],
 ) -> list[CATRiskLayer]:
     """Group adjacent E-Shear levels into risk layers, split by severity.
 
-    After adjacency grouping (pressure gap ≤ 100 hPa), each group is split
-    into sub-layers by severity tier so that each layer's risk accurately
-    reflects its altitude range.
+    *e_levels* carry their index in the sounding the caller iterated, and
+    *calm_idx* the indices where E was computed and came out NONE. Two risk
+    levels merge iff no calm level lies between them in the sounding, within
+    the ``ZONE_MAX_NATIVE_GAP_HPA`` sanity cap (#861, mirroring the icing
+    rule of #835). The model's level spacing is not a reason to split: on
+    Open-Meteo's 13-level ECMWF table 850 and 700 hPa are neighbours 150 hPa
+    apart, and the old fixed 100 hPa gap put a clear hole at FL080 inside one
+    shear layer. Conversely, on a dense table a measured calm level between
+    two risk levels now splits them even when they are close in pressure.
+
+    *Missing* levels bridge: a level skipped for no wind or no altitude (and
+    the level above it, whose shear needs it) is unknown, not calm, and
+    unknown must not read as a smooth gap inside a turbulence layer
+    (#391/#393). The cap bounds how far such a bridge can reach.
+
+    After adjacency grouping, each group is split into sub-layers by
+    severity tier so that each layer's risk accurately reflects its altitude
+    range.
     """
     if not e_levels:
         return []
 
-    groups: list[list[tuple[DerivedLevel, CATRiskLevel, float]]] = []
-    current: list[tuple[DerivedLevel, CATRiskLevel, float]] = [e_levels[0]]
+    def _adjacent(prev_i: int, prev_lv: DerivedLevel, this_i: int, this_lv: DerivedLevel) -> bool:
+        if any(j in calm_idx for j in range(prev_i + 1, this_i)):
+            return False
+        return abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= ZONE_MAX_NATIVE_GAP_HPA
 
-    for item in e_levels[1:]:
-        prev_lv = current[-1][0]
-        this_lv = item[0]
-        if abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= _ZONE_MAX_PRESSURE_GAP_HPA:
-            current.append(item)
+    groups: list[list[tuple[DerivedLevel, CATRiskLevel, float]]] = []
+    prev_i, first_lv, first_risk, first_e = e_levels[0]
+    current: list[tuple[DerivedLevel, CATRiskLevel, float]] = [(first_lv, first_risk, first_e)]
+
+    for this_i, lv, risk, e_val in e_levels[1:]:
+        if _adjacent(prev_i, current[-1][0], this_i, lv):
+            current.append((lv, risk, e_val))
         else:
             groups.append(current)
-            current = [item]
+            current = [(lv, risk, e_val)]
+        prev_i = this_i
     groups.append(current)
 
     # Split each adjacency group into sub-layers by severity tier
