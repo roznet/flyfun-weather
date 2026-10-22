@@ -49,6 +49,7 @@ SUBJECT = {
     "flight_category": r"LIFR|IFR|MVFR|ceiling|Decke|Wolkenuntergrenze|cloud|Wolk|overcast|OVC|BKN",
     "ifr_feasibility": r"LIFR|IFR|ceiling|Decke|minim|cloud|Wolk",
     "approach_feasibility": r"LIFR|IFR|ceiling|Decke|minim|approach|Anflug",
+    "departure_feasibility": r"LIFR|IFR|MVFR|ceiling|Decke|departure|Abflug|Z-?(flight|Flug)|pick-?up",
     "vfr_feasibility": r"VFR|IMC|VMC|cloud|Wolk|overcast|OVC|BKN|ceiling|Decke",
     "vmc_cruise": r"IMC|VMC|cloud|Wolk|overcast|OVC|BKN",
     "cloud_top": r"cloud|Wolk|tops|Obergrenze",

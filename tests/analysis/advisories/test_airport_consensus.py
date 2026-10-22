@@ -281,3 +281,44 @@ class TestAcrossAdvisories:
             )
             assert plain.aggregate_status == adv.aggregate_status
             assert plain.representative_model == adv.representative_model
+
+
+# --- the departure end (departure_feasibility, #829) -------------------------------
+
+class TestDepartureFeasibility:
+    """The departure card prints a ``dep`` clause only, so it is kept out of
+    ``AIRPORT_IDS`` (whose loops assert the arrival consensus) and checked here."""
+
+    IDS = {"flight_category", "departure_feasibility"}
+
+    def _run(self, dep, aggregation=AdvisoryAggregation.MAJORITY):
+        ctx = dataclasses.replace(
+            _ctx({m: VFR for m in MODELS}, dep=dep),
+            departure_approaches=AirportApproaches(
+                icao="EGTK", has_procedure_data=True, approaches=[], iso_country="CH",
+            ),
+        )
+        results = evaluate_all(ctx, enabled_ids=self.IDS, aggregation=aggregation)
+        return {r.advisory_id: r for r in results}
+
+    def test_split_departure_names_the_dissent_like_flight_category(self):
+        r = self._run({"ecmwf": IFR, "gfs": MVFR, "icon": IFR})
+        dep = r["departure_feasibility"]
+        assert dep.aggregate_status == AdvisoryStatus.AMBER
+        assert dep.airport_consensus == {"dep": IFR}
+        assert dep.aggregate_detail.startswith("Dep EGTK: IFR (gfs MVFR)")
+        assert "Dep EGTK: IFR (gfs MVFR)" in r["flight_category"].aggregate_detail
+        # gfs's own row still says what gfs forecast.
+        gfs = next(m for m in dep.per_model if m.model == "gfs")
+        assert gfs.detail.startswith("Dep EGTK: MVFR")
+
+    @pytest.mark.parametrize("aggregation", list(AdvisoryAggregation))
+    def test_statuses_do_not_depend_on_the_clause(self, aggregation):
+        r = self._run({"ecmwf": VFR, "gfs": MVFR, "icon": LIFR}, aggregation)
+        adv = r["departure_feasibility"]
+        stripped = [m.model_copy(update={"airport_clauses": []}) for m in adv.per_model]
+        plain = RouteAdvisoryResult.from_per_model(
+            adv.advisory_id, stripped, adv.parameters_used, aggregation=aggregation,
+        )
+        assert plain.aggregate_status == adv.aggregate_status
+        assert plain.representative_model == adv.representative_model

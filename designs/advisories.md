@@ -569,7 +569,8 @@ the value `flight_category` grades, so the two cards cannot disagree):
 
 **Never RED** (owner's call): local departure rules are not verified, and
 delaying is always an option. Unknown country (`iso_country=None`, now carried
-on `AirportApproaches`) is **not** exempt. VFR wins over the GB note: a VFR
+on `AirportApproaches`) is **not** exempt, and neither are the Crown
+dependencies (JE, GG, IM: own ISO codes, not added yet). VFR wins over the GB note: a VFR
 departure needs no IFR caveat. The detail follows the `Dep ICAO: CAT — ` clause
 head (#823), so the copy repeats neither the ICAO nor the category; the
 consensus swap then keeps the printed category right when models disagree.

@@ -60,7 +60,9 @@ ADVISORY_ID = "departure_feasibility"
 
 # Countries where an IFR departure from a field with no published procedures is
 # routine (UK: IFR outside controlled airspace). A module constant, not a user
-# param — extended as feedback arrives, never inferred.
+# param — extended as feedback arrives, never inferred. The Crown dependencies
+# (JE, GG, IM) have their own ISO codes and are deliberately not in it yet: they
+# grade AMBER like the continent, the conservative side.
 EXEMPT_COUNTRIES: frozenset[str] = frozenset({"GB"})
 
 
