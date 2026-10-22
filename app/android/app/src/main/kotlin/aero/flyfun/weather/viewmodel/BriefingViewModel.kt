@@ -461,6 +461,8 @@ class BriefingViewModel(
 
     private suspend fun refreshBriefingInternal(flightId: String) {
         if (_isRefreshing.value) return
+        // A resume check still between its status read and its poll would overlap this run.
+        resumeJob?.cancel()
         _isRefreshing.value = true
         _refreshProgressText.value = "Starting briefing refresh…"
         _errorMessage.value = null

@@ -64,6 +64,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -616,6 +617,23 @@ private val DISPLAY_TIME_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm", Locale.US)
 
 /**
+ * Interaction source for a read-only text field that reports a tap anywhere on the field.
+ */
+@Composable
+private fun rememberTapInteractionSource(onTap: () -> Unit): MutableInteractionSource {
+    val interactionSource = remember { MutableInteractionSource() }
+    val currentOnTap by rememberUpdatedState(onTap)
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Release) {
+                currentOnTap()
+            }
+        }
+    }
+    return interactionSource
+}
+
+/**
  * Read-only tappable field that opens a native Material 3 [DatePickerDialog] calendar widget.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -627,15 +645,7 @@ private fun NativeDatePickerField(
     modifier: Modifier = Modifier,
 ) {
     var showDialog by remember { mutableStateOf(false) }
-    val interactionSource = remember { MutableInteractionSource() }
-
-    LaunchedEffect(interactionSource) {
-        interactionSource.interactions.collect { interaction ->
-            if (interaction is PressInteraction.Release) {
-                showDialog = true
-            }
-        }
-    }
+    val interactionSource = rememberTapInteractionSource { showDialog = true }
 
     OutlinedTextField(
         value = date.format(DISPLAY_DATE_FORMATTER),
@@ -700,15 +710,7 @@ private fun NativeTimePickerField(
 ) {
     var showDialog by remember { mutableStateOf(false) }
     var useKeyboardInput by remember { mutableStateOf(false) }
-    val interactionSource = remember { MutableInteractionSource() }
-
-    LaunchedEffect(interactionSource) {
-        interactionSource.interactions.collect { interaction ->
-            if (interaction is PressInteraction.Release) {
-                showDialog = true
-            }
-        }
-    }
+    val interactionSource = rememberTapInteractionSource { showDialog = true }
 
     OutlinedTextField(
         value = "${time.format(DISPLAY_TIME_FORMATTER)} UTC",
