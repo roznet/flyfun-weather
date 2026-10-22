@@ -32,6 +32,8 @@ sealed interface NavigationTarget {
     @Serializable
     data class ForecastMap(
         val dayOffset: Int? = null,
+        /** Absolute UTC `YYYY-MM-DD` (`fc.date`, #840); wins over [dayOffset] when set. */
+        val date: String? = null,
         val hourUtc: Int? = null,
         val model: String? = null,
         val metric: String? = null,

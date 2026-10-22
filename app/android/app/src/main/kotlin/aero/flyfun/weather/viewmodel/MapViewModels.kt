@@ -8,6 +8,7 @@ import aero.flyfun.weather.model.DayHourBucket
 import aero.flyfun.weather.model.DaySummary
 import aero.flyfun.weather.model.ForecastDayEntry
 import aero.flyfun.weather.model.ForecastDaysResponse
+import aero.flyfun.weather.model.ForecastLinkedDate
 import aero.flyfun.weather.model.ForecastMapAirport
 import aero.flyfun.weather.model.ForecastMapResponse
 import aero.flyfun.weather.model.ForecastModelEntry
@@ -17,7 +18,9 @@ import aero.flyfun.weather.model.HistoricalMetar
 import aero.flyfun.weather.model.HistoricalTaf
 import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.ui.map.AirportMapMetric
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -37,6 +40,7 @@ class ForecastMapViewModel(
     private val apiClient: ApiClient? = null,
     private val isMockModeProvider: () -> Boolean = { false },
     private val scopeOverride: CoroutineScope? = null,
+    private val clock: () -> Instant = { Instant.now() },
 ) : ViewModel() {
 
     private val scope: CoroutineScope
@@ -78,6 +82,22 @@ class ForecastMapViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    /**
+     * Set when a linked `fc.date` couldn't be shown as is (#860): says which day is shown
+     * instead. Cleared when the pilot picks a day.
+     */
+    private val _linkedDateNotice = MutableStateFlow<String?>(null)
+    val linkedDateNotice: StateFlow<String?> = _linkedDateNotice.asStateFlow()
+
+    /** True once the days request has finished (or was skipped), so [days] is final. */
+    private var daysResolved = false
+
+    /** The days request failed and [days] is the offline D+0…D+3 guess. */
+    private var gridIsFallback = false
+
+    /** A linked `fc.date` that arrived before the grid; resolved by [loadInitial]. */
+    private var pendingLink: NavigationTarget.ForecastMap? = null
+
     init {
         loadInitial()
     }
@@ -87,21 +107,33 @@ class ForecastMapViewModel(
             _isLoading.value = true
             _error.value = null
             if (!isMockModeProvider() && apiClient != null) {
-                runCatching { apiClient.getForecastDays() }.onSuccess { resp ->
-                    if (resp.days.isNotEmpty()) {
-                        _days.value = resp.days
-                        val hrs = resp.days.firstOrNull()?.hours?.map { it.hour }
-                        if (!hrs.isNullOrEmpty()) {
-                            _availableHours.value = hrs
+                runCatching { apiClient.getForecastDays() }
+                    .onSuccess { resp ->
+                        // Days beyond the model horizon have no hours: not offered
+                        val offered = resp.days.filter { it.available }
+                        if (offered.isNotEmpty()) {
+                            _days.value = offered
+                            gridIsFallback = false
+                            offered.first().hours.takeIf { it.isNotEmpty() }?.let { _availableHours.value = it }
+                        } else {
+                            gridIsFallback = true
                         }
                     }
-                }
+                    .onFailure { gridIsFallback = true }
+            }
+            daysResolved = true
+            pendingLink?.let { link ->
+                pendingLink = null
+                applyLinkedDay(link)
             }
             fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
         }
     }
 
     fun selectDay(dayOffset: Int) {
+        // The pilot's pick wins over a link still waiting for the grid
+        pendingLink = null
+        _linkedDateNotice.value = null
         if (_selectedDay.value == dayOffset && _mapData.value != null) return
         _selectedDay.value = dayOffset
         fetchForecastSlice(day = dayOffset, hourUtc = _selectedHour.value)
@@ -140,11 +172,33 @@ class ForecastMapViewModel(
                 _worstOfModels.value = false
             }
         }
-        val day = target.dayOffset ?: _selectedDay.value
-        val hour = target.hourUtc ?: _selectedHour.value
-        _selectedDay.value = day
-        _selectedHour.value = hour
-        fetchForecastSlice(day = day, hourUtc = hour)
+        target.hourUtc?.let { _selectedHour.value = it }
+        if (target.date != null && !daysResolved) {
+            // `fc.date` resolves against the real grid: loadInitial applies it and fetches once
+            // the days request lands, so don't fetch a provisional day now.
+            pendingLink = target
+            return
+        }
+        applyLinkedDay(target)
+        fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
+    }
+
+    /** `fc.date` wins over `fc.day` (#860); a malformed date or empty grid falls back to `fc.day`. */
+    private fun applyLinkedDay(target: NavigationTarget.ForecastMap) {
+        _linkedDateNotice.value = null
+        // One clock reading for both the resolution and the notice's label, so a UTC-midnight
+        // rollover in between can't mislabel the shown day.
+        val today = LocalDate.ofInstant(clock(), ZoneOffset.UTC)
+        val linked = target.date
+        val resolved = linked?.let { date ->
+            ForecastLinkedDate.resolve(date, offered = _days.value.filter { it.available }.map { it.day }, today = today)
+        }
+        if (linked == null || resolved == null) {
+            target.dayOffset?.let { _selectedDay.value = it }
+            return
+        }
+        _selectedDay.value = resolved.day
+        _linkedDateNotice.value = ForecastLinkedDate.noticeFor(linked, resolved, gridIsFallback, today)
     }
 
     private fun fetchForecastSlice(day: Int, hourUtc: Int) {
@@ -363,13 +417,8 @@ object PanEuropeanMapFixtures {
             ForecastDayEntry(
                 day = d,
                 date = dateStr,
-                hours = listOf(6, 9, 12, 15, 18).map { hr ->
-                    DayHourBucket(
-                        hour = hr,
-                        label = String.format(Locale.US, "%02dZ", hr),
-                        sampleTimeUtc = String.format(Locale.US, "%sT%02d:00:00Z", dateStr, hr),
-                    )
-                },
+                hours = listOf(6, 9, 12, 15, 18),
+                models = listOf("ecmwf", "gfs", "icon_eu"),
             )
         }
         return ForecastDaysResponse(days = days)
