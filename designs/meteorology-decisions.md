@@ -6616,3 +6616,47 @@ horizon, or when GRIB is skipped) get one thicker zone where they had two thin
 ones, so more icing minutes at levels between table entries. Dense tables are
 unchanged. Zone edges are still level altitudes (±500 ft for a single level); no
 interpolation at the 0 / −15 °C or threshold crossings.
+
+## 59. CAT layers (E-Shear + Ri) merge on native-table adjacency too (#861)
+
+§58 fixed icing; the two CAT layer builders kept the fixed 100 hPa gap and had
+the same two failures. On Open-Meteo's 13-level ECMWF table 850 → 700 hPa is
+150 hPa, so shear at both became two layers with FL080 smooth between them. On a
+dense table E-Shear, which only saw the risk levels, merged 400 and 350 hPa
+(Δp 50) across a *measured* calm 375.
+
+**E-Shear decision.** `compute_e_shear_per_sounding` keeps each risk level's
+index and the indices where E was computed and came out NONE. Two risk levels
+merge iff no such calm level lies between them, within the shared
+`ZONE_MAX_NATIVE_GAP_HPA = 200` cap. Fine tables now split at a calm level they
+used to bridge; coarse tables join neighbours they used to split.
+
+**E-Shear missing levels bridge.** Unlike icing, E-Shear sees the gap inside its
+own loop: a level with no wind or no altitude gets no E, and nor does the level
+above it (its VWS needs the missing one). Both are unknown, not calm, so a layer
+continues across them up to the cap, for the §58 reason (#391/#393: unknown
+must not read as a smooth gap). Not chosen: computing VWS across the hole
+(changes the shear itself, larger change than this issue).
+
+**Ri decision.** `_build_cat_layers` merges neighbours in `derived_levels`
+(index gap 1) up to the 200 hPa cap. Across one skipped level (index gap 2) it
+keeps the old 100 hPa limit (`_CAT_MAX_SKIP_GAP_HPA`). Not chosen: raising the
+hPa term to 200 for every index gap, which would let a 13-level table bridge a
+stable 600 hPa level between low Ri at 700 and 500 (a new 10,000 ft band over a
+level the model judged stable).
+
+**Ri base extension unchanged.** A layer's base still extends to the level
+below only within 100 hPa (§25(d), #539: one bulk Ri across a wide slab should
+not paint a multi-thousand-ft band on its own). Consequence, deliberate: a
+*lone* low Ri at 700 over 850 paints only the 700 level, but low Ri at *both*
+850 and 700 paints the whole 850–700 slab, because two independent measurements
+bracket it. Revisit only if a replay shows the lone-level case hides real
+layers.
+
+**Effect.** Mostly Open-Meteo ECMWF beyond the GRIB horizon: thicker CAT
+layers across 850–700 hPa (the table's only gap over 100 hPa), so more
+turbulence exposure around FL060–FL090. Dense
+tables: E-Shear layers can split where a calm level sits inside; Ri unchanged.
+Replay before landing: `scripts/replay_cat_layers.py` on `main` vs the branch
+(see its docstring).
+

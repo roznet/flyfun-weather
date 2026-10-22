@@ -356,6 +356,45 @@ def test_deep_layer_prevented_by_index_gap():
     assert len(assessment.cat_risk_layers) == 2
 
 
+def test_cat_coarse_table_neighbours_150_hpa_apart_form_one_layer():
+    """Open-Meteo ECMWF 13-level table: 850 → 700 hPa are neighbours 150 hPa
+    apart. Low Ri at both is one layer (#861); the old 100 hPa grouping term
+    split it with a hole around FL080."""
+    levels = [
+        DerivedLevel(pressure_hpa=925, altitude_ft=2500, omega_pa_s=-0.5,
+                     richardson_number=5.0),
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert len(assessment.cat_risk_layers) == 1
+    layer = assessment.cat_risk_layers[0]
+    # 850's base extends to 925 (75 hPa); 700's base does not extend (150 hPa),
+    # but grouping with 850 covers that slab anyway.
+    assert (layer.base_ft, layer.top_ft) == (2500, 10000)
+
+
+def test_cat_coarse_table_does_not_bridge_a_stable_level_200_hpa_wide():
+    """Skipping a level keeps the old 100 hPa limit (#861): on a 13-level
+    table, low Ri at 700 and 500 with a stable 600 between (index gap 2,
+    200 hPa) stays two layers. Raising the hPa term to the native cap for
+    every index gap would have bridged it."""
+    levels = [
+        DerivedLevel(pressure_hpa=850, altitude_ft=5000, omega_pa_s=-0.5,
+                     richardson_number=5.0),
+        DerivedLevel(pressure_hpa=700, altitude_ft=10000, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+        DerivedLevel(pressure_hpa=600, altitude_ft=14000, omega_pa_s=-0.5,
+                     richardson_number=20.0),
+        DerivedLevel(pressure_hpa=500, altitude_ft=18000, omega_pa_s=-0.5,
+                     richardson_number=0.2),
+    ]
+    assessment = assess_vertical_motion(levels)
+    assert len(assessment.cat_risk_layers) == 2
+
+
 # --- Convective contamination tests ---
 
 
@@ -834,8 +873,8 @@ def test_sparse_column_does_not_extend_base_across_wide_gap():
 
     Ri computed over such a slab is already dubious; extending the layer
     would paint a multi-thousand-ft band from a single number. The old
-    upper-bound-only behaviour is kept there (mirrors the 100 hPa adjacency
-    criterion used for grouping).
+    upper-bound-only behaviour is kept there. Deliberately NOT relaxed when
+    grouping moved to native adjacency (#861).
     """
     levels = [
         DerivedLevel(pressure_hpa=500, altitude_ft=18000, richardson_number=5.0),
@@ -1284,6 +1323,11 @@ class TestNativeBoundaryLayerTop:
         it does not blind the detector.
         """
         levels = self._stable_profile()
+        # A stable 850 hPa level keeps 700 hPa off 900 hPa's native neighbour
+        # slot: with the two adjacent and both low-Ri, #861 groups them into
+        # one 1,750–12,000 ft layer, which is not what this test is about.
+        levels.insert(5, DerivedLevel(pressure_hpa=850, altitude_ft=5000,
+                                      temperature_c=3.0, richardson_number=10.0))
 
         without = assess_vertical_motion(levels)
         with_native = assess_vertical_motion(levels, native_bl_top_ft=1800.0)

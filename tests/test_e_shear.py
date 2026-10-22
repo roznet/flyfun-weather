@@ -117,3 +117,69 @@ def test_e_risk_thresholds_pinned():
     assert _E_LIGHT == 40.0
     assert _E_MODERATE == 80.0
     assert _E_SEVERE == 160.0
+
+
+# --- Layer grouping: native-table adjacency, not a fixed hPa gap (#861) ---
+
+
+def _lv_missing_wind(pressure_hpa: int, altitude_ft: float) -> DerivedLevel:
+    return DerivedLevel(pressure_hpa=pressure_hpa, altitude_ft=altitude_ft)
+
+
+def test_coarse_table_neighbours_150_hpa_apart_form_one_layer():
+    """Open-Meteo ECMWF 13-level table: 850 → 700 hPa are neighbours 150 hPa
+    apart. Shear risk at both is one layer, not two with a hole at FL080."""
+    levels = [
+        _lv(925, 2500, 0.0),
+        _lv(850, 5000, 50.0),    # Δ50 kt / 2500 ft = 20 kt/1000ft → MODERATE
+        _lv(700, 10000, 150.0),  # Δ100 kt / 5000 ft = 20 kt/1000ft → MODERATE
+    ]
+    layers = compute_e_shear_per_sounding(levels)
+    assert len(layers) == 1
+    assert layers[0].risk == CATRiskLevel.MODERATE
+    assert (layers[0].base_ft, layers[0].top_ft) == (5000, 10000)
+    assert (layers[0].base_pressure_hpa, layers[0].top_pressure_hpa) == (850, 700)
+
+
+def test_fine_table_measured_calm_level_splits_the_layer():
+    """Dense 25 hPa table: risk / NONE / risk on consecutive levels is two
+    layers. The old 100 hPa rule merged 400 and 350 (Δp 50) over the calm 375."""
+    levels = [
+        _lv(425, 20000, 0.0),
+        _lv(400, 21000, 20.0),   # MODERATE
+        _lv(375, 22000, 20.0),   # zero shear → E 10.5 → NONE, measured calm
+        _lv(350, 23000, 40.0),   # MODERATE
+    ]
+    layers = compute_e_shear_per_sounding(levels)
+    assert len(layers) == 2
+    assert [(lay.base_pressure_hpa, lay.top_pressure_hpa) for lay in layers] == [
+        (400, 400), (350, 350),
+    ]
+
+
+def test_missing_wind_level_bridges_the_layer():
+    """A level with no wind is unknown, not calm: it and the level above it
+    (whose shear needs it) get no E, and the layer continues across them."""
+    levels = [
+        _lv(900, 3200, 0.0),
+        _lv(850, 5000, 36.0),               # 20 kt/1000ft → MODERATE
+        _lv_missing_wind(800, 6500),        # no wind → skipped
+        _lv(750, 8000, 36.0),               # prev has no wind → skipped
+        _lv(700, 10000, 76.0),              # 20 kt/1000ft → MODERATE
+    ]
+    layers = compute_e_shear_per_sounding(levels)
+    assert len(layers) == 1
+    assert (layers[0].base_pressure_hpa, layers[0].top_pressure_hpa) == (850, 700)
+
+
+def test_missing_wind_bridge_is_capped_at_the_native_gap():
+    """A bridge over missing levels stops at the 200 hPa sanity cap."""
+    levels = [
+        _lv(900, 3200, 0.0),
+        _lv(850, 5000, 36.0),               # MODERATE
+        _lv_missing_wind(700, 10000),
+        _lv(600, 14000, 36.0),              # prev has no wind → skipped
+        _lv(500, 18000, 116.0),             # 20 kt/1000ft → MODERATE, 350 hPa above 850
+    ]
+    layers = compute_e_shear_per_sounding(levels)
+    assert len(layers) == 2
