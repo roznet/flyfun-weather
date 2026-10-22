@@ -77,6 +77,8 @@ object UniversalLinkRouter {
                     val view = params["fc.view"] ?: params["now.view"] ?: params["syn.view"]
                     NavigationTarget.ForecastMap(
                         dayOffset = params["fc.day"]?.toIntOrNull(),
+                        // Malformed → dropped, so `fc.day` applies
+                        date = params["fc.date"]?.takeIf { ForecastLinkedDate.parse(it) != null },
                         hourUtc = params["fc.hour"]?.toIntOrNull(),
                         model = params["fc.model"]?.takeIf { it.isNotEmpty() },
                         metric = params["fc.metric"]?.takeIf { it.isNotEmpty() },

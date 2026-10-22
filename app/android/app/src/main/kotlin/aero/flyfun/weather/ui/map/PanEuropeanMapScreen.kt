@@ -191,6 +191,7 @@ private fun ForecastMapBody(
     val mapData by viewModel.mapData.collectAsState()
     val selectedAirportIcao by viewModel.selectedAirportIcao.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val linkedDateNotice by viewModel.linkedDateNotice.collectAsState()
 
     var metricMenuExpanded by remember { mutableStateOf(false) }
     val density = LocalDensity.current
@@ -218,6 +219,16 @@ private fun ForecastMapBody(
                     onClick = { viewModel.selectDay(dayEntry.day) },
                 )
             }
+        }
+
+        // A linked `fc.date` that couldn't be shown as is (#860), until the pilot picks a day
+        linkedDateNotice?.let { notice ->
+            Text(
+                text = notice,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         // B. Hour Chips + Model Chips + Metric Dropdown

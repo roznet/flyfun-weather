@@ -2222,13 +2222,21 @@ data class HistoricalRangeResponse(
 @Serializable
 data class ForecastDaysResponse(
     val days: List<ForecastDayEntry> = emptyList(),
+    @SerialName("max_day")
+    val maxDay: Int? = null,
 )
 
+/** One day of `/api/maps/forecast/days` (`compute_day_availability` on the server). */
 @Serializable
 data class ForecastDayEntry(
     val day: Int = 0,
     val date: String = "",
-    val hours: List<DayHourBucket> = emptyList(),
+    /** False when the day is beyond the current model horizon (no hours yet). */
+    val available: Boolean = true,
+    /** Sorted UTC sample hours that have data (plain ints on the wire). */
+    val hours: List<Int> = emptyList(),
+    /** Models present across those hours. */
+    val models: List<String> = emptyList(),
 ) {
     val id: Int
         get() = day

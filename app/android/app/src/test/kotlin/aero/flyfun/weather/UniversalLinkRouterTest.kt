@@ -109,6 +109,27 @@ class UniversalLinkRouterTest {
     }
 
     @Test
+    fun `maps forecast deep link parses fc date`() {
+        val target = UniversalLinkRouter.navigationTarget(
+            "https://weather.flyfun.aero/maps.html?fc.day=3&fc.date=2026-10-25&fc.hour=12"
+        )
+        assertEquals(
+            NavigationTarget.ForecastMap(dayOffset = 3, date = "2026-10-25", hourUtc = 12),
+            target,
+        )
+    }
+
+    @Test
+    fun `maps forecast deep link drops a malformed fc date and keeps fc day`() {
+        for (bad in listOf("2026-02-30", "2026-10-2", "%2B026-10-21", "tomorrow", "")) {
+            val target = UniversalLinkRouter.navigationTarget(
+                "https://weather.flyfun.aero/maps.html?fc.day=2&fc.date=$bad"
+            )
+            assertEquals(bad, NavigationTarget.ForecastMap(dayOffset = 2), target)
+        }
+    }
+
+    @Test
     fun `maps historical deep link parses all parameters`() {
         val target = UniversalLinkRouter.navigationTarget(
             "https://weather.flyfun.aero/maps.html?tab=historical&hist.date=2026-03-15&hist.hour=9&hist.metric=alert&clim.view=verify"
