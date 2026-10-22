@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-22",
+    "title": "iOS 1.16 — Flight strip, Start re-times your flight, one icing card",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Flight strip on the Observed tab: see where you are along your route at a glance, with your destination's weather at your expected arrival time.\n- Start re-times your flight: pressing Start takes your real take-off as the departure time, updates the observations straight away, then every five minutes.\n- One icing card, graded for the aircraft you fly: FIKI and non-FIKI aircraft get their own assessment, and you're told if your aircraft profile isn't marked FIKI.\n- A new advisory flags IFR departures from airfields with no instrument procedures.\n- The cross-section opens with the same layers and look as the website.\n- Forecast map links open on the right day and time.\n- Fixes: runway ends, storms that have already passed, TAF period reading, and more reliable briefings when a weather model is slow to respond."
+  }
+]
