@@ -274,7 +274,9 @@ fun FlyFunWeatherRoot(
         openObserved: Boolean = false,
     ) {
         cachedFlightForBriefing = flight
-        // Tapping the selected flight again from another screen is a fresh open: reload it
+        // Tapping the selected flight again from another screen is a fresh open: reload it.
+        // The current composition may still hold the cleared VM for one frame; the next one
+        // finds no owner under this key, creates a new one and with it a fresh BriefingViewModel.
         if (activeFlightId == flightId && currentRoute != RootRoute.BRIEFING) {
             viewModelScopes.clear(ViewModelScopes.briefingKey(sessionKey, flightId))
         }
