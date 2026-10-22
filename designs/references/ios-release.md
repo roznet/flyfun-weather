@@ -216,10 +216,33 @@ attach the wrong binary.
 ## §A8 — App Store screenshots (`scripts/ios_screenshots.py`)
 
 Screenshots are regenerated, not hand-made: `python3 scripts/ios_screenshots.py` runs
-`ScreenshotUITests` on iPhone 17 (6.3", 1206x2622) and iPad Pro 13" (2064x2752) — the two
-sizes App Store Connect requires; it scales the rest — with the status bar pinned to 9:41,
-and writes `build/appstore-screenshots/<device>/<light|dark>/NN-screen.png`. `--appearance
-dark` adds a dark set; `--wait` queues behind another `xcodebuild test`.
+`ScreenshotUITests` on iPhone 17 (6.3", 1206x2622), iPhone 17 Pro Max (6.9", 1320x2868) and
+iPad Pro 13" (2064x2752), with the status bar pinned to 9:41, and writes
+`build/appstore-screenshots/<device>/<light|dark>/NN-screen.png`. `--appearance dark` adds a
+dark set; `--wait` queues behind another `xcodebuild test`. The sizes follow Apple's table
+(2026-10): iPhone needs 6.3" **and** 6.9" (or 6.5" in its place), iPad needs 13"; the store
+scales the rest. Without the 6.9" set the 1.0-era 6.5" set would keep showing on large
+iPhones. The iPad has no `02-advisories`: its summary already shows the advisory list, so
+the shot repeated `01`.
+
+**Only when the screens change.** A new App Store version inherits the previous version's
+screenshots, so a release that didn't touch the screens needs neither a capture nor an
+upload. Two layers make that automatic:
+
+- `ios_screenshots.py --if-changed` skips the capture (~10 min) unless a file in
+  `CAPTURE_INPUTS` — Views, ViewModels, assets, the showcase fixture and its repository, the
+  journey, the script — changed since the commit in `build/appstore-screenshots/
+  manifest.json`, which each successful run writes. Models/Services are left out on purpose
+  (almost every release touches them; a decoding change that alters a screen also breaks
+  `FixtureShowcaseTests`). Run without the flag to force a capture.
+- `asc.py screenshots` (or `stage --screenshots DIR`) compares each set's MD5s with the
+  `sourceFileChecksum` App Store Connect keeps and leaves a matching set alone; otherwise it
+  deletes what no local file matches, uploads the rest and reorders. A family that received
+  a set loses its other sizes (the old 6.5" set) only when the required sizes remain. It
+  refuses a set with two identical files — a sign the journey shot one screen twice.
+
+A capture re-dates the fixture to tomorrow, so a fresh capture always differs from the store
+and always uploads: the decision lives in `--if-changed`, not in the checksums.
 
 The journey drives the mock app on **one real briefing**, `flyfun-weatherUITests/Showcase/
 showcase.json` (EGTF→LSGS 2026-10-12: IFR stratus at Fairoaks clearing to CAVOK over the

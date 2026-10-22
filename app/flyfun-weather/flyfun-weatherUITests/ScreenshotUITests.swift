@@ -44,7 +44,11 @@ final class ScreenshotUITests: FlyfunUITestCase {
         let advisories = app.buttons["Advisories"].firstMatch
         XCTAssertTrue(advisories.waitForExistence(timeout: Self.uiTimeout), "the Advisories pill should be shown")
         advisories.tap()
-        capture(app, "02-advisories")
+        // The iPad's summary already shows the whole advisory list, so the pill
+        // doesn't scroll and this would be 01 again.
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            capture(app, "02-advisories")
+        }
 
         let why = app.buttons["advisoryWhy-vfr_feasibility"].firstMatch
         XCTAssertTrue(why.waitForExistence(timeout: Self.uiTimeout), "VFR Feasibility should offer 'Why it's RED'")

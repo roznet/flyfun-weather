@@ -339,8 +339,18 @@ First show the user what App Store Connect currently thinks:
 source venv/bin/activate && python3 scripts/asc.py status
 ```
 
-Then stage everything in one call. `--notes-file` reads the entry drafted in Step 8, so the
-App Store text and the site's release-stream entry cannot drift:
+Recapture the store screenshots only if the screens changed since the last capture — it
+exits at once when nothing did, and otherwise takes ~10 min (`run_in_background: true`).
+Why the sizes and how "changed" is decided: **§A8**.
+
+```bash
+python3 scripts/ios_screenshots.py --if-changed --wait
+```
+
+If it captured, show the user a few of the new PNGs before staging. Then stage everything in
+one call. `--notes-file` reads the entry drafted in Step 8, so the App Store text and the
+site's release-stream entry cannot drift; `--screenshots` uploads only the sets that differ
+from the store, so it is a no-op when nothing was recaptured:
 
 ```bash
 source venv/bin/activate && python3 scripts/asc.py stage \
@@ -348,6 +358,7 @@ source venv/bin/activate && python3 scripts/asc.py stage \
   --build {build_number} \
   --archive "{archive_path}" \
   --notes-file release-notes/ios-{version}.json \
+  --screenshots build/appstore-screenshots \
   --review-notes "flyfunweather://auth?token=…"
 ```
 

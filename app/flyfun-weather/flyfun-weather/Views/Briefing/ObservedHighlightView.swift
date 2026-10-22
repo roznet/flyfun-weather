@@ -168,10 +168,13 @@ struct ObservedDetailsFold: View {
             .accessibilityValue(expanded ? "expanded" : "collapsed")
 
             if expanded {
-                ObservedNutshellCard(
+                let passed = ObservedNutshellCard(
                     viewModel: viewModel, glance: glance,
                     lines: glance.passedItems, showsHeadline: glance.highlight != nil
                 )
+                if !passed.isEmpty {
+                    passed
+                }
                 if let changes {
                     LiveChangesView(changes: changes, baseline: baseline, excludesAlerts: true)
                 }

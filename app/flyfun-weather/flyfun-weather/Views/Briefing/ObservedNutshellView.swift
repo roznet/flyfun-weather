@@ -68,6 +68,15 @@ struct ObservedNutshellCard: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// Nothing to draw: no headline, no line, no map button — the Details fold
+    /// before anything is passed (preflight). Callers skip the card then rather
+    /// than show an empty box.
+    var isEmpty: Bool {
+        !(showsHeadline && glance.headline != nil)
+            && (lines ?? glance.items).isEmpty
+            && !(offersMap && showsMapButton)
+    }
+
     private var showsMapButton: Bool {
         if case .loaded(let snapshot) = viewModel.snapshotState {
             return snapshot.observedConditions?.hasAnyField ?? false
