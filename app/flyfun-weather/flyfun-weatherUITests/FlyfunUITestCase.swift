@@ -301,8 +301,22 @@ class FlyfunUITestCase: XCTestCase {
         let picker = app.buttons[identifier].firstMatch
         scrollToFormRow(app, picker)
         XCTAssertTrue(picker.waitForExistence(timeout: Self.uiTimeout), "the \(identifier) picker should be present")
+        let currentLabel = picker.staticTexts.firstMatch.label
         picker.tap()
         let option = app.buttons[value].firstMatch
+        // A long menu (the 24 hours) opens scrolled to the current value and only
+        // creates the rows on screen, so "00" under a 15:00 selection doesn't exist
+        // until the menu scrolls to it. Scroll the list that holds the current
+        // value's (selected) row: only the menu has it, so the swipe can't land on
+        // the iPad's sidebar list, and waiting for it also waits out the iPad
+        // popover's opening. Swipe the list, not the row — a flick starting on a
+        // row can carry out of the menu and dismiss it.
+        let selected = NSPredicate(format: "label == %@ AND selected == true", currentLabel)
+        let menu = app.collectionViews.containing(selected).firstMatch
+        if menu.waitForExistence(timeout: Self.uiTimeout) {
+            for _ in 0..<3 where !option.exists && menu.exists { menu.swipeDown() }
+            for _ in 0..<3 where !option.exists && menu.exists { menu.swipeUp() }
+        }
         XCTAssertTrue(option.waitForExistence(timeout: Self.uiTimeout), "\(value) should be offered by \(identifier)")
         option.tap()
     }
@@ -444,8 +458,18 @@ class FlyfunUITestCase: XCTestCase {
 
                 // #690: the nutshell is the server's text, word for word.
                 if let glance = tick.body["glance"] as? [String: Any] {
-                    XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].firstMatch.exists,
-                                  "\(hhmm): the nutshell should replace the glance card")
+                    // The Details card only draws when it has something: a passed
+                    // non-alert line (arrival yields to the destination block) or
+                    // the headline under a highlight. Preflight it has neither.
+                    let hasDestination = glance["destination"] is [String: Any]
+                    let hasPassed = ((glance["lines"] as? [[String: Any]]) ?? []).contains {
+                        $0["passed"] as? Bool == true && $0["alert"] as? Bool != true
+                            && !(hasDestination && $0["phase"] as? String == "arrival")
+                    }
+                    if hasPassed || (glance["highlight"] is [String: Any] && glance["headline"] is String) {
+                        XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].firstMatch.exists,
+                                      "\(hhmm): the nutshell should replace the glance card")
+                    }
                     // #816: the flight strip leads, and "Destination at your
                     // ETA" stands in for a non-alert arrival line.
                     if let flight = glance["flight"] as? [String: Any], let text = flight["text"] as? String {
@@ -453,7 +477,6 @@ class FlyfunUITestCase: XCTestCase {
                         XCTAssertTrue(strip.exists, "\(hhmm): the flight strip should render")
                         XCTAssertTrue(strip.label.contains(text), "\(hhmm): the strip should read \"\(text)\", got \(strip.label)")
                     }
-                    let hasDestination = glance["destination"] is [String: Any]
                     if hasDestination {
                         XCTAssertTrue(app.descendants(matching: .any)["observedDestination"].firstMatch.exists,
                                       "\(hhmm): the destination-at-ETA card should render unfolded")

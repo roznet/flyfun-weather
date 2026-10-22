@@ -66,6 +66,13 @@ shape is the honest one.
     python3 scripts/asc.py wait-build --version 1.5 --build 11
     python3 scripts/asc.py attach-build --version 1.5 --build 11
     python3 scripts/asc.py review-notes --text "flyfunweather://auth?token=..."
+    python3 scripts/asc.py screenshots --dir build/appstore-screenshots
+
+`screenshots` uploads what `scripts/ios_screenshots.py` captured, one set per
+device size, and leaves a set alone when its checksums already match — a new
+version inherits the previous version's screenshots, so a release that didn't
+recapture uploads nothing. Replacing a size also removes that device family's
+other sizes (the 1.0-era 6.5" set, say), once the required sizes are in place.
 
 Add `--dry-run` to any mutating subcommand to see the request that would be
 sent without sending it.
@@ -74,6 +81,7 @@ sent without sending it.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -130,8 +138,29 @@ IN_FLIGHT_STATES = {
 }
 
 
+# Screenshot display type by pixel size (portrait; landscape is the transpose).
+# Apple's table: developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications
+DISPLAY_TYPES = {
+    (1260, 2736): "APP_IPHONE_67", (1290, 2796): "APP_IPHONE_67", (1320, 2868): "APP_IPHONE_67",
+    (1284, 2778): "APP_IPHONE_65", (1242, 2688): "APP_IPHONE_65",
+    (1179, 2556): "APP_IPHONE_61", (1206, 2622): "APP_IPHONE_61",
+    (2064, 2752): "APP_IPAD_PRO_3GEN_129", (2048, 2732): "APP_IPAD_PRO_3GEN_129",
+}
+# What a family must still have after its other sizes are pruned: iPhone needs
+# 6.3" plus one of 6.9"/6.5"; iPad needs 13". Each inner tuple is "any of".
+REQUIRED_DISPLAY_TYPES = {
+    "APP_IPHONE": [("APP_IPHONE_61",), ("APP_IPHONE_67", "APP_IPHONE_65")],
+    "APP_IPAD": [("APP_IPAD_PRO_3GEN_129",)],
+}
+MAX_SCREENSHOTS_PER_SET = 10
+
+
 def _fail(msg: str) -> NoReturn:
     sys.exit(f"error: {msg}")
+
+
+def _family(display_type: str) -> str:
+    return "APP_IPAD" if display_type.startswith("APP_IPAD") else "APP_IPHONE"
 
 
 # --- Config ------------------------------------------------------------------
@@ -563,6 +592,232 @@ class Asc:
                 },
             )
 
+    # --- Screenshots ---
+
+    def localizations(self, version_id: str) -> list[dict[str, Any]]:
+        data = self.get(f"/appStoreVersions/{version_id}/appStoreVersionLocalizations")
+        return data.get("data", [])
+
+    def screenshot_sets(self, localization_id: str) -> dict[str, tuple[str, list[dict[str, Any]]]]:
+        """{display type: (set id, screenshots in display order)} for one localization."""
+        data = self.get(
+            f"/appStoreVersionLocalizations/{localization_id}/appScreenshotSets",
+            include="appScreenshots",
+            limit=50,
+        )
+        included = {i["id"]: i for i in data.get("included", []) if i["type"] == "appScreenshots"}
+        sets = {}
+        for row in data.get("data", []):
+            refs = row.get("relationships", {}).get("appScreenshots", {}).get("data") or []
+            shots = [included[r["id"]] for r in refs if r["id"] in included]
+            sets[row["attributes"]["screenshotDisplayType"]] = (row["id"], shots)
+        return sets
+
+    def create_screenshot_set(self, localization_id: str, display_type: str) -> str:
+        created = self.request(
+            "POST",
+            "/appScreenshotSets",
+            body={
+                "data": {
+                    "type": "appScreenshotSets",
+                    "attributes": {"screenshotDisplayType": display_type},
+                    "relationships": {
+                        "appStoreVersionLocalization": {
+                            "data": {"type": "appStoreVersionLocalizations", "id": localization_id}
+                        }
+                    },
+                }
+            },
+        )
+        return created.get("data", {}).get("id", f"<new {display_type} set>")
+
+    def upload_screenshot(self, set_id: str, path: Path, checksum: str) -> str:
+        """Reserve, upload and commit one screenshot; returns its id.
+
+        Apple's three-step asset upload: POST reserves the asset and returns
+        `uploadOperations` (pre-signed PUTs, possibly several byte ranges), then
+        PATCH `uploaded: true` with the MD5 commits it. Processing finishes on
+        Apple's side afterwards — `wait_screenshots` checks it.
+        """
+        data = path.read_bytes()
+        reserved = self.request(
+            "POST",
+            "/appScreenshots",
+            body={
+                "data": {
+                    "type": "appScreenshots",
+                    "attributes": {"fileName": path.name, "fileSize": len(data)},
+                    "relationships": {
+                        "appScreenshotSet": {"data": {"type": "appScreenshotSets", "id": set_id}}
+                    },
+                }
+            },
+        )
+        if self.dry_run:
+            print(f"[dry-run] PUT {path.name} ({len(data)} bytes) to the reserved upload URL(s)")
+            return f"<new {path.name}>"
+        shot = reserved["data"]
+        for op in shot["attributes"].get("uploadOperations") or []:
+            offset, length = op["offset"], op["length"]
+            resp = requests.request(
+                op["method"],
+                op["url"],
+                headers={h["name"]: h["value"] for h in op.get("requestHeaders") or []},
+                data=data[offset:offset + length],
+                timeout=120,
+            )
+            if not resp.ok:
+                _fail(f"uploading {path.name} -> {resp.status_code}\n  {resp.text[:500]}")
+        self.request(
+            "PATCH",
+            f"/appScreenshots/{shot['id']}",
+            body={
+                "data": {
+                    "id": shot["id"],
+                    "type": "appScreenshots",
+                    "attributes": {"uploaded": True, "sourceFileChecksum": checksum},
+                }
+            },
+        )
+        return shot["id"]
+
+    def wait_screenshots(self, ids: list[str], timeout_seconds: int = 300) -> None:
+        """Wait until Apple has processed the uploads; fail on any it rejected."""
+        if self.dry_run:
+            return
+        pending = set(ids)
+        deadline = time.monotonic() + timeout_seconds
+        while pending and time.monotonic() < deadline:
+            for shot_id in sorted(pending):
+                attrs = self.get(f"/appScreenshots/{shot_id}")["data"]["attributes"]
+                delivery = attrs.get("assetDeliveryState") or {}
+                if delivery.get("state") == "COMPLETE":
+                    pending.discard(shot_id)
+                elif delivery.get("state") == "FAILED":
+                    errors = "; ".join(
+                        f"{e.get('code')}: {e.get('description')}" for e in delivery.get("errors") or []
+                    )
+                    _fail(f"App Store Connect rejected {attrs.get('fileName')}: {errors}")
+            if pending:
+                time.sleep(5)
+        if pending:
+            print(f"  {len(pending)} screenshot(s) still processing — check `status` shortly.")
+
+    def order_screenshots(self, set_id: str, ids: list[str]) -> None:
+        self.request(
+            "PATCH",
+            f"/appScreenshotSets/{set_id}/relationships/appScreenshots",
+            body={"data": [{"type": "appScreenshots", "id": i} for i in ids]},
+        )
+
+
+# --- Screenshots -------------------------------------------------------------
+
+
+def png_size(path: Path) -> tuple[int, int]:
+    """(width, height) from a PNG's IHDR chunk, without an imaging dependency."""
+    head = path.read_bytes()[:24]
+    if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        _fail(f"{path} is not a PNG")
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def collect_screenshots(root: Path, appearance: str) -> dict[str, list[Path]]:
+    """{display type: PNGs in order} from ios_screenshots.py's <device>/<appearance>/ layout."""
+    if not root.is_dir():
+        _fail(f"screenshot directory not found: {root} — run scripts/ios_screenshots.py first.")
+    by_type: dict[str, list[Path]] = {}
+    source: dict[str, Path] = {}
+    for folder in sorted(p for p in root.glob(f"*/{appearance}") if p.is_dir()):
+        pngs = sorted(folder.glob("*.png"))
+        if not pngs:
+            continue
+        sizes = {tuple(sorted(png_size(p))) for p in pngs}
+        if len(sizes) != 1:
+            _fail(f"{folder} mixes image sizes {sorted(sizes)}")
+        size = sizes.pop()
+        display_type = DISPLAY_TYPES.get(size)
+        if display_type is None:
+            _fail(f"{folder}: {size[0]}x{size[1]} is not a size App Store Connect accepts here")
+        if display_type in by_type:
+            _fail(f"{folder} and {source[display_type]} are both {display_type} — keep one")
+        seen: dict[str, Path] = {}
+        for p in pngs:
+            if (twin := seen.setdefault(md5(p), p)) is not p:
+                _fail(f"{p} is identical to {twin.name} — the capture journey shot one screen twice")
+        if len(pngs) > MAX_SCREENSHOTS_PER_SET:
+            _fail(f"{folder} has {len(pngs)} screenshots; App Store Connect takes {MAX_SCREENSHOTS_PER_SET}")
+        by_type[display_type] = pngs
+        source[display_type] = folder
+    if not by_type:
+        _fail(f"no {appearance} screenshots under {root}")
+    return by_type
+
+
+def md5(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def sync_screenshots(asc: Asc, version_id: str, local: dict[str, list[Path]],
+                     locales: list[str] | None = None) -> None:
+    """Make each localization's screenshot sets match `local`, touching only what differs.
+
+    A set whose checksums already match, in order, is left alone. Otherwise
+    screenshots no local file matches are deleted first (a set holds at most
+    10, so old + new can't coexist), the missing ones uploaded, and the set
+    reordered. A family that received a set loses its other sizes, but only
+    when what remains still meets Apple's required sizes.
+    """
+    rows = [r for r in asc.localizations(version_id)
+            if not locales or r["attributes"].get("locale") in locales]
+    if not rows:
+        _fail(f"no localization matched {locales}.")
+
+    for row in rows:
+        locale = row["attributes"].get("locale")
+        remote = asc.screenshot_sets(row["id"])
+        for display_type, paths in local.items():
+            sums = [md5(p) for p in paths]
+            set_id, shots = remote.get(display_type, (None, []))
+            if [s["attributes"].get("sourceFileChecksum") for s in shots] == sums:
+                print(f"[{locale}] {display_type}: {len(paths)} screenshots already match — unchanged")
+                continue
+            if set_id is None:
+                set_id = asc.create_screenshot_set(row["id"], display_type)
+            kept = {s["attributes"].get("sourceFileChecksum"): s["id"] for s in shots}
+            for shot in shots:
+                if shot["attributes"].get("sourceFileChecksum") not in sums:
+                    asc.request("DELETE", f"/appScreenshots/{shot['id']}")
+            ordered, uploaded = [], []
+            for path, checksum in zip(paths, sums):
+                if checksum in kept:
+                    ordered.append(kept[checksum])
+                else:
+                    shot_id = asc.upload_screenshot(set_id, path, checksum)
+                    ordered.append(shot_id)
+                    uploaded.append(shot_id)
+            asc.wait_screenshots(uploaded)
+            asc.order_screenshots(set_id, ordered)
+            print(f"[{locale}] {display_type}: uploaded {len(uploaded)}, "
+                  f"kept {len(ordered) - len(uploaded)}, removed "
+                  f"{len([s for s in shots if s['attributes'].get('sourceFileChecksum') not in sums])}")
+
+        for family in sorted({_family(t) for t in local}):
+            stale = [t for t in remote if _family(t) == family and t not in local]
+            if not stale:
+                continue
+            present = {t for t in local if _family(t) == family}
+            unmet = [any_of for any_of in REQUIRED_DISPLAY_TYPES[family]
+                     if not present.intersection(any_of)]
+            if unmet:
+                print(f"[{locale}] keeping {', '.join(stale)}: without them {family} "
+                      f"would lack {' / '.join(unmet[0])}")
+                continue
+            for display_type in stale:
+                asc.request("DELETE", f"/appScreenshotSets/{remote[display_type][0]}")
+                print(f"[{locale}] {display_type}: removed (superseded by "
+                      f"{', '.join(sorted(present))})")
+
 
 # --- Archive upload ----------------------------------------------------------
 
@@ -756,6 +1011,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p)
 
     p = sub.add_parser(
+        "screenshots",
+        help="upload ios_screenshots.py captures, skipping sets that already match",
+    )
+    p.add_argument("--dir", default="build/appstore-screenshots",
+                   help="ios_screenshots.py output (<device>/<appearance>/NN-screen.png)")
+    p.add_argument("--appearance", default="light", choices=["light", "dark"])
+    p.add_argument("--locale", action="append", help="restrict to locale(s), repeatable")
+    add_common(p)
+
+    p = sub.add_parser(
         "stage",
         help="ensure-version + set-notes + upload + wait + attach (no submit)",
     )
@@ -766,6 +1031,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text", help="literal What's New text (overrides --notes-file)")
     p.add_argument("--locale", action="append")
     p.add_argument("--review-notes", help="App Review notes (reviewer sign-in link)")
+    p.add_argument("--screenshots", metavar="DIR",
+                   help="also sync screenshots from DIR (see `screenshots`; unchanged sets are skipped)")
     p.add_argument(
         "--release-type",
         default="AFTER_APPROVAL",
@@ -835,6 +1102,14 @@ def main() -> None:
         print("App Review notes updated.")
         return
 
+    if args.command == "screenshots":
+        editable = asc.editable_version()
+        if editable is None:
+            _fail("no editable version — run `ensure-version` first.")
+        local = collect_screenshots(Path(args.dir).expanduser(), args.appearance)
+        sync_screenshots(asc, editable["id"], local, args.locale)
+        return
+
     if args.command == "stage":
         version = asc.ensure_version(args.version, args.release_type)
         version_id = version.get("id")
@@ -846,6 +1121,10 @@ def main() -> None:
         if args.review_notes:
             asc.set_review_notes(version_id, args.review_notes)
             print("App Review notes updated.")
+
+        if args.screenshots:
+            local = collect_screenshots(Path(args.screenshots).expanduser(), "light")
+            sync_screenshots(asc, version_id, local, args.locale)
 
         if args.archive:
             upload_archive(config, Path(args.archive).expanduser(), asc.dry_run)
