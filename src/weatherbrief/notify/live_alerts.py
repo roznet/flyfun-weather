@@ -376,7 +376,7 @@ def skip_reason(
 
         trip = db.get(FlightTripRow, flight_row.trip_id)
     if not (started or flight_row.auto_refresh or (trip is not None and trip.auto_refresh)):
-        return "not_auto_refresh", []
+        return "no_consent", []
     override = flight_row.notify_override or "default"
     if override == "default" and trip is not None:
         override = trip.notify_override or "default"

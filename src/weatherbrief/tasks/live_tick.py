@@ -657,6 +657,8 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
             return False
         before = live_for_pack(pack_dir)
         previous = before.glance.highlight if before is not None and before.glance is not None else None
+        # Empty without a previous highlight: nothing to compare the new times
+        # with, so ensure_highlight leaves out at_new_times.
         retimed_from = (previous.gate or {}) if previous is not None else {}
         try:
             run_realtime_refresh(

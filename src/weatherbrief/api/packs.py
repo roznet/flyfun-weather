@@ -5577,6 +5577,9 @@ def _fix_event(f: LivePositionFix, track, elevation, now: datetime):
 #: How far back the owner's previous flight may have departed for a fix on
 #: the ground at this one's departure to close it (#812).
 _PREVIOUS_FLIGHT_LOOKBACK = timedelta(hours=24)
+#: At most this many of them are read (each a briefing and elevation load,
+#: inline in the Start post).
+_PREVIOUS_FLIGHT_SCAN = 3
 
 
 def _close_previous_flight(db: Session, flight, fixes: list, now: datetime) -> bool:
@@ -5604,6 +5607,8 @@ def _close_previous_flight(db: Session, flight, fixes: list, now: datetime) -> b
     from weatherbrief.tasks.live_layer import flight_dir_for_pack, record_progress_events
     from weatherbrief.tasks.live_tick import live_window_end, live_window_hours
 
+    # ``fixes`` are the accepted ones, already within MAX_FIX_ACCURACY_M:
+    # filter here too if that ever changes, or a poor fix lands another flight.
     at_departure = [e for e in fixes if on_ground_at_departure(e)]
     if not at_departure or flight.departure_time is None:
         return False
@@ -5614,6 +5619,7 @@ def _close_previous_flight(db: Session, flight, fixes: list, now: datetime) -> b
                FlightRow.departure_time < departure,
                FlightRow.departure_time >= departure - _PREVIOUS_FLIGHT_LOOKBACK)
         .order_by(FlightRow.departure_time.desc())
+        .limit(_PREVIOUS_FLIGHT_SCAN)
     ).scalars().all()
     before_h, after_h = live_window_hours()
     for row in rows:

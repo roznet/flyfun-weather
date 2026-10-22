@@ -374,7 +374,7 @@ def test_live_alerts_default_on_without_the_key(db_session, dev_user):
 
 
 @pytest.mark.parametrize("setup, reason", [
-    (lambda db, u, f: setattr(f, "auto_refresh", False), "not_auto_refresh"),
+    (lambda db, u, f: setattr(f, "auto_refresh", False), "no_consent"),
     (lambda db, u, f: setattr(f, "notify_override", "mute"), "muted"),
     (lambda db, u, f: _prefs(db, u, notify_live_alerts=False), "pref_off"),
     (lambda db, u, f: _prefs(db, u, notify_push=False), "push_off"),

@@ -171,9 +171,9 @@ def test_start_is_consent_to_live_alerts(db_session, monkeypatch, tmp_path):
 
     row = tp._flight_row()
     row.auto_refresh = False
-    assert live_alerts.skip_reason(db_session, row, trigger="tick")[0] == "not_auto_refresh"
+    assert live_alerts.skip_reason(db_session, row, trigger="tick")[0] == "no_consent"
     reason = live_alerts.skip_reason(db_session, row, trigger="tick", started=True)[0]
-    assert reason != "not_auto_refresh"
+    assert reason != "no_consent"
     # A ↻ press never pushes, Start or not.
     assert live_alerts.skip_reason(db_session, row, trigger="user", started=True)[0] == "user_trigger"
 
