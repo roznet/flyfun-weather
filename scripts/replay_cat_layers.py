@@ -87,8 +87,13 @@ def compare(a_path: Path, b_path: Path) -> int:
         totals["packs"] += 1
         cruise = a_pack["cruise_ft"]
         lines = []
+        for key in sorted(b_pack["points"].keys() - a_pack["points"].keys()):
+            lines.append(f"  {key}: missing in A")
         for key, a_pt in sorted(a_pack["points"].items()):
-            b_pt = b_pack["points"].get(key, {"ri": [], "e_shear": []})
+            b_pt = b_pack["points"].get(key)
+            if b_pt is None:
+                lines.append(f"  {key}: missing in B")
+                continue
             for kind in ("ri", "e_shear"):
                 if a_pt[kind] == b_pt[kind]:
                     continue

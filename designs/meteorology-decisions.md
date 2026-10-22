@@ -6643,7 +6643,10 @@ must not read as a smooth gap). Not chosen: computing VWS across the hole
 keeps the old 100 hPa limit (`_CAT_MAX_SKIP_GAP_HPA`). Not chosen: raising the
 hPa term to 200 for every index gap, which would let a 13-level table bridge a
 stable 600 hPa level between low Ri at 700 and 500 (a new 10,000 ft band over a
-level the model judged stable).
+level the model judged stable). A level with no Ri (missing wind or
+temperature) counts as a skipped level here, so it is bridged only under the
+100 hPa skip rule — stricter than E-Shear's 200 hPa bridge over unknown levels.
+Left as is: the skip rule already covered missing Ri before #861.
 
 **Ri base extension unchanged.** A layer's base still extends to the level
 below only within 100 hPa (§25(d), #539: one bulk Ri across a wide slab should

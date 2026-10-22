@@ -46,3 +46,17 @@ def test_compare_flags_cruise_newly_inside_a_merged_layer(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "cruise 8000 ft now inside" in out
     assert '"cruise_newly_in_layer": 1' in out
+
+
+def test_compare_reports_missing_points_distinctly(tmp_path, capsys):
+    layer = [[5000, 10000, "moderate", 850, 700]]
+    for name, key in (("a", "0/ecmwf"), ("b", "1/ecmwf")):
+        (tmp_path / f"{name}.json").write_text(json.dumps({
+            "pack": {"cruise_ft": 8000,
+                     "points": {key: {"ri": [], "e_shear": layer}}},
+        }))
+    _load_script().compare(tmp_path / "a.json", tmp_path / "b.json")
+    out = capsys.readouterr().out
+    assert "0/ecmwf: missing in B" in out
+    assert "1/ecmwf: missing in A" in out
+    assert '"soundings_changed": 0' in out

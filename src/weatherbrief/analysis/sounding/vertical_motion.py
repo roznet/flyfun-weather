@@ -693,7 +693,10 @@ def _build_cat_layers(
     # Open-Meteo's 13-level ECMWF table has 850 → 700 hPa as neighbours, and
     # the old 100 hPa term split one shear layer there. Skipping up to
     # *max_index_gap* - 1 levels keeps the old 100 hPa limit, so a coarse
-    # table does not newly bridge a level judged smooth.
+    # table does not newly bridge a level judged smooth. A level with no Ri
+    # (missing wind/temperature) never sits between gap-1 neighbours, so it
+    # is handled like a smooth one: bridged only under the 100 hPa skip rule.
+    # E-Shear bridges unknown levels up to 200 hPa instead (§59).
     groups: list[list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]]] = []
     current: list[tuple[int, DerivedLevel, DerivedLevel, CATRiskLevel, float]] = [cat_levels[0]]
 
