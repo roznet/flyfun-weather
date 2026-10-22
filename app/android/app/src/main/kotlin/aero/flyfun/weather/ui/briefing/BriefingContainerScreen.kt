@@ -108,22 +108,25 @@ fun BriefingContainerScreen(
     // does not turn off the display after 30s and abort the socket mid-refresh.
     val localView = LocalView.current
     DisposableEffect(localView, isRefreshing) {
-        val previousKeepScreenOn = localView.keepScreenOn
-        if (isRefreshing) {
-            localView.keepScreenOn = true
-        }
+        localView.keepScreenOn = isRefreshing
         onDispose {
-            localView.keepScreenOn = previousKeepScreenOn
+            localView.keepScreenOn = false
         }
     }
 
     // Re-sync with the server whenever the screen returns to ON_RESUME (e.g. after unlocking
-    // the phone if the screen was manually turned off during a refresh).
+    // the phone if the screen was manually turned off during a refresh). Skip the initial
+    // ON_RESUME dispatched synchronously when the observer is first registered.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
+        var skippedInitialResume = false
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.onForegroundResume()
+                if (!skippedInitialResume) {
+                    skippedInitialResume = true
+                } else {
+                    viewModel.onForegroundResume()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

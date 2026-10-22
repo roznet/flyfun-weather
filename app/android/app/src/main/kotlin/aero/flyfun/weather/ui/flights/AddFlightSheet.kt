@@ -771,8 +771,7 @@ private fun NativeTimePickerField(
                             FilterChip(
                                 selected = timePickerState.minute == minOpt,
                                 onClick = {
-                                    onTimeSelected(LocalTime.of(timePickerState.hour, minOpt))
-                                    showDialog = false
+                                    timePickerState.minute = minOpt
                                 },
                                 label = { Text(":%02d".format(minOpt)) },
                             )
