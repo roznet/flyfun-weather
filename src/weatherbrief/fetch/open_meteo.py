@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 import os
@@ -147,6 +148,8 @@ _MAX_RETRIES = 4
 _RETRY_BACKOFF = [10, 30, 60, 90]  # seconds — generous for expanded pressure levels
 # Timeouts / connection errors get their own, shorter schedule: a briefing is
 # waiting on the call, and a stalled request already cost `timeout` seconds.
+# The budget is per `_get_with_retry` call, shared with the 429/5xx loop, so a
+# flaky host costs at most two extra timeouts per model, not two per attempt.
 _NETWORK_RETRY_BACKOFF = [5, 15]  # seconds — len() is the number of retries
 
 
@@ -236,13 +239,15 @@ class OpenMeteoClient:
     def _get_with_retry(self, url: str, params: dict) -> requests.Response:
         """GET with retry on 429 rate-limit and 5xx server error responses.
 
-        Each GET also retries a read timeout or connection error
+        A read timeout or connection error is also retried
         (`_send_with_network_retry`), so a stalled request doesn't drop a
-        model on its first attempt.
+        model on its first attempt. Those retries draw on one budget for the
+        whole call, across the 429/5xx attempts.
         """
         url, params = self._prepare_request(url, params)
+        network_attempts = iter(range(len(_NETWORK_RETRY_BACKOFF)))
         for attempt in range(_MAX_RETRIES):
-            resp = self._send_with_network_retry(url, params)
+            resp = self._send_with_network_retry(url, params, network_attempts)
             if resp.status_code not in self._RETRYABLE_STATUS_CODES:
                 resp.raise_for_status()
                 return resp
@@ -256,31 +261,34 @@ class OpenMeteoClient:
             )
             time.sleep(wait)
         # Final attempt — let it raise on any error
-        resp = self._send_with_network_retry(url, params)
+        resp = self._send_with_network_retry(url, params, network_attempts)
         resp.raise_for_status()
         return resp
 
-    def _send_with_network_retry(self, url: str, params: dict) -> requests.Response:
+    def _send_with_network_retry(
+        self, url: str, params: dict, network_attempts: Iterator[int],
+    ) -> requests.Response:
         """One GET, retried on `requests.Timeout` / `requests.ConnectionError`.
 
-        Retries `len(_NETWORK_RETRY_BACKOFF)` times; the last failure
+        Each retry takes the next index of `_NETWORK_RETRY_BACKOFF` from
+        *network_attempts*, the caller's budget; once it is spent the failure
         propagates so the caller's per-model handler records it.
         """
-        for attempt in range(len(_NETWORK_RETRY_BACKOFF) + 1):
+        while True:
             self._record_call()
             try:
                 return self.session.get(url, params=params, timeout=self.timeout)
             except (requests.Timeout, requests.ConnectionError) as exc:
-                if attempt >= len(_NETWORK_RETRY_BACKOFF):
+                attempt = next(network_attempts, None)
+                if attempt is None:
                     raise
                 wait = _NETWORK_RETRY_BACKOFF[attempt]
                 logger.warning(
-                    "%s on attempt %d/%d, retrying in %ds: %s",
-                    type(exc).__name__, attempt + 1, len(_NETWORK_RETRY_BACKOFF) + 1,
+                    "%s, network retry %d/%d in %ds: %s",
+                    type(exc).__name__, attempt + 1, len(_NETWORK_RETRY_BACKOFF),
                     wait, url.split("/")[-1],
                 )
                 time.sleep(wait)
-        raise AssertionError("unreachable")
 
     def get_json(self, url: str, params: dict) -> dict:
         """Public GET-with-retry returning parsed JSON.

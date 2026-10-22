@@ -68,7 +68,7 @@ The pipeline uses `fetch_multi_point()` to consolidate API calls: **1 call per m
 - **Max retries**: `_MAX_RETRIES = 4`, with `_RETRY_BACKOFF = [10, 30, 60, 90]` seconds (generous for expanded pressure-level requests)
 - Respects `Retry-After` header from server if present; falls back to backoff schedule otherwise
 - Retries on `_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}` — rate-limit and transient server errors; other HTTP errors propagate immediately
-- **Timeouts / connection errors** (`requests.Timeout`, `requests.ConnectionError`) are retried per GET by `_send_with_network_retry`: 2 retries at `_NETWORK_RETRY_BACKOFF = [5, 15]` s, short because a briefing is waiting and the stalled call already cost `timeout` (30 s). The last failure raises (#835)
+- **Timeouts / connection errors** (`requests.Timeout`, `requests.ConnectionError`) are retried by `_send_with_network_retry`: 2 retries at `_NETWORK_RETRY_BACKOFF = [5, 15]` s per `_get_with_retry` call, one budget shared across the 429/5xx attempts so a flaky host can't multiply them, short because a briefing is waiting and the stalled call already cost `timeout` (30 s). The last failure raises (#835)
 - Logging includes attempt count, wait time, and truncated URL for debugging
 - `_prepare_request()` swaps the host for historical (`historical-forecast-api`) or customer-API-key (`customer-api`) modes; `get_json()` is the public GET-with-retry entry used by callers building their own URLs (e.g. frontal grid fetch)
 

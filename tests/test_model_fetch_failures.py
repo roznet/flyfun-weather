@@ -21,7 +21,7 @@ from weatherbrief.models import (
     RoutePointAnalysis,
     SoundingAnalysis,
 )
-from weatherbrief.tasks.advise import _models_failed_for_ctx
+from weatherbrief.tasks.advise import _models_failed_for_ctx, _restrict_to_advisory_models
 from weatherbrief.tasks.artifacts import write_pack_meta
 from weatherbrief.tasks.fetch import _build_fetch_diagnostics, model_failure_reason
 
@@ -81,6 +81,20 @@ def test_http_4xx_is_not_retried(mock_sleep):
     mock_sleep.assert_not_called()
 
 
+@patch("weatherbrief.fetch.open_meteo.time.sleep")
+def test_network_retry_budget_is_shared_across_5xx_attempts(mock_sleep):
+    """Two network retries per call in total, not two per 429/5xx attempt."""
+    busy = MagicMock()
+    busy.status_code = 503
+    busy.headers = {}
+    timeout = requests.exceptions.ReadTimeout("read timed out")
+    client = _client_with([timeout, busy, timeout, timeout, _ok_response()])
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        client._get_with_retry("https://api.open-meteo.com/v1/ecmwf", {})
+    assert client.session.get.call_count == 4
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [5, 10, 15]
+
+
 # --- A2: structured per-model status ---
 
 
@@ -128,6 +142,14 @@ def test_pack_meta_round_trips_models_failed(tmp_path):
     assert _models_failed_for_ctx(tmp_path, None) == {"ecmwf": "timeout"}
     # A model the user excluded from advisories is not reported missing.
     assert _models_failed_for_ctx(tmp_path, ["gfs"]) == {}
+
+
+def test_user_excluded_model_is_never_unavailable():
+    """The pipeline passes the fetch record directly; same filter as the pack path."""
+    failed = {"ecmwf": "timeout", "gfs": "http_503"}
+    assert _restrict_to_advisory_models(failed, ["gfs", "icon"]) == {"gfs": "http_503"}
+    assert _restrict_to_advisory_models(failed, None) == failed
+    assert _restrict_to_advisory_models(failed, []) == failed
 
 
 def test_old_pack_without_field_reads_empty(tmp_path):

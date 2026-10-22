@@ -312,8 +312,19 @@ def _models_failed_for_ctx(
     except (OSError, ValueError):
         logger.debug("Could not read models_failed from pack meta", exc_info=True)
         return {}
+    return _restrict_to_advisory_models(failed, advisory_models)
+
+
+def _restrict_to_advisory_models(
+    failed: dict[str, str],
+    advisory_models: list[str] | None,
+) -> dict[str, str]:
+    """Drop failed models the user excluded from advisories (#835).
+
+    A model they deselected on purpose must never read as "unavailable".
+    """
     if advisory_models:
-        failed = {m: r for m, r in failed.items() if m in advisory_models}
+        return {m: r for m, r in failed.items() if m in advisory_models}
     return dict(failed)
 
 
@@ -528,8 +539,8 @@ def run_advisories(
         # The pipeline passes the fetch stage's record; otherwise read the pack.
         if models_failed is None:
             models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
-        elif advisory_models:
-            models_failed = {m: r for m, r in models_failed.items() if m in advisory_models}
+        else:
+            models_failed = _restrict_to_advisory_models(models_failed, advisory_models)
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
