@@ -231,15 +231,20 @@ upload. Two layers make that automatic:
 
 - `ios_screenshots.py --if-changed` skips the capture (~10 min) unless a file in
   `CAPTURE_INPUTS` — Views, ViewModels, assets, the showcase fixture and its repository, the
-  journey, the script — changed since the commit in `build/appstore-screenshots/
-  manifest.json`, which each successful run writes. Models/Services are left out on purpose
+  journey, the script — changed since that device/appearance was captured. Each successful
+  run records its commit per device and appearance in `build/appstore-screenshots/
+  manifest.json`, keeping the entries a partial run (`--device X`) didn't touch; the export
+  first clears the folder's old `NN-*.png`, so a screen the journey dropped can't linger. Models/Services are left out on purpose
   (almost every release touches them; a decoding change that alters a screen also breaks
   `FixtureShowcaseTests`). Run without the flag to force a capture.
 - `asc.py screenshots` (or `stage --screenshots DIR`) compares each set's MD5s with the
   `sourceFileChecksum` App Store Connect keeps and leaves a matching set alone; otherwise it
   deletes what no local file matches, uploads the rest and reorders. A family that received
   a set loses its other sizes (the old 6.5" set) only when the required sizes remain. It
-  refuses a set with two identical files — a sign the journey shot one screen twice.
+  refuses a set with two identical files — a sign the journey shot one screen twice — and
+  deletes a second remote copy of the same shot. `stage` checks the screenshot folder before
+  changing anything and syncs it last, after the build is attached, so a screenshot failure
+  never costs the build its upload.
 
 A capture re-dates the fixture to tomorrow, so a fresh capture always differs from the store
 and always uploads: the decision lives in `--if-changed`, not in the checksums.

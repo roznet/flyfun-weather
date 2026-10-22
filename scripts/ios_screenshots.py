@@ -78,31 +78,50 @@ def changed_since_capture(out: Path, devices: list[str], appearances: list[str])
     except (OSError, ValueError):
         return "no previous capture manifest"
     captured = manifest.get("captures", {})
-    for device in devices:
-        for appearance in appearances:
-            if appearance not in captured.get(ios_test.slug(device), []):
-                return f"{device} / {appearance} was not in the last capture"
-    if manifest.get("dirty"):
-        return "the last capture ran on uncommitted screen changes"
-    try:
-        diff = git("diff", "--name-only", manifest["commit"], "HEAD", "--", *CAPTURE_INPUTS)
-    except (KeyError, subprocess.CalledProcessError):
-        return "the last capture's commit is unknown here"
     dirty = git("status", "--porcelain", "--", *CAPTURE_INPUTS)
-    if diff or dirty:
-        files = (diff + "\n" + dirty).split()
-        return f"{len(files)} screen input(s) changed since {manifest['commit'][:8]}, e.g. {files[-1]}"
+    for device in devices:
+        slot = captured.get(ios_test.slug(device))
+        for appearance in appearances:
+            entry = slot.get(appearance) if isinstance(slot, dict) else None
+            if not isinstance(entry, dict):
+                return f"{device} / {appearance} was not in the last capture"
+            if entry.get("dirty"):
+                return f"{device} / {appearance} was captured on uncommitted screen changes"
+            try:
+                diff = git("diff", "--name-only", entry["commit"], "HEAD", "--", *CAPTURE_INPUTS)
+            except (KeyError, subprocess.CalledProcessError):
+                return f"{device} / {appearance}: its capture commit is unknown here"
+            if diff or dirty:
+                files = (diff + "\n" + dirty).split()
+                return (f"{len(files)} screen input(s) changed since {device} / {appearance} "
+                        f"was captured at {entry['commit'][:8]}, e.g. {files[-1]}")
     return None
 
 
 def write_manifest(out: Path, devices: list[str], appearances: list[str]) -> None:
+    """Record what this run captured, per device and appearance, keeping earlier entries.
+
+    Each entry carries its own commit: a partial run (`--device X`) must not
+    drop the other devices, nor vouch for them at a commit they weren't shot at.
+    """
     out.mkdir(parents=True, exist_ok=True)
-    (out / "manifest.json").write_text(json.dumps({
+    path = out / "manifest.json"
+    try:
+        captures = json.loads(path.read_text()).get("captures", {})
+    except (OSError, ValueError):
+        captures = {}
+    entry = {
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain", "--", *CAPTURE_INPUTS)),
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "captures": {ios_test.slug(d): appearances for d in devices},
-    }, indent=2) + "\n")
+    }
+    for device in devices:
+        slot = captures.get(ios_test.slug(device))
+        slot = slot if isinstance(slot, dict) else {}
+        for appearance in appearances:
+            slot[appearance] = entry
+        captures[ios_test.slug(device)] = slot
+    path.write_text(json.dumps({"captures": captures}, indent=2) + "\n")
 
 
 def simctl(*args: str) -> None:
@@ -132,6 +151,10 @@ def export(bundle: Path, dest: Path) -> list[Path]:
                         "--path", str(bundle), "--output-path", tmp], check=True, capture_output=True)
         manifest = json.loads((Path(tmp) / "manifest.json").read_text())
         dest.mkdir(parents=True, exist_ok=True)
+        # A screen the journey no longer shoots (the iPad's 02-advisories) must
+        # not survive from an earlier capture and get uploaded.
+        for stale in dest.glob("[0-9][0-9]-*.png"):
+            stale.unlink()
         written = []
         for test in manifest:
             for a in test["attachments"]:

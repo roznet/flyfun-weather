@@ -784,10 +784,18 @@ def sync_screenshots(asc: Asc, version_id: str, local: dict[str, list[Path]],
                 continue
             if set_id is None:
                 set_id = asc.create_screenshot_set(row["id"], display_type)
-            kept = {s["attributes"].get("sourceFileChecksum"): s["id"] for s in shots}
+            # One remote shot per wanted checksum is kept; the rest — unwanted, or a
+            # second copy of a wanted one, which would never be reordered away and
+            # would count toward the 10-shot cap — are deleted.
+            kept: dict[str, str] = {}
+            removed = 0
             for shot in shots:
-                if shot["attributes"].get("sourceFileChecksum") not in sums:
+                checksum = shot["attributes"].get("sourceFileChecksum")
+                if checksum in sums and checksum not in kept:
+                    kept[checksum] = shot["id"]
+                else:
                     asc.request("DELETE", f"/appScreenshots/{shot['id']}")
+                    removed += 1
             ordered, uploaded = [], []
             for path, checksum in zip(paths, sums):
                 if checksum in kept:
@@ -799,8 +807,7 @@ def sync_screenshots(asc: Asc, version_id: str, local: dict[str, list[Path]],
             asc.wait_screenshots(uploaded)
             asc.order_screenshots(set_id, ordered)
             print(f"[{locale}] {display_type}: uploaded {len(uploaded)}, "
-                  f"kept {len(ordered) - len(uploaded)}, removed "
-                  f"{len([s for s in shots if s['attributes'].get('sourceFileChecksum') not in sums])}")
+                  f"kept {len(ordered) - len(uploaded)}, removed {removed}")
 
         for family in sorted({_family(t) for t in local}):
             stale = [t for t in remote if _family(t) == family and t not in local]
@@ -1111,6 +1118,10 @@ def main() -> None:
         return
 
     if args.command == "stage":
+        # Check the screenshots before changing anything: a bad capture must not
+        # leave a half-staged version behind.
+        local_shots = (collect_screenshots(Path(args.screenshots).expanduser(), "light")
+                       if args.screenshots else None)
         version = asc.ensure_version(args.version, args.release_type)
         version_id = version.get("id")
 
@@ -1122,21 +1133,22 @@ def main() -> None:
             asc.set_review_notes(version_id, args.review_notes)
             print("App Review notes updated.")
 
-        if args.screenshots:
-            local = collect_screenshots(Path(args.screenshots).expanduser(), "light")
-            sync_screenshots(asc, version_id, local, args.locale)
-
         if args.archive:
             upload_archive(config, Path(args.archive).expanduser(), asc.dry_run)
 
         if asc.dry_run:
             print("[dry-run] skipping build wait + attach")
-            return
+        else:
+            print(f"Waiting for build {args.version} ({args.build}) to process…")
+            build = asc.wait_build(args.version, args.build, args.timeout)
+            asc.attach_build(version_id, build["id"])
+            print(f"Attached build {args.version} ({args.build}).")
 
-        print(f"Waiting for build {args.version} ({args.build}) to process…")
-        build = asc.wait_build(args.version, args.build, args.timeout)
-        asc.attach_build(version_id, build["id"])
-        print(f"Attached build {args.version} ({args.build}).")
+        # Last, so a screenshot upload failure never costs the build its upload.
+        if local_shots is not None:
+            sync_screenshots(asc, version_id, local_shots, args.locale)
+        if asc.dry_run:
+            return
 
         print()
         print_status(asc)
