@@ -1,6 +1,8 @@
 package aero.flyfun.weather.ui.flights
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -18,13 +20,19 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -34,7 +42,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,7 +53,11 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimeInput
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -63,9 +75,12 @@ import aero.flyfun.weather.model.FlexibilityMode
 import aero.flyfun.weather.model.FlightDuration
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.viewmodel.AddFlightViewModel
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -108,10 +123,6 @@ fun AddFlightSheet(
     val errorMessage by viewModel.errorMessage.collectAsState()
 
     var showFplBox by remember { mutableStateOf(false) }
-    var dateInputText by remember(departureDate) { mutableStateOf(departureDate.toString()) }
-    var timeInputText by remember(departureTime) {
-        mutableStateOf(departureTime.format(DateTimeFormatter.ofPattern("HH:mm")))
-    }
 
     LaunchedEffect(Unit) {
         viewModel.loadFormMetadata()
@@ -333,7 +344,7 @@ fun AddFlightSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                val today = LocalDate.now()
+                val today = LocalDate.now(ZoneOffset.UTC)
                 listOf(
                     "Today" to today,
                     "Tomorrow" to today.plusDays(1),
@@ -342,10 +353,7 @@ fun AddFlightSheet(
                 ).forEach { (label, date) ->
                     FilterChip(
                         selected = departureDate == date,
-                        onClick = {
-                            viewModel.setDepartureDate(date)
-                            dateInputText = date.toString()
-                        },
+                        onClick = { viewModel.setDepartureDate(date) },
                         label = { Text(label) },
                     )
                 }
@@ -355,24 +363,16 @@ fun AddFlightSheet(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                OutlinedTextField(
-                    value = dateInputText,
-                    onValueChange = { str ->
-                        dateInputText = str
-                        runCatching { LocalDate.parse(str) }.onSuccess { viewModel.setDepartureDate(it) }
-                    },
-                    label = { Text("Date (YYYY-MM-DD)") },
-                    singleLine = true,
+                NativeDatePickerField(
+                    label = "Date",
+                    date = departureDate,
+                    onDateSelected = { viewModel.setDepartureDate(it) },
                     modifier = Modifier.weight(1f),
                 )
-                OutlinedTextField(
-                    value = timeInputText,
-                    onValueChange = { str ->
-                        timeInputText = str
-                        runCatching { LocalTime.parse(str) }.onSuccess { viewModel.setDepartureTime(it) }
-                    },
-                    label = { Text("Time UTC (HH:MM)") },
-                    singleLine = true,
+                NativeTimePickerField(
+                    label = "Time (UTC)",
+                    time = departureTime,
+                    onTimeSelected = { viewModel.setDepartureTime(it) },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -399,29 +399,17 @@ fun AddFlightSheet(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (flexibilityMode == FlexibilityMode.MULTI_DAY) {
-                        var endDateStr by remember(windowEndDate) { mutableStateOf(windowEndDate.toString()) }
-                        OutlinedTextField(
-                            value = endDateStr,
-                            onValueChange = { str ->
-                                endDateStr = str
-                                runCatching { LocalDate.parse(str) }.onSuccess { viewModel.setWindowEndDate(it) }
-                            },
-                            label = { Text("End Date (YYYY-MM-DD)") },
-                            singleLine = true,
+                        NativeDatePickerField(
+                            label = "End Date",
+                            date = windowEndDate,
+                            onDateSelected = { viewModel.setWindowEndDate(it) },
                             modifier = Modifier.weight(1f),
                         )
                     }
-                    var endTimeStr by remember(windowEndTime) {
-                        mutableStateOf(windowEndTime.format(DateTimeFormatter.ofPattern("HH:mm")))
-                    }
-                    OutlinedTextField(
-                        value = endTimeStr,
-                        onValueChange = { str ->
-                            endTimeStr = str
-                            runCatching { LocalTime.parse(str) }.onSuccess { viewModel.setWindowEndTime(it) }
-                        },
-                        label = { Text("Window End UTC (HH:MM)") },
-                        singleLine = true,
+                    NativeTimePickerField(
+                        label = "Window End (UTC)",
+                        time = windowEndTime,
+                        onTimeSelected = { viewModel.setWindowEndTime(it) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -455,30 +443,15 @@ fun AddFlightSheet(
                 valueRange = 2000f..30000f,
             )
 
-            // Flight Duration
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = "Duration: ${FlightDuration.label(viewModel.totalDurationHours)}",
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedButton(
-                    onClick = {
-                        val totalMins = (durationHours * 60 + durationMinutes - 15).coerceAtLeast(15)
-                        viewModel.setDuration(totalMins / 60, totalMins % 60)
-                    },
-                ) { Text("-15m") }
-                OutlinedButton(
-                    onClick = {
-                        val totalMins = (durationHours * 60 + durationMinutes + 15).coerceAtMost(12 * 60)
-                        viewModel.setDuration(totalMins / 60, totalMins % 60)
-                    },
-                ) { Text("+15m") }
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Flight Duration (iOS-style Hours + Quarter-Hour Minutes dropdowns + Slider)
+            FlightDurationPickerSection(
+                durationHours = durationHours,
+                durationMinutes = durationMinutes,
+                totalDurationHours = viewModel.totalDurationHours,
+                onDurationChange = { h, m -> viewModel.setDuration(h, m) },
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -497,7 +470,7 @@ fun AddFlightSheet(
                         label = { Text("Aircraft") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = acExpanded) },
                         modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                             .fillMaxWidth(),
                     )
                     ExposedDropdownMenu(
@@ -540,7 +513,7 @@ fun AddFlightSheet(
                         label = { Text("Briefing Profile") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = profExpanded) },
                         modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                             .fillMaxWidth(),
                     )
                     ExposedDropdownMenu(
@@ -575,7 +548,7 @@ fun AddFlightSheet(
                     label = { Text("Assign to Trip (Optional)") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = tripExpanded) },
                     modifier = Modifier
-                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                         .fillMaxWidth(),
                 )
                 ExposedDropdownMenu(
@@ -634,5 +607,303 @@ fun AddFlightSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+}
+
+private val DISPLAY_DATE_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEE, d MMM yyyy", Locale.US)
+private val DISPLAY_TIME_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("HH:mm", Locale.US)
+
+/**
+ * Read-only tappable field that opens a native Material 3 [DatePickerDialog] calendar widget.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NativeDatePickerField(
+    label: String,
+    date: LocalDate,
+    onDateSelected: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Release) {
+                showDialog = true
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = date.format(DISPLAY_DATE_FORMATTER),
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text(label) },
+        trailingIcon = {
+            IconButton(onClick = { showDialog = true }) {
+                Icon(Icons.Default.CalendarMonth, contentDescription = "Pick $label")
+            }
+        },
+        interactionSource = interactionSource,
+        modifier = modifier,
+    )
+
+    if (showDialog) {
+        val initialMillis = remember(date) {
+            date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        }
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+        DatePickerDialog(
+            onDismissRequest = { showDialog = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val picked = Instant.ofEpochMilli(millis)
+                                .atZone(ZoneOffset.UTC)
+                                .toLocalDate()
+                            onDateSelected(picked)
+                        }
+                        showDialog = false
+                    },
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+/**
+ * Read-only tappable field that opens a native Material 3 24-hour [TimePicker] dialog
+ * (with a clock-dial / keyboard toggle and quick quarter-hour chips).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NativeTimePickerField(
+    label: String,
+    time: LocalTime,
+    onTimeSelected: (LocalTime) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    var useKeyboardInput by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Release) {
+                showDialog = true
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = "${time.format(DISPLAY_TIME_FORMATTER)} UTC",
+        onValueChange = {},
+        readOnly = true,
+        singleLine = true,
+        label = { Text(label) },
+        trailingIcon = {
+            IconButton(onClick = { showDialog = true }) {
+                Icon(Icons.Default.Schedule, contentDescription = "Pick $label")
+            }
+        },
+        interactionSource = interactionSource,
+        modifier = modifier,
+    )
+
+    if (showDialog) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = time.hour,
+            initialMinute = time.minute,
+            is24Hour = true,
+        )
+
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    IconButton(onClick = { useKeyboardInput = !useKeyboardInput }) {
+                        Icon(
+                            imageVector = if (useKeyboardInput) Icons.Default.Schedule else Icons.Default.Keyboard,
+                            contentDescription = if (useKeyboardInput) "Switch to clock dial" else "Switch to keyboard input",
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (useKeyboardInput) {
+                        TimeInput(state = timePickerState)
+                    } else {
+                        TimePicker(state = timePickerState)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Quick quarter-hour chips for fast aviation time entry
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FlightDuration.minuteOptions.forEach { minOpt ->
+                            FilterChip(
+                                selected = timePickerState.minute == minOpt,
+                                onClick = {
+                                    onTimeSelected(LocalTime.of(timePickerState.hour, minOpt))
+                                    showDialog = false
+                                },
+                                label = { Text(":%02d".format(minOpt)) },
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onTimeSelected(LocalTime.of(timePickerState.hour, timePickerState.minute))
+                        showDialog = false
+                    },
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Flight duration section combining iOS-style Hours (`0..12 h`) + Quarter-Hour Minutes
+ * (`00, 15, 30, 45 m`) dropdown menus with a synchronized quarter-hour slider.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FlightDurationPickerSection(
+    durationHours: Int,
+    durationMinutes: Int,
+    totalDurationHours: Double,
+    onDurationChange: (hours: Int, minutes: Int) -> Unit,
+) {
+    var hoursExpanded by remember { mutableStateOf(false) }
+    var minutesExpanded by remember { mutableStateOf(false) }
+    val snappedMinutes = remember(durationMinutes) {
+        FlightDuration.minuteOptions.minByOrNull { kotlin.math.abs(it - durationMinutes) } ?: 0
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = "Duration: ${FlightDuration.label(totalDurationHours)}",
+                style = MaterialTheme.typography.labelLarge,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+
+            // Hours dropdown (0h .. 12h)
+            ExposedDropdownMenuBox(
+                expanded = hoursExpanded,
+                onExpandedChange = { hoursExpanded = it },
+                modifier = Modifier.width(104.dp),
+            ) {
+                OutlinedTextField(
+                    value = "${durationHours}h",
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = hoursExpanded) },
+                    modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                )
+                ExposedDropdownMenu(
+                    expanded = hoursExpanded,
+                    onDismissRequest = { hoursExpanded = false },
+                ) {
+                    (0..FlightDuration.maxHours).forEach { h ->
+                        DropdownMenuItem(
+                            text = { Text("${h} h") },
+                            onClick = {
+                                val nextMin = if (h == 0 && snappedMinutes == 0) 15 else snappedMinutes
+                                onDurationChange(h, nextMin)
+                                hoursExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+
+            // Quarter-hour minutes dropdown (00m, 15m, 30m, 45m)
+            ExposedDropdownMenuBox(
+                expanded = minutesExpanded,
+                onExpandedChange = { minutesExpanded = it },
+                modifier = Modifier.width(108.dp),
+            ) {
+                OutlinedTextField(
+                    value = "%02dm".format(snappedMinutes),
+                    onValueChange = {},
+                    readOnly = true,
+                    singleLine = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = minutesExpanded) },
+                    modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+                )
+                ExposedDropdownMenu(
+                    expanded = minutesExpanded,
+                    onDismissRequest = { minutesExpanded = false },
+                ) {
+                    FlightDuration.minuteOptions.forEach { m ->
+                        val enabled = !(durationHours == 0 && m == 0)
+                        DropdownMenuItem(
+                            text = { Text("%02d min".format(m)) },
+                            enabled = enabled,
+                            onClick = {
+                                onDurationChange(durationHours, m)
+                                minutesExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        // Quarter-hour slider (0h 15m .. 12h 00m in 15-minute increments)
+        val totalQuarterHours = (durationHours * 4 + snappedMinutes / 15).coerceIn(1, FlightDuration.maxHours * 4)
+        Slider(
+            value = totalQuarterHours.toFloat(),
+            onValueChange = { rawQuarters ->
+                val q = rawQuarters.roundToInt().coerceIn(1, FlightDuration.maxHours * 4)
+                onDurationChange(q / 4, (q % 4) * 15)
+            },
+            valueRange = 1f..(FlightDuration.maxHours * 4).toFloat(),
+        )
     }
 }

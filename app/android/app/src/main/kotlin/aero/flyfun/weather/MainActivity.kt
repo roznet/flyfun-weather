@@ -269,6 +269,7 @@ fun FlyFunWeatherRoot(
         activeFlightId = null
         activePackTimestamp = null
         activeOpenObserved = false
+        flightListViewModel.loadFlights()
         currentRoute = RootRoute.FLIGHTS
     }
 

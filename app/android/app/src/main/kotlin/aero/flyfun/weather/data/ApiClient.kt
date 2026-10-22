@@ -479,6 +479,9 @@ class ApiClient(
             .build()
 
         val listener = object : EventSourceListener() {
+            @Volatile
+            private var terminalEventReceived = false
+
             override fun onEvent(
                 eventSource: EventSource,
                 id: String?,
@@ -490,10 +493,16 @@ class ApiClient(
                 val event = runCatching {
                     json.decodeFromString(RefreshEvent.serializer(), trimmed)
                 }.getOrNull() ?: return
-                trySend(event)
-                if (event.type == "complete" || event.type == "error") {
-                    eventSource.cancel()
+                val resolvedType = event.type.ifBlank { type.orEmpty() }
+                val normalized = if (resolvedType != event.type) event.copy(type = resolvedType) else event
+                val isTerminal = normalized.type == "complete" || normalized.type == "error"
+                if (isTerminal) {
+                    terminalEventReceived = true
+                }
+                trySend(normalized)
+                if (isTerminal) {
                     channel.close()
+                    eventSource.cancel()
                 }
             }
 
@@ -506,8 +515,15 @@ class ApiClient(
                 t: Throwable?,
                 response: Response?,
             ) {
+                // Once `complete` or `error` has been delivered, cancelling or closing the
+                // underlying HTTP/2 or chunked SSE stream triggers `onFailure` with the
+                // initial 200 OK response attached; do not turn that teardown into an error.
+                if (terminalEventReceived) {
+                    channel.close()
+                    return
+                }
                 val err: Throwable = when {
-                    response != null -> {
+                    response != null && !response.isSuccessful -> {
                         val code = response.code
                         val bodyBytes = runCatching { response.body?.bytes() ?: ByteArray(0) }.getOrDefault(ByteArray(0))
                         when (code) {
