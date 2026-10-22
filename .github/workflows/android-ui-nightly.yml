@@ -58,8 +58,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # No android-actions/setup-android: ubuntu-latest ships the SDK with
+      # ANDROID_HOME set (android.yml relies on it too), and that action's
+      # default `sdkmanager tools` fails on cmdline-tools 16.0 ("Failed to
+      # find package 'tools'"), which broke every nightly through 2026-10-22.
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
