@@ -114,7 +114,6 @@ class ForecastMapViewModel(
                         if (offered.isNotEmpty()) {
                             _days.value = offered
                             gridIsFallback = false
-                            offered.first().hours.takeIf { it.isNotEmpty() }?.let { _availableHours.value = it }
                         } else {
                             gridIsFallback = true
                         }
@@ -126,6 +125,7 @@ class ForecastMapViewModel(
                 pendingLink = null
                 applyLinkedDay(link)
             }
+            syncHoursToSelectedDay()
             fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
         }
     }
@@ -136,6 +136,7 @@ class ForecastMapViewModel(
         _linkedDateNotice.value = null
         if (_selectedDay.value == dayOffset && _mapData.value != null) return
         _selectedDay.value = dayOffset
+        syncHoursToSelectedDay()
         fetchForecastSlice(day = dayOffset, hourUtc = _selectedHour.value)
     }
 
@@ -180,6 +181,7 @@ class ForecastMapViewModel(
             return
         }
         applyLinkedDay(target)
+        syncHoursToSelectedDay()
         fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
     }
 
@@ -199,6 +201,19 @@ class ForecastMapViewModel(
         }
         _selectedDay.value = resolved.day
         _linkedDateNotice.value = ForecastLinkedDate.noticeFor(linked, resolved, gridIsFallback, today)
+    }
+
+    /**
+     * Hour chips follow the selected day's sample hours (the last day often has only a few),
+     * snapping the hour to the nearest one so the map never asks for an hour with no data.
+     * Same rule as iOS `hours(forDay:)` + `snapHour`.
+     */
+    private fun syncHoursToSelectedDay() {
+        val hours = _days.value.firstOrNull { it.day == _selectedDay.value }?.hours.orEmpty()
+        if (hours.isEmpty()) return
+        _availableHours.value = hours
+        val hour = _selectedHour.value
+        if (hour !in hours) _selectedHour.value = hours.minBy { abs(it - hour) }
     }
 
     private fun fetchForecastSlice(day: Int, hourUtc: Int) {
@@ -411,7 +426,8 @@ object PanEuropeanMapFixtures {
     )
 
     fun defaultForecastDays(): ForecastDaysResponse {
-        val today = LocalDate.now()
+        // Server days are UTC dates
+        val today = LocalDate.now(ZoneOffset.UTC)
         val days = (0..3).map { d ->
             val dateStr = today.plusDays(d.toLong()).toString()
             ForecastDayEntry(

@@ -98,10 +98,9 @@ class ForecastLinkedDateTest {
 
     @Test
     fun `view model - fc date wins over fc day and picking a day clears the notice`() {
-        // Mock grid is D+0…D+3 from the device's local date; keep the clock on today's UTC date
-        val now = Instant.now().toString()
-        val todayUtc = LocalDate.ofInstant(Instant.parse(now), java.time.ZoneOffset.UTC)
-        val vm = mockViewModel(now)
+        // Resolution only uses the mock grid's day offsets (D+0…D+3), so a pinned clock is enough
+        val todayUtc = today
+        val vm = mockViewModel("2026-10-22T10:00:00Z")
 
         vm.applyDeepLinkTarget(NavigationTarget.ForecastMap(dayOffset = 3, date = todayUtc.plusDays(1).toString(), hourUtc = 15))
         assertEquals(1, vm.selectedDay.value)
@@ -123,5 +122,15 @@ class ForecastLinkedDateTest {
         vm.applyDeepLinkTarget(NavigationTarget.ForecastMap(dayOffset = 2, date = "2026-02-30"))
         assertEquals(2, vm.selectedDay.value)
         assertNull(vm.linkedDateNotice.value)
+    }
+
+    @Test
+    fun `view model - hour chips follow the selected day and snap the hour`() {
+        val vm = mockViewModel("2026-10-22T10:00:00Z")
+        // Off-grid linked hour snaps to the nearest sample hour of the day
+        vm.applyDeepLinkTarget(NavigationTarget.ForecastMap(date = today.plusDays(2).toString(), hourUtc = 13))
+        assertEquals(2, vm.selectedDay.value)
+        assertEquals(vm.days.value.first { it.day == 2 }.hours, vm.availableHours.value)
+        assertEquals(12, vm.selectedHour.value)
     }
 }
