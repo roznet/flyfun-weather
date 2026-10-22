@@ -225,8 +225,12 @@ struct BriefingContainerView: View {
                 let flight = flight
                 tracking.onLanding = { fixes in positions.submit(fixes, flightId: flight.id, landed: true) }
                 tracking.onOneShotFix = { fix in
-                    // The PIREP form's fix, or the one taken on opening.
-                    if flight.isInLiveObservationWindow() { positions.submit([fix], flightId: flight.id) }
+                    // The PIREP form's fix, or the one taken on opening. Only
+                    // after Start (#812): the server reads the first ground fix
+                    // at the departure as Start.
+                    if flight.isInLiveObservationWindow(), positions.hasConsent(flightId: flight.id) {
+                        positions.submit([fix], flightId: flight.id)
+                    }
                 }
                 vm.beforeLivePoll = {
                     if tracking.isTracking {

@@ -20,20 +20,24 @@ a late take-off pushes it back, a recorded landing closes it.
    once per tick and shared the same way.
 
 So a tick costs at most two METAR/TAF batches and one SIGMET call, whatever
-the number of flights.
+the number of flights. Observed radar/lightning/tops are re-sampled from local
+frames as usual (no network).
 
 **Started flights every 5 min (#812).** Between two verification cycles the
 loop runs a lighter pass over the started flights only (``started_only``:
 Start pressed or a take-off known, not yet arrived). It has no verification
 fetch to share, so it costs one METAR/TAF batch and one SIGMET call, again
 whatever the number of flights. Started flights also ride the 10-min tick, so
-they tick every 5 min; the others stay on 10.
+they tick every 5 min; the others stay on 10 (loosely: each wait starts after
+the previous pass ends). Writers overlapping on one flight (this pass, the
+10-min tick, a Start update, a ↻ press) are serialised by
+``commit_live_update``'s per-flight lock, which also drops a write computed
+before the stored one.
 
 **Start (#812).** The first ground fix at the departure (the app posts one
 right after Start) runs :func:`run_start_update` at once, from the position
 endpoint: the ↻ path with a fresh fetch, and the highlight regenerated at the
-new times. Like a ↻ press it never pushes. Observed radar/lightning/tops are re-sampled from local
-frames as usual (no network).
+new times. Like a ↻ press it never pushes.
 
 After the commits, each committed flight's new alerts (and pushed alerts that
 cleared) go to the live-alert push (#754, ``notify/live_alerts.py``); only this
@@ -664,18 +668,21 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
         except Exception:
             logger.warning("Start update: refresh failed for flight %s", flight_id, exc_info=True)
             return False
+        highlight = "off"
         try:
             from weatherbrief.tasks.live_highlight import charge_highlight, ensure_highlight, highlight_enabled
 
             layer = live_for_pack(pack_dir)
             if highlight_enabled() and layer is not None:
                 outcome = ensure_highlight(flight_dir, layer, retimed_from=retimed_from)
-                charge_highlight(db, flight.user_id, flight_id, outcome.usage)
+                highlight = outcome.outcome
+                charge_highlight(db, flight.user_id, flight_id, outcome.usage)  # None usage: no-op
                 db.commit()
         except Exception:
+            highlight = "failed"
             logger.warning("Start update: highlight failed for flight %s", flight_id, exc_info=True)
             db.rollback()
-        logger.info("LIVE_START flight=%s refreshed", flight_id)
+        logger.info("LIVE_START flight=%s refreshed highlight=%s", flight_id, highlight)
         return True
     except Exception:
         logger.warning("Start update failed for flight %s", flight_id, exc_info=True)

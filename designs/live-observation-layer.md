@@ -414,7 +414,13 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
     to leave then and land the planned duration later (the common case:
     no fix after Start). Accepted cost: a check at the airfield an hour
     early moves every ETA an hour early until the next fix. (Was
-    `max(planned, fix + 10 min)`, #761.)
+    `max(planned, fix + 10 min)`, #761.) The server cannot see the button:
+    the iOS app sends no fix for a flight before Start is pressed on it (the
+    fix on opening, the PIREP form's and the map's locate button all wait
+    for `grantConsent`), so the first ground fix is the press. Owner,
+    2026-10-22: Start is pressed once in the aircraft, from boarding to just
+    before take-off; the 3 h window start stays the only bound. An explicit
+    `start` flag from the app is #813's.
   - *Started* (`FlightProgress.started`): a ground fix at the departure or
     a take-off known, not yet arrived; `start_fix` is the first ground fix
     at the departure, which stays after the take-off (push consent).
