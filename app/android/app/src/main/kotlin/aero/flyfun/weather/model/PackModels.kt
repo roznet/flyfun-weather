@@ -178,17 +178,23 @@ typealias ChartOverlay = Map<String, ChartOverlayEntry>
 data class RefreshEvent(
     val type: String = "",
     val stage: String? = null,
+    val label: String? = null,
     val detail: String? = null,
     val progress: Double? = null,
     val pack: PackMetaResponse? = null,
     val message: String? = null,
     val elapsed: Double? = null,
+    @SerialName("elapsed_seconds")
+    val elapsedSeconds: Double? = null,
+    @SerialName("refresh_decision")
+    val refreshDecision: RefreshDecision? = null,
 )
 
 @Serializable
 data class RefreshDecision(
     val action: String = "",
-    val reason: String = "",
+    val mode: String? = null,
+    val reason: String? = null,
     @SerialName("stale_models")
     val staleModels: List<String>? = null,
     @SerialName("next_expected_model")

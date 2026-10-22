@@ -122,6 +122,8 @@ fun AdvisoryTabScreen(
     val debriefTaxonomy by viewModel.debriefTaxonomy.collectAsState()
     val liveLayer by viewModel.liveLayer.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val refreshProgressText by viewModel.refreshProgressText.collectAsState()
 
     val effectiveAlternates = alternatesState ?: advisories?.alternates
     val hasAirports = advisories?.airportConditions != null
@@ -185,9 +187,11 @@ fun AdvisoryTabScreen(
                         pack = selectedPack,
                         digest = digest,
                         flight = flight,
+                        isGeneratingFirstPack = selectedPack == null && (isLoading || isRefreshing),
+                        refreshProgressText = refreshProgressText,
                     )
 
-                    if (showsObservedTeaser) {
+                    if (showsObservedTeaser && selectedPack != null) {
                         ObservedTeaserRow(
                             liveChanges = liveLayer?.changes,
                             onOpenObserved = { viewModel.selectTab(BriefingTab.OBSERVED) },
@@ -230,7 +234,7 @@ fun AdvisoryTabScreen(
                 AdvisoriesGridSection(
                     advisoriesResponse = advisories,
                     digest = digest,
-                    isLoading = isLoading,
+                    isLoading = isLoading || (selectedPack == null && isRefreshing),
                     onFocusIntent = { intent -> viewModel.applyFocusIntent(intent) },
                 )
             }
@@ -286,8 +290,47 @@ private fun VerdictHeroCard(
     pack: PackMetaResponse?,
     digest: DigestResponse?,
     flight: FlightResponse?,
+    isGeneratingFirstPack: Boolean = false,
+    refreshProgressText: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    if (isGeneratingFirstPack) {
+        val accentColor = MaterialTheme.colorScheme.primary
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = accentColor.copy(alpha = 0.08f),
+            border = BorderStroke(0.5.dp, accentColor.copy(alpha = 0.30f)),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.5.dp,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Generating briefing for ${flight?.shortTitle ?: "this route"}…",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = refreshProgressText ?: "Fetching weather models and route advisories…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        return
+    }
+
     val assessment = when {
         pack != null && pack.assessment != null -> pack.resolvedAssessment
         digest != null && digest.assessment != null -> digest.resolvedAssessment

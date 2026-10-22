@@ -482,6 +482,91 @@ class ViewModelTest {
         assertEquals(0, repo.refreshPackCalls)
     }
 
+    @Test
+    fun briefingViewModel_sseDisconnectHandsOffToActiveRefreshPolling() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // Initial load sees no active refresh (0), so it starts SSE refreshPack;
+        // SSE stream drops after progress, while the server is still active for 2 status checks.
+        val repo = InterruptedSseRepository(
+            inner = FixtureBriefingRepository(),
+            activePollsAfterStreamDrop = 2,
+        )
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions()
+        testScope.advanceUntilIdle()
+
+        assertEquals(1, repo.refreshPackCalls)
+        assertNotNull(vm.selectedPack.value)
+        assertNull(vm.errorMessage.value)
+        assertFalse(vm.isRefreshing.value)
+    }
+
+    @Test
+    fun briefingViewModel_sseTeardownFailureRecoversCompletedServerPack() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        // SSE stream throws at close right as the server finishes saving the pack (0 active polls left).
+        val repo = InterruptedSseRepository(
+            inner = FixtureBriefingRepository(),
+            activePollsAfterStreamDrop = 0,
+        )
+        val vm = BriefingViewModel(
+            flightId = FixtureBriefingData.FLIGHT_ID,
+            repository = repo,
+            scopeOverride = testScope,
+        )
+
+        vm.applyLaunchOptions()
+        testScope.advanceUntilIdle()
+
+        assertEquals(1, repo.refreshPackCalls)
+        assertNotNull(vm.selectedPack.value)
+        assertNull(vm.errorMessage.value)
+        assertFalse(vm.isRefreshing.value)
+    }
+
+    private class InterruptedSseRepository(
+        private val inner: BriefingRepository,
+        private var activePollsAfterStreamDrop: Int,
+    ) : BriefingRepository by inner {
+        var refreshPackCalls = 0
+        private var streamStarted = false
+        private var packReady = false
+
+        override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse {
+            if (!streamStarted) {
+                return ActiveRefreshResponse(active = false)
+            }
+            if (activePollsAfterStreamDrop > 0) {
+                activePollsAfterStreamDrop--
+                return ActiveRefreshResponse(active = true, label = "Generating digest", progress = 0.85)
+            }
+            packReady = true
+            return ActiveRefreshResponse(active = false)
+        }
+
+        override suspend fun latestPack(flightId: String): PackMetaResponse =
+            if (packReady) inner.latestPack(flightId) else throw ApiError.NotFound
+
+        override suspend fun listPacks(flightId: String): List<PackMetaResponse> =
+            if (packReady) inner.listPacks(flightId) else emptyList()
+
+        override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> =
+            kotlinx.coroutines.flow.flow {
+                refreshPackCalls++
+                streamStarted = true
+                if (activePollsAfterStreamDrop == 0) {
+                    packReady = true
+                }
+                emit(RefreshEvent(type = "progress", label = "Fetching weather", progress = 0.5))
+                throw ApiError.NetworkError(IOException("SSE stream reset"))
+            }
+    }
+
     /** A flight whose server refresh state is scripted: [activePolls] "running" answers, then done. */
     private class NewFlightRepository(
         private val inner: BriefingRepository,

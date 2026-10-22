@@ -45,6 +45,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -52,9 +53,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import aero.flyfun.weather.model.AdvisoriesResponse
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
@@ -98,6 +103,34 @@ fun BriefingContainerScreen(
     val isDownloadingPack by viewModel.isDownloadingPack.collectAsState()
     val focusIntent by viewModel.focusIntent.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+
+    // Keep the screen awake while a briefing refresh is actively streaming/polling so Android
+    // does not turn off the display after 30s and abort the socket mid-refresh.
+    val localView = LocalView.current
+    DisposableEffect(localView, isRefreshing) {
+        val previousKeepScreenOn = localView.keepScreenOn
+        if (isRefreshing) {
+            localView.keepScreenOn = true
+        }
+        onDispose {
+            localView.keepScreenOn = previousKeepScreenOn
+        }
+    }
+
+    // Re-sync with the server whenever the screen returns to ON_RESUME (e.g. after unlocking
+    // the phone if the screen was manually turned off during a refresh).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onForegroundResume()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val showsObserved = remember(availableTabsState, liveLayer, snapshot) {
         BriefingTab.OBSERVED in availableTabsState ||
