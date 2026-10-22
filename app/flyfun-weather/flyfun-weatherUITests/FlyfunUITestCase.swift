@@ -334,9 +334,10 @@ class FlyfunUITestCase: XCTestCase {
             return
         }
         let content = app.descendants(matching: .any)["observedNutshell"].firstMatch
-        guard !content.exists else { return }
         // Either signal counts as open: the content, or the toggle's own
         // value (in case a fold ever opens onto content that isn't exposed).
+        // Checked up front too, or a tap would close an already-open fold.
+        guard !content.exists, (toggle.value as? String) != "expanded" else { return }
         // Polled here on the main actor rather than in a block predicate,
         // which XCTWaiter may evaluate off it.
         let opened = { (timeout: TimeInterval) -> Bool in

@@ -870,8 +870,9 @@ further calibration gate, no What's New entry).
   so the toggle exposes `expanded`/`collapsed` to the XCUI helper. UI-test
   launches clear the remembered state (`AppState.setupUITestSession`), and the
   helper `openObservedDetails` judges "open" by the fold's content
-  (`observedNutshell`), retapping only if that is absent and the toggle still
-  reads collapsed: a blind retap on a lagging value closed it again (#803).
+  (`observedNutshell`) or the toggle reading `expanded`, retapping only if the
+  content is absent and the toggle still reads collapsed: a blind retap on a
+  lagging value closed it again (#803).
 - **Web** (`nutshellHtml`): the highlight (or the headline), alert lines, then
   the headline and the other lines **unfolded** (documented divergence: the
   desktop has room).
