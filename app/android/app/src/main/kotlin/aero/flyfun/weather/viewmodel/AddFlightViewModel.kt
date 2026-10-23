@@ -740,7 +740,7 @@ class AddFlightViewModel(
         )
         // Create refuses "alternate"; restore it with the same create-then-patch the web does.
         if (_flexibility.value != FlightFlexibility.ALTERNATE) return created
-        return runCatching {
+        return try {
             repository.updateFlight(
                 created.id,
                 UpdateFlightRequest(
@@ -748,7 +748,12 @@ class AddFlightViewModel(
                     altDepartureTime = buildAltDepartureIso(),
                 ),
             ).flight
-        }.getOrDefault(created)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            _saveWarning.value = "The flight was created, but the alternate time didn't save. Open Edit to apply it again."
+            created
+        }
     }
 
     private suspend fun saveEdit(): FlightResponse {
