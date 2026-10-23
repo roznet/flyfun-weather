@@ -5,7 +5,7 @@
 //  The experimental radar-cell overlay on iOS (#661) — the mirror of
 //  web/tests/unit/cells-overlay-core.test.ts: stamp pairing and staleness,
 //  the badge, motion/trend words, arrows only for measured motion on cores,
-//  display decoding through the shared snake_case decoder, the route list and
+//  display decoding through the shared snake_case decoder and
 //  the shared model's caching. Plus the briefing tab bar shapes.
 //
 
@@ -218,69 +218,12 @@ struct CellsOverlayTests {
         #expect(CellsOverlay.arrowEnd(cells[2]) == nil)          // rain area
     }
 
-    @Test("route list without a route: cores only, strongest first")
-    func listedWithoutRoute() throws {
-        #expect(CellsOverlay.routeStorms(try Self.display(), route: []).map(\.id) == ["c2", "c1"])
-    }
-
-    /// A fictional storm field around a north–south route along 5.0E,
-    /// 44.0N → 45.0N (#689): one storm 9 NM off track (a core41 inside a
-    /// core35), a stronger one 36 NM off, and a lone core41 15 NM off.
-    static let stormsJSON = """
-    {"valid_time": "2026-10-03T14:05:00+00:00",
-     "cells": [
-       {"id": "near35", "tier": "core35", "lat": 44.20, "lon": 5.209, "area_km2": 300, "peak_dbz": 49},
-       {"id": "near41", "tier": "core41", "lat": 44.21, "lon": 5.215, "area_km2": 40, "peak_dbz": 49},
-       {"id": "far35", "tier": "core35", "lat": 44.50, "lon": 5.84, "area_km2": 900, "peak_dbz": 75.5},
-       {"id": "far41", "tier": "core41", "lat": 44.50, "lon": 5.84, "area_km2": 200, "peak_dbz": 75.5},
-       {"id": "lone41", "tier": "core41", "lat": 44.70, "lon": 4.65, "area_km2": 30, "peak_dbz": 45},
-       {"id": "rain", "tier": "rain20", "lat": 44.30, "lon": 5.00, "area_km2": 5000, "peak_dbz": 30}
-     ]}
-    """
-    static let route = [CLLocationCoordinate2D(latitude: 44.0, longitude: 5.0),
-                        CLLocationCoordinate2D(latitude: 45.0, longitude: 5.0)]
-
-    @Test("storms: a core41 inside a core35 is one storm; only within 20 NM; nearest first")
-    func routeStorms() throws {
-        let display = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(Self.stormsJSON.utf8))
-        let storms = CellsOverlay.routeStorms(display, route: Self.route)
-        #expect(storms.map(\.id) == ["near35", "lone41"])
-        #expect(storms.map { Int(($0.offTrackNm ?? -1).rounded()) } == [9, 15])
-        let wide = CellsOverlay.routeStorms(display, route: Self.route, withinNm: 50)
-        #expect(wide.map(\.id) == ["near35", "lone41", "far35"])
-    }
-
-    @Test("off-track distance is to the route line, not its waypoints")
-    func offTrack() throws {
-        let display = try JSONDecoder.weatherBrief.decode(CellDisplay.self, from: Data(Self.stormsJSON.utf8))
-        let near = try #require(display.cells.first { $0.id == "near35" })
-        // Abeam the middle of the leg, ~9 NM east; the nearest waypoint is 12 NM+ away.
-        #expect(abs((CellsOverlay.offTrackNm(near, route: Self.route) ?? 0) - 9.0) < 0.5)
-        #expect(CellsOverlay.offTrackNm(near, route: []) == nil)
-    }
-
-    @Test("chip counts cells within a stated distance")
-    func stormsChip() {
-        #expect(CellsOverlay.stormsChipText(0) == "No cells within 20 NM of route")
-        #expect(CellsOverlay.stormsChipText(1) == "1 cell within 20 NM of route")
-        #expect(CellsOverlay.stormsChipText(3) == "3 cells within 20 NM of route")
-    }
-
     @Test("whole-number dBZ and singular flash")
     func wording() {
         #expect(CellsOverlay.dbzText(75.5) == "76 dBZ")
         #expect(CellsOverlay.dbzText(nil) == "–")
         #expect(CellsOverlay.flashesText(1) == "1 flash")
         #expect(CellsOverlay.flashesText(3) == "3 flashes")
-    }
-
-    @Test("location is named by the nearest route waypoint")
-    func location() throws {
-        let cell = try Self.display().cells[0]  // 44.05N 5.1E
-        let waypoints = [("ZZAA", CLLocationCoordinate2D(latitude: 43.8, longitude: 4.8)),
-                         ("ZZBB", CLLocationCoordinate2D(latitude: 46.0, longitude: 7.0))]
-        let label = CellsOverlay.locationLabel(cell, waypoints: waypoints.map { (icao: $0.0, coordinate: $0.1) })
-        #expect(label == "20 NM NE of ZZAA")
     }
 
     @Test("display path fills the stamp and the box")

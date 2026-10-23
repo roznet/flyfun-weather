@@ -812,7 +812,8 @@ logs `Live glance failed` and leaves both null for that tick.
   web test rather than an empty section. Those archived ticks have a dark cells
   feed, so they exercise the radar-strip fallback; the bands path and the
   interactions are covered by `web/tests/observed-ribbon.spec.ts`.
-  - The web has **no standalone cells list** (iOS's `ObservedCellsSection`):
+  - The web has **no standalone cells list** (iOS's `ObservedCellsSection`,
+    on `/live` storms since #816):
     cells live on the route map's Cells toggle and the maps page's "Now" tab,
     and the ribbon plus the cell detail now cover the route-relative reading.
     "Since this briefing" also stays a page-level banner on web
@@ -882,8 +883,19 @@ same `build_glance` call, so they inherit its "never raises" guard:
   dimmed. **This reverses the 2026-10-09 "highlight above alerts" order**: the
   issue's target layout puts alerts second. iOS spy pills gain "Ahead"; the
   highlight caption adds its age, orange past `LiveTime.staleAfter` (30 min).
-- **Not done in #816's first PR** (follow-ups): the iOS Cells list on `/live`
-  storms, the offline banner, tappable change rows (`storm_ids` is decoded),
+- **iOS Cells list on `/live` storms** (#816, second PR): the Observed tab's
+  Cells list and glance chip read `LiveLayer.storms`, not the raw cell feed.
+  The phone used to group cores and measure 20 NM from each cell's centre
+  itself, so its "N cells within 20 NM" could disagree with the ribbon, the
+  alerts, the web and Android (30 NM corridor, the server's lineage groups).
+  Now: ahead in the server's route order, then behind (dimmed); position,
+  motion and abeam in the server's words (`RouteRibbonRules`'s
+  `stormPositionText` / `stormMotionText`, `LiveStormListRules`); rows tap to the storm's
+  `focus`; a dark feed says why (stale since / disabled / unavailable), never
+  "no cells". No live layer, no list. The map's Cells toggle still draws the
+  raw feed (`RouteCellsModel`, map only now). Rule: anything route-relative is
+  computed on the server, clients only word it.
+- **Not done in #816's PRs** (follow-ups): the offline banner, tappable change rows (`storm_ids` is decoded),
   changes collapsed to a count, phase emphasis beyond the strip, the XCUI
   before/en route/after-landing journey.
 

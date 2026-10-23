@@ -153,16 +153,15 @@ Port of the same rules: `CellsOverlay` (Views/Map/CellsOverlay.swift — match,
 badge, words, colours; tested in `CellsOverlayTests`), DTOs in
 `Models/API/ObservedCells.swift`, fetching in `RouteCellsModel` (60 s listing
 TTL, 6-entry display cache by path, token-guarded so an overtaken refresh is
-dropped). Two instances per briefing: the route map's own (Cells toggle, off
-by default, pairs with the drawn reflectivity frame) and the Observed tab's
-(`BriefingViewModel.cellsModel`, newest current overlay — no radar drawn
-there). Kept apart on purpose: one model polled with two stamps could flip the
-map to a frame that is not the radar under it. The box is the widest sampled
-corridor + 50 NM — not the cross-section's corridor pick — so both ask for the
-same box. `CellDisplay` decodes leniently: envelope fields optional, `cells`
-element by element (a malformed cell is dropped, not the overlay). The list
-names a cell's position by the nearest route waypoint ("20 NM NE of LFPN"), a
-label only: off-track/abeam geometry stays the planned server-side step.
+dropped). One instance, the route map's own (Cells toggle, off by default,
+pairs with the drawn reflectivity frame). The box is the widest sampled
+corridor + 50 NM (`BriefingViewModel.cellsBox`), not the cross-section's
+corridor pick. `CellDisplay` decodes leniently: envelope fields optional,
+`cells` element by element (a malformed cell is dropped, not the overlay).
+The Observed tab's Cells list and chip no longer read this feed (#816): they
+show the server's `/live` storms, the same list as the ribbon and the alerts,
+because the phone's own grouping and 20 NM centre distance disagreed with the
+server's 30 NM corridor and lineage groups. The raw feed is for the map only.
 `requestDataURL`, not `requestData`, so the bbox query survives.
 Paths use `CellFrame.displayKey` (#666, the newest revision; the bare stamp
 on an older server), so the 6-entry path cache never holds a superseded

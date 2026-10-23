@@ -2,10 +2,9 @@ import Foundation
 import Observation
 import OSLog
 
-/// The experimental radar-cell overlay for one briefing route (#661). Two
-/// instances per briefing: the route map's (paired with the drawn radar frame)
-/// and the Observed tab's (`BriefingViewModel.cellsModel`, newest frame), so
-/// two polls with different stamps never overtake each other.
+/// The experimental radar-cell overlay for one briefing route (#661), owned by
+/// the route map and paired with its drawn radar frame. Map only: the Observed
+/// tab's Cells list and chip read the server's `/live` storms (#816).
 ///
 /// Port of the web's `CellsLayer.refresh` (cells-overlay.ts): the frame listing
 /// is fetched at most once a minute (a new frame lands every 5), the display
