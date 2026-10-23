@@ -116,4 +116,32 @@ class DtoSerializationTest {
         assertNotNull(mapCatalog)
         assertTrue(mapCatalog!!.scales.categorical.containsKey("flight_category"))
     }
+
+    @Test
+    fun `live position request matches the server schema`() {
+        // api/packs.py LivePositionFix / LivePositionRequest (#761, #874): `at`, `alt_ft`, `gs_kt`,
+        // required `h_accuracy_m`, `landed`; an unknown value is omitted, never sent as 0.
+        val request = LivePositionRequest(
+            fixes = listOf(
+                LivePositionFix(
+                    lat = 50.1, lon = 1.2, altitudeFt = 3281.0, groundSpeedKt = 12.0, trackDeg = null,
+                    recordedAt = "2026-06-24T12:00:00Z", hAccuracyM = 8.0,
+                ),
+            ),
+            landed = true,
+        )
+        val obj = WbJson.parseToJsonElement(WbJson.encodeToString(LivePositionRequest.serializer(), request))
+            as kotlinx.serialization.json.JsonObject
+        assertEquals("true", obj["landed"].toString())
+        val fix = (obj["fixes"] as kotlinx.serialization.json.JsonArray)[0] as kotlinx.serialization.json.JsonObject
+        assertEquals(setOf("lat", "lon", "alt_ft", "gs_kt", "at", "h_accuracy_m"), fix.keys)
+        assertEquals("\"2026-06-24T12:00:00Z\"", fix["at"].toString())
+
+        val result = WbJson.decodeFromString(
+            LivePositionResult.serializer(),
+            """{"flight_id":"f","accepted":1,"ignored":[],"landed_recorded":true,"progress":null}""",
+        )
+        assertEquals(1, result.accepted)
+        assertTrue(result.landedRecorded)
+    }
 }

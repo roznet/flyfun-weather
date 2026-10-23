@@ -163,6 +163,7 @@ fun ObservedTabScreen(
                 flightId = currentFlightId,
                 waypoints = routeCoordinates,
                 apiClient = viewModel.apiClient,
+                endEpochMs = flight?.trackingWindowEndEpochMs(started = true),
             )
         }
     }
@@ -179,6 +180,8 @@ fun ObservedTabScreen(
                     flightId = currentFlightId,
                     waypoints = routeCoordinates,
                     apiClient = viewModel.apiClient,
+                    // Until the landing, or the latest a late take-off could still be flying (#874).
+                    endEpochMs = flight?.trackingWindowEndEpochMs(started = true),
                 )
             } else {
                 val permissions = buildList {

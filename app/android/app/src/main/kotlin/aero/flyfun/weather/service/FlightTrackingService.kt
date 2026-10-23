@@ -25,7 +25,6 @@ import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.model.IsoTime
 import aero.flyfun.weather.model.LivePositionFix
 import aero.flyfun.weather.model.LivePositionRequest
-import aero.flyfun.weather.model.LivePositionResult
 import aero.flyfun.weather.model.rules.LivePositionRules
 import aero.flyfun.weather.model.rules.ProjectedRoutePosition
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +37,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -167,21 +167,41 @@ class FlightTrackingService : Service() {
         if (location.hasAccuracy() && location.accuracy > MAX_ACCEPTABLE_ACCURACY_M) {
             return
         }
-        val altitudeFt = if (location.hasAltitude()) location.altitude * METERS_TO_FEET else 0.0
-        val speedKt = if (location.hasSpeed()) location.speed * MPS_TO_KNOTS else 0.0
-        val trackDeg = if (location.hasBearing()) location.bearing.toDouble() else 0.0
+        // Null, never 0, when the device has no value: the server reads altitude 0 as on the ground.
+        val altitudeFt = if (location.hasAltitude()) location.altitude * METERS_TO_FEET else null
+        val speedKt = if (location.hasSpeed()) location.speed * MPS_TO_KNOTS else null
+        val trackDeg = if (location.hasBearing()) location.bearing.toDouble() else null
+        val accuracyM = if (location.hasAccuracy()) location.accuracy.toDouble() else null
         val recordedIso = IsoTime.formatUtc(if (location.time > 0L) location.time else System.currentTimeMillis())
 
         serviceScope.launch {
-            onLocationFix(
+            val stop = onLocationFix(
                 lat = location.latitude,
                 lon = location.longitude,
                 altitudeFt = altitudeFt,
                 groundSpeedKt = speedKt,
                 trackDeg = trackDeg,
+                hAccuracyM = accuracyM,
                 recordedAt = recordedIso,
             )
+            if (stop != null) {
+                withContext(Dispatchers.Main) {
+                    stopLocationUpdates()
+                    clearTrackingState()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
         }
+    }
+
+    /** Why tracking stopped on its own (#874). */
+    enum class AutoStop {
+        /** Slow near the destination after the take-off roll: the landing was sent. */
+        LANDED,
+
+        /** Past [trackingEndEpochMs]: the latest the flight could still be flying. */
+        WINDOW_ENDED,
     }
 
     companion object {
@@ -211,19 +231,27 @@ class FlightTrackingService : Service() {
 
         private var activeWaypoints: List<Pair<Double, Double>> = emptyList()
         private var activeApiClient: ApiClient? = null
+
+        /** Tracking auto-stops after this (`FlightResponse.trackingWindowEndEpochMs(started = true)`), null: never. */
+        private var trackingEndEpochMs: Long? = null
+
+        /** A fix at take-off speed was seen: only then can a slow fix near the destination be the landing. */
+        private var airborneSeen = false
         private var lastQueuedFix: LivePositionFix? = null
         private val pendingFixes = mutableListOf<LivePositionFix>()
 
         /**
-         * Start foreground GPS tracking for `flightId` along `waypoints`.
+         * Start foreground GPS tracking for `flightId` along `waypoints`, until the landing is
+         * detected or `endEpochMs` passes (#874).
          */
         fun startTracking(
             context: Context,
             flightId: String,
             waypoints: List<Pair<Double, Double>>,
             apiClient: ApiClient? = null,
+            endEpochMs: Long? = null,
         ) {
-            configureSession(flightId = flightId, waypoints = waypoints, apiClient = apiClient)
+            configureSession(flightId = flightId, waypoints = waypoints, apiClient = apiClient, endEpochMs = endEpochMs)
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, FlightTrackingService::class.java).apply {
                 action = ACTION_START
@@ -260,12 +288,15 @@ class FlightTrackingService : Service() {
             flightId: String,
             waypoints: List<Pair<Double, Double>>,
             apiClient: ApiClient? = null,
+            endEpochMs: Long? = null,
         ) {
             _activeFlightId.value = flightId
             activeWaypoints = waypoints.toList()
             if (apiClient != null) {
                 activeApiClient = apiClient
             }
+            trackingEndEpochMs = endEpochMs
+            airborneSeen = false
             lastQueuedFix = null
             pendingFixes.clear()
         }
@@ -278,6 +309,8 @@ class FlightTrackingService : Service() {
             _activeFlightId.value = null
             _currentPosition.value = null
             activeWaypoints = emptyList()
+            trackingEndEpochMs = null
+            airborneSeen = false
             lastQueuedFix = null
             pendingFixes.clear()
         }
@@ -286,68 +319,88 @@ class FlightTrackingService : Service() {
          * Process a single GPS fix: project it onto `activeWaypoints` via [LivePositionRules.projectOntoRoute],
          * update [currentPosition], and when [LivePositionRules.shouldSendPositionFix] is satisfied,
          * enqueue and post the fix to the backend.
+         *
+         * Returns why tracking should stop, or null to carry on (#874): [AutoStop.LANDED] once a fix
+         * reads as the landing ([LivePositionRules.isLanding], after the take-off roll was seen), the
+         * landing then posted with `landed = true` like iOS; [AutoStop.WINDOW_ENDED] past
+         * [trackingEndEpochMs]. A fix without a horizontal accuracy is projected but not sent (the
+         * server requires one).
          */
         suspend fun onLocationFix(
             lat: Double,
             lon: Double,
-            altitudeFt: Double,
-            groundSpeedKt: Double,
-            trackDeg: Double,
+            altitudeFt: Double?,
+            groundSpeedKt: Double?,
+            trackDeg: Double?,
+            hAccuracyM: Double?,
             recordedAt: String = IsoTime.formatUtc(System.currentTimeMillis()),
-        ): ProjectedRoutePosition? = stateMutex.withLock {
+            nowEpochMs: Long = System.currentTimeMillis(),
+        ): AutoStop? = stateMutex.withLock {
+            trackingEndEpochMs?.let { end ->
+                if (nowEpochMs > end) return@withLock AutoStop.WINDOW_ENDED
+            }
+
             val projected = LivePositionRules.projectOntoRoute(
                 lat = lat,
                 lon = lon,
-                altitudeFt = altitudeFt,
-                groundSpeedKt = groundSpeedKt,
-                trackDeg = trackDeg,
+                altitudeFt = altitudeFt ?: 0.0,
+                groundSpeedKt = groundSpeedKt ?: 0.0,
+                trackDeg = trackDeg ?: 0.0,
                 waypoints = activeWaypoints,
             )
             _currentPosition.value = projected
 
-            val fix = LivePositionFix(
-                lat = lat,
-                lon = lon,
-                altitudeFt = altitudeFt.roundToInt().toDouble(),
-                groundSpeedKt = groundSpeedKt.roundToInt().toDouble(),
-                trackDeg = trackDeg.roundToInt().toDouble(),
-                recordedAt = recordedAt,
-            )
+            val fix = hAccuracyM?.let {
+                LivePositionFix(
+                    lat = lat,
+                    lon = lon,
+                    altitudeFt = altitudeFt?.roundToInt()?.toDouble(),
+                    groundSpeedKt = groundSpeedKt?.roundToInt()?.toDouble(),
+                    trackDeg = trackDeg?.roundToInt()?.toDouble(),
+                    recordedAt = recordedAt,
+                    hAccuracyM = it,
+                )
+            }
 
-            if (LivePositionRules.shouldSendPositionFix(lastQueuedFix, fix)) {
-                lastQueuedFix = fix
-                pendingFixes.add(fix)
-                val trimmed = LivePositionRules.trimFixBuffer(pendingFixes)
-                pendingFixes.clear()
-                pendingFixes.addAll(trimmed)
+            if (airborneSeen && LivePositionRules.isLanding(lat, lon, groundSpeedKt, activeWaypoints)) {
+                if (fix != null) enqueueLocked(fix)
+                flushPendingFixesLocked(landed = true)
+                return@withLock AutoStop.LANDED
+            }
+            if (groundSpeedKt != null && groundSpeedKt >= LivePositionRules.LANDING_MAX_SPEED_KT) {
+                airborneSeen = true
+            }
+
+            if (fix != null && LivePositionRules.shouldSendPositionFix(lastQueuedFix, fix)) {
+                enqueueLocked(fix)
                 flushPendingFixesLocked()
             }
 
-            projected
+            null
         }
 
-        private suspend fun flushPendingFixesLocked() {
+        private fun enqueueLocked(fix: LivePositionFix) {
+            lastQueuedFix = fix
+            pendingFixes.add(fix)
+            val trimmed = LivePositionRules.trimFixBuffer(pendingFixes)
+            pendingFixes.clear()
+            pendingFixes.addAll(trimmed)
+        }
+
+        /**
+         * Post the newest queued fixes (at most [LivePositionRules.MAX_BATCH_SIZE], the server's
+         * limit) to `POST /api/flights/{id}/live/position`, with `landed` for the landing.
+         */
+        private suspend fun flushPendingFixesLocked(landed: Boolean = false) {
             val client = activeApiClient ?: return
             val flightId = _activeFlightId.value
-            if (pendingFixes.isEmpty()) return
+            if (flightId.isNullOrBlank()) return
+            if (pendingFixes.isEmpty() && !landed) return
 
-            val batch = pendingFixes.take(LivePositionRules.MAX_BATCH_SIZE)
+            val batch = pendingFixes.takeLast(LivePositionRules.MAX_BATCH_SIZE)
             try {
-                if (!flightId.isNullOrBlank()) {
-                    runCatching {
-                        client.post<LivePositionRequest, LivePositionResult>(
-                            path = "/api/flights/$flightId/live/position",
-                            body = LivePositionRequest(fixes = batch),
-                        )
-                    }.getOrElse {
-                        client.reportLivePosition(batch)
-                    }
-                } else {
-                    client.reportLivePosition(batch)
-                }
-                repeat(batch.size.coerceAtMost(pendingFixes.size)) {
-                    pendingFixes.removeAt(0)
-                }
+                client.postLivePosition(flightId, LivePositionRequest(fixes = batch, landed = landed))
+                pendingFixes.clear()
             } catch (err: Throwable) {
                 val statusCode = (err as? ApiError.ServerError)?.statusCode
                     ?: when (err) {
@@ -357,9 +410,7 @@ class FlightTrackingService : Service() {
                         else -> null
                     }
                 if (LivePositionRules.failureAction(statusCode) == LivePositionRules.FailureAction.DROP_BATCH) {
-                    repeat(batch.size.coerceAtMost(pendingFixes.size)) {
-                        pendingFixes.removeAt(0)
-                    }
+                    pendingFixes.clear()
                 }
             }
         }

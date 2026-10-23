@@ -102,6 +102,7 @@ final class LivePositionService {
     private var held: Set<String> = []
     private let defaults: UserDefaults
     private let consentKey: String
+    private let landedKey: String
 
     /// `scope`: the signed-in user's cache scope (`AppState.cacheScope`), so
     /// one user's consents never apply to another on the same device.
@@ -109,6 +110,7 @@ final class LivePositionService {
         self.repository = repository
         self.defaults = defaults
         self.consentKey = "livePositionConsentFlightIds.\(scope)"
+        self.landedKey = "livePositionLandedFlightIds.\(scope)"
     }
 
     /// Queue `fixes` (and the landing) for `flightId` and send them.
@@ -116,7 +118,10 @@ final class LivePositionService {
         let before = queues[flightId]?.last?.at
         queues[flightId] = LivePositionRules.queued(fixes, into: queues[flightId] ?? [],
                                                     since: lastSent[flightId])
-        if landed { landings.insert(flightId) }
+        if landed {
+            landings.insert(flightId)
+            markLanded(flightId: flightId)
+        }
         // Something new is worth one more try after a 409.
         if landed || queues[flightId]?.last?.at != before { held.remove(flightId) }
         flush(flightId: flightId)
@@ -195,5 +200,35 @@ final class LivePositionService {
 
     func hasConsent(flightId: String) -> Bool {
         (defaults.stringArray(forKey: consentKey) ?? []).contains(flightId)
+    }
+
+    // MARK: - Started and not landed (#874)
+
+    /// Start was pressed for this flight on this device and no app landing
+    /// has been detected since: its tracking and live windows stay open past
+    /// the planned arrival (`FlightResponse.isInTrackingWindow(started:)`), so
+    /// a late take-off keeps tracking until it lands. Kept on disk, like the
+    /// consent, so it survives the app being killed in flight.
+    func isStartedNotLanded(flightId: String) -> Bool {
+        hasConsent(flightId: flightId)
+            && !(defaults.stringArray(forKey: landedKey) ?? []).contains(flightId)
+    }
+
+    /// Start was pressed (again): the flight is no longer landed, e.g. after a
+    /// landing detected by mistake.
+    func markStarted(flightId: String) {
+        grantConsent(flightId: flightId)
+        let ids = defaults.stringArray(forKey: landedKey) ?? []
+        guard ids.contains(flightId) else { return }
+        defaults.set(ids.filter { $0 != flightId }, forKey: landedKey)
+    }
+
+    /// The landing auto-stop fired: the flight drops back to its planned
+    /// windows. Recorded when detected, whether or not the post gets through.
+    func markLanded(flightId: String) {
+        var ids = defaults.stringArray(forKey: landedKey) ?? []
+        guard !ids.contains(flightId) else { return }
+        ids.append(flightId)
+        defaults.set(Array(ids.suffix(50)), forKey: landedKey)
     }
 }

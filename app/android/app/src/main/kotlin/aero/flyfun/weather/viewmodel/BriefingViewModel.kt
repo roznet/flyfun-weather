@@ -7,6 +7,7 @@ import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.CachingBriefingRepository
 import aero.flyfun.weather.data.OnlineBriefingRepository
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.service.FlightTrackingService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -333,7 +334,12 @@ class BriefingViewModel(
     private fun reconcileTabs(openObserved: Boolean = false) {
         val showsObserved = openObserved ||
             hasObservedContent(_snapshot.value, _liveLayer.value) ||
-            (_flight.value?.isInLiveObservationWindow() == true)
+            (_flight.value?.let { f ->
+                // A flight being tracked is started and not landed: its window runs on (#874).
+                val started = FlightTrackingService.isTracking.value &&
+                    FlightTrackingService.activeFlightId.value == f.id
+                f.isInLiveObservationWindow(started = started)
+            } == true)
         val tabs = BriefingTab.tabs(showsObserved = showsObserved)
         _availableTabs.value = tabs
 

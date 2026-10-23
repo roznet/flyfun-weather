@@ -673,40 +673,41 @@ data class LiveStormEstimate(
 // Live Position Reporting (GPX / Device GPS -> Server)
 // ============================================================================
 
+/**
+ * One GPS fix for `POST /api/flights/{id}/live/position` (#761). Mirrors `LivePositionFix` in
+ * `api/packs.py` and iOS `LivePositionFix`: speed, track and altitude are null when the device
+ * has no valid value (never 0, which the server would read as on the ground).
+ */
 @Serializable
 data class LivePositionFix(
     val lat: Double,
     val lon: Double,
-    @SerialName("altitude_ft")
+    @SerialName("alt_ft")
     val altitudeFt: Double? = null,
-    @SerialName("ground_speed_kt")
+    @SerialName("gs_kt")
     val groundSpeedKt: Double? = null,
     @SerialName("track_deg")
     val trackDeg: Double? = null,
-    @SerialName("recorded_at")
+    @SerialName("at")
     val recordedAt: String,
+    /** Required by the server: fixes worse than 1000 m are ignored there. */
+    @SerialName("h_accuracy_m")
+    val hAccuracyM: Double,
 )
 
+/** The newest fixes (at most [LivePositionRules.MAX_BATCH_SIZE]), and `landed` when the landing auto-stop fired (#874). */
 @Serializable
 data class LivePositionRequest(
     val fixes: List<LivePositionFix>,
+    val landed: Boolean = false,
 )
 
+/** What the server kept (only the counts are read, as on iOS). */
 @Serializable
 data class LivePositionResult(
     val accepted: Int = 0,
-    @SerialName("active_flight_id")
-    val activeFlightId: String? = null,
-    @SerialName("along_track_nm")
-    val alongTrackNm: Double? = null,
-    @SerialName("cross_track_nm")
-    val crossTrackNm: Double? = null,
-    @SerialName("ground_speed_kt")
-    val groundSpeedKt: Double? = null,
-    @SerialName("altitude_ft")
-    val altitudeFt: Double? = null,
-    @SerialName("phase")
-    val phase: String? = null,
+    @SerialName("landed_recorded")
+    val landedRecorded: Boolean = false,
 )
 
 object LiveTime {

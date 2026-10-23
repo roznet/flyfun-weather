@@ -804,7 +804,12 @@ struct FlightListView: View {
     /// could belong to either, so it goes nowhere.
     private var liveOwnedFlightId: String? {
         guard case .loaded(let flights) = viewModel?.state else { return nil }
-        let live = flights.filter { $0.isEditable && $0.isInLiveObservationWindow() }
+        let positions = appState.livePositions
+        let live = flights.filter { flight in
+            flight.isEditable && flight.isInLiveObservationWindow(
+                started: positions?.isStartedNotLanded(flightId: flight.id) == true
+            )
+        }
         return live.count == 1 ? live[0].id : nil
     }
 

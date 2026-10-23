@@ -160,6 +160,25 @@ class FlightResponseGroupingTest {
     }
 
     @Test
+    fun `a started flight keeps its windows open up to the late take-off cap`() {
+        // #874: departure 12:00Z, 2h flight; the server accepts a take-off until 18:00Z.
+        val f = makeFlight(departureTime = "2026-06-24T12:00:00Z", flightDurationHours = 2.0)
+        fun at(iso: String): Long = IsoTime.parseEpochMs(iso)!!
+
+        assertEquals(at("2026-06-24T16:00:00Z"), f.trackingWindowEndEpochMs())
+        assertEquals(at("2026-06-24T22:00:00Z"), f.trackingWindowEndEpochMs(started = true))
+        assertTrue(f.isInTrackingWindow(at("2026-06-24T17:30:00Z"), started = true))
+        assertTrue(f.isInTrackingWindow(at("2026-06-24T22:00:00Z"), started = true))
+        assertFalse(f.isInTrackingWindow(at("2026-06-24T22:00:01Z"), started = true))
+        assertFalse(f.isInTrackingWindow(at("2026-06-24T09:59:59Z"), started = true))
+
+        assertTrue(f.hasLiveObservationWindowEnded(at("2026-06-24T15:01:00Z")))
+        assertFalse(f.hasLiveObservationWindowEnded(at("2026-06-24T15:01:00Z"), started = true))
+        assertTrue(f.isInLiveObservationWindow(at("2026-06-24T21:00:00Z"), started = true))
+        assertFalse(f.isInLiveObservationWindow(at("2026-06-24T21:01:00Z"), started = true))
+    }
+
+    @Test
     fun `isHistoricalForRefresh honours 3h post-arrival grace and 12h cap`() {
         val f = makeFlight(departureTime = "2026-06-24T12:00:00Z", flightDurationHours = 2.0)
         fun at(iso: String): Long = IsoTime.parseEpochMs(iso)!!
