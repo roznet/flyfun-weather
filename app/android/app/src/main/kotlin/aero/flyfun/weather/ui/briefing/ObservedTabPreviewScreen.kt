@@ -489,7 +489,7 @@ private fun ObservedChangesSection(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = storm.headline.ifBlank { "Storm cell (${storm.severity})" },
+                                text = storm.headline.ifBlank { listOfNotNull("Storm cell", storm.trend).joinToString(" · ") },
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                             )

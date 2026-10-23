@@ -91,6 +91,14 @@ class BriefingViewModel(
     private val _liveLayer = MutableStateFlow<LiveLayerResponse?>(null)
     val liveLayer: StateFlow<LiveLayerResponse?> = _liveLayer.asStateFlow()
 
+    /**
+     * The last `/live` read failed (#883 offline banner). [liveLayer] then keeps the
+     * previous layer, so the Observed tab shows it as cached data, not as nothing.
+     * Cleared by the next successful read.
+     */
+    private val _liveFetchFailed = MutableStateFlow(false)
+    val liveFetchFailed: StateFlow<Boolean> = _liveFetchFailed.asStateFlow()
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -287,7 +295,9 @@ class BriefingViewModel(
         }
 
         val resolvedSnap = snap
-        val resolvedLive = live
+        // A failed read keeps the layer we already had (shown under the offline banner).
+        _liveFetchFailed.value = live == null
+        val resolvedLive = live ?: _liveLayer.value?.takeIf { it.flightId.isEmpty() || it.flightId == flightId }
         // Overlay live observation blocks onto snapshot when live layer is newer
         val effectiveSnapshot = if (resolvedSnap != null && resolvedLive != null && resolvedLive.hasObservationOverlay) {
             resolvedSnap.copy(

@@ -65,6 +65,10 @@ data class LiveGlance(
     val lines: List<LiveGlanceLine>? = null,
     @SerialName("quiet_summary")
     val quietSummary: String? = null,
+    // The flight strip and the airport cards' blocks (#816, #880).
+    val flight: LiveGlanceFlight? = null,
+    val destination: LiveGlanceTerminal? = null,
+    val departure: LiveGlanceTerminal? = null,
 )
 
 @Serializable

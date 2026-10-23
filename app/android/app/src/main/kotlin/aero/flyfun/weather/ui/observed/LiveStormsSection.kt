@@ -2,7 +2,6 @@ package aero.flyfun.weather.ui.observed
 
 import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.model.LiveStorm
-import aero.flyfun.weather.model.LiveStormTrackPoint
 import aero.flyfun.weather.model.LiveStorms
 import aero.flyfun.weather.ui.theme.AssessmentAmber
 import aero.flyfun.weather.ui.theme.AssessmentGreen
@@ -63,6 +62,9 @@ fun LiveStormsSection(
     onSelectFocus: ((LiveFocus) -> Unit)? = null,
 ) {
     val cells = storms?.cells.orEmpty()
+    // The server's own `ahead` (#790); a storm without it counts as ahead, as on iOS.
+    val aheadCount = cells.count { it.ahead != false }
+    val behindCount = cells.size - aheadCount
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -92,7 +94,7 @@ fun LiveStormsSection(
                     Icon(
                         imageVector = Icons.Default.Radar,
                         contentDescription = null,
-                        tint = if ((storms?.directThreatCount ?: 0) > 0) AssessmentRed else MaterialTheme.colorScheme.primary,
+                        tint = if (aheadCount > 0) AssessmentAmber else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp),
                     )
                     Column {
@@ -120,16 +122,16 @@ fun LiveStormsSection(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        if (storms.directThreatCount > 0) {
+                        if (aheadCount > 0) {
                             StormBadgePill(
-                                text = "${storms.directThreatCount} direct",
-                                color = AssessmentRed,
+                                text = "$aheadCount ahead",
+                                color = AssessmentAmber,
                             )
                         }
-                        if (storms.vicinityCount > 0) {
+                        if (behindCount > 0) {
                             StormBadgePill(
-                                text = "${storms.vicinityCount} vicinity",
-                                color = AssessmentAmber,
+                                text = "$behindCount behind",
+                                color = MaterialTheme.colorScheme.secondary,
                             )
                         }
                         if (cells.isEmpty()) {
@@ -188,12 +190,14 @@ private fun LiveStormCellCard(
     storm: LiveStorm,
     onSelectFocus: ((LiveFocus) -> Unit)?,
 ) {
-    val isDirect = storm.disposition.equals("direct", ignoreCase = true) ||
-        storm.disposition.equals("threat", ignoreCase = true) ||
-        storm.distanceNm <= 10.0
+    // Toned by the server's own words (#688): its VIP intensity and `ahead`.
+    // The server sends no disposition or severity, so none is read here (#883).
+    val isBehind = storm.ahead == false
     val accentColor = when {
-        isDirect || (storm.maxDbz ?: 0.0) >= 45.0 -> AssessmentRed
-        (storm.maxDbz ?: 0.0) >= 35.0 || storm.flashCount > 0 -> AssessmentAmber
+        isBehind -> MaterialTheme.colorScheme.outline
+        storm.intensity.equals("extreme", ignoreCase = true) ||
+            storm.intensity.equals("very heavy", ignoreCase = true) -> AssessmentRed
+        storm.intensity.equals("heavy", ignoreCase = true) || storm.flashCount > 0 -> AssessmentAmber
         else -> Color(0xFF0284C7)
     }
 
@@ -225,21 +229,27 @@ private fun LiveStormCellCard(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Top badges: Disposition + dBZ core + Lightning + Cloud Top FL + Trend
+            // Top badges: intensity title (+ Behind) + dBZ core + Lightning + Cloud Top FL + Trend
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 StormBadgePill(
-                    text = if (isDirect) "DIRECT THREAT" else "VICINITY",
+                    text = stormTitle(storm),
                     color = accentColor,
                 )
+                if (isBehind) {
+                    StormBadgePill(
+                        text = "Behind",
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
 
                 storm.maxDbz?.let { dbz ->
                     StormBadgePill(
                         text = "${dbz.roundToInt()} dBZ core",
-                        color = if (dbz >= 42.0) AssessmentRed else AssessmentAmber,
+                        color = accentColor,
                     )
                 }
 
@@ -283,17 +293,17 @@ private fun LiveStormCellCard(
                     )
                 }
 
-                val trendLabel = formatStormTrendLabel(storm)
-                StormBadgePill(
-                    text = trendLabel,
-                    color = when {
-                        storm.severity.equals("decaying", ignoreCase = true) ||
-                            storm.severity.equals("weakening", ignoreCase = true) -> AssessmentGreen
-                        storm.severity.equals("intensifying", ignoreCase = true) ||
-                            storm.severity.equals("developing", ignoreCase = true) -> AssessmentAmber
-                        else -> MaterialTheme.colorScheme.secondary
-                    },
-                )
+                // The server's 30-min trend: developing / steady / decaying / mixed / new.
+                storm.trend?.takeIf { it.isNotBlank() }?.let { trend ->
+                    StormBadgePill(
+                        text = trend.replaceFirstChar { it.uppercase() },
+                        color = when (trend.lowercase()) {
+                            "decaying" -> AssessmentGreen
+                            "developing", "new" -> AssessmentAmber
+                            else -> MaterialTheme.colorScheme.secondary
+                        },
+                    )
+                }
             }
 
             // Headline & relative position to route
@@ -370,26 +380,10 @@ private fun StormDistanceSparkline(
     storm: LiveStorm,
     accentColor: Color,
 ) {
-    val trackPoints = storm.track.orEmpty()
-    // Build distance series: if track history has points, plot their dBZ or distance progression
-    // alongside current distanceNm and CPA estimate
-    val distanceSeries: List<Double> = when {
-        trackPoints.size >= 2 -> {
-            // Use maxDbz history if available, otherwise synthesize off-track distance approach
-            val closingKt = storm.closingKt ?: 0.0
-            val count = trackPoints.size
-            trackPoints.mapIndexed { idx, _ ->
-                val minutesAgo = (count - 1 - idx) * 5.0
-                (storm.distanceNm + (closingKt * (minutesAgo / 60.0))).coerceAtLeast(0.5)
-            }
-        }
-        else -> {
-            val closingKt = storm.closingKt ?: 0.0
-            listOf(30.0, 20.0, 10.0, 0.0).map { minAgo ->
-                (storm.distanceNm + closingKt * (minAgo / 60.0)).coerceAtLeast(0.5)
-            }
-        }
-    }
+    // The server's off-track distance at the earlier frames (oldest first), then now.
+    // Nothing is synthesised: without history there is no sparkline (#883).
+    val distanceSeries: List<Double> = storm.history.orEmpty().map { it.offtrackNm } + storm.distanceNm
+    if (distanceSeries.size < 2) return
 
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
 
@@ -450,7 +444,7 @@ private fun StormDistanceSparkline(
                 )
             }
             Text(
-                text = "30m track (${storm.distanceNm.roundToInt()} NM)",
+                text = "30 min off track (${storm.distanceNm.roundToInt()} NM)",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -480,12 +474,9 @@ private fun StormBadgePill(
     }
 }
 
-private fun formatStormTrendLabel(storm: LiveStorm): String {
-    val track: List<LiveStormTrackPoint> = storm.track.orEmpty()
-    val maxAge = track.maxOfOrNull { it.ageMinutes }?.roundToInt()
-    val base = storm.severity.replaceFirstChar { it.uppercase() }
-    return if (maxAge != null && maxAge > 0) "$base (${maxAge}m)" else base
-}
+/** "Heavy cell" / "Cell": the server's VIP intensity, as the iOS list words it. */
+internal fun stormTitle(storm: LiveStorm): String =
+    storm.intensity?.takeIf { it.isNotBlank() }?.let { "${it.replaceFirstChar { c -> c.uppercase() }} cell" } ?: "Cell"
 
 private fun buildStormPositionSummary(storm: LiveStorm): String {
     val sideStr = when (storm.side?.lowercase()) {

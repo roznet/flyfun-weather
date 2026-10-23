@@ -681,6 +681,41 @@ data class AirportObservation(
     val etaHourOffset: Int? = null,
     @SerialName("obs_proxy")
     val obsProxy: ObsProxy? = null,
+    // --- The airport card's readings (#880, server `analysis/airport_card`). Drawn as is (#883).
+    @SerialName("metar_report_type")
+    val metarReportType: String? = null,
+    @SerialName("metar_previous_flight_category")
+    val metarPreviousFlightCategory: String? = null,
+    @SerialName("metar_previous_time")
+    val metarPreviousTime: String? = null,
+    @SerialName("taf_prevailing_category_at_eta")
+    val tafPrevailingCategoryAtEta: String? = null,
+    @SerialName("taf_temporary_category_at_eta")
+    val tafTemporaryCategoryAtEta: String? = null,
+    @SerialName("taf_temporary_type")
+    val tafTemporaryType: String? = null,
+    @SerialName("taf_hours")
+    val tafHours: List<TafHour> = emptyList(),
+    @SerialName("metar_trend")
+    val metarTrend: String? = null,
+    @SerialName("metar_ceiling_meter")
+    val metarCeilingMeter: Double? = null,
+    @SerialName("metar_visibility_meter")
+    val metarVisibilityMeter: Double? = null,
+    @SerialName("metar_visibility_text")
+    val metarVisibilityText: String? = null,
+    @SerialName("metar_sky_text")
+    val metarSkyText: String? = null,
+    @SerialName("metar_cavok")
+    val metarCavok: Boolean = false,
+    @SerialName("metar_wind_short")
+    val metarWindShort: String? = null,
+    @SerialName("metar_weather_words")
+    val metarWeatherWords: List<WeatherWord> = emptyList(),
+    @SerialName("metar_crosswind")
+    val metarCrosswind: CrosswindReading? = null,
+    @SerialName("runway_wind")
+    val runwayWind: RunwayWindWire? = null,
 ) {
     val id: String
         get() = icao
