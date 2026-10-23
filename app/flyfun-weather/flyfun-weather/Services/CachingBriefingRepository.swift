@@ -46,7 +46,8 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     private(set) var isServingCachedTrips = false
 
     /// Whether the last `latestPack()` / `liveLayer()` call was served from
-    /// cache (server unreachable, #882).
+    /// cache (server unreachable, #882). Set right before each return; a
+    /// throw leaves it alone (the caller treats a throw as offline itself).
     private(set) var isServingCachedLive = false
 
     init(
@@ -288,23 +289,26 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     func latestPack(flightId: String) async throws -> PackMetaResponse {
         do {
             let pack = try await online.latestPack(flightId: flightId)
-            isServingCachedLive = false
             if let data = try? JSONEncoder.weatherBrief.encode(pack) {
                 try? await cache.writeFlightMetadata(data, flightId: flightId, name: "latest-pack")
             }
+            // Set right before each return, after the last await, so an
+            // overlapping read cannot overwrite it before the caller reads it.
+            isServingCachedLive = false
             return pack
         } catch {
-            isServingCachedLive = true
             // Fallback 1: cached latest-pack metadata
             if let data = await cache.readFlightMetadata(flightId: flightId, name: "latest-pack"),
                let cached = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
                 Self.logger.info("Serving latest pack from cache for \(flightId) (offline)")
+                isServingCachedLive = true
                 return cached
             }
             // Fallback 2: pack metadata saved during download
             if let data = await cache.readFlightMetadata(flightId: flightId, name: "pack-meta"),
                let cached = try? JSONDecoder.weatherBrief.decode(PackMetaResponse.self, from: data) {
                 Self.logger.info("Serving pack meta from download cache for \(flightId)")
+                isServingCachedLive = true
                 return cached
             }
             throw error
@@ -327,11 +331,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     func liveLayer(flightId: String, source: String?) async throws -> LiveLayerResponse {
         do {
             let layer = try await online.liveLayer(flightId: flightId, source: source)
-            isServingCachedLive = false
             await storeLiveLayer(layer, flightId: flightId)
+            isServingCachedLive = false
             return layer
         } catch {
-            isServingCachedLive = true
             // Auth failures and a deleted flight are answers, not "offline":
             // serving stale observations there would hide them.
             if let apiError = error as? APIError {
@@ -342,6 +345,7 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
             }
             if let cached = await cache.readLiveLayer(flightId: flightId) {
                 Self.logger.info("Serving live layer from cache for \(flightId) (offline)")
+                isServingCachedLive = true
                 return cached
             }
             throw error

@@ -203,7 +203,8 @@ server) keeps the dial pair, tiles and chips. Choices:
   `airport.metar_wind_advisory` (amber/red only); a cells / lightning row goes
   amber only on `cells_alert` / `lightning_alert`.
 - **Accessibility.** Each card is one VoiceOver element: a spoken summary
-  built from the server's fields in card order, plus a "Show on map" action.
+  built from the server's fields in card order, plus a "Show on map" action
+  and one action per nearby cell (named by the server's cell text).
   Identifiers `airportCard-dep` / `airportCard-arr` / `airportCardFolded`.
 - **Offline banner** (`ObservedOfflineBanner`): "Offline · showing data from
   HH:MMZ, N min ago" (the layer's `live_updated_at`) while
