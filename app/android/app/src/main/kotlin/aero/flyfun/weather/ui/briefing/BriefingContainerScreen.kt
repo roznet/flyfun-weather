@@ -46,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -66,6 +67,7 @@ import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.WaypointAnalysis
+import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.crosssection.CrossSectionTabScreen
 import aero.flyfun.weather.ui.map.RouteMapTabScreen
 import aero.flyfun.weather.ui.observed.ObservedTabScreen
@@ -103,6 +105,13 @@ fun BriefingContainerScreen(
     val isDownloadingPack by viewModel.isDownloadingPack.collectAsState()
     val focusIntent by viewModel.focusIntent.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val isTracking by FlightTrackingService.isTracking.collectAsState()
+    val trackedFlightId by FlightTrackingService.activeFlightId.collectAsState()
+
+    // A tracked flight keeps its Observed tab past the planned window (#874): re-check on change.
+    LaunchedEffect(viewModel, isTracking, trackedFlightId) {
+        viewModel.onTrackingStateChanged()
+    }
 
     // Keep the screen awake while a briefing refresh is actively streaming/polling so Android
     // does not turn off the display after 30s and abort the socket mid-refresh.

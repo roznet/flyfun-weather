@@ -350,6 +350,15 @@ class BriefingViewModel(
         }
     }
 
+    /**
+     * Re-evaluate the tabs when tracking starts or stops: a tracked flight's Observed tab stays
+     * past its planned window (#874), and [reconcileTabs] otherwise reads the tracking state only
+     * when the briefing loads. Called by the screen, which observes the service's state.
+     */
+    fun onTrackingStateChanged() {
+        if (_flight.value != null) reconcileTabs()
+    }
+
     fun selectTab(tab: BriefingTab) {
         if (tab == BriefingTab.OBSERVED && tab !in _availableTabs.value) {
             _availableTabs.value = BriefingTab.tabs(showsObserved = true)
