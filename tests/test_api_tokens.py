@@ -328,7 +328,7 @@ class TestAdminUsersList:
 
 class TestAdminActivity:
     def test_windows_and_metrics(self, client, db_session):
-        from weatherbrief.db.models import BriefingUsageRow, FlightRow
+        from weatherbrief.db.models import BriefingUsageRow, FlightRow, McpToolCallRow
 
         now = datetime.now(timezone.utc)
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -337,24 +337,30 @@ class TestAdminActivity:
         d3, d20, d90 = (now - timedelta(days=n) for n in (3, 20, 90))
         session = db_session()
         session.query(UserRow).filter(UserRow.id == REGULAR_ID).one().created_at = d3
-        session.query(UserRow).filter(UserRow.id == ADMIN_ID).one().created_at = d90
+        admin = session.query(UserRow).filter(UserRow.id == ADMIN_ID).one()
+        admin.created_at = d90
+        admin.last_seen_at = now  # read in the app today, no briefing requested
         # Admin: flight created 20 days ago, first briefing then, refreshed
         # yesterday by hand and today by the scheduler (not a user refresh).
         session.add(FlightRow(id="f-a", user_id=ADMIN_ID, departure_time=now, created_at=d20))
         # Regular: flight created yesterday, first briefing via MCP, refreshed today via MCP.
         session.add(FlightRow(id="f-r", user_id=REGULAR_ID, departure_time=now, created_at=yday))
         session.flush()
-        for user, flight, ts, trig in (
-            (ADMIN_ID, "f-a", d20, "user"),
-            (ADMIN_ID, "f-a", yday, "user"),
-            (ADMIN_ID, "f-a", now, "scheduler"),
-            (REGULAR_ID, "f-r", yday, "mcp"),
-            (REGULAR_ID, "f-r", now, "mcp"),
+        for user, flight, ts, trig, tokens in (
+            (ADMIN_ID, "f-a", d20, "user", None),
+            (ADMIN_ID, "f-a", yday, "user", (100, 20)),
+            (ADMIN_ID, "f-a", now, "scheduler", (50, 0)),
+            (REGULAR_ID, "f-r", yday, "mcp", None),
+            (REGULAR_ID, "f-r", now, "mcp", None),
         ):
             session.add(BriefingUsageRow(
                 user_id=user, flight_id=flight, timestamp=ts, triggered_by=trig,
+                llm_digest=tokens is not None,
+                llm_input_tokens=tokens[0] if tokens else None,
+                llm_output_tokens=tokens[1] if tokens else None,
             ))
-        # MCP connector session today for the regular user; a non-MCP token is ignored.
+        session.add(McpToolCallRow(user_id=REGULAR_ID, ts=now, tool="get_briefing"))
+        # MCP connector pings (token last_used_at) are not activity.
         session.add(ApiTokenRow(
             user_id=REGULAR_ID, token_hash="h-mcp", scope="mcp", last_used_at=now,
         ))
@@ -381,16 +387,39 @@ class TestAdminActivity:
         # scheduler run and each flight's first briefing are not refreshes.
         assert row("refreshes") == [1, 1, 2, 2, 2]
         assert row("refreshes", "count") == [1, 1, 2, 2, 2]
+        # Users: tool calls or MCP briefings; count: logged tool calls only.
         assert row("mcp") == [1, 1, 1, 1, 1]
-        assert row("mcp", "count") == [1, 1, 2, 2, 2]
-        # Today: only the regular user's MCP refresh (the scheduler run and
-        # the token pings don't count as activity).
-        assert row("active_users") == [1, 2, 2, 2, 2]
+        assert row("mcp", "count") == [1, 0, 1, 1, 1]
+        assert row("auto_refreshes") == [1, 0, 1, 1, 1]
+        assert row("auto_refreshes", "count") == [1, 0, 1, 1, 1]
+        assert row("llm_tokens") == [1, 1, 1, 1, 1]
+        assert row("llm_tokens", "count") == [50, 120, 170, 170, 170]
+        # Today: admin was seen (last_seen_at) and regular called MCP; the
+        # scheduler run and the token pings don't count as activity.
+        assert row("active_users") == [2, 2, 2, 2, 2]
 
     def test_requires_admin(self, client):
         token = create_token(REGULAR_ID, "user@test.com", "Regular User", TEST_SECRET)
         resp = client.get("/api/admin/activity", cookies={COOKIE_NAME: token})
         assert resp.status_code == 403
+
+
+class TestAdminDigestSend:
+    def test_send_reaches_admin_emails(self, client, monkeypatch):
+        """Regression: the endpoint called an un-imported get_admin_emails (500)."""
+        sent = {}
+        monkeypatch.setattr(
+            "weatherbrief.tasks.admin_digest_stats.get_admin_digest_data",
+            lambda *a, **k: "data",
+        )
+        monkeypatch.setattr(
+            "weatherbrief.notify.admin_digest_email.send_admin_digest",
+            lambda emails, data: sent.update(emails=emails, data=data),
+        )
+        resp = client.post("/api/admin/digest/send", cookies=_admin_cookie())
+        assert resp.status_code == 200
+        assert resp.json()["recipients"] == [ADMIN_EMAIL]
+        assert sent == {"emails": [ADMIN_EMAIL], "data": "data"}
 
 
 class TestCreateAdditionalToken:

@@ -7,17 +7,18 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
-from weatherbrief.db.models import ApiUsageRow, BriefingUsageRow
+from weatherbrief.db.models import ApiUsageRow, BriefingUsageRow, McpToolCallRow
 from weatherbrief.pipeline import BriefingUsage
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user/usage", tags=["usage"])
+mcp_router = APIRouter(prefix="/mcp", tags=["usage"])
 
 # --- Rate limits (per-user, per-day) ---
 
@@ -367,3 +368,28 @@ def get_usage(
 ) -> UsageSummary:
     """Return usage summary for the current user."""
     return get_usage_summary(db, user_id)
+
+
+# --- MCP tool-call log (#873) ---
+
+
+class McpToolCall(BaseModel):
+    tool: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    ok: bool = True
+    elapsed_ms: int | None = Field(default=None, ge=0)
+
+
+@mcp_router.post("/tool-calls", status_code=204, include_in_schema=False)
+def record_mcp_tool_call(
+    call: McpToolCall,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> None:
+    """Log one MCP tool call for the calling user.
+
+    Posted by the MCP server's middleware with the user's own token after each
+    tool returns; a user can only ever add rows to their own count.
+    """
+    db.add(McpToolCallRow(
+        user_id=user_id, tool=call.tool, ok=call.ok, elapsed_ms=call.elapsed_ms,
+    ))

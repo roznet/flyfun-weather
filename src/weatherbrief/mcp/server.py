@@ -27,6 +27,7 @@ import httpx
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth import AccessToken, RemoteAuthProvider, TokenVerifier
 from fastmcp.server.dependencies import get_http_request
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 
@@ -205,6 +206,43 @@ mcp = FastMCP(
         "to the pilot for visual details."
     ),
 )
+
+
+class _ToolCallLog(Middleware):
+    """Log each tool call to the API (#873) — the MCP row of admin activity.
+
+    Best effort: a failed or slow log never fails the tool. The row is posted
+    with the caller's own token, so the API attributes it to that user.
+    """
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        start = time.monotonic()
+        ok = False
+        try:
+            result = await call_next(context)
+            structured = getattr(result, "structured_content", None)
+            ok = not (isinstance(structured, dict) and "error" in structured)
+            return result
+        finally:
+            await _log_tool_call(
+                context.message.name, ok, int((time.monotonic() - start) * 1000),
+            )
+
+
+async def _log_tool_call(tool: str, ok: bool, elapsed_ms: int) -> None:
+    try:
+        token = _extract_token()
+        async with httpx.AsyncClient(base_url=API_BASE, timeout=2) as client:
+            await client.post(
+                "/api/mcp/tool-calls",
+                json={"tool": tool, "ok": ok, "elapsed_ms": elapsed_ms},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except Exception:  # noqa: BLE001 - logging must never break a tool call
+        logger.debug("MCP tool-call log failed for %s", tool, exc_info=True)
+
+
+mcp.add_middleware(_ToolCallLog())
 
 
 def _extract_token() -> str:

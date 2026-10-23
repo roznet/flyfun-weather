@@ -801,13 +801,21 @@ function showTokenModal(token: string, name: string): void {
   });
 }
 
-const ACTIVITY_ROWS: { key: ActivityMetricKey; label: string; title: string }[] = [
+const ACTIVITY_ROWS: { key: ActivityMetricKey; label: string; title: string; compact?: boolean }[] = [
   { key: 'new_users', label: 'New users', title: 'Accounts created' },
-  { key: 'active_users', label: 'Active users', title: 'Created a flight or requested a briefing (web, app, Siri, MCP, trip)' },
+  { key: 'active_users', label: 'Active users', title: 'Seen in a web/app session, created a flight, requested a briefing or called an MCP tool. "Seen" is a last-seen time, so Yesterday misses users also seen today.' },
   { key: 'new_briefings', label: 'New briefings', title: 'Users who created flights · flights created' },
   { key: 'refreshes', label: 'Refreshes', title: 'Users who refreshed · user-requested refreshes (not auto-refresh)' },
-  { key: 'mcp', label: 'MCP', title: 'Users whose MCP connector opened a session (last use only, so a user on both days counts under today) · MCP-requested briefings' },
+  { key: 'mcp', label: 'MCP', title: 'Users who called an MCP tool or requested an MCP briefing · tool calls (logged since 2026-10-23)' },
+  { key: 'auto_refreshes', label: 'Auto-refreshes', title: 'Users with scheduled refreshes · scheduler runs' },
+  { key: 'llm_tokens', label: 'LLM tokens', title: 'Users with a digest · briefing-digest tokens (input + output, any trigger)', compact: true },
 ];
+
+function compactNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
 
 async function loadActivity(): Promise<void> {
   const tbody = document.getElementById('activity-tbody')!;
@@ -819,10 +827,11 @@ async function loadActivity(): Promise<void> {
 }
 
 function renderActivityRows(a: ActivityResponse): string {
-  return ACTIVITY_ROWS.map(({ key, label, title }) => {
+  return ACTIVITY_ROWS.map(({ key, label, title, compact }) => {
     const m = a.metrics[key];
     const cells = a.windows.map((w) => {
-      const ev = m.count ? `<span class="ev">${m.count[w].toLocaleString()}</span>` : '';
+      const count = m.count ? (compact ? compactNumber(m.count[w]) : m.count[w].toLocaleString()) : '';
+      const ev = m.count ? `<span class="ev">${count}</span>` : '';
       return `<td class="num">${m.users[w].toLocaleString()}${ev}</td>`;
     }).join('');
     return `<tr><td title="${escapeHtml(title)}">${label}</td>${cells}</tr>`;

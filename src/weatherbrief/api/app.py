@@ -29,6 +29,7 @@ from flyfun_common.db import (
     ensure_dev_user,
     get_engine,
     init_shared_db,
+    register_passive_paths,
     register_scope_paths,
 )
 from flyfun_common.db.models import UserPreferencesRow
@@ -69,7 +70,7 @@ from weatherbrief.api.models import router as models_router
 from weatherbrief.api.tokens import router as tokens_router
 from weatherbrief.api.account_export import router as account_export_router
 from weatherbrief.privacy import mask_email
-from weatherbrief.api.usage import router as usage_router
+from weatherbrief.api.usage import mcp_router, router as usage_router
 from flyfun_common.admin_hub import create_hub_router
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ def _on_delete_user(user_id: str, db):
     from pathlib import Path
     from weatherbrief.db.models import (
         BriefingRefreshJobRow, BriefingUsageRow, DeviceTokenRow, FeedbackRow,
-        FlightBriefingSeenRow, FlightProfileRow, FlightRow, PirepRow,
+        FlightBriefingSeenRow, FlightProfileRow, FlightRow, McpToolCallRow, PirepRow,
         UserAircraftRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
@@ -112,6 +113,9 @@ def _on_delete_user(user_id: str, db):
     ).delete(synchronize_session=False)
     db.query(BriefingUsageRow).filter(
         BriefingUsageRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(McpToolCallRow).filter(
+        McpToolCallRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.query(FeedbackRow).filter(
         FeedbackRow.user_id == user_id
@@ -639,6 +643,7 @@ def create_app() -> FastAPI:
     app.include_router(profiles_router, prefix="/api")
     app.include_router(profiles_admin_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
+    app.include_router(mcp_router, prefix="/api")
     app.include_router(credits_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
     app.include_router(cost_config_router, prefix="/api")
@@ -733,6 +738,10 @@ def create_app() -> FastAPI:
             ("GET", r"/api/flights/[^/]+/export"),
         ],
     )
+
+    # Not a visit: the app syncs its badge from a silent push in the background
+    # (flyfun-common's users.last_seen_at would otherwise count it, #873).
+    register_passive_paths([("GET", r"/api/flights/badge")])
 
     hub_router = create_hub_router(
         require_admin=require_admin,

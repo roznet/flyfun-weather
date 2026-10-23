@@ -2146,3 +2146,30 @@ class LiveDeliveryRow(Base):
     requested_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
     delivered_via: Mapped[str] = mapped_column(String(8), nullable=False, default="poll")
     push_sent_at: Mapped[datetime | None] = mapped_column(TZDateTime(fsp=6), nullable=True)
+
+
+class McpToolCallRow(Base):
+    """One MCP tool call (#873) — the MCP usage signal for admin activity.
+
+    Posted by the MCP server's middleware with the caller's own token after
+    each tool returns, so ``user_id`` is the authenticated user. Token
+    ``last_used_at`` is not a substitute: the MCP server checks the token on
+    every protocol request (session open, tool listing), not only on calls.
+    """
+
+    __tablename__ = "mcp_tool_calls"
+    __table_args__ = (
+        Index("ix_mcp_tool_calls_ts", "ts"),
+        Index("ix_mcp_tool_calls_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ts: Mapped[datetime] = mapped_column(
+        TZDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    tool: Mapped[str] = mapped_column(String(64), nullable=False)
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

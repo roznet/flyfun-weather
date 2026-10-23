@@ -32,9 +32,9 @@ from flyfun_common.admin import (
 from flyfun_common.db.models import CostLedgerRow
 from weatherbrief.privacy import mask_email
 from weatherbrief.db.models import (
-    BriefingUsageRow, FlightRow,
+    BriefingUsageRow, FlightRow, McpToolCallRow,
 )
-from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, is_admin_email
+from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails, is_admin_email
 from weatherbrief.api.security import audit_admin_action
 
 logger = logging.getLogger(__name__)
@@ -294,9 +294,10 @@ def _activity_windows(now: datetime) -> dict[str, tuple[datetime | None, datetim
     }
 
 
-def _window_counts(db: Session, ts, user, windows, *, where=(), row=None) -> dict:
-    """Distinct ``user`` (and, with ``row``, non-NULL ``row``) per window — one query.
+def _window_counts(db: Session, ts, user, windows, *, where=(), row=None, agg=func.count) -> dict:
+    """Distinct ``user`` (and, with ``row``, ``agg(row)``) per window — one query.
 
+    ``agg`` is ``func.count`` (non-NULL rows) or ``func.sum`` (a quantity).
     Every window is a conditional aggregate over the same scan, so a metric
     costs one pass over its (small) table however many columns the page shows.
     """
@@ -310,17 +311,17 @@ def _window_counts(db: Session, ts, user, windows, *, where=(), row=None) -> dic
             cond = and_(*bounds)
             cols.append(func.count(distinct(case((cond, user)))))
             if row is not None:
-                cols.append(func.count(case((cond, row))))
+                cols.append(agg(case((cond, row))))
         else:
             cols.append(func.count(distinct(user)))
             if row is not None:
-                cols.append(func.count(row))
+                cols.append(agg(row))
     values = iter(db.execute(select(*cols).where(*where)).one())
     out: dict = {"users": {}, "count": {} if row is not None else None}
     for key in windows:
         out["users"][key] = int(next(values))
         if row is not None:
-            out["count"][key] = int(next(values))
+            out["count"][key] = int(next(values) or 0)
     return out
 
 
@@ -331,37 +332,40 @@ def activity_summary(
 ):
     """Who used the app, per window (today / yesterday / 7d / 30d / lifetime).
 
-    Five small queries, one per metric. ``users`` is distinct accounts;
-    ``count`` (where present) is events. Signals are what the DB records:
-    a user who only *opens* briefings leaves no row, and a web/iOS session
-    has no last-seen column, so ``active_users`` undercounts pure readers.
+    One small query per metric. ``users`` is distinct accounts; ``count``
+    (where present) is events, or a quantity for ``llm_tokens``.
 
     - ``new_users``: human accounts created.
+    - ``active_users``: accounts that were seen in a web/app session
+      (``users.last_seen_at``), created a flight, requested a briefing (web,
+      app, Siri, MCP, trip) or called an MCP tool. ``last_seen_at`` is a
+      last-seen value: exact for windows ending now, but "yesterday" misses
+      readers also seen today. MCP connector sessions (token pings on every
+      protocol request) don't count.
     - ``new_briefings``: flights created (each gets its first briefing).
     - ``refreshes``: user-requested briefings that weren't a flight's first.
-    - ``mcp``: ``users`` = accounts whose MCP token was last used in the
-      window, ``count`` = MCP-requested briefings. The MCP server checks the
-      token on every request (session open, tool listing), so a token use
-      means "connector session", not "tool called"; and it is a last-seen
-      value, so a user active both days only shows under today.
-    - ``active_users``: accounts that created a flight or requested a
-      briefing (web, app, Siri, MCP, trip). Connector sessions alone don't
-      count — they fire whenever a Claude chat with the connector opens.
+    - ``mcp``: ``users`` = accounts that called an MCP tool or requested an
+      MCP briefing (the latter covers history before the tool-call log);
+      ``count`` = tool calls (logged since #873).
+    - ``auto_refreshes``: scheduler-run briefings.
+    - ``llm_tokens``: briefing-digest tokens (input + output), any trigger.
     """
     windows = _activity_windows(datetime.now(timezone.utc))
     bu = BriefingUsageRow
     user_requested = or_(bu.triggered_by.is_(None), bu.triggered_by.notin_(_UNATTENDED_TRIGGERS))
     first_briefing_ids = select(func.min(bu.id)).group_by(bu.flight_id)
-    mcp_token = and_(ApiTokenRow.scope.contains("mcp"), ApiTokenRow.last_used_at.isnot(None))
+    mcp = McpToolCallRow
+    llm_tokens = func.coalesce(bu.llm_input_tokens, 0) + func.coalesce(bu.llm_output_tokens, 0)
 
     mcp_events = union_all(
-        select(bu.user_id.label("user_id"), bu.timestamp.label("ts"), literal(1).label("n"))
-        .where(bu.triggered_by == "mcp"),
-        select(ApiTokenRow.user_id, ApiTokenRow.last_used_at, null()).where(mcp_token),
+        select(mcp.user_id.label("user_id"), mcp.ts.label("ts"), literal(1).label("n")),
+        select(bu.user_id, bu.timestamp, null()).where(bu.triggered_by == "mcp"),
     ).subquery()
     any_activity = union_all(
         select(bu.user_id.label("user_id"), bu.timestamp.label("ts")).where(user_requested),
         select(FlightRow.user_id, FlightRow.created_at),
+        select(mcp.user_id, mcp.ts),
+        select(UserRow.id, UserRow.last_seen_at).where(UserRow.last_seen_at.isnot(None)),
     ).subquery()
 
     return {
@@ -383,6 +387,14 @@ def activity_summary(
             ),
             "mcp": _window_counts(
                 db, mcp_events.c.ts, mcp_events.c.user_id, windows, row=mcp_events.c.n,
+            ),
+            "auto_refreshes": _window_counts(
+                db, bu.timestamp, bu.user_id, windows, row=bu.id,
+                where=(bu.triggered_by == "scheduler",),
+            ),
+            "llm_tokens": _window_counts(
+                db, bu.timestamp, bu.user_id, windows, row=llm_tokens, agg=func.sum,
+                where=(bu.llm_digest.is_(True),),
             ),
         },
     }

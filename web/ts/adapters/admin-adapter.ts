@@ -38,11 +38,12 @@ export type ActivityWindow = 'today' | 'yesterday' | 'week' | 'month' | 'lifetim
 export interface ActivityMetric {
   /** Distinct accounts per window. */
   users: Record<ActivityWindow, number>;
-  /** Events per window (flights, refreshes, MCP briefings); null when users is the only figure. */
+  /** Events per window (flights, refreshes, tool calls, runs) or LLM tokens; null when users is the only figure. */
   count: Record<ActivityWindow, number> | null;
 }
 
-export type ActivityMetricKey = 'new_users' | 'active_users' | 'new_briefings' | 'refreshes' | 'mcp';
+export type ActivityMetricKey =
+  'new_users' | 'active_users' | 'new_briefings' | 'refreshes' | 'mcp' | 'auto_refreshes' | 'llm_tokens';
 
 export interface ActivityResponse {
   windows: ActivityWindow[];
