@@ -2286,7 +2286,8 @@ async function init(): Promise<void> {
 
   // #881: the "Details" fold and each flight's folded departure are
   // remembered (a poll re-renders the card). Storage can throw (private
-  // mode, blocked site data): then they simply start closed.
+  // mode, blocked site data): then they simply start closed. One key per
+  // flight, written only while its departure is open: small, so never pruned.
   const DETAILS_OPEN_KEY = 'observedDetailsExpanded';
   const departureOpenKey = (flightId: string) => `observedDepartureOpen:${flightId}`;
   const readFlag = (key: string): boolean => {
@@ -3269,7 +3270,12 @@ async function init(): Promise<void> {
       // #881: the offline banner follows the browser too; back online, read
       // at once (a success clears it).
       window.addEventListener('offline', () => store.getState().setLiveOffline(true));
-      window.addEventListener('online', () => { void runLiveSync(); });
+      // Clear at once: the next read re-raises it if the server still fails,
+      // and outside the poll's window there may be no next read.
+      window.addEventListener('online', () => {
+        store.getState().setLiveOffline(false);
+        void runLiveSync();
+      });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible' || livePollTimer === null) return;
         refreshAges();

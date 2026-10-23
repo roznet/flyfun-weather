@@ -11,8 +11,9 @@ import SwiftUI
 // `destination_block`). The client adds the title, the ETA, the wind
 // advisory's colour and the taps that open the map.
 //
-// SYNC — web counterparts: `flightStripHtml` / `destinationHtml` in
-// web/ts/visualization/observed/nutshell-view.ts.
+// SYNC — web counterparts: `flightStripHtml` in
+// web/ts/visualization/observed/nutshell-view.ts; the destination block is
+// the arrival card on web since #881 (observed/airport-card-view.ts).
 
 // MARK: - Flight strip
 

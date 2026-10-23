@@ -476,7 +476,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const flight = await api.fetchFlight(id);
-      set({ flight, loading: false });
+      set({ flight, loading: false, liveOffline: false });
       await get().loadPacks();
       await get().selectLatest();
       await get().maybeAutoRefreshOnOpen();
