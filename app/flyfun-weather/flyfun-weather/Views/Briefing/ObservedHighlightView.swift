@@ -134,8 +134,9 @@ struct ObservedHighlightCard: View {
 /// Everything below the ribbon that a pilot reads only when the top raised a
 /// question: the headline (when the highlight took its slot), the non-alert
 /// lines still ahead and those the flight has passed (#882: the airport cards
-/// above answer the terminals), the non-alert change rows. Collapsed by default; the state is remembered
-/// across launches, except under UI tests, which start collapsed (#803).
+/// above answer the terminals), the non-alert change rows. Collapsed by
+/// default; the state is remembered across launches, except under UI tests,
+/// which start collapsed (#803).
 ///
 /// A plain button rather than a `DisclosureGroup`, so the toggle carries an
 /// `expanded` / `collapsed` accessibility value a UI test can read.

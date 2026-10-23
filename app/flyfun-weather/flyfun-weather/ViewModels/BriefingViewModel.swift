@@ -1061,9 +1061,6 @@ final class BriefingViewModel {
         await syncLatestPack(forceLive: true)
     }
 
-    /// The adopted live layer, only while it belongs to the pack on screen
-    /// (#690): its nutshell and ribbon describe the latest pack, never an older
-    /// one the pilot is browsing.
     /// #882: the Observed tab is showing older data: the last live read
     /// failed, or the device has no connection.
     var isLiveOffline: Bool {
@@ -1076,6 +1073,9 @@ final class BriefingViewModel {
         (repository as? CacheStatusReporting)?.isServingCachedLive ?? false
     }
 
+    /// The adopted live layer, only while it belongs to the pack on screen
+    /// (#690): its nutshell and ribbon describe the latest pack, never an older
+    /// one the pilot is browsing.
     var liveLayerForPack: LiveLayerResponse? {
         guard let timestamp = pack?.fetchTimestamp, samePack(liveLayer, timestamp) else { return nil }
         return liveLayer
