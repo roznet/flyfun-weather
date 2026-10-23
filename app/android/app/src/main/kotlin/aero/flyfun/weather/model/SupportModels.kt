@@ -34,6 +34,9 @@ data class AircraftResponse(
     val isDefault: Boolean = false,
     @SerialName("created_at")
     val createdAt: String? = null,
+    /** The server's synthesised "My aircraft" (`ZZZZ`, #777); cleared by any PUT. */
+    @SerialName("is_placeholder")
+    val isPlaceholder: Boolean = false,
 ) {
     val displayLabel: String
         get() = when {
@@ -153,6 +156,9 @@ data class ProfileSettings(
     @SerialName("digest_guidance")
     val digestGuidance: String? = null,
     val advisories: ProfileAdvisoriesConfig? = null,
+    /** "vfr_only" or "vfr_ifr". */
+    @SerialName("flight_rules")
+    val flightRules: String? = null,
 )
 
 @Serializable
@@ -393,6 +399,8 @@ data class PreferencesResponse(
     val briefingUpdates: BriefingUpdates = BriefingUpdates.DAILY,
     @SerialName("live_updates")
     val liveUpdates: Boolean = true,
+    // Never sent by `/api/user/preferences`: first-run setup reads `setup_completed` from
+    // `/auth/me` ([AuthMeResponse], #900). Kept so the cached shape is unchanged.
     @SerialName("setup_completed")
     val setupCompleted: Boolean = true,
     @SerialName("has_autorouter_creds")
@@ -613,3 +621,56 @@ data class SubmitPirepRequest(
     val aircraftType: String? = null,
     val source: String = "manual",
 )
+
+// ============================================================================
+// First-run setup (#900)
+// ============================================================================
+
+/**
+ * The one `/auth/me` field the app reads. `/api/user/preferences` does not carry `setup_completed`;
+ * `/auth/me` does (false when the user has no preferences row yet), as the web reads it. A missing
+ * field means "not done".
+ */
+@Serializable
+data class AuthMeResponse(
+    @SerialName("setup_completed")
+    val setupCompleted: Boolean? = null,
+)
+
+/** A system profile template (`GET /api/user/profiles/system-templates`): the profile card's description. */
+@Serializable
+data class SystemTemplate(
+    val key: String = "",
+    val name: String = "",
+    val description: String = "",
+)
+
+/**
+ * Body for `PUT /api/user/profiles/{id}`. The server merges `settings` sparsely: an omitted key is
+ * kept, so the template's models and advisory choices survive. Null fields are left out of the wire
+ * (`explicitNulls = false`), never sent as null (a null deletes the key).
+ */
+@Serializable
+data class SetupProfileUpdate(
+    @SerialName("is_default")
+    val isDefault: Boolean? = null,
+    val settings: SetupMission? = null,
+)
+
+/** The wizard's "Your usual mission" group, saved to the chosen profile. */
+@Serializable
+data class SetupMission(
+    @SerialName("flight_rules")
+    val flightRules: String,
+    @SerialName("cruise_altitude_ft")
+    val cruiseAltitudeFt: Int,
+    @SerialName("flight_ceiling_ft")
+    val flightCeilingFt: Int,
+)
+
+/**
+ * The profile says FIKI: the IFR FIKI template, or the retired FIKI Icing card on. Mirrors the
+ * server's `profile_declares_fiki` (#850).
+ */
+val ProfileResponse.declaresFiki: Boolean
+    get() = systemTemplateKey == "ifr_fiki" || settings.advisories?.enabled?.get("fiki_icing") == true

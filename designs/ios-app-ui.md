@@ -334,7 +334,7 @@ Severity color mapping (`severityPicker`): none→green, trace/light→yellow, m
 
 ## UI-test fixtures (shared with Android)
 
-The XCUI journeys (`flyfun-weatherUITests/`) launch the app with `FLYFUN_UITEST=1` + `FLYFUN_MOCK=1` (optionally `FLYFUN_MOCK_OFFLINE`, `FLYFUN_MOCK_LIVE`, `FLYFUN_MOCK_LIVE_JSON`), handled in `AppState.setupUITestSession` (DEBUG only). The fixtures live outside the Xcode project, in `app/fixtures/`, since #895:
+The XCUI journeys (`flyfun-weatherUITests/`) launch the app with `FLYFUN_UITEST=1` + `FLYFUN_MOCK=1` (optionally `FLYFUN_MOCK_OFFLINE`, `FLYFUN_MOCK_LIVE`, `FLYFUN_MOCK_LIVE_JSON`, `FLYFUN_MOCK_SETUP` for the first-run wizard, see [first-run-setup.md](./first-run-setup.md)), handled in `AppState.setupUITestSession` (DEBUG only). The fixtures live outside the Xcode project, in `app/fixtures/`, since #895:
 
 - `app/fixtures/api/*.json` — one mock response per endpoint, served by `FixtureBriefingRepository` through `FixtureFiles` (production decoder, `fatalError` on a missing or undecodable file). The Android app's fixture repository reads the **same files**, so editing one changes both platforms' journeys and the Android demo mode. The folder is a folder reference copied to `api/` in the app bundle; Release excludes it (`EXCLUDED_SOURCE_FILE_NAMES = api`). A simulator build falls back to reading the source tree; `FixtureFilesTests` pins the bundled copy so the fallback can't hide a broken resource phase.
 - `app/fixtures/live-scenarios/` — server-produced `/live` ticks (`scripts/export_live_scenario_ios.py`; `tests/test_live_scenarios.py` fails if they drift), read in place from the host by `FlyfunUITestCase.liveScenarioTick`, and by the web unit tests.

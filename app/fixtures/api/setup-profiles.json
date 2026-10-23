@@ -1,0 +1,29 @@
+[
+  {
+    "id": 101,
+    "name": "VFR Only",
+    "is_default": true,
+    "system_template_key": "vfr_only",
+    "settings": {"flight_rules": "vfr_only", "cruise_altitude_ft": 5500, "flight_ceiling_ft": 10000},
+    "created_at": "2026-10-01T08:00:00Z",
+    "updated_at": "2026-10-01T08:00:00Z"
+  },
+  {
+    "id": 102,
+    "name": "IFR Conservative",
+    "is_default": false,
+    "system_template_key": "ifr_conservative",
+    "settings": {"flight_rules": "vfr_ifr", "cruise_altitude_ft": 8000, "flight_ceiling_ft": 18000},
+    "created_at": "2026-10-01T08:00:00Z",
+    "updated_at": "2026-10-01T08:00:00Z"
+  },
+  {
+    "id": 103,
+    "name": "IFR FIKI",
+    "is_default": false,
+    "system_template_key": "ifr_fiki",
+    "settings": {"flight_rules": "vfr_ifr", "cruise_altitude_ft": 10000, "flight_ceiling_ft": 25000},
+    "created_at": "2026-10-01T08:00:00Z",
+    "updated_at": "2026-10-01T08:00:00Z"
+  }
+]

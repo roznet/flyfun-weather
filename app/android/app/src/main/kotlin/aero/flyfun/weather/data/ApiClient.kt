@@ -697,6 +697,18 @@ class ApiClient(
 
     suspend fun listProfiles(): List<ProfileResponse> = get("/api/user/profiles")
 
+    // First-run setup (#900): the calls the web welcome wizard makes.
+
+    suspend fun getAuthMe(): AuthMeResponse = get("/auth/me")
+
+    suspend fun listSystemTemplates(locale: String = "en"): List<SystemTemplate> =
+        get("/api/user/profiles/system-templates", listOf("locale" to locale))
+
+    suspend fun updateProfile(id: Int, req: SetupProfileUpdate): ProfileResponse =
+        put("/api/user/profiles/$id", req)
+
+    suspend fun completeSetup() = postEmpty("/api/user/preferences/setup-complete")
+
     suspend fun getPreferences(): PreferencesResponse = get("/api/user/preferences")
 
     suspend fun updatePreferences(body: Map<String, kotlinx.serialization.json.JsonElement>): PreferencesResponse =

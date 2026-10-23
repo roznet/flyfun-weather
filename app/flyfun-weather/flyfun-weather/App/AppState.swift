@@ -65,6 +65,11 @@ final class AppState {
     /// user B. `private(set) var` so only sign-in reshapes it.
     private(set) var pirepOfflineStore = PirepOfflineStore()
     let userPreferences = UserPreferencesStore()
+    /// First-run setup calls (#900); nil when signed out, like `repository`.
+    @ObservationIgnored private(set) var setupRepository: (any SetupRepository)?
+    /// The first-run setup wizard is up. Set by `checkSetupNeeded` when the
+    /// account's `setup_completed` is false; cleared when the wizard finishes.
+    var showSetupWizard = false
     /// Local device settings (e.g. offline auto-download mode). Server-side flags
     /// live in `userPreferences`; this is the on-device counterpart.
     let settings = AppSettingsStore()
@@ -265,6 +270,11 @@ final class AppState {
             // past LoginView, and it lives on the observable mirror only.
             jwt = "uitest-token"
             repository = FixtureBriefingRepository(offline: Self.isUITestOfflineMode)
+            // `FLYFUN_MOCK_SETUP=1` starts the account with setup not done, so
+            // the setup journeys see the wizard and no other journey does.
+            setupRepository = FixtureSetupRepository(
+                setupCompleted: ProcessInfo.processInfo.environment["FLYFUN_MOCK_SETUP"] != "1"
+            )
         } else {
             // Live-dev mode: mirror the real keychain token so the auth gate
             // matches what the API will actually use (nil → LoginView, as normal).
@@ -381,6 +391,8 @@ final class AppState {
         applyToken(nil)
         apiClient = nil
         repository = nil
+        setupRepository = nil
+        showSetupWizard = false
         userPreferences.clear()
     }
 
@@ -392,6 +404,8 @@ final class AppState {
         jwt = nil
         apiClient = nil
         repository = nil
+        setupRepository = nil
+        showSetupWizard = false
         userPreferences.clear()
     }
 
@@ -722,6 +736,15 @@ final class AppState {
         }
     }
 
+    /// Offer the first-run setup wizard when this account hasn't done it on
+    /// any client (#900). Read once per sign-in from `/auth/me`; offline or
+    /// on any error the wizard simply isn't shown this time.
+    func checkSetupNeeded() async {
+        guard let setupRepository, !showSetupWizard,
+              let done = try? await setupRepository.setupCompleted() else { return }
+        if !done { showSetupWizard = true }
+    }
+
     func refreshUserPreferences() async {
         guard let apiClient else { return }
         await userPreferences.refresh(using: apiClient)
@@ -841,6 +864,7 @@ final class AppState {
         BriefingCacheStore.migrateLegacyLayout(base: base)
         let cache = BriefingCacheStore(cacheDir: BriefingCacheStore.scopedCacheDir(base: base, scope: scope))
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
+        setupRepository = OnlineSetupRepository(client: client)
         Self.discardLegacyPireps()
         pirepOfflineStore = PirepOfflineStore(fileURL: Self.scopedPirepURL(scope: scope))
         Task { await userPreferences.refresh(using: client) }

@@ -1,0 +1,20 @@
+[
+  {
+    "key": "vfr_only",
+    "name": "VFR Only",
+    "description": "For VFR-only pilots. Conservative cloud and visibility thresholds, focuses on visual flight conditions. Disables IFR-specific advisories.",
+    "settings": {"flight_rules": "vfr_only", "cruise_altitude_ft": 5500, "flight_ceiling_ft": 10000}
+  },
+  {
+    "key": "ifr_conservative",
+    "name": "IFR Conservative",
+    "description": "For IFR-rated pilots preferring conservative assessments. Uses worst-case aggregation across models. All advisories enabled including IFR feasibility with tighter ceiling thresholds.",
+    "settings": {"flight_rules": "vfr_ifr", "cruise_altitude_ft": 8000, "flight_ceiling_ft": 18000}
+  },
+  {
+    "key": "ifr_fiki",
+    "name": "IFR FIKI",
+    "description": "For FIKI-equipped IFR aircraft. Tolerant digest guidance and majority aggregation for balanced assessments. Icing is graded for the aircraft you fly: mark it FIKI on the aircraft form.",
+    "settings": {"flight_rules": "vfr_ifr", "cruise_altitude_ft": 10000, "flight_ceiling_ft": 25000}
+  }
+]
