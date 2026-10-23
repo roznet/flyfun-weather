@@ -520,6 +520,9 @@ test.describe('Observed airport cards (#881)', () => {
         await expect(arr).toContainText('Thunder nearby');
         await expect(arr).toContainText('SPECI');
         await expect(dep.locator('[data-testid="card-crosswind"]')).toHaveClass(/ac-tone-amber/);
+        // The server flags the arrival's cells and lightning rows alert-tier.
+        await expect(arr.locator('[data-testid="card-cells"]')).toHaveClass(/ac-tone-amber/);
+        await expect(dep.locator('[data-testid="card-cells"]')).not.toHaveClass(/ac-tone-amber/);
         await expect(arr.locator('[data-testid="card-taf-strip"] .ac-strip-eta')).toHaveCount(1);
         // Side by side on a desktop section, stacked at ~400 px.
         const [d, a] = [await dep.boundingBox(), await arr.boundingBox()];

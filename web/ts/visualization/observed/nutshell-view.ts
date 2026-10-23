@@ -146,9 +146,10 @@ export function flightStripHtml(flight: LiveGlanceFlight): string {
 /** "Offline · showing data from 08:30Z, 12 min ago" (#881). The age is
  *  filled and re-aged by `refreshLiveAges`. */
 export function offlineBannerHtml(since: string): string {
+  // The age goes where the locale puts {age}: a span refreshLiveAges fills.
+  const [before, after = ''] = t('observed.offline', { time: formatHhmmZ(since), age: '\u0000' }).split('\u0000');
   return '<div class="glance-offline" role="status" data-testid="observed-offline">'
-    + `${escapeHtml(t('observed.offline', { time: formatHhmmZ(since) }))}, `
-    + `<span data-live-age="${escapeHtml(since)}"></span></div>`;
+    + `${escapeHtml(before)}<span data-live-age="${escapeHtml(since)}"></span>${escapeHtml(after)}</div>`;
 }
 
 /** The nutshell card's markup. Pure, so the wording and the alert/passed

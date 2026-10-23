@@ -1011,7 +1011,7 @@
   "observed.card.crosswindFrom.right": "Vent de travers de la droite",
   "observed.card.stripTitle": "TAF heure par heure : hachuré = groupe TEMPO/PROB plus défavorable, heure encadrée = {mark}",
   "observed.details": "Détails",
-  "observed.offline": "Hors ligne · données de {time}",
+  "observed.offline": "Hors ligne · données de {time}, {age}",
   "observed.ribbon.plannedPositionNow": "Position prévue maintenant",
   "observed.highlight.written": "rédigé à {time}",
   "observed.highlight.up": "Ce résumé correspondait à ce que j'ai vu",

@@ -1463,6 +1463,10 @@ export interface LiveGlanceDestination {
   cells_text: string;
   cells?: LiveDestinationCell[];
   lightning_text?: string | null;
+  /** #881: an alert-tier change stands behind the card's cells / lightning
+   *  row (the server's routing of its own alert tier): tone that row. */
+  cells_alert?: boolean;
+  lightning_alert?: boolean;
   alert?: boolean;
   unavailable?: string[];
   focus?: LiveFocus | null;

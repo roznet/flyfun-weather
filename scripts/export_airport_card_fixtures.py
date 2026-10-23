@@ -137,6 +137,8 @@ def destination() -> LiveGlanceDestination:
         cells=[LiveDestinationCell(id=cell, text="9 NM SW · 48 dBZ, lightning · closing 6 kt",
                                    focus=focus("storm", cell, 51.2, -0.9, ["route", "radar", "cells"]))],
         lightning_text="lightning ≤20 NM (4 flashes, nearest 9 NM)",
+        # The storm and lightning change rows for EGLF are alert-tier.
+        cells_alert=True, lightning_alert=True,
         focus=focus("station", "EGLF", 51.276, -0.776, STATION_LAYERS), airport=a,
     )
 

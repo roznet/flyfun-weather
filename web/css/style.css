@@ -9541,6 +9541,7 @@ button.glance-line:hover {
 
 .ac-xw { font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .ac-tone-amber { color: var(--amber); font-weight: 600; }
+
 .ac-tone-red { color: var(--red); font-weight: 600; }
 
 .ac-near {
@@ -9560,6 +9561,7 @@ button.glance-line:hover {
 .ac-near > span:not(.glance-chevron) { flex: 1; min-width: 0; }
 .ac-near .glance-chevron { align-self: center; }
 button.ac-near { cursor: pointer; }
+.ac-near.ac-tone-amber, .ac-near.ac-tone-amber .ac-ic { color: var(--amber); font-weight: 600; }
 button.ac-near:hover { color: var(--primary); }
 
 .ac-cells {

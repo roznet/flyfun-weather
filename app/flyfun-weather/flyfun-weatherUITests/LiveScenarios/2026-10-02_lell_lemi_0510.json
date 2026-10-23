@@ -154,6 +154,7 @@
    },
    "alert": false,
    "cells": [],
+   "cells_alert": false,
    "cells_text": "radar cells unavailable",
    "etd": "2026-10-02T08:00:00Z",
    "focus": {
@@ -179,6 +180,7 @@
    "folded_source": null,
    "folded_text": null,
    "icao": "LELL",
+   "lightning_alert": false,
    "lightning_text": "lightning unavailable",
    "metar_category": "VFR",
    "metar_text": "LELL VFR",
@@ -333,6 +335,7 @@
    },
    "alert": false,
    "cells": [],
+   "cells_alert": false,
    "cells_text": "radar cells unavailable",
    "eta": "2026-10-02T10:00:00Z",
    "focus": {
@@ -354,6 +357,7 @@
     "time": null
    },
    "icao": "LEMI",
+   "lightning_alert": false,
    "lightning_text": "lightning unavailable",
    "metar_category": "VFR",
    "metar_text": "LEMI VFR",

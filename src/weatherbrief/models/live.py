@@ -490,6 +490,13 @@ class LiveGlanceDestination(BaseModel):
     cells: list[LiveDestinationCell] = Field(default_factory=list)
     # "no lightning ≤20 NM", as on the arrival line (the block stands in for it).
     lightning_text: str | None = None
+    # The card's rows to tone (#881, styling only): an alert-tier change row
+    # stands behind them. ``cells_alert``: a storm or radar alert for this
+    # terminal, or one naming a cell listed here; ``lightning_alert``: a
+    # lightning alert for this terminal. No new threshold: the alert tier is
+    # the significance rules' own (§36, §41).
+    cells_alert: bool = False
+    lightning_alert: bool = False
     # An alert-tier change belongs to the arrival phase (styling only).
     alert: bool = False
     unavailable: list[str] = Field(default_factory=list)
@@ -532,6 +539,13 @@ class LiveGlanceDeparture(BaseModel):
     cells_text: str
     cells: list[LiveDestinationCell] = Field(default_factory=list)
     lightning_text: str | None = None
+    # The card's rows to tone (#881, styling only): an alert-tier change row
+    # stands behind them. ``cells_alert``: a storm or radar alert for this
+    # terminal, or one naming a cell listed here; ``lightning_alert``: a
+    # lightning alert for this terminal. No new threshold: the alert tier is
+    # the significance rules' own (§36, §41).
+    cells_alert: bool = False
+    lightning_alert: bool = False
     # An alert-tier change belongs to the departure phase (styling only).
     alert: bool = False
     unavailable: list[str] = Field(default_factory=list)

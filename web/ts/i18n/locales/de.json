@@ -1011,7 +1011,7 @@
   "observed.card.crosswindFrom.right": "Seitenwind von rechts",
   "observed.card.stripTitle": "TAF stundenweise: schraffiert = schlechtere TEMPO/PROB-Gruppe, umrandete Stunde = {mark}",
   "observed.details": "Details",
-  "observed.offline": "Offline · Daten von {time}",
+  "observed.offline": "Offline · Daten von {time}, {age}",
   "observed.ribbon.plannedPositionNow": "Geplante Position jetzt",
   "observed.highlight.written": "verfasst {time}",
   "observed.highlight.up": "Diese Zusammenfassung passte zu dem, was ich sah",

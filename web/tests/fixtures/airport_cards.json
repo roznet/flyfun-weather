@@ -16,6 +16,8 @@
    "cells_text": "no cells within 30 NM",
    "cells": [],
    "lightning_text": "no lightning ≤20 NM",
+   "cells_alert": false,
+   "lightning_alert": false,
    "alert": false,
    "unavailable": [],
    "focus": {
@@ -291,6 +293,8 @@
     }
    ],
    "lightning_text": "lightning ≤20 NM (4 flashes, nearest 9 NM)",
+   "cells_alert": true,
+   "lightning_alert": true,
    "alert": false,
    "unavailable": [],
    "focus": {
@@ -550,6 +554,8 @@
    "cells_text": "no cells within 30 NM",
    "cells": [],
    "lightning_text": "no lightning ≤20 NM",
+   "cells_alert": false,
+   "lightning_alert": false,
    "alert": false,
    "unavailable": [],
    "focus": {
@@ -825,6 +831,8 @@
     }
    ],
    "lightning_text": "lightning ≤20 NM (4 flashes, nearest 9 NM)",
+   "cells_alert": true,
+   "lightning_alert": true,
    "alert": false,
    "unavailable": [],
    "focus": {

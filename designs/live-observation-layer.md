@@ -935,6 +935,14 @@ clients only draw. Additive and optional throughout.
   follow the live ETA. **Residual:** the at-ETA TAF fields and the strip's
   window (to ETA + 2 h) are still read at the live ETA, hour-level only; this
   predates #880 for the at-ETA fields.
+- **Row alerts (#881):** `cells_alert` / `lightning_alert` on both blocks
+  (`_row_alerts`): an alert-tier change row stands behind the card's cells or
+  lightning row. Cells: a `storm` / `radar` alert with this terminal's role,
+  or a storm alert naming a cell the card lists (a storm near the field can
+  carry the `route` role); lightning: a `lightning` alert with this role.
+  Routing only, so no new threshold: which changes are alerts stays the
+  significance rules' call (§36, §41). Clients tone the row amber, nothing
+  else.
 - **Agent:** `summarize_live` `glance.departure` `{icao, metar_text,
   taf_text, wind_text, folded, folded_source}` and `glance.destination`
   `{icao, metar_text, taf_text, wind_text, cells_text}` (the destination was
@@ -965,8 +973,8 @@ client). Choices:
   `wind_advisory` (that one follows `wind_text`, the TAF at ETA when there is
   one), so the toned figure and its advisory are the same METAR wind.
 - **Alert**: `block.alert` gives the whole card a red left bar (as the old
-  destination block); there is no per-row alert flag for cells/lightning, so
-  those rows stay untoned.
+  destination block); the cells / lightning rows turn amber on the server's
+  `cells_alert` / `lightning_alert` (below).
 - **Older server / no airport row**: header from `metar_category`, then the
   block's `metar_text` / `wind_text` lines. No `glance.departure`: no
   departure card.
