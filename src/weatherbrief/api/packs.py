@@ -2146,12 +2146,9 @@ def _post_refresh_live_update(
 
     if as_of_time is not None or not live_enabled():
         return
-    if progress_callback is not None:
-        try:
-            progress_callback("live_observations")
-        except Exception:
-            logger.debug("live_observations progress failed for %s", flight_id, exc_info=True)
-    run_post_refresh_update(flight_id, db_path, as_of=as_of_time)
+    run_post_refresh_update(
+        flight_id, db_path, as_of=as_of_time, progress_callback=progress_callback,
+    )
 
 
 def _notify_refresh_complete(

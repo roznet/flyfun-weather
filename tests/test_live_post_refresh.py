@@ -49,7 +49,11 @@ def test_in_window_refresh_writes_the_layer_and_highlight(wired):
     from weatherbrief.tasks.live_tick import run_post_refresh_update
 
     wired.flight(tt.NOW + timedelta(hours=1))
-    assert run_post_refresh_update("zz-soon", "/fake/db", now=tt.NOW) is True
+    stages = []
+    assert run_post_refresh_update(
+        "zz-soon", "/fake/db", now=tt.NOW, progress_callback=lambda stage: stages.append(stage),
+    ) is True
+    assert stages == ["live_observations"]
     assert wired.refresh.call_args.args == (wired.pack_dir, "/fake/db")
     assert wired.refresh.call_args.kwargs["flight_id"] == "zz-soon"
     assert "report_source" not in wired.refresh.call_args.kwargs  # a fresh fetch
@@ -61,8 +65,12 @@ def test_outside_window_writes_nothing(wired):
     from weatherbrief.tasks.live_tick import run_post_refresh_update
 
     wired.flight(tt.NOW + timedelta(hours=5))  # window opens 3 h before
-    assert run_post_refresh_update("zz-soon", "/fake/db", now=tt.NOW) is False
+    stages = []
+    assert run_post_refresh_update(
+        "zz-soon", "/fake/db", now=tt.NOW, progress_callback=lambda stage: stages.append(stage),
+    ) is False
     wired.refresh.assert_not_called()
+    assert stages == []  # no "Updating live observations" step outside the window
 
 
 def test_as_of_refresh_writes_nothing(wired):
@@ -114,23 +122,21 @@ def test_never_raises_when_the_db_is_down(monkeypatch):
     assert live_tick.run_post_refresh_update("zz", "/fake/db", now=tt.NOW) is False
 
 
-def test_refresh_wrapper_reports_progress_then_updates(monkeypatch):
-    """The shared post-commit helper every full-refresh path calls: a
-    progress stage first, skipped for an as-of refresh."""
+def test_refresh_wrapper_passes_progress_and_skips_as_of(monkeypatch):
+    """The shared post-commit helper every full-refresh path calls hands its
+    progress callback on, and does nothing for an as-of refresh."""
     from weatherbrief.api import packs
     from weatherbrief.tasks import live_tick
 
     calls = []
+    progress = lambda stage, detail=None: None  # noqa: E731
     monkeypatch.setattr(live_tick, "live_enabled", lambda: True)
     monkeypatch.setattr(live_tick, "run_post_refresh_update",
-                        lambda fid, db, **kw: calls.append(("update", fid, db, kw)))
-    packs._post_refresh_live_update(
-        "zz", "/fake/db", as_of_time=None,
-        progress_callback=lambda stage, detail=None: calls.append(("progress", stage)),
-    )
-    assert calls == [("progress", "live_observations"), ("update", "zz", "/fake/db", {"as_of": None})]
+                        lambda fid, db, **kw: calls.append((fid, db, kw)))
+    packs._post_refresh_live_update("zz", "/fake/db", as_of_time=None, progress_callback=progress)
+    assert calls == [("zz", "/fake/db", {"as_of": None, "progress_callback": progress})]
     assert "live_observations" in packs._STAGE_LABELS
 
     calls.clear()
-    packs._post_refresh_live_update("zz", "/fake/db", as_of_time=tt.NOW, progress_callback=lambda *a: calls.append(a))
+    packs._post_refresh_live_update("zz", "/fake/db", as_of_time=tt.NOW, progress_callback=progress)
     assert calls == []
