@@ -339,9 +339,15 @@ First show the user what App Store Connect currently thinks:
 source venv/bin/activate && python3 scripts/asc.py status
 ```
 
-Recapture the store screenshots only if the screens changed since the last capture — it
-exits at once when nothing did, and otherwise takes ~10 min (`run_in_background: true`).
-Why the sizes and how "changed" is decided: **§A8**.
+**Store screenshots are opt-in — ask, don't default.** Most releases don't need new ones,
+and recapture (~10 min) plus upload (~10 min) roughly doubles staging. Ask the user (ask it
+alongside the Step 9 token question, so it costs no extra round-trip):
+
+> Update the App Store screenshots for this release? (recapture ~10 min + upload ~10 min)
+
+Only on yes, recapture — it exits at once when no screen changed since the last capture;
+otherwise run it with `run_in_background: true`. Why the sizes and how "changed" is
+decided: **§A8**.
 
 ```bash
 python3 scripts/ios_screenshots.py --if-changed --wait
@@ -349,8 +355,9 @@ python3 scripts/ios_screenshots.py --if-changed --wait
 
 If it captured, show the user a few of the new PNGs before staging. Then stage everything in
 one call. `--notes-file` reads the entry drafted in Step 8, so the App Store text and the
-site's release-stream entry cannot drift; `--screenshots` uploads only the sets that differ
-from the store, so it is a no-op when nothing was recaptured:
+site's release-stream entry cannot drift. Pass `--screenshots` **only if the user said yes**
+— it uploads the sets that differ from the store, so a stale local capture left over from
+an earlier release would otherwise be pushed anyway:
 
 ```bash
 source venv/bin/activate && python3 scripts/asc.py stage \
@@ -361,6 +368,9 @@ source venv/bin/activate && python3 scripts/asc.py stage \
   --screenshots build/appstore-screenshots \
   --review-notes "flyfunweather://auth?token=…"
 ```
+
+(Drop `--screenshots` when the user declined screenshots, and `--review-notes` when they
+declined the token.)
 
 Notes on behaviour — all four are normal, not errors:
 
