@@ -197,17 +197,19 @@ The strip (`glance.flight`) and the "Destination at your ETA" block
 
 | Platform | Where |
 |---|---|
-| Web | `nutshellHtml` / `flightStripHtml` / `destinationHtml` in `web/ts/visualization/observed/nutshell-view.ts` |
+| Web | `nutshellHtml` / `flightStripHtml` in `web/ts/visualization/observed/nutshell-view.ts` (the cards: §5c) |
 | iOS | `LiveGlance.aheadItems` / `passedItems` (`Models/API/LiveGlance.swift`), `ObservedTabView`, `ObservedFlightStripView.swift` |
 
-Check: the order (strip → alert lines → highlight or headline → lines not
-passed → destination block → passed lines); the destination block stands in
-for a **non-alert** arrival line only; the ribbon marker reads
+Check: the order (#881: offline banner → strip → alert lines → highlight or
+headline → departure + arrival cards → ribbon → "Details" fold with the
+headline under a highlight, the lines still ahead, the passed lines); each
+card stands in for a **non-alert** terminal line only; the ribbon marker reads
 `glance.flight.marker_label` (fallback "Planned position now"). Tests:
 `web/tests/unit/observed-flight-strip.test.ts` + `observed-highlight.test.ts`
-↔ `ObservedFlightStripTests.swift`. Known divergence, do not re-flag: iOS
-folds the passed lines (and the headline under a highlight) into "Details";
-the web shows them unfolded, dimmed, at the bottom.
+↔ `ObservedFlightStripTests.swift`. Known divergence, do not re-flag: the web
+draws its Details fold at the end of the "At a glance" section, i.e. just
+above the ribbon section, not below it; the change rows stay in the web's
+page-level "Since this briefing" banner.
 
 ### 5b. Runway + wind widget rules — a mirrored pure pair (#758)
 
@@ -228,6 +230,30 @@ convention (north up, y down, arrow drawn from the upwind rim, idents on the
 approach side), then the strings. Known divergence, do not re-flag: the
 all-ends list is a `<details>` on web and a tap-to-expand on iOS (same
 `endLine` strings).
+
+### 5c. Departure / arrival airport cards — drawing only (#881)
+
+Every value on the card is the server's (#880: `glance.departure` /
+`glance.destination` and their `airport` row: meter positions, sky and
+visibility words, weather words with an icon kind, short wind, crosswind
+reading, trend, `taf_hours`, the fold). No rules to mirror; what is
+hand-copied is the **drawing**: the header boxes (METAR now → TAF at ETD/ETA,
+dashed TEMPO/PROB), the row order (ceiling meter, visibility meter, weather
+words, wind + RWY chip + crosswind toned by `metar_wind_advisory`, cells,
+lightning, provenance: METAR time + age, SPECI, trend, ETD/ETA), the dial on
+the right (#758 `compact`, solid METAR, ghost TAF), the TAF strip, the folded
+departure line.
+
+| Platform | File |
+|---|---|
+| Web | `web/ts/visualization/observed/airport-card-view.ts` (CSS `.ac-*` in `web/css/style.css`) |
+| iOS | #882 |
+| Android | #883 |
+
+Fixture shared by every client: `web/tests/fixtures/airport_cards.json`
+(server-written by `scripts/export_airport_card_fixtures.py`, drift test
+`tests/test_airport_card_fixture.py`). Check that a missing field is left out
+on every platform, never derived.
 
 ### 6. API DTO contracts
 

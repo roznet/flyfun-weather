@@ -11,32 +11,25 @@
  * drawing scales to any box (the core's geometry is resolution-free). Colours
  * are CSS tokens, so light and dark follow the page.
  *
- * The widget takes a dial and a size and never knows where it is placed; the
- * departure/destination pair is a layout container only.
+ * The widget takes a dial and a size and never knows where it is placed: the
+ * airport cards (#881, `observed/airport-card-view.ts`) hold it at a fixed size.
  */
 
 import { escapeHtml } from '../../utils';
-import { formatHhmmZ } from '../../helpers/live-layer';
 import {
   CENTER,
   RIM_R,
   componentsLine,
-  crosswindText,
-  crosswindTone,
-  endLine,
-  ghostLine,
   missingWindLabel,
   runwayBars,
   visibleLabels,
   windArrow,
-  windLabel,
   windMark,
   type Pt,
   type RunwayWindDial,
   type RunwayWindSize,
   type WindArrow,
 } from './runway-wind-core';
-import type { WindAtAirport } from '../../store/types';
 
 const S = 100; // unit square → viewBox
 
@@ -112,53 +105,4 @@ export function runwayWindSvg(dial: RunwayWindDial, size: RunwayWindSize): strin
   return `<svg class="rw-svg rw-${size}" viewBox="0 0 ${S} ${S}" role="img" aria-label="${escapeHtml(`${dial.icao}: ${title}`)}">`
     + parts.join('')
     + `</svg>`;
-}
-
-/** A text line with only its crosswind part toned (amber/red); green is quiet. */
-function lineHtml(text: string, w: WindAtAirport | null, cls: string, key: string): string {
-  const tone = crosswindTone(w?.advisory ?? null);
-  const cross = crosswindText(w);
-  const at = tone && cross ? text.lastIndexOf(cross) : -1;
-  const body = at >= 0
-    ? escapeHtml(text.slice(0, at)) + `<span class="rw-tone-${tone}">${escapeHtml(cross!)}</span>`
-      + escapeHtml(text.slice(at + cross!.length))
-    : escapeHtml(text);
-  return `<div class="${cls}" data-rw-line="${key}">${body}</div>`;
-}
-
-/** One dial with its heading, text lines and the all-ends list. */
-export function runwayWindDialHtml(dial: RunwayWindDial, size: RunwayWindSize): string {
-  if (size === 'inline') return runwayWindSvg(dial, size);
-  const missing = missingWindLabel(dial);
-  const primary = dial.primary;
-  const head = `<div class="rw-head"><span class="rw-role">${dial.role}</span> `
-    + `<span class="rw-icao">${escapeHtml(dial.icao)}</span>`
-    + (primary ? `<span class="rw-wind">METAR ${dial.metarStation ? `${escapeHtml(dial.metarStation)} ` : ''}`
-      + `${escapeHtml(formatHhmmZ(primary.wind.time))} ${escapeHtml(windLabel(primary.wind))}</span>` : '')
-    + `</div>`
-    // #767: the field has no METAR/TAF of its own — say whose wind this is.
-    + (dial.proxyCaption ? `<div class="rw-proxy">${escapeHtml(dial.proxyCaption)}</div>` : '');
-  const lines = [lineHtml(componentsLine(primary, missing), primary, 'rw-line', 'primary')];
-  if (size === 'regular' && dial.ghost) {
-    lines.push(lineHtml(ghostLine(dial.ghost), dial.ghost, 'rw-line rw-line-ghost', 'ghost'));
-  }
-  const ends = primary?.ends ?? [];
-  const details = ends.length > 1
-    ? `<details class="rw-details"><summary>All runways</summary><ul>`
-      + ends.map((e) => `<li>${escapeHtml(endLine(e, primary!.wind))}</li>`).join('')
-      + `</ul><p class="rw-note">Head/crosswind on each runway end from the latest METAR. `
-      + `“up to” is the worst case over a variable range or gust. True north up; runway numbers as painted.</p></details>`
-    : '';
-  return `<div class="rw-dial" data-rw-role="${dial.role}" data-rw-icao="${escapeHtml(dial.icao)}">`
-    + head
-    + `<div class="rw-plot">${runwayWindSvg(dial, size)}</div>`
-    + lines.join('')
-    + details
-    + `</div>`;
-}
-
-/** The departure + destination pair: a layout container, nothing more. */
-export function runwayWindPairHtml(dials: RunwayWindDial[], size: RunwayWindSize = 'regular'): string {
-  if (!dials.length) return '';
-  return `<div class="rw-pair">${dials.map((d) => runwayWindDialHtml(d, size)).join('')}</div>`;
 }
