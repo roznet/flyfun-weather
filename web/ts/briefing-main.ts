@@ -10,7 +10,7 @@ import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
-import { departureMs, formatHhmmZ, isInLiveWindow, isLiveWindowPast, isoToMs, lateLiveWindowEndMs, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
+import { departureMs, formatHhmmZ, isInLiveWindow, isLiveWindowPast, isoToMs, lateLiveWindowEndMs, LIVE_WINDOW_BEFORE_H, liveDeparture } from './helpers/live-layer';
 import type { FlightResponse, ForecastSnapshot, LiveFocus, LiveLayer, LiveTickResponse, RecapResponse } from './store/types';
 import {
   forecastLaneBands,
@@ -3197,9 +3197,6 @@ async function init(): Promise<void> {
   let liveSyncInFlight = false;
   let liveVisibilityWired = false;
 
-  const liveDeparture = (f: FlightResponse) =>
-    f.departure_time || { target_date: f.target_date, target_time_utc: f.target_time_utc };
-
   const stopLivePolling = () => {
     if (livePollTimer !== null) { clearInterval(livePollTimer); livePollTimer = null; }
     if (liveAgeTimer !== null) { clearInterval(liveAgeTimer); liveAgeTimer = null; }
@@ -3251,11 +3248,8 @@ async function init(): Promise<void> {
       if (store.getState().live) await startLiveLayer(true);
       return;
     }
-    // One catch-up after the first load (the snapshot already carries the
-    // server overlay; this only picks up anything newer).
-    if (!caughtUp && viewingLatest && (inWindow || s.currentPack.days_out === 0)) {
-      void s.loadLive();
-    }
+    // The catch-up read of /live is the store's: `selectPack` does it on
+    // every latest-pack selection inside the window (#898).
     if (isLiveWindowPast(dep, f.flight_duration_hours, now, progress)) return;
     const opensSoon = !inWindow && departureMs(dep) - LIVE_WINDOW_BEFORE_H * 3600_000 - now <= LIVE_PREWINDOW_MS;
     if (!inWindow && !opensSoon) return;

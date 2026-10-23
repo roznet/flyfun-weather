@@ -630,12 +630,91 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
     moment, gets the live layer recomputed at the new times instead of
     waiting for the next tick.
 
+    :func:`run_live_update` with ``retime``: the highlight is written anew
+    whatever the gate says, with what changed at the new times against the
+    one the pilot had (``ensure_highlight(retimed_from=…)``). Never pushes,
+    like a ↻ press. Never raises; returns True when the layer was refreshed.
+    """
+    return run_live_update(flight_id, airports_db_path, reason="start", retime=True)
+
+
+def run_post_refresh_update(
+    flight_id: str, airports_db_path: str, *, as_of: datetime | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Build the live layer for the pack a full refresh just committed (#898).
+
+    A live layer is tied to its pack, so without this the Observed tab of a
+    flight inside its live window stays empty after a full refresh until the
+    next tick (up to 10 min). Called after the commit and before the refresh
+    reports complete (notify, SSE ``complete``, ``succeeded``), so the client
+    reloading the pack finds the layer written.
+
+    Skipped (no ``live.json`` written) when the live layer is disabled, the
+    refresh was as-of (``as_of``), or the flight is outside its live window
+    (:func:`in_live_window`, the tick's own predicate with the progress
+    events). :func:`run_live_update` adds the frozen / historical checks.
+    Re-fetches rather than seeding from the pack's own observations: one
+    path with ↻ / Start, and it seeds the baseline of a pack built a day out.
+    Never pushes, never raises; returns True when the layer was refreshed.
+    """
+    outcome = "skipped"
+    try:
+        if not live_enabled():
+            outcome = "disabled"
+        elif as_of is not None:
+            outcome = "as_of"
+        elif not airports_db_path:
+            outcome = "no_airports_db"
+        elif not _flight_in_live_window(flight_id, now or datetime.now(timezone.utc)):
+            outcome = "outside_window"
+        else:
+            outcome = "refreshed" if run_live_update(
+                flight_id, airports_db_path, reason="post_refresh",
+            ) else "not_refreshed"
+    except Exception:
+        outcome = "failed"
+        logger.warning("Post-refresh live update failed for flight %s", flight_id, exc_info=True)
+    logger.info("LIVE_POST_REFRESH flight=%s outcome=%s", flight_id, outcome)
+    return outcome == "refreshed"
+
+
+def _flight_in_live_window(flight_id: str, now: datetime) -> bool:
+    """The flight is inside its live window at ``now`` — :func:`find_live_flights`'
+    predicate (planned times moved by the progress events) for one flight."""
+    from flyfun_common.db import SessionLocal
+
+    from weatherbrief.storage.flights import _resolve_artifact_path, list_packs
+    from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
+
+    db = SessionLocal()
+    try:
+        flight = db.get(FlightRow, flight_id)
+        if flight is None or flight.departure_time is None:
+            return False
+        packs = list_packs(db, flight_id)
+        artifact = packs[0].artifact_path if packs else None
+        events = load_progress_events(flight_dir_for_pack(_resolve_artifact_path(artifact))) if artifact else ()
+        before_h, after_h = live_window_hours()
+        return in_live_window(
+            flight.departure_time, flight.flight_duration_hours, now, before_h, after_h, events,
+        )
+    finally:
+        db.close()
+
+
+def run_live_update(
+    flight_id: str, airports_db_path: str, *, reason: str, retime: bool = False,
+) -> bool:
+    """Refresh the live layer of the flight's latest pack, then its highlight.
+
     The ↻ path (``run_realtime_refresh``, persisting, fresh METAR/TAF and
-    SIGMET fetch, no model run), then the highlight written anew whatever
-    the gate says, with what changed at the new times against the one the
-    pilot had (``ensure_highlight(retimed_from=…)``). Never pushes, like a
-    ↻ press. Own session: runs after the position endpoint has answered.
-    Never raises; returns True when the layer was refreshed.
+    SIGMET fetch, no model run), then ``ensure_highlight`` and its charge.
+    With ``retime`` (Start, #812) the highlight is regenerated against the
+    previous one's gate. Shared by Start and the post-refresh update (#898).
+    Skips a historical latest pack and a frozen layer. Never pushes: only
+    the tick does. Own session. Never raises; returns True when the layer
+    was refreshed.
     """
     from flyfun_common.db import SessionLocal
 
@@ -643,6 +722,7 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
     from weatherbrief.tasks.live_layer import LIVE_FROZEN_FILE, flight_dir_for_pack, live_for_pack
     from weatherbrief.tasks.route_weather import run_realtime_refresh
 
+    label = reason.replace("_", "-").capitalize()
     db = None
     try:
         db = SessionLocal()
@@ -655,11 +735,13 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
         flight_dir = flight_dir_for_pack(pack_dir)
         if (flight_dir / LIVE_FROZEN_FILE).exists():
             return False
-        before = live_for_pack(pack_dir)
-        previous = before.glance.highlight if before is not None and before.glance is not None else None
-        # Empty without a previous highlight: nothing to compare the new times
-        # with, so ensure_highlight leaves out at_new_times.
-        retimed_from = (previous.gate or {}) if previous is not None else {}
+        retimed_from = None
+        if retime:
+            before = live_for_pack(pack_dir)
+            previous = before.glance.highlight if before is not None and before.glance is not None else None
+            # Empty without a previous highlight: nothing to compare the new
+            # times with, so ensure_highlight leaves out at_new_times.
+            retimed_from = (previous.gate or {}) if previous is not None else {}
         try:
             run_realtime_refresh(
                 pack_dir, airports_db_path,
@@ -668,7 +750,7 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
                 pack_timestamp=_as_utc(latest.fetch_timestamp).isoformat(),
             )
         except Exception:
-            logger.warning("Start update: refresh failed for flight %s", flight_id, exc_info=True)
+            logger.warning("%s update: refresh failed for flight %s", label, flight_id, exc_info=True)
             return False
         highlight = "off"
         try:
@@ -682,12 +764,13 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
                 db.commit()
         except Exception:
             highlight = "failed"
-            logger.warning("Start update: highlight failed for flight %s", flight_id, exc_info=True)
+            logger.warning("%s update: highlight failed for flight %s", label, flight_id, exc_info=True)
             db.rollback()
-        logger.info("LIVE_START flight=%s refreshed highlight=%s", flight_id, highlight)
+        if reason == "start":
+            logger.info("LIVE_START flight=%s refreshed highlight=%s", flight_id, highlight)
         return True
     except Exception:
-        logger.warning("Start update failed for flight %s", flight_id, exc_info=True)
+        logger.warning("%s update failed for flight %s", label, flight_id, exc_info=True)
         return False
     finally:
         if db is not None:

@@ -16,7 +16,7 @@ import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { errorToMessage } from '../utils';
 import { t } from '../i18n/i18n';
-import { addsTrails, applyLiveToSnapshot, highlightChanged, isoToMs, sameInstant } from '../helpers/live-layer';
+import { addsTrails, applyLiveToSnapshot, highlightChanged, isInLiveWindow, isoToMs, liveDeparture, sameInstant } from '../helpers/live-layer';
 import { REPLAY_BASE, startTick, tickFailed, tickLoaded, type ReplayState } from '../helpers/debrief-replay';
 
 /** Sequence of `loadRecapForecast` picks (#769): only the latest applies. */
@@ -561,7 +561,18 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
+      const progress = get().live?.progress;
       set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, live: null, liveOffline: false, loading: false });
+      // #898: the glance, highlight, storms and ribbon ride only on /live.
+      // A full refresh inside the window now writes the new pack's layer
+      // before it completes, so the snapshot overlay already carries that
+      // stamp and syncLatest would never see it move: read /live once here.
+      const latest = get().packs[0];
+      const viewingLatest = !latest || sameInstant(latest.fetch_timestamp, pack.fetch_timestamp);
+      if (viewingLatest && (pack.days_out === 0
+          || isInLiveWindow(liveDeparture(flight), flight.flight_duration_hours, Date.now(), progress))) {
+        void get().loadLive();
+      }
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();

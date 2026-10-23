@@ -205,3 +205,29 @@ def test_live_retention_sets_partition_live_files():
     assert set(LIVE_FILES_T1) | set(LIVE_FILES_KEPT) == set(LIVE_FILES)
     assert not set(LIVE_FILES_T1) & set(LIVE_FILES_KEPT)
     assert set(LIVE_FILES_T1) == {"live.json", "live_highlights.jsonl", "live_frozen"}
+
+
+def test_racing_writers_on_the_new_pack_leave_one_valid_layer(tmp_path):
+    """#898: the post-refresh update and a tick committing the new pack at
+    once. The per-flight lock serialises them: no exception, one layer, on
+    the new pack."""
+    import threading
+
+    pack, briefing = _pack(tmp_path, "p2")
+    ts = "2026-10-01T08:00:00+00:00"
+    errors = []
+
+    def write(cat, minutes):
+        try:
+            _commit(pack, briefing, _obs(cat, NOW), ts=ts, now=NOW + timedelta(minutes=minutes))
+        except Exception as exc:  # pragma: no cover - the failure being tested for
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(c, m)) for c, m in (("VFR", 1), ("MVFR", 1))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    layer = live_for_pack(pack)
+    assert layer is not None and layer.pack_dir_name == "p2"

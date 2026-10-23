@@ -1350,6 +1350,7 @@ _STAGE_LABELS: dict[str, str] = {
     "generate_skewt": "Generating Skew-T",
     "briefing_ready": "Briefing ready",
     "llm_digest": "Generating AI digest",
+    "live_observations": "Updating live observations",
 }
 
 _STAGE_PROGRESS: dict[str, float] = {
@@ -1371,6 +1372,7 @@ _STAGE_PROGRESS: dict[str, float] = {
     # to surface the stage label between provisional persist and digest.
     "briefing_ready": 0.88,
     "llm_digest": 0.95,
+    "live_observations": 0.98,
 }
 
 
@@ -2132,6 +2134,26 @@ def _normalize_source(source: str | None) -> str:
     return source if source in _CLIENT_REFRESH_SOURCES else "user"
 
 
+def _post_refresh_live_update(
+    flight_id: str, db_path: str, *, as_of_time, progress_callback=None,
+) -> None:
+    """After a full refresh commits, build the new pack's live layer when the
+    flight is inside its live window (#898), before the refresh reports
+    complete. Shared by every full-refresh path (streaming, queued,
+    scheduler). Never raises, never pushes: a failure leaves the tick to
+    catch up."""
+    from weatherbrief.tasks.live_tick import live_enabled, run_post_refresh_update
+
+    if as_of_time is not None or not live_enabled():
+        return
+    if progress_callback is not None:
+        try:
+            progress_callback("live_observations")
+        except Exception:
+            logger.debug("live_observations progress failed for %s", flight_id, exc_info=True)
+    run_post_refresh_update(flight_id, db_path, as_of=as_of_time)
+
+
 def _notify_refresh_complete(
     db: Session,
     flight: Flight,
@@ -2489,6 +2511,12 @@ async def refresh_briefing(
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
+                _post_refresh_live_update(
+                    flight_id, db_path, as_of_time=resolved_as_of,
+                    progress_callback=lambda stage, detail=None: (
+                        refresh_registry.update_progress(flight_id, stage, detail)
+                    ),
+                )
                 # Notify AFTER commit (single sink). This non-streaming path has
                 # no UI stream, so presence comes only from a concurrent
                 # per-flight status poll (rare) — otherwise it notifies.
@@ -2853,6 +2881,10 @@ async def refresh_briefing_stream(
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
+                _post_refresh_live_update(
+                    flight_id, db_path, as_of_time=resolved_as_of,
+                    progress_callback=progress_callback,
+                )
                 # Notify AFTER commit (single sink). Presence (was the user
                 # watching this stream/poll finish?) is read from the watch
                 # registry inside — the entry is still registered until the

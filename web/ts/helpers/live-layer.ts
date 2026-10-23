@@ -118,6 +118,14 @@ export function departureMs(
 
 type Departure = string | { target_date: string; target_time_utc: number };
 
+/** The departure the live window is measured from: the flight's
+ *  `departure_time`, else its target date and time. */
+export function liveDeparture(f: {
+  departure_time?: string | null; target_date: string; target_time_utc: number;
+}): Departure {
+  return f.departure_time || { target_date: f.target_date, target_time_utc: f.target_time_utc };
+}
+
 /** The latest a flight can still be live: a take-off `MAX_TAKEOFF_DELAY_H`
  *  late, + duration + 1h (#877). NaN without a departure. */
 export function lateLiveWindowEndMs(departure: Departure, durationHours: number): number {
