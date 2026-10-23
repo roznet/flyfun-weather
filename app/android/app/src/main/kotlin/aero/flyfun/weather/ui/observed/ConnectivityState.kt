@@ -30,7 +30,7 @@ fun rememberIsOnline(): State<Boolean> {
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                online.value = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                online.value = caps.isValidatedInternet()
             }
         }
         val registered = cm != null && runCatching { cm.registerDefaultNetworkCallback(callback) }.isSuccess
@@ -43,5 +43,10 @@ fun rememberIsOnline(): State<Boolean> {
 
 private fun ConnectivityManager.isOnlineNow(): Boolean {
     val caps = getNetworkCapabilities(activeNetwork) ?: return false
-    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    return caps.isValidatedInternet()
 }
+
+/** A captive portal not yet signed in has INTERNET but not VALIDATED: that is offline here. */
+private fun NetworkCapabilities.isValidatedInternet(): Boolean =
+    hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)

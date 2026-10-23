@@ -3,6 +3,9 @@ package aero.flyfun.weather.model.rules
 import aero.flyfun.weather.model.AirportObservation
 import aero.flyfun.weather.model.IsoTime
 import aero.flyfun.weather.model.LiveGlanceTerminal
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
 
 /**
@@ -76,17 +79,23 @@ object AirportCardRules {
     fun trendText(airport: AirportObservation?): String? {
         val trend = airport?.metarTrend ?: return null
         val prev = airport.metarPreviousFlightCategory ?: return null
-        val arrow = if (trend == "worse") "↘" else "↗"
+        val arrow = when (trend) {
+            "worse" -> "↘"
+            "better" -> "↗"
+            else -> return null
+        }
         val time = hhmmZ(airport.metarPreviousTime)
         return listOf("$arrow was $prev", time).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
-    /** "09:30Z" from an ISO time, "" without one. */
+    /** "09:30Z" from an ISO time (converted to UTC when it carries an offset), "" without one. */
     fun hhmmZ(iso: String?): String {
-        if (iso.isNullOrBlank()) return ""
-        val t = iso.indexOf('T')
-        return if (t != -1 && iso.length >= t + 6) "${iso.substring(t + 1, t + 6)}Z" else ""
+        if (iso.isNullOrBlank() || !iso.contains('T')) return ""
+        val ms = IsoTime.parseEpochMs(iso) ?: return ""
+        return HHMM_UTC.format(Instant.ofEpochMilli(ms)) + "Z"
     }
+
+    private val HHMM_UTC: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneOffset.UTC)
 
     /** "10Z": a TAF strip hour label. */
     fun hourLabel(iso: String?): String = hhmmZ(iso).takeIf { it.length >= 2 }?.let { "${it.take(2)}Z" } ?: ""

@@ -14,7 +14,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
@@ -84,11 +83,13 @@ class AirportCardRulesTest {
         assertEquals("↘ was VFR 09:00Z", AirportCardRules.trendText(worse))
         assertEquals("↗ was MVFR", AirportCardRules.trendText(AirportObservation(metarTrend = "better", metarPreviousFlightCategory = "MVFR")))
         assertNull(AirportCardRules.trendText(AirportObservation(metarPreviousFlightCategory = "VFR")))
+        assertNull(AirportCardRules.trendText(AirportObservation(metarTrend = "same", metarPreviousFlightCategory = "VFR")))
     }
 
     @Test
     fun `times, ages and the stale mark`() {
         assertEquals("09:30Z", AirportCardRules.hhmmZ("2026-10-23T09:30:00Z"))
+        assertEquals("08:30Z", AirportCardRules.hhmmZ("2026-10-23T10:30:00+02:00"))
         assertEquals("10Z", AirportCardRules.hourLabel("2026-10-23T10:00:00Z"))
         assertEquals("", AirportCardRules.hhmmZ(null))
         assertEquals(10L, AirportCardRules.minutesAgo("2026-10-23T09:30:00Z", now))
@@ -161,7 +162,7 @@ class AirportCardRulesTest {
         val file = listOf("../../../web/tests/fixtures/airport_cards.json", "../../web/tests/fixtures/airport_cards.json")
             .map { File(it) }
             .firstOrNull { it.exists() }
-        assumeTrue("shared fixture not on this branch yet", file != null)
+        assertNotNull("shared fixture web/tests/fixtures/airport_cards.json is missing", file)
         val root = WbJson.parseToJsonElement(file!!.readText()).jsonObject
         listOf("before", "after").forEach { key ->
             val pair = root[key] as JsonObject

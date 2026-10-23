@@ -335,7 +335,7 @@ private fun MeterRow(icon: ImageVector, label: String, text: String?, position: 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(icon, contentDescription = label, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             text = text ?: "—",
             style = MaterialTheme.typography.bodySmall,
@@ -485,11 +485,11 @@ private fun NearRow(
 ) {
     if (text.isBlank()) return
     val color = if (alert) AssessmentAmber else MaterialTheme.colorScheme.onSurface
-    val tappable = focus != null && onSelectFocus != null
+    val tap: (() -> Unit)? = if (focus != null && onSelectFocus != null) ({ onSelectFocus(focus) }) else null
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (tappable) Modifier.clickable { onSelectFocus?.invoke(focus!!) } else Modifier),
+            .then(if (tap != null) Modifier.clickable(onClick = tap) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -501,7 +501,7 @@ private fun NearRow(
             fontWeight = if (alert) FontWeight.SemiBold else FontWeight.Normal,
             modifier = Modifier.weight(1f),
         )
-        if (tappable) {
+        if (tap != null) {
             Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

@@ -45,7 +45,11 @@ import androidx.compose.ui.unit.dp
 
 private const val PREFS_NAME = "observed_layout"
 
-/** A per-flight on/off remembered across launches (the folded departure, the Details fold). */
+/**
+ * A per-flight on/off remembered across launches (the folded departure, the Details fold). Only
+ * an "on" is stored: turning it off removes the key, so the file holds just the flights a pilot
+ * actually folded or opened, not one entry per flight ever viewed.
+ */
 @Composable
 internal fun rememberFlightFlag(name: String, flightId: String): Pair<Boolean, () -> Unit> {
     val context = LocalContext.current
@@ -54,7 +58,7 @@ internal fun rememberFlightFlag(name: String, flightId: String): Pair<Boolean, (
     var value by remember(key) { mutableStateOf(prefs.getBoolean(key, false)) }
     return value to {
         value = !value
-        prefs.edit().putBoolean(key, value).apply()
+        prefs.edit().apply { if (value) putBoolean(key, true) else remove(key) }.apply()
     }
 }
 
