@@ -216,3 +216,13 @@ def test_a_proxied_terminal_takes_its_stations_taf_hours_and_readings():
     assert eff.icao == "ZZDS"
     assert [h.is_eta for h in eff.taf_hours] == [True]
     assert eff.metar_cavok and eff.metar_sky_text == "CAVOK" and eff.metar_wind_short == "300/14"
+
+
+@pytest.mark.parametrize("code, text", [
+    ("+BLSN", "Heavy blowing snow"),
+    ("VCBLSN", "Blowing snow nearby"),
+    ("DRSA", "Drifting sand"),
+    ("VCBLDU", "Blowing dust nearby"),
+])
+def test_blowing_and_drifting_keep_intensity_and_vicinity(code, text):
+    assert weather_words([code])[0]["text"] == text

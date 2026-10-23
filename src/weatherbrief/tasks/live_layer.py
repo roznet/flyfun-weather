@@ -1171,6 +1171,17 @@ def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
     if out.storms is not None:
         for st in out.storms.storms:
             st.abeam_eta = st.minutes_to_abeam = st.estimate = None
+    # The METAR/TAF rows' ETA hour (#880 review): ``eta_hour_offset`` and the
+    # TAF strip's ``is_eta`` follow the live ETA. The rows themselves stay:
+    # their at-ETA reading is the TAF, not a position.
+    rows = list(out.route_observations.airports) if out.route_observations is not None else []
+    if out.glance is not None:
+        rows += [b.airport for b in (out.glance.departure, out.glance.destination)
+                 if b is not None and b.airport is not None]
+    for row in rows:
+        row.eta_hour_offset = None
+        for hour in row.taf_hours:
+            hour.is_eta = False
     if out.ribbon is not None:
         r = out.ribbon
         r.flown_nm = r.arrival_at = None
