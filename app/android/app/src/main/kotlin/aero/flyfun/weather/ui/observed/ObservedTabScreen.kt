@@ -9,6 +9,7 @@ import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FeedbackRequest
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.LiveFocus
+import aero.flyfun.weather.model.rules.AirportCardRules
 import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.briefing.SectionSpyBar
 import aero.flyfun.weather.ui.briefing.SpySection
@@ -52,7 +53,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
 private val TrackingActiveCyan = Color(0xFF0284C7)
@@ -80,8 +84,10 @@ private val ObservedSpySections = listOf(
  * Flight-Day `Observed` Tab Screen combining:
  * - Top live status bar (`Live updated HH:MMZ · Refresh ↻`) + In-Flight GPS Tracking Bar
  *   (`"Start Flight Tracking"` / `"Tracking Active · Stop"` toggle showing live distance along route & groundspeed/altitude).
+ * - The offline banner when the last `/live` read failed or there is no connection (#883).
  * - Sticky [SectionSpyBar] (`Summary`, `Changes`, `Storms`, `Airports`, `SIGMETs`).
- * - [ObservedHighlightCard] → [ObservedNutshellCard] ([RouteRibbonCanvas]) → [LiveChangesSection] →
+ * - Flight strip → [ObservedHighlightCard] → departure / arrival [AirportCardsSection] (#883) →
+ *   [ObservedNutshellCard] ([RouteRibbonCanvas]) → [LiveChangesSection] →
  *   [LiveStormsSection] → [RouteObservationsSection] (with [RunwayWindDialView]) → [RouteSigmetsSection].
  */
 @Composable
@@ -100,6 +106,17 @@ fun ObservedTabScreen(
     val liveLayer by viewModel.liveLayer.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val liveFetchFailed by viewModel.liveFetchFailed.collectAsState()
+    val isOnline by rememberIsOnline()
+
+    // Ticks once a minute so the ages ("8 min", "12 min ago") move without a reload.
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
 
     val serviceTracking by FlightTrackingService.isTracking.collectAsState()
     val serviceFlightId by FlightTrackingService.activeFlightId.collectAsState()
@@ -296,6 +313,18 @@ fun ObservedTabScreen(
             onScrubFraction = { demoTrackedFraction = it },
         )
 
+        // Offline: the last /live read failed (with a layer kept from before) or no connection.
+        AirportCardRules.offlineBannerText(
+            offline = !isOnline || (liveFetchFailed && liveLayer != null),
+            liveUpdatedAt = liveLayer?.liveUpdatedAt,
+            nowMs = nowMs,
+        )?.let { text ->
+            ObservedOfflineBanner(
+                text = text,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
         // 2. Sticky SectionSpyBar
         SectionSpyBar(
             sections = ObservedSpySections,
@@ -334,6 +363,7 @@ fun ObservedTabScreen(
                 item(key = "summary") {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         val glance = liveLayer?.glance
+                        glance?.flight?.text?.takeIf { it.isNotBlank() }?.let { ObservedFlightStrip(it) }
                         if (glance != null) {
                             ObservedHighlightCard(
                                 glance = glance,
@@ -341,6 +371,14 @@ fun ObservedTabScreen(
                                 onRateHighlight = { thumbsUp: Boolean ->
                                     viewModel.submitHighlightFeedback(thumbsUp = thumbsUp)
                                 }.takeIf { (glance.highlight ?: glance.highlights.firstOrNull())?.let(FeedbackRequest::isRatable) == true },
+                                onSelectFocus = handleFocus,
+                            )
+                            // Departure / arrival cards (#883): the server's blocks, drawn as is.
+                            AirportCardsSection(
+                                departure = glance.departure,
+                                destination = glance.destination,
+                                flightId = currentFlightId,
+                                nowMs = nowMs,
                                 onSelectFocus = handleFocus,
                             )
                         }

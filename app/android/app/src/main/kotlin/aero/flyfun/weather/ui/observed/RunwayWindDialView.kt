@@ -294,7 +294,7 @@ fun RunwayWindDialView(
 }
 
 @Composable
-private fun RunwayCompassCanvas(
+internal fun RunwayCompassCanvas(
     physicalPairs: List<PhysicalRunwayPair>,
     favoredEnd: RunwayEnd?,
     windDirDeg: Int?,
@@ -303,6 +303,9 @@ private fun RunwayCompassCanvas(
     tafWindDirDeg: Int?,
     tafWindSpeedKt: Int?,
     dialSize: Dp,
+    // The airport card's corner dial (#883): cardinals only, the best end's label only,
+    // thinner strips and arrows, so it reads at ~92 dp.
+    compact: Boolean = false,
 ) {
     val textMeasurer = rememberTextMeasurer()
     val outlineColor = MaterialTheme.colorScheme.outline
@@ -350,6 +353,7 @@ private fun RunwayCompassCanvas(
             tickColor = onSurfaceVariantColor,
             cardinalColor = onSurfaceColor,
             textMeasurer = textMeasurer,
+            compact = compact,
         )
 
         // 4. Physical runways (draw secondary first, favored pair on top)
@@ -365,6 +369,7 @@ private fun RunwayCompassCanvas(
                 favoredEndId = favoredEnd?.id,
                 isFavoredPair = isFavoredPair,
                 textMeasurer = textMeasurer,
+                compact = compact,
             )
         }
 
@@ -378,6 +383,7 @@ private fun RunwayCompassCanvas(
                 windGustKt = null,
                 color = TafWindAmber,
                 isDashed = true,
+                compact = compact,
             )
         }
 
@@ -391,12 +397,13 @@ private fun RunwayCompassCanvas(
                 windGustKt = windGustKt,
                 color = MetarWindCyan,
                 isDashed = false,
+                compact = compact,
             )
         } else if (windSpeedKt == 0) {
             // Calm wind indicator ring in center
             drawCircle(
                 color = MetarWindCyan.copy(alpha = 0.6f),
-                radius = 12.dp.toPx(),
+                radius = (if (compact) 6 else 12).dp.toPx(),
                 center = center,
                 style = Stroke(width = 2.dp.toPx()),
             )
@@ -410,7 +417,9 @@ private fun DrawScope.drawCompassRose(
     tickColor: Color,
     cardinalColor: Color,
     textMeasurer: TextMeasurer,
+    compact: Boolean = false,
 ) {
+    val tickScale = if (compact) 0.5f else 1f
     for (deg in 0 until 360 step 10) {
         val isCardinal = deg % 90 == 0
         val isMajor = deg % 30 == 0
@@ -418,7 +427,7 @@ private fun DrawScope.drawCompassRose(
             isCardinal -> 10.dp.toPx()
             isMajor -> 7.dp.toPx()
             else -> 4.dp.toPx()
-        }
+        } * tickScale
         val strokeWidth = when {
             isCardinal -> 2.dp.toPx()
             isMajor -> 1.3.dp.toPx()
@@ -451,7 +460,7 @@ private fun DrawScope.drawCompassRose(
             cap = StrokeCap.Round,
         )
 
-        if (isMajor) {
+        if (isMajor && (!compact || isCardinal)) {
             val label = when (deg) {
                 0 -> "N"
                 90 -> "E"
@@ -461,12 +470,12 @@ private fun DrawScope.drawCompassRose(
             }
             val labelStyle = TextStyle(
                 color = if (isCardinal) cardinalColor else tickColor.copy(alpha = 0.8f),
-                fontSize = if (isCardinal) 11.sp else 9.sp,
+                fontSize = if (compact) 8.sp else if (isCardinal) 11.sp else 9.sp,
                 fontWeight = if (isCardinal) FontWeight.ExtraBold else FontWeight.Medium,
                 fontFamily = FontFamily.Monospace,
             )
             val measured = textMeasurer.measure(label, labelStyle)
-            val labelRadius = outerRadius - tickLength - 9.dp.toPx()
+            val labelRadius = outerRadius - tickLength - (if (compact) 6 else 9).dp.toPx()
             val labelCenter = Offset(
                 x = center.x + labelRadius * cosA - measured.size.width / 2f,
                 y = center.y + labelRadius * sinA - measured.size.height / 2f,
@@ -483,12 +492,18 @@ private fun DrawScope.drawPhysicalRunway(
     favoredEndId: String?,
     isFavoredPair: Boolean,
     textMeasurer: TextMeasurer,
+    compact: Boolean = false,
 ) {
     // Runway strip is aligned with primary.headingDeg.
     // The threshold of `primary` sits at the opposite end (headingDeg + 180) so an aircraft
     // landing on `primary` flies along `primary.headingDeg` from bottom of strip toward top.
     val stripHalfLength = outerRadius * if (isFavoredPair) 0.56f else 0.48f
-    val stripWidth = if (isFavoredPair) 22.dp.toPx() else 15.dp.toPx()
+    val stripWidth = when {
+        compact && isFavoredPair -> 10.dp.toPx()
+        compact -> 7.dp.toPx()
+        isFavoredPair -> 22.dp.toPx()
+        else -> 15.dp.toPx()
+    }
 
     withTransform({
         rotate(degrees = pair.primary.headingDeg.toFloat(), pivot = center)
@@ -527,7 +542,8 @@ private fun DrawScope.drawPhysicalRunway(
     }
 
     // Draw threshold designator badges at both ends in upright screen coordinates
-    drawRunwayThresholdBadge(
+    // (compact: the best end's only).
+    if (!compact || pair.primary.id == favoredEndId) drawRunwayThresholdBadge(
         center = center,
         stripHalfLength = stripHalfLength,
         headingToThresholdDeg = pair.primary.headingDeg + 180.0,
@@ -537,7 +553,7 @@ private fun DrawScope.drawPhysicalRunway(
         textMeasurer = textMeasurer,
     )
 
-    if (pair.reciprocal != null) {
+    if (pair.reciprocal != null && (!compact || pair.reciprocal.id == favoredEndId)) {
         drawRunwayThresholdBadge(
             center = center,
             stripHalfLength = stripHalfLength,
@@ -608,18 +624,20 @@ private fun DrawScope.drawWindVector(
     windGustKt: Int?,
     color: Color,
     isDashed: Boolean,
+    compact: Boolean = false,
 ) {
+    val k = if (compact) 0.55f else 1f
     // Wind blows FROM windDirDeg toward the center of the dial
     val fromRad = (windDirDeg - 90.0) * PI / 180.0
     val unitFrom = Offset(cos(fromRad).toFloat(), sin(fromRad).toFloat())
 
     val rimPoint = Offset(
-        x = center.x + (outerRadius - 14.dp.toPx()) * unitFrom.x,
-        y = center.y + (outerRadius - 14.dp.toPx()) * unitFrom.y,
+        x = center.x + (outerRadius - 14.dp.toPx() * k) * unitFrom.x,
+        y = center.y + (outerRadius - 14.dp.toPx() * k) * unitFrom.y,
     )
     val tipPoint = Offset(
-        x = center.x + 12.dp.toPx() * unitFrom.x,
-        y = center.y + 12.dp.toPx() * unitFrom.y,
+        x = center.x + 12.dp.toPx() * k * unitFrom.x,
+        y = center.y + 12.dp.toPx() * k * unitFrom.y,
     )
 
     val pathEffect = if (isDashed) {
@@ -633,7 +651,7 @@ private fun DrawScope.drawWindVector(
         color = color,
         start = rimPoint,
         end = tipPoint,
-        strokeWidth = if (isDashed) 2.2.dp.toPx() else 3.2.dp.toPx(),
+        strokeWidth = (if (isDashed) 2.2.dp.toPx() else 3.2.dp.toPx()) * (if (compact) 0.75f else 1f),
         cap = StrokeCap.Round,
         pathEffect = pathEffect,
     )
@@ -641,7 +659,7 @@ private fun DrawScope.drawWindVector(
     // Origin dot at compass rim
     drawCircle(
         color = color,
-        radius = if (isDashed) 3.5.dp.toPx() else 4.5.dp.toPx(),
+        radius = (if (isDashed) 3.5.dp.toPx() else 4.5.dp.toPx()) * k,
         center = rimPoint,
     )
 
@@ -653,14 +671,14 @@ private fun DrawScope.drawWindVector(
         )
         drawCircle(
             color = MetarGustPurple,
-            radius = 4.dp.toPx(),
+            radius = 4.dp.toPx() * k,
             center = midPoint,
         )
     }
 
     // Arrowhead at tipPoint pointing toward center (-unitFrom direction)
-    val headLength = if (isDashed) 9.dp.toPx() else 11.dp.toPx()
-    val headHalfWidth = if (isDashed) 5.dp.toPx() else 6.5.dp.toPx()
+    val headLength = (if (isDashed) 9.dp.toPx() else 11.dp.toPx()) * k
+    val headHalfWidth = (if (isDashed) 5.dp.toPx() else 6.5.dp.toPx()) * k
     val perp = Offset(-unitFrom.y, unitFrom.x)
     val baseCenter = Offset(
         x = tipPoint.x + headLength * unitFrom.x,
