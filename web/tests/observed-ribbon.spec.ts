@@ -585,5 +585,8 @@ test.describe('Observed airport cards (#881)', () => {
     await expect(banner).toContainText('Offline · showing data from');
     await expect(banner).toContainText(`${layer.live_updated_at.slice(11, 16)}Z, 12 min ago`);
     await shoot(page, 'offline-light');
+    // Back online: cleared at once (the next failed read would raise it again).
+    await context.setOffline(false);
+    await expect(banner).toHaveCount(0);
   });
 });

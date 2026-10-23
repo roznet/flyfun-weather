@@ -401,7 +401,10 @@ export function runwayWindDial(
 }
 
 /** The departure + destination dials, or [] when neither airport has a
- *  picture (an older server: the section renders as before). */
+ *  picture (an older server: the section renders as before). No web caller
+ *  since #881 (the airport cards build one dial each with `runwayWindDial`);
+ *  kept because it mirrors `RunwayWindRules.swift`'s pair, which iOS still
+ *  draws until #882, and the paired tests hold the two in step. */
 export function runwayWindPair(
   airports: AirportObservation[] | null | undefined,
   departure: string | null | undefined,

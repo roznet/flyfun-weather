@@ -144,7 +144,7 @@ function provenanceHtml(block: Block, role: Role, a: AirportObservation | null, 
     const was = t('observed.card.was', {
       cat: a.metar_previous_flight_category, time: formatHhmmZ(a.metar_previous_time ?? null),
     }).trim();
-    parts.push(`<span class="ac-trend-${a.metar_trend}">${a.metar_trend === 'worse' ? '↘' : '↗'} ${escapeHtml(was)}</span>`);
+    parts.push(`<span class="ac-trend-${escapeHtml(a.metar_trend)}">${a.metar_trend === 'worse' ? '↘' : '↗'} ${escapeHtml(was)}</span>`);
   }
   // No TAF category at the ETA: the server's reason ("no TAF for ETA").
   if (!a?.taf_prevailing_category_at_eta && block.taf_text) parts.push(`<span>${escapeHtml(block.taf_text)}</span>`);
