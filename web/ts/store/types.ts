@@ -1580,8 +1580,24 @@ export interface LiveLayer {
   storms?: LiveStorms | null;
   glance?: LiveGlance | null;
   ribbon?: LiveRibbon | null;
+  /** Where the server places the flight (#760); absent on an older server,
+   *  redacted for a viewer the owner does not share position with. */
+  progress?: LiveProgress | null;
   changes: LiveChanges | null;
   last_refresh_delta: RefreshDelta | null;
+}
+
+/** `models/live.py::LiveProgress`, the fields the web reads. `departed_at` /
+ *  `landed_at` are entered, app-detected or inferred from a fix, never the
+ *  plan alone; `eta_destination` is the effective arrival (the plan, moved by
+ *  a take-off or a fix, or the landing itself). */
+export interface LiveProgress {
+  source: string;
+  as_of: string;
+  departed_at?: string | null;
+  eta_destination?: string | null;
+  landed_at?: string | null;
+  delay_min?: number | null;
 }
 
 /** GET /flights/{id}/live/at?tick= (#711): the Observed section as it stood
@@ -1590,7 +1606,6 @@ export interface LiveLayer {
 export interface LiveTickResponse extends LiveLayer {
   tick_at: string;
   radar_time?: string | null;
-  progress?: Record<string, unknown> | null;
 }
 
 /** One radar-lane stretch of a recorded tick (`/live/ticks?segments=1`). */

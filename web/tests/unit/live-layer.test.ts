@@ -22,6 +22,8 @@ import {
   highlightChanged,
   isInLiveWindow,
   isLiveWindowPast,
+  lateLiveWindowEndMs,
+  liveWindowEndMs,
   minutesAgo,
   observedAsOf,
   pythonDatetimeStr,
@@ -146,6 +148,44 @@ describe('applyLiveToSnapshot', () => {
     expect(applyLiveToSnapshot(snap, older, '2026-10-01T09:00:00Z')).toBeNull();
     const newer = live({ live_updated_at: '2026-10-01T11:10:00.250000+00:00' });
     expect(applyLiveToSnapshot(snap, newer, '2026-10-01T09:00:00Z')).not.toBeNull();
+  });
+});
+
+describe('liveWindowEndMs (#877)', () => {
+  // Planned 12:00Z, 2h: planned end 15:00Z, late cap 12:00 + 6 + 2 + 1 = 21:00Z.
+  const dep = '2026-10-01T12:00:00Z';
+  const ms = (iso: string) => new Date(iso).getTime();
+  const progress = (eta: string | null, extra: Record<string, string> = {}) => ({
+    source: 'app', as_of: '2026-10-01T16:00:00Z', eta_destination: eta, ...extra,
+  });
+
+  it('is the plan without progress, or with plan-only progress', () => {
+    expect(liveWindowEndMs(dep, 2)).toBe(ms('2026-10-01T15:00:00Z'));
+    expect(liveWindowEndMs(dep, 2, null)).toBe(ms('2026-10-01T15:00:00Z'));
+    expect(liveWindowEndMs(dep, 2, progress('2026-10-01T14:00:00Z'))).toBe(ms('2026-10-01T15:00:00Z'));
+  });
+
+  it('runs on past the plan for a late take-off, to its ETA + 1h', () => {
+    const late = progress('2026-10-01T17:30:00Z', { departed_at: '2026-10-01T15:30:00Z' });
+    expect(liveWindowEndMs(dep, 2, late)).toBe(ms('2026-10-01T18:30:00Z'));
+    expect(isInLiveWindow(dep, 2, ms('2026-10-01T16:00:00Z'), late)).toBe(true);
+    expect(isLiveWindowPast(dep, 2, ms('2026-10-01T16:00:00Z'), late)).toBe(false);
+    expect(isLiveWindowPast(dep, 2, ms('2026-10-01T18:30:01Z'), late)).toBe(true);
+  });
+
+  it('never runs past the latest take-off the server accepts', () => {
+    expect(lateLiveWindowEndMs(dep, 2)).toBe(ms('2026-10-01T21:00:00Z'));
+    const veryLate = progress('2026-10-02T03:00:00Z', { departed_at: '2026-10-02T01:00:00Z' });
+    expect(liveWindowEndMs(dep, 2, veryLate)).toBe(ms('2026-10-01T21:00:00Z'));
+  });
+
+  it('closes 1h after a late landing, and never before the plan', () => {
+    const landedLate = progress('2026-10-01T17:10:00Z', {
+      departed_at: '2026-10-01T15:20:00Z', landed_at: '2026-10-01T17:10:00Z',
+    });
+    expect(liveWindowEndMs(dep, 2, landedLate)).toBe(ms('2026-10-01T18:10:00Z'));
+    const landedEarly = progress('2026-10-01T13:40:00Z', { landed_at: '2026-10-01T13:40:00Z' });
+    expect(liveWindowEndMs(dep, 2, landedEarly)).toBe(ms('2026-10-01T15:00:00Z'));
   });
 });
 

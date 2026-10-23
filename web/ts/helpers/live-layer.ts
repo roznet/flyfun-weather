@@ -14,12 +14,18 @@ import type {
   LiveChange,
   LiveChanges,
   LiveLayer,
+  LiveProgress,
   SigmetAlongRoute,
 } from '../store/types';
 
 /** Window around the flight when the server keeps the live layer fresh. */
 export const LIVE_WINDOW_BEFORE_H = 3;
 export const LIVE_WINDOW_AFTER_H = 1;
+/** The latest take-off the server accepts after the planned departure
+ *  (`tasks/live_tick.py::MAX_TAKEOFF_DELAY_H`, also copied as iOS
+ *  `maxTakeoffDelayHours` and Android `MAX_TAKEOFF_DELAY_HOURS`): how far past
+ *  the plan a late flight's live window can run (#877). */
+export const MAX_TAKEOFF_DELAY_H = 6;
 /** "Observed as of" turns stale-tinted past this age. */
 export const OBSERVED_STALE_MIN = 30;
 
@@ -110,30 +116,61 @@ export function departureMs(
   return isoToMs(`${departure.target_date}T${hh}:00:00Z`);
 }
 
-/** departure − 3h ≤ now ≤ departure + duration + 1h (inclusive both ends). */
+type Departure = string | { target_date: string; target_time_utc: number };
+
+/** The latest a flight can still be live: a take-off `MAX_TAKEOFF_DELAY_H`
+ *  late, + duration + 1h (#877). NaN without a departure. */
+export function lateLiveWindowEndMs(departure: Departure, durationHours: number): number {
+  const dep = departureMs(departure);
+  return dep + (MAX_TAKEOFF_DELAY_H + (durationHours || 0) + LIVE_WINDOW_AFTER_H) * 3600_000;
+}
+
+/** When the live window closes, as epoch ms. Mirrors the server's
+ *  `live_window_end`: the planned arrival + 1h, or later when `progress`
+ *  moved the effective arrival (a late take-off, a fix, the landing) — that
+ *  arrival + 1h, at most `lateLiveWindowEndMs` (#877). Without progress (no
+ *  `/live` read yet, an older server, a redacted viewer): the plan. NaN
+ *  without a departure. */
+export function liveWindowEndMs(
+  departure: Departure,
+  durationHours: number,
+  progress?: LiveProgress | null,
+): number {
+  const dep = departureMs(departure);
+  const planned = dep + ((durationHours || 0) + LIVE_WINDOW_AFTER_H) * 3600_000;
+  const eta = isoToMs(progress?.eta_destination);
+  if (isNaN(dep) || isNaN(eta)) return planned;
+  return Math.min(
+    Math.max(planned, eta + LIVE_WINDOW_AFTER_H * 3600_000),
+    lateLiveWindowEndMs(departure, durationHours),
+  );
+}
+
+/** departure − 3h ≤ now ≤ window end (`liveWindowEndMs`; inclusive both ends). */
 export function isInLiveWindow(
-  departure: string | { target_date: string; target_time_utc: number },
+  departure: Departure,
   durationHours: number,
   now: Date | number = Date.now(),
+  progress?: LiveProgress | null,
 ): boolean {
   const dep = departureMs(departure);
   if (isNaN(dep)) return false;
   const t = typeof now === 'number' ? now : now.getTime();
   const start = dep - LIVE_WINDOW_BEFORE_H * 3600_000;
-  const end = dep + ((durationHours || 0) + LIVE_WINDOW_AFTER_H) * 3600_000;
-  return t >= start && t <= end;
+  return t >= start && t <= liveWindowEndMs(departure, durationHours, progress);
 }
 
 /** True once the live window has closed (polling can stop for good). */
 export function isLiveWindowPast(
-  departure: string | { target_date: string; target_time_utc: number },
+  departure: Departure,
   durationHours: number,
   now: Date | number = Date.now(),
+  progress?: LiveProgress | null,
 ): boolean {
   const dep = departureMs(departure);
   if (isNaN(dep)) return true;
   const t = typeof now === 'number' ? now : now.getTime();
-  return t > dep + ((durationHours || 0) + LIVE_WINDOW_AFTER_H) * 3600_000;
+  return t > liveWindowEndMs(departure, durationHours, progress);
 }
 
 /** Newest of the live-layer update and the observation fetch time, as the

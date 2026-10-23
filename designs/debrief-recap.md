@@ -124,7 +124,7 @@ review pass decides.
   alert set changed (`alert_changed` in the tick index, not merely
   `alert_count > 0`); ← / → step while focus is on it. It replaced one chip
   per tick, which wrapped to rows on a normal flight.
-  **After the window** (`isLiveWindowPast`): "Along the route" opens on the
+  **After the window** (`isLiveWindowPast`, with the live layer's `progress`, so a late take-off's window ends later, #877): "Along the route" opens on the
   recap and the last tick's live ribbon is hidden (it would read "now").
 - **Replay**: the stepper, a recap stretch (its `tick_at`), an alert marker (its
   tick), a grid row, or a route point (the "seen at" lane, or the point

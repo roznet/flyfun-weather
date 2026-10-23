@@ -255,7 +255,12 @@ Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
    with `at_new_times` in its facts (below). Never pushes, like a ↻ press.
    `find_live_flights` picks candidates by the planned window widened by
    `MAX_TAKEOFF_DELAY_H` (6 h) and reads only their progress records.
-   `push_expiry` uses the same end.
+   `push_expiry` uses the same end. The web briefing page mirrors it from
+   `/live`'s `progress` (#877, `helpers/live-layer.ts::liveWindowEndMs`):
+   `max(planned end, eta_destination + 1 h)`, capped at departure + 6 h +
+   duration + 1 h. Past the planned window but before that cap, with no
+   progress yet, it reads `/live` once before deciding to poll or open on the
+   recap, so a late take-off keeps polling and never opens on the recap.
 
 `None` blocks keep the stored value (a SIGMET fetch failing must not blank the
 SIGMETs); each block has its own `*_updated_at`.

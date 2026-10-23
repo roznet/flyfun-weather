@@ -10,8 +10,8 @@ import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
 import { improvingCount, invertAdvisoryStatus, isWorseCandidate } from './helpers/time-scenario-display';
-import { departureMs, formatHhmmZ, isInLiveWindow, isLiveWindowPast, isoToMs, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
-import type { FlightResponse, ForecastSnapshot, LiveFocus, LiveTickResponse, RecapResponse } from './store/types';
+import { departureMs, formatHhmmZ, isInLiveWindow, isLiveWindowPast, isoToMs, lateLiveWindowEndMs, LIVE_WINDOW_BEFORE_H } from './helpers/live-layer';
+import type { FlightResponse, ForecastSnapshot, LiveFocus, LiveLayer, LiveTickResponse, RecapResponse } from './store/types';
 import {
   forecastLaneBands,
   isReplaying,
@@ -2399,8 +2399,9 @@ async function init(): Promise<void> {
 
   const flightDeparture = (f: FlightResponse) =>
     f.departure_time || { target_date: f.target_date, target_time_utc: f.target_time_utc };
-  const windowPast = (f: FlightResponse | null) =>
-    !!f && isLiveWindowPast(flightDeparture(f), f.flight_duration_hours);
+  // A late take-off moves the end (#877): the live layer's progress says so.
+  const windowPast = (f: FlightResponse | null, live: LiveLayer | null) =>
+    !!f && isLiveWindowPast(flightDeparture(f), f.flight_duration_hours, Date.now(), live?.progress);
   const windowStarted = (f: FlightResponse | null) =>
     !!f && Date.now() >= departureMs(flightDeparture(f)) - LIVE_WINDOW_BEFORE_H * 3600_000;
 
@@ -2494,7 +2495,7 @@ async function init(): Promise<void> {
     }
     const chipsHost = panel.querySelector<HTMLElement>('.replay-chips-host')!;
     const recapHost = panel.querySelector<HTMLElement>('.recap-host')!;
-    const past = windowPast(state.flight);
+    const past = windowPast(state.flight, state.live);
     const ticks = state.ticks ?? [];
     const replay = state.replay;
 
@@ -2577,7 +2578,7 @@ async function init(): Promise<void> {
   function loadDebrief(): void {
     const s = store.getState();
     if (!windowStarted(s.flight)) return;
-    const past = windowPast(s.flight);
+    const past = windowPast(s.flight, s.live);
     void s.loadTicks(past);
     if (past) void s.loadRecap();
   }
@@ -2691,6 +2692,8 @@ async function init(): Promise<void> {
       || state.recapForecast !== prev.recapForecast
       || state.selectedPointIndex !== prev.selectedPointIndex
       || state.routeAnalyses !== prev.routeAnalyses
+      // A late take-off learned from /live moves the window end (#877).
+      || state.live?.progress?.eta_destination !== prev.live?.progress?.eta_destination
     ) {
       renderReplayPanel(state);
     }
@@ -2699,7 +2702,7 @@ async function init(): Promise<void> {
     if (
       state.live !== prev.live && state.live
       && state.live.live_updated_at !== prev.live?.live_updated_at
-      && windowStarted(state.flight) && !windowPast(state.flight)
+      && windowStarted(state.flight) && !windowPast(state.flight, state.live)
     ) {
       void store.getState().loadTicks();
     }
@@ -3203,13 +3206,14 @@ async function init(): Promise<void> {
     const f = store.getState().flight;
     if (!f) return;
     const now = Date.now();
-    if (isLiveWindowPast(liveDeparture(f), f.flight_duration_hours, now)) {
+    const progress = store.getState().live?.progress;
+    if (isLiveWindowPast(liveDeparture(f), f.flight_duration_hours, now, progress)) {
       stopLivePolling();
       // #769: the window just closed with the page open: open on the recap.
       loadDebrief();
       return;
     }
-    if (!isInLiveWindow(liveDeparture(f), f.flight_duration_hours, now)) return;
+    if (!isInLiveWindow(liveDeparture(f), f.flight_duration_hours, now, progress)) return;
     liveSyncInFlight = true;
     try {
       await store.getState().syncLatest();
@@ -3221,21 +3225,34 @@ async function init(): Promise<void> {
     refreshAges();
   };
 
-  const startLiveLayer = () => {
+  /** Resolves once the window is decided: at once, or after the one `/live`
+   *  read a flight past its planned window needs first (#877). */
+  const startLiveLayer = async (caughtUp = false): Promise<void> => {
     const s = store.getState();
     const f = s.flight;
     if (!f || !s.currentPack) return;
     const now = Date.now();
     const dep = liveDeparture(f);
-    const inWindow = isInLiveWindow(dep, f.flight_duration_hours, now);
+    const progress = s.live?.progress;
+    const inWindow = isInLiveWindow(dep, f.flight_duration_hours, now, progress);
     const viewingLatest = s.packs.length === 0
       || s.packs[0].fetch_timestamp === s.currentPack.fetch_timestamp;
+    // Past the planned window with no progress known yet: the flight may have
+    // taken off late (#877). Read /live once while the server could still be
+    // keeping it live, then decide again from its progress.
+    if (viewingLatest && !caughtUp && !s.live
+        && isLiveWindowPast(dep, f.flight_duration_hours, now)
+        && now <= lateLiveWindowEndMs(dep, f.flight_duration_hours)) {
+      await s.loadLive();
+      if (store.getState().live) await startLiveLayer(true);
+      return;
+    }
     // One catch-up after the first load (the snapshot already carries the
     // server overlay; this only picks up anything newer).
-    if (viewingLatest && (inWindow || s.currentPack.days_out === 0)) {
+    if (!caughtUp && viewingLatest && (inWindow || s.currentPack.days_out === 0)) {
       void s.loadLive();
     }
-    if (isLiveWindowPast(dep, f.flight_duration_hours, now)) return;
+    if (isLiveWindowPast(dep, f.flight_duration_hours, now, progress)) return;
     const opensSoon = !inWindow && departureMs(dep) - LIVE_WINDOW_BEFORE_H * 3600_000 - now <= LIVE_PREWINDOW_MS;
     if (!inWindow && !opensSoon) return;
     if (livePollTimer === null) {
@@ -3399,9 +3416,9 @@ async function init(): Promise<void> {
 
     // Live observation layer (#637): catch up once, then poll while the
     // flight is in its live window.
-    startLiveLayer();
-    // #769: recorded ticks (and the recap once the window is past).
-    loadDebrief();
+    // #769: then the recorded ticks (and the recap once the window is past),
+    // after a late flight's progress is known so it does not open on the recap.
+    void startLiveLayer().then(loadDebrief);
 
     document.getElementById('tour-btn')?.addEventListener('click', () => startBriefingTour());
     maybeAutoStartBriefingTour();
