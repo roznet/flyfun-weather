@@ -1,6 +1,5 @@
 package aero.flyfun.weather.ui.observed
 
-import android.content.Context
 import aero.flyfun.weather.model.AirportObservation
 import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.model.LiveGlanceTerminal
@@ -54,10 +53,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -69,7 +65,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,7 +84,6 @@ import androidx.compose.ui.unit.sp
  * SYNC: web `airport-card-view.ts` (#881) and iOS (#882) draw the same card.
  */
 
-private const val PREFS_NAME = "airport_cards"
 private val WIDE_LAYOUT_MIN = 600.dp
 
 /** The dial in the card's corner: fixed, never stretched (phone ~92 dp, tablet ~120 dp). */
@@ -114,14 +108,7 @@ fun AirportCardsSection(
     val slots = AirportCardRules.slots(departure, destination)
     if (slots.isEmpty()) return
 
-    val context = LocalContext.current
-    val prefs = remember(context) { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    val prefKey = "departure_open_$flightId"
-    var departureOpen by remember(flightId) { mutableStateOf(prefs.getBoolean(prefKey, false)) }
-    val toggleDeparture: () -> Unit = {
-        departureOpen = !departureOpen
-        prefs.edit().putBoolean(prefKey, departureOpen).apply()
-    }
+    val (departureOpen, toggleDeparture) = rememberFlightFlag("departure_open", flightId)
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val wide = maxWidth >= WIDE_LAYOUT_MIN

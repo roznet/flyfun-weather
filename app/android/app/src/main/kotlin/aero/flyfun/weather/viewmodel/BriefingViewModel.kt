@@ -94,7 +94,8 @@ class BriefingViewModel(
     /**
      * The last `/live` read failed (#883 offline banner). [liveLayer] then keeps the
      * previous layer, so the Observed tab shows it as cached data, not as nothing.
-     * Cleared by the next successful read.
+     * Cleared by the next successful read. Also true for a flight that simply has no
+     * live layer (the read fails the same way), so read it together with [liveLayer].
      */
     private val _liveFetchFailed = MutableStateFlow(false)
     val liveFetchFailed: StateFlow<Boolean> = _liveFetchFailed.asStateFlow()
