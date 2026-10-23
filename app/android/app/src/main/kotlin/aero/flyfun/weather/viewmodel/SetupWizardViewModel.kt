@@ -28,6 +28,8 @@ enum class SetupStep { WELCOME, PROFILE, AIRCRAFT, DONE }
 data class SetupWizardState(
     val step: SetupStep = SetupStep.WELCOME,
     val isLoading: Boolean = false,
+    /** Profiles or aircraft failed to load: the profile step offers Retry and Next stays blocked. */
+    val loadFailed: Boolean = false,
     val isSaving: Boolean = false,
     val errorMessage: String? = null,
     val profiles: List<ProfileResponse> = emptyList(),
@@ -135,15 +137,23 @@ class SetupWizardViewModel(
      */
     suspend fun load() {
         _state.update { it.copy(isLoading = true) }
-        // The app is English-only, so the template descriptions are too.
-        val profiles = runCatching { repository.profiles() }.getOrDefault(emptyList())
+        // Without the profiles the profile writes would be skipped, and without the aircraft the
+        // save would POST a second default next to a real one: stop rather than guess.
+        val loaded = runCatching { repository.profiles() to repository.aircraft() }
+        val (profiles, aircraft) = loaded.getOrElse { err ->
+            logError("Failed to load the wizard's profiles or aircraft", err)
+            _state.update { it.copy(isLoading = false, loadFailed = true) }
+            return
+        }
+        // Descriptions only: the cards still work without them. The app is English-only, so the
+        // template descriptions are too.
         val templates = runCatching { repository.systemTemplates("en") }.getOrDefault(emptyList())
-        val aircraft = runCatching { repository.aircraft() }.getOrDefault(emptyList())
         val current = aircraft.firstOrNull { it.isDefault }
         val real = current?.takeIf { !it.isPlaceholder }
         _state.update { s ->
             var next = s.copy(
                 isLoading = false,
+                loadFailed = false,
                 profiles = profiles,
                 templates = templates,
                 selectedProfileId = (profiles.firstOrNull { it.isDefault } ?: profiles.firstOrNull())?.id,
@@ -212,13 +222,14 @@ class SetupWizardViewModel(
     }
 
     /**
-     * Save the current step, then move on. Returns false (staying put) only when the aircraft step
-     * can't be saved: an unsaved aircraft is the one thing the pilot must know about. Profile writes
-     * that fail are logged and skipped, like the web; Settings stays the place to fix them.
+     * Save the current step, then move on. Returns false (staying put) when the load failed or the
+     * aircraft step can't be saved (aircraft or mission): those are what the briefing runs on. The
+     * default-profile write that fails is logged and skipped, like the web.
      */
     suspend fun next(): Boolean {
         // A second tap while the aircraft POST is in flight must not create a second aircraft.
         if (_state.value.isSaving) return false
+        if (_state.value.loadFailed && _state.value.step != SetupStep.WELCOME) return false
         _state.update { it.copy(errorMessage = null) }
         when (_state.value.step) {
             SetupStep.WELCOME -> _state.update { it.copy(step = SetupStep.PROFILE) }
@@ -332,7 +343,14 @@ class SetupWizardViewModel(
                 flightCeilingFt = SetupWizardState.positiveInt(s.flightCeilingFt) ?: DEFAULT_FLIGHT_CEILING_FT,
             )
             runCatching { repository.updateProfile(profile.id, SetupProfileUpdate(settings = mission)) }
-                .onFailure { logError("Failed to save the wizard mission", it) }
+                .onFailure { err ->
+                    // The aircraft is saved (and now PUT on a retry); stay so the mission isn't lost.
+                    logError("Failed to save the wizard mission", err)
+                    _state.update {
+                        it.copy(isSaving = false, errorMessage = "Couldn't save your usual mission: ${err.message ?: err}")
+                    }
+                    return false
+                }
         }
         _state.update { it.copy(isSaving = false) }
         return true

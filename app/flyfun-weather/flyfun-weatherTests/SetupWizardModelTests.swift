@@ -15,6 +15,8 @@ final class StubSetupRepository: SetupRepository {
     var profilesResult: [SetupProfile] = []
     var aircraftResult: [AircraftResponse] = []
     var createAircraftError: Error?
+    var aircraftError: Error?
+    var missionError: Error?
     private(set) var profileUpdates: [(id: Int, request: SetupProfileUpdate)] = []
     private(set) var createRequests: [CreateAircraftRequest] = []
     private(set) var updateRequests: [(id: Int, request: UpdateAircraftRequest)] = []
@@ -25,7 +27,10 @@ final class StubSetupRepository: SetupRepository {
     func systemTemplates(locale: String) async throws -> [SystemTemplate] {
         [SystemTemplate(key: "ifr_fiki", name: "IFR FIKI", description: "For FIKI-equipped IFR aircraft.")]
     }
-    func aircraft() async throws -> [AircraftResponse] { aircraftResult }
+    func aircraft() async throws -> [AircraftResponse] {
+        if let aircraftError { throw aircraftError }
+        return aircraftResult
+    }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
     func createAircraft(_ request: CreateAircraftRequest) async throws -> AircraftResponse {
         if let createAircraftError { throw createAircraftError }
@@ -37,6 +42,7 @@ final class StubSetupRepository: SetupRepository {
         return makeAircraft(id: id, icaoType: request.icaoType ?? "C172", isDefault: true)
     }
     func updateProfile(id: Int, request: SetupProfileUpdate) async throws {
+        if let missionError, request.settings != nil { throw missionError }
         profileUpdates.append((id, request))
     }
     func completeSetup() async throws { completeCount += 1 }
@@ -184,6 +190,45 @@ private func seededRepo() -> StubSetupRepository {
         #expect(update.request.isIfr == nil)
         #expect(update.request.isFiki == false)
         #expect(update.request.isDefault == nil) // already the default
+    }
+
+    /// Without the aircraft list the save could POST a second default next
+    /// to a real one: the wizard stops after welcome until Retry loads.
+    @Test func aFailedLoadBlocksUntilRetry() async {
+        let repo = seededRepo()
+        repo.aircraftError = MockError.injected("offline")
+        let model = SetupWizardModel(repository: repo)
+        await model.load()
+        #expect(model.loadFailed)
+        #expect(await model.next())              // welcome needs nothing loaded
+        #expect(await model.next() == false)     // the profile step does
+        #expect(model.step == .profile)
+        #expect(repo.profileUpdates.isEmpty)
+
+        repo.aircraftError = nil
+        await model.load()                       // Retry
+        #expect(model.loadFailed == false)
+        #expect(await model.next())
+        #expect(model.step == .aircraft)
+    }
+
+    @Test func aFailedMissionSaveStaysAndARetryUpdatesTheAircraft() async {
+        let repo = seededRepo()
+        let model = SetupWizardModel(repository: repo)
+        await model.load()
+        await model.next()
+        await model.next()
+        model.icaoType = "C172"
+        repo.missionError = MockError.injected("offline")
+        #expect(await model.next() == false)
+        #expect(model.step == .aircraft)
+        #expect(model.errorMessage?.hasPrefix("Couldn't save your usual mission") == true)
+
+        repo.missionError = nil
+        #expect(await model.next())
+        #expect(model.step == .done)
+        #expect(repo.createRequests.count == 1)  // the retry PUTs the saved aircraft
+        #expect(repo.updateRequests.first?.id == 50)
     }
 
     @Test func backKeepsTheMissionTyped() async {

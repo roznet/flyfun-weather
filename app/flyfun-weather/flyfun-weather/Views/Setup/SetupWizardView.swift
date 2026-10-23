@@ -92,7 +92,14 @@ struct SetupWizardView: View {
             } footer: {
                 Text("Tap a profile to make it your default. You can switch or customize profiles later in Settings.")
             }
-            if model.systemProfiles.isEmpty {
+            if model.loadFailed {
+                Section {
+                    Text("Couldn't load your profiles and aircraft. Check your connection and try again.")
+                        .foregroundStyle(.red)
+                    Button("Retry") { Task { await model.load() } }
+                        .accessibilityIdentifier("setupRetryButton")
+                }
+            } else if model.systemProfiles.isEmpty {
                 Section {
                     Text(model.isLoading
                          ? "Loading profiles\u{2026}"
@@ -275,7 +282,7 @@ struct SetupWizardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 // The welcome step needs nothing loaded; the others wait for the profiles.
-                .disabled(model.isSaving || (model.isLoading && model.step != .welcome))
+                .disabled(model.isSaving || ((model.isLoading || model.loadFailed) && model.step != .welcome))
                 .accessibilityIdentifier("setupNextButton")
             }
         }

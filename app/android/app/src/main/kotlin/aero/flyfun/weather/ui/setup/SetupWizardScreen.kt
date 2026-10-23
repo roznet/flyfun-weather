@@ -111,7 +111,8 @@ fun SetupWizardScreen(
                         Button(
                             onClick = viewModel::onNext,
                             // The welcome step needs nothing loaded; the others wait for the profiles.
-                            enabled = !state.isSaving && !(state.isLoading && state.step != SetupStep.WELCOME),
+                            enabled = !state.isSaving &&
+                                !((state.isLoading || state.loadFailed) && state.step != SetupStep.WELCOME),
                             modifier = Modifier.testTag("setupNextButton"),
                         ) {
                             if (state.isSaving) {
@@ -180,7 +181,16 @@ private fun ProfileStep(state: SetupWizardState, viewModel: SetupWizardViewModel
     )
     Hint("Tap a profile to make it your default. You can switch or customize profiles later in Settings.")
     val profiles = state.systemProfiles
-    if (profiles.isEmpty()) {
+    if (state.loadFailed) {
+        Text(
+            "Couldn't load your profiles and aircraft. Check your connection and try again.",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        TextButton(onClick = viewModel::start, modifier = Modifier.testTag("setupRetryButton")) {
+            Text("Retry")
+        }
+    } else if (profiles.isEmpty()) {
         Hint(
             if (state.isLoading) "Loading profiles…"
             else "No system profiles available. You can configure your settings on the next step.",

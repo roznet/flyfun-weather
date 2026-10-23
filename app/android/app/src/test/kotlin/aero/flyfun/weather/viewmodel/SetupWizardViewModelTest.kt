@@ -1,6 +1,7 @@
 package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.weather.data.FixtureSetupRepository
+import aero.flyfun.weather.data.SetupRepository
 import aero.flyfun.weather.model.AircraftResponse
 import aero.flyfun.weather.model.AuthMeResponse
 import aero.flyfun.weather.model.ProfileAdvisoriesConfig
@@ -10,6 +11,7 @@ import aero.flyfun.weather.model.SetupMission
 import aero.flyfun.weather.model.SetupProfileUpdate
 import aero.flyfun.weather.model.WbJson
 import aero.flyfun.weather.model.declaresFiki
+import java.io.IOException
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -108,6 +110,45 @@ class SetupWizardViewModelTest {
     }
 
     @Test
+    fun `a failed load blocks the wizard until Retry, and never completes over it`() = runTest {
+        val repo = FlakySetupRepository(FixtureSetupRepository(setupCompleted = false))
+        repo.failAircraft = true
+        val vm = SetupWizardViewModel(repo, scopeOverride = this)
+        vm.load()
+        assertTrue(vm.state.value.loadFailed)
+        assertTrue(vm.next()) // the welcome copy needs nothing loaded
+        assertFalse(vm.next()) // but the profile step does
+        assertEquals(SetupStep.PROFILE, vm.state.value.step)
+
+        repo.failAircraft = false
+        vm.load() // Retry
+        assertFalse(vm.state.value.loadFailed)
+        assertEquals("110", vm.state.value.cruiseSpeedKt)
+        assertTrue(vm.next())
+        assertEquals(SetupStep.AIRCRAFT, vm.state.value.step)
+    }
+
+    @Test
+    fun `a failed mission save stays on the aircraft step, and a retry updates the aircraft`() = runTest {
+        val repo = FlakySetupRepository(FixtureSetupRepository(setupCompleted = false))
+        val vm = SetupWizardViewModel(repo, scopeOverride = this)
+        vm.load()
+        vm.next()
+        vm.next()
+        vm.setIcaoType("C172")
+        repo.failMission = true
+        assertFalse(vm.next())
+        assertEquals(SetupStep.AIRCRAFT, vm.state.value.step)
+        assertTrue(vm.state.value.errorMessage!!.startsWith("Couldn't save your usual mission"))
+        assertFalse(vm.state.value.isSaving)
+
+        repo.failMission = false
+        assertTrue(vm.next())
+        assertEquals(SetupStep.DONE, vm.state.value.step)
+        assertEquals(1, repo.aircraft().size) // the retry PUT the saved aircraft, no second POST
+    }
+
+    @Test
     fun `back keeps the mission typed`() = runTest {
         val (_, vm) = loaded()
         vm.next()
@@ -179,5 +220,18 @@ class SetupWizardViewModelTest {
         val appState = AppStateViewModel(context = null, scopeOverride = TestScope(testScheduler))
         appState.enterDemoMode()
         assertNull(appState.setupRepository)
+    }
+}
+
+/** The fixture account with switchable failures, for the wizard's error paths. */
+private class FlakySetupRepository(private val inner: FixtureSetupRepository) : SetupRepository by inner {
+    var failAircraft = false
+    var failMission = false
+
+    override suspend fun aircraft() = if (failAircraft) throw IOException("offline") else inner.aircraft()
+
+    override suspend fun updateProfile(id: Int, req: SetupProfileUpdate) {
+        if (failMission && req.settings != null) throw IOException("offline")
+        inner.updateProfile(id, req)
     }
 }

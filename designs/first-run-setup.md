@@ -53,8 +53,11 @@ All three make the same server calls; the server is unchanged by the mobile port
   skippable and starts from their real aircraft when they have one.
 - **Mobile differences from the web** (kept small during the release): no forecast-model picker
   (the template's models are kept), no demo-tour link, English only (both apps are English
-  only), and a failed aircraft save stays on the step with an error instead of moving on (the
-  web logs and continues). Profile writes that fail are logged and skipped, as on the web.
+  only), and the apps stop where the web logs and continues: a failed aircraft or mission save
+  stays on the aircraft step with an error (Next again PUTs the saved aircraft and retries), and
+  a failed load of profiles or aircraft shows Retry and blocks Next past welcome (no duplicate
+  default aircraft, no `setup-complete` over profile writes that never ran). Only the
+  default-profile PUT is logged and skipped, as on the web.
 - **Demo mode** (Android "Explore Demo Briefings") has no account, so no wizard.
 
 ## Testing
