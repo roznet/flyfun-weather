@@ -28,9 +28,6 @@ import aero.flyfun.weather.model.PendingNavigation
 import aero.flyfun.weather.model.UniversalLinkRouter
 import aero.flyfun.weather.model.UserPreferencesResponse
 import java.io.File
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -111,7 +108,10 @@ class AppStateViewModel(
     val userPreferences: StateFlow<UserPreferencesResponse?> = _userPreferences.asStateFlow()
 
     private var pendingOAuthVerifier: String? = null
-    private var pendingPkceVerifier: String? = null
+
+    private val _autorouterLinkError = MutableStateFlow<String?>(null)
+    /** Why the last Autorouter link attempt failed (callback `status=error`, or the redeem call). */
+    val autorouterLinkError: StateFlow<String?> = _autorouterLinkError.asStateFlow()
 
     private val cacheRootDir: File?
         get() = cacheRootOverride ?: context?.filesDir?.let { File(it, "BriefingCache") }
@@ -335,19 +335,22 @@ class AppStateViewModel(
             return
         }
 
-        // 2. Check Autorouter link callback (`flyfunweather://autorouter-linked?ticket=...`)
-        if (uriString.startsWith("flyfunweather://autorouter-linked")) {
-            val ticket = extractQueryParam(uriString, "ticket")
-            val verifier = pendingPkceVerifier
-            if (!ticket.isNullOrBlank() && !verifier.isNullOrBlank()) {
-                scope.launch {
-                    runCatching {
-                        apiClient.completeAutorouterLink(ticket, verifier)
-                    }.onSuccess {
+        // 2. Autorouter link callback (`flyfunweather://autorouter/callback?status=authorized&code=...`,
+        //    or `status=error&reason=...`). The code is redeemed with this app's bearer, so only the
+        //    user who started the link can complete it (flyfun-common `autorouter.py`).
+        if (uriString.startsWith("$AUTOROUTER_CALLBACK_SCHEME://autorouter/callback")) {
+            val code = extractQueryParam(uriString, "code")
+            if (extractQueryParam(uriString, "status") != "authorized" || code.isNullOrBlank()) {
+                _autorouterLinkError.value = autorouterLinkErrorMessage(extractQueryParam(uriString, "reason"))
+                return
+            }
+            scope.launch {
+                runCatching { apiClient.completeAutorouterLink(code) }
+                    .onSuccess {
                         _autorouterLinked.value = true
-                        pendingPkceVerifier = null
+                        _autorouterLinkError.value = null
                     }
-                }
+                    .onFailure { _autorouterLinkError.value = "Couldn't connect Autorouter: ${it.message}" }
             }
             return
         }
@@ -397,16 +400,13 @@ class AppStateViewModel(
         }
     }
 
-    /** Initiate Autorouter account linking with PKCE. Returns the browser URL if successful. */
+    /**
+     * Start Autorouter account linking: the server returns a short-lived URL (a signed ticket, since
+     * the browser can't send the app's bearer) that ends at the `flyfunweather://autorouter/callback`.
+     */
     suspend fun buildAutorouterLinkUrl(): String? {
-        val verifierBytes = ByteArray(32)
-        SecureRandom().nextBytes(verifierBytes)
-        val verifier = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes)
-        val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII))
-        val challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
-        pendingPkceVerifier = verifier
-        val ticketResp = apiClient.createAutorouterLinkTicket(challenge)
-        return "$baseUrl/api/autorouter/link?ticket=${ticketResp.ticket}"
+        _autorouterLinkError.value = null
+        return apiClient.createAutorouterLinkTicket(AUTOROUTER_CALLBACK_SCHEME).url.takeIf { it.isNotBlank() }
     }
 
     fun unlinkAutorouter() {
@@ -472,5 +472,16 @@ class AppStateViewModel(
             }
         }
         return null
+    }
+
+    private fun autorouterLinkErrorMessage(reason: String?): String = when (reason) {
+        "denied" -> "Autorouter access wasn't granted. Try again and choose Allow on autorouter.aero."
+        "expired" -> "The connection request timed out. Please try again."
+        else -> "Couldn't connect Autorouter. Please try again."
+    }
+
+    private companion object {
+        /** Registered in the manifest and on the server's allowed callback schemes (as on iOS). */
+        const val AUTOROUTER_CALLBACK_SCHEME = "flyfunweather"
     }
 }

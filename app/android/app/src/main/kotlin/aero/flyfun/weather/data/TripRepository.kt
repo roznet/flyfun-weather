@@ -16,7 +16,8 @@ interface TripRepository {
     suspend fun removeTripLeg(tripId: String, flightId: String): TripResponse
     suspend fun refreshTrip(tripId: String, force: Boolean = false): TripRefreshStatus
     suspend fun tripRefreshStatus(tripId: String): TripRefreshStatus
-    suspend fun tripAiSummary(tripId: String, generate: Boolean = false): TripAiSummaryResponse
+    /** `POST /ai-summary`: the stored paragraph, regenerated only when stale. The GET trip carries it otherwise. */
+    suspend fun tripAiSummary(tripId: String): TripAiSummaryResponse
 }
 
 /**
@@ -82,8 +83,8 @@ open class OnlineTripRepository(
     override suspend fun tripRefreshStatus(tripId: String): TripRefreshStatus =
         api.tripRefreshStatus(tripId)
 
-    override suspend fun tripAiSummary(tripId: String, generate: Boolean): TripAiSummaryResponse =
-        api.getTripAiSummary(tripId, generate)
+    override suspend fun tripAiSummary(tripId: String): TripAiSummaryResponse =
+        api.generateTripAiSummary(tripId)
 
     private suspend fun cacheTripDetail(trip: TripResponse) {
         val store = cache ?: return

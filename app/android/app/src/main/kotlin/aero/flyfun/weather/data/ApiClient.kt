@@ -325,35 +325,18 @@ class ApiClient(
     // Autorouter
     // ========================================================================
 
-    suspend fun fetchAutorouterRoutes(
-        departure: String,
-        destination: String,
-        departureTime: String,
-        cruiseAltitudeFt: Int,
-        durationHours: Double,
-        aircraftId: Int? = null,
-    ): AutorouterRoutesResponse {
-        val query = buildList {
-            add("departure" to departure)
-            add("destination" to destination)
-            add("departure_time" to departureTime)
-            add("cruise_altitude_ft" to cruiseAltitudeFt.toString())
-            add("duration_hours" to durationHours.toString())
-            if (aircraftId != null) add("aircraft_id" to aircraftId.toString())
-        }
-        return get("/api/autorouter/routes", query)
-    }
+    /** The linked Autorouter account's recent routes; a `409 autorouter_not_linked` means "offer to link". */
+    suspend fun fetchAutorouterRoutes(limit: Int = 25): AutorouterRoutesResponse =
+        get("/api/flights/autorouter-routes", listOf("limit" to limit.toString()))
 
-    suspend fun createAutorouterLinkTicket(codeChallenge: String): AutorouterLinkTicketResponse =
-        post("/api/autorouter/link-ticket", AutorouterLinkTicketRequest(codeChallenge = codeChallenge))
+    // Account linking lives in flyfun-common, at the root rather than under `/api`.
+    suspend fun createAutorouterLinkTicket(scheme: String): AutorouterLinkTicketResponse =
+        post("/autorouter/link-ticket", AutorouterLinkTicketRequest(scheme = scheme))
 
-    suspend fun completeAutorouterLink(ticket: String, codeVerifier: String) =
-        postIgnoreResponse(
-            "/api/autorouter/link-complete",
-            AutorouterLinkCompleteRequest(ticket = ticket, codeVerifier = codeVerifier),
-        )
+    suspend fun completeAutorouterLink(code: String) =
+        postIgnoreResponse("/autorouter/link-complete", AutorouterLinkCompleteRequest(code = code))
 
-    suspend fun unlinkAutorouter() = delete("/api/autorouter/link")
+    suspend fun unlinkAutorouter() = postEmpty("/autorouter/unlink")
 
     /** Permanently deletes the signed-in user's account (flyfun-common `DELETE /auth/account`). */
     suspend fun deleteAccount() = delete("/auth/account")
@@ -626,22 +609,24 @@ class ApiClient(
     // ========================================================================
 
     suspend fun resolveSharedFlight(code: String): FlightResponse =
-        get("/api/shared/flight/${encodePathSegment(code)}")
+        get("/api/flights/by-share/${encodePathSegment(code)}")
 
-    suspend fun subscribeToSharedFlight(code: String): FlightResponse =
-        postNoBody("/api/shared/flight/${encodePathSegment(code)}/subscribe")
+    /** Follow a flight by id (resolve a share code first with [resolveSharedFlight]). */
+    suspend fun subscribeToFlight(flightId: String): SubscribeResponse =
+        postNoBody("/api/flights/${encodePathSegment(flightId)}/subscribe")
 
     suspend fun unsubscribeFromFlight(flightId: String) =
-        delete("/api/flights/${encodePathSegment(flightId)}/subscription")
+        delete("/api/flights/${encodePathSegment(flightId)}/subscribe")
 
     suspend fun resolveSharedTrip(code: String): TripResponse =
-        get("/api/shared/trip/${encodePathSegment(code)}")
+        get("/api/trips/by-share/${encodePathSegment(code)}")
 
-    suspend fun subscribeToSharedTrip(code: String): TripSubscribeResponse =
-        postNoBody("/api/shared/trip/${encodePathSegment(code)}/subscribe")
+    /** Follow every leg of a trip by id (resolve a share code first with [resolveSharedTrip]). */
+    suspend fun subscribeToTrip(tripId: String): TripSubscribeResponse =
+        postNoBody("/api/trips/${encodePathSegment(tripId)}/subscribe")
 
     suspend fun unsubscribeFromTrip(tripId: String) =
-        delete("/api/trips/${encodePathSegment(tripId)}/subscription")
+        delete("/api/trips/${encodePathSegment(tripId)}/subscribe")
 
     // ========================================================================
     // Trips
@@ -687,12 +672,9 @@ class ApiClient(
     suspend fun tripRefreshStatus(tripId: String): TripRefreshStatus =
         get("/api/trips/${encodePathSegment(tripId)}/refresh/status")
 
-    suspend fun getTripAiSummary(tripId: String, generate: Boolean = false): TripAiSummaryResponse =
-        if (generate) {
-            postNoBody("/api/trips/${encodePathSegment(tripId)}/ai-summary")
-        } else {
-            get("/api/trips/${encodePathSegment(tripId)}/ai-summary")
-        }
+    /** There is no GET: the trip itself carries the stored paragraph (`ai_summary`, `ai_summary_stale`). */
+    suspend fun generateTripAiSummary(tripId: String): TripAiSummaryResponse =
+        postNoBody("/api/trips/${encodePathSegment(tripId)}/ai-summary")
 
     // ========================================================================
     // Aircraft, Profiles, Preferences, Usage, Feedback, Messages, PIREPs
@@ -713,7 +695,7 @@ class ApiClient(
         return get("/api/aircraft/types", q)
     }
 
-    suspend fun listProfiles(): List<ProfileResponse> = get("/api/profiles")
+    suspend fun listProfiles(): List<ProfileResponse> = get("/api/user/profiles")
 
     suspend fun getPreferences(): PreferencesResponse = get("/api/user/preferences")
 
@@ -721,9 +703,6 @@ class ApiClient(
         put("/api/user/preferences", body)
 
     suspend fun getUsageSummary(): UsageSummaryResponse = get("/api/user/usage")
-
-    suspend fun getHelpCatalog(locale: String = "en"): HelpCatalogResponse =
-        get("/api/help/metrics", listOf("locale" to locale))
 
     suspend fun listSystemMessages(): List<SystemMessageResponse> =
         get("/api/messages")
@@ -737,24 +716,18 @@ class ApiClient(
     }
 
     suspend fun registerDeviceToken(req: DeviceRegistrationRequest) =
-        postIgnoreResponse("/api/user/devices", req)
+        postIgnoreResponse("/api/devices", req)
 
     suspend fun unregisterDeviceToken(token: String) =
-        delete("/api/user/devices/${encodePathSegment(token)}")
+        delete("/api/devices/${encodePathSegment(token)}")
 
     suspend fun getBadgeStatus(): BadgeStatus =
-        get("/api/user/notifications/badge")
+        get("/api/flights/badge")
 
-    suspend fun clearBadge() =
-        postEmpty("/api/user/notifications/clear-badge")
+    suspend fun markFlightSeen(flightId: String): BadgeStatus =
+        postNoBody("/api/flights/${encodePathSegment(flightId)}/seen")
 
-    suspend fun submitDigestFeedback(req: DigestFeedbackRequest) =
-        postIgnoreResponse("/api/feedback/digest", req)
-
-    suspend fun submitHighlightFeedback(req: HighlightFeedbackRequest) =
-        postIgnoreResponse("/api/feedback/highlight", req)
-
-    suspend fun submitGeneralFeedback(req: GeneralFeedbackRequest) =
+    suspend fun submitFeedback(req: FeedbackRequest) =
         postIgnoreResponse("/api/feedback", req)
 
     suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
@@ -797,9 +770,6 @@ class ApiClient(
 
     suspend fun getHistoricalMap(date: String, hourUtc: Int): HistoricalMapResponse =
         get("/api/maps/historical", listOf("date" to date, "hour" to hourUtc.toString()))
-
-    suspend fun getAirportWeather(icao: String, day: Int = 0): AirportWeatherResponse =
-        get("/api/airports/${encodePathSegment(icao)}/weather", listOf("day" to day.toString()))
 
     suspend fun getFrequentAirports(): FrequentAirportsResponse =
         get("/api/flights/frequent-airports")

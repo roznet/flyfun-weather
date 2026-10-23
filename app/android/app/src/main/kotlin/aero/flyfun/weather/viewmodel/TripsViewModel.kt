@@ -79,7 +79,15 @@ class TripsViewModel(
             }.onSuccess { trip ->
                 _currentTrip.value = trip
                 _isLoading.value = false
-                loadAiSummary(tripId, generate = false)
+                // The trip carries the stored paragraph; only a stale one is worth a POST (as on iOS).
+                _aiSummary.value = TripAiSummaryResponse(
+                    tripId = trip.id,
+                    text = trip.aiSummary,
+                    generatedAt = trip.aiSummaryAt,
+                )
+                if (trip.aiSummaryStale == true && trip.role != "viewer") {
+                    loadAiSummary(tripId, generate = false)
+                }
             }.onFailure { err ->
                 _errorMessage.value = err.message ?: "Failed to load trip"
                 _isLoading.value = false
@@ -187,7 +195,7 @@ class TripsViewModel(
         if (generate) _isGeneratingAi.value = true
         scope.launch {
             runCatching {
-                tripRepository.tripAiSummary(tripId, generate = generate)
+                tripRepository.tripAiSummary(tripId)
             }.onSuccess { summary ->
                 _aiSummary.value = summary
                 _isGeneratingAi.value = false

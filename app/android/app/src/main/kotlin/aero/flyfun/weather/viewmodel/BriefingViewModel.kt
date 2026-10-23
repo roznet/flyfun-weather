@@ -679,7 +679,6 @@ class BriefingViewModel(
                 if (saved.taxonomy.categories.isNotEmpty() || saved.taxonomy.severities.isNotEmpty()) {
                     _debriefTaxonomy.value = saved.taxonomy
                 }
-                _flight.value = _flight.value?.copy(hasDebrief = true)
             } catch (e: Throwable) {
                 _errorMessage.value = e.message ?: "Failed to save debrief"
             }
@@ -692,7 +691,6 @@ class BriefingViewModel(
             try {
                 repository.deleteDebrief(flightId)
                 _debrief.value = null
-                _flight.value = _flight.value?.copy(hasDebrief = false)
             } catch (e: Throwable) {
                 _errorMessage.value = e.message ?: "Failed to delete debrief"
             }
@@ -704,15 +702,25 @@ class BriefingViewModel(
         val packTs = _selectedPack.value?.fetchTimestamp ?: return
         scope.launch {
             try {
-                val category = if (thumbsUp) "helpful" else FeedbackCategory.OTHER.wireValue
-                apiClient?.submitDigestFeedback(
-                    DigestFeedbackRequest(
-                        flightId = flightId,
-                        packTimestamp = packTs,
-                        category = category,
-                        comment = comment.orEmpty(),
-                    )
+                apiClient?.submitFeedback(
+                    FeedbackRequest.digestRating(flightId, packTs, thumbsUp, comment.orEmpty())
                 )
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to submit feedback"
+            }
+        }
+    }
+
+    /** Thumb on the Observed tab's live highlight (target `live_highlight`, keyed to the rated line). */
+    fun submitHighlightFeedback(thumbsUp: Boolean) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val live = _liveLayer.value ?: return
+        val highlight = live.glance?.highlight ?: live.glance?.highlights?.firstOrNull() ?: return
+        val packTs = live.packTimestamp ?: _selectedPack.value?.fetchTimestamp ?: return
+        val request = FeedbackRequest.highlightRating(flightId, packTs, highlight, thumbsUp) ?: return
+        scope.launch {
+            try {
+                apiClient?.submitFeedback(request)
             } catch (e: Throwable) {
                 _errorMessage.value = e.message ?: "Failed to submit feedback"
             }

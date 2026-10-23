@@ -79,7 +79,7 @@ object FixtureTripData {
       "subscriber_count": 0,
       "share_code": "Tr9pK2mN",
       "ai_summary": "Leg 1 (LFMD → LFML) is the weather pinch point: GFS builds mid-morning CAPE near Cannes while ECMWF stays marginal. Leg 2 (LFML → LFMN) looks benign on ECMWF.",
-      "ai_summary_generated_at": "2099-06-30T06:05:00Z",
+      "ai_summary_at": "2099-06-30T06:05:00Z",
       "ai_summary_stale": false,
       "created_at": "2099-06-30T00:00:00Z",
       "legs": [
@@ -168,7 +168,7 @@ class FixtureTripRepository : TripRepository {
     }
 
     override suspend fun createTrip(req: CreateTripRequest): TripResponse {
-        val created = detail.copy(id = "trip-created-${summaries.size + 1}", title = req.title)
+        val created = detail.copy(id = "trip-created-${summaries.size + 1}", title = req.name)
         detail = created
         summaries.add(
             0,
@@ -187,7 +187,7 @@ class FixtureTripRepository : TripRepository {
     override suspend fun addTripLegs(tripId: String, req: AddTripLegsRequest): TripResponse = detail
 
     override suspend fun updateTrip(tripId: String, req: UpdateTripRequest): TripResponse {
-        detail = detail.copy(title = req.title ?: detail.title)
+        detail = detail.copy(title = req.name ?: detail.title)
         val idx = summaries.indexOfFirst { it.id == tripId }
         if (idx >= 0) {
             summaries[idx] = summaries[idx].copy(title = detail.title)
@@ -211,11 +211,10 @@ class FixtureTripRepository : TripRepository {
     override suspend fun tripRefreshStatus(tripId: String): TripRefreshStatus =
         TripRefreshStatus(tripId = tripId, active = false)
 
-    override suspend fun tripAiSummary(tripId: String, generate: Boolean): TripAiSummaryResponse =
+    override suspend fun tripAiSummary(tripId: String): TripAiSummaryResponse =
         TripAiSummaryResponse(
             tripId = tripId,
-            summary = detail.aiSummary,
-            generatedAt = detail.aiSummaryGeneratedAt,
-            stale = detail.aiSummaryStale ?: false,
+            text = detail.aiSummary,
+            generatedAt = detail.aiSummaryAt,
         )
 }

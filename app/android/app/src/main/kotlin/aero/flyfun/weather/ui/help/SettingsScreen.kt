@@ -53,7 +53,7 @@ import aero.flyfun.weather.viewmodel.AppStateViewModel
 import kotlinx.coroutines.launch
 
 /**
- * Settings, account status, Autorouter PKCE linking, offline/demo toggles, and help screen.
+ * Settings, account status, Autorouter account linking, offline/demo toggles, and help screen.
  * Mirrors iOS Settings/Account & Help controls.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,6 +73,7 @@ fun SettingsScreen(
     val isMockMode by appState.isMockMode.collectAsState()
     val isOfflineMode by appState.isOfflineMode.collectAsState()
     val autorouterLinked by appState.autorouterLinked.collectAsState()
+    val autorouterLinkError by appState.autorouterLinkError.collectAsState()
 
     var showFeedbackSheet by remember { mutableStateOf(false) }
     // Account deletion: two confirmations, as on iOS (Settings > Delete Account).
@@ -179,13 +180,21 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = if (autorouterLinked) {
-                            "Connected — Autorouter route suggestions and GRAMET enrichment are active."
+                            "Connected. Add Flight can import the routes you planned on autorouter.aero."
                         } else {
-                            "Link your Autorouter.aero account to fetch IFR/VFR route suggestions and GRAMET cross-sections."
+                            "Connect your autorouter.aero account to import the routes you've planned there when adding a flight."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    autorouterLinkError?.let { error ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     if (autorouterLinked) {
                         OutlinedButton(

@@ -338,7 +338,7 @@ fun ObservedTabScreen(
                                 glance = glance,
                                 updatedAt = liveLayer?.liveUpdatedAt,
                                 onRateHighlight = { thumbsUp ->
-                                    viewModel.submitDigestFeedback(thumbsUp = thumbsUp)
+                                    viewModel.submitHighlightFeedback(thumbsUp = thumbsUp)
                                 },
                                 onSelectFocus = handleFocus,
                             )

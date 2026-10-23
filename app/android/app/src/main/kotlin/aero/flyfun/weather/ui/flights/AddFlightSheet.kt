@@ -273,15 +273,13 @@ fun AddFlightSheet(
                 TextButton(onClick = { showFplBox = !showFplBox }) {
                     Text(if (showFplBox) "Hide ICAO FPL" else "Paste ICAO FPL")
                 }
-                if (waypoints.size >= 2) {
-                    TextButton(
-                        onClick = { viewModel.fetchAutorouterSuggestions() },
-                        enabled = !isFetchingRoutes,
-                    ) {
-                        Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (isFetchingRoutes) "Fetching Routes..." else "Autorouter Routes")
-                    }
+                TextButton(
+                    onClick = { viewModel.fetchAutorouterSuggestions() },
+                    enabled = !isFetchingRoutes,
+                ) {
+                    Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (isFetchingRoutes) "Fetching Routes..." else "Autorouter Routes")
                 }
             }
 
@@ -309,7 +307,7 @@ fun AddFlightSheet(
             if (autorouterRoutes.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Autorouter Suggestions",
+                    text = "Recent Autorouter Routes",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                 )
@@ -322,14 +320,12 @@ fun AddFlightSheet(
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text(
-                                text = option.routeText,
+                                text = option.title,
                                 fontFamily = FontFamily.Monospace,
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Text(
-                                text = "${option.distanceNm?.roundToInt() ?: 0} nm • ${
-                                    option.durationHours?.let { FlightDuration.label(it) } ?: ""
-                                }",
+                                text = option.subtitle,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
