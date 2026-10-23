@@ -202,6 +202,12 @@ class AppStateViewModel(
             airportDb?.let { db -> runCatching { db.ensureLoaded(apiClient) } }
             helpStore?.let { store -> runCatching { store.refreshIfNeeded(apiClient) } }
             whatsNewStore?.let { store -> runCatching { store.checkStatus(apiClient) } }
+            // Position fixes a killed process left queued on disk (#889).
+            context?.let { ctx ->
+                runCatching {
+                    aero.flyfun.weather.service.FlightTrackingService.uploadPersistedFixes(ctx, apiClient)
+                }
+            }
         }
     }
 
@@ -429,6 +435,7 @@ class AppStateViewModel(
     fun logout() {
         context?.let { ctx ->
             runCatching { aero.flyfun.weather.service.FlightTrackingService.stopTracking(ctx) }
+            aero.flyfun.weather.service.FlightTrackingService.discardPersistedFixes(ctx)
         }
         tokenStore.clearToken()
         rebuildUserScopedRepositories(null)
