@@ -132,8 +132,8 @@ describe('ceilingMapColor', () => {
     expect(ceilingMapColor(499)).toBe('#8e24aa');
     expect(ceilingMapColor(500)).toBe('#dc3545');     // IFR-red 500..999
     expect(ceilingMapColor(999)).toBe('#dc3545');
-    expect(ceilingMapColor(1000)).toBe('#f59e0b');    // MVFR-amber 1000..2999
-    expect(ceilingMapColor(2999)).toBe('#f59e0b');
+    expect(ceilingMapColor(1000)).toBe('#3b82f6');    // MVFR-blue 1000..2999
+    expect(ceilingMapColor(2999)).toBe('#3b82f6');
     expect(ceilingMapColor(3000)).toBe('#22c55e');    // VFR-green >= 3000
   });
 });

@@ -80,7 +80,7 @@ override it at runtime, so "on" here is not what a returning user necessarily se
 | CAT bands | CAT (Ri) | turbulence | `cat-bands.ts` | off | Richardson number turbulence. No layer in the `turbulence` group is `defaultEnabled`, so method resolution falls back to `layers[0]` = this one. |
 | E-Shear bands | CAT (E-Shear) | turbulence | `e-shear-bands.ts` | off | Vertical + horizontal wind shear E parameter (CloudPath method) |
 | Inversion bands | Inversions | stability | `inversion-bands.ts` | off | Purple bands by strength |
-| Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives flight-category color (LIFR purple, IFR red, MVFR amber). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
+| Surface obscuration | Surface obscuration | obscuration | `surface-obscuration-bands.ts` | off† | Diagonal-hatched fog/LIFR band synthesised from surface vis / low-cloud + DD; severity drives the band color (LIFR purple, IFR red, MVFR amber — kept amber here, unlike the blue MVFR category colour elsewhere, because a blue band would vanish against the sky). †Default ON in airport-profile drawer, OFF on briefing — context-aware via `getDefaultEnabled('airport-profile')`. |
 | Terrain fill | Terrain | terrain | `terrain-fill.ts` | on | SRTM elevation, earth-tone gradient |
 | Current conditions | Current conditions | conditions | `current-conditions.ts` | off | D-0 overlay: METAR airport columns (flight-category color, ±2 nm, 5000 ft tall) + route SIGMET hatched zones; model-independent, projected from the snapshot. Shown only when turned on, then always from the latest live data. iOS: `CurrentConditionsLayer.swift` (same constants; app category palette, so MVFR is blue) — extraction is `VizCurrentConditions.build`, and the chart rebuilds on `SnapshotResponse.crossSectionLiveToken`, which moves on ANY live update (METARs, SIGMETs or observed), not just the observed payload |
 | Air-mass boundary | Air-mass boundary (experimental) | fronts | `fronts-markers.ts` | off | Vertical marker at each on-track Hewson front crossing (#196), colored by kind (cold=blue/warm=red/quasi=purple), weighted by intensity, solid/dashed by wet/dry, opacity by persistence, triangle for convective. Reads `VizRouteData.fronts`; skipped in single-airport time-axis view. Advisory-only free-atmosphere boundary. |
@@ -695,7 +695,7 @@ Two optional overlays live in `renderer.ts` beside the route segments:
 | headwind | Headwind | | Green (tailwind) ↔ Red (headwind) |
 | tailwind | Tailwind | | Separate tailwind view |
 | cape | CAPE | | Green→Yellow→Red continuous (0–2000 J/kg) |
-| nwp-ceiling | NWP Ceiling | | Purple (LIFR)→Red (IFR)→Amber (MVFR)→Green (VFR) |
+| nwp-ceiling | NWP Ceiling | | Purple (LIFR)→Red (IFR)→Blue (MVFR)→Green (VFR) |
 | temp-at-level | Temperature at FL | Yes | Blue→White→Red diverging |
 | model-agreement | Model Agreement | | Green/Orange/Red discrete |
 | icing-risk-at-level | Icing Risk at FL | Yes | Green→Yellow→Orange→Red |

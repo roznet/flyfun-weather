@@ -527,7 +527,8 @@ export interface VizSurfaceObscuration {
   baseFt: number;
   topFt: number;
   /** Aviation flight category — drives both the tooltip label and the
-   *  rendered color (LIFR=purple, IFR=red, MVFR=amber). */
+   *  rendered color (LIFR=purple, IFR=red, MVFR=amber: amber, not the
+   *  category blue, so the band does not vanish against the sky). */
   severity: 'lifr' | 'ifr' | 'mvfr';
   visM: number | null;
   surfaceTC: number | null;

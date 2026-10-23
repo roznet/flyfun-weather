@@ -22,10 +22,9 @@
  *
  * Deliberate divergences from the Swift side, documented so `/sync-ios-web`
  * does not re-flag them:
- *  - **Category colours.** Web MVFR is amber (`--amber`), iOS MVFR is blue.
- *    The web page already badges MVFR amber in every table, so matching iOS
- *    here would paint one airport two colours on one page. Thresholds and
- *    colour *roles* are shared; the palette is each platform's own.
+ *  - **Category hexes.** Both platforms paint MVFR blue (the standard
+ *    VFR green / MVFR blue / IFR red / LIFR purple); the exact shades are
+ *    each platform's own (web CSS tokens, SwiftUI system colours).
  *  - **dBZ hexes** come from the web's own VIP ramp (`layer-legends.ts`) so
  *    the ribbon matches the radar legend beside it. The *boundaries*
  *    (35 / 41 / 50) are shared with iOS exactly — those are the cell tiers.
@@ -94,11 +93,11 @@ export function weatherAvailable(ribbon: LiveRibbon): boolean {
 // --- Colour ladders --------------------------------------------------------
 
 /** METAR / TAF category. CSS custom properties, so dark mode follows the
- *  page. See the divergence note above: MVFR is amber on web. */
+ *  page. MVFR is blue (`--mvfr`), as on iOS. */
 export function categoryColour(category: string | null | undefined): string {
   switch ((category ?? '').toLowerCase()) {
     case 'vfr': return 'var(--green)';
-    case 'mvfr': return 'var(--amber)';
+    case 'mvfr': return 'var(--mvfr)';
     case 'ifr': return 'var(--red)';
     case 'lifr': return 'var(--lifr)';
     default: return 'var(--text-muted, #888)';

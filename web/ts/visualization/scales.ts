@@ -184,7 +184,7 @@ export function ceilingMapColor(ft: number | null): string {
   if (ft === null) return '#22c55e';
   if (ft < 500) return '#8e24aa';   // LIFR — purple
   if (ft < 1000) return '#dc3545';  // IFR — red
-  if (ft < 3000) return '#f59e0b';  // MVFR — amber
+  if (ft < 3000) return '#3b82f6';  // MVFR — blue
   return '#22c55e';                  // VFR — green
 }
 
@@ -195,7 +195,7 @@ export function ceilingMapColor(ft: number | null): string {
 export function flightCategoryColor(cat: string): string {
   switch (cat.toUpperCase()) {
     case 'VFR': return '#2d8a4e';
-    case 'MVFR': return '#b8860b';
+    case 'MVFR': return '#2563eb';
     case 'IFR': return '#c0392b';
     case 'LIFR': return '#8e24aa';
     default: return '#6b7280';  // gray — unknown category

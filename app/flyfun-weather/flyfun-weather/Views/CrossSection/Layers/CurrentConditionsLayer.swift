@@ -62,8 +62,8 @@ struct CurrentConditionsLayer: CrossSectionLayerProtocol {
 
     /// Flight-category colour. Uses the app's canonical category palette
     /// (`MapColors.flightCategory`, the same as `FlightCategoryBadge` and the
-    /// observations table) rather than the web's hexes — iOS deliberately has a
-    /// single MVFR colour (blue, where the web uses amber).
+    /// observations table) rather than the web's hexes — same hues (MVFR blue),
+    /// the shades are each platform's own.
     static func categoryColor(_ category: String) -> Color {
         MapColors.flightCategory(category)
     }

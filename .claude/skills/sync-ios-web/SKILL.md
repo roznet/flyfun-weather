@@ -170,10 +170,9 @@ run both — a green pair means the labels and geometry still agree.
 
 **Known divergences — do NOT re-flag** (both are in the two file headers):
 
-- `categoryColour` MVFR is **amber on web, blue on iOS**. The web page badges
-  MVFR amber in every table, so matching iOS would paint one airport two
-  colours on one page. Thresholds and colour *roles* are shared; the palette is
-  each platform's.
+- `categoryColour` shades differ (web `--mvfr` etc. CSS tokens, iOS SwiftUI
+  system colours), but both paint the standard VFR green / MVFR blue / IFR red
+  / LIFR purple. A *hue* mismatch (e.g. MVFR amber anywhere) is real drift.
 - The dBZ **hexes** differ: web takes them from its own VIP ramp
   (`layer-legends.ts`) so the ribbon matches the radar legend beside it. The
   *boundaries* are shared exactly and must stay so.

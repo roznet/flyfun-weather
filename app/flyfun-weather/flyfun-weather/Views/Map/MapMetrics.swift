@@ -247,9 +247,8 @@ enum MapColors {
     }
 
     /// Ceiling severity = standard aviation flight-category colours, matching
-    /// `FlightCategoryBadge` (VFR green, MVFR blue, IFR red, LIFR purple). We
-    /// deliberately do NOT use the web's amber MVFR here — within the app there
-    /// is a single MVFR colour, the badge's blue.
+    /// `FlightCategoryBadge` (VFR green, MVFR blue, IFR red, LIFR purple), the
+    /// same hues as the web.
     static func ceiling(_ ft: Double) -> Color {
         if ft < 500 { return flightCategory("LIFR") }
         if ft < 1000 { return flightCategory("IFR") }
