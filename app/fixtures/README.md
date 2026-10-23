@@ -13,5 +13,9 @@ Test data both mobile apps use, kept once here (#895).
 - `showcase/showcase.json` — the App Store screenshot briefing, written by
   `scripts/export_showcase_fixture_ios.py`.
 
+Android puts this whole folder on its resource path and drops everything but `api/` at
+packaging (`packaging.resources.excludes` in `app/android/app/build.gradle.kts`). A new
+top-level folder here ships in the Android APK unless it is added to that list.
+
 Design notes: `designs/ios-app-ui.md` (UI-test fixtures) and
 `designs/android-app-architecture.md` (UI Tests & Mock Launch).

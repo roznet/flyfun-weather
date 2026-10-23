@@ -14,6 +14,7 @@
    "wind_text": "Wind at ETD 290° 18G28 kt · RWY 24 crosswind 14 kt",
    "wind_advisory": "amber",
    "cells_text": "no cells within 30 NM",
+   "cells_short": null,
    "cells": [],
    "lightning_text": "no lightning ≤20 NM",
    "cells_alert": false,
@@ -270,6 +271,7 @@
    "wind_text": "Wind at ETA 270° 14G24 kt · RWY 24 crosswind 6 kt",
    "wind_advisory": "green",
    "cells_text": "nearest cell 9 NM SW (48 dBZ, lightning), closing 6 kt",
+   "cells_short": null,
    "cells": [
     {
      "id": "core41-zz1",
@@ -552,6 +554,7 @@
    "wind_text": "Wind at ETD 290° 18G28 kt · RWY 24 crosswind 14 kt",
    "wind_advisory": "amber",
    "cells_text": "no cells within 30 NM",
+   "cells_short": null,
    "cells": [],
    "lightning_text": "no lightning ≤20 NM",
    "cells_alert": false,
@@ -808,6 +811,7 @@
    "wind_text": "Wind at ETA 270° 14G24 kt · RWY 24 crosswind 6 kt",
    "wind_advisory": "green",
    "cells_text": "nearest cell 9 NM SW (48 dBZ, lightning), closing 6 kt",
+   "cells_short": null,
    "cells": [
     {
      "id": "core41-zz1",
