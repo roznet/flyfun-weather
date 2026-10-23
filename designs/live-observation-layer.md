@@ -1419,7 +1419,10 @@ code relies on:
 - `classify_changes` gets a `quiet` key set from the SIGMET stage: those rows
   set the alert memory without `new_alert`.
 - No geometry or validity on either side → never a reissue (the louder
-  "New SIGMET" reading).
+  "New SIGMET" reading). AWC sometimes sends no coords for a SIGMET whose
+  text has a `WI` polygon (LFBB, 2026-10-23); euro_aip ≥ 0.24 parses it
+  from the text (`SigmetAlongRoute.coords_source == "text"`, #897), so
+  those chain and route-match by geometry instead of by FIR.
 - **Direction (#689, §40).** A reissue of a chain the baseline had is
   `updated` unless it reaches the destination or `LiveSigmetTrace.reissue_worse`
   (area now crosses the route, or levels now meet the flight's band; decided

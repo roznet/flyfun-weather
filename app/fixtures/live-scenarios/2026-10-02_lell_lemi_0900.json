@@ -3475,6 +3475,7 @@
       37.8
      ]
     ],
+    "coords_source": null,
     "direction": null,
     "enroute_distance_from_nm": 235.12697602257145,
     "enroute_distance_to_nm": 275.5684207179973,
@@ -3516,6 +3517,7 @@
       37.8
      ]
     ],
+    "coords_source": null,
     "direction": null,
     "enroute_distance_from_nm": 240.12836095004945,
     "enroute_distance_to_nm": 275.5684207179973,
@@ -3567,6 +3569,7 @@
       40.05
      ]
     ],
+    "coords_source": null,
     "direction": "NW",
     "enroute_distance_from_nm": 0.0,
     "enroute_distance_to_nm": 170.15032492665446,

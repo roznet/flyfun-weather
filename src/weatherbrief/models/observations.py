@@ -565,6 +565,10 @@ class SigmetAlongRoute(BaseModel):
     # Polygon outline as (lon, lat) vertices — kept for a future
     # cross-section/map overlay of the affected area.
     coords: list[tuple[float, float]] = Field(default_factory=list)
+    # Where coords came from (euro_aip SigmetReport.coords_source): "awc",
+    # "text" (parsed from raw_text, AWC sent none, #897) or None (no geometry,
+    # so the SIGMET was matched by FIR only).
+    coords_source: str | None = None
 
 
 #: What every surface says for a block whose fetch failed (#734): the empty

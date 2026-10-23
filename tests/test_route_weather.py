@@ -695,7 +695,7 @@ def test_run_route_sigmets_maps_result(two_wp_route):
         valid_to=datetime(2026, 5, 20, 14, tzinfo=timezone.utc),
         direction="NE", speed_kt=20,
         raw_text="LFFF SIGMET 1 VALID ... SEV TURB ...",
-        coords=[(2.0, 49.0), (3.0, 49.0), (3.0, 50.0)],
+        coords=[(2.0, 49.0), (3.0, 49.0), (3.0, 50.0)], coords_source="text",
     )
     route_sig = SimpleNamespace(
         sigmet=sig, matched_firs=["LFFF"],
@@ -736,6 +736,8 @@ def test_run_route_sigmets_maps_result(two_wp_route):
     assert s.enroute_distance_to_nm == 90.0
     # Polygon retained for a future cross-section/map overlay.
     assert s.coords[0] == (2.0, 49.0)
+    # Where the polygon came from, so reviews can count text fallbacks (#897).
+    assert s.coords_source == "text"
     # Altitude band passed to the service is surface -> cruise+buffer.
     kwargs = fake_service.fetch_route_sigmets.call_args.kwargs
     assert kwargs["altitude_band_ft"] == (0, 6000 + 5000)
