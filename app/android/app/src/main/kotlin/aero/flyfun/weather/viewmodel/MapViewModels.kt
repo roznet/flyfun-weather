@@ -190,7 +190,7 @@ class ForecastMapViewModel(
         _linkedDateNotice.value = null
         // One clock reading for both the resolution and the notice's label, so a UTC-midnight
         // rollover in between can't mislabel the shown day.
-        val today = LocalDate.ofInstant(clock(), ZoneOffset.UTC)
+        val today = clock().atZone(ZoneOffset.UTC).toLocalDate()
         val linked = target.date
         val resolved = linked?.let { date ->
             ForecastLinkedDate.resolve(date, offered = _days.value.filter { it.available }.map { it.day }, today = today)
