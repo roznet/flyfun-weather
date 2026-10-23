@@ -161,6 +161,11 @@ final class BriefingViewModel {
     @ObservationIgnored private var livePollTask: Task<Void, Never>?
     /// Collapses overlapping live fetches (load + poll + push landing together).
     @ObservationIgnored private var isFetchingLive = false
+    /// #882: the last live read (`/live`, or the latest-pack check that gates
+    /// it) failed or was served from the offline cache. With no connection it
+    /// reads the same: the Observed tab says it is showing older data
+    /// (`isLiveOffline`). Cleared by the next read the server answered.
+    private(set) var liveReadFailed = false
     /// Run at each live poll before its fetch (#761): the briefing screen posts
     /// the tracking service's GPS fixes here. Must not block (fire-and-forget).
     @ObservationIgnored var beforeLivePoll: (@MainActor () -> Void)?
@@ -406,6 +411,7 @@ final class BriefingViewModel {
             latest = try await repository.latestPack(flightId: flight.id)
         } catch {
             Self.logger.debug("syncLatestPack: latestPack fetch failed, keeping current pack: \(error)")
+            liveReadFailed = true
             return
         }
         // Already showing the newest pack — seamless no-op for the pack itself
@@ -413,7 +419,11 @@ final class BriefingViewModel {
         guard latest.fetchTimestamp != pack?.fetchTimestamp else {
             if forceLive || LiveTime.isNewer(latest.liveUpdatedAt, than: appliedLiveUpdatedAt)
                 || LiveTime.isNewer(latest.highlightUpdatedAt, than: liveLayer?.highlightUpdatedAt) {
+                // `fetchLiveLayer` clears or raises the offline flag itself:
+                // clearing it here first would flash the banner.
                 await fetchLiveLayer(timestamp: latest.fetchTimestamp)
+            } else {
+                liveReadFailed = servedLiveFromCache
             }
             return
         }
@@ -1001,8 +1011,10 @@ final class BriefingViewModel {
         liveFetchSource = nil
         do {
             let layer = try await repository.liveLayer(flightId: flight.id, source: source)
+            liveReadFailed = servedLiveFromCache
             adoptLiveLayer(layer, timestamp: timestamp)
         } catch {
+            liveReadFailed = true
             // Keep the push tag for the next attempt, so the tap is still
             // counted as a push open (#754).
             if liveFetchSource == nil { liveFetchSource = source }
@@ -1052,6 +1064,18 @@ final class BriefingViewModel {
     /// The adopted live layer, only while it belongs to the pack on screen
     /// (#690): its nutshell and ribbon describe the latest pack, never an older
     /// one the pilot is browsing.
+    /// #882: the Observed tab is showing older data: the last live read
+    /// failed, or the device has no connection.
+    var isLiveOffline: Bool {
+        liveReadFailed || networkMonitor?.isConnected == false
+    }
+
+    /// The caching repository answered the last live read from disk (the
+    /// server was unreachable): a success that is still offline.
+    private var servedLiveFromCache: Bool {
+        (repository as? CacheStatusReporting)?.isServingCachedLive ?? false
+    }
+
     var liveLayerForPack: LiveLayerResponse? {
         guard let timestamp = pack?.fetchTimestamp, samePack(liveLayer, timestamp) else { return nil }
         return liveLayer

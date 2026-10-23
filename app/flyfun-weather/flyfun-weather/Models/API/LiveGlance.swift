@@ -64,19 +64,24 @@ nonisolated struct LiveGlance: Codable, Sendable {
     /// server; `flight` also nil for a viewer the owner hides position from.
     var flight: LiveGlanceFlight? = nil
     var destination: LiveGlanceDestination? = nil
+    /// #880: the departure card's block, the destination's twin read at the
+    /// ETD plus the fold. nil from an older server.
+    var departure: LiveGlanceDeparture? = nil
 
     var items: [LiveGlanceLine] { lines ?? [] }
     /// Alert-tier lines sit above the highlight and are never folded (#697, #816).
     var alertItems: [LiveGlanceLine] { items.filter { $0.alert == true } }
     var otherItems: [LiveGlanceLine] { items.filter { $0.alert != true } }
 
-    /// The non-alert lines the tab lays out itself (#816): the destination
-    /// block stands in for a non-alert arrival line.
+    /// The non-alert lines the tab lays out itself: an airport card stands in
+    /// for its non-alert terminal line (#816 arrival, #882 departure).
     /// SYNC — `nutshellHtml` in web/ts/visualization/observed/nutshell-view.ts.
     private var restItems: [LiveGlanceLine] {
-        otherItems.filter { !(destination != nil && $0.phase == "arrival") }
+        otherItems.filter {
+            !(destination != nil && $0.phase == "arrival") && !(departure != nil && $0.phase == "departure")
+        }
     }
-    /// Lines still ahead of the flight: shown unfolded, above the destination.
+    /// Lines still ahead of the flight: first in the Details fold (#882).
     var aheadItems: [LiveGlanceLine] { restItems.filter { $0.passed != true } }
     /// Lines the flight has passed: in the Details fold, dimmed.
     var passedItems: [LiveGlanceLine] { restItems.filter { $0.passed == true } }
@@ -113,9 +118,31 @@ nonisolated struct LiveDestinationCell: Codable, Sendable, Equatable, Identifiab
     let focus: LiveFocus?
 }
 
-/// "Destination at your ETA" (#816), `models/live.py::LiveGlanceDestination`.
-/// Every clause is the server's.
-nonisolated struct LiveGlanceDestination: Codable, Sendable, Equatable {
+/// The fields both airport cards read (#880). The departure and destination
+/// blocks are twins on the server (`LiveGlanceDeparture` extends the
+/// destination's fields); the card draws either through this.
+nonisolated protocol LiveGlanceTerminal: Sendable {
+    var icao: String? { get }
+    var name: String? { get }
+    var metarText: String? { get }
+    var metarCategory: String? { get }
+    var metarTime: String? { get }
+    var proxyCaption: String? { get }
+    var tafText: String? { get }
+    var windText: String? { get }
+    var cellsText: String? { get }
+    var cells: [LiveDestinationCell]? { get }
+    var lightningText: String? { get }
+    var cellsAlert: Bool? { get }
+    var lightningAlert: Bool? { get }
+    var alert: Bool? { get }
+    var focus: LiveFocus? { get }
+    var airport: AirportObservation? { get }
+}
+
+/// "Destination at your ETA" (#816), `models/live.py::LiveGlanceDestination`:
+/// the arrival card since #882. Every clause is the server's.
+nonisolated struct LiveGlanceDestination: Codable, Sendable, Equatable, LiveGlanceTerminal {
     let icao: String?
     let name: String?
     let eta: String?
@@ -134,6 +161,49 @@ nonisolated struct LiveGlanceDestination: Codable, Sendable, Equatable {
     let alert: Bool?
     let unavailable: [String]?
     let focus: LiveFocus?
+    /// #881: an alert-tier change stands behind the card's cells / lightning
+    /// row: tone that row amber. nil / false = quiet.
+    var cellsAlert: Bool? = nil
+    var lightningAlert: Bool? = nil
+    /// #880: the field as the card reads it (its own row, or with its proxy
+    /// station's METAR/TAF laid in). Never pick `route_observations` rows.
+    var airport: AirportObservation? = nil
+}
+
+/// The departure card's block (#880), `models/live.py::LiveGlanceDeparture`:
+/// the destination's twin read at the ETD, plus the fold.
+nonisolated struct LiveGlanceDeparture: Codable, Sendable, Equatable, LiveGlanceTerminal {
+    let icao: String?
+    let name: String?
+    /// nil under position_sharing = none.
+    let etd: String?
+    let metarText: String?
+    let metarCategory: String?
+    let metarTime: String?
+    let proxyCaption: String?
+    let tafText: String?
+    let tafCategory: String?
+    let windText: String?
+    let windAdvisory: String?
+    let cellsText: String?
+    let cells: [LiveDestinationCell]?
+    let lightningText: String?
+    let alert: Bool?
+    let unavailable: [String]?
+    let focus: LiveFocus?
+    var cellsAlert: Bool? = nil
+    var lightningAlert: Bool? = nil
+    var airport: AirportObservation? = nil
+    /// The departure is behind the flight, by evidence (a take-off entered or
+    /// fixes), never the plan alone. The server decides; the card folds.
+    var folded: Bool? = nil
+    var foldedAt: String? = nil
+    /// takeoff / fixes.
+    var foldedSource: String? = nil
+    /// "LFPN 290/15G25 · RWY 25R · departed ~10:09Z"; nil while unfolded.
+    var foldedText: String? = nil
+
+    var isFolded: Bool { folded == true }
 }
 
 /// `glance.highlight` as `/live` serves it (the server's regeneration gate is

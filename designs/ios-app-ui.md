@@ -176,6 +176,42 @@ taps drive `ScrollPosition.scrollTo(id:)` — native iOS 18 scroll APIs that
 replaced a `GeometryReader`/`PreferenceKey`/coordinate-space offset reporter
 (#437). The bar suppresses itself when there is only one section.
 
+**Observed tab airport cards (#882, web #881, server #880).** With a nutshell,
+the Observed top reads in the order every client shares: offline banner →
+flight strip → alert lines and alert change rows → highlight (or headline) →
+departure + arrival cards (`AirportCardsSection`, spy pill "Airports") → route
+ribbon → Details fold (headline, the non-alert lines still ahead, the passed
+lines, the other change rows). The cards replace `RunwayWindPairCard` and the
+old "Destination at your ETA" card; the fallback branch (no nutshell, older
+server) keeps the dial pair, tiles and chips. Choices:
+- **Server computes, the card draws.** Every value comes from
+  `glance.departure` / `glance.destination` and their `airport` row (meter
+  positions, sky / visibility words, weather words, short wind, crosswind,
+  trend, TAF hours, the fold). `AirportCardRules.swift` only picks and orders
+  them (unit-tested in `AirportCardTests`); `AirportCardView.swift` holds no
+  rules. A missing field is left out, never derived.
+- **Layout.** Side by side on regular width, stacked on compact. Once the
+  server sets `folded`, the arrival comes first and the departure is one
+  tappable line (`folded_text`) that opens the full card in place; the open
+  state is remembered per flight (`@AppStorage("observedDepartureOpen:<id>")`,
+  cleared on UI-test launches). The dial is the #758 `RunwayWindCanvas`
+  (`compact`, solid METAR, outline TAF at ETD/ETA) at a fixed 120 pt (iPad) /
+  92 pt (iPhone), never stretched.
+- **Colours.** Category boxes, meter bands and the TAF strip use
+  `RouteRibbonRules.categoryColor` (MVFR blue, as on the ribbon below and every
+  other iOS badge); the web card uses its amber MVFR. Crosswind tone comes from
+  `airport.metar_wind_advisory` (amber/red only); a cells / lightning row goes
+  amber only on `cells_alert` / `lightning_alert`.
+- **Accessibility.** Each card is one VoiceOver element: a spoken summary
+  built from the server's fields in card order, plus a "Show on map" action.
+  Identifiers `airportCard-dep` / `airportCard-arr` / `airportCardFolded`.
+- **Offline banner** (`ObservedOfflineBanner`): "Offline · showing data from
+  HH:MMZ, N min ago" (the layer's `live_updated_at`) while
+  `BriefingViewModel.isLiveOffline`: the last `latestPack` / `/live` read threw
+  or was answered from the offline cache (`CacheStatusReporting
+  .isServingCachedLive`), or `NetworkMonitor` reports no path. Cleared by the
+  next read the server answered.
+
 ## In-Flight Mode (Phase 3 vision — NOT built as drawn)
 
 Original concept: "Start Flight" → map-dominant UI, status bar with live data, report/timeline panel. **This dedicated full-screen flight-session layout was not built.** What actually shipped instead: GPS tracking (`FlightTrackingService`) runs during the flight window and is surfaced *inside the existing tabs* — a live aircraft icon (heading-rotated, opacity by position confidence) on the **Map** tab, plus a position marker on the cross-section. No separate session screen, no status bar with GS/altitude/timer. See `project_start_flight_feature.md` memory for the v1 scope that was actually implemented.

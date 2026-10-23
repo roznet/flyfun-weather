@@ -5,15 +5,17 @@ import SwiftUI
 /// this is the screen the app is opened for (planning happens on a computer).
 ///
 /// 1. **At a glance** (#697, reordered around the pilot's in-flight
-///    questions in #816) — the flight strip (where the flight is, its ETA),
+///    questions in #816 and #882) — the offline banner when the last live
+///    read failed, the flight strip (where the flight is, its ETA),
 ///    alert-tier nutshell lines and change rows (never folded), the
 ///    model-written highlight (or the nutshell headline in its place), the
-///    nutshell lines still ahead and "Destination at your ETA" (unfolded),
-///    the departure / destination runway + wind dials (#758), the route
-///    ribbon, then a **Details** fold (collapsed by default, remembered) with
-///    the headline, the passed lines and the other "Since this briefing"
-///    rows (#637). A layer without a nutshell (older server, a tick that
-///    could not build it) falls back to the departure / destination tiles
+///    departure + arrival airport cards (#882: side by side on iPad, stacked
+///    on iPhone, the departure folded to one line once the server says it is
+///    behind), the route ribbon, then a **Details** fold (collapsed by
+///    default, remembered) with the headline, the lines still ahead, the
+///    passed lines and the other "Since this briefing" rows (#637). A layer
+///    without a nutshell (older server, a tick that could not build it)
+///    falls back to the runway/wind dials, the departure / destination tiles
 ///    and chips, with every change row in the panel below them.
 /// 2. **Since this briefing** — only in that fallback; otherwise in Details.
 /// 3. **Radar & lightning now** — the server's per-source summary clauses
@@ -33,6 +35,9 @@ struct ObservedTabView: View {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
                 if let glance = nutshell {
                     VStack(alignment: .leading, spacing: Theme.spacingM) {
+                        if let since = offlineSince {
+                            ObservedOfflineBanner(since: since)
+                        }
                         if let flight = glance.flight {
                             ObservedFlightStrip(flight: flight)
                         }
@@ -40,23 +45,10 @@ struct ObservedTabView: View {
                         ObservedHighlightCard(viewModel: viewModel, glance: glance)
                     }
                     .spyAnchor("glance")
-                    if hasAhead(glance) {
-                        VStack(alignment: .leading, spacing: Theme.spacingM) {
-                            if !glance.aheadItems.isEmpty {
-                                ObservedNutshellCard(
-                                    viewModel: viewModel, glance: glance, lines: glance.aheadItems,
-                                    showsHeadline: false, offersMap: false, identifier: "observedAhead"
-                                )
-                            }
-                            if let destination = glance.destination {
-                                DestinationAtETACard(viewModel: viewModel, destination: destination)
-                            }
-                        }
-                        .spyAnchor("ahead")
-                    }
-                    if !runwayWindDials.isEmpty {
-                        RunwayWindPairCard(dials: runwayWindDials)
-                            .spyAnchor("winds")
+                    if hasCards(glance) {
+                        AirportCardsSection(viewModel: viewModel, departure: glance.departure,
+                                            destination: glance.destination)
+                            .spyAnchor("airports")
                     }
                     if let ribbon = viewModel.liveLayerForPack?.ribbon {
                         RouteRibbonCard(viewModel: viewModel, ribbon: ribbon, storms: viewModel.liveLayerForPack?.storms,
@@ -100,9 +92,17 @@ struct ObservedTabView: View {
         .background(Theme.bg)
     }
 
-    /// #816: lines still ahead or a destination block to show unfolded.
-    private func hasAhead(_ glance: LiveGlance) -> Bool {
-        !glance.aheadItems.isEmpty || glance.destination != nil
+    /// #882: a departure or arrival card to draw.
+    private func hasCards(_ glance: LiveGlance) -> Bool {
+        glance.departure != nil || glance.destination != nil
+    }
+
+    /// #882: the time of the data on screen when the last live read failed or
+    /// there is no connection (the layer's own `live_updated_at`); nil while
+    /// online.
+    private var offlineSince: Date? {
+        guard viewModel.isLiveOffline, let layer = viewModel.liveLayerForPack else { return nil }
+        return (layer.liveUpdatedAt ?? layer.glance?.asOf).flatMap(Date.parseISO8601)
     }
 
     /// The server's nutshell for the pack on screen, when it has lines.
@@ -118,11 +118,12 @@ struct ObservedTabView: View {
 
     private var observedConditions: ObservedConditions? { snapshot?.observedConditions }
 
-    /// Departure + destination runway/wind dials (#758). Flight day only (a
-    /// live layer exists); the snapshot's airports, which the live layer
-    /// patches each tick. Empty on an older server — the tab is as before.
+    /// Departure + destination runway/wind dials (#758), for the fallback only
+    /// (no nutshell, an older server): with a nutshell each airport card draws
+    /// its own dial (#882). Flight day only (a live layer exists); the
+    /// snapshot's airports, which the live layer patches each tick.
     private var runwayWindDials: [RunwayWindRules.Dial] {
-        guard viewModel.liveLayerForPack != nil else { return [] }
+        guard viewModel.liveLayerForPack != nil, nutshell == nil else { return [] }
         let waypoints = viewModel.flight.waypoints
         return RunwayWindRules.pair(
             airports: snapshot?.routeObservations?.airports,
@@ -149,8 +150,7 @@ struct ObservedTabView: View {
         var sections = nutshell == nil && !runwayWindDials.isEmpty
             ? [SpySection("winds", "Winds"), SpySection("glance", "Now")]
             : [SpySection("glance", "Now")]
-        if let glance = nutshell, hasAhead(glance) { sections.append(SpySection("ahead", "Ahead")) }
-        if nutshell != nil, !runwayWindDials.isEmpty { sections.append(SpySection("winds", "Winds")) }
+        if let glance = nutshell, hasCards(glance) { sections.append(SpySection("airports", "Airports")) }
         if nutshell != nil {
             if viewModel.liveLayerForPack?.ribbon != nil { sections.append(SpySection("ribbon", "Route")) }
             sections.append(SpySection("details", "Details"))

@@ -256,6 +256,10 @@ final class AppState {
         // Remembered UI state that a journey toggles: start every launch from
         // the default so one tap is deterministic (#803).
         UserDefaults.standard.removeObject(forKey: ObservedDetailsFold.expandedDefaultsKey)
+        for key in UserDefaults.standard.dictionaryRepresentation().keys
+        where key.hasPrefix(AirportCardRules.departureOpenKeyPrefix) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         if Self.isUITestMockMode {
             // Fixtures need no real auth — a fake gate token is enough to render
             // past LoginView, and it lives on the observable mirror only.
