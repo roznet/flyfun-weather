@@ -17,6 +17,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import aero.flyfun.weather.MainActivity
@@ -211,6 +212,7 @@ class FlightTrackingService : Service() {
 
         const val CHANNEL_ID: String = "flyfun_flight_tracking"
         const val NOTIFICATION_ID: Int = 4101
+        private const val TAG: String = "FlightTracking"
 
         private const val MIN_UPDATE_INTERVAL_MS: Long = 5_000L
         private const val MIN_UPDATE_DISTANCE_M: Float = 25f
@@ -237,6 +239,12 @@ class FlightTrackingService : Service() {
 
         /** A fix at take-off speed was seen: only then can a slow fix near the destination be the landing. */
         private var airborneSeen = false
+
+        /** The landing was detected but its post has not gone through yet: retried with each next fix. */
+        private var landingPending = false
+
+        /** Auto-stop when the flight is not known yet (no departure to compute the window from). */
+        private const val FALLBACK_TRACKING_MS: Long = 12L * 3_600_000L
         private var lastQueuedFix: LivePositionFix? = null
         private val pendingFixes = mutableListOf<LivePositionFix>()
 
@@ -251,7 +259,12 @@ class FlightTrackingService : Service() {
             apiClient: ApiClient? = null,
             endEpochMs: Long? = null,
         ) {
-            configureSession(flightId = flightId, waypoints = waypoints, apiClient = apiClient, endEpochMs = endEpochMs)
+            configureSession(
+                flightId = flightId,
+                waypoints = waypoints,
+                apiClient = apiClient,
+                endEpochMs = endEpochMs ?: (System.currentTimeMillis() + FALLBACK_TRACKING_MS),
+            )
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, FlightTrackingService::class.java).apply {
                 action = ACTION_START
@@ -297,6 +310,7 @@ class FlightTrackingService : Service() {
             }
             trackingEndEpochMs = endEpochMs
             airborneSeen = false
+            landingPending = false
             lastQueuedFix = null
             pendingFixes.clear()
         }
@@ -311,6 +325,7 @@ class FlightTrackingService : Service() {
             activeWaypoints = emptyList()
             trackingEndEpochMs = null
             airborneSeen = false
+            landingPending = false
             lastQueuedFix = null
             pendingFixes.clear()
         }
@@ -321,8 +336,9 @@ class FlightTrackingService : Service() {
          * enqueue and post the fix to the backend.
          *
          * Returns why tracking should stop, or null to carry on (#874): [AutoStop.LANDED] once a fix
-         * reads as the landing ([LivePositionRules.isLanding], after the take-off roll was seen), the
-         * landing then posted with `landed = true` like iOS; [AutoStop.WINDOW_ENDED] past
+         * reads as the landing ([LivePositionRules.isLanding], after the take-off roll was seen) and
+         * the post with `landed = true` went through (like iOS); a landing post that fails for want of
+         * data is retried with each next fix, tracking running on meanwhile; [AutoStop.WINDOW_ENDED] past
          * [trackingEndEpochMs]. A fix without a horizontal accuracy is projected but not sent (the
          * server requires one).
          */
@@ -362,10 +378,16 @@ class FlightTrackingService : Service() {
                 )
             }
 
-            if (airborneSeen && LivePositionRules.isLanding(lat, lon, groundSpeedKt, activeWaypoints)) {
-                if (fix != null) enqueueLocked(fix)
-                flushPendingFixesLocked(landed = true)
-                return@withLock AutoStop.LANDED
+            if (fix == null) {
+                Log.d(TAG, "Fix without horizontal accuracy: projected, not sent")
+            }
+
+            if (landingPending ||
+                (airborneSeen && LivePositionRules.isLanding(lat, lon, groundSpeedKt, activeWaypoints))
+            ) {
+                if (!landingPending && fix != null) enqueueLocked(fix)
+                landingPending = true
+                return@withLock if (flushPendingFixesLocked(landed = true)) AutoStop.LANDED else null
             }
             if (groundSpeedKt != null && groundSpeedKt >= LivePositionRules.LANDING_MAX_SPEED_KT) {
                 airborneSeen = true
@@ -388,31 +410,38 @@ class FlightTrackingService : Service() {
         }
 
         /**
-         * Post the newest queued fixes (at most [LivePositionRules.MAX_BATCH_SIZE], the server's
-         * limit) to `POST /api/flights/{id}/live/position`, with `landed` for the landing.
+         * Post the queued fixes oldest first, in batches of at most [LivePositionRules.MAX_BATCH_SIZE]
+         * (the server's limit), to `POST /api/flights/{id}/live/position`; `landed` goes with the last
+         * batch. A batch that fails is kept for the next flush (or dropped on a permanent refusal).
+         * Returns whether everything, the landing included, was delivered or dropped for good.
          */
-        private suspend fun flushPendingFixesLocked(landed: Boolean = false) {
-            val client = activeApiClient ?: return
+        private suspend fun flushPendingFixesLocked(landed: Boolean = false): Boolean {
+            val client = activeApiClient ?: return false
             val flightId = _activeFlightId.value
-            if (flightId.isNullOrBlank()) return
-            if (pendingFixes.isEmpty() && !landed) return
+            if (flightId.isNullOrBlank()) return false
 
-            val batch = pendingFixes.takeLast(LivePositionRules.MAX_BATCH_SIZE)
-            try {
-                client.postLivePosition(flightId, LivePositionRequest(fixes = batch, landed = landed))
-                pendingFixes.clear()
-            } catch (err: Throwable) {
-                val statusCode = (err as? ApiError.ServerError)?.statusCode
-                    ?: when (err) {
-                        is ApiError.Unauthorized -> 401
-                        is ApiError.Forbidden -> 403
-                        is ApiError.NotFound -> 404
-                        else -> null
+            do {
+                val batch = pendingFixes.take(LivePositionRules.MAX_BATCH_SIZE)
+                val last = batch.size == pendingFixes.size
+                if (batch.isEmpty() && !landed) return true
+                try {
+                    client.postLivePosition(flightId, LivePositionRequest(fixes = batch, landed = landed && last))
+                } catch (err: Throwable) {
+                    val statusCode = (err as? ApiError.ServerError)?.statusCode
+                        ?: when (err) {
+                            is ApiError.Unauthorized -> 401
+                            is ApiError.Forbidden -> 403
+                            is ApiError.NotFound -> 404
+                            else -> null
+                        }
+                    if (LivePositionRules.failureAction(statusCode) != LivePositionRules.FailureAction.DROP_BATCH) {
+                        return false
                     }
-                if (LivePositionRules.failureAction(statusCode) == LivePositionRules.FailureAction.DROP_BATCH) {
-                    pendingFixes.clear()
+                    Log.w(TAG, "Position post refused ($statusCode), ${batch.size} fixes dropped")
                 }
-            }
+                repeat(batch.size) { pendingFixes.removeAt(0) }
+            } while (pendingFixes.isNotEmpty())
+            return true
         }
 
         fun hasLocationPermission(context: Context): Boolean {
