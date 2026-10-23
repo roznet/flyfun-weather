@@ -178,13 +178,6 @@ final class BriefingViewModel {
     private(set) var downloadState: DownloadState = .notDownloaded
     private(set) var packCacheStatus: [String: Bool] = [:] // timestamp -> isCached
 
-    /// The experimental radar-cell overlay for the Observed tab's glance chip
-    /// and cell list (#661). The route map keeps its own model: it pairs with
-    /// the drawn radar frame, the list takes the newest, and one shared model
-    /// polled with two stamps could flip the map to a frame that is not the
-    /// radar under it. Online-only.
-    let cellsModel: RouteCellsModel
-
     // UI state
     var selectedTab: BriefingTab = .advisory
     /// The flight-day default (open on Observed) is applied once per open, so
@@ -233,7 +226,6 @@ final class BriefingViewModel {
         self.settings = settings
         self.networkMonitor = networkMonitor
         self.debrief = flight.debrief
-        self.cellsModel = RouteCellsModel(repository: repository)
     }
 
     /// Adopt the saved (or deleted → nil) debrief so the Advisory card updates.
@@ -299,30 +291,15 @@ final class BriefingViewModel {
         BriefingTab.tabs(showsObserved: showsObservedTab)
     }
 
-    /// Whether a network path is usable — so an online-only surface (cells,
-    /// radar) can say "offline" rather than "unavailable". No monitor (tests,
-    /// previews) reads as online.
-    var isOnline: Bool { networkMonitor?.isConnected ?? true }
-
-    /// Route points in order, for geometry (the cells box, location labels).
+    /// Route points in order, for geometry (the map's cells box).
     var routeCoordinates: [CLLocationCoordinate2D] {
         guard case .loaded(let analyses) = routeAnalysesState else { return [] }
         return analyses.analyses.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
     }
 
-    /// The route's named waypoints with their positions.
-    var routeWaypoints: [(icao: String, coordinate: CLLocationCoordinate2D)] {
-        guard case .loaded(let analyses) = routeAnalysesState else { return [] }
-        return analyses.analyses.compactMap { p in
-            guard let icao = p.waypointIcao, !icao.isEmpty else { return nil }
-            return (icao, CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon))
-        }
-    }
-
     /// The box the cell overlay is fetched for: the widest sampled corridor
     /// plus `CellsOverlay.marginNm` (web: corridor + 50 NM). Independent of the
-    /// cross-section's corridor pick, so the map and the Observed list ask for
-    /// the same box.
+    /// cross-section's corridor pick.
     var cellsBox: ObservedMapImagery.LatLonBox? {
         guard case .loaded(let snapshot) = snapshotState else { return nil }
         let corridor = ObservedMapImagery.corridorRadius(snapshot.observedConditions, picked: nil) ?? 20
@@ -1065,11 +1042,6 @@ final class BriefingViewModel {
     /// Pull-to-refresh: adopt a newer pack *and* re-fetch the live layer.
     func pullToRefresh() async {
         await syncLatestPack(forceLive: true)
-        // The Observed tab's cells are online-only and on their own 2-min
-        // poll; a pull is the pilot asking for "now", so fetch them too.
-        if case .loaded(let snapshot) = snapshotState, snapshot.observedConditions?.hasAnyField == true {
-            await cellsModel.refresh(radarStamp: nil, box: cellsBox, force: true)
-        }
     }
 
     /// The adopted live layer, only while it belongs to the pack on screen

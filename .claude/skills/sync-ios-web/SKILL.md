@@ -177,8 +177,9 @@ run both — a green pair means the labels and geometry still agree.
 - The dBZ **hexes** differ: web takes them from its own VIP ramp
   (`layer-legends.ts`) so the ribbon matches the radar legend beside it. The
   *boundaries* are shared exactly and must stay so.
-- The web has no standalone cells list (iOS `ObservedCellsSection`) — cells are
-  on the route map's toggle and the "Now" tab there. "Since this briefing" is a
+- The web has no standalone cells list (iOS `ObservedCellsSection`, which reads
+  the server's `/live` storms since #816, words in `LiveStormListRules.swift`)
+  — cells are on the route map's toggle and the "Now" tab there. "Since this briefing" is a
   page-level banner on web, a section on iOS.
 
 Also worth a glance: `web/tests/unit/observed-live-fixtures.test.ts` renders the

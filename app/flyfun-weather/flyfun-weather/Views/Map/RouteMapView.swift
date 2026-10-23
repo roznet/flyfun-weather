@@ -45,8 +45,8 @@ struct RouteMapView: View {
     /// Experimental radar-cell overlay (#661). Off by default, as on the web —
     /// an experimental layer on a safety product is opted into.
     @AppStorage("mapObservedCells") private var observedCells = false
-    /// The map's own cell model (not `viewModel.cellsModel`): it pairs with the
-    /// drawn reflectivity frame, while the Observed list takes the newest.
+    /// The map's cell model: it pairs with the drawn reflectivity frame. The
+    /// Observed tab's Cells list reads the server's `/live` storms instead.
     @State private var cellsModel: RouteCellsModel?
     /// Lightning flashes as small bolts (#665). On by default: a measurement,
     /// not an experimental analysis, and the web route map always draws it.

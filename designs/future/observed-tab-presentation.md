@@ -3,7 +3,7 @@
 Status: direction agreed 2026-10-06. Slice 1 (#689) done: reissue "updated",
 `new_sigmets`, SIGMET-after-arrival highlight, tops "unavailable", radar peak
 position in the summary, iOS storm count/sort/wording as interim client logic
-(`CellsOverlay.routeStorms`, to be replaced by #688's server geometry).
+(`CellsOverlay.routeStorms`, replaced in #816 by the server's `/live` storms).
 Slice 2 (#688, PR #692) landed: per-storm route geometry in the tick,
 `LiveLayer.storms`, storm rows (meteorology-decisions §41), estimates logged
 for `score-estimates`; thresholds not yet calibrated on a real-cell replay.
@@ -12,8 +12,8 @@ tick, on `/live` and the agent `live` block (`tasks/live_glance.py`, as-built no
 `live-observation-layer.md`). Slice 4 iOS landed in the same PR (#695, 2026-10-07):
 nutshell, the ribbon as a symbolic map (rain/core bands from the cells feed's
 outlines, airports either side, motion arrows), tap-to-map, storm sheet; pilot text
-says "cell". The Layer 3 cells list still uses the client-side
-`CellsOverlay.routeStorms`. Slice 4's web half landed next (#699): the same
+says "cell". The Layer 3 cells list used the client-side
+`CellsOverlay.routeStorms` until #816 moved it onto `/live` storms. Slice 4's web half landed next (#699): the same
 nutshell and ribbon as two sections at the head of the briefing page's
 Observations group, in the iOS reading order, with tap-to-map and the cell
 detail. The ribbon's rules were extracted into a mirrored pure pair

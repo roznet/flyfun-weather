@@ -18,7 +18,8 @@ import SwiftUI
 /// 2. **Since this briefing** — only in that fallback; otherwise in Details.
 /// 3. **Radar & lightning now** — the server's per-source summary clauses
 ///    (#574), each with its own frame age; missing sources are named.
-/// 4. **Cells** — the experimental cell analysis for the route box (#656).
+/// 4. **Cells** — the server's radar storms against the route (`/live`
+///    `storms`, #688; #816: the same list as the ribbon and the alerts).
 /// 5. **METAR/TAF** — observations vs model (#492).
 /// 6. **SIGMET** — route area hazards (#493).
 ///
@@ -81,8 +82,8 @@ struct ObservedTabView: View {
                     ObservedNowView(observed: observed)
                         .spyAnchor("radar")
                 }
-                if showsCells {
-                    ObservedCellsSection(viewModel: viewModel)
+                if let storms = liveStorms {
+                    ObservedCellsSection(viewModel: viewModel, storms: storms)
                         .spyAnchor("cells")
                 }
                 if hasObservations {
@@ -97,13 +98,6 @@ struct ObservedTabView: View {
             .padding(.vertical, Theme.cardPadding)
         }
         .background(Theme.bg)
-        .task(id: cellsPollKey) {
-            // Online-only; polls while this tab is on screen. No radar is drawn
-            // here, so the newest current overlay is the one listed.
-            guard showsCells else { return }
-            let box = viewModel.cellsBox
-            await viewModel.cellsModel.poll(radarStamp: { nil }, box: box)
-        }
     }
 
     /// #816: lines still ahead or a destination block to show unfolded.
@@ -137,14 +131,10 @@ struct ObservedTabView: View {
         )
     }
 
-    /// Cells are offered wherever the radar is (web: the route map's Cells
-    /// toggle appears with the observed layers).
-    private var showsCells: Bool { observedConditions?.hasAnyField ?? false }
-
-    private var cellsPollKey: String {
-        guard showsCells, let box = viewModel.cellsBox else { return "off" }
-        return "\(box.south),\(box.west),\(box.north),\(box.east)"
-    }
+    /// The server's storms for the pack on screen (#816): the Cells list is
+    /// shown whenever the live layer carries them, a dark feed included (the
+    /// list says why). No live layer, no list: nothing is measured here.
+    private var liveStorms: LiveStorms? { viewModel.liveLayerForPack?.storms }
 
     private var hasObservations: Bool {
         !(snapshot?.routeObservations?.reportingAirports.isEmpty ?? true)
@@ -168,7 +158,7 @@ struct ObservedTabView: View {
             sections.append(SpySection("live", "Changes"))
         }
         if observedConditions?.hasAnyField ?? false { sections.append(SpySection("radar", "Radar")) }
-        if showsCells { sections.append(SpySection("cells", "Cells")) }
+        if liveStorms != nil { sections.append(SpySection("cells", "Cells")) }
         if hasObservations { sections.append(SpySection("observations", "METAR/TAF")) }
         if hasSigmets { sections.append(SpySection("sigmets", "SIGMET")) }
         return sections
@@ -305,20 +295,16 @@ struct ObservedGlanceCard: View {
         return chips
     }
 
-    /// Storms within the stated distance of the route, from the shared cell
-    /// model (#689: storms, not tiers) — attention, not a verdict, so neutral
-    /// when there are none.
+    /// Storms still ahead within the server's corridor (#816: `/live`
+    /// storms, the ribbon's list) — attention, not a verdict, so neutral when
+    /// there are none. Nothing while the feed is down: the Cells list says why.
     private var cellsChip: Chip? {
-        let model = viewModel.cellsModel
-        guard case .ok = model.match, let display = model.display else { return nil }
-        // No route geometry yet: nothing was measured against the route, so
-        // say nothing rather than "N storms within 20 NM".
-        let route = viewModel.routeCoordinates
-        guard route.count > 1 else { return nil }
-        let storms = CellsOverlay.routeStorms(display, route: route).count
-        return Chip(text: CellsOverlay.stormsChipText(storms),
-                    icon: storms == 0 ? "cloud" : "cloud.bolt",
-                    tint: storms == 0 ? Theme.textMuted : Theme.primary)
+        let storms = viewModel.liveLayerForPack?.storms
+        guard let text = LiveStormListRules.chipText(storms), let storms else { return nil }
+        let none = LiveStormListRules.ahead(storms).isEmpty
+        return Chip(text: text,
+                    icon: none ? "cloud" : "cloud.bolt",
+                    tint: none ? Theme.textMuted : Theme.primary)
     }
 }
 
@@ -457,18 +443,20 @@ struct ObservedNowView: View {
 
 // MARK: - Cells
 
-/// The experimental cell analysis near the route: storms within
-/// `CellsOverlay.listOffTrackNm` of the route line, nearest first (#689), each
-/// with where it is, how it is evolving and where it is heading. Describes
-/// evolution, not safety — labelled experimental.
+/// The radar cells near the route (#816): the server's `/live` storms — the
+/// same list the ribbon, the alerts, the web and Android show — ahead first in
+/// route order, each with where it is against the track, how it moves toward
+/// it and when the flight is abeam. Nothing is measured on the phone; the map
+/// keeps the raw cell feed. Describes evolution, not safety: experimental.
 struct ObservedCellsSection: View {
     let viewModel: BriefingViewModel
+    let storms: LiveStorms
     @State private var showsAll = false
 
     private static let compactCap = 5
+    private typealias L = LiveStormListRules
 
     var body: some View {
-        let model = viewModel.cellsModel
         VStack(alignment: .leading, spacing: Theme.spacingS) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Radar cells")
@@ -481,7 +469,7 @@ struct ObservedCellsSection: View {
                     .overlay(Capsule().stroke(Theme.border))
                 Spacer(minLength: 0)
             }
-            content(model)
+            content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.cardPadding)
@@ -490,43 +478,36 @@ struct ObservedCellsSection: View {
     }
 
     @ViewBuilder
-    private func content(_ model: RouteCellsModel) -> some View {
-        if !model.hasLoaded {
-            if viewModel.isOnline {
-                ProgressView("Checking radar cells…")
-                    .font(.subheadline)
-            } else {
-                muted("Offline — radar cells need a connection")
+    private var content: some View {
+        if let status = L.statusText(storms) {
+            muted(status)
+        } else {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                muted(L.caption(storms, now: context.date), font: .caption)
             }
-        } else if case .ok = model.match, let display = model.display {
-            if let badge = model.badge { muted(badge, font: .caption) }
-            let route = viewModel.routeCoordinates
-            // Without route geometry the list is every core, strongest first:
-            // it must not claim a distance it did not measure.
-            let measured = route.count > 1
-            let cells = CellsOverlay.routeStorms(display, route: measured ? route : [])
-            let within = Int(CellsOverlay.listOffTrackNm.rounded())
-            if cells.isEmpty {
-                muted(measured ? "No storms within \(within) NM of the route" : "No convective cores in the route box")
+            let ahead = L.ahead(storms)
+            let behind = L.behind(storms)
+            if ahead.isEmpty {
+                muted("No cells ahead within \(L.corridorText(storms)) of track")
             } else {
-                muted(measured ? "Storms within \(within) NM of the route, nearest first"
-                               : "Convective cores in the route box, strongest first", font: .caption)
-                let shown = showsAll ? cells : Array(cells.prefix(Self.compactCap))
+                let shown = showsAll ? ahead : Array(ahead.prefix(Self.compactCap))
                 ForEach(shown) { storm in
-                    CellRow(cell: storm.cell, offTrackNm: storm.offTrackNm,
-                            location: CellsOverlay.locationLabel(storm.cell, waypoints: viewModel.routeWaypoints))
+                    CellRow(viewModel: viewModel, storm: storm)
                 }
-                if cells.count > Self.compactCap {
-                    Button(showsAll ? "Show fewer" : "Show all \(cells.count)") { showsAll.toggle() }
+                if ahead.count > Self.compactCap {
+                    Button(showsAll ? "Show fewer" : "Show all \(ahead.count)") { showsAll.toggle() }
                         .font(.subheadline.weight(.semibold))
                         .frame(minHeight: 44)
                 }
             }
+            if !behind.isEmpty {
+                muted(behind.count == 1 ? "1 cell behind" : "\(behind.count) cells behind", font: .caption)
+                ForEach(behind) { storm in
+                    CellRow(viewModel: viewModel, storm: storm)
+                        .opacity(0.6)
+                }
+            }
             muted(CellsOverlay.caveat, font: .caption2)
-        } else if !viewModel.isOnline {
-            muted("Offline — radar cells need a connection")
-        } else if let badge = model.badge {
-            muted(badge)
         }
     }
 
@@ -538,48 +519,62 @@ struct ObservedCellsSection: View {
     }
 }
 
-/// One core: trend dot, strength, where it is, then evolution and motion.
+/// One storm: trend dot, strength, where it is against the track, then
+/// motion, abeam time and what it is. Taps open the map on it.
 private struct CellRow: View {
-    let cell: DisplayCell
-    let offTrackNm: Double?
-    let location: String?
+    let viewModel: BriefingViewModel
+    let storm: LiveStorm
 
     var body: some View {
+        if let focus = storm.focus {
+            Button {
+                viewModel.setFocusIntent(FocusIntent(target: .map, mapFocus: focus))
+            } label: { row(showsMap: true) }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("observedCell-\(storm.id)")
+        } else {
+            row(showsMap: false)
+        }
+    }
+
+    private func row(showsMap: Bool) -> some View {
         HStack(alignment: .top, spacing: Theme.spacingS) {
             Circle()
-                .fill(Color(uiColor: CellsOverlay.trendColor(cell.trend?.state)))
+                .fill(Color(uiColor: CellsOverlay.trendColor(storm.trend)))
                 .overlay(Circle().stroke(Color(white: 0.13), lineWidth: 1))
                 .frame(width: 14, height: 14)
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.spacingS) {
-                    Text(cell.peakDbz.map { CellsOverlay.dbzText($0) } ?? CellsOverlay.tierLabel(cell.tier))
+                    Text(LiveStormListRules.title(storm))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Theme.text)
-                    if let location {
-                        Text(location)
+                    if let dbz = storm.peakDbz {
+                        Text(CellsOverlay.dbzText(dbz))
                             .font(.subheadline)
                             .foregroundStyle(Theme.text)
                     }
                 }
-                Text(secondLine)
+                Text(RouteRibbonRules.stormPositionText(storm))
                     .font(.subheadline)
-                    .foregroundStyle(Theme.textMuted)
+                    .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(LiveStormListRules.detailLine(storm))
+                    .font(.subheadline)
+                    .foregroundStyle(storm.isClosing ? Color.orange : Theme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if showsMap {
+                Image(systemName: "map")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textMuted)
+                    .padding(.top, 3)
             }
         }
         .padding(.vertical, 4)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-    }
-
-    private var secondLine: String {
-        var parts: [String] = []
-        if let offTrackNm { parts.append("\(Int(offTrackNm.rounded())) NM off track") }
-        parts += [cell.trend?.state ?? "trend unknown", CellsOverlay.motionText(cell.motion)]
-        if let flashes = cell.flashes, flashes > 0 { parts.append(CellsOverlay.flashesText(flashes)) }
-        if cell.flashes == nil, cell.flashesPending == true { parts.append("lightning pending") }
-        if let top = cell.topFl { parts.append("top FL\(Int(top.rounded()))") }
-        if cell.truncated == true { parts.append("partly outside radar coverage") }
-        return parts.joined(separator: " · ")
     }
 }
