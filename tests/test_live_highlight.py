@@ -1121,12 +1121,14 @@ def test_agent_block_highlight_is_null_without_one():
 
 
 class _Resp:
-    def __init__(self, text="Quiet route ahead.", stop_reason="end_turn", category=None):
+    def __init__(self, text="Quiet route ahead.", stop_reason="end_turn", category=None,
+                 input_tokens=1750, cache_read=0, cache_write=0):
         self.content = [type("B", (), {"type": "text", "text": text})()]
         self.stop_reason = stop_reason
         self.stop_details = type("D", (), {"category": category})() if category else None
-        self.usage = type("U", (), {"input_tokens": 1750, "output_tokens": 85,
-                                    "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})()
+        self.usage = type("U", (), {"input_tokens": input_tokens, "output_tokens": 85,
+                                    "cache_read_input_tokens": cache_read,
+                                    "cache_creation_input_tokens": cache_write})()
 
 
 class _Client:
@@ -1150,6 +1152,40 @@ def test_generate_turns_thinking_off_at_low_effort(monkeypatch):
     assert client.kwargs["output_config"] == {"effort": "low"}
     assert client.kwargs["max_tokens"] == lh.MAX_TOKENS
     assert usage["output_tokens"] == 85
+
+
+def test_generate_caches_the_shared_system_prompt_for_an_hour(monkeypatch):
+    """Every flight sends the same SYSTEM; ticks are ~11 min apart, so only a
+    1h entry survives to the next burst."""
+    client = _Client(_Resp())
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: client)
+    lh.generate(_facts_with())
+    assert client.kwargs["system"] == [{
+        "type": "text", "text": lh.SYSTEM,
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }]
+
+
+def test_cached_tokens_count_as_input_and_price_at_the_1h_tier(monkeypatch):
+    """The SDK's input_tokens excludes cache tokens; the usage dict adds them
+    back so compute_call_cost's subset accounting holds."""
+    from weatherbrief.costs import compute_call_cost
+
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: _Client(_Resp(input_tokens=800, cache_read=950)))
+    _, usage, _ = lh.generate(_facts_with())
+    assert usage["input_tokens"] == 1750
+    assert usage["cache_read_tokens"] == 950
+
+    monkeypatch.setattr(lh, "_anthropic_client", lambda: _Client(_Resp(input_tokens=800, cache_write=950)))
+    _, written, _ = lh.generate(_facts_with())
+    assert lh.call_cost(written) == compute_call_cost(
+        "claude-haiku-5-5", input_tokens=1750, output_tokens=85,
+        cache_write_tokens=950, cache_ttl="1h",
+    )
+    assert lh.call_cost(written) > compute_call_cost(
+        "claude-haiku-5-5", input_tokens=1750, output_tokens=85,
+        cache_write_tokens=950, cache_ttl="5m",
+    )
 
 
 def test_a_refusal_is_a_billed_rejection_under_the_retry_cap(monkeypatch, tmp_path):

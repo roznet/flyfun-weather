@@ -79,6 +79,12 @@ MAX_ATTEMPTS_PER_FACTS = 2
 #: than 4.5's for the same text); 300 leaves room without paying for a runaway,
 #: which the post-check rejects anyway.
 MAX_TOKENS = 300
+#: Prompt-cache TTL for SYSTEM, the one part of the request every flight
+#: shares. A tick fans every flight's call out at once and ticks run ~11 min
+#: apart, so a 5m entry is always gone by the next burst (5.9 % hits replaying
+#: prod 10-16..10-23); 1h is read by every burst after the day's first (99.4 %,
+#: ~4 writes/day). Also prices the writes, so the two cannot drift.
+CACHE_TTL = "1h"
 
 SYSTEM = """You write the one-glance highlight at the top of a pilot's in-flight weather screen.
 
@@ -1040,17 +1046,21 @@ def generate(f: dict, model: str = DEFAULT_MODEL) -> tuple[str, dict, int]:
         max_tokens=MAX_TOKENS,
         thinking=THINKING,
         output_config={"effort": EFFORT},
-        system=SYSTEM,
+        system=[{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL}}],
         messages=[{"role": "user", "content": "FACTS:\n" + json.dumps(f, indent=1, ensure_ascii=False)}],
     )
     latency_ms = int((time.perf_counter() - t) * 1000)
     text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+    cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+    cache_write = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
     usage = {
         "model": model,
-        "input_tokens": resp.usage.input_tokens,
+        # The SDK's input_tokens leaves the cached part out; compute_call_cost
+        # (and every other usage row) counts cache tokens as a subset of it.
+        "input_tokens": resp.usage.input_tokens + cache_read + cache_write,
         "output_tokens": resp.usage.output_tokens,
-        "cache_read_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
-        "cache_write_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
         "stop_reason": resp.stop_reason,
     }
     if resp.stop_reason == "refusal":
@@ -1134,6 +1144,7 @@ def call_cost(usage: dict | None) -> float | None:
             output_tokens=usage.get("output_tokens") or 0,
             cache_read_tokens=usage.get("cache_read_tokens") or 0,
             cache_write_tokens=usage.get("cache_write_tokens") or 0,
+            cache_ttl=CACHE_TTL,
         )
     except Exception:
         # An unpriced model raises rather than guess; a missing cost must not
@@ -1388,6 +1399,7 @@ def charge_highlight(db, user_id: str | None, flight_id: str, usage: dict | None
             output_tokens=usage.get("output_tokens") or 0,
             cache_read_tokens=usage.get("cache_read_tokens") or 0,
             cache_write_tokens=usage.get("cache_write_tokens") or 0,
+            cache_ttl=CACHE_TTL,
         )
         with Session(bind=db.get_bind()) as own:
             record_cost(
@@ -1399,7 +1411,9 @@ def charge_highlight(db, user_id: str | None, flight_id: str, usage: dict | None
                 description=f"Observed highlight (${cost:.4f})",
                 metadata={"model": usage["model"],
                           "input_tokens": usage.get("input_tokens") or 0,
-                          "output_tokens": usage.get("output_tokens") or 0},
+                          "output_tokens": usage.get("output_tokens") or 0,
+                          "cache_read_tokens": usage.get("cache_read_tokens") or 0,
+                          "cache_write_tokens": usage.get("cache_write_tokens") or 0},
                 reference_id=flight_id,
             )
             own.commit()
