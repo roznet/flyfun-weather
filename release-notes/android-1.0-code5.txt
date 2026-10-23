@@ -1,0 +1,6 @@
+- Edit a saved flight's route, time or altitude, or duplicate it, straight from its briefing
+- Observed tab: departure and arrival airport cards with the latest weather, and alerts for storms and lightning nearby
+- More reliable flight tracking: position fixes are no longer lost, even if the app is closed, and landing is retried
+- A started flight stays open if you take off late
+- Simpler Add Flight screen
+- Map fix for Android 12 and 13, and other fixes
