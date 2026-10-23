@@ -125,4 +125,11 @@ class FlightEditRulesTest {
         )
         assertTrue(FlightEditRules.moveConsequence(packCount = 1, isLive = true).endsWith("tracking for today are dropped."))
     }
+
+    @Test
+    fun storedSecondsAreNotATimeChange() {
+        // The form holds minutes; a stored 22:30:42 must not read as an edit to 22:30.
+        val withSeconds = flight.copy(departureTime = "2099-07-10T22:30:42Z")
+        assertEquals(Impact.NONE, FlightEditRules.impact(values(departure = Instant.parse("2099-07-10T22:30:00Z")), withSeconds))
+    }
 }

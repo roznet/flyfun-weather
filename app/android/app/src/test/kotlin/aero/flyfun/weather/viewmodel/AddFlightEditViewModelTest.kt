@@ -1,5 +1,6 @@
 package aero.flyfun.weather.viewmodel
 
+import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.model.FlightInvalidation
@@ -196,5 +197,46 @@ class AddFlightEditViewModelTest {
         assertEquals(9000, req.cruiseAltitudeFt)
         assertEquals("2099-07-04T10:30:00Z", req.departureTime)
         assertNull(req.tripId)
+    }
+
+    @Test
+    fun aRouteTheServerCouldNotCheckFailsTheSave() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        repo.interpretRouteError = java.io.IOException("offline")
+        vm.loadExistingFlight(repo.flight("fixture-2"))
+
+        vm.updateRouteText("EGTK DCT LFAT DCT LFPB")
+        var saved: FlightResponse? = null
+        vm.saveFlight { saved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        // The local token split is never sent as a resolved route.
+        assertNull(saved)
+        assertNull(repo.lastUpdatedFlight)
+        assertTrue(vm.errorMessage.value.orEmpty().startsWith("Couldn't check the route"))
+    }
+
+    @Test
+    fun aFailedFollowUpPatchAfterMoveWarnsWithWhatDidNotSave() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+        vm.setDepartureDate(LocalDate.of(2099, 7, 2))
+        vm.selectProfile(42)
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        repo.updateFlightError = ApiError.NotFound
+        var moved: FlightResponse? = null
+        vm.moveFlight { moved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        // The move committed, so the sheet still closes; the warning is shown after it.
+        assertNotNull(moved)
+        assertEquals(
+            "The flight moved, but the profile change didn't save. Open Edit to apply it again.",
+            vm.saveWarning.value,
+        )
     }
 }

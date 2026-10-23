@@ -2,6 +2,7 @@ package aero.flyfun.weather
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -28,8 +29,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import aero.flyfun.weather.model.BriefingTab
@@ -530,12 +533,15 @@ fun FlyFunWeatherRoot(
     }
 
     if (showAddFlightSheet) {
+        val context = LocalContext.current
         val addVm = remember(editingFlightId, nextLegSourceFlightId, duplicateSourceFlightId) {
             AddFlightViewModel(
                 repository = appState.repository,
                 apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
                 tripRepository = appState.tripRepository,
                 airportDb = appState.airportDb,
+                // The process-lived app state, so a queued re-brief retry survives the sheet.
+                backgroundScope = appState.viewModelScope,
             ).also { vm ->
                 resolvedEditingFlight?.let { vm.loadExistingFlight(it) }
                 resolvedNextLegSourceFlight?.let { vm.populateNextLeg(it) }
@@ -546,6 +552,7 @@ fun FlyFunWeatherRoot(
             viewModel = addVm,
             onDismiss = { showAddFlightSheet = false },
             onFlightSaved = { saved ->
+                addVm.saveWarning.value?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                 showAddFlightSheet = false
                 flightListViewModel.loadFlights()
                 openBriefing(flightId = saved.id, flight = saved, forceReload = true)
