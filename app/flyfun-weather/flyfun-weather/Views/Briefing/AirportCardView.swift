@@ -103,6 +103,15 @@ struct AirportCard: View {
         .accessibilityLabel(R.accessibilitySummary(block, role: role))
         .accessibilityIdentifier("airportCard-\(role == .departure ? "dep" : "arr")")
         .accessibilityAction(named: Text("Show on map")) { openMap(block.focus) }
+        .accessibilityActions {
+            // The cells near the field, each one its own action: the card is
+            // a single element, so its buttons are not reachable otherwise.
+            ForEach(block.cells ?? []) { cell in
+                if let focus = cell.focus, let text = cell.text {
+                    Button(text) { openMap(focus) }
+                }
+            }
+        }
     }
 
     private var dialSide: CGFloat { horizontalSizeClass == .regular ? 120 : 92 }
@@ -121,7 +130,8 @@ struct AirportCard: View {
                              position: R.meterPosition(a.metarVisibilityMeter))
             if let words = a.metarWeatherWords, !words.isEmpty {
                 FlowLayout(spacing: Theme.spacingS) {
-                    ForEach(words, id: \.code) { word in
+                    // Offsets, not codes: a METAR can repeat a group.
+                    ForEach(Array(words.enumerated()), id: \.offset) { _, word in
                         Label(word.text, systemImage: R.weatherSymbol(word.icon))
                             .font(.subheadline)
                             .foregroundStyle(Theme.text)
