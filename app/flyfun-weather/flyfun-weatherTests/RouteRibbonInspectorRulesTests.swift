@@ -213,8 +213,8 @@ private func leaks(_ c: RibbonCardContent) -> Bool {
     /// every station names its airport and quotes its raw METAR / TAF.
     @Test func everyExportedTickStationNamesItsAirportAndQuotesItsRawReports() throws {
         let dir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("flyfun-weatherUITests/LiveScenarios")
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/live-scenarios")
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
         #expect(!files.isEmpty)

@@ -152,7 +152,7 @@ def test_lell_lemi_fixture_matches_current_build():
 
 @pytest.mark.parametrize("name", sorted(IOS_TICKS))
 def test_ios_live_fixtures_match_the_server(name, tmp_path):
-    """flyfun-weatherUITests/LiveScenarios/ feeds the UI test that screenshots
+    """app/fixtures/live-scenarios/ feeds the UI test that screenshots
     each tick. If the rules change, these files must follow: rerun
     scripts/export_live_scenario_ios.py and review the diff."""
     files = ios_tick_files(name, replay(load_scenario(name), tmp_path / "u" / "flight"), IOS_TICKS[name])

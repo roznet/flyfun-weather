@@ -62,6 +62,23 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    // The mock API fixtures shared with iOS (#895): app/fixtures/api/*.json, read from the
+    // classpath as `api/<name>.json` by FixtureFiles in the app, androidTest and JVM unit tests.
+    // Main, not debug: the login screen's demo mode serves them in release too.
+    sourceSets {
+        getByName("main") {
+            resources.srcDir("../../fixtures")
+        }
+    }
+
+    packaging {
+        resources {
+            // Only api/ is the app's: the live-scenario ticks and the App Store showcase in the
+            // same folder are test data for the iOS journeys and the Python suite.
+            excludes += listOf("/live-scenarios/**", "/showcase/**", "/README.md")
+        }
+    }
 }
 
 dependencies {
@@ -95,6 +112,12 @@ dependencies {
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

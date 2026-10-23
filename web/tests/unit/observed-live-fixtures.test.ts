@@ -19,7 +19,7 @@ import { nutshellHtml } from '../../ts/visualization/observed/nutshell-view';
 import { ribbonLegendHtml, ribbonSvg, stormDetailHtml } from '../../ts/visualization/observed/ribbon-view';
 import { weatherAvailable } from '../../ts/visualization/observed/ribbon-core';
 
-const DIR = resolve(__dirname, '../../../app/flyfun-weather/flyfun-weatherUITests/LiveScenarios');
+const DIR = resolve(__dirname, '../../../app/fixtures/live-scenarios');
 
 function ticks(): { name: string; layer: LiveLayer }[] {
   return readdirSync(DIR)

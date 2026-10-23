@@ -14,6 +14,7 @@
 		42B896452F54720900C5AF7B /* RZUtilsSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896442F54720900C5AF7B /* RZUtilsSwiftUI */; };
 		42B896472F54720900C5AF7B /* RZUtilsUniversal in Frameworks */ = {isa = PBXBuildFile; productRef = 42B896462F54720900C5AF7B /* RZUtilsUniversal */; };
 		42BF6E612FAD203A00D5615F /* FlyFunCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 42BF6E602FAD203A00D5615F /* FlyFunCommon */; };
+		42F895A12F70000000ABC001 /* api in Resources */ = {isa = PBXBuildFile; fileRef = 42F895A02F70000000ABC001 /* api */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,6 +38,7 @@
 		42269E4C2F546D2000EFA5E4 /* flyfun-weather.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "flyfun-weather.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		42269E5B2F546D2100EFA5E4 /* flyfun-weatherTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "flyfun-weatherTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		42269E652F546D2100EFA5E4 /* flyfun-weatherUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "flyfun-weatherUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		42F895A02F70000000ABC001 /* api */ = {isa = PBXFileReference; lastKnownFileType = folder; name = api; path = ../fixtures/api; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -108,6 +110,7 @@
 				42269E4E2F546D2000EFA5E4 /* flyfun-weather */,
 				42269E5E2F546D2100EFA5E4 /* flyfun-weatherTests */,
 				42269E682F546D2100EFA5E4 /* flyfun-weatherUITests */,
+				42F895A02F70000000ABC001 /* api */,
 				424BB6462F69F29700023F98 /* Frameworks */,
 				42269E4D2F546D2000EFA5E4 /* Products */,
 			);
@@ -264,6 +267,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				42F895A12F70000000ABC001 /* api in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -525,6 +529,7 @@
 		42269E712F546D2100EFA5E4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				EXCLUDED_SOURCE_FILE_NAMES = api;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "flyfun-weather/flyfun_weather.entitlements";

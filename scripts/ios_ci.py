@@ -19,7 +19,8 @@
     gate [--repo OWNER/NAME]
         For /archive: can the local UI passes be skipped? Finds the newest
         nightly on main whose iPhone *and* iPad UI jobs both ran and passed,
-        then checks that app/flyfun-weather has not changed since that commit
+        then checks that app/flyfun-weather and the fixtures it serves
+        (app/fixtures) have not changed since that commit
         apart from the version-bump lines. Exit 0 = covered (prints the run),
         1 = not covered (prints why). Needs `gh` (unsandboxed).
 
@@ -37,6 +38,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_DIR = "app/flyfun-weather"
+# What the UI journeys run on: the app, plus the mock API fixtures and live-scenario
+# ticks it shares with Android (#895).
+UI_INPUTS = (APP_DIR, "app/fixtures")
 WORKFLOW = "ios-ui-nightly.yml"
 # Job names the nightly's matrix produces — `gate` requires both to have run.
 LEGS = ("UI (iPhone)", "UI (iPad)")
@@ -148,7 +152,7 @@ def summarize(bundle: str, label: str) -> int:
 
 def code_changes_since(sha: str) -> list[str]:
     """Changed lines under app/ since `sha`, ignoring version-bump lines."""
-    diff = run("git", "diff", "-U0", sha, "HEAD", "--", APP_DIR)
+    diff = run("git", "diff", "-U0", sha, "HEAD", "--", *UI_INPUTS)
     return [
         line for line in diff.splitlines()
         if line[:1] in "+-" and not line.startswith(("+++", "---")) and not VERSION_LINE.match(line)
@@ -180,11 +184,11 @@ def gate(repo: str | None) -> int:
         return 1
     print(f"nightly {sha[:8]} ({r['createdAt']}) — both legs green: {r['url']}")
     if changes:
-        files = run("git", "diff", "--name-only", sha, "HEAD", "--", APP_DIR).split()
-        print(f"NOT COVERED: {len(changes)} changed line(s) under {APP_DIR} since then:")
+        files = run("git", "diff", "--name-only", sha, "HEAD", "--", *UI_INPUTS).split()
+        print(f"NOT COVERED: {len(changes)} changed line(s) under {' / '.join(UI_INPUTS)} since then:")
         print("\n".join(f"  {f}" for f in files))
         return 1
-    print(f"COVERED: no change under {APP_DIR} since that run except version-bump lines.")
+    print(f"COVERED: no change under {' / '.join(UI_INPUTS)} since that run except version-bump lines.")
     return 0
 
 

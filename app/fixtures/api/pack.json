@@ -1,0 +1,31 @@
+{
+  "flight_id": "fixture-1",
+  "fetch_timestamp": "2099-06-30T06:00:00Z",
+  "days_out": 1,
+  "is_historical": false,
+  "has_gramet": false,
+  "has_skewt": true,
+  "has_digest": true,
+  "has_advisories": true,
+  "assessment": "amber",
+  "assessment_reason": "Isolated convective cell risk near Cannes on GFS; marginal cruise icing on the coast. VFR feasible with care and a timing eye on the afternoon build-up.",
+  "model_init_times": {
+    "ecmwf": 0,
+    "gfs": 6
+  },
+  "grib_init_times": {
+    "ecmwf": 0,
+    "gfs": 6
+  },
+  "models_skipped_region": [],
+  "data_status": {
+    "fresh": true,
+    "stale_models": [],
+    "model_init_times": {
+      "ecmwf": 0,
+      "gfs": 6
+    },
+    "next_expected_update": null,
+    "next_expected_model": null
+  }
+}

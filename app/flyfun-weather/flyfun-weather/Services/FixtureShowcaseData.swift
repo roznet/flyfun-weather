@@ -3,7 +3,7 @@ import Foundation
 
 /// One real briefing for App Store screenshots (`FLYFUN_MOCK_SHOWCASE=<path>`).
 ///
-/// The file is `flyfun-weatherUITests/Showcase/showcase.json`, written by
+/// The file is `app/fixtures/showcase/showcase.json`, written by
 /// `scripts/export_showcase_fixture_ios.py` from a prod flight: ECMWF only, no
 /// live layer, no charts / GRAMET, fictional aircraft. The UI test passes its
 /// absolute path — a simulator app reads host paths — so the fixture never

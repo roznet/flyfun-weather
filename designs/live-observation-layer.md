@@ -805,7 +805,7 @@ logs `Live glance failed` and leaves both null for that tick.
   Both are asserted on both sides.
   `web/tests/unit/observed-live-fixtures.test.ts` renders the **same** exported
   `/live` ticks the iOS UI test consumes
-  (`flyfun-weatherUITests/LiveScenarios/`, written by
+  (`app/fixtures/live-scenarios/`, written by
   `scripts/export_live_scenario_ios.py` and pinned to the server by
   `test_live_scenarios.py`), so a server-side shape change surfaces as a failing
   web test rather than an empty section. Those archived ticks have a dark cells

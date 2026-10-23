@@ -66,6 +66,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -192,7 +193,10 @@ fun AddFlightSheet(
                         Icon(Icons.Default.AutoFixHigh, contentDescription = "Interpret Route")
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                // UI-test selectors use the iOS accessibilityIdentifier names (#895).
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("waypointsField"),
             )
 
             // Airport autocomplete suggestions
@@ -556,7 +560,8 @@ fun AddFlightSheet(
                 enabled = !isSaving && viewModel.isValid && viewModel.hasChanges,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
+                    .height(50.dp)
+                    .testTag("submitFlightButton"),
             ) {
                 if (isSaving) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

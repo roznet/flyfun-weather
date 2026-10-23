@@ -77,7 +77,7 @@ final class CachingBriefingRepository: BriefingRepository { ... }
 final class FixtureBriefingRepository: BriefingRepository { ... }
 ```
 
-`AppState` owns the active `repository` (and exposes `cachingRepository` when caching is enabled). The fixture repo is what makes the XCUI journeys run without a server — `FLYFUN_MOCK_OFFLINE=1` additionally makes it report cached-list status so the offline banner/read-only paths are testable; endpoints no journey needs throw `notProvided` rather than being faked.
+`AppState` owns the active `repository` (and exposes `cachingRepository` when caching is enabled). The fixture repo serves the JSON in `app/fixtures/api/` (shared with Android, #895; see `FixtureFiles` and [ios-app-ui.md](./ios-app-ui.md#ui-test-fixtures-shared-with-android)). The fixture repo is what makes the XCUI journeys run without a server — `FLYFUN_MOCK_OFFLINE=1` additionally makes it report cached-list status so the offline banner/read-only paths are testable; endpoints no journey needs throw `notProvided` rather than being faked.
 
 ## iOS App Layers
 

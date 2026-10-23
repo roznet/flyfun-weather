@@ -126,8 +126,11 @@ class AppStateViewModel(
     var briefingCache: BriefingCache? = null
         private set
 
-    private val fixtureBriefingRepo = FixtureBriefingRepository(mockLive = true)
-    private val fixtureTripRepo = FixtureTripRepository()
+    @Volatile
+    private var fixtureBriefingRepo = FixtureBriefingRepository(mockLive = true)
+
+    @Volatile
+    private var fixtureTripRepo = FixtureTripRepository()
 
     @Volatile
     private var onlineBriefingRepo: BriefingRepository = OnlineBriefingRepository(apiClient)
@@ -317,6 +320,25 @@ class AppStateViewModel(
 
     fun setOfflineMode(offline: Boolean) {
         _isOfflineMode.value = offline
+    }
+
+    /**
+     * A UI-test launch (#895), the twin of iOS `AppState.setupUITestSession`. With [UiTestLaunch.mock]
+     * the app renders past the login gate on fresh fixture repositories, so every journey starts
+     * from the same seeded data even when the instrumentation process (and this process-lived
+     * state) outlives the previous test's activity. Never writes the token store: a developer's
+     * signed-in emulator stays signed in. Without `mock` it changes nothing (live-dev mode: the
+     * normal auth gate against the selected server).
+     */
+    fun startUiTestSession(launch: UiTestLaunch) {
+        if (!launch.mock) return
+        fixtureBriefingRepo = FixtureBriefingRepository(mockLive = launch.mockLive)
+        fixtureTripRepo = FixtureTripRepository()
+        _authError.value = null
+        _isGuestBrowsing.value = false
+        _isOfflineMode.value = launch.offline
+        _isMockMode.value = true
+        _isAuthenticated.value = true
     }
 
     /** Directly accept a JWT token (e.g. from OAuth callback or deep link). */

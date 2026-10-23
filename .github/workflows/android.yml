@@ -10,6 +10,8 @@ on:
     branches: [main]
     paths: &paths
       - 'app/android/**'
+      # The mock API fixtures shared with iOS (#895): the unit tests decode them.
+      - 'app/fixtures/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths: *paths
@@ -39,9 +41,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run JVM unit tests
+      # assembleDebugAndroidTest compiles the Compose UI journeys (src/androidTest) without
+      # running them: they need an emulator, which runs nightly (android-ui-nightly.yml), so a
+      # PR can't break their build unnoticed.
+      - name: Run JVM unit tests and compile the UI journeys
         working-directory: app/android
-        run: ./gradlew test :app:testDebugUnitTest --stacktrace
+        run: ./gradlew test :app:testDebugUnitTest :app:assembleDebugAndroidTest --stacktrace
 
       - name: Guard against a vacuous pass
         working-directory: app/android

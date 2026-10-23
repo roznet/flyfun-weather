@@ -8,7 +8,7 @@ dropped the flight:
   the untouched responses, all models, as one ``api_responses.json.gz`` in the
   private eval-set repo (``demo-fixtures/<flight>/``; LFS there).
 * ``trim`` turns that dump into the fixture the mock app serves
-  (app/flyfun-weather/flyfun-weatherUITests/Showcase/showcase.json): ECMWF
+  (app/fixtures/showcase/showcase.json): ECMWF
   only, no live layer, no surface charts / GRAMET (only what the app draws
   natively appears in screenshots), and a fictional aircraft — this repo is
   public. ``FixtureShowcaseData.swift`` shifts its dates to tomorrow at load.
@@ -34,7 +34,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_FLIGHT = "egtf_big_rem_sapre_lsgs-2026-10-12-8bf2"
-FIXTURE = REPO / "app/flyfun-weather/flyfun-weatherUITests/Showcase/showcase.json"
+FIXTURE = REPO / "app/fixtures/showcase/showcase.json"
 MODEL = "ecmwf"
 # Per-model dicts inside each route point (route-analyses and snapshot).
 PER_MODEL_KEYS = ("sounding", "wind_components")

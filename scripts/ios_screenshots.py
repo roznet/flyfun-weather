@@ -1,6 +1,6 @@
 """Capture the App Store screenshots from the showcase fixture.
 
-Runs ScreenshotUITests (the mock app on `Showcase/showcase.json`, see
+Runs ScreenshotUITests (the mock app on `app/fixtures/showcase/showcase.json`, see
 scripts/export_showcase_fixture_ios.py) on each device and appearance through
 ios_test.py, with the status bar pinned to Apple's marketing state (9:41, full
 battery and signal), and exports the captures as PNGs named by screen:
@@ -61,7 +61,7 @@ CAPTURE_INPUTS = [
     f"{APP}/flyfun-weather/Services/FixtureShowcaseData.swift",
     f"{APP}/flyfun-weather/Services/FixtureBriefingRepository.swift",
     f"{APP}/flyfun-weatherUITests/ScreenshotUITests.swift",
-    f"{APP}/flyfun-weatherUITests/Showcase",
+    "app/fixtures/showcase",
     "scripts/ios_screenshots.py",
 ]
 

@@ -58,6 +58,7 @@ import aero.flyfun.weather.viewmodel.FlightListViewModel
 import aero.flyfun.weather.viewmodel.ForecastMapViewModel
 import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
 import aero.flyfun.weather.viewmodel.TripsViewModel
+import aero.flyfun.weather.viewmodel.UiTestLaunch
 import aero.flyfun.weather.viewmodel.ViewModelScopes
 
 /**
@@ -76,6 +77,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // A UI test's launch extras (#895); debug builds only. Only on a fresh start, so a
+        // rotation mid-journey doesn't reseed the fixtures under it.
+        if (BuildConfig.DEBUG && savedInstanceState == null) {
+            UiTestLaunch.from { intent?.getStringExtra(it) }?.let(appState::startUiTestSession)
+        }
         handleIntent(intent)
 
         setContent {

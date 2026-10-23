@@ -18,6 +18,8 @@ on:
     branches: [main]
     paths: &paths
       - 'app/flyfun-weather/**'
+      # The mock API fixtures shared with Android (#895), decoded by the unit tests.
+      - 'app/fixtures/**'
       - '.github/workflows/ios.yml'
   pull_request:
     paths: *paths

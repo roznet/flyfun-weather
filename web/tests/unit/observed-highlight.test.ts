@@ -1,6 +1,6 @@
 /** The Observed highlight (#697) in the web nutshell: reading order, caption,
  *  thumbs, and the headline fallback. Against the exported real-morning
- *  fixtures (`LiveScenarios/*_highlight.json` carries a fixed, grounded line;
+ *  fixtures (`app/fixtures/live-scenarios/*_highlight.json` carries a fixed, grounded line;
  *  the others carry `highlight: null`, as the suite-less server produces). */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -24,7 +24,7 @@ import {
   nutshellHtml,
 } from '../../ts/visualization/observed/nutshell-view';
 
-const DIR = resolve(__dirname, '../../../app/flyfun-weather/flyfun-weatherUITests/LiveScenarios');
+const DIR = resolve(__dirname, '../../../app/fixtures/live-scenarios');
 const load = (name: string): LiveLayer => JSON.parse(readFileSync(resolve(DIR, name), 'utf8')) as LiveLayer;
 const highlightFiles = readdirSync(DIR).filter((f) => f.endsWith('_highlight.json')).sort();
 

@@ -1,6 +1,6 @@
 import XCTest
 
-/// App Store screenshots of one real briefing (`Showcase/showcase.json`, see
+/// App Store screenshots of one real briefing (`app/fixtures/showcase/showcase.json`, see
 /// `FixtureShowcase`). Not a regression journey, but every capture is a hard
 /// assertion — a store set missing a screen must fail, not ship short — and
 /// it runs only when asked —
@@ -11,8 +11,10 @@ final class ScreenshotUITests: FlyfunUITestCase {
     /// The fixture's absolute path on the host, which the simulator app can
     /// read: nothing is copied into the app bundle.
     static let showcasePath = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Showcase/showcase.json").path
+        .deletingLastPathComponent()  // → flyfun-weatherUITests/
+        .deletingLastPathComponent()  // → app/flyfun-weather/
+        .deletingLastPathComponent()  // → app/
+        .appendingPathComponent("fixtures/showcase/showcase.json").path
     /// The flight id carries its date, which the date shift moves with the
     /// rest: match the card by the route part only.
     static let cardPrefix = "flightCard-egtf_big_rem_sapre_lsgs-"

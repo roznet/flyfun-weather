@@ -1,0 +1,265 @@
+{
+  "advisories": [
+    {
+      "advisory_id": "convective",
+      "aggregate_status": "red",
+      "aggregate_detail": "Isolated convective cell near LFMD — GFS builds CAPE to ~1400 J/kg by mid-morning.",
+      "parameters_used": {
+        "cape_red_jkg": 1000.0,
+        "affected_pct_red": 25.0
+      },
+      "per_model": [
+        {
+          "model": "gfs",
+          "status": "red",
+          "detail": "CAPE ~1400 J/kg near LFMD, tops to FL340.",
+          "affected_points": 2,
+          "total_points": 5,
+          "affected_pct": 40.0,
+          "affected_nm": 20.0,
+          "total_nm": 78.0,
+          "cross_check": "High CAPE (~1400 J/kg) while the model's own convective cover is ~2% — a classic quiet-sky thermodynamic RED, not a wall of cloud."
+        },
+        {
+          "model": "ecmwf",
+          "status": "amber",
+          "detail": "Marginal instability; CAPE ~600 J/kg.",
+          "affected_points": 1,
+          "total_points": 5,
+          "affected_pct": 20.0,
+          "affected_nm": 8.0,
+          "total_nm": 78.0
+        }
+      ]
+    },
+    {
+      "advisory_id": "icing",
+      "aggregate_status": "amber",
+      "aggregate_detail": "Light rime possible in coastal cloud between 6,000 and 9,000 ft.",
+      "parameters_used": {
+        "freezing_level_ft": 9000.0
+      },
+      "per_model": [
+        {
+          "model": "gfs",
+          "status": "amber",
+          "detail": "Light rime 6–9 kft in stratiform cloud.",
+          "affected_points": 2,
+          "total_points": 5,
+          "affected_pct": 40.0,
+          "affected_nm": 18.0,
+          "total_nm": 78.0
+        },
+        {
+          "model": "ecmwf",
+          "status": "green",
+          "detail": "Freezing level above cloud tops.",
+          "affected_points": 0,
+          "total_points": 5,
+          "affected_pct": 0.0,
+          "affected_nm": 0.0,
+          "total_nm": 78.0
+        }
+      ]
+    },
+    {
+      "advisory_id": "turbulence",
+      "aggregate_status": "green",
+      "aggregate_detail": "No significant turbulence expected en route.",
+      "parameters_used": {},
+      "per_model": [
+        {
+          "model": "gfs",
+          "status": "green",
+          "detail": "Smooth.",
+          "affected_points": 0,
+          "total_points": 5,
+          "affected_pct": 0.0,
+          "affected_nm": 0.0,
+          "total_nm": 78.0
+        },
+        {
+          "model": "ecmwf",
+          "status": "green",
+          "detail": "Smooth.",
+          "affected_points": 0,
+          "total_points": 5,
+          "affected_pct": 0.0,
+          "affected_nm": 0.0,
+          "total_nm": 78.0
+        }
+      ]
+    },
+    {
+      "advisory_id": "winds_aloft",
+      "aggregate_status": "green",
+      "aggregate_detail": "Light westerly component, no trip-impacting headwind.",
+      "parameters_used": {},
+      "per_model": [
+        {
+          "model": "gfs",
+          "status": "green",
+          "detail": "10 kt headwind.",
+          "affected_points": 0,
+          "total_points": 5,
+          "affected_pct": 0.0,
+          "affected_nm": 0.0,
+          "total_nm": 78.0
+        },
+        {
+          "model": "ecmwf",
+          "status": "green",
+          "detail": "8 kt headwind.",
+          "affected_points": 0,
+          "total_points": 5,
+          "affected_pct": 0.0,
+          "affected_nm": 0.0,
+          "total_nm": 78.0
+        }
+      ]
+    }
+  ],
+  "catalog": [
+    {
+      "id": "convective",
+      "name": "Convective",
+      "short_description": "Thunderstorm / instability risk",
+      "description": "Flags convective potential from model CAPE and native convective cloud fields, graded by the worst realizable scenario along the route.",
+      "category": "convective",
+      "default_enabled": true,
+      "altitude_dependent": false,
+      "parameters": []
+    },
+    {
+      "id": "icing",
+      "name": "Icing",
+      "short_description": "Airframe icing risk",
+      "description": "Airframe icing risk from freezing level, cloud layers, and Ogimet/NWP icing indices, gated to in-cloud layers.",
+      "category": "icing",
+      "default_enabled": true,
+      "altitude_dependent": true,
+      "parameters": []
+    },
+    {
+      "id": "turbulence",
+      "name": "Turbulence",
+      "short_description": "En-route turbulence",
+      "description": "Clear-air and mechanical turbulence risk from vertical motion and terrain-driven wind.",
+      "category": "turbulence",
+      "default_enabled": true,
+      "altitude_dependent": true,
+      "parameters": []
+    },
+    {
+      "id": "winds_aloft",
+      "name": "Winds Aloft",
+      "short_description": "Trip-impacting wind",
+      "description": "Winds-aloft trip impact from the headwind/tailwind component along the planned route and altitude.",
+      "category": "winds",
+      "default_enabled": true,
+      "altitude_dependent": true,
+      "parameters": []
+    }
+  ],
+  "route_name": "LFMD LFML",
+  "cruise_altitude_ft": 8000,
+  "flight_ceiling_ft": 13000,
+  "total_distance_nm": 78.0,
+  "models": [
+    "ecmwf",
+    "gfs"
+  ],
+  "aggregation": "worst",
+  "airport_conditions": {
+    "departure": {
+      "icao": "LFMD",
+      "name": "Cannes-Mandelieu",
+      "runway_ends": [
+        {
+          "id": "17",
+          "heading_deg": 165.0
+        },
+        {
+          "id": "35",
+          "heading_deg": 345.0
+        }
+      ],
+      "conditions": [
+        {
+          "model": "ecmwf",
+          "flight_category": "VFR",
+          "ceiling_ft": 4500,
+          "visibility_sm": 9.0,
+          "wind_speed_kt": 8.0,
+          "wind_direction_deg": 200.0,
+          "wind_gust_kt": null,
+          "best_runway": {
+            "runway_id": "17",
+            "heading_deg": 165.0,
+            "crosswind_kt": 4.0,
+            "headwind_kt": 7.0
+          },
+          "all_runways": [
+            {
+              "runway_id": "17",
+              "heading_deg": 165.0,
+              "crosswind_kt": 4.0,
+              "headwind_kt": 7.0
+            },
+            {
+              "runway_id": "35",
+              "heading_deg": 345.0,
+              "crosswind_kt": 4.0,
+              "headwind_kt": -7.0
+            }
+          ]
+        }
+      ]
+    },
+    "arrival": {
+      "icao": "LFML",
+      "name": "Marseille Provence",
+      "runway_ends": [
+        {
+          "id": "13L",
+          "heading_deg": 130.0
+        },
+        {
+          "id": "31R",
+          "heading_deg": 310.0
+        }
+      ],
+      "conditions": [
+        {
+          "model": "ecmwf",
+          "flight_category": "VFR",
+          "ceiling_ft": 3800,
+          "visibility_sm": 8.0,
+          "wind_speed_kt": 12.0,
+          "wind_direction_deg": 300.0,
+          "wind_gust_kt": 18.0,
+          "best_runway": {
+            "runway_id": "31R",
+            "heading_deg": 310.0,
+            "crosswind_kt": 6.0,
+            "headwind_kt": 10.0
+          },
+          "all_runways": [
+            {
+              "runway_id": "31R",
+              "heading_deg": 310.0,
+              "crosswind_kt": 6.0,
+              "headwind_kt": 10.0
+            },
+            {
+              "runway_id": "13L",
+              "heading_deg": 130.0,
+              "crosswind_kt": 6.0,
+              "headwind_kt": -10.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 Replays each scenario (tests/fixtures/live_scenarios/) through the production
 live layer and writes the chosen ticks as ``/live`` response bodies under
-app/flyfun-weather/flyfun-weatherUITests/LiveScenarios/<scenario>_<HHMM>.json.
+app/fixtures/live-scenarios/<scenario>_<HHMM>.json.
 The UI test feeds each one to the mock app (FLYFUN_MOCK_LIVE_JSON) and checks
 every change renders at its tier. tests/test_live_scenarios.py fails when these
 files drift from what the server would produce — rerun this script then.

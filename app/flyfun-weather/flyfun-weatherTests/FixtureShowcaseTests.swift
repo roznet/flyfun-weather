@@ -2,7 +2,7 @@
 //  FixtureShowcaseTests.swift
 //  flyfun-weatherTests
 //
-//  The App Store showcase fixture (`flyfun-weatherUITests/Showcase/showcase.json`)
+//  The App Store showcase fixture (`app/fixtures/showcase/showcase.json`)
 //  still decodes through the production DTOs, and its dates move so the flight
 //  departs tomorrow. The screenshot journey only runs on demand, so this is
 //  what tells CI the fixture has drifted from the models — rerun
@@ -14,9 +14,10 @@ import Foundation
 @testable import flyfun_weather
 
 private let showcasePath = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("flyfun-weatherUITests/Showcase/showcase.json").path
+    .deletingLastPathComponent()  // → flyfun-weatherTests/
+    .deletingLastPathComponent()  // → app/flyfun-weather/
+    .deletingLastPathComponent()  // → app/
+    .appendingPathComponent("fixtures/showcase/showcase.json").path
 
 @Suite struct FixtureShowcaseTests {
 

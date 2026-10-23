@@ -62,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -363,6 +364,7 @@ fun BriefingContainerScreen(
                                 selected = tab == selectedTab,
                                 onClick = { viewModel.selectTab(tab) },
                                 text = { Text(tab.title) },
+                                modifier = Modifier.testTag(briefingTabTestTag(tab)),
                                 icon = {
                                     Icon(
                                         imageVector = tab.icon(),
@@ -383,6 +385,7 @@ fun BriefingContainerScreen(
                         NavigationBarItem(
                             selected = tab == selectedTab,
                             onClick = { viewModel.selectTab(tab) },
+                            modifier = Modifier.testTag(briefingTabTestTag(tab)),
                             icon = {
                                 Icon(
                                     imageVector = tab.icon(),
@@ -815,3 +818,10 @@ private fun FlightActionsMenu(
         }
     }
 }
+
+/**
+ * UI-test tag of a briefing tab, the same on the phone's bottom bar and the wide top tab row, so
+ * "the briefing is open" is one selector on both layouts. The iOS journeys key off the tab
+ * title (`app.buttons["Advisory"]`); this is that title as a tag (#895).
+ */
+fun briefingTabTestTag(tab: BriefingTab): String = "briefingTab-${tab.title}"

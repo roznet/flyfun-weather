@@ -2,9 +2,11 @@ package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.FixtureBriefingRepository
+import aero.flyfun.weather.model.BriefingStatusInfo
 import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightInvalidation
 import aero.flyfun.weather.model.FlightResponse
+import aero.flyfun.weather.model.TripLegRef
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -27,6 +29,11 @@ class AddFlightEditViewModelTest {
 
     private fun setUp(testScope: TestScope): Pair<FixtureBriefingRepository, AddFlightViewModel> {
         val repo = FixtureBriefingRepository(mockLive = true)
+        // This suite's own two flights instead of the shared UI-test fixtures (app/fixtures/api),
+        // so those can follow the journeys without rewriting these cases. `fixture-1` keeps its
+        // id because that is the flight the fixture repository serves a pack for.
+        repo.flights.clear()
+        repo.flights += listOf(BRIEFED_TRIP_LEG, ROUTED_FLIGHT)
         val vm = AddFlightViewModel(
             repository = repo,
             apiClient = null,
@@ -37,6 +44,41 @@ class AddFlightEditViewModelTest {
     }
 
     private fun FixtureBriefingRepository.flight(id: String): FlightResponse = flights.first { it.id == id }
+
+    private companion object {
+        /** Briefed (the repository has its pack) and leg 1 of a trip. */
+        val BRIEFED_TRIP_LEG = FlightResponse(
+            id = "fixture-1",
+            userId = "ui-test",
+            routeName = "LFMD LFML",
+            waypoints = listOf("LFMD", "LFML"),
+            departureTime = "2099-07-01T09:00:00Z",
+            targetDate = "2099-07-01",
+            targetTimeUtc = 9,
+            cruiseAltitudeFt = 8000,
+            flightCeilingFt = 13000,
+            flightDurationHours = 1.5,
+            createdAt = "2099-06-30T00:00:00Z",
+            briefingStatus = BriefingStatusInfo(lastUpdated = "2099-06-30T06:00:00Z", assessment = "amber", daysOut = 1, hasDigest = true),
+            trip = TripLegRef(legacyTripId = "trip-fixture-1", title = "Riviera Hop", role = "owner", legacyLegIndex = 1, legacyLegCount = 2),
+        )
+
+        /** No pack, not in a trip, with the Field-15 text the pilot typed. */
+        val ROUTED_FLIGHT = FlightResponse(
+            id = "fixture-2",
+            userId = "ui-test",
+            routeName = "EGTK LFPB",
+            waypoints = listOf("EGTK", "LFPB"),
+            rawRoute = "EGTK DCT LFPB",
+            departureTime = "2099-07-03T10:30:00Z",
+            targetDate = "2099-07-03",
+            targetTimeUtc = 10,
+            cruiseAltitudeFt = 9000,
+            flightCeilingFt = 18000,
+            flightDurationHours = 2.0,
+            createdAt = "2099-06-30T00:00:00Z",
+        )
+    }
 
     @Test
     fun editPrefillsTheTypedRouteAndPatchesOnlyWhatChanged() = runTest {

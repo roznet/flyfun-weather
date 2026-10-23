@@ -1,0 +1,90 @@
+{
+  "advisory_id": "convective",
+  "aggregate_status": "red",
+  "aggregate_detail": "Isolated convective cell near LFMD — GFS builds CAPE to ~1400 J/kg by mid-morning.",
+  "parameters_used": {
+    "cape_red_jkg": 1000.0,
+    "affected_pct_red": 25.0,
+    "el_top_ft": 34000.0
+  },
+  "cross_check_note": "This is an explainer, not an alert: the RED is driven by realizable CAPE, even though the model paints a nearly clear sky. Watch the timing — instability grows through the morning.",
+  "name": "Convective",
+  "category": "convective",
+  "description": "Convective potential from model CAPE and native convective cloud fields, graded by the worst realizable scenario along the route.",
+  "convective_note": "GFS and ECMWF disagree on magnitude; treat the coast near Cannes as the focus area.",
+  "per_model": [
+    {
+      "model": "gfs",
+      "status": "red",
+      "detail": "CAPE ~1400 J/kg near LFMD, parcel equilibrium level ~FL340.",
+      "affected_pct": 40.0,
+      "affected_nm": 20.0,
+      "total_nm": 78.0,
+      "cross_check": "High CAPE (~1400 J/kg) while the model's own convective cover is ~2% — a quiet-sky thermodynamic RED."
+    },
+    {
+      "model": "ecmwf",
+      "status": "amber",
+      "detail": "Marginal instability; CAPE ~600 J/kg, tops near FL240.",
+      "affected_pct": 20.0,
+      "affected_nm": 8.0,
+      "total_nm": 78.0
+    }
+  ],
+  "convective": {
+    "gfs": {
+      "assessment_method": "thermo",
+      "method_counts": {
+        "thermo": 2,
+        "nwp": 0
+      },
+      "thermo": {
+        "cape_range_jkg": [
+          300.0,
+          1400.0
+        ],
+        "peak": {
+          "cape_jkg": 1400.0,
+          "el_top_ft": 34000.0,
+          "risk_level": "high",
+          "distance_nm": 8.0,
+          "waypoint_icao": "LFMD",
+          "valid_time": "2099-07-01T10:00:00Z",
+          "eta": "2099-07-01T09:15:00Z"
+        }
+      },
+      "nwp": {
+        "max_cover_pct": 2.0,
+        "peak_top_ft": null,
+        "note": "Native convective cover ~2% — blue sky."
+      }
+    },
+    "ecmwf": {
+      "assessment_method": "thermo",
+      "method_counts": {
+        "thermo": 1,
+        "nwp": 0
+      },
+      "thermo": {
+        "cape_range_jkg": [
+          150.0,
+          600.0
+        ],
+        "peak": {
+          "cape_jkg": 600.0,
+          "el_top_ft": 24000.0,
+          "risk_level": "moderate",
+          "distance_nm": 12.0,
+          "waypoint_icao": "LFMD",
+          "valid_time": "2099-07-01T10:00:00Z",
+          "eta": "2099-07-01T09:18:00Z"
+        }
+      },
+      "nwp": {
+        "max_cover_pct": 1.0,
+        "peak_top_ft": null,
+        "note": "Native convective cover ~1%."
+      }
+    }
+  }
+}
