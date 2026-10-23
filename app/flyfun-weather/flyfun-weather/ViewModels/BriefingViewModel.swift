@@ -164,6 +164,11 @@ final class BriefingViewModel {
     /// Run at each live poll before its fetch (#761): the briefing screen posts
     /// the tracking service's GPS fixes here. Must not block (fire-and-forget).
     @ObservationIgnored var beforeLivePoll: (@MainActor () -> Void)?
+    /// Whether the flight is started and not yet landed on this device
+    /// (`LivePositionService.isStartedNotLanded`, #874): its live window then
+    /// stays open past the planned arrival, so a late take-off keeps polling.
+    /// Set by the view; false (the planned window) until then.
+    @ObservationIgnored var isStartedNotLanded: @MainActor () -> Bool = { false }
     /// The server refreshes the layer every ~10 min; polling at half that keeps
     /// the worst-case lag near one server tick without hammering it.
     static let livePollInterval: Duration = .seconds(300)
@@ -346,7 +351,7 @@ final class BriefingViewModel {
         }
         guard !flightDayDefaultApplied, showsObservedTab else { return }
         flightDayDefaultApplied = true
-        if selectedTab == .advisory, flight.isInLiveObservationWindow(now: now) {
+        if selectedTab == .advisory, flight.isInLiveObservationWindow(now: now, started: isStartedNotLanded()) {
             selectedTab = .observed
         }
     }
@@ -1038,12 +1043,12 @@ final class BriefingViewModel {
     func startLivePolling() {
         livePollTask?.cancel()
         livePollTask = nil
-        guard flight.coverage == nil, !flight.hasLiveObservationWindowEnded() else { return }
+        guard flight.coverage == nil, !flight.hasLiveObservationWindowEnded(started: isStartedNotLanded()) else { return }
         livePollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: BriefingViewModel.livePollInterval)
                 guard !Task.isCancelled, let self else { return }
-                if self.flight.hasLiveObservationWindowEnded() { return }
+                if self.flight.hasLiveObservationWindowEnded(started: self.isStartedNotLanded()) { return }
                 await self.pollLiveOnce()
             }
         }
@@ -1056,7 +1061,7 @@ final class BriefingViewModel {
     }
 
     private func pollLiveOnce() async {
-        guard flight.isInLiveObservationWindow() else { return }
+        guard flight.isInLiveObservationWindow(started: isStartedNotLanded()) else { return }
         if let networkMonitor, !networkMonitor.isConnected { return }
         beforeLivePoll?()
         await syncLatestPack()

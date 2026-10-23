@@ -154,35 +154,58 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
         return now > departure.addingTimeInterval(flightDurationHours * 3600)
     }
 
+    /// How long after the planned departure the server still accepts a
+    /// take-off (`MAX_TAKEOFF_DELAY_H` in `tasks/live_tick.py`, #760): a later
+    /// one is a different flight day. Bounds how far a started flight's
+    /// windows stretch past the plan (#874). Keep in step with the server.
+    static let maxTakeoffDelayHours: Double = 6
+
     /// Whether `now` falls in the flight's tracking window: departure −2h to
     /// departure + duration + 2h. This is the single source of truth for that
     /// window — the briefing view (Start/Stop, PIREP button) and the flight list
     /// ("Add PIREP" gate) both use it instead of reimplementing the formula, and
     /// it mirrors the server's PIREP-linkage window in `storage/pireps.py`.
-    /// `now` is a parameter for deterministic testing.
-    func isInTrackingWindow(now: Date = Date()) -> Bool {
-        guard let departure = departureDate else { return false }
+    ///
+    /// `started`: the flight is started and not yet landed on this device
+    /// (`LivePositionService.isStartedNotLanded`). Its window then stays open
+    /// as late as the server would still take the flight off and fly it
+    /// (#874): a leg that takes off after its planned arrival keeps tracking
+    /// until it lands. `now` is a parameter for deterministic testing.
+    func isInTrackingWindow(now: Date = Date(), started: Bool = false) -> Bool {
+        guard let departure = departureDate, let end = trackingWindowEnd(started: started) else { return false }
         let start = departure.addingTimeInterval(-2 * 3600)
-        let end = departure.addingTimeInterval((flightDurationHours + 2) * 3600)
         return now >= start && now <= end
+    }
+
+    /// When the tracking window closes (the tracking auto-stop): planned
+    /// arrival + 2h, or for a started flight the latest take-off the server
+    /// accepts (`maxTakeoffDelayHours`) + duration + 2h (#874).
+    func trackingWindowEnd(started: Bool = false) -> Date? {
+        guard let departure = departureDate else { return nil }
+        let delay = started ? Self.maxTakeoffDelayHours : 0
+        return departure.addingTimeInterval((delay + flightDurationHours + 2) * 3600)
     }
 
     /// Whether `now` falls in the server's live-observation window (#637):
     /// departure −3h to departure + duration + 1h, the span in which the server
     /// refreshes the flight's live layer every ~10 min. Gates the briefing's
     /// D-0 live poll — outside it `/live` only moves on a manual refresh.
+    /// `started` stretches the end as `isInTrackingWindow` does (#874): the
+    /// server moves its own window with the take-off.
     /// `now` is a parameter for deterministic testing.
-    func isInLiveObservationWindow(now: Date = Date()) -> Bool {
+    func isInLiveObservationWindow(now: Date = Date(), started: Bool = false) -> Bool {
         guard let departure = departureDate else { return false }
         let start = departure.addingTimeInterval(-3 * 3600)
-        return now >= start && !hasLiveObservationWindowEnded(now: now)
+        return now >= start && !hasLiveObservationWindowEnded(now: now, started: started)
     }
 
-    /// Whether the live-observation window is over (arrival + 1h has passed),
-    /// so a poll loop can stop for good rather than idling.
-    func hasLiveObservationWindowEnded(now: Date = Date()) -> Bool {
+    /// Whether the live-observation window is over (arrival + 1h has passed;
+    /// for a started flight, the latest take-off + duration + 1h, #874), so a
+    /// poll loop can stop for good rather than idling.
+    func hasLiveObservationWindowEnded(now: Date = Date(), started: Bool = false) -> Bool {
         guard let departure = departureDate else { return true }
-        return now > departure.addingTimeInterval((flightDurationHours + 1) * 3600)
+        let delay = started ? Self.maxTakeoffDelayHours : 0
+        return now > departure.addingTimeInterval((delay + flightDurationHours + 1) * 3600)
     }
 
     /// Whether a refresh would take the server's *historical* (admin-only) path.

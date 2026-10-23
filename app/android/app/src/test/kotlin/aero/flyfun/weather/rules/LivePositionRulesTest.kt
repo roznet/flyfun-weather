@@ -111,6 +111,7 @@ class LivePositionRulesTest {
             groundSpeedKt = 120.0,
             trackDeg = 90.0,
             recordedAt = "2026-04-12T10:00:00Z",
+            hAccuracyM = 10.0,
         )
 
         // First fix when lastFix is null -> always send
@@ -157,11 +158,23 @@ class LivePositionRulesTest {
         assertEquals(LivePositionRules.FailureAction.RETAIN_BATCH, LivePositionRules.failureAction(null))
 
         val fixes = (1..10).map { i ->
-            LivePositionFix(lat = 48.0 + i * 0.01, lon = 2.0, recordedAt = "2026-04-12T10:00:0${i % 10}Z")
+            LivePositionFix(lat = 48.0 + i * 0.01, lon = 2.0, recordedAt = "2026-04-12T10:00:0${i % 10}Z", hAccuracyM = 10.0)
         }
         val trimmed = LivePositionRules.trimFixBuffer(fixes, maxBufferedFixes = 4)
         assertEquals(4, trimmed.size)
         assertEquals(48.07, trimmed.first().lat, 1e-6)
         assertEquals(48.10, trimmed.last().lat, 1e-6)
+    }
+
+    @Test
+    fun `isLanding needs a valid slow speed within 5 nm of the destination`() {
+        // Destination (50.0, 4.0); 0.05 deg lat ~ 3 nm, 0.1 deg ~ 6 nm.
+        assertTrue(LivePositionRules.isLanding(50.05, 4.0, groundSpeedKt = 12.0, waypoints = sampleRoute))
+        assertFalse(LivePositionRules.isLanding(50.05, 4.0, groundSpeedKt = 30.0, waypoints = sampleRoute))
+        assertFalse(LivePositionRules.isLanding(50.10, 4.0, groundSpeedKt = 12.0, waypoints = sampleRoute))
+        assertFalse(LivePositionRules.isLanding(50.05, 4.0, groundSpeedKt = null, waypoints = sampleRoute))
+        // Slow at the departure is not the landing.
+        assertFalse(LivePositionRules.isLanding(48.0, 2.0, groundSpeedKt = 5.0, waypoints = sampleRoute))
+        assertFalse(LivePositionRules.isLanding(50.0, 4.0, groundSpeedKt = 5.0, waypoints = emptyList()))
     }
 }

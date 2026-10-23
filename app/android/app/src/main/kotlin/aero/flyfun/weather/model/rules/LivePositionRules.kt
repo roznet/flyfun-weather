@@ -48,8 +48,17 @@ object LivePositionRules {
     /** Maximum number of fixes retained in the offline upload ring buffer. */
     const val MAX_BUFFERED_FIXES: Int = 200
 
-    /** Maximum fixes sent in a single `POST /api/flights/{id}/live/position` batch. */
-    const val MAX_BATCH_SIZE: Int = 50
+    /**
+     * Maximum fixes sent in a single `POST /api/flights/{id}/live/position` batch: the server
+     * refuses more than 5 (`LivePositionRequest.fixes`, `max_length=5`) with a 422.
+     */
+    const val MAX_BATCH_SIZE: Int = 5
+
+    /** Landing auto-stop (#874): ground speed under this, within [LANDING_MAX_DISTANCE_NM] of the destination. */
+    const val LANDING_MAX_SPEED_KT: Double = 30.0
+
+    /** Landing auto-stop distance from the destination. Mirrors iOS `FlightTrackingService.projectLocation`. */
+    const val LANDING_MAX_DISTANCE_NM: Double = 5.0
 
     enum class FailureAction {
         DROP_BATCH,
@@ -168,6 +177,26 @@ object LivePositionRules {
         }
 
         return false
+    }
+
+    /**
+     * Whether a fix reads as the landing (#874): a valid ground speed under [LANDING_MAX_SPEED_KT]
+     * within [LANDING_MAX_DISTANCE_NM] of the destination (the route's last waypoint). A fix with
+     * no speed never does. Same rule as the iOS landing auto-stop.
+     */
+    fun isLanding(
+        lat: Double,
+        lon: Double,
+        groundSpeedKt: Double?,
+        waypoints: List<Pair<Double, Double>>,
+    ): Boolean {
+        val (destLat, destLon) = waypoints.lastOrNull() ?: return false
+        if (groundSpeedKt == null || groundSpeedKt < 0.0 || groundSpeedKt >= LANDING_MAX_SPEED_KT) return false
+        val distanceNm = RouteGeometry.directDistanceNm(
+            from = Coord(latitude = lat, longitude = lon),
+            to = Coord(latitude = destLat, longitude = destLon),
+        )
+        return distanceNm < LANDING_MAX_DISTANCE_NM
     }
 
     /**

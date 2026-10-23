@@ -186,6 +186,25 @@ import CoreLocation
         #expect(!theirs.hasConsent(flightId: "a"))
     }
 
+    // #874: Start makes a flight started until an app landing; Start again
+    // undoes a landing; both survive a new service (the app relaunched).
+    @Test @MainActor func startedUntilLanded() {
+        let defaults = scratchDefaults()
+        let service = LivePositionService(repository: MockBriefingRepository(), scope: "me", defaults: defaults)
+        #expect(!service.isStartedNotLanded(flightId: "a"))
+        service.markStarted(flightId: "a")
+        #expect(service.isStartedNotLanded(flightId: "a"))
+        #expect(service.hasConsent(flightId: "a"))
+        service.submit([], flightId: "a", landed: true)
+        #expect(!service.isStartedNotLanded(flightId: "a"))
+        let relaunched = LivePositionService(repository: MockBriefingRepository(), scope: "me", defaults: defaults)
+        #expect(!relaunched.isStartedNotLanded(flightId: "a"))
+        #expect(relaunched.hasConsent(flightId: "a"))
+        relaunched.markStarted(flightId: "a")
+        #expect(relaunched.isStartedNotLanded(flightId: "a"))
+        #expect(!relaunched.isStartedNotLanded(flightId: "b"))
+    }
+
     @Test @MainActor func locationToFix() throws {
         let loc = CLLocation(
             coordinate: CLLocationCoordinate2D(latitude: 50.1, longitude: 1.2), altitude: 1000,

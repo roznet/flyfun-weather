@@ -337,35 +337,60 @@ data class FlightResponse(
 
     /**
      * True once the live observation window (`departure - 3h .. departure + duration + 1h`) has ended.
+     * [started]: the flight is being tracked and has not landed (#874); the end then moves to the
+     * latest take-off the server accepts ([MAX_TAKEOFF_DELAY_HOURS]) + duration + 1h, as the
+     * server's own window moves with the take-off.
      */
-    fun hasLiveObservationWindowEnded(nowEpochMs: Long = System.currentTimeMillis()): Boolean {
+    fun hasLiveObservationWindowEnded(
+        nowEpochMs: Long = System.currentTimeMillis(),
+        started: Boolean = false,
+    ): Boolean {
         val dep = departureEpochMs ?: return false
-        val windowEndMs = dep + ((flightDurationHours + 1.0) * 3_600_000.0).toLong()
+        val delayHours = if (started) MAX_TAKEOFF_DELAY_HOURS else 0.0
+        val windowEndMs = dep + ((delayHours + flightDurationHours + 1.0) * 3_600_000.0).toLong()
         return nowEpochMs > windowEndMs
     }
 
     /**
      * True when [nowEpochMs] is within the live observation window:
-     * `departure - 3h <= now <= departure + duration + 1h`.
+     * `departure - 3h <= now <= departure + duration + 1h` (later when [started], see
+     * [hasLiveObservationWindowEnded]).
      */
-    fun isInLiveObservationWindow(nowEpochMs: Long = System.currentTimeMillis()): Boolean {
+    fun isInLiveObservationWindow(
+        nowEpochMs: Long = System.currentTimeMillis(),
+        started: Boolean = false,
+    ): Boolean {
         val dep = departureEpochMs ?: return false
         val windowStartMs = dep - 3L * 3_600_000L
-        return nowEpochMs >= windowStartMs && !hasLiveObservationWindowEnded(nowEpochMs)
+        return nowEpochMs >= windowStartMs && !hasLiveObservationWindowEnded(nowEpochMs, started)
     }
 
     /**
      * True when [nowEpochMs] is within the tracking / PIREP window:
      * `departure - 2h <= now <= departure + duration + 2h`.
-     * Mirrors `PIREP_FLIGHT_WINDOW_HOURS` in `api/pireps.py`.
+     * Mirrors `PIREP_FLIGHT_WINDOW_HOURS` in `api/pireps.py`. [started] moves the end to
+     * [trackingWindowEndEpochMs] with `started = true` (#874).
      */
-    fun isInTrackingWindow(nowEpochMs: Long = System.currentTimeMillis()): Boolean {
+    fun isInTrackingWindow(
+        nowEpochMs: Long = System.currentTimeMillis(),
+        started: Boolean = false,
+    ): Boolean {
         val dep = departureEpochMs ?: return false
-        val twoHoursMs = 2L * 3_600_000L
-        val durationMs = (flightDurationHours * 3_600_000.0).toLong()
-        val windowStartMs = dep - twoHoursMs
-        val windowEndMs = dep + durationMs + twoHoursMs
+        val windowEndMs = trackingWindowEndEpochMs(started) ?: return false
+        val windowStartMs = dep - 2L * 3_600_000L
         return nowEpochMs in windowStartMs..windowEndMs
+    }
+
+    /**
+     * When the tracking window closes: `departure + duration + 2h`, or for a started flight the
+     * latest take-off the server accepts ([MAX_TAKEOFF_DELAY_HOURS]) + duration + 2h (#874), so a
+     * leg taking off after its planned arrival keeps tracking until it lands. The tracking
+     * service's auto-stop. Mirrors iOS `FlightResponse.trackingWindowEnd(started:)`.
+     */
+    fun trackingWindowEndEpochMs(started: Boolean = false): Long? {
+        val dep = departureEpochMs ?: return null
+        val delayHours = if (started) MAX_TAKEOFF_DELAY_HOURS else 0.0
+        return dep + ((delayHours + flightDurationHours + 2.0) * 3_600_000.0).toLong()
     }
 
     /**
@@ -387,6 +412,13 @@ data class FlightResponse(
     )
 
     companion object {
+        /**
+         * How long after the planned departure the server still accepts a take-off
+         * (`MAX_TAKEOFF_DELAY_H` in `tasks/live_tick.py`, #760). Bounds how far a started
+         * flight's windows stretch past the plan (#874). Keep in step with the server.
+         */
+        const val MAX_TAKEOFF_DELAY_HOURS: Double = 6.0
+
         /**
          * Buckets flights into `Future`, `Recent`, and `Past` sections (dropping empty groups),
          * honoring [order] for `Future` while keeping `Recent` and `Past` most-recent-first.

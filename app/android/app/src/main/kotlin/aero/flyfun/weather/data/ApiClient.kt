@@ -746,8 +746,9 @@ class ApiClient(
     suspend fun listPireps(flightId: String): PirepListResponse =
         get("/api/pireps", listOf("flight_id" to flightId))
 
-    suspend fun reportLivePosition(fixes: List<LivePositionFix>): LivePositionResult =
-        post("/api/live-position", LivePositionRequest(fixes = fixes))
+    /** App GPS fixes for a flight (#761), owner only; `landed` with the landing auto-stop (#874). */
+    suspend fun postLivePosition(flightId: String, request: LivePositionRequest): LivePositionResult =
+        post("/api/flights/$flightId/live/position", request)
 
     // ========================================================================
     // Forecast & Historical Maps & Airport Weather

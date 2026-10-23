@@ -51,6 +51,10 @@ final class FlightTrackingService: NSObject {
     private var routePoints: [TrackingRoutePoint] = []
     private var flightEndTime: Date?
     private var destinationCoordinate: CLLocationCoordinate2D?
+    /// A fix at take-off speed (≥ 30 kt) was seen since Start: only then can a
+    /// slow fix near the destination be the landing (#874), so a round trip or
+    /// a short hop is not "landed" on the ground at Start.
+    private var airborneSeen = false
     private var lastProjectionTime: Date = .distantPast
     private let projectionThrottleInterval: TimeInterval = 5.0
     /// A one-shot `requestLocation()` is in flight (PIREP pre-fill outside an
@@ -63,12 +67,13 @@ final class FlightTrackingService: NSObject {
     ///
     /// - Parameters:
     ///   - routePoints: Fine-grained route points with coordinates and cumulative distance
-    ///   - flightEndTime: Auto-stop after this time (departure + duration + 2h)
+    ///   - flightEndTime: Auto-stop after this time (`FlightResponse.trackingWindowEnd(started: true)`, #874)
     func start(routePoints: [TrackingRoutePoint], flightEndTime: Date) {
         guard !isTracking else { return }
         self.routePoints = routePoints
         self.flightEndTime = flightEndTime
         self.destinationCoordinate = routePoints.last?.coordinate
+        self.airborneSeen = false
 
         let manager = CLLocationManager()
         manager.delegate = self
@@ -99,6 +104,7 @@ final class FlightTrackingService: NSObject {
         routePoints = []
         flightEndTime = nil
         destinationCoordinate = nil
+        airborneSeen = false
         logger.info("Flight tracking stopped")
     }
 
@@ -155,14 +161,16 @@ final class FlightTrackingService: NSObject {
             return
         }
 
-        // Auto-stop: landing detection (speed < ~30kt AND near destination)
+        // Auto-stop: landing detection (speed < ~30kt AND near destination),
+        // once the take-off roll was seen (#874)
         if let dest = destinationCoordinate {
             let speedKt = location.speed * 1.94384 // m/s to knots
             let distToDest = RouteGeometry.directDistanceNm(
                 from: location.coordinate,
                 to: dest
             )
-            if speedKt >= 0 && speedKt < 30 && distToDest < 5.0 {
+            if isTracking && speedKt >= 30 { airborneSeen = true }
+            if airborneSeen && speedKt >= 0 && speedKt < 30 && distToDest < 5.0 {
                 logger.info("Auto-stopping: landing detected (speed=\(speedKt)kt, dist=\(distToDest)nm)")
                 if isTracking {
                     let fix = Self.fix(from: location, alongNm: nil, crossTrackNm: nil)

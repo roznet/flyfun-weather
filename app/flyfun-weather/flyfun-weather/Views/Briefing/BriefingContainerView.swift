@@ -74,8 +74,16 @@ struct BriefingContainerView: View {
     /// Whether the current time is within the flight tracking window. Delegates
     /// to the shared `FlightResponse.isInTrackingWindow` so the formula lives in
     /// exactly one place (was duplicated here and in `FlightListView`).
+    /// A flight started and not yet landed keeps it open past the planned
+    /// arrival (#874), and so does one being tracked right now.
     private var isInFlightWindow: Bool {
-        flight.isInTrackingWindow()
+        trackingService.isTracking || flight.isInTrackingWindow(started: isStartedNotLanded)
+    }
+
+    /// Start pressed for this flight on this device and no app landing since
+    /// (#874): its tracking and live windows stretch past the planned arrival.
+    private var isStartedNotLanded: Bool {
+        flight.isEditable && appState.livePositions?.isStartedNotLanded(flightId: flight.id) == true
     }
 
     /// Whether refresh is gated, and why. Subscriber wins over historical so a
@@ -228,10 +236,13 @@ struct BriefingContainerView: View {
                     // The PIREP form's fix, or the one taken on opening. Only
                     // after Start (#812): the server reads the first ground fix
                     // at the departure as Start.
-                    if flight.isInLiveObservationWindow(), positions.hasConsent(flightId: flight.id) {
+                    let started = positions.isStartedNotLanded(flightId: flight.id)
+                    if flight.isInLiveObservationWindow(started: started), positions.hasConsent(flightId: flight.id) {
                         positions.submit([fix], flightId: flight.id)
                     }
                 }
+                // A late take-off keeps the live poll going past the plan (#874).
+                vm.isStartedNotLanded = { positions.isStartedNotLanded(flightId: flight.id) }
                 vm.beforeLivePoll = {
                     if tracking.isTracking {
                         positions.submit(tracking.recentFixes, flightId: flight.id)
@@ -374,20 +385,24 @@ struct BriefingContainerView: View {
     private func startTracking() {
         guard let viewModel,
               case .loaded(let analyses) = viewModel.routeAnalysesState else { return }
-        guard let departure = flight.departureDate else { return }
-
         let routePoints = analyses.analyses.map { rpa in
             TrackingRoutePoint(
                 coordinate: .init(latitude: rpa.lat, longitude: rpa.lon),
                 distanceFromOriginNm: rpa.distanceFromOriginNm
             )
         }
-        let flightEndTime = departure.addingTimeInterval((flight.flightDurationHours + 2) * 3600)
+        // Pressing Start makes the flight started: tracking runs until the
+        // landing auto-stop, or at the latest until the last take-off the
+        // server accepts + duration + 2h (#874), not the planned arrival + 2h.
+        guard let flightEndTime = flight.trackingWindowEnd(started: true) else { return }
         trackingService.start(routePoints: routePoints, flightEndTime: flightEndTime)
         postOnNextFix = true
         // Start Flight is the pilot's consent for this flight: from now on,
-        // opening it in its live window takes a fix (#761).
-        if flight.isEditable { appState.livePositions?.grantConsent(flightId: flight.id) }
+        // opening it in its live window takes a fix (#761), and the flight
+        // counts as started until a landing is detected (#874).
+        if flight.isEditable { appState.livePositions?.markStarted(flightId: flight.id) }
+        // The poll may have ended at the planned window; a started flight's runs on.
+        viewModel.startLivePolling()
     }
 
     /// One fix when the flight is opened (or comes back to the foreground)
@@ -395,7 +410,7 @@ struct BriefingContainerView: View {
     /// (#761). Never prompts; it goes out through `onOneShotFix`. The common
     /// case: the app opened to check the weather, nobody watching it live.
     private func takeFixOnOpen() {
-        guard flight.isEditable, !trackingService.isTracking, flight.isInLiveObservationWindow(),
+        guard flight.isEditable, !trackingService.isTracking, flight.isInLiveObservationWindow(started: isStartedNotLanded),
               appState.livePositions?.hasConsent(flightId: flight.id) == true else { return }
         trackingService.requestOneShotLocation(prompt: false)
     }

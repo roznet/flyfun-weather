@@ -179,6 +179,28 @@ struct FlightTrackingWindowTests {
         #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T09:59:59Z")))
         #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T16:00:01Z")))
     }
+
+    // #874: a started, not yet landed flight keeps its window open as late as
+    // the server would still take it off (departure + 6h) and fly it (+ 2h):
+    // departure 12:00Z, 2h flight → end 22:00Z instead of 16:00Z.
+    @Test("started: open past the planned end, up to the late take-off cap")
+    func startedStretchesTheEnd() {
+        #expect(Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T17:30:00Z"), started: true))
+        #expect(Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T22:00:00Z"), started: true))
+        #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T22:00:01Z"), started: true))
+        // The start edge does not move.
+        #expect(!Self.flight.isInTrackingWindow(now: Self.at("2026-06-24T09:59:59Z"), started: true))
+        #expect(Self.flight.trackingWindowEnd(started: true) == Self.at("2026-06-24T22:00:00Z"))
+        #expect(Self.flight.trackingWindowEnd() == Self.at("2026-06-24T16:00:00Z"))
+    }
+
+    @Test("started: the live window ends at the late take-off cap + duration + 1h")
+    func startedStretchesTheLiveWindow() {
+        #expect(Self.flight.hasLiveObservationWindowEnded(now: Self.at("2026-06-24T15:01:00Z")))
+        #expect(!Self.flight.hasLiveObservationWindowEnded(now: Self.at("2026-06-24T15:01:00Z"), started: true))
+        #expect(Self.flight.isInLiveObservationWindow(now: Self.at("2026-06-24T21:00:00Z"), started: true))
+        #expect(!Self.flight.isInLiveObservationWindow(now: Self.at("2026-06-24T21:01:00Z"), started: true))
+    }
 }
 
 /// `FlightResponse.isHistoricalForRefresh` — the boundary that gates the briefing
