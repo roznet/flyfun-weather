@@ -23,6 +23,8 @@ import androidx.core.content.ContextCompat
 import aero.flyfun.weather.MainActivity
 import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.data.ApiError
+import aero.flyfun.weather.data.PendingFixStore
+import aero.flyfun.weather.data.TrackingSession
 import aero.flyfun.weather.model.IsoTime
 import aero.flyfun.weather.model.LivePositionFix
 import aero.flyfun.weather.model.LivePositionRequest
@@ -83,6 +85,9 @@ class FlightTrackingService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
+                // A null intent is Android restarting the service after a process kill: pick the
+                // session back up from disk, so fixes keep being recorded (and queued) for it.
+                if (intent == null && _activeFlightId.value == null) restoreSession(this)
                 val flightId = intent?.getStringExtra(EXTRA_FLIGHT_ID) ?: _activeFlightId.value
                 if (flightId != null) {
                     _activeFlightId.value = flightId
@@ -186,6 +191,7 @@ class FlightTrackingService : Service() {
                 recordedAt = recordedIso,
             )
             if (stop != null) {
+                runCatching { attachStore(this@FlightTrackingService).saveSession(null) }
                 withContext(Dispatchers.Main) {
                     stopLocationUpdates()
                     clearTrackingState()
@@ -248,6 +254,12 @@ class FlightTrackingService : Service() {
         private var lastQueuedFix: LivePositionFix? = null
         private val pendingFixes = mutableListOf<LivePositionFix>()
 
+        /** Disk copy of [pendingFixes] and the session (#889); null until a context attaches it. */
+        private var fixStore: PendingFixStore? = null
+
+        private fun attachStore(context: Context): PendingFixStore =
+            fixStore ?: PendingFixStore(context.applicationContext.filesDir).also { fixStore = it }
+
         /**
          * Start foreground GPS tracking for `flightId` along `waypoints`, until the landing is
          * detected or `endEpochMs` passes (#874).
@@ -259,12 +271,17 @@ class FlightTrackingService : Service() {
             apiClient: ApiClient? = null,
             endEpochMs: Long? = null,
         ) {
+            val store = attachStore(context)
+            val end = endEpochMs ?: (System.currentTimeMillis() + FALLBACK_TRACKING_MS)
             configureSession(
                 flightId = flightId,
                 waypoints = waypoints,
                 apiClient = apiClient,
-                endEpochMs = endEpochMs ?: (System.currentTimeMillis() + FALLBACK_TRACKING_MS),
+                endEpochMs = end,
             )
+            runCatching {
+                store.saveSession(TrackingSession(flightId, waypoints.map { listOf(it.first, it.second) }, end))
+            }
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, FlightTrackingService::class.java).apply {
                 action = ACTION_START
@@ -290,6 +307,7 @@ class FlightTrackingService : Service() {
             }.onFailure {
                 appCtx.stopService(Intent(appCtx, FlightTrackingService::class.java))
             }
+            runCatching { attachStore(appCtx).saveSession(null) }
             clearTrackingState()
         }
 
@@ -313,6 +331,48 @@ class FlightTrackingService : Service() {
             landingPending = false
             lastQueuedFix = null
             pendingFixes.clear()
+            // Fixes left from before a kill are sent with this session's next post. A stored landing
+            // is not carried over: starting tracking again means the flight is not landed.
+            runCatching { fixStore?.queue(flightId) }.getOrNull()?.let { pendingFixes.addAll(it.fixes) }
+        }
+
+        /** Re-create the session saved by [startTracking]; no API client until the app attaches one. */
+        private fun restoreSession(context: Context) {
+            val session = runCatching { attachStore(context).session() }.getOrNull() ?: return
+            if (session.endEpochMs != null && System.currentTimeMillis() > session.endEpochMs) return
+            configureSession(
+                flightId = session.flightId,
+                waypoints = session.waypoints.mapNotNull { if (it.size == 2) it[0] to it[1] else null },
+                endEpochMs = session.endEpochMs,
+            )
+        }
+
+        /**
+         * Upload what a killed process left on disk (#889): every stored flight's fixes and pending
+         * landing, oldest first. Called on app start once signed in. Also hands the restored
+         * session its API client, so a service Android restarted resumes posting.
+         */
+        suspend fun uploadPersistedFixes(context: Context, apiClient: ApiClient) = stateMutex.withLock {
+            val store = attachStore(context)
+            if (activeApiClient == null && _activeFlightId.value != null) activeApiClient = apiClient
+            for (queue in runCatching { store.queues() }.getOrDefault(emptyList())) {
+                // The running session posts its own queue with its next fix.
+                if (queue.flightId == _activeFlightId.value) continue
+                val remaining = queue.fixes.toMutableList()
+                val delivered = postQueue(apiClient, queue.flightId, remaining, queue.landed)
+                runCatching { store.save(queue.flightId, remaining, queue.landed && !delivered) }
+            }
+        }
+
+        /** Sign-out: drop the stored fixes and session (they belong to the previous user). */
+        fun discardPersistedFixes(context: Context) {
+            runCatching { attachStore(context).clear() }
+        }
+
+        private fun persistLocked() {
+            val flightId = _activeFlightId.value ?: return
+            runCatching { fixStore?.save(flightId, pendingFixes, landingPending) }
+                .onFailure { Log.w(TAG, "Could not save pending fixes: $it") }
         }
 
         /**
@@ -352,8 +412,25 @@ class FlightTrackingService : Service() {
             recordedAt: String = IsoTime.formatUtc(System.currentTimeMillis()),
             nowEpochMs: Long = System.currentTimeMillis(),
         ): AutoStop? = stateMutex.withLock {
+            try {
+                onLocationFixLocked(lat, lon, altitudeFt, groundSpeedKt, trackDeg, hAccuracyM, recordedAt, nowEpochMs)
+            } finally {
+                persistLocked()
+            }
+        }
+
+        private suspend fun onLocationFixLocked(
+            lat: Double,
+            lon: Double,
+            altitudeFt: Double?,
+            groundSpeedKt: Double?,
+            trackDeg: Double?,
+            hAccuracyM: Double?,
+            recordedAt: String,
+            nowEpochMs: Long,
+        ): AutoStop? {
             trackingEndEpochMs?.let { end ->
-                if (nowEpochMs > end) return@withLock AutoStop.WINDOW_ENDED
+                if (nowEpochMs > end) return AutoStop.WINDOW_ENDED
             }
 
             val projected = LivePositionRules.projectOntoRoute(
@@ -387,7 +464,9 @@ class FlightTrackingService : Service() {
             ) {
                 if (!landingPending && fix != null) enqueueLocked(fix)
                 landingPending = true
-                return@withLock if (flushPendingFixesLocked(landed = true)) AutoStop.LANDED else null
+                if (!flushPendingFixesLocked(landed = true)) return null
+                landingPending = false // delivered: nothing left on disk to resend
+                return AutoStop.LANDED
             }
             if (groundSpeedKt != null && groundSpeedKt >= LivePositionRules.LANDING_MAX_SPEED_KT) {
                 airborneSeen = true
@@ -398,7 +477,7 @@ class FlightTrackingService : Service() {
                 flushPendingFixesLocked()
             }
 
-            null
+            return null
         }
 
         private fun enqueueLocked(fix: LivePositionFix) {
@@ -419,10 +498,25 @@ class FlightTrackingService : Service() {
             val client = activeApiClient ?: return false
             val flightId = _activeFlightId.value
             if (flightId.isNullOrBlank()) return false
+            return postQueue(client, flightId, pendingFixes, landed)
+        }
 
+        /**
+         * Post `queue` oldest first, in batches of at most [LivePositionRules.MAX_BATCH_SIZE] (the
+         * server's limit), to `POST /api/flights/{id}/live/position`; `landed` goes with the last
+         * batch. Delivered batches are removed from `queue`; a batch that fails is kept for the next
+         * try (or dropped on a permanent refusal). Returns whether everything, the landing included,
+         * was delivered or dropped for good.
+         */
+        private suspend fun postQueue(
+            client: ApiClient,
+            flightId: String,
+            queue: MutableList<LivePositionFix>,
+            landed: Boolean,
+        ): Boolean {
             do {
-                val batch = pendingFixes.take(LivePositionRules.MAX_BATCH_SIZE)
-                val last = batch.size == pendingFixes.size
+                val batch = queue.take(LivePositionRules.MAX_BATCH_SIZE)
+                val last = batch.size == queue.size
                 if (batch.isEmpty() && !landed) return true
                 try {
                     client.postLivePosition(flightId, LivePositionRequest(fixes = batch, landed = landed && last))
@@ -439,8 +533,8 @@ class FlightTrackingService : Service() {
                     }
                     Log.w(TAG, "Position post refused ($statusCode), ${batch.size} fixes dropped")
                 }
-                repeat(batch.size) { pendingFixes.removeAt(0) }
-            } while (pendingFixes.isNotEmpty())
+                repeat(batch.size) { queue.removeAt(0) }
+            } while (queue.isNotEmpty())
             return true
         }
 
