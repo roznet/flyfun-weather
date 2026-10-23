@@ -806,7 +806,7 @@ const ACTIVITY_ROWS: { key: ActivityMetricKey; label: string; title: string; com
   { key: 'active_users', label: 'Active users', title: 'Seen in a web/app session, created a flight, requested a briefing or called an MCP tool. "Seen" is a last-seen time, so Yesterday misses users also seen today.' },
   { key: 'new_briefings', label: 'New briefings', title: 'Users who created flights · flights created' },
   { key: 'refreshes', label: 'Refreshes', title: 'Users who refreshed · user-requested refreshes (not auto-refresh)' },
-  { key: 'mcp', label: 'MCP', title: 'Users who called an MCP tool or requested an MCP briefing · tool calls (logged since 2026-10-23)' },
+  { key: 'mcp', label: 'MCP', title: 'Users who called an MCP tool or requested an MCP briefing · tool calls (logged since 2026-10-23, kept 365 days, so Lifetime = last year)' },
   { key: 'auto_refreshes', label: 'Auto-refreshes', title: 'Users with scheduled refreshes · scheduler runs' },
   { key: 'llm_tokens', label: 'LLM tokens', title: 'Users with a digest · briefing-digest tokens (input + output, any trigger)', compact: true },
 ];

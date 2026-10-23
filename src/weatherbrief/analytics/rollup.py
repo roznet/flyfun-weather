@@ -390,6 +390,28 @@ def purge_old_events(db: Session, retention_days: int | None = None) -> int:
     return result.rowcount or 0
 
 
+#: MCP tool-call log (#873): one row per call, kept a year by default so the
+#: admin Activity table's "Lifetime" MCP column means "last 365 days".
+MCP_TOOL_CALL_RETENTION_ENV = "MCP_TOOL_CALL_RETENTION_DAYS"
+DEFAULT_MCP_TOOL_CALL_RETENTION_DAYS = 365
+
+
+def purge_old_mcp_tool_calls(db: Session, retention_days: int | None = None) -> int:
+    """Delete ``mcp_tool_calls`` rows older than the retention window."""
+    from weatherbrief.db.models import McpToolCallRow
+
+    if retention_days is None:
+        try:
+            retention_days = max(1, int(os.environ.get(
+                MCP_TOOL_CALL_RETENTION_ENV, DEFAULT_MCP_TOOL_CALL_RETENTION_DAYS,
+            )))
+        except ValueError:
+            retention_days = DEFAULT_MCP_TOOL_CALL_RETENTION_DAYS
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    result = db.execute(delete(McpToolCallRow).where(McpToolCallRow.ts < cutoff))
+    return result.rowcount or 0
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint used by the scheduler loop
 # ---------------------------------------------------------------------------
@@ -414,11 +436,19 @@ def run_rollup_and_retention(db: Session) -> dict:
     except Exception:
         logger.warning("Live latency purge failed — rollup kept", exc_info=True)
         latency_purged = 0
+    # MCP tool-call log (#873): same pass, 365 d by default.
+    try:
+        with db.begin_nested():
+            mcp_purged = purge_old_mcp_tool_calls(db)
+    except Exception:
+        logger.warning("MCP tool-call purge failed — rollup kept", exc_info=True)
+        mcp_purged = 0
     logger.info(
         "analytics rollup: day=%s events=%d features=%d briefings=%d "
-        "xsection_config=%d purged=%d live_latency_purged=%d",
+        "xsection_config=%d purged=%d live_latency_purged=%d mcp_tool_calls_purged=%d",
         yesterday, counts["events"], counts["features"], counts["briefings"],
-        counts["xsection_config"], purged, latency_purged,
+        counts["xsection_config"], purged, latency_purged, mcp_purged,
     )
     return {"day": yesterday.isoformat(), "purged": purged,
-            "live_latency_purged": latency_purged, **counts}
+            "live_latency_purged": latency_purged,
+            "mcp_tool_calls_purged": mcp_purged, **counts}

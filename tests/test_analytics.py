@@ -298,3 +298,45 @@ class TestXsectionConfigRollup:
         # Scalars still rolled up; the bad layers value produced no layer rows.
         assert rows[("theme", "gramet")].views == 1
         assert not any(dim == "layer" for dim, _ in rows)
+
+
+# ---------------------------------------------------------------------------
+# MCP tool-call retention (#873)
+# ---------------------------------------------------------------------------
+
+
+def _mcp_db(analytics_db):
+    from flyfun_common.db.models import UserRow
+
+    analytics_db.add(UserRow(id="mcp-u", provider="email", email="m@example.com"))
+    analytics_db.flush()
+    return analytics_db
+
+
+def test_mcp_tool_calls_purged_past_retention(analytics_db, monkeypatch):
+    from weatherbrief.analytics.rollup import purge_old_mcp_tool_calls
+    from weatherbrief.db.models import McpToolCallRow
+
+    db = _mcp_db(analytics_db)
+    now = datetime.now(timezone.utc)
+    for age in (10, 364, 366, 800):
+        db.add(McpToolCallRow(user_id="mcp-u", tool="get_briefing", ts=now - timedelta(days=age)))
+    db.flush()
+
+    monkeypatch.delenv("MCP_TOOL_CALL_RETENTION_DAYS", raising=False)
+    assert purge_old_mcp_tool_calls(db) == 2  # default 365 d
+    monkeypatch.setenv("MCP_TOOL_CALL_RETENTION_DAYS", "30")
+    assert purge_old_mcp_tool_calls(db) == 1
+    assert db.query(McpToolCallRow).count() == 1
+
+
+def test_rollup_pass_reports_mcp_purge(analytics_db):
+    from weatherbrief.analytics.rollup import run_rollup_and_retention
+    from weatherbrief.db.models import McpToolCallRow
+
+    db = _mcp_db(analytics_db)
+    db.add(McpToolCallRow(
+        user_id="mcp-u", tool="list_flights", ts=datetime.now(timezone.utc) - timedelta(days=400),
+    ))
+    db.flush()
+    assert run_rollup_and_retention(db)["mcp_tool_calls_purged"] == 1

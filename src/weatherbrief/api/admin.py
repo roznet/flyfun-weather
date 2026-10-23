@@ -346,7 +346,8 @@ def activity_summary(
     - ``refreshes``: user-requested briefings that weren't a flight's first.
     - ``mcp``: ``users`` = accounts that called an MCP tool or requested an
       MCP briefing (the latter covers history before the tool-call log);
-      ``count`` = tool calls (logged since #873).
+      ``count`` = tool calls (logged since #873, purged after
+      ``MCP_TOOL_CALL_RETENTION_DAYS``, 365 by default).
     - ``auto_refreshes``: scheduler-run briefings.
     - ``llm_tokens``: briefing-digest tokens (input + output), any trigger.
     """
