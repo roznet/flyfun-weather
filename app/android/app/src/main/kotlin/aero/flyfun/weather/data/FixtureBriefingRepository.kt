@@ -770,6 +770,9 @@ open class FixtureBriefingRepository(
 
     /** Invalidation the next [updateFlight] reports, so tests can drive the post-save paths. */
     var nextInvalidation: FlightInvalidation = FlightInvalidation.NONE
+    /** When set, `updateFlight` / `interpretRoute` throw it (tests). */
+    var updateFlightError: Throwable? = null
+    var interpretRouteError: Throwable? = null
     var savedDebrief: DebriefResponse? = null
 
     override suspend fun listFlights(): List<FlightResponse> = flights.toList()
@@ -804,6 +807,7 @@ open class FixtureBriefingRepository(
 
     override suspend fun updateFlight(id: String, req: UpdateFlightRequest): UpdateFlightResponse {
         lastUpdatedFlight = id to req
+        updateFlightError?.let { throw it }
         val idx = flights.indexOfFirst { it.id == id }
         if (idx < 0) throw ApiError.NotFound
         val current = flights[idx]
@@ -874,6 +878,7 @@ open class FixtureBriefingRepository(
 
     /** Keeps the 4-letter idents, drops Field-15 syntax (DCT, VFR, N0120F065...). */
     override suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse {
+        interpretRouteError?.let { throw it }
         val tokens = rawRoute.uppercase().split(Regex("[\\s,\\->]+")).filter { it.isNotBlank() }
         val syntax = setOf("DCT", "VFR", "IFR")
         val idents = tokens.filter { it.length == 4 && it.all(Char::isLetter) && it !in syntax }

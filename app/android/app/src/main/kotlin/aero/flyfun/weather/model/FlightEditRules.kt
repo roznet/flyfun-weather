@@ -3,6 +3,7 @@ package aero.flyfun.weather.model
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 
 /**
  * Pure rules for editing a flight, ported from the web (`flight-main.ts`,
@@ -142,6 +143,9 @@ object FlightEditRules {
     }
 }
 
-/** Parsed departure instant, or null when the stored string is not valid ISO 8601. */
+/**
+ * Parsed departure, at the form's minute precision so a stored departure with seconds
+ * doesn't read as a time change (and a needless re-brief); null when not valid ISO 8601.
+ */
 val FlightResponse.departureInstant: Instant?
-    get() = departureEpochMs?.let { Instant.ofEpochMilli(it) }
+    get() = departureEpochMs?.let { Instant.ofEpochMilli(it).truncatedTo(ChronoUnit.MINUTES) }

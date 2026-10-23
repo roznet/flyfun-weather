@@ -60,6 +60,8 @@ class AddFlightViewModel(
     private val tripRepository: TripRepository? = null,
     private val airportDb: AirportDatabaseService? = null,
     private val scopeOverride: CoroutineScope? = null,
+    /** Outlives the sheet: the 409 refresh retry keeps going after it closes. */
+    private val backgroundScope: CoroutineScope? = null,
 ) : ViewModel() {
 
     /** What the sheet is doing. */
@@ -162,6 +164,10 @@ class AddFlightViewModel(
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    /** Set when a save went through but part of it didn't (shown after the sheet closes). */
+    private val _saveWarning = MutableStateFlow<String?>(null)
+    val saveWarning: StateFlow<String?> = _saveWarning.asStateFlow()
 
     /**
      * How many briefings the edited flight has, for what Move discards. Null while unknown
@@ -657,6 +663,7 @@ class AddFlightViewModel(
     private fun submit(onSaved: (FlightResponse) -> Unit, block: suspend () -> FlightResponse) {
         _isSaving.value = true
         _errorMessage.value = null
+        _saveWarning.value = null
         scope.launch {
             try {
                 val saved = block()
@@ -685,11 +692,19 @@ class AddFlightViewModel(
             return RoutePayload(original.waypoints, original.rawRoute, changed = false)
         }
         val text = _rawRouteText.value.trim()
-        val resolved = runCatching { repository.interpretRoute(text) }.getOrNull()
-        val waypoints = resolved?.interpreted?.takeIf { it.size >= 2 } ?: _waypoints.value
-        if (resolved != null && resolved.skipped.isNotEmpty()) {
+        // A failed check is a failed save: the local token split is not a resolved route.
+        val resolved = try {
+            repository.interpretRoute(text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            throw IllegalStateException("Couldn't check the route with the server. ${e.message ?: ""}".trim(), e)
+        }
+        if (resolved.skipped.isNotEmpty()) {
             throw IllegalArgumentException("Not recognised in the route: ${resolved.skipped.joinToString(" ")}")
         }
+        val waypoints = resolved.interpreted.takeIf { it.size >= 2 }
+            ?: throw IllegalArgumentException("The route needs a departure and a destination.")
         _waypoints.value = waypoints
         return RoutePayload(waypoints, text, changed = true)
     }
@@ -801,10 +816,10 @@ class AddFlightViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                val retry = attempt == 0 && isWorthRetrying(e)
-                if (!retry) {
-                    _errorMessage.value =
-                        "The flight moved, but the aircraft/profile change didn't save. Re-open Edit to apply it."
+                if (attempt == 0 && isWorthRetrying(e)) {
+                    delay(RESIDUAL_RETRY_MS)
+                } else {
+                    _saveWarning.value = residualFailureMessage(request)
                     return moved
                 }
             }
@@ -839,7 +854,7 @@ class AddFlightViewModel(
     private suspend fun queueRefresh(flightId: String) {
         val first = runCatching { repository.triggerRefresh(flightId) }
         if (first.isSuccess || !isConflict(first.exceptionOrNull())) return
-        scope.launch {
+        (backgroundScope ?: scope).launch {
             repeat(QUEUE_REFRESH_ATTEMPTS) {
                 delay(QUEUE_REFRESH_RETRY_MS)
                 val retry = runCatching { repository.triggerRefresh(flightId) }
@@ -890,6 +905,21 @@ class AddFlightViewModel(
     companion object {
         private const val QUEUE_REFRESH_ATTEMPTS = 6
         private const val QUEUE_REFRESH_RETRY_MS = 30_000L
+        private const val RESIDUAL_RETRY_MS = 2_000L
+
+        /** Names what the follow-up PATCH after a move carried, for the failure warning. */
+        fun residualFailureMessage(request: UpdateFlightRequest): String {
+            val parts = listOfNotNull(
+                "aircraft".takeIf { request.aircraftId != null },
+                "profile".takeIf { request.profileId != null },
+                "flexibility".takeIf { request.flexibility != null || request.altDepartureTime != null },
+            )
+            val what = when (parts.size) {
+                0, 1 -> parts.firstOrNull() ?: "edit"
+                else -> parts.dropLast(1).joinToString(", ") + " and " + parts.last()
+            }
+            return "The flight moved, but the $what change didn't save. Open Edit to apply it again."
+        }
 
         private fun iso(instant: Instant): String = DateTimeFormatter.ISO_INSTANT.format(instant)
 
