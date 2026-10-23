@@ -22,11 +22,9 @@ fun rememberIsOnline(): State<Boolean> {
     val cm = remember(context) { context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager }
     val online = remember(cm) { mutableStateOf(cm?.isOnlineNow() ?: true) }
     DisposableEffect(cm) {
+        // No onAvailable: it fires before the capabilities are known, and
+        // onCapabilitiesChanged follows it with the real answer.
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                online.value = true
-            }
-
             override fun onLost(network: Network) {
                 online.value = cm?.isOnlineNow() ?: false
             }

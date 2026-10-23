@@ -10,6 +10,7 @@ import aero.flyfun.weather.model.FeedbackRequest
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.model.rules.AirportCardRules
+import aero.flyfun.weather.model.rules.ObservedLayoutRules
 import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.briefing.SectionSpyBar
 import aero.flyfun.weather.ui.briefing.SpySection
@@ -74,7 +75,6 @@ private val TrackingActiveCyan = Color(0xFF0284C7)
 
 private val ObservedSpySections = listOf(
     SpySection(id = "summary", title = "Summary"),
-    SpySection(id = "changes", title = "Changes"),
     SpySection(id = "storms", title = "Storms"),
     SpySection(id = "airports", title = "Airports"),
     SpySection(id = "sigmets", title = "SIGMETs"),
@@ -85,10 +85,11 @@ private val ObservedSpySections = listOf(
  * - Top live status bar (`Live updated HH:MMZ · Refresh ↻`) + In-Flight GPS Tracking Bar
  *   (`"Start Flight Tracking"` / `"Tracking Active · Stop"` toggle showing live distance along route & groundspeed/altitude).
  * - The offline banner when the last `/live` read failed or there is no connection (#883).
- * - Sticky [SectionSpyBar] (`Summary`, `Changes`, `Storms`, `Airports`, `SIGMETs`).
- * - Flight strip → [ObservedHighlightCard] → departure / arrival [AirportCardsSection] (#883) →
- *   [ObservedNutshellCard] ([RouteRibbonCanvas]) → [LiveChangesSection] →
- *   [LiveStormsSection] → [RouteObservationsSection] (with [RunwayWindDialView]) → [RouteSigmetsSection].
+ * - Sticky [SectionSpyBar] (`Summary`, `Storms`, `Airports`, `SIGMETs`).
+ * - Summary in the shared order (#883, web #881, iOS #882; [ObservedLayoutRules]): flight strip →
+ *   [ObservedAlertLines] → [ObservedHighlightCard] (or the headline) → [AirportCardsSection] →
+ *   [ObservedRibbonCard] → [ObservedDetailsFold] (headline, lines ahead, passed lines, [LiveChangesSection]).
+ * - Then [LiveStormsSection] → [RouteObservationsSection] (with [RunwayWindDialView]) → [RouteSigmetsSection].
  */
 @Composable
 fun ObservedTabScreen(
@@ -283,18 +284,16 @@ fun ObservedTabScreen(
     }
 
     // LazyColumn item indices for SectionSpyBar
-    // 0 = Highlight + Nutshell (Summary)
-    // 1 = LiveChangesSection (Changes)
-    // 2 = LiveStormsSection (Storms)
-    // 3 = RouteObservationsSection (Airports)
-    // 4 = RouteSigmetsSection (SIGMETs)
+    // 0 = Summary (strip, alerts, highlight, cards, ribbon, Details with the change rows)
+    // 1 = LiveStormsSection (Storms)
+    // 2 = RouteObservationsSection (Airports)
+    // 3 = RouteSigmetsSection (SIGMETs)
     val sectionIndices = remember {
         mapOf(
             "summary" to 0,
-            "changes" to 1,
-            "storms" to 2,
-            "airports" to 3,
-            "sigmets" to 4,
+            "storms" to 1,
+            "airports" to 2,
+            "sigmets" to 3,
         )
     }
 
@@ -359,20 +358,28 @@ fun ObservedTabScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                // Item 0: Summary (Highlight Card + Nutshell Card)
+                // Item 0: Summary, in the order every client shares (#883, web #881, iOS #882):
+                // flight strip → alert lines → highlight (or headline) → airport cards → ribbon → Details.
                 item(key = "summary") {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         val glance = liveLayer?.glance
+                        val layout = remember(glance) { glance?.let { ObservedLayoutRules.layout(it) } }
                         glance?.flight?.text?.takeIf { it.isNotBlank() }?.let { ObservedFlightStrip(it) }
-                        if (glance != null) {
-                            ObservedHighlightCard(
-                                glance = glance,
-                                updatedAt = liveLayer?.liveUpdatedAt,
-                                onRateHighlight = { thumbsUp: Boolean ->
-                                    viewModel.submitHighlightFeedback(thumbsUp = thumbsUp)
-                                }.takeIf { (glance.highlight ?: glance.highlights.firstOrNull())?.let(FeedbackRequest::isRatable) == true },
-                                onSelectFocus = handleFocus,
-                            )
+                        if (glance != null && layout != null) {
+                            ObservedAlertLines(lines = layout.alertLines, onSelectFocus = handleFocus)
+                            val highlight = glance.highlight
+                            if (layout.leadIsHighlight && highlight != null) {
+                                ObservedHighlightCard(
+                                    highlight = highlight,
+                                    updatedAt = highlight.generatedAt ?: liveLayer?.liveUpdatedAt,
+                                    onRateHighlight = { thumbsUp: Boolean ->
+                                        viewModel.submitHighlightFeedback(thumbsUp = thumbsUp)
+                                    }.takeIf { FeedbackRequest.isRatable(highlight) },
+                                    onSelectFocus = handleFocus,
+                                )
+                            } else {
+                                ObservedHeadline(glance.headline)
+                            }
                             // Departure / arrival cards (#883): the server's blocks, drawn as is.
                             AirportCardsSection(
                                 departure = glance.departure,
@@ -382,23 +389,22 @@ fun ObservedTabScreen(
                                 onSelectFocus = handleFocus,
                             )
                         }
-                        ObservedNutshellCard(
+                        liveLayer?.ribbon?.let { ribbon ->
+                            ObservedRibbonCard(
+                                ribbon = ribbon,
+                                progress = flightProgress,
+                                waypoints = waypoints,
+                                onOpenMap = onOpenMapTab,
+                                onSelectFocus = handleFocus,
+                            )
+                        }
+                        ObservedDetailsFold(
                             glance = glance,
-                            ribbon = liveLayer?.ribbon,
-                            progress = flightProgress,
-                            waypoints = waypoints,
-                            onFocusMap = onOpenMapTab,
+                            changes = liveLayer?.changes,
+                            flightId = currentFlightId,
                             onSelectFocus = handleFocus,
                         )
                     }
-                }
-
-                // Item 1: Since this briefing (LiveChangesSection)
-                item(key = "changes") {
-                    LiveChangesSection(
-                        liveChanges = liveLayer?.changes,
-                        onSelectFocus = handleFocus,
-                    )
                 }
 
                 // Item 2: Radar Storm Lineage (LiveStormsSection)
