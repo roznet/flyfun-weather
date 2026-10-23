@@ -15,7 +15,8 @@ Test data both mobile apps use, kept once here (#895).
 
 Android puts this whole folder on its resource path and drops everything but `api/` at
 packaging (`packaging.resources.excludes` in `app/android/app/build.gradle.kts`). A new
-top-level folder here ships in the Android APK unless it is added to that list.
+top-level folder here ships in the Android APK unless it is added to that list;
+`FixtureFolderTest` (Android JVM unit tests) fails until it is.
 
 Design notes: `designs/ios-app-ui.md` (UI-test fixtures) and
 `designs/android-app-architecture.md` (UI Tests & Mock Launch).

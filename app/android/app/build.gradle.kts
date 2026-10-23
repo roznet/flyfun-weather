@@ -118,6 +118,9 @@ dependencies {
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // Compose ui-test pulls espresso-core 3.5.0, which calls InputManager.getInstance — gone on
+    // API 35+, so every journey failed in onIdle on a current emulator. 3.7.0 is the first fix.
+    androidTestImplementation(libs.androidx.espresso.core)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
