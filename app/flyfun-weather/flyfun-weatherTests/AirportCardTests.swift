@@ -115,8 +115,8 @@ private let glanceJSON = """
     /// the departure block with its airport row.
     @Test func everyExportedTickDecodesItsDepartureCard() throws {
         let dir = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("flyfun-weatherUITests/LiveScenarios")
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/live-scenarios")
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
         #expect(!files.isEmpty)

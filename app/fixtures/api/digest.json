@@ -1,0 +1,19 @@
+{
+  "assessment": "amber",
+  "assessment_reason": "VFR feasible with attention to the afternoon convective build-up near the coast.",
+  "synoptic": "A weak upper trough drifts across the Côte d'Azur, steepening lapse rates through the morning. Surface flow is a light onshore westerly with a shallow marine layer along the Marseille approach.",
+  "specific_concerns": "Isolated convective cells could pop near Cannes after 10Z. Keep a diversion plan for the coastal leg.",
+  "winds": "Light westerly aloft, 8–12 kt at cruise. No trip-impacting headwind on the direct route.",
+  "icing": "A thin band of light rime is possible where the cruise level clips coastal stratiform cloud between 6,000 and 9,000 ft — GFS flags it, ECMWF keeps the freezing level above the tops.",
+  "turbulence": "Smooth away from any convective cell. Expect light mechanical turbulence on the Marseille approach in the westerly.",
+  "precipitation": "Dry for most of the route; a brief shower is possible under any cell that develops near LFMD.",
+  "visibility": "Good, 8–10 SM, reducing only briefly in a shower.",
+  "trend": "Instability increases through the afternoon — an earlier departure keeps the convective risk lower.",
+  "model_agreement": "Good on winds and visibility; GFS is more bullish than ECMWF on convective CAPE near the coast.",
+  "recommendations": "Depart on the earlier side, brief a coastal diversion, and re-check the D-0 pack for cell initiation.",
+  "watch_items": [
+    "Convective initiation near LFMD after 10Z",
+    "Marine layer ceiling on the LFML approach",
+    "Light rime in coastal cloud at cruise"
+  ]
+}

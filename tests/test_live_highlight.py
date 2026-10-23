@@ -20,7 +20,7 @@ import pytest
 from weatherbrief.models.live import LiveGlance, LiveHighlight
 from weatherbrief.tasks import live_highlight as lh
 
-SCENARIOS = Path(__file__).resolve().parent.parent / "app/flyfun-weather/flyfun-weatherUITests/LiveScenarios"
+SCENARIOS = Path(__file__).resolve().parent.parent / "app/fixtures/live-scenarios"
 
 
 def _fg(**over) -> tuple[dict, dict]:

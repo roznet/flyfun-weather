@@ -1,0 +1,37 @@
+{
+  "route_name": "LFMD LFML",
+  "max_elevation_ft": 2400.0,
+  "total_distance_nm": 78.0,
+  "points": [
+    {
+      "distance_nm": 0.0,
+      "elevation_ft": 12.0,
+      "lat": 43.542,
+      "lon": 6.953
+    },
+    {
+      "distance_nm": 20.0,
+      "elevation_ft": 1800.0,
+      "lat": 43.516,
+      "lon": 6.52
+    },
+    {
+      "distance_nm": 39.0,
+      "elevation_ft": 2400.0,
+      "lat": 43.489,
+      "lon": 6.084
+    },
+    {
+      "distance_nm": 59.0,
+      "elevation_ft": 900.0,
+      "lat": 43.463,
+      "lon": 5.649
+    },
+    {
+      "distance_nm": 78.0,
+      "elevation_ft": 74.0,
+      "lat": 43.436,
+      "lon": 5.215
+    }
+  ]
+}

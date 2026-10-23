@@ -8,6 +8,7 @@ import aero.flyfun.weather.model.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,12 +17,12 @@ class DtoSerializationTest {
     @Test
     fun `decode FixtureBriefingData and FixtureTripData blobs`() {
         val flights = FixtureBriefingRepository.decodeDefaultFlights()
-        assertEquals(2, flights.size)
+        assertEquals(listOf("fixture-1", "fixture-2", "fixture-trip-out", "fixture-trip-back"), flights.map { it.id })
         val f1 = flights.first()
-        assertEquals("fixture-1", f1.id)
         assertEquals("LFMD → LFML", f1.shortTitle)
         assertEquals(Assessment.AMBER, f1.resolvedAssessment)
-        assertEquals("Riviera Hop · Leg 1/2", f1.trip?.badgeText)
+        assertNull(f1.trip)
+        assertEquals("Alps weekend · Leg 2/2", flights.last().trip?.badgeText)
 
         val pack = FixtureBriefingData.pack
         assertEquals("fixture-1", pack.flightId)
@@ -45,13 +46,13 @@ class DtoSerializationTest {
 
         val snapshot = FixtureBriefingData.snapshot
         assertEquals(2, snapshot.analyses.size)
-        assertEquals(2, snapshot.routeObservations?.airports?.size)
-        assertEquals(1, snapshot.routeSigmets?.sigmets?.size)
+        assertEquals(3, snapshot.routeObservations?.airports?.size)
+        assertEquals(2, snapshot.routeSigmets?.sigmets?.size)
 
         val routeAnalyses = FixtureBriefingData.routeAnalyses
-        assertEquals(1, routeAnalyses.analyses.size)
-        val pt0 = routeAnalyses.analyses.first()
-        assertEquals(12.0, pt0.sounding["gfs"]?.sfipZones?.first()?.meanSfip100 ?: 0.0, 1e-6)
+        assertEquals(5, routeAnalyses.analyses.size)
+        val pt1 = routeAnalyses.analyses[1]
+        assertEquals(12.0, pt1.sounding["gfs"]?.sfipZones?.first()?.meanSfip100 ?: 0.0, 1e-6)
 
         val elevation = FixtureBriefingData.elevation
         assertEquals(5, elevation.points.size)
@@ -61,15 +62,18 @@ class DtoSerializationTest {
         assertFalse(nullLive.hasObservationOverlay)
         val live = FixtureBriefingData.liveLayer
         assertTrue(live.supersedes(nullLive))
-        assertEquals(1, live.changes?.changes?.size)
+        assertEquals(3, live.changes?.changes?.size)
 
+        // The server's trip shape: the legs come in the summary, the list entry is the trip itself.
         val tripSummaries = FixtureTripData.summaries
         assertEquals(1, tripSummaries.size)
-        assertEquals("LFMD → LFMN", tripSummaries.first().routeLabel)
+        assertEquals("Alps weekend", tripSummaries.first().name)
+        assertEquals(2, tripSummaries.first().flightCount)
         val trip = FixtureTripData.trip
-        assertEquals(2, trip.legs.size)
-        assertEquals(TripLegState.COMPLETE, trip.legs[0].resolvedLegState)
-        assertEquals(TripLegState.ECMWF_ONLY, trip.legs[1].resolvedLegState)
+        assertEquals(FixtureTripData.TRIP_ID, trip.id)
+        assertEquals(listOf(FixtureTripData.OUTBOUND_ID, FixtureTripData.RETURN_ID), trip.flights.map { it.id })
+        assertEquals(Assessment.AMBER, trip.resolvedAssessment)
+        assertEquals(listOf("flown", "remaining"), trip.summary?.legs?.map { it.state })
     }
 
     @Test

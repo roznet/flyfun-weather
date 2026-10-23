@@ -183,7 +183,7 @@ run both — a green pair means the labels and geometry still agree.
 
 Also worth a glance: `web/tests/unit/observed-live-fixtures.test.ts` renders the
 same exported `/live` ticks the iOS UI test feeds the app
-(`flyfun-weatherUITests/LiveScenarios/`). If those files changed, both
+(`app/fixtures/live-scenarios/`). If those files changed, both
 consumers must still pass — re-run `scripts/export_live_scenario_ios.py` and
 `pytest tests/test_live_scenarios.py` first.
 

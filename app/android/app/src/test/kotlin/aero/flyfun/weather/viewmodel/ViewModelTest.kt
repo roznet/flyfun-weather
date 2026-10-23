@@ -5,6 +5,7 @@ import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.FixtureBriefingData
 import aero.flyfun.weather.data.FixtureBriefingRepository
+import aero.flyfun.weather.data.FixtureTripData
 import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightFlexibility
@@ -102,7 +103,8 @@ class ViewModelTest {
         vm.loadFlights(nowEpochMs = 1_700_000_000_000L)
         testScope.advanceUntilIdle()
 
-        assertEquals(2, vm.flights.value.size)
+        // The shared fixtures: fixture-1, fixture-2 and the two legs of fixture-trip-1.
+        assertEquals(4, vm.flights.value.size)
         assertEquals(1, vm.trips.value.size)
         assertTrue(vm.groups.value.any { it.section == FlightSection.FUTURE })
 
@@ -115,7 +117,7 @@ class ViewModelTest {
         vm.setSearchQuery("LFMD", nowEpochMs = 1_700_000_000_000L)
         assertEquals(1, vm.groups.value.sumOf { it.flights.size })
         vm.setSearchQuery("", nowEpochMs = 1_700_000_000_000L)
-        assertEquals(2, vm.groups.value.sumOf { it.flights.size })
+        assertEquals(4, vm.groups.value.sumOf { it.flights.size })
 
         // Multi-select bulk delete
         vm.enterSelectionMode("fixture-2")
@@ -126,8 +128,7 @@ class ViewModelTest {
         testScope.advanceUntilIdle()
 
         assertFalse(vm.isSelectionMode.value)
-        assertEquals(1, vm.flights.value.size)
-        assertEquals("fixture-1", vm.flights.value.first().id)
+        assertEquals(listOf("fixture-1", "fixture-trip-out", "fixture-trip-back"), vm.flights.value.map { it.id })
     }
 
     @Test
@@ -248,13 +249,13 @@ class ViewModelTest {
             scopeOverride = testScope,
         )
 
-        tripsVm.loadTripDetail("trip-fixture-1")
+        tripsVm.loadTripDetail(FixtureTripData.TRIP_ID)
         testScope.advanceUntilIdle()
 
         assertNotNull(tripsVm.currentTrip.value)
         assertNotNull(tripsVm.aiSummary.value?.text)
 
-        tripsVm.renameTrip("trip-fixture-1", "Provence Weekend")
+        tripsVm.renameTrip(FixtureTripData.TRIP_ID, "Provence Weekend")
         testScope.advanceUntilIdle()
         assertEquals("Provence Weekend", tripsVm.currentTrip.value?.name)
     }

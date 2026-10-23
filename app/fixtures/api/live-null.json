@@ -1,0 +1,10 @@
+{
+  "flight_id": "fixture-1",
+  "pack_timestamp": "2099-06-30T06:00:00Z",
+  "live_updated_at": null,
+  "route_observations": null,
+  "route_sigmets": null,
+  "observed_conditions": null,
+  "changes": null,
+  "last_refresh_delta": null
+}

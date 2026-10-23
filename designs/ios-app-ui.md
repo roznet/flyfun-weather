@@ -332,6 +332,16 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 
 Severity color mapping (`severityPicker`): none→green, trace/light→yellow, moderate→orange, severe→red. This is the real cockpit color coding referenced by the constraints above.
 
+## UI-test fixtures (shared with Android)
+
+The XCUI journeys (`flyfun-weatherUITests/`) launch the app with `FLYFUN_UITEST=1` + `FLYFUN_MOCK=1` (optionally `FLYFUN_MOCK_OFFLINE`, `FLYFUN_MOCK_LIVE`, `FLYFUN_MOCK_LIVE_JSON`), handled in `AppState.setupUITestSession` (DEBUG only). The fixtures live outside the Xcode project, in `app/fixtures/`, since #895:
+
+- `app/fixtures/api/*.json` — one mock response per endpoint, served by `FixtureBriefingRepository` through `FixtureFiles` (production decoder, `fatalError` on a missing or undecodable file). The Android app's fixture repository reads the **same files**, so editing one changes both platforms' journeys and the Android demo mode. The folder is a folder reference copied to `api/` in the app bundle; Release excludes it (`EXCLUDED_SOURCE_FILE_NAMES = api`). A simulator build falls back to reading the source tree; `FixtureFilesTests` pins the bundled copy so the fallback can't hide a broken resource phase.
+- `app/fixtures/live-scenarios/` — server-produced `/live` ticks (`scripts/export_live_scenario_ios.py`; `tests/test_live_scenarios.py` fails if they drift), read in place from the host by `FlyfunUITestCase.liveScenarioTick`, and by the web unit tests.
+- `app/fixtures/showcase/showcase.json` — the App Store screenshot briefing (`scripts/export_showcase_fixture_ios.py`), read in place by `ScreenshotUITests` / `FixtureShowcaseTests`.
+
+Journeys stay per platform; only the data is shared. Where a screen exists on both, the Android `testTag` reuses the iOS `accessibilityIdentifier` (`flightCard-<id>`, `addFlightButton`, `waypointsField`, `submitFlightButton`), so a journey ports line by line. See [android-app-architecture.md](./android-app-architecture.md#ui-tests--mock-launch-895).
+
 ## References
 
 - [Features](./ios-app-features.md) — PIREP modes, voice input, timeline, community feed

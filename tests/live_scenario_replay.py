@@ -193,7 +193,7 @@ IOS_TICKS = {
     ],
 }
 IOS_SCENARIOS = (
-    Path(__file__).parent.parent / "app" / "flyfun-weather" / "flyfun-weatherUITests" / "LiveScenarios"
+    Path(__file__).parent.parent / "app" / "fixtures" / "live-scenarios"
 )
 #: One tick per scenario also exported with a highlight (#697), as
 #: ``<name>_<HHMM>_highlight.json``: the suite has no API key, so the replay
@@ -256,7 +256,7 @@ def with_fixture_highlight(body: dict, highlight: dict) -> dict:
 
 
 def ios_tick_files(name: str, ticks: list[Tick], at: list[str]) -> dict[Path, str]:
-    """``LiveScenarios/<name>_<HHMM>.json`` contents for the chosen ticks
+    """``app/fixtures/live-scenarios/<name>_<HHMM>.json`` contents for the chosen ticks
     (flat names: the test bundle copies resources without their folders),
     plus ``<name>_<HHMM>_highlight.json`` for :data:`IOS_HIGHLIGHT_TICKS`."""
     by_hhmm = {t.at.strftime("%H:%M"): t for t in ticks}

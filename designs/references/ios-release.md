@@ -249,7 +249,7 @@ upload. Two layers make that automatic:
 A capture re-dates the fixture to tomorrow, so a fresh capture always differs from the store
 and always uploads: the decision lives in `--if-changed`, not in the checksums.
 
-The journey drives the mock app on **one real briefing**, `flyfun-weatherUITests/Showcase/
+The journey drives the mock app on **one real briefing**, `app/fixtures/showcase/
 showcase.json` (EGTF→LSGS 2026-10-12: IFR stratus at Fairoaks clearing to CAVOK over the
 Alps; the ECMWF cross-section shows the terrain). Choices baked into it:
 

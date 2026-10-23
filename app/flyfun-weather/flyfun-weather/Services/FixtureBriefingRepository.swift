@@ -60,29 +60,12 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         isServingCachedFlights ? [FixtureBriefingData.flightId] : []
     }
 
+    /// `fixture-1` (briefed) and `fixture-2` (no pack), from the shared
+    /// `app/fixtures/api/flights.json`. Decoded loudly (see `FixtureFiles`): a
+    /// model change that breaks it must not silently empty the list and fail
+    /// every UI journey with a misleading "no flights" message.
     private static func decodeFlights() -> [FlightResponse] {
-        let json = """
-        [
-          {
-            "id": "fixture-1", "user_id": "uitest", "route_name": "LFMD LFML",
-            "waypoints": ["LFMD", "LFML"], "departure_time": "2099-07-01T09:00:00Z",
-            "target_date": "2099-07-01", "target_time_utc": 900,
-            "cruise_altitude_ft": 8000, "flight_ceiling_ft": 13000, "flight_duration_hours": 1.5,
-            "private": false, "auto_refresh": false, "created_at": "2099-06-25T09:00:00Z"
-          },
-          {
-            "id": "fixture-2", "user_id": "uitest", "route_name": "EGTF LFAT",
-            "waypoints": ["EGTF", "LFAT"], "departure_time": "2099-07-03T13:00:00Z",
-            "target_date": "2099-07-03", "target_time_utc": 1300,
-            "cruise_altitude_ft": 6000, "flight_ceiling_ft": 11000, "flight_duration_hours": 2.0,
-            "private": false, "auto_refresh": false, "created_at": "2099-06-25T09:00:00Z"
-          }
-        ]
-        """
-        // try! on purpose: this fixture must always decode. If a model change
-        // breaks it, fail loudly here rather than silently emptying the list and
-        // making every UI journey fail with a misleading "no flights" message.
-        return try! JSONDecoder.weatherBrief.decode([FlightResponse].self, from: Data(json.utf8))
+        FixtureFiles.decode([FlightResponse].self, "flights")
     }
 
     private let flightsFixture = decodeFlights()

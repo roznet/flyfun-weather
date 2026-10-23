@@ -1,9 +1,14 @@
 name: Android Build (nightly)
 
-# Nightly Android debug APK assembly, lint check, and full JVM unit suite.
-# Skips when HEAD is unchanged since the last green run, and always runs on
-# manual workflow_dispatch. Does not run :app:assembleRelease (which requires
+# Nightly Android debug APK assembly, lint check, full JVM unit suite, and the
+# Compose UI journeys (src/androidTest, #895) on an emulator. Skips when HEAD is
+# unchanged since the last green run, and always runs on manual
+# workflow_dispatch. Does not run :app:assembleRelease (which requires
 # production signing secrets not stored in CI).
+#
+# Like ios-ui-nightly.yml, the journeys are not a PR gate: they drive an
+# emulator, the flaky half. android.yml compiles them on every PR; this runs
+# them. A failure here is a message, not a block.
 
 on:
   schedule:
@@ -75,4 +80,72 @@ jobs:
         with:
           name: flyfun-weather-debug-apk
           path: app/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  ui-journeys:
+    name: UI journeys (emulator)
+    needs: changed
+    if: github.event_name == 'workflow_dispatch' || needs.changed.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Hardware acceleration for the x86_64 emulator; without it the runner falls
+      # back to software emulation and the journeys time out.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Build before booting the emulator, so compile time doesn't count against
+      # its boot and the journeys' timeouts.
+      - name: Assemble the app and the journeys
+        working-directory: app/android
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
+      - name: Run the UI journeys
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: app/android
+          script: ./gradlew :app:connectedDebugAndroidTest --stacktrace
+
+      - name: Guard against a vacuous pass
+        working-directory: app/android
+        run: |
+          total=$(python3 -c '
+          import glob, xml.etree.ElementTree as ET
+          files = glob.glob("app/build/outputs/androidTest-results/connected/**/*.xml", recursive=True)
+          print(sum(int(ET.parse(f).getroot().attrib.get("tests", 0)) for f in files))
+          ')
+          echo "Ran $total Android UI journeys" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::connectedDebugAndroidTest reported success but ran 0 journeys."
+            exit 1
+          fi
+
+      - name: Upload the journey report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-journeys-report
+          path: |
+            app/android/app/build/reports/androidTests/connected/
+            app/android/app/build/outputs/androidTest-results/connected/
           retention-days: 7

@@ -400,19 +400,26 @@ class FlyfunUITestCase: XCTestCase {
 
     // MARK: - Live layer: a real flight morning, tick by tick (#637, §36)
 
+    /// The shared `app/fixtures/live-scenarios/` folder on the host (#895). Read
+    /// in place, as `ScreenshotUITests` reads the showcase: the simulator's test
+    /// runner sees host paths, so nothing is copied into the test bundle.
+    static let liveScenariosDir = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()  // → flyfun-weatherUITests/
+        .deletingLastPathComponent()  // → app/flyfun-weather/
+        .deletingLastPathComponent()  // → app/
+        .appendingPathComponent("fixtures/live-scenarios")
+
     /// One tick of a frozen flight morning, as the `/live` body the server
     /// produced for it (tests/fixtures/live_scenarios, exported by
     /// scripts/export_live_scenario_ios.py; the Python suite fails if these
     /// drift from the server's rules).
     func liveScenarioTick(_ scenario: String, _ hhmm: String) throws -> (json: String, body: [String: Any]) {
-        let bundle = Bundle(for: FlyfunUITestCase.self)
         let name = "\(scenario)_\(hhmm)"
-        let url = try XCTUnwrap(
-            bundle.url(forResource: name, withExtension: "json")
-                ?? bundle.url(forResource: name, withExtension: "json", subdirectory: "LiveScenarios"),
-            "missing UI-test fixture \(name).json — run scripts/export_live_scenario_ios.py"
+        let url = Self.liveScenariosDir.appendingPathComponent("\(name).json")
+        let data = try XCTUnwrap(
+            try? Data(contentsOf: url),
+            "missing UI-test fixture \(url.path) — run scripts/export_live_scenario_ios.py"
         )
-        let data = try Data(contentsOf: url)
         let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         return (String(decoding: data, as: UTF8.self), body)
     }
