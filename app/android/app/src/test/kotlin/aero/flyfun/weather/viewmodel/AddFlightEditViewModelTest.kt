@@ -3,6 +3,7 @@ package aero.flyfun.weather.viewmodel
 import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.data.FixtureTripRepository
+import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightInvalidation
 import aero.flyfun.weather.model.FlightResponse
 import java.time.LocalDate
@@ -236,6 +237,31 @@ class AddFlightEditViewModelTest {
         assertNotNull(moved)
         assertEquals(
             "The flight moved, but the profile change didn't save. Open Edit to apply it again.",
+            vm.saveWarning.value,
+        )
+    }
+
+    @Test
+    fun keepBothWarnsWhenTheAlternateFollowUpFails() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+        vm.setDepartureDate(LocalDate.of(2099, 7, 8))
+        vm.setFlexibility(FlightFlexibility.ALTERNATE)
+        vm.setAltDepartureTime(LocalTime.of(14, 0))
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        // Create refuses "alternate", so it follows as a PATCH; its failure is not silent.
+        repo.updateFlightError = ApiError.NotFound
+        var saved: FlightResponse? = null
+        vm.duplicateEditedFlight { saved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        assertNotNull(saved)
+        assertNull(repo.lastCreatedFlight?.flexibility)
+        assertEquals(
+            "The flight was created, but the alternate time didn't save. Open Edit to apply it again.",
             vm.saveWarning.value,
         )
     }
