@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.model.BriefingTab
+import aero.flyfun.weather.model.FeedbackRequest
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.service.FlightTrackingService
@@ -337,9 +338,9 @@ fun ObservedTabScreen(
                             ObservedHighlightCard(
                                 glance = glance,
                                 updatedAt = liveLayer?.liveUpdatedAt,
-                                onRateHighlight = { thumbsUp ->
+                                onRateHighlight = { thumbsUp: Boolean ->
                                     viewModel.submitHighlightFeedback(thumbsUp = thumbsUp)
-                                },
+                                }.takeIf { (glance.highlight ?: glance.highlights.firstOrNull())?.let(FeedbackRequest::isRatable) == true },
                                 onSelectFocus = handleFocus,
                             )
                         }

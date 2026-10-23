@@ -254,7 +254,7 @@ class ViewModelTest {
         testScope.advanceUntilIdle()
 
         assertNotNull(tripsVm.currentTrip.value)
-        assertNotNull(tripsVm.aiSummary.value?.summary)
+        assertNotNull(tripsVm.aiSummary.value?.text)
 
         tripsVm.renameTrip("trip-fixture-1", "Provence Weekend")
         testScope.advanceUntilIdle()

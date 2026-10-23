@@ -218,18 +218,18 @@ fun TripDetailScreen(
                                 )
                             }
                             OutlinedButton(
-                                onClick = { viewModel.loadAiSummary(tripId, generate = true) },
+                                onClick = { viewModel.generateAiSummary(tripId) },
                                 enabled = !isGeneratingAi,
                             ) {
                                 if (isGeneratingAi) {
                                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 } else {
-                                    Text(if (aiSummary?.summary != null) "Regenerate" else "Generate")
+                                    Text(if (aiSummary?.text != null) "Regenerate" else "Generate")
                                 }
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        val summaryText = aiSummary?.summary
+                        val summaryText = aiSummary?.text
                         if (!summaryText.isNullOrBlank()) {
                             Text(
                                 text = summaryText,

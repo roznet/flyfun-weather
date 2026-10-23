@@ -257,6 +257,7 @@ class FlightTrackingService : Service() {
         /** Disk copy of [pendingFixes] and the session (#889); null until a context attaches it. */
         private var fixStore: PendingFixStore? = null
 
+        @Synchronized
         private fun attachStore(context: Context): PendingFixStore =
             fixStore ?: PendingFixStore(context.applicationContext.filesDir).also { fixStore = it }
 
@@ -339,7 +340,10 @@ class FlightTrackingService : Service() {
         /** Re-create the session saved by [startTracking]; no API client until the app attaches one. */
         private fun restoreSession(context: Context) {
             val session = runCatching { attachStore(context).session() }.getOrNull() ?: return
-            if (session.endEpochMs != null && System.currentTimeMillis() > session.endEpochMs) return
+            if (session.endEpochMs != null && System.currentTimeMillis() > session.endEpochMs) {
+                runCatching { attachStore(context).saveSession(null) }
+                return
+            }
             configureSession(
                 flightId = session.flightId,
                 waypoints = session.waypoints.mapNotNull { if (it.size == 2) it[0] to it[1] else null },
@@ -364,8 +368,14 @@ class FlightTrackingService : Service() {
             }
         }
 
-        /** Sign-out: drop the stored fixes and session (they belong to the previous user). */
-        fun discardPersistedFixes(context: Context) {
+        /**
+         * Sign-out: drop the stored fixes and session (they belong to the previous user). Under the
+         * state lock and with the in-memory state cleared too, so a fix still being processed can't
+         * write the queue back after the file is gone.
+         */
+        suspend fun discardPersistedFixes(context: Context) = stateMutex.withLock {
+            clearTrackingState()
+            activeApiClient = null
             runCatching { attachStore(context).clear() }
         }
 

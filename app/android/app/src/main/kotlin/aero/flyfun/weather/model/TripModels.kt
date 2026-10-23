@@ -436,10 +436,7 @@ data class TripAiSummaryResponse(
     /** Why there is no paragraph (`ai_disabled`, `no_legs`, `generation_failed`, ...), when there isn't one. */
     @SerialName("unavailable_reason")
     val unavailableReason: String? = null,
-) {
-    val summary: String?
-        get() = text
-}
+)
 
 @Serializable
 data class TripSubscribeResponse(

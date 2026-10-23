@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import aero.flyfun.weather.MainActivity
@@ -189,6 +190,7 @@ object PushNotificationManager {
         if (flightId.isBlank()) return
         runCatching { apiClient.markFlightSeen(flightId) }
             .onSuccess { _badgeStatus.value = it }
+            .onFailure { Log.w("PushNotifications", "Mark seen failed for $flightId: $it") }
     }
 
     /**

@@ -44,6 +44,9 @@ class TripsViewModel(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    /** Trips whose stale paragraph was already regenerated on open this session. */
+    private val staleSummaryAttempted = mutableSetOf<String>()
+
     private val _isGeneratingAi = MutableStateFlow(false)
     val isGeneratingAi: StateFlow<Boolean> = _isGeneratingAi.asStateFlow()
 
@@ -85,8 +88,9 @@ class TripsViewModel(
                     text = trip.aiSummary,
                     generatedAt = trip.aiSummaryAt,
                 )
-                if (trip.aiSummaryStale == true && trip.role != "viewer") {
-                    loadAiSummary(tripId, generate = false)
+                // Once per trip per session: a generation that keeps failing is not retried on every open.
+                if (trip.aiSummaryStale == true && trip.isEditable && staleSummaryAttempted.add(tripId)) {
+                    generateAiSummary(tripId, userInitiated = false)
                 }
             }.onFailure { err ->
                 _errorMessage.value = err.message ?: "Failed to load trip"
@@ -191,8 +195,13 @@ class TripsViewModel(
         }
     }
 
-    fun loadAiSummary(tripId: String, generate: Boolean = false) {
-        if (generate) _isGeneratingAi.value = true
+    /**
+     * `POST /ai-summary` (an LLM call, idempotent on unchanged legs). [userInitiated] is the
+     * Generate button: only it shows the spinner. A failure is reported either way, since the
+     * stored paragraph stays stale.
+     */
+    fun generateAiSummary(tripId: String, userInitiated: Boolean = true) {
+        if (userInitiated) _isGeneratingAi.value = true
         scope.launch {
             runCatching {
                 tripRepository.tripAiSummary(tripId)
@@ -200,9 +209,7 @@ class TripsViewModel(
                 _aiSummary.value = summary
                 _isGeneratingAi.value = false
             }.onFailure { err ->
-                if (generate) {
-                    _errorMessage.value = err.message ?: "Failed to generate trip AI summary"
-                }
+                _errorMessage.value = err.message ?: "Failed to generate trip AI summary"
                 _isGeneratingAi.value = false
             }
         }

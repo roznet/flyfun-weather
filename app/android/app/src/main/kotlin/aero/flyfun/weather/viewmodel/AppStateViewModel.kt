@@ -109,6 +109,9 @@ class AppStateViewModel(
 
     private var pendingOAuthVerifier: String? = null
 
+    /** Set by [buildAutorouterLinkUrl]: a callback this app session didn't start is ignored. */
+    private var pendingAutorouterLink = false
+
     private val _autorouterLinkError = MutableStateFlow<String?>(null)
     /** Why the last Autorouter link attempt failed (callback `status=error`, or the redeem call). */
     val autorouterLinkError: StateFlow<String?> = _autorouterLinkError.asStateFlow()
@@ -345,6 +348,8 @@ class AppStateViewModel(
         //    or `status=error&reason=...`). The code is redeemed with this app's bearer, so only the
         //    user who started the link can complete it (flyfun-common `autorouter.py`).
         if (uriString.startsWith("$AUTOROUTER_CALLBACK_SCHEME://autorouter/callback")) {
+            if (!pendingAutorouterLink) return
+            pendingAutorouterLink = false
             val code = extractQueryParam(uriString, "code")
             if (extractQueryParam(uriString, "status") != "authorized" || code.isNullOrBlank()) {
                 _autorouterLinkError.value = autorouterLinkErrorMessage(extractQueryParam(uriString, "reason"))
@@ -412,7 +417,9 @@ class AppStateViewModel(
      */
     suspend fun buildAutorouterLinkUrl(): String? {
         _autorouterLinkError.value = null
-        return apiClient.createAutorouterLinkTicket(AUTOROUTER_CALLBACK_SCHEME).url.takeIf { it.isNotBlank() }
+        val url = apiClient.createAutorouterLinkTicket(AUTOROUTER_CALLBACK_SCHEME).url.takeIf { it.isNotBlank() }
+        pendingAutorouterLink = url != null
+        return url
     }
 
     fun unlinkAutorouter() {
@@ -435,7 +442,7 @@ class AppStateViewModel(
     fun logout() {
         context?.let { ctx ->
             runCatching { aero.flyfun.weather.service.FlightTrackingService.stopTracking(ctx) }
-            aero.flyfun.weather.service.FlightTrackingService.discardPersistedFixes(ctx)
+            scope.launch { aero.flyfun.weather.service.FlightTrackingService.discardPersistedFixes(ctx) }
         }
         tokenStore.clearToken()
         rebuildUserScopedRepositories(null)

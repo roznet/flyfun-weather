@@ -1,5 +1,6 @@
 package aero.flyfun.weather.data
 
+import android.util.Log
 import aero.flyfun.weather.model.LivePositionFix
 import aero.flyfun.weather.model.WbJson
 import kotlinx.serialization.SerialName
@@ -81,7 +82,10 @@ class PendingFixStore(filesDir: File) {
         if (!file.exists()) return PendingFixFile()
         return runCatching {
             WbJson.decodeFromString(PendingFixFile.serializer(), file.readText(Charsets.UTF_8))
-        }.getOrDefault(PendingFixFile())
+        }.getOrElse {
+            Log.w("PendingFixStore", "Unreadable $FILENAME, treating as empty: $it")
+            PendingFixFile()
+        }
     }
 
     private fun write(content: PendingFixFile) {

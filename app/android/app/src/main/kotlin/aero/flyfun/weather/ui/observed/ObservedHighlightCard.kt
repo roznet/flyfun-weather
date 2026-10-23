@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ObservedHighlightCard(
     highlight: LiveHighlight,
-    onRateHighlight: (Boolean) -> Unit,
+    onRateHighlight: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
     secondaryHighlights: List<LiveHighlight> = emptyList(),
     secondaryLines: List<LiveGlanceLine> = emptyList(),
@@ -85,7 +85,7 @@ fun ObservedHighlightCard(
 @Composable
 fun ObservedHighlightCard(
     glance: LiveGlance,
-    onRateHighlight: (Boolean) -> Unit,
+    onRateHighlight: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
     updatedAt: String? = null,
     onSelectFocus: ((LiveFocus) -> Unit)? = null,
@@ -146,7 +146,7 @@ private fun ObservedHighlightCardContent(
     secondaryLines: List<LiveGlanceLine>,
     quietSummary: String?,
     updatedAt: String?,
-    onRateHighlight: (Boolean) -> Unit,
+    onRateHighlight: ((Boolean) -> Unit)?,
     onSelectFocus: ((LiveFocus) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
@@ -330,7 +330,8 @@ private fun ObservedHighlightCardContent(
                     modifier = Modifier.weight(1f),
                 )
 
-                Row(
+                // No thumbs for a line the server can't key a rating to (null callback).
+                if (onRateHighlight != null) Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {

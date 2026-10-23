@@ -480,19 +480,21 @@ data class FeedbackRequest(
             highlight: LiveHighlight,
             thumbsUp: Boolean,
         ): FeedbackRequest? {
-            val factsHash = highlight.factsHash?.takeIf { it.isNotBlank() } ?: return null
-            val generatedAt = highlight.generatedAt?.takeIf { it.isNotBlank() } ?: return null
-            val model = highlight.model?.takeIf { it.isNotBlank() } ?: return null
-            if (highlight.text.isBlank()) return null
+            if (!isRatable(highlight)) return null
             return FeedbackRequest(
                 flightId = flightId,
                 packTimestamp = packTimestamp,
                 category = "highlight_rating",
                 sentiment = if (thumbsUp) "up" else "down",
                 target = "live_highlight",
-                context = HighlightFeedbackContext(factsHash, generatedAt, model, highlight.text),
+                context = HighlightFeedbackContext(highlight.factsHash!!, highlight.generatedAt!!, highlight.model!!, highlight.text),
             )
         }
+
+        /** Whether [highlightRating] can build a request for `highlight`: the UI hides the thumbs otherwise. */
+        fun isRatable(highlight: LiveHighlight): Boolean =
+            !highlight.factsHash.isNullOrBlank() && !highlight.generatedAt.isNullOrBlank() &&
+                !highlight.model.isNullOrBlank() && highlight.text.isNotBlank()
     }
 }
 
