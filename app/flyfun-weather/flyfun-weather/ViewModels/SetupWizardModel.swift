@@ -27,6 +27,10 @@ final class SetupWizardModel {
     private(set) var step: Step = .welcome
     private(set) var isLoading = false
     private(set) var isSaving = false
+    /// Profiles or aircraft couldn't be read. The wizard then stops at the
+    /// profile step with a Retry: going on would skip the profile writes, or
+    /// POST a second default aircraft over a real one it couldn't see.
+    private(set) var loadFailed = false
     var errorMessage: String?
 
     // MARK: Profile step
@@ -120,10 +124,19 @@ final class SetupWizardModel {
     func load() async {
         isLoading = true
         defer { isLoading = false }
-        // The app is English-only, so the template descriptions are too.
-        profiles = (try? await repository.profiles()) ?? []
+        let aircraft: [AircraftResponse]
+        do {
+            profiles = try await repository.profiles()
+            aircraft = try await repository.aircraft()
+            loadFailed = false
+        } catch {
+            Self.logger.error("Failed to load the wizard's profiles or aircraft: \(error)")
+            loadFailed = true
+            return
+        }
+        // Descriptions only: the cards still work without them. The app is
+        // English-only, so the descriptions are too.
         templates = (try? await repository.systemTemplates(locale: "en")) ?? []
-        let aircraft = (try? await repository.aircraft()) ?? []
 
         selectedProfileId = (profiles.first { $0.isDefault } ?? profiles.first)?.id
 
@@ -148,7 +161,7 @@ final class SetupWizardModel {
     @discardableResult
     func next() async -> Bool {
         // A second tap while the aircraft POST is in flight must not create a second aircraft.
-        guard !isSaving else { return false }
+        guard !isSaving, !(loadFailed && step != .welcome) else { return false }
         errorMessage = nil
         switch step {
         case .welcome:
@@ -293,7 +306,10 @@ final class SetupWizardModel {
             do {
                 try await repository.updateProfile(id: profile.id, request: SetupProfileUpdate(settings: mission))
             } catch {
+                // Stay on the step: Next again PUTs the (now saved) aircraft and retries this.
                 Self.logger.error("Failed to save the wizard mission: \(error)")
+                errorMessage = "Couldn't save your usual mission: \(error.localizedDescription)"
+                return false
             }
         }
         return true
