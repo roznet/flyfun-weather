@@ -640,7 +640,7 @@ def run_start_update(flight_id: str, airports_db_path: str) -> bool:
 
 def run_post_refresh_update(
     flight_id: str, airports_db_path: str, *, as_of: datetime | None = None,
-    now: datetime | None = None,
+    now: datetime | None = None, progress_callback=None,
 ) -> bool:
     """Build the live layer for the pack a full refresh just committed (#898).
 
@@ -656,6 +656,8 @@ def run_post_refresh_update(
     events). :func:`run_live_update` adds the frozen / historical checks.
     Re-fetches rather than seeding from the pack's own observations: one
     path with ↻ / Start, and it seeds the baseline of a pack built a day out.
+    ``progress_callback`` gets a ``live_observations`` stage only once the
+    gate passes, so a refresh outside the window shows no extra step.
     Never pushes, never raises; returns True when the layer was refreshed.
     """
     outcome = "skipped"
@@ -669,6 +671,11 @@ def run_post_refresh_update(
         elif not _flight_in_live_window(flight_id, now or datetime.now(timezone.utc)):
             outcome = "outside_window"
         else:
+            if progress_callback is not None:
+                try:
+                    progress_callback("live_observations")
+                except Exception:
+                    logger.debug("live_observations progress failed for %s", flight_id, exc_info=True)
             outcome = "refreshed" if run_live_update(
                 flight_id, airports_db_path, reason="post_refresh",
             ) else "not_refreshed"
