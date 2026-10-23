@@ -239,8 +239,8 @@ visibility words, weather words with an icon kind, short wind, crosswind
 reading, trend, `taf_hours`, the fold). No rules to mirror; what is
 hand-copied is the **drawing**: the header boxes (METAR now → TAF at ETD/ETA,
 dashed TEMPO/PROB), the row order (ceiling meter, visibility meter, weather
-words, wind + RWY chip + crosswind toned by `metar_wind_advisory`, cells,
-lightning, provenance: METAR time + age, SPECI, trend, ETD/ETA), the dial on
+words, wind + RWY chip + crosswind toned by `metar_wind_advisory`, cells and
+lightning toned amber by `cells_alert` / `lightning_alert`, provenance: METAR time + age, SPECI, trend, ETD/ETA), the dial on
 the right (#758 `compact`, solid METAR, ghost TAF), the TAF strip, the folded
 departure line.
 

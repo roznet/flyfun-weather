@@ -158,3 +158,32 @@ def test_sharing_none_hides_the_eta_hour_on_the_metar_taf_rows():
     # The owner's and along-route views keep the mark.
     kept = redact_live(resp, "along_route")
     assert kept.route_observations.airports[0].taf_hours[0].is_eta
+
+
+def _change(kind, tier, role, storm_ids=None):
+    from weatherbrief.models.live import LiveChange
+
+    return LiveChange(
+        key=f"{kind}:x", kind=kind, source="RADAR" if kind in ("storm", "radar") else "LIGHTNING",
+        direction="worse", tier=tier, role=role, message="m", storm_ids=storm_ids,
+    )
+
+
+def test_card_rows_take_the_alert_tier_of_their_own_change_rows():
+    """#881: a card row is toned only when an alert-tier change of its kind
+    stands behind it: same terminal role, or (storms) a cell the card lists."""
+    from weatherbrief.models.live import LiveChanges, LiveDestinationCell
+    from weatherbrief.tasks.live_glance import _row_alerts
+
+    cells = [LiveDestinationCell(id="core41-a", text="9 NM SW")]
+    changes = lambda *cs: LiveChanges(computed_at=DEP, changes=list(cs))  # noqa: E731
+
+    assert _row_alerts(None, "destination", cells) == (False, False)
+    assert _row_alerts(changes(_change("storm", "alert", "destination")), "destination", []) == (True, False)
+    # A highlight never tones; another terminal's alert neither.
+    assert _row_alerts(changes(_change("storm", "highlight", "destination")), "destination", cells) == (False, False)
+    assert _row_alerts(changes(_change("storm", "alert", "departure")), "destination", []) == (False, False)
+    # A route-role storm row naming a listed cell tones the cells row.
+    assert _row_alerts(changes(_change("storm", "alert", "route", ["core41-a"])), "destination", cells) == (True, False)
+    assert _row_alerts(changes(_change("lightning", "alert", "departure")), "departure", []) == (False, True)
+    assert _row_alerts(changes(_change("lightning", "alert", "route")), "departure", []) == (False, False)

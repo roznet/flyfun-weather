@@ -1086,7 +1086,6 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
       if (get().flight?.id === flight.id) set({ liveOffline: true });
       return;
     }
-    if (get().liveOffline) set({ liveOffline: false });
     const now = get();
     if (now.flight?.id !== flight.id || now.currentPack?.fetch_timestamp !== currentPack.fetch_timestamp) return;
     if (!sameInstant(meta.fetch_timestamp, currentPack.fetch_timestamp)) {
@@ -1102,7 +1101,11 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     const highlightApplied = now.live?.highlight_updated_at ?? null;
     if ((meta.live_updated_at && !sameInstant(meta.live_updated_at, applied))
         || (meta.highlight_updated_at && !sameInstant(meta.highlight_updated_at, highlightApplied))) {
+      // `loadLive` clears or raises the offline flag itself: clearing it
+      // here first would flash the banner off and on when /live then fails.
       await get().loadLive();
+    } else if (get().liveOffline) {
+      set({ liveOffline: false });
     }
   },
 

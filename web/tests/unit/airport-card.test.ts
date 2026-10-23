@@ -109,6 +109,15 @@ describe('airport card', () => {
     expect(cardFocus(dep, dest, 'dep:3')).toBeNull();
   });
 
+  it('tones the cells / lightning row only when the server flags it', () => {
+    const html = airportCardHtml(dest, 'ARR', NOW);
+    expect(html).toMatch(/class="ac-row ac-near ac-tone-amber"[^>]*data-testid="card-cells"/);
+    expect(html).toMatch(/class="ac-row ac-near ac-tone-amber"[^>]*data-testid="card-lightning"/);
+    const quiet = airportCardHtml({ ...dest, cells_alert: false, lightning_alert: undefined }, 'ARR', NOW);
+    expect(quiet).not.toContain('ac-near ac-tone-amber');
+    expect(airportCardHtml(dep, 'DEP', NOW)).not.toContain('ac-near ac-tone-amber');
+  });
+
   it('draws the dial at a fixed size, and none without runway data', () => {
     const html = airportCardHtml(dest, 'ARR', NOW);
     expect(html).toContain('<div class="ac-dial">');

@@ -116,17 +116,22 @@ function windRowHtml(a: AirportObservation): string {
 /** Cells and lightning near the field, in the server's words. The row opens
  *  the map on the field; a listed cell opens on that cell. */
 function nearHtml(block: Block, key: string): string {
-  const row = (iconName: string, text: string) => (block.focus
-    ? `<button type="button" class="ac-row ac-near" data-card-focus="${key}">${icon(iconName)}`
-      + `<span>${escapeHtml(text)}</span><span class="glance-chevron" aria-hidden="true">▸</span></button>`
-    : `<div class="ac-row ac-near">${icon(iconName)}<span>${escapeHtml(text)}</span></div>`);
+  // Amber only when the server says an alert-tier change stands behind it.
+  const row = (iconName: string, text: string, alert: boolean | undefined, id: string) => {
+    const cls = `ac-row ac-near${alert ? ' ac-tone-amber' : ''}`;
+    const body = `${icon(iconName)}<span>${escapeHtml(text)}</span>`;
+    return block.focus
+      ? `<button type="button" class="${cls}" data-card-focus="${key}" data-testid="card-${id}">${body}`
+        + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
+      : `<div class="${cls}" data-testid="card-${id}">${body}</div>`;
+  };
   const cells = (block.cells ?? []).map((c, i) => (c.focus
     ? `<button type="button" class="ac-cell" data-card-cell="${key}:${i}">${escapeHtml(c.text)}`
       + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
     : `<div class="ac-cell">${escapeHtml(c.text)}</div>`)).join('');
-  return row('cell', block.cells_text)
+  return row('cell', block.cells_text, block.cells_alert, 'cells')
     + (cells ? `<div class="ac-cells">${cells}</div>` : '')
-    + (block.lightning_text ? row('thunder', block.lightning_text) : '');
+    + (block.lightning_text ? row('thunder', block.lightning_text, block.lightning_alert, 'lightning') : '');
 }
 
 /** "METAR 09:30Z · 8 min" (amber past the stale age) · SPECI · trend · ETA. */

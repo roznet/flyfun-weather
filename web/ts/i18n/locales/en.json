@@ -1189,7 +1189,7 @@
   "observed.card.crosswindFrom.right": "Crosswind from the right",
   "observed.card.stripTitle": "TAF by hour: hatched = worse TEMPO/PROB group, outlined hour = {mark}",
   "observed.details": "Details",
-  "observed.offline": "Offline · showing data from {time}",
+  "observed.offline": "Offline · showing data from {time}, {age}",
   "observed.ribbon.plannedPositionNow": "Planned position now",
   "observed.highlight.written": "written {time}",
   "observed.highlight.up": "This summary matched what I saw",

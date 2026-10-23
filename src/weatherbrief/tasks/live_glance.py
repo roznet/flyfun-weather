@@ -662,6 +662,27 @@ def _terminal_wind(obs: AirportObservation | None, at_label: str = "ETA") -> tup
     return None, None
 
 
+def _row_alerts(
+    changes: LiveChanges | None, role: str, cells: list[LiveDestinationCell],
+) -> tuple[bool, bool]:
+    """Which of a terminal card's rows an alert-tier change stands behind
+    (#881): ``(cells, lightning)``. Cells: a storm or radar alert with this
+    terminal's ``role``, or a storm alert naming a cell the card lists (a
+    storm row near the field can carry the ``route`` role). Lightning: a
+    lightning alert with this role. Routing only: which changes are alerts is
+    the significance rules' call, so no new threshold."""
+    listed = {c.id for c in cells}
+    cells_alert = lightning_alert = False
+    for c in (changes.changes if changes else []):
+        if c.tier != "alert":
+            continue
+        if c.kind in ("storm", "radar") and (c.role == role or listed.intersection(c.storm_ids or ())):
+            cells_alert = True
+        elif c.kind == "lightning" and c.role == role:
+            lightning_alert = True
+    return cells_alert, lightning_alert
+
+
 def _terminal_block(
     layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *,
     phase: str, obs_stale: bool,
@@ -713,6 +734,7 @@ def _terminal_block(
     )
     if missing:
         unavailable.append("lightning")
+    cells_alert, lightning_alert = _row_alerts(layer.changes, "departure" if dep else "destination", cells)
 
     field = route_obs.airport(icao) if route_obs is not None else None
     name = (flight.locator.names.get(icao) if flight.locator is not None else None) or (
@@ -731,6 +753,7 @@ def _terminal_block(
         ),
         wind_text=wind_text, wind_advisory=wind_adv,
         cells_text=cells_text, cells=cells, lightning_text=lightning_text,
+        cells_alert=cells_alert, lightning_alert=lightning_alert,
         unavailable=unavailable, focus=_terminal_focus(flight, phase),
         airport=obs,
     )
