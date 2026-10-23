@@ -2,7 +2,6 @@ package aero.flyfun.weather.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 // ============================================================================
 // Aircraft
@@ -396,7 +395,7 @@ data class PreferencesResponse(
     val liveUpdates: Boolean = true,
     @SerialName("setup_completed")
     val setupCompleted: Boolean = true,
-    @SerialName("has_autorouter")
+    @SerialName("has_autorouter_creds")
     val hasAutorouter: Boolean = false,
     @SerialName("autorouter_mode")
     val autorouterMode: String? = null,
@@ -416,64 +415,95 @@ data class DeviceRegistrationRequest(
 
 @Serializable
 data class BadgeStatus(
-    @SerialName("has_unread")
-    val hasUnread: Boolean = false,
-    @SerialName("unread_flight_ids")
-    val unreadFlightIds: List<String> = emptyList(),
+    /** Flights with a briefing update the user has not opened yet (server-derived). */
+    val count: Int = 0,
 )
 
 // ============================================================================
 // Feedback
 // ============================================================================
 
-@Serializable
+/** The feedback form's categories: wire values are the server's `ALLOWED_CATEGORIES`, labels mirror iOS. */
 enum class FeedbackCategory(val wireValue: String, val label: String) {
-    @SerialName("data_issue")
-    DATA_ISSUE("data_issue", "Data / Forecast Issue"),
+    DATA_ISSUE("data_issue", "Briefing Data Issue"),
+    TOO_CONSERVATIVE("too_conservative", "Briefing Too Conservative"),
+    TOO_OPTIMISTIC("too_optimistic", "Briefing Too Optimistic"),
+    INCORRECT_INTERPRETATION("incorrect_interpretation", "Briefing Incorrect Interpretation"),
+    OTHER("other", "Other Bug/Issue"),
+}
 
-    @SerialName("too_conservative")
-    TOO_CONSERVATIVE("too_conservative", "Too Conservative"),
+/**
+ * `POST /api/feedback` body (server `FeedbackRequest`). One endpoint takes the form, the digest
+ * thumb and the live-highlight thumb; build them with the companion factories.
+ */
+@Serializable
+data class FeedbackRequest(
+    @SerialName("flight_id")
+    val flightId: String = "",
+    @SerialName("pack_timestamp")
+    val packTimestamp: String = "",
+    val category: String,
+    val comment: String = "",
+    val sentiment: String? = null,
+    val target: String? = null,
+    @SerialName("contact_ok")
+    val contactOk: Boolean = true,
+    val context: HighlightFeedbackContext? = null,
+) {
+    companion object {
+        fun general(category: FeedbackCategory, comment: String, flightId: String = "", packTimestamp: String = "") =
+            FeedbackRequest(
+                flightId = flightId,
+                packTimestamp = packTimestamp,
+                category = category.wireValue,
+                comment = comment,
+                target = "general",
+            )
 
-    @SerialName("too_optimistic")
-    TOO_OPTIMISTIC("too_optimistic", "Too Optimistic"),
+        fun digestRating(flightId: String, packTimestamp: String, thumbsUp: Boolean, comment: String = "") =
+            FeedbackRequest(
+                flightId = flightId,
+                packTimestamp = packTimestamp,
+                category = "digest_rating",
+                comment = comment,
+                sentiment = if (thumbsUp) "up" else "down",
+                target = "digest",
+            )
 
-    @SerialName("wrong_focus")
-    WRONG_FOCUS("wrong_focus", "Missed Key Weather"),
-
-    @SerialName("other")
-    OTHER("other", "Other"),
+        /**
+         * A live-highlight thumb. The server keys it to the rated line, so it needs all four context
+         * fields; returns null for a highlight that lacks one (nothing to rate).
+         */
+        fun highlightRating(
+            flightId: String,
+            packTimestamp: String,
+            highlight: LiveHighlight,
+            thumbsUp: Boolean,
+        ): FeedbackRequest? {
+            val factsHash = highlight.factsHash?.takeIf { it.isNotBlank() } ?: return null
+            val generatedAt = highlight.generatedAt?.takeIf { it.isNotBlank() } ?: return null
+            val model = highlight.model?.takeIf { it.isNotBlank() } ?: return null
+            if (highlight.text.isBlank()) return null
+            return FeedbackRequest(
+                flightId = flightId,
+                packTimestamp = packTimestamp,
+                category = "highlight_rating",
+                sentiment = if (thumbsUp) "up" else "down",
+                target = "live_highlight",
+                context = HighlightFeedbackContext(factsHash, generatedAt, model, highlight.text),
+            )
+        }
+    }
 }
 
 @Serializable
-data class DigestFeedbackRequest(
-    @SerialName("flight_id")
-    val flightId: String,
-    @SerialName("pack_timestamp")
-    val packTimestamp: String,
-    val category: String,
-    val comment: String = "",
-)
-
-@Serializable
-data class HighlightFeedbackRequest(
-    @SerialName("flight_id")
-    val flightId: String,
-    @SerialName("pack_timestamp")
-    val packTimestamp: String? = null,
-    @SerialName("change_key")
-    val changeKey: String = "",
-    val target: String? = null,
-    val vote: String,
-    val comment: String? = null,
-    val context: Map<String, JsonElement>? = null,
-)
-
-@Serializable
-data class GeneralFeedbackRequest(
-    val category: String,
-    val message: String,
-    @SerialName("flight_id")
-    val flightId: String? = null,
+data class HighlightFeedbackContext(
+    @SerialName("facts_hash")
+    val factsHash: String,
+    @SerialName("generated_at")
+    val generatedAt: String,
+    val model: String,
+    val text: String,
 )
 
 // ============================================================================

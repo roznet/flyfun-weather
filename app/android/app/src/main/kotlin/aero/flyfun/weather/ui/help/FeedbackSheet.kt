@@ -27,14 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import aero.flyfun.weather.data.ApiClient
-import aero.flyfun.weather.model.DigestFeedbackRequest
-import aero.flyfun.weather.model.GeneralFeedbackRequest
-import aero.flyfun.weather.model.HighlightFeedbackRequest
+import aero.flyfun.weather.model.FeedbackCategory
+import aero.flyfun.weather.model.FeedbackRequest
 import kotlinx.coroutines.launch
 
 /**
- * Feedback modal bottom sheet supporting General feedback, Digest feedback, and Highlight feedback,
- * mirroring iOS `FeedbackSheet`.
+ * General feedback form (`POST /api/feedback`, target `general`), mirroring iOS `FeedbackSheet`.
+ * Digest and live-highlight thumbs go through `BriefingViewModel`, not this sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -42,12 +41,10 @@ fun FeedbackSheet(
     apiClient: ApiClient,
     flightId: String? = null,
     packTimestamp: String? = null,
-    highlightTarget: String? = null,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val categories = listOf("Briefing Accuracy", "Advisories", "Cross-Section", "Skew-T", "Feature Request", "Bug")
-    var selectedCategory by remember { mutableStateOf(categories.first()) }
+    var selectedCategory by remember { mutableStateOf(FeedbackCategory.DATA_ISSUE) }
     var comment by remember { mutableStateOf("") }
     var isSubmitting by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -80,11 +77,11 @@ fun FeedbackSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                categories.forEach { cat ->
+                FeedbackCategory.entries.forEach { cat ->
                     FilterChip(
                         selected = selectedCategory == cat,
                         onClick = { selectedCategory = cat },
-                        label = { Text(cat) },
+                        label = { Text(cat.label) },
                     )
                 }
             }
@@ -118,37 +115,14 @@ fun FeedbackSheet(
                     errorText = null
                     scope.launch {
                         runCatching {
-                            when {
-                                flightId != null && packTimestamp != null && highlightTarget != null -> {
-                                    apiClient.submitHighlightFeedback(
-                                        HighlightFeedbackRequest(
-                                            flightId = flightId,
-                                            packTimestamp = packTimestamp,
-                                            target = highlightTarget,
-                                            vote = selectedCategory,
-                                            comment = comment.trim(),
-                                        ),
-                                    )
-                                }
-                                flightId != null && packTimestamp != null -> {
-                                    apiClient.submitDigestFeedback(
-                                        DigestFeedbackRequest(
-                                            flightId = flightId,
-                                            packTimestamp = packTimestamp,
-                                            category = selectedCategory,
-                                            comment = comment.trim(),
-                                        ),
-                                    )
-                                }
-                                else -> {
-                                    apiClient.submitGeneralFeedback(
-                                        GeneralFeedbackRequest(
-                                            category = selectedCategory,
-                                            message = comment.trim(),
-                                        ),
-                                    )
-                                }
-                            }
+                            apiClient.submitFeedback(
+                                FeedbackRequest.general(
+                                    category = selectedCategory,
+                                    comment = comment.trim(),
+                                    flightId = flightId.orEmpty(),
+                                    packTimestamp = packTimestamp.orEmpty(),
+                                ),
+                            )
                         }.onSuccess {
                             isSubmitting = false
                             onDismiss()

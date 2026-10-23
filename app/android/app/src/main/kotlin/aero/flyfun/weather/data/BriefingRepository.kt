@@ -20,14 +20,7 @@ interface BriefingRepository {
     suspend fun parseFpl(fplText: String): ParseFplResponse
     suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse
     suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse
-    suspend fun fetchAutorouterRoutes(
-        departure: String,
-        destination: String,
-        departureTime: String,
-        cruiseAltitudeFt: Int,
-        durationHours: Double,
-        aircraftId: Int? = null,
-    ): AutorouterRoutesResponse
+    suspend fun fetchAutorouterRoutes(limit: Int = 25): AutorouterRoutesResponse
 
     // Pack metadata
     suspend fun listPacks(flightId: String): List<PackMetaResponse>
@@ -158,21 +151,8 @@ open class OnlineBriefingRepository(
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         api.routeDistance(waypoints)
 
-    override suspend fun fetchAutorouterRoutes(
-        departure: String,
-        destination: String,
-        departureTime: String,
-        cruiseAltitudeFt: Int,
-        durationHours: Double,
-        aircraftId: Int?,
-    ): AutorouterRoutesResponse = api.fetchAutorouterRoutes(
-        departure = departure,
-        destination = destination,
-        departureTime = departureTime,
-        cruiseAltitudeFt = cruiseAltitudeFt,
-        durationHours = durationHours,
-        aircraftId = aircraftId,
-    )
+    override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse =
+        api.fetchAutorouterRoutes(limit)
 
     override suspend fun listPacks(flightId: String): List<PackMetaResponse> = api.listPacks(flightId)
 
@@ -301,8 +281,12 @@ open class OnlineBriefingRepository(
     override suspend fun resolveSharedFlight(code: String): FlightResponse =
         api.resolveSharedFlight(code)
 
-    override suspend fun subscribeToSharedFlight(code: String): FlightResponse =
-        api.subscribeToSharedFlight(code)
+    /** The server subscribes by flight id, so resolve the code first; returns the followed flight. */
+    override suspend fun subscribeToSharedFlight(code: String): FlightResponse {
+        val flight = api.resolveSharedFlight(code)
+        api.subscribeToFlight(flight.id)
+        return flight
+    }
 
     override suspend fun unsubscribeFromFlight(flightId: String) =
         api.unsubscribeFromFlight(flightId)
@@ -311,7 +295,7 @@ open class OnlineBriefingRepository(
         api.resolveSharedTrip(code)
 
     override suspend fun subscribeToSharedTrip(code: String): TripSubscribeResponse =
-        api.subscribeToSharedTrip(code)
+        api.subscribeToTrip(api.resolveSharedTrip(code).id)
 
     override suspend fun unsubscribeFromTrip(tripId: String) =
         api.unsubscribeFromTrip(tripId)

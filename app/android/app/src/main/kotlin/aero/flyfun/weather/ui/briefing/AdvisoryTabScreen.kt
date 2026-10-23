@@ -217,7 +217,7 @@ fun AdvisoryTabScreen(
                     }
 
                     val currentFlight = flight
-                    if (currentFlight != null && (currentFlight.isPast() || currentFlight.debriefEligible == true || debrief != null)) {
+                    if (currentFlight != null && (currentFlight.isPast() || debrief != null)) {
                         DebriefCard(
                             debrief = debrief,
                             taxonomy = debriefTaxonomy ?: debrief?.taxonomy,

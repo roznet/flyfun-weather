@@ -248,51 +248,29 @@ data class FlightResponse(
     val autoRefresh: Boolean = true,
     @SerialName("auto_refresh_hour")
     val autoRefreshHour: Int? = null,
-    @SerialName("effective_auto_refresh_hour")
-    val effectiveAutoRefreshHour: Int? = null,
     @SerialName("created_at")
     val createdAt: String = "",
     /** The server's `latest_briefing` (older Android fixtures call it `briefing_status`). */
     @SerialName("latest_briefing")
     @kotlinx.serialization.json.JsonNames("briefing_status")
     val briefingStatus: BriefingStatusInfo? = null,
-    @SerialName("advisory_summary")
-    val advisorySummary: AdvisorySummary? = null,
     @SerialName("alt_departure_time")
     val altDepartureTime: String? = null,
-    @SerialName("alt_briefing_status")
-    val altBriefingStatus: BriefingStatusInfo? = null,
-    @SerialName("alt_advisory_summary")
-    val altAdvisorySummary: AdvisorySummary? = null,
     val flexibility: FlightFlexibility = FlightFlexibility.NONE,
     /** Pilot's free-text purpose. Owner-only: a subscriber gets null. */
     val description: String? = null,
     /** The Field-15 text the pilot typed, when captured; the edit form is pre-filled from it. */
     @SerialName("raw_route")
     val rawRoute: String? = null,
-    @SerialName("time_scan_status")
-    val timeScanStatus: TimeScanStatusDTO? = null,
-    @SerialName("time_confirmation")
-    val timeConfirmation: TimeConfirmationDTO? = null,
-    @SerialName("has_pireps")
-    val hasPireps: Boolean? = null,
     val section: String? = null,
-    @SerialName("debrief_eligible")
-    val debriefEligible: Boolean? = null,
-    @SerialName("has_debrief")
-    val hasDebrief: Boolean? = null,
     val role: FlightRole? = null,
     @SerialName("owner_display_name")
     val ownerDisplayName: String? = null,
-    @SerialName("subscriber_count")
-    val subscriberCount: Int? = null,
     @SerialName("share_code")
     val shareCode: String? = null,
     @SerialName("notify_override")
     val notifyOverride: FlightNotifyOverride? = null,
     val trip: TripLegRef? = null,
-    @SerialName("coverage_pending")
-    val coveragePending: List<CoveragePending>? = null,
 ) {
     /** Short display title: `"ORIGIN → DEST"`. */
     val shortTitle: String
@@ -754,29 +732,39 @@ data class RouteDistanceResponse(
     val totalDistanceNm: Double = 0.0,
 )
 
+/**
+ * One recent route from the linked Autorouter account (`GET /api/flights/autorouter-routes`, the
+ * flyfun-common `router/logs` subset). Picking one feeds [fplan] through parse-fpl, as on iOS.
+ */
 @Serializable
 data class AutorouterRoute(
-    val fpl: String = "",
+    val routeid: String = "",
     val departure: String = "",
     val destination: String = "",
-    val waypoints: List<String> = emptyList(),
-    @SerialName("distance_nm")
-    val distanceNm: Double? = null,
-    @SerialName("fuel_penalty")
-    val fuelPenalty: Double? = null,
-    @SerialName("flight_time_minutes")
-    val flightTimeMinutes: Int? = null,
-    @SerialName("minimum_level")
-    val minimumLevel: Int? = null,
-    @SerialName("maximum_level")
-    val maximumLevel: Int? = null,
-    val summary: String? = null,
+    @SerialName("departure_name")
+    val departureName: String? = null,
+    @SerialName("destination_name")
+    val destinationName: String? = null,
+    @SerialName("departure_time")
+    val departureTime: String? = null,
+    val fplan: String = "",
+    @SerialName("route_distance_nm")
+    val routeDistanceNm: Int? = null,
+    @SerialName("aircraft_description")
+    val aircraftDescription: String? = null,
+    val callsign: String? = null,
 ) {
-    val routeText: String
-        get() = fpl.ifBlank { summary.orEmpty() }
+    /** "EGTF → LSGS" headline for the picker row. */
+    val title: String
+        get() = "$departure \u2192 $destination"
 
-    val durationHours: Double?
-        get() = flightTimeMinutes?.let { it / 60.0 }
+    /** Secondary line: date · distance · aircraft, omitting missing parts. */
+    val subtitle: String
+        get() = listOfNotNull(
+            departureTime?.take(10),
+            routeDistanceNm?.let { "$it nm" },
+            aircraftDescription?.takeIf { it.isNotBlank() } ?: callsign?.takeIf { it.isNotBlank() },
+        ).joinToString(" \u00b7 ")
 }
 
 typealias AutorouterRouteOption = AutorouterRoute
@@ -788,23 +776,31 @@ data class AutorouterRoutesResponse(
 
 @Serializable
 data class AutorouterLinkTicketRequest(
-    @SerialName("code_challenge")
-    val codeChallenge: String,
-    val platform: String = "android",
+    /** The app's callback scheme; the server binds it into the ticket. */
+    val scheme: String,
 )
 
 @Serializable
 data class AutorouterLinkCompleteRequest(
-    val ticket: String,
-    @SerialName("code_verifier")
-    val codeVerifier: String,
+    /** The `code` from the `autorouter/callback` deep link. */
+    val code: String,
 )
 
 @Serializable
 data class AutorouterLinkTicketResponse(
-    @SerialName("authorize_url")
-    val authorizeUrl: String = "",
-    val ticket: String = "",
+    val url: String = "",
+    @SerialName("expires_in")
+    val expiresIn: Int? = null,
+)
+
+/** `POST /api/flights/{id}/subscribe`; `created` is false when already subscribed. */
+@Serializable
+data class SubscribeResponse(
+    @SerialName("flight_id")
+    val flightId: String = "",
+    @SerialName("user_id")
+    val userId: String = "",
+    val created: Boolean = false,
 )
 
 @Serializable

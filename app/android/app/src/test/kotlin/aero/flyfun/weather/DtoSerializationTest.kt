@@ -144,4 +144,49 @@ class DtoSerializationTest {
         assertEquals(1, result.accepted)
         assertTrue(result.landedRecorded)
     }
+
+    /** #889: one `POST /api/feedback` body for the form and both thumbs, keyed as the server validates. */
+    @Test
+    fun `feedback requests carry the server's category, sentiment and target`() {
+        fun keysOf(req: FeedbackRequest) =
+            WbJson.parseToJsonElement(WbJson.encodeToString(FeedbackRequest.serializer(), req))
+                as kotlinx.serialization.json.JsonObject
+
+        val digest = keysOf(FeedbackRequest.digestRating("ZZ-f1", "2026-06-24T06:00:00Z", thumbsUp = false))
+        assertEquals("\"digest_rating\"", digest["category"].toString())
+        assertEquals("\"down\"", digest["sentiment"].toString())
+        assertEquals("\"digest\"", digest["target"].toString())
+        assertFalse("context" in digest)
+
+        val general = keysOf(FeedbackRequest.general(FeedbackCategory.INCORRECT_INTERPRETATION, "Missed the front"))
+        assertEquals("\"incorrect_interpretation\"", general["category"].toString())
+        assertEquals("\"Missed the front\"", general["comment"].toString())
+        assertFalse("sentiment" in general)
+
+        val line = LiveHighlight(text = "New SIGMET at destination", model = "m", factsHash = "abc", generatedAt = "2026-06-24T07:00:00Z")
+        val highlight = keysOf(FeedbackRequest.highlightRating("ZZ-f1", "2026-06-24T06:00:00Z", line, thumbsUp = true)!!)
+        assertEquals("\"live_highlight\"", highlight["target"].toString())
+        assertEquals("\"highlight_rating\"", highlight["category"].toString())
+        assertEquals(
+            setOf("facts_hash", "generated_at", "model", "text"),
+            (highlight["context"] as kotlinx.serialization.json.JsonObject).keys,
+        )
+        // The server rejects a highlight rating without its full context, so none is sent.
+        assertEquals(null, FeedbackRequest.highlightRating("ZZ-f1", "t", line.copy(factsHash = null), thumbsUp = true))
+    }
+
+    @Test
+    fun `decode autorouter recent routes and the badge`() {
+        val routes = WbJson.decodeFromString(
+            AutorouterRoutesResponse.serializer(),
+            """{"routes":[{"routeid":"r1","departure":"EGTF","destination":"LSGS","departure_time":"2026-06-24T08:00:00Z",
+               "fplan":"(FPL-ZZABC-VG ...)","route_distance_nm":412,"aircraft_description":"SR22"}]}""",
+        )
+        val route = routes.routes.single()
+        assertEquals("EGTF \u2192 LSGS", route.title)
+        assertEquals("2026-06-24 \u00b7 412 nm \u00b7 SR22", route.subtitle)
+        assertEquals("(FPL-ZZABC-VG ...)", route.fplan)
+
+        assertEquals(3, WbJson.decodeFromString(BadgeStatus.serializer(), """{"count":3}""").count)
+    }
 }
