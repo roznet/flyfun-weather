@@ -27,7 +27,9 @@ enum LiveStormListRules {
         "\(Int((storms.corridorNm ?? 30).rounded())) NM"
     }
 
-    /// Storms still ahead, in the server's along-track order.
+    /// Storms still ahead, in the server's along-track order. A storm with no
+    /// `ahead` (a layer from before #790) counts as ahead, so
+    /// the chip may then call "ahead" a storm the server never placed.
     static func ahead(_ storms: LiveStorms) -> [LiveStorm] {
         storms.items.filter { $0.ahead != false }
     }

@@ -494,18 +494,20 @@ struct ObservedCellsSection: View {
                 ForEach(shown) { storm in
                     CellRow(viewModel: viewModel, storm: storm)
                 }
-                if ahead.count > Self.compactCap {
-                    Button(showsAll ? "Show fewer" : "Show all \(ahead.count)") { showsAll.toggle() }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(minHeight: 44)
-                }
             }
             if !behind.isEmpty {
+                // Capped like the ahead list: a busy day on a long route
+                // would otherwise bury the caveat under passed storms.
                 muted(behind.count == 1 ? "1 cell behind" : "\(behind.count) cells behind", font: .caption)
-                ForEach(behind) { storm in
+                ForEach(showsAll ? behind : Array(behind.prefix(Self.compactCap))) { storm in
                     CellRow(viewModel: viewModel, storm: storm)
                         .opacity(0.6)
                 }
+            }
+            if ahead.count > Self.compactCap || behind.count > Self.compactCap {
+                Button(showsAll ? "Show fewer" : "Show all \(ahead.count + behind.count)") { showsAll.toggle() }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
             }
             muted(CellsOverlay.caveat, font: .caption2)
         }

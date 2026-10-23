@@ -888,7 +888,8 @@ same `build_glance` call, so they inherit its "never raises" guard:
   The phone used to group cores and measure 20 NM from each cell's centre
   itself, so its "N cells within 20 NM" could disagree with the ribbon, the
   alerts, the web and Android (30 NM corridor, the server's lineage groups).
-  Now: ahead in the server's route order, then behind (dimmed); position,
+  Now: ahead in the server's route order, then behind (dimmed), each capped at
+  5 behind one "Show all"; position,
   motion and abeam in the server's words (`RouteRibbonRules`'s
   `stormPositionText` / `stormMotionText`, `LiveStormListRules`); rows tap to the storm's
   `focus`; a dark feed says why (stale since / disabled / unavailable), never

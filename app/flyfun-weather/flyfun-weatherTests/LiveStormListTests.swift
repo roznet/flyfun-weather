@@ -89,6 +89,15 @@ private let stormsJSON = """
         #expect(LiveStormListRules.detailLine(behind) == "moving away 5 kt")
     }
 
+    /// The row's dot colours `LiveStorm.trend` through the map's table: every
+    /// word the server sends (models/live.py `LiveStorm.trend`) must have a
+    /// colour, or the dot falls back to the unknown grey without a word.
+    @Test func serverTrendWordsAllHaveAColour() {
+        for word in ["developing", "steady", "decaying", "mixed", "new"] {
+            #expect(CellsOverlay.trendHex[word] != nil, "no colour for server trend \(word)")
+        }
+    }
+
     @Test func abeamRoundsLikeTheServer() throws {
         func storm(_ minutes: Double?, eta: String? = nil) throws -> LiveStorm {
             let m = minutes.map { "\($0)" } ?? "null"
