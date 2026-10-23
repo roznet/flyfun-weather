@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, computed_field, field_validator
 
 from weatherbrief.models.observations import (
+    AirportObservation,
     RefreshDelta,
     RouteObservations,
     RouteSigmets,
@@ -493,6 +494,58 @@ class LiveGlanceDestination(BaseModel):
     alert: bool = False
     unavailable: list[str] = Field(default_factory=list)
     focus: LiveFocus | None = None
+    # The field as the airport card reads it (#880): its own row, or with
+    # its proxy station's METAR/TAF laid in (#767,
+    # ``TerminalObservation.effective``). One source for the card, so no
+    # client picks rows. None when the corridor has no row for the field.
+    airport: AirportObservation | None = None
+
+
+FoldSource = Literal["takeoff", "fixes"]
+
+
+class LiveGlanceDeparture(BaseModel):
+    """The departure card's block (#880): the twin of
+    :class:`LiveGlanceDestination`, read at the ETD, from the same helpers so
+    the same words. Server-built (``live_glance.departure_block``).
+
+    ``folded`` says the departure is behind the flight **by evidence**, never
+    by the plan: a take-off entered or inferred from the fixes, or the app's
+    Start fix ``FOLD_AFTER_START`` old with the flight under way. A late
+    flight past its planned time with nothing observed stays unfolded.
+    """
+
+    icao: str
+    name: str | None = None
+    # The effective departure the TAF was read at (``FlightProgress.departed_at``).
+    etd: datetime | None = None
+    metar_text: str
+    metar_category: str | None = None
+    metar_time: datetime | None = None
+    proxy_caption: str | None = None
+    # "TAF at ETD VFR, TEMPO MVFR", or "no TAF for ETD".
+    taf_text: str
+    taf_category: str | None = None
+    # "Wind at ETD 290° 15G25 kt · RWY 25R crosswind 10 kt".
+    wind_text: str | None = None
+    wind_advisory: str | None = None
+    cells_text: str
+    cells: list[LiveDestinationCell] = Field(default_factory=list)
+    lightning_text: str | None = None
+    # An alert-tier change belongs to the departure phase (styling only).
+    alert: bool = False
+    unavailable: list[str] = Field(default_factory=list)
+    focus: LiveFocus | None = None
+    airport: AirportObservation | None = None
+    folded: bool = False
+    # When it left: the take-off, else the departure the Start fix gives.
+    folded_at: datetime | None = None
+    # "takeoff" (an entered take-off event) or "fixes" (inferred from app
+    # positions): ``position_sharing=none`` keeps only the first.
+    folded_source: FoldSource | None = None
+    # The folded line: "LFPN 290/15G25 · RWY 25R · departed 10:04Z" ("~"
+    # before an estimated time). None while unfolded.
+    folded_text: str | None = None
 
 
 class LiveGlance(BaseModel):
@@ -509,6 +562,8 @@ class LiveGlance(BaseModel):
     # without progress / a layer written before #816.
     flight: LiveGlanceFlight | None = None
     destination: LiveGlanceDestination | None = None
+    # The departure card's block (#880). None on layers written before it.
+    departure: LiveGlanceDeparture | None = None
     # The model-written highlight (#697), patched in after the tick commits.
     # None whenever it was not generated, not reusable, or rejected by the
     # grounding check — readers fall back to ``headline``.

@@ -899,6 +899,41 @@ same `build_glance` call, so they inherit its "never raises" guard:
   changes collapsed to a count, phase emphasis beyond the strip, the XCUI
   before/en route/after-landing journey.
 
+### Airport cards: departure block and fold (#880)
+
+Server half of the departure / arrival airport cards (#737; web #881, iOS
+#882, Android #883). Every rule the card needs is decided here so the three
+clients only draw. Additive and optional throughout.
+
+- **`glance.departure`** (`LiveGlanceDeparture`, `departure_block`): the
+  destination block's twin read at the ETD. Both now come from one helper,
+  `_terminal_block`, so the words match ("TAF at ETD …", "Wind at ETD …",
+  "no TAF for ETD"); `etd` is `FlightProgress.departed_at`.
+- **`airport`** on both blocks: the terminal's `effective()` row (its own, or
+  with the proxy station's METAR/TAF laid in, #767). The card reads that one
+  object, so no client picks the station row itself. ~3–5 KB per block in
+  `live.json` and `/live`. Not stored in `live_snapshots.jsonl.gz` (it is a
+  METAR/TAF row, like `route_observations`): `tick_view` re-attaches it from
+  the rebuilt rows, so `/live/at` has it without the runway picture.
+- **Fold rule** (`departure_fold`): by evidence, never the plan. A take-off
+  event (`folded_source="takeoff"`), else a take-off inferred from fixes,
+  else the Start fix `FOLD_AFTER_START` (15 min) old **and**
+  `progress.departed` (past the take-off that fix implies; a newer ground fix
+  moves it, so a pilot still parked stays open), or any landing (all
+  `"fixes"`). A late flight with nothing observed stays open. `folded_at` is
+  the take-off, else `departed_at`; `folded_text` is the whole folded line
+  ("LFPN 290/15G25 · RWY 25R · departed ~10:09Z", `~` for an estimate; the
+  category box is drawn from `metar_category`).
+- **Redaction:** `none` nulls `etd`, strips every clause, and keeps a fold
+  only when `folded_source == "takeoff"`; a fixes fold would say where the
+  flight is. `redact_summary` applies the same rule to the agent block.
+- **Agent:** `summarize_live` `glance.departure` `{icao, metar_text,
+  taf_text, wind_text, folded, folded_source}` and `glance.destination`
+  `{icao, metar_text, taf_text, wind_text, cells_text}` (the destination was
+  not in the agent block before).
+- The airport-level fields (`taf_hours`, `metar_trend`, meter, sky, weather
+  words, short wind, crosswind) are in `metar-taf-route-weather.md`.
+
 ## Observed highlight (#697)
 
 One or two sentences above the nutshell saying what deserves attention on the
@@ -1568,7 +1603,7 @@ old "N NM along" wording (a layer or pack written before #790, a locator failure
 - `tasks/live_trail.py` — `change_trails`, `trails_for_pack` (#669)
 - `observed/storms.py` — `load_cell_frames`, `build_storms`, `group_storms`, `estimate` (#688); `analysis/route_geometry.RouteTrack`
 - `analysis/flight_progress.py` — `FlightProgress`, `ProgressEvent`, `FixData`, `progress_events` (#759, #760, #761: fix fusion); `live_layer.flight_progress` builds it per tick, `progress_block` makes the `LiveProgress` block, `load_progress_events` / `record_progress_event` read and append the entries; `live_tick.live_window_end`; position sharing `live_layer.sharing_for_viewer` / `redact_live` / `redact_summary`; tests `tests/test_flight_progress.py`, `tests/test_live_progress.py` (incl. the LELL→LEMI replay with a take-off 40 min late), `tests/test_live_position.py` (the same morning with a fix stream and with occasional one-shot fixes), `tests/test_api.py::TestLiveProgress` / `TestLivePosition`
-- `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690); `flight_strip`, `destination_block` (#816, tests `tests/test_live_glance_strip.py`)
+- `tasks/live_glance.py` — `build_glance`: the Observed tab's nutshell, ribbon and map focus (#690); `flight_strip`, `destination_block` (#816, tests `tests/test_live_glance_strip.py`), `departure_block` / `departure_fold` (#880, `tests/test_live_glance_departure.py`)
 - `analysis/route_locator.py`: `RouteLocator` (`build`, `locate`, `locate_along`, `span`, `ladder`, `from_ladder`), `for_route`, `display_names`, `town_name`, `short_airport_name`, `when_text`; `analysis/coastline.py`: `is_land`, `coast_crossings` (#790); tests `tests/test_route_locator.py`, `tests/test_route_locator_wiring.py`
 - `tasks/live_highlight.py` — `facts`, `facts_hash`, `check_grounding`, `generate`, `carry_forward`, `ensure_highlight`, `charge_highlight`: the model-written highlight (#697); `live_layer.patch_highlight` is its second write and `live_tick._highlights` its fan-out
 - `api/packs.py` — `live_router` (`/flights/{id}/live`, `/flights/{id}/live/summary`, `POST /flights/{id}/live/progress`, `POST /flights/{id}/live/position`), overlay in snapshot/bundle; `api/flights.py` `PATCH /flights/{id}/position-sharing`
