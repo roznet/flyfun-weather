@@ -538,7 +538,6 @@ fun FlyFunWeatherRoot(
             AddFlightViewModel(
                 repository = appState.repository,
                 apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
-                tripRepository = appState.tripRepository,
                 airportDb = appState.airportDb,
                 // The process-lived app state, so a queued re-brief retry survives the sheet.
                 backgroundScope = appState.viewModelScope,

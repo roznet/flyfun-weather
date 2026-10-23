@@ -7,12 +7,9 @@ import aero.flyfun.weather.data.AirportDatabaseService
 import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.BriefingRepository
-import aero.flyfun.weather.data.TripRepository
-import aero.flyfun.weather.model.AddTripLegsRequest
 import aero.flyfun.weather.model.AircraftResponse
 import aero.flyfun.weather.model.AutorouterRouteOption
 import aero.flyfun.weather.model.CreateFlightRequest
-import aero.flyfun.weather.model.CreateTripRequest
 import aero.flyfun.weather.model.FlightDuration
 import aero.flyfun.weather.model.FlightEditRules
 import aero.flyfun.weather.model.FlightFlexibility
@@ -20,7 +17,6 @@ import aero.flyfun.weather.model.FlightInvalidation
 import aero.flyfun.weather.model.FlightProfileResponse
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.MoveFlightRequest
-import aero.flyfun.weather.model.TripSummaryResponse
 import aero.flyfun.weather.model.UpdateFlightRequest
 import aero.flyfun.weather.model.departureInstant
 import java.time.Instant
@@ -47,7 +43,8 @@ import kotlinx.coroutines.launch
  * - Autorouter route suggestions
  * - Aircraft selection (autofilling speed & ceiling) and Profile selection
  * - Flexibility (the server's timing-scenario mode, incl. a pinned alternate departure)
- * - Optional Trip assignment (existing trip or inline new trip creation)
+ * - No trip picker: trips are arranged later from the flight list; a next leg joins its
+ *   previous flight's trip
  *
  * Editing follows the web's rules ([FlightEditRules], #552, #885): a change of UTC date or of
  * origin/destination is a different flight, so Save asks for Move or Duplicate instead of a
@@ -57,7 +54,6 @@ import kotlinx.coroutines.launch
 class AddFlightViewModel(
     private val repository: BriefingRepository,
     private val apiClient: ApiClient? = null,
-    private val tripRepository: TripRepository? = null,
     private val airportDb: AirportDatabaseService? = null,
     private val scopeOverride: CoroutineScope? = null,
     /** Outlives the sheet: the 409 refresh retry keeps going after it closes. */
@@ -144,14 +140,8 @@ class AddFlightViewModel(
     private val _selectedProfileId = MutableStateFlow<Int?>(null)
     val selectedProfileId: StateFlow<Int?> = _selectedProfileId.asStateFlow()
 
-    private val _trips = MutableStateFlow<List<TripSummaryResponse>>(emptyList())
-    val trips: StateFlow<List<TripSummaryResponse>> = _trips.asStateFlow()
-
     private val _selectedTripId = MutableStateFlow<String?>(null)
     val selectedTripId: StateFlow<String?> = _selectedTripId.asStateFlow()
-
-    private val _newTripName = MutableStateFlow("")
-    val newTripName: StateFlow<String> = _newTripName.asStateFlow()
 
     private val _autorouterRoutes = MutableStateFlow<List<AutorouterRouteOption>>(emptyList())
     val autorouterRoutes: StateFlow<List<AutorouterRouteOption>> = _autorouterRoutes.asStateFlow()
@@ -194,10 +184,6 @@ class AddFlightViewModel(
     val isValid: Boolean
         get() = _waypoints.value.size >= 2 && totalDurationHours > 0.0
 
-    /** The trip-picker applies to create and duplicate; an edit moves trips from the list. */
-    val showsTripPicker: Boolean
-        get() = _mode.value != Mode.EDIT
-
     /** Alternate needs an alt time that only PATCH can set, so it is offered on edit only. */
     val flexibilityOptions: List<FlightFlexibility>
         get() = if (_mode.value == Mode.EDIT) {
@@ -223,11 +209,6 @@ class AddFlightViewModel(
                     if (_mode.value == Mode.CREATE && _selectedProfileId.value == null) {
                         _selectedProfileId.value = list.firstOrNull { it.isDefault }?.id ?: list.firstOrNull()?.id
                     }
-                }
-            }
-            tripRepository?.let { repo ->
-                runCatching { repo.listTrips() }.onSuccess { list ->
-                    _trips.value = list
                 }
             }
         }
@@ -547,14 +528,6 @@ class AddFlightViewModel(
         profile.settings.speedKt?.let { _cruiseSpeedKt.value = it }
     }
 
-    fun selectTrip(tripId: String?) {
-        _selectedTripId.value = tripId
-    }
-
-    fun setNewTripName(name: String) {
-        _newTripName.value = name
-    }
-
     fun setDepartureDate(date: LocalDate) {
         _departureDate.value = date
     }
@@ -638,7 +611,7 @@ class AddFlightViewModel(
         submit(onSaved) {
             when (_mode.value) {
                 Mode.EDIT -> saveEdit()
-                Mode.CREATE, Mode.DUPLICATE -> createNew(tripId = resolveTripForCreate())
+                Mode.CREATE, Mode.DUPLICATE -> createNew(tripId = _selectedTripId.value)
             }
         }
     }
@@ -703,15 +676,6 @@ class AddFlightViewModel(
             ?: throw IllegalArgumentException("The route needs a departure and a destination.")
         _waypoints.value = waypoints
         return RoutePayload(waypoints, text, changed = true)
-    }
-
-    private suspend fun resolveTripForCreate(): String? {
-        val picked = _selectedTripId.value
-        val name = _newTripName.value.trim()
-        if (picked == null && name.isNotBlank() && tripRepository != null) {
-            return tripRepository.createTrip(CreateTripRequest(name = name, flightIds = emptyList())).id
-        }
-        return picked
     }
 
     private suspend fun createNew(tripId: String?): FlightResponse {

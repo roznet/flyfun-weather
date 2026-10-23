@@ -2,7 +2,6 @@ package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.FixtureBriefingRepository
-import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightInvalidation
 import aero.flyfun.weather.model.FlightResponse
@@ -31,7 +30,6 @@ class AddFlightEditViewModelTest {
         val vm = AddFlightViewModel(
             repository = repo,
             apiClient = null,
-            tripRepository = FixtureTripRepository(),
             airportDb = null,
             scopeOverride = testScope,
         )

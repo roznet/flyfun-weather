@@ -134,11 +134,9 @@ class ViewModelTest {
     fun addFlightViewModel_parsesWaypointsAndCreatesFlight() = runTest {
         val testScope = TestScope(StandardTestDispatcher(testScheduler))
         val repo = FixtureBriefingRepository(mockLive = true)
-        val tripRepo = FixtureTripRepository()
         val vm = AddFlightViewModel(
             repository = repo,
             apiClient = null,
-            tripRepository = tripRepo,
             airportDb = null,
             scopeOverride = testScope,
         )

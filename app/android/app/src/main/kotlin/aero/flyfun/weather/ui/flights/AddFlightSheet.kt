@@ -121,9 +121,6 @@ fun AddFlightSheet(
     val selectedAircraftId by viewModel.selectedAircraftId.collectAsState()
     val profiles by viewModel.profiles.collectAsState()
     val selectedProfileId by viewModel.selectedProfileId.collectAsState()
-    val trips by viewModel.trips.collectAsState()
-    val selectedTripId by viewModel.selectedTripId.collectAsState()
-    val newTripName by viewModel.newTripName.collectAsState()
     val autorouterRoutes by viewModel.autorouterRoutes.collectAsState()
     val isFetchingRoutes by viewModel.isFetchingRoutes.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
@@ -532,59 +529,6 @@ fun AddFlightSheet(
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-            }
-
-            if (viewModel.showsTripPicker) {
-                // Trip Assignment
-                var tripExpanded by remember { mutableStateOf(false) }
-                val currentTripName = trips.firstOrNull { it.id == selectedTripId }?.name ?: "No Trip"
-                ExposedDropdownMenuBox(
-                    expanded = tripExpanded,
-                    onExpandedChange = { tripExpanded = it },
-                ) {
-                    OutlinedTextField(
-                        value = currentTripName,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Assign to Trip (Optional)") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = tripExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth(),
-                    )
-                    ExposedDropdownMenu(
-                        expanded = tripExpanded,
-                        onDismissRequest = { tripExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("No Trip") },
-                            onClick = {
-                                viewModel.selectTrip(null)
-                                tripExpanded = false
-                            },
-                        )
-                        trips.forEach { trip ->
-                            DropdownMenuItem(
-                                text = { Text(trip.name) },
-                                onClick = {
-                                    viewModel.selectTrip(trip.id)
-                                    tripExpanded = false
-                                },
-                            )
-                        }
-                    }
-                }
-
-                if (selectedTripId == null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = newTripName,
-                        onValueChange = { viewModel.setNewTripName(it) },
-                        label = { Text("Or create new trip name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
