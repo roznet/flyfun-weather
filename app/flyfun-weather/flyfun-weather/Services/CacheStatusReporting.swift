@@ -16,4 +16,14 @@ protocol CacheStatusReporting {
     /// Flight IDs that have a full pack available offline, so their row stays
     /// tappable (and un-dimmed) while offline.
     func offlineReadyFlightIds() async -> Set<String>
+
+    /// #882: whether the last `latestPack()` / `liveLayer()` read fell back to
+    /// the cache because the server could not be reached. Drives the Observed
+    /// tab's offline banner.
+    var isServingCachedLive: Bool { get }
+}
+
+extension CacheStatusReporting {
+    /// Repositories without a live cache never serve one.
+    var isServingCachedLive: Bool { false }
 }

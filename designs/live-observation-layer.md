@@ -1017,7 +1017,9 @@ further calibration gate, no What's New entry).
 - **iOS** (`ObservedHighlightView.swift`): a "Details" fold below the ribbon,
   collapsed by default and remembered (`@AppStorage("observedDetailsExpanded")`),
   holds the headline (when the highlight took its slot), the other nutshell
-  lines, the map button and the other "Since this briefing" rows
+  lines (since #882 the lines still ahead too: the airport cards above stand
+  in for the terminal lines, see ios-app-ui.md), the map button and the other
+  "Since this briefing" rows
   (`LiveChangesView(excludesAlerts:)`). A plain button, not `DisclosureGroup`,
   so the toggle exposes `expanded`/`collapsed` to the XCUI helper. UI-test
   launches clear the remembered state (`AppState.setupUITestSession`), and the

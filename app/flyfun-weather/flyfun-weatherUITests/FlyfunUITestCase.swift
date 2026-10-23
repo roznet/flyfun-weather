@@ -458,33 +458,48 @@ class FlyfunUITestCase: XCTestCase {
 
                 // #690: the nutshell is the server's text, word for word.
                 if let glance = tick.body["glance"] as? [String: Any] {
-                    // The Details card only draws when it has something: a passed
-                    // non-alert line (arrival yields to the destination block) or
-                    // the headline under a highlight. Preflight it has neither.
+                    // The Details card only draws when it has something: a
+                    // non-alert line no airport card stands in for (#882: the
+                    // cards replace the terminal lines) or the headline under
+                    // a highlight.
                     let hasDestination = glance["destination"] is [String: Any]
-                    let hasPassed = ((glance["lines"] as? [[String: Any]]) ?? []).contains {
-                        $0["passed"] as? Bool == true && $0["alert"] as? Bool != true
-                            && !(hasDestination && $0["phase"] as? String == "arrival")
+                    let departure = glance["departure"] as? [String: Any]
+                    let coveredByCard = { (line: [String: Any]) -> Bool in
+                        guard line["alert"] as? Bool != true else { return false }
+                        switch line["phase"] as? String {
+                        case "arrival": return hasDestination
+                        case "departure": return departure != nil
+                        default: return false
+                        }
                     }
-                    if hasPassed || (glance["highlight"] is [String: Any] && glance["headline"] is String) {
+                    let hasDetailLine = ((glance["lines"] as? [[String: Any]]) ?? []).contains {
+                        $0["alert"] as? Bool != true && !coveredByCard($0)
+                    }
+                    if hasDetailLine || (glance["highlight"] is [String: Any] && glance["headline"] is String) {
                         XCTAssertTrue(app.descendants(matching: .any)["observedNutshell"].firstMatch.exists,
                                       "\(hhmm): the nutshell should replace the glance card")
                     }
-                    // #816: the flight strip leads, and "Destination at your
-                    // ETA" stands in for a non-alert arrival line.
+                    // #816: the flight strip leads.
                     if let flight = glance["flight"] as? [String: Any], let text = flight["text"] as? String {
                         let strip = app.descendants(matching: .any)["observedFlightStrip"].firstMatch
                         XCTAssertTrue(strip.exists, "\(hhmm): the flight strip should render")
                         XCTAssertTrue(strip.label.contains(text), "\(hhmm): the strip should read \"\(text)\", got \(strip.label)")
                     }
+                    // #882: the airport cards, the departure folded to one
+                    // line once the server says it is behind.
                     if hasDestination {
-                        XCTAssertTrue(app.descendants(matching: .any)["observedDestination"].firstMatch.exists,
-                                      "\(hhmm): the destination-at-ETA card should render unfolded")
+                        XCTAssertTrue(app.descendants(matching: .any)["airportCard-arr"].firstMatch.exists,
+                                      "\(hhmm): the arrival card should render")
+                    }
+                    if let departure {
+                        let id = departure["folded"] as? Bool == true ? "airportCardFolded" : "airportCard-dep"
+                        XCTAssertTrue(app.descendants(matching: .any)[id].firstMatch.exists,
+                                      "\(hhmm): the departure should render as \(id)")
                     }
                     for line in (glance["lines"] as? [[String: Any]]) ?? [] {
                         let phase = line["phase"] as? String ?? ""
                         let text = line["text"] as? String ?? ""
-                        if hasDestination, phase == "arrival", line["alert"] as? Bool != true { continue }
+                        if coveredByCard(line) { continue }
                         let row = app.descendants(matching: .any)["observedNutshellLine-\(phase)"].firstMatch
                         XCTAssertTrue(row.waitForExistence(timeout: Self.uiTimeout),
                                       "\(hhmm): the \(phase) nutshell line should render")

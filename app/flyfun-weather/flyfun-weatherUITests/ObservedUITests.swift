@@ -105,11 +105,13 @@ final class ObservedUITests: FlyfunUITestCase {
         XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the airport card's Show on map should open the map")
 
-        // A nutshell line opens the map too.
+        // A nutshell line opens the map too (#882: under Details, below the
+        // ribbon, since the airport cards took the top).
         switchToBriefingTab(app, "Observed")
+        openObservedDetails(app)
         let line = app.descendants(matching: .any)["observedNutshellLine-enroute"].firstMatch
         XCTAssertTrue(line.waitForExistence(timeout: Self.uiTimeout), "the en-route line should render")
-        line.tap()
+        tapAfterScrolling(app, line)
         XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "a nutshell line should open the map")
     }

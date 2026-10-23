@@ -1,27 +1,31 @@
 import SwiftUI
 
 // The top of the Observed tab once the server sends a nutshell (#697,
-// reordered around the pilot's in-flight questions in #816):
+// reordered around the pilot's in-flight questions in #816, and into the
+// shared order of every client in #882):
 //
+//   0. offline      — "Offline · showing data from …" when the last live read
+//                     failed (ObservedOfflineBanner);
 //   1. flight strip — where the flight is and its ETA (ObservedFlightStrip);
 //   2. alerts       — alert-tier nutshell lines and alert-tier change rows,
 //                     never folded;
 //   3. highlight    — the model-written line, its caption (written time and
 //                     age, orange once stale) and 👍/👎; the nutshell
 //                     headline stands in its place when there is none;
-//   4. ahead        — the lines not yet passed, unfolded, then "Destination
-//                     at your ETA" (DestinationAtETACard);
+//   4. airports     — the departure + arrival cards (AirportCardsSection);
+//                     they stand in for the non-alert terminal lines;
 //   5. ribbon       — (RouteRibbonCard, its marker captioned by the strip);
 //   6. Details      — collapsed by default and remembered: the headline, the
-//                     passed lines, the other change rows.
+//                     lines still ahead, the passed lines, the other change
+//                     rows.
 //
 // Every word is the server's: the client never re-words the highlight, and
 // it is never styled as an alert.
 //
 // SYNC — the highlight block's web counterpart is `highlightHtml` in
-// web/ts/visualization/observed/nutshell-view.ts. Documented divergence: the
-// web leaves the headline and the other lines unfolded (the desktop has the
-// room), and keeps the alert change rows in its page-level "Since this
+// web/ts/visualization/observed/nutshell-view.ts. Both fold the headline and
+// the non-alert lines under "Details" (#881); the web draws its fold above
+// the ribbon and keeps the alert change rows in its page-level "Since this
 // briefing" banner.
 
 // MARK: - Alerts
@@ -128,9 +132,9 @@ struct ObservedHighlightCard: View {
 // MARK: - Details fold
 
 /// Everything below the ribbon that a pilot reads only when the top raised a
-/// question: the headline (when the highlight took its slot), the lines the
-/// flight has passed (#816: the lines ahead are unfolded above), the
-/// non-alert change rows. Collapsed by default; the state is remembered
+/// question: the headline (when the highlight took its slot), the non-alert
+/// lines still ahead and those the flight has passed (#882: the airport cards
+/// above answer the terminals), the non-alert change rows. Collapsed by default; the state is remembered
 /// across launches, except under UI tests, which start collapsed (#803).
 ///
 /// A plain button rather than a `DisclosureGroup`, so the toggle carries an
@@ -168,12 +172,12 @@ struct ObservedDetailsFold: View {
             .accessibilityValue(expanded ? "expanded" : "collapsed")
 
             if expanded {
-                let passed = ObservedNutshellCard(
+                let lines = ObservedNutshellCard(
                     viewModel: viewModel, glance: glance,
-                    lines: glance.passedItems, showsHeadline: glance.highlight != nil
+                    lines: glance.aheadItems + glance.passedItems, showsHeadline: glance.highlight != nil
                 )
-                if !passed.isEmpty {
-                    passed
+                if !lines.isEmpty {
+                    lines
                 }
                 if let changes {
                     LiveChangesView(changes: changes, baseline: baseline, excludesAlerts: true)

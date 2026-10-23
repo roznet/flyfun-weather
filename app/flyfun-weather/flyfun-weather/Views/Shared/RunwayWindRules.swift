@@ -26,6 +26,7 @@ import Foundation
 //   ghostLine / sampleTimeLabel   → ghostLine / sampleTimeLabel
 //   crosswindText / crosswindTone → crosswindText / crosswindTone
 //   wind(of:source:)              → windOf
+//   dial(role:icao:airport:ghost:) → runwayWindDial
 //   pair(airports:…)              → runwayWindPair
 //   missingWindLabel              → missingWindLabel
 //
@@ -388,7 +389,8 @@ nonisolated enum RunwayWindRules {
         /// Nil when the airport has no picture (no runway data, or none fetched).
         let picture: RunwayWindPicture?
         let primary: WindAtAirport?
-        /// The TAF at ETA for the destination; never for the departure ("now").
+        /// The TAF at ETA: the destination's in the pair, either card's
+        /// (ETD for the departure) in the airport cards (#882).
         let ghost: WindAtAirport?
         /// #767: the station the METAR wind comes from when the field has none
         /// of its own (laid over the field's runways); nil for its own METAR.
@@ -399,8 +401,23 @@ nonisolated enum RunwayWindRules {
         var id: String { role }
     }
 
+    /// One airport's dial: the METAR now, plus the TAF at ETA (ETD for the
+    /// departure's airport card) as the ghost when `ghost` is set.
+    static func dial(role: String, icao: String, airport: AirportObservation?, ghost: Bool) -> Dial {
+        let picture = airport?.runwayWind
+        return Dial(
+            role: role, icao: icao.uppercased(), picture: picture,
+            primary: wind(of: picture, source: "metar"),
+            ghost: ghost ? wind(of: picture, source: "taf") : nil,
+            metarStation: airport?.metarProxy?.icao,
+            proxyCaption: airport?.proxyCaption
+        )
+    }
+
     /// The departure + destination dials, or [] when neither airport has a
-    /// picture (an older server: the tab renders as before).
+    /// picture (an older server: the tab renders as before). Since #882 only
+    /// the Observed tab's fallback (no nutshell) draws the pair; the airport
+    /// cards build one dial each with `dial(role:icao:airport:ghost:)`.
     static func pair(airports: [AirportObservation]?, departure: String?, destination: String?) -> [Dial] {
         func find(_ icao: String) -> AirportObservation? {
             (airports ?? []).first { $0.icao.uppercased() == icao.uppercased() }
@@ -408,15 +425,7 @@ nonisolated enum RunwayWindRules {
         var dials: [Dial] = []
         func add(_ role: String, _ icao: String?) {
             guard let icao, !icao.isEmpty else { return }
-            let airport = find(icao)
-            let picture = airport?.runwayWind
-            dials.append(Dial(
-                role: role, icao: icao.uppercased(), picture: picture,
-                primary: wind(of: picture, source: "metar"),
-                ghost: role == "ARR" ? wind(of: picture, source: "taf") : nil,
-                metarStation: airport?.metarProxy?.icao,
-                proxyCaption: airport?.proxyCaption
-            ))
+            dials.append(dial(role: role, icao: icao, airport: find(icao), ghost: role == "ARR"))
         }
         add("DEP", departure)
         if let destination, destination.uppercased() != (departure ?? "").uppercased() { add("ARR", destination) }

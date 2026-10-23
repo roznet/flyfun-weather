@@ -169,7 +169,7 @@ nonisolated struct ObsProxy: Codable, Sendable, Equatable {
     let source: String?
 }
 
-nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
+nonisolated struct AirportObservation: Codable, Identifiable, Sendable, Equatable {
     let icao: String
     let name: String?
     let distanceFromRouteNm: Double?
@@ -256,6 +256,27 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
     let tafProxy: ObsProxy?
     let proxyCaption: String?
 
+    // Airport card readings (#880), all server-computed; absent on older
+    // servers, and the card leaves a missing one out rather than derive it.
+    /// The TAF hour by hour: the card's strip. Empty without a TAF.
+    var tafHours: [TafHour]? = nil
+    /// "better" / "worse" against `metarPreviousFlightCategory`.
+    var metarTrend: String? = nil
+    /// The dot on the four equal bands LIFR | IFR | MVFR | VFR, 0…1.
+    var metarCeilingMeter: Double? = nil
+    var metarVisibilityMeter: Double? = nil
+    /// "BKN 1,200 ft", "CAVOK", "VV 100 ft".
+    var metarSkyText: String? = nil
+    /// true → sun icon, false → cloud icon.
+    var metarCavok: Bool? = nil
+    /// "10 km+", "6 km", "800 m".
+    var metarVisibilityText: String? = nil
+    /// "290/15G25", "VRB 03", "Calm".
+    var metarWindShort: String? = nil
+    var metarWeatherWords: [MetarWeatherWord]? = nil
+    /// The METAR wind's crosswind on its best runway end; nil on `/live/at`.
+    var metarCrosswind: CrosswindReading? = nil
+
     var id: String { icao }
 
     /// The TAF read at this airport's ETA, for the observations table and the
@@ -292,6 +313,38 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable {
             legacyTrend: nil
         ))
     }
+}
+
+/// One TAF hour (#880), `models/observations.py::TafHour`.
+nonisolated struct TafHour: Codable, Sendable, Equatable {
+    /// The hour's start.
+    let time: String
+    let prevailingCategory: String?
+    /// The worst TEMPO/PROB group, only when worse than prevailing.
+    var temporaryCategory: String? = nil
+    var temporaryType: String? = nil
+    /// The ETA hour (the ETD's for the departure): outlined.
+    var isEta: Bool? = nil
+}
+
+/// A METAR present-weather group in words (#880).
+nonisolated struct MetarWeatherWord: Codable, Sendable, Equatable {
+    let code: String
+    let text: String
+    /// thunder, hail, snow, freezing, showers, rain, drizzle, fog, mist, haze,
+    /// smoke, dust, squall, funnel, other.
+    let icon: String?
+}
+
+/// The crosswind on the best runway end (#880).
+nonisolated struct CrosswindReading: Codable, Sendable, Equatable {
+    let runway: String
+    /// Where it comes from: "left" / "right" / "" (down the runway).
+    let side: String?
+    let kt: Double?
+    var gustKt: Double? = nil
+    /// "10G16 kt".
+    let text: String
 }
 
 /// An airport's TAF read at its ETA. See `AirportObservation.tafAtEta`.
