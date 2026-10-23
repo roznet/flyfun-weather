@@ -175,6 +175,12 @@
       margin-top: 0.75rem;
     }
 
+    .activity-table td.num .ev {
+      color: var(--text-muted);
+      font-size: 0.8em;
+      margin-left: 0.3rem;
+    }
+
     /* Usage Analytics tab */
     .usage-summary {
       display: grid;
@@ -391,14 +397,30 @@
 
     <!-- Usage tab -->
     <div id="tab-usage" class="tab-panel">
-      <!-- Period toggle -->
-      <div id="period-toggle" class="period-toggle">
-        <button class="toggle-btn active" data-period="30d">Last 30 days</button>
-        <button class="toggle-btn" data-period="all">All Time</button>
+      <!-- Activity by window (DB-only; GET /admin/activity) -->
+      <div class="section">
+        <h3>Activity</h3>
+        <div style="overflow-x:auto;">
+          <table class="admin-table activity-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th style="text-align:center;" title="Since 00:00 UTC">Today</th>
+                <th style="text-align:center;" title="Previous UTC day">Yesterday</th>
+                <th style="text-align:center;" title="Rolling 7 days">Last 7d</th>
+                <th style="text-align:center;" title="Rolling 30 days">Last 30d</th>
+                <th style="text-align:center;">Lifetime</th>
+              </tr>
+            </thead>
+            <tbody id="activity-tbody">
+              <tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" style="margin:0.4rem 0 0;font-size:0.75rem;">
+          Users, with events in grey. Active = created a flight or requested a briefing; users who only read briefings leave no trace.
+        </p>
       </div>
-
-      <!-- Summary stats -->
-      <div id="summary-bar" class="summary-bar" style="display:none;"></div>
 
       <!-- Pending approvals -->
       <div id="pending-section" class="section" style="display:none;">
@@ -409,6 +431,10 @@
       <!-- All users -->
       <details class="section collapse-section" open>
         <summary><h3>Users</h3><span class="count" id="users-count"></span></summary>
+        <div id="period-toggle" class="period-toggle">
+          <button class="toggle-btn active" data-period="30d">Last 30 days</button>
+          <button class="toggle-btn" data-period="all">All Time</button>
+        </div>
         <div style="overflow-x:auto;">
           <table class="admin-table">
             <thead>
@@ -416,16 +442,14 @@
                 <th>Name</th>
                 <th>Email</th>
                 <th>Status</th>
+                <th>Joined</th>
                 <th>Last Active</th>
                 <th style="text-align:center;">Briefings</th>
-                <th style="text-align:center;">GRAMET</th>
-                <th style="text-align:center;">LLM</th>
-                <th style="text-align:center;">Tokens</th>
-                <th style="text-align:center;">Disk</th>
+                <th style="text-align:center;" title="LLM input + output tokens">Tokens</th>
               </tr>
             </thead>
             <tbody id="users-tbody">
-              <tr><td colspan="9" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
+              <tr><td colspan="7" class="muted" style="text-align:center;padding:2rem;">Loading...</td></tr>
             </tbody>
           </table>
         </div>

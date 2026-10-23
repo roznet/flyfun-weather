@@ -295,8 +295,7 @@ class TestAdminUsersList:
         assert agent_users[0]["active_tokens"] == 1
         assert len(human_users) == 2  # admin + regular
 
-    def test_active_users_follows_period(self, client, db_session):
-        """``active_users`` is windowed; ``total_users`` is every account."""
+    def test_usage_follows_period_and_has_no_disk(self, client, db_session):
         from weatherbrief.db.models import BriefingUsageRow, FlightRow
 
         now = datetime.now(timezone.utc)
@@ -306,6 +305,7 @@ class TestAdminUsersList:
         session.flush()
         session.add(BriefingUsageRow(
             user_id=ADMIN_ID, flight_id="flt-recent", timestamp=now - timedelta(days=2),
+            llm_input_tokens=100, llm_output_tokens=20,
         ))
         session.add(BriefingUsageRow(
             user_id=REGULAR_ID, flight_id="flt-old", timestamp=now - timedelta(days=90),
@@ -313,17 +313,84 @@ class TestAdminUsersList:
         session.commit()
         session.close()
 
-        recent = client.get("/api/admin/users", cookies=_admin_cookie()).json()["summary"]
-        assert recent["active_users"] == 1  # only the 2-day-old briefing counts
-        assert recent["total_briefings"] == 1
-        assert recent["total_users"] == 2  # both accounts, unwindowed
+        def usage(period: str) -> dict:
+            users = client.get(
+                f"/api/admin/users?period={period}", cookies=_admin_cookie(),
+            ).json()["users"]
+            return {u["id"]: u for u in users}
 
-        all_time = client.get(
-            "/api/admin/users?period=all", cookies=_admin_cookie(),
-        ).json()["summary"]
-        assert all_time["active_users"] == 2
-        assert all_time["total_briefings"] == 2
-        assert all_time["total_users"] == 2
+        recent = usage("30d")
+        assert recent[ADMIN_ID]["usage"] == {"briefings": 1, "total_tokens": 120}
+        assert recent[REGULAR_ID]["usage"]["briefings"] == 0
+        assert "disk_usage_bytes" not in recent[ADMIN_ID]
+        assert usage("all")[REGULAR_ID]["usage"]["briefings"] == 1
+
+
+class TestAdminActivity:
+    def test_windows_and_metrics(self, client, db_session):
+        from weatherbrief.db.models import BriefingUsageRow, FlightRow
+
+        now = datetime.now(timezone.utc)
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Mid-way through yesterday / 3 days / 20 days / 90 days ago.
+        yday = today - timedelta(hours=12)
+        d3, d20, d90 = (now - timedelta(days=n) for n in (3, 20, 90))
+        session = db_session()
+        session.query(UserRow).filter(UserRow.id == REGULAR_ID).one().created_at = d3
+        session.query(UserRow).filter(UserRow.id == ADMIN_ID).one().created_at = d90
+        # Admin: flight created 20 days ago, first briefing then, refreshed
+        # yesterday by hand and today by the scheduler (not a user refresh).
+        session.add(FlightRow(id="f-a", user_id=ADMIN_ID, departure_time=now, created_at=d20))
+        # Regular: flight created yesterday, first briefing via MCP, refreshed today via MCP.
+        session.add(FlightRow(id="f-r", user_id=REGULAR_ID, departure_time=now, created_at=yday))
+        session.flush()
+        for user, flight, ts, trig in (
+            (ADMIN_ID, "f-a", d20, "user"),
+            (ADMIN_ID, "f-a", yday, "user"),
+            (ADMIN_ID, "f-a", now, "scheduler"),
+            (REGULAR_ID, "f-r", yday, "mcp"),
+            (REGULAR_ID, "f-r", now, "mcp"),
+        ):
+            session.add(BriefingUsageRow(
+                user_id=user, flight_id=flight, timestamp=ts, triggered_by=trig,
+            ))
+        # MCP connector session today for the regular user; a non-MCP token is ignored.
+        session.add(ApiTokenRow(
+            user_id=REGULAR_ID, token_hash="h-mcp", scope="mcp", last_used_at=now,
+        ))
+        session.add(ApiTokenRow(
+            user_id=ADMIN_ID, token_hash="h-other", scope=None, last_used_at=now,
+        ))
+        session.commit()
+        session.close()
+
+        resp = client.get("/api/admin/activity", cookies=_admin_cookie())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["windows"] == ["today", "yesterday", "week", "month", "lifetime"]
+        m = body["metrics"]
+
+        def row(key: str, part: str = "users") -> list[int]:
+            return [m[key][part][w] for w in body["windows"]]
+
+        assert row("new_users") == [0, 0, 1, 1, 2]
+        assert m["new_users"]["count"] is None
+        assert row("new_briefings") == [0, 1, 1, 2, 2]
+        assert row("new_briefings", "count") == [0, 1, 1, 2, 2]
+        # Admin's yesterday refresh + regular's today MCP refresh; the
+        # scheduler run and each flight's first briefing are not refreshes.
+        assert row("refreshes") == [1, 1, 2, 2, 2]
+        assert row("refreshes", "count") == [1, 1, 2, 2, 2]
+        assert row("mcp") == [1, 1, 1, 1, 1]
+        assert row("mcp", "count") == [1, 1, 2, 2, 2]
+        # Today: only the regular user's MCP refresh (the scheduler run and
+        # the token pings don't count as activity).
+        assert row("active_users") == [1, 2, 2, 2, 2]
+
+    def test_requires_admin(self, client):
+        token = create_token(REGULAR_ID, "user@test.com", "Regular User", TEST_SECRET)
+        resp = client.get("/api/admin/activity", cookies={COOKIE_NAME: token})
+        assert resp.status_code == 403
 
 
 class TestCreateAdditionalToken:

@@ -13,12 +13,11 @@ import time
 import uuid
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Integer, func
+from sqlalchemy import Integer, and_, case, distinct, func, literal, null, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from flyfun_common.auth import get_jwt_secret, is_dev_mode
@@ -37,7 +36,6 @@ from weatherbrief.db.models import (
 )
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, is_admin_email
 from weatherbrief.api.security import audit_admin_action
-from weatherbrief.storage.flights import safe_path_component
 
 logger = logging.getLogger(__name__)
 
@@ -78,21 +76,6 @@ def require_admin(
 
 
 # --- Endpoints ---
-
-
-def _user_disk_bytes(data_dir: Path, user_id: str) -> int:
-    """Sum file sizes under data/packs/{safe_user_id}/."""
-    user_dir = data_dir / "packs" / safe_path_component(user_id)
-    if not user_dir.is_dir():
-        return 0
-    total = 0
-    for dirpath, _dirnames, filenames in os.walk(user_dir):
-        for f in filenames:
-            try:
-                total += os.path.getsize(os.path.join(dirpath, f))
-            except OSError:
-                pass
-    return total
 
 
 @router.get("/freshness/markers")
@@ -180,14 +163,15 @@ def list_users(
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db, scope="function"),
 ):
-    """List all users with usage summaries and disk usage.
+    """List all users with briefing and LLM-token counts.
 
     ``period`` controls the usage window: ``30d`` (last 30 days, default)
     or ``all`` (all time).  ``limit`` caps the number of human users
     returned (0 = unlimited).  Agents are always included.
-    """
-    from datetime import datetime, timedelta, timezone
 
+    Database only — no per-user disk walk, which made this endpoint slow
+    once there were hundreds of user pack directories.
+    """
     now = datetime.now(timezone.utc)
     usage_since = (now - timedelta(days=30)) if period == "30d" else None
 
@@ -215,12 +199,6 @@ def list_users(
         BriefingUsageRow.user_id,
         func.count().label("briefings"),
         func.coalesce(
-            func.sum(func.cast(BriefingUsageRow.gramet_fetched, Integer)), 0
-        ).label("gramet"),
-        func.coalesce(
-            func.sum(func.cast(BriefingUsageRow.llm_digest, Integer)), 0
-        ).label("llm_digest"),
-        func.coalesce(
             func.sum(BriefingUsageRow.llm_input_tokens), 0
         ).label("input_tokens"),
         func.coalesce(
@@ -234,15 +212,12 @@ def list_users(
     usage_map = {
         r.user_id: {
             "briefings": r.briefings,
-            "gramet": int(r.gramet),
-            "llm_digest": int(r.llm_digest),
             "total_tokens": int(r.input_tokens) + int(r.output_tokens),
         }
         for r in usage_rows
     }
 
-    default_usage = {"briefings": 0, "gramet": 0, "llm_digest": 0, "total_tokens": 0}
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    default_usage = {"briefings": 0, "total_tokens": 0}
 
     # Batch-query active token count and last-used per agent user
     token_stats_rows = (
@@ -265,10 +240,7 @@ def list_users(
     }
 
     user_list = []
-    total_disk = 0
     for u in users:
-        disk = _user_disk_bytes(data_dir, u.id)
-        total_disk += disk
         is_agent = u.provider == "api_token"
         entry: dict = {
             "id": u.id,
@@ -281,7 +253,6 @@ def list_users(
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             "last_active_at": last_active_map[u.id].isoformat() if u.id in last_active_map else None,
             "usage": usage_map.get(u.id, default_usage),
-            "disk_usage_bytes": disk,
         }
         if is_agent:
             ts = token_stats_map.get(u.id, {"token_count": 0, "active_tokens": 0, "token_last_used": None})
@@ -289,15 +260,6 @@ def list_users(
             entry["active_tokens"] = ts["active_tokens"]
             entry["token_last_used"] = ts["token_last_used"].isoformat() if ts["token_last_used"] else None
         user_list.append(entry)
-
-    # Aggregate summary from ALL users (before limiting)
-    total_briefings = sum(u["usage"]["briefings"] for u in user_list)
-    total_tokens = sum(u["usage"]["total_tokens"] for u in user_list)
-    # Users who actually generated a briefing in the period. ``total_users``
-    # below is every account ever created and ignores ``period`` by nature, so
-    # the summary bar needs a windowed figure to sit next to the windowed
-    # briefing/token counts.
-    active_users = sum(1 for u in user_list if u["usage"]["briefings"] > 0)
 
     # Split humans / agents; paginate humans only
     humans = [u for u in user_list if u["type"] != "agent"]
@@ -310,15 +272,119 @@ def list_users(
 
     return {
         "period": period,
-        "summary": {
-            "total_users": len(user_list),
-            "active_users": active_users,
-            "total_briefings": total_briefings,
-            "total_tokens": total_tokens,
-            "total_disk_bytes": total_disk,
-        },
         "total_humans": total_humans,
         "users": humans + agents,
+    }
+
+
+#: ``briefing_usage.triggered_by`` values nobody asked for at that moment.
+#: NULL predates the column and was always a user request, so it counts as one.
+_UNATTENDED_TRIGGERS = ("scheduler", "resume", "admin-script")
+
+
+def _activity_windows(now: datetime) -> dict[str, tuple[datetime | None, datetime | None]]:
+    """``[start, end)`` per activity column; ``None`` = unbounded. UTC days."""
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return {
+        "today": (today, None),
+        "yesterday": (today - timedelta(days=1), today),
+        "week": (now - timedelta(days=7), None),
+        "month": (now - timedelta(days=30), None),
+        "lifetime": (None, None),
+    }
+
+
+def _window_counts(db: Session, ts, user, windows, *, where=(), row=None) -> dict:
+    """Distinct ``user`` (and, with ``row``, non-NULL ``row``) per window — one query.
+
+    Every window is a conditional aggregate over the same scan, so a metric
+    costs one pass over its (small) table however many columns the page shows.
+    """
+    cols = []
+    for start, end in windows.values():
+        bounds = [c for c in (
+            ts >= start if start is not None else None,
+            ts < end if end is not None else None,
+        ) if c is not None]
+        if bounds:
+            cond = and_(*bounds)
+            cols.append(func.count(distinct(case((cond, user)))))
+            if row is not None:
+                cols.append(func.count(case((cond, row))))
+        else:
+            cols.append(func.count(distinct(user)))
+            if row is not None:
+                cols.append(func.count(row))
+    values = iter(db.execute(select(*cols).where(*where)).one())
+    out: dict = {"users": {}, "count": {} if row is not None else None}
+    for key in windows:
+        out["users"][key] = int(next(values))
+        if row is not None:
+            out["count"][key] = int(next(values))
+    return out
+
+
+@router.get("/activity")
+def activity_summary(
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db, scope="function"),
+):
+    """Who used the app, per window (today / yesterday / 7d / 30d / lifetime).
+
+    Five small queries, one per metric. ``users`` is distinct accounts;
+    ``count`` (where present) is events. Signals are what the DB records:
+    a user who only *opens* briefings leaves no row, and a web/iOS session
+    has no last-seen column, so ``active_users`` undercounts pure readers.
+
+    - ``new_users``: human accounts created.
+    - ``new_briefings``: flights created (each gets its first briefing).
+    - ``refreshes``: user-requested briefings that weren't a flight's first.
+    - ``mcp``: ``users`` = accounts whose MCP token was last used in the
+      window, ``count`` = MCP-requested briefings. The MCP server checks the
+      token on every request (session open, tool listing), so a token use
+      means "connector session", not "tool called"; and it is a last-seen
+      value, so a user active both days only shows under today.
+    - ``active_users``: accounts that created a flight or requested a
+      briefing (web, app, Siri, MCP, trip). Connector sessions alone don't
+      count — they fire whenever a Claude chat with the connector opens.
+    """
+    windows = _activity_windows(datetime.now(timezone.utc))
+    bu = BriefingUsageRow
+    user_requested = or_(bu.triggered_by.is_(None), bu.triggered_by.notin_(_UNATTENDED_TRIGGERS))
+    first_briefing_ids = select(func.min(bu.id)).group_by(bu.flight_id)
+    mcp_token = and_(ApiTokenRow.scope.contains("mcp"), ApiTokenRow.last_used_at.isnot(None))
+
+    mcp_events = union_all(
+        select(bu.user_id.label("user_id"), bu.timestamp.label("ts"), literal(1).label("n"))
+        .where(bu.triggered_by == "mcp"),
+        select(ApiTokenRow.user_id, ApiTokenRow.last_used_at, null()).where(mcp_token),
+    ).subquery()
+    any_activity = union_all(
+        select(bu.user_id.label("user_id"), bu.timestamp.label("ts")).where(user_requested),
+        select(FlightRow.user_id, FlightRow.created_at),
+    ).subquery()
+
+    return {
+        "windows": list(windows),
+        "metrics": {
+            "new_users": _window_counts(
+                db, UserRow.created_at, UserRow.id, windows,
+                where=(UserRow.provider != "api_token",),
+            ),
+            "active_users": _window_counts(
+                db, any_activity.c.ts, any_activity.c.user_id, windows,
+            ),
+            "new_briefings": _window_counts(
+                db, FlightRow.created_at, FlightRow.user_id, windows, row=FlightRow.id,
+            ),
+            "refreshes": _window_counts(
+                db, bu.timestamp, bu.user_id, windows, row=bu.id,
+                where=(user_requested, bu.id.notin_(first_briefing_ids)),
+            ),
+            "mcp": _window_counts(
+                db, mcp_events.c.ts, mcp_events.c.user_id, windows, row=mcp_events.c.n,
+            ),
+        },
     }
 
 

@@ -4,8 +4,7 @@ import { apiFetch } from '../utils';
 
 export interface AdminUserUsage {
   briefings: number;
-  gramet: number;
-  llm_digest: number;
+  /** LLM input + output tokens. */
   total_tokens: number;
 }
 
@@ -20,30 +19,34 @@ export interface AdminUser {
   last_login_at: string | null;
   last_active_at: string | null;
   usage: AdminUserUsage;
-  disk_usage_bytes: number;
   // Agent-only fields
   token_count?: number;
   active_tokens?: number;
   token_last_used?: string | null;
 }
 
-export interface AdminSummary {
-  /** Every account ever created — not windowed by ``period``. */
-  total_users: number;
-  /** Accounts that generated at least one briefing within ``period``. */
-  active_users: number;
-  total_briefings: number;
-  total_tokens: number;
-  total_disk_bytes: number;
-}
-
 export type AdminPeriod = '30d' | 'all';
 
 export interface AdminUsersResponse {
   period: AdminPeriod;
-  summary: AdminSummary;
   total_humans: number;
   users: AdminUser[];
+}
+
+export type ActivityWindow = 'today' | 'yesterday' | 'week' | 'month' | 'lifetime';
+
+export interface ActivityMetric {
+  /** Distinct accounts per window. */
+  users: Record<ActivityWindow, number>;
+  /** Events per window (flights, refreshes, MCP briefings); null when users is the only figure. */
+  count: Record<ActivityWindow, number> | null;
+}
+
+export type ActivityMetricKey = 'new_users' | 'active_users' | 'new_briefings' | 'refreshes' | 'mcp';
+
+export interface ActivityResponse {
+  windows: ActivityWindow[];
+  metrics: Record<ActivityMetricKey, ActivityMetric>;
 }
 
 export interface CreateAgentResponse {
@@ -59,6 +62,10 @@ export interface CreateTokenResponse {
 
 export async function fetchAdminUsers(period: AdminPeriod = '30d', limit = 25, offset = 0): Promise<AdminUsersResponse> {
   return apiFetch<AdminUsersResponse>(`/admin/users?period=${period}&limit=${limit}&offset=${offset}`);
+}
+
+export async function fetchActivity(): Promise<ActivityResponse> {
+  return apiFetch<ActivityResponse>('/admin/activity');
 }
 
 export async function approveUser(userId: string): Promise<void> {

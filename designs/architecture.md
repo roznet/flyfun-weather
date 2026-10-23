@@ -430,7 +430,8 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/user/preferences` | GET/PUT | User preferences (autorouter creds) |
 | `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
 | `/api/user/usage` | GET | Today/month usage summary with quotas |
-| `/api/admin/users` | GET | All users with monthly summaries (admin only) |
+| `/api/admin/users` | GET | All users with briefing + LLM-token counts (30d / all; DB only, no disk walk) (admin only) |
+| `/api/admin/activity` | GET | Users / events per window (today, yesterday, 7d, 30d, lifetime): new users, active, new briefings, refreshes, MCP — the Usage tab's top table (admin) |
 | `/api/admin/users/{id}/costs` | GET | Per-user cost detail: balance, transactions, breakdown (admin) |
 | `/api/admin/users/{id}/approve` | POST | Approve user (admin only) |
 | `/api/admin/approve/{id}` | GET | One-click HMAC-signed approval link |

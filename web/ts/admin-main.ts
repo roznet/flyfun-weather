@@ -4,11 +4,11 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   fetchAdminUsers, approveUser, createAgent, createAgentToken,
   revokeAgent, fetchAdminFeedback, fetchAdminMetrics, fetchHubUsers,
-  fetchApiUsage, updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply,
+  fetchActivity, updateFeedbackStatus, saveFeedbackReply, sendFeedbackReply,
   saveFeedbackNotes, reopenFeedback, fetchConnectedApps,
-  type AdminUser, type AdminSummary, type AdminPeriod, type FeedbackEntry,
-  type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse, type ApiUsageResponse,
-  type ConnectedApp,
+  type AdminUser, type AdminPeriod, type FeedbackEntry,
+  type FeedbackStatus, type AdminMetrics, type AdminMetricsWindow, type HubResponse,
+  type ConnectedApp, type ActivityResponse, type ActivityMetricKey,
 } from './adapters/admin-adapter';
 import { redirectToLogin, renderUserInfo, escapeHtml, formatDate, flightTitle } from './utils';
 import { initTheme } from './theme';
@@ -32,10 +32,7 @@ async function init(): Promise<void> {
   setupAgentCreateButton();
   setupTabs();
   setupPeriodToggle();
-  // Load both tabs in parallel
-  // Load API usage first so summary bar can include the API call count
-  await loadApiUsage();
-  await Promise.all([loadUsers(), loadConnectedApps(), loadFeedback()]);
+  await Promise.all([loadActivity(), loadUsers(), loadConnectedApps(), loadFeedback()]);
 }
 
 function setupPeriodToggle(): void {
@@ -61,7 +58,6 @@ let costLoaded = false;
 let systemsPeriod: AdminPeriod = '30d';
 let systemsSort: 'last_active' | 'total_cost' = 'last_active';
 let systemsData: HubResponse | null = null;
-let apiUsageData: ApiUsageResponse | null = null;
 
 function setupTabs(): void {
   document.querySelectorAll('.settings-tabs .tab-btn').forEach((btn) => {
@@ -566,7 +562,6 @@ const PAGE_SIZE = 25;
 let currentOffset = 0;
 
 async function loadUsers(): Promise<void> {
-  const summaryBar = document.getElementById('summary-bar')!;
   const pendingSection = document.getElementById('pending-section')!;
   const pendingList = document.getElementById('pending-list')!;
   const usersBody = document.getElementById('users-tbody')!;
@@ -576,7 +571,7 @@ async function loadUsers(): Promise<void> {
 
   try {
     const response = await fetchAdminUsers(currentPeriod, PAGE_SIZE, currentOffset);
-    const { summary, total_humans, users } = response;
+    const { total_humans, users } = response;
 
     const humans = users.filter(u => u.type !== 'agent');
     const agents = users.filter(u => u.type === 'agent');
@@ -586,9 +581,6 @@ async function loadUsers(): Promise<void> {
     if (usersCount) usersCount.textContent = `(${total_humans})`;
     const agentsCount = document.getElementById('agents-count');
     if (agentsCount) agentsCount.textContent = `(${agents.length})`;
-
-    // Summary bar
-    renderSummaryBar(summaryBar, summary);
 
     // Pending approvals
     const pending = humans.filter(u => !u.approved);
@@ -809,26 +801,32 @@ function showTokenModal(token: string, name: string): void {
   });
 }
 
-function periodLabel(): string {
-  return currentPeriod === '30d' ? '30d' : 'All';
+const ACTIVITY_ROWS: { key: ActivityMetricKey; label: string; title: string }[] = [
+  { key: 'new_users', label: 'New users', title: 'Accounts created' },
+  { key: 'active_users', label: 'Active users', title: 'Created a flight or requested a briefing (web, app, Siri, MCP, trip)' },
+  { key: 'new_briefings', label: 'New briefings', title: 'Users who created flights · flights created' },
+  { key: 'refreshes', label: 'Refreshes', title: 'Users who refreshed · user-requested refreshes (not auto-refresh)' },
+  { key: 'mcp', label: 'MCP', title: 'Users whose MCP connector opened a session (last use only, so a user on both days counts under today) · MCP-requested briefings' },
+];
+
+async function loadActivity(): Promise<void> {
+  const tbody = document.getElementById('activity-tbody')!;
+  try {
+    tbody.innerHTML = renderActivityRows(await fetchActivity());
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">Failed to load activity: ${escapeHtml(String(err))}</td></tr>`;
+  }
 }
 
-function renderSummaryBar(el: HTMLElement, s: AdminSummary): void {
-  const tokens = s.total_tokens >= 1000
-    ? `~${Math.round(s.total_tokens / 1000)}K`
-    : String(s.total_tokens);
-  const pl = periodLabel();
-  const apiCalls = apiUsageData
-    ? (currentPeriod === 'all' ? apiUsageData.all_time : apiUsageData.last_30d).total_calls
-    : 0;
-  el.style.display = '';
-  el.innerHTML = `
-    <div class="summary-card"><div class="value">${s.active_users}</div><div class="label">Users (${pl})</div><div class="sub">of ${s.total_users} registered</div></div>
-    <div class="summary-card"><div class="value">${s.total_briefings}</div><div class="label">Briefings (${pl})</div></div>
-    <div class="summary-card"><div class="value">${tokens}</div><div class="label">Tokens (${pl})</div></div>
-    <div class="summary-card"><div class="value">${apiCalls.toLocaleString()}</div><div class="label">API Calls (${pl})</div></div>
-    <div class="summary-card"><div class="value">${formatBytes(s.total_disk_bytes)}</div><div class="label">Disk</div></div>
-  `;
+function renderActivityRows(a: ActivityResponse): string {
+  return ACTIVITY_ROWS.map(({ key, label, title }) => {
+    const m = a.metrics[key];
+    const cells = a.windows.map((w) => {
+      const ev = m.count ? `<span class="ev">${m.count[w].toLocaleString()}</span>` : '';
+      return `<td class="num">${m.users[w].toLocaleString()}${ev}</td>`;
+    }).join('');
+    return `<tr><td title="${escapeHtml(title)}">${label}</td>${cells}</tr>`;
+  }).join('');
 }
 
 function renderPendingCard(u: AdminUser): string {
@@ -894,12 +892,10 @@ function renderUserRow(u: AdminUser): string {
       <td><a href="${costsHref}">${escapeHtml(u.display_name)}</a></td>
       <td>${escapeHtml(u.email)}</td>
       <td>${status} ${approveBtn}</td>
+      <td>${u.created_at ? formatDate(u.created_at) : '-'}</td>
       <td>${lastActiveLabel}</td>
       <td class="num">${m.briefings}</td>
-      <td class="num">${m.gramet}</td>
-      <td class="num">${m.llm_digest}</td>
       <td class="num">${tokens}</td>
-      <td class="num">${formatBytes(u.disk_usage_bytes)}</td>
     </tr>`;
 }
 
@@ -971,14 +967,6 @@ function renderPerformance(m: AdminMetrics): string {
     <div class="summary-bar">
       ${triggerCells || '<p class="muted">No refreshes in the last 24 hours.</p>'}
     </div>`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / Math.pow(1024, i);
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
 
 // --- Systems tab (cross-app hub) ---
@@ -1232,16 +1220,6 @@ function showMessageModal(existing?: { id: number; date: string; title: string; 
     alert(`Failed to delete: ${String(err)}`);
   }
 };
-
-// --- API Usage summary ---
-
-async function loadApiUsage(): Promise<void> {
-  try {
-    apiUsageData = await fetchApiUsage();
-  } catch {
-    // Non-critical — summary bar will show 0
-  }
-}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
