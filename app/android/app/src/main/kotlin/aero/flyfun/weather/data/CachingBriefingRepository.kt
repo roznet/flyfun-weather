@@ -124,21 +124,8 @@ class CachingBriefingRepository(
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         online.routeDistance(waypoints)
 
-    override suspend fun fetchAutorouterRoutes(
-        departure: String,
-        destination: String,
-        departureTime: String,
-        cruiseAltitudeFt: Int,
-        durationHours: Double,
-        aircraftId: Int?,
-    ): AutorouterRoutesResponse = online.fetchAutorouterRoutes(
-        departure = departure,
-        destination = destination,
-        departureTime = departureTime,
-        cruiseAltitudeFt = cruiseAltitudeFt,
-        durationHours = durationHours,
-        aircraftId = aircraftId,
-    )
+    override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse =
+        online.fetchAutorouterRoutes(limit)
 
     // ========================================================================
     // Pack Metadata (network-first with cache fallback)

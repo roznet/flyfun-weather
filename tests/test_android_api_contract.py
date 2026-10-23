@@ -22,6 +22,10 @@ from pathlib import Path
 
 import pytest
 
+from flyfun_common import autorouter as autorouter_api
+
+from weatherbrief.api import devices as devices_api
+from weatherbrief.api import feedback as feedback_api
 from weatherbrief.api import flights as flights_api
 from weatherbrief.api import trips as trips_api
 from weatherbrief.api.app import create_app
@@ -43,36 +47,19 @@ VERBS = {
     "deleteWithBody": "DELETE",
 }
 
-# Calls whose path or verb the server does not route, outside the #885 edit fix.
+# Calls whose path or verb the server does not route. #889 fixed the rest; these two areas need
+# design work rather than a path fix and are tracked separately.
 # Not catchable here: `GET /api/observed/{layer}/frames` matches the literal
 # `/api/observed/cells/frames`, but the server's radar/satellite frames are
 # `/api/observed/frames/{source}`.
 KNOWN_BROKEN_CALLS = {
-    ("DELETE", "/api/autorouter/link"),
-    ("DELETE", "/api/flights/{}/subscription"),
-    ("DELETE", "/api/trips/{}/subscription"),
-    ("DELETE", "/api/user/devices/{}"),
-    ("GET", "/api/airports/{}/weather"),
-    ("GET", "/api/autorouter/routes"),
+    # Flexible departure: per flight on Android, per pack on the server (a port of the iOS flow).
     ("GET", "/api/flights/{}/time-options"),
-    ("GET", "/api/help/metrics"),
-    ("GET", "/api/observed/cells"),
-    ("GET", "/api/observed/lightning/flashes"),
-    ("GET", "/api/profiles"),
-    ("GET", "/api/shared/flight/{}"),
-    ("GET", "/api/shared/trip/{}"),
-    ("GET", "/api/trips/{}/ai-summary"),
-    ("GET", "/api/user/notifications/badge"),
-    ("POST", "/api/autorouter/link-complete"),
-    ("POST", "/api/autorouter/link-ticket"),
-    ("POST", "/api/feedback/digest"),
-    ("POST", "/api/feedback/highlight"),
     ("POST", "/api/flights/{}/time-options/confirm"),
     ("POST", "/api/flights/{}/time-options/scan"),
-    ("POST", "/api/shared/flight/{}/subscribe"),
-    ("POST", "/api/shared/trip/{}/subscribe"),
-    ("POST", "/api/user/devices"),
-    ("POST", "/api/user/notifications/clear-badge"),
+    # Observed imagery: no Android screen calls these yet; wiring them is its own feature.
+    ("GET", "/api/observed/cells"),
+    ("GET", "/api/observed/lightning/flashes"),
 }
 
 # Kotlin request class → server model. The keys Android encodes must all be server fields.
@@ -87,32 +74,17 @@ REQUEST_DTOS = {
     "AddTripLegsRequest": trips_api.AddLegsRequest,
     "CreateTripRequest": trips_api.CreateTripRequest,
     "UpdateTripRequest": trips_api.UpdateTripRequest,
+    "DeviceRegistrationRequest": devices_api.DeviceRegistration,
+    "FeedbackRequest": feedback_api.FeedbackRequest,
+    "AutorouterLinkTicketRequest": autorouter_api.LinkTicketRequest,
+    "AutorouterLinkCompleteRequest": autorouter_api.LinkCompleteRequest,
 }
 
-# Request keys the server ignores, outside the edit fix (the trip calls still work: the
-# server reads `name` / `flight_ids` and drops the rest).
-KNOWN_EXTRA_REQUEST_KEYS = {
-    ("CreateTripRequest", "title"),
-    ("CreateTripRequest", "legs"),
-    ("AddTripLegsRequest", "legs"),
-    ("UpdateTripRequest", "title"),
-    ("UpdateTripRequest", "flight_ids"),
-}
+# Request keys the server ignores. Add nothing here: fix the client.
+KNOWN_EXTRA_REQUEST_KEYS: set[tuple[str, str]] = set()
 
-# `FlightResponse` keys the server never sends (they decode to their defaults).
-KNOWN_UNSENT_FLIGHT_KEYS = {
-    "effective_auto_refresh_hour",
-    "advisory_summary",
-    "alt_briefing_status",
-    "alt_advisory_summary",
-    "time_scan_status",
-    "time_confirmation",
-    "has_pireps",
-    "debrief_eligible",
-    "has_debrief",
-    "subscriber_count",
-    "coverage_pending",
-}
+# `FlightResponse` keys the server never sends (they would decode to their defaults).
+KNOWN_UNSENT_FLIGHT_KEYS: set[str] = set()
 
 
 def _normalize(path: str) -> str:

@@ -894,14 +894,7 @@ open class FixtureBriefingRepository(
             totalDistanceNm = 78.0,
         )
 
-    override suspend fun fetchAutorouterRoutes(
-        departure: String,
-        destination: String,
-        departureTime: String,
-        cruiseAltitudeFt: Int,
-        durationHours: Double,
-        aircraftId: Int?,
-    ): AutorouterRoutesResponse = AutorouterRoutesResponse()
+    override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse = AutorouterRoutesResponse()
 
     override suspend fun listPacks(flightId: String): List<PackMetaResponse> =
         if (flightId == FixtureBriefingData.FLIGHT_ID) FixtureBriefingData.packs else emptyList()
@@ -1066,10 +1059,10 @@ open class FixtureBriefingRepository(
 
     override suspend fun subscribeToSharedTrip(code: String): TripSubscribeResponse =
         TripSubscribeResponse(
-            subscribed = true,
             tripId = FixtureTripData.TRIP_ID,
-            title = FixtureTripData.trip.title,
-            legCount = FixtureTripData.trip.legCount,
+            changed = FixtureTripData.trip.legCount,
+            totalLegs = FixtureTripData.trip.legCount,
+            isSubscribed = true,
         )
 
     override suspend fun unsubscribeFromTrip(tripId: String) = Unit

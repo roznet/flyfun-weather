@@ -263,7 +263,6 @@ data class ServerTripLeg(
             departureTime = departureTime,
             flightDurationHours = durationHours,
             briefingStatus = BriefingStatusInfo(assessment = assessment),
-            advisorySummary = advisorySummary,
         )
     }
 }
@@ -346,8 +345,6 @@ data class TripResponse(
     val shareCode: String? = null,
     @SerialName("ai_summary")
     val aiSummary: String? = null,
-    @SerialName("ai_summary_generated_at")
-    val aiSummaryGeneratedAt: String? = null,
     @SerialName("ai_summary_at")
     val aiSummaryAt: String? = null,
     @SerialName("ai_summary_stale")
@@ -392,35 +389,20 @@ data class TripResponse(
 @Serializable
 data class CreateTripRequest(
     val name: String = "",
-    val title: String = "",
     @SerialName("flight_ids")
     val flightIds: List<String> = emptyList(),
-    val legs: List<CreateFlightRequest>? = null,
-) {
-    constructor(
-        name: String,
-        flightIds: List<String> = emptyList(),
-    ) : this(name = name, title = name, flightIds = flightIds, legs = null)
-}
+)
 
 @Serializable
 data class AddTripLegsRequest(
     @SerialName("flight_ids")
     val flightIds: List<String> = emptyList(),
-    val legs: List<CreateFlightRequest>? = null,
 )
 
 @Serializable
 data class UpdateTripRequest(
     val name: String? = null,
-    val title: String? = null,
-    @SerialName("flight_ids")
-    val flightIds: List<String>? = null,
-) {
-    constructor(
-        name: String?,
-    ) : this(name = name, title = name, flightIds = null)
-}
+)
 
 @Serializable
 data class TripRefreshStatus(
@@ -448,22 +430,27 @@ data class TripRefreshStatus(
 data class TripAiSummaryResponse(
     @SerialName("trip_id")
     val tripId: String = "",
-    val summary: String? = null,
+    val text: String? = null,
     @SerialName("generated_at")
     val generatedAt: String? = null,
-    val stale: Boolean = false,
-)
+    /** Why there is no paragraph (`ai_disabled`, `no_legs`, `generation_failed`, ...), when there isn't one. */
+    @SerialName("unavailable_reason")
+    val unavailableReason: String? = null,
+) {
+    val summary: String?
+        get() = text
+}
 
 @Serializable
 data class TripSubscribeResponse(
-    val subscribed: Boolean = false,
     @SerialName("trip_id")
     val tripId: String = "",
-    val title: String = "",
-    @SerialName("leg_count")
-    val legCount: Int = 0,
-    @SerialName("owner_display_name")
-    val ownerDisplayName: String? = null,
+    /** Legs newly added to (or removed from) the caller's list; zero means they already followed all. */
+    val changed: Int = 0,
+    @SerialName("total_legs")
+    val totalLegs: Int = 0,
+    @SerialName("is_subscribed")
+    val isSubscribed: Boolean = false,
 )
 
 @Serializable

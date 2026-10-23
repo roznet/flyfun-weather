@@ -179,32 +179,16 @@ object PushNotificationManager {
     }
 
     /**
-     * Mark a specific flight's briefing notification as seen via `POST /api/flights/{id}/seen`
-     * and update [badgeStatus].
+     * Mark a specific flight's briefing as seen via `POST /api/flights/{id}/seen`; the server
+     * answers with the new badge count.
      */
     suspend fun markFlightSeen(
         apiClient: ApiClient,
         flightId: String,
     ) {
         if (flightId.isBlank()) return
-        runCatching {
-            apiClient.postEmpty("/api/flights/$flightId/seen")
-        }.onFailure {
-            runCatching { apiClient.clearBadge() }
-        }
-        val remainingIds = _badgeStatus.value.unreadFlightIds.filterNot { it == flightId }
-        _badgeStatus.value = BadgeStatus(
-            hasUnread = remainingIds.isNotEmpty(),
-            unreadFlightIds = remainingIds,
-        )
-    }
-
-    /**
-     * Clear all unread badges via `POST /api/flights/badge/clear`.
-     */
-    suspend fun clearAllBadges(apiClient: ApiClient) {
-        runCatching { apiClient.clearBadge() }
-        _badgeStatus.value = BadgeStatus(hasUnread = false, unreadFlightIds = emptyList())
+        runCatching { apiClient.markFlightSeen(flightId) }
+            .onSuccess { _badgeStatus.value = it }
     }
 
     /**

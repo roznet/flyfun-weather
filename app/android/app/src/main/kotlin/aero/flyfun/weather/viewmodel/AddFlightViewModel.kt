@@ -488,42 +488,38 @@ class AddFlightViewModel(
         }
     }
 
+    /** Recent routes from the linked Autorouter account (the server lists them; it does not route). */
     fun fetchAutorouterSuggestions() {
-        val wps = _waypoints.value
-        if (wps.size < 2 || apiClient == null) return
+        if (apiClient == null) return
         _isFetchingRoutes.value = true
         _errorMessage.value = null
         scope.launch {
             runCatching {
-                apiClient.fetchAutorouterRoutes(
-                    departure = wps.first(),
-                    destination = wps.last(),
-                    departureTime = buildDepartureIso(),
-                    cruiseAltitudeFt = _cruiseAltitudeFt.value,
-                    durationHours = totalDurationHours,
-                    aircraftId = _selectedAircraftId.value,
-                )
+                apiClient.fetchAutorouterRoutes(limit = 25)
             }.onSuccess { resp ->
                 _autorouterRoutes.value = resp.routes
+                if (resp.routes.isEmpty()) {
+                    _errorMessage.value = "No recent routes found in your Autorouter account."
+                }
                 _isFetchingRoutes.value = false
             }.onFailure { err ->
-                _errorMessage.value = err.message ?: "Autorouter route fetch failed"
+                _autorouterRoutes.value = emptyList()
+                _errorMessage.value = if (err is ApiError.ServerError && err.statusCode == 409) {
+                    "Link your Autorouter account in Settings to import its routes."
+                } else {
+                    err.message ?: "Autorouter route fetch failed"
+                }
                 _isFetchingRoutes.value = false
             }
         }
     }
 
+    /** Fill the form from the route's ICAO flight plan, through the same path as "Paste ICAO FPL". */
     fun applyAutorouterRoute(option: AutorouterRouteOption) {
-        if (option.waypoints.isNotEmpty()) {
-            _waypoints.value = option.waypoints
-            _rawRouteText.value = option.waypoints.joinToString(" ")
-        }
-        option.distanceNm?.let { _distanceNm.value = it }
-        option.durationHours?.let { dur ->
-            val parts = FlightDuration.split(FlightDuration.clampToPickerRange(dur))
-            _durationHours.value = parts.hours
-            _durationMinutes.value = parts.minutes
-        }
+        if (option.fplan.isBlank()) return
+        _fplText.value = option.fplan
+        _autorouterRoutes.value = emptyList()
+        parseIcaoFpl()
     }
 
     fun selectAircraft(aircraftId: Int?) {
