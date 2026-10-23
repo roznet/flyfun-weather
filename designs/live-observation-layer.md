@@ -947,6 +947,11 @@ clients only draw. Additive and optional throughout.
   taf_text, wind_text, folded, folded_source}` and `glance.destination`
   `{icao, metar_text, taf_text, wind_text, cells_text}` (the destination was
   not in the agent block before).
+- **`cells_short`** on both blocks: the card's one-line count ("7 cells
+  ≤20 NM", "no cell within 20 NM"; None when storms are unavailable). iOS and
+  Android draw it with one map button to the nearest cell instead of listing
+  `cells`; each cell stays on the map and in the Cells section. `cells_text`
+  keeps the full sentence for the agent, VoiceOver and older clients.
 - The airport-level fields (`taf_hours`, `metar_trend`, meter, sky, weather
   words, short wind, crosswind) are in `metar-taf-route-weather.md`.
 

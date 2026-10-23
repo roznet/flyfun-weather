@@ -131,6 +131,7 @@ nonisolated protocol LiveGlanceTerminal: Sendable {
     var tafText: String? { get }
     var windText: String? { get }
     var cellsText: String? { get }
+    var cellsShort: String? { get }
     var cells: [LiveDestinationCell]? { get }
     var lightningText: String? { get }
     var cellsAlert: Bool? { get }
@@ -156,6 +157,9 @@ nonisolated struct LiveGlanceDestination: Codable, Sendable, Equatable, LiveGlan
     /// green / amber / red: the server's own wind advisory.
     let windAdvisory: String?
     let cellsText: String?
+    /// "7 cells ≤20 NM": the card's count line (#882 follow-up). Optional,
+    /// so an older server falls back to `cellsText`.
+    let cellsShort: String?
     let cells: [LiveDestinationCell]?
     let lightningText: String?
     let alert: Bool?
@@ -186,6 +190,7 @@ nonisolated struct LiveGlanceDeparture: Codable, Sendable, Equatable, LiveGlance
     let windText: String?
     let windAdvisory: String?
     let cellsText: String?
+    let cellsShort: String?
     let cells: [LiveDestinationCell]?
     let lightningText: String?
     let alert: Bool?

@@ -103,10 +103,18 @@ describe('airport card', () => {
     expect(html).toContain(dest.cells_text);
     expect(html).toContain(dest.lightning_text!);
     expect(html).toContain('data-card-focus="arr"');
+    // The cells row opens the nearest cell; the cells are not listed.
     expect(html).toContain('data-card-cell="arr:0"');
+    expect(html).not.toContain(dest.cells![0].text);
     expect(cardFocus(dep, dest, 'arr:0')).toEqual(dest.cells![0].focus);
     expect(cardFocus(dep, dest, 'dep')).toEqual(dep.focus);
     expect(cardFocus(dep, dest, 'dep:3')).toBeNull();
+  });
+
+  it('reads the cells as the server\'s short count when it sends one', () => {
+    const html = plain(airportCardHtml({ ...dest, cells_short: '1 cell ≤20 NM' }, 'ARR', NOW));
+    expect(html).toContain('1 cell ≤20 NM');
+    expect(html).not.toContain(dest.cells_text);
   });
 
   it('tones the cells / lightning row only when the server flags it', () => {

@@ -71,14 +71,19 @@ struct AirportCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.spacingS) {
             AirportCardHeader(block: block, role: role)
-            HStack(alignment: .top, spacing: Theme.spacingS) {
+            if horizontalSizeClass == .regular {
+                HStack(alignment: .top, spacing: Theme.spacingS) {
+                    VStack(alignment: .leading, spacing: 6) { rows }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let dial { dialView(dial) }
+                }
+            } else {
+                // iPhone: the dial on top, so the rows keep the full width.
+                if let dial {
+                    dialView(dial).frame(maxWidth: .infinity)
+                }
                 VStack(alignment: .leading, spacing: 6) { rows }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if let dial {
-                    // Fixed, never stretched: iPad ~120 pt, iPhone 92 pt.
-                    RunwayWindCanvas(dial: dial, size: .compact)
-                        .frame(width: dialSide, height: dialSide)
-                }
             }
             if let hours = block.airport?.tafHours, !hours.isEmpty {
                 TafStrip(hours: hours, role: role)
@@ -114,7 +119,11 @@ struct AirportCard: View {
         }
     }
 
-    private var dialSide: CGFloat { horizontalSizeClass == .regular ? 120 : 92 }
+    /// Fixed, never stretched: 120 pt, beside the rows on iPad, above them on iPhone.
+    private func dialView(_ dial: RunwayWindRules.Dial) -> some View {
+        RunwayWindCanvas(dial: dial, size: .compact)
+            .frame(width: 120, height: 120)
+    }
 
     private var dial: RunwayWindRules.Dial? {
         guard let airport = block.airport, airport.runwayWind != nil else { return nil }
@@ -180,28 +189,26 @@ struct AirportCard: View {
     }
 
     /// Cells and lightning near the field, in the server's words; amber only
-    /// when the server says an alert-tier change stands behind the row.
+    /// when the server says an alert-tier change stands behind the row. The
+    /// cells are a count and one map button to the nearest: each cell is on
+    /// the map and in the Cells section, not listed here.
     @ViewBuilder
     private var nearRows: some View {
-        if let cells = block.cellsText {
-            nearRow(symbol: "circle.circle", text: cells, alert: block.cellsAlert == true)
-        }
-        ForEach(block.cells ?? []) { cell in
-            Button { openMap(cell.focus ?? block.focus) } label: {
-                HStack(spacing: Theme.spacingXS) {
-                    Text(cell.text ?? "")
-                        .font(.caption)
-                        .foregroundStyle(Theme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if cell.focus != nil {
-                        Image(systemName: "map").font(.caption2).foregroundStyle(Theme.textMuted)
+        if let cells = block.cellsShort ?? block.cellsText {
+            HStack(spacing: Theme.spacingS) {
+                nearRow(symbol: "circle.circle", text: cells, alert: block.cellsAlert == true)
+                if let focus = block.cells?.first(where: { $0.focus != nil })?.focus {
+                    Button { openMap(focus) } label: {
+                        Image(systemName: "map")
+                            .font(.subheadline)
+                            .frame(minWidth: 44, minHeight: 28)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.primary)
+                    .accessibilityIdentifier("airportCardCellsMap")
                 }
-                .padding(.leading, 21)
-                .frame(minHeight: 28, alignment: .leading)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
         if let lightning = block.lightningText {
             nearRow(symbol: "bolt", text: lightning, alert: block.lightningAlert == true)

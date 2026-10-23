@@ -135,6 +135,9 @@ data class LiveGlanceTerminal(
     val windAdvisory: String? = null,
     @SerialName("cells_text")
     val cellsText: String = "",
+    // "7 cells ≤20 NM": the card's count line; null from an older server (use cellsText).
+    @SerialName("cells_short")
+    val cellsShort: String? = null,
     val cells: List<LiveDestinationCell> = emptyList(),
     @SerialName("lightning_text")
     val lightningText: String? = null,

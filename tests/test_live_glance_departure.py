@@ -49,6 +49,7 @@ def test_departure_block_reads_at_the_etd():
     assert d.wind_advisory == "amber"
     # The default layer's cell near the departure, with its map focus.
     assert d.cells_text.startswith("nearest cell 9 NM NE")
+    assert d.cells_short == "1 cell ≤20 NM"
     assert len(d.cells) == 1 and d.cells[0].focus is not None
     assert d.airport is not None and d.airport.icao == "ZZDP"
     assert d.airport.metar_wind_short == "290/15G25"

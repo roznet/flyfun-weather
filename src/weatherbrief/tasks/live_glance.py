@@ -718,9 +718,15 @@ def _terminal_block(
     if missing:
         unavailable.append("storms")
     cells: list[LiveDestinationCell] = []
+    cells_short: str | None = None
     if storms is not None and storms.status == "available":
         lat, lon = pos
-        for d, st in _storms_around(storms, pos)[0]:
+        near = _storms_around(storms, pos)[0]
+        # The card shows this count and a map button; each cell is on the map
+        # and the Cells section, not listed on the card.
+        cells_short = (f"{_plural(len(near), 'cell')} ≤{TERMINAL_NM:.0f} NM" if near
+                       else f"no cell within {TERMINAL_NM:.0f} NM")
+        for d, st in near:
             flash = ", lightning" if st.flashes else ""
             cells.append(LiveDestinationCell(
                 id=st.id,
@@ -752,7 +758,7 @@ def _terminal_block(
             if obs is not None and "taf" not in unavailable else None
         ),
         wind_text=wind_text, wind_advisory=wind_adv,
-        cells_text=cells_text, cells=cells, lightning_text=lightning_text,
+        cells_text=cells_text, cells_short=cells_short, cells=cells, lightning_text=lightning_text,
         cells_alert=cells_alert, lightning_alert=lightning_alert,
         unavailable=unavailable, focus=_terminal_focus(flight, phase),
         airport=obs,

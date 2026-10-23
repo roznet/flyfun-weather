@@ -487,6 +487,9 @@ class LiveGlanceDestination(BaseModel):
     wind_advisory: str | None = None
     # "no cell within 20 NM now", "nearest cell 9 NM NE (45 dBZ), closing 8 kt".
     cells_text: str
+    # The card's one-line count: "7 cells ≤20 NM", "no cell within 20 NM";
+    # None when the storms are unavailable (``cells_text`` says why).
+    cells_short: str | None = None
     cells: list[LiveDestinationCell] = Field(default_factory=list)
     # "no lightning ≤20 NM", as on the arrival line (the block stands in for it).
     lightning_text: str | None = None
@@ -537,6 +540,7 @@ class LiveGlanceDeparture(BaseModel):
     wind_text: str | None = None
     wind_advisory: str | None = None
     cells_text: str
+    cells_short: str | None = None
     cells: list[LiveDestinationCell] = Field(default_factory=list)
     lightning_text: str | None = None
     # The card's rows to tone (#881, styling only): an alert-tier change row

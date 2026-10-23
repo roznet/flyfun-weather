@@ -336,6 +336,7 @@
    "alert": false,
    "cells": [],
    "cells_alert": false,
+   "cells_short": null,
    "cells_text": "radar cells unavailable",
    "etd": "2026-10-02T08:00:00Z",
    "focus": {
@@ -517,6 +518,7 @@
    "alert": false,
    "cells": [],
    "cells_alert": false,
+   "cells_short": null,
    "cells_text": "radar cells unavailable",
    "eta": "2026-10-02T10:00:00Z",
    "focus": {

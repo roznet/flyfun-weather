@@ -1461,6 +1461,8 @@ export interface LiveGlanceDestination {
   /** green / amber / red: the server's own wind advisory. */
   wind_advisory?: string | null;
   cells_text: string;
+  /** "7 cells ≤20 NM": the card's count line; absent from an older server. */
+  cells_short?: string | null;
   cells?: LiveDestinationCell[];
   lightning_text?: string | null;
   /** #881: an alert-tier change stands behind the card's cells / lightning

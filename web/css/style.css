@@ -9566,29 +9566,6 @@ button.ac-near { cursor: pointer; }
 .ac-near.ac-tone-amber, .ac-near.ac-tone-amber .ac-ic { color: var(--amber); font-weight: 600; }
 button.ac-near:hover { color: var(--primary); }
 
-.ac-cells {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-left: 20px;
-}
-
-.ac-cell {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.2rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.78rem;
-  text-align: left;
-}
-
-button.ac-cell { cursor: pointer; }
-
 .ac-prov {
   display: flex;
   flex-wrap: wrap;

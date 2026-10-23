@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Dehaze
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Grain
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Thunderstorm
@@ -86,9 +87,8 @@ import androidx.compose.ui.unit.sp
 
 private val WIDE_LAYOUT_MIN = 600.dp
 
-/** The dial in the card's corner: fixed, never stretched (phone ~92 dp, tablet ~120 dp). */
-private val DIAL_PHONE = 92.dp
-private val DIAL_TABLET = 120.dp
+/** The runway dial: fixed, never stretched. Beside the rows on a tablet, above them on a phone. */
+private val DIAL_SIZE = 120.dp
 
 /**
  * Both cards: departure then arrival, side by side when there is room
@@ -112,7 +112,6 @@ fun AirportCardsSection(
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val wide = maxWidth >= WIDE_LAYOUT_MIN
-        val dialSize = if (wide) DIAL_TABLET else DIAL_PHONE
         val anyFolded = slots.any { it.folded }
 
         // Side by side only for two full cards: a folded line stacks under the arrival.
@@ -122,13 +121,13 @@ fun AirportCardsSection(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 slots.forEach {
-                    AirportCardSlot(it, departureOpen, toggleDeparture, dialSize, nowMs, onSelectFocus, Modifier.weight(1f))
+                    AirportCardSlot(it, departureOpen, toggleDeparture, wide, nowMs, onSelectFocus, Modifier.weight(1f))
                 }
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 slots.forEach {
-                    AirportCardSlot(it, departureOpen, toggleDeparture, dialSize, nowMs, onSelectFocus, Modifier.fillMaxWidth())
+                    AirportCardSlot(it, departureOpen, toggleDeparture, wide, nowMs, onSelectFocus, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -140,7 +139,7 @@ private fun AirportCardSlot(
     slot: AirportCardRules.Slot,
     departureOpen: Boolean,
     onToggleDeparture: () -> Unit,
-    dialSize: Dp,
+    wide: Boolean,
     nowMs: Long,
     onSelectFocus: ((LiveFocus) -> Unit)?,
     modifier: Modifier,
@@ -150,7 +149,7 @@ private fun AirportCardSlot(
             block = slot.block,
             open = departureOpen,
             onToggle = onToggleDeparture,
-            dialSize = dialSize,
+            wide = wide,
             nowMs = nowMs,
             onSelectFocus = onSelectFocus,
             modifier = modifier,
@@ -159,7 +158,7 @@ private fun AirportCardSlot(
         AirportCard(
             block = slot.block,
             role = slot.role,
-            dialSize = dialSize,
+            wide = wide,
             nowMs = nowMs,
             onSelectFocus = onSelectFocus,
             modifier = modifier,
@@ -173,7 +172,7 @@ fun AirportCard(
     block: LiveGlanceTerminal,
     role: Role,
     modifier: Modifier = Modifier,
-    dialSize: Dp = DIAL_PHONE,
+    wide: Boolean = false,
     nowMs: Long = System.currentTimeMillis(),
     showBorder: Boolean = true,
     onSelectFocus: ((LiveFocus) -> Unit)? = null,
@@ -191,49 +190,71 @@ fun AirportCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CardHeader(block, role)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+            val dial = a?.runwayWind?.takeIf { it.runways.isNotEmpty() }
+            if (wide) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (a != null) {
-                        MeterRow(
-                            icon = if (a.metarCavok) Icons.Default.WbSunny else Icons.Default.Cloud,
-                            label = "Ceiling",
-                            text = a.metarSkyText,
-                            position = AirportCardRules.meterPosition(a.metarCeilingMeter),
-                        )
-                        MeterRow(
-                            icon = Icons.Default.Visibility,
-                            label = "Visibility",
-                            text = a.metarVisibilityText,
-                            position = AirportCardRules.meterPosition(a.metarVisibilityMeter),
-                        )
-                        WeatherWordsRow(a.metarWeatherWords)
-                        WindRow(a)
-                    } else {
-                        // No airport row (an older server, or no corridor row): the block's own lines.
-                        RowText(block.metarText)
-                        block.windText?.let { RowText(it) }
-                    }
-                    NearRows(block, onSelectFocus)
-                    ProvenanceRow(block, role, a, nowMs)
-                    block.proxyCaption?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    CardRows(block, role, nowMs, onSelectFocus, Modifier.weight(1f))
+                    dial?.let { CompactRunwayWindDial(it, DIAL_SIZE) }
+                }
+            } else {
+                // Phone: the dial on top, so the rows keep the full width.
+                dial?.let {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CompactRunwayWindDial(it, DIAL_SIZE)
                     }
                 }
-                a?.runwayWind?.takeIf { it.runways.isNotEmpty() }?.let { rw ->
-                    CompactRunwayWindDial(rw, dialSize)
-                }
+                CardRows(block, role, nowMs, onSelectFocus, Modifier.fillMaxWidth())
             }
             a?.tafHours?.takeIf { it.isNotEmpty() }?.let { TafStrip(it) }
+        }
+    }
+}
+
+/** The card's rows: the meters, weather, wind, cells and lightning, provenance. */
+@Composable
+private fun CardRows(
+    block: LiveGlanceTerminal,
+    role: Role,
+    nowMs: Long,
+    onSelectFocus: ((LiveFocus) -> Unit)?,
+    modifier: Modifier,
+) {
+    val a = block.airport
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (a != null) {
+            MeterRow(
+                icon = if (a.metarCavok) Icons.Default.WbSunny else Icons.Default.Cloud,
+                label = "Ceiling",
+                text = a.metarSkyText,
+                position = AirportCardRules.meterPosition(a.metarCeilingMeter),
+            )
+            MeterRow(
+                icon = Icons.Default.Visibility,
+                label = "Visibility",
+                text = a.metarVisibilityText,
+                position = AirportCardRules.meterPosition(a.metarVisibilityMeter),
+            )
+            WeatherWordsRow(a.metarWeatherWords)
+            WindRow(a)
+        } else {
+            // No airport row (an older server, or no corridor row): the block's own lines.
+            RowText(block.metarText)
+            block.windText?.let { RowText(it) }
+        }
+        NearRows(block, onSelectFocus)
+        ProvenanceRow(block, role, a, nowMs)
+        block.proxyCaption?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -443,35 +464,18 @@ private fun WindRow(a: AirportObservation) {
     }
 }
 
-/** Cells and lightning near the field, in the server's words; amber only on the server's row alert. */
+/**
+ * Cells and lightning near the field, in the server's words; amber only on the server's row alert.
+ * The cells are a count whose map icon opens the nearest: each cell is on the map and in the
+ * Cells section, not listed here.
+ */
 @Composable
 private fun NearRows(block: LiveGlanceTerminal, onSelectFocus: ((LiveFocus) -> Unit)?) {
-    NearRow(Icons.Default.Radar, block.cellsText, block.cellsAlert, block.focus, onSelectFocus)
-    block.cells.forEach { cell ->
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 22.dp)
-                .then(
-                    if (cell.focus != null && onSelectFocus != null) {
-                        Modifier.clickable { onSelectFocus(cell.focus) }
-                    } else {
-                        Modifier
-                    },
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = cell.text,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            if (cell.focus != null && onSelectFocus != null) {
-                Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(14.dp))
-            }
-        }
-    }
+    val nearest = block.cells.firstNotNullOfOrNull { it.focus }
+    NearRow(
+        Icons.Default.Radar, block.cellsShort ?: block.cellsText, block.cellsAlert,
+        nearest ?: block.focus, onSelectFocus, trailing = if (nearest != null) Icons.Default.Map else Icons.Default.ChevronRight,
+    )
     block.lightningText?.let { NearRow(Icons.Default.Bolt, it, block.lightningAlert, block.focus, onSelectFocus) }
 }
 
@@ -482,6 +486,7 @@ private fun NearRow(
     alert: Boolean,
     focus: LiveFocus?,
     onSelectFocus: ((LiveFocus) -> Unit)?,
+    trailing: ImageVector = Icons.Default.ChevronRight,
 ) {
     if (text.isBlank()) return
     val color = if (alert) AssessmentAmber else MaterialTheme.colorScheme.onSurface
@@ -502,7 +507,7 @@ private fun NearRow(
             modifier = Modifier.weight(1f),
         )
         if (tap != null) {
-            Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(trailing, contentDescription = null, modifier = Modifier.size(if (trailing == Icons.Default.ChevronRight) 14.dp else 18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -660,7 +665,7 @@ private fun FoldedDeparture(
     block: LiveGlanceTerminal,
     open: Boolean,
     onToggle: () -> Unit,
-    dialSize: Dp,
+    wide: Boolean,
     nowMs: Long,
     onSelectFocus: ((LiveFocus) -> Unit)?,
     modifier: Modifier = Modifier,
@@ -700,7 +705,7 @@ private fun FoldedDeparture(
                 AirportCard(
                     block = block,
                     role = Role.DEPARTURE,
-                    dialSize = dialSize,
+                    wide = wide,
                     nowMs = nowMs,
                     showBorder = false,
                     onSelectFocus = onSelectFocus,

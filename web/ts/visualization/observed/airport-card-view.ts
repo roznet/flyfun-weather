@@ -113,25 +113,25 @@ function windRowHtml(a: AirportObservation): string {
     + '</div>';
 }
 
-/** Cells and lightning near the field, in the server's words. The row opens
- *  the map on the field; a listed cell opens on that cell. */
+/** Cells and lightning near the field, in the server's words. The rows open
+ *  the map on the field; the cells row, a count, opens on the nearest cell
+ *  (each cell is on the map and in the Cells section, not listed here). */
 function nearHtml(block: Block, key: string): string {
   // Amber only when the server says an alert-tier change stands behind it.
-  const row = (iconName: string, text: string, alert: boolean | undefined, id: string) => {
+  const row = (iconName: string, text: string, alert: boolean | undefined, id: string, ref: string | null) => {
     const cls = `ac-row ac-near${alert ? ' ac-tone-amber' : ''}`;
     const body = `${icon(iconName)}<span>${escapeHtml(text)}</span>`;
-    return block.focus
-      ? `<button type="button" class="${cls}" data-card-focus="${key}" data-testid="card-${id}">${body}`
+    const attr = ref?.includes(':') ? 'data-card-cell' : 'data-card-focus';
+    return ref
+      ? `<button type="button" class="${cls}" ${attr}="${ref}" data-testid="card-${id}">${body}`
         + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
       : `<div class="${cls}" data-testid="card-${id}">${body}</div>`;
   };
-  const cells = (block.cells ?? []).map((c, i) => (c.focus
-    ? `<button type="button" class="ac-cell" data-card-cell="${key}:${i}">${escapeHtml(c.text)}`
-      + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
-    : `<div class="ac-cell">${escapeHtml(c.text)}</div>`)).join('');
-  return row('cell', block.cells_text, block.cells_alert, 'cells')
-    + (cells ? `<div class="ac-cells">${cells}</div>` : '')
-    + (block.lightning_text ? row('thunder', block.lightning_text, block.lightning_alert, 'lightning') : '');
+  const field = block.focus ? key : null;
+  const nearest = (block.cells ?? []).findIndex((c) => c.focus);
+  return row('cell', block.cells_short ?? block.cells_text, block.cells_alert, 'cells',
+    nearest >= 0 ? `${key}:${nearest}` : field)
+    + (block.lightning_text ? row('thunder', block.lightning_text, block.lightning_alert, 'lightning', field) : '');
 }
 
 /** "METAR 09:30Z · 8 min" (amber past the stale age) · SPECI · trend · ETA. */

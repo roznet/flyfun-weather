@@ -159,6 +159,7 @@ def test_destination_block_reads_metar_taf_wind_and_cells():
     assert d.cells[0].text.startswith("7 NM ") and "52 dBZ, lightning" in d.cells[0].text
     assert d.cells[0].focus is not None and d.cells[0].focus.id == "core41-near"
     assert d.cells_text.startswith("nearest cell 7 NM")
+    assert d.cells_short == "1 cell ≤20 NM"
     assert d.lightning_text == "no lightning ≤20 NM"
     assert d.unavailable == [] and d.focus.id == "ZZDS"
 
@@ -172,6 +173,7 @@ def test_destination_block_says_unavailable_never_clear():
     assert d.metar_text == "ZZDS METAR unavailable"
     assert d.taf_text == "no TAF for ETA"
     assert d.cells_text == "radar cells unavailable" and d.cells == []
+    assert d.cells_short is None
     assert d.unavailable == ["metar", "taf", "storms", "lightning"]
     assert d.wind_text is None
 
