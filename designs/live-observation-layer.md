@@ -225,7 +225,7 @@ timeline.
 
 ## Writers
 
-Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
+All go through `run_realtime_refresh(pack_dir, …, persist=…)` →
 `live_layer.commit_live_update`:
 
 1. **A D-0 ↻ press** (tiered gate `realtime` mode, both refresh endpoints, and
@@ -261,6 +261,24 @@ Both go through `run_realtime_refresh(pack_dir, …, persist=…)` →
    duration + 1 h. Past the planned window but before that cap, with no
    progress yet, it reads `/live` once before deciding to poll or open on the
    recap, so a late take-off keeps polling and never opens on the recap.
+4. **The post-refresh update** (`live_tick.run_post_refresh_update`, #898):
+   a layer is tied to its pack, so a full refresh inside the window used to
+   leave the Observed tab empty until the next tick. Every full-refresh path
+   (streaming, queued, scheduler) calls `api/packs._post_refresh_live_update`
+   after the commit and **before** `_notify_refresh_complete` / SSE `complete`
+   / `succeeded`, with a `live_observations` progress stage. Gated on
+   `live_enabled()`, no as-of, and `in_live_window` with the progress events
+   (the tick's predicate); `run_live_update` (shared with Start, which is it
+   with `retime=True`) skips a historical latest pack and a frozen layer.
+   Re-fetches rather than seeding from the pack's own observations: one path
+   with ↻ / Start, and it seeds the baseline of a pack built a day out.
+   Never pushes, never fails the refresh; logs `LIVE_POST_REFRESH flight=…
+   outcome=…`. The preflight slot's flight-day brief refreshes again right
+   after its auto-refresh: a duplicate fetch, accepted. The web's
+   `selectPack` reads `/live` once for the latest pack inside the window (or
+   D-0), since the snapshot overlay already carries the new stamp and
+   `syncLatest` would never see it move; iOS and Android re-fetch `/live` on
+   every pack adoption already.
 
 `None` blocks keep the stored value (a SIGMET fetch failing must not blank the
 SIGMETs); each block has its own `*_updated_at`.

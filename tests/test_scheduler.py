@@ -575,6 +575,56 @@ class TestAutoRefreshGate:
 
         mock_exec.assert_called_once()
 
+    @patch("weatherbrief.api.packs._notify_refresh_complete")
+    @patch("weatherbrief.api.packs._post_refresh_live_update")
+    @patch("weatherbrief.api.packs._finalize_refresh")
+    @patch("weatherbrief.api.packs._prepare_refresh")
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.api.packs.decide_refresh")
+    @patch("weatherbrief.api.packs._build_data_status")
+    @patch("weatherbrief.storage.flights.list_packs")
+    @patch("weatherbrief.storage.flights._row_to_flight")
+    @patch("weatherbrief.scheduler.SessionLocal")
+    def test_live_layer_built_after_commit_before_notify(
+        self, mock_session, mock_row_to_flight, mock_list,
+        mock_status, mock_decide, mock_exec, mock_prepare, mock_finalize,
+        mock_live, mock_notify,
+    ):
+        """#898: commit, then the new pack's live layer, then the notify."""
+        from unittest.mock import MagicMock
+
+        from weatherbrief.api.packs import DataStatus, RefreshDecision
+        from weatherbrief.models import BriefingPackMeta
+        from weatherbrief.scheduler import _auto_refresh_one
+
+        order = []
+        session = MagicMock()
+        session.commit.side_effect = lambda: order.append("commit")
+        mock_session.return_value = session
+        mock_live.side_effect = lambda *a, **k: order.append("live")
+        mock_notify.side_effect = lambda *a, **k: order.append("notify")
+        mock_row_to_flight.return_value = SimpleNamespace(
+            departure_time=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        mock_list.return_value = [BriefingPackMeta(
+            flight_id="f", fetch_timestamp=datetime.now(timezone.utc),
+            days_out=0, artifact_path="/tmp/pack",
+        )]
+        mock_status.return_value = DataStatus(fresh=False)
+        mock_decide.return_value = RefreshDecision(
+            mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=0,
+        )
+        mock_prepare.return_value = (
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+        )
+        mock_exec.return_value = MagicMock()
+
+        _auto_refresh_one(_make_row(), SimpleNamespace(db_path="/fake/db"), "u1")
+
+        assert order[-3:] == ["commit", "live", "notify"]
+        assert mock_live.call_args.args[1] == "/fake/db"
+        assert mock_live.call_args.kwargs["as_of_time"] is None
+
     @staticmethod
     def _params_change_setup(mock_session, mock_row_to_flight, mock_list,
                              mock_status, mock_decide, mock_prepare, mock_exec):

@@ -655,7 +655,7 @@ def _auto_refresh_one(
     ``succeeded`` would make the post-mortem record lie (issue #499).
     """
     from weatherbrief.api.packs import (
-        _finalize_refresh, _notify_refresh_complete, _prepare_refresh,
+        _finalize_refresh, _notify_refresh_complete, _post_refresh_live_update, _prepare_refresh,
         gated_data_status, refresh_registry,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
@@ -733,6 +733,16 @@ def _auto_refresh_one(
             as_of_time=resolved_as_of,
         )
         db.commit()
+
+        # Inside the live window, the new pack's live layer before notifying
+        # (#898). The preflight slot's flight-day brief refreshes it again
+        # right after: a duplicate fetch, accepted as cheap.
+        _post_refresh_live_update(
+            flight_row.id, db_path, as_of_time=resolved_as_of,
+            progress_callback=lambda stage, detail=None: (
+                refresh_registry.update_progress(flight_row.id, stage, detail)
+            ),
+        )
 
         # Briefing-refresh notifications (email + APNs push) fire from the shared
         # ``_notify_refresh_complete`` sink AFTER commit, so the same hook covers
