@@ -4,12 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.TripRepository
+import aero.flyfun.weather.model.AddTripLegsRequest
 import aero.flyfun.weather.model.CreateTripRequest
 import aero.flyfun.weather.model.FlightGroup
 import aero.flyfun.weather.model.FlightOrder
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FlightSection
-import aero.flyfun.weather.model.MoveFlightRequest
 import aero.flyfun.weather.model.SharedFlightCodeResponse
 import aero.flyfun.weather.model.SharedFlightPreview
 import aero.flyfun.weather.model.TripSummaryResponse
@@ -170,13 +170,25 @@ class FlightListViewModel(
         }
     }
 
+    /**
+     * Put the selected flights in [tripId], or take them out of their trips when null. Trip
+     * membership is the trip's legs (`POST /api/trips/{id}/legs`, which also takes a leg out of
+     * its previous trip); never `/move`, which would replace each flight and drop its briefings.
+     */
     fun moveSelectedFlightsToTrip(tripId: String?, nowEpochMs: Long = System.currentTimeMillis()) {
         val ids = _selectedFlightIds.value.toList()
         if (ids.isEmpty()) return
+        val repo = tripRepository ?: return
         scope.launch {
             runCatching {
-                for (id in ids) {
-                    repository.moveFlight(id, MoveFlightRequest(tripId = tripId))
+                if (tripId != null) {
+                    repo.addTripLegs(tripId, AddTripLegsRequest(flightIds = ids))
+                } else {
+                    val byId = _flights.value.associateBy { it.id }
+                    for (id in ids) {
+                        val current = byId[id]?.tripId ?: continue
+                        repo.removeTripLeg(current, id)
+                    }
                 }
             }.onSuccess {
                 exitSelectionMode()

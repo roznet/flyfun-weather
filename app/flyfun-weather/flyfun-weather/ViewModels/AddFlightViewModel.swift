@@ -193,20 +193,33 @@ final class AddFlightViewModel {
 
     private let repository: any BriefingRepository
     private let editingFlight: FlightResponse?
+    /// The flight a standalone Duplicate (#885) copies. The form is a *create*
+    /// pre-filled from it, so `isEditing` stays false and every create rule holds.
+    private let duplicateSource: FlightResponse?
     private static let logger = Logger(subsystem: "aero.flyfun.weather", category: "AddFlight")
 
-    init(repository: any BriefingRepository, flight: FlightResponse? = nil) {
+    /// - Parameters:
+    ///   - flight: the flight to edit.
+    ///   - duplicating: a flight to copy into a new one (#885 "Duplicate…"): the
+    ///     route as typed, altitude, ceiling, duration, aircraft, profile and
+    ///     description, with the departure moved to the next day for the pilot to
+    ///     adjust. Not added to the trip, the same as the web's Duplicate.
+    init(repository: any BriefingRepository, flight: FlightResponse? = nil,
+         duplicating: FlightResponse? = nil) {
         self.repository = repository
         self.editingFlight = flight
+        self.duplicateSource = flight == nil ? duplicating : nil
         self.aircraftForm = AircraftFormModel(repository: repository)
         let defaultInstant = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
-        let departureInstant = flight?.departureDate ?? defaultInstant
+        let departureInstant = flight?.departureDate
+            ?? duplicateSource?.departureDate.map { Self.duplicateDeparture(from: $0) }
+            ?? defaultInstant
         self.departureTime = DepartureTimeModel(instant: departureInstant)
         // Seed the alt-departure editor from the flight's stored alt time when
         // present, else from the primary departure (a sensible starting point).
         let altInstant = flight?.altDepartureTime.flatMap { Date.parseISO8601($0) } ?? departureInstant
         self.altDepartureTime = DepartureTimeModel(instant: altInstant)
-        if let flight {
+        if let flight = flight ?? duplicateSource {
             waypointsText = Self.baselineRouteInput(for: flight)
             descriptionText = flight.description ?? ""
             cruiseAltitudeFt = flight.cruiseAltitudeFt
@@ -218,6 +231,23 @@ final class AddFlightViewModel {
             selectedProfileId = flight.profileId
             flexibility = flight.effectiveFlexibility
         }
+        // Create refuses `.alternate` (it needs an alt time only PATCH sets), so a
+        // copy starts without it; the day modes carry over.
+        if duplicateSource != nil, flexibility == .alternate {
+            flexibility = .none
+        }
+    }
+
+    /// The departure a duplicate starts from: the same UTC time of day, on the day
+    /// after the later of the source's day and today. A duplicate on the source's
+    /// own day would collide with it (409), and one in the past would be refused.
+    static func duplicateDeparture(from source: Date, now: Date = Date()) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        let sourceDay = calendar.startOfDay(for: source)
+        let laterDay = max(sourceDay, calendar.startOfDay(for: now))
+        let offset = calendar.dateComponents([.day], from: sourceDay, to: laterDay).day ?? 0
+        return calendar.date(byAdding: .day, value: offset + 1, to: source) ?? source
     }
 
     var isEditing: Bool { editingFlight != nil }
@@ -236,7 +266,12 @@ final class AddFlightViewModel {
         return trimmed == original ? nil : trimmed
     }
 
-    var navigationTitle: String { isEditing ? "Edit Flight" : "New Flight" }
+    var isDuplicating: Bool { duplicateSource != nil }
+
+    var navigationTitle: String {
+        if isEditing { return "Edit Flight" }
+        return isDuplicating ? "Duplicate Flight" : "New Flight"
+    }
 
     var submitTitle: String { isEditing ? "Save" : "Create" }
 

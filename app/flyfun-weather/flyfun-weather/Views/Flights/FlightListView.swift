@@ -44,6 +44,11 @@ struct FlightListView: View {
     /// list — see `FlightSelectionView` for why.
     @State private var showBulkSelect = false
     @State private var editingFlight: FlightResponse?
+    /// Standalone Duplicate (#885): a create sheet pre-filled from this flight.
+    @State private var duplicatingFlight: FlightResponse?
+    /// Bumped after a save from the briefing's own Edit, so a same-id edit rebuilds
+    /// the briefing (its view model loads once per identity) and shows the new values.
+    @State private var briefingReloadToken = 0
     /// A flight the user chose to file a PIREP for from the list (context menu),
     /// presented as the reporting sheet. nil when closed.
     @State private var pirepFlight: FlightResponse?
@@ -367,6 +372,16 @@ struct FlightListView: View {
                     }
                 }
             }
+            .sheet(item: $duplicatingFlight) { flight in
+                if let repo = appState.repository {
+                    AddFlightView(repository: repo, duplicating: flight) { created in
+                        Task {
+                            await viewModel?.loadFlights()
+                            selection = .flight(created)
+                        }
+                    }
+                }
+            }
             .sheet(item: $shareFlight) { flight in
                 if let code = flight.shareCode {
                     ShareActivitySheet(items: [AppState.shareURL(forShareCode: code)],
@@ -395,10 +410,18 @@ struct FlightListView: View {
         } detail: {
             switch selection {
             case .flight(let flight):
-                BriefingContainerView(flight: flight) { tripId in
-                    selection = .trip(id: tripId)
-                }
-                .id(flight.id)
+                BriefingContainerView(
+                    flight: flight,
+                    onOpenTrip: { tripId in selection = .trip(id: tripId) },
+                    onFlightSaved: { saved in
+                        Task {
+                            await viewModel?.loadFlights()
+                            briefingReloadToken += 1
+                            selection = .flight(saved)
+                        }
+                    }
+                )
+                .id("\(flight.id)#\(briefingReloadToken)")
             case .trip(let tripId):
                 // The trip screen fills the detail pane exactly as a briefing
                 // does — directly, with no NavigationStack of its own: the split
@@ -1011,6 +1034,11 @@ struct FlightListView: View {
                     editingFlight = flight
                 } label: {
                     Label("Edit Flight", systemImage: "pencil")
+                }
+                Button {
+                    duplicatingFlight = flight
+                } label: {
+                    Label("Duplicate\u{2026}", systemImage: "plus.square.on.square")
                 }
             }
             // File a pilot report for this flight. Gated so a list-filed report

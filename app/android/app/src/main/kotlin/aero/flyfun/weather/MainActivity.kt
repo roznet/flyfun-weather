@@ -257,13 +257,32 @@ fun FlyFunWeatherRoot(
     var showAddFlightSheet by rememberSaveable(sessionKey) { mutableStateOf(false) }
     var editingFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var nextLegSourceFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+    var duplicateSourceFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var editingFlightMem by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
     var nextLegSourceFlightMem by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
+    var duplicateSourceFlightMem by remember(sessionKey) { mutableStateOf<FlightResponse?>(null) }
 
     val resolvedEditingFlight = editingFlightMem?.takeIf { it.id == editingFlightId }
         ?: editingFlightId?.let { id -> allFlights.firstOrNull { it.id == id } }
     val resolvedNextLegSourceFlight = nextLegSourceFlightMem?.takeIf { it.id == nextLegSourceFlightId }
         ?: nextLegSourceFlightId?.let { id -> allFlights.firstOrNull { it.id == id } }
+    val resolvedDuplicateSourceFlight = duplicateSourceFlightMem?.takeIf { it.id == duplicateSourceFlightId }
+        ?: duplicateSourceFlightId?.let { id -> allFlights.firstOrNull { it.id == id } }
+
+    /** Open the add / edit / duplicate sheet; exactly one source (or none for a new flight). */
+    fun openFlightSheet(
+        editing: FlightResponse? = null,
+        nextLegAfter: FlightResponse? = null,
+        duplicateOf: FlightResponse? = null,
+    ) {
+        editingFlightId = editing?.id
+        editingFlightMem = editing
+        nextLegSourceFlightId = nextLegAfter?.id
+        nextLegSourceFlightMem = nextLegAfter
+        duplicateSourceFlightId = duplicateOf?.id
+        duplicateSourceFlightMem = duplicateOf
+        showAddFlightSheet = true
+    }
 
     val sharedPreview by flightListViewModel.sharedPreview.collectAsState()
 
@@ -272,12 +291,14 @@ fun FlyFunWeatherRoot(
         flight: FlightResponse? = null,
         packTimestamp: String? = null,
         openObserved: Boolean = false,
+        forceReload: Boolean = false,
     ) {
         cachedFlightForBriefing = flight
-        // Tapping the selected flight again from another screen is a fresh open: reload it.
+        // Tapping the selected flight again from another screen is a fresh open: reload it, and
+        // so is coming back from editing it (same id, new values, maybe a refresh queued).
         // The current composition may still hold the cleared VM for one frame; the next one
         // finds no owner under this key, creates a new one and with it a fresh BriefingViewModel.
-        if (activeFlightId == flightId && currentRoute != RootRoute.BRIEFING) {
+        if (activeFlightId == flightId && (forceReload || currentRoute != RootRoute.BRIEFING)) {
             viewModelScopes.clear(ViewModelScopes.briefingKey(sessionKey, flightId))
         }
         activeFlightId = flightId
@@ -393,13 +414,7 @@ fun FlyFunWeatherRoot(
                 onOpenFlight = { flight ->
                     openBriefing(flightId = flight.id, flight = flight)
                 },
-                onAddNextLeg = { prevLeg ->
-                    editingFlightId = null
-                    editingFlightMem = null
-                    nextLegSourceFlightId = prevLeg?.id
-                    nextLegSourceFlightMem = prevLeg
-                    showAddFlightSheet = true
-                },
+                onAddNextLeg = { prevLeg -> openFlightSheet(nextLegAfter = prevLeg) },
             )
         }
         RootScreen.Flights,
@@ -415,27 +430,10 @@ fun FlyFunWeatherRoot(
                         onFlightClick = { flight ->
                             openBriefing(flightId = flight.id, flight = flight)
                         },
-                        onAddFlightClick = {
-                            editingFlightId = null
-                            editingFlightMem = null
-                            nextLegSourceFlightId = null
-                            nextLegSourceFlightMem = null
-                            showAddFlightSheet = true
-                        },
-                        onEditFlightClick = { flight ->
-                            editingFlightId = flight.id
-                            editingFlightMem = flight
-                            nextLegSourceFlightId = null
-                            nextLegSourceFlightMem = null
-                            showAddFlightSheet = true
-                        },
-                        onAddNextLegClick = { flight ->
-                            editingFlightId = null
-                            editingFlightMem = null
-                            nextLegSourceFlightId = flight.id
-                            nextLegSourceFlightMem = flight
-                            showAddFlightSheet = true
-                        },
+                        onAddFlightClick = { openFlightSheet() },
+                        onEditFlightClick = { flight -> openFlightSheet(editing = flight) },
+                        onDuplicateFlightClick = { flight -> openFlightSheet(duplicateOf = flight) },
+                        onAddNextLegClick = { flight -> openFlightSheet(nextLegAfter = flight) },
                         onOpenTripClick = { tripId ->
                             activeTripId = tripId
                             currentRoute = RootRoute.TRIP
@@ -460,7 +458,14 @@ fun FlyFunWeatherRoot(
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         val vm = selectedBriefingVm
                         if (vm != null && briefingOwner != null) {
-                            BriefingPane(vm, briefingOwner, onBack = { closeBriefingToFlights() }, showBackButton = false)
+                            BriefingPane(
+                                vm,
+                                briefingOwner,
+                                onBack = { closeBriefingToFlights() },
+                                showBackButton = false,
+                                onEditFlight = { flight -> openFlightSheet(editing = flight) },
+                                onDuplicateFlight = { flight -> openFlightSheet(duplicateOf = flight) },
+                            )
                         } else {
                             Surface(
                                 modifier = Modifier.fillMaxSize(),
@@ -482,7 +487,14 @@ fun FlyFunWeatherRoot(
                 // Phone single-pane layout
                 val vm = selectedBriefingVm
                 if (screen is RootScreen.Briefing && vm != null && briefingOwner != null) {
-                    BriefingPane(vm, briefingOwner, onBack = { closeBriefingToFlights() }, showBackButton = true)
+                    BriefingPane(
+                        vm,
+                        briefingOwner,
+                        onBack = { closeBriefingToFlights() },
+                        showBackButton = true,
+                        onEditFlight = { flight -> openFlightSheet(editing = flight) },
+                        onDuplicateFlight = { flight -> openFlightSheet(duplicateOf = flight) },
+                    )
                 } else {
                     FlightListScreen(
                         viewModel = flightListViewModel,
@@ -491,27 +503,10 @@ fun FlyFunWeatherRoot(
                         onFlightClick = { flight ->
                             openBriefing(flightId = flight.id, flight = flight)
                         },
-                        onAddFlightClick = {
-                            editingFlightId = null
-                            editingFlightMem = null
-                            nextLegSourceFlightId = null
-                            nextLegSourceFlightMem = null
-                            showAddFlightSheet = true
-                        },
-                        onEditFlightClick = { flight ->
-                            editingFlightId = flight.id
-                            editingFlightMem = flight
-                            nextLegSourceFlightId = null
-                            nextLegSourceFlightMem = null
-                            showAddFlightSheet = true
-                        },
-                        onAddNextLegClick = { flight ->
-                            editingFlightId = null
-                            editingFlightMem = null
-                            nextLegSourceFlightId = flight.id
-                            nextLegSourceFlightMem = flight
-                            showAddFlightSheet = true
-                        },
+                        onAddFlightClick = { openFlightSheet() },
+                        onEditFlightClick = { flight -> openFlightSheet(editing = flight) },
+                        onDuplicateFlightClick = { flight -> openFlightSheet(duplicateOf = flight) },
+                        onAddNextLegClick = { flight -> openFlightSheet(nextLegAfter = flight) },
                         onOpenTripClick = { tripId ->
                             activeTripId = tripId
                             currentRoute = RootRoute.TRIP
@@ -535,7 +530,7 @@ fun FlyFunWeatherRoot(
     }
 
     if (showAddFlightSheet) {
-        val addVm = remember(editingFlightId, nextLegSourceFlightId) {
+        val addVm = remember(editingFlightId, nextLegSourceFlightId, duplicateSourceFlightId) {
             AddFlightViewModel(
                 repository = appState.repository,
                 apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
@@ -544,6 +539,7 @@ fun FlyFunWeatherRoot(
             ).also { vm ->
                 resolvedEditingFlight?.let { vm.loadExistingFlight(it) }
                 resolvedNextLegSourceFlight?.let { vm.populateNextLeg(it) }
+                resolvedDuplicateSourceFlight?.let { vm.loadDuplicateOf(it) }
             }
         }
         AddFlightSheet(
@@ -552,7 +548,7 @@ fun FlyFunWeatherRoot(
             onFlightSaved = { saved ->
                 showAddFlightSheet = false
                 flightListViewModel.loadFlights()
-                openBriefing(flightId = saved.id, flight = saved)
+                openBriefing(flightId = saved.id, flight = saved, forceReload = true)
             },
         )
     }
@@ -586,8 +582,16 @@ private fun BriefingPane(
     owner: ViewModelStoreOwner,
     onBack: () -> Unit,
     showBackButton: Boolean,
+    onEditFlight: (FlightResponse) -> Unit,
+    onDuplicateFlight: (FlightResponse) -> Unit,
 ) {
     CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
-        BriefingContainerScreen(viewModel = viewModel, onBack = onBack, showBackButton = showBackButton)
+        BriefingContainerScreen(
+            viewModel = viewModel,
+            onBack = onBack,
+            showBackButton = showBackButton,
+            onEditFlight = onEditFlight,
+            onDuplicateFlight = onDuplicateFlight,
+        )
     }
 }

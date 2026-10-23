@@ -18,7 +18,7 @@ interface BriefingRepository {
     suspend fun bulkDeleteFlights(ids: List<String>): BulkDeleteResponse
     suspend fun moveFlight(id: String, req: MoveFlightRequest): FlightResponse
     suspend fun parseFpl(fplText: String): ParseFplResponse
-    suspend fun interpretRoute(rawText: String, cruiseSpeedKt: Double? = null): InterpretRouteResponse
+    suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse
     suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse
     suspend fun fetchAutorouterRoutes(
         departure: String,
@@ -152,8 +152,8 @@ open class OnlineBriefingRepository(
 
     override suspend fun parseFpl(fplText: String): ParseFplResponse = api.parseFpl(fplText)
 
-    override suspend fun interpretRoute(rawText: String, cruiseSpeedKt: Double?): InterpretRouteResponse =
-        api.interpretRoute(rawText, cruiseSpeedKt)
+    override suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse =
+        api.interpretRoute(rawRoute)
 
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         api.routeDistance(waypoints)

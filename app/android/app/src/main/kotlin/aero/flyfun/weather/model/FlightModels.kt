@@ -83,6 +83,41 @@ enum class FlexibilityMode(val wireValue: String, val label: String) {
     }
 }
 
+/**
+ * The flight's timing-scenario mode, as the server stores it (`FlightResponse.flexibility`).
+ * Mirrors iOS `FlexibilityMode`. Unknown values decode to [NONE] (see the serializer) so a
+ * mode added server-side never fails the whole flight-list decode.
+ */
+@Serializable(with = FlightFlexibilitySerializer::class)
+enum class FlightFlexibility(val wireValue: String, val label: String) {
+    NONE("none", "None"),
+    ALTERNATE("alternate", "Alternate time"),
+    SAME_DAY("same_day", "Same day"),
+    PREV_DAY("prev_day", "Previous day"),
+    NEXT_DAY("next_day", "Next day"),
+    ;
+
+    companion object {
+        fun fromWire(value: String?): FlightFlexibility =
+            entries.firstOrNull { it.wireValue == value?.trim()?.lowercase() } ?: NONE
+    }
+}
+
+object FlightFlexibilitySerializer : KSerializer<FlightFlexibility> {
+    override val descriptor: SerialDescriptor =
+        kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+            "aero.flyfun.weather.model.FlightFlexibility",
+            kotlinx.serialization.descriptors.PrimitiveKind.STRING,
+        )
+
+    override fun deserialize(decoder: Decoder): FlightFlexibility =
+        FlightFlexibility.fromWire(decoder.decodeString())
+
+    override fun serialize(encoder: Encoder, value: FlightFlexibility) {
+        encoder.encodeString(value.wireValue)
+    }
+}
+
 @Serializable
 data class CoveragePending(
     val model: String = "",
@@ -217,7 +252,9 @@ data class FlightResponse(
     val effectiveAutoRefreshHour: Int? = null,
     @SerialName("created_at")
     val createdAt: String = "",
-    @SerialName("briefing_status")
+    /** The server's `latest_briefing` (older Android fixtures call it `briefing_status`). */
+    @SerialName("latest_briefing")
+    @kotlinx.serialization.json.JsonNames("briefing_status")
     val briefingStatus: BriefingStatusInfo? = null,
     @SerialName("advisory_summary")
     val advisorySummary: AdvisorySummary? = null,
@@ -227,16 +264,12 @@ data class FlightResponse(
     val altBriefingStatus: BriefingStatusInfo? = null,
     @SerialName("alt_advisory_summary")
     val altAdvisorySummary: AdvisorySummary? = null,
-    @SerialName("flexibility_mode")
-    val flexibilityMode: FlexibilityMode = FlexibilityMode.FIXED,
-    @SerialName("flexibility_days")
-    val flexibilityDays: Int = 1,
-    @SerialName("time_window_from_utc")
-    val timeWindowFromUtc: Int = 6,
-    @SerialName("time_window_to_utc")
-    val timeWindowToUtc: Int = 18,
-    @SerialName("time_step_hours")
-    val timeStepHours: Int = 3,
+    val flexibility: FlightFlexibility = FlightFlexibility.NONE,
+    /** Pilot's free-text purpose. Owner-only: a subscriber gets null. */
+    val description: String? = null,
+    /** The Field-15 text the pilot typed, when captured; the edit form is pre-filled from it. */
+    @SerialName("raw_route")
+    val rawRoute: String? = null,
     @SerialName("time_scan_status")
     val timeScanStatus: TimeScanStatusDTO? = null,
     @SerialName("time_confirmation")
@@ -297,9 +330,6 @@ data class FlightResponse(
 
     val tripName: String?
         get() = trip?.resolvedTitle?.takeIf { it.isNotBlank() }
-
-    val departureWindowEnd: String?
-        get() = altDepartureTime
 
     /** Server-computed section, falling back to date-based bucketing at the current clock time. */
     val flightSection: FlightSection
@@ -476,15 +506,24 @@ fun groupFlights(
     nowEpochMs: Long = System.currentTimeMillis(),
 ): List<FlightGroup> = FlightResponse.groupFlights(flights, order, nowEpochMs)
 
+/**
+ * Body of `POST /api/flights` (server `CreateFlightRequest`, `api/flights.py`).
+ *
+ * Every key here must be a server field: the server ignores unknown keys, so a
+ * misnamed one is dropped without an error (that is how Flexibility used to be
+ * lost on create). `tests/test_android_api_contract.py` checks this.
+ */
 @Serializable
 data class CreateFlightRequest(
     val waypoints: List<String>,
     @SerialName("route_name")
     val routeName: String? = null,
+    /** The Field-15 text the pilot typed, stored verbatim beside [waypoints]. */
+    @SerialName("raw_route")
+    val rawRoute: String? = null,
+    val description: String? = null,
     @SerialName("departure_time")
     val departureTime: String,
-    @SerialName("departure_window_end")
-    val departureWindowEnd: String? = null,
     @SerialName("cruise_altitude_ft")
     val cruiseAltitudeFt: Int? = null,
     @SerialName("flight_ceiling_ft")
@@ -495,29 +534,30 @@ data class CreateFlightRequest(
     val profileId: Int? = null,
     @SerialName("aircraft_id")
     val aircraftId: Int? = null,
+    /** `ALTERNATE` is rejected on create: it needs an alt time, which only PATCH sets. */
+    val flexibility: FlightFlexibility? = null,
+    /** Opt-in trip membership. A duplicate does not inherit the source's trip. */
     @SerialName("trip_id")
     val tripId: String? = null,
-    @SerialName("alt_departure_time")
-    val altDepartureTime: String? = null,
-    @SerialName("flexibility_mode")
-    val flexibilityMode: FlexibilityMode? = null,
-    @SerialName("flexibility_days")
-    val flexibilityDays: Int? = null,
-    @SerialName("time_window_from_utc")
-    val timeWindowFromUtc: Int? = null,
-    @SerialName("time_window_to_utc")
-    val timeWindowToUtc: Int? = null,
-    @SerialName("time_step_hours")
-    val timeStepHours: Int? = null,
 )
 
+/**
+ * Body of `PATCH /api/flights/{id}` (server `UpdateFlightRequest`). A null field is
+ * omitted on the wire (`explicitNulls = false`), which the server reads as "unchanged".
+ *
+ * The date and the first/last waypoint are part of the flight's identity: PATCH refuses
+ * them with a 422, and the client offers Move or Duplicate instead ([FlightEditRules]).
+ * Trip membership is not a PATCH field; it goes through `/api/trips/{id}/legs`.
+ */
 @Serializable
 data class UpdateFlightRequest(
     val waypoints: List<String>? = null,
+    /** Sent only when the pilot edited the route; omitting it on a route change clears it. */
+    @SerialName("raw_route")
+    val rawRoute: String? = null,
+    val description: String? = null,
     @SerialName("departure_time")
     val departureTime: String? = null,
-    @SerialName("departure_window_end")
-    val departureWindowEnd: String? = null,
     @SerialName("cruise_altitude_ft")
     val cruiseAltitudeFt: Int? = null,
     @SerialName("flight_ceiling_ft")
@@ -528,27 +568,12 @@ data class UpdateFlightRequest(
     val profileId: Int? = null,
     @SerialName("aircraft_id")
     val aircraftId: Int? = null,
-    @SerialName("trip_id")
-    val tripId: String? = null,
-    val private: Boolean? = null,
-    @SerialName("auto_refresh")
-    val autoRefresh: Boolean? = null,
-    @SerialName("auto_refresh_hour")
-    val autoRefreshHour: Int? = null,
+    /** ISO 8601, or `""` to clear a stored alternate. Must be on the departure's UTC day. */
     @SerialName("alt_departure_time")
     val altDepartureTime: String? = null,
-    @SerialName("flexibility_mode")
-    val flexibilityMode: FlexibilityMode? = null,
-    @SerialName("flexibility_days")
-    val flexibilityDays: Int? = null,
-    @SerialName("time_window_from_utc")
-    val timeWindowFromUtc: Int? = null,
-    @SerialName("time_window_to_utc")
-    val timeWindowToUtc: Int? = null,
-    @SerialName("time_step_hours")
-    val timeStepHours: Int? = null,
+    val flexibility: FlightFlexibility? = null,
     @SerialName("notify_override")
-    val notifyOverride: FlightNotifyOverride? = null,
+    val notifyOverride: String? = null,
 )
 
 @Serializable
@@ -606,19 +631,35 @@ object UpdateFlightResponseSerializer : KSerializer<UpdateFlightResponse> {
     }
 }
 
+/**
+ * Body of `POST /api/flights/{id}/move` (server `MoveFlightRequest`): replaces the flight
+ * with one built from these values and **discards all its briefing packs**. Null fields
+ * inherit from the source flight. There is no aircraft, profile or Flexibility field, so
+ * the client sends those as a follow-up PATCH on the moved flight.
+ */
 @Serializable
 data class MoveFlightRequest(
     @SerialName("departure_time")
-    val departureTime: String = "",
-    @SerialName("alt_departure_time")
-    val altDepartureTime: String? = null,
-    @SerialName("trip_id")
-    val tripId: String? = null,
+    val departureTime: String? = null,
+    val waypoints: List<String>? = null,
+    @SerialName("cruise_altitude_ft")
+    val cruiseAltitudeFt: Int? = null,
+    @SerialName("flight_ceiling_ft")
+    val flightCeilingFt: Int? = null,
+    @SerialName("flight_duration_hours")
+    val flightDurationHours: Double? = null,
+    @SerialName("raw_route")
+    val rawRoute: String? = null,
+    val description: String? = null,
+    /** Trip membership survives a move unless the pilot unticks it. */
+    @SerialName("keep_in_trip")
+    val keepInTrip: Boolean = true,
 )
 
+/** `POST /api/flights/bulk-delete` body: the server field is `ids` (at most 200). */
 @Serializable
 data class BulkDeleteRequest(
-    @SerialName("flight_ids")
+    @SerialName("ids")
     val flightIds: List<String>,
 )
 
@@ -645,61 +686,60 @@ data class ParseFplRequest(
     val fplText: String,
 )
 
+/** `POST /api/flights/parse-fpl` (server `ParseFplResponse`). */
 @Serializable
 data class ParseFplResponse(
     val waypoints: List<String> = emptyList(),
-    @SerialName("raw_route_tokens")
-    val rawRouteTokens: List<String> = emptyList(),
-    @SerialName("skipped_tokens")
-    val skippedTokens: List<String> = emptyList(),
+    /** Departure date, `YYYY-MM-DD`. */
+    val date: String? = null,
+    /** Departure time, `HH:MM` UTC. */
+    @SerialName("time_utc")
+    val timeUtc: String? = null,
     @SerialName("altitude_ft")
     val altitudeFt: Int? = null,
-    @SerialName("speed_kt")
-    val speedKt: Int? = null,
-    @SerialName("flight_rules")
-    val flightRules: String? = null,
-    @SerialName("departure_time_utc")
-    val departureTimeUtc: String? = null,
     @SerialName("duration_hours")
     val durationHours: Double? = null,
+    @SerialName("flight_rules")
+    val flightRules: String? = null,
     @SerialName("aircraft_type")
     val aircraftType: String? = null,
-    @SerialName("tail_number")
-    val tailNumber: String? = null,
-    @SerialName("departure_date")
-    val departureDate: String? = null,
+    /** The plan's Field-15 route, kept as the flight's `raw_route`. */
+    @SerialName("raw_route")
+    val rawRoute: String? = null,
+    val error: String? = null,
 ) {
+    /** Departure as ISO 8601 UTC, when the plan carried both a date and a time. */
     val departureTime: String?
-        get() = departureTimeUtc
+        get() {
+            val d = date?.takeIf { it.isNotBlank() } ?: return null
+            val t = timeUtc?.takeIf { it.isNotBlank() } ?: return null
+            return "${d}T$t:00Z"
+        }
 }
 
-@Serializable
-data class RouteWaypointInfo(
-    val code: String = "",
-    val name: String = "",
-    @SerialName("kind_label")
-    val kindLabel: String = "",
-    val lat: Double = 0.0,
-    val lon: Double = 0.0,
-)
-
+/** `POST /api/flights/interpret-route` body (server `InterpretRouteRequest`). */
 @Serializable
 data class InterpretRouteRequest(
-    @SerialName("raw_text")
-    val rawText: String,
-    @SerialName("cruise_speed_kt")
-    val cruiseSpeedKt: Double? = null,
+    @SerialName("raw_route")
+    val rawRoute: String,
 )
 
+/**
+ * `POST /api/flights/interpret-route` (server `InterpretRouteResponse`): the Field-15
+ * text resolved into the waypoint list a flight stores.
+ */
 @Serializable
 data class InterpretRouteResponse(
-    val waypoints: List<RouteWaypointInfo> = emptyList(),
-    @SerialName("skipped_tokens")
-    val skippedTokens: List<String> = emptyList(),
-    @SerialName("total_distance_nm")
-    val totalDistanceNm: Double? = null,
-    @SerialName("estimated_duration_hours")
-    val estimatedDurationHours: Double? = null,
+    @SerialName("original_tokens")
+    val originalTokens: List<String> = emptyList(),
+    /** The waypoints that resolved, in route order: what the flight stores. */
+    val interpreted: List<String> = emptyList(),
+    /** Tokens that could not be placed (typos, unknown idents). */
+    val skipped: List<String> = emptyList(),
+    /** Tokens recognised but dropped as too far off the direct leg. */
+    @SerialName("off_route")
+    val offRoute: List<String> = emptyList(),
+    val waypoints: List<Waypoint> = emptyList(),
 )
 
 @Serializable

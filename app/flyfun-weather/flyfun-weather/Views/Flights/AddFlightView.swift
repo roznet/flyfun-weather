@@ -37,8 +37,11 @@ struct AddFlightView: View {
     let onCreated: (FlightResponse) -> Void
 
     init(repository: any BriefingRepository, flight: FlightResponse? = nil,
+         duplicating: FlightResponse? = nil,
          onCreated: @escaping (FlightResponse) -> Void) {
-        _viewModel = State(initialValue: AddFlightViewModel(repository: repository, flight: flight))
+        _viewModel = State(initialValue: AddFlightViewModel(
+            repository: repository, flight: flight, duplicating: duplicating
+        ))
         self.onCreated = onCreated
     }
 
