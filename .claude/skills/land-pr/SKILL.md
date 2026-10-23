@@ -71,8 +71,9 @@ cloud; on the Mac it's an ordinary run.
 - `scripts/ops/stage_labels.py` needs `--repo roznet/flyfun-weather` (no `gh` to
   infer it).
 - No worktrees, `main/` checkout or devserver: the container is a throwaway clone.
-- The container doesn't outlive the session: everything ends up pushed or in an
-  issue, nothing left local.
+- The container doesn't outlive the session: everything ends up pushed, or in an
+  issue the user approved, nothing left local. A proposed issue that isn't approved
+  before the session ends lives only in the summary, so give enough there.
 
 ## Step 1 — Pre-merge checks
 
@@ -91,8 +92,9 @@ Mechanical checks first; only the cases marked **pause** stop the merge:
    contains "Code Review", not just the last. If there's no review on the head commit,
    note it and carry on. The user chose to land.
 4. **Triage every finding** still open across all rounds into "fix on main",
-   "issue (needs design)" or "skip (why)". **Pause** only for the narrow case above,
-   data loss or security on going live. Regular bugs are fixed on main.
+   "propose an issue (needs design)" or "skip (why)". **Pause** only for the narrow
+   case above, data loss or security on going live. Regular bugs are fixed on main.
+   "Propose an issue" never means filing one yourself (Step 4).
 5. **Close keyword.** For each linked issue, check the author
    (`gh issue view <N> --json author`; cloud: `issue_read`). Issues filed by the user (`roznet`) → `Closes #N`.
    Issues from an **outside reporter** → must be `Addresses #N`, in the PR body
@@ -146,12 +148,18 @@ main, not the PR). If no UI test covers the change, say so.
   uncommitted changes, don't touch it — work from a clean checkout. Re-check the
   branch before committing.
 - Apply **all** the "fix on main" findings, plus any small "Follow-ups noticed" from the
-  brief. Anything that genuinely needs design thought gets a
-  **detailed issue** (root cause, call sites, acceptance criteria) for an
-  implementation agent, not an in-session fix. Such an issue is born ready:
-  `gh issue create --label to-start …` (cloud: `issue_write` with
-  `labels: ["to-start"]`; a vaguer follow-up gets no label and the
-  Action marks it `to-plan`; `designs/stage-labels.md`).
+  brief. Anything that genuinely needs design thought is **proposed** as an issue,
+  never filed on your own: **opening an issue is the user's decision.** Draft it
+  (root cause, call sites, acceptance criteria), then list it under "Proposed issues"
+  in the summary (Step 6) with *why* you think it needs one: what's broken, the
+  pilot/owner impact, why it isn't a fix on main or a skip. Include the
+  alternatives (fix now, narrow it, skip). The merge and the on-main fixes don't
+  wait for this.
+- **Only after the user approves** (in this session; adjust to what they said), file
+  it: `gh issue create --label to-start …` if another agent could implement it from
+  the body alone (cloud: `issue_write` with `labels: ["to-start"]`); a vaguer one gets
+  no label and the Action marks it `to-plan` (`designs/stage-labels.md`). If they
+  pick "fix now", do it as another `Follow-up to #<pr>` commit.
 - Run the targeted tests for what you touched (web: `npx tsc --noEmit` / vitest in
   `web/`; Python: targeted pytest). **Swift / Kotlin:** build, unit tests, and the
   affected UI journey, on this Mac before pushing. **In the cloud,** run the full
@@ -188,8 +196,12 @@ brief, updated with what actually happened here:
 **Your simulator check:** <specific screens/states, or "none needed">
 **Deploy will need:** <migration / env var + container recreate / flag / prod command / app release — or "nothing special">
 **User-facing (What's New candidate):** yes — <one-line pilot wording> | no
-**Left open:** <issues opened, deferred findings, decisions still pending — or "none">
+**Left open:** <deferred findings, decisions still pending — or "none">
+**Proposed issues (not filed, your call):** <per issue: title · why it needs one · alternatives — or "none">
 ```
+
+The summary's line limit doesn't apply to "Proposed issues": give each one enough
+for the user to approve or redirect without opening the draft.
 
 **Never deploy and never start `/deploy`.** Deploying is the user's separate,
 confirmed step.
