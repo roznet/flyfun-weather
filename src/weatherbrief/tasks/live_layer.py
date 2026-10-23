@@ -1196,6 +1196,21 @@ def redact_live(resp: LiveLayerResponse, sharing: str) -> LiveLayerResponse:
             d.lightning_text = strip_eta_text(d.lightning_text) if d.lightning_text else d.lightning_text
             for c in d.cells:
                 c.text = strip_eta_text(c.text)
+        if out.glance.departure is not None:
+            d = out.glance.departure
+            d.etd = None
+            d.metar_text, d.taf_text, d.cells_text = (
+                strip_eta_text(d.metar_text), strip_eta_text(d.taf_text), strip_eta_text(d.cells_text))
+            d.wind_text = strip_eta_text(d.wind_text) if d.wind_text else d.wind_text
+            d.lightning_text = strip_eta_text(d.lightning_text) if d.lightning_text else d.lightning_text
+            for c in d.cells:
+                c.text = strip_eta_text(c.text)
+            # Folded from take-off entries only (#880): a fold the app's
+            # positions gave would say where the flight is.
+            if d.folded_source != "takeoff":
+                d.folded, d.folded_at, d.folded_source, d.folded_text = False, None, None, None
+            elif d.folded_text:
+                d.folded_text = strip_eta_text(d.folded_text)
         # Model-written: its times may not match the ~HH:MMZ pattern.
         out.glance.highlight = None
     if out.changes is not None:
@@ -1217,6 +1232,13 @@ def redact_summary(summary: dict | None, sharing: str) -> dict | None:
         out["progress"] = None
         if out.get("glance"):
             out["glance"]["flight"] = None
+            dep = out["glance"].get("departure")
+            if dep and dep.get("folded_source") != "takeoff":
+                dep["folded"], dep["folded_source"] = False, None
+            for block in (dep, out["glance"].get("destination")):
+                for key in ("metar_text", "taf_text", "wind_text", "cells_text"):
+                    if block and isinstance(block.get(key), str):
+                        block[key] = strip_eta_text(block[key])
         for ln in (out.get("glance") or {}).get("lines") or []:
             ln["text"] = strip_eta_text(ln["text"])
         out["highlight"] = None  # model-written, as in redact_live
@@ -1326,6 +1348,24 @@ def summarize_live(layer: LiveLayer, briefing_data: dict, changes: LiveChanges |
                 "flight": (
                     {"phase": layer.glance.flight.phase, "text": layer.glance.flight.text}
                     if layer.glance.flight is not None else None
+                ),
+                # The two airport cards (#816, #880), word for word.
+                "departure": (
+                    {
+                        "icao": dep.icao, "metar_text": dep.metar_text, "taf_text": dep.taf_text,
+                        "wind_text": dep.wind_text, "folded": dep.folded,
+                        # Read by :func:`redact_summary`, which keeps only an
+                        # entered take-off's fold under ``none``.
+                        "folded_source": dep.folded_source,
+                    }
+                    if (dep := layer.glance.departure) is not None else None
+                ),
+                "destination": (
+                    {
+                        "icao": dest.icao, "metar_text": dest.metar_text, "taf_text": dest.taf_text,
+                        "wind_text": dest.wind_text, "cells_text": dest.cells_text,
+                    }
+                    if (dest := layer.glance.destination) is not None else None
                 ),
             }
             if layer.glance is not None else None

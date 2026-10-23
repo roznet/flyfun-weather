@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 
 from euro_aip.utils.geometry import haversine_nm
 
-from weatherbrief.analysis.flight_progress import FlightProgress
+from weatherbrief.analysis.flight_progress import EVENT_TAKEOFF, FlightProgress
 from weatherbrief.analysis.route_geometry import RouteTrack
 from weatherbrief.analysis.route_locator import RouteLocator, town_name, when_text
 from weatherbrief.models.analysis import RouteConfig
@@ -40,8 +40,10 @@ from weatherbrief.models.live import (
     ChangeRole,
     LiveChanges,
     LiveDestinationCell,
+    FoldSource,
     LiveFocus,
     LiveGlance,
+    LiveGlanceDeparture,
     LiveGlanceDestination,
     LiveGlanceFlight,
     LiveGlanceLine,
@@ -80,6 +82,11 @@ STALE_BLOCK = timedelta(minutes=30)
 
 #: A METAR older than this is flagged with its time ("METAR 12:50Z").
 OLD_METAR = timedelta(minutes=75)
+
+#: The departure card folds once the app's Start fix is this old and the
+#: flight is past the take-off it implies (#880): the pilot pressed Start,
+#: taxied and left, with no take-off entered or seen yet.
+FOLD_AFTER_START = timedelta(minutes=15)
 
 #: SIGMETs named in the en-route line; the rest are "+N more".
 GLANCE_MAX_SIGMETS = 2
@@ -301,13 +308,14 @@ def _metar_clause(
     return text, False, [f"metar:{icao}"]
 
 
-def _taf_text(obs: AirportObservation) -> str | None:
-    """"TAF at ETA VFR, PROB30 MVFR TS CB" or None when no TAF covers it."""
+def _taf_text(obs: AirportObservation, at_label: str = "ETA") -> str | None:
+    """"TAF at ETA VFR, PROB30 MVFR TS CB" ("TAF at ETD …" for the
+    departure), or None when no TAF covers it."""
     if not obs.has_taf and not obs.taf_raw:
         return None
     if obs.taf_valid_at_eta is False or obs.taf_flight_category_at_eta is None:
         return None
-    text = f"TAF at ETA {obs.taf_prevailing_category_at_eta or obs.taf_flight_category_at_eta}"
+    text = f"TAF at {at_label} {obs.taf_prevailing_category_at_eta or obs.taf_flight_category_at_eta}"
     if obs.taf_temporary_category_at_eta:
         text += f", {obs.taf_temporary_type or 'TEMPO'} {obs.taf_temporary_category_at_eta}"
     if obs.taf_significant_weather:
@@ -625,17 +633,18 @@ def _wind_words(direction: int | None, speed: int | None, gust: int | None) -> s
     return f"{head} {speed}" + (f"G{gust}" if gust else "") + " kt"
 
 
-def _destination_wind(obs: AirportObservation | None) -> tuple[str | None, str | None]:
+def _terminal_wind(obs: AirportObservation | None, at_label: str = "ETA") -> tuple[str | None, str | None]:
     """"Wind at ETA 240° 18G28 kt · RWY 27 crosswind 12 kt" from the TAF at
-    the ETA, else "Wind now …" from the METAR; the advisory tier is the
-    server's own (``compute_wind_advisory``), never a new threshold."""
+    the ETA (``at_label`` "ETD" for the departure), else "Wind now …" from
+    the METAR; the advisory tier is the server's own
+    (``compute_wind_advisory``), never a new threshold."""
     if obs is None:
         return None, None
     taf_ok = (obs.has_taf or bool(obs.taf_raw)) and obs.taf_valid_at_eta is not False
     # Explicit fields (not string-built names): a renamed field fails the type
     # check and the tests, not silently at runtime (#816 review).
     sources = (
-        ("Wind at ETA", taf_ok, obs.taf_wind_dir, obs.taf_wind_speed_kt, obs.taf_wind_gust_kt,
+        (f"Wind at {at_label}", taf_ok, obs.taf_wind_dir, obs.taf_wind_speed_kt, obs.taf_wind_gust_kt,
          obs.taf_best_runway_id, obs.taf_crosswind_kt, obs.taf_wind_advisory),
         ("Wind now", obs.has_metar or bool(obs.metar_raw), obs.metar_wind_dir, obs.metar_wind_speed_kt,
          obs.metar_wind_gust_kt, obs.metar_best_runway_id, obs.metar_crosswind_kt, obs.metar_wind_advisory),
@@ -653,14 +662,18 @@ def _destination_wind(obs: AirportObservation | None) -> tuple[str | None, str |
     return None, None
 
 
-def destination_block(
-    layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *, alert: bool, obs_stale: bool,
-) -> LiveGlanceDestination:
-    """"Destination at your ETA" (#816): METAR now, TAF at ETA, the wind on
-    the best runway and the cells within ``TERMINAL_NM``, each clause as the
-    arrival line words it (same helpers), split into fields so a client can
-    lay them out without parsing."""
-    icao = flight.dest_icao
+def _terminal_block(
+    layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *,
+    phase: str, obs_stale: bool,
+) -> dict:
+    """The fields the departure and destination blocks share, for the
+    ``phase`` ("departure" / "arrival") end: METAR now, the TAF at the ETD /
+    ETA, the wind on the best runway and the cells within ``TERMINAL_NM``,
+    each clause as the phase's line words it (same helpers)."""
+    dep = phase == "departure"
+    icao = flight.dep_icao if dep else flight.dest_icao
+    pos = flight.dep_pos if dep else flight.dest_pos
+    at_label = "ETD" if dep else "ETA"
     now = flight.now
     route_obs = layer.route_observations
     term = route_obs.terminal(icao) if route_obs is not None else None
@@ -673,20 +686,20 @@ def destination_block(
         unavailable.append("metar")
     elif obs_stale:
         metar_text += f" (METARs as of {_hhmm(layer.observations_updated_at)})"
-    taf_text = _taf_text(obs) if obs is not None else None
+    taf_text = _taf_text(obs, at_label) if obs is not None else None
     if taf_text is None:
-        taf_text = "no TAF for ETA"
+        taf_text = f"no TAF for {at_label}"
         unavailable.append("taf")
-    wind_text, wind_adv = _destination_wind(obs)
+    wind_text, wind_adv = _terminal_wind(obs, at_label)
 
     storms = layer.storms
-    cells_text, missing, _ = _terminal_storms(storms, flight.dest_pos, " now")
+    cells_text, missing, _ = _terminal_storms(storms, pos, "" if dep else " now")
     if missing:
         unavailable.append("storms")
     cells: list[LiveDestinationCell] = []
     if storms is not None and storms.status == "available":
-        lat, lon = flight.dest_pos
-        for d, st in _storms_around(storms, flight.dest_pos)[0]:
+        lat, lon = pos
+        for d, st in _storms_around(storms, pos)[0]:
             flash = ", lightning" if st.flashes else ""
             cells.append(LiveDestinationCell(
                 id=st.id,
@@ -696,7 +709,7 @@ def destination_block(
             ))
 
     lightning_text, missing = _lightning_at(
-        layer.observed_conditions, _terminal_station(layer.observed_conditions, flight.total_nm),
+        layer.observed_conditions, _terminal_station(layer.observed_conditions, 0.0 if dep else flight.total_nm),
     )
     if missing:
         unavailable.append("lightning")
@@ -705,8 +718,8 @@ def destination_block(
     name = (flight.locator.names.get(icao) if flight.locator is not None else None) or (
         town_name(field.municipality) if field is not None else None
     )
-    return LiveGlanceDestination(
-        icao=icao, name=name, eta=flight.progress.arrival,
+    return dict(
+        icao=icao, name=name,
         metar_text=metar_text,
         metar_category=obs.metar_flight_category if obs is not None else None,
         metar_time=obs.metar_time if obs is not None else None,
@@ -718,7 +731,67 @@ def destination_block(
         ),
         wind_text=wind_text, wind_advisory=wind_adv,
         cells_text=cells_text, cells=cells, lightning_text=lightning_text,
-        alert=alert, unavailable=unavailable, focus=_terminal_focus(flight, "arrival"),
+        unavailable=unavailable, focus=_terminal_focus(flight, phase),
+        airport=obs,
+    )
+
+
+def destination_block(
+    layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *, alert: bool, obs_stale: bool,
+) -> LiveGlanceDestination:
+    """"Destination at your ETA" (#816): METAR now, TAF at ETA, the wind on
+    the best runway and the cells within ``TERMINAL_NM``, each clause as the
+    arrival line words it (same helpers), split into fields so a client can
+    lay them out without parsing."""
+    return LiveGlanceDestination(
+        **_terminal_block(layer, flight, focus_by_storm, phase="arrival", obs_stale=obs_stale),
+        eta=flight.progress.arrival, alert=alert,
+    )
+
+
+def departure_fold(progress: FlightProgress) -> tuple[datetime | None, FoldSource | None, bool]:
+    """When the departure card folds (#880): ``(folded_at, source,
+    estimated)``, ``(None, None, False)`` while it stays open.
+
+    By evidence only, never by the plan: a take-off entered (``takeoff``),
+    else one the fixes show, else the app's Start fix ``FOLD_AFTER_START``
+    old with the flight past the take-off that fix implies (the strip's
+    ``enroute``), or a landing (both ``fixes``). A flight whose planned time
+    has passed with nothing observed stays open."""
+    entered = progress.latest_event(EVENT_TAKEOFF)
+    if entered is not None and entered.at is not None:
+        return entered.at, "takeoff", False
+    if progress.takeoff_at is not None:
+        return progress.takeoff_at, "fixes", True
+    start = progress.start_fix
+    started = (
+        start is not None and start.at is not None and progress.as_of - start.at >= FOLD_AFTER_START
+        and progress.departed
+    )
+    if started or progress.landed_at is not None:
+        return progress.departed_at, "fixes", True
+    return None, None, False
+
+
+def departure_block(
+    layer: LiveLayer, flight: _Flight, focus_by_storm: dict[str, LiveFocus], *, alert: bool, obs_stale: bool,
+) -> LiveGlanceDeparture:
+    """The departure card's block (#880): the destination block's twin at the
+    ETD, plus whether it folds and the folded line."""
+    fields = _terminal_block(layer, flight, focus_by_storm, phase="departure", obs_stale=obs_stale)
+    folded_at, source, estimated = departure_fold(flight.progress)
+    folded_text = None
+    if source is not None:
+        obs: AirportObservation | None = fields["airport"]
+        parts = [flight.dep_icao + (f" {obs.metar_wind_short}" if obs is not None and obs.metar_wind_short else "")]
+        if obs is not None and obs.metar_crosswind is not None:
+            parts.append(f"RWY {obs.metar_crosswind.runway}")
+        if folded_at is not None:
+            parts.append(f"departed {'~' if estimated else ''}{_hhmm(folded_at)}")
+        folded_text = " · ".join(parts)
+    return LiveGlanceDeparture(
+        **fields, etd=flight.progress.departed_at, alert=alert,
+        folded=source is not None, folded_at=folded_at, folded_source=source, folded_text=folded_text,
     )
 
 
@@ -1035,8 +1108,9 @@ def build_glance(
     ))
 
     headline, comparison = _headline(layer.changes, now)
-    # The strip and the destination are additive (#816): a failure in either
-    # leaves that block null, never the lines the tab already relied on.
+    # The strip, the destination (#816) and the departure (#880) are
+    # additive: a failure in one leaves that block null, never the lines
+    # the tab already relied on.
     try:
         strip = flight_strip(progress, flight.dep_icao, flight.dest_icao)
     except Exception:
@@ -1049,9 +1123,16 @@ def build_glance(
     except Exception:
         logger.exception("LIVE_GLANCE_DESTINATION_FAILED — destination block null this tick")
         destination = None
+    try:
+        departure = departure_block(
+            layer, flight, focus_by_storm, alert="departure" in alert_phases, obs_stale=obs_stale,
+        )
+    except Exception:
+        logger.exception("LIVE_GLANCE_DEPARTURE_FAILED — departure block null this tick")
+        departure = None
     glance = LiveGlance(
         as_of=now, headline=headline, comparison=comparison, lines=lines,
-        flight=strip, destination=destination,
+        flight=strip, destination=destination, departure=departure,
     )
     if storms is not None:
         for st in storms.storms:

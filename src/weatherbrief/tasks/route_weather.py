@@ -270,6 +270,7 @@ def run_route_weather(
         model=model,
     )
 
+    fetched_at = datetime.now(timezone.utc)
     airports: list[AirportObservation] = []
     etas: list[datetime] = []  # each airport's ETA, for the TAF wind sample
     metar_categories: list[str] = []
@@ -337,6 +338,7 @@ def run_route_weather(
             obs.has_taf = True
             obs.taf_issue_time = taf.observation_time
             _apply_taf_at_eta(obs, taf, airport_time)
+            _apply_taf_hours(obs, taf, fetched_at, airport_time)
             if obs.taf_flight_category_at_eta is not None:
                 taf_categories.append(obs.taf_flight_category_at_eta)
 
@@ -387,7 +389,7 @@ def run_route_weather(
 
     route_obs = RouteObservations(
         corridor_nm=corridor_nm,
-        fetch_time=datetime.now(timezone.utc),
+        fetch_time=fetched_at,
         airports_found=len(airports),
         airports_with_metar=sum(1 for a in airports if a.has_metar),
         # Count TAFs that say something about the flight, not expired ones.
@@ -528,6 +530,17 @@ def _apply_taf_at_eta(obs: AirportObservation, taf, eta: datetime) -> None:
     obs.taf_wind_variable_to = reading.wind_variable_to
 
     obs.taf_applicable_lines = _applicable_taf_lines(taf, eta)
+
+
+def _apply_taf_hours(obs: AirportObservation, taf, now: datetime, eta: datetime) -> None:
+    """The TAF hour by hour for the airport card (#880). A failure costs the
+    strip, never the airport."""
+    from weatherbrief.analysis.taf_reading import read_taf_hours
+
+    try:
+        obs.taf_hours = read_taf_hours(taf, now, eta)
+    except Exception:
+        logger.warning("Failed to read the TAF by hour for %s", obs.icao, exc_info=True)
 
 
 def _classify_discrepancy(

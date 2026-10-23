@@ -144,9 +144,23 @@ def test_live_at_returns_what_live_returned_at_that_tick(lell_lemi, hhmm):
     snap = find_tick(load_snapshots(flight_dir), tick.at)
     replayed = LiveTickResponse(flight_id="fixture-1", **tick_view(flight_dir, snap)).model_dump(mode="json")
     served = live_response(tick)
+    # The airport cards' ``airport`` rows (#880) are METAR/TAF rows: like
+    # ``route_observations`` they are rebuilt from the history, not stored,
+    # so they are compared as rows below.
+    cards = {}
+    for body in (replayed, served):
+        for key in ("departure", "destination"):
+            block = (body["glance"] or {}).get(key)
+            if block is not None:
+                cards.setdefault(key, []).append(block.pop("airport"))
     for key in ("live_updated_at", "route_sigmets", "storms", "glance", "ribbon", "changes",
                 "last_refresh_delta", "observed_conditions", "sigmets_updated_at", "observations_updated_at"):
         assert replayed[key] == served[key], key
+    for key, (again, first) in cards.items():
+        fields = ("icao", "metar_raw", "metar_time", "metar_flight_category", "taf_raw", "metar_sky_text")
+        assert (again is None) == (first is None), key
+        if first is not None:
+            assert [again[f] for f in fields] == [first[f] for f in fields], key
 
     def rows(body):
         return [

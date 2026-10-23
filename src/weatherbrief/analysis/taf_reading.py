@@ -24,7 +24,7 @@ euro_aip docstring itself says not to use for "what does this TAF say at T".
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 
@@ -96,3 +96,40 @@ def read_taf_at(taf: Any, check_time: datetime) -> TafReading | None:
     reading.wind_variable_from = wind.wind_variable_from
     reading.wind_variable_to = wind.wind_variable_to
     return reading
+
+
+#: The airport card's TAF strip (#880): up to this many hours, ending this
+#: long after the ETA.
+TAF_HOURS_MAX = 8
+TAF_HOURS_AFTER_ETA = timedelta(hours=2)
+
+
+def read_taf_hours(taf: Any, now: datetime, eta: datetime) -> list:
+    """The TAF read hour by hour for the card's strip (#880):
+    ``[TafHour, …]`` from ``now``'s hour to the hour holding ``eta`` + 2 h,
+    the last ``TAF_HOURS_MAX`` of them when that is longer (so the ETA hour
+    stays in a window that starts hours ahead), and only hours the TAF's
+    validity covers. Each hour is read at its start, except the one holding
+    ``eta``, read at ``eta`` so it matches the at-ETA fields, and marked."""
+    from weatherbrief.models.observations import TafHour
+
+    def floor(t: datetime) -> datetime:
+        return t.replace(minute=0, second=0, microsecond=0)
+
+    eta_hour = floor(eta)
+    last = floor(eta + TAF_HOURS_AFTER_ETA)
+    first = max(floor(now), last - timedelta(hours=TAF_HOURS_MAX - 1))
+    out = []
+    hour = first
+    while hour <= last:
+        is_eta = hour == eta_hour
+        reading = read_taf_at(taf, eta if is_eta else hour)
+        if reading is not None:
+            out.append(TafHour(
+                time=hour, prevailing_category=reading.prevailing_category,
+                temporary_category=reading.temporary_category,
+                temporary_type=reading.temporary_type if reading.temporary_category else None,
+                is_eta=is_eta,
+            ))
+        hour += timedelta(hours=1)
+    return out

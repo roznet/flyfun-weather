@@ -85,7 +85,12 @@ def _glance(layer: LiveLayer) -> dict | None:
         return None
     # The highlight's gate is the server's regeneration baseline (``/live``
     # strips it too); the carried-forward line itself is kept.
-    return layer.glance.model_dump(mode="json", exclude={"highlight": {"gate"}})
+    # The airport cards' ``airport`` rows (#880) are METAR/TAF rows: not
+    # stored, like ``route_observations``; :func:`tick_view` re-attaches
+    # them from the rebuilt rows.
+    return layer.glance.model_dump(mode="json", exclude={
+        "highlight": {"gate"}, "departure": {"airport"}, "destination": {"airport"},
+    })
 
 
 def snapshot_record(layer: LiveLayer, *, tick_at: datetime, progress=None) -> dict:
@@ -288,7 +293,7 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
     from euro_aip.briefing.weather.parser import WeatherParser
 
     from weatherbrief.models.observations import AirportObservation, RouteObservations
-    from weatherbrief.tasks.route_weather import _apply_taf_at_eta, _worst_category
+    from weatherbrief.tasks.route_weather import _apply_taf_at_eta, _apply_taf_hours, _worst_category
 
     block = snapshot.get("observations")
     at = parse_utc(snapshot.get("tick_at"))
@@ -355,6 +360,7 @@ def observations_as_of(history: list[dict], snapshot: dict, progress=None):
                     _apply_taf_at_eta(obs, taf, eta)
                 except Exception:
                     logger.debug("TAF at ETA failed for %s", icao, exc_info=True)
+                _apply_taf_hours(obs, taf, at, eta)
         airports.append(obs)
 
     metar_cats = [a.metar_flight_category for a in airports if a.metar_flight_category]
@@ -387,6 +393,25 @@ def find_tick(snapshots: list[dict], tick: datetime) -> dict | None:
         if best_t is None or t >= best_t:
             best, best_t = s, t
     return best
+
+
+def _with_card_airports(glance: dict | None, observations) -> dict | None:
+    """The stored glance with each airport card's ``airport`` (#880) taken
+    from the rebuilt METAR/TAF rows, as the tick built it (no runway picture:
+    :func:`observations_as_of` does not rebuild it)."""
+    if not glance or observations is None:
+        return glance
+    out = dict(glance)
+    for key in ("departure", "destination"):
+        block = out.get(key)
+        if not isinstance(block, dict) or not block.get("icao"):
+            continue
+        try:
+            term = observations.terminal(block["icao"])
+            out[key] = {**block, "airport": term.effective().model_dump(mode="json") if term else None}
+        except Exception:
+            logger.debug("Card airport rebuild failed for %s", block.get("icao"), exc_info=True)
+    return out
 
 
 def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None = None) -> dict:
@@ -432,7 +457,7 @@ def tick_view(flight_dir: Path | str, snapshot: dict, history: list[dict] | None
         "observed_conditions": snapshot.get("observed_conditions"),
         "observed_updated_at": snapshot.get("observed_updated_at"),
         "storms": snapshot.get("storms"),
-        "glance": snapshot.get("glance"),
+        "glance": _with_card_airports(snapshot.get("glance"), observations),
         "ribbon": snapshot.get("ribbon"),
         # Trails as /live served them at that tick (#669): the history up to it.
         "changes": (

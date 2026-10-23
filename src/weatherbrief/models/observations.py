@@ -40,6 +40,40 @@ class ObsProxy(BaseModel):
         return text
 
 
+class TafHour(BaseModel):
+    """The TAF read at one whole hour (#880), for the airport card's strip."""
+
+    time: datetime  # the hour's start
+    prevailing_category: str | None = None
+    # The worst TEMPO/PROB group, only when strictly worse than prevailing
+    # (the ``read_taf_at`` rule), with its label ("TEMPO", "PROB30 TEMPO").
+    temporary_category: str | None = None
+    temporary_type: str | None = None
+    # The hour holding the airport's ETA (the ETD for the departure). That
+    # hour is read at the ETA itself, so it matches the at-ETA fields.
+    is_eta: bool = False
+
+
+class WeatherWord(BaseModel):
+    """One METAR present-weather group in words (#880)."""
+
+    code: str  # "-DZ"
+    text: str  # "Light drizzle"
+    # The client's icon: thunder, hail, snow, freezing, showers, rain,
+    # drizzle, fog, mist, haze, smoke, dust, squall, funnel, other.
+    icon: str
+
+
+class CrosswindReading(BaseModel):
+    """The crosswind on the best runway end (#880), as the card shows it."""
+
+    runway: str
+    side: str  # where it comes from: "left" / "right" / "" (down the runway)
+    kt: int
+    gust_kt: int | None = None  # only GUST_DISPLAY_MIN_EXCESS_KT above kt
+    text: str  # "10G16 kt"
+
+
 class AirportObservation(BaseModel):
     """METAR/TAF data for one airport along the route."""
 
@@ -117,6 +151,11 @@ class AirportObservation(BaseModel):
     taf_wind_variable_from: int | None = None  # #758, as metar_wind_variable_*
     taf_wind_variable_to: int | None = None
     taf_applicable_lines: list[int] = Field(default_factory=list)
+    # The TAF hour by hour (#880): from the fetch hour to ETA + 2 h, the 8
+    # hours ending there at most, inside the TAF's validity. Empty without a
+    # TAF, when the window misses it, or on packs built before #880. Named
+    # ``taf_`` so a proxied terminal (#767) takes its station's.
+    taf_hours: list[TafHour] = Field(default_factory=list)
     metar_wind_advisory: str | None = None
     metar_best_runway_id: str | None = None
     metar_crosswind_kt: float | None = None
@@ -147,6 +186,82 @@ class AirportObservation(BaseModel):
         """Where the airport is along the route, NM: the true projection when
         the pack has it (#790), else the legacy enroute distance."""
         return self.along_track_nm if self.along_track_nm is not None else self.enroute_distance_nm
+
+    # --- The airport card's readings (#880, ``analysis/airport_card``) ---------
+    # Computed, so stored packs get them too and every client shows the same.
+
+    @computed_field
+    @property
+    def metar_trend(self) -> str | None:
+        """"better" / "worse": the latest METAR's category against the report
+        before it (``metar_previous_*``), None when unchanged or unknown."""
+        from weatherbrief.analysis.airport_card import metar_trend
+
+        return metar_trend(self.metar_flight_category, self.metar_previous_flight_category)
+
+    @computed_field
+    @property
+    def metar_ceiling_meter(self) -> float | None:
+        """The ceiling on the card's four-band meter, 0..1 (no ceiling = 1)."""
+        from weatherbrief.analysis.airport_card import ceiling_meter
+
+        return ceiling_meter(self.metar_ceiling_ft, has_metar=self.has_metar or bool(self.metar_raw))
+
+    @computed_field
+    @property
+    def metar_visibility_meter(self) -> float | None:
+        """The visibility on the card's four-band meter, 0..1."""
+        from weatherbrief.analysis.airport_card import visibility_meter
+
+        return visibility_meter(self.metar_visibility_m)
+
+    @computed_field
+    @property
+    def metar_visibility_text(self) -> str | None:
+        """"10 km+", "6 km", "800 m"."""
+        from weatherbrief.analysis.airport_card import visibility_text
+
+        return visibility_text(self.metar_visibility_m)
+
+    @computed_field
+    @property
+    def metar_sky_text(self) -> str | None:
+        """"BKN 1,200 ft", "CAVOK", "VV 100 ft": the ceiling row's words."""
+        from weatherbrief.analysis.airport_card import sky_text
+
+        return sky_text(self.metar_raw)[0]
+
+    @computed_field
+    @property
+    def metar_cavok(self) -> bool:
+        from weatherbrief.analysis.airport_card import sky_text
+
+        return sky_text(self.metar_raw)[1]
+
+    @computed_field
+    @property
+    def metar_wind_short(self) -> str | None:
+        """"290/15G25", "VRB 03", "Calm"."""
+        from weatherbrief.analysis.airport_card import wind_short
+
+        return wind_short(self.metar_wind_dir, self.metar_wind_speed_kt, self.metar_wind_gust_kt)
+
+    @computed_field
+    @property
+    def metar_weather_words(self) -> list[WeatherWord]:
+        """The present weather in words with an icon kind ("-DZ" → "Light drizzle")."""
+        from weatherbrief.analysis.airport_card import weather_words
+
+        return [WeatherWord(**w) for w in weather_words(self.metar_weather)]
+
+    @computed_field
+    @property
+    def metar_crosswind(self) -> CrosswindReading | None:
+        """The METAR wind's crosswind on its best runway end (``runway_wind``)."""
+        from weatherbrief.analysis.airport_card import crosswind_reading
+
+        reading = crosswind_reading(self.runway_wind, "metar")
+        return CrosswindReading(**reading) if reading is not None else None
 
     @computed_field
     @property

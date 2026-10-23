@@ -129,6 +129,39 @@ length_ft, surface, hard, ends:[{ident, heading_true}]}], winds:
 - Since euro_aip 0.22.0 (the pin), a VRB wind's worst case is its gust
   (`VRB05G20` → 20 for `max_crosswind_kt`).
 
+### Airport card readings (#880)
+
+What the departure / arrival card draws, decided on the server
+(`analysis/airport_card.py`, tests `tests/test_airport_card.py`). No new
+threshold: the meter uses `airport_conditions`' band edges.
+
+- **`taf_hours`** (stored, `TafHour{time, prevailing_category,
+  temporary_category, temporary_type, is_eta}`): `read_taf_hours` in
+  `analysis/taf_reading.py`, built in `run_route_weather` next to
+  `_apply_taf_at_eta` (`_apply_taf_hours`, a failure costs the strip only).
+  Window: from the fetch hour to the hour holding ETA + 2 h, **the last 8 of
+  them** when longer, inside the TAF's validity. **Choice:** the issue said
+  "from the fetch hour, capped at 8", which drops the ETA hour once the ETA
+  is more than ~5 h out; anchoring the cap at the end keeps it. Each hour is
+  read at its start, except the ETA hour, read at the ETA so it matches the
+  at-ETA fields and the card's header box. Temporary only when strictly
+  worse (the `read_taf_at` rule). Named `taf_` so a proxied terminal takes
+  its station's (`_fields`). ~1 KB per airport with a TAF.
+- **Computed** (so stored packs get them too; reading a dump back ignores
+  them): `metar_trend` ("better"/"worse" vs `metar_previous_flight_category`),
+  `metar_ceiling_meter` / `metar_visibility_meter` (0..1 on four equal bands,
+  piecewise-linear, top band to 5,000 ft / 10 km; no ceiling = 1),
+  `metar_sky_text` + `metar_cavok` (ceiling layer from the METAR body before
+  any TEMPO/BECMG/NOSIG/RMK: "BKN 1,200 ft", "VV 100 ft", else the lowest
+  layer, "CAVOK", NSC in words), `metar_visibility_text` ("10 km+" from 9999,
+  "6 km" from 5 km, else metres), `metar_wind_short` ("290/15G25", "VRB 03",
+  "Calm"), `metar_weather_words` (`{code, text, icon}`: "-DZ" → "Light
+  drizzle"/`drizzle`; an unknown group keeps its code, icon `other`),
+  `metar_crosswind` (`{runway, side, kt, gust_kt, text}` on the METAR wind's
+  best end of `runway_wind`; gust kept only `GUST_DISPLAY_MIN_EXCESS_KT` (4 kt)
+  above the steady component, the rule every wind string uses, not the
+  mockup's 3).
+
 ### Observation proxy (#767)
 
 A departure/destination with no METAR (or no TAF) of its own reads a nearby
