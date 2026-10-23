@@ -36,10 +36,9 @@ import SwiftUI
 //   phaseLabel              → phaseLabel  (on LiveGlanceLine.phaseLabel here)
 //
 // Deliberate divergences, documented so `/sync-ios-web` does not re-flag them:
-//  - **Category colours.** iOS MVFR is blue; the web's is amber, because the
-//    web page already badges MVFR amber in every table and matching iOS there
-//    would paint one airport two colours on one page. The thresholds and the
-//    colour *roles* are shared; the palette is each platform's own.
+//  - **Category shades.** Both platforms paint MVFR blue (VFR green, IFR red,
+//    LIFR purple); the exact shades are each platform's own (SwiftUI system
+//    colours here, CSS tokens on the web).
 //  - **dBZ palette.** The boundaries (35 / 41 / 50) are shared exactly — they
 //    are the cell tiers. The web takes its hexes from its own VIP ramp
 //    (`layer-legends.ts`) so the ribbon matches the radar legend beside it.

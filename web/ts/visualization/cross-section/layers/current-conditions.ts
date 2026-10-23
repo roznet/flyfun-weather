@@ -13,8 +13,8 @@
  *    SEV/EMBD.
  *
  * SYNC: iOS ports this in `Views/CrossSection/Layers/CurrentConditionsLayer.swift`
- * (data shapes in `Models/Domain/VizData.swift`). iOS deliberately keeps its own
- * flight-category palette (MVFR blue, not amber) — mirror geometry, not colors.
+ * (data shapes in `Models/Domain/VizData.swift`). Both paint MVFR blue; the
+ * exact shades are each platform's own — mirror geometry, not hexes.
  */
 
 import type { CrossSectionLayer, CoordTransform, VizMetarColumn, VizSigmetZone } from '../../types';

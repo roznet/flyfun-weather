@@ -793,9 +793,8 @@ logs `Live glance failed` and leaves both null for that tick.
   View), and `tests/unit/ribbon-core.test.ts` ↔ `RouteRibbonRulesTests.swift`
   assert the same inputs against the same expected strings — change a rule on
   one platform and the other platform's test is what tells you. Two
-  divergences are deliberate and documented in both headers: **MVFR is amber on
-  web, blue on iOS** (the web badges MVFR amber in every table, so matching iOS
-  would paint one airport two colours on one page), and the **dBZ hexes** come
+  divergences are deliberate and documented in both headers: the category
+  **shades** are each platform's own (both paint MVFR blue since #881), and the **dBZ hexes** come
   from the web's own VIP ramp while the *boundaries* (35 / 41 / 50, the cell
   tiers) are shared exactly. Registered in the `sync-ios-web` skill.
   Two traps the pair hit and now guards: JS `Math.round` breaks ties toward

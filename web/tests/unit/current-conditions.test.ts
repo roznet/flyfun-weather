@@ -245,7 +245,7 @@ describe('isSevereSigmet', () => {
 describe('flightCategoryColor', () => {
   it('maps known categories to the badge colors (case-insensitive)', () => {
     expect(flightCategoryColor('VFR')).toBe('#2d8a4e');
-    expect(flightCategoryColor('mvfr')).toBe('#b8860b');
+    expect(flightCategoryColor('mvfr')).toBe('#2563eb');
     expect(flightCategoryColor('IFR')).toBe('#c0392b');
     expect(flightCategoryColor('LIFR')).toBe('#8e24aa');
   });

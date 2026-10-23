@@ -16,6 +16,7 @@
   --amber-bg: #fff3cd;
   --red: #dc3545;
   --red-bg: #f8d7da;
+  --mvfr: #2563eb;
   --lifr: #8e24aa;
   --radius: 6px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
@@ -55,6 +56,7 @@
   --amber-bg: #78350f;
   --red: #f87171;
   --red-bg: #7f1d1d;
+  --mvfr: #60a5fa;
   --lifr: #c084fc;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   color-scheme: dark;
@@ -5252,7 +5254,7 @@ html {
 }
 
 .flight-cat-mvfr {
-  background: var(--amber, #b8860b);
+  background: var(--mvfr);
   color: #fff;
 }
 
@@ -9360,8 +9362,8 @@ button.glance-line:hover {
 
 /* #881: departure / arrival airport cards (the agreed "Airport Card Lab"
    design). Every value is the server's; this only lays it out. Side by side
-   from ~700 px of section width, stacked below. MVFR is amber, as every
-   web table badges it. */
+   from ~700 px of section width, stacked below. MVFR is blue (--mvfr), the
+   standard category colour used across the web and iOS. */
 .ac-cards {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -9463,14 +9465,14 @@ button.glance-line:hover {
 .ac-catbox-small { min-width: 0; padding: 2px 6px; }
 
 .ac-cat-vfr { background: var(--green); }
-.ac-cat-mvfr { background: var(--amber); }
+.ac-cat-mvfr { background: var(--mvfr); }
 .ac-cat-ifr { background: var(--red); }
 .ac-cat-lifr { background: var(--lifr); }
 .ac-cat-none { background: var(--border); }
 
 .ac-catbox-dashed { background: transparent; border-style: dashed; }
 .ac-catbox-dashed.ac-cat-vfr { border-color: var(--green); color: var(--green); }
-.ac-catbox-dashed.ac-cat-mvfr { border-color: var(--amber); color: var(--amber); }
+.ac-catbox-dashed.ac-cat-mvfr { border-color: var(--mvfr); color: var(--mvfr); }
 .ac-catbox-dashed.ac-cat-ifr { border-color: var(--red); color: var(--red); }
 .ac-catbox-dashed.ac-cat-lifr { border-color: var(--lifr); color: var(--lifr); }
 
@@ -9639,7 +9641,7 @@ button.ac-cell { cursor: pointer; }
 .ac-meter-track > span:not(.ac-meter-dot) { opacity: 0.35; }
 .ac-m-lifr { background: var(--lifr); border-radius: 3px 0 0 3px; }
 .ac-m-ifr { background: var(--red); }
-.ac-m-mvfr { background: var(--amber); }
+.ac-m-mvfr { background: var(--mvfr); }
 .ac-m-vfr { background: var(--green); border-radius: 0 3px 3px 0; }
 
 .ac-meter-dot {
@@ -9680,7 +9682,7 @@ button.ac-cell { cursor: pointer; }
 }
 
 .ac-strip-temp { position: absolute; inset: 0; background: none; }
-.ac-strip-temp.ac-cat-mvfr { background: repeating-linear-gradient(135deg, var(--amber) 0 3px, transparent 3px 6px); }
+.ac-strip-temp.ac-cat-mvfr { background: repeating-linear-gradient(135deg, var(--mvfr) 0 3px, transparent 3px 6px); }
 .ac-strip-temp.ac-cat-ifr { background: repeating-linear-gradient(135deg, var(--red) 0 3px, transparent 3px 6px); }
 .ac-strip-temp.ac-cat-lifr { background: repeating-linear-gradient(135deg, var(--lifr) 0 3px, transparent 3px 6px); }
 
