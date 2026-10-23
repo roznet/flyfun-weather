@@ -232,12 +232,14 @@ object LivePositionRules {
 
     /**
      * Enforce the ring-buffer cap on pending fixes, dropping oldest fixes when over `maxBufferedFixes`.
+     * Always a new list: the service clears its buffer before re-adding the result, so returning
+     * the input itself emptied the queue and no fix was ever sent.
      */
     fun trimFixBuffer(
         fixes: List<LivePositionFix>,
         maxBufferedFixes: Int = MAX_BUFFERED_FIXES,
     ): List<LivePositionFix> {
-        if (fixes.size <= maxBufferedFixes) return fixes
+        if (fixes.size <= maxBufferedFixes) return fixes.toList()
         return fixes.takeLast(maxBufferedFixes)
     }
 }

@@ -167,6 +167,17 @@ class LivePositionRulesTest {
     }
 
     @Test
+    fun `trimFixBuffer under the cap survives the service's clear-then-addAll`() {
+        val buffer = mutableListOf(
+            LivePositionFix(lat = 51.0, lon = 0.0, recordedAt = "2026-10-23T08:43:00Z", hAccuracyM = 12.0),
+        )
+        val trimmed = LivePositionRules.trimFixBuffer(buffer)
+        buffer.clear()
+        buffer.addAll(trimmed)
+        assertEquals(1, buffer.size)
+    }
+
+    @Test
     fun `isLanding needs a valid slow speed within 5 nm of the destination`() {
         // Destination (50.0, 4.0); 0.05 deg lat ~ 3 nm, 0.1 deg ~ 6 nm.
         assertTrue(LivePositionRules.isLanding(50.05, 4.0, groundSpeedKt = 12.0, waypoints = sampleRoute))
