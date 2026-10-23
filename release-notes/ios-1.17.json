@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-23",
+    "title": "iOS 1.17 — Departure and arrival airport cards",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- Departure and arrival airport cards on the Observed tab: the flight category now and at your departure or arrival time, any TEMPO/PROB period, visibility, cloud and weather, wind with the runway and crosswind, nearby storm cells and lightning, and the TAF timeline. Side by side on iPad, stacked on iPhone.\n- The Cells list now matches the alerts and the website: storms ahead of you in route order, then those behind, with their position, closing speed and when they'll be abeam. Tap one to see it on the map.\n- Late take-off: once you've pressed Start, tracking and live updates stay on if you leave later than planned, up to six hours.\n- A banner tells you when you're looking at saved data or have no connection.\n- Fixes: a round trip is no longer marked as landed the moment you press Start."
+  }
+]
