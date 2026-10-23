@@ -24,13 +24,9 @@ from __future__ import annotations
 import re
 
 from weatherbrief.analysis.airport_conditions import (
-    _CEIL_IFR,
-    _CEIL_LIFR,
-    _CEIL_MVFR,
-    _VIS_IFR_M,
-    _VIS_LIFR_M,
-    _VIS_MVFR_M,
+    CEILING_EDGES_FT,
     GUST_DISPLAY_MIN_EXCESS_KT,
+    VISIBILITY_EDGES_M,
 )
 
 #: The meter's VFR band ends here; anything above sits at the right edge.
@@ -58,14 +54,14 @@ def ceiling_meter(ceiling_ft: int | None, *, has_metar: bool) -> float | None:
         return None
     if ceiling_ft is None:
         return 1.0
-    return _meter(ceiling_ft, (_CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR), METER_CEILING_TOP_FT)
+    return _meter(ceiling_ft, CEILING_EDGES_FT, METER_CEILING_TOP_FT)
 
 
 def visibility_meter(visibility_m: int | None) -> float | None:
     """The visibility's place on the meter, None when not reported."""
     if visibility_m is None:
         return None
-    return _meter(visibility_m, (_VIS_LIFR_M, _VIS_IFR_M, _VIS_MVFR_M), METER_VISIBILITY_TOP_M)
+    return _meter(visibility_m, VISIBILITY_EDGES_M, METER_VISIBILITY_TOP_M)
 
 
 def visibility_text(visibility_m: int | None) -> str | None:
@@ -189,23 +185,15 @@ def _words(intensity: str, descriptors: list[str], phenomena: list[str]) -> str:
         if near:
             return "Thunder nearby"
         return "Thunderstorm" + (f" with {strength}{precip_words}" if precip else "")
+    motion = "blowing " if "BL" in descriptors else "drifting " if "DR" in descriptors else ""
     if precip:
-        text = (strength + precip_words).capitalize()
-        if "BL" in descriptors:
-            text = "Blowing " + precip_words
-        elif "DR" in descriptors:
-            text = "Drifting " + precip_words
-        return text + (" nearby" if near else "")
+        return (strength + motion + precip_words).capitalize() + (" nearby" if near else "")
     if "SH" in descriptors:
         return "Showers nearby" if near else "Showers"
     if other == ["FG"] and descriptors and descriptors[0] in _FOG_DESCRIPTOR:
         return _FOG_DESCRIPTOR[descriptors[0]]
     words = " and ".join(_PHENOMENA[p] for p in other)
-    if "BL" in descriptors:
-        words = "blowing " + words
-    elif "DR" in descriptors:
-        words = "drifting " + words
-    text = (strength + words).capitalize()
+    text = (strength + motion + words).capitalize()
     return text + (" nearby" if near else "")
 
 

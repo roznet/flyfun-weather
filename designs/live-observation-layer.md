@@ -927,6 +927,11 @@ clients only draw. Additive and optional throughout.
 - **Redaction:** `none` nulls `etd`, strips every clause, and keeps a fold
   only when `folded_source == "takeoff"`; a fixes fold would say where the
   flight is. `redact_summary` applies the same rule to the agent block.
+  It also clears `eta_hour_offset` and every `taf_hours[].is_eta` on the
+  METAR/TAF rows (`route_observations` and the cards' `airport`), since both
+  follow the live ETA. **Residual:** the at-ETA TAF fields and the strip's
+  window (to ETA + 2 h) are still read at the live ETA, hour-level only; this
+  predates #880 for the at-ETA fields.
 - **Agent:** `summarize_live` `glance.departure` `{icao, metar_text,
   taf_text, wind_text, folded, folded_source}` and `glance.destination`
   `{icao, metar_text, taf_text, wind_text, cells_text}` (the destination was

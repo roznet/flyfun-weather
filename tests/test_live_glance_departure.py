@@ -134,3 +134,27 @@ def test_a_failing_departure_leaves_the_rest(monkeypatch):
     monkeypatch.setattr(lg, "departure_block", boom)
     glance, _ = build_glance(_layer(), ROUTE, FlightProgress.from_route(ROUTE, DEP, mins(10)))
     assert glance.departure is None and glance.destination is not None
+
+
+def test_sharing_none_hides_the_eta_hour_on_the_metar_taf_rows():
+    """Review round 1: the rows' ``eta_hour_offset`` and the strip's
+    ``is_eta`` follow the live ETA, so ``none`` clears them everywhere."""
+    from weatherbrief.models.observations import TafHour
+
+    _, layer = _departure(mins(50), fix(40, 0.5))
+    for block in (layer.glance.departure, layer.glance.destination):
+        block.airport.eta_hour_offset = 1
+        block.airport.taf_hours = [TafHour(time=mins(60), prevailing_category="VFR", is_eta=True)]
+    obs = layer.route_observations.model_copy(deep=True)
+    for a in obs.airports:
+        a.eta_hour_offset = 1
+        a.taf_hours = [TafHour(time=mins(60), prevailing_category="VFR", is_eta=True)]
+    resp = LiveLayerResponse(flight_id=layer.flight_id, pack_timestamp=layer.pack_timestamp,
+                             glance=layer.glance, ribbon=layer.ribbon, route_observations=obs)
+    hidden = redact_live(resp, "none")
+    rows = [*hidden.route_observations.airports, hidden.glance.departure.airport, hidden.glance.destination.airport]
+    assert all(r.eta_hour_offset is None and not any(h.is_eta for h in r.taf_hours) for r in rows)
+    assert [h.prevailing_category for h in rows[0].taf_hours] == ["VFR"]  # the strip itself stays
+    # The owner's and along-route views keep the mark.
+    kept = redact_live(resp, "along_route")
+    assert kept.route_observations.airports[0].taf_hours[0].is_eta

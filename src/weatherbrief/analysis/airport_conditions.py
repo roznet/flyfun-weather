@@ -32,6 +32,10 @@ from weatherbrief.units import M_PER_SM as _M_PER_SM
 # METRIC_VFR_VISIBILITY_M, so a model 8 km and an observed 8000 m agree.
 _CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR = 500, 1000, 3000
 _VIS_LIFR_M, _VIS_IFR_M, _VIS_MVFR_M = 1 * _M_PER_SM, 3 * _M_PER_SM, 8000
+#: The LIFR/IFR, IFR/MVFR and MVFR/VFR edges, for readers outside the
+#: classifier (the airport card's meter, #880).
+CEILING_EDGES_FT = (_CEIL_LIFR, _CEIL_IFR, _CEIL_MVFR)
+VISIBILITY_EDGES_M = (_VIS_LIFR_M, _VIS_IFR_M, _VIS_MVFR_M)
 
 
 # A gust is only shown when it exceeds the sustained wind by at least this many
