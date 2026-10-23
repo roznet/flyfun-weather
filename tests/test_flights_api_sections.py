@@ -271,6 +271,7 @@ def _save_pack(
     days_out: int,
     artifact_path: str = "",
     fetch_timestamp: datetime | None = None,
+    advisory_summary_json: str | None = None,
 ) -> None:
     """Insert a minimal latest briefing pack row for a flight."""
     from weatherbrief.db.models import BriefingPackRow
@@ -284,6 +285,7 @@ def _save_pack(
         assessment_reason="test",
         has_digest=True,
         artifact_path=artifact_path,
+        advisory_summary_json=advisory_summary_json,
     ))
     s.commit()
     s.close()
@@ -304,7 +306,7 @@ class TestLatestBriefingInline:
         assert lb["assessment"] == "AMBER"
         assert lb["days_out"] == 3
         assert lb["fetch_timestamp"] is not None
-        # No route_advisories.json on disk → flag is False.
+        # No advisory summary on the row → flag is False.
         assert lb["has_advisories"] is False
 
     def test_fetch_timestamp_is_utc_qualified(self, client, app_db):
@@ -354,14 +356,29 @@ class TestLatestBriefingInline:
         rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
         assert rec["latest_briefing"] is None
 
-    def test_has_advisories_true_when_manifest_on_disk(self, client, app_db, tmp_path):
+    def test_has_advisories_from_summary_column(self, client, app_db):
         f = _save_flight(app_db, route="radv", days_offset=+5, idx=3)
-        adv_dir = tmp_path / "pack-radv"
+        _save_pack(
+            app_db, f.id, assessment="GREEN", days_out=2,
+            advisory_summary_json='{"red": 1, "amber": 0, "top": [{"status": "RED", "name": "Icing"}]}',
+        )
+        lb = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)["latest_briefing"]
+        assert lb["has_advisories"] is True
+        assert lb["advisory_summary"]["red"] == 1
+
+    def test_list_does_not_touch_pack_dir(self, client, app_db, tmp_path):
+        """#870: the list reads only DB columns — a cold stat per flight on the
+        prod data volume made it 1-2 s. A manifest on disk with no summary
+        column (pre-#276 pack) reads as no advisories, and live_updated_at is
+        never resolved even when a live layer exists for the pack."""
+        f = _save_flight(app_db, route="rdisk", days_offset=+5, idx=4)
+        adv_dir = tmp_path / "pack-rdisk"
         adv_dir.mkdir(parents=True, exist_ok=True)
         (adv_dir / "route_advisories.json").write_text("{}")
         _save_pack(app_db, f.id, assessment="GREEN", days_out=2, artifact_path=str(adv_dir))
-        rec = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)
-        assert rec["latest_briefing"]["has_advisories"] is True
+        lb = next(x for x in client.get("/api/flights").json() if x["id"] == f.id)["latest_briefing"]
+        assert lb["has_advisories"] is False
+        assert lb["live_updated_at"] is None
 
 
 class TestPastPagination:

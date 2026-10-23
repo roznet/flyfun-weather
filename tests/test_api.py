@@ -2408,12 +2408,13 @@ class TestLiveLayerEndpoint:
         assert live["observations_updated_at"] is not None
         assert live["changes"]["changes"] == []
 
-        # Pack meta (latest + list) and the flight list carry live_updated_at.
+        # Pack meta carries live_updated_at; the flight list deliberately does
+        # not resolve it (#870 — a per-flight disk read no client consumed).
         latest = client.get(f"/api/flights/{sample_flight.id}/packs/latest").json()
         assert latest["live_updated_at"] == layer.live_updated_at.isoformat()
         flights = client.get("/api/flights").json()
         mine = next(f for f in flights if f["id"] == sample_flight.id)
-        assert mine["latest_briefing"]["live_updated_at"] == layer.live_updated_at.isoformat()
+        assert mine["latest_briefing"]["live_updated_at"] is None
 
         # The snapshot serves the newest observations over the immutable pack.
         ts = latest["fetch_timestamp"]

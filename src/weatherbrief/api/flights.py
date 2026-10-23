@@ -62,7 +62,6 @@ from weatherbrief.storage.flights import (
     list_flights_with_role,
     load_flight,
     lookup_flight_id_by_share_code,
-    pack_has_advisories,
     parse_advisory_summary,
     remove_artifacts_after_commit,
     safe_path_component,
@@ -182,10 +181,12 @@ class BriefingStatusInfo(BaseModel):
     has_digest: bool = False
     days_out: int | None = None
     fetch_timestamp: str | None = None
+    # True when the pack has a denormalized advisory summary (#870: from the
+    # DB column, not a stat of route_advisories.json). False for pre-#276 packs.
     has_advisories: bool = False
-    # When the flight's live observation layer (#637) last changed, for this
-    # (latest) pack. A realtime refresh keeps ``fetch_timestamp``, so clients
-    # sync on this too. None when nothing live exists yet.
+    # Always None in the list (#870): resolving it was a per-flight disk read
+    # and no client consumes it here — live sync goes through /packs/latest.
+    # Kept so older app builds that decode it keep working.
     live_updated_at: str | None = None
     # Compact RED/AMBER advisory breakdown + top named categories for the
     # flights-list card chips. Read straight from the denormalized pack column
@@ -719,9 +720,14 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
         )
     ).scalars().all()
 
-    # has_advisories is a per-pack disk stat (route_advisories.json), all in
-    # this one request — far cheaper than the per-flight /packs/latest
-    # round-trips it replaces.
+    # No filesystem access per flight (#870): on prod a cold stat of the pack
+    # dir costs ~25 ms on the data volume, so two per flight made a cold list
+    # 1-2 s. has_advisories reads the denormalized summary instead of statting
+    # route_advisories.json — the row is inserted at briefing_ready from the
+    # same manifest that file is written from, so the two agree except for
+    # pre-#276 packs. live_updated_at stays None: no client reads it from the
+    # list (iOS syncs it from /packs/latest).
+    summaries = {row.flight_id: parse_advisory_summary(row.advisory_summary_json) for row in rows}
     return {
         row.flight_id: BriefingStatusInfo(
             assessment=row.assessment,
@@ -738,18 +744,11 @@ def _get_latest_packs(db: Session, flight_ids: list[str]) -> dict[str, BriefingS
             # /flights/{id}/packs already goes through the same helper — this
             # keeps the two representations of the same field identical.
             fetch_timestamp=ensure_utc(row.fetch_timestamp).isoformat(),
-            has_advisories=pack_has_advisories(row.artifact_path),
-            live_updated_at=_live_updated_at_iso(row.artifact_path),
-            advisory_summary=parse_advisory_summary(row.advisory_summary_json),
+            has_advisories=summaries[row.flight_id] is not None,
+            advisory_summary=summaries[row.flight_id],
         )
         for row in rows
     }
-
-
-def _live_updated_at_iso(artifact_path: str | None) -> str | None:
-    from weatherbrief.tasks.live_layer import live_updated_at_iso
-
-    return live_updated_at_iso(artifact_path)
 
 
 def _reorder_future_soonest_first(

@@ -862,13 +862,13 @@ export function renderFlightList(
       host.dataset.open = '1';
       host.innerHTML = `<div class="debrief-loading">${escapeHtml(t('debrief.loading'))}</div>`;
       // Lazy-fetch advisories for the latest pack so the form knows which
-      // categories to surface as outcome questions. The flight's inline
-      // latest_briefing already tells us whether advisories exist and at which
-      // timestamp, so we only hit the network when there's something to fetch.
-      // Empty list if the pack has no advisories or the call fails.
+      // categories to surface as outcome questions. Keyed on the pack timestamp
+      // alone, not has_advisories: that flag now comes from the denormalized
+      // summary (#870), which pre-#276 packs lack even though their manifest
+      // is on disk. Empty list if the pack has no advisories or the call fails.
       const lb = flight.latest_briefing;
       let flaggedCategories: ReturnType<typeof flaggedTagsFromAdvisories> = [];
-      if (lb && lb.has_advisories && lb.fetch_timestamp) {
+      if (lb && lb.fetch_timestamp) {
         try {
           const manifest = await fetchRouteAdvisories(id, lb.fetch_timestamp);
           flaggedCategories = flaggedTagsFromAdvisories(manifest);
