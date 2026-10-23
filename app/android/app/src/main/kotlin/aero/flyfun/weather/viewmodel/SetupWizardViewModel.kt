@@ -217,6 +217,8 @@ class SetupWizardViewModel(
      * that fail are logged and skipped, like the web; Settings stays the place to fix them.
      */
     suspend fun next(): Boolean {
+        // A second tap while the aircraft POST is in flight must not create a second aircraft.
+        if (_state.value.isSaving) return false
         _state.update { it.copy(errorMessage = null) }
         when (_state.value.step) {
             SetupStep.WELCOME -> _state.update { it.copy(step = SetupStep.PROFILE) }

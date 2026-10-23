@@ -48,6 +48,7 @@ private func profile(_ id: Int, _ key: String, rules: String, isDefault: Bool = 
                                                 flightCeilingFt: 20000, fikiIcingEnabled: fikiCard))
 }
 
+@MainActor
 private func seededRepo() -> StubSetupRepository {
     let repo = StubSetupRepository()
     repo.profilesResult = [

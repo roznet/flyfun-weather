@@ -121,7 +121,7 @@ final class FixtureSetupRepository: SetupRepository {
             cruiseSpeedKt: request.cruiseSpeedKt, ceilingFt: request.ceilingFt,
             isDefault: request.isDefault, createdAt: "2026-10-23T00:00:00Z"
         )
-        // Like the server: a default POST over a sole placeholder replaces it.
+        // Like the server (`api/aircraft.py`, #777): a default POST over a sole placeholder replaces it.
         if request.isDefault, storedAircraft.count == 1, storedAircraft[0].isPlaceholder {
             storedAircraft = [created]
         } else {
