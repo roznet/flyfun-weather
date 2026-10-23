@@ -628,7 +628,7 @@ final class OnlineBriefingRepository: BriefingRepository {
     /// delimiters (legal in a query as a whole), so encoding a value with it
     /// leaves those intact and allows parameter injection from free-text input.
     /// Remove them from the allowed set so the value is a single opaque token.
-    private static func queryValueEncoded(_ value: String) -> String {
+    static func queryValueEncoded(_ value: String) -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&=+?#")
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value

@@ -48,6 +48,7 @@ import aero.flyfun.weather.ui.help.SettingsScreen
 import aero.flyfun.weather.ui.help.WhatsNewScreen
 import aero.flyfun.weather.ui.map.PanEuropeanMapMode
 import aero.flyfun.weather.ui.map.PanEuropeanMapScreen
+import aero.flyfun.weather.ui.setup.SetupWizardScreen
 import aero.flyfun.weather.ui.theme.FlyFunWeatherTheme
 import aero.flyfun.weather.ui.trips.TripDetailScreen
 import aero.flyfun.weather.viewmodel.AddFlightViewModel
@@ -58,6 +59,7 @@ import aero.flyfun.weather.viewmodel.FlightListViewModel
 import aero.flyfun.weather.viewmodel.ForecastMapViewModel
 import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
 import aero.flyfun.weather.viewmodel.TripsViewModel
+import aero.flyfun.weather.viewmodel.SetupWizardViewModel
 import aero.flyfun.weather.viewmodel.UiTestLaunch
 import aero.flyfun.weather.viewmodel.ViewModelScopes
 
@@ -156,6 +158,17 @@ fun FlyFunWeatherRoot(
 
     val sessionKey = "$cacheScope:$isMockMode:$isGuestBrowsing"
     val sessionOwner = viewModelScopes.owner(ViewModelScopes.sessionKey(sessionKey))
+
+    // First-run setup (#900): shown over everything until finished or skipped.
+    val showSetupWizard by appState.showSetupWizard.collectAsState()
+    val setupRepository = appState.setupRepository
+    if (showSetupWizard && setupRepository != null) {
+        val setupViewModel: SetupWizardViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "setupWizard") {
+            SetupWizardViewModel(setupRepository).also { it.start() }
+        }
+        SetupWizardScreen(viewModel = setupViewModel, onFinished = appState::dismissSetupWizard)
+        return
+    }
 
     val flightListViewModel: FlightListViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "flightList") {
         FlightListViewModel(

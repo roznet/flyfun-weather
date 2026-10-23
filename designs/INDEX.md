@@ -217,6 +217,11 @@ Google Play release path for `aero.flyfun.weather`, ported from flyfun-forms: `s
 Key exports: `scripts/play.py`, `.claude/skills/release-android/SKILL.md`
 → Full doc: android-play-release.md
 
+### first-run-setup
+Once-per-account welcome wizard on web, iOS and Android (#900): welcome → default profile → aircraft (POST over the placeholder, FIKI pre-ticked from the profile) + usual mission → `setup-complete`. Shown while `/auth/me` `setup_completed` is false; Skip also completes. Mobile differences from the web, and the `FLYFUN_MOCK_SETUP=1` journeys.
+Key exports: web `showWelcomeWizard`; iOS `SetupWizardView`, `SetupWizardModel`, `SetupRepository`, `AppState.checkSetupNeeded`; Android `SetupWizardScreen`, `SetupWizardViewModel`, `SetupRepository`, `AppStateViewModel.checkSetupNeeded`
+→ Full doc: first-run-setup.md
+
 ## Verification, evaluation & pilot feedback
 
 ### metar-taf-accuracy [project]

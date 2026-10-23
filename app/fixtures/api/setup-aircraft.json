@@ -1,0 +1,16 @@
+[
+  {
+    "id": 201,
+    "icao_type": "ZZZZ",
+    "type_name": "Unknown",
+    "tail_number": null,
+    "nickname": "My aircraft",
+    "is_ifr": false,
+    "is_fiki": false,
+    "cruise_speed_kt": 110,
+    "ceiling_ft": null,
+    "is_default": true,
+    "is_placeholder": true,
+    "created_at": "2026-10-01T08:00:00Z"
+  }
+]

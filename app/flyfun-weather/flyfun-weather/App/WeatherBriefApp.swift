@@ -33,6 +33,16 @@ struct WeatherBriefApp: App {
             Group {
                 if appState.isAuthenticated {
                     FlightListView()
+                        // First-run setup (#900): once per sign-in, ask the
+                        // server whether this account has done it anywhere.
+                        .task(id: appState.jwt) { await appState.checkSetupNeeded() }
+                        .fullScreenCover(isPresented: $appState.showSetupWizard) {
+                            if let setupRepository = appState.setupRepository {
+                                SetupWizardView(repository: setupRepository) {
+                                    appState.showSetupWizard = false
+                                }
+                            }
+                        }
                 } else {
                     LoginView()
                 }

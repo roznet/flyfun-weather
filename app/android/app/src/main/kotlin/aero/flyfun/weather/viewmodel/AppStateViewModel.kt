@@ -16,11 +16,14 @@ import aero.flyfun.weather.data.BriefingCache
 import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.CachingBriefingRepository
 import aero.flyfun.weather.data.FixtureBriefingRepository
+import aero.flyfun.weather.data.FixtureSetupRepository
 import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.data.HelpCatalogStore
 import aero.flyfun.weather.data.OnlineBriefingRepository
+import aero.flyfun.weather.data.OnlineSetupRepository
 import aero.flyfun.weather.data.OnlineTripRepository
 import aero.flyfun.weather.data.PirepOfflineStore
+import aero.flyfun.weather.data.SetupRepository
 import aero.flyfun.weather.data.TripRepository
 import aero.flyfun.weather.data.WhatsNewStore
 import aero.flyfun.weather.model.NavigationTarget
@@ -138,6 +141,27 @@ class AppStateViewModel(
     @Volatile
     private var onlineTripRepo: TripRepository = OnlineTripRepository(apiClient, null)
 
+    private val onlineSetupRepo: SetupRepository = OnlineSetupRepository(apiClient)
+
+    /** Setup is done for the mock account unless a UI test asks otherwise (`FLYFUN_MOCK_SETUP`). */
+    @Volatile
+    private var fixtureSetupRepo: SetupRepository = FixtureSetupRepository(setupCompleted = true)
+
+    /**
+     * First-run setup calls (#900). None in demo mode: a guest has no account to set up.
+     */
+    val setupRepository: SetupRepository?
+        get() = when {
+            _isGuestBrowsing.value -> null
+            _isMockMode.value -> fixtureSetupRepo
+            else -> onlineSetupRepo
+        }
+
+    private val _showSetupWizard = MutableStateFlow(false)
+
+    /** The first-run setup wizard is up: the account's `setup_completed` is false (#900). */
+    val showSetupWizard: StateFlow<Boolean> = _showSetupWizard.asStateFlow()
+
     val repository: BriefingRepository
         get() = if (_isMockMode.value || _isGuestBrowsing.value) fixtureBriefingRepo else onlineBriefingRepo
 
@@ -164,6 +188,7 @@ class AppStateViewModel(
             _isAuthenticated.value = true
             _userEmail.value = extractEmailFromToken(existingToken)
             refreshUserSupportData()
+            checkSetupNeeded()
         } else {
             rebuildUserScopedRepositories(null)
             if (initialMockMode) {
@@ -215,6 +240,27 @@ class AppStateViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Offer the first-run setup wizard when this account hasn't done it on any client (#900). Read
+     * once per sign-in from `/auth/me`; offline or on any error the wizard simply isn't shown this
+     * time. A late answer for a session that has since changed (sign-out, a UI test's reseed) is
+     * dropped.
+     */
+    fun checkSetupNeeded() {
+        if (!_isAuthenticated.value) return
+        val repo = setupRepository ?: return
+        scope.launch {
+            runCatching { repo.setupCompleted() }.onSuccess { done ->
+                if (!done && setupRepository === repo && _isAuthenticated.value) _showSetupWizard.value = true
+            }
+        }
+    }
+
+    /** The wizard finished or was skipped (it has already told the server). */
+    fun dismissSetupWizard() {
+        _showSetupWizard.value = false
     }
 
     /** Build the Google OAuth URL for Chrome Custom Tabs and store the state nonce + PKCE verifier. */
@@ -334,11 +380,14 @@ class AppStateViewModel(
         if (!launch.mock) return
         fixtureBriefingRepo = FixtureBriefingRepository(mockLive = launch.mockLive)
         fixtureTripRepo = FixtureTripRepository()
+        fixtureSetupRepo = FixtureSetupRepository(setupCompleted = !launch.setupPending)
+        _showSetupWizard.value = false
         _authError.value = null
         _isGuestBrowsing.value = false
         _isOfflineMode.value = launch.offline
         _isMockMode.value = true
         _isAuthenticated.value = true
+        checkSetupNeeded()
     }
 
     /** Directly accept a JWT token (e.g. from OAuth callback or deep link). */
@@ -352,7 +401,9 @@ class AppStateViewModel(
         _magicLinkSent.value = false
         _authError.value = null
         _userEmail.value = extractEmailFromToken(jwt)
+        _showSetupWizard.value = false
         refreshUserSupportData()
+        checkSetupNeeded()
     }
 
     /**
@@ -476,6 +527,7 @@ class AppStateViewModel(
         _userPreferences.value = null
         _autorouterLinked.value = false
         _authError.value = null
+        _showSetupWizard.value = false
     }
 
     /**
