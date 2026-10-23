@@ -345,3 +345,50 @@ def test_preview_threads_draft_engine_settings(client, app_db, monkeypatch):
     # ``cloud_source="dd"`` is read directly.
     assert captured["cloud_source"] == "dd"
     assert captured["persist"] is False
+
+
+def test_recalculate_at_probe_altitude_does_not_persist(client, app_db):
+    """The web altitude lever probes recalculate for its wind overlay (#871).
+
+    A what-if altitude (≠ the flight's saved cruise_altitude_ft) must leave the
+    stored briefing byte-identical: no route_advisories.json rewrite and no
+    fronts side effect.
+    """
+    flight_id, ts, pack_dir = _seed(app_db)
+    url = f"/api/flights/{flight_id}/packs/{ts}/advisories/recalculate"
+
+    # Baseline at the flight's own altitude persists, as an altitude edit does.
+    resp = client.post(f"{url}?cruise_altitude_ft=5000")
+    assert resp.status_code == 200, resp.text
+    stored = (pack_dir / "route_advisories.json").read_bytes()
+    assert json.loads(stored)["cruise_altitude_ft"] == 5000
+    fronts = pack_dir / "route_fronts.json"
+    fronts.write_text("{}")  # sentinel: a probe must not delete or rewrite it
+
+    resp = client.post(f"{url}?cruise_altitude_ft=11000")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["manifest"]["cruise_altitude_ft"] == 11000
+    assert (pack_dir / "route_advisories.json").read_bytes() == stored
+    assert fronts.read_text() == "{}"
+
+
+def test_recalculate_without_altitude_persists(client, app_db):
+    """No altitude → the pack's own altitude, so the result is the stored briefing."""
+    flight_id, ts, pack_dir = _seed(app_db)
+    resp = client.post(f"/api/flights/{flight_id}/packs/{ts}/advisories/recalculate")
+    assert resp.status_code == 200, resp.text
+    assert (pack_dir / "route_advisories.json").exists()
+
+
+def test_recalculate_after_altitude_edit_persists_at_new_altitude(client, app_db):
+    """An altitude edit (flight saved first, then recalc at it) still persists (#871)."""
+    flight_id, ts, pack_dir = _seed(app_db)
+    resp = client.patch(f"/api/flights/{flight_id}", json={"cruise_altitude_ft": 9000})
+    assert resp.status_code == 200, resp.text
+
+    resp = client.post(
+        f"/api/flights/{flight_id}/packs/{ts}/advisories/recalculate?cruise_altitude_ft=9000",
+    )
+    assert resp.status_code == 200, resp.text
+    stored = json.loads((pack_dir / "route_advisories.json").read_text())
+    assert stored["cruise_altitude_ft"] == 9000

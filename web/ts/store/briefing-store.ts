@@ -904,6 +904,14 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     // instantly (no stale-probe flash during the debounce window).
     if (_windOverlayTimer !== null) clearTimeout(_windOverlayTimer);
     const seq = ++_windOverlaySeq;
+    // Back at the anchor the manifest's own winds apply, so no overlay is
+    // needed. Skipping the call also keeps the lever a pure what-if: recalc at
+    // the flight's own altitude persists route_advisories.json (#871).
+    if (alt === anchor) {
+      _windOverlayTimer = null;
+      set({ windOverlay: null });
+      return;
+    }
     _windOverlayTimer = window.setTimeout(() => {
       void api.recalculateAdvisories(flight.id, currentPack.fetch_timestamp, alt)
         .then(result => {
