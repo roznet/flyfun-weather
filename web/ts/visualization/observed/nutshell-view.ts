@@ -4,16 +4,19 @@
  * app/flyfun-weather/flyfun-weather/Views/Briefing/ObservedNutshellView.swift.
  * SYNC — the highlight block is paired with `ObservedHighlightCard` in
  * app/flyfun-weather/flyfun-weather/Views/Briefing/ObservedHighlightView.swift
- * (#697). Documented divergence: iOS folds the headline and the non-alert
- * lines under "Details"; the web leaves them unfolded (the desktop has room).
+ * (#697). Both fold the headline and the non-alert lines under "Details"
+ * (#881); iOS draws its fold below the ribbon, the web at the end of this
+ * section, just above the ribbon section.
  *
- * Reading order (#816, around the pilot's in-flight questions): the flight
- * strip (where the flight is, ETA), the alert-tier lines, the model-written
- * highlight with its "experimental · written HH:MMZ" caption and 👍/👎 (the
- * headline in its slot when there is none, #697), the lines still ahead, the
- * "Destination at your ETA" block (it stands in for a non-alert arrival
- * line), then the passed lines, dimmed. After landing the strip says so and
- * the rest reads as it was. The highlight is never styled as an alert.
+ * Reading order (#881, the shared order on every client): the offline
+ * banner when the last `/live` read failed, the flight strip (where the
+ * flight is, ETA), the alert-tier lines, the model-written highlight with its
+ * "experimental · written HH:MMZ" caption and 👍/👎 (the headline in its slot
+ * when there is none, #697), the departure + arrival airport cards
+ * (`airport-card-view.ts`; they stand in for a non-alert departure / arrival
+ * line), then a "Details" fold, collapsed and remembered: the headline (when
+ * the highlight took its slot), the lines still ahead, the passed lines and
+ * the map button. The route ribbon is its own section, right after.
  *
  * The headline comparing with the briefing, then one line per phase
  * (departure / en route / arrival). **Every word is the server's**
@@ -28,9 +31,10 @@ import { escapeHtml } from '../../utils';
 import { t } from '../../i18n/i18n';
 import { formatHhmmZ } from '../../helpers/live-layer';
 import type {
-  LiveFocus, LiveGlance, LiveGlanceDestination, LiveGlanceFlight, LiveGlanceLine, LiveHighlight,
+  LiveFocus, LiveGlance, LiveGlanceFlight, LiveGlanceLine, LiveHighlight,
 } from '../../store/types';
 import { phaseLabel } from './ribbon-core';
+import { airportCardsHtml, cardFocus } from './airport-card-view';
 
 export type HighlightSentiment = 'up' | 'down';
 
@@ -44,6 +48,10 @@ export interface NutshellHandlers {
   onRateHighlight?: (
     highlight: LiveHighlight, sentiment: HighlightSentiment, comment: string, contactOk: boolean,
   ) => Promise<void>;
+  /** The "Details" fold was opened or closed (to remember it). */
+  onDetailsToggle?: (open: boolean) => void;
+  /** The folded departure was opened or closed (remembered per flight). */
+  onDepartureToggle?: (open: boolean) => void;
 }
 
 export interface NutshellOptions {
@@ -51,6 +59,14 @@ export interface NutshellOptions {
   rateable?: boolean;
   /** This highlight was already rated in this page view: thanks, no thumbs. */
   highlightRated?: boolean;
+  /** "Details" starts open (the pilot left it open). */
+  detailsOpen?: boolean;
+  /** The folded departure starts open. */
+  departureOpen?: boolean;
+  /** The last `/live` read failed: the time of the data still on screen. */
+  offlineSince?: string | null;
+  /** For the cards' METAR ages and stale tint (tests pin it). */
+  now?: number;
 }
 
 /** Dedup key for a highlight rating: one per flight and rated line. */
@@ -127,38 +143,12 @@ export function flightStripHtml(flight: LiveGlanceFlight): string {
     + '</div>';
 }
 
-/** "Destination at your ETA" (#816): every clause is the server's; the
- *  client adds the title, the ETA and the wind advisory's colour. Cells with
- *  a focus are buttons (`data-dest-cell`), the title opens the field. */
-export function destinationHtml(dest: LiveGlanceDestination): string {
-  const eta = formatHhmmZ(dest.eta ?? null);
-  const title = `${t('observed.destination.title')} · ${dest.icao}${dest.name ? ` ${dest.name}` : ''}`
-    + (eta ? ` · ${eta}` : '');
-  const row = (label: string, text: string, extra = '') =>
-    `<div class="glance-dest-row${extra}"><span class="glance-dest-label">${escapeHtml(label)}</span>`
-    + `<span class="glance-dest-text">${escapeHtml(text)}</span></div>`;
-  const cells = (dest.cells ?? []).map((c, i) => (c.focus
-    ? `<button type="button" class="glance-dest-cell" data-dest-cell="${i}">${escapeHtml(c.text)}`
-      + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
-    : `<div class="glance-dest-cell">${escapeHtml(c.text)}</div>`)).join('');
-  const missing = (dest.unavailable ?? []).length > 0
-    ? `<span class="glance-missing">${escapeHtml(t('observed.destination.unavailable', { sources: (dest.unavailable ?? []).join(', ') }))}</span>`
-    : '';
-  const advisory = dest.wind_advisory ? ` glance-dest-wind-${escapeHtml(dest.wind_advisory)}` : '';
-  return `<div class="glance-dest${dest.alert ? ' glance-dest-alert' : ''}" data-testid="glance-destination">`
-    + (dest.focus
-      ? `<button type="button" class="glance-dest-title" data-dest-focus>${escapeHtml(title)}`
-        + '<span class="glance-chevron" aria-hidden="true">▸</span></button>'
-      : `<div class="glance-dest-title">${escapeHtml(title)}</div>`)
-    + row('METAR', dest.metar_text)
-    + (dest.proxy_caption ? `<span class="glance-proxy">${escapeHtml(dest.proxy_caption)}</span>` : '')
-    + row('TAF', dest.taf_text)
-    + (dest.wind_text ? row(t('observed.destination.wind'), dest.wind_text, advisory) : '')
-    + row(t('observed.destination.cells'), dest.cells_text)
-    + (cells ? `<div class="glance-dest-cells">${cells}</div>` : '')
-    + (dest.lightning_text ? row(t('observed.destination.lightning'), dest.lightning_text) : '')
-    + missing
-    + '</div>';
+/** "Offline · showing data from 08:30Z, 12 min ago" (#881). The age is
+ *  filled and re-aged by `refreshLiveAges`. */
+export function offlineBannerHtml(since: string): string {
+  return '<div class="glance-offline" role="status" data-testid="observed-offline">'
+    + `${escapeHtml(t('observed.offline', { time: formatHhmmZ(since) }))}, `
+    + `<span data-live-age="${escapeHtml(since)}"></span></div>`;
 }
 
 /** The nutshell card's markup. Pure, so the wording and the alert/passed
@@ -168,11 +158,13 @@ export function nutshellHtml(
 ): string {
   // Indices stay those of `glance.lines`: the focus taps look them up there.
   const indexed = (glance.lines ?? []).map((line, i) => ({ line, i }));
+  const dep = glance.departure ?? null;
   const dest = glance.destination ?? null;
   const html = (list: typeof indexed) => list.map(({ line, i }) => lineHtml(line, i)).join('');
   const alertLines = html(indexed.filter(({ line }) => line.alert));
-  // The destination block stands in for a non-alert arrival line (#816).
-  const rest = indexed.filter(({ line }) => !line.alert && !(dest && line.phase === 'arrival'));
+  // A card stands in for its non-alert terminal line (#816, #881).
+  const rest = indexed.filter(({ line }) => !line.alert
+    && !(dest && line.phase === 'arrival') && !(dep && line.phase === 'departure'));
   const aheadLines = html(rest.filter(({ line }) => !line.passed));
   const passedLines = html(rest.filter(({ line }) => line.passed));
   // `data-live-age`, not `data-live-asof`: the headline already opens with
@@ -184,18 +176,24 @@ export function nutshellHtml(
   const highlight = glance.highlight ?? null;
   const headline = `<div class="glance-headline" data-testid="glance-headline">`
     + `${escapeHtml(glance.headline ?? '')}${asOf}</div>`;
-  return '<div class="glance-card" data-testid="observed-nutshell">'
-    + (glance.flight ? flightStripHtml(glance.flight) : '')
-    + (alertLines ? `<div class="glance-lines glance-lines-alert">${alertLines}</div>` : '')
-    + (highlight ? highlightHtml(highlight, opts) : headline)
-    // Kept under the highlight too: it carries the observation time and age.
-    + (highlight ? headline : '')
+  const cards = airportCardsHtml(dep, dest, { departureOpen: opts.departureOpen, now: opts.now });
+  const details = (highlight ? headline : '')
     + (aheadLines ? `<div class="glance-lines" data-testid="glance-ahead">${aheadLines}</div>` : '')
-    + (dest ? destinationHtml(dest) : '')
     + (passedLines ? `<div class="glance-lines glance-lines-passed">${passedLines}</div>` : '')
     + (showMapButton
       ? '<button type="button" class="btn-secondary glance-map-btn" data-glance-showmap>'
         + 'Show radar &amp; cells on map</button>'
+      : '');
+  return '<div class="glance-card" data-testid="observed-nutshell">'
+    + (opts.offlineSince ? offlineBannerHtml(opts.offlineSince) : '')
+    + (glance.flight ? flightStripHtml(glance.flight) : '')
+    + (alertLines ? `<div class="glance-lines glance-lines-alert">${alertLines}</div>` : '')
+    + (highlight ? highlightHtml(highlight, opts) : headline)
+    + cards
+    + (details
+      ? `<details class="glance-details" data-glance-details data-testid="glance-details"${opts.detailsOpen ? ' open' : ''}>`
+        + `<summary>${escapeHtml(t('observed.details'))}</summary>`
+        + `<div class="glance-details-body">${details}</div></details>`
       : '')
     + '</div>';
 }
@@ -220,16 +218,18 @@ export function mountNutshell(
       if (focus) handlers.onFocus(focus);
     });
   });
+  const dep = glance.departure ?? null;
   const dest = glance.destination ?? null;
-  el.querySelector<HTMLElement>('[data-dest-focus]')?.addEventListener('click', () => {
-    if (dest?.focus) handlers.onFocus(dest.focus);
-  });
-  el.querySelectorAll<HTMLElement>('[data-dest-cell]').forEach((node) => {
+  el.querySelectorAll<HTMLElement>('[data-card-focus], [data-card-cell]').forEach((node) => {
     node.addEventListener('click', () => {
-      const focus = (dest?.cells ?? [])[Number(node.dataset.destCell)]?.focus;
+      const focus = cardFocus(dep, dest, node.dataset.cardFocus ?? node.dataset.cardCell ?? '');
       if (focus) handlers.onFocus(focus);
     });
   });
+  const details = el.querySelector<HTMLDetailsElement>('[data-glance-details]');
+  details?.addEventListener('toggle', () => handlers.onDetailsToggle?.(details.open));
+  const fold = el.querySelector<HTMLDetailsElement>('[data-card-fold]');
+  fold?.addEventListener('toggle', () => handlers.onDepartureToggle?.(fold.open));
   el.querySelector<HTMLElement>('[data-glance-showmap]')
     ?.addEventListener('click', () => handlers.onShowMap());
 }

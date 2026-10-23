@@ -36,7 +36,7 @@ describe('observed highlight', () => {
     expect(highlightFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(highlightFiles)('%s: strip, alert lines, highlight, ahead, destination, passed (#816)', (name) => {
+  it.each(highlightFiles)('%s: strip, alert lines, highlight, cards, then Details (#881)', (name) => {
     const glance = load(name).glance!;
     const hl = glance.highlight!;
     expect(hl.text).toBeTruthy();
@@ -49,26 +49,27 @@ describe('observed highlight', () => {
     expect(glance.flight).toBeTruthy();
     expect(at(glance.flight!.text)).toBeGreaterThan(-1);
     expect(at(glance.flight!.text)).toBeLessThan(highlightAt);
-    const destAt = html.indexOf('data-testid="glance-destination"');
-    expect(destAt).toBeGreaterThan(-1);
+    const cardsAt = html.indexOf('data-testid="airport-cards"');
+    const detailsAt = html.indexOf('data-testid="glance-details"');
+    expect(cardsAt).toBeGreaterThan(highlightAt);
+    expect(detailsAt).toBeGreaterThan(cardsAt);
+    // Collapsed unless the pilot left it open.
+    expect(html).not.toMatch(/data-testid="glance-details" open/);
     for (const line of glance.lines) {
       const lineAt = at(line.text);
       if (line.alert) {
         // Alert lines sit above the highlight, never folded.
         expect(lineAt).toBeGreaterThan(at(glance.flight!.text));
         expect(lineAt).toBeLessThan(highlightAt);
-      } else if (line.phase === 'arrival') {
-        // The destination block stands in for a non-alert arrival line.
+      } else if (line.phase === 'arrival' || line.phase === 'departure') {
+        // The cards stand in for a non-alert terminal line.
         expect(lineAt).toBe(-1);
       } else {
-        expect(lineAt).toBeGreaterThan(highlightAt);
-        if (line.passed) expect(html.indexOf(`glance-line-${line.phase}`)).toBeGreaterThan(destAt);
-        else expect(html.indexOf(`glance-line-${line.phase}`)).toBeLessThan(destAt);
+        expect(html.indexOf(`glance-line-${line.phase}`)).toBeGreaterThan(detailsAt);
       }
     }
-    // The headline stays (it carries the observation time), under the
-    // highlight.
-    expect(at(glance.headline)).toBeGreaterThan(highlightAt);
+    // The headline moves under Details when the highlight took its slot.
+    expect(html.indexOf('data-testid="glance-headline"')).toBeGreaterThan(detailsAt);
     // Caption with the written time, and the thumbs.
     expect(html).toContain('Experimental, still being calibrated. Thanks for flagging issues.');
     expect(html).toContain('written 08:20Z');
@@ -88,6 +89,8 @@ describe('observed highlight', () => {
     expect(glance.highlight ?? null).toBeNull();
     const html = nutshellHtml(glance, false, { rateable: true });
     expect(html).toContain('data-testid="glance-headline"');
+    // In the highlight's slot, above the cards, not under Details.
+    expect(html.indexOf('data-testid="glance-headline"')).toBeLessThan(html.indexOf('data-testid="airport-cards"'));
     expect(html).not.toContain('data-testid="glance-highlight"');
     expect(html).not.toContain('Experimental');
     expect(html).not.toContain('data-hl-thumb');
@@ -110,7 +113,8 @@ describe('observed highlight', () => {
     const glance = load(highlightFiles[0]).glance!;
     const lines = glance.lines.map((ln) => ln.phase === 'departure'
       ? { ...ln, proxy_caption: 'using ZZPX as proxy · 8 NM NE' } : ln);
-    const html = nutshellHtml({ ...glance, lines }, false);
+    // Without a departure card (an older server) the line itself shows.
+    const html = nutshellHtml({ ...glance, lines, departure: null }, false);
     expect(html).toContain('<span class="glance-proxy">using ZZPX as proxy · 8 NM NE</span>');
     expect(html.match(/glance-proxy/g)).toHaveLength(1);
   });

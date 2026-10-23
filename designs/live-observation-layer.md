@@ -821,10 +821,13 @@ logs `Live glance failed` and leaves both null for that tick.
 
 ### Runway + wind dials (#758)
 
-Departure + destination dials in the glance section: web `#observed-runway-wind`
-inside `#observed-glance-wrapper` (shown when glance lines **or** a dial
-exist), iOS `RunwayWindPairCard` above the ribbon (or above
-`ObservedGlanceCard` in the fallback), spy anchor `winds`. Flight day only:
+Departure + destination dials. Web: since #881 the dial lives inside each
+airport card (`airport-card-view.ts`, `compact`, fixed 128 px, 96 px on a
+phone-width card; solid arrow METAR, ghost TAF at ETD/ETA for both terminals);
+the hidden `#observed-runway-wind` pair, its flag and `runwayWindPairHtml` are
+gone (`runwayWindPair` stays: the mirrored rule). iOS until #882:
+`RunwayWindPairCard` above the ribbon (or above `ObservedGlanceCard` in the
+fallback), spy anchor `winds`. Flight day only:
 both require the live layer. Data is `AirportObservation.runway_wind` from the
 live tick's airports (else the pack's), see
 [metar-taf-route-weather.md](metar-taf-route-weather.md). The departure shows
@@ -877,10 +880,10 @@ same `build_glance` call, so they inherit its "never raises" guard:
   through `strip_eta_text`. They carry no estimate today; the strip keeps a
   future wording from leaking one. `along_route` keeps both.
 - **Agent:** `summarize_live` adds `glance.flight` `{phase, text}`.
-- **Reading order, both clients:** strip → alert lines (and on iOS alert
-  change rows) → highlight or headline → lines not yet `passed` → destination
-  → (iOS) winds, ribbon, Details with the passed lines / (web) passed lines
-  dimmed. **This reverses the 2026-10-09 "highlight above alerts" order**: the
+- **Reading order, both clients** (web superseded by #881 below): strip →
+  alert lines (and on iOS alert change rows) → highlight or headline → lines
+  not yet `passed` → destination → (iOS) winds, ribbon, Details with the
+  passed lines / (web) passed lines dimmed. **This reverses the 2026-10-09 "highlight above alerts" order**: the
   issue's target layout puts alerts second. iOS spy pills gain "Ahead"; the
   highlight caption adds its age, orange past `LiveTime.staleAfter` (30 min).
 - **iOS Cells list on `/live` storms** (#816, second PR): the Observed tab's
@@ -896,7 +899,7 @@ same `build_glance` call, so they inherit its "never raises" guard:
   "no cells". No live layer, no list. The map's Cells toggle still draws the
   raw feed (`RouteCellsModel`, map only now). Rule: anything route-relative is
   computed on the server, clients only word it.
-- **Not done in #816's PRs** (follow-ups): the offline banner, tappable change rows (`storm_ids` is decoded),
+- **Not done in #816's PRs** (follow-ups): the offline banner (web: #881), tappable change rows (`storm_ids` is decoded),
   changes collapsed to a count, phase emphasis beyond the strip, the XCUI
   before/en route/after-landing journey.
 
@@ -939,6 +942,46 @@ clients only draw. Additive and optional throughout.
   not in the agent block before).
 - The airport-level fields (`taf_hours`, `metar_trend`, meter, sky, weather
   words, short wind, crosswind) are in `metar-taf-route-weather.md`.
+
+### Airport cards on the web (#881)
+
+`web/ts/visualization/observed/airport-card-view.ts` draws the agreed card
+(mockup "Airport Card Lab": Now → at ETA, category meter, TAF strip, large
+dial, departure folded after Start) from `glance.departure` /
+`glance.destination` and their `airport` row. **Drawing only:** a missing
+field is left out, never derived (owner's rule: nothing computed on the
+client). Choices:
+
+- **Reading order** (`nutshellHtml`): offline banner → strip → alert lines →
+  highlight or headline → cards (departure then arrival; once `folded`, the
+  arrival then the one-line departure) → "Details" fold (headline under a
+  highlight, lines still ahead, passed lines, map button). Each card stands in
+  for its non-alert terminal line. The fold sits at the end of the glance
+  section, so just above the separate ribbon section (iOS puts it below the
+  ribbon). Change rows stay in the page-level "Since this briefing" banner.
+- **Remembered** in `localStorage` (try/catch, closed when storage fails):
+  Details `observedDetailsExpanded`, the folded departure
+  `observedDepartureOpen:<flight id>`.
+- **Crosswind tone** reads `airport.metar_wind_advisory`, not the block's
+  `wind_advisory` (that one follows `wind_text`, the TAF at ETA when there is
+  one), so the toned figure and its advisory are the same METAR wind.
+- **Alert**: `block.alert` gives the whole card a red left bar (as the old
+  destination block); there is no per-row alert flag for cells/lightning, so
+  those rows stay untoned.
+- **Older server / no airport row**: header from `metar_category`, then the
+  block's `metar_text` / `wind_text` lines. No `glance.departure`: no
+  departure card.
+- **Side by side** from 700 px of section width (container query), stacked
+  below.
+- **Offline banner** ("Offline · showing data from HH:MMZ, N min ago"): the
+  store's `liveOffline`, set when `/live` or the latest-pack poll throws or the
+  browser fires `offline`, cleared by the next successful read; time from
+  `live_updated_at`. Not on a replayed tick.
+- **Fixture**: `web/tests/fixtures/airport_cards.json`, written by
+  `scripts/export_airport_card_fixtures.py` from the server's models (drift
+  test `tests/test_airport_card_fixture.py`); the Playwright spec shifts its
+  times to now and screenshots light/dark, desktop/400 px, before/after the
+  fold.
 
 ## Observed highlight (#697)
 

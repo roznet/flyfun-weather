@@ -48,17 +48,27 @@ describe('observed live fixtures', () => {
     // The text is the server's: not re-worded, not re-ordered, not dropped.
     // Compare on a decoration-free form: the markup escapes `&` and `<`.
     const plain = html.replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    const dep = layer.glance!.departure;
     const dest = layer.glance!.destination;
     for (const line of layer.glance!.lines) {
-      // The destination block stands in for a non-alert arrival line (#816).
+      // The cards stand in for a non-alert terminal line (#816, #881).
       if (dest && line.phase === 'arrival' && !line.alert) continue;
+      if (dep && line.phase === 'departure' && !line.alert) continue;
       expect(plain).toContain(line.text);
     }
-    // #816: the strip and every destination clause, verbatim.
     expect(plain).toContain(layer.glance!.flight!.text);
+    // #881: both cards, from the server's own readings.
+    expect(dep).toBeTruthy();
     expect(dest).toBeTruthy();
-    for (const text of [dest!.metar_text, dest!.taf_text, dest!.cells_text, dest!.wind_text, dest!.lightning_text]) {
-      if (text) expect(plain).toContain(text);
+    for (const block of [dep!, dest!]) {
+      for (const text of [block.cells_text, block.lightning_text]) {
+        if (text) expect(plain).toContain(text);
+      }
+      const a = block.airport;
+      expect(a).toBeTruthy();
+      for (const text of [a!.metar_sky_text, a!.metar_visibility_text, a!.metar_wind_short]) {
+        if (text) expect(plain).toContain(text);
+      }
     }
     expect(html).not.toMatch(/undefined|NaN|\[object/);
   });

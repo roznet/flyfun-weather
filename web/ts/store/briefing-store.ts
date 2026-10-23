@@ -226,6 +226,10 @@ export interface BriefingState {
    *  null until `loadLive` applies one (the latest pack's snapshot already
    *  carries the server-side overlay at load time). */
   live: LiveLayer | null;
+  /** #881: the last live read (`/live` or the latest-pack poll) failed, or
+   *  the browser went offline. The Observed section says it is showing the
+   *  data from `live.live_updated_at`; cleared by the next successful read. */
+  liveOffline: boolean;
   /** Debrief replay (#769): the recorded ticks of the live window (oldest
    *  first; null until loaded), the recap (after the window), the forecast
    *  row the pilot picked from the pack list (null = the recap's default),
@@ -280,6 +284,8 @@ export interface BriefingState {
    *  (#815) → `loadLive()`. No-op unless
    *  the user is viewing the latest pack. */
   syncLatest: () => Promise<void>;
+  /** #881: the browser's own offline / online event. */
+  setLiveOffline: (offline: boolean) => void;
   /** Re-read the recorded ticks (`segments` for the distance × time grid). */
   loadTicks: (segments?: boolean) => Promise<void>;
   /** Load the recap with the server's default forecast pack. */
@@ -460,6 +466,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   emailing: false,
   error: null,
   live: null,
+  liveOffline: false,
   ticks: null,
   recap: null,
   recapForecast: null,
@@ -554,7 +561,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
                       : available.includes('ecmwf') ? 'ecmwf'
                       : available[0];
       }
-      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, live: null, loading: false });
+      set({ currentPack: pack, snapshot, digest, routeAnalyses, routeAdvisories, routeFronts, elevationProfile, altitudeTable, selectedModel, advisoryAltitudeOverride: null, altAdvisories: null, windOverlay: null, showingAlt: false, selectedPointIndex: null, timeOptions: null, live: null, liveOffline: false, loading: false });
       // Auto-load alt advisories if available
       if (pack.has_alt_advisories) {
         get().loadAltAdvisories();
@@ -1037,8 +1044,12 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       live = await api.fetchLive(flightId);
     } catch {
-      return; // Non-critical: the pack's own observations stay on screen.
+      // Non-critical: the pack's own observations stay on screen, under the
+      // Observed section's offline banner (#881).
+      if (get().flight?.id === flightId) set({ liveOffline: true });
+      return;
     }
+    if (get().liveOffline) set({ liveOffline: false });
     // Drop responses for a flight/pack that is no longer the one on screen.
     const now = get();
     if (now.flight?.id !== flightId || now.currentPack?.fetch_timestamp !== packTs || !now.snapshot) return;
@@ -1072,8 +1083,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     try {
       meta = await api.fetchLatestPack(flight.id);
     } catch {
+      if (get().flight?.id === flight.id) set({ liveOffline: true });
       return;
     }
+    if (get().liveOffline) set({ liveOffline: false });
     const now = get();
     if (now.flight?.id !== flight.id || now.currentPack?.fetch_timestamp !== currentPack.fetch_timestamp) return;
     if (!sameInstant(meta.fetch_timestamp, currentPack.fetch_timestamp)) {
@@ -1091,6 +1104,10 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
         || (meta.highlight_updated_at && !sameInstant(meta.highlight_updated_at, highlightApplied))) {
       await get().loadLive();
     }
+  },
+
+  setLiveOffline: (offline) => {
+    if (get().liveOffline !== offline) set({ liveOffline: offline });
   },
 
   loadTicks: async (segments = false) => {

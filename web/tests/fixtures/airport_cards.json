@@ -1,0 +1,1071 @@
+{
+ "t0": "2026-10-23T09:40:00Z",
+ "before": {
+  "departure": {
+   "icao": "EGTF",
+   "name": "Fairoaks",
+   "etd": "2026-10-23T10:00:00Z",
+   "metar_text": "EGTF MVFR (BKN 2,500 ft) · worse since 09:00Z",
+   "metar_category": "MVFR",
+   "metar_time": "2026-10-23T09:30:00Z",
+   "proxy_caption": null,
+   "taf_text": "TAF at ETD VFR, TEMPO MVFR",
+   "taf_category": "VFR",
+   "wind_text": "Wind at ETD 290° 18G28 kt · RWY 24 crosswind 14 kt",
+   "wind_advisory": "amber",
+   "cells_text": "no cells within 30 NM",
+   "cells": [],
+   "lightning_text": "no lightning ≤20 NM",
+   "alert": false,
+   "unavailable": [],
+   "focus": {
+    "kind": "station",
+    "id": "EGTF",
+    "bbox": [
+     -0.859,
+     51.147999999999996,
+     -0.25900000000000006,
+     51.548
+    ],
+    "layers": [
+     "route",
+     "radar",
+     "cells",
+     "lightning",
+     "sigmets"
+    ],
+    "time": null
+   },
+   "airport": {
+    "icao": "EGTF",
+    "name": "Fairoaks",
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": null,
+    "along_track_nm": null,
+    "cross_track_nm": null,
+    "route_end": null,
+    "municipality": null,
+    "nearest_waypoint_icao": "EGTF",
+    "lat": null,
+    "lon": null,
+    "metar_raw": "EGTF 230930Z 29015G25KT 9999 -RA BKN025 12/08 Q1009",
+    "metar_time": "2026-10-23T09:30:00Z",
+    "metar_flight_category": "MVFR",
+    "metar_ceiling_ft": 2500,
+    "metar_visibility_m": 9999,
+    "metar_wind_dir": 290,
+    "metar_wind_speed_kt": 15,
+    "metar_wind_gust_kt": 25,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
+    "metar_weather": [
+     "-RA"
+    ],
+    "metar_temperature_c": null,
+    "metar_dewpoint_c": null,
+    "metar_qnh": null,
+    "metar_report_type": "METAR",
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-23T09:00:00Z",
+    "taf_raw": "TAF EGTF 230500Z 2306/2406 28012KT 9999 SCT035 TEMPO 2309/2313 29018G28KT 6000 -RA BKN018",
+    "taf_issue_time": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_valid_at_eta": true,
+    "taf_flight_category_at_eta": "MVFR",
+    "taf_trend_type": null,
+    "taf_prevailing_category_at_eta": "VFR",
+    "taf_temporary_category_at_eta": "MVFR",
+    "taf_temporary_type": "TEMPO",
+    "taf_significant_weather": [],
+    "taf_wind_dir": 290,
+    "taf_wind_speed_kt": 18,
+    "taf_wind_gust_kt": 28,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null,
+    "taf_applicable_lines": [],
+    "taf_hours": [
+     {
+      "time": "2026-10-23T09:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T10:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": true
+     },
+     {
+      "time": "2026-10-23T11:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T12:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T13:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     }
+    ],
+    "metar_wind_advisory": "amber",
+    "metar_best_runway_id": "24",
+    "metar_crosswind_kt": null,
+    "metar_headwind_kt": null,
+    "taf_wind_advisory": null,
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_headwind_kt": null,
+    "has_metar": true,
+    "has_taf": true,
+    "eta_hour_offset": null,
+    "runway_wind": {
+     "icao": "EGTF",
+     "runways": [
+      {
+       "id": "06/24",
+       "length_ft": 2664,
+       "surface": "ASPH",
+       "hard": true,
+       "ends": [
+        {
+         "ident": "06",
+         "heading_true": 58.0
+        },
+        {
+         "ident": "24",
+         "heading_true": 238.0
+        }
+       ]
+      }
+     ],
+     "winds": [
+      {
+       "wind": {
+        "source": "metar",
+        "time": "2026-10-23T09:30:00Z",
+        "direction_true": 290,
+        "speed_kt": 15,
+        "gust_kt": 25,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -9.2,
+         "crosswind_kt": -11.8,
+         "side": "left",
+         "gust_headwind_kt": -15.4,
+         "gust_crosswind_kt": -19.7,
+         "max_crosswind_kt": 19.7
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 9.2,
+         "crosswind_kt": 11.8,
+         "side": "right",
+         "gust_headwind_kt": 15.4,
+         "gust_crosswind_kt": 19.7,
+         "max_crosswind_kt": 19.7
+        }
+       ],
+       "best_end": "24",
+       "advisory": "amber"
+      },
+      {
+       "wind": {
+        "source": "taf",
+        "time": "2026-10-23T10:00:00Z",
+        "direction_true": 290,
+        "speed_kt": 18,
+        "gust_kt": 28,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -11.1,
+         "crosswind_kt": -14.2,
+         "side": "left",
+         "gust_headwind_kt": -17.2,
+         "gust_crosswind_kt": -22.1,
+         "max_crosswind_kt": 22.1
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 11.1,
+         "crosswind_kt": 14.2,
+         "side": "right",
+         "gust_headwind_kt": 17.2,
+         "gust_crosswind_kt": 22.1,
+         "max_crosswind_kt": 22.1
+        }
+       ],
+       "best_end": "24",
+       "advisory": "amber"
+      }
+     ]
+    },
+    "metar_proxy": null,
+    "taf_proxy": null,
+    "metar_trend": "worse",
+    "metar_ceiling_meter": 0.688,
+    "metar_visibility_meter": 1.0,
+    "metar_visibility_text": "10 km+",
+    "metar_sky_text": "BKN 2,500 ft",
+    "metar_cavok": false,
+    "metar_wind_short": "290/15G25",
+    "metar_weather_words": [
+     {
+      "code": "-RA",
+      "text": "Light rain",
+      "icon": "rain"
+     }
+    ],
+    "metar_crosswind": {
+     "runway": "24",
+     "side": "right",
+     "kt": 12,
+     "gust_kt": 20,
+     "text": "12G20 kt"
+    },
+    "proxy_caption": null
+   },
+   "folded": false,
+   "folded_at": null,
+   "folded_source": null,
+   "folded_text": null
+  },
+  "destination": {
+   "icao": "EGLF",
+   "name": "Farnborough",
+   "eta": "2026-10-23T11:00:00Z",
+   "metar_text": "EGLF VFR · VCTS",
+   "metar_category": "VFR",
+   "metar_time": "2026-10-23T09:20:00Z",
+   "proxy_caption": null,
+   "taf_text": "TAF at ETA MVFR, TEMPO IFR TSRA",
+   "taf_category": "MVFR",
+   "wind_text": "Wind at ETA 270° 14G24 kt · RWY 24 crosswind 6 kt",
+   "wind_advisory": "green",
+   "cells_text": "nearest cell 9 NM SW (48 dBZ, lightning), closing 6 kt",
+   "cells": [
+    {
+     "id": "core41-zz1",
+     "text": "9 NM SW · 48 dBZ, lightning · closing 6 kt",
+     "focus": {
+      "kind": "storm",
+      "id": "core41-zz1",
+      "bbox": [
+       -1.2,
+       51.0,
+       -0.6000000000000001,
+       51.400000000000006
+      ],
+      "layers": [
+       "route",
+       "radar",
+       "cells"
+      ],
+      "time": null
+     }
+    }
+   ],
+   "lightning_text": "lightning ≤20 NM (4 flashes, nearest 9 NM)",
+   "alert": false,
+   "unavailable": [],
+   "focus": {
+    "kind": "station",
+    "id": "EGLF",
+    "bbox": [
+     -1.076,
+     51.076,
+     -0.47600000000000003,
+     51.476000000000006
+    ],
+    "layers": [
+     "route",
+     "radar",
+     "cells",
+     "lightning",
+     "sigmets"
+    ],
+    "time": null
+   },
+   "airport": {
+    "icao": "EGLF",
+    "name": "Farnborough",
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": null,
+    "along_track_nm": null,
+    "cross_track_nm": null,
+    "route_end": null,
+    "municipality": null,
+    "nearest_waypoint_icao": "EGLF",
+    "lat": null,
+    "lon": null,
+    "metar_raw": "EGLF 230920Z 27012KT 9999 VCTS SCT035CB 13/09 Q1010",
+    "metar_time": "2026-10-23T09:20:00Z",
+    "metar_flight_category": "VFR",
+    "metar_ceiling_ft": null,
+    "metar_visibility_m": 9999,
+    "metar_wind_dir": 270,
+    "metar_wind_speed_kt": 12,
+    "metar_wind_gust_kt": null,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
+    "metar_weather": [
+     "VCTS"
+    ],
+    "metar_temperature_c": null,
+    "metar_dewpoint_c": null,
+    "metar_qnh": null,
+    "metar_report_type": "SPECI",
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-23T08:50:00Z",
+    "taf_raw": "TAF EGLF 230500Z 2306/2406 27012KT 9999 BKN020 TEMPO 2310/2314 TSRA BKN008CB",
+    "taf_issue_time": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_valid_at_eta": true,
+    "taf_flight_category_at_eta": "IFR",
+    "taf_trend_type": null,
+    "taf_prevailing_category_at_eta": "MVFR",
+    "taf_temporary_category_at_eta": "IFR",
+    "taf_temporary_type": "TEMPO",
+    "taf_significant_weather": [],
+    "taf_wind_dir": 270,
+    "taf_wind_speed_kt": 14,
+    "taf_wind_gust_kt": 24,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null,
+    "taf_applicable_lines": [],
+    "taf_hours": [
+     {
+      "time": "2026-10-23T09:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T10:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T11:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": true
+     },
+     {
+      "time": "2026-10-23T12:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T13:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T14:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     }
+    ],
+    "metar_wind_advisory": "green",
+    "metar_best_runway_id": "24",
+    "metar_crosswind_kt": null,
+    "metar_headwind_kt": null,
+    "taf_wind_advisory": null,
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_headwind_kt": null,
+    "has_metar": true,
+    "has_taf": true,
+    "eta_hour_offset": null,
+    "runway_wind": {
+     "icao": "EGLF",
+     "runways": [
+      {
+       "id": "06/24",
+       "length_ft": 8005,
+       "surface": "ASPH",
+       "hard": true,
+       "ends": [
+        {
+         "ident": "06",
+         "heading_true": 62.0
+        },
+        {
+         "ident": "24",
+         "heading_true": 242.0
+        }
+       ]
+      }
+     ],
+     "winds": [
+      {
+       "wind": {
+        "source": "metar",
+        "time": "2026-10-23T09:20:00Z",
+        "direction_true": 270,
+        "speed_kt": 12,
+        "gust_kt": null,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -10.6,
+         "crosswind_kt": -5.6,
+         "side": "left",
+         "gust_headwind_kt": null,
+         "gust_crosswind_kt": null,
+         "max_crosswind_kt": 5.6
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 10.6,
+         "crosswind_kt": 5.6,
+         "side": "right",
+         "gust_headwind_kt": null,
+         "gust_crosswind_kt": null,
+         "max_crosswind_kt": 5.6
+        }
+       ],
+       "best_end": "24",
+       "advisory": "green"
+      },
+      {
+       "wind": {
+        "source": "taf",
+        "time": "2026-10-23T11:00:00Z",
+        "direction_true": 270,
+        "speed_kt": 14,
+        "gust_kt": 24,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -12.4,
+         "crosswind_kt": -6.6,
+         "side": "left",
+         "gust_headwind_kt": -21.2,
+         "gust_crosswind_kt": -11.3,
+         "max_crosswind_kt": 11.3
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 12.4,
+         "crosswind_kt": 6.6,
+         "side": "right",
+         "gust_headwind_kt": 21.2,
+         "gust_crosswind_kt": 11.3,
+         "max_crosswind_kt": 11.3
+        }
+       ],
+       "best_end": "24",
+       "advisory": "green"
+      }
+     ]
+    },
+    "metar_proxy": null,
+    "taf_proxy": null,
+    "metar_trend": null,
+    "metar_ceiling_meter": 1.0,
+    "metar_visibility_meter": 1.0,
+    "metar_visibility_text": "10 km+",
+    "metar_sky_text": "SCT 3,500 ft CB",
+    "metar_cavok": false,
+    "metar_wind_short": "270/12",
+    "metar_weather_words": [
+     {
+      "code": "VCTS",
+      "text": "Thunder nearby",
+      "icon": "thunder"
+     }
+    ],
+    "metar_crosswind": {
+     "runway": "24",
+     "side": "right",
+     "kt": 6,
+     "gust_kt": null,
+     "text": "6 kt"
+    },
+    "proxy_caption": null
+   }
+  }
+ },
+ "after": {
+  "departure": {
+   "icao": "EGTF",
+   "name": "Fairoaks",
+   "etd": "2026-10-23T10:04:00Z",
+   "metar_text": "EGTF MVFR (BKN 2,500 ft) · worse since 09:00Z",
+   "metar_category": "MVFR",
+   "metar_time": "2026-10-23T09:30:00Z",
+   "proxy_caption": null,
+   "taf_text": "TAF at ETD VFR, TEMPO MVFR",
+   "taf_category": "VFR",
+   "wind_text": "Wind at ETD 290° 18G28 kt · RWY 24 crosswind 14 kt",
+   "wind_advisory": "amber",
+   "cells_text": "no cells within 30 NM",
+   "cells": [],
+   "lightning_text": "no lightning ≤20 NM",
+   "alert": false,
+   "unavailable": [],
+   "focus": {
+    "kind": "station",
+    "id": "EGTF",
+    "bbox": [
+     -0.859,
+     51.147999999999996,
+     -0.25900000000000006,
+     51.548
+    ],
+    "layers": [
+     "route",
+     "radar",
+     "cells",
+     "lightning",
+     "sigmets"
+    ],
+    "time": null
+   },
+   "airport": {
+    "icao": "EGTF",
+    "name": "Fairoaks",
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": null,
+    "along_track_nm": null,
+    "cross_track_nm": null,
+    "route_end": null,
+    "municipality": null,
+    "nearest_waypoint_icao": "EGTF",
+    "lat": null,
+    "lon": null,
+    "metar_raw": "EGTF 230930Z 29015G25KT 9999 -RA BKN025 12/08 Q1009",
+    "metar_time": "2026-10-23T09:30:00Z",
+    "metar_flight_category": "MVFR",
+    "metar_ceiling_ft": 2500,
+    "metar_visibility_m": 9999,
+    "metar_wind_dir": 290,
+    "metar_wind_speed_kt": 15,
+    "metar_wind_gust_kt": 25,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
+    "metar_weather": [
+     "-RA"
+    ],
+    "metar_temperature_c": null,
+    "metar_dewpoint_c": null,
+    "metar_qnh": null,
+    "metar_report_type": "METAR",
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-23T09:00:00Z",
+    "taf_raw": "TAF EGTF 230500Z 2306/2406 28012KT 9999 SCT035 TEMPO 2309/2313 29018G28KT 6000 -RA BKN018",
+    "taf_issue_time": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_valid_at_eta": true,
+    "taf_flight_category_at_eta": "MVFR",
+    "taf_trend_type": null,
+    "taf_prevailing_category_at_eta": "VFR",
+    "taf_temporary_category_at_eta": "MVFR",
+    "taf_temporary_type": "TEMPO",
+    "taf_significant_weather": [],
+    "taf_wind_dir": 290,
+    "taf_wind_speed_kt": 18,
+    "taf_wind_gust_kt": 28,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null,
+    "taf_applicable_lines": [],
+    "taf_hours": [
+     {
+      "time": "2026-10-23T09:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T10:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": true
+     },
+     {
+      "time": "2026-10-23T11:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T12:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": "MVFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T13:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     }
+    ],
+    "metar_wind_advisory": "amber",
+    "metar_best_runway_id": "24",
+    "metar_crosswind_kt": null,
+    "metar_headwind_kt": null,
+    "taf_wind_advisory": null,
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_headwind_kt": null,
+    "has_metar": true,
+    "has_taf": true,
+    "eta_hour_offset": null,
+    "runway_wind": {
+     "icao": "EGTF",
+     "runways": [
+      {
+       "id": "06/24",
+       "length_ft": 2664,
+       "surface": "ASPH",
+       "hard": true,
+       "ends": [
+        {
+         "ident": "06",
+         "heading_true": 58.0
+        },
+        {
+         "ident": "24",
+         "heading_true": 238.0
+        }
+       ]
+      }
+     ],
+     "winds": [
+      {
+       "wind": {
+        "source": "metar",
+        "time": "2026-10-23T09:30:00Z",
+        "direction_true": 290,
+        "speed_kt": 15,
+        "gust_kt": 25,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -9.2,
+         "crosswind_kt": -11.8,
+         "side": "left",
+         "gust_headwind_kt": -15.4,
+         "gust_crosswind_kt": -19.7,
+         "max_crosswind_kt": 19.7
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 9.2,
+         "crosswind_kt": 11.8,
+         "side": "right",
+         "gust_headwind_kt": 15.4,
+         "gust_crosswind_kt": 19.7,
+         "max_crosswind_kt": 19.7
+        }
+       ],
+       "best_end": "24",
+       "advisory": "amber"
+      },
+      {
+       "wind": {
+        "source": "taf",
+        "time": "2026-10-23T10:00:00Z",
+        "direction_true": 290,
+        "speed_kt": 18,
+        "gust_kt": 28,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -11.1,
+         "crosswind_kt": -14.2,
+         "side": "left",
+         "gust_headwind_kt": -17.2,
+         "gust_crosswind_kt": -22.1,
+         "max_crosswind_kt": 22.1
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 11.1,
+         "crosswind_kt": 14.2,
+         "side": "right",
+         "gust_headwind_kt": 17.2,
+         "gust_crosswind_kt": 22.1,
+         "max_crosswind_kt": 22.1
+        }
+       ],
+       "best_end": "24",
+       "advisory": "amber"
+      }
+     ]
+    },
+    "metar_proxy": null,
+    "taf_proxy": null,
+    "metar_trend": "worse",
+    "metar_ceiling_meter": 0.688,
+    "metar_visibility_meter": 1.0,
+    "metar_visibility_text": "10 km+",
+    "metar_sky_text": "BKN 2,500 ft",
+    "metar_cavok": false,
+    "metar_wind_short": "290/15G25",
+    "metar_weather_words": [
+     {
+      "code": "-RA",
+      "text": "Light rain",
+      "icon": "rain"
+     }
+    ],
+    "metar_crosswind": {
+     "runway": "24",
+     "side": "right",
+     "kt": 12,
+     "gust_kt": 20,
+     "text": "12G20 kt"
+    },
+    "proxy_caption": null
+   },
+   "folded": true,
+   "folded_at": "2026-10-23T10:04:00Z",
+   "folded_source": "takeoff",
+   "folded_text": "EGTF 290/15G25 · RWY 24 · departed 10:04Z"
+  },
+  "destination": {
+   "icao": "EGLF",
+   "name": "Farnborough",
+   "eta": "2026-10-23T11:00:00Z",
+   "metar_text": "EGLF VFR · VCTS",
+   "metar_category": "VFR",
+   "metar_time": "2026-10-23T09:20:00Z",
+   "proxy_caption": null,
+   "taf_text": "TAF at ETA MVFR, TEMPO IFR TSRA",
+   "taf_category": "MVFR",
+   "wind_text": "Wind at ETA 270° 14G24 kt · RWY 24 crosswind 6 kt",
+   "wind_advisory": "green",
+   "cells_text": "nearest cell 9 NM SW (48 dBZ, lightning), closing 6 kt",
+   "cells": [
+    {
+     "id": "core41-zz1",
+     "text": "9 NM SW · 48 dBZ, lightning · closing 6 kt",
+     "focus": {
+      "kind": "storm",
+      "id": "core41-zz1",
+      "bbox": [
+       -1.2,
+       51.0,
+       -0.6000000000000001,
+       51.400000000000006
+      ],
+      "layers": [
+       "route",
+       "radar",
+       "cells"
+      ],
+      "time": null
+     }
+    }
+   ],
+   "lightning_text": "lightning ≤20 NM (4 flashes, nearest 9 NM)",
+   "alert": false,
+   "unavailable": [],
+   "focus": {
+    "kind": "station",
+    "id": "EGLF",
+    "bbox": [
+     -1.076,
+     51.076,
+     -0.47600000000000003,
+     51.476000000000006
+    ],
+    "layers": [
+     "route",
+     "radar",
+     "cells",
+     "lightning",
+     "sigmets"
+    ],
+    "time": null
+   },
+   "airport": {
+    "icao": "EGLF",
+    "name": "Farnborough",
+    "distance_from_route_nm": 0.0,
+    "enroute_distance_nm": null,
+    "along_track_nm": null,
+    "cross_track_nm": null,
+    "route_end": null,
+    "municipality": null,
+    "nearest_waypoint_icao": "EGLF",
+    "lat": null,
+    "lon": null,
+    "metar_raw": "EGLF 230920Z 27012KT 9999 VCTS SCT035CB 13/09 Q1010",
+    "metar_time": "2026-10-23T09:20:00Z",
+    "metar_flight_category": "VFR",
+    "metar_ceiling_ft": null,
+    "metar_visibility_m": 9999,
+    "metar_wind_dir": 270,
+    "metar_wind_speed_kt": 12,
+    "metar_wind_gust_kt": null,
+    "metar_wind_variable_from": null,
+    "metar_wind_variable_to": null,
+    "metar_weather": [
+     "VCTS"
+    ],
+    "metar_temperature_c": null,
+    "metar_dewpoint_c": null,
+    "metar_qnh": null,
+    "metar_report_type": "SPECI",
+    "metar_previous_flight_category": "VFR",
+    "metar_previous_time": "2026-10-23T08:50:00Z",
+    "taf_raw": "TAF EGLF 230500Z 2306/2406 27012KT 9999 BKN020 TEMPO 2310/2314 TSRA BKN008CB",
+    "taf_issue_time": null,
+    "taf_valid_from": null,
+    "taf_valid_to": null,
+    "taf_valid_at_eta": true,
+    "taf_flight_category_at_eta": "IFR",
+    "taf_trend_type": null,
+    "taf_prevailing_category_at_eta": "MVFR",
+    "taf_temporary_category_at_eta": "IFR",
+    "taf_temporary_type": "TEMPO",
+    "taf_significant_weather": [],
+    "taf_wind_dir": 270,
+    "taf_wind_speed_kt": 14,
+    "taf_wind_gust_kt": 24,
+    "taf_wind_variable_from": null,
+    "taf_wind_variable_to": null,
+    "taf_applicable_lines": [],
+    "taf_hours": [
+     {
+      "time": "2026-10-23T09:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T10:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T11:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": true
+     },
+     {
+      "time": "2026-10-23T12:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T13:00:00Z",
+      "prevailing_category": "MVFR",
+      "temporary_category": "IFR",
+      "temporary_type": "TEMPO",
+      "is_eta": false
+     },
+     {
+      "time": "2026-10-23T14:00:00Z",
+      "prevailing_category": "VFR",
+      "temporary_category": null,
+      "temporary_type": null,
+      "is_eta": false
+     }
+    ],
+    "metar_wind_advisory": "green",
+    "metar_best_runway_id": "24",
+    "metar_crosswind_kt": null,
+    "metar_headwind_kt": null,
+    "taf_wind_advisory": null,
+    "taf_best_runway_id": null,
+    "taf_crosswind_kt": null,
+    "taf_headwind_kt": null,
+    "has_metar": true,
+    "has_taf": true,
+    "eta_hour_offset": null,
+    "runway_wind": {
+     "icao": "EGLF",
+     "runways": [
+      {
+       "id": "06/24",
+       "length_ft": 8005,
+       "surface": "ASPH",
+       "hard": true,
+       "ends": [
+        {
+         "ident": "06",
+         "heading_true": 62.0
+        },
+        {
+         "ident": "24",
+         "heading_true": 242.0
+        }
+       ]
+      }
+     ],
+     "winds": [
+      {
+       "wind": {
+        "source": "metar",
+        "time": "2026-10-23T09:20:00Z",
+        "direction_true": 270,
+        "speed_kt": 12,
+        "gust_kt": null,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -10.6,
+         "crosswind_kt": -5.6,
+         "side": "left",
+         "gust_headwind_kt": null,
+         "gust_crosswind_kt": null,
+         "max_crosswind_kt": 5.6
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 10.6,
+         "crosswind_kt": 5.6,
+         "side": "right",
+         "gust_headwind_kt": null,
+         "gust_crosswind_kt": null,
+         "max_crosswind_kt": 5.6
+        }
+       ],
+       "best_end": "24",
+       "advisory": "green"
+      },
+      {
+       "wind": {
+        "source": "taf",
+        "time": "2026-10-23T11:00:00Z",
+        "direction_true": 270,
+        "speed_kt": 14,
+        "gust_kt": 24,
+        "variable": false,
+        "variable_from": null,
+        "variable_to": null,
+        "calm": false
+       },
+       "ends": [
+        {
+         "ident": "06",
+         "headwind_kt": -12.4,
+         "crosswind_kt": -6.6,
+         "side": "left",
+         "gust_headwind_kt": -21.2,
+         "gust_crosswind_kt": -11.3,
+         "max_crosswind_kt": 11.3
+        },
+        {
+         "ident": "24",
+         "headwind_kt": 12.4,
+         "crosswind_kt": 6.6,
+         "side": "right",
+         "gust_headwind_kt": 21.2,
+         "gust_crosswind_kt": 11.3,
+         "max_crosswind_kt": 11.3
+        }
+       ],
+       "best_end": "24",
+       "advisory": "green"
+      }
+     ]
+    },
+    "metar_proxy": null,
+    "taf_proxy": null,
+    "metar_trend": null,
+    "metar_ceiling_meter": 1.0,
+    "metar_visibility_meter": 1.0,
+    "metar_visibility_text": "10 km+",
+    "metar_sky_text": "SCT 3,500 ft CB",
+    "metar_cavok": false,
+    "metar_wind_short": "270/12",
+    "metar_weather_words": [
+     {
+      "code": "VCTS",
+      "text": "Thunder nearby",
+      "icon": "thunder"
+     }
+    ],
+    "metar_crosswind": {
+     "runway": "24",
+     "side": "right",
+     "kt": 6,
+     "gust_kt": null,
+     "text": "6 kt"
+    },
+    "proxy_caption": null
+   }
+  }
+ }
+}

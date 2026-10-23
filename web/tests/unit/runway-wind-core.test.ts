@@ -28,7 +28,7 @@ import {
   windMark,
   type Pt,
 } from '../../ts/visualization/runway-wind/runway-wind-core';
-import { runwayWindPairHtml, runwayWindSvg } from '../../ts/visualization/runway-wind/runway-wind-view';
+import { runwayWindSvg } from '../../ts/visualization/runway-wind/runway-wind-view';
 import type {
   AirportObservation,
   EndComponents,
@@ -278,9 +278,6 @@ describe('the departure / destination pair', () => {
     expect(dials[0].metarStation).toBe('ZZPX');
     expect(dials[0].proxyCaption).toBe('using ZZPX as proxy · 8 NM NE');
     expect(dials[1].metarStation).toBeNull();
-    const html = runwayWindPairHtml(dials);
-    expect(html).toContain('METAR ZZPX ');
-    expect(html).toContain('<div class="rw-proxy">using ZZPX as proxy · 8 NM NE</div>');
   });
 
   it('is empty when no airport has a picture (older server)', () => {
@@ -297,11 +294,5 @@ describe('the departure / destination pair', () => {
       expect(svg).toMatch(/^<svg /);
       expect(svg).not.toMatch(/NaN|undefined/);
     }
-    const html = runwayWindPairHtml(dials);
-    expect(html).toContain('data-rw-role="DEP"');
-    expect(html).toContain('data-rw-role="ARR"');
-    expect(html).toContain('data-rw-line="ghost"');
-    expect(html).not.toMatch(/NaN|undefined|\[object/);
-    expect(runwayWindPairHtml([])).toBe('');
   });
 });

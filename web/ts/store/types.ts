@@ -751,6 +751,58 @@ export interface AirportObservation {
   /** #767 — server-built gray line for a proxied field ("using EGLL as proxy ·
    *  8 NM NE"); null otherwise. */
   proxy_caption?: string | null;
+  // --- #880: the airport card's readings, all server-computed. Absent on
+  // older servers; the card leaves a missing one out rather than derive it.
+  /** The TAF hour by hour: the card's strip. Empty without a TAF. */
+  taf_hours?: TafHour[];
+  /** "better" / "worse" against `metar_previous_flight_category`. */
+  metar_trend?: 'better' | 'worse' | null;
+  /** The dot on the four equal bands LIFR | IFR | MVFR | VFR, 0..1. */
+  metar_ceiling_meter?: number | null;
+  metar_visibility_meter?: number | null;
+  /** "BKN 1,200 ft", "CAVOK", "VV 100 ft". */
+  metar_sky_text?: string | null;
+  /** True → sun icon, false → cloud icon. */
+  metar_cavok?: boolean;
+  /** "10 km+", "6 km", "800 m". */
+  metar_visibility_text?: string | null;
+  /** "290/15G25", "VRB 03", "Calm". */
+  metar_wind_short?: string | null;
+  metar_weather_words?: WeatherWord[];
+  /** The METAR wind's crosswind on its best runway end; null on `/live/at`. */
+  metar_crosswind?: CrosswindReading | null;
+}
+
+/** One TAF hour (#880, `models/observations.py::TafHour`). */
+export interface TafHour {
+  /** The hour's start. */
+  time: string;
+  prevailing_category: string | null;
+  /** The worst TEMPO/PROB group, only when worse than prevailing. */
+  temporary_category?: string | null;
+  temporary_type?: string | null;
+  /** The ETA hour (the ETD's for the departure): outlined. */
+  is_eta: boolean;
+}
+
+/** A METAR present-weather group in words (#880). */
+export interface WeatherWord {
+  code: string;
+  text: string;
+  /** thunder, hail, snow, freezing, showers, rain, drizzle, fog, mist, haze,
+   *  smoke, dust, squall, funnel, other. */
+  icon: string;
+}
+
+/** The crosswind on the best runway end (#880). */
+export interface CrosswindReading {
+  runway: string;
+  /** Where it comes from: "left" / "right" / "" (down the runway). */
+  side: string;
+  kt: number;
+  gust_kt?: number | null;
+  /** "10G16 kt". */
+  text: string;
 }
 
 /** #767 (server: models/observations.py ObsProxy). */
@@ -1359,6 +1411,8 @@ export interface LiveGlance {
   flight?: LiveGlanceFlight | null;
   /** "Destination at your ETA" (#816); absent on an older server. */
   destination?: LiveGlanceDestination | null;
+  /** The departure card's block (#880); absent on an older server. */
+  departure?: LiveGlanceDeparture | null;
   /** The model-written one-glance highlight (#697); null/absent until the
    *  first generation lands, after a rejected generation and after arrival —
    *  show `headline` in its place then. */
@@ -1412,6 +1466,21 @@ export interface LiveGlanceDestination {
   alert?: boolean;
   unavailable?: string[];
   focus?: LiveFocus | null;
+  /** The field as the card reads it (#880): its own row, or with its proxy
+   *  station's METAR/TAF laid in. Never pick `route_observations` rows. */
+  airport?: AirportObservation | null;
+}
+
+/** The departure card's block (#880), `models/live.py::LiveGlanceDeparture`:
+ *  the destination's twin read at the ETD, plus the fold. */
+export interface LiveGlanceDeparture extends Omit<LiveGlanceDestination, 'eta'> {
+  etd?: string | null;
+  /** The departure is behind the flight, by evidence (never the plan). */
+  folded?: boolean;
+  folded_at?: string | null;
+  folded_source?: 'takeoff' | 'fixes' | null;
+  /** "LFPN 290/15G25 · RWY 25R · departed ~10:09Z"; null while unfolded. */
+  folded_text?: string | null;
 }
 
 /** `glance.highlight` as `/live` serves it (the server's gate is stripped).

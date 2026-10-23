@@ -380,6 +380,26 @@ export interface RunwayWindDial {
   proxyCaption: string | null;
 }
 
+/** One airport's dial: the METAR now, plus the TAF at ETA (ETD for the
+ *  departure's airport card) as the ghost when `ghost` is set. */
+export function runwayWindDial(
+  role: 'DEP' | 'ARR',
+  icao: string,
+  airport: AirportObservation | null | undefined,
+  ghost: boolean,
+): RunwayWindDial {
+  const picture = airport?.runway_wind ?? null;
+  return {
+    role,
+    icao: icao.toUpperCase(),
+    picture,
+    primary: windOf(picture, 'metar'),
+    ghost: ghost ? windOf(picture, 'taf') : null,
+    metarStation: airport?.metar_proxy?.icao ?? null,
+    proxyCaption: airport?.proxy_caption ?? null,
+  };
+}
+
 /** The departure + destination dials, or [] when neither airport has a
  *  picture (an older server: the section renders as before). */
 export function runwayWindPair(
@@ -391,17 +411,7 @@ export function runwayWindPair(
   const dials: RunwayWindDial[] = [];
   const add = (role: 'DEP' | 'ARR', icao: string | null | undefined) => {
     if (!icao) return;
-    const airport = find(icao);
-    const picture = airport?.runway_wind ?? null;
-    dials.push({
-      role,
-      icao: icao.toUpperCase(),
-      picture,
-      primary: windOf(picture, 'metar'),
-      ghost: role === 'ARR' ? windOf(picture, 'taf') : null,
-      metarStation: airport?.metar_proxy?.icao ?? null,
-      proxyCaption: airport?.proxy_caption ?? null,
-    });
+    dials.push(runwayWindDial(role, icao, find(icao), role === 'ARR'));
   };
   add('DEP', departure);
   if (destination && destination.toUpperCase() !== (departure ?? '').toUpperCase()) add('ARR', destination);

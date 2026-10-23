@@ -34,8 +34,6 @@ import { getMetric, renderCompactThresholdStrip } from './helpers/metrics-helper
 import { hideMetricInfo, initInfoPopup, showMetricInfo, showPopupContent } from './components/info-popup';
 import { highlightRatingKey, mountNutshell } from './visualization/observed/nutshell-view';
 import { mountRibbon, stormDetailHtml } from './visualization/observed/ribbon-view';
-import { runwayWindPair } from './visualization/runway-wind/runway-wind-core';
-import { runwayWindPairHtml } from './visualization/runway-wind/runway-wind-view';
 import { openFlexibilityExplainer } from './components/flexibility-explainer';
 import { CrossSectionRenderer } from './visualization/cross-section/renderer';
 import type { LayerGroup, VizRouteData } from './visualization/types';
@@ -2286,10 +2284,21 @@ async function init(): Promise<void> {
    *  (session-only, as for digests): a 10-min poll re-renders the card. */
   const ratedHighlights = new Set<string>();
 
-  // #758 dials are hidden until the card carries more than the two dials;
-  // the data still ships on every corridor airport. Flip to bring them back.
-  const SHOW_RUNWAY_WIND_DIALS = false;
-  let lastRunwayWindHtml: string | null = null;
+  // #881: the "Details" fold and each flight's folded departure are
+  // remembered (a poll re-renders the card). Storage can throw (private
+  // mode, blocked site data): then they simply start closed.
+  const DETAILS_OPEN_KEY = 'observedDetailsExpanded';
+  const departureOpenKey = (flightId: string) => `observedDepartureOpen:${flightId}`;
+  const readFlag = (key: string): boolean => {
+    try { return localStorage.getItem(key) === '1'; } catch { return false; }
+  };
+  const writeFlag = (key: string, on: boolean): void => {
+    try {
+      if (on) localStorage.setItem(key, '1');
+      else localStorage.removeItem(key);
+    } catch { /* not remembered */ }
+  };
+
   function renderObservedLive(state: BriefingState): void {
     // #769: while a recorded tick is on screen, every Observed renderer reads
     // the tick; the live poll keeps updating `state.live` underneath.
@@ -2302,26 +2311,8 @@ async function init(): Promise<void> {
     const ribbonEl = document.getElementById('observed-ribbon-section');
 
     const hasGlance = !!glance && (glance.lines ?? []).length > 0;
-    // #758: departure + destination runway/wind dials. Flight day only (the
-    // live layer exists); its own tick's airports, else the pack's.
-    const flightWaypoints = state.flight?.waypoints ?? [];
-    const windDials = SHOW_RUNWAY_WIND_DIALS && liveView
-      ? runwayWindPair(
-        liveView.route_observations?.airports ?? state.snapshot?.route_observations?.airports,
-        flightWaypoints[0], flightWaypoints.length > 1 ? flightWaypoints[flightWaypoints.length - 1] : null,
-      )
-      : [];
-    if (glanceWrapper) glanceWrapper.style.display = hasGlance || windDials.length ? '' : 'none';
+    if (glanceWrapper) glanceWrapper.style.display = hasGlance ? '' : 'none';
     if (glanceEl && !hasGlance) glanceEl.innerHTML = '';
-    const windEl = document.getElementById('observed-runway-wind');
-    if (windEl) {
-      const html = runwayWindPairHtml(windDials);
-      // Unchanged tick: keep the DOM, so an open "All runways" stays open.
-      if (lastRunwayWindHtml !== html) {
-        windEl.innerHTML = html;
-        lastRunwayWindHtml = html;
-      }
-    }
     if (hasGlance && glanceEl && glance) {
       const live = liveView!;
       const ratedKey = glance.highlight ? highlightRatingKey(live.flight_id, glance.highlight) : null;
@@ -2349,7 +2340,18 @@ async function init(): Promise<void> {
           });
           ratedHighlights.add(highlightRatingKey(live.flight_id, highlight));
         },
-      }, { highlightRated: ratedKey != null && ratedHighlights.has(ratedKey) });
+        onDetailsToggle: (open) => writeFlag(DETAILS_OPEN_KEY, open),
+        onDepartureToggle: (open) => writeFlag(departureOpenKey(live.flight_id), open),
+      }, {
+        highlightRated: ratedKey != null && ratedHighlights.has(ratedKey),
+        detailsOpen: readFlag(DETAILS_OPEN_KEY),
+        departureOpen: readFlag(departureOpenKey(live.flight_id)),
+        // #881: the last read failed (or the browser is offline). A replayed
+        // tick is a recording: no banner there.
+        offlineSince: !isReplaying(state.replay) && (state.liveOffline || navigator.onLine === false)
+          ? live.live_updated_at ?? glance.as_of
+          : null,
+      });
       // Fill the "N min ago" the card leaves empty; the poll re-ages it after.
       refreshAges();
     }
@@ -2677,6 +2679,7 @@ async function init(): Promise<void> {
     if (
       observedLive(state.replay, state.live) !== observedLive(prev.replay, prev.live)
       || observedNow !== !!prev.snapshot?.observed_conditions
+      || state.liveOffline !== prev.liveOffline
     ) {
       renderObservedLive(state);
     }
@@ -3263,6 +3266,10 @@ async function init(): Promise<void> {
     }
     if (!liveVisibilityWired) {
       liveVisibilityWired = true;
+      // #881: the offline banner follows the browser too; back online, read
+      // at once (a success clears it).
+      window.addEventListener('offline', () => store.getState().setLiveOffline(true));
+      window.addEventListener('online', () => { void runLiveSync(); });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState !== 'visible' || livePollTimer === null) return;
         refreshAges();

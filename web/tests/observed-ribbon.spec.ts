@@ -440,7 +440,8 @@ test.describe('Observed nutshell + route ribbon', () => {
       (els) => els.map((e) => (e as HTMLElement).dataset.testid ?? e.className));
     expect(order.indexOf('glance-lines glance-lines-alert')).toBe(0);
     expect(order.indexOf('glance-highlight')).toBe(1);
-    expect(order.indexOf('glance-headline')).toBe(2);
+    // #881: the headline folds under Details once the highlight took its slot.
+    expect(order.indexOf('glance-details')).toBe(2);
 
     await block.locator('[data-hl-thumb="down"]').click();
     await block.locator('[data-hl-comment]').fill('The cells were west, not east.');
@@ -454,5 +455,135 @@ test.describe('Observed nutshell + route ribbon', () => {
       context: HIGHLIGHT,
     });
     await page.locator('#observed-glance-wrapper').screenshot({ path: 'test-results/observed-highlight.png' });
+  });
+});
+
+// --- Departure / arrival airport cards (#881) --------------------------------
+//
+// tests/fixtures/airport_cards.json was written by the server's own models
+// (scripts/export_airport_card_fixtures.py) on this same EGTF → EGLF flight,
+// anchored at its `t0`; every time is shifted so `t0` is now. The
+// screenshots (light / dark, desktop / ~400 px, before / after the fold) are
+// the visual review of the card against the agreed mockup.
+
+const CARDS = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'airport_cards.json'), 'utf-8'));
+
+/** Every ISO time in `value` moved by `deltaMs`. */
+function shifted<T>(value: T, deltaMs: number): T {
+  return JSON.parse(JSON.stringify(value), (_k, v) => (
+    typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)
+      ? new Date(Date.parse(v) + deltaMs).toISOString().replace('.000Z', 'Z')
+      : v));
+}
+
+function liveWithCards(moment: 'before' | 'after') {
+  const layer = liveLayer(HIGHLIGHT);
+  const { departure, destination } = shifted(CARDS[moment], Date.now() - Date.parse(CARDS.t0));
+  layer.glance = {
+    ...layer.glance,
+    flight: moment === 'before'
+      ? { phase: 'planned', source: 'plan', marker_label: 'Planned position',
+          text: `Planned · departure ${departure.etd.slice(11, 16)}Z · ETA EGLF ${destination.eta.slice(11, 16)}Z` }
+      : { phase: 'enroute', source: 'app', marker_label: 'You · 2 min ago',
+          text: `24 of 100 NM · ETA EGLF ${destination.eta.slice(11, 16)}Z · position 2 min ago` },
+    departure, destination,
+  } as typeof layer.glance;
+  return layer;
+}
+
+test.describe('Observed airport cards (#881)', () => {
+  test.beforeEach(async ({ page }) => { await mockBriefingApi(page); });
+
+  // A full-page shot clipped to the section: an element shot scrolls it
+  // under the sticky page header.
+  const shoot = async (page: Page, name: string) => {
+    const box = (await page.locator('#observed-glance-wrapper').boundingBox())!;
+    const y = box.y + await page.evaluate(() => window.scrollY);
+    await page.screenshot({ path: `test-results/airport-cards-${name}.png`, fullPage: true,
+      clip: { x: box.x, y, width: box.width, height: box.height } });
+  };
+
+  for (const scheme of ['light', 'dark'] as const) {
+    for (const [label, width] of [['desktop', 1280], ['narrow', 400]] as const) {
+      test(`before the fold: both cards, ${scheme} ${label}`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.setViewportSize({ width, height: 1000 });
+        await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveWithCards('before') }));
+        await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+        const dep = page.locator('[data-testid="airport-card-dep"]');
+        const arr = page.locator('[data-testid="airport-card-arr"]');
+        await expect(dep).toBeVisible();
+        await expect(arr).toBeVisible();
+        await expect(dep).toContainText('BKN 2,500 ft');
+        await expect(dep).toContainText('290/15G25');
+        await expect(dep).toContainText('was VFR');
+        await expect(arr).toContainText('Thunder nearby');
+        await expect(arr).toContainText('SPECI');
+        await expect(dep.locator('[data-testid="card-crosswind"]')).toHaveClass(/ac-tone-amber/);
+        await expect(arr.locator('[data-testid="card-taf-strip"] .ac-strip-eta')).toHaveCount(1);
+        // Side by side on a desktop section, stacked at ~400 px.
+        const [d, a] = [await dep.boundingBox(), await arr.boundingBox()];
+        if (label === 'desktop') expect(Math.abs(d!.y - a!.y)).toBeLessThan(2);
+        else expect(a!.y).toBeGreaterThan(d!.y + d!.height - 1);
+        // The dial keeps its fixed size: 128 px, 96 px on a phone-width card.
+        expect(Math.round((await dep.locator('.ac-dial').boundingBox())!.width)).toBe(label === 'desktop' ? 128 : 96);
+        // Details starts collapsed.
+        await expect(page.locator('[data-testid="glance-details"]')).not.toHaveAttribute('open', '');
+        await shoot(page, `before-${scheme}-${label}`);
+      });
+    }
+  }
+
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`after the fold: arrival card, one-line departure that opens and is remembered, ${scheme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveWithCards('after') }));
+      await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+      const folded = page.locator('[data-testid="airport-card-folded"]');
+      await expect(folded).toBeVisible();
+      await expect(folded.locator('summary')).toContainText('EGTF 290/15G25 · RWY 24 · departed');
+      await expect(folded.locator('[data-testid="airport-card-dep"]')).toBeHidden();
+      await shoot(page, `after-${scheme}`);
+      await folded.locator('summary').click();
+      await expect(folded.locator('[data-testid="airport-card-dep"]')).toBeVisible();
+      await shoot(page, `after-open-${scheme}`);
+      await page.reload();
+      await expect(page.locator('[data-testid="airport-card-folded"] [data-testid="airport-card-dep"]')).toBeVisible();
+    });
+  }
+
+  test('a cell under a card opens the map on it', async ({ page }) => {
+    await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveWithCards('before') }));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await expect(page.locator('.leaflet-container')).toHaveCount(0);
+    await page.locator('[data-card-cell="arr:0"]').click();
+    await expect(page.locator('.leaflet-container')).toBeVisible();
+    await expect(page.locator('#map-observed-cells')).toBeChecked();
+  });
+
+  test('Details opens on the rest and stays open across a reload', async ({ page }) => {
+    await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: liveWithCards('before') }));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const details = page.locator('[data-testid="glance-details"]');
+    await expect(details.locator('[data-testid="glance-line-enroute"]')).toBeHidden();
+    await details.locator('summary').click();
+    await expect(details.locator('[data-testid="glance-headline"]')).toBeVisible();
+    await page.reload();
+    await expect(page.locator('[data-testid="glance-details"] [data-testid="glance-headline"]')).toBeVisible();
+  });
+
+  test('going offline shows what time the data on screen is from', async ({ page, context }) => {
+    // The last tick landed 12 min ago.
+    const layer = { ...liveWithCards('before'), live_updated_at: iso(new Date(Date.now() - 12 * 60_000)) };
+    await page.route(`**/api/flights/${FLIGHT_ID}/live`, r => r.fulfill({ json: layer }));
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await expect(page.locator('[data-testid="airport-card-dep"]')).toBeVisible();
+    await expect(page.locator('[data-testid="observed-offline"]')).toHaveCount(0);
+    await context.setOffline(true);
+    const banner = page.locator('[data-testid="observed-offline"]');
+    await expect(banner).toContainText('Offline · showing data from');
+    await expect(banner).toContainText(`${layer.live_updated_at.slice(11, 16)}Z, 12 min ago`);
+    await shoot(page, 'offline-light');
   });
 });

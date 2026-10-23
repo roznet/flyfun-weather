@@ -2411,6 +2411,11 @@ export function refreshLiveAges(now: number = Date.now()): void {
   document.querySelectorAll<HTMLElement>('[data-live-age-short]').forEach((node) => {
     node.textContent = liveAgeShort(node.dataset.liveAgeShort, now);
   });
+  // The airport cards' METAR time (#881): amber once older than the stale age.
+  document.querySelectorAll<HTMLElement>('[data-live-stale]').forEach((node) => {
+    const min = minutesAgo(node.dataset.liveStale, now);
+    node.classList.toggle('ac-stale', min != null && min > OBSERVED_STALE_MIN);
+  });
 }
 
 /**
