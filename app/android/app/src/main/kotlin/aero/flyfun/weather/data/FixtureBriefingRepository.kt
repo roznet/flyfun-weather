@@ -765,6 +765,11 @@ open class FixtureBriefingRepository(
     val flights: MutableList<FlightResponse> = decodeDefaultFlights().toMutableList()
     var lastMovedFlight: Pair<String, MoveFlightRequest>? = null
     var lastUpdatedFlight: Pair<String, UpdateFlightRequest>? = null
+    var lastCreatedFlight: CreateFlightRequest? = null
+    val refreshTriggeredFor = mutableListOf<String>()
+
+    /** Invalidation the next [updateFlight] reports, so tests can drive the post-save paths. */
+    var nextInvalidation: FlightInvalidation = FlightInvalidation.NONE
     var savedDebrief: DebriefResponse? = null
 
     override suspend fun listFlights(): List<FlightResponse> = flights.toList()
@@ -773,6 +778,7 @@ open class FixtureBriefingRepository(
         flights.firstOrNull { it.id == id } ?: throw ApiError.NotFound
 
     override suspend fun createFlight(req: CreateFlightRequest): FlightResponse {
+        lastCreatedFlight = req
         val id = "fixture-created-${flights.size + 1}"
         val routeName = req.routeName ?: req.waypoints.joinToString(" ")
         val created = FlightResponse(
@@ -786,6 +792,11 @@ open class FixtureBriefingRepository(
             flightCeilingFt = req.flightCeilingFt ?: 18000,
             flightDurationHours = req.flightDurationHours ?: 2.0,
             createdAt = "2099-06-30T00:00:00Z",
+            profileId = req.profileId,
+            aircraftId = req.aircraftId,
+            flexibility = req.flexibility ?: FlightFlexibility.NONE,
+            rawRoute = req.rawRoute,
+            description = req.description,
         )
         flights.add(0, created)
         return created
@@ -802,11 +813,18 @@ open class FixtureBriefingRepository(
             cruiseAltitudeFt = req.cruiseAltitudeFt ?: current.cruiseAltitudeFt,
             flightCeilingFt = req.flightCeilingFt ?: current.flightCeilingFt,
             flightDurationHours = req.flightDurationHours ?: current.flightDurationHours,
-            private = req.private ?: current.private,
-            autoRefresh = req.autoRefresh ?: current.autoRefresh,
+            profileId = req.profileId ?: current.profileId,
+            aircraftId = req.aircraftId ?: current.aircraftId,
+            flexibility = req.flexibility ?: current.flexibility,
+            altDepartureTime = when (req.altDepartureTime) {
+                null -> current.altDepartureTime
+                "" -> null
+                else -> req.altDepartureTime
+            },
+            rawRoute = if (req.waypoints != null) req.rawRoute else current.rawRoute,
         )
         flights[idx] = updated
-        return UpdateFlightResponse(flight = updated, invalidation = FlightInvalidation.NONE)
+        return UpdateFlightResponse(flight = updated, invalidation = nextInvalidation)
     }
 
     override suspend fun deleteFlight(id: String) {
@@ -823,33 +841,44 @@ open class FixtureBriefingRepository(
         lastMovedFlight = id to req
         val idx = flights.indexOfFirst { it.id == id }
         if (idx < 0) throw ApiError.NotFound
-        val updated = flights[idx].copy(
-            departureTime = req.departureTime,
-            altDepartureTime = req.altDepartureTime,
+        val source = flights[idx]
+        val waypoints = req.waypoints ?: source.waypoints
+        val departure = req.departureTime ?: source.departureTime
+        // Like the server, the id follows the route endpoints and the UTC date.
+        val sameIdentity = departure.take(10) == source.departureTime.take(10) &&
+            waypoints.firstOrNull() == source.waypoints.firstOrNull() &&
+            waypoints.lastOrNull() == source.waypoints.lastOrNull()
+        val moved = source.copy(
+            id = if (sameIdentity) source.id else "fixture-moved-${flights.size + 1}",
+            waypoints = waypoints,
+            departureTime = departure,
+            targetDate = departure.take(10),
+            cruiseAltitudeFt = req.cruiseAltitudeFt ?: source.cruiseAltitudeFt,
+            flightCeilingFt = req.flightCeilingFt ?: source.flightCeilingFt,
+            flightDurationHours = req.flightDurationHours ?: source.flightDurationHours,
+            rawRoute = if (req.waypoints != null) req.rawRoute else source.rawRoute,
+            trip = if (req.keepInTrip) source.trip else null,
         )
-        flights[idx] = updated
-        return updated
+        flights[idx] = moved
+        return moved
     }
 
     override suspend fun parseFpl(fplText: String): ParseFplResponse =
         ParseFplResponse(
             waypoints = listOf("LFMD", "LFML"),
-            rawRouteTokens = listOf("LFMD", "LFML"),
             altitudeFt = 8000,
-            speedKt = 150,
-            flightRules = "VFR",
+            flightRules = "V",
             durationHours = 1.5,
+            rawRoute = "LFMD DCT LFML",
         )
 
-    override suspend fun interpretRoute(rawText: String, cruiseSpeedKt: Double?): InterpretRouteResponse =
-        InterpretRouteResponse(
-            waypoints = listOf(
-                RouteWaypointInfo(code = "LFMD", name = "Cannes-Mandelieu", kindLabel = "Airport", lat = 43.542, lon = 6.953),
-                RouteWaypointInfo(code = "LFML", name = "Marseille Provence", kindLabel = "Airport", lat = 43.436, lon = 5.215),
-            ),
-            totalDistanceNm = 78.0,
-            estimatedDurationHours = 1.5,
-        )
+    /** Keeps the 4-letter idents, drops Field-15 syntax (DCT, VFR, N0120F065...). */
+    override suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse {
+        val tokens = rawRoute.uppercase().split(Regex("[\\s,\\->]+")).filter { it.isNotBlank() }
+        val syntax = setOf("DCT", "VFR", "IFR")
+        val idents = tokens.filter { it.length == 4 && it.all(Char::isLetter) && it !in syntax }
+        return InterpretRouteResponse(originalTokens = tokens, interpreted = idents)
+    }
 
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         RouteDistanceResponse(
@@ -947,8 +976,10 @@ open class FixtureBriefingRepository(
             FixtureBriefingData.nullLiveLayer
         }
 
-    override suspend fun triggerRefresh(flightId: String, force: Boolean): RefreshStatusResponse =
-        RefreshStatusResponse(status = "queued", flightId = flightId)
+    override suspend fun triggerRefresh(flightId: String, force: Boolean): RefreshStatusResponse {
+        refreshTriggeredFor += flightId
+        return RefreshStatusResponse(status = "queued", flightId = flightId)
+    }
 
     override suspend fun refreshStatus(flightId: String): ActiveRefreshResponse =
         ActiveRefreshResponse(active = false)
@@ -1058,7 +1089,7 @@ open class FixtureBriefingRepository(
             "private": false,
             "auto_refresh": true,
             "created_at": "2099-06-30T00:00:00Z",
-            "briefing_status": {
+            "latest_briefing": {
               "last_updated": "2099-06-30T06:00:00Z",
               "assessment": "amber",
               "days_out": 1,
@@ -1087,6 +1118,7 @@ open class FixtureBriefingRepository(
             "user_id": "ui-test",
             "route_name": "EGTK LFPB",
             "waypoints": ["EGTK", "LFPB"],
+            "raw_route": "EGTK DCT LFPB",
             "departure_time": "2099-07-03T10:30:00Z",
             "target_date": "2099-07-03",
             "target_time_utc": 10,

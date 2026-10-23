@@ -235,6 +235,22 @@ class ApiClient(
         requestRaw(path = path, method = "POST", queryItems = queryItems, bodyBytes = reqBytes)
     }
 
+    suspend inline fun <reified Req, reified Res> patch(
+        path: String,
+        body: Req,
+        queryItems: List<Pair<String, String>> = emptyList(),
+    ): Res {
+        val reqBytes = json.encodeToString(json.serializersModule.serializer<Req>(), body)
+            .toByteArray(Charsets.UTF_8)
+        return requestDecoded(
+            serializer = json.serializersModule.serializer<Res>(),
+            path = path,
+            method = "PATCH",
+            queryItems = queryItems,
+            bodyBytes = reqBytes,
+        )
+    }
+
     suspend inline fun <reified Req, reified Res> put(
         path: String,
         body: Req,
@@ -283,14 +299,15 @@ class ApiClient(
     suspend fun createFlight(req: CreateFlightRequest): FlightResponse =
         post("/api/flights", req)
 
+    /** `PATCH`: the server has no `PUT` on this path (it answered 405, #885). */
     suspend fun updateFlight(id: String, req: UpdateFlightRequest): UpdateFlightResponse =
-        put("/api/flights/${encodePathSegment(id)}", req)
+        patch("/api/flights/${encodePathSegment(id)}", req)
 
     suspend fun deleteFlight(id: String) =
         delete("/api/flights/${encodePathSegment(id)}")
 
     suspend fun bulkDeleteFlights(ids: List<String>): BulkDeleteResponse =
-        deleteWithBody("/api/flights/bulk", BulkDeleteRequest(flightIds = ids))
+        post("/api/flights/bulk-delete", BulkDeleteRequest(flightIds = ids))
 
     suspend fun moveFlight(id: String, req: MoveFlightRequest): FlightResponse =
         post("/api/flights/${encodePathSegment(id)}/move", req)
@@ -298,8 +315,8 @@ class ApiClient(
     suspend fun parseFpl(fplText: String): ParseFplResponse =
         post("/api/flights/parse-fpl", ParseFplRequest(fplText = fplText))
 
-    suspend fun interpretRoute(rawText: String, cruiseSpeedKt: Double? = null): InterpretRouteResponse =
-        post("/api/flights/interpret-route", InterpretRouteRequest(rawText = rawText, cruiseSpeedKt = cruiseSpeedKt))
+    suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse =
+        post("/api/flights/interpret-route", InterpretRouteRequest(rawRoute = rawRoute))
 
     suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         post("/api/flights/route-distance", RouteDistanceRequest(waypoints = waypoints))
@@ -643,7 +660,7 @@ class ApiClient(
         post("/api/trips/${encodePathSegment(tripId)}/legs", req)
 
     suspend fun updateTrip(tripId: String, req: UpdateTripRequest): TripResponse =
-        put("/api/trips/${encodePathSegment(tripId)}", req)
+        patch("/api/trips/${encodePathSegment(tripId)}", req)
 
     suspend fun deleteTrip(tripId: String, deleteFlights: Boolean = false) {
         val query = if (deleteFlights) listOf("delete_flights" to "true") else emptyList()

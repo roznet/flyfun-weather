@@ -20,8 +20,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.ShowChart
@@ -32,6 +35,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -49,7 +54,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -78,7 +85,9 @@ import kotlin.math.roundToInt
 
 /**
  * Top-level tabbed briefing container screen (mirrors `BriefingContainerView.swift`):
- * - TopAppBar with route title + departure subtitle, [BriefingPackToolbar], and refresh button.
+ * - TopAppBar with route title + departure subtitle, [BriefingPackToolbar], refresh button and,
+ *   for the owner, an overflow with Edit flight / Duplicate… (#885: the briefing is where a
+ *   pilot notices the date or route is wrong).
  * - SSE refresh progress banner and offline download banner.
  * - Adaptive 5-tab navigation (`BriefingTab.tabs(showsObserved)`).
  * - [BackHandler] that clears an active [FocusIntent] or switches back to [BriefingTab.ADVISORY]
@@ -92,6 +101,8 @@ fun BriefingContainerScreen(
     viewModel: BriefingViewModel,
     onBack: () -> Unit,
     showBackButton: Boolean = true,
+    onEditFlight: ((FlightResponse) -> Unit)? = null,
+    onDuplicateFlight: ((FlightResponse) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val flight by viewModel.flight.collectAsState()
@@ -239,6 +250,13 @@ fun BriefingContainerScreen(
                                     contentDescription = "Refresh briefing",
                                 )
                             }
+                        }
+                        val ownFlight = flight?.takeIf { it.isEditable }
+                        if (ownFlight != null && (onEditFlight != null || onDuplicateFlight != null)) {
+                            FlightActionsMenu(
+                                onEdit = onEditFlight?.let { { it(ownFlight) } },
+                                onDuplicate = onDuplicateFlight?.let { { it(ownFlight) } },
+                            )
                         }
                     },
                 )
@@ -757,6 +775,42 @@ internal fun RouteMapPreviewScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Top-bar overflow for the owner's flight actions. */
+@Composable
+private fun FlightActionsMenu(
+    onEdit: (() -> Unit)?,
+    onDuplicate: (() -> Unit)?,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "Flight actions")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (onEdit != null) {
+                DropdownMenuItem(
+                    text = { Text("Edit flight") },
+                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onEdit()
+                    },
+                )
+            }
+            if (onDuplicate != null) {
+                DropdownMenuItem(
+                    text = { Text("Duplicate\u2026") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onDuplicate()
+                    },
+                )
             }
         }
     }

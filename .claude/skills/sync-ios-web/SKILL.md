@@ -246,6 +246,11 @@ consumed by iOS only; the web still builds its chart panel from the flat
 (every field the server may omit must stay Optional), and do not flag the web
 for lacking it.
 
+Android (`app/android/.../model/*.kt`, `data/ApiClient.kt`) is checked by
+`tests/test_android_api_contract.py`: run it rather than diffing by hand. It
+fails when a call or request key drifts from the server, and when an entry on
+its `KNOWN_BROKEN_*` allowlists gets fixed without being removed.
+
 Report field name / optionality / nesting mismatches. Prioritise fields present
 in the backend (or web) but **missing or non-optional in Swift** — those are the
 runtime-decode hazards. A field the server may omit must be `Optional` on iOS.

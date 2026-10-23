@@ -7,7 +7,7 @@ import aero.flyfun.weather.data.FixtureBriefingData
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.data.FixtureTripRepository
 import aero.flyfun.weather.model.BriefingTab
-import aero.flyfun.weather.model.FlexibilityMode
+import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightOrder
 import aero.flyfun.weather.model.FlightSection
 import aero.flyfun.weather.model.FocusIntent
@@ -149,14 +149,12 @@ class ViewModelTest {
 
         vm.setDepartureDate(LocalDate.of(2099, 7, 10))
         vm.setDepartureTime(LocalTime.of(8, 30))
-        vm.setFlexibilityMode(FlexibilityMode.DAY)
-        vm.setWindowEndTime(LocalTime.of(14, 0))
+        vm.setFlexibility(FlightFlexibility.SAME_DAY)
         vm.setCruiseAltitudeFt(9500)
         vm.setFlightCeilingFt(16000)
         vm.setDuration(2, 15)
 
         assertEquals("2099-07-10T08:30:00Z", vm.buildDepartureIso())
-        assertEquals("2099-07-10T14:00:00Z", vm.buildDepartureWindowEndIso())
 
         var createdId: String? = null
         vm.saveFlight { saved ->
@@ -167,6 +165,9 @@ class ViewModelTest {
         assertNotNull(createdId)
         val allFlights = repo.fetchFlights()
         assertTrue(allFlights.any { it.id == createdId && it.waypoints == listOf("EGTK", "LFPB", "LFMD") })
+        // The server field is `flexibility`; the old `flexibility_mode` was silently dropped (#885).
+        assertEquals(FlightFlexibility.SAME_DAY, repo.lastCreatedFlight?.flexibility)
+        assertEquals("egtk -> lfpb lfmd", repo.lastCreatedFlight?.rawRoute)
     }
 
     @Test

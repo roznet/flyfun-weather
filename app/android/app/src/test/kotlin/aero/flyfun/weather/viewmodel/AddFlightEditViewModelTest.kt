@@ -1,0 +1,200 @@
+package aero.flyfun.weather.viewmodel
+
+import aero.flyfun.weather.data.FixtureBriefingRepository
+import aero.flyfun.weather.data.FixtureTripRepository
+import aero.flyfun.weather.model.FlightInvalidation
+import aero.flyfun.weather.model.FlightResponse
+import java.time.LocalDate
+import java.time.LocalTime
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The Android edit flow (#885) against the fixture repository: PATCH only what changed,
+ * Move / Keep both for a structural edit, the residual PATCH after Move, trip defaults, and
+ * acting on the server's `invalidation`.
+ */
+class AddFlightEditViewModelTest {
+
+    private fun setUp(testScope: TestScope): Pair<FixtureBriefingRepository, AddFlightViewModel> {
+        val repo = FixtureBriefingRepository(mockLive = true)
+        val vm = AddFlightViewModel(
+            repository = repo,
+            apiClient = null,
+            tripRepository = FixtureTripRepository(),
+            airportDb = null,
+            scopeOverride = testScope,
+        )
+        return repo to vm
+    }
+
+    private fun FixtureBriefingRepository.flight(id: String): FlightResponse = flights.first { it.id == id }
+
+    @Test
+    fun editPrefillsTheTypedRouteAndPatchesOnlyWhatChanged() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-2"))
+
+        assertEquals("EGTK DCT LFPB", vm.rawRouteText.value)
+        assertFalse(vm.hasChanges)
+
+        vm.setCruiseAltitudeFt(9500)
+        assertTrue(vm.hasChanges)
+        assertFalse(vm.hasStructuralChange)
+
+        var saved: FlightResponse? = null
+        vm.saveFlight { saved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        assertEquals("fixture-2", saved?.id)
+        val (id, req) = requireNotNull(repo.lastUpdatedFlight)
+        assertEquals("fixture-2", id)
+        assertEquals(9500, req.cruiseAltitudeFt)
+        // An untouched route keeps its stored waypoints and Field-15 text: neither is sent.
+        assertNull(req.waypoints)
+        assertNull(req.rawRoute)
+        assertNull(req.departureTime)
+        assertNull(req.flightDurationHours)
+    }
+
+    @Test
+    fun aTimeChangeQueuesTheRefreshTheServerAskedFor() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        repo.nextInvalidation = FlightInvalidation.REFETCH_NEEDED
+        vm.loadExistingFlight(repo.flight("fixture-2"))
+
+        vm.setDepartureTime(LocalTime.of(12, 0))
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        assertEquals("2099-07-03T12:00:00Z", repo.lastUpdatedFlight?.second?.departureTime)
+        assertEquals(listOf("fixture-2"), repo.refreshTriggeredFor)
+    }
+
+    @Test
+    fun aMidRouteEditSendsTheResolvedWaypointsAndTheTextAsTyped() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-2"))
+
+        vm.updateRouteText("EGTK DCT LFAT DCT LFPB")
+        assertFalse(vm.hasStructuralChange)
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        val req = requireNotNull(repo.lastUpdatedFlight).second
+        assertEquals(listOf("EGTK", "LFAT", "LFPB"), req.waypoints)
+        assertEquals("EGTK DCT LFAT DCT LFPB", req.rawRoute)
+    }
+
+    @Test
+    fun aDateChangeAsksBeforeMovingAndMoveKeepsTheTrip() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+
+        vm.setDepartureDate(LocalDate.of(2099, 7, 2))
+        assertTrue(vm.hasStructuralChange)
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        // No PATCH the server would refuse: the choice is shown instead.
+        assertTrue(vm.showStructuralChoice.value)
+        assertNull(repo.lastUpdatedFlight)
+
+        var moved: FlightResponse? = null
+        vm.moveFlight { moved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        val (sourceId, req) = requireNotNull(repo.lastMovedFlight)
+        assertEquals("fixture-1", sourceId)
+        assertEquals("2099-07-02T09:00:00Z", req.departureTime)
+        assertNull(req.waypoints)
+        assertTrue(req.keepInTrip)
+        assertNotNull(moved)
+        assertNotEquals("fixture-1", moved?.id)
+        assertEquals("trip-fixture-1", moved?.tripId)
+        // Nothing /move can't carry was edited: no follow-up PATCH.
+        assertNull(repo.lastUpdatedFlight)
+    }
+
+    @Test
+    fun moveSendsTheProfileChangeAsAFollowUpPatch() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+
+        vm.updateRouteText("LFMD LFMN")
+        vm.selectProfile(42)
+        vm.setKeepInTripOnMove(false)
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+        assertTrue(vm.showStructuralChoice.value)
+
+        var moved: FlightResponse? = null
+        vm.moveFlight { moved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        val moveReq = requireNotNull(repo.lastMovedFlight).second
+        assertEquals(listOf("LFMD", "LFMN"), moveReq.waypoints)
+        assertFalse(moveReq.keepInTrip)
+        val (patchedId, patch) = requireNotNull(repo.lastUpdatedFlight)
+        assertEquals(moved?.id, patchedId)
+        assertEquals(42, patch.profileId)
+    }
+
+    @Test
+    fun keepBothLeavesTheOriginalAndJoinsTheTripOnlyWhenTicked() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+        vm.setDepartureDate(LocalDate.of(2099, 7, 8))
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        vm.duplicateEditedFlight()
+        testScope.testScheduler.advanceUntilIdle()
+        assertNull(repo.lastCreatedFlight?.tripId)
+        assertTrue(repo.flights.any { it.id == "fixture-1" })
+        assertNull(repo.lastMovedFlight)
+
+        vm.setAddDuplicateToTrip(true)
+        vm.setDepartureDate(LocalDate.of(2099, 7, 9))
+        vm.duplicateEditedFlight()
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals("trip-fixture-1", repo.lastCreatedFlight?.tripId)
+    }
+
+    @Test
+    fun duplicatePrefillsFromTheFlightAndLeavesTheDateToPick() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        vm.loadDuplicateOf(repo.flight("fixture-2"), today = LocalDate.of(2099, 6, 1))
+
+        assertEquals(AddFlightViewModel.Mode.DUPLICATE, vm.mode.value)
+        assertEquals("EGTK DCT LFPB", vm.rawRouteText.value)
+        assertEquals(LocalDate.of(2099, 7, 4), vm.departureDate.value)
+        assertEquals(LocalTime.of(10, 30), vm.departureTime.value)
+        assertNull(vm.selectedTripId.value)
+
+        vm.saveFlight()
+        testScope.testScheduler.advanceUntilIdle()
+
+        val req = requireNotNull(repo.lastCreatedFlight)
+        assertEquals(listOf("EGTK", "LFPB"), req.waypoints)
+        assertEquals("EGTK DCT LFPB", req.rawRoute)
+        assertEquals(9000, req.cruiseAltitudeFt)
+        assertEquals("2099-07-04T10:30:00Z", req.departureTime)
+        assertNull(req.tripId)
+    }
+}

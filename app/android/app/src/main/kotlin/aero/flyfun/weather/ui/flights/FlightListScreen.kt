@@ -111,6 +111,7 @@ fun FlightListScreen(
     onFlightClick: (FlightResponse) -> Unit,
     onAddFlightClick: () -> Unit,
     onEditFlightClick: (FlightResponse) -> Unit = {},
+    onDuplicateFlightClick: (FlightResponse) -> Unit = {},
     onAddNextLegClick: (FlightResponse) -> Unit = {},
     onOpenTripClick: (String) -> Unit = {},
     onOpenMapsClick: () -> Unit = {},
@@ -400,6 +401,7 @@ fun FlightListScreen(
                                         }
                                     },
                                     onEditClick = { onEditFlightClick(flight) },
+                                    onDuplicateClick = { onDuplicateFlightClick(flight) },
                                     onAddNextLegClick = { onAddNextLegClick(flight) },
                                     onShareClick = {
                                         viewModel.createShareLink(flight.id) { shareUrl ->
@@ -579,6 +581,7 @@ private fun FlightRowCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onEditClick: () -> Unit,
+    onDuplicateClick: () -> Unit,
     onAddNextLegClick: () -> Unit,
     onShareClick: () -> Unit,
     onDeleteClick: () -> Unit,
@@ -738,13 +741,23 @@ private fun FlightRowCard(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("Edit Flight") },
-                            onClick = {
-                                menuExpanded = false
-                                onEditClick()
-                            },
-                        )
+                        // Owner-only, like the server: a subscriber can't edit, copy-edit or delete.
+                        if (flight.isEditable) {
+                            DropdownMenuItem(
+                                text = { Text("Edit Flight") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEditClick()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Duplicate\u2026") },
+                                onClick = {
+                                    menuExpanded = false
+                                    onDuplicateClick()
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Add Next Leg") },
                             onClick = {

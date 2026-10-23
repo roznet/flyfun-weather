@@ -36,9 +36,16 @@ struct BriefingContainerView: View {
     /// nil elsewhere (a shared-flight preview, a deep-linked briefing), which
     /// simply hides the action.
     var onOpenTrip: ((String) -> Void)?
+    /// Called with the flight an Edit or Duplicate started here saved (#885): the
+    /// same flight after an edit, a new one after a Move or Duplicate. Set by the
+    /// flight list, which re-selects it; nil elsewhere, which hides the actions.
+    var onFlightSaved: ((FlightResponse) -> Void)?
     @Environment(AppState.self) private var appState
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: BriefingViewModel?
+    /// The edit / duplicate sheet opened from the toolbar's flight-actions menu.
+    @State private var editingFlight: FlightResponse?
+    @State private var duplicatingFlight: FlightResponse?
     @State private var trackingService = FlightTrackingService()
     /// Post with the next fix (#761): set on Start Flight and on return to the
     /// foreground, so the post carries a fix taken from that moment on.
@@ -133,6 +140,16 @@ struct BriefingContainerView: View {
         .navigationSubtitle(identitySubtitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // Edit / Duplicate (#885): the briefing is where a pilot notices the
+            // date or route is wrong, and the list's swipe and long-press were the
+            // only ways in. Owner-only and online-only, like the list. Outside the
+            // pending-coverage gate below: a flight beyond the horizon can still be
+            // edited, and often is (its date).
+            if onFlightSaved != nil, flight.isEditable, appState.networkMonitor.isConnected {
+                ToolbarItem(placement: .topBarTrailing) {
+                    flightActionsMenu
+                }
+            }
             // A pending-coverage flight has no pack: hide the pack picker and the
             // refresh/download/track actions — none apply until it's in range.
             if let viewModel, flight.coverage == nil {
@@ -187,6 +204,20 @@ struct BriefingContainerView: View {
                                             isInFlightWindow: isInFlightWindow, startTracking: startTracking,
                                             refreshGate: refreshGate)
                     }
+                }
+            }
+        }
+        .sheet(item: $editingFlight) { flight in
+            if let repo = appState.repository {
+                AddFlightView(repository: repo, flight: flight) { saved in
+                    onFlightSaved?(saved)
+                }
+            }
+        }
+        .sheet(item: $duplicatingFlight) { flight in
+            if let repo = appState.repository {
+                AddFlightView(repository: repo, duplicating: flight) { saved in
+                    onFlightSaved?(saved)
                 }
             }
         }
@@ -323,6 +354,29 @@ struct BriefingContainerView: View {
             viewModel?.stopLivePolling()
             appState.setObservedVisible(false, flightId: flight.id)
         }
+    }
+
+    /// The owner's flight actions: Edit (PATCH, or Move / Duplicate for a new date
+    /// or route endpoint, all in `AddFlightView`) and a standalone Duplicate.
+    private var flightActionsMenu: some View {
+        Menu {
+            Button {
+                editingFlight = flight
+            } label: {
+                Label("Edit Flight", systemImage: "pencil")
+            }
+            .accessibilityIdentifier("briefingEditFlightButton")
+            Button {
+                duplicatingFlight = flight
+            } label: {
+                Label("Duplicate\u{2026}", systemImage: "plus.square.on.square")
+            }
+            .accessibilityIdentifier("briefingDuplicateFlightButton")
+        } label: {
+            Label("Flight actions", systemImage: "ellipsis.circle")
+                .font(.caption)
+        }
+        .accessibilityIdentifier("briefingFlightActionsMenu")
     }
 
     /// Per-flight notification bell — Default / Always / Mute. Delivery still

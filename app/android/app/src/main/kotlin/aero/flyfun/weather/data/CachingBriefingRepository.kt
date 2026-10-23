@@ -109,6 +109,8 @@ class CachingBriefingRepository(
 
     override suspend fun moveFlight(id: String, req: MoveFlightRequest): FlightResponse {
         val flight = online.moveFlight(id, req)
+        // Move deletes the source flight and its packs server-side.
+        cache.removeFlight(id)
         cacheFlightData(flight)
         return flight
     }
@@ -116,8 +118,8 @@ class CachingBriefingRepository(
     override suspend fun parseFpl(fplText: String): ParseFplResponse =
         online.parseFpl(fplText)
 
-    override suspend fun interpretRoute(rawText: String, cruiseSpeedKt: Double?): InterpretRouteResponse =
-        online.interpretRoute(rawText, cruiseSpeedKt)
+    override suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse =
+        online.interpretRoute(rawRoute)
 
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         online.routeDistance(waypoints)

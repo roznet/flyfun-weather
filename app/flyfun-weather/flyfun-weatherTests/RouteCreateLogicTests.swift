@@ -253,3 +253,40 @@ private func deviceDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
         #expect(RouteAutocompleteController.lastToken(in: "") == "")
     }
 }
+
+/// Standalone Duplicate (#885): a *create* pre-filled from a flight, so every
+/// create rule (submit-time interpret, no trip, no alternate) still holds.
+@MainActor
+@Suite struct DuplicateFlightTests {
+    @Test func duplicatePrefillsTheTypedRouteAsANewFlight() {
+        let repo = MockBriefingRepository()
+        let source = makeFlight(
+            waypoints: ["EGKA", "EGKB"],
+            cruiseAltitudeFt: 6500,
+            flexibility: .alternate,
+            altDepartureTime: "2026-06-24T15:00:00Z",
+            rawRoute: "EGKA N0180VFR EGKB"
+        )
+        let vm = AddFlightViewModel(repository: repo, duplicating: source)
+
+        #expect(!vm.isEditing)
+        #expect(vm.isDuplicating)
+        #expect(vm.navigationTitle == "Duplicate Flight")
+        #expect(vm.waypointsText == "EGKA N0180VFR EGKB")
+        #expect(vm.cruiseAltitudeFt == 6500)
+        // Create refuses "alternate": the copy starts without it.
+        #expect(vm.flexibility == FlexibilityMode.none)
+    }
+
+    @Test func duplicateDepartureIsTheDayAfterTheLaterOfSourceAndToday() throws {
+        let iso = ISO8601DateFormatter()
+        let source = try #require(iso.date(from: "2026-06-24T12:00:00Z"))
+        let beforeSource = try #require(iso.date(from: "2026-06-01T08:00:00Z"))
+        let afterSource = try #require(iso.date(from: "2026-07-10T20:00:00Z"))
+
+        #expect(AddFlightViewModel.duplicateDeparture(from: source, now: beforeSource)
+            == iso.date(from: "2026-06-25T12:00:00Z"))
+        #expect(AddFlightViewModel.duplicateDeparture(from: source, now: afterSource)
+            == iso.date(from: "2026-07-11T12:00:00Z"))
+    }
+}
