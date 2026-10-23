@@ -3949,6 +3949,14 @@ def recalculate_advisories(
     Re-evaluates all advisory logic without re-fetching forecasts or
     re-running the full analysis pipeline. Useful when advisory logic
     or user parameters change.
+
+    Persists ``route_advisories.json`` (and the fronts side effect) only when
+    the graded altitude is the flight's saved ``cruise_altitude_ft`` (or no
+    altitude is passed). Any other altitude is a what-if (the web altitude
+    lever probes here for its wind overlay) and is computed with
+    ``persist=False``, so the stored briefing that every other reader trusts
+    (flight-day diff, email, MCP, report) stays graded at the planned altitude
+    (#871).
     """
     from weatherbrief.tasks.advise import run_advisories_from_pack
 
@@ -3961,13 +3969,17 @@ def recalculate_advisories(
     enabled_ids, enabled_map, user_params, aggregation, adv_models, icing_method, cloud_source, convective_method, recompute_conds, locale, auto_front_detection, declared_approaches = \
         _load_advisory_profile(db, flight, user_id, request, pack_dir)
 
+    persist = cruise_altitude_ft is None or cruise_altitude_ft == flight.cruise_altitude_ft
+
     # Experimental front detection (#196): keep route_fronts.json in sync with
     # the auto_front_detection master so the overlays + advisory data follow the
     # pref on recalc. Recompute reads the precomputed Hewson snapshot — no
     # re-fetch. The advisory task then picks up (or no longer finds) the artifact;
     # whether the *grade* surfaces from a present artifact is then decided by the
     # independent per-profile fronts toggle (enabled_map, model B).
-    if auto_front_detection:
+    # A what-if altitude skips this like preview_advisories: it would rewrite
+    # route_fronts.json labelled at the probed altitude.
+    if persist and auto_front_detection:
         try:
             # A new altitude only relabels each model's primary level; the
             # detection itself is altitude-independent and costs ~20 s.
@@ -3980,7 +3992,7 @@ def recalculate_advisories(
             )
         except Exception:
             logger.warning("Front detection recompute failed during recalculate", exc_info=True)
-    else:
+    elif persist:
         # Pref off → drop any stale artifact so the advisory disappears.
         # Tolerate races / permission issues — a leftover artifact is not fatal.
         try:
@@ -4015,6 +4027,7 @@ def recalculate_advisories(
         cruise_speed_ias_kt=_resolve_cruise_ias_kt(db, flight),
         equipage=_resolve_equipage(db, flight),
         flight_duration_hours=flight.flight_duration_hours,
+        persist=persist,
     )
 
     if advisory_result.manifest is None:
