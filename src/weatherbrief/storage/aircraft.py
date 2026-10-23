@@ -236,13 +236,15 @@ def resolve_flight_aircraft(session: Session, flight) -> UserAircraftRow | None:
     return get_default_aircraft(session, user_id)
 
 
-def _default_profile_settings(session: Session, user_id: str) -> dict:
-    """Raw settings of the user's default profile ({} when none / unreadable)."""
-    row = session.execute(
+def _default_profile_row(session: Session, user_id: str) -> FlightProfileRow | None:
+    return session.execute(
         select(FlightProfileRow).where(
             FlightProfileRow.user_id == user_id, FlightProfileRow.is_default.is_(True),
         )
     ).scalars().first()
+
+
+def _profile_settings(row: FlightProfileRow | None) -> dict:
     if row is None or not row.settings_json:
         return {}
     try:
@@ -250,6 +252,21 @@ def _default_profile_settings(session: Session, user_id: str) -> dict:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _default_profile_settings(session: Session, user_id: str) -> dict:
+    """Raw settings of the user's default profile ({} when none / unreadable)."""
+    return _profile_settings(_default_profile_row(session, user_id))
+
+
+def default_profile_declares_fiki(session: Session, user_id: str) -> bool:
+    """The user's default profile says FIKI (the IFR FIKI template, or the
+    retired FIKI Icing card on): the answer a new aircraft's FIKI flag takes
+    when the client doesn't send one (#850)."""
+    from weatherbrief.analysis.advisories.aircraft_icing import profile_declares_fiki
+
+    row = _default_profile_row(session, user_id)
+    return row is not None and profile_declares_fiki(_profile_settings(row), row.system_template_key)
 
 
 def only_placeholder(session: Session, user_id: str) -> UserAircraftRow | None:

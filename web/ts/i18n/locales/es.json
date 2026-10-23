@@ -507,6 +507,8 @@
   "wizard.icaoTypeRequired": "Introduzca el tipo OACI de su aeronave (ZZZZ si no tiene).",
   "wizard.serviceCeiling": "Techo de servicio (ft)",
   "wizard.serviceCeilingPlaceholder": "p. ej. 17500",
+  "wizard.fiki": "Equipada FIKI (certificada para vuelo en engelamiento conocido)",
+  "wizard.fikiHint": "Los avisos de engelamiento dependen de ello: sin FIKI, cualquier engelamiento en crucero cuenta en contra del vuelo.",
   "wizard.missionGroup": "Su misión habitual",
   "wizard.missionGroupHint": "Cómo suele volar. Se guarda en su perfil; puede cambiarlo en cada vuelo.",
   "wizard.yourAircraft": "su aeronave",

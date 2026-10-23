@@ -278,6 +278,46 @@ class TestPlaceholderLifecycle:
         assert next(r for r in _rows(app_db) if r.id == pid).is_default
 
 
+# --- FIKI default from the profile (#850) ---------------------------------
+
+
+def _set_template(app_db, profile_id: int, key: str) -> None:
+    s = app_db()
+    s.get(FlightProfileRow, profile_id).system_template_key = key
+    s.commit()
+    s.close()
+
+
+class TestFikiDefaultFromProfile:
+    """An omitted ``is_fiki`` takes the default profile's answer: a pilot who
+    picked IFR FIKI isn't graded non-FIKI by a form that never asked."""
+
+    def test_ifr_fiki_template_defaults_fiki(self, client, app_db):
+        _set_template(app_db, _add_profile(app_db, {}), "ifr_fiki")
+        assert client.post("/api/aircraft", json={"icao_type": "PA46"}).json()["is_fiki"] is True
+
+    def test_retired_fiki_card_defaults_fiki(self, client, app_db):
+        _add_profile(app_db, {"advisories": {"enabled": {"fiki_icing": True}}})
+        assert client.post("/api/aircraft", json={"icao_type": "SR22"}).json()["is_fiki"] is True
+
+    def test_explicit_false_wins(self, client, app_db):
+        _set_template(app_db, _add_profile(app_db, {}), "ifr_fiki")
+        resp = client.post("/api/aircraft", json={"icao_type": "C172", "is_fiki": False})
+        assert resp.json()["is_fiki"] is False
+
+    def test_non_fiki_profile_defaults_non_fiki(self, client, app_db):
+        _set_template(app_db, _add_profile(app_db, {}), "ifr_conservative")
+        assert client.post("/api/aircraft", json={"icao_type": "SR22"}).json()["is_fiki"] is False
+
+    def test_no_profile_defaults_non_fiki(self, client, app_db):
+        assert client.post("/api/aircraft", json={"icao_type": "SR22"}).json()["is_fiki"] is False
+
+    def test_only_the_default_profile_counts(self, client, app_db):
+        _set_template(app_db, _add_profile(app_db, {}, is_default=False), "ifr_fiki")
+        _add_profile(app_db, {})
+        assert client.post("/api/aircraft", json={"icao_type": "SR22"}).json()["is_fiki"] is False
+
+
 # --- flights ---------------------------------------------------------------
 
 

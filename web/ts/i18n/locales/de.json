@@ -507,6 +507,8 @@
   "wizard.icaoTypeRequired": "Geben Sie den ICAO-Typ Ihres Flugzeugs ein (ZZZZ, falls es keinen hat).",
   "wizard.serviceCeiling": "Dienstgipfelhöhe (ft)",
   "wizard.serviceCeilingPlaceholder": "z. B. 17500",
+  "wizard.fiki": "FIKI-ausgerüstet (zugelassen für Flüge in bekannte Vereisung)",
+  "wizard.fikiHint": "Die Vereisungshinweise hängen davon ab: ohne FIKI zählt jede Vereisung im Reiseflug gegen den Flug.",
   "wizard.missionGroup": "Ihr üblicher Einsatz",
   "wizard.missionGroupHint": "Wie Sie üblicherweise fliegen. Wird in Ihrem Profil gespeichert und lässt sich pro Flug ändern.",
   "wizard.yourAircraft": "Ihrem Flugzeug",

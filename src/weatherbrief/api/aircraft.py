@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.db import current_user_id, get_db
 from weatherbrief.storage.aircraft import (
     create_aircraft,
+    default_profile_declares_fiki,
     delete_aircraft,
     ensure_default_aircraft,
     get_aircraft,
@@ -93,7 +94,10 @@ class CreateAircraftRequest(BaseModel):
     tail_number: str | None = None
     nickname: str | None = None
     is_ifr: bool = False
-    is_fiki: bool = False
+    # Omitted → the default profile's answer (the IFR FIKI template says yes), so
+    # a pilot who picked FIKI once isn't graded non-FIKI by a form that never
+    # asked (#850). An explicit false stays false.
+    is_fiki: bool | None = None
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool = False
@@ -209,7 +213,10 @@ def add_aircraft(
         tail_number=req.tail_number,
         nickname=req.nickname,
         is_ifr=req.is_ifr,
-        is_fiki=req.is_fiki,
+        is_fiki=(
+            req.is_fiki if req.is_fiki is not None
+            else default_profile_declares_fiki(db, user_id)
+        ),
         cruise_speed_kt=req.cruise_speed_kt,
         ceiling_ft=req.ceiling_ft,
         is_default=req.is_default,

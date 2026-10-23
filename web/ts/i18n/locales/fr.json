@@ -507,6 +507,8 @@
   "wizard.icaoTypeRequired": "Saisissez le type OACI de votre aéronef (ZZZZ s'il n'en a pas).",
   "wizard.serviceCeiling": "Plafond pratique (ft)",
   "wizard.serviceCeilingPlaceholder": "ex. 17500",
+  "wizard.fiki": "Équipé FIKI (certifié pour le vol en conditions givrantes connues)",
+  "wizard.fikiHint": "Les avis de givrage en dépendent : sans FIKI, tout givrage en croisière compte contre le vol.",
   "wizard.missionGroup": "Votre mission habituelle",
   "wizard.missionGroupHint": "Votre façon habituelle de voler. Enregistrée dans votre profil ; modifiable pour chaque vol.",
   "wizard.yourAircraft": "votre aéronef",

@@ -46,9 +46,12 @@ let wizardAircraft: AircraftResponse | null = null;
 /** True when wizardAircraft is a real aircraft the pilot had before the wizard:
  *  we then don't touch its IFR flag (that's the pilot's earlier answer). */
 let aircraftPreExisted = false;
-/** Field values of the aircraft group, kept across Back/Next re-renders. */
-interface AircraftDraft { name: string; icao: string; typeName: string; speed: string; ceiling: string }
-let aircraftDraft: AircraftDraft = { name: '', icao: '', typeName: '', speed: '', ceiling: '' };
+/** Field values of the aircraft group, kept across Back/Next re-renders.
+ *  `fiki` is null until the pilot ticks or unticks the box (or a real aircraft
+ *  already answered it): until then it follows the selected profile. */
+interface AircraftDraft { name: string; icao: string; typeName: string; speed: string; ceiling: string; fiki: boolean | null }
+const EMPTY_DRAFT: AircraftDraft = { name: '', icao: '', typeName: '', speed: '', ceiling: '', fiki: null };
+let aircraftDraft: AircraftDraft = { ...EMPTY_DRAFT };
 
 /** Show the welcome wizard. Returns a promise that resolves when the user finishes. */
 export async function showWelcomeWizard(
@@ -81,6 +84,19 @@ export async function showWelcomeWizard(
 
 function getSelectedProfile(): ProfileResponse | null {
   return allProfiles.find(p => p.id === selectedProfileId) ?? allProfiles[0] ?? null;
+}
+
+/** The profile says FIKI: the IFR FIKI template, or the retired FIKI Icing card
+ *  on. Mirrors the server's `profile_declares_fiki` (#850). */
+function profileSaysFiki(profile: ProfileResponse | null): boolean {
+  if (!profile) return false;
+  if (profile.system_template_key === 'ifr_fiki') return true;
+  return profile.settings?.advisories?.enabled?.fiki_icing === true;
+}
+
+/** The FIKI box's value: the pilot's answer, else the selected profile's. */
+function draftFiki(): boolean {
+  return aircraftDraft.fiki ?? profileSaysFiki(getSelectedProfile());
 }
 
 function createWizardDOM(onComplete: () => void): void {
@@ -219,6 +235,8 @@ function wireAircraftStep(): void {
   for (const id of ['#wiz-ac-ceiling', '#wiz-ceiling', '#wiz-ac-name', '#wiz-ac-icao']) {
     wizardEl.querySelector(id)?.addEventListener('input', updateWizardCeilingWarning);
   }
+  const fikiBox = wizardEl.querySelector('#wiz-ac-fiki') as HTMLInputElement | null;
+  fikiBox?.addEventListener('change', () => { aircraftDraft.fiki = fikiBox.checked; });
   updateWizardCeilingWarning();
 }
 
@@ -387,6 +405,12 @@ function renderAircraftStep(): string {
               <input type="number" id="wiz-ac-ceiling" value="${escapeHtml(d.ceiling)}" placeholder="${escapeHtml(t('wizard.serviceCeilingPlaceholder'))}" min="1000" max="60000" step="500">
             </div>
           </div>
+          <div class="wizard-form-row">
+            <div class="wizard-form-group">
+              <label class="checkbox-label"><input type="checkbox" id="wiz-ac-fiki"${draftFiki() ? ' checked' : ''}> ${t('wizard.fiki')}</label>
+              <p class="muted wizard-group-hint">${t('wizard.fikiHint')}</p>
+            </div>
+          </div>
         </fieldset>
 
         <fieldset class="wizard-group">
@@ -429,15 +453,16 @@ function renderAircraftStep(): string {
  *  only contributes its speed (carried over from the old profile speed); its
  *  "My aircraft" name and ZZZZ type are stand-ins, not the pilot's answers. */
 function draftFromAircraft(ac: AircraftResponse | null): AircraftDraft {
-  if (!ac) return { name: '', icao: '', typeName: '', speed: '', ceiling: '' };
+  if (!ac) return { ...EMPTY_DRAFT };
   const speed = ac.cruise_speed_kt != null ? String(ac.cruise_speed_kt) : '';
-  if (ac.is_placeholder) return { name: '', icao: '', typeName: '', speed, ceiling: '' };
+  if (ac.is_placeholder) return { ...EMPTY_DRAFT, speed };
   return {
     name: ac.nickname ?? '',
     icao: ac.icao_type,
     typeName: ac.type_name !== ac.icao_type ? ac.type_name : '',
     speed,
     ceiling: ac.ceiling_ft != null ? String(ac.ceiling_ft) : '',
+    fiki: ac.is_fiki,
   };
 }
 
@@ -605,6 +630,9 @@ async function saveWizardAircraft(rules: string): Promise<void> {
     ceiling_ft: Number.isFinite(ceiling) && ceiling > 0 ? ceiling : null,
     // Mirrors the placeholder rule: IFR-capable unless the pilot flies VFR only.
     ...(aircraftPreExisted ? {} : { is_ifr: rules !== 'vfr_only' }),
+    // Icing is graded for the aircraft (#827): the box, pre-ticked from the
+    // profile, so picking "IFR FIKI" a step earlier isn't lost (#850).
+    is_fiki: draftFiki(),
     is_default: true,
   };
   try {

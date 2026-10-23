@@ -595,6 +595,8 @@
   "wizard.icaoTypeRequired": "Enter your aircraft's ICAO type (use ZZZZ if it has none).",
   "wizard.serviceCeiling": "Service Ceiling (ft)",
   "wizard.serviceCeilingPlaceholder": "e.g. 17500",
+  "wizard.fiki": "FIKI equipped (approved for flight into known icing)",
+  "wizard.fikiHint": "Icing advisories are graded for this: without FIKI any icing at cruise counts against the flight.",
   "wizard.missionGroup": "Your usual mission",
   "wizard.missionGroupHint": "How you usually fly it. Saved to your profile; you can change it for each flight.",
   "wizard.yourAircraft": "your aircraft",
