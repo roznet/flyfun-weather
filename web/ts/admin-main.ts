@@ -811,6 +811,15 @@ const ACTIVITY_ROWS: { key: ActivityMetricKey; label: string; title: string; com
   { key: 'llm_tokens', label: 'LLM tokens', title: 'Users with a digest · briefing-digest tokens (input + output, any trigger)', compact: true },
 ];
 
+const PLATFORM_LABELS: Record<string, string> = { ios: 'iOS', android: 'Android', web: 'Web', mcp: 'MCP' };
+
+const PLATFORM_ROWS: { key: ActivityMetricKey; label: string; title: string }[] =
+  (['ios', 'android', 'web', 'mcp'] as const).map((p) => ({
+    key: `platform_${p}` as ActivityMetricKey,
+    label: PLATFORM_LABELS[p],
+    title: `Users who used ${PLATFORM_LABELS[p]} · user-days (UTC calendar days; 7d/30d include today; recorded since 2026-10-23)`,
+  }));
+
 function compactNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
@@ -820,14 +829,33 @@ function compactNumber(n: number): string {
 async function loadActivity(): Promise<void> {
   const tbody = document.getElementById('activity-tbody')!;
   try {
-    tbody.innerHTML = renderActivityRows(await fetchActivity());
+    const activity = await fetchActivity();
+    tbody.innerHTML = renderActivityRows(activity);
+    renderPlatformMix(activity);
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="muted" style="text-align:center;padding:1rem;">Failed to load activity: ${escapeHtml(String(err))}</td></tr>`;
   }
 }
 
+function renderPlatformMix(a: ActivityResponse): void {
+  const el = document.getElementById('platform-mix');
+  if (!el) return;
+  const mix = a.platform_mix_30d.map(
+    (m) => `${m.platforms.map((p) => PLATFORM_LABELS[p] ?? p).join(' + ')} <strong>${m.users}</strong>`,
+  );
+  el.innerHTML = mix.length ? `Platform mix, last 30 days (users): ${mix.join(' · ')}` : '';
+}
+
 function renderActivityRows(a: ActivityResponse): string {
-  return ACTIVITY_ROWS.map(({ key, label, title, compact }) => {
+  const platformHeader = `<tr class="activity-group"><td colspan="${a.windows.length + 1}">Platforms</td></tr>`;
+  return renderMetricRows(a, ACTIVITY_ROWS) + platformHeader + renderMetricRows(a, PLATFORM_ROWS);
+}
+
+function renderMetricRows(
+  a: ActivityResponse,
+  rows: { key: ActivityMetricKey; label: string; title: string; compact?: boolean }[],
+): string {
+  return rows.map(({ key, label, title, compact }) => {
     const m = a.metrics[key];
     const cells = a.windows.map((w) => {
       const count = m.count ? (compact ? compactNumber(m.count[w]) : m.count[w].toLocaleString()) : '';

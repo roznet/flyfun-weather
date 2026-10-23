@@ -43,11 +43,19 @@ export interface ActivityMetric {
 }
 
 export type ActivityMetricKey =
-  'new_users' | 'active_users' | 'new_briefings' | 'refreshes' | 'mcp' | 'auto_refreshes' | 'llm_tokens';
+  'new_users' | 'active_users' | 'new_briefings' | 'refreshes' | 'mcp' | 'auto_refreshes' | 'llm_tokens'
+  | 'platform_ios' | 'platform_android' | 'platform_web' | 'platform_mcp';
+
+export interface PlatformMix {
+  platforms: string[];
+  users: number;
+}
 
 export interface ActivityResponse {
   windows: ActivityWindow[];
   metrics: Record<ActivityMetricKey, ActivityMetric>;
+  /** Users per combination of platforms used in the last 30 days, most common first. */
+  platform_mix_30d: PlatformMix[];
 }
 
 export interface CreateAgentResponse {

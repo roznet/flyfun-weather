@@ -390,6 +390,9 @@ def record_mcp_tool_call(
     Posted by the MCP server's middleware with the user's own token after each
     tool returns; a user can only ever add rows to their own count.
     """
+    from weatherbrief.api.platform_usage import record_platform_day
+
     db.add(McpToolCallRow(
         user_id=user_id, tool=call.tool, ok=call.ok, elapsed_ms=call.elapsed_ms,
     ))
+    record_platform_day(db, user_id, "mcp")

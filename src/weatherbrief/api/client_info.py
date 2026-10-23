@@ -1,11 +1,13 @@
-"""Which client (iOS app, web browser, something else) sent a request.
+"""Which client (iOS app, Android app, web browser, something else) sent a request.
 
 Derived from the ``User-Agent`` header alone, so it needs no client change:
 the iOS app talks through ``URLSession``, whose default agent is
-``flyfun-weather/<build> CFNetwork/<v> Darwin/<v>``, and every browser —
-including mobile Safari on an iPhone — sends a ``Mozilla/5.0 …`` agent. That
-split is exactly the one we want: a pilot on their phone in Safari is a *web*
-user, not an app user.
+``flyfun-weather/<build> CFNetwork/<v> Darwin/<v>``; the Android app's API
+client is OkHttp with its default ``okhttp/<v>`` agent (its map-tile client
+sends ``FlyFunWeather-Android/<v>``); and every browser — including mobile
+Safari on an iPhone — sends a ``Mozilla/5.0 …`` agent. That split is exactly
+the one we want: a pilot on their phone in Safari is a *web* user, not an app
+user.
 """
 
 from __future__ import annotations
@@ -18,11 +20,13 @@ USER_AGENT_MAX_LEN = 256
 
 
 def classify_user_agent(user_agent: str | None) -> str | None:
-    """Return ``'ios'``, ``'web'`` or ``'other'``; ``None`` when there is no agent."""
+    """Return ``'ios'``, ``'android'``, ``'web'`` or ``'other'``; ``None`` when there is no agent."""
     if not user_agent:
         return None
     if "CFNetwork/" in user_agent:
         return "ios"
+    if user_agent.startswith(("okhttp/", "FlyFunWeather-Android/")):
+        return "android"
     if user_agent.startswith("Mozilla/"):
         return "web"
     return "other"

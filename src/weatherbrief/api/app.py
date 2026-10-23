@@ -82,7 +82,7 @@ def _on_delete_user(user_id: str, db):
     from weatherbrief.db.models import (
         BriefingRefreshJobRow, BriefingUsageRow, DeviceTokenRow, FeedbackRow,
         FlightBriefingSeenRow, FlightProfileRow, FlightRow, McpToolCallRow, PirepRow,
-        UserAircraftRow,
+        UserAircraftRow, UserPlatformDayRow,
     )
     from weatherbrief.storage.flights import _data_dir, _rmtree, safe_path_component
 
@@ -116,6 +116,9 @@ def _on_delete_user(user_id: str, db):
     ).delete(synchronize_session=False)
     db.query(McpToolCallRow).filter(
         McpToolCallRow.user_id == user_id
+    ).delete(synchronize_session=False)
+    db.query(UserPlatformDayRow).filter(
+        UserPlatformDayRow.user_id == user_id
     ).delete(synchronize_session=False)
     db.query(FeedbackRow).filter(
         FeedbackRow.user_id == user_id
@@ -422,6 +425,11 @@ def create_app() -> FastAPI:
     # Rolling JWT cookie — refreshes flyfun_auth when it drops below the
     # refresh threshold so active users stay logged in up to the hard cap.
     app.add_middleware(SlidingSessionMiddleware)
+    # Outside SlidingSession so it sees the scope's "session authenticated"
+    # mark after the response: per-user ios/android/web days (#879).
+    from weatherbrief.api.platform_usage import PlatformUsageMiddleware
+
+    app.add_middleware(PlatformUsageMiddleware)
 
     if is_dev_mode():
         app.add_middleware(

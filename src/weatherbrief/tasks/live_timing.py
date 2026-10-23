@@ -236,7 +236,7 @@ def write_tick_rows(db: Session, rows: list[LiveTickTimingRow]) -> int:
 
 def platform_of(client: str | None) -> str:
     """``live_delivery.platform`` from ``api/client_info.classify_user_agent``."""
-    return client if client in ("ios", "web") else "other"
+    return client if client in ("ios", "android", "web") else "other"
 
 
 # (flight, user, platform) -> newest live_updated_at already recorded. Spares

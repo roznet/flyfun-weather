@@ -431,8 +431,8 @@ Authentication (from flyfun-common) supports both JWT cookies (`flyfun_auth`, cr
 | `/api/user/preferences/autorouter` | DELETE | Clear autorouter credentials |
 | `/api/user/usage` | GET | Today/month usage summary with quotas |
 | `/api/admin/users` | GET | All users with briefing + LLM-token counts (30d / all; DB only, no disk walk) (admin only) |
-| `/api/admin/activity` | GET | Users / events per window (today, yesterday, 7d, 30d, lifetime): new users, active (incl. `users.last_seen_at`), new briefings, refreshes, MCP tool calls, auto-refreshes, LLM tokens — the Usage tab's top table (admin) |
-| `/api/mcp/tool-calls` | POST | One `mcp_tool_calls` row per MCP tool call, posted by the MCP server's middleware with the caller's token (#873) |
+| `/api/admin/activity` | GET | Users / events per window (today, yesterday, 7d, 30d, lifetime): new users, active (incl. `users.last_seen_at`), new briefings, refreshes, MCP tool calls, auto-refreshes, LLM tokens, per-platform users (iOS / Android / web / MCP from `user_platform_days`, #879) + 30-day platform mix — the Usage tab's top table (admin) |
+| `/api/mcp/tool-calls` | POST | One `mcp_tool_calls` row per MCP tool call, posted by the MCP server's middleware with the caller's token (#873); also records the `mcp` platform day |
 | `/api/admin/users/{id}/costs` | GET | Per-user cost detail: balance, transactions, breakdown (admin) |
 | `/api/admin/users/{id}/approve` | POST | Approve user (admin only) |
 | `/api/admin/approve/{id}` | GET | One-click HMAC-signed approval link |

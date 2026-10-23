@@ -15,6 +15,9 @@ from weatherbrief.api.client_info import USER_AGENT_MAX_LEN, classify_user_agent
      "(KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1", "web"),
     ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
      "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", "web"),
+    # Android app: OkHttp's default agent on API calls, its own on map tiles.
+    ("okhttp/4.12.0", "android"),
+    ("FlyFunWeather-Android/1.0 (https://weather.flyfun.aero)", "android"),
     ("python-httpx/0.28.1", "other"),
     ("curl/8.7.1", "other"),
     ("", None),

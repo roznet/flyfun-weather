@@ -12,7 +12,7 @@ import secrets
 import time
 import uuid
 from base64 import urlsafe_b64encode
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -32,7 +32,7 @@ from flyfun_common.admin import (
 from flyfun_common.db.models import CostLedgerRow
 from weatherbrief.privacy import mask_email
 from weatherbrief.db.models import (
-    BriefingUsageRow, FlightRow, McpToolCallRow,
+    BriefingUsageRow, FlightRow, McpToolCallRow, UserPlatformDayRow,
 )
 from weatherbrief.notify.admin_email import APPROVE_LINK_EXPIRY_SECONDS, get_admin_emails, is_admin_email
 from weatherbrief.api.security import audit_admin_action
@@ -294,6 +294,40 @@ def _activity_windows(now: datetime) -> dict[str, tuple[datetime | None, datetim
     }
 
 
+def _day_windows(today: date) -> dict[str, tuple[date | None, date | None]]:
+    """``_activity_windows`` on a calendar-day column: the 7/30-day windows
+    include today, so "week" is today and the 6 days before."""
+    return {
+        "today": (today, None),
+        "yesterday": (today - timedelta(days=1), today),
+        "week": (today - timedelta(days=6), None),
+        "month": (today - timedelta(days=29), None),
+        "lifetime": (None, None),
+    }
+
+
+#: ``user_platform_days.platform`` values, in display order.
+_PLATFORMS = ("ios", "android", "web", "mcp")
+
+
+def _platform_mix(db: Session, since: date) -> list[dict]:
+    """Users per combination of platforms used since ``since`` (e.g. ios+web: 4)."""
+    upd = UserPlatformDayRow
+    by_user: dict[str, set[str]] = {}
+    for user_id, platform in db.execute(
+        select(upd.user_id, upd.platform).where(upd.day >= since).distinct()
+    ):
+        by_user.setdefault(user_id, set()).add(platform)
+    combos: dict[tuple[str, ...], int] = {}
+    for platforms in by_user.values():
+        key = tuple(p for p in _PLATFORMS if p in platforms) + tuple(sorted(platforms - set(_PLATFORMS)))
+        combos[key] = combos.get(key, 0) + 1
+    return [
+        {"platforms": list(k), "users": n}
+        for k, n in sorted(combos.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
+
 def _window_counts(db: Session, ts, user, windows, *, where=(), row=None, agg=func.count) -> dict:
     """Distinct ``user`` (and, with ``row``, ``agg(row)``) per window — one query.
 
@@ -350,8 +384,15 @@ def activity_summary(
       ``MCP_TOOL_CALL_RETENTION_DAYS``, 365 by default).
     - ``auto_refreshes``: scheduler-run briefings.
     - ``llm_tokens``: briefing-digest tokens (input + output), any trigger.
+    - ``platform_<p>`` (ios / android / web / mcp): users who used that
+      platform · user-days, on UTC calendar days (``user_platform_days``,
+      recorded since #879). ``platform_mix_30d``: users per combination of
+      platforms used in the last 30 days.
     """
-    windows = _activity_windows(datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    windows = _activity_windows(now)
+    day_windows = _day_windows(now.date())
+    upd = UserPlatformDayRow
     bu = BriefingUsageRow
     user_requested = or_(bu.triggered_by.is_(None), bu.triggered_by.notin_(_UNATTENDED_TRIGGERS))
     first_briefing_ids = select(func.min(bu.id)).group_by(bu.flight_id)
@@ -397,7 +438,15 @@ def activity_summary(
                 db, bu.timestamp, bu.user_id, windows, row=llm_tokens, agg=func.sum,
                 where=(bu.llm_digest.is_(True),),
             ),
+            **{
+                f"platform_{p}": _window_counts(
+                    db, upd.day, upd.user_id, day_windows, row=upd.id,
+                    where=(upd.platform == p,),
+                )
+                for p in _PLATFORMS
+            },
         },
+        "platform_mix_30d": _platform_mix(db, day_windows["month"][0]),
     }
 
 

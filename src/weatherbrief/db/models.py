@@ -2139,7 +2139,7 @@ class LiveDeliveryRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     flight_id: Mapped[str] = mapped_column(String(256), nullable=False)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    # ios | web | agent | other (api/client_info.py). iPadOS is not told
+    # ios | android | web | agent | other (api/client_info.py). iPadOS is not told
     # apart: the app's default URLSession agent is the same on both.
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     served_live_updated_at: Mapped[datetime] = mapped_column(TZDateTime(fsp=6), nullable=False)
@@ -2173,3 +2173,26 @@ class McpToolCallRow(Base):
     tool: Mapped[str] = mapped_column(String(64), nullable=False)
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class UserPlatformDayRow(Base):
+    """A user used a client platform on a UTC day (#879 platform split).
+
+    One row per (day, user, platform): ``ios`` / ``android`` / ``web`` from the
+    User-Agent of a session-authenticated request (``api/platform_usage.py``),
+    ``mcp`` from a logged MCP tool call. Presence only, no counts — "which
+    platforms do people use, and how many days" is the question it answers.
+    """
+
+    __tablename__ = "user_platform_days"
+    __table_args__ = (
+        UniqueConstraint("day", "user_id", "platform", name="uq_user_platform_day"),
+        Index("ix_user_platform_days_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date_t] = mapped_column(Date, nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)

@@ -175,6 +175,13 @@
       margin-top: 0.75rem;
     }
 
+    .activity-table tr.activity-group td {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      padding-top: 0.8rem;
+    }
     .activity-table td.num .ev {
       color: var(--text-muted);
       font-size: 0.8em;
@@ -418,8 +425,9 @@
           </table>
         </div>
         <p class="muted" style="margin:0.4rem 0 0;font-size:0.75rem;">
-          Users, with events (or tokens) in grey. Hover a row name for what it counts.
+          Users, with events (or tokens, or user-days for platforms) in grey. Hover a row name for what it counts.
         </p>
+        <p id="platform-mix" class="muted" style="margin:0.3rem 0 0;font-size:0.8rem;"></p>
       </div>
 
       <!-- Pending approvals -->
