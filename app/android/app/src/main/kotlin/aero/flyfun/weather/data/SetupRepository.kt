@@ -107,7 +107,7 @@ class FixtureSetupRepository(setupCompleted: Boolean) : SetupRepository {
             isFiki = req.isFiki,
             isDefault = req.isDefault,
         )
-        // Like the server: a default POST over a sole placeholder replaces it.
+        // Like the server (`api/aircraft.py`, #777): a default POST over a sole placeholder replaces it.
         storedAircraft = if (req.isDefault && storedAircraft.size == 1 && storedAircraft[0].isPlaceholder) {
             listOf(created)
         } else {

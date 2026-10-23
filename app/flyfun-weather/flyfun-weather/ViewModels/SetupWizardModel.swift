@@ -147,6 +147,8 @@ final class SetupWizardModel {
     /// and skipped, like the web; Settings stays the place to fix them.
     @discardableResult
     func next() async -> Bool {
+        // A second tap while the aircraft POST is in flight must not create a second aircraft.
+        guard !isSaving else { return false }
         errorMessage = nil
         switch step {
         case .welcome:
