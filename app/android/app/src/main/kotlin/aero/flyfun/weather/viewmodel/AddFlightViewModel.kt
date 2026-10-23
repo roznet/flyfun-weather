@@ -846,6 +846,7 @@ class AddFlightViewModel(
                     queueRefresh(flight.id)
                 } else {
                     runCatching { repository.recalculateAdvisories(flight.id, pack.fetchTimestamp) }
+                        .onFailure { _saveWarning.value = BRIEFING_NOT_UPDATED_WARNING }
                 }
             }
             FlightInvalidation.REFETCH_NEEDED -> queueRefresh(flight.id)
@@ -854,11 +855,16 @@ class AddFlightViewModel(
 
     /**
      * Queue a refresh. A 409 means one is already running on the *old* values, so retry in the
-     * background until it clears (the briefing's own ↻ is the backstop if it never does).
+     * background until it clears (the briefing's own ↻ is the backstop if it never does). Any
+     * other failure means no refresh is coming, so the pilot is told to use ↻.
      */
     private suspend fun queueRefresh(flightId: String) {
         val first = runCatching { repository.triggerRefresh(flightId) }
-        if (first.isSuccess || !isConflict(first.exceptionOrNull())) return
+        if (first.isSuccess) return
+        if (!isConflict(first.exceptionOrNull())) {
+            _saveWarning.value = BRIEFING_NOT_UPDATED_WARNING
+            return
+        }
         (backgroundScope ?: scope).launch {
             repeat(QUEUE_REFRESH_ATTEMPTS) {
                 delay(QUEUE_REFRESH_RETRY_MS)
@@ -927,6 +933,9 @@ class AddFlightViewModel(
         }
 
         private fun iso(instant: Instant): String = DateTimeFormatter.ISO_INSTANT.format(instant)
+
+        const val BRIEFING_NOT_UPDATED_WARNING =
+            "The flight saved, but its briefing didn't update. Tap ↻ on the briefing to refresh it."
 
         private fun isConflict(error: Throwable?): Boolean =
             (error as? ApiError.ServerError)?.statusCode == 409

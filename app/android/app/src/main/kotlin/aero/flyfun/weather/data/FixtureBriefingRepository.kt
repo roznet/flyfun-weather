@@ -770,9 +770,11 @@ open class FixtureBriefingRepository(
 
     /** Invalidation the next [updateFlight] reports, so tests can drive the post-save paths. */
     var nextInvalidation: FlightInvalidation = FlightInvalidation.NONE
-    /** When set, `updateFlight` / `interpretRoute` throw it (tests). */
+    /** When set, `updateFlight` / `interpretRoute` / `triggerRefresh` / `recalculateAdvisories` throw it (tests). */
     var updateFlightError: Throwable? = null
     var interpretRouteError: Throwable? = null
+    var triggerRefreshError: Throwable? = null
+    var recalculateAdvisoriesError: Throwable? = null
     var savedDebrief: DebriefResponse? = null
 
     override suspend fun listFlights(): List<FlightResponse> = flights.toList()
@@ -920,8 +922,10 @@ open class FixtureBriefingRepository(
     override suspend fun altAdvisories(flightId: String, timestamp: String): AdvisoriesResponse =
         FixtureBriefingData.advisories
 
-    override suspend fun recalculateAdvisories(flightId: String, timestamp: String): AdvisoriesResponse =
-        FixtureBriefingData.advisories
+    override suspend fun recalculateAdvisories(flightId: String, timestamp: String): AdvisoriesResponse {
+        recalculateAdvisoriesError?.let { throw it }
+        return FixtureBriefingData.advisories
+    }
 
     override suspend fun recalculateAltAdvisories(flightId: String, timestamp: String): AdvisoriesResponse =
         FixtureBriefingData.advisories
@@ -982,6 +986,7 @@ open class FixtureBriefingRepository(
         }
 
     override suspend fun triggerRefresh(flightId: String, force: Boolean): RefreshStatusResponse {
+        triggerRefreshError?.let { throw it }
         refreshTriggeredFor += flightId
         return RefreshStatusResponse(status = "queued", flightId = flightId)
     }

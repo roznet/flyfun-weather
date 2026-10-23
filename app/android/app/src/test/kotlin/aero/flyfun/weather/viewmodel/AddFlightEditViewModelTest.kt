@@ -84,6 +84,42 @@ class AddFlightEditViewModelTest {
     }
 
     @Test
+    fun aRefreshThatFailsToQueueWarnsAfterTheSave() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        repo.nextInvalidation = FlightInvalidation.REFETCH_NEEDED
+        repo.triggerRefreshError = ApiError.ServerError(500, "boom")
+        vm.loadExistingFlight(repo.flight("fixture-2"))
+
+        vm.setDepartureTime(LocalTime.of(12, 0))
+        var saved: FlightResponse? = null
+        vm.saveFlight { saved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        // The PATCH committed, so the sheet closes; the stale briefing is not silent.
+        assertNotNull(saved)
+        assertEquals(AddFlightViewModel.BRIEFING_NOT_UPDATED_WARNING, vm.saveWarning.value)
+    }
+
+    @Test
+    fun aFailedAdvisoryRecalculationWarnsAfterTheSave() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val (repo, vm) = setUp(testScope)
+        repo.nextInvalidation = FlightInvalidation.ADVISORIES_ONLY
+        repo.recalculateAdvisoriesError = java.io.IOException("offline")
+        // fixture-1 has a pack, so this takes the recalculate path rather than a refresh.
+        vm.loadExistingFlight(repo.flight("fixture-1"))
+
+        vm.setCruiseAltitudeFt(9500)
+        var saved: FlightResponse? = null
+        vm.saveFlight { saved = it }
+        testScope.testScheduler.advanceUntilIdle()
+
+        assertNotNull(saved)
+        assertEquals(AddFlightViewModel.BRIEFING_NOT_UPDATED_WARNING, vm.saveWarning.value)
+    }
+
+    @Test
     fun aMidRouteEditSendsTheResolvedWaypointsAndTheTextAsTyped() = runTest {
         val testScope = TestScope(StandardTestDispatcher(testScheduler))
         val (repo, vm) = setUp(testScope)
