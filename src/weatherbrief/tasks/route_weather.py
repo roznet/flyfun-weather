@@ -886,6 +886,7 @@ def run_route_sigmets(
             enroute_distance_from_nm=rs.enroute_distance_from_nm,
             enroute_distance_to_nm=rs.enroute_distance_to_nm,
             coords=[tuple(c) for c in s.coords],
+            coords_source=s.coords_source,
         ))
 
     # Order by corridor progression so web + PDF rows scan front-to-back.
