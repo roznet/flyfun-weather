@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-24",
+    "title": "iOS 1.18 — First-run setup and a smarter Check Briefing",
+    "category": "app_release",
+    "highlight": true,
+    "body": "- New first-run setup: choose your default profile, add your aircraft (including whether it's FIKI equipped) and your usual kind of flying in a few quick steps. You can skip it, and it only appears once per account.\n- Check Briefing with Siri and Shortcuts: on the day of your flight it now starts with any live alerts and the latest highlight, then gives the briefing's grade. It also shows a card with Refresh and Open Briefing buttons.\n- Observations: when an airport has no METAR or TAF of its own, a line now names the nearby airport used in its place."
+  }
+]
