@@ -3097,6 +3097,29 @@ _KT_PER_MS = 1.94384  # knots per m/s
 _RD_DRY_AIR = 287.05  # specific gas constant for dry air, J/(kg·K)
 
 
+_MAGNUS_A = 17.67
+_MAGNUS_B_C = 243.5
+_MAGNUS_RH_FLOOR_PCT = 0.1  # avoid log(0)
+
+
+def magnus_dewpoint_c(t_c, rh_pct):
+    """Dewpoint (°C) from T (°C) and RH (%) by Magnus over water.
+
+    The one definition for every GRIB path: the sounding decode below (floats)
+    and the Hewson grid (numpy arrays, ``hewson/grib_source.py``), so a
+    briefing Td and a Hewson θe at the same point cannot drift apart. RH is
+    floored at 0.1 %; RH above 100 % (model supersaturation) is kept.
+    """
+    if isinstance(rh_pct, (int, float)):
+        log_rh = math.log(max(rh_pct, _MAGNUS_RH_FLOOR_PCT) / 100.0)
+    else:
+        import numpy as np
+
+        log_rh = np.log(np.maximum(rh_pct, _MAGNUS_RH_FLOOR_PCT) / 100.0)
+    gamma = _MAGNUS_A * t_c / (_MAGNUS_B_C + t_c) + log_rh
+    return _MAGNUS_B_C * gamma / (_MAGNUS_A - gamma)
+
+
 def _convert_raw_sounding(
     raw: dict[str, float],
     pressure_hpa: int,
@@ -3150,11 +3173,9 @@ def _convert_raw_sounding(
     if d_k is not None:
         out["dewpoint_c"] = d_k - 273.15
     elif out.get("temperature_c") is not None and out.get("relative_humidity_pct") is not None:
-        t_c = out["temperature_c"]
-        rh_val = max(out["relative_humidity_pct"], 0.1)  # avoid log(0)
-        a, b = 17.67, 243.5
-        gamma = a * t_c / (b + t_c) + math.log(rh_val / 100.0)
-        out["dewpoint_c"] = b * gamma / (a - gamma)
+        out["dewpoint_c"] = magnus_dewpoint_c(
+            out["temperature_c"], out["relative_humidity_pct"],
+        )
 
     # Geopotential height: prefer delivered gh (gpm ≈ m), fall back to z/g.
     # ECMWF delivers z only at level 1 by catalogue design; for pre-amendment
