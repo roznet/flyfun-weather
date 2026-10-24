@@ -934,7 +934,13 @@ def _select_ecmwf_window_steps(
         if flight_start - margin <= valid_time <= flight_end + margin
     }
 
-    before = [s for s in all_steps if s[2] < flight_start]
+    # Strictly before the departure HOUR, not the departure minute: the
+    # GRIB-primary window starts at floor(departure) (#912), and that hour's
+    # rate needs the step before the one covering it. A 15:30 departure at
+    # +99.5h otherwise kept 99 as its own lower bracket, so precipitation at
+    # 15Z had no predecessor and every point fell back to Open-Meteo.
+    start_hour = flight_start.replace(minute=0, second=0, microsecond=0)
+    before = [s for s in all_steps if s[2] < start_hour]
     if before:
         keep.add(max(before, key=lambda s: s[2])[0])
 

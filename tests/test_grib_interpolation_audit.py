@@ -328,6 +328,18 @@ class TestEcmwfWindowStepSelection:
         selected = self._select(dep_hour)
         assert any(s < dep_hour for s in selected)
 
+    @pytest.mark.parametrize("dep_hour", [99.5, 96.25, 150.5, 156.75])
+    def test_departure_between_hours_keeps_the_departure_hours_predecessor(
+        self, dep_hour,
+    ):
+        """A 15:30 departure at +99.5h (prod, #912): the window starts at the
+        departure hour (+99), whose rate needs the step before it (+96)."""
+        selected = self._select(dep_hour)
+        floor_h = int(dep_hour)
+        assert any(s < floor_h for s in selected), (
+            f"+{dep_hour}h: no step before the departure hour: {selected}"
+        )
+
     def test_exact_step_itself_is_still_retained(self):
         """Making the lower bracket strict must not drop the departure step —
         the margin window still covers it."""
