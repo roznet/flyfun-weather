@@ -1,6 +1,7 @@
 package aero.flyfun.weather.viewmodel
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aero.flyfun.common.AuthConfig
@@ -31,8 +32,10 @@ import aero.flyfun.weather.model.PendingNavigation
 import aero.flyfun.weather.model.UniversalLinkRouter
 import aero.flyfun.weather.model.UserPreferencesResponse
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -159,6 +162,8 @@ class AppStateViewModel(
 
     private val _showSetupWizard = MutableStateFlow(false)
 
+    private var setupCheckJob: Job? = null
+
     /** The first-run setup wizard is up: the account's `setup_completed` is false (#900). */
     val showSetupWizard: StateFlow<Boolean> = _showSetupWizard.asStateFlow()
 
@@ -249,17 +254,27 @@ class AppStateViewModel(
      * dropped.
      */
     fun checkSetupNeeded() {
+        // One check at a time: an earlier one answering after this sign-in (or after a dismiss)
+        // must not raise the wizard again.
+        setupCheckJob?.cancel()
         if (!_isAuthenticated.value) return
         val repo = setupRepository ?: return
-        scope.launch {
-            runCatching { repo.setupCompleted() }.onSuccess { done ->
-                if (!done && setupRepository === repo && _isAuthenticated.value) _showSetupWizard.value = true
-            }
+        setupCheckJob = scope.launch {
+            runCatching { repo.setupCompleted() }
+                .onSuccess { done ->
+                    if (!done && setupRepository === repo && _isAuthenticated.value) _showSetupWizard.value = true
+                }
+                .onFailure { err ->
+                    if (err is CancellationException) throw err
+                    // android.util.Log is a stub in JVM unit tests; never let logging fail the check.
+                    runCatching { Log.w(TAG, "Setup check failed, wizard not offered this launch: ${err.message}") }
+                }
         }
     }
 
     /** The wizard finished or was skipped (it has already told the server). */
     fun dismissSetupWizard() {
+        setupCheckJob?.cancel()
         _showSetupWizard.value = false
     }
 
@@ -571,5 +586,6 @@ class AppStateViewModel(
     private companion object {
         /** Registered in the manifest and on the server's allowed callback schemes (as on iOS). */
         const val AUTOROUTER_CALLBACK_SCHEME = "flyfunweather"
+        const val TAG = "AppState"
     }
 }

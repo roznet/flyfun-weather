@@ -227,10 +227,23 @@ class SetupWizardViewModel(
      * default-profile write that fails is logged and skipped, like the web.
      */
     suspend fun next(): Boolean {
-        // A second tap while the aircraft POST is in flight must not create a second aircraft.
-        if (_state.value.isSaving) return false
         if (_state.value.loadFailed && _state.value.step != SetupStep.WELCOME) return false
-        _state.update { it.copy(errorMessage = null) }
+        // A second tap while a step saves must not repeat its writes (a second aircraft POST, a
+        // second profile PUT): claimed atomically, held for the whole step.
+        var claimed = false
+        _state.update {
+            claimed = !it.isSaving
+            if (claimed) it.copy(isSaving = true, errorMessage = null) else it
+        }
+        if (!claimed) return false
+        try {
+            return advance()
+        } finally {
+            _state.update { it.copy(isSaving = false) }
+        }
+    }
+
+    private suspend fun advance(): Boolean {
         when (_state.value.step) {
             SetupStep.WELCOME -> _state.update { it.copy(step = SetupStep.PROFILE) }
             SetupStep.PROFILE -> {
@@ -292,7 +305,6 @@ class SetupWizardViewModel(
             _state.update { it.copy(icaoTypeMissing = true) }
             return false
         }
-        _state.update { it.copy(isSaving = true) }
         val nickname = s.nickname.trim()
         val speed = SetupWizardState.positiveInt(s.cruiseSpeedKt)
         val ceiling = SetupWizardState.positiveInt(s.serviceCeilingFt)
@@ -331,7 +343,7 @@ class SetupWizardViewModel(
         }
         val aircraft = saved.getOrElse { err ->
             logError("Failed to save the wizard aircraft", err)
-            _state.update { it.copy(isSaving = false, errorMessage = "Couldn't save your aircraft: ${err.message ?: err}") }
+            _state.update { it.copy(errorMessage = "Couldn't save your aircraft: ${err.message ?: err}") }
             return false
         }
         _state.update { it.copy(savedAircraft = aircraft) }
@@ -346,13 +358,10 @@ class SetupWizardViewModel(
                 .onFailure { err ->
                     // The aircraft is saved (and now PUT on a retry); stay so the mission isn't lost.
                     logError("Failed to save the wizard mission", err)
-                    _state.update {
-                        it.copy(isSaving = false, errorMessage = "Couldn't save your usual mission: ${err.message ?: err}")
-                    }
+                    _state.update { it.copy(errorMessage = "Couldn't save your usual mission: ${err.message ?: err}") }
                     return false
                 }
         }
-        _state.update { it.copy(isSaving = false) }
         return true
     }
 

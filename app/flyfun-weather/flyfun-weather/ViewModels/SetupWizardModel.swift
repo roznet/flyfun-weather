@@ -160,8 +160,11 @@ final class SetupWizardModel {
     /// and skipped, like the web; Settings stays the place to fix them.
     @discardableResult
     func next() async -> Bool {
-        // A second tap while the aircraft POST is in flight must not create a second aircraft.
+        // A second tap while a step saves must not repeat its writes (a second
+        // aircraft POST, a second profile PUT): held for the whole step.
         guard !isSaving, !(loadFailed && step != .welcome) else { return false }
+        isSaving = true
+        defer { isSaving = false }
         errorMessage = nil
         switch step {
         case .welcome:
@@ -259,8 +262,6 @@ final class SetupWizardModel {
             icaoTypeMissing = true
             return false
         }
-        isSaving = true
-        defer { isSaving = false }
 
         let nick = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         let speed = Self.positiveInt(cruiseSpeedKt)

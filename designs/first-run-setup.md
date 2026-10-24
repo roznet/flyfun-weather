@@ -58,6 +58,10 @@ All three make the same server calls; the server is unchanged by the mobile port
   a failed load of profiles or aircraft shows Retry and blocks Next past welcome (no duplicate
   default aircraft, no `setup-complete` over profile writes that never ran). Only the
   default-profile PUT is logged and skipped, as on the web.
+- **One write at a time.** Each Next holds `isSaving` for its whole step, and Skip is disabled
+  while it is set, so a double tap never repeats a write and a save never finishes behind a
+  closed wizard. The `/auth/me` check drops a late answer for a changed session (and on Android
+  a superseded check is cancelled), so a dismissed wizard does not come back that launch.
 - **Demo mode** (Android "Explore Demo Briefings") has no account, so no wizard.
 
 ## Testing

@@ -738,10 +738,20 @@ final class AppState {
 
     /// Offer the first-run setup wizard when this account hasn't done it on
     /// any client (#900). Read once per sign-in from `/auth/me`; offline or
-    /// on any error the wizard simply isn't shown this time.
+    /// on any error the wizard simply isn't shown this time. A late answer
+    /// for a session that has since changed (sign-out, another sign-in) is
+    /// dropped, as on Android.
     func checkSetupNeeded() async {
-        guard let setupRepository, !showSetupWizard,
-              let done = try? await setupRepository.setupCompleted() else { return }
+        guard let setupRepository, !showSetupWizard else { return }
+        let session = jwt
+        let done: Bool
+        do {
+            done = try await setupRepository.setupCompleted()
+        } catch {
+            Self.logger.warning("Setup check failed, wizard not offered this launch: \(error)")
+            return
+        }
+        guard !Task.isCancelled, jwt == session else { return }
         if !done { showSetupWizard = true }
     }
 

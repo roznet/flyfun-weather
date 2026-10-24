@@ -28,7 +28,9 @@ struct SetupWizardView: View {
             .toolbar {
                 if model.step != .done {
                     ToolbarItem(placement: .cancellationAction) {
+                        // Not while a save is in flight: its failure would land on a closed wizard.
                         Button("Skip") { finish() }
+                            .disabled(model.isSaving)
                             .accessibilityIdentifier("setupSkipButton")
                     }
                 }

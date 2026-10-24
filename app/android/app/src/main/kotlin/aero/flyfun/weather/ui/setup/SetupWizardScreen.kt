@@ -80,7 +80,8 @@ fun SetupWizardScreen(
                 title = { Text(titleFor(state.step)) },
                 actions = {
                     if (state.step != SetupStep.DONE) {
-                        TextButton(onClick = finish, modifier = Modifier.testTag("setupSkipButton")) {
+                        // Not while a save is in flight: its failure would land on a closed wizard.
+                        TextButton(onClick = finish, enabled = !state.isSaving, modifier = Modifier.testTag("setupSkipButton")) {
                             Text("Skip")
                         }
                     }
