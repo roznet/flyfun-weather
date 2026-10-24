@@ -84,7 +84,10 @@ retrospective set). `scheduler.py` only wraps it in a loop.
   pins the GRIB run instead of taking the newest (no purge), so a cycle that
   already has an Open-Meteo snapshot can be recomputed within its 48 h
   retention. Diff two trees with `scripts/compare_hewson_sources.py` (fields,
-  plus route crossings with `--route`).
+  with a signed mean θe Δ for a systematic offset, plus route crossings with
+  `--route`). ECMWF needs `--b-init`: Open-Meteo labels its ECMWF snapshots
+  06/18 Z while the a2 GRIB is 00/12 Z, so no init is in both trees, and B is
+  matched to A on valid time instead.
 
 ### Front detection: source-agnostic, config-driven (#195)
 

@@ -6732,8 +6732,25 @@ front crossings in briefings.
 
 **Measured.** Side-by-side diff per model and level (`scripts/compare_hewson_sources.py`,
 θe and |∇θe| max/mean |Δ|, share of cells where only one source reaches
-4 K/100 km, plus route crossings with `--route`): **pending, to be run on the
-compute node** for one cycle against the last Open-Meteo snapshot of the same
-init (`hewson precompute --init <that init> --output-dir …`; recorded on the PR). The cloud session that wrote this could reach only
+4 K/100 km, plus route crossings with `--route`). **Run on the mini 2026-10-24**
+for init 00Z, GRIB vs the Open-Meteo snapshot of the same init (ECMWF vs
+Open-Meteo's 2026-10-23 18Z via `--b-init`, since no init is in both trees).
+Signed mean θe Δ (GRIB − Open-Meteo), 700 / 850 / 925 hPa:
+
+| model | mean Δ (K) | mean \|Δ\| (K) | ≥ 4 K/100 km disagree |
+|---|---|---|---|
+| GFS | +0.00 / −0.01 / −0.01 | 0.11–0.12 | 9–10 % |
+| ICON-EU | +0.01 / +0.05 / +0.06 | 0.35–0.41 | 18–22 % |
+| ECMWF (6 h lead apart) | +0.04 / +0.15 / +0.11 | 1.4–2.0 | 47–63 % |
+
+No systematic offset, so the Open-Meteo-calibrated thresholds carry over.
+GFS is the same field both ways. ICON's larger band disagreement is native
+ICON-EU vs Open-Meteo's D2/EU/global blend; ECMWF's |Δ| is the 6 h lead
+difference, not the source. Missing cells: 0.00 % for every input at every
+level in ICON-EU and ECMWF (probed f000/f039/f078/f117): the GRIB fills
+below-ground cells, so the 5 % limit does not trip at 925 hPa. Route check
+EGTF→LFMD (850 hPa): GFS crossing identical; ICON's cold front 23 km earlier,
+|∇θe| 17.6 vs 13.2 (the sharper native gradient expected above). The 700 hPa
+Magnus-over-ice bias is not visible in an October cycle; recheck in winter. The cloud session that wrote this could reach only
 GFS on S3 (one real run, 2026-10-24 06Z: θe 283–333 K, no NaN, a cold front
 picked up near Paris by the route detector), not Open-Meteo, DWD or ECMWF.

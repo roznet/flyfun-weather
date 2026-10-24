@@ -288,7 +288,7 @@ def test_cli_exit_code_flags_failed_models(monkeypatch, skipped, rc):
     args = argparse.Namespace(
         models=None, levels=None, output_dir=None, forecast_days=5,
         stride_hours=3, retention_hours=48, dry_run=False, force=False, date=None,
-        source="grib")
+        source="grib", init=None, allow_stale=False)
     assert cli._cmd_precompute(args) == rc
 
 

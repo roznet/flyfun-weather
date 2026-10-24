@@ -2,7 +2,7 @@
 """Side-by-side diff of two Hewson snapshot trees (#911: GRIB vs Open-Meteo).
 
     compare_hewson_sources.py GRIB_ROOT OM_ROOT [--models ecmwf,gfs,icon] [--init ISO]
-        [--route "LAT,LON LAT,LON ..." --depart ISO [--kt 120] [--alt 6000]]
+        [--b-init ISO] [--route "LAT,LON LAT,LON ..." --depart ISO [--kt 120] [--alt 6000]]
 
 Each root is a ``hewson/`` directory (``<model>/<init>.npz``). For every model
 the newest init present in both trees is compared (or ``--init``,
@@ -12,8 +12,14 @@ against a GRIB one on the trimmed grid (99 × 183) over the trimmed domain, and
 the Open-Meteo series (anchored at 00 Z of its day) against the GRIB one
 (anchored at init) on their common hours.
 
+``--b-init`` pins B to a different init, matched to A on valid time. Use it
+for ECMWF: the Open-Meteo snapshots are 06/18 Z, the a2 GRIB 00/12 Z, so no
+init is in both trees. The 6 h lead difference adds forecast noise to |Δ|,
+but leaves the signed mean Δ a fair test for a systematic offset.
+
 Per model and level it prints, over all shared cells and hours:
-  θe       max / mean |Δ| (K)
+  θe       max / mean |Δ| (K), and the signed mean Δ = A − B: a systematic
+           offset between the sources shows here, not in |Δ|
   |∇θe|    max / mean |Δ| (K/100 km), and the mean of each side
   ≥ 4      cells where only one side reaches the 4 K/100 km gradient band,
            as a share of cells where either does
@@ -63,7 +69,7 @@ def _pick_init(model: str, roots: list[Path], init: str | None) -> str | None:
 
 
 def compare_model(model: str, a_path: Path, b_path: Path) -> list[str]:
-    lines = [f"{model}  {a_path.name}"]
+    lines = [f"{model}  {a_path.name}" + ("" if a_path.name == b_path.name else f" vs B {b_path.name}")]
     with np.load(a_path) as a, np.load(b_path) as b:
         ti, tj = _common_index(
             a["valid_times"].astype("datetime64[s]").astype(np.int64).astype(float),
@@ -80,14 +86,15 @@ def compare_model(model: str, a_path: Path, b_path: Path) -> list[str]:
             return lines
         levels = sorted(set(a["levels"].tolist()) & set(b["levels"].tolist()))
         lines.append(
-            "  level   θe max|Δ|  mean|Δ|   |∇θe| max|Δ|  mean|Δ|  mean A  mean B"
+            "  level   θe max|Δ|  mean|Δ|  mean Δ   |∇θe| max|Δ|  mean|Δ|  mean A  mean B"
             f"   ≥{GRADIENT_BAND:g} disagree"
         )
         for L in levels:
             def sl(npz, key, t, y, x):
                 return npz[f"{key}_{L}"][np.ix_(t, y, x)].astype(np.float64)
 
-            te = np.abs(sl(a, "theta_e", ti, yi, xi) - sl(b, "theta_e", tj, yj, xj))
+            dte = sl(a, "theta_e", ti, yi, xi) - sl(b, "theta_e", tj, yj, xj)
+            te = np.abs(dte)
             ga = sl(a, "gradient", ti, yi, xi)
             gb = sl(b, "gradient", tj, yj, xj)
             gd = np.abs(ga - gb)
@@ -97,6 +104,7 @@ def compare_model(model: str, a_path: Path, b_path: Path) -> list[str]:
             share = f"{100.0 * disagree / either:5.1f} %" if either else "   n/a"
             lines.append(
                 f"  {L:4d}   {np.nanmax(te):8.2f}  {np.nanmean(te):7.3f}"
+                f"  {np.nanmean(dte):+6.3f}"
                 f"   {np.nanmax(gd):11.2f}  {np.nanmean(gd):7.3f}"
                 f"  {np.nanmean(ga):6.2f}  {np.nanmean(gb):6.2f}   {share}"
             )
@@ -152,6 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("b_root", type=Path, help="second hewson/ tree (e.g. Open-Meteo)")
     p.add_argument("--models", default="ecmwf,gfs,icon")
     p.add_argument("--init", default=None, help="init stem, e.g. 2026-10-24T00:00:00Z")
+    p.add_argument("--b-init", default=None,
+                   help="B's init stem when it differs from A's (ECMWF: 06/18 Z "
+                        "Open-Meteo vs 00/12 Z GRIB); needs one model in --models")
     p.add_argument("--route", default=None, help='waypoints "lat,lon lat,lon ..."')
     p.add_argument("--depart", default=None, help="departure, ISO UTC")
     p.add_argument("--kt", type=float, default=120.0, help="ground speed (default 120)")
@@ -161,13 +172,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"A = {args.a_root}\nB = {args.b_root}\n")
     found = False
     for model in [m.strip() for m in args.models.split(",") if m.strip()]:
-        name = _pick_init(model, [args.a_root, args.b_root], args.init)
-        if name is None:
-            print(f"{model}: no init present in both trees\n")
-            continue
+        if args.b_init:
+            if not args.init:
+                p.error("--b-init needs --init")
+            a_path = args.a_root / model / f"{args.init}.npz"
+            b_path = args.b_root / model / f"{args.b_init}.npz"
+            if not (a_path.exists() and b_path.exists()):
+                print(f"{model}: {a_path} or {b_path} missing\n")
+                continue
+        else:
+            name = _pick_init(model, [args.a_root, args.b_root], args.init)
+            if name is None:
+                print(f"{model}: no init present in both trees\n")
+                continue
+            a_path, b_path = args.a_root / model / name, args.b_root / model / name
         found = True
-        print("\n".join(compare_model(model, args.a_root / model / name,
-                                      args.b_root / model / name)))
+        print("\n".join(compare_model(model, a_path, b_path)))
         print()
     if args.route:
         if not args.depart:

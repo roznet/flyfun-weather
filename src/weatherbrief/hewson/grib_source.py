@@ -158,8 +158,8 @@ def read_lattice_fields(
         sources = [sources]
     wanted_levels = {float(L): int(L) for L in levels}
     out: dict[int, dict[str, np.ndarray]] = {int(L): {} for L in levels}
-    # grid_key → (rows, cols) or None (grid does not hold the lattice)
-    index_cache: dict[str, tuple[np.ndarray, np.ndarray] | None] = {}
+    # grid_key → (grid, (rows, cols)), or None (grid does not hold the lattice)
+    index_cache: dict[str, tuple[object, tuple[np.ndarray, np.ndarray]] | None] = {}
 
     for source in sources:
         for msg in iter_messages(source):
@@ -170,18 +170,18 @@ def read_lattice_fields(
                 continue
             if msg.grid_key not in index_cache:
                 grid = msg.grid()
-                index_cache[msg.grid_key] = (
+                idx = (
                     None if grid is None
                     else lattice_indices(grid.lats, grid.lons, lat, lon)
                 )
-            idx = index_cache[msg.grid_key]
-            if idx is None:
+                index_cache[msg.grid_key] = None if idx is None else (grid, idx)
+            cached = index_cache[msg.grid_key]
+            if cached is None:
                 continue
-            grid = msg.grid()
-            values = msg.values(grid) if grid is not None else None
+            grid, (rows, cols) = cached
+            values = msg.values(grid)
             if values is None:
                 continue
-            rows, cols = idx
             out[level][msg.var] = values[np.ix_(rows, cols)].astype(np.float64)
     return out
 
@@ -400,6 +400,17 @@ def _resolve_icon(
                 ]
                 with ThreadPoolExecutor(max_workers=_ICON_DOWNLOAD_WORKERS) as pool:
                     results = list(pool.map(lambda u: _download_one_file(u, session), urls))
+                failed = [
+                    f"{url.rsplit('/', 1)[-1]} ({status})"
+                    for url, (data, status) in zip(urls, results) if data is None
+                ]
+                if failed:
+                    # A DWD partial outage (5xx / network) reads differently
+                    # from a renamed file (404) — read_step only says "incomplete".
+                    logger.warning(
+                        "Hewson GRIB icon f%03d: %d/%d files failed: %s",
+                        hour, len(failed), len(urls), ", ".join(failed[:6]),
+                    )
                 blobs = [data for data, _status in results if data is not None]
                 return blobs or None
 

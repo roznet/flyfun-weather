@@ -74,8 +74,8 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         start_date=args.date,
         end_date=args.date,
         source=args.source,
-        init=getattr(args, "init", None),
-        require_current=not getattr(args, "allow_stale", False),
+        init=args.init,
+        require_current=not args.allow_stale,
     )
     for model, src in result.sources.items():
         print(f"  {model}: source {src}")
@@ -303,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.func is _cmd_precompute and args.init is not None and (
+        args.date or args.source != SOURCE_GRIB
+    ):
+        parser.error("--init pins a GRIB run; it cannot combine with "
+                     "--source open-meteo or --date")
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
