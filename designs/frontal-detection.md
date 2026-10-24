@@ -62,7 +62,8 @@ retrospective set). `scheduler.py` only wraps it in a loop.
   longer carries the 00–09Z hours before its own init (never used: readers pick
   a snapshot whose init precedes the flight).
 - **All or nothing per model.** A step still unreadable after one retry drops
-  the model for the cycle (`skipped="incomplete"`), never a snapshot with a hole
+  the model for the cycle (`skipped="incomplete"`; a level over the 5 %
+  missing-cell limit gives `"too-many-missing"`), never a snapshot with a hole
   (it would read as "no front" there). No Open-Meteo fallback: it would put the
   ~4.2M billed calls / 30 d back.
 - **The current cycle or a failure.** A model whose newest complete run is

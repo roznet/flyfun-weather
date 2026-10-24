@@ -256,6 +256,11 @@ INIT = datetime(2026, 10, 24, 0, tzinfo=timezone.utc)
 SAMPLE_NOW = INIT + timedelta(hours=8)
 
 
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch):
+    monkeypatch.setattr(grib_source, "_STEP_RETRY_DELAY_S", 0.0)
+
+
 @pytest.fixture
 def flat_terrain():
     with patch(
@@ -331,7 +336,7 @@ def test_run_once_grib_holey_level_skips_model(tmp_path, flat_terrain, no_open_m
          patch("weatherbrief.hewson.precompute.prepare_level_fields", return_value=None):
         result = run_once(models=["gfs"], output_dir=tmp_path, forecast_days=1,
                           stride_hours=12, now=SAMPLE_NOW)
-    assert result.skipped == {"gfs": "incomplete"}
+    assert result.skipped == {"gfs": "too-many-missing"}
     assert not list(tmp_path.rglob("gfs/*.npz"))
 
 
