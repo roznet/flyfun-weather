@@ -300,15 +300,21 @@ class ProgramCostReport:
     config_id: int
 
 
+#: Labels of the fixed lines that always exist; the cost table orders its
+#: rows by them (server first, misc last).
+SERVER_LINE = "Server (droplet)"
+MISC_LINE = "Misc"
+
+
 def fixed_monthly_lines(config: CostConfig) -> list[tuple[str, float]]:
     """The rate card's fixed lines as ``(label, monthly USD)``, display order."""
-    lines = [("Server (droplet)", config.droplet_monthly_usd)]
+    lines = [(SERVER_LINE, config.droplet_monthly_usd)]
     details = config.subscription_details or {}
     if details:
         lines.extend((f"Subscription: {name}", float(m)) for name, m in details.items())
     elif config.subscriptions_monthly_usd:
         lines.append(("Subscriptions", config.subscriptions_monthly_usd))
-    lines.append(("Misc", config.misc_monthly_usd))
+    lines.append((MISC_LINE, config.misc_monthly_usd))
     return lines
 
 
@@ -427,13 +433,60 @@ def prorate_fixed(
     return out
 
 
+def rate_card_coverage(
+    versions: Sequence[tuple[CostConfig, datetime, datetime | None]],
+    start: datetime,
+    end: datetime,
+) -> tuple[datetime | None, float]:
+    """When rate-card coverage of ``[start, end)`` begins, and how many days it covers.
+
+    Same overlap rule as ``prorate_fixed``, so a window reaching before the
+    first card *or* across a gap between versions reads as partial: fixed cost
+    is only charged for the days counted here.
+    """
+    first: datetime | None = None
+    seconds = 0.0
+    for _config, active_from, active_until in versions:
+        lo = max(start, active_from)
+        hi = min(end, active_until or end)
+        if hi <= lo:
+            continue
+        first = lo if first is None else min(first, lo)
+        seconds += (hi - lo).total_seconds()
+    return first, seconds / 86400
+
+
+def briefing_ledger_figures(detail_json: str | None) -> tuple[float, float, float | None]:
+    """``(token, storage, cache_saving)`` USD from a briefing ledger row's detail.
+
+    Tolerant of rows that are empty, not JSON, not an object, or carry a null
+    figure: one bad row reads as zero rather than failing a whole report.
+    ``cache_saving`` stays ``None`` when the row does not record it.
+    """
+    try:
+        bd = json.loads(detail_json) if detail_json else {}
+    except (json.JSONDecodeError, TypeError):
+        bd = {}
+    if not isinstance(bd, dict):
+        bd = {}
+
+    def _num(key: str) -> float | None:
+        try:
+            return None if bd.get(key) is None else float(bd[key])
+        except (TypeError, ValueError):
+            return None
+
+    return _num("token_cost_usd") or 0.0, _num("storage_cost_usd") or 0.0, _num("cache_saving_usd")
+
+
 @dataclass(frozen=True)
 class CostWindowInputs:
     """What one column of the admin cost table is computed from."""
 
     key: str  # "7d", "30d", "365d"
     days: int
-    covered_days: float  # the window clipped to the first rate card
+    covered_from: datetime | None  # ``rate_card_coverage``
+    covered_days: float  # days of the window some rate card was active
     fixed: dict[str, float]  # label → prorated USD (``prorate_fixed``)
     briefing_token_usd: float
     storage_usd: float
@@ -452,7 +505,7 @@ _OTHER_LLM_LABELS = {
 
 def _fixed_sort_key(label: str) -> int:
     # Server first, Misc last, subscriptions in between in first-seen order.
-    return 0 if label.startswith("Server") else 2 if label == "Misc" else 1
+    return 0 if label == SERVER_LINE else 2 if label == MISC_LINE else 1
 
 
 def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float) -> dict:
@@ -465,8 +518,11 @@ def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float)
     """
     n = len(windows)
 
-    def _row(label: str, values: list[float | None]) -> dict:
-        return {"label": label, "values": [None if v is None else round(v, 4) for v in values]}
+    def _row(label: str, values: list[float | None], key: str | None = None) -> dict:
+        row = {"label": label, "values": [None if v is None else round(v, 4) for v in values]}
+        if key:
+            row["key"] = key
+        return row
 
     fixed_labels: list[str] = []
     for w in windows:
@@ -489,7 +545,8 @@ def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float)
     ]
     extra = [p * margin_percent / 100 for p in pre_extra]
     variable_rows = [
-        _row("LLM tokens – briefings", [w.briefing_token_usd for w in windows]),
+        # Keyed: the page hangs the cache-saving aside under this row.
+        _row("LLM tokens – briefings", [w.briefing_token_usd for w in windows], "briefing_tokens"),
         *(
             _row(
                 _OTHER_LLM_LABELS.get(c, f"LLM – {c.replace('_', ' ')}"),
@@ -508,7 +565,12 @@ def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float)
 
     return {
         "columns": [
-            {"key": w.key, "days": w.days, "covered_days": round(w.covered_days, 1)}
+            {
+                "key": w.key,
+                "days": w.days,
+                "covered_days": round(w.covered_days, 1),
+                "covered_from": w.covered_from.isoformat() if w.covered_from else None,
+            }
             for w in windows
         ],
         "margin_percent": margin_percent,

@@ -278,12 +278,15 @@ export async function fetchCostReport(window: '7d' | '30d' = '30d'): Promise<Cos
 
 export interface CostTableRow {
   label: string;
+  /** Stable id for rows the page treats specially (`briefing_tokens`). */
+  key?: string;
   /** One per column; `null` when undefined (e.g. cost per briefing with none). */
   values: Array<number | null>;
 }
 
 export interface CostTable {
-  columns: Array<{ key: string; days: number; covered_days: number }>;
+  /** `covered_from` is when rate-card coverage of the window begins (ISO). */
+  columns: Array<{ key: string; days: number; covered_days: number; covered_from: string | null }>;
   margin_percent: number;
   /** Fixed, Variable: header `values` are the section subtotal. */
   sections: Array<CostTableRow & { rows: CostTableRow[] }>;

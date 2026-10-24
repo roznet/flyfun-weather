@@ -21,6 +21,7 @@ from weatherbrief.costs import (
     DEFAULT_CONFIG,
     ProgramCostReport,
     breakdown_to_dict,
+    briefing_ledger_figures,
     build_cost_table,
     cache_write_multiplier_for,
     compute_cost,
@@ -28,6 +29,7 @@ from weatherbrief.costs import (
     config_from_row,
     program_report_to_dict,
     prorate_fixed,
+    rate_card_coverage,
 )
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db, optional_user_id
@@ -503,15 +505,9 @@ def _program_variable_and_counts(
     users: set[str] = set()
     for detail_json, user_id in rows:
         users.add(user_id)
-        if not detail_json:
-            continue
-        try:
-            bd = json.loads(detail_json)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        token_usd += bd.get("token_cost_usd", 0.0)
-        storage_usd += bd.get("storage_cost_usd", 0.0)
-        saving = bd.get("cache_saving_usd")
+        token, storage, saving = briefing_ledger_figures(detail_json)
+        token_usd += token
+        storage_usd += storage
         if saving is not None:
             cache_saving_usd = (cache_saving_usd or 0.0) + saving
     return token_usd, storage_usd, len(rows), len(users), cache_saving_usd
@@ -639,7 +635,8 @@ def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | 
     (the ledger has no ``created_at`` index, so a narrower SQL window would
     scan the same table anyway).  Fixed cost is prorated per rate-card
     version (``prorate_fixed``); a window reaching back before the first
-    version is clipped to it, and ``covered_days`` says so.
+    version (or across a gap between versions) is partial, and
+    ``covered_from`` / ``covered_days`` say so.
 
     Not the donation-economics report: ``build_program_report`` stays on the
     active card and briefing-only figures.
@@ -656,7 +653,6 @@ def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | 
         )
         for r in db.query(CostConfigRow).order_by(CostConfigRow.active_from).all()
     ]
-    first_card = versions[0][1]
     widest = now - timedelta(days=max(d for _, d in _TABLE_WINDOWS))
 
     # (created_at, category, cost, user_id, token, storage, cache_saving)
@@ -674,16 +670,9 @@ def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | 
         )
         .all()
     ):
-        token = storage = 0.0
-        saving = None
-        if category == "briefing" and detail_json:
-            try:
-                bd = json.loads(detail_json)
-            except (json.JSONDecodeError, TypeError):
-                bd = {}
-            token = bd.get("token_cost_usd", 0.0)
-            storage = bd.get("storage_cost_usd", 0.0)
-            saving = bd.get("cache_saving_usd")
+        token, storage, saving = (
+            briefing_ledger_figures(detail_json) if category == "briefing" else (0.0, 0.0, None)
+        )
         ledger.append((
             ensure_utc(created_at), category, float(cost or 0.0), user_id,
             token, storage, saving,
@@ -714,10 +703,12 @@ def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | 
                     saving_usd = (saving_usd or 0.0) + saving
             else:
                 other[category] = other.get(category, 0.0) + cost
+        covered_from, covered_days = rate_card_coverage(versions, start, now)
         windows.append(CostWindowInputs(
             key=key,
             days=days,
-            covered_days=(now - max(start, first_card)).total_seconds() / 86400,
+            covered_from=covered_from,
+            covered_days=covered_days,
             fixed=prorate_fixed(versions, start, now),
             briefing_token_usd=token_usd,
             storage_usd=storage_usd,

@@ -13,12 +13,14 @@ from weatherbrief.costs import (
     CostWindowInputs,
     DEFAULT_CONFIG,
     breakdown_to_dict,
+    briefing_ledger_figures,
     build_cost_table,
     cache_write_multiplier_for,
     compute_cost,
     compute_program_cost,
     program_report_to_dict,
     prorate_fixed,
+    rate_card_coverage,
 )
 
 
@@ -594,7 +596,7 @@ class TestCostTable:
 
     def _window(self, **kw) -> CostWindowInputs:
         base = dict(
-            key="30d", days=30, covered_days=30.0,
+            key="30d", days=30, covered_from=None, covered_days=30.0,
             fixed={"Misc": 2.0, "Server (droplet)": 24.0, "Subscription: om": 30.0},
             briefing_token_usd=1.0, storage_usd=0.5,
             other_llm_usd={"live_highlight": 0.5}, cache_saving_usd=None,
@@ -633,3 +635,25 @@ class TestCostTable:
         assert var_rows["LLM – trip summary"] == [0.0, 2.0]
         usage = {u["label"]: u["values"] for u in t["usage"]}
         assert usage["Cost / briefing"][0] is None
+
+    def test_coverage_counts_a_gap_between_versions_as_uncovered(self):
+        cfg = _default_config()
+        versions = [
+            (cfg, self.T0, self.T0 + timedelta(days=10)),
+            (cfg, self.T0 + timedelta(days=15), None),  # 5-day gap
+        ]
+        end = self.T0 + timedelta(days=30)
+        first, days = rate_card_coverage(versions, self.T0 - timedelta(days=5), end)
+        assert first == self.T0
+        assert days == pytest.approx(25.0)
+
+    @pytest.mark.parametrize("detail", [
+        None, "", "not json", "[1, 2]", '{"token_cost_usd": null}',
+        '{"token_cost_usd": "x", "storage_cost_usd": null}',
+    ])
+    def test_bad_ledger_detail_reads_as_zero(self, detail):
+        assert briefing_ledger_figures(detail) == (0.0, 0.0, None)
+
+    def test_ledger_detail_figures(self):
+        d = '{"token_cost_usd": 0.2, "storage_cost_usd": 0.01, "cache_saving_usd": -0.03}'
+        assert briefing_ledger_figures(d) == (0.2, 0.01, -0.03)

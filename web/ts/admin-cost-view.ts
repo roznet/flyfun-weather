@@ -132,10 +132,13 @@ async function loadOtherLlm(): Promise<void> {
 
 function columnHeader(c: CostTable['columns'][number]): string {
   // A window reaching back before the first rate card only covers part of it.
-  const partial = c.covered_days < c.days - 0.5;
-  const since = new Date(Date.now() - c.covered_days * 86_400_000)
-    .toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-  return `<th class="num">Last ${c.days}d${partial ? `<br><span class="muted" style="font-weight:400;font-size:0.75rem;">since ${since}</span>` : ''}</th>`;
+  // A window reaching back before the first rate card (or across a gap
+  // between versions) only covers part of it.
+  const partial = c.covered_days < c.days - 0.5 && c.covered_from;
+  const since = partial
+    ? new Date(c.covered_from!).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    : '';
+  return `<th class="num">Last ${c.days}d${partial ? `<br><span class="muted" style="font-weight:400;font-size:0.75rem;">since ${since} (${Math.round(c.covered_days)}d)</span>` : ''}</th>`;
 }
 
 function renderTable(t: CostTable | null): void {
@@ -164,7 +167,7 @@ function renderTable(t: CostTable | null): void {
     for (const r of sec.rows) {
       html += row('', r.label, r.values, money, 'cost-line');
       // Reporting-only: the saving is already netted off inside the token line.
-      if (r.label.startsWith('LLM tokens') && t.cache_saving_usd.some((v) => v != null)) {
+      if (r.key === 'briefing_tokens' && t.cache_saving_usd.some((v) => v != null)) {
         html += row('cost-aside muted', 'of which cache saved', t.cache_saving_usd, money4, 'cost-line');
       }
     }
@@ -178,7 +181,8 @@ function renderTable(t: CostTable | null): void {
 
   note.innerHTML = 'Fixed cost is prorated from each rate-card version over the part of the window it was active '
     + '(monthly &times; days/30). Variable is the LLM and storage cost actually charged. '
-    + `Extra is ${t.margin_percent}% of everything else. Cost per briefing / user divide the total.`
+    + `Extra is ${t.margin_percent}% of everything else. Cost per briefing / user divide the total. `
+    + 'Variable includes the per-call LLM features, so Total differs from the donation-economics figure, which counts briefings only.'
     + (currency !== 'USD' && fxRates[currency]
       ? ` Converted from USD at 1 USD = ${fxRates[currency].rate} ${currency} (ECB, ${fxRates[currency].as_of ?? 'today'}).`
       : '');

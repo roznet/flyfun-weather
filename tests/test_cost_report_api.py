@@ -442,6 +442,9 @@ class TestCostTableEndpoint:
         assert [c["key"] for c in t["columns"]] == ["7d", "30d", "365d"]
         # 365d is clipped to the first rate card.
         assert t["columns"][2]["covered_days"] == pytest.approx(100.0, abs=0.1)
+        assert t["columns"][2]["covered_from"].startswith(
+            (now - timedelta(days=100)).date().isoformat()
+        )
 
         fixed = {r["label"]: r["values"] for r in t["sections"][0]["rows"]}
         # 7d: default card only (24/mo). 365d: 90d at 30 + 10d at 24.
