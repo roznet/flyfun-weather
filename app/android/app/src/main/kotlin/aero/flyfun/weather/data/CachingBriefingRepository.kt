@@ -1,6 +1,7 @@
 package aero.flyfun.weather.data
 
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.model.rules.LatLonBox
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -375,14 +376,14 @@ class CachingBriefingRepository(
     override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
         online.observedFrames(layer, bbox)
 
-    override suspend fun observedFlashes(bbox: String, validTime: String?): ObservedFlashesResponse =
-        online.observedFlashes(bbox, validTime)
+    override suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse =
+        online.observedFlashes(box)
 
-    override suspend fun cellFrames(bbox: String): CellFramesResponse =
-        online.cellFrames(bbox)
+    override suspend fun cellFrames(): CellFramesResponse =
+        online.cellFrames()
 
-    override suspend fun observedCells(bbox: String, validTime: String?): CellDisplay =
-        online.observedCells(bbox, validTime)
+    override suspend fun observedCellDisplay(key: String, box: LatLonBox?): CellDisplay =
+        online.observedCellDisplay(key, box)
 
     override suspend fun debrief(flightId: String): DebriefResponse =
         online.debrief(flightId)

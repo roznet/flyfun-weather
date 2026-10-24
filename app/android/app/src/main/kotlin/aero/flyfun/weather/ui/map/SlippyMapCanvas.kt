@@ -839,31 +839,6 @@ fun DrawScope.drawFrontSymbolOnMap(
 }
 
 /**
- * Draw one of the server's route storms (`LiveStorm`, #886) at its observed position:
- * a dot in the map's trend colour (iOS/web `trendHex`), a gold ring when it has
- * lightning, faded once the flight has passed it.
- */
-fun DrawScope.drawStormDotOnMap(
-    center: Offset,
-    trendColor: Color,
-    hasLightning: Boolean,
-    isBehind: Boolean,
-    radiusPx: Float = 9f,
-) {
-    val alpha = if (isBehind) 0.4f else 1f
-    drawCircle(color = trendColor.copy(alpha = 0.85f * alpha), radius = radiusPx, center = center)
-    drawCircle(color = Color.Black.copy(alpha = 0.7f * alpha), radius = radiusPx, center = center, style = Stroke(width = 1.5f))
-    if (hasLightning) {
-        drawCircle(
-            color = Color(0xFFFACC15).copy(alpha = alpha),
-            radius = radiusPx + 4f,
-            center = center,
-            style = Stroke(width = 2.2f),
-        )
-    }
-}
-
-/**
  * Draw a SIGMET / AIRMET polygon on the map with dashed amber/red border and hazard label.
  */
 fun DrawScope.drawSigmetPolygonOnMap(

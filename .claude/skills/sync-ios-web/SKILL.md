@@ -255,6 +255,30 @@ Fixture shared by every client: `web/tests/fixtures/airport_cards.json`
 `tests/test_airport_card_fixture.py`). Check that a missing field is left out
 on every platform, never derived.
 
+### 5d. Route-map cells and lightning — a mirrored pure trio (#661, #665, #907)
+
+The raw cell feed and the lightning flashes are server data (outlines, the
+`arrow` point, trend and motion fields, each flash's own time), so the shapes
+cannot drift. What is hand-copied is the **rules**: which cell frame is drawn and
+when it is too old, which tiers are outlined, arrows only for measured motion on
+cores, trend colours, the fade, the request boxes (corridor + 50 NM for cells,
+corridor for flashes, `minutes=60`), the badge and chip words.
+
+| Platform | Cells | Lightning |
+|---|---|---|
+| Web | `web/ts/visualization/cells-overlay-core.ts` | `web/ts/visualization/route-map/observed-overlay-geometry.ts` |
+| iOS | `Views/Map/CellsOverlay.swift`, `ViewModels/RouteCellsModel.swift` | `Views/Map/ObservedLightning.swift`, `ViewModels/RouteLightningModel.swift` |
+| Android | `model/rules/CellsOverlayRules.kt`, `viewmodel/RouteObservedLayerModels.kt` (`RouteCellsModel`), painted by `ui/map/ObservedMapLayers.kt` | `model/rules/ObservedLightningRules.kt`, `RouteLightningModel` (same files) |
+
+Tests: iOS `CellsOverlayTests.swift` / `ObservedLightningTests.swift` ↔ Android
+`rules/CellsOverlayRulesTest.kt` / `rules/ObservedLightningRulesTest.kt`, same
+fixtures and expected strings. Trend colours are one table on Android
+(`LiveStormRules.TREND_HEX`, shared with the storm cards) = iOS
+`CellsOverlay.trendHex`. Known divergences, do not re-flag: Android always draws
+the newest current cell frame (its radar tiles are not keyed to a cell stamp, so
+there is no radar pairing); Android's chips are FilterChips beside the other
+overlays, iOS's are menu items.
+
 ### 6. API DTO contracts
 
 iOS `Models/API/*Response.swift` Codable types mirror backend JSON. A server

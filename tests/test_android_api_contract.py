@@ -47,8 +47,8 @@ VERBS = {
     "deleteWithBody": "DELETE",
 }
 
-# Calls whose path or verb the server does not route. #889 fixed the rest; these two areas need
-# design work rather than a path fix and are tracked separately.
+# Calls whose path or verb the server does not route. #889 fixed the rest and #907 the observed
+# cells/flashes calls; flexible departure needs design work rather than a path fix.
 # Not catchable here: `GET /api/observed/{layer}/frames` matches the literal
 # `/api/observed/cells/frames`, but the server's radar/satellite frames are
 # `/api/observed/frames/{source}`.
@@ -57,9 +57,6 @@ KNOWN_BROKEN_CALLS = {
     ("GET", "/api/flights/{}/time-options"),
     ("POST", "/api/flights/{}/time-options/confirm"),
     ("POST", "/api/flights/{}/time-options/scan"),
-    # Observed imagery: no Android screen calls these yet; wiring them is its own feature.
-    ("GET", "/api/observed/cells"),
-    ("GET", "/api/observed/lightning/flashes"),
 }
 
 # Kotlin request class → server model. The keys Android encodes must all be server fields.

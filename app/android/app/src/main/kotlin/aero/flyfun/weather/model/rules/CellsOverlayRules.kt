@@ -1,273 +1,258 @@
 package aero.flyfun.weather.model.rules
 
 import aero.flyfun.weather.model.CellDisplay
+import aero.flyfun.weather.model.CellFrame
+import aero.flyfun.weather.model.CellFramesResponse
+import aero.flyfun.weather.model.CellMotion
+import aero.flyfun.weather.model.CellTrend
 import aero.flyfun.weather.model.DisplayCell
 import aero.flyfun.weather.model.IsoTime
-import aero.flyfun.weather.model.ObservedImageryFrame
-import java.time.LocalDateTime
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-import java.util.Locale
-import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
-import kotlin.math.sin
+import kotlin.math.roundToInt
 
 /**
- * Metadata entry for a single convective cell frame in the radar timeline.
- */
-data class CellFrameEntry(
-    val timestamp: String,
-    val validTime: String? = null,
-    val epochMs: Long? = null,
-) {
-    fun resolvedEpochMs(): Long? =
-        epochMs ?: CellsOverlayRules.parseFrameEpochMs(validTime) ?: CellsOverlayRules.parseFrameEpochMs(timestamp)
-
-    companion object {
-        fun fromImageryFrame(frame: ObservedImageryFrame): CellFrameEntry = CellFrameEntry(
-            timestamp = frame.timestamp,
-            validTime = frame.validTime,
-            epochMs = CellsOverlayRules.parseFrameEpochMs(frame.validTime)
-                ?: CellsOverlayRules.parseFrameEpochMs(frame.timestamp),
-        )
-    }
-}
-
-/**
- * Age bucket classification for Blitzortung lightning strikes relative to a reference radar frame timestamp.
- */
-enum class LightningAgeBucket(
-    val maxAgeSeconds: Long,
-    val alpha: Float,
-    val colorHex: Long,
-) {
-    FRESH_5M(300L, 1.0f, 0xFFFACC15L),
-    RECENT_15M(900L, 0.75f, 0xFFF97316L),
-    OLDER_30M(1800L, 0.45f, 0xFFEF4444L),
-    EXPIRED(Long.MAX_VALUE, 0.0f, 0xFF6B7280L),
-}
-
-/**
- * A single observed lightning strike with its classified age bucket.
- */
-data class ClassifiedLightningFlash(
-    val lat: Double,
-    val lon: Double,
-    val epochSec: Long,
-    val ageSeconds: Long,
-    val bucket: LightningAgeBucket,
-)
-
-/**
- * Pure rules for convective cell frame matching, staleness detection, operational cell filtering,
- * motion arrow projection, and Blitzortung lightning strike age bucketing.
- * Mirrors iOS `CellsOverlay.swift` and `ObservedLightning.swift`.
+ * The experimental radar-cell overlay on the route map (#907): outlines per tier, a marker per
+ * core coloured by **trend** (evolution, not safety), and a magenta arrow to where a core would
+ * be in 30 min, only for measured motion. Everything here is pure so the rules (which overlay to
+ * draw, when it is too old, what the badge and the cell card say) are unit-testable; the map
+ * only paints the result.
+ *
+ * Nothing is computed on the phone: the arrow end is the feed's own `arrow` point, the trend and
+ * motion words are the feed's own fields put into words.
+ *
+ * SYNC: port of iOS `Views/Map/CellsOverlay.swift` (itself a port of the web's
+ * `cells-overlay-core.ts`). A wording, colour or threshold change there lands here too
+ * (pinned by `CellsOverlayRulesTest`, the iOS `CellsOverlayTests` fixture).
  */
 object CellsOverlayRules {
 
-    /** Maximum drift in milliseconds between a radar frame and a cell frame before refusing the match (10 min). */
-    const val MAX_FRAME_DRIFT_MS: Long = 10L * 60L * 1000L
+    /** Cells are fetched for the corridor box widened by this much (iOS `CellsOverlay.marginNm`). */
+    const val MARGIN_NM: Double = 50.0
 
-    /** Default staleness threshold in minutes for convective cell frames. */
-    const val DEFAULT_STALE_THRESHOLD_MINUTES: Int = 25
+    /** The corridor used when the briefing sampled none (iOS `BriefingViewModel.cellsBox`). */
+    const val DEFAULT_CORRIDOR_NM: Double = 20.0
 
-    /** Default forward motion projection horizon in minutes. */
-    const val DEFAULT_PROJECTION_MINUTES: Double = 30.0
+    /** Magenta motion arrow (web `ARROW_COLOUR`). */
+    const val ARROW_ARGB: Long = 0xFFB000B5L
 
-    /** Maximum future tolerance (seconds) when matching strikes to a scrubbed frame. */
-    const val MAX_FUTURE_SLOP_SECONDS: Long = 120L
+    /** Marker rim (iOS `UIColor(white: 0.13)`). */
+    const val MARKER_RIM_ARGB: Long = 0xFF212121L
 
-    private val COMPACT_ISO_FORMATTER: DateTimeFormatter =
-        DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'", Locale.US)
-    private val COMPACT_MIN_FORMATTER: DateTimeFormatter =
-        DateTimeFormatter.ofPattern("yyyyMMddHHmm", Locale.US)
-    private val COMPACT_UNDERSCORE_FORMATTER: DateTimeFormatter =
-        DateTimeFormatter.ofPattern("yyyyMMdd_HHmm", Locale.US)
+    /** Legend order. */
+    val TREND_ORDER: List<String> = listOf("developing", "steady", "decaying", "mixed", "new")
 
-    /**
-     * Parse either an ISO-8601 timestamp (`2026-04-12T10:25:00Z`) or compact radar stamp
-     * (`20260412T102500Z`, `202604121025`, `20260412_1025`) into epoch milliseconds.
-     */
-    fun parseFrameEpochMs(raw: String?): Long? {
-        if (raw.isNullOrBlank()) return null
-        val trimmed = raw.trim()
-        IsoTime.parseEpochMs(trimmed)?.let { return it }
+    /** Trend colour; same table as the storm cards ([LiveStormRules.TREND_HEX] = iOS `trendHex`). */
+    fun trendColorArgb(state: String?): Long = LiveStormRules.trendColorArgb(state)
 
-        for (fmt in listOf(COMPACT_ISO_FORMATTER, COMPACT_MIN_FORMATTER, COMPACT_UNDERSCORE_FORMATTER)) {
-            runCatching {
-                LocalDateTime.parse(trimmed, fmt).toInstant(ZoneOffset.UTC).toEpochMilli()
-            }.getOrNull()?.let { return it }
-        }
-        return null
+    /** Outline stroke per tier: ARGB and width in dp. `rain20` is never drawn on the route map. */
+    fun outlineStyle(tier: String): Pair<Long, Float> = when (tier) {
+        "core41" -> 0xFF000000L to 1.5f
+        "core35" -> 0xFFFFFFFFL to 1.5f
+        else -> 0xFF8A8A8AL to 1f
+    }
+
+    /** The tiers drawn as outlines, bottom first (core35 under core41). */
+    val OUTLINE_TIERS: List<String> = listOf("core35", "core41")
+
+    fun tierLabel(tier: String): String = when (tier) {
+        "rain20" -> "Rain area ≥20 dBZ"
+        "core35" -> "Core ≥35 dBZ"
+        "core41" -> "Core ≥41 dBZ"
+        else -> tier
+    }
+
+    /** Marker radius in dp (web circleMarker radius). */
+    fun markerRadiusDp(tier: String): Float = when (tier) {
+        "core41" -> 7f
+        "core35" -> 5f
+        else -> 6f
     }
 
     /**
-     * Match a cell frame to a target radar frame timestamp.
-     *
-     * - If `frames` is empty, returns `null`.
-     * - If `targetRadarStamp` is null or blank, returns the latest frame in `frames`.
-     * - If an exact timestamp or validTime match exists, returns it immediately.
-     * - Otherwise selects the closest frame by epoch time within [MAX_FRAME_DRIFT_MS] (10 minutes),
-     *   preferring the earlier frame on exact ties.
+     * The arrow's end, `(lat, lon)`, only for measured motion on a core: never for withheld or
+     * unsupported motion even if an arrow point were present, never for a rain area.
      */
-    fun matchCellFrame(
-        frames: List<CellFrameEntry>,
-        targetRadarStamp: String?,
-    ): CellFrameEntry? {
-        if (frames.isEmpty()) return null
-        if (targetRadarStamp.isNullOrBlank()) {
-            return frames.maxByOrNull { it.resolvedEpochMs() ?: Long.MIN_VALUE } ?: frames.last()
+    fun arrowEnd(cell: DisplayCell): Pair<Double, Double>? {
+        if (!cell.isCore || cell.motion?.status != "available") return null
+        val arrow = cell.arrow ?: return null
+        if (arrow.size != 2) return null
+        return arrow[0] to arrow[1]
+    }
+
+    /** Polylines of one tier as `(lat, lon)` lists, dropping malformed points and lines under 2 points. */
+    fun outlines(display: CellDisplay, tier: String): List<List<Pair<Double, Double>>> =
+        display.outlines?.get(tier).orEmpty()
+            .map { line -> line.mapNotNull { p -> if (p.size == 2) p[0] to p[1] else null } }
+            .filter { it.size >= 2 }
+
+    /** The cells the route map draws: cores only (web parity). */
+    fun drawnCells(display: CellDisplay): List<DisplayCell> = display.cells.filter { it.isCore }
+
+    // ---- Which overlay to draw ----
+
+    sealed interface Match {
+        data class Ok(val frame: CellFrame) : Match
+        data object Disabled : Match
+        data class Unavailable(val since: String?) : Match
+    }
+
+    /**
+     * Which overlay to draw. The overlay for the same stamp as [radarStamp] when there is one,
+     * else the newest at or before it; null [radarStamp] means the newest. Then the overlay's
+     * own age decides: past `staleAfterMinutes` nothing is drawn and the map says "unavailable
+     * since" that overlay's time. Never a stale picture.
+     */
+    fun match(info: CellFramesResponse?, radarStamp: String? = null, nowMs: Long): Match {
+        if (info == null) return Match.Unavailable(null)
+        if (!info.enabled) return Match.Disabled
+        val frames = info.frames
+        val pick = if (radarStamp != null) {
+            frames.firstOrNull { it.stamp == radarStamp } ?: frames.firstOrNull { it.stamp <= radarStamp }
+        } else {
+            frames.firstOrNull()
         }
+        if (pick == null) return Match.Unavailable(frames.firstOrNull()?.validTime ?: info.unavailableSince)
+        val valid = IsoTime.parseEpochMs(pick.validTime) ?: return Match.Unavailable(pick.validTime)
+        if ((nowMs - valid) / 60_000.0 > info.staleAfterMinutes) return Match.Unavailable(pick.validTime)
+        return Match.Ok(pick)
+    }
 
-        val targetTrimmed = targetRadarStamp.trim()
-        frames.firstOrNull {
-            it.timestamp == targetTrimmed || it.validTime == targetTrimmed
-        }?.let { return it }
+    /** The cells box: the corridor plus [MARGIN_NM] (iOS `BriefingViewModel.cellsBox`). */
+    fun cellsBox(points: List<Pair<Double, Double>>, corridorNm: Double?): LatLonBox? =
+        ObservedMapRules.corridorBox(points, (corridorNm ?: DEFAULT_CORRIDOR_NM) + MARGIN_NM)
 
-        val targetMs = parseFrameEpochMs(targetTrimmed) ?: return null
+    /** The display file's box query, two decimals (iOS `displayPath`); empty without a box. */
+    fun boxQuery(box: LatLonBox?): List<Pair<String, String>> {
+        box ?: return emptyList()
+        return listOf(
+            "south" to ObservedMapRules.fixed(box.south, 2),
+            "west" to ObservedMapRules.fixed(box.west, 2),
+            "north" to ObservedMapRules.fixed(box.north, 2),
+            "east" to ObservedMapRules.fixed(box.east, 2),
+        )
+    }
 
-        var bestEntry: CellFrameEntry? = null
-        var bestDiff = Long.MAX_VALUE
-        var bestEpoch = Long.MAX_VALUE
+    // ---- Words ----
 
-        for (entry in frames) {
-            val entryMs = entry.resolvedEpochMs() ?: continue
-            val diff = abs(entryMs - targetMs)
-            if (diff < bestDiff || (diff == bestDiff && entryMs < bestEpoch)) {
-                bestDiff = diff
-                bestEpoch = entryMs
-                bestEntry = entry
+    fun hhmmZ(iso: String?): String = AirportCardRules.hhmmZ(iso).ifEmpty { "--:--Z" }
+
+    private fun ageMinutes(validTime: String, nowMs: Long): Double? =
+        IsoTime.parseEpochMs(validTime)?.let { max(0.0, (nowMs - it) / 60_000.0) }
+
+    /** The overlay's badge line: its own time, never the radar's. */
+    fun badge(match: Match, display: CellDisplay?, nowMs: Long): String = when (match) {
+        Match.Disabled -> "Cell analysis: not available on this server"
+        is Match.Unavailable ->
+            if (match.since != null) {
+                "Cell analysis unavailable since ${hhmmZ(match.since)}"
+            } else {
+                "Cell analysis unavailable (nothing received yet)"
             }
-        }
-
-        return if (bestEntry != null && bestDiff <= MAX_FRAME_DRIFT_MS) bestEntry else null
-    }
-
-    /**
-     * Overload matching `ObservedImageryFrame` directly.
-     */
-    fun matchImageryFrame(
-        frames: List<ObservedImageryFrame>,
-        targetRadarStamp: String?,
-    ): ObservedImageryFrame? {
-        if (frames.isEmpty()) return null
-        val entries = frames.map { CellFrameEntry.fromImageryFrame(it) }
-        val matched = matchCellFrame(entries, targetRadarStamp) ?: return null
-        return frames.firstOrNull {
-            it.timestamp == matched.timestamp && it.validTime == matched.validTime
+        is Match.Ok -> buildString {
+            val age = ageMinutes(match.frame.validTime, nowMs)?.roundToInt() ?: 0
+            append("Cells ${hhmmZ(match.frame.validTime)} · $age min old")
+            if (display != null) append(" · ${display.cells.size} cells")
+            // Never "no lightning" (reads as "none in these cells"): pending (on its way, #666)
+            // and unavailable are said as such.
+            display?.pending?.takeIf { it.isNotEmpty() }?.let { append(" · " + it.joinToString(", ") + " pending") }
+            display?.unavailable?.takeIf { it.isNotEmpty() }?.let {
+                append(" · " + it.joinToString(", ") { u -> u.what } + " unavailable")
+            }
+            append(" · experimental")
         }
     }
 
-    /**
-     * Returns true if the cell frame is older than `staleThresholdMinutes` (default 25 min) relative to `nowEpochMs`.
-     */
-    fun isCellFrameStale(
-        frameTimestampEpochMs: Long,
-        nowEpochMs: Long,
-        staleThresholdMinutes: Int = DEFAULT_STALE_THRESHOLD_MINUTES,
-    ): Boolean {
-        val thresholdMs = staleThresholdMinutes.toLong() * 60_000L
-        return (nowEpochMs - frameTimestampEpochMs) > thresholdMs
+    /** The overlay's chip in the map's summary line: its own age, never the radar's. */
+    fun chip(match: Match, nowMs: Long): ObservedSummaryChip = when (match) {
+        Match.Disabled, is Match.Unavailable -> ObservedSummaryChip("Cells", "n/a", isWarning = true)
+        is Match.Ok -> ObservedSummaryChip(
+            "Cells",
+            ObservedMapRules.chipAge(ageMinutes(match.frame.validTime, nowMs) ?: 0.0),
+            isWarning = false,
+        )
     }
 
-    /**
-     * Overload checking staleness from an ISO or compact timestamp string.
-     */
-    fun isCellFrameStale(
-        frameTimestamp: String?,
-        nowEpochMs: Long,
-        staleThresholdMinutes: Int = DEFAULT_STALE_THRESHOLD_MINUTES,
-    ): Boolean {
-        val frameMs = parseFrameEpochMs(frameTimestamp) ?: return true
-        return isCellFrameStale(frameMs, nowEpochMs, staleThresholdMinutes)
+    private val COMPASS_POINTS = listOf(
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    )
+
+    fun compass(deg: Double?): String {
+        if (deg == null || !deg.isFinite()) return "–"
+        val normalised = ((deg % 360.0) + 360.0) % 360.0
+        return COMPASS_POINTS[(normalised / 22.5).roundToInt() % 16]
     }
 
-    /**
-     * Determine whether a `DisplayCell` is a suspect (unconfirmed radar-only) cell vs a lightning-confirmed core.
-     */
-    fun isSuspectCell(cell: DisplayCell): Boolean {
-        val sev = cell.severity.trim().lowercase(Locale.US)
-        if (sev == "suspect" || sev == "unconfirmed" || sev == "rain_ring") return true
-        if (cell.id.startsWith("suspect", ignoreCase = true)) return true
-        return false
-    }
-
-    /**
-     * Filter operational cells according to `suppressSuspect`.
-     *
-     * - When `suppressSuspect == false` (Operational OFF / show all), all cells are kept.
-     * - When `suppressSuspect == true` (Operational ON), suspect cells are removed so only
-     *   confirmed convective cells remain.
-     */
-    fun filterOperationalCells(
-        display: CellDisplay,
-        suppressSuspect: Boolean,
-    ): CellDisplay {
-        if (!suppressSuspect) return display
-        val currentCells = display.cells ?: return display
-        val filtered = currentCells.filterNot { isSuspectCell(it) }
-        return display.copy(cells = filtered)
-    }
-
-    /**
-     * Project a cell's centroid forward along its motion track (`dirFromDeg` bearing in degrees true,
-     * `speedKt` in knots) by `minutesAhead` minutes (default 30.0 min).
-     *
-     * Returns `(projectedLat, projectedLon)`.
-     */
-    fun projectCellArrow(
-        lat: Double,
-        lon: Double,
-        speedKt: Double,
-        dirFromDeg: Double,
-        minutesAhead: Double = DEFAULT_PROJECTION_MINUTES,
-    ): Pair<Double, Double> {
-        if (speedKt <= 0.0 || minutesAhead <= 0.0 || speedKt.isNaN() || dirFromDeg.isNaN()) {
-            return lat to lon
-        }
-        val distanceKm = speedKt * 1.852 * (minutesAhead / 60.0)
-        return projectPosition(lat = lat, lon = lon, bearingDeg = dirFromDeg, distanceKm = distanceKm)
-    }
-
-    /**
-     * Project a `(lat, lon)` coordinate along a true bearing (`0° = N`, `90° = E`) by `distanceKm`.
-     */
-    fun projectPosition(
-        lat: Double,
-        lon: Double,
-        bearingDeg: Double,
-        distanceKm: Double,
-    ): Pair<Double, Double> {
-        if (distanceKm <= 0.0) return lat to lon
-        val latRad = lat * PI / 180.0
-        val bearingRad = bearingDeg * PI / 180.0
-        val dLat = (distanceKm / 111.32) * cos(bearingRad)
-        val cosLat = max(0.01, abs(cos(latRad)))
-        val dLon = (distanceKm / (111.32 * cosLat)) * sin(bearingRad)
-        return (lat + dLat) to (lon + dLon)
-    }
-
-    /**
-     * Classify a Blitzortung lightning strike's age (`refEpochSec - flashEpochSec`) into a [LightningAgeBucket]:
-     * - `0..5 min` (`<= 300s`): [LightningAgeBucket.FRESH_5M]
-     * - `5..15 min` (`301..900s`): [LightningAgeBucket.RECENT_15M]
-     * - `15..30 min` (`901..1800s`): [LightningAgeBucket.OLDER_30M]
-     * - `> 30 min` (`> 1800s`) or `> 2 min` in the future: [LightningAgeBucket.EXPIRED]
-     */
-    fun classifyFlashAge(
-        flashEpochSec: Long,
-        refEpochSec: Long,
-    ): LightningAgeBucket {
-        val ageSec = refEpochSec - flashEpochSec
-        if (ageSec < -MAX_FUTURE_SLOP_SECONDS) return LightningAgeBucket.EXPIRED
-        val effectiveAge = max(0L, ageSec)
-        return when {
-            effectiveAge <= LightningAgeBucket.FRESH_5M.maxAgeSeconds -> LightningAgeBucket.FRESH_5M
-            effectiveAge <= LightningAgeBucket.RECENT_15M.maxAgeSeconds -> LightningAgeBucket.RECENT_15M
-            effectiveAge <= LightningAgeBucket.OLDER_30M.maxAgeSeconds -> LightningAgeBucket.OLDER_30M
-            else -> LightningAgeBucket.EXPIRED
+    /** "moving NE at 9 kt", or why there is no motion: in words, not codes. */
+    fun motionText(m: CellMotion?): String {
+        val status = m?.status ?: return "motion unknown"
+        return when (status) {
+            "available" -> {
+                val toward = m.towardDeg
+                val speed = m.speedKt ?: 0.0
+                if (toward == null || speed < 1) "nearly stationary" else "moving ${compass(toward)} at ${speed.roundToInt()} kt"
+            }
+            // A split or merge this frame: the matcher could not pair it yet (#689).
+            "withheld" -> "motion not yet measured"
+            "unsupported" -> "motion withheld: too little of the cell in matched tiles"
+            "no_pair" -> "no motion yet: no earlier radar frame to compare"
+            else -> if (!m.reason.isNullOrEmpty()) "motion $status: ${m.reason}" else "motion $status"
         }
     }
+
+    fun trendText(t: CellTrend?): String {
+        t ?: return "trend unknown"
+        val window = t.windowMin
+        if (t.state == "new" || window == null) return "new (less than 15 min of history)"
+        val parts = buildList {
+            t.dPeakDb?.let { add("peak ${signed(it)} dB") }
+            t.areaRatio?.let { add("area ×${number(it)}") }
+            t.dFlashes?.let { add("flashes ${signed(it)}") }
+        }
+        val head = "${t.state ?: "unknown"} over ${window.roundToInt()} min"
+        return if (parts.isEmpty()) head else "$head (${parts.joinToString(", ")})"
+    }
+
+    /** The cell's measurements, one clause per line: descriptive only (web `cellPopupHtml`). */
+    fun detailLines(c: DisplayCell): List<String> = buildList {
+        add("peak ${dbzText(c.peakDbz)} · area ${value(c.areaKm2, " km²")}")
+        add(
+            "rain rate peak ${value(c.ratePeakMmH, " mm/h")}${rateAsOfText(c)} · lightning ${lightningText(c)}" +
+                (c.topFl?.let { " · cloud top FL${it.roundToInt()}" } ?: ""),
+        )
+        add("age ${value(c.ageMin, " min")} (${c.event ?: ""}) · ${trendText(c.trend)}")
+        add(motionText(c.motion))
+        if (c.truncated == true) add("partly outside radar coverage")
+    }
+
+    /** The caveat every cell surface carries. */
+    const val CAVEAT: String = "Provisional thresholds: cells often flicker in as \"new\", rain rate can show " +
+        "artefact peaks and lag the radar by ~10 min. Describes evolution, not safety."
+
+    /** "pending" while the frame's lightning is on its way (#666), else the count or "–". */
+    fun lightningText(c: DisplayCell): String =
+        if (c.flashes == null && c.flashesPending == true) "pending" else value(c.flashes)
+
+    /** " (as of HH:MMZ)" when the rain rate is older than the radar (#666), else "". */
+    fun rateAsOfText(c: DisplayCell): String {
+        if (c.ratePeakMmH == null) return ""
+        val asOf = c.rateAsOf ?: return ""
+        return " (as of ${hhmmZ(asOf)})"
+    }
+
+    /** Whole-number dBZ ("76 dBZ", not "75.5 dBZ", #689). */
+    fun dbzText(v: Double?): String = v?.let { "${it.roundToInt()} dBZ" } ?: "–"
+
+    /** "1 flash", "3 flashes". */
+    fun flashesText(n: Double): String {
+        val count = n.roundToInt()
+        return if (count == 1) "1 flash" else "$count flashes"
+    }
+
+    fun value(v: Double?, unit: String = ""): String = v?.let { number(it) + unit } ?: "–"
+
+    fun number(v: Double): String =
+        if (v == Math.rint(v)) v.toLong().toString() else ObservedMapRules.fixed(v, 1)
+
+    private fun signed(v: Double): String = (if (v > 0) "+" else "") + number(v)
 }
