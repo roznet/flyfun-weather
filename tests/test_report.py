@@ -174,7 +174,6 @@ class TestRenderHtml:
         assert "SIGMETs Along Route" not in html
         assert "SIGMETs unavailable" not in html
 
-
     def _with_observations(self, pack_dir, airports):
         from weatherbrief.models.observations import RouteObservations
 
