@@ -484,12 +484,15 @@ export interface ApiUsageBucket {
   service: string;
   pipeline: string;
   total_calls: number;
+  /** Provider-billed calls (Open-Meteo weight); 0 for rows before migration 114. */
+  total_weighted_calls: number;
 }
 
 export interface ApiUsagePeriod {
   label: string;
   by_service: ApiUsageBucket[];
   total_calls: number;
+  total_weighted_calls: number;
 }
 
 export interface ApiUsageResponse {

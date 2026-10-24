@@ -118,6 +118,7 @@ class BriefingUsage:
     """Tracks resource usage during a single briefing pipeline run."""
 
     open_meteo_calls: int = 0
+    open_meteo_weighted_calls: float = 0.0
     grib_enrichment: bool = False
     grib_enrichment_failed: bool = False
     gramet_fetched: bool = False
@@ -136,6 +137,10 @@ class BriefingUsage:
     alternates_computed: bool = False
     alternates_count: int = 0
     alternates_candidates: int = 0
+    # The alternates stage's own Open-Meteo fetches (logged as a separate
+    # `alternates` pipeline row, not folded into the route fetch above).
+    alternates_open_meteo_calls: int = 0
+    alternates_open_meteo_weighted_calls: float = 0.0
     elapsed_seconds: float | None = None
     queue_wait_seconds: float | None = None
     triggered_by: str | None = None
@@ -661,6 +666,7 @@ def _execute_briefing_stages(
     # as the forecast map. Gated on the medium-range window (`days_out <= 2`)
     # and the `compute_alternates` preference — a "fast brief" skips it.
     alternates = None
+    alternates_om = None
     if (
         days_out <= 2
         and options.compute_alternates
@@ -670,17 +676,19 @@ def _execute_briefing_stages(
         _notify("alternates")
         _t0 = perf_counter()
         try:
+            from weatherbrief.fetch.open_meteo import open_meteo_meter
             from weatherbrief.tasks.alternates import run_alternates
 
-            alternates = run_alternates(
-                route=route,
-                target_time=target_dt,
-                airports_db_path=options.airports_db_path,
-                # Reduce per-model data the same way the airport arrival card
-                # does, so the same airport shows one category everywhere.
-                # Default matches the advisory default (majority).
-                aggregation=(options.advisory_aggregation or "majority"),
-            )
+            with open_meteo_meter() as alternates_om:
+                alternates = run_alternates(
+                    route=route,
+                    target_time=target_dt,
+                    airports_db_path=options.airports_db_path,
+                    # Reduce per-model data the same way the airport arrival card
+                    # does, so the same airport shows one category everywhere.
+                    # Default matches the advisory default (majority).
+                    aggregation=(options.advisory_aggregation or "majority"),
+                )
         except Exception:
             logger.warning("Alternates stage failed", exc_info=True)
         stage_timings["alternates"] = perf_counter() - _t0
@@ -754,6 +762,7 @@ def _execute_briefing_stages(
     if _terrain_diag is not None:
         result.diagnostics.append(_terrain_diag)
     result.usage.open_meteo_calls = fetch_result.open_meteo_api_calls
+    result.usage.open_meteo_weighted_calls = fetch_result.open_meteo_weighted_calls
     result.usage.grib_enrichment = fetch_result.grib_enriched
     result.usage.grib_enrichment_failed = fetch_result.grib_enrichment_failed
     result.usage.metar_taf_fetched = result_usage_metar
@@ -763,6 +772,9 @@ def _execute_briefing_stages(
     result.usage.alternates_computed = alternates is not None
     result.usage.alternates_count = len(alternates.alternates) if alternates else 0
     result.usage.alternates_candidates = alternates.candidates_evaluated if alternates else 0
+    if alternates_om is not None:
+        result.usage.alternates_open_meteo_calls = alternates_om.usage.calls
+        result.usage.alternates_open_meteo_weighted_calls = alternates_om.usage.weight
     if fetch_result.elevation_profile and pack_dir:
         result.elevation_profile_path = pack_dir / "elevation_profile.json"
     if route_advisories_manifest and pack_dir:

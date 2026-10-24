@@ -7,7 +7,10 @@ import math
 import threading
 import time
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 
 import os
 
@@ -169,6 +172,107 @@ _HISTORICAL_MODEL_MAP: dict[str, str] = {
 }
 
 
+# Open-Meteo bills "fractional" calls, not HTTP requests. Ported from the
+# server's ``ForecastapiResult.calculateQueryWeight`` (open-meteo/open-meteo,
+# Sources/App/Helper/Writer/ForecastApiResult.swift): per location,
+# ``max(1, v/10 * max(1, days/14))`` where ``v`` is the variable count across
+# the current/minutely_15/hourly/daily sections times the number of models;
+# the request weight is the sum over locations. A 600-variable sounding request
+# for 50 route points over 2 days therefore bills 3,000 calls, not one.
+_REFERENCE_VARIABLES = 10
+_REFERENCE_DAYS = 14
+_DEFAULT_FORECAST_DAYS = 7  # Open-Meteo's default when no window is given
+_VARIABLE_SECTIONS = ("current", "minutely_15", "hourly", "daily")
+
+
+def _param_items(value: object) -> list[str]:
+    """Split a comma-joined string or a list param into its non-empty items."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v for v in value.split(",") if v]
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    return [str(value)]
+
+
+def request_weight(params: dict) -> float:
+    """Billed Open-Meteo calls for one request with these query params."""
+    locations = max(1, len(_param_items(params.get("latitude"))))
+    n_vars = sum(len(_param_items(params.get(s))) for s in _VARIABLE_SECTIONS)
+    n_models = max(1, len(_param_items(params.get("models"))))
+
+    if params.get("start_date") and params.get("end_date"):
+        days = (
+            date.fromisoformat(str(params["end_date"]))
+            - date.fromisoformat(str(params["start_date"]))
+        ).days + 1
+    else:
+        days = int(params.get("forecast_days") or _DEFAULT_FORECAST_DAYS)
+        days += int(params.get("past_days") or 0)
+
+    variables_fraction = n_vars * n_models / _REFERENCE_VARIABLES
+    time_fraction = days / _REFERENCE_DAYS
+    per_location = max(1.0, variables_fraction * max(1.0, time_fraction))
+    return locations * per_location
+
+
+@dataclass(frozen=True)
+class OpenMeteoUsage:
+    """HTTP requests issued and the fractional calls Open-Meteo bills for them."""
+
+    calls: int = 0
+    weight: float = 0.0
+
+    def __add__(self, other: OpenMeteoUsage) -> OpenMeteoUsage:
+        return OpenMeteoUsage(self.calls + other.calls, self.weight + other.weight)
+
+
+class OpenMeteoMeter:
+    """Thread-safe tally of every request made by clients built under it.
+
+    For callers that don't hold the client: alternates, the time scan and the
+    standalone cycle create theirs several layers down (alternates in worker
+    threads). See :func:`open_meteo_meter`.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+        self._weight = 0.0
+
+    def add(self, weight: float) -> None:
+        with self._lock:
+            self._calls += 1
+            self._weight += weight
+
+    @property
+    def usage(self) -> OpenMeteoUsage:
+        with self._lock:
+            return OpenMeteoUsage(self._calls, self._weight)
+
+
+_active_meter: ContextVar[OpenMeteoMeter | None] = ContextVar(
+    "open_meteo_meter", default=None,
+)
+
+
+@contextmanager
+def open_meteo_meter() -> Iterator[OpenMeteoMeter]:
+    """Meter every Open-Meteo request of a unit of work.
+
+    A client binds to the meter active when it is *constructed*, so requests
+    from pool threads still count as long as the client was built inside the
+    block, or the thread runs under ``copy_context()`` (as alternates does).
+    """
+    meter = OpenMeteoMeter()
+    token = _active_meter.set(meter)
+    try:
+        yield meter
+    finally:
+        _active_meter.reset(token)
+
+
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
 
@@ -180,6 +284,12 @@ class OpenMeteoClient:
         # fetch_forecast); for concurrent paths the per-thread counter below
         # is the source of truth and the caller aggregates after join.
         self.call_count = 0
+        # Billed weight (see `request_weight`). Unlike `call_count` it is
+        # updated under a lock, so it stays exact under the concurrent paths
+        # and callers read it directly after their pool joins.
+        self.call_weight = 0.0
+        self._weight_lock = threading.Lock()
+        self._meter = _active_meter.get()
         self._tls = threading.local()
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
         self.has_api_key = bool(self._api_key)
@@ -188,8 +298,17 @@ class OpenMeteoClient:
         if historical:
             logger.info("Using Open-Meteo historical forecast API (free tier)")
 
-    def _record_call(self) -> None:
+    @property
+    def usage(self) -> OpenMeteoUsage:
+        """Requests and billed weight issued through this client so far."""
+        return OpenMeteoUsage(self.call_count, self.call_weight)
+
+    def _record_call(self, weight: float = 1.0) -> None:
         """Bump both the global aggregate and the thread-local counter."""
+        with self._weight_lock:
+            self.call_weight += weight
+        if self._meter is not None:
+            self._meter.add(weight)
         # `self.call_count` is a plain int and the increment is racy under
         # threading. That's fine because concurrent callers (tasks/fetch.py)
         # ignore the value during the run and overwrite it with the summed
@@ -274,8 +393,10 @@ class OpenMeteoClient:
         *network_attempts*, the caller's budget; once it is spent the failure
         propagates so the caller's per-model handler records it.
         """
+        # Every attempt is billed, retries included — same as `call_count`.
+        weight = request_weight(params)
         while True:
-            self._record_call()
+            self._record_call(weight)
             try:
                 return self.session.get(url, params=params, timeout=self.timeout)
             except (requests.Timeout, requests.ConnectionError) as exc:

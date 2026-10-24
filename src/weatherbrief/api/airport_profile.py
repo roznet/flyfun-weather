@@ -387,7 +387,31 @@ def _fetch_pressure_levels(
             icao, model, lat, lon, exc_info=True,
         )
         return None
+    finally:
+        _log_open_meteo_usage(client)
     return forecasts[0] if forecasts else None
+
+
+def _log_open_meteo_usage(client) -> None:
+    """Record the fetch's Open-Meteo usage; accounting never fails the stream.
+
+    Own short-lived session for the same reason as the surface read in
+    ``get_airport_profile``: this runs in an executor thread mid-stream.
+    """
+    from weatherbrief.api.usage import log_api_usage
+
+    db = SessionLocal()
+    try:
+        log_api_usage(
+            db, service="open_meteo", pipeline="airport_profile",
+            api_calls=client.call_count, weighted_calls=client.call_weight,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("Airport profile: failed to log API usage", exc_info=True)
+    finally:
+        db.close()
 
 
 def _hourly_to_dict(h) -> dict[str, Any]:

@@ -162,6 +162,7 @@ class FetchResult:
     grib_sources: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     open_meteo_api_calls: int = 0
+    open_meteo_weighted_calls: float = 0.0
 
 
 def _build_fetch_diagnostics(
@@ -573,4 +574,5 @@ def run_fetch(
         grib_sources=grib_sources,
         diagnostics=diagnostics,
         open_meteo_api_calls=client.call_count,
+        open_meteo_weighted_calls=client.call_weight,
     )

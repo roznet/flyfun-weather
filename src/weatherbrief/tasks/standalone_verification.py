@@ -1984,6 +1984,7 @@ def run_standalone_cycle(
         models_fetched = 0
         snapshots_stored = 0
         total_api_calls = 0
+        total_weighted_calls = 0.0
         obs_stored = 0
         scores_created = 0
         pruned = 0
@@ -2066,13 +2067,17 @@ def run_standalone_cycle(
                                 model, init_time, len(airports))
                     # GFS/ICON GRIB diagnostics are fetched alongside and
                     # attached before the sounding pass (#635).
-                    snapshots, api_calls = fetch_model_snapshots(
-                        model, init_time, airports, session, edr_acc=edr_acc,
-                        days=map_days,
-                        pool_soundings=pool_soundings,
-                        priority=DecodePriority.BACKGROUND,
-                    )
+                    from weatherbrief.fetch.open_meteo import open_meteo_meter
+
+                    with open_meteo_meter() as om_meter:
+                        snapshots, api_calls = fetch_model_snapshots(
+                            model, init_time, airports, session, edr_acc=edr_acc,
+                            days=map_days,
+                            pool_soundings=pool_soundings,
+                            priority=DecodePriority.BACKGROUND,
+                        )
                     total_api_calls += api_calls
+                    total_weighted_calls += om_meter.usage.weight
                     logger.info("Model %s: %d snapshot values from Open-Meteo (%d API calls)",
                                 model, len(snapshots), api_calls)
 
@@ -2115,6 +2120,7 @@ def run_standalone_cycle(
                 service="open_meteo",
                 pipeline="verification",
                 api_calls=total_api_calls,
+                weighted_calls=total_weighted_calls,
             )
 
         # Record cycle metrics
