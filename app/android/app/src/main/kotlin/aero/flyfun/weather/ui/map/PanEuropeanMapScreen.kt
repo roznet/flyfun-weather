@@ -245,7 +245,8 @@ private fun ForecastMapBody(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            if (!didLoadOnce && payload == null) {
+            // A failed hour/day change clears the map too, so its error and Retry show here
+            if (payload == null) {
                 MapPlaceholder(
                     loadingText = "Loading forecast map…",
                     error = loadError?.let { "Map unavailable: $it" },

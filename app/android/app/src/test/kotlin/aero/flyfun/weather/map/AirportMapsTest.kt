@@ -22,6 +22,7 @@ import aero.flyfun.weather.viewmodel.HistoricalTime
 import aero.flyfun.weather.viewmodel.MAPS_DEMO_UNAVAILABLE
 import java.time.Instant
 import java.time.LocalDate
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -203,10 +204,18 @@ class AirportMapsTest {
         val forecastCalls = mutableListOf<Pair<Int, Int>>()
         val historicalCalls = mutableListOf<Pair<String, Int>>()
 
+        /** Slots whose fetch throws. */
+        val failing = mutableSetOf<Pair<Int, Int>>()
+
+        /** Slots whose fetch suspends until the test completes the gate. */
+        val gates = mutableMapOf<Pair<Int, Int>, CompletableDeferred<Unit>>()
+
         override suspend fun getForecastDays() = days
 
         override suspend fun getForecastMap(day: Int, hourUtc: Int): ForecastMapResponse {
             forecastCalls += day to hourUtc
+            gates[day to hourUtc]?.await()
+            if ((day to hourUtc) in failing) throw java.io.IOException("offline")
             return forecast
         }
 
@@ -260,6 +269,51 @@ class AirportMapsTest {
         assertEquals("LFPB", vm.selectedIcao.value)
         // The linked slot, then its neighbours prefetched for ‹ › stepping
         assertTrue(api.forecastCalls.containsAll(listOf(1 to 15, 1 to 12, 1 to 18)))
+    }
+
+    @Test
+    fun `a failed hour change clears the previous slot and says why`() {
+        val api = fakeApi()
+        val vm = ForecastMapViewModel(api = api, scopeOverride = scope, clock = { Instant.parse("2026-10-24T17:10:00Z") })
+        assertNotNull(vm.payload.value)
+        api.failing += 1 to 18
+        vm.selectDay(1)
+        // Never the previous day's airports under the new day's label
+        assertNull(vm.payload.value)
+        assertEquals("offline", vm.loadError.value)
+        assertFalse(vm.isLoading.value)
+        api.failing.clear()
+        vm.retry()
+        assertNotNull(vm.payload.value)
+        assertNull(vm.loadError.value)
+    }
+
+    @Test
+    fun `stepping onto a prefetch in flight waits for it and surfaces its failure`() {
+        val api = fakeApi()
+        val gate = CompletableDeferred<Unit>()
+        api.gates[0 to 15] = gate
+        api.failing += 0 to 15
+        val vm = ForecastMapViewModel(api = api, scopeOverride = scope, clock = { Instant.parse("2026-10-24T17:10:00Z") })
+        // 18Z loaded; its 15Z neighbour is prefetching
+        assertEquals(18, vm.selectedHour.value)
+        vm.stepHour(-1)
+        assertEquals(15, vm.selectedHour.value)
+        assertTrue(vm.isLoading.value)
+        assertEquals(1, api.forecastCalls.count { it == 0 to 15 })
+        gate.complete(Unit)
+        assertFalse(vm.isLoading.value)
+        assertEquals("offline", vm.loadError.value)
+        assertNull(vm.payload.value)
+    }
+
+    @Test
+    fun `a linked hour is snapped into the day's grid straight away`() {
+        val api = fakeApi()
+        val vm = ForecastMapViewModel(api = api, scopeOverride = scope, clock = { Instant.parse("2026-10-24T10:00:00Z") })
+        vm.applyDeepLinkTarget(NavigationTarget.ForecastMap(dayOffset = 1, hourUtc = 16))
+        assertEquals(15, vm.selectedHour.value)
+        assertFalse(api.forecastCalls.contains(1 to 16))
     }
 
     @Test

@@ -27,7 +27,9 @@ import java.util.Locale
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.ln
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -129,7 +131,9 @@ class ForecastMapViewModel(
     val focusRequest: StateFlow<MapFocusRequest?> = _focusRequest.asStateFlow()
 
     private val slots = LinkedHashMap<SlotKey, ForecastMapResponse>(16, 0.75f, true)
-    private val inFlight = mutableSetOf<SlotKey>()
+
+    /** One request per slot: a selection landing on a prefetch in flight awaits it. */
+    private val inFlight = mutableMapOf<SlotKey, CompletableDeferred<ForecastMapResponse>>()
 
     /** True once the days request has finished (or was skipped), so [days] is final. */
     private var daysResolved = false
@@ -306,7 +310,8 @@ class ForecastMapViewModel(
         target.metric?.let { _metric.value = it }
         target.model?.let { _mode.value = ForecastModelMode.fromToken(it) }
         target.hourUtc?.let {
-            _selectedHour.value = it
+            // Snapped now so a retry before the grid lands can't ask for an hour with no data
+            _selectedHour.value = snapHour(it, hoursFor(target.dayOffset ?: _selectedDay.value, _days.value))
             hourFromLink = true
         }
         target.airport?.let { pendingOpenIcao = it }
@@ -367,19 +372,19 @@ class ForecastMapViewModel(
             prefetchAdjacentHours(client)
             return
         }
-        if (key in inFlight) return // a prefetch already owns it; store() publishes it
-        inFlight += key
         if (isCurrent()) _isLoading.value = true
         _loadError.value = null
         try {
-            store(client.getForecastMap(day = day, hourUtc = hour), key)
+            // store() publishes it while it is the selected slot
+            fetchSlot(client, key).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // The previous slot stays on screen; a first load with nothing to show says why
-            if (isCurrent() && _payload.value == null) _loadError.value = e.message ?: "The forecast map didn't load."
-        } finally {
-            inFlight -= key
+            if (isCurrent()) {
+                // Don't leave the previous slot on screen under the new day/hour
+                _loadError.value = e.message ?: "The forecast map didn't load."
+                _payload.value = null
+            }
         }
         if (isCurrent()) _isLoading.value = false
         _didLoadOnce.value = _didLoadOnce.value || _payload.value != null
@@ -395,20 +400,30 @@ class ForecastMapViewModel(
             val hour = hours.getOrNull(neighbour) ?: continue
             val key = SlotKey(_selectedDay.value, hour)
             if (key in slots || key in inFlight) continue
-            inFlight += key
+            // Best effort: a failure is dropped here and surfaces if the pilot steps onto the slot
+            fetchSlot(client, key)
+        }
+    }
+
+    /** The slot's request in flight, else a new one; it stores the payload when it lands. */
+    private fun fetchSlot(client: MapsApi, key: SlotKey): Deferred<ForecastMapResponse> =
+        inFlight[key] ?: CompletableDeferred<ForecastMapResponse>().also { deferred ->
+            inFlight[key] = deferred
             scope.launch {
                 try {
-                    store(client.getForecastMap(day = key.day, hourUtc = key.hour), key)
+                    val resp = client.getForecastMap(day = key.day, hourUtc = key.hour)
+                    store(resp, key)
+                    deferred.complete(resp)
                 } catch (e: CancellationException) {
+                    deferred.cancel(e)
                     throw e
-                } catch (_: Exception) {
-                    // Best effort
+                } catch (e: Exception) {
+                    deferred.completeExceptionally(e)
                 } finally {
-                    inFlight -= key
+                    inFlight.remove(key)
                 }
             }
         }
-    }
 
     private fun store(resp: ForecastMapResponse, key: SlotKey) {
         slots[key] = resp
@@ -902,8 +917,8 @@ class HistoricalMapViewModel(
             return
         }
         instant?.let { _selectedInstant.value = clamp(it) }
-        scope.launch {
-            reloadJob?.cancel()
+        reloadJob?.cancel()
+        reloadJob = scope.launch {
             load()
             openPendingAirport()
         }
@@ -915,6 +930,7 @@ class HistoricalMapViewModel(
         private const val LRU_CAPACITY = 8
 
         /** Server `FINAL_AFTER`: only instants older than this are cached. */
+        // SYNC: weatherbrief/tasks/historical_map.py FINAL_AFTER
         private val FINAL_AFTER: Duration = Duration.ofHours(2)
     }
 }
