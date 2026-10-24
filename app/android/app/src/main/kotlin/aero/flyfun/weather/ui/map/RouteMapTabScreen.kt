@@ -256,6 +256,10 @@ fun RouteMapTabScreen(
         val box = cellsBox
         if (showsCells && box != null) cellsModel.poll(box)
     }
+    // Hidden → drop a tapped core's card, so it doesn't outlive the marker it describes.
+    LaunchedEffect(showsCells) {
+        if (!showsCells && selection is RouteMapSelection.Cell) selection = null
+    }
     LaunchedEffect(lightningModel, showsLightning, lightningBox) {
         val box = lightningBox
         // Hidden → forget the flashes, so toggling back on shows no stale bolts or badge.
