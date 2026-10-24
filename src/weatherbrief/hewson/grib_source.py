@@ -58,7 +58,8 @@ _ICON_DOWNLOAD_WORKERS = 12
 # The newest cycle each model should have out in full by a given time:
 # (cycle interval, hours from init until the whole 0-117 h run is published),
 # with margin. ECMWF a2 lands ~6 h 40 min after 00Z/12Z (the compute node syncs
-# it at 07:15/19:15); GFS and ICON-EU finish their 120 h runs ~4 h after init.
+# it at 07:15/19:15); GFS and ICON-EU finish their 120 h runs ~4 h after init
+# (5 h here: one hour of margin).
 # At the 08Z/20Z sample hours this expects the 00Z/12Z run of every model.
 _EXPECTED_CYCLE_HOURS: dict[str, tuple[int, float]] = {
     "ecmwf": (12, 7.5),

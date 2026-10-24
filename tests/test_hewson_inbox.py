@@ -258,6 +258,8 @@ class TestTryIngestHewsonSnapshots:
 
         monkeypatch.setenv("HEWSON_INBOX_MODELS", "gfs, bogus")
         assert sched._hewson_inbox_models() == ["gfs"]
+        monkeypatch.setenv("HEWSON_INBOX_MODELS", "gsf")  # typo: keep the offload
+        assert sched._hewson_inbox_models() == ["ecmwf", "gfs", "icon"]
         monkeypatch.delenv("HEWSON_INBOX_MODELS")
         assert sched._hewson_inbox_models() == ["ecmwf", "gfs", "icon"]
 

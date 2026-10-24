@@ -409,7 +409,7 @@ def _build_one_snapshot_grib(
         step = read_step(run, h, levels, lat, lon)
         fetch_secs += time.monotonic() - t0
         if step is None:
-            logger.warning(
+            logger.error(
                 "Hewson precompute: %s %s f%03d unreadable — skipping the model "
                 "this cycle", run.model, run.describe(), h,
             )
@@ -423,8 +423,15 @@ def _build_one_snapshot_grib(
                 )
                 if inputs is not None else None
             )
-            if fields is not None:
-                _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)
+            if fields is None:
+                # Too many missing cells: a NaN slice would read as "no front".
+                logger.error(
+                    "Hewson precompute: %s %s f%03d %d hPa has too many missing "
+                    "cells — skipping the model this cycle",
+                    run.model, run.describe(), h, L,
+                )
+                return None
+            _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)
         compute_secs += time.monotonic() - t0
     t0 = time.monotonic()
     _add_tendency(per_level, levels, stride_hours)
@@ -716,9 +723,11 @@ def run_once(
                     continue
                 result.sources[model] = run.describe()
                 if require_current and init is None:
-                    from weatherbrief.hewson.grib_source import expected_init
+                    from weatherbrief.hewson.grib_source import (
+                        expected_init as cycle_expected_init,
+                    )
 
-                    want = expected_init(model, now)
+                    want = cycle_expected_init(model, now)
                     if run.init < want:
                         # Never quietly keep (or publish) an older run: the
                         # delivery or sync for this cycle failed (#911).
