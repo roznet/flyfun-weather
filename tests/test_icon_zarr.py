@@ -165,9 +165,25 @@ def _grib_bytes(tmp_path: Path, short: str = "t") -> bytes:
     return data
 
 
-def test_cache_write_converts_and_drops_grib(tmp_path, monkeypatch):
-    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")  # convert in-process
+@pytest.fixture
+def inline_pool(monkeypatch):
+    """A decode pool that runs jobs in this process.
+
+    Conversion is skipped when no pool is configured, so the write-hook tests
+    report a pool and run the worker function inline instead of spawning one.
+    """
+    import weatherbrief.fetch.grib as grib_mod
+    from weatherbrief.fetch.grib import decode_worker
+
     monkeypatch.delenv("WB_ICON_ZARR", raising=False)
+    monkeypatch.setattr(grib_mod, "decode_pool_enabled", lambda: True)
+    monkeypatch.setattr(
+        grib_mod, "_dispatch_decode",
+        lambda name, *args, priority=None: getattr(decode_worker, name)(*args),
+    )
+
+
+def test_cache_write_converts_and_drops_grib(tmp_path, inline_pool):
     run_dir = tmp_path / "icon-eu" / "20261024_06z"
     ck = "f003_ICON_EU_T.grib2"
 
@@ -189,9 +205,20 @@ def test_rollback_switch_keeps_grib(tmp_path, monkeypatch):
     assert icon_zarr.cached_model_level_entry(run_dir, ck) == entry
 
 
-def test_failed_conversion_keeps_grib(tmp_path, monkeypatch):
-    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+def test_no_decode_pool_keeps_grib(tmp_path, monkeypatch):
+    """GRIB_DECODE_WORKERS=0: no inline ~360 MB conversion on the app process."""
     monkeypatch.delenv("WB_ICON_ZARR", raising=False)
+    monkeypatch.setenv("GRIB_DECODE_WORKERS", "0")
+    run_dir = tmp_path / "icon-eu" / "20261024_06z"
+    ck = "f003_ICON_EU_T.grib2"
+
+    entry = icon_zarr.cache_model_level_blob(run_dir, ck, _grib_bytes(tmp_path))
+
+    assert entry == run_dir / ck and entry.exists()
+    assert not (run_dir / "f003_ICON_EU_T.zarr").exists()
+
+
+def test_failed_conversion_keeps_grib(tmp_path, inline_pool):
     run_dir = tmp_path / "icon-eu" / "20261024_06z"
     ck = "f003_ICON_EU_T.grib2"
     data = _grib_bytes(tmp_path, "t") + _grib_bytes(tmp_path, "u")  # refused
@@ -278,7 +305,9 @@ def test_decode_planner_prefers_store_and_mixes_with_grib(tmp_path):
         captured["jobs"] = job_list
         return []
 
-    with patch.object(grib_mod, "_dispatch_decode_parallel", side_effect=fake_parallel):
+    # The #912 surface decode fetches its own missing files: not under test.
+    with patch.object(grib_mod, "_dispatch_decode_parallel", side_effect=fake_parallel), \
+            patch.object(grib_mod, "_decode_icon_surface", return_value={}):
         grib_mod._decode_and_merge_icon_eu(_eu_ctx(tmp_path), [cs], [], [])
 
     (worker, (var_paths, _, _)), = captured["jobs"]
@@ -330,5 +359,19 @@ def test_transient_read_error_keeps_the_store(tmp_path, monkeypatch):
         raise OSError("I/O pressure")
 
     monkeypatch.setattr(icon_zarr, "read_model_level_columns", boom)
+    assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
+    assert (store / "zarr.json").exists()
+
+
+def test_reader_bug_keeps_the_store(tmp_path, monkeypatch):
+    """A failure outside the zarr reads (here the weights) is not corruption:
+    skip the variable, never delete a good store."""
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+
+    def bug(*a, **k):
+        raise ValueError("reader bug")
+
+    monkeypatch.setattr(dec, "_bilinear_grid_weights", bug)
     assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
     assert (store / "zarr.json").exists()

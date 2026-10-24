@@ -39,6 +39,7 @@ import math
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -249,6 +250,26 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
 # ---------------------------------------------------------------------------
 
 
+class StoreCorrupt(Exception):
+    """The store itself is unreadable: metadata, attributes or a shard.
+
+    Raised only around the zarr reads, never around the interpolation, so a
+    bug in the reader's own arithmetic cannot be mistaken for a bad store and
+    get every store a briefing touches deleted. I/O and memory errors pass
+    through unwrapped: they are transient and say nothing about the store.
+    """
+
+
+@contextmanager
+def _store_reads(store_path):
+    try:
+        yield
+    except (OSError, MemoryError):
+        raise
+    except Exception as e:
+        raise StoreCorrupt(f"{store_path}: {e!r}") from e
+
+
 def read_model_level_columns(
     store_path: str | Path,
     latitudes: list[float],
@@ -265,13 +286,14 @@ def read_model_level_columns(
     from weatherbrief.fetch.grib.decode import _bilinear_grid_weights
     from weatherbrief.fetch.grib.grib_reader import combine_bilinear
 
-    arr = zarr.open_array(str(store_path), mode="r")
-    attrs = arr.attrs
-    if attrs.get("schema") != STORE_SCHEMA:
-        raise ValueError(f"{store_path}: unknown store schema {attrs.get('schema')!r}")
-    levels = [int(v) for v in attrs["levels"]]
-    lats = np.asarray(attrs["lats"], dtype=np.float64)
-    lons = np.asarray(attrs["lons"], dtype=np.float64)
+    with _store_reads(store_path):
+        arr = zarr.open_array(str(store_path), mode="r")
+        attrs = arr.attrs
+        if attrs.get("schema") != STORE_SCHEMA:
+            raise ValueError(f"unknown store schema {attrs.get('schema')!r}")
+        levels = [int(v) for v in attrs["levels"]]
+        lats = np.asarray(attrs["lats"], dtype=np.float64)
+        lons = np.asarray(attrs["lons"], dtype=np.float64)
     n_points = len(latitudes)
 
     bw = _bilinear_grid_weights(
@@ -296,7 +318,8 @@ def read_model_level_columns(
         sel = np.flatnonzero(tiles == tile)
         y0 = int(cell_rows[sel[0]] // TILE) * TILE
         x0 = int(cell_cols[sel[0]] // TILE) * TILE
-        block = arr[:, y0:min(y0 + TILE, ny), x0:min(x0 + TILE, nx)]
+        with _store_reads(store_path):
+            block = arr[:, y0:min(y0 + TILE, ny), x0:min(x0 + TILE, nx)]
         compact[:, sel] = block[:, cell_rows[sel] - y0, cell_cols[sel] - x0]
 
     m = bw.inb_idx.size
@@ -347,7 +370,8 @@ def cache_model_level_blob(
     valid cache entry), converts it in a decode-pool worker (the conversion is
     CPU and ~145 MB, so it stays off the uvicorn process, and the dispatcher's
     priority ordering lets interactive decodes overtake a warm-loop
-    conversion), and deletes the GRIB once the store is in place. ICON is
+    conversion), and deletes the GRIB once the store is in place. With no
+    decode pool it does not convert at all. ICON is
     re-downloadable for about a day, so the GRIB is not kept as a backup.
     ``priority`` defaults to the caller's decode priority (the ContextVar).
 
@@ -356,8 +380,13 @@ def cache_model_level_blob(
     from weatherbrief.fetch.grib import _dispatch_decode
     from weatherbrief.fetch.grib.cache import put_cached
 
+    from weatherbrief.fetch.grib import decode_pool_enabled
+
     grib_path = put_cached(run_dir, filename, data)
-    if not zarr_enabled():
+    # No pool (GRIB_DECODE_WORKERS=0, the kill switch / some dev setups): the
+    # dispatcher would run the conversion inline, putting a ~360 MB job on the
+    # app process. Keep the GRIB instead; the decoder reads it as before.
+    if not zarr_enabled() or not decode_pool_enabled():
         return grib_path
     store_path = run_dir / store_name(filename)
     try:
