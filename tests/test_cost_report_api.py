@@ -400,6 +400,19 @@ class TestOtherLlmSpend:
         assert by_cat["trip_summary"]["flight_id"] is None
 
 
+@pytest.fixture
+def _stub_fx(monkeypatch):
+    """Offline FX: the table carries today's rates for its currency toggle."""
+    from flyfun_common import fx
+    fx.clear_cache()
+    monkeypatch.setattr(fx, "_fetch_rates", lambda: (
+        {"USD": 1.0, "EUR": 0.9, "GBP": 0.8, "CHF": 0.85}, "2026-10-23",
+    ))
+    yield
+    fx.clear_cache()
+
+
+@pytest.mark.usefixtures("_stub_fx")
 class TestCostTableEndpoint:
     def test_no_config_returns_null(self, client):
         assert client.get("/api/admin/cost-report/table").json() is None
@@ -446,3 +459,5 @@ class TestCostTableEndpoint:
         # The fixture's dev user also signed up just now.
         assert usage["New sign-ups"] == [2, 2, 2]
         assert t["cache_saving_usd"] == [None, 0.05, 0.05]
+        assert t["fx"]["GBP"] == {"currency": "GBP", "rate": 0.8, "as_of": "2026-10-23"}
+        assert set(t["fx"]) == {"USD", "EUR", "GBP", "CHF"}

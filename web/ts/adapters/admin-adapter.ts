@@ -1,6 +1,7 @@
 /** Admin adapter — user management and agent API calls. */
 
 import { apiFetch } from '../utils';
+import type { FxBlock } from './donations-adapter';
 
 export interface AdminUserUsage {
   briefings: number;
@@ -290,6 +291,9 @@ export interface CostTable {
   /** Reporting-only, already inside the briefing token line. */
   cache_saving_usd: Array<number | null>;
   usage: Array<CostTableRow & { kind: 'count' | 'usd' }>;
+  /** Today's rate per offered currency (units per 1 USD). A currency whose
+   *  rate was unavailable comes back as a USD block. */
+  fx?: Record<string, FxBlock>;
 }
 
 export async function fetchCostTable(): Promise<CostTable | null> {
