@@ -30,23 +30,30 @@ GFS_PUBLISH_DELAY_HOURS = 5  # GFS typically available ~4.5h after init
 _REQUEST_TIMEOUT = 60  # seconds
 
 
-def gfs_grib2_url(init_date: str, init_hour: int, forecast_hour: int) -> str:
+def gfs_grib2_url(
+    init_date: str, init_hour: int, forecast_hour: int, product: str = "pgrb2",
+) -> str:
     """Build the S3 URL for a GFS GRIB2 file.
 
     Args:
         init_date: YYYYMMDD format.
         init_hour: 0, 6, 12, or 18.
         forecast_hour: Forecast hour (0–384).
+        product: ``pgrb2`` (the main file) or ``pgrb2b``, which holds the
+            in-between pressure levels (875, 825 … 525 hPa) the GRIB-primary
+            sounding needs (#913).
     """
     return (
         f"{S3_BASE_URL}/gfs.{init_date}/{init_hour:02d}/atmos/"
-        f"gfs.t{init_hour:02d}z.pgrb2.0p25.f{forecast_hour:03d}"
+        f"gfs.t{init_hour:02d}z.{product}.0p25.f{forecast_hour:03d}"
     )
 
 
-def gfs_idx_url(init_date: str, init_hour: int, forecast_hour: int) -> str:
+def gfs_idx_url(
+    init_date: str, init_hour: int, forecast_hour: int, product: str = "pgrb2",
+) -> str:
     """Build the S3 URL for a GFS .idx file."""
-    return gfs_grib2_url(init_date, init_hour, forecast_hour) + ".idx"
+    return gfs_grib2_url(init_date, init_hour, forecast_hour, product) + ".idx"
 
 
 def find_latest_run(
@@ -114,6 +121,31 @@ def find_latest_run_with_response(
                 continue
 
     return None
+
+
+GFS_HORIZON_H = 384
+
+
+def gfs_window_out_of_range(
+    target_time: datetime,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+) -> bool:
+    """True when the newest publishable GFS run cannot reach the window end.
+
+    Deterministic (no network), the GFS counterpart of
+    ``icon_eu_window_out_of_range``: the newest cycle past
+    :data:`GFS_PUBLISH_DELAY_HOURS` as-of *as_of_time*, whose 384 h horizon
+    must reach ``target_time + flight_duration_hours``. Every GFS cycle runs
+    to 384 h, so the newest run is the one that reaches furthest.
+    """
+    reference_time = as_of_time or datetime.now(timezone.utc)
+    need_until = target_time + timedelta(hours=max(flight_duration_hours, 0.0))
+    newest = reference_time - timedelta(hours=GFS_PUBLISH_DELAY_HOURS)
+    init_time = newest.replace(
+        hour=(newest.hour // 6) * 6, minute=0, second=0, microsecond=0,
+    )
+    return init_time + timedelta(hours=GFS_HORIZON_H) < need_until
 
 
 def _snap_to_gfs_grid(fhour: float) -> int:
@@ -221,10 +253,11 @@ def fetch_idx(
     init_hour: int,
     forecast_hour: int,
     session: requests.Session | None = None,
+    product: str = "pgrb2",
 ) -> str:
     """Download a GFS .idx file."""
     sess = session or requests.Session()
-    url = gfs_idx_url(init_date, init_hour, forecast_hour)
+    url = gfs_idx_url(init_date, init_hour, forecast_hour, product)
     logger.debug("Fetching .idx: %s", url)
     resp = sess.get(url, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()

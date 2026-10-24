@@ -110,7 +110,12 @@ def _rmtree_unless_pinned(run_dir: Path) -> bool:
 # ``run_dir.parent.name`` is the model key (see :func:`cache_dir_for_run`).
 # Models not listed here fall back to :data:`CACHE_TTL_SECONDS`.
 MODEL_TTL_SECONDS: dict[str, int] = {
-    "gfs": 24 * 3600,       # no precache, small footprint (~0.5 GB/run)
+    # GFS: 12 h like icon-eu since #913. A GRIB-primary briefing caches the
+    # full sounding + surface, ~177 MB per forecast hour (measured on
+    # gfs.20261024/00z), so a run is no longer small. A cycle is the newest
+    # for 6 h after its ~5 h publication delay, so 12 h of init-time age keeps
+    # it through its successor's arrival; in-use runs are pinned.
+    "gfs": 12 * 3600,
     "icon-eu": 12 * 3600,   # precached each main run; previous run is fallback
     "icon-d2": 6 * 3600,    # 8 runs/day (every 3h); keep current + prior run
     # HRRR (#457): hourly cycles and ~200 MB per cached forecast hour, so a
@@ -156,8 +161,8 @@ _GIB = 1024 ** 3
 # tightens; the normal steady state is ~39 GiB and unaffected.
 # Env override per model: ``WB_GRIB_CACHE_CAP_GB_<MODEL>`` (e.g.
 # ``WB_GRIB_CACHE_CAP_GB_ICON_D2=40``; ``0``/negative disables). Models without
-# a default and no override are uncapped (GFS is cheap; ICON-EU is bounded by
-# its 12 h TTL once init-time aging lands).
+# a default and no override are uncapped (ICON-EU is bounded by its 12 h TTL
+# once init-time aging lands).
 DEFAULT_CACHE_FLOOR_RUNS = 2
 
 _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
@@ -168,6 +173,12 @@ _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     # pulling a different hourly run. Enforced from the daily retention pass
     # (HRRR is not precached, so there is no warm-loop enforcement site).
     "hrrr": 8.0,
+    # GFS (#913): the GRIB-primary sounding + surface is ~177 MB per forecast
+    # hour, on top of the airport-profile precache's cloud water and
+    # diagnostics. Each briefed window adds its hours to the run, so the TTL
+    # (12 h, ~2 runs) is the main bound and this cap the backstop for a busy
+    # day of many flights. Enforced after each GFS warm and daily.
+    "gfs": 20.0,
     # AROME (#529): ~146 MB per package group, one or two groups per flight
     # window, ~2 runs live under the 9 h TTL. Not precached, so enforced from
     # the daily retention pass only; the TTL is the primary bound.

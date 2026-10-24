@@ -1150,15 +1150,17 @@ _GRIB_PRIMARY_FILL_FIELDS: tuple[str, ...] = (
     "cloud_cover_mid_pct",
     "cloud_cover_high_pct",
     "freezing_level_m",
+    "lifted_index_raw",  # GFS LFTX (#913)
 )
 
 # Slots whose surface scalars are written from GRIB at native steps: ECMWF a1
-# (``_apply_ecmwf_surface_to_hourly``) and the ICON surface files (#912,
-# ``_apply_icon_surface_to_sections``). Both write alongside the step's
+# (``_apply_ecmwf_surface_to_hourly``), the ICON surface files (#912,
+# ``_apply_icon_surface_to_sections``) and the GFS surface blob (#913,
+# ``_apply_gfs_surface_to_sections``). All write alongside the step's
 # cloud diagnostics, which is what the anchor detector below relies on.
-# ICON's GRIB surface is fill-only end to end, so on ICON every field —
-# the ECMWF overwrite set included — is interpolated into empty hours only.
-_GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon"})
+# ICON's and GFS's GRIB surface is fill-only end to end, so there every field
+# — the ECMWF overwrite set included — is interpolated into empty hours only.
+_GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon", "gfs"})
 
 
 def _linear_interp_grib_surface(
@@ -1195,6 +1197,10 @@ def _linear_interp_grib_surface(
     ``freezing_level_m`` is listed for ICON (``hzerocl``); on ECMWF the
     diagnostics fill mirrors ``deg0l`` over it afterwards anyway.
 
+    GFS (#913) likewise: its surface blob is written at the steps that carry
+    the cloud diagnostics. GFS is hourly to f120, so gaps appear past f120
+    (3-hourly) only.
+
     Wind speed/direction are interpolated as U/V components (``_lerp_wind``),
     not as scalars. Gust is a window maximum and is held over the covering
     interval rather than linearly interpolated. See findings #6/#7.
@@ -1216,7 +1222,7 @@ def _linear_interp_grib_surface(
 
     if total:
         logger.info(
-            "ECMWF/ICON surface scalars linearly interpolated for %d gap hourly entries",
+            "ECMWF/ICON/GFS surface scalars linearly interpolated for %d gap hourly entries",
             total,
         )
 

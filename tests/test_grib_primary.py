@@ -99,12 +99,14 @@ class _FakeClient:
 
 
 @pytest.mark.parametrize("value,expected", [
-    (None, (ModelSource.ECMWF, ModelSource.ICON)),
-    ("1", (ModelSource.ECMWF, ModelSource.ICON)),
+    (None, (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS)),
+    ("1", (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS)),
     ("0", ()),
     ("off", ()),
     ("ecmwf", (ModelSource.ECMWF,)),
-    ("icon, gfs", (ModelSource.ICON,)),
+    ("icon, gfs", (ModelSource.ICON, ModelSource.GFS)),
+    ("ecmwf,icon", (ModelSource.ECMWF, ModelSource.ICON)),
+    ("ukmo", ()),
 ])
 def test_switch(monkeypatch, value, expected):
     if value is None:
@@ -130,8 +132,10 @@ def test_gate_disabled_and_icon_rules(monkeypatch):
     assert primary.grib_primary_skip_reason(
         ModelSource.ICON, _points(), now + timedelta(hours=6), 2.0,
     ) is None
-    # GFS is never GRIB-primary (its sounding overlays Open-Meteo's levels).
-    assert primary.grib_primary_skip_reason(ModelSource.GFS, _points(), DEP, 2.0) is not None
+    # Models without a GRIB source never are.
+    assert primary.grib_primary_skip_reason(
+        ModelSource.UKMO, _points(), DEP, 2.0,
+    ) == "disabled"
 
 
 def test_gate_ecmwf_without_files(monkeypatch, tmp_path):

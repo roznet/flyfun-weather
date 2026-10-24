@@ -6876,3 +6876,66 @@ leaves D2 so ICON-EU), F3 LFPN→LEBL at +88 h (3-hourly steps), F4 EGTF→EHRD
   prod's Open-Meteo ECMWF is a newer run than our 00/12Z ECPDS one; GRIB-primary
   now takes RH, MSLP, covers and the rain split from the same run as the
   sounding.
+
+## 62. GFS briefing slot built from NOAA GRIB, Open-Meteo only as fallback (#913)
+
+**Date:** 2026-10-24. **Part of** #910 (cut Open-Meteo usage). Same shape as
+§61: a gated GFS slot makes no Open-Meteo request; `fill_grib_primary_gaps`
+fetches Open-Meteo only for points GRIB left short and splices gaps only.
+Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
+
+**Decisions.**
+
+- **Gate.** GFS is global, so no domain test: refused only when historical
+  (replay rule still open for every GRIB-primary model), when the route takes
+  the HRRR upgrade (`hrrr_route`: `WB_HRRR_ENABLED`, whole route in CONUS, a
+  publishable HRRR run reaching the window end; that path stays exactly as
+  #457 built it), and past the newest cycle's 384 h horizon (`out_of_range`).
+- **Whole column from NOAA, all 28 Open-Meteo levels.** TMP, RH, UGRD, VGRD,
+  HGT, VVEL, CLMR, ICMR. pgrb2.0p25 carries 20 of the 28 levels; 875, 825 …
+  525 hPa are only in pgrb2b, so both are read into one cached blob per hour
+  (~163 MB, measured on gfs.20261024/00z). Not chosen: the 20 pgrb2 levels
+  only (≈ 30 % fewer bytes) because the 50 hPa spacing below 500 hPa would
+  coarsen icing and cloud layers against what the slot carried until now.
+  The plan is checked before downloading (every level, every mandatory
+  variable) and the blob is all-or-nothing, so a column is never half GRIB.
+- **Fill-only, per hour.** The sounding is written only on hours that have
+  none (`only_empty`), the surface only into empty fields. On an Open-Meteo
+  slot (gate refused) the old CLWMR/ICMR patch runs unchanged and nothing
+  else moves.
+- **Surface** from the same pgrb2 file (~14.5 MB per hour): 2 m TMP/DPT/RH,
+  10 m wind, GUST, PRMSL, PRES, VIS, HGT of the 0 °C isotherm (MSL, as
+  Open-Meteo's `freezing_level_height`), surface-based CAPE/CIN (what
+  Open-Meteo served for GFS, `NWP_CAPE_TYPE["gfs"] = "sb"`), LFTX as
+  `lifted_index_raw`, and the **instantaneous** LCDC/MCDC/HCDC/TCDC for the
+  bulk covers. The cloud-diagnostics band machinery (§3, averaged windows,
+  RH/condensate gate) is untouched.
+- **Precipitation.** APCP and ACPCP are running totals since init (the .idx
+  lists both the bucket and the 0-N total; the 0-N total is read). Per hour
+  over the step window: `precipitation_mm` = ΔAPCP, `showers_mm` = ΔACPCP,
+  `snowfall_cm` = ΔAPCP × CPOFP/100 × 0.7, `rain_mm` = ΔAPCP − ΔACPCP − snow
+  water, floored at 0 (the ECMWF rule of §61). CPOFP's −50 fill falls back to
+  the CSNOW category; no precipitation means 0 snow and 0 rain. The step
+  before the first window hour is read too, so that hour has its amount.
+- **None on a GRIB-primary GFS slot:** `precipitation_probability_pct` (as
+  §61). `lifted_index_raw` is set (LFTX), unlike ECMWF / ICON.
+- **Cache.** GFS TTL 24 h → 12 h and a 20 GiB default cap
+  (`WB_GRIB_CACHE_CAP_GB_GFS`), the run pinned while it is read: ~177 MB per
+  forecast hour where the CLWMR patch was ~2 MB. Precache still fetches only
+  the cloud-diagnostic messages, not soundings.
+
+**What changes in values.** On GRIB-primary GFS slots: the whole sounding and
+every surface field now come from NOAA's GFS 0.25° instead of Open-Meteo's
+`gfs_seamless` (GFS 0.25° blended with GFS 0.11° / HRRR where available);
+bilinear from the four surrounding cells instead of Open-Meteo's
+terrain-matched land cell (the §61 cell-selection difference applies). Hours
+between native 3-hourly steps past f120 are linearly interpolated, as for
+ECMWF / ICON.
+
+**Measured.** In the sandbox, live NOAA f011/f012 decoded at 7 points:
+sounding 3.6 s, surface 0.5 s; values sane (CIN negative, CPOFP zero packed
+as −6e-6). The advisory replay diff (`scripts/compare_grib_primary.py --off
+ecmwf,icon --on 1`, so only GFS differs) and the daily pack compare with
+sounding levels (`scripts/compare_pack_surface_openmeteo.py --levels
+850,700,500`, Open-Meteo `ncep_gfs025` same run) are **pending on the Mac**
+(Open-Meteo is not reachable from the sandbox).

@@ -373,10 +373,14 @@ def test_cap_env_override(monkeypatch):
 
 
 def test_cap_none_for_uncapped_models(monkeypatch):
-    monkeypatch.delenv("WB_GRIB_CACHE_CAP_GB_GFS", raising=False)
     monkeypatch.delenv("WB_GRIB_CACHE_CAP_GB_ICON_EU", raising=False)
-    assert cache_cap_bytes("gfs") is None
     assert cache_cap_bytes("icon-eu") is None
+
+
+def test_gfs_capped_by_default_for_grib_primary_soundings(monkeypatch):
+    """#913: a GRIB-primary GFS slot caches ~177 MB per forecast hour."""
+    monkeypatch.delenv("WB_GRIB_CACHE_CAP_GB_GFS", raising=False)
+    assert cache_cap_bytes("gfs") == 20 * 1024**3
 
 
 def test_default_floor_is_two():
