@@ -44,7 +44,7 @@ class ApiClient(
     onUnauthorized: () -> Unit = {},
     val json: Json = WbJson,
     httpClient: OkHttpClient? = null,
-) {
+) : MapsApi {
     @Volatile
     var baseUrl: String = baseUrl.trimEnd('/')
         set(value) {
@@ -756,10 +756,10 @@ class ApiClient(
     // Forecast & Historical Maps & Airport Weather
     // ========================================================================
 
-    suspend fun getForecastDays(): ForecastDaysResponse =
+    override suspend fun getForecastDays(): ForecastDaysResponse =
         get("/api/maps/forecast/days")
 
-    suspend fun getForecastMap(day: Int, hourUtc: Int): ForecastMapResponse =
+    override suspend fun getForecastMap(day: Int, hourUtc: Int): ForecastMapResponse =
         get("/api/maps/forecast", listOf("day" to day.toString(), "hour" to hourUtc.toString()))
 
     suspend fun getForecastGramet(
@@ -777,13 +777,14 @@ class ApiClient(
         return requestRaw("/api/maps/forecast/gramet", queryItems = query)
     }
 
-    suspend fun getHistoricalRange(): HistoricalRangeResponse =
+    override suspend fun getHistoricalRange(): HistoricalRangeResponse =
         get("/api/maps/historical/range")
 
-    suspend fun getHistoricalMap(date: String, hourUtc: Int): HistoricalMapResponse =
-        get("/api/maps/historical", listOf("date" to date, "hour" to hourUtc.toString()))
+    /** [at] is an ISO8601 UTC instant (floored to the 30-min grid server-side); [lead] 0…6 days. */
+    override suspend fun getHistoricalMap(at: String, lead: Int): HistoricalMapResponse =
+        get("/api/maps/historical", listOf("at" to at, "lead" to lead.toString()))
 
-    suspend fun getFrequentAirports(): FrequentAirportsResponse =
+    override suspend fun getFrequentAirports(): FrequentAirportsResponse =
         get("/api/flights/frequent-airports")
 
     companion object {

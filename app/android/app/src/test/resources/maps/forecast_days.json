@@ -1,0 +1,119 @@
+{
+ "days": [
+  {
+   "day": 0,
+   "date": "2026-10-24",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs",
+    "icon"
+   ]
+  },
+  {
+   "day": 1,
+   "date": "2026-10-25",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs",
+    "icon"
+   ]
+  },
+  {
+   "day": 2,
+   "date": "2026-10-26",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs",
+    "icon"
+   ]
+  },
+  {
+   "day": 3,
+   "date": "2026-10-27",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs",
+    "icon"
+   ]
+  },
+  {
+   "day": 4,
+   "date": "2026-10-28",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs",
+    "icon"
+   ]
+  },
+  {
+   "day": 5,
+   "date": "2026-10-29",
+   "available": true,
+   "hours": [
+    6,
+    9,
+    12,
+    15,
+    18
+   ],
+   "models": [
+    "ecmwf",
+    "gfs"
+   ]
+  },
+  {
+   "day": 6,
+   "date": "2026-10-30",
+   "available": true,
+   "hours": [
+    6,
+    12,
+    18
+   ],
+   "models": [
+    "gfs"
+   ]
+  }
+ ],
+ "max_day": 6
+}

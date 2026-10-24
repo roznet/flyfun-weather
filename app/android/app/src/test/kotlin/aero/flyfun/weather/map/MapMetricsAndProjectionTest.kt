@@ -1,20 +1,13 @@
 package aero.flyfun.weather.map
 
-import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.viz.VizAltitudeLines
 import aero.flyfun.weather.model.viz.VizConvectiveZone
 import aero.flyfun.weather.model.viz.VizIcingZone
 import aero.flyfun.weather.model.viz.VizPoint
-import aero.flyfun.weather.ui.map.AirportMapMetric
 import aero.flyfun.weather.ui.map.GeoBounds
 import aero.flyfun.weather.ui.map.RouteMapMetric
 import aero.flyfun.weather.ui.map.SlippyMapCameraState
 import aero.flyfun.weather.ui.map.SlippyMapProjection
-import aero.flyfun.weather.viewmodel.ForecastMapViewModel
-import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
-import aero.flyfun.weather.viewmodel.PanEuropeanMapFixtures
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -112,52 +105,5 @@ class MapMetricsAndProjectionTest {
         cam.viewportHeightPx = 800f
         cam.fitBounds(GeoBounds(minLat = 43.0, maxLat = 52.0, minLon = -1.5, maxLon = 9.0))
         assertTrue(cam.zoom in 4.0f..8.5f)
-    }
-
-    @Test
-    fun `PanEuropeanMapFixtures and AirportMapMetric cover 15 European airports`() {
-        val forecastResp = PanEuropeanMapFixtures.buildForecastMapResponse(day = 0, hourUtc = 12)
-        assertEquals(15, forecastResp.airports.size)
-        assertTrue(forecastResp.modelInitTimes.keys.containsAll(listOf("ecmwf", "gfs", "icon_eu")))
-
-        val egll = forecastResp.airports.first { it.icao == "EGLL" }
-        for (metric in AirportMapMetric.forecastMetrics) {
-            val raw = metric.extractForecastRawValue(egll, selectedModel = "ecmwf", worstOfModels = false)
-            assertNotNull("Forecast raw value for ${metric.id}", raw)
-            val color = metric.resolveColor(raw)
-            val radius = metric.resolveRadiusDp(raw)
-            assertTrue(color.alpha > 0f)
-            assertTrue(radius >= 6.0f)
-            assertTrue(metric.formatValue(raw).isNotBlank())
-            assertTrue(metric.legendSwatches().isNotEmpty())
-        }
-
-        val histResp = PanEuropeanMapFixtures.buildHistoricalMapResponse(date = "2026-04-17", hourUtc = 12)
-        assertEquals(15, histResp.airports.size)
-        val lszh = histResp.airports.first { it.icao == "LSZH" }
-        for (metric in AirportMapMetric.historicalMetrics) {
-            val raw = metric.extractHistoricalRawValue(lszh, viewMode = "worst")
-            assertNotNull("Historical raw value for ${metric.id}", raw)
-            assertTrue(metric.resolveRadiusDp(raw) >= 6.0f)
-        }
-
-        val scope = CoroutineScope(Dispatchers.Unconfined)
-        val fVm = ForecastMapViewModel(isMockModeProvider = { true }, scopeOverride = scope)
-        fVm.applyDeepLinkTarget(
-            NavigationTarget.ForecastMap(dayOffset = 1, hourUtc = 15, model = "gfs", metric = "crosswind_kt"),
-        )
-        assertEquals(1, fVm.selectedDay.value)
-        assertEquals(15, fVm.selectedHour.value)
-        assertEquals("gfs", fVm.selectedModel.value)
-        assertEquals(AirportMapMetric.CROSSWIND, fVm.selectedMetric.value)
-
-        val hVm = HistoricalMapViewModel(isMockModeProvider = { true }, scopeOverride = scope)
-        hVm.applyDeepLinkTarget(
-            NavigationTarget.HistoricalMap(date = "2026-04-10", hourUtc = 9, metric = "wind_speed_kt", viewMode = "taf"),
-        )
-        assertEquals("2026-04-10", hVm.selectedDate.value)
-        assertEquals(9, hVm.selectedHour.value)
-        assertEquals("taf", hVm.viewMode.value)
-        assertEquals(AirportMapMetric.WIND_SPEED, hVm.selectedMetric.value)
     }
 }

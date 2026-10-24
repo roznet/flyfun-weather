@@ -1,43 +1,76 @@
+// SYNC: iOS app/flyfun-weather/flyfun-weather/ViewModels/ForecastMapViewModel.swift
+//       iOS app/flyfun-weather/flyfun-weather/ViewModels/HistoricalMapViewModel.swift
 package aero.flyfun.weather.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import aero.flyfun.weather.data.ApiClient
-import aero.flyfun.weather.model.AgreementEntry
-import aero.flyfun.weather.model.DayHourBucket
-import aero.flyfun.weather.model.DaySummary
+import aero.flyfun.weather.data.MapsApi
 import aero.flyfun.weather.model.ForecastDayEntry
-import aero.flyfun.weather.model.ForecastDaysResponse
 import aero.flyfun.weather.model.ForecastLinkedDate
 import aero.flyfun.weather.model.ForecastMapAirport
 import aero.flyfun.weather.model.ForecastMapResponse
-import aero.flyfun.weather.model.ForecastModelEntry
+import aero.flyfun.weather.model.ForecastModelMode
 import aero.flyfun.weather.model.HistoricalMapAirport
 import aero.flyfun.weather.model.HistoricalMapResponse
-import aero.flyfun.weather.model.HistoricalMetar
-import aero.flyfun.weather.model.HistoricalTaf
+import aero.flyfun.weather.model.HistoricalRangeResponse
+import aero.flyfun.weather.model.HistoricalSource
+import aero.flyfun.weather.model.MapViewport
 import aero.flyfun.weather.model.NavigationTarget
-import aero.flyfun.weather.ui.map.AirportMapMetric
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
-import kotlin.math.max
+import kotlin.math.ln
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * ViewModel for the Pan-European **Forecast Weather Overview Map** (`/api/maps/forecast`).
- * Supports live API fetching with automatic fallback to a rich 15-airport European fixture
- * (`EGLL`, `EGTK`, `LFPB`, `LFPG`, `LFMD`, `LFML`, `LSZH`, `LSGG`, `EDDF`, `EDDM`, `EHAM`,
- * `LEMD`, `LEBL`, `LIMC`, `LOWW`) across D0..D3 and hours 06..18Z.
+ * A one-shot camera move the map screen applies, then clears. [webZoom] is a Leaflet-style zoom
+ * (the share links' unit; the screen adds the display density); null keeps the current zoom.
+ */
+data class MapFocusRequest(
+    val lat: Double,
+    val lon: Double,
+    val webZoom: Double? = null,
+    /** Bumped so two identical requests in a row both apply. */
+    val seq: Long = nextSeq(),
+) {
+    companion object {
+        private var counter = 0L
+
+        @Synchronized
+        private fun nextSeq(): Long = ++counter
+
+        /** Leaflet zoom for a camera spanning [lonSpanDeg] of longitude (iOS spans → web zoom). */
+        fun webZoomForLonSpan(lonSpanDeg: Double): Double = ln(360.0 / lonSpanDeg) / ln(2.0)
+
+        fun at(view: MapViewport) = MapFocusRequest(view.lat, view.lon, view.zoom.toDouble())
+    }
+}
+
+/** What a demo / guest session shows instead of a map: the payloads need a signed-in server. */
+const val MAPS_DEMO_UNAVAILABLE = "The weather maps need a signed-in account; they aren't available in demo mode."
+
+/**
+ * State for the pan-European **forecast map** (#420): the day/hour/metric/model selection, the
+ * per-(day, hour) payload with an in-memory LRU + adjacent-hour prefetch, and the tapped airport.
+ *
+ * Metric and model switches are a **pure recolour**; only a day/hour change hits the network. A
+ * failed load shows the error. There is no stand-in data: the map shows the server's airports or
+ * says why it can't.
  */
 class ForecastMapViewModel(
-    private val apiClient: ApiClient? = null,
+    private val api: MapsApi? = null,
     private val isMockModeProvider: () -> Boolean = { false },
     private val scopeOverride: CoroutineScope? = null,
     private val clock: () -> Instant = { Instant.now() },
@@ -46,7 +79,10 @@ class ForecastMapViewModel(
     private val scope: CoroutineScope
         get() = scopeOverride ?: viewModelScope
 
-    private val _days = MutableStateFlow<List<ForecastDayEntry>>(PanEuropeanMapFixtures.defaultForecastDays().days)
+    private data class SlotKey(val day: Int, val hour: Int)
+
+    /** The ragged day/hour/model grid, from `/maps/forecast/days` (near-days guess until then). */
+    private val _days = MutableStateFlow(fallbackDays())
     val days: StateFlow<List<ForecastDayEntry>> = _days.asStateFlow()
 
     private val _selectedDay = MutableStateFlow(0)
@@ -55,39 +91,45 @@ class ForecastMapViewModel(
     private val _selectedHour = MutableStateFlow(12)
     val selectedHour: StateFlow<Int> = _selectedHour.asStateFlow()
 
-    private val _availableHours = MutableStateFlow(listOf(6, 9, 12, 15, 18))
+    /** The selected day's sample hours (the hour menu and the ‹ › stepper). */
+    private val _availableHours = MutableStateFlow(hoursFor(0, fallbackDays()))
     val availableHours: StateFlow<List<Int>> = _availableHours.asStateFlow()
 
-    private val _selectedModel = MutableStateFlow("ecmwf")
-    val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
+    private val _metric = MutableStateFlow("flight_category")
+    val metric: StateFlow<String> = _metric.asStateFlow()
 
-    private val _availableModels = MutableStateFlow(listOf("ecmwf", "gfs", "icon_eu"))
-    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+    private val _mode = MutableStateFlow<ForecastModelMode>(ForecastModelMode.Worst)
+    val mode: StateFlow<ForecastModelMode> = _mode.asStateFlow()
 
-    private val _selectedMetric = MutableStateFlow(AirportMapMetric.FLIGHT_CATEGORY)
-    val selectedMetric: StateFlow<AirportMapMetric> = _selectedMetric.asStateFlow()
+    private val _selectedIcao = MutableStateFlow<String?>(null)
+    val selectedIcao: StateFlow<String?> = _selectedIcao.asStateFlow()
 
-    private val _worstOfModels = MutableStateFlow(false)
-    val worstOfModels: StateFlow<Boolean> = _worstOfModels.asStateFlow()
-
-    private val _mapData = MutableStateFlow<ForecastMapResponse?>(null)
-    val mapData: StateFlow<ForecastMapResponse?> = _mapData.asStateFlow()
-
-    private val _selectedAirportIcao = MutableStateFlow<String?>(null)
-    val selectedAirportIcao: StateFlow<String?> = _selectedAirportIcao.asStateFlow()
+    /** The selected slot's payload (null until the first load). */
+    private val _payload = MutableStateFlow<ForecastMapResponse?>(null)
+    val payload: StateFlow<ForecastMapResponse?> = _payload.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    private val _loadError = MutableStateFlow<String?>(null)
+    val loadError: StateFlow<String?> = _loadError.asStateFlow()
+
+    /** True once the grid + first payload have loaded (drives the full-screen placeholder). */
+    private val _didLoadOnce = MutableStateFlow(false)
+    val didLoadOnce: StateFlow<Boolean> = _didLoadOnce.asStateFlow()
 
     /**
-     * Set when a linked `fc.date` couldn't be shown as is (#860): says which day is shown
-     * instead. Cleared when the pilot picks a day.
+     * Set when a linked `fc.date` couldn't be shown as is (#840): says which day is shown instead.
+     * Cleared when the pilot picks a day.
      */
     private val _linkedDateNotice = MutableStateFlow<String?>(null)
     val linkedDateNotice: StateFlow<String?> = _linkedDateNotice.asStateFlow()
+
+    private val _focusRequest = MutableStateFlow<MapFocusRequest?>(null)
+    val focusRequest: StateFlow<MapFocusRequest?> = _focusRequest.asStateFlow()
+
+    private val slots = LinkedHashMap<SlotKey, ForecastMapResponse>(16, 0.75f, true)
+    private val inFlight = mutableSetOf<SlotKey>()
 
     /** True once the days request has finished (or was skipped), so [days] is final. */
     private var daysResolved = false
@@ -95,97 +137,195 @@ class ForecastMapViewModel(
     /** The days request failed and [days] is the offline D+0…D+3 guess. */
     private var gridIsFallback = false
 
-    /** A linked `fc.date` that arrived before the grid; resolved by [loadInitial]. */
+    /** A linked `fc.date` that arrived before the grid; resolved by [start]. */
     private var pendingLink: NavigationTarget.ForecastMap? = null
 
+    /** A linked airport to open once its payload is on screen. */
+    private var pendingOpenIcao: String? = null
+
+    /** A link set the view (or an airport): no cold-open centring on the usual airport. */
+    private var hasExplicitLocation = false
+
+    /** The link pinned `fc.hour`; without it the cold-open nearest-hour default applies. */
+    private var hourFromLink = false
+
+    /** Cold-open target from the pilot's frequent airports, applied once its payload is there. */
+    private var coldOpenIcao: String? = null
+
+    /** The pilot moved the map: a late cold-open target must not yank the camera. */
+    private var userDidInteract = false
+
     init {
-        loadInitial()
+        start()
     }
 
-    fun loadInitial() {
+    private fun start() {
         scope.launch {
             _isLoading.value = true
-            _error.value = null
-            if (!isMockModeProvider() && apiClient != null) {
-                runCatching { apiClient.getForecastDays() }
-                    .onSuccess { resp ->
-                        // Days beyond the model horizon have no hours: not offered
-                        val offered = resp.days.filter { it.available }
-                        if (offered.isNotEmpty()) {
-                            _days.value = offered
-                            gridIsFallback = false
-                        } else {
-                            gridIsFallback = true
-                        }
-                    }
-                    .onFailure { gridIsFallback = true }
+            _loadError.value = null
+            val client = api
+            if (isMockModeProvider() || client == null) {
+                // The demo grid stays as the grid; there is no payload to show
+                daysResolved = true
+                pendingLink?.let { link ->
+                    pendingLink = null
+                    applyLinkedDay(link)
+                }
+                snapSelectionIntoGrid(smartDefaultHour = !hourFromLink)
+                _loadError.value = MAPS_DEMO_UNAVAILABLE
+                _isLoading.value = false
+                return@launch
+            }
+            // 1. The grid (best effort; a failure keeps the near-days guess)
+            try {
+                val resp = client.getForecastDays()
+                if (resp.days.isNotEmpty()) {
+                    _days.value = resp.days
+                    gridIsFallback = false
+                } else {
+                    gridIsFallback = true
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                gridIsFallback = true
             }
             daysResolved = true
+            // 2. A linked absolute date wins over `fc.day` (#840); then snap into the real grid
             pendingLink?.let { link ->
                 pendingLink = null
                 applyLinkedDay(link)
             }
-            syncHoursToSelectedDay()
-            fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
+            snapSelectionIntoGrid(smartDefaultHour = !hourFromLink)
+            // 3. Cold-open centring on the pilot's usual departure (non-blocking, non-fatal)
+            if (!hasExplicitLocation) {
+                scope.launch { resolveColdOpenTarget(client) }
+            }
+            // 4. First payload
+            loadSlot(_selectedDay.value, _selectedHour.value)
+            _didLoadOnce.value = _payload.value != null
+            openPendingAirport()
         }
     }
 
-    fun selectDay(dayOffset: Int) {
+    /** Retry after a failed first load. */
+    fun retry() {
+        if (_isLoading.value) return
+        loadSlotAsync(_selectedDay.value, _selectedHour.value)
+    }
+
+    // -------------------------------------------------------------------------
+    // Selection
+    // -------------------------------------------------------------------------
+
+    fun selectDay(day: Int) {
         // The pilot's pick wins over a link still waiting for the grid
         pendingLink = null
         _linkedDateNotice.value = null
-        if (_selectedDay.value == dayOffset && _mapData.value != null) return
-        _selectedDay.value = dayOffset
+        if (_selectedDay.value == day && _payload.value != null) return
+        _selectedDay.value = day
         syncHoursToSelectedDay()
-        fetchForecastSlice(day = dayOffset, hourUtc = _selectedHour.value)
+        snapModeIntoDay()
+        loadSlotAsync(day, _selectedHour.value)
     }
 
-    fun selectHour(hourUtc: Int) {
-        if (_selectedHour.value == hourUtc && _mapData.value != null) return
-        _selectedHour.value = hourUtc
-        fetchForecastSlice(day = _selectedDay.value, hourUtc = hourUtc)
+    fun selectHour(hour: Int) {
+        val snapped = snapHour(hour, hoursFor(_selectedDay.value, _days.value))
+        if (_selectedHour.value == snapped && _payload.value != null) return
+        _selectedHour.value = snapped
+        loadSlotAsync(_selectedDay.value, snapped)
     }
 
-    fun selectModel(model: String) {
-        _selectedModel.value = model
-        _worstOfModels.value = false
+    /** Step the hour by ±1 within the day's sample hours (the ‹ › feel). */
+    fun stepHour(delta: Int) {
+        val hours = _availableHours.value
+        val idx = hours.indexOf(_selectedHour.value)
+        if (idx < 0) {
+            hours.firstOrNull()?.let(::selectHour)
+            return
+        }
+        hours.getOrNull(idx + delta)?.let(::selectHour)
     }
 
-    fun setWorstOfModels(enabled: Boolean) {
-        _worstOfModels.value = enabled
+    fun canStepHour(delta: Int): Boolean {
+        val hours = _availableHours.value
+        val idx = hours.indexOf(_selectedHour.value)
+        return idx >= 0 && (idx + delta) in hours.indices
     }
 
-    fun selectMetric(metric: AirportMapMetric) {
-        _selectedMetric.value = metric
+    fun selectMetric(metric: String) {
+        _metric.value = metric
     }
 
-    fun selectAirport(icao: String?) {
-        _selectedAirportIcao.value = icao
+    fun selectMode(mode: ForecastModelMode) {
+        _mode.value = mode
     }
+
+    /** Models present for a day (an unknown day → all three). */
+    fun models(day: Int): List<String> =
+        _days.value.firstOrNull { it.day == day }?.models?.takeIf { it.isNotEmpty() } ?: listOf("gfs", "icon", "ecmwf")
+
+    /** Greyed-but-tappable: an unreachable model must explain itself, never read as agreement. */
+    fun modelAvailable(model: String, day: Int = _selectedDay.value): Boolean = model in models(day)
+
+    fun select(icao: String) {
+        _selectedIcao.value = icao
+        _payload.value?.airports?.firstOrNull { it.icao == icao }?.let { apt ->
+            _focusRequest.value = MapFocusRequest(apt.lat, apt.lon)
+        }
+    }
+
+    fun deselect() {
+        _selectedIcao.value = null
+    }
+
+    fun selectedAirport(): ForecastMapAirport? {
+        val icao = _selectedIcao.value ?: return null
+        return _payload.value?.airports?.firstOrNull { it.icao == icao }
+    }
+
+    /** A located fix (the locate-me button) recentres the map at a regional zoom. */
+    fun focusOn(lat: Double, lon: Double) {
+        _focusRequest.value = MapFocusRequest(lat, lon, MapFocusRequest.webZoomForLonSpan(5.0))
+    }
+
+    fun focusApplied(request: MapFocusRequest) {
+        if (_focusRequest.value == request) _focusRequest.value = null
+    }
+
+    /** The pilot panned or zoomed: freeze cold-open so it can't recentre later. */
+    fun markUserInteracted() {
+        userDidInteract = true
+    }
+
+    // -------------------------------------------------------------------------
+    // Deep links
+    // -------------------------------------------------------------------------
 
     fun applyDeepLinkTarget(target: NavigationTarget.ForecastMap) {
-        target.metric?.let { _selectedMetric.value = AirportMapMetric.fromId(it) }
-        target.model?.let {
-            if (it == "worst") {
-                _worstOfModels.value = true
-            } else {
-                _selectedModel.value = it
-                _worstOfModels.value = false
-            }
+        target.metric?.let { _metric.value = it }
+        target.model?.let { _mode.value = ForecastModelMode.fromToken(it) }
+        target.hourUtc?.let {
+            _selectedHour.value = it
+            hourFromLink = true
         }
-        target.hourUtc?.let { _selectedHour.value = it }
-        if (target.date != null && !daysResolved) {
-            // `fc.date` resolves against the real grid: loadInitial applies it and fetches once
-            // the days request lands, so don't fetch a provisional day now.
+        target.airport?.let { pendingOpenIcao = it }
+        target.view?.let {
+            hasExplicitLocation = true
+            _focusRequest.value = MapFocusRequest.at(it)
+        }
+        if (target.airport != null) hasExplicitLocation = true
+        if (!daysResolved) {
+            // `fc.date` resolves against the real grid: start() applies it once the days land
             pendingLink = target
             return
         }
         applyLinkedDay(target)
-        syncHoursToSelectedDay()
-        fetchForecastSlice(day = _selectedDay.value, hourUtc = _selectedHour.value)
+        snapSelectionIntoGrid(smartDefaultHour = false)
+        loadSlotAsync(_selectedDay.value, _selectedHour.value, openPendingAirport = true)
     }
 
-    /** `fc.date` wins over `fc.day` (#860); a malformed date or empty grid falls back to `fc.day`. */
+    /** `fc.date` wins over `fc.day` (#840); a malformed date or empty grid falls back to `fc.day`. */
     private fun applyLinkedDay(target: NavigationTarget.ForecastMap) {
         _linkedDateNotice.value = null
         // One clock reading for both the resolution and the notice's label, so a UTC-midnight
@@ -203,423 +343,624 @@ class ForecastMapViewModel(
         _linkedDateNotice.value = ForecastLinkedDate.noticeFor(linked, resolved, gridIsFallback, today)
     }
 
-    /**
-     * Hour chips follow the selected day's sample hours (the last day often has only a few),
-     * snapping the hour to the nearest one so the map never asks for an hour with no data.
-     * Same rule as iOS `hours(forDay:)` + `snapHour`.
-     */
-    private fun syncHoursToSelectedDay() {
-        val hours = _days.value.firstOrNull { it.day == _selectedDay.value }?.hours.orEmpty()
-        if (hours.isEmpty()) return
-        _availableHours.value = hours
-        val hour = _selectedHour.value
-        if (hour !in hours) _selectedHour.value = hours.minBy { abs(it - hour) }
+    // -------------------------------------------------------------------------
+    // Loading
+    // -------------------------------------------------------------------------
+
+    private fun loadSlotAsync(day: Int, hour: Int, openPendingAirport: Boolean = false) {
+        scope.launch {
+            loadSlot(day, hour)
+            if (openPendingAirport) openPendingAirport()
+        }
     }
 
-    private fun fetchForecastSlice(day: Int, hourUtc: Int) {
-        scope.launch {
-            _isLoading.value = true
-            _error.value = null
-            val client = apiClient
-            if (!isMockModeProvider() && client != null) {
-                runCatching {
-                    client.getForecastMap(day = day, hourUtc = hourUtc)
-                }.onSuccess { resp ->
-                    _mapData.value = resp
-                    val models = resp.modelInitTimes.keys.toList()
-                        .ifEmpty { resp.airports.firstOrNull()?.models?.keys?.toList().orEmpty() }
-                    if (models.isNotEmpty()) {
-                        _availableModels.value = models
-                        if (_selectedModel.value !in models) {
-                            _selectedModel.value = models.first()
-                        }
-                    }
-                    _isLoading.value = false
-                    return@launch
-                }.onFailure {
-                    // Fall back to rich European fixture so map remains interactive offline/demo
+    /** Fetch a slot from the LRU or the network; publish it only while it is the selected slot. */
+    private suspend fun loadSlot(day: Int, hour: Int) {
+        val key = SlotKey(day, hour)
+        fun isCurrent() = _selectedDay.value == day && _selectedHour.value == hour
+        val client = api
+        if (isMockModeProvider() || client == null) return
+        slots[key]?.let { cached ->
+            _payload.value = cached
+            _loadError.value = null
+            if (isCurrent()) _isLoading.value = false
+            prefetchAdjacentHours(client)
+            return
+        }
+        if (key in inFlight) return // a prefetch already owns it; store() publishes it
+        inFlight += key
+        if (isCurrent()) _isLoading.value = true
+        _loadError.value = null
+        try {
+            store(client.getForecastMap(day = day, hourUtc = hour), key)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The previous slot stays on screen; a first load with nothing to show says why
+            if (isCurrent() && _payload.value == null) _loadError.value = e.message ?: "The forecast map didn't load."
+        } finally {
+            inFlight -= key
+        }
+        if (isCurrent()) _isLoading.value = false
+        _didLoadOnce.value = _didLoadOnce.value || _payload.value != null
+        prefetchAdjacentHours(client)
+    }
+
+    /** Prefetch the day's neighbouring hours (server-cached, so cheap) so ‹ › feels instant. */
+    private fun prefetchAdjacentHours(client: MapsApi) {
+        val hours = _availableHours.value
+        val idx = hours.indexOf(_selectedHour.value)
+        if (idx < 0) return
+        for (neighbour in listOf(idx - 1, idx + 1)) {
+            val hour = hours.getOrNull(neighbour) ?: continue
+            val key = SlotKey(_selectedDay.value, hour)
+            if (key in slots || key in inFlight) continue
+            inFlight += key
+            scope.launch {
+                try {
+                    store(client.getForecastMap(day = key.day, hourUtc = key.hour), key)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Best effort
+                } finally {
+                    inFlight -= key
                 }
             }
-            val fixture = PanEuropeanMapFixtures.buildForecastMapResponse(day = day, hourUtc = hourUtc)
-            _mapData.value = fixture
-            _availableModels.value = fixture.modelInitTimes.keys.toList()
-            _isLoading.value = false
+        }
+    }
+
+    private fun store(resp: ForecastMapResponse, key: SlotKey) {
+        slots[key] = resp
+        val current = SlotKey(_selectedDay.value, _selectedHour.value)
+        if (key == current) {
+            _payload.value = resp
+            _loadError.value = null
+        }
+        applyColdOpenIfPossible()
+        // Evict least-recently used, never the on-screen slot
+        val iter = slots.keys.iterator()
+        while (slots.size > LRU_CAPACITY && iter.hasNext()) {
+            if (iter.next() != current) iter.remove()
+        }
+    }
+
+    private fun openPendingAirport() {
+        val icao = pendingOpenIcao ?: return
+        if (_payload.value?.airports?.any { it.icao == icao } == true) {
+            pendingOpenIcao = null
+            select(icao)
+        }
+    }
+
+    private suspend fun resolveColdOpenTarget(client: MapsApi) {
+        val freq = try {
+            client.getFrequentAirports()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        coldOpenIcao = freq.departures.firstOrNull()?.icao ?: freq.destinations.firstOrNull()?.icao
+        applyColdOpenIfPossible()
+    }
+
+    private fun applyColdOpenIfPossible() {
+        if (hasExplicitLocation || userDidInteract) return
+        val icao = coldOpenIcao ?: return
+        val apt = _payload.value?.airports?.firstOrNull { it.icao == icao } ?: return
+        // iOS: an 8° × 10° region around the pilot's usual departure
+        _focusRequest.value = MapFocusRequest(apt.lat, apt.lon, MapFocusRequest.webZoomForLonSpan(10.0))
+        coldOpenIcao = null
+    }
+
+    // -------------------------------------------------------------------------
+    // Grid
+    // -------------------------------------------------------------------------
+
+    private fun snapSelectionIntoGrid(smartDefaultHour: Boolean) {
+        val maxDay = _days.value.maxOfOrNull { it.day } ?: 0
+        _selectedDay.value = _selectedDay.value.coerceIn(0, maxDay)
+        val hours = hoursFor(_selectedDay.value, _days.value)
+        // Cold open: nearest sample hour to the current UTC hour, not always 12Z
+        val wanted = if (smartDefaultHour) clock().atZone(ZoneOffset.UTC).hour else _selectedHour.value
+        _selectedHour.value = snapHour(wanted, hours)
+        _availableHours.value = hours
+        snapModeIntoDay()
+    }
+
+    /**
+     * Hour menu follows the selected day's sample hours (the last day often has only a few),
+     * snapping the hour to the nearest one so the map never asks for an hour with no data.
+     */
+    private fun syncHoursToSelectedDay() {
+        val hours = hoursFor(_selectedDay.value, _days.value)
+        _availableHours.value = hours
+        _selectedHour.value = snapHour(_selectedHour.value, hours)
+    }
+
+    /** Fall back to worst consensus when the active model can't reach the selected day (web). */
+    private fun snapModeIntoDay() {
+        val m = _mode.value
+        if (m is ForecastModelMode.Model && !modelAvailable(m.name)) _mode.value = ForecastModelMode.Worst
+    }
+
+    companion object {
+        private const val LRU_CAPACITY = 8
+
+        /** Sample hours for a day from the grid; the fine set when the grid doesn't say. */
+        fun hoursFor(day: Int, days: List<ForecastDayEntry>): List<Int> =
+            days.firstOrNull { it.day == day }?.hours?.takeIf { it.isNotEmpty() }
+                ?: if (day >= 6) listOf(6, 12, 18) else listOf(6, 9, 12, 15, 18)
+
+        fun snapHour(hour: Int, hours: List<Int>): Int =
+            if (hours.isEmpty() || hour in hours) hour else hours.minBy { abs(it - hour) }
+
+        /** Near-days grid when `/maps/forecast/days` is unreachable (web `fallbackDayGrid`). */
+        fun fallbackDays(): List<ForecastDayEntry> = (0..3).map { d ->
+            ForecastDayEntry(day = d, date = "", available = true, hours = listOf(6, 9, 12, 15, 18), models = listOf("ecmwf", "gfs", "icon"))
         }
     }
 }
 
 /**
- * ViewModel for the Pan-European **Historical Weather & Verification Map** (`/api/maps/historical`).
+ * State for the **historical map** (#629): a past instant on the 30-min UTC grid, a model lead
+ * (Latest / D-1…D-6), a source (METAR / TAF / Worst / Majority / GFS / ICON / ECMWF) and a metric.
+ *
+ * Every selection rule lives on the server (`tasks/historical_map.py`); this VM fetches on an
+ * instant or lead change and recolours on a source or metric change, presenting the chosen source to
+ * the shared marker layer as a [ForecastMapResponse] ([mapPayload]).
  */
 class HistoricalMapViewModel(
-    private val apiClient: ApiClient? = null,
+    private val api: MapsApi? = null,
     private val isMockModeProvider: () -> Boolean = { false },
     private val scopeOverride: CoroutineScope? = null,
+    private val now: () -> Instant = { Instant.now() },
 ) : ViewModel() {
 
     private val scope: CoroutineScope
         get() = scopeOverride ?: viewModelScope
 
-    private val _minDate = MutableStateFlow(LocalDate.now().minusDays(30).toString())
-    val minDate: StateFlow<String> = _minDate.asStateFlow()
+    private data class SlotKey(val at: Instant, val lead: Int)
 
-    private val _maxDate = MutableStateFlow(LocalDate.now().minusDays(1).toString())
-    val maxDate: StateFlow<String> = _maxDate.asStateFlow()
+    private val _range = MutableStateFlow<HistoricalRangeResponse?>(null)
+    val range: StateFlow<HistoricalRangeResponse?> = _range.asStateFlow()
 
-    private val _selectedDate = MutableStateFlow(LocalDate.now().minusDays(1).toString())
-    val selectedDate: StateFlow<String> = _selectedDate.asStateFlow()
+    /** The selected instant, on the grid once the range has loaded. */
+    private val _selectedInstant = MutableStateFlow<Instant?>(null)
+    val selectedInstant: StateFlow<Instant?> = _selectedInstant.asStateFlow()
 
-    private val _selectedHour = MutableStateFlow(12)
-    val selectedHour: StateFlow<Int> = _selectedHour.asStateFlow()
+    private val _lead = MutableStateFlow(0)
+    val lead: StateFlow<Int> = _lead.asStateFlow()
 
-    private val _availableHours = MutableStateFlow(listOf(6, 9, 12, 15, 18))
-    val availableHours: StateFlow<List<Int>> = _availableHours.asStateFlow()
+    private val _source = MutableStateFlow(HistoricalSource.METAR)
+    val source: StateFlow<HistoricalSource> = _source.asStateFlow()
 
-    private val _selectedMetric = MutableStateFlow(AirportMapMetric.FLIGHT_CATEGORY)
-    val selectedMetric: StateFlow<AirportMapMetric> = _selectedMetric.asStateFlow()
+    private val _metric = MutableStateFlow("flight_category")
+    val metric: StateFlow<String> = _metric.asStateFlow()
 
-    /** `"metar"`, `"taf"`, or `"worst"` */
-    private val _viewMode = MutableStateFlow("metar")
-    val viewMode: StateFlow<String> = _viewMode.asStateFlow()
+    private val _selectedIcao = MutableStateFlow<String?>(null)
+    val selectedIcao: StateFlow<String?> = _selectedIcao.asStateFlow()
 
-    private val _mapData = MutableStateFlow<HistoricalMapResponse?>(null)
-    val mapData: StateFlow<HistoricalMapResponse?> = _mapData.asStateFlow()
+    private val _payload = MutableStateFlow<HistoricalMapResponse?>(null)
+    val payload: StateFlow<HistoricalMapResponse?> = _payload.asStateFlow()
 
-    private val _selectedAirportIcao = MutableStateFlow<String?>(null)
-    val selectedAirportIcao: StateFlow<String?> = _selectedAirportIcao.asStateFlow()
+    /** The payload as the marker layer reads it: the airports that have [source], presenting it. */
+    private val _mapPayload = MutableStateFlow<ForecastMapResponse?>(null)
+    val mapPayload: StateFlow<ForecastMapResponse?> = _mapPayload.asStateFlow()
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    private val _loadError = MutableStateFlow<String?>(null)
+    val loadError: StateFlow<String?> = _loadError.asStateFlow()
+
+    private val _didLoadOnce = MutableStateFlow(false)
+    val didLoadOnce: StateFlow<Boolean> = _didLoadOnce.asStateFlow()
+
+    /** Why a tapped source can't be shown; the screen presents it as a dialog. */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    private val _focusRequest = MutableStateFlow<MapFocusRequest?>(null)
+    val focusRequest: StateFlow<MapFocusRequest?> = _focusRequest.asStateFlow()
+
+    /** Final instants only: a past instant stops changing once every input has landed. */
+    private val cache = LinkedHashMap<SlotKey, HistoricalMapResponse>(16, 0.75f, true)
+    private var requestedInstant: Instant? = null
+    private var pendingOpenIcao: String? = null
+    private var startJob: Job? = null
+
+    /** The fetch for the current selection; cancelled when the selection moves on. */
+    private var reloadJob: Job? = null
 
     init {
-        loadInitial()
+        start()
     }
 
-    fun loadInitial() {
-        scope.launch {
+    private fun start() {
+        if (startJob?.isActive == true) return
+        startJob = scope.launch {
             _isLoading.value = true
-            _error.value = null
-            if (!isMockModeProvider() && apiClient != null) {
-                runCatching { apiClient.getHistoricalRange() }.onSuccess { range ->
-                    range.earliestDate?.let { _minDate.value = it }
-                    range.latestDate?.let {
-                        _maxDate.value = it
-                        _selectedDate.value = it
-                    }
-                }
+            _loadError.value = null
+            val client = api
+            if (isMockModeProvider() || client == null) {
+                _loadError.value = MAPS_DEMO_UNAVAILABLE
+                _isLoading.value = false
+                return@launch
             }
-            fetchHistoricalSlice(date = _selectedDate.value, hourUtc = _selectedHour.value)
+            try {
+                _range.value = client.getHistoricalRange()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _loadError.value = e.message ?: "The historical map didn't load."
+                _isLoading.value = false
+                return@launch
+            }
+            _selectedInstant.value = clamp(requestedInstant ?: latest)
+            requestedInstant = null
+            load()
+            // A failed first payload keeps the full-screen error (with Retry) up
+            _didLoadOnce.value = _payload.value != null
+            if (_payload.value == null && _loadError.value == null) _loadError.value = "The historical map didn't load."
+            openPendingAirport()
         }
     }
 
-    fun selectDate(dateIso: String) {
-        if (_selectedDate.value == dateIso && _mapData.value != null) return
-        _selectedDate.value = dateIso
-        fetchHistoricalSlice(date = dateIso, hourUtc = _selectedHour.value)
+    /** Retry after a failed first load (range or payload). */
+    fun retry() {
+        if (_didLoadOnce.value) {
+            retryReload()
+        } else {
+            start()
+        }
     }
 
-    fun stepDay(deltaDays: Long) {
-        val current = runCatching { LocalDate.parse(_selectedDate.value) }
-            .getOrDefault(LocalDate.now().minusDays(1))
-        val minD = runCatching { LocalDate.parse(_minDate.value) }.getOrDefault(current.minusDays(30))
-        val maxD = runCatching { LocalDate.parse(_maxDate.value) }.getOrDefault(LocalDate.now())
-        val next = current.plusDays(deltaDays).coerceIn(minD, maxD)
-        selectDate(next.toString())
+    /** Retry the current instant after a failed reload. */
+    fun retryReload() {
+        if (_selectedInstant.value != null) reload()
     }
 
-    fun selectHour(hourUtc: Int) {
-        if (_selectedHour.value == hourUtc && _mapData.value != null) return
-        _selectedHour.value = hourUtc
-        fetchHistoricalSlice(date = _selectedDate.value, hourUtc = hourUtc)
+    private fun reload() {
+        reloadJob?.cancel()
+        reloadJob = scope.launch { load() }
     }
 
-    fun selectMetric(metric: AirportMapMetric) {
-        _selectedMetric.value = metric
+    private suspend fun load() {
+        val at = _selectedInstant.value ?: return
+        val client = api ?: return
+        val key = SlotKey(at, _lead.value)
+        fun isCurrent() = _selectedInstant.value == key.at && _lead.value == key.lead
+        cache[key]?.let { cached ->
+            setPayload(cached)
+            _isLoading.value = false
+            return
+        }
+        _isLoading.value = true
+        _loadError.value = null
+        try {
+            val resp = client.getHistoricalMap(at = DateTimeFormatter.ISO_INSTANT.format(at), lead = key.lead)
+            if (at < now().minus(FINAL_AFTER)) store(resp, key)
+            // The pilot may have stepped on while this was in flight
+            if (isCurrent()) setPayload(resp)
+        } catch (e: CancellationException) {
+            // Superseded: the fetch that replaced this one owns isLoading
+            throw e
+        } catch (e: Exception) {
+            if (isCurrent()) {
+                // Don't leave the previous instant on screen under the new title
+                _loadError.value = e.message ?: "The historical map didn't load."
+                _payload.value = null
+                rebuildMapPayload()
+            }
+        }
+        if (isCurrent()) _isLoading.value = false
     }
 
-    fun selectViewMode(mode: String) {
-        _viewMode.value = mode
+    private fun setPayload(resp: HistoricalMapResponse) {
+        _payload.value = resp
+        _loadError.value = null
+        _didLoadOnce.value = true
+        rebuildMapPayload()
     }
 
-    fun selectAirport(icao: String?) {
-        _selectedAirportIcao.value = icao
+    private fun rebuildMapPayload() {
+        val payload = _payload.value
+        val source = _source.value
+        _mapPayload.value = payload?.let {
+            ForecastMapResponse(
+                forecastTime = it.at,
+                modelInitTimes = emptyMap(),
+                airports = it.airports.mapNotNull { apt -> apt.forecastAirport(source) },
+            )
+        }
+        // Close the card when its airport isn't in the new payload rather than leave it empty
+        val icao = _selectedIcao.value
+        if (icao != null && payload?.airports?.any { it.icao == icao } != true) _selectedIcao.value = null
     }
+
+    private fun store(resp: HistoricalMapResponse, key: SlotKey) {
+        cache[key] = resp
+        val iter = cache.keys.iterator()
+        while (cache.size > LRU_CAPACITY && iter.hasNext()) {
+            iter.next()
+            iter.remove()
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Time grid
+    // -------------------------------------------------------------------------
+
+    private val step: Duration get() = Duration.ofMinutes((_range.value?.stepMinutes ?: 30).toLong())
+
+    /** Latest selectable instant (the server's floor of "now"); now before the range loads. */
+    val latest: Instant
+        get() = _range.value?.latest?.let(HistoricalTime::parse) ?: floorToStep(now())
+
+    /** Earliest selectable instant: the oldest observation, else the oldest model. */
+    val earliest: Instant
+        get() = (_range.value?.earliestObservation ?: _range.value?.earliestModel)?.let(HistoricalTime::parse) ?: latest
+
+    /** First instant with model data; days before it are METAR/TAF only. */
+    val earliestModel: Instant?
+        get() = _range.value?.earliestModel?.let(HistoricalTime::parse)
+
+    private fun floorToStep(instant: Instant): Instant {
+        val stepS = step.seconds
+        val s = instant.epochSecond
+        return Instant.ofEpochSecond(s - Math.floorMod(s, stepS))
+    }
+
+    /** Snap an instant into [earliest, latest] on the grid (web `clampState`). */
+    fun clamp(instant: Instant): Instant {
+        var at = instant
+        if (at > latest) at = latest
+        if (at < earliest) at = earliest
+        return floorToStep(at)
+    }
+
+    /** Every slot of the selected UTC day, for the time menu. */
+    fun timeSlots(): List<Instant> {
+        val at = _selectedInstant.value ?: return emptyList()
+        val start = HistoricalTime.startOfUtcDay(at)
+        val count = (Duration.ofDays(1).seconds / step.seconds).toInt()
+        return (0 until count).map { start.plus(step.multipliedBy(it.toLong())) }
+    }
+
+    /** Future and pre-history slots stay listed but disabled, as on the web. */
+    fun isSelectable(slot: Instant): Boolean = slot <= latest && slot >= floorToStep(earliest)
+
+    /** Whether a UTC day predates the model history (METAR/TAF only). */
+    fun isObservationOnly(day: Instant): Boolean {
+        val model = earliestModel ?: return true
+        return HistoricalTime.startOfUtcDay(day) < HistoricalTime.startOfUtcDay(model)
+    }
+
+    fun selectInstant(instant: Instant) {
+        val at = clamp(instant)
+        if (at == _selectedInstant.value) return
+        _selectedInstant.value = at
+        reload()
+    }
+
+    /** Pick a UTC day, keeping the time of day (then clamping, so today lands on the latest slot). */
+    fun selectDay(day: LocalDate) {
+        val at = _selectedInstant.value ?: return
+        val offset = Duration.between(HistoricalTime.startOfUtcDay(at), at)
+        selectInstant(day.atStartOfDay(ZoneOffset.UTC).toInstant().plus(offset))
+    }
+
+    /** Step by ±1 slot, crossing midnight into the adjacent day. */
+    fun step(delta: Int) {
+        val at = _selectedInstant.value ?: return
+        val next = at.plus(step.multipliedBy(delta.toLong()))
+        if (isSelectable(next)) selectInstant(next)
+    }
+
+    fun canStep(delta: Int): Boolean =
+        _selectedInstant.value?.let { isSelectable(it.plus(step.multipliedBy(delta.toLong()))) } ?: false
+
+    fun selectLead(lead: Int) {
+        if (lead == _lead.value || lead !in LEADS) return
+        _lead.value = lead
+        reload()
+    }
+
+    /** Models the server stores at a lead (a model past its map horizon isn't). */
+    fun models(lead: Int): List<String> =
+        _range.value?.leads?.firstOrNull { it.leadDays == lead }?.models ?: listOf("gfs", "icon", "ecmwf")
+
+    fun selectMetric(metric: String) {
+        _metric.value = metric
+    }
+
+    // -------------------------------------------------------------------------
+    // Source
+    // -------------------------------------------------------------------------
+
+    /** Switch source (a pure recolour). An unavailable source doesn't switch; it says why. */
+    fun selectSource(source: HistoricalSource) {
+        if (!sourceAvailable(source)) {
+            _notice.value = unavailableText(source)
+            return
+        }
+        if (source == _source.value) return
+        _source.value = source
+        rebuildMapPayload()
+    }
+
+    fun dismissNotice() {
+        _notice.value = null
+    }
+
+    /** Unknown until loaded, so nothing is greyed out before the first payload. */
+    fun sourceAvailable(source: HistoricalSource): Boolean {
+        val payload = _payload.value ?: return true
+        if (source.isConsensus) return HistoricalSource.nwpModels.any { payload.sources[it.token]?.available == true }
+        return payload.sources[source.token]?.available ?: false
+    }
+
+    /** Why a source has nothing at this instant and lead, in words. */
+    fun unavailableText(source: HistoricalSource): String {
+        if (source.isObserved) return "No ${source.label} reports at this time."
+        if (source.isConsensus) return "No model has data at this time and lead."
+        val lead = _lead.value
+        return when (_payload.value?.sources?.get(source.token)?.reason) {
+            "beyond_horizon" -> "${source.label} isn't stored $lead day${if (lead == 1) "" else "s"} ahead. Its map horizon is shorter."
+            "no_valid_time" -> "No model sample at this time. Models are sampled every 3 h from 06Z to 18Z."
+            "no_run" -> "No ${source.label} run was stored for this time and lead."
+            else -> "No ${source.label} data at this time."
+        }
+    }
+
+    /** One line under the pickers: why the map is empty, or what it shows. */
+    fun statusLine(): String? {
+        _loadError.value?.let { return "Couldn't load this time: $it" }
+        val payload = _payload.value ?: return null
+        val at = _selectedInstant.value
+        // The previous instant stays on screen while the next one loads; say so
+        if (_isLoading.value && at != null && HistoricalTime.parse(payload.at) != at) {
+            return "Loading ${HistoricalTime.timeLabel(at)}… showing ${HistoricalTime.timeLabel(payload.at)}"
+        }
+        val source = _source.value
+        if (!sourceAvailable(source)) return unavailableText(source)
+        val shown = _mapPayload.value?.airports?.size ?: 0
+        return "$shown airport${if (shown == 1) "" else "s"} · " + provenance(source, payload)
+    }
+
+    private fun provenance(source: HistoricalSource, payload: HistoricalMapResponse): String = when (source) {
+        HistoricalSource.METAR -> "reports ≤${payload.sources["metar"]?.maxAgeMin ?: 90} min old"
+        HistoricalSource.TAF -> "TAFs read at ${HistoricalTime.timeLabel(payload.at)}"
+        HistoricalSource.WORST, HistoricalSource.MAJORITY -> {
+            val present = HistoricalSource.nwpModels.filter { payload.sources[it.token]?.available == true }
+            "${source.label.lowercase(Locale.US)} of " + present.joinToString(" · ") { it.label }
+        }
+        HistoricalSource.GFS, HistoricalSource.ICON, HistoricalSource.ECMWF -> {
+            val info = payload.sources[source.token]
+            if (info == null) {
+                source.label
+            } else {
+                var text = "run ${HistoricalTime.runLabel(info.modelInitTime)} → ${HistoricalTime.timeLabel(info.validTime)}"
+                info.leadHours?.let { text += " (+${it}h)" }
+                text
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Selection
+    // -------------------------------------------------------------------------
+
+    fun select(icao: String) {
+        _selectedIcao.value = icao
+        _payload.value?.airports?.firstOrNull { it.icao == icao }?.let { apt ->
+            _focusRequest.value = MapFocusRequest(apt.lat, apt.lon)
+        }
+    }
+
+    fun deselect() {
+        _selectedIcao.value = null
+    }
+
+    /** The tapped airport, from the full payload (it stays open when the source has nothing for it). */
+    fun selectedAirport(): HistoricalMapAirport? {
+        val icao = _selectedIcao.value ?: return null
+        return _payload.value?.airports?.firstOrNull { it.icao == icao }
+    }
+
+    fun focusOn(lat: Double, lon: Double) {
+        _focusRequest.value = MapFocusRequest(lat, lon, MapFocusRequest.webZoomForLonSpan(5.0))
+    }
+
+    fun focusApplied(request: MapFocusRequest) {
+        if (_focusRequest.value == request) _focusRequest.value = null
+    }
+
+    private fun openPendingAirport() {
+        val icao = pendingOpenIcao ?: return
+        pendingOpenIcao = null
+        if (_payload.value?.airports?.any { it.icao == icao } == true) select(icao)
+    }
+
+    // -------------------------------------------------------------------------
+    // Deep links
+    // -------------------------------------------------------------------------
 
     fun applyDeepLinkTarget(target: NavigationTarget.HistoricalMap) {
-        target.metric?.let { _selectedMetric.value = AirportMapMetric.fromId(it) }
-        target.viewMode?.let { _viewMode.value = it }
-        val date = target.date ?: _selectedDate.value
-        val hour = target.hourUtc ?: _selectedHour.value
-        _selectedDate.value = date
-        _selectedHour.value = hour
-        fetchHistoricalSlice(date = date, hourUtc = hour)
+        target.lead?.takeIf { it in LEADS }?.let { _lead.value = it }
+        HistoricalSource.fromToken(target.source)?.let { _source.value = it }
+        target.metric?.let { _metric.value = it }
+        target.view?.let { _focusRequest.value = MapFocusRequest.at(it) }
+        pendingOpenIcao = target.airport
+        // The linked instant applies only when both date and time are given, as on the web
+        val instant = HistoricalTime.instant(target.date, target.time)
+        if (_range.value == null) {
+            requestedInstant = instant
+            start()
+            return
+        }
+        instant?.let { _selectedInstant.value = clamp(it) }
+        scope.launch {
+            reloadJob?.cancel()
+            load()
+            openPendingAirport()
+        }
     }
 
-    private fun fetchHistoricalSlice(date: String, hourUtc: Int) {
-        scope.launch {
-            _isLoading.value = true
-            _error.value = null
-            val client = apiClient
-            if (!isMockModeProvider() && client != null) {
-                runCatching {
-                    client.getHistoricalMap(date = date, hourUtc = hourUtc)
-                }.onSuccess { resp ->
-                    _mapData.value = resp
-                    resp.availableHours?.map { it.hour }?.takeIf { it.isNotEmpty() }?.let {
-                        _availableHours.value = it
-                    }
-                    _isLoading.value = false
-                    return@launch
-                }.onFailure {
-                    // Fall back to rich European historical fixture
-                }
-            }
-            _mapData.value = PanEuropeanMapFixtures.buildHistoricalMapResponse(date = date, hourUtc = hourUtc)
-            _isLoading.value = false
-        }
+    companion object {
+        /** Leads the server stores (web `HISTORICAL_LEADS`). */
+        val LEADS = 0..6
+        private const val LRU_CAPACITY = 8
+
+        /** Server `FINAL_AFTER`: only instants older than this are cached. */
+        private val FINAL_AFTER: Duration = Duration.ofHours(2)
     }
 }
 
-// ============================================================================
-// Rich Pan-European 15-Airport Fixtures (Forecast & Historical)
-// ============================================================================
+/** Parsing and labels for the historical map's UTC instants (iOS `HistoricalTime`). */
+object HistoricalTime {
+    private fun formatter(pattern: String) = DateTimeFormatter.ofPattern(pattern, Locale.US).withZone(ZoneOffset.UTC)
 
-object PanEuropeanMapFixtures {
+    private val hhmm = formatter("HH:mm")
+    private val run = formatter("dd HH")
+    private val longDate = formatter("EEE d MMM yyyy")
+    private val shortDate = formatter("EEE d MMM")
+    private val isoDayFormatter = formatter("yyyy-MM-dd")
 
-    private data class AirportSeed(
-        val icao: String,
-        val name: String,
-        val lat: Double,
-        val lon: Double,
-        val rwyId: String,
-        val baseCategory: String,
-        val baseWindDir: Double,
-        val baseWindKt: Double,
-        val baseCrosswindKt: Double,
-        val baseCeilingFt: Double?,
-        val baseVisM: Double,
-        val baseConvective: String,
-        val baseCloudPct: Double,
-        val baseCape: Double,
-        val agreement: String,
-    )
-
-    private val EUROPEAN_AIRPORT_SEEDS = listOf(
-        AirportSeed("EGLL", "London Heathrow", 51.4700, -0.4543, "27L", "VFR", 250.0, 14.0, 5.0, 4200.0, 9999.0, "none", 30.0, 40.0, "consistent"),
-        AirportSeed("EGTK", "Oxford Kidlington", 51.8369, -1.3200, "19", "MVFR", 230.0, 16.0, 10.0, 2400.0, 8000.0, "marginal", 65.0, 120.0, "consistent"),
-        AirportSeed("LFPB", "Paris Le Bourget", 48.9694, 2.4414, "25", "VFR", 240.0, 12.0, 3.0, 4800.0, 9999.0, "none", 25.0, 80.0, "consistent"),
-        AirportSeed("LFPG", "Paris Charles de Gaulle", 49.0097, 2.5479, "26R", "VFR", 240.0, 13.0, 4.5, 4500.0, 9999.0, "none", 28.0, 75.0, "consistent"),
-        AirportSeed("LFMD", "Cannes Mandelieu", 43.5420, 6.9535, "17", "VFR", 150.0, 9.0, 3.0, 8500.0, 9999.0, "none", 12.0, 20.0, "consistent"),
-        AirportSeed("LFML", "Marseille Provence", 43.4393, 5.2214, "31R", "VFR", 330.0, 24.0, 8.0, 7000.0, 9999.0, "none", 15.0, 30.0, "consistent"),
-        AirportSeed("LSZH", "Zurich", 47.4582, 8.5555, "28", "IFR", 290.0, 18.0, 6.0, 800.0, 3800.0, "moderate", 88.0, 680.0, "mixed"),
-        AirportSeed("LSGG", "Geneva", 46.2381, 6.1090, "22", "MVFR", 240.0, 15.0, 5.5, 2200.0, 7000.0, "low", 60.0, 340.0, "mixed"),
-        AirportSeed("EDDF", "Frankfurt", 50.0379, 8.5622, "25C", "MVFR", 220.0, 19.0, 9.5, 1800.0, 6000.0, "low", 72.0, 290.0, "mixed"),
-        AirportSeed("EDDM", "Munich", 48.3537, 11.7750, "26R", "IFR", 280.0, 22.0, 12.0, 700.0, 3200.0, "moderate", 92.0, 950.0, "divergent"),
-        AirportSeed("EHAM", "Amsterdam Schiphol", 52.3105, 4.7683, "24", "MVFR", 270.0, 26.0, 13.0, 1900.0, 7500.0, "marginal", 68.0, 180.0, "consistent"),
-        AirportSeed("LEMD", "Madrid Barajas", 40.4983, -3.5676, "32L", "VFR", 310.0, 8.0, 2.0, 9500.0, 9999.0, "none", 10.0, 15.0, "consistent"),
-        AirportSeed("LEBL", "Barcelona El Prat", 41.2974, 2.0833, "24R", "VFR", 210.0, 11.0, 5.5, 6500.0, 9999.0, "none", 18.0, 90.0, "consistent"),
-        AirportSeed("LIMC", "Milan Malpensa", 45.6301, 8.7255, "35R", "LIFR", 140.0, 7.0, 3.5, 400.0, 1200.0, "high", 96.0, 1450.0, "divergent"),
-        AirportSeed("LOWW", "Vienna", 48.1103, 16.5697, "29", "VFR", 300.0, 17.0, 4.0, 5200.0, 9999.0, "low", 35.0, 260.0, "consistent"),
-    )
-
-    fun defaultForecastDays(): ForecastDaysResponse {
-        // Server days are UTC dates
-        val today = LocalDate.now(ZoneOffset.UTC)
-        val days = (0..3).map { d ->
-            val dateStr = today.plusDays(d.toLong()).toString()
-            ForecastDayEntry(
-                day = d,
-                date = dateStr,
-                hours = listOf(6, 9, 12, 15, 18),
-                models = listOf("ecmwf", "gfs", "icon_eu"),
-            )
-        }
-        return ForecastDaysResponse(days = days)
+    /** Server timestamps are Python `isoformat()` (`+00:00`, sometimes microseconds); a naive one is UTC. */
+    fun parse(iso: String?): Instant? {
+        if (iso.isNullOrBlank()) return null
+        return runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+            ?: runCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }.getOrNull()
     }
 
-    fun buildForecastMapResponse(day: Int, hourUtc: Int): ForecastMapResponse {
-        val dateStr = LocalDate.now().plusDays(day.toLong()).toString()
-        val forecastTime = String.format(Locale.US, "%sT%02d:00:00Z", dateStr, hourUtc)
-        val hourShift = (hourUtc - 12) / 3
-        val dayShift = day.coerceIn(0, 3)
+    fun startOfUtcDay(instant: Instant): Instant =
+        instant.atZone(ZoneOffset.UTC).toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
 
-        val airports = EUROPEAN_AIRPORT_SEEDS.mapIndexed { idx, seed ->
-            val windDelta = (hourShift * 1.5) + (dayShift * 2.0) * if (idx % 2 == 0) 1.0 else -0.5
-            val ecmwfWind = (seed.baseWindKt + windDelta).coerceAtLeast(3.0)
-            val gfsWind = (ecmwfWind + if (idx % 3 == 0) 4.0 else -2.0).coerceAtLeast(3.0)
-            val iconWind = (ecmwfWind + if (idx % 2 == 0) -1.5 else 3.0).coerceAtLeast(3.0)
+    /** "14:30Z"; empty when absent or unparseable. */
+    fun timeLabel(iso: String?): String = parse(iso)?.let(::timeLabel) ?: ""
 
-            val ecmwfCat = shiftCategory(seed.baseCategory, dayShift, hourShift, idx)
-            val gfsCat = if (seed.agreement == "divergent") shiftCategory(ecmwfCat, 1, 1, idx + 1) else ecmwfCat
-            val iconCat = if (seed.agreement != "consistent" && idx % 2 == 0) shiftCategory(ecmwfCat, 1, 0, idx) else ecmwfCat
+    fun timeLabel(instant: Instant): String = hhmm.format(instant) + "Z"
 
-            val ecmwfEntry = ForecastModelEntry(
-                category = ecmwfCat,
-                windSpeedKt = ecmwfWind,
-                windDir = (seed.baseWindDir + dayShift * 10.0) % 360.0,
-                windGustKt = ecmwfWind + 8.0,
-                bestRunway = seed.rwyId,
-                crosswindKt = (seed.baseCrosswindKt + abs(windDelta) * 0.5).coerceAtLeast(1.0),
-                ceilingFt = seed.baseCeilingFt?.let { (it - dayShift * 150.0).coerceAtLeast(200.0) },
-                visibilityM = seed.baseVisM,
-                cloudCoverPct = (seed.baseCloudPct + dayShift * 5.0).coerceIn(0.0, 100.0),
-                capeJkg = (seed.baseCape + max(0, hourShift) * 120.0).coerceAtLeast(0.0),
-                convectiveRisk = seed.baseConvective,
-                temperatureC = 14.0 + hourShift * 2.0 - (seed.lat - 45.0) * 0.6,
-                precipMm = if (ecmwfCat == "IFR" || ecmwfCat == "LIFR") 2.8 else 0.0,
-                freezingLevelFt = 7800.0,
-                pressureHpa = 1016.0,
-            )
+    /** "28 00Z": day-of-month + hour, the compact model-run notation. */
+    fun runLabel(iso: String?): String = parse(iso)?.let { run.format(it) + "Z" } ?: ""
 
-            val gfsEntry = ecmwfEntry.copy(
-                category = gfsCat,
-                windSpeedKt = gfsWind,
-                windGustKt = gfsWind + 9.0,
-                crosswindKt = (ecmwfEntry.crosswindKt ?: 5.0) + 2.5,
-                ceilingFt = ecmwfEntry.ceilingFt?.let { (it - 200.0).coerceAtLeast(200.0) },
-                capeJkg = (ecmwfEntry.capeJkg ?: 0.0) * 1.15,
-            )
+    /** "Mon 28 Sep 2026". */
+    fun dateLabel(instant: Instant): String = longDate.format(instant)
 
-            val iconEntry = ecmwfEntry.copy(
-                category = iconCat,
-                windSpeedKt = iconWind,
-                windGustKt = iconWind + 7.0,
-                crosswindKt = (ecmwfEntry.crosswindKt ?: 5.0) - 1.0,
-                ceilingFt = ecmwfEntry.ceilingFt?.let { it + 150.0 },
-            )
+    /** "Mon 28 Sep". */
+    fun shortDateLabel(instant: Instant): String = shortDate.format(instant)
 
-            ForecastMapAirport(
-                icao = seed.icao,
-                name = seed.name,
-                lat = seed.lat,
-                lon = seed.lon,
-                models = mapOf(
-                    "ecmwf" to ecmwfEntry,
-                    "gfs" to gfsEntry,
-                    "icon_eu" to iconEntry,
-                ),
-                consensus = mapOf(
-                    "category" to ecmwfCat,
-                    "overall" to seed.agreement,
-                ),
-                agreement = mapOf(
-                    "ecmwf" to AgreementEntry(
-                        level = seed.agreement,
-                        detail = if (seed.agreement == "consistent") "All models agree" else "Spread across models",
-                    ),
-                    "gfs" to AgreementEntry(level = seed.agreement, detail = ""),
-                    "icon_eu" to AgreementEntry(level = seed.agreement, detail = ""),
-                ),
-                daySummary = mapOf(
-                    "ecmwf" to DaySummary(
-                        worstCategory = ecmwfCat,
-                        maxCrosswindKt = ecmwfEntry.crosswindKt,
-                        maxWindSpeedKt = ecmwfWind,
-                        minCeilingFt = ecmwfEntry.ceilingFt,
-                    ),
-                ),
-            )
-        }
+    /** "2026-09-28" (the `hist.date` token). */
+    fun isoDay(instant: Instant): String = isoDayFormatter.format(instant)
 
-        return ForecastMapResponse(
-            forecastTime = forecastTime,
-            forecastDay = day,
-            hourUtc = hourUtc,
-            availableHours = listOf(6, 9, 12, 15, 18).map { hr ->
-                DayHourBucket(hour = hr, label = String.format(Locale.US, "%02dZ", hr))
-            },
-            modelInitTimes = mapOf(
-                "ecmwf" to "${LocalDate.now()}T00:00:00Z",
-                "gfs" to "${LocalDate.now()}T06:00:00Z",
-                "icon_eu" to "${LocalDate.now()}T06:00:00Z",
-            ),
-            airports = airports,
-        )
-    }
-
-    fun buildHistoricalMapResponse(date: String, hourUtc: Int): HistoricalMapResponse {
-        val obsTime = String.format(Locale.US, "%sT%02d:00:00Z", date, hourUtc)
-        val airports = EUROPEAN_AIRPORT_SEEDS.mapIndexed { idx, seed ->
-            val windSpd = seed.baseWindKt.toInt()
-            val windDir = seed.baseWindDir.toInt()
-            val visInt = seed.baseVisM.toInt()
-            val ceilInt = seed.baseCeilingFt?.toInt()
-            val tafCat = if (idx % 4 == 0) shiftCategory(seed.baseCategory, 1, 0, idx) else seed.baseCategory
-
-            val metarRaw = buildString {
-                append("METAR ${seed.icao} ${date.takeLast(2)}${String.format(Locale.US, "%02d50Z", hourUtc)} ")
-                append(String.format(Locale.US, "%03d%02dKT ", windDir, windSpd))
-                append(if (visInt >= 9999) "9999 " else String.format(Locale.US, "%04d ", visInt))
-                if (ceilInt != null && ceilInt < 5000) {
-                    append(String.format(Locale.US, "BKN%03d ", ceilInt / 100))
-                } else {
-                    append("FEW045 ")
-                }
-                append("14/08 Q1016 NOSIG")
-            }
-
-            val tafRaw = buildString {
-                append("TAF ${seed.icao} ${date.takeLast(2)}0500Z ${date.takeLast(2)}06/${date.takeLast(2)}24 ")
-                append(String.format(Locale.US, "%03d%02dKT ", windDir, maxOf(5, windSpd - 2)))
-                append(if (tafCat == "IFR") "3000 BKN008" else "9999 SCT035")
-            }
-
-            HistoricalMapAirport(
-                icao = seed.icao,
-                name = seed.name,
-                lat = seed.lat,
-                lon = seed.lon,
-                metar = HistoricalMetar(
-                    raw = metarRaw,
-                    observationTime = obsTime,
-                    category = seed.baseCategory,
-                    windDir = seed.baseWindDir,
-                    windSpeedKt = seed.baseWindKt,
-                    windGustKt = if (windSpd >= 18) seed.baseWindKt + 8.0 else null,
-                    crosswindKt = seed.baseCrosswindKt,
-                    bestRunway = seed.rwyId,
-                    ceilingFt = seed.baseCeilingFt,
-                    visibilityM = seed.baseVisM,
-                    temperatureC = 14.0,
-                    dewpointC = 8.0,
-                    pressureHpa = 1016.0,
-                ),
-                taf = HistoricalTaf(
-                    raw = tafRaw,
-                    issueTime = "${date}T05:00:00Z",
-                    category = tafCat,
-                    windDir = seed.baseWindDir,
-                    windSpeedKt = max(5.0, seed.baseWindKt - 2.0),
-                    windGustKt = if (windSpd >= 20) seed.baseWindKt + 6.0 else null,
-                    crosswindKt = (seed.baseCrosswindKt - 1.5).coerceAtLeast(1.0),
-                    bestRunway = seed.rwyId,
-                    ceilingFt = if (tafCat == "IFR") 800.0 else seed.baseCeilingFt,
-                    visibilityM = if (tafCat == "IFR") 3000.0 else 9999.0,
-                ),
-                categoryMatch = tafCat == seed.baseCategory,
-                verificationScore = if (tafCat == seed.baseCategory) "good" else "mixed",
-            )
-        }
-
-        return HistoricalMapResponse(
-            date = date,
-            hourUtc = hourUtc,
-            forecastTime = obsTime,
-            availableHours = listOf(6, 9, 12, 15, 18).map { hr ->
-                DayHourBucket(hour = hr, label = String.format(Locale.US, "%02dZ", hr))
-            },
-            airports = airports,
-        )
-    }
-
-    private fun shiftCategory(base: String, dayShift: Int, hourShift: Int, idx: Int): String {
-        if (dayShift == 0 && hourShift == 0) return base
-        val order = listOf("VFR", "MVFR", "IFR", "LIFR")
-        val cur = order.indexOf(base).coerceAtLeast(0)
-        val delta = if ((dayShift + hourShift + idx) % 3 == 0) 1 else 0
-        return order[(cur + delta).coerceIn(0, order.lastIndex)]
+    /** Rebuild an instant from `hist.date` + `hist.time` tokens; null unless both parse. */
+    fun instant(date: String?, time: String?): Instant? {
+        if (date == null || time == null) return null
+        return runCatching {
+            LocalDateTime.parse("${date}T$time").toInstant(ZoneOffset.UTC)
+        }.getOrNull()
     }
 }
