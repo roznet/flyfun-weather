@@ -125,17 +125,24 @@ def _scan_levels(grib_path: Path):
     return (*ident, sorted(headers))
 
 
+def _fsync_path(path: str | Path, *, drop: bool = False) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+        if drop and hasattr(os, "posix_fadvise"):  # absent on macOS
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
+
+
 def _fsync_tree(root: Path) -> None:
-    """fsync + drop from page cache every file under ``root`` (see put_cached)."""
-    for dirpath, _, files in os.walk(root):
+    """fsync every file and directory under ``root``, dropping file pages
+    from the page cache (see put_cached), so a store renamed into place after
+    this never appears without its contents after a crash."""
+    for dirpath, _, files in os.walk(root, topdown=False):
         for name in files:
-            fd = os.open(os.path.join(dirpath, name), os.O_RDONLY)
-            try:
-                os.fsync(fd)
-                if hasattr(os, "posix_fadvise"):  # absent on macOS
-                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-            finally:
-                os.close(fd)
+            _fsync_path(os.path.join(dirpath, name), drop=True)
+        _fsync_path(dirpath)
 
 
 def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool:
@@ -158,6 +165,7 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
 
     # One compression thread: this runs in a decode-pool worker, and the pool
     # size is what bounds GRIB CPU on the box. Blosc defaults to every core.
+    # Process-global, which is fine: pool workers have no other blosc user.
     numcodecs.blosc.set_nthreads(1)
 
     grib_path = Path(grib_path)
@@ -235,6 +243,7 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
                 shutil.rmtree(tmp, ignore_errors=True)
                 return True  # a concurrent writer finished first
             raise
+        _fsync_path(store_path.parent)  # make the rename itself durable
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
@@ -288,7 +297,7 @@ def read_model_level_columns(
     cells, inverse = np.unique(rows * nx + cols, return_inverse=True)
     cell_rows, cell_cols = cells // nx, cells % nx
     compact = np.empty((len(levels), cells.size), dtype=np.float32)
-    tiles = (cell_rows // TILE) * (nx // TILE + 1) + (cell_cols // TILE)
+    tiles = (cell_rows // TILE) * math.ceil(nx / TILE) + (cell_cols // TILE)
     for tile in np.unique(tiles):
         sel = np.flatnonzero(tiles == tile)
         y0 = int(cell_rows[sel[0]] // TILE) * TILE
@@ -333,7 +342,6 @@ def cached_model_level_entry(run_dir: Path, filename: str) -> Path | None:
     if is_cached(run_dir, filename):
         return run_dir / filename
     return None
-
 
 
 def cache_model_level_blob(

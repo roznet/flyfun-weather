@@ -1388,7 +1388,17 @@ def _decode_icon_eu_single_var(
         try:
             return read_model_level_columns(grib_bytes, latitudes, longitudes)
         except Exception:
-            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
+            # The GRIB is gone, so an unreadable store would otherwise be
+            # re-read and re-fail on every briefing until TTL. Drop it: the
+            # next prefetch sees the variable missing and downloads it again,
+            # and this hour is skipped like any variable that failed to decode.
+            import shutil
+
+            logger.warning(
+                "unreadable ICON-EU zarr store %s, removing it so the next "
+                "prefetch re-downloads the variable", grib_bytes, exc_info=True,
+            )
+            shutil.rmtree(grib_bytes, ignore_errors=True)
             return {}
     try:
         return _decode_icon_eu_single_var_direct(grib_bytes, latitudes, longitudes)

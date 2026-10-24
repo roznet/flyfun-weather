@@ -307,3 +307,15 @@ def test_prefetch_skips_variables_held_as_stores(tmp_path, monkeypatch):
 
     assert "qc" not in fetched
     assert set(fetched) == set(ICON_EU_VARIABLES) - {"qc"}
+
+
+def test_unreadable_store_is_removed_so_prefetch_refetches(tmp_path):
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+    grib.unlink()
+    shard = next(p for p in store.rglob("*") if p.is_file() and p.name != "zarr.json")
+    shard.write_bytes(b"garbage")
+
+    assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
+    assert not store.exists()
+    assert icon_zarr.cached_model_level_entry(tmp_path, grib.name) is None
