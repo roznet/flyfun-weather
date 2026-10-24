@@ -6913,8 +6913,11 @@ Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
 - **Precipitation.** APCP and ACPCP are running totals since init (the .idx
   lists both the bucket and the 0-N total; the 0-N total is read). Per hour
   over the step window: `precipitation_mm` = ΔAPCP, `showers_mm` = ΔACPCP,
-  `snowfall_cm` = ΔAPCP × CPOFP/100 × 0.7, `rain_mm` = ΔAPCP − ΔACPCP − snow
-  water, floored at 0 (the ECMWF rule of §61). CPOFP's −50 fill falls back to
+  `snowfall_cm` = ΔAPCP × CPOFP/100 × 0.7, `rain_mm` = (ΔAPCP − ΔACPCP) ×
+  (1 − CPOFP/100), floored at 0. Unlike ECMWF (§61, `tp − cp − sf` with its
+  own `sf` field), GFS has one frozen share for the column, so it is applied
+  to the large-scale part rather than subtracting the whole snow amount,
+  which would remove convective snow twice (review of PR 927). CPOFP's −50 fill falls back to
   the CSNOW category; no precipitation means 0 snow and 0 rain. The step
   before the first window hour is read too, so that hour has its amount.
 - **None on a GRIB-primary GFS slot:** `precipitation_probability_pct` (as

@@ -471,7 +471,7 @@ def gfs_sounding_plan_problem(
 ) -> str | None:
     """Why a planned GFS sounding cannot make complete columns, or None.
 
-    Checked before the ~160 MB download: every wanted level must offer every
+    Checked before the ~163 MB download (~177 MB per hour with the surface): every wanted level must offer every
     :data:`GFS_SOUNDING_MANDATORY` variable across the two products.
     """
     by_level: dict[int, set[str]] = {}

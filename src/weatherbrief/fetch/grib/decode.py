@@ -3344,8 +3344,11 @@ def gfs_surface_rates(
     - ``showers_mm`` = ΔACPCP, the convective precipitation, as Open-Meteo
       defines showers
     - ``snowfall_cm`` = ΔAPCP × frozen share at the step × 0.7 cm/mm
-    - ``rain_mm`` = ΔAPCP − ΔACPCP − frozen part, floored at 0: the
-      large-scale liquid part, the ECMWF ``tp − cp − sf`` rule (#912).
+    - ``rain_mm`` = (ΔAPCP − ΔACPCP) × (1 − frozen share), floored at 0: the
+      large-scale liquid part. GRIB gives one frozen share for the whole
+      column, so it is applied to the large-scale part alone; subtracting the
+      whole snow amount (the ECMWF ``tp − cp − sf`` rule, where ``sf`` is a
+      field of its own) would take convective snow off twice.
 
     The frozen share is the step's instantaneous ``CPOFP`` applied to the
     window ending there. A missing component makes its field absent (unknown),
@@ -3378,7 +3381,7 @@ def gfs_surface_rates(
     snow_water = tot * frozen
     out["snowfall_cm"] = snow_water * SNOW_CM_PER_MM_WATER
     if conv is not None:
-        out["rain_mm"] = max(0.0, tot - conv - snow_water)
+        out["rain_mm"] = max(0.0, tot - conv) * (1.0 - frozen)
     return out
 
 

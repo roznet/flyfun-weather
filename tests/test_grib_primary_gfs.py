@@ -248,7 +248,7 @@ def test_gfs_surface_rates():
     assert out["precipitation_mm"] == pytest.approx(2.0)
     assert out["showers_mm"] == pytest.approx(0.6)
     assert out["snowfall_cm"] == pytest.approx(2.0 * 0.25 * 0.7)
-    assert out["rain_mm"] == pytest.approx(2.0 - 0.6 - 0.5)
+    assert out["rain_mm"] == pytest.approx((2.0 - 0.6) * 0.75)
     # 3-hourly steps after f120: the amount is spread over the window.
     out = gfs_surface_rates({"APCP": 4.0, "ACPCP": 0.4}, prev, 3.0)
     assert out["precipitation_mm"] == pytest.approx(1.0)
@@ -351,19 +351,39 @@ def test_gfs_column_problem():
     assert why == "700hPa missing raw_v_wind_m_s"
 
 
-def test_hours_without_sounding_and_slot_detection():
-    from weatherbrief.fetch.grib import _gfs_hours_without_sounding, _gfs_slot_grib_built
+def test_hours_without_sounding():
+    from weatherbrief.fetch.grib import _gfs_hours_without_sounding
 
     pts = _points(1)
     cs, skel = _gfs_section(pts)
-    assert _gfs_slot_grib_built([cs])
     for h in skel[0].hourly:
         if h.time.hour != 10:
             h.pressure_levels = [PressureLevelData(pressure_hpa=850)]
     assert _gfs_hours_without_sounding([cs], "20260504", 6, [2, 3, 4, 5]) == [4]
-    for h in skel[0].hourly:
-        h.pressure_levels = [PressureLevelData(pressure_hpa=850)]
-    assert not _gfs_slot_grib_built([cs])
+
+
+@pytest.mark.parametrize("grib_built,hrrr_tried", [(False, True), (True, False)])
+def test_grib_primary_flag_comes_from_the_gate_not_the_data(tmp_path, grib_built, hrrr_tried):
+    """An Open-Meteo slot with empty hours still gets HRRR; only the gate's flag skips it."""
+    from weatherbrief.fetch import grib as grib_mod
+
+    pts = _points(1)
+    cs, _skel = _gfs_section(pts)  # every hour empty, like an OM slot with nulls
+    tried: list[bool] = []
+
+    def fake_hrrr(*a, **kw):
+        tried.append(True)
+        return 123
+
+    with patch.object(grib_mod, "_try_enrich_gfs_from_hrrr", new=fake_hrrr), patch.object(
+        grib_mod, "find_latest_run", return_value=None,
+    ):
+        out = grib_mod._enrich_gfs_inner(
+            [cs], [], pts, DEP, data_dir=tmp_path, flight_duration_hours=1.0,
+            grib_built=grib_built,
+        )
+    assert bool(tried) is hrrr_tried
+    assert out == ((123, "hrrr:noaa") if hrrr_tried else (None, None))
 
 
 def test_gfs_previous_step():

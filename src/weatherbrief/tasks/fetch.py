@@ -556,6 +556,7 @@ def run_fetch(
                 # flights (also departure, so the run covers the window); None for
                 # normal future flights, which then use the freshest run.
                 as_of_time=as_of_time,
+                grib_primary=grib_primary_models,
             )
             grib_enriched = True
             logger.info("GRIB2 enrichment applied")
