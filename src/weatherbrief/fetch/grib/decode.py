@@ -1383,28 +1383,28 @@ def _decode_icon_eu_single_var(
         return {}
     if isinstance(grib_bytes, Path):
         # A zarr store converted on write (#705): same output, tiles only.
-        from weatherbrief.fetch.grib.icon_zarr import read_model_level_columns
+        from weatherbrief.fetch.grib.icon_zarr import StoreCorrupt, read_model_level_columns
 
         try:
             return read_model_level_columns(grib_bytes, latitudes, longitudes)
-        except (OSError, MemoryError):
-            # Transient (I/O pressure, a tight worker) or the store vanished
-            # under us: skip this read, keep the store.
-            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
-            return {}
-        except Exception:
-            # Anything else is the store itself (bad schema, codec or shard
-            # error). The GRIB is gone, so an unreadable store would otherwise be
-            # re-read and re-fail on every briefing until TTL. Drop it: the
-            # next prefetch sees the variable missing and downloads it again,
-            # and this hour is skipped like any variable that failed to decode.
+        except StoreCorrupt:
+            # The store itself is bad (schema, attributes, codec or shard).
+            # The GRIB is gone, so it would otherwise be re-read and re-fail on
+            # every briefing until TTL. Drop it: the next prefetch sees the
+            # variable missing and downloads it again, and this hour is skipped
+            # like any variable that failed to decode.
             import shutil
 
-            logger.warning(
-                "unreadable ICON-EU zarr store %s, removing it so the next "
+            logger.error(
+                "corrupt ICON-EU zarr store %s, removing it so the next "
                 "prefetch re-downloads the variable", grib_bytes, exc_info=True,
             )
             shutil.rmtree(grib_bytes, ignore_errors=True)
+            return {}
+        except Exception:
+            # Transient (I/O pressure, a tight worker, the store vanishing
+            # under us) or a bug in the reader: skip this read, keep the store.
+            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
             return {}
     try:
         return _decode_icon_eu_single_var_direct(grib_bytes, latitudes, longitudes)
