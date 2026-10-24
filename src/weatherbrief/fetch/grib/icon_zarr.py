@@ -70,6 +70,8 @@ def zarr_enabled() -> bool:
     return _zarr_installed()
 
 
+# TODO(#705 follow-up): drop once every venv has been reinstalled with the
+# zarr dependency; only the transition needs it.
 @functools.cache
 def _zarr_installed() -> bool:
     import importlib.util
