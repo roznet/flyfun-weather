@@ -568,6 +568,7 @@ def run_fetch(
 
     # --- GRIB-primary Open-Meteo fallback (#912) ---
     grib_primary: dict[str, int] = {}
+    grib_primary_dropped: dict[str, str] = {}
     if grib_primary_models:
         from weatherbrief.fetch.grib.primary import (
             apply_failure_drill,
@@ -603,8 +604,10 @@ def run_fetch(
             models_fetched_names[:] = [m for m in models_fetched_names if m != outcome.model]
             if outcome.empty:
                 models_returned_empty.append(outcome.model)
+                grib_primary_dropped[outcome.model] = "fallback_empty"
             else:
                 models_failed[outcome.model] = model_failure_reason(outcome.error)
+                grib_primary_dropped[outcome.model] = models_failed[outcome.model]
             grib_init_times.pop(outcome.model, None)
             grib_sources.pop(outcome.model, None)
 
@@ -638,6 +641,8 @@ def run_fetch(
             # Open-Meteo calls this fetch made, and the GRIB runs used.
             fetch_facts={
                 "grib_primary": grib_primary,
+                # GRIB-primary slots dropped because their fallback failed.
+                "grib_primary_dropped": grib_primary_dropped,
                 "open_meteo_calls": client.call_count,
                 "open_meteo_weighted_calls": round(client.call_weight, 2),
                 "grib_init_times": grib_init_times,

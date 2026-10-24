@@ -616,9 +616,16 @@ def confirm_candidate(
         )
         from weatherbrief.fetch.open_meteo import OpenMeteoClient
 
+        from weatherbrief.tasks.artifacts import load_fetch_meta
+
+        # Only the slots the briefing built from GRIB (fetch_facts, #912): an
+        # Open-Meteo slot keeps today's behaviour, holes and all.
+        facts = (load_fetch_meta(pack_dir) or {}).get("fetch_facts") or {}
+        built = set(facts.get("grib_primary") or {})
         outcomes = fill_grib_primary_gaps(
             cross_sections, route_points,
-            [cs.model for cs in cross_sections if cs.model in GRIB_PRIMARY_MODELS],
+            [cs.model for cs in cross_sections
+             if cs.model in GRIB_PRIMARY_MODELS and cs.model.value in built],
             cand, route.flight_duration_hours,
             client=OpenMeteoClient(),
             start_date=cand.strftime("%Y-%m-%d"),
