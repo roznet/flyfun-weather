@@ -16,7 +16,7 @@ import okhttp3.Request
 import java.io.File
 
 /**
- * Manages the local `airports.db` SQLite database downloaded from `/api/airports/db`,
+ * Manages the local `airports.db` SQLite database downloaded from `/api/nav/airports-db`,
  * verifying ETag for incremental updates and exposing [KnownAirports] from `:rzflight`.
  * Mirrors `AirportDatabase` on iOS.
  */
@@ -40,7 +40,7 @@ class AirportDatabaseService(
 
     /**
      * Opens the cached `airports.db` immediately if present on disk, then performs an
-     * ETag-conditional `GET /api/airports/db` check against [api] to download updates.
+     * ETag-conditional `GET /api/nav/airports-db` check against [api] to download updates.
      */
     suspend fun ensureLoaded(api: ApiClient) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -64,10 +64,10 @@ class AirportDatabaseService(
     }
 
     /**
-     * Performs an ETag-conditional download of `/api/airports/db`.
+     * Performs an ETag-conditional download of `/api/nav/airports-db`.
      */
     suspend fun refreshFromServer(api: ApiClient): Boolean = withContext(Dispatchers.IO) {
-        val url = api.buildUrl("/api/airports/db")
+        val url = api.buildUrl("/api/nav/airports-db")
         val reqBuilder = Request.Builder().url(url).get()
         val storedEtag = if (etagFile.isFile) {
             runCatching { etagFile.readText(Charsets.UTF_8).trim() }.getOrNull()

@@ -86,7 +86,7 @@ data class MapLegendRow(
 
 /**
  * Loads `metrics-catalog.json` and `map-metrics-catalog.json` from Android assets
- * (with optional ETag-conditional refresh from `/api/help`), indexing [MetricHelp] by metric key.
+ * (with optional ETag-conditional refresh from `/api/help/catalog`), indexing [MetricHelp] by metric key.
  * Mirrors `HelpCatalogStore` on iOS.
  */
 class HelpCatalogStore(
@@ -157,10 +157,10 @@ class HelpCatalogStore(
     }
 
     /**
-     * Refreshes the help catalog from `GET /api/help` using `If-None-Match` ETag caching.
+     * Refreshes the help catalog from `GET /api/help/catalog` using `If-None-Match` ETag caching.
      */
     suspend fun refreshIfNeeded(api: ApiClient) = withContext(Dispatchers.IO) {
-        val url = api.buildUrl("/api/help")
+        val url = api.buildUrl("/api/help/catalog")
         val reqBuilder = Request.Builder().url(url).get()
         currentEtag?.takeIf { it.isNotEmpty() }?.let { etag ->
             reqBuilder.header("If-None-Match", etag)
