@@ -175,14 +175,15 @@ import Foundation
     }
 
     /// #776: a field reading a nearby station's report has no row of its own,
-    /// so the table names the stand-in above it — the server's caption with
-    /// the same "ICAO: " prefix the web and the PDF report add.
+    /// so the table names the stand-in above it with the server's line, the
+    /// same string the web and the PDF report show.
     @Test func proxyLinesNameTheStandIn() throws {
         let json = """
         { "corridor_nm": 30.0, "fetch_time": "2026-07-25T05:50:00Z",
           "airports": [
             { "icao": "ZZFD", "distance_from_route_nm": 0, "metar_weather": [],
-              "has_metar": false, "proxy_caption": "using ZZPX as proxy · 8 NM NE" },
+              "has_metar": false, "proxy_caption": "using ZZPX as proxy · 8 NM NE",
+              "proxy_line": "ZZFD: using ZZPX as proxy · 8 NM NE" },
             { "icao": "ZZPX", "distance_from_route_nm": 6, "metar_weather": [], "has_metar": true }
           ] }
         """

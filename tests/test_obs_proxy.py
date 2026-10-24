@@ -448,3 +448,14 @@ def test_run_route_weather_wires_the_proxy_and_the_field_dials(monkeypatch):
     winds = field.runway_wind.winds
     assert [w.wind.source for w in winds] == ["metar"]  # the fixture TAF carries no wind
     assert winds[0].wind.speed_kt == 8 and winds[0].best_end == "25"
+
+
+def test_proxy_line_names_the_field_for_the_observations_table():
+    """#776: the line above the observations table is server-built, so web,
+    iOS and the PDF report read one string; the field's own row stays None."""
+    obs = _proxied_egtf()
+    egtf = obs.airport("EGTF")
+    assert egtf.proxy_line == f"EGTF: {egtf.proxy_caption}"
+    assert egtf.proxy_line.startswith("EGTF: using EGLL as proxy")
+    assert obs.airport("EGLL").proxy_line is None
+    assert obs.model_dump(mode="json")["airports"][0].keys() >= {"proxy_line"}

@@ -287,6 +287,16 @@ class AirportObservation(BaseModel):
             f" · TAF {name(t, self.has_taf or bool(self.taf_raw))}"
         )
 
+    @computed_field
+    @property
+    def proxy_line(self) -> str | None:
+        """The caption named for its field, for the line above an observations
+        table (#776), where the field has no row of its own: "EGTF: using EGLL
+        as proxy · 8 NM NE". Server-built so the web, iOS and the PDF report
+        show one string. None when the field reports itself."""
+        caption = self.proxy_caption
+        return f"{self.icao}: {caption}" if caption is not None else None
+
     def taf_at_eta_line(self) -> str:
         """One-line TAF reading at ETA, shared by the LLM context and the text digest.
 
