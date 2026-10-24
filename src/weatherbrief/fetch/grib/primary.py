@@ -223,18 +223,18 @@ def _hrrr_takes_route(
 ) -> bool:
     """Would ``_try_enrich_gfs_from_hrrr`` pass its network-free gates?
 
-    Same three checks in the same order: the ``WB_HRRR_ENABLED`` switch, the
-    whole route in the CONUS domain, a publishable run reaching the window
-    end. A probe failure later still falls back to plain GFS there.
+    Same three checks in the same order, on the same helpers: the
+    ``WB_HRRR_ENABLED`` switch (``hrrr_enabled``), the whole route in the CONUS
+    domain, a publishable run reaching the window end. A probe failure later
+    still falls back to plain GFS there.
     """
     from weatherbrief.fetch.grib.hrrr_fetch import (
+        hrrr_enabled,
         hrrr_window_out_of_range,
         route_in_hrrr_domain,
     )
 
-    if os.environ.get("WB_HRRR_ENABLED", "true").strip().lower() not in (
-        "1", "true", "yes",
-    ):
+    if not hrrr_enabled():
         return False
     try:
         if not route_in_hrrr_domain(route_points):

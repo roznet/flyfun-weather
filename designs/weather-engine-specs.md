@@ -128,7 +128,7 @@ Surface field sources on a GRIB-primary slot:
 | RH 2 m | from 2t/2d (Magnus) | relhum_2m, else from T/Td | RH 2 m, else from T/Td |
 | wind 10 m, gust | 10u/10v (U/V interp), 10fg (window max) | u_10m/v_10m, vmax_10m (max since last output) | UGRD/VGRD 10 m, GUST surface |
 | MSLP, surface pressure | msl, sp | pmsl, ps | PRMSL, PRES |
-| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) | APCP, APCP − ACPCP − snow, ACPCP, APCP × CPOFP × 0.7 (0-N totals differenced) |
+| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) | APCP, (APCP − ACPCP) × (1 − CPOFP), ACPCP, APCP × CPOFP × 0.7 (0-N totals differenced) |
 | cloud cover total/low/mid/high | tcc/lcc/mcc/hcc | clct/clcl/clcm/clch (cloud-diag blob) | instantaneous TCDC/LCDC/MCDC/HCDC |
 | CAPE / CIN | mucape / mlcin100 | cape_ml / None | surface CAPE / CIN |
 | visibility | vis | vis | VIS |

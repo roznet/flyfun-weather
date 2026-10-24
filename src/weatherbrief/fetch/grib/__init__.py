@@ -33,7 +33,7 @@ from typing import Any
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Collection
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -2193,6 +2193,7 @@ def enrich_forecasts(
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
     priority: int | DecodePriority | None = None,
+    grib_primary: Collection[ModelSource] = (),
 ) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
     """Enrich cross-section forecasts with cloud water from GRIB2 sources.
 
@@ -2221,6 +2222,9 @@ def enrich_forecasts(
             ContextVar for the duration so Phase-1 worker threads (which inherit
             the context via ``_submit_with_context``) dispatch at the right
             level.
+        grib_primary: Slots the fetch gate built as GRIB-primary skeletons
+            (#912, #913). Only GFS reads it here: a GRIB-primary GFS slot
+            gets its whole column and surface from GRIB and never tries HRRR.
 
     Returns:
         Tuple of (grib_init_times, grib_skip_reasons, grib_sources):
@@ -2240,6 +2244,7 @@ def enrich_forecasts(
             flight_duration_hours=flight_duration_hours,
             progress_callback=progress_callback,
             as_of_time=as_of_time,
+            grib_primary=frozenset(grib_primary),
         )
     finally:
         timer.log_summary()
@@ -2258,6 +2263,7 @@ def _enrich_forecasts_inner(
     flight_duration_hours: float = 0.0,
     progress_callback: Callable[[str, str | None], None] | None = None,
     as_of_time: datetime | None = None,
+    grib_primary: frozenset[ModelSource] = frozenset(),
 ) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
     """Inner body of enrich_forecasts; assumes _GRIB_TIMER is set to *timer*."""
     grib_init_times: dict[str, int] = {}
@@ -2315,6 +2321,7 @@ def _enrich_forecasts_inner(
             grib_sources=grib_sources, icon_ctx=icon_ctx,
             icon_prepare_skip=icon_prepare_skip,
             arome_ctx=arome_ctx, arome_prepare_skip=arome_prepare_skip,
+            grib_primary=grib_primary,
         )
 
 
@@ -2336,6 +2343,7 @@ def _enrich_forecasts_phases(
     icon_prepare_skip: str | None,
     arome_ctx: "_AromeContext | None",
     arome_prepare_skip: str | None,
+    grib_primary: frozenset[ModelSource] = frozenset(),
 ) -> tuple[dict[str, int], dict[str, str], dict[str, str]]:
     """Phases 1–2 + time fill of :func:`_enrich_forecasts_inner`."""
     gfs_ts: int | None = None
@@ -2390,6 +2398,7 @@ def _enrich_forecasts_phases(
                 departure_time, data_dir=data_dir,
                 flight_duration_hours=flight_duration_hours,
                 as_of_time=as_of_time,
+                grib_built=ModelSource.GFS in grib_primary,
             )
             gfs_future.add_done_callback(
                 _phase1_model_done(ModelSource.GFS.value.upper())
@@ -2839,6 +2848,7 @@ def _enrich_gfs(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
+    grib_built: bool = False,
 ) -> tuple[int | None, str | None]:
     """Enrich the gfs slot — from HRRR when the route/window qualify, else GFS.
 
@@ -2852,6 +2862,7 @@ def _enrich_gfs(
             departure_time, data_dir=data_dir,
             flight_duration_hours=flight_duration_hours,
             as_of_time=as_of_time,
+            grib_built=grib_built,
         )
 
 
@@ -2864,6 +2875,7 @@ def _enrich_gfs_inner(
     data_dir: Path,
     flight_duration_hours: float = 0.0,
     as_of_time: datetime | None = None,
+    grib_built: bool = False,
 ) -> tuple[int | None, str | None]:
     from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
 
@@ -2874,11 +2886,11 @@ def _enrich_gfs_inner(
 
     session = _grib_session()
 
-    # A GRIB-primary slot (#913) carries no Open-Meteo sounding: some of its
-    # hours have no levels at all. The fetch gate kept HRRR routes off that
-    # path, so the HRRR upgrade (which keeps Open-Meteo's surface) never runs
-    # on one.
-    grib_built = _gfs_slot_grib_built(gfs_sections)
+    # A GRIB-primary slot (#913) is told by the fetch gate (``grib_built``),
+    # never inferred from the data: an Open-Meteo slot with a few empty hours
+    # must keep its HRRR upgrade and CLWMR patch. The gate kept HRRR routes
+    # off the GRIB-primary path, so HRRR (which keeps Open-Meteo's surface)
+    # never runs on a skeleton.
 
     # HRRR short-range upgrade (issue #457): when the whole route fits the
     # HRRR CONUS domain AND a run's horizon covers the flight window, the gfs
@@ -3014,6 +3026,7 @@ def _try_enrich_gfs_from_hrrr(
     """
     from weatherbrief.fetch.grib.hrrr_fetch import (
         find_latest_hrrr_run,
+        hrrr_enabled,
         route_in_hrrr_domain,
     )
 
@@ -3022,9 +3035,7 @@ def _try_enrich_gfs_from_hrrr(
     # WB_GRIB_PRECACHE_ENABLED. Exists so the HRRR-vs-plain-GFS difference can
     # be measured A/B on one route, and so an S3-side problem can be routed
     # around without a deploy. Read per call, not cached at import.
-    if os.environ.get("WB_HRRR_ENABLED", "true").strip().lower() not in (
-        "1", "true", "yes",
-    ):
+    if not hrrr_enabled():
         logger.info("HRRR disabled via WB_HRRR_ENABLED; using GFS")
         return None
 
@@ -3486,6 +3497,10 @@ _GFS_REQUIRED_DECODED = (
 )
 
 
+# Concurrent per-hour GFS GRIB-primary downloads (sounding + surface blobs).
+_GFS_DOWNLOAD_WORKERS = 4
+
+
 def gfs_sounding_levels() -> list[int]:
     """The GRIB-primary GFS levels: the ones the Open-Meteo GFS slot carried.
 
@@ -3501,18 +3516,6 @@ def _gfs_previous_step(fhour: int) -> int | None:
     if fhour <= 0:
         return None
     return fhour - 1 if fhour <= 120 else fhour - 3
-
-
-def _gfs_slot_grib_built(gfs_sections: list[RouteCrossSection]) -> bool:
-    """True when the gfs slot has hours with no sounding (GRIB-primary, #913).
-
-    An Open-Meteo slot carries its levels on every hour it returned; a
-    GRIB-primary skeleton has none outside what GRIB filled.
-    """
-    return any(
-        not h.pressure_levels
-        for cs in gfs_sections for wf in cs.point_forecasts for h in wf.hourly
-    )
 
 
 def _gfs_hours_without_sounding(
@@ -3746,15 +3749,25 @@ def read_gfs_grib_points(
     lead = _gfs_previous_step(fhours[0])
     surface_steps = ([lead] if lead is not None and lead not in fhours else []) + fhours
 
-    sounding_hours = [
-        f for f in fhours
-        if sounding
-        and _ensure_gfs_sounding(init_date, init_hour, f, run_dir, idx_by_fhour, session, levels)
-    ]
-    surface_hours = [
-        f for f in surface_steps
-        if _ensure_gfs_surface(init_date, init_hour, f, run_dir, idx_by_fhour, session)
-    ]
+    # Hours download side by side (~177 MB each on a cold cache, review of
+    # PR 927). Each blob streams to disk, never into memory.
+    with ThreadPoolExecutor(max_workers=_GFS_DOWNLOAD_WORKERS) as pool:
+        snd_futures = {
+            f: _submit_with_context(
+                pool, _ensure_gfs_sounding,
+                init_date, init_hour, f, run_dir, idx_by_fhour, session, levels,
+            )
+            for f in (fhours if sounding else [])
+        }
+        sfc_futures = {
+            f: _submit_with_context(
+                pool, _ensure_gfs_surface,
+                init_date, init_hour, f, run_dir, idx_by_fhour, session,
+            )
+            for f in surface_steps
+        }
+    sounding_hours = [f for f, fut in snd_futures.items() if fut.result()]
+    surface_hours = [f for f, fut in sfc_futures.items() if fut.result()]
     jobs = [
         ("decode_gfs_sounding", (str(run_dir / _gfs_sounding_cache_key(f, levels)), point_lats, point_lons))
         for f in sounding_hours

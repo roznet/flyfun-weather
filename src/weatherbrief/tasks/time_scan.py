@@ -591,12 +591,29 @@ def confirm_candidate(
             cross_sections, route_points, cand.date(), cand_end.date(),
         )
 
+    # Only the slots the briefing built from GRIB (fetch_facts, #912): an
+    # Open-Meteo slot keeps today's behaviour, holes and all.
+    from weatherbrief.fetch.grib.primary import GRIB_PRIMARY_MODELS
+    from weatherbrief.tasks.artifacts import load_fetch_meta
+
+    try:
+        facts = (load_fetch_meta(pack_dir) or {}).get("fetch_facts") or {}
+    except Exception:
+        logger.warning("time-scan confirm: fetch_meta unreadable", exc_info=True)
+        return None
+    built = set(facts.get("grib_primary") or {})
+    built_models = [
+        cs.model for cs in cross_sections
+        if cs.model in GRIB_PRIMARY_MODELS and cs.model.value in built
+    ]
+
     try:
         enrich_forecasts(
             cross_sections, [], route_points, cand,
             data_dir=data_dir,
             flight_duration_hours=route.flight_duration_hours,
             priority=DecodePriority.BACKGROUND,
+            grib_primary=built_models,
         )
     except Exception:
         # A failed multi-model enrichment must not degrade into a quiet
@@ -610,21 +627,12 @@ def confirm_candidate(
     # failed fill means empty hours in the window: refuse, like a failed
     # enrichment, rather than grade them as "all models checked".
     try:
-        from weatherbrief.fetch.grib.primary import (
-            GRIB_PRIMARY_MODELS,
-            fill_grib_primary_gaps,
-        )
+        from weatherbrief.fetch.grib.primary import fill_grib_primary_gaps
         from weatherbrief.fetch.open_meteo import OpenMeteoClient
-        from weatherbrief.tasks.artifacts import load_fetch_meta
 
-        # Only the slots the briefing built from GRIB (fetch_facts, #912): an
-        # Open-Meteo slot keeps today's behaviour, holes and all.
-        facts = (load_fetch_meta(pack_dir) or {}).get("fetch_facts") or {}
-        built = set(facts.get("grib_primary") or {})
         outcomes = fill_grib_primary_gaps(
             cross_sections, route_points,
-            [cs.model for cs in cross_sections
-             if cs.model in GRIB_PRIMARY_MODELS and cs.model.value in built],
+            built_models,
             cand, route.flight_duration_hours,
             client=OpenMeteoClient(),
             start_date=cand.strftime("%Y-%m-%d"),

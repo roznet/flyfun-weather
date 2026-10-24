@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -201,6 +202,17 @@ def hrrr_grid_fractional_indices(
         fx = [(xs - x0) / HRRR_GRID_DX_M]
         fy = [(ys - y0) / HRRR_GRID_DY_M]
     return fx, fy
+
+
+def hrrr_enabled() -> bool:
+    """The ``WB_HRRR_ENABLED`` kill switch (default on), read per call.
+
+    Shared by the HRRR upgrade (``_try_enrich_gfs_from_hrrr``) and the
+    GRIB-primary GFS gate (``primary._hrrr_takes_route``) so the two agree.
+    """
+    return os.environ.get("WB_HRRR_ENABLED", "true").strip().lower() in (
+        "1", "true", "yes",
+    )
 
 
 def route_in_hrrr_domain(route_points: list) -> bool:
