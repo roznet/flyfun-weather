@@ -313,8 +313,9 @@ def test_unreadable_store_is_removed_so_prefetch_refetches(tmp_path):
     grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
     store = _convert(tmp_path, grib)
     grib.unlink()
-    shard = next(p for p in store.rglob("*") if p.is_file() and p.name != "zarr.json")
-    shard.write_bytes(b"garbage")
+    # Every shard: which band holds the target's tiles depends on the grid.
+    for shard in (p for p in store.rglob("*") if p.is_file() and p.name != "zarr.json"):
+        shard.write_bytes(b"garbage")
 
     assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
     assert not store.exists()
