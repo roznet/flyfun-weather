@@ -2,7 +2,8 @@
 
 Cache layout:
     {data_dir}/.cache/grib/{model}/{YYYYMMDD}_{HH}z/
-        f{FFF}_{var}_{bbox_hash}.grib2
+        f{FFF}_{var}.grib2
+        f{FFF}_{var}.zarr/      ICON-EU model levels, converted on write (#705)
 
 TTL is per-model: ICON-EU is precached on each main run so the previous run
 is dead weight after a few hours (12 h); GFS isn't precached and is small
@@ -265,6 +266,30 @@ def is_cached(
     if age > _ttl_for(run_dir):
         logger.debug("Cache expired: %s (%.0fh old)", path, age / 3600)
         path.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def is_store_cached(
+    run_dir: Path,
+    store: str,
+) -> bool:
+    """:func:`is_cached` for a zarr store directory (ICON-EU, #705).
+
+    A store is present once its ``zarr.json`` is: stores are renamed into
+    place whole, so a half-built one is never visible under this name. Aged
+    by that file's mtime against the model TTL, and removed when expired,
+    matching :func:`is_cached`.
+    """
+    meta = run_dir / store / "zarr.json"
+    try:
+        mtime = meta.stat().st_mtime
+    except OSError:
+        return False
+    age = time.time() - mtime
+    if age > _ttl_for(run_dir):
+        logger.debug("Cache expired: %s (%.0fh old)", run_dir / store, age / 3600)
+        shutil.rmtree(run_dir / store, ignore_errors=True)
         return False
     return True
 

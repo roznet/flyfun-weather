@@ -60,6 +60,11 @@ dependencies = [
     # "unknown parameter" errors on pressure-level messages.
     "eccodes>=2.45",
     "xarray>=2024.1",
+    # ICON-EU model levels are cached as sharded zarr v3 (#705): a briefing
+    # reads only the 64x64 tiles under its route instead of unpacking the
+    # whole grid. 3.x for sharding + BloscCodec; numcodecs comes with it.
+    # Optional at runtime: without it the cache simply stays GRIB.
+    "zarr>=3.1",
     # Was transitive via MetPy; the HRRR Lambert-grid decode + domain gate
     # (#457) depend on it directly, so pin it explicitly.
     "pyproj>=3.4",

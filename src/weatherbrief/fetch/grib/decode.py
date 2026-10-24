@@ -1367,7 +1367,7 @@ def decode_cloud_diag_per_point(
 
 
 def _decode_icon_eu_single_var(
-    grib_bytes: bytes,
+    grib_bytes: "bytes | Path",
     latitudes: list[float],
     longitudes: list[float],
 ) -> dict[int, list[float | None]]:
@@ -1381,6 +1381,15 @@ def _decode_icon_eu_single_var(
     """
     if not grib_bytes:
         return {}
+    if isinstance(grib_bytes, Path):
+        # A zarr store converted on write (#705): same output, tiles only.
+        from weatherbrief.fetch.grib.icon_zarr import read_model_level_columns
+
+        try:
+            return read_model_level_columns(grib_bytes, latitudes, longitudes)
+        except Exception:
+            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
+            return {}
     try:
         return _decode_icon_eu_single_var_direct(grib_bytes, latitudes, longitudes)
     except Exception:
@@ -1562,7 +1571,7 @@ def _derive_clc_cloud_layers(
 
 
 def decode_icon_eu_per_point_chunked(
-    var_bytes: dict[str, bytes],
+    var_bytes: "dict[str, bytes | Path]",
     latitudes: list[float],
     longitudes: list[float],
     target_pressures_hpa: list[int] | None = None,
@@ -1576,7 +1585,8 @@ def decode_icon_eu_per_point_chunked(
     Args:
         var_bytes: {variable_name: grib_bytes} — one entry per variable
             (e.g. "p", "qc", "qi", "clc"). Each is concatenated GRIB2 for
-            all model levels of that variable.
+            all model levels of that variable, or the ``Path`` of its zarr
+            store when it was converted on write (#705).
         latitudes: Target latitudes for interpolation.
         longitudes: Target longitudes for interpolation.
         target_pressures_hpa: Target pressure levels in hPa.

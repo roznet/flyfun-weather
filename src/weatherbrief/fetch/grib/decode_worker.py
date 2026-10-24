@@ -246,7 +246,9 @@ def decode_icon_chunked(
     concatenated into that variable's GRIB2 byte stream. A whole-column blob
     (ICON-EU, or a legacy ICON-D2 hit) is a one-element list; the per-level
     cache (ICON-D2, #469) is one path per model level. cfgrib indexes messages
-    by their level coordinate, so concatenation order is irrelevant.
+    by their level coordinate, so concatenation order is irrelevant. An
+    ICON-EU variable converted on write (#705) is a one-element list holding
+    its ``.zarr`` store, read tile by tile instead of unpacked.
     """
     # ICON takes a dict of var→paths; log the first var's first file as a rep.
     fn_label = "decode_icon_chunked"
@@ -259,10 +261,37 @@ def decode_icon_chunked(
     with _log_decode(fn_label, rep_path):
         from weatherbrief.fetch.grib.decode import decode_icon_eu_per_point_chunked
         var_bytes = {
-            var: b"".join(Path(p).read_bytes() for p in paths)
-            for var, paths in var_paths.items()
+            var: _icon_var_source(paths) for var, paths in var_paths.items()
         }
         return decode_icon_eu_per_point_chunked(var_bytes, latitudes, longitudes)
+
+
+def _icon_var_source(paths: list[str]) -> bytes | Path:
+    """One variable's input: a zarr store path (#705) or the GRIB bytes.
+
+    A one-element GRIB path whose file has gone, with its zarr store now
+    beside it, is the convert-on-write race: the parent listed the GRIB just
+    before a concurrent writer finished converting it and deleted it. Read
+    the store instead of losing the variable (and with it the hour).
+    """
+    from weatherbrief.fetch.grib.icon_zarr import is_store_path, store_name
+
+    if len(paths) == 1:
+        p = Path(paths[0])
+        if is_store_path(p):
+            return p
+        if not p.exists():
+            store = p.with_name(store_name(p.name))
+            if (store / "zarr.json").exists():
+                return store
+    return b"".join(Path(p).read_bytes() for p in paths)
+
+
+def convert_icon_zarr(grib_path: str, store_path: str) -> bool:
+    """Convert one cached ICON-EU model-level blob to a zarr store (#705)."""
+    with _log_decode("convert_icon_zarr", grib_path):
+        from weatherbrief.fetch.grib.icon_zarr import convert_grib_to_store
+        return convert_grib_to_store(grib_path, store_path)
 
 
 def decode_icon_legacy(

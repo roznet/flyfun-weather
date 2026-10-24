@@ -230,14 +230,28 @@ def gather_bilinear(values: np.ndarray, bw) -> np.ndarray:
     Arithmetic order matches the previous gather (w00, w01, w10, w11, summed
     left to right in float64), so unmasked results are bit-identical to it.
     """
+    return combine_bilinear(
+        (
+            values[..., bw.i0, bw.j0],
+            values[..., bw.i0, bw.j1],
+            values[..., bw.i1, bw.j0],
+            values[..., bw.i1, bw.j1],
+        ),
+        bw,
+    )
+
+
+def combine_bilinear(corners, bw) -> np.ndarray:
+    """Weight and sum the four corner values ``(v00, v01, v10, v11)``.
+
+    The arithmetic half of :func:`gather_bilinear`, split out so a reader that
+    fetches the corner cells some other way (the ICON-EU zarr tiles, #705)
+    applies exactly the same edge rule and summation order, and so stays
+    bit-identical to the GRIB path.
+    """
     out = None
-    for w, i, j in (
-        (bw.w00, bw.i0, bw.j0),
-        (bw.w01, bw.i0, bw.j1),
-        (bw.w10, bw.i1, bw.j0),
-        (bw.w11, bw.i1, bw.j1),
-    ):
-        term = w * values[..., i, j]
+    for w, v in zip((bw.w00, bw.w01, bw.w10, bw.w11), corners):
+        term = w * v
         term = np.where(w == 0.0, 0.0, term)
         out = term if out is None else out + term
     return out

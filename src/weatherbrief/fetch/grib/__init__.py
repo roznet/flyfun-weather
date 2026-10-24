@@ -4284,6 +4284,10 @@ def _prefetch_icon_eu_data_inner(
         icon_surface_cache_key,
         icon_surface_steps,
     )
+    from weatherbrief.fetch.grib.icon_zarr import (
+        cache_model_level_blob,
+        cached_model_level_entry,
+    )
 
     variant = ctx.variant
     prefix = variant.cache_prefix
@@ -4320,7 +4324,9 @@ def _prefetch_icon_eu_data_inner(
                 )
             data = per_var.get(var)
             if data:
-                put_cached(ctx.run_dir, ck, data)
+                # Whole-column variants (ICON-EU) convert to zarr on write
+                # (#705); the blob stays GRIB if conversion is off or fails.
+                cache_model_level_blob(ctx.run_dir, ck, data)
         except Exception:
             logger.warning("Prefetch %s f%03d %s failed", variant.slug, fhour, var, exc_info=True)
 
@@ -4448,7 +4454,7 @@ def _prefetch_icon_eu_data_inner(
         else:
             for var in model_level_vars:
                 ck = cache_key(fhour, icon_model_level_var_legacy_label(variant, var))
-                if not is_cached(ctx.run_dir, ck):
+                if cached_model_level_entry(ctx.run_dir, ck) is None:
                     jobs.append((_fetch_var, fhour, var, ck))
 
         # Single-level cloud diagnostics
@@ -4572,6 +4578,7 @@ def _decode_and_merge_icon_eu(
         icon_model_level_var_label,
         icon_model_level_var_legacy_label,
     )
+    from weatherbrief.fetch.grib.icon_zarr import cached_model_level_entry
 
     variant = ctx.variant
     prefix = variant.cache_prefix
@@ -4634,11 +4641,13 @@ def _decode_and_merge_icon_eu(
         incomplete: list[str] = []
         for var in model_level_vars:
             if not variant.per_level_cache:
-                legacy_var_ck = cache_key(
-                    fhour, icon_model_level_var_legacy_label(variant, var),
+                # The zarr store when converted on write (#705), else the blob.
+                entry = cached_model_level_entry(
+                    ctx.run_dir,
+                    cache_key(fhour, icon_model_level_var_legacy_label(variant, var)),
                 )
-                if is_cached(ctx.run_dir, legacy_var_ck):
-                    var_paths[var] = [str(ctx.run_dir / legacy_var_ck)]
+                if entry is not None:
+                    var_paths[var] = [str(entry)]
                 continue
             level_paths = [
                 str(ctx.run_dir / cache_key(
