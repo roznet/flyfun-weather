@@ -187,17 +187,14 @@ def read_lattice_fields(
 
 
 def dewpoint_magnus_c(t_c: np.ndarray, rh_pct: np.ndarray) -> np.ndarray:
-    """Dewpoint (°C) from T (°C) and RH (%) — vectorised Magnus.
+    """Dewpoint (°C) from T (°C) and RH (%): the sounding path's Magnus.
 
-    Same constants and RH floor as the GRIB sounding path
-    (``decode._convert_raw_sounding``: a = 17.67, b = 243.5 °C, RH ≥ 0.1 %), so
-    a Hewson θe and a briefing sounding derive Td the same way. RH above 100 %
-    (model supersaturation) is kept, as it is there.
+    ``decode.magnus_dewpoint_c`` itself, so a Hewson θe and a briefing
+    sounding derive Td by one definition.
     """
-    a, b = 17.67, 243.5
-    rh = np.maximum(rh_pct, 0.1)
-    gamma = a * t_c / (b + t_c) + np.log(rh / 100.0)
-    return b * gamma / (a - gamma)
+    from weatherbrief.fetch.grib.decode import magnus_dewpoint_c
+
+    return magnus_dewpoint_c(t_c, rh_pct)
 
 
 def level_inputs(

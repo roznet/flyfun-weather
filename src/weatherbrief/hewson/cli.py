@@ -53,7 +53,12 @@ def _parse_init(s: str) -> datetime:
     """``2026-10-24T00Z`` / ``2026-10-24T00:00:00Z`` → aware UTC datetime."""
     s = s.strip().upper().rstrip("Z")
     fmt = "%Y-%m-%dT%H" if len(s) == 13 else "%Y-%m-%dT%H:%M:%S" if s.count(":") == 2 else "%Y-%m-%dT%H:%M"
-    return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+    try:
+        return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--init {s!r}: expected e.g. 2026-10-24T00Z or 2026-10-24T00:00Z"
+        ) from None
 
 
 def _cmd_precompute(args: argparse.Namespace) -> int:
@@ -69,7 +74,7 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         start_date=args.date,
         end_date=args.date,
         source=args.source,
-        init=_parse_init(args.init) if getattr(args, "init", None) else None,
+        init=getattr(args, "init", None),
         require_current=not getattr(args, "allow_stale", False),
     )
     for model, src in result.sources.items():
@@ -221,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
              "'open-meteo' is the pre-#911 grid fetch, for comparisons.",
     )
     p_pc.add_argument(
-        "--init", default=None,
+        "--init", default=None, type=_parse_init,
         help="GRIB source only: read this run (e.g. 2026-10-24T00Z) instead of "
              "the newest, to recompute a cycle that has an Open-Meteo snapshot "
              "for scripts/compare_hewson_sources.py. Skips the purge. Give it its own "
