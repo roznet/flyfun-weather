@@ -306,6 +306,34 @@ def splice_open_meteo(target: WaypointForecast, source: WaypointForecast) -> int
     return touched
 
 
+def apply_failure_drill(
+    cross_sections: list["RouteCrossSection"], primary_models: list[ModelSource],
+) -> None:
+    """Dev-only drill: pretend GRIB delivered nothing for some slots.
+
+    ``WB_GRIB_PRIMARY_DRILL=icon`` empties every point of the icon skeleton
+    after enrichment, ``icon:half`` every other point (ECMWF likewise), so
+    the Open-Meteo fallback and its reporting can be watched end to end on a
+    machine where GRIB is healthy. Unset in production.
+    """
+    raw = os.environ.get("WB_GRIB_PRIMARY_DRILL", "").strip().lower()
+    if not raw:
+        return
+    for item in raw.split(","):
+        name, _, mode = item.strip().partition(":")
+        model = next((m for m in primary_models if m.value == name), None)
+        section = next((cs for cs in cross_sections if cs.model == model), None)
+        if section is None:
+            continue
+        step = 2 if mode == "half" else 1
+        for wf in section.point_forecasts[::step]:
+            wf.hourly[:] = [HourlyForecast(time=h.time) for h in wf.hourly]
+        logger.warning(
+            "GRIB-primary drill: emptied %d/%d %s points (WB_GRIB_PRIMARY_DRILL)",
+            len(section.point_forecasts[::step]), len(section.point_forecasts), name,
+        )
+
+
 @dataclass
 class GribPrimaryOutcome:
     """What happened to one GRIB-primary slot after enrichment."""

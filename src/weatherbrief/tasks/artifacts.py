@@ -58,6 +58,7 @@ def save_fetch_artifacts(
     models_fetched: list[str] | None = None,
     models_failed: dict[str, str] | None = None,
     diagnostics: list[Diagnostic] | None = None,
+    fetch_facts: dict | None = None,
 ) -> None:
     """Persist fetch-stage artifacts to *pack_dir*.
 
@@ -87,6 +88,7 @@ def save_fetch_artifacts(
         models_fetched=models_fetched or [],
         models_failed=models_failed or {},
         diagnostics=diagnostics or [],
+        fetch_facts=fetch_facts,
     )
 
 
@@ -97,6 +99,7 @@ def write_pack_meta(
     diagnostics: list[Diagnostic],
     models_failed: dict[str, str] | None = None,
     fetched_at: datetime | None = None,
+    fetch_facts: dict | None = None,
 ) -> None:
     """Write or rewrite ``fetch_meta.json`` with the given diagnostics.
 
@@ -104,7 +107,18 @@ def write_pack_meta(
     by the pipeline at end-of-run with diagnostics merged across all stages.
     Keeping the file name stable avoids consumer churn — its contents are
     additive, not breaking.
+
+    ``fetch_facts`` (#912) records what the fetch stage did with GRIB and
+    Open-Meteo, for the GRIB-primary checks (``scripts/compare_pack_surface_openmeteo.py``,
+    the leak check). Only the fetch stage knows it: a rewrite that passes None
+    keeps the value already on disk.
     """
+    meta_path = pack_dir / "fetch_meta.json"
+    if fetch_facts is None and meta_path.exists():
+        try:
+            fetch_facts = json.loads(meta_path.read_text()).get("fetch_facts")
+        except (ValueError, OSError):
+            fetch_facts = None
     meta = {
         "fetched_at": (fetched_at or datetime.now(timezone.utc)).isoformat(),
         "models_fetched": models_fetched,
@@ -113,7 +127,8 @@ def write_pack_meta(
         "models_failed": models_failed or {},
         "diagnostics": [d.model_dump(mode="json") for d in diagnostics],
     }
-    meta_path = pack_dir / "fetch_meta.json"
+    if fetch_facts is not None:
+        meta["fetch_facts"] = fetch_facts
     meta_path.write_text(json.dumps(meta, indent=2))
 
 

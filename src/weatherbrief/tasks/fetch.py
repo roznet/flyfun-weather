@@ -569,7 +569,12 @@ def run_fetch(
     # --- GRIB-primary Open-Meteo fallback (#912) ---
     grib_primary: dict[str, int] = {}
     if grib_primary_models:
-        from weatherbrief.fetch.grib.primary import fill_grib_primary_gaps
+        from weatherbrief.fetch.grib.primary import (
+            apply_failure_drill,
+            fill_grib_primary_gaps,
+        )
+
+        apply_failure_drill(cross_sections, grib_primary_models)
 
         reasons = []
         if grib_enrichment_failed:
@@ -628,6 +633,15 @@ def run_fetch(
             models_fetched=models_fetched_names,
             models_failed=models_failed,
             diagnostics=diagnostics,
+            # GRIB-primary facts (#912) for the post-rollout checks: which
+            # slots were built from GRIB, how many points fell back, the
+            # Open-Meteo calls this fetch made, and the GRIB runs used.
+            fetch_facts={
+                "grib_primary": grib_primary,
+                "open_meteo_calls": client.call_count,
+                "grib_init_times": grib_init_times,
+                "grib_sources": grib_sources,
+            },
         )
 
     # Combine all skip/empty buckets into one list for the UI badge

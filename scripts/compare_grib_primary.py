@@ -6,7 +6,10 @@ the GRIB-primary gate on, then prints:
 
 - the Open-Meteo calls each run made (billed weight is calls x variables/10),
 - which models each run built from GRIB and how many points fell back,
-- every (advisory, model) status that differs between the two runs.
+- every (advisory, model) status that differs between the two runs,
+- the surface fields of each GRIB-built slot against the same slot from
+  Open-Meteo (bias, mean/max |Δ|, total ratio of the accumulated fields,
+  suspects with their distance along the route, for domain-edge jumps).
 
 Needs the ECMWF ECPDS disk, DWD opendata and Open-Meteo, so run it where
 the briefings run (droplet or Mac mini), not in a sandbox. Runs back to back
@@ -23,6 +26,7 @@ Packs go under ``profiles/_packs/<flight-id>/grib_primary_{off,on}/``.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -111,8 +115,45 @@ def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
             if b != a:
                 changes += 1
                 print(f"  {adv_id:<28} {model:<12} {b:>12} -> {a}")
-    print(f"{changes} status change(s); packs: {off_dir} | {on_dir}\n")
+    print(f"{changes} status change(s); packs: {off_dir} | {on_dir}")
+    _surface_diff(off_dir, on_dir)
+    print()
     return changes
+
+
+def _surface_diff(off_dir: Path, on_dir: Path) -> None:
+    """Surface fields of the GRIB-built slots vs the same slots from Open-Meteo.
+
+    Every route point and every hour the GRIB pack has a value for. Watch the
+    total ratio on the accumulated fields (an accumulation or unit slip), and
+    the suspects for jumps at a domain edge (their distance along the route).
+    """
+    sys.path.insert(0, str(ROOT))
+    from scripts.compare_pack_surface_openmeteo import (
+        compare_point,
+        hourly_as_open_meteo,
+        print_stats,
+    )
+    from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
+
+    facts = json.loads((on_dir / "fetch_meta.json").read_text()).get("fetch_facts") or {}
+    primary = facts.get("grib_primary") or {}
+    if not primary:
+        print("No slot was GRIB-primary in the 'on' run: nothing to diff.")
+        return
+    off_cs = {cs.model.value: cs for cs in load_cross_sections(off_dir)}
+    on_cs = {cs.model.value: cs for cs in load_cross_sections(on_dir)}
+    points = load_route_points(on_dir) or []
+    stats: dict = {}
+    for model in primary:
+        if model not in off_cs or model not in on_cs:
+            continue
+        per_model = stats.setdefault(model, {})
+        for i, (a, b) in enumerate(zip(off_cs[model].point_forecasts, on_cs[model].point_forecasts)):
+            nm = points[i].distance_from_origin_nm if i < len(points) else float(i)
+            compare_point(per_model, b.hourly, hourly_as_open_meteo(a.hourly), f"pt{i} ({nm:.0f} nm)")
+    print("Surface, GRIB pack minus Open-Meteo pack:")
+    print_stats(stats)
 
 
 def main() -> int:
