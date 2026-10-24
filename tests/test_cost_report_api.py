@@ -398,3 +398,51 @@ class TestOtherLlmSpend:
         by_cat = {t["category"]: t for t in txs}
         assert by_cat["live_highlight"]["flight_id"] == "7zz-b-2026-10-09-cd34"
         assert by_cat["trip_summary"]["flight_id"] is None
+
+
+class TestCostTableEndpoint:
+    def test_no_config_returns_null(self, client):
+        assert client.get("/api/admin/cost-report/table").json() is None
+
+    def test_three_columns_with_rate_card_history(self, client, app_db):
+        now = datetime.now(timezone.utc)
+        s = app_db()
+        # 100 days ago → 10 days ago on a $30 droplet, then the default card.
+        from dataclasses import replace
+        old = replace(DEFAULT_CONFIG, droplet_monthly_usd=30.0)
+        s.add(CostConfigRow(
+            active_from=now - timedelta(days=100), active_until=now - timedelta(days=10),
+            config_json=old.to_json(),
+        ))
+        s.add(CostConfigRow(active_from=now - timedelta(days=10), config_json=DEFAULT_CONFIG.to_json()))
+        _add_briefing(s, "user-a", 0.20, 0.01, days_ago=1)
+        _add_briefing(s, "user-b", 0.10, 0.00, days_ago=20, cache_saving=0.05)
+        _add_briefing(s, "user-c", 1.00, 0.00, days_ago=400)  # outside every column
+        _add_call(s, "user-a", "live_highlight", 0.5, days_ago=2)
+        _add_call(s, "user-a", "topup", 9.0)
+        s.add(UserRow(id="user-new", provider="local", provider_sub="new",
+                      email="new@example.invalid", created_at=now - timedelta(days=3)))
+        s.commit()
+        s.close()
+
+        t = client.get("/api/admin/cost-report/table").json()
+        assert [c["key"] for c in t["columns"]] == ["7d", "30d", "365d"]
+        # 365d is clipped to the first rate card.
+        assert t["columns"][2]["covered_days"] == pytest.approx(100.0, abs=0.1)
+
+        fixed = {r["label"]: r["values"] for r in t["sections"][0]["rows"]}
+        # 7d: default card only (24/mo). 365d: 90d at 30 + 10d at 24.
+        assert fixed["Server (droplet)"][0] == pytest.approx(24 * 7 / 30, abs=1e-3)
+        assert fixed["Server (droplet)"][2] == pytest.approx(30 * 3 + 24 / 3, abs=1e-2)
+
+        var = {r["label"]: r["values"] for r in t["sections"][1]["rows"]}
+        assert var["LLM tokens – briefings"] == pytest.approx([0.20, 0.30, 0.30])
+        assert var["LLM – live highlight"] == pytest.approx([0.5, 0.5, 0.5])
+        assert not any("topup" in k for k in var)
+
+        usage = {u["label"]: u["values"] for u in t["usage"]}
+        assert usage["Briefings"] == [1, 2, 2]
+        assert usage["Active users (made a briefing)"] == [1, 2, 2]
+        # The fixture's dev user also signed up just now.
+        assert usage["New sign-ups"] == [2, 2, 2]
+        assert t["cache_saving_usd"] == [None, 0.05, 0.05]

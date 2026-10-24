@@ -299,6 +299,10 @@
     .ua-error { color: var(--danger); padding: 0.5rem 0; display: none; }
 
     /* Cost tab */
+    .cost-table tr.cost-section td { font-weight: 600; border-top: 2px solid var(--border); }
+    .cost-table tr.cost-total td { font-weight: 700; border-top: 2px solid var(--border); }
+    .cost-table td.cost-line { padding-left: 1.5rem; }
+    .cost-table tr.cost-aside td { font-style: italic; }
     .cost-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -630,22 +634,11 @@
         <div class="section">
           <div class="section-header">
             <h3>Program cost</h3>
-            <div id="cost-period-toggle" class="period-toggle">
-              <button class="toggle-btn" data-window="7d">Last 7 days</button>
-              <button class="toggle-btn active" data-window="30d">Last 30 days</button>
-            </div>
           </div>
-          <div id="cost-report-summary" class="summary-bar"></div>
           <div style="overflow-x:auto;">
-            <table class="admin-table">
-              <thead>
-                <tr>
-                  <th>Fixed cost line</th>
-                  <th style="text-align:center;">Monthly</th>
-                  <th style="text-align:center;">This window</th>
-                </tr>
-              </thead>
-              <tbody id="cost-fixed-tbody"></tbody>
+            <table class="admin-table cost-table">
+              <thead id="cost-table-head"></thead>
+              <tbody id="cost-table-body"></tbody>
             </table>
           </div>
           <p id="cost-report-note" class="muted" style="font-size:0.8rem;margin-top:0.5rem;"></p>
@@ -654,8 +647,12 @@
         <div class="section">
           <div class="section-header">
             <h3>Other LLM spend</h3>
+            <div id="cost-period-toggle" class="period-toggle">
+              <button class="toggle-btn" data-window="7d">Last 7 days</button>
+              <button class="toggle-btn active" data-window="30d">Last 30 days</button>
+            </div>
           </div>
-          <p class="muted" style="font-size:0.8rem;">Per-call LLM features outside the briefing charge (live highlight, trip summary). Not in any figure above, nor in what pilots see; same window as the program report.</p>
+          <p class="muted" style="font-size:0.8rem;">Per-call LLM features outside the briefing charge (live highlight, trip summary). Their totals are lines in the table above; not in what pilots see.</p>
           <div id="cost-other-llm"></div>
         </div>
 

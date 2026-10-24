@@ -1,5 +1,7 @@
 """Tests for the cost computation module."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from weatherbrief.costs import (
@@ -8,12 +10,15 @@ from weatherbrief.costs import (
     DIGEST_CACHE_TTL,
     CostBreakdown,
     CostConfig,
+    CostWindowInputs,
     DEFAULT_CONFIG,
     breakdown_to_dict,
+    build_cost_table,
     cache_write_multiplier_for,
     compute_cost,
     compute_program_cost,
     program_report_to_dict,
+    prorate_fixed,
 )
 
 
@@ -566,3 +571,65 @@ class TestProgramCacheSaving:
         assert with_saving.total_usd == without.total_usd
         assert with_saving.variable_usd == without.variable_usd
         assert with_saving.cost_per_briefing_usd == without.cost_per_briefing_usd
+
+
+class TestCostTable:
+    """Admin 7d/30d/365d table: per-version proration and section subtotals."""
+
+    T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def test_prorate_fixed_charges_each_version_for_its_own_span(self):
+        cheap = _default_config(droplet_monthly_usd=30.0, misc_monthly_usd=0.0,
+                                subscriptions_monthly_usd=0.0)
+        dear = _default_config(droplet_monthly_usd=60.0, misc_monthly_usd=0.0,
+                               subscriptions_monthly_usd=0.0)
+        mid = self.T0 + timedelta(days=30)
+        versions = [(cheap, self.T0, mid), (dear, mid, None)]
+        # 60 days from T0: 30 at $30/mo + 30 at $60/mo.
+        out = prorate_fixed(versions, self.T0, self.T0 + timedelta(days=60))
+        assert out["Server (droplet)"] == pytest.approx(90.0)
+        # Time before the first version is not charged.
+        out = prorate_fixed(versions, self.T0 - timedelta(days=300), mid)
+        assert out["Server (droplet)"] == pytest.approx(30.0)
+
+    def _window(self, **kw) -> CostWindowInputs:
+        base = dict(
+            key="30d", days=30, covered_days=30.0,
+            fixed={"Misc": 2.0, "Server (droplet)": 24.0, "Subscription: om": 30.0},
+            briefing_token_usd=1.0, storage_usd=0.5,
+            other_llm_usd={"live_highlight": 0.5}, cache_saving_usd=None,
+            num_briefings=10, num_users=4, num_signups=2,
+        )
+        return CostWindowInputs(**{**base, **kw})
+
+    def test_sections_carry_subtotals_and_extra_sits_in_variable(self):
+        t = build_cost_table([self._window()], margin_percent=10.0)
+        fixed, variable = t["sections"]
+        assert [r["label"] for r in fixed["rows"]] == [
+            "Server (droplet)", "Subscription: om", "Misc",
+        ]
+        assert fixed["values"] == [56.0]
+        labels = [r["label"] for r in variable["rows"]]
+        assert labels == [
+            "LLM tokens – briefings", "LLM – live highlight", "Disk / storage", "Extra (10%)",
+        ]
+        # Extra = 10% of everything else: (56 + 1 + 0.5 + 0.5) * 0.1 = 5.8
+        assert variable["rows"][-1]["values"] == [5.8]
+        assert variable["values"] == [pytest.approx(7.8)]
+        assert t["total"] == [pytest.approx(63.8)]
+        usage = {u["label"]: u["values"][0] for u in t["usage"]}
+        assert usage["Cost / briefing"] == pytest.approx(6.38)
+        assert usage["New sign-ups"] == 2
+        assert t["cache_saving_usd"] == [None]
+
+    def test_lines_missing_from_a_window_read_zero_and_empty_counts_none(self):
+        narrow = self._window(key="7d", days=7, fixed={"Server (droplet)": 5.6},
+                              other_llm_usd={}, num_briefings=0, num_users=0)
+        wide = self._window(key="365d", days=365, other_llm_usd={"trip_summary": 2.0})
+        t = build_cost_table([narrow, wide], margin_percent=0.0)
+        fixed_rows = {r["label"]: r["values"] for r in t["sections"][0]["rows"]}
+        assert fixed_rows["Misc"] == [0.0, 2.0]
+        var_rows = {r["label"]: r["values"] for r in t["sections"][1]["rows"]}
+        assert var_rows["LLM – trip summary"] == [0.0, 2.0]
+        usage = {u["label"]: u["values"] for u in t["usage"]}
+        assert usage["Cost / briefing"][0] is None

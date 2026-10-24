@@ -4,18 +4,18 @@
  * ``initCostTab()``.
  *
  * Two sections:
- *  1. Program cost report (7d/30d) — real prorated fixed cost + actual
- *     variable cost from the ledger, plus per-briefing/per-user economics.
- *     Below it, "Other LLM spend" (#741): non-briefing per-call charges
- *     (live highlight, trip summary) by category / day / user — shown apart
- *     because the report's figures drive the per-briefing economics.
+ *  1. Program cost table — Fixed / Variable / Usage rows by 7d, 30d, 365d
+ *     columns; fixed prorated per rate-card version, variable from the
+ *     ledger (incl. per-call LLM features), the margin as "Extra".
+ *     Below it, "Other LLM spend" (#741) by category / day / user with its
+ *     own 7d/30d toggle.
  *  2. Rate-card editor — edit fixed costs (incl. itemized subscriptions),
  *     token rates, margin; saving creates a new versioned config.
  */
 
 import {
-  fetchCostReport, fetchCostConfig, fetchCostConfigHistory, updateCostConfig,
-  type CostReport, type CostConfigData, type CostConfigVersion, type OtherLlmSpend,
+  fetchCostReport, fetchCostTable, fetchCostConfig, fetchCostConfigHistory, updateCostConfig,
+  type CostTable, type CostConfigData, type CostConfigVersion, type OtherLlmSpend,
 } from './adapters/admin-adapter';
 import { escapeHtml, formatDate, usd4, signedUsd4 } from './utils';
 
@@ -39,7 +39,7 @@ export async function initCostTab(): Promise<void> {
       reportWindow = w;
       document.querySelectorAll('#cost-period-toggle .toggle-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      void loadReport();
+      void loadOtherLlm();
     });
   });
 
@@ -63,70 +63,76 @@ function showError(msg: string): void {
 // --- Program report ---
 
 async function loadReport(): Promise<void> {
+  await Promise.all([loadTable(), loadOtherLlm()]);
+}
+
+async function loadTable(): Promise<void> {
+  try {
+    renderTable(await fetchCostTable());
+  } catch (err) {
+    showError(`Failed to load cost table: ${err}`);
+  }
+}
+
+/** The windowed program report now only feeds "Other LLM spend" detail. */
+async function loadOtherLlm(): Promise<void> {
   try {
     const r = await fetchCostReport(reportWindow);
-    renderReport(r);
+    renderOtherLlm(r?.other_llm ?? null);
   } catch (err) {
     showError(`Failed to load cost report: ${err}`);
   }
 }
 
-function renderReport(r: CostReport | null): void {
-  const summary = document.getElementById('cost-report-summary')!;
-  const tbody = document.getElementById('cost-fixed-tbody')!;
+function columnHeader(c: CostTable['columns'][number]): string {
+  // A window reaching back before the first rate card only covers part of it.
+  const partial = c.covered_days < c.days - 0.5;
+  const since = new Date(Date.now() - c.covered_days * 86_400_000)
+    .toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return `<th class="num">Last ${c.days}d${partial ? `<br><span class="muted" style="font-weight:400;font-size:0.75rem;">since ${since}</span>` : ''}</th>`;
+}
+
+function renderTable(t: CostTable | null): void {
+  const head = document.getElementById('cost-table-head')!;
+  const body = document.getElementById('cost-table-body')!;
   const note = document.getElementById('cost-report-note')!;
 
-  renderOtherLlm(r?.other_llm ?? null);
-
-  if (!r) {
-    summary.innerHTML = '<p class="muted">No active cost config — set the rate card below.</p>';
-    tbody.innerHTML = '';
+  if (!t) {
+    head.innerHTML = '';
+    body.innerHTML = '<tr><td class="muted">No active cost config — set the rate card below.</td></tr>';
     note.textContent = '';
     return;
   }
 
-  // Reporting-only: the saving is already netted off inside variable_usd, so
-  // it gets its own card rather than a slot in the cost sequence. Absent when
-  // no ledger row in the window carries the figure.
-  const savingCard = r.cache_saving_usd == null
-    ? ''
-    : `<div class="summary-card"><div class="value">${signedUsd4(r.cache_saving_usd)}</div><div class="label">Cache saved</div></div>`;
+  const cells = (values: Array<number | null>, fmt: (n: number) => string) =>
+    values.map((v) => `<td class="num">${v == null ? '–' : fmt(v)}</td>`).join('');
+  const row = (cls: string, label: string, values: Array<number | null>, fmt: (n: number) => string, labelCls = '') =>
+    `<tr class="${cls}"><td class="${labelCls}">${escapeHtml(label)}</td>${cells(values, fmt)}</tr>`;
+  const blank = `<td></td>`.repeat(t.columns.length);
 
-  summary.innerHTML = `
-    <div class="summary-card"><div class="value">${usd(r.fixed_prorated_usd)}</div><div class="label">Fixed</div></div>
-    <div class="summary-card"><div class="value">${usd(r.variable_usd)}</div><div class="label">Variable</div></div>
-    ${savingCard}
-    <div class="summary-card"><div class="value">${usd(r.margin_usd)}</div><div class="label">Other costs (${r.margin_percent}%)</div></div>
-    <div class="summary-card"><div class="value">${usd(r.total_usd)}</div><div class="label">Total</div></div>
-    <div class="summary-card"><div class="value">${r.num_briefings}</div><div class="label">Briefings</div></div>
-    <div class="summary-card"><div class="value">${r.num_users}</div><div class="label">Active users</div></div>
-    <div class="summary-card"><div class="value">${usd4(r.cost_per_briefing_usd)}</div><div class="label">Per briefing</div></div>
-    <div class="summary-card"><div class="value">${usd(r.cost_per_user_usd)}</div><div class="label">Per user</div></div>`;
+  head.innerHTML = `<tr><th></th>${t.columns.map(columnHeader).join('')}</tr>`;
 
-  tbody.innerHTML = r.fixed_lines.map((ln) => `
-    <tr>
-      <td>${escapeHtml(ln.label)}</td>
-      <td class="num">${usd(ln.monthly_usd)}</td>
-      <td class="num">${usd(ln.prorated_usd)}</td>
-    </tr>`).join('') + `
-    <tr style="font-weight:600;border-top:2px solid var(--border);">
-      <td>Total fixed</td>
-      <td class="num">${usd(r.fixed_monthly_usd)}</td>
-      <td class="num">${usd(r.fixed_prorated_usd)}</td>
-    </tr>`;
+  let html = '';
+  for (const sec of t.sections) {
+    html += row('cost-section', sec.label, sec.values, usd);
+    for (const r of sec.rows) {
+      html += row('', r.label, r.values, usd, 'cost-line');
+      // Reporting-only: the saving is already netted off inside the token line.
+      if (r.label.startsWith('LLM tokens') && t.cache_saving_usd.some((v) => v != null)) {
+        html += row('cost-aside muted', 'of which cache saved', t.cache_saving_usd, signedUsd4, 'cost-line');
+      }
+    }
+  }
+  html += row('cost-total', 'Total', t.total, usd);
+  html += `<tr class="cost-section"><td>Usage</td>${blank}</tr>`;
+  for (const u of t.usage) {
+    html += row('', u.label, u.values, u.kind === 'count' ? (n) => String(n) : usd4, 'cost-line');
+  }
+  body.innerHTML = html;
 
-  // Prompt-cache saving is reporting-only — it is already inside the token
-  // figure above. `null`/absent means no row in the window recorded it (they
-  // pre-date the field), which must not render as a measured $0.00.
-  const saving = r.cache_saving_usd;
-  const savingNote = saving == null
-    ? ''
-    : ` Prompt caching saved ${signedUsd4(saving)} of that token cost`
-      + `${saving < 0 ? ' (negative: cache writes outran the reads in this window)' : ''}.`;
-
-  note.innerHTML = `Fixed cost is prorated from the rate card (monthly &times; ${r.window_days}/30). `
-    + `Variable is the actual LLM token (${usd4(r.variable_token_usd)}) + storage (${usd4(r.variable_storage_usd)}) `
-    + `charged over the window.${savingNote} Total includes the ${r.margin_percent}% margin.`;
+  note.innerHTML = 'Fixed cost is prorated from each rate-card version over the part of the window it was active '
+    + '(monthly &times; days/30). Variable is the LLM and storage cost actually charged. '
+    + `Extra is ${t.margin_percent}% of everything else. Cost per briefing / user divide the total.`;
 }
 
 /** Rows shown per table before the rest is cut (30d of daily rows per
@@ -240,7 +246,7 @@ function renderConfigForm(version: CostConfigVersion | null): void {
         ${numField('Token $/1k output', 'token_cost_per_1k_output', cfg.token_cost_per_1k_output, '0.0001')}
         ${numField('Disk $/GB-month', 'disk_cost_per_gb_monthly', cfg.disk_cost_per_gb_monthly, '0.01')}
         ${numField('Est. monthly briefings', 'estimated_monthly_briefings', cfg.estimated_monthly_briefings, '1')}
-        ${numField('Other costs %', 'margin_percent', cfg.margin_percent, '1')}
+        ${numField('Extra %', 'margin_percent', cfg.margin_percent, '1')}
       </fieldset>
     </div>
     <div style="margin-top:0.75rem;display:flex;gap:0.75rem;align-items:center;">
@@ -337,7 +343,7 @@ async function loadHistory(): Promise<void> {
     }
     el.innerHTML = `
       <table class="admin-table" style="margin-top:0.5rem;">
-        <thead><tr><th>Ver</th><th>Active from</th><th>Active until</th><th class="num">Droplet</th><th class="num">Subs</th><th class="num">Other costs</th></tr></thead>
+        <thead><tr><th>Ver</th><th>Active from</th><th>Active until</th><th class="num">Droplet</th><th class="num">Subs</th><th class="num">Extra</th></tr></thead>
         <tbody>${versions.map((v) => `
           <tr>
             <td>#${v.id}</td>

@@ -17,14 +17,17 @@ from weatherbrief.costs import (
     DIGEST_CACHE_TTL,
     CostBreakdown,
     CostConfig,
+    CostWindowInputs,
     DEFAULT_CONFIG,
     ProgramCostReport,
     breakdown_to_dict,
+    build_cost_table,
     cache_write_multiplier_for,
     compute_cost,
     compute_program_cost,
     config_from_row,
     program_report_to_dict,
+    prorate_fixed,
 )
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db, optional_user_id
@@ -32,6 +35,7 @@ from flyfun_common.db.models import CostLedgerRow, UserRow
 from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
 from weatherbrief.db.models import CostConfigRow
 from weatherbrief.impact import UsageFootprint, usage_footprint
+from weatherbrief.storage.flights import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +622,119 @@ def other_llm_spend(
             for k, v in sorted(by_user.items(), key=lambda kv: -kv[1][0])
         ],
     }
+
+
+#: Columns of the admin cost table.
+_TABLE_WINDOWS = (("7d", 7), ("30d", 30), ("365d", 365))
+
+
+def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | None:
+    """The admin cost table: 7d / 30d / 365d side by side, or None without a config.
+
+    One ledger read over the widest window, bucketed per column in Python
+    (the ledger has no ``created_at`` index, so a narrower SQL window would
+    scan the same table anyway).  Fixed cost is prorated per rate-card
+    version (``prorate_fixed``); a window reaching back before the first
+    version is clipped to it, and ``covered_days`` says so.
+
+    Not the donation-economics report: ``build_program_report`` stays on the
+    active card and briefing-only figures.
+    """
+    active = get_active_cost_config(db)
+    if not active:
+        return None
+    now = now or datetime.now(timezone.utc)
+    versions = [
+        (
+            CostConfig.from_json(r.config_json),
+            ensure_utc(r.active_from),
+            ensure_utc(r.active_until) if r.active_until else None,
+        )
+        for r in db.query(CostConfigRow).order_by(CostConfigRow.active_from).all()
+    ]
+    first_card = versions[0][1]
+    widest = now - timedelta(days=max(d for _, d in _TABLE_WINDOWS))
+
+    # (created_at, category, cost, user_id, token, storage, cache_saving)
+    ledger: list[tuple] = []
+    for category, cost, detail_json, user_id, created_at in (
+        db.query(
+            CostLedgerRow.category, CostLedgerRow.cost, CostLedgerRow.detail_json,
+            CostLedgerRow.user_id, CostLedgerRow.created_at,
+        )
+        .filter(
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category.isnot(None),
+            CostLedgerRow.category != "topup",
+            CostLedgerRow.created_at >= widest,
+        )
+        .all()
+    ):
+        token = storage = 0.0
+        saving = None
+        if category == "briefing" and detail_json:
+            try:
+                bd = json.loads(detail_json)
+            except (json.JSONDecodeError, TypeError):
+                bd = {}
+            token = bd.get("token_cost_usd", 0.0)
+            storage = bd.get("storage_cost_usd", 0.0)
+            saving = bd.get("cache_saving_usd")
+        ledger.append((
+            ensure_utc(created_at), category, float(cost or 0.0), user_id,
+            token, storage, saving,
+        ))
+    signups = [
+        ensure_utc(c)
+        for (c,) in db.query(UserRow.created_at).filter(UserRow.created_at >= widest).all()
+        if c is not None
+    ]
+
+    windows = []
+    for key, days in _TABLE_WINDOWS:
+        start = now - timedelta(days=days)
+        token_usd = storage_usd = 0.0
+        saving_usd: float | None = None
+        other: dict[str, float] = {}
+        briefings = 0
+        users: set[str] = set()
+        for created_at, category, cost, user_id, token, storage, saving in ledger:
+            if created_at < start:
+                continue
+            if category == "briefing":
+                briefings += 1
+                users.add(user_id)
+                token_usd += token
+                storage_usd += storage
+                if saving is not None:
+                    saving_usd = (saving_usd or 0.0) + saving
+            else:
+                other[category] = other.get(category, 0.0) + cost
+        windows.append(CostWindowInputs(
+            key=key,
+            days=days,
+            covered_days=(now - max(start, first_card)).total_seconds() / 86400,
+            fixed=prorate_fixed(versions, start, now),
+            briefing_token_usd=token_usd,
+            storage_usd=storage_usd,
+            other_llm_usd=other,
+            cache_saving_usd=saving_usd,
+            num_briefings=briefings,
+            num_users=len(users),
+            num_signups=sum(1 for c in signups if c >= start),
+        ))
+
+    margin = CostConfig.from_json(active.config_json).margin_percent
+    return build_cost_table(windows, margin)
+
+
+@report_router.get("/table")
+def get_cost_table(
+    _admin_id: str = Depends(require_admin),
+    db: Session = Depends(get_db, scope="function"),
+):
+    """Admin cost table: fixed / variable / usage rows × 7d, 30d, 365d."""
+    return build_cost_table_report(db)
 
 
 @report_router.get("")
