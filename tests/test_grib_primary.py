@@ -10,6 +10,7 @@ datum, the ICON time interpolation).
 
 from __future__ import annotations
 
+import types
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -326,6 +327,7 @@ def test_failed_fallback_drops_slot_like_a_failed_fetch(monkeypatch):
     )
     assert result.models_fetched == ["gfs"]
     assert result.models_failed == {"ecmwf": "timeout"}
+    assert result.grib_primary == {}
     assert all(cs.model != ModelSource.ECMWF for cs in result.cross_sections)
     assert all(wf.model != ModelSource.ECMWF for wf in result.all_forecasts)
 
@@ -570,6 +572,9 @@ def test_time_scan_confirm_refuses_when_gap_fill_fails(tmp_path, monkeypatch, ca
         "weatherbrief.tasks.advise.run_alt_from_pack",
         lambda *a, **k: graded.append(1),
     )
+    (tmp_path / "fetch_meta.json").write_text(
+        '{"fetch_facts": {"grib_primary": {"icon": 0}}}'
+    )
     with caplog.at_level("WARNING"):
         assert time_scan.confirm_candidate(
             tmp_path, _route(), DEP, data_dir=tmp_path,
@@ -665,3 +670,25 @@ def test_pack_as_open_meteo_round_trip():
     stats = {}
     assert compare_point(stats, skel[0].hourly, hourly_as_open_meteo(skel[0].hourly), "x") == 4
     assert all(s.max_abs == 0 for s in stats.values())
+
+
+def test_time_scan_confirm_leaves_open_meteo_slots_alone(tmp_path, monkeypatch):
+    """No fetch_facts entry for the slot → no gap fill, today's behaviour."""
+    from weatherbrief.tasks import artifacts, time_scan
+    import weatherbrief.fetch.grib as grib_mod
+
+    pts = _points()
+    sections = _sections(ModelSource.ICON, pts, covered=set())
+    monkeypatch.setattr(artifacts, "load_cross_sections", lambda _: sections)
+    monkeypatch.setattr(artifacts, "load_route_points", lambda _: pts)
+    monkeypatch.setattr(grib_mod, "enrich_forecasts", lambda *a, **k: ({}, {}, {}))
+    seen = []
+
+    def spy(cross_sections, route_points, models, *a, **k):
+        seen.append(list(models))
+        return []
+
+    monkeypatch.setattr(primary, "fill_grib_primary_gaps", spy)
+    monkeypatch.setattr("weatherbrief.tasks.advise.run_alt_from_pack", lambda *a, **k: types.SimpleNamespace(manifest=None))
+    time_scan.confirm_candidate(tmp_path, _route(), DEP, data_dir=tmp_path)
+    assert seen == [[]]

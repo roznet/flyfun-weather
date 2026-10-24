@@ -284,7 +284,7 @@ def splice_open_meteo(target: WaypointForecast, source: WaypointForecast) -> int
         t = _aware(src.time)
         dst = by_time.get(t)
         if dst is None:
-            target.hourly.append(src)
+            target.hourly.append(src.model_copy(deep=True))
             added = True
             touched += 1
             continue
