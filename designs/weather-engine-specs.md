@@ -468,6 +468,7 @@ The direct decoder unpacks the whole 657 × 1377 grid for every level to read a 
 - **Where it runs:** `cache_model_level_blob` (called by the briefing prefetch `_fetch_var` and the airport-profile warm loop) writes the GRIB with `put_cached`, then dispatches `convert_icon_zarr` to the decode pool: at the caller's priority from a briefing prefetch, explicitly BACKGROUND from the airport-profile warm loop (which sets no priority of its own, so it would otherwise run SCHEDULED). ICON-D2 (per-level cache) and the legacy `_QC_QI_P` blob are untouched.
 - **Race:** the decode planner can list a GRIB just before a concurrent writer converts and deletes it. `decode_worker._icon_var_source` falls back to the store beside a missing GRIB.
 - **Housekeeping:** `is_store_cached` ages a store by its `zarr.json` mtime against the model TTL. `purge_old_runs` and the size cap work on whole run dirs, so stores need nothing new. A crash mid-convert leaves a `.f…zarr.*.tmp` dir that goes with its run.
+- **Parity sweep:** `scripts/icon_zarr_parity.py RUN_DIR` converts every GRIB blob of a cached run to scratch stores and checks the decode is identical (levels, missing points, floats), with sizes and per-file times. Needs a run cached as GRIB (pre-#705 or `WB_ICON_ZARR=0`).
 - **Rollback:** `WB_ICON_ZARR=0` stops conversion; existing stores are still read. Without the `zarr` package installed the same happens.
 
 ### ICON-EU
