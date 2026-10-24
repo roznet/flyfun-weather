@@ -526,12 +526,26 @@ class TestExplicitConvPrefetch:
         )
         grib_mod._prefetch_icon_eu_data_inner(ctx)
 
-        explicit_calls = [c for c in single_level_calls if c[1] is not None]
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_SURFACE_VARIABLES
+
+        explicit_calls = [
+            c for c in single_level_calls
+            if c[1] is not None and c[1][0] in ICON_D2_EXPLICIT_CONV_VARIABLES
+        ]
         # Every explicit variable fetched per window hour AND for the lead
         # step f011 (the prior-file echo-top quarters hour 12 needs).
         for fhour in (11, 12, 13):
             fetched_vars = {c[1][0] for c in explicit_calls if c[0] == fhour}
             assert fetched_vars == set(ICON_D2_EXPLICIT_CONV_VARIABLES)
+        # GRIB-primary surface fields (#912): one file per variable, window
+        # hours plus the accumulation lead step.
+        surface_calls = [
+            c for c in single_level_calls
+            if c[1] is not None and c[1][0] in ICON_SURFACE_VARIABLES
+        ]
+        for fhour in (11, 12, 13):
+            fetched_vars = {c[1][0] for c in surface_calls if c[0] == fhour}
+            assert fetched_vars == set(ICON_SURFACE_VARIABLES)
         # D2 fetches no rain_con, so the cloud-diag blob needs NO lead step:
         # diag fetches (variables=None) cover only the window hours.
         diag_hours = sorted(c[0] for c in single_level_calls if c[1] is None)

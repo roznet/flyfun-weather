@@ -287,6 +287,20 @@ def decode_icon_cloud_diag(
         return decode_icon_eu_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_icon_surface(
+    var_paths: dict[str, str],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """ICON per-variable surface files → per-point raw values (#912)."""
+    rep_path = next(iter(var_paths.values()), "")
+    with _log_decode(f"decode_icon_surface[{len(var_paths)}v]", rep_path):
+        from weatherbrief.fetch.grib.decode import decode_icon_surface_per_point
+        return decode_icon_surface_per_point(
+            {var: Path(p) for var, p in var_paths.items()}, latitudes, longitudes,
+        )
+
+
 def decode_icon_d2_explicit_conv(
     var_paths: dict[str, str],
     latitudes: list[float],

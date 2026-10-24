@@ -163,6 +163,9 @@ class FetchResult:
     diagnostics: list[Diagnostic] = field(default_factory=list)
     open_meteo_api_calls: int = 0
     open_meteo_weighted_calls: float = 0.0
+    # Models built from GRIB without an up-front Open-Meteo fetch (#912),
+    # with the number of points that needed the Open-Meteo fallback.
+    grib_primary: dict[str, int] = field(default_factory=dict)
 
 
 def _build_fetch_diagnostics(
@@ -404,6 +407,35 @@ def run_fetch(
             continue
         models_to_fetch.append(model)
 
+    # --- GRIB-primary gate (#912) ---
+    # ECMWF and ICON skip the up-front Open-Meteo fetch when GRIB should cover
+    # them: they start as empty skeletons that enrichment fills, and
+    # fill_grib_primary_gaps fetches Open-Meteo afterwards only for the points
+    # GRIB left short. Needs enrichment on; everything else is unchanged.
+    grib_primary_models: list[ModelSource] = []
+    if enrich_grib:
+        from weatherbrief.fetch.grib.primary import (
+            GRIB_PRIMARY_MODELS,
+            grib_primary_skip_reason,
+        )
+
+        for model in list(models_to_fetch):
+            if model not in GRIB_PRIMARY_MODELS:
+                continue
+            reason = grib_primary_skip_reason(
+                model, route_points, departure_time,
+                route.flight_duration_hours or 0.0,
+                as_of_time=as_of_time, historical_mode=historical_mode,
+            )
+            if reason is not None:
+                logger.info(
+                    "GRIB-primary %s: not eligible (%s), Open-Meteo first as before",
+                    model.value, reason,
+                )
+                continue
+            models_to_fetch.remove(model)
+            grib_primary_models.append(model)
+
     def _record_success(model: ModelSource, point_forecasts: list[WaypointForecast]) -> None:
         for rp, fc in zip(route_points, point_forecasts):
             if rp.waypoint_icao:
@@ -494,6 +526,15 @@ def run_fetch(
                     continue
                 _record_success(model, point_forecasts)
 
+    if grib_primary_models:
+        from weatherbrief.fetch.grib.primary import build_skeleton
+
+        for model in grib_primary_models:
+            logger.info("GRIB-primary %s: built from GRIB, no up-front Open-Meteo fetch", model.value)
+            _record_success(model, build_skeleton(
+                route_points, model, start_date=target_date, end_date=end_date,
+            ))
+
     # --- GRIB2 enrichment (optional) ---
     grib_enriched = False
     grib_enrichment_failed = False
@@ -524,6 +565,43 @@ def run_fetch(
                 "GRIB2 enrichment failed, using Open-Meteo data only",
                 exc_info=True,
             )
+
+    # --- GRIB-primary Open-Meteo fallback (#912) ---
+    grib_primary: dict[str, int] = {}
+    if grib_primary_models:
+        from weatherbrief.fetch.grib.primary import fill_grib_primary_gaps
+
+        reasons = []
+        if grib_enrichment_failed:
+            reasons.append("GRIB enrichment raised")
+        for m in grib_primary_models:
+            if m.value in grib_skip_reasons:
+                reasons.append(f"{m.value} GRIB skipped: {grib_skip_reasons[m.value]}")
+        outcomes = fill_grib_primary_gaps(
+            cross_sections, route_points, grib_primary_models,
+            departure_time, route.flight_duration_hours or 0.0,
+            client=client, start_date=target_date, end_date=end_date,
+            reason="; ".join(reasons),
+        )
+        for outcome in outcomes:
+            if not outcome.failed:
+                grib_primary[outcome.model] = outcome.points_fallback
+                continue
+            # GRIB left points short and the Open-Meteo fallback for them
+            # failed: drop the slot, exactly as a failed (or empty) Open-Meteo
+            # fetch leaves it today.
+            logger.warning("GRIB-primary %s: slot dropped", outcome.model)
+            dropped = [cs for cs in cross_sections if cs.model.value == outcome.model]
+            dropped_ids = {id(wf) for cs in dropped for wf in cs.point_forecasts}
+            cross_sections[:] = [cs for cs in cross_sections if cs.model.value != outcome.model]
+            all_forecasts[:] = [wf for wf in all_forecasts if id(wf) not in dropped_ids]
+            models_fetched_names[:] = [m for m in models_fetched_names if m != outcome.model]
+            if outcome.empty:
+                models_returned_empty.append(outcome.model)
+            else:
+                models_failed[outcome.model] = model_failure_reason(outcome.error)
+            grib_init_times.pop(outcome.model, None)
+            grib_sources.pop(outcome.model, None)
 
     # --- Build diagnostics ---
     diagnostics = _build_fetch_diagnostics(
@@ -575,4 +653,5 @@ def run_fetch(
         diagnostics=diagnostics,
         open_meteo_api_calls=client.call_count,
         open_meteo_weighted_calls=client.call_weight,
+        grib_primary=grib_primary,
     )

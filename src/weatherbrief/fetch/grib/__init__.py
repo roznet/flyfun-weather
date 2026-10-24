@@ -2794,6 +2794,7 @@ def _enrich_ecmwf_inner(
                     prev_valid_utc=prev_a1_valid_utc,
                     prev_tp_per_point=prev_tp_per_point,
                     prev_sf_per_point=prev_sf_per_point,
+                    prev_cp_per_point=prev_cp_per_point,
                 )
                 # Carry this step's cumulative values forward as the next
                 # step's predecessors.
@@ -3592,6 +3593,21 @@ _ECMWF_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
     "nwp_total_totals",
 )
 
+# GRIB-primary (#912): the rest of what Open-Meteo used to supply. Written
+# only into EMPTY fields, so a slot that has Open-Meteo values keeps them
+# exactly as before (the bulk covers stay Open-Meteo's hourly values, see
+# "Cloud cover field separation" in fetch.md) and only a GRIB-primary
+# skeleton gets filled.
+_ECMWF_HOURLY_FILL_INSTANT_FIELDS: tuple[str, ...] = (
+    "pressure_msl_hpa",
+    "relative_humidity_2m_pct",
+    "convective_inhibition_jkg",
+    "cloud_cover_pct",
+    "cloud_cover_low_pct",
+    "cloud_cover_mid_pct",
+    "cloud_cover_high_pct",
+)
+
 # Window-average surface fields. ECMWF a1 delivers these as cumulative-since-init,
 # so we step-difference against the prior a1 file and distribute the per-hour
 # rate across every hour in the window — no forward-fill needed.
@@ -3600,11 +3616,27 @@ _ECMWF_HOURLY_RATE_FIELDS: tuple[str, ...] = (
     "snowfall_cm",
 )
 
+# rain_mm / showers_mm (#912) split the same window: showers = convective
+# precip ``cp``, rain = the large-scale LIQUID part, tp − cp − sf. Fill-only,
+# like the instant fields above.
+_ECMWF_HOURLY_FILL_RATE_FIELDS: tuple[str, ...] = (
+    "rain_mm",
+    "showers_mm",
+)
+
 
 def _copy_fields(hourly: HourlyForecast, snap: dict, fields: tuple[str, ...]) -> None:
     for f in fields:
         v = snap.get(f)
         if v is not None:
+            setattr(hourly, f, v)
+
+
+def _fill_fields(hourly: HourlyForecast, snap: dict, fields: tuple[str, ...]) -> None:
+    """Like :func:`_copy_fields`, but only into fields that are still None."""
+    for f in fields:
+        v = snap.get(f)
+        if v is not None and getattr(hourly, f) is None:
             setattr(hourly, f, v)
 
 
@@ -3619,6 +3651,7 @@ def _apply_ecmwf_surface_to_hourly(
     prev_valid_utc: datetime | None,
     prev_tp_per_point: list[float | None],
     prev_sf_per_point: list[float | None],
+    prev_cp_per_point: list[float | None] | None = None,
 ) -> None:
     """Write decoded ECMWF a1 surface fields onto matching ``HourlyForecast``s.
 
@@ -3671,16 +3704,35 @@ def _apply_ecmwf_surface_to_hourly(
         inst_snaps.append(build_ecmwf_surface_snapshot(inst_raw))
 
         rate_raw: dict[str, float] = {}
+        rate_extra: dict[str, float] = {}
         if window_hours is not None:
             tp = raw.get("total_precip_m")
             ptp = prev_tp_per_point[i] if i < len(prev_tp_per_point) else None
-            if tp is not None and ptp is not None:
-                rate_raw["total_precip_m"] = max(0.0, (tp - ptp) / window_hours)
+            d_tp = tp - ptp if tp is not None and ptp is not None else None
+            if d_tp is not None:
+                rate_raw["total_precip_m"] = max(0.0, d_tp / window_hours)
             sf = raw.get("snowfall_m_we")
             psf = prev_sf_per_point[i] if i < len(prev_sf_per_point) else None
-            if sf is not None and psf is not None:
-                rate_raw["snowfall_m_we"] = max(0.0, (sf - psf) / window_hours)
-        rate_snaps.append(build_ecmwf_surface_snapshot(rate_raw) if rate_raw else {})
+            d_sf = sf - psf if sf is not None and psf is not None else None
+            if d_sf is not None:
+                rate_raw["snowfall_m_we"] = max(0.0, d_sf / window_hours)
+            cp = raw.get("conv_precip_m")
+            pcp = (
+                prev_cp_per_point[i]
+                if prev_cp_per_point is not None and i < len(prev_cp_per_point)
+                else None
+            )
+            d_cp = cp - pcp if cp is not None and pcp is not None else None
+            if d_cp is not None:
+                rate_extra["showers_mm"] = max(0.0, d_cp / window_hours) * 1000.0
+                if d_tp is not None and d_sf is not None:
+                    rate_extra["rain_mm"] = (
+                        max(0.0, (d_tp - d_cp - d_sf) / window_hours) * 1000.0
+                    )
+        snap = build_ecmwf_surface_snapshot(rate_raw) if rate_raw else {}
+        if rate_extra:
+            snap = {**snap, **rate_extra}
+        rate_snaps.append(snap)
 
     def _aware(dt: datetime) -> datetime:
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -3689,10 +3741,12 @@ def _apply_ecmwf_surface_to_hourly(
         for h in hourly_list:
             if inst and _matches_valid_time(h.time, valid_utc):
                 _copy_fields(h, inst, _ECMWF_HOURLY_INSTANT_FIELDS)
+                _fill_fields(h, inst, _ECMWF_HOURLY_FILL_INSTANT_FIELDS)
             if rate and prev_valid_utc is not None:
                 ht = _aware(h.time)
                 if prev_valid_utc < ht <= valid_utc:
                     _copy_fields(h, rate, _ECMWF_HOURLY_RATE_FIELDS)
+                    _fill_fields(h, rate, _ECMWF_HOURLY_FILL_RATE_FIELDS)
 
     # Cross-section route points
     for cs in ecmwf_sections:
@@ -3731,6 +3785,7 @@ def _replace_pressure_levels_from_grib(
     decoded_points: list[dict[int, dict[str, float]]],
     valid_utc: datetime | None = None,
     model_source: ModelSource = ModelSource.ECMWF,
+    msl_hpa_per_point: list[float | None] | None = None,
 ) -> int:
     """Replace pressure_levels on hourly forecasts with full GRIB sounding.
 
@@ -3748,10 +3803,20 @@ def _replace_pressure_levels_from_grib(
     would otherwise anchor its reconstructed column on ISA. Only the datum is
     borrowed — every layer thickness still comes from the GRIB column.
 
+    A GRIB-primary slot (#912) has no Open-Meteo levels underneath, so
+    ``msl_hpa_per_point`` — the model's own MSLP at each route point and this
+    valid time — supplies the datum instead. The Open-Meteo reference still
+    wins when both exist.
+
     Returns:
         Number of hourly entries whose pressure levels were replaced.
     """
     from weatherbrief.fetch.grib.decode import build_pressure_levels_from_grib
+
+    def _msl(point_idx: int) -> float | None:
+        if msl_hpa_per_point is None or point_idx >= len(msl_hpa_per_point):
+            return None
+        return msl_hpa_per_point[point_idx]
 
     replaced_count = 0
     for cs in sections:
@@ -3766,29 +3831,30 @@ def _replace_pressure_levels_from_grib(
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
                 new_levels = build_pressure_levels_from_grib(
-                    point_data, _geopotential_reference(hourly),
+                    point_data, _geopotential_reference(hourly), _msl(point_idx),
                 )
                 if new_levels:
                     hourly.pressure_levels = new_levels
                     replaced_count += 1
 
     # Also replace for waypoint-only forecasts
-    wp_data_lookup: dict[str, dict[int, dict[str, float]]] = {}
-    for rp, pd in zip(route_points, decoded_points):
+    wp_data_lookup: dict[str, tuple[int, dict[int, dict[str, float]]]] = {}
+    for rp_idx, (rp, pd) in enumerate(zip(route_points, decoded_points)):
         if rp.waypoint_icao and pd:
-            wp_data_lookup[rp.waypoint_icao] = pd
+            wp_data_lookup[rp.waypoint_icao] = (rp_idx, pd)
 
     for wf in all_forecasts:
         if wf.model != model_source:
             continue
-        point_data = wp_data_lookup.get(wf.waypoint.icao)
-        if not point_data:
+        found = wp_data_lookup.get(wf.waypoint.icao)
+        if not found:
             continue
+        rp_idx, point_data = found
         for hourly in wf.hourly:
             if not _matches_valid_time(hourly.time, valid_utc):
                 continue
             new_levels = build_pressure_levels_from_grib(
-                point_data, _geopotential_reference(hourly),
+                point_data, _geopotential_reference(hourly), _msl(rp_idx),
             )
             if new_levels:
                 hourly.pressure_levels = new_levels
@@ -4208,6 +4274,9 @@ def _prefetch_icon_eu_data_inner(
         icon_model_level_fetch_variables,
         icon_model_level_var_label,
         icon_model_level_var_legacy_label,
+        ICON_SURFACE_VARIABLES,
+        icon_surface_cache_key,
+        icon_surface_steps,
     )
 
     variant = ctx.variant
@@ -4315,6 +4384,27 @@ def _prefetch_icon_eu_data_inner(
                 variant.slug, var, fhour, exc_info=True,
             )
 
+    def _fetch_surface(fhour: int, var: str, ck: str) -> None:
+        # One file per surface variable (#912), cached on its own so a failed
+        # download is a missing file rather than a short blob.
+        try:
+            with _grib_time("icon_prefetch_surface"):
+                fetched = fetch_icon_eu_single_level(
+                    ctx.init_date, ctx.init_hour, [fhour],
+                    variables=[var],
+                    session=ctx.session,
+                    max_workers=1,
+                    variant=variant,
+                )
+            grib_bytes = fetched.get(fhour)
+            if grib_bytes:
+                put_cached(ctx.run_dir, ck, grib_bytes)
+        except Exception:
+            logger.warning(
+                "Prefetch %s surface %s f%03d failed",
+                variant.slug, var, fhour, exc_info=True,
+            )
+
     def _explicit_jobs(fhour: int) -> list[tuple]:
         return [
             (_fetch_expl, fhour, var, ck)
@@ -4362,6 +4452,14 @@ def _prefetch_icon_eu_data_inner(
 
         # Explicit-convection storm diagnostics (D2 only, #462)
         jobs.extend(_explicit_jobs(fhour))
+
+    # Surface fields (#912), on the window hours plus one leading step for
+    # the accumulated precipitation — every variant, D2 included.
+    for fhour in icon_surface_steps(ctx.forecast_hours, variant):
+        for var in ICON_SURFACE_VARIABLES:
+            ck = cache_key(fhour, icon_surface_cache_key(var, variant))
+            if not is_cached(ctx.run_dir, ck):
+                jobs.append((_fetch_surface, fhour, var, ck))
 
     # One leading single-level step so the first window hour has a predecessor
     # (variant-level flag, #421/#462): rain_con (EU) needs it to de-accumulate
@@ -4596,6 +4694,11 @@ def _decode_and_merge_icon_eu(
             decoded, clc_layers = raw
             decoded_by_fhour[fhour] = (decoded, clc_layers)
 
+    # Surface fields (#912) before the sounding: the GRIB-primary column takes
+    # its height datum from the model's own MSLP when no Open-Meteo levels sit
+    # underneath to borrow one from.
+    surface_by_fhour = _decode_icon_surface(ctx)
+
     # Merge in forecast_hours order so the existing valid-time invariants hold.
     total_enriched = 0
     for fhour in ctx.forecast_hours:
@@ -4611,9 +4714,14 @@ def _decode_and_merge_icon_eu(
             clc_layers_by_fhour[fhour] = clc_layers
 
         valid_utc = _forecast_hour_to_utc(ctx.init_date, ctx.init_hour, fhour)
+        surface_points = surface_by_fhour.get(fhour) or []
         replaced = _replace_pressure_levels_from_grib(
             icon_sections, all_forecasts, route_points, decoded_points,
             valid_utc=valid_utc, model_source=ModelSource.ICON,
+            msl_hpa_per_point=[
+                raw.get("pmsl") / 100.0 if raw.get("pmsl") is not None else None
+                for raw in surface_points
+            ],
         )
         total_enriched += replaced
         del decoded_points
@@ -4640,6 +4748,7 @@ def _decode_and_merge_icon_eu(
         ctx.init_date, ctx.init_hour, ctx.forecast_hours,
         ctx.run_dir, ctx.point_lats, ctx.point_lons, ctx.session,
         clc_layers_by_fhour=clc_layers_by_fhour, variant=variant,
+        surface_by_fhour=surface_by_fhour,
     )
 
     # Explicit-convection storm diagnostics (ICON-D2 only, #462). Failure here
@@ -4657,6 +4766,177 @@ def _decode_and_merge_icon_eu(
     return _run_info_to_timestamp(ctx.init_date, ctx.init_hour), None
 
 
+def _decode_icon_surface(ctx: _IconEuContext) -> dict[int, list[dict[str, float]]]:
+    """Decode the cached ICON surface files for every surface step (#912).
+
+    Returns ``{fhour: [per-point raw dict keyed by DWD variable name]}`` for
+    the window hours plus the leading step (accumulation seed). A step with
+    no cached surface file is absent. Decodes fan out on the decode pool, one
+    job per step; files the prefetch could not get are fetched here first
+    (the cache-miss path the cloud diagnostics use too).
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_SURFACE_VARIABLES,
+        fetch_icon_eu_single_level,
+        icon_surface_cache_key,
+        icon_surface_steps,
+    )
+
+    variant = ctx.variant
+    steps = icon_surface_steps(ctx.forecast_hours, variant)
+    job_steps: list[int] = []
+    jobs: list[tuple[str, tuple]] = []
+    for fhour in steps:
+        var_paths: dict[str, str] = {}
+        for var in ICON_SURFACE_VARIABLES:
+            ck = cache_key(fhour, icon_surface_cache_key(var, variant))
+            if not is_cached(ctx.run_dir, ck):
+                try:
+                    fetched = fetch_icon_eu_single_level(
+                        ctx.init_date, ctx.init_hour, [fhour], variables=[var],
+                        session=ctx.session, max_workers=1, variant=variant,
+                    )
+                    grib_bytes = fetched.get(fhour)
+                    if grib_bytes:
+                        put_cached(ctx.run_dir, ck, grib_bytes)
+                except Exception:
+                    logger.warning(
+                        "Failed to fetch %s surface %s f%03d",
+                        variant.slug, var, fhour, exc_info=True,
+                    )
+            if is_cached(ctx.run_dir, ck):
+                var_paths[var] = str(ctx.run_dir / ck)
+        if not var_paths:
+            continue
+        missing = [v for v in ICON_SURFACE_VARIABLES if v not in var_paths]
+        if missing:
+            logger.info(
+                "%s f%03d surface: %d/%d variables (missing: %s)",
+                variant.slug, fhour, len(var_paths), len(ICON_SURFACE_VARIABLES),
+                ", ".join(missing),
+            )
+        job_steps.append(fhour)
+        jobs.append(("decode_icon_surface", (var_paths, ctx.point_lats, ctx.point_lons)))
+
+    if not jobs:
+        logger.warning("No %s surface fields available", variant.slug)
+        return {}
+    with _grib_time("icon_surface_decode"):
+        results = _dispatch_decode_parallel(jobs)
+    return {
+        fhour: decoded for fhour, decoded in zip(job_steps, results) if decoded
+    }
+
+
+# Instantaneous ICON surface fields, written at the matching valid hour
+# (#912). The cover and CAPE come from the same step's cloud diagnostics
+# (clct/clcl/clcm/clch, cape_ml); the rest from the per-variable surface files.
+_ICON_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
+    "temperature_2m_c",
+    "dewpoint_2m_c",
+    "relative_humidity_2m_pct",
+    "wind_speed_10m_kt",
+    "wind_direction_10m_deg",
+    "wind_gusts_10m_kt",
+    "pressure_msl_hpa",
+    "surface_pressure_hpa",
+    "visibility_m",
+    "freezing_level_m",
+    "cape_jkg",
+    "cloud_cover_pct",
+    "cloud_cover_low_pct",
+    "cloud_cover_mid_pct",
+    "cloud_cover_high_pct",
+)
+
+# De-accumulated ICON fields, spread as a per-hour rate over (prev, valid].
+# rain = grid-scale rain (rain_gsp), showers = the convection scheme's rain +
+# snow (rain_con + snow_con), snowfall = all snow (snow_gsp + snow_con) in cm
+# at Open-Meteo's 0.7 cm per mm water, as for ECMWF.
+_ICON_HOURLY_RATE_FIELDS: tuple[str, ...] = (
+    "precipitation_mm",
+    "rain_mm",
+    "showers_mm",
+    "snowfall_cm",
+)
+
+
+def _icon_surface_rates(
+    raw: dict[str, float],
+    prev: dict[str, float] | None,
+    window_h: float | None,
+) -> dict[str, float]:
+    """Per-hour precipitation rates for one point from two accumulated steps.
+
+    A field is produced only when every component it sums is present at both
+    steps: a missing component makes the field None (unknown), never a smaller
+    number that would read as drier than the model said.
+    """
+    from weatherbrief.units import SNOW_CM_PER_MM_WATER
+
+    if prev is None or window_h is None or window_h <= 0:
+        return {}
+
+    def _rate(var: str) -> float | None:
+        cur, before = raw.get(var), prev.get(var)
+        if cur is None or before is None:
+            return None
+        return max(0.0, (cur - before) / window_h)
+
+    out: dict[str, float] = {}
+    tot = _rate("tot_prec")
+    if tot is not None:
+        out["precipitation_mm"] = tot
+    rain = _rate("rain_gsp")
+    if rain is not None:
+        out["rain_mm"] = rain
+    rain_con, snow_con, snow_gsp = _rate("rain_con"), _rate("snow_con"), _rate("snow_gsp")
+    if rain_con is not None and snow_con is not None:
+        out["showers_mm"] = rain_con + snow_con
+    if snow_gsp is not None and snow_con is not None:
+        out["snowfall_cm"] = (snow_gsp + snow_con) * SNOW_CM_PER_MM_WATER
+    return out
+
+
+def _icon_diag_surface_fields(diag: NWPCloudDiagnostics | None) -> dict[str, float]:
+    """The HourlyForecast cover / CAPE fields an ICON step's diagnostics give."""
+    if diag is None:
+        return {}
+    pairs = (
+        ("cloud_cover_pct", diag.total_cover_pct),
+        ("cloud_cover_low_pct", diag.low.cover_pct if diag.low else None),
+        ("cloud_cover_mid_pct", diag.mid.cover_pct if diag.mid else None),
+        ("cloud_cover_high_pct", diag.high.cover_pct if diag.high else None),
+        ("cape_jkg", diag.ml_cape_jkg),
+    )
+    return {k: v for k, v in pairs if v is not None}
+
+
+def _write_surface_step(
+    hourly_list: list[HourlyForecast],
+    inst: dict,
+    rate: dict,
+    *,
+    inst_fields: tuple[str, ...],
+    rate_fields: tuple[str, ...],
+    valid_utc: datetime,
+    prev_valid_utc: datetime | None,
+) -> None:
+    """Fill one GRIB step's surface values into a point's empty hourly fields.
+
+    Instantaneous values land on the hour matching ``valid_utc``; per-hour
+    rates on every hour in ``(prev_valid_utc, valid_utc]``. Fill-only: an
+    Open-Meteo value already there is kept.
+    """
+    for h in hourly_list:
+        if inst and _matches_valid_time(h.time, valid_utc):
+            _fill_fields(h, inst, inst_fields)
+        if rate and prev_valid_utc is not None:
+            ht = h.time if h.time.tzinfo else h.time.replace(tzinfo=timezone.utc)
+            if prev_valid_utc < ht <= valid_utc:
+                _fill_fields(h, rate, rate_fields)
+
+
 def _enrich_icon_eu_cloud_diagnostics(
     icon_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
@@ -4671,6 +4951,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     *,
     clc_layers_by_fhour: dict[int, list[dict[str, float]]] | None = None,
     variant=None,
+    surface_by_fhour: dict[int, list[dict[str, float]]] | None = None,
 ) -> None:
     """Enrich ICON forecasts with single-level cloud diagnostics (ceiling, etc.).
 
@@ -4680,6 +4961,12 @@ def _enrich_icon_eu_cloud_diagnostics(
     hour's geometry — clouds evolve over time, so each valid time uses its own.
 
     *variant* selects ICON-EU vs ICON-D2 URL/cache conventions (defaults to EU).
+
+    *surface_by_fhour* (#912, from :func:`_decode_icon_surface`) is written
+    onto the same hourlies afterwards, together with each step's cover and
+    CAPE from these diagnostics, so the slot carries every surface field
+    without Open-Meteo. Both land before the time fill, which reads the
+    diagnostics as its GRIB-anchor marker.
     """
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
@@ -4711,6 +4998,7 @@ def _enrich_icon_eu_cloud_diagnostics(
     # firing gate). Not 0.0 — a real 0.0 would actively hold a tower down.
     prev_rain_con_per_point: list[float | None] = [None] * n_points
     prev_valid_utc: datetime | None = None
+    diag_by_fhour: dict[int, list[NWPCloudDiagnostics | None]] = {}
 
     total_enriched = 0
     for fhour in steps:
@@ -4797,6 +5085,7 @@ def _enrich_icon_eu_cloud_diagnostics(
                         layer.base_ft = clc[f"{band}_base_ft"]
                     if layer.top_ft is None and f"{band}_top_ft" in clc:
                         layer.top_ft = clc[f"{band}_top_ft"]
+        diag_by_fhour[fhour] = diagnostics_per_point
 
         # Use _apply_cloud_diagnostics_to_sections with GFS-priority guard
         for cs in icon_sections:
@@ -4843,6 +5132,91 @@ def _enrich_icon_eu_cloud_diagnostics(
         )
     else:
         logger.debug("No ICON-EU cloud diagnostic GRIB2 data retrieved")
+
+    if surface_by_fhour:
+        _apply_icon_surface_to_sections(
+            icon_sections, all_forecasts, route_points,
+            init_date, init_hour, surface_by_fhour, diag_by_fhour,
+        )
+
+
+def _apply_icon_surface_to_sections(
+    icon_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    surface_by_fhour: dict[int, list[dict[str, float]]],
+    diag_by_fhour: dict[int, list[NWPCloudDiagnostics | None]],
+) -> None:
+    """Write ICON surface fields onto the icon slot's hourlies (#912).
+
+    Walks the surface steps in order. Instantaneous fields go on the matching
+    valid hour, into empty fields only: a slot that still has Open-Meteo
+    values underneath (not GRIB-primary) keeps them exactly as before, so the
+    fallback path is unchanged. Accumulated precipitation is
+    differenced against the previous step and spread as a per-hour rate over
+    ``(prev, valid]``; the leading step only seeds that difference. A point
+    missing a value at one step resets its predecessor, so the next step reads
+    unknown rather than a multi-step total divided by one window.
+    """
+    from weatherbrief.fetch.grib.decode import build_icon_surface_snapshot
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_SURFACE_ACCUMULATED
+
+    n_points = len(route_points)
+    prev_raw: list[dict[str, float] | None] = [None] * n_points
+    prev_valid_utc: datetime | None = None
+    wp_idx = {
+        rp.waypoint_icao: i for i, rp in enumerate(route_points) if rp.waypoint_icao
+    }
+    written = 0
+    for fhour in sorted(surface_by_fhour):
+        points = surface_by_fhour[fhour]
+        diags = diag_by_fhour.get(fhour) or []
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        window_h = (
+            (valid_utc - prev_valid_utc).total_seconds() / 3600.0
+            if prev_valid_utc is not None else None
+        )
+        inst_snaps: list[dict] = []
+        rate_snaps: list[dict] = []
+        for i in range(n_points):
+            raw = points[i] if i < len(points) else {}
+            inst = {
+                k: v for k, v in build_icon_surface_snapshot(raw).items()
+                if v is not None
+            }
+            inst.update(_icon_diag_surface_fields(diags[i] if i < len(diags) else None))
+            inst_snaps.append(inst)
+            rate_snaps.append(_icon_surface_rates(raw, prev_raw[i], window_h))
+            prev_raw[i] = (
+                {k: raw[k] for k in ICON_SURFACE_ACCUMULATED if k in raw} or None
+            )
+
+        def _write(wf: WaypointForecast, i: int) -> None:
+            _write_surface_step(
+                wf.hourly, inst_snaps[i], rate_snaps[i],
+                inst_fields=_ICON_HOURLY_INSTANT_FIELDS,
+                rate_fields=_ICON_HOURLY_RATE_FIELDS,
+                valid_utc=valid_utc, prev_valid_utc=prev_valid_utc,
+            )
+
+        for cs in icon_sections:
+            for i, wf in enumerate(cs.point_forecasts[:n_points]):
+                _write(wf, i)
+                written += 1
+        for wf in all_forecasts:
+            if wf.model != ModelSource.ICON:
+                continue
+            i = wp_idx.get(wf.waypoint.icao)
+            if i is not None:
+                _write(wf, i)
+        prev_valid_utc = valid_utc
+
+    logger.info(
+        "ICON surface from GRIB: %d steps written onto %d point series",
+        len(surface_by_fhour), written,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -6754,3 +6754,68 @@ EGTF→LFMD (850 hPa): GFS crossing identical; ICON's cold front 23 km earlier,
 Magnus-over-ice bias is not visible in an October cycle; recheck in winter. The cloud session that wrote this could reach only
 GFS on S3 (one real run, 2026-10-24 06Z: θe 283–333 K, no NaN, a cold front
 picked up near Paris by the route detector), not Open-Meteo, DWD or ECMWF.
+
+## 61. ECMWF and ICON briefing slots built from GRIB, Open-Meteo only as fallback (#912)
+
+**Date:** 2026-10-24. **Part of** #910 (cut Open-Meteo usage).
+
+ECMWF and ICON were fetched from Open-Meteo with the full variable set and
+then had their soundings replaced by GRIB in 99 % / 89 % of packs. Now a slot
+that passes the GRIB gate makes no Open-Meteo request; Open-Meteo is fetched
+afterwards only for the points GRIB left short in the flight window, and its
+values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
+
+**Decisions.**
+
+- **Fallback is per point, full variable set, gaps only.** A point is covered
+  when every flight-window hour has a sounding plus T 2 m, wind 10 m,
+  precipitation and total cover. Not chosen: a surface-only top-up call for the
+  fields GRIB lacks (precipitation probability, lifted index), since nothing
+  grades on them (below).
+- **The Open-Meteo path is unchanged.** Every new GRIB surface write (ECMWF
+  msl/RH/CIN/covers/rain/showers, every ICON surface field) and their time
+  interpolation fill empty fields only. A slot the gate refuses, or a point
+  that fell back, carries today's values. The pre-#912 ECMWF overwrites (T, Td,
+  wind, gust, vis, CAPE, sp, precip, snow, deg0l) are kept as they were.
+- **Rain / showers.** ECMWF: `showers_mm` = Δcp, `rain_mm` = Δ(tp − cp − sf)
+  (large-scale liquid), per hour over the step window. ICON: `showers_mm` =
+  Δ(rain_con + snow_con) (the convection scheme's precipitation, as
+  Open-Meteo defines showers), `rain_mm` = Δrain_gsp, `snowfall_cm` =
+  Δ(snow_gsp + snow_con) × 0.7. A missing component makes the field None, never
+  a smaller number.
+- **Covers on a GRIB-primary slot come from GRIB.** ECMWF tcc/lcc/mcc/hcc, ICON
+  clct/clcl/clcm/clch, at native steps, linearly interpolated between them. The
+  "Cloud cover field separation" rule (Open-Meteo keeps the bulk fields) still
+  holds wherever Open-Meteo is underneath.
+- **ICON height datum from its own MSLP.** ICON has no geopotential; the column
+  used to borrow its datum from the Open-Meteo levels (§20, #486). With none
+  underneath it now anchors on `pmsl` at that point and step: hypsometric
+  height of each level above MSL with the level's virtual temperature warmed
+  towards sea level at 6.5 K/km (`_height_above_msl_m`), the integration
+  running out from there as before. The Open-Meteo reference still wins when it
+  exists; ISA stays the last resort.
+- **ICON freezing level** is `hzerocl` (MSL by DWD definition, negative = none)
+  on `freezing_level_m` only; `NWPCloudDiagnostics.freezing_level_ft` stays
+  None for ICON (§ #487 unchanged).
+- **None on a GRIB-primary slot:** `precipitation_probability_pct` (no
+  deterministic GRIB field; no code reads it), `lifted_index_raw` (only a
+  fallback behind the sounding's own LI in the fronts gate; UKMO, Météo-France
+  and GEM already lack it), ICON `convective_inhibition_jkg` (Open-Meteo never
+  gave it for ICON either), and ICON `visibility_m` if DWD does not publish
+  `vis` for the variant (logged as a missing surface variable).
+- **Out-of-window hours are empty** on a GRIB-primary slot (ECMWF keeps ±3 h,
+  ICON the window). Time-scan coverage already refuses them; the confirm path
+  gap-fills (timing-scenarios gotchas).
+
+**What changes in values.** Only on GRIB-primary slots: RH, MSLP, CIN (ECMWF),
+covers, rain/showers split, and all ICON surface fields now come from the
+model's own GRIB instead of Open-Meteo's processing of the same model
+(Open-Meteo's ICON is a D2/EU/global blend, ours one variant). ICON soundings
+anchor on the model MSLP instead of Open-Meteo's level heights: expect level
+heights within a few tens of metres. Not touched: #849 (fake ceiling at cloud
+edges) is a diagnostics sampling issue and unchanged here.
+
+**Measured.** Advisory replay diff with `scripts/compare_grib_primary.py`
+(same flight, `WB_GRIB_PRIMARY=0` vs on, back to back): **pending**, it needs
+ECPDS, DWD and Open-Meteo, none reachable from the cloud session that wrote
+this. To be run on the mini and recorded here and on the PR.

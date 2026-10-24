@@ -268,6 +268,9 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     "sf": "snowfall_m_we",                 # m water equivalent, accumulated since init
     "mucape": "mucape_jkg",                # J/kg (most-unstable parcel CAPE)
     "sp": "surface_pressure_pa",           # Pa (used as anchor for sounding analysis)
+    # Mean sea-level pressure (#912): the QNH the airport card reads. Was
+    # delivered in a1 but undecoded while Open-Meteo supplied pressure_msl.
+    "msl": "msl_pa",                       # Pa
     # NOTE: ``kx``/``totalx`` are mapped once above (k_index_c / total_totals_c).
     # The model-native convective indices feeding the convective character
     # advisory (issue #294, nwp_k_index / nwp_total_totals) derive from those
@@ -1956,6 +1959,132 @@ def decode_icon_eu_cloud_diag_per_point(
         tmp_path.unlink(missing_ok=True)
 
 
+def decode_icon_surface_per_point(
+    var_sources: dict[str, "Path | str | bytes"],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode ICON single-level SURFACE fields, one file per variable (#912).
+
+    ``var_sources`` maps the DWD variable name (``t_2m``, ``pmsl``,
+    ``tot_prec`` …) to that variable's own single-message file. The output is
+    keyed by that same name, never by the decoded shortName: DWD products
+    decode under names that are not the product name (RAIN_CON reads as
+    ``crr``, and #530 could not confirm several others), so a file-per-
+    variable layout identifies the field by where it came from, like the D2
+    explicit-convection blobs (#462).
+
+    Direct eccodes read through ``grib_reader`` and the shared bilinear
+    weights (longitude convention aligned per grid, #673; zero-weight edge
+    rule, #674). The first regular lat/lon message of each file is used. A
+    target outside the grid, or on masked cells, gets no key — missing, not 0.
+
+    Returns one flat dict per target point: ``{variable: native value}``.
+    """
+    import numpy as np
+
+    from weatherbrief.fetch.grib.grib_reader import gather_bilinear, iter_messages
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+
+    for var, source in var_sources.items():
+        try:
+            for msg in iter_messages(source):
+                grid = msg.grid()
+                if grid is None:
+                    continue
+                bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
+                if bw is None or not bw.inb_idx.size:
+                    break
+                values = msg.values(grid)
+                if values is None:
+                    logger.warning("ICON surface %s: value count disagrees with grid", var)
+                    break
+                gathered = gather_bilinear(values, bw)
+                for k, idx in enumerate(bw.inb_idx):
+                    val = float(gathered[k])
+                    if not math.isnan(val):
+                        results[int(idx)][var] = val
+                break
+        except Exception:
+            logger.warning("ICON surface %s: decode failed", var, exc_info=True)
+    return results
+
+
+def build_icon_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]:
+    """ICON instantaneous surface fields in ``HourlyForecast`` units (#912).
+
+    ``raw`` is one point from :func:`decode_icon_surface_per_point`. The
+    accumulated fields (``tot_prec``, ``rain_*``, ``snow_*``) are NOT handled
+    here: they need the previous step and are de-accumulated in the ICON
+    enrichment loop.
+
+    - K → °C (``t_2m``, ``td_2m``); RH from ``relhum_2m``, else from T/Td.
+    - m/s → kt (wind and the ``vmax_10m`` gust), direction meteorological.
+    - Pa → hPa (``pmsl``, ``ps``).
+    - ``vis`` already m; ``hzerocl`` already m above MSL — a negative value is
+      DWD's "no 0 °C level in the column" fill and reads as None.
+    """
+    out: dict[str, float | None] = {
+        "temperature_2m_c": None,
+        "dewpoint_2m_c": None,
+        "relative_humidity_2m_pct": None,
+        "wind_speed_10m_kt": None,
+        "wind_direction_10m_deg": None,
+        "wind_gusts_10m_kt": None,
+        "pressure_msl_hpa": None,
+        "surface_pressure_hpa": None,
+        "visibility_m": None,
+        "freezing_level_m": None,
+    }
+    if not raw:
+        return out
+
+    t_k = raw.get("t_2m")
+    td_k = raw.get("td_2m")
+    if t_k is not None:
+        out["temperature_2m_c"] = t_k - 273.15
+    if td_k is not None:
+        out["dewpoint_2m_c"] = td_k - 273.15
+    rh = raw.get("relhum_2m")
+    if rh is not None:
+        out["relative_humidity_2m_pct"] = min(100.0, max(0.0, rh))
+    elif t_k is not None and td_k is not None:
+        out["relative_humidity_2m_pct"] = relative_humidity_from_dewpoint_pct(
+            t_k - 273.15, td_k - 273.15,
+        )
+
+    u = raw.get("u_10m")
+    v = raw.get("v_10m")
+    if u is not None and v is not None:
+        speed_ms = math.sqrt(u * u + v * v)
+        out["wind_speed_10m_kt"] = speed_ms * _KT_PER_MS
+        out["wind_direction_10m_deg"] = (
+            (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0 if speed_ms > 0.01 else 0.0
+        )
+    gust = raw.get("vmax_10m")
+    if gust is not None and gust >= 0:
+        out["wind_gusts_10m_kt"] = gust * _KT_PER_MS
+
+    pmsl = raw.get("pmsl")
+    if pmsl is not None:
+        out["pressure_msl_hpa"] = pmsl / 100.0
+    ps = raw.get("ps")
+    if ps is not None:
+        out["surface_pressure_hpa"] = ps / 100.0
+
+    vis = raw.get("vis")
+    if vis is not None and vis >= 0:
+        out["visibility_m"] = vis
+    hzerocl = raw.get("hzerocl")
+    if hzerocl is not None and hzerocl >= 0:
+        out["freezing_level_m"] = hzerocl
+    return out
+
+
 _M_TO_FT = 3.28084
 
 # One "no ceiling" cut-off for every model (#847). ICON's CEILING (~16 km,
@@ -3120,6 +3249,18 @@ def magnus_dewpoint_c(t_c, rh_pct):
     return _MAGNUS_B_C * gamma / (_MAGNUS_A - gamma)
 
 
+def relative_humidity_from_dewpoint_pct(t_c: float, td_c: float) -> float:
+    """RH (%) from T and Td (°C): the inverse of :func:`magnus_dewpoint_c`.
+
+    Same Magnus-over-water coefficients, so a GRIB T/Td pair turned into RH
+    and back gives the Td it came from. Capped at 100 %: a 2 m dewpoint above
+    the temperature is interpolation noise, not supersaturation.
+    """
+    e_td = math.exp(_MAGNUS_A * td_c / (_MAGNUS_B_C + td_c))
+    e_t = math.exp(_MAGNUS_A * t_c / (_MAGNUS_B_C + t_c))
+    return min(100.0, max(0.0, 100.0 * e_td / e_t))
+
+
 def _convert_raw_sounding(
     raw: dict[str, float],
     pressure_hpa: int,
@@ -3211,6 +3352,7 @@ def _convert_raw_sounding(
 def build_pressure_levels_from_grib(
     point_data: dict[int, dict[str, float]],
     reference_heights_m: dict[int, float] | None = None,
+    msl_pressure_hpa: float | None = None,
 ) -> list:
     """Build PressureLevelData objects from decoded ECMWF GRIB data.
 
@@ -3231,6 +3373,10 @@ def build_pressure_levels_from_grib(
             column is about to replace. Used only to give the reconstruction
             a real datum instead of ISA (#486); see
             ``_fill_missing_geopotential_height``.
+        msl_pressure_hpa: The model's own mean sea-level pressure at the
+            same point and valid time. The datum when no reference heights
+            exist, i.e. when the slot was built from GRIB with no Open-Meteo
+            levels underneath (#912).
     """
     from weatherbrief.models.analysis import PressureLevelData
 
@@ -3243,6 +3389,7 @@ def build_pressure_levels_from_grib(
 
     _fill_missing_geopotential_height(
         converted_by_p, reference_heights_m=reference_heights_m,
+        msl_pressure_hpa=msl_pressure_hpa,
     )
 
     return [
@@ -3279,10 +3426,30 @@ def _virtual_temperature_k(
     return (temperature_c + 273.15) / denom
 
 
+def _height_above_msl_m(
+    p_hpa: float, msl_hpa: float, temperature_c: float, rh_pct: float | None,
+) -> float:
+    """Height (m) of the ``p_hpa`` surface above mean sea level, from MSLP.
+
+    Hypsometric thickness of the layer between the model's MSLP and ``p_hpa``,
+    with the layer's virtual temperature taken as the level's own, warmed
+    towards sea level at the standard 6.5 K/km — the same assumption MSLP
+    reduction makes, so this is close to inverting it. Two passes settle the
+    mean temperature; a level below sea level comes out negative.
+    """
+    tv = _virtual_temperature_k(temperature_c, rh_pct, p_hpa)
+    log_ratio = math.log(msl_hpa / p_hpa)
+    z = (_RD_DRY_AIR * tv / _G) * log_ratio
+    for _ in range(2):
+        z = (_RD_DRY_AIR * (tv + 0.0065 * z / 2.0) / _G) * log_ratio
+    return z
+
+
 def _fill_missing_geopotential_height(
     converted_by_p: dict[int, dict[str, float]],
     *,
     reference_heights_m: dict[int, float] | None = None,
+    msl_pressure_hpa: float | None = None,
 ) -> None:
     """Derive ``geopotential_height_m`` via the hypsometric equation.
 
@@ -3310,7 +3477,10 @@ def _fill_missing_geopotential_height(
     in practice Open-Meteo's own levels for the same model. The surface-most
     matching level becomes the datum, and ONLY that one: the reference sets
     where the column sits, never how thick its layers are. Without a
-    reference the column falls back to the ISA altitude of its surface-most
+    reference, ``msl_pressure_hpa`` (the model's own MSLP at the point) puts
+    the surface-most level at its hypsometric height above sea level (#912:
+    a GRIB-primary ICON slot has no Open-Meteo levels to borrow from). With
+    neither, the column falls back to the ISA altitude of its surface-most
     pressure level.
 
     Note what the ISA fallback does and does not cost. It is *not* a terrain
@@ -3378,9 +3548,14 @@ def _fill_missing_geopotential_height(
     )
     if datum_i is None:
         datum_i = 0
-        converted_by_p[sorted_p[0]]["geopotential_height_m"] = (
-            pressure_hpa_to_altitude_m(sorted_p[0])
-        )
+        surface = converted_by_p[sorted_p[0]]
+        if msl_pressure_hpa is not None and msl_pressure_hpa > 0:
+            surface["geopotential_height_m"] = _height_above_msl_m(
+                sorted_p[0], msl_pressure_hpa,
+                surface["temperature_c"], surface.get("relative_humidity_pct"),
+            )
+        else:
+            surface["geopotential_height_m"] = pressure_hpa_to_altitude_m(sorted_p[0])
 
     # Downward from the datum (higher pressure, lower altitude).
     for i in range(datum_i - 1, -1, -1):
@@ -4073,6 +4248,9 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         "cloud_cover_mid_pct": None,
         "cloud_cover_high_pct": None,
         "surface_pressure_hpa": None,
+        "pressure_msl_hpa": None,
+        "relative_humidity_2m_pct": None,
+        "convective_inhibition_jkg": None,
         "nwp_ceiling_ft": None,
         "cloud_base_ft": None,
         "nwp_k_index": None,
@@ -4141,6 +4319,20 @@ def build_ecmwf_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     sp = raw.get("surface_pressure_pa")
     if sp is not None:
         out["surface_pressure_hpa"] = sp / 100.0
+
+    # GRIB-primary surface fields (#912), which Open-Meteo used to supply.
+    msl = raw.get("msl_pa")
+    if msl is not None:
+        out["pressure_msl_hpa"] = msl / 100.0
+    if t_k is not None and d_k is not None:
+        out["relative_humidity_2m_pct"] = relative_humidity_from_dewpoint_pct(
+            t_k - 273.15, d_k - 273.15,
+        )
+    # Same mixed-layer CIN the diagnostics carry, in the app's negative
+    # convention (``_normalize_model_cin``).
+    out["convective_inhibition_jkg"] = _normalize_model_cin(
+        raw, "ml_cin_jkg", drop_at_or_above=9998.0,
+    )
 
     ceil_m = raw.get("ceiling_m")
     if ceil_m is not None and 0 <= ceil_m < _ECMWF_NO_CLOUD_SENTINEL_M:
