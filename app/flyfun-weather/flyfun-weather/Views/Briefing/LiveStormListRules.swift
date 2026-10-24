@@ -69,6 +69,7 @@ enum LiveStormListRules {
     /// "abeam in ~25 min (~10:20Z)": the server's minutes to abeam (at its
     /// tick, to the nearest 5 like its `when_text`) and its clock time. Nil
     /// past the route's ends, behind, or without a time.
+    /// SYNC: Android `LiveStormRules.abeamText` (#886).
     static func abeamText(_ storm: LiveStorm) -> String? {
         guard storm.end == nil, storm.ahead != false else { return nil }
         let clock = RouteRibbonInspectorRules.hhmmZ(storm.abeamEta)

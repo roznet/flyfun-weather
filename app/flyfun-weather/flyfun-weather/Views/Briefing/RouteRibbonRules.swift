@@ -249,6 +249,7 @@ enum RouteRibbonRules {
     /// from the airport past the route's ends — the server's
     /// `storm_position_text`. Without a place (a pre-#790 layer), the legacy
     /// "… at 85 NM".
+    /// SYNC: Android `LiveStormRules.positionText` (#886).
     static func stormPositionText(_ storm: LiveStorm, form: PlaceForm = .text) -> String {
         let off = "\(Int((storm.offtrackNm ?? 0).rounded())) NM"
         if let place = storm.place, let w = words(place, form) {
@@ -265,6 +266,7 @@ enum RouteRibbonRules {
     }
 
     /// Observed motion against the track — the server's wording.
+    /// SYNC: Android `LiveStormRules.motionText` (#886).
     static func stormMotionText(_ storm: LiveStorm) -> String {
         switch storm.relativeMotion {
         case "closing": return storm.closingKt.map { "closing \(Int($0.rounded())) kt" } ?? "closing"

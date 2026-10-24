@@ -10,6 +10,9 @@ import kotlin.math.roundToInt
  * trend, intensity, side, place, relative motion, closing speed and the abeam time are
  * the server's. Mirrors iOS `LiveStormListRules`, `RouteRibbonRules.stormPositionText`
  * / `stormMotionText` and the `CellsOverlay.trendHex` table.
+ *
+ * SYNC: hand-copied from those iOS functions; a wording, threshold or colour change
+ * there lands here too (pinned by `LiveStormRulesTest`, the iOS `LiveStormListTests` fixture).
  */
 object LiveStormRules {
 

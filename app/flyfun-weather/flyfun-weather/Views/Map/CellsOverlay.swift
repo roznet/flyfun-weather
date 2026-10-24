@@ -25,6 +25,7 @@ enum CellsOverlay {
 
     // MARK: Colours (web TREND_COLOURS / OUTLINE_STYLE / ARROW_COLOUR)
 
+    /// SYNC: Android `LiveStormRules.TREND_HEX` (#886).
     static let trendHex: [String: String] = [
         "developing": "#d7263d",
         "decaying": "#1b6ca8",
