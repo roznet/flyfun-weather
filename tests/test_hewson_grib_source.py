@@ -335,6 +335,11 @@ def test_run_once_grib_holey_level_skips_model(tmp_path, flat_terrain, no_open_m
     assert not list(tmp_path.rglob("gfs/*.npz"))
 
 
+def test_resolve_run_session_pool_fits_icon_workers():
+    adapter = grib_source._new_session().get_adapter("https://opendata.dwd.de")
+    assert adapter._pool_maxsize >= grib_source._ICON_DOWNLOAD_WORKERS
+
+
 def test_run_once_grib_unresolved_model_skipped(tmp_path, flat_terrain, no_open_meteo):
     with patch.object(grib_source, "resolve_run", return_value=None):
         result = run_once(models=["ecmwf"], output_dir=tmp_path, forecast_days=1)

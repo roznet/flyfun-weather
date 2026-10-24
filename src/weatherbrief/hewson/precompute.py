@@ -394,7 +394,11 @@ def _build_one_snapshot_grib(
     Returns ``(init_time_unix, valid_times, per_level_stacks, fetch_secs,
     compute_secs)`` or None.
     """
-    from weatherbrief.hewson.grib_source import level_inputs, read_step
+    from weatherbrief.hewson.grib_source import (
+        HEWSON_GRIB_VARS,
+        level_inputs,
+        read_step,
+    )
 
     n_time = len(hours)
     valid_times = np.array(
@@ -425,10 +429,16 @@ def _build_one_snapshot_grib(
             )
             if fields is None:
                 # Too many missing cells: a NaN slice would read as "no front".
+                # The share per input says whether it is below-ground masking
+                # (T/Td/u/v alike, worst at 925 hPa) or a broken field.
+                missing = ", ".join(
+                    f"{v} {100.0 * float(np.isnan(step[L][v]).mean()):.1f}%"
+                    for v in HEWSON_GRIB_VARS if v in step[L]
+                ) or "inputs absent"
                 logger.error(
                     "Hewson precompute: %s %s f%03d %d hPa has too many missing "
-                    "cells — skipping the model this cycle",
-                    run.model, run.describe(), h, L,
+                    "cells (%s) — skipping the model this cycle",
+                    run.model, run.describe(), h, L, missing,
                 )
                 return None
             _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)

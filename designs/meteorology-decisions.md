@@ -6699,7 +6699,12 @@ ICON-EU pressure levels (DWD). Mechanics: `designs/frontal-detection.md`,
 - **Td from T + RH by the sounding path's Magnus** (17.67, 243.5 °C, RH ≥
   0.1 %). The GRIB RH is the models' own (mixed-phase below 0 °C for ECMWF and
   GFS); Magnus over water is applied as in the briefing soundings, so a
-  briefing and a Hewson θe at the same point use one definition.
+  briefing and a Hewson θe at the same point use one definition. Known bias:
+  below about −23 °C the models' RH is with respect to ice, so Magnus over
+  water gives a Td (and θe) slightly too moist there, mostly at 700 hPa in the
+  cold season. Accepted for now on the same grounds as the soundings; the
+  side-by-side diff checks its size at 700 hPa before the fronts advisory
+  leans on it.
 - **Native u/v** instead of Open-Meteo's rounded speed (kn) + direction (°).
 - **Time axis anchored at init:** 0–117 h every 3 h (40 steps, as before). The
   Open-Meteo series started at 00 Z of its day, so a 12Z snapshot also carried
@@ -6708,7 +6713,14 @@ ICON-EU pressure levels (DWD). Mechanics: `designs/frontal-detection.md`,
 - **A model is all or nothing per cycle.** A step that cannot be read after one
   retry drops the model for the cycle; the front stage then falls back to that
   model's previous snapshot (or reports it missing), exactly as for a failed
-  Open-Meteo fetch. No Open-Meteo fallback (it would restore the cost).
+  Open-Meteo fetch. No Open-Meteo fallback (it would restore the cost). The
+  same holds for a level with ≥ 5 % missing cells (`prepare_field`'s limit):
+  a NaN slice would read as "no front", so the model is dropped and the error
+  log gives each input's missing share. Open risk, unmeasured: if a model's
+  pressure-level GRIB masks below-ground cells instead of extrapolating them,
+  925 hPa over the Alps / Pyrenees / Iberian plateau / Scandes could cross
+  that limit every cycle. ECMWF and GFS extrapolate; ICON-EU is unconfirmed.
+  The first real ICON-EU and ECMWF runs on the compute node show it.
 
 **Expected effect.** Small value changes, not new behaviour: same models
 (ECMWF, GFS) or a sibling configuration (ICON-EU vs the blended ICON), same
