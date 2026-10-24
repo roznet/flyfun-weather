@@ -14,6 +14,13 @@ struct OpenBriefingIntent: AppIntent {
     @Parameter(title: "Flight")
     var flight: FlightEntity?
 
+    init() {}
+
+    /// For `Button(intent:)` on the Check Briefing card (#365).
+    init(flight: FlightEntity?) {
+        self.flight = flight
+    }
+
     static var parameterSummary: some ParameterSummary {
         Summary("Open briefing for \(\.$flight)")
     }

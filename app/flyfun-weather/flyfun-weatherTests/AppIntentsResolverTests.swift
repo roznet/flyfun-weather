@@ -425,3 +425,92 @@ struct DialogTests {
             == "EGKA isn't monitored, so here's the nearest, EGKB. Tomorrow, EGKB is forecast VFR with wind 10 knots from 240 degrees.")
     }
 }
+
+// MARK: - Flight-day live lead (#365)
+
+/// A `/live` payload as the server sends it (snake_case), decoded the way the
+/// repository does. `alert` / `highlight` / `liveUpdatedAt` toggle the cases.
+private func makeLiveLayer(
+    liveUpdatedAt: String? = "2026-07-08T14:30:00Z",
+    alert: String? = "New SIGMET at LFML",
+    highlight: String? = "Route as briefed, storms building near LFML"
+) throws -> LiveLayerResponse {
+    var lines: [[String: Any]] = [["phase": "departure", "icao": "LFMD", "alert": false, "text": "LFMD VFR"]]
+    if let alert {
+        lines.append(["phase": "arrival", "icao": "LFML", "alert": true, "text": alert])
+    }
+    var glance: [String: Any] = [
+        "as_of": "2026-07-08T14:30:00Z",
+        "headline": "Observed 14:30Z · as briefed",
+        "comparison": "as_briefed",
+        "lines": lines,
+    ]
+    if let highlight {
+        glance["highlight"] = ["text": highlight, "model": "fixture", "generated_at": "2026-07-08T14:29:00Z"]
+    }
+    var payload: [String: Any] = ["flight_id": "flt-1", "pack_timestamp": "2026-07-08T07:12:00Z", "glance": glance]
+    if let liveUpdatedAt { payload["live_updated_at"] = liveUpdatedAt }
+    let data = try JSONSerialization.data(withJSONObject: payload)
+    return try JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: data)
+}
+
+@Suite("Check briefing — live layer first (#365)")
+struct LiveCheckDialogTests {
+    private func flight(assessment: String = "AMBER") -> FlightResponse {
+        let briefing = makeBriefingStatus(
+            assessment: assessment, hasAdvisories: true,
+            advisorySummary: AdvisorySummary(red: 0, amber: 1, top: [AdvisoryChip(status: "AMBER", name: "convective")]),
+            fetchTimestamp: "2026-07-08T07:12:00Z")
+        return makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: briefing)
+    }
+
+    @Test("alert lines first, then the highlight with its time, then the briefing's grade")
+    func alertAndHighlight() throws {
+        let live = try makeLiveLayer()
+        #expect(IntentDialogs.checkSummary(flight(), live: live)
+            == "New SIGMET at LFML. As of 14:29Z: Route as briefed, storms building near LFML. "
+            + "The 07:12Z briefing graded it amber; top concern: convective.")
+    }
+
+    @Test("no highlight: the headline stands in, without an extra time")
+    func headlineFallback() throws {
+        let live = try makeLiveLayer(highlight: nil)
+        #expect(IntentDialogs.checkSummary(flight(), live: live)
+            == "New SIGMET at LFML. Observed 14:30Z · as briefed. "
+            + "The 07:12Z briefing graded it amber; top concern: convective.")
+    }
+
+    @Test("a layer without data leaves today's line unchanged")
+    func noData() throws {
+        let live = try makeLiveLayer(liveUpdatedAt: nil)
+        #expect(IntentDialogs.liveCheckLines(live) == nil)
+        #expect(IntentDialogs.checkSummary(flight(), live: live) == IntentDialogs.checkSummary(flight()))
+        #expect(IntentDialogs.checkSummary(flight(), live: live)
+            == "Your LFMD → LFML flight is graded amber. Top concern: convective.")
+    }
+
+    @Test("UNAVAILABLE grade with live data: the live lines lead, the briefing is not a verdict")
+    func unavailableWithLive() throws {
+        let live = try makeLiveLayer(alert: nil)
+        #expect(IntentDialogs.checkSummary(flight(assessment: "UNAVAILABLE"), live: live)
+            == "As of 14:29Z: Route as briefed, storms building near LFML. "
+            + "The 07:12Z briefing couldn't assess it: there was no usable model data for that route.")
+    }
+
+    @Test("live lines keep server text verbatim, in spoken order")
+    func liveLines() throws {
+        let lines = try #require(IntentDialogs.liveCheckLines(try makeLiveLayer()))
+        #expect(lines.alerts == ["New SIGMET at LFML"])
+        #expect(lines.summary == "Route as briefed, storms building near LFML")
+        #expect(lines.summaryTime == "14:29Z")
+    }
+
+    @Test("card note: nil for a traffic-light grade, the dialog's words otherwise")
+    func briefingNote() {
+        #expect(IntentDialogs.briefingNote(flight()) == nil)
+        #expect(IntentDialogs.briefingNote(flight(assessment: "UNAVAILABLE"))
+            == "I couldn't assess your LFMD → LFML flight — there's no usable model data for that route yet.")
+        #expect(IntentDialogs.briefingNote(makeFlight(waypoints: ["LFMD", "LFML"]))
+            == "Your LFMD → LFML flight hasn't been briefed yet.")
+    }
+}
