@@ -375,3 +375,73 @@ def test_reader_bug_keeps_the_store(tmp_path, monkeypatch):
     monkeypatch.setattr(dec, "_bilinear_grid_weights", bug)
     assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
     assert (store / "zarr.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Briefing prefetch: conversion queued, never waited for
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def queued_pool(monkeypatch):
+    """A dispatcher whose submit_one hands back a future the test resolves."""
+    from concurrent.futures import Future
+
+    import weatherbrief.fetch.grib as grib_mod
+
+    monkeypatch.delenv("WB_ICON_ZARR", raising=False)
+    monkeypatch.setattr(grib_mod, "decode_pool_enabled", lambda: True)
+    monkeypatch.setattr(grib_mod, "_priority_enabled", lambda: True)
+    submitted = []
+
+    class _Dispatcher:
+        def submit_one(self, name, args, priority):
+            fut = Future()
+            submitted.append((name, args, priority, fut))
+            return fut
+
+    monkeypatch.setattr(grib_mod, "_get_dispatcher", lambda: _Dispatcher())
+    return submitted
+
+
+def test_queued_conversion_returns_at_once_and_drops_grib_when_done(tmp_path, queued_pool):
+    from weatherbrief.fetch.grib import DecodePriority
+    from weatherbrief.fetch.grib.decode_worker import convert_icon_zarr
+
+    run_dir = tmp_path / "icon-eu" / "20261024_06z"
+    ck = "f003_ICON_EU_T.grib2"
+
+    entry = icon_zarr.cache_model_level_blob(
+        run_dir, ck, _grib_bytes(tmp_path),
+        priority=DecodePriority.BACKGROUND, wait=False,
+    )
+
+    # The briefing gets the GRIB straight away and decodes it as before.
+    assert entry == run_dir / ck and entry.exists()
+    (name, args, priority, fut), = queued_pool
+    assert name == "convert_icon_zarr" and priority == int(DecodePriority.BACKGROUND)
+
+    fut.set_result(convert_icon_zarr(*args))  # the pool runs it later
+
+    assert not (run_dir / ck).exists()
+    assert icon_zarr.cached_model_level_entry(run_dir, ck) == run_dir / "f003_ICON_EU_T.zarr"
+
+
+def test_queued_conversion_that_fails_keeps_grib(tmp_path, queued_pool):
+    run_dir = tmp_path / "icon-eu" / "20261024_06z"
+    ck = "f003_ICON_EU_T.grib2"
+
+    icon_zarr.cache_model_level_blob(run_dir, ck, _grib_bytes(tmp_path), wait=False)
+    (_, _, _, fut), = queued_pool
+    fut.set_exception(RuntimeError("dispatcher_shutdown"))
+
+    assert (run_dir / ck).exists()
+    assert icon_zarr.cached_model_level_entry(run_dir, ck) == run_dir / ck
+
+
+def test_failed_job_still_returns_a_store_a_racing_writer_finished(tmp_path):
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+
+    assert icon_zarr._after_conversion(False, grib, store) == store
+    assert not grib.exists()

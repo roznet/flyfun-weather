@@ -1404,7 +1404,11 @@ def _decode_icon_eu_single_var(
         except Exception:
             # Transient (I/O pressure, a tight worker, the store vanishing
             # under us) or a bug in the reader: skip this read, keep the store.
-            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
+            # ERROR, not WARNING: the variable (and so the hour) is lost, and a
+            # reader regression must not pass for I/O noise.
+            logger.error(
+                "ICON-EU zarr read failed (store kept) %s", grib_bytes, exc_info=True,
+            )
             return {}
     try:
         return _decode_icon_eu_single_var_direct(grib_bytes, latitudes, longitudes)

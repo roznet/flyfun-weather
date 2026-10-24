@@ -4324,9 +4324,14 @@ def _prefetch_icon_eu_data_inner(
                 )
             data = per_var.get(var)
             if data:
-                # Whole-column variants (ICON-EU) convert to zarr on write
-                # (#705); the blob stays GRIB if conversion is off or fails.
-                cache_model_level_blob(ctx.run_dir, ck, data)
+                # Whole-column variants (ICON-EU) convert to zarr (#705). Not
+                # waited for: this briefing decodes the GRIB as before and the
+                # conversion takes idle pool time, so a cold briefing is never
+                # slower; the store serves the next briefing on this run.
+                cache_model_level_blob(
+                    ctx.run_dir, ck, data,
+                    priority=DecodePriority.BACKGROUND, wait=False,
+                )
         except Exception:
             logger.warning("Prefetch %s f%03d %s failed", variant.slug, fhour, var, exc_info=True)
 
