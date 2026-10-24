@@ -557,11 +557,10 @@ data class LiveStorm(
     val id: String? = null,
     @SerialName("cell_ids")
     val cellIds: List<String> = emptyList(),
-    val severity: String = "developing",
     val intensity: String? = null,
     val trend: String? = null,
-    @SerialName("disposition")
-    val disposition: String = "vicinity",
+    // Part of the storm lies outside radar coverage.
+    val truncated: Boolean = false,
     @SerialName("offtrack_nm")
     val offtrackNm: Double? = null,
     @SerialName("along_nm")
@@ -575,6 +574,13 @@ data class LiveStorm(
     @SerialName("bearing_from_route")
     val bearingFromRoute: String? = null,
     val side: String? = null,
+    // Before the route's first point / past its last: the server places it
+    // from the airport ("8 NM NE of ZZAR") instead of left/right of track.
+    val end: String? = null,
+    @SerialName("end_icao")
+    val endIcao: String? = null,
+    @SerialName("end_bearing")
+    val endBearing: String? = null,
     val flashes: Int? = null,
     @SerialName("flash_count")
     val flashCount: Int = flashes ?: 0,
@@ -655,7 +661,6 @@ data class LiveStormEstimate(
     val horizon: String = "",
     val label: String = "",
     val confidence: String = "medium",
-    val disposition: String = "vicinity",
     val text: String = "",
     @SerialName("cpa_nm")
     val cpaNm: Double? = null,

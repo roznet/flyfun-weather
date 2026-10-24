@@ -2,7 +2,6 @@ package aero.flyfun.weather.model.rules
 
 import aero.flyfun.weather.model.LiveRibbon
 import aero.flyfun.weather.model.LiveRibbonSegment
-import aero.flyfun.weather.model.LiveStorm
 import aero.flyfun.weather.model.RibbonSigmet
 import aero.flyfun.weather.model.RibbonStation
 import aero.flyfun.weather.model.RibbonWaypoint
@@ -144,9 +143,6 @@ object RouteRibbonRules {
     /** Default corridor filter threshold (nm) for station dots on the ribbon. */
     const val DEFAULT_CORRIDOR_NM: Double = 25.0
 
-    /** Distance threshold (nm) within which adjacent SIGMET-sourced storm ticks merge. */
-    const val SIGMET_GROUP_PROXIMITY_NM: Double = 55.0
-
     // -------------------------------------------------------------------------
     // Models mirroring iOS RouteRibbonRules
     // -------------------------------------------------------------------------
@@ -195,32 +191,6 @@ object RouteRibbonRules {
     ) {
         val midpointNm: Double get() = (clampedStartNm + clampedEndNm) * 0.5
         val spanNm: Double get() = max(0.0, clampedEndNm - clampedStartNm)
-    }
-
-    data class StormTick(
-        val id: String,
-        val severity: String,
-        val disposition: String,
-        val enrouteDistanceNm: Double,
-        val distanceNm: Double,
-        val bearingFromRoute: String?,
-        val flashCount: Int,
-        val maxDbz: Double?,
-        val maxTopFt: Double?,
-        val trackDeg: Double?,
-        val speedKt: Double?,
-        val headline: String,
-    )
-
-    data class StormGroup(
-        val id: String,
-        val startNm: Double,
-        val endNm: Double,
-        val midpointNm: Double,
-        val worstSeverity: String,
-        val items: List<StormTick>,
-    ) {
-        val count: Int get() = items.size
     }
 
     data class WaypointTick(
@@ -472,79 +442,6 @@ object RouteRibbonRules {
                 isNew = sig.isNew,
             )
         }
-    }
-
-    fun extractStorms(
-        storms: List<LiveStorm>,
-        totalDistanceNm: Double,
-    ): List<StormTick> {
-        val total = max(0.0, totalDistanceNm)
-        return storms
-            .map { st ->
-                val clampedNm = if (total > 0.0) st.enrouteDistanceNm.coerceIn(0.0, total) else max(0.0, st.enrouteDistanceNm)
-                StormTick(
-                    id = st.computedId,
-                    severity = st.severity,
-                    disposition = st.disposition,
-                    enrouteDistanceNm = clampedNm,
-                    distanceNm = st.distanceNm,
-                    bearingFromRoute = st.bearingFromRoute,
-                    flashCount = st.flashCount,
-                    maxDbz = st.maxDbz,
-                    maxTopFt = st.maxTopFt,
-                    trackDeg = st.trackDeg,
-                    speedKt = st.speedKt,
-                    headline = st.headline,
-                )
-            }
-            .sortedBy { it.enrouteDistanceNm }
-    }
-
-    fun groupStormTicks(
-        storms: List<StormTick>,
-        proximityNm: Double = SIGMET_GROUP_PROXIMITY_NM,
-    ): List<StormGroup> {
-        if (storms.isEmpty()) return emptyList()
-        val sorted = storms.sortedBy { it.enrouteDistanceNm }
-        val groups = mutableListOf<StormGroup>()
-        var current = mutableListOf(sorted.first())
-
-        for (tick in sorted.drop(1)) {
-            val prev = current.last()
-            if (tick.enrouteDistanceNm - prev.enrouteDistanceNm <= proximityNm) {
-                current.add(tick)
-            } else {
-                groups.add(makeGroup(current))
-                current = mutableListOf(tick)
-            }
-        }
-        groups.add(makeGroup(current))
-        return groups
-    }
-
-    private fun makeGroup(items: List<StormTick>): StormGroup {
-        val first = items.first()
-        val last = items.last()
-        val start = first.enrouteDistanceNm
-        val end = last.enrouteDistanceNm
-        val worst = items.fold("developing") { acc, tick ->
-            if (severityOrder(tick.severity) > severityOrder(acc)) tick.severity else acc
-        }
-        return StormGroup(
-            id = "storm-group-${first.id}",
-            startNm = start,
-            endNm = end,
-            midpointNm = (start + end) * 0.5,
-            worstSeverity = worst,
-            items = items,
-        )
-    }
-
-    fun severityOrder(severity: String): Int = when (severity.lowercase(Locale.US)) {
-        "severe", "red", "extreme" -> 3
-        "moderate", "amber", "orange" -> 2
-        "developing", "light", "green" -> 1
-        else -> 0
     }
 
     fun extractWaypoints(waypoints: List<RibbonWaypoint>): List<WaypointTick> {
