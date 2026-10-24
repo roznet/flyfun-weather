@@ -463,3 +463,18 @@ def test_worker_reads_store_when_grib_vanishes_at_read_time(tmp_path, monkeypatc
 
     monkeypatch.setattr(Path, "read_bytes", read_after_unlink)
     assert _icon_var_source([str(grib)]) == store
+
+
+def test_second_writer_does_not_queue_a_duplicate_conversion(tmp_path, queued_pool):
+    run_dir = tmp_path / "icon-eu" / "20261024_06z"
+    ck = "f003_ICON_EU_T.grib2"
+    data = _grib_bytes(tmp_path)
+
+    icon_zarr.cache_model_level_blob(run_dir, ck, data, wait=False)
+    icon_zarr.cache_model_level_blob(run_dir, ck, data, wait=False)  # raced
+    assert len(queued_pool) == 1
+
+    (_, _, _, fut), = queued_pool
+    fut.set_exception(RuntimeError("boom"))  # done → released
+    icon_zarr.cache_model_level_blob(run_dir, ck, data, wait=False)
+    assert len(queued_pool) == 2

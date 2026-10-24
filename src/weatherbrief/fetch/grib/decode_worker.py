@@ -287,6 +287,8 @@ def _icon_var_source(paths: list[str]) -> bytes | Path:
     """
     from weatherbrief.fetch.grib.icon_zarr import is_store_path, store_name
 
+    # Only a one-element list can be a converted blob: per-level lists
+    # (ICON-D2) are never converted, so they read GRIB bytes as before.
     if len(paths) == 1:
         p = Path(paths[0])
         if is_store_path(p):

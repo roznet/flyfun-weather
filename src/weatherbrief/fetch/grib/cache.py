@@ -279,7 +279,9 @@ def is_store_cached(
     A store is present once its ``zarr.json`` is: stores are renamed into
     place whole, so a half-built one is never visible under this name. Aged
     by that file's mtime against the model TTL, and removed when expired,
-    matching :func:`is_cached`.
+    matching :func:`is_cached`. ``zarr.json`` is written at the start of the
+    build, so the age runs a conversion's few seconds early: noise against
+    a 12 h TTL.
     """
     meta = run_dir / store / "zarr.json"
     try:

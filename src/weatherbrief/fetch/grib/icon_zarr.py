@@ -39,6 +39,7 @@ import math
 import os
 import shutil
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -406,15 +407,25 @@ def cache_model_level_blob(
         return grib_path
     store_path = run_dir / store_name(filename)
     args = (str(grib_path), str(store_path))
+    # One conversion per store at a time: two writers that downloaded the
+    # same variable together (two briefings, or a briefing and the warm loop)
+    # would otherwise each build a ~360 MB cube on separate workers. The
+    # second just leaves its (identical) GRIB for the first job to delete.
+    if not _claim(store_path):
+        return grib_path
 
     if not wait:
         # The legacy FIFO path (GRIB_DECODE_PRIORITY_ENABLED=0) has no
         # non-blocking submit; a rollback switch, so it just keeps the GRIB.
         if not _priority_enabled():
             return grib_path
-        future = _get_dispatcher().submit_one(
-            "convert_icon_zarr", args, _resolve_priority(priority),
-        )
+        try:
+            future = _get_dispatcher().submit_one(
+                "convert_icon_zarr", args, _resolve_priority(priority),
+            )
+        except BaseException:
+            _release(store_path)
+            raise
         future.add_done_callback(
             lambda f: _finish_conversion(f, grib_path, store_path, filename),
         )
@@ -425,7 +436,28 @@ def cache_model_level_blob(
     except Exception:
         logger.warning("ICON zarr conversion failed for %s, keeping GRIB", filename, exc_info=True)
         ok = False
+    finally:
+        _release(store_path)
     return _after_conversion(ok, grib_path, store_path)
+
+
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT: set[str] = set()
+
+
+def _claim(store_path: Path) -> bool:
+    """Mark a store's conversion as queued or running; False if it already is."""
+    key = str(store_path)
+    with _INFLIGHT_LOCK:
+        if key in _INFLIGHT:
+            return False
+        _INFLIGHT.add(key)
+        return True
+
+
+def _release(store_path: Path) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.discard(str(store_path))
 
 
 def _after_conversion(ok: bool, grib_path: Path, store_path: Path) -> Path:
@@ -442,6 +474,7 @@ def _after_conversion(ok: bool, grib_path: Path, store_path: Path) -> Path:
 
 def _finish_conversion(future, grib_path: Path, store_path: Path, filename: str) -> None:
     """Done-callback of a queued conversion. Never raises (dispatcher thread)."""
+    _release(store_path)
     try:
         try:
             ok = bool(future.result())
