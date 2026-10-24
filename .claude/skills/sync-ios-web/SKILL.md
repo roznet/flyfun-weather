@@ -279,6 +279,26 @@ the newest current cell frame (its radar tiles are not keyed to a cell stamp, so
 there is no radar pairing); Android's chips are FilterChips beside the other
 overlays, iOS's are menu items.
 
+### 5e. Forecast and historical maps — catalog interpreter + view models (#420, #629)
+
+Colours and legends are the served `map-metrics-catalog.json`, so they cannot
+drift; what is hand-copied is its **interpreter** (band kinds, `m_to_sm`,
+`null_color`, numeric vs colour `fallback`, `gray_ramp`, `alternate_needed`
+aggregation per mode, the per-metric agreement key), the metric-question list,
+the card matrices (`compactCell`, `altLabel`, wind `dir@speedGgust`), and the
+view-model rules (hour snapping, model-reaches-day, cold open, the historical
+30-min grid, source availability words, status line).
+
+| Platform | Catalog + DTOs | State | Screen |
+|---|---|---|---|
+| Web | `web/ts/visualization/weather-map-format.ts` | `HistoricalTab` / forecast page | `maps.html` |
+| iOS | `Views/ForecastMap/MapMetricsCatalog.swift`, `Models/API/ForecastMapResponse.swift`, `HistoricalMapResponse.swift` | `ForecastMapViewModel.swift`, `HistoricalMapViewModel.swift` | `ForecastMapView`, `HistoricalMapView`, the two cards |
+| Android | `ui/map/AirportMapCatalog.kt`, `model/MapModels.kt` | `viewmodel/MapViewModels.kt` | `ui/map/PanEuropeanMapScreen.kt` |
+
+Tests: Android `map/AirportMapsTest.kt` replays trimmed real payloads. Known
+divergences, do not re-flag: Android has no locate-me button and shows the card
+under the map rather than in a sheet.
+
 ### 6. API DTO contracts
 
 iOS `Models/API/*Response.swift` Codable types mirror backend JSON. A server

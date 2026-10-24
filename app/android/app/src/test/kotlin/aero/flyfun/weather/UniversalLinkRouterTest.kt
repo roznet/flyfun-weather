@@ -1,5 +1,6 @@
 package aero.flyfun.weather
 
+import aero.flyfun.weather.model.MapViewport
 import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.UniversalLinkRouter
 import org.junit.Assert.assertEquals
@@ -84,7 +85,7 @@ class UniversalLinkRouterTest {
                 model = null,
                 metric = null,
                 grametInitKey = null,
-                viewMode = null,
+                view = null,
             ),
             target,
         )
@@ -93,18 +94,37 @@ class UniversalLinkRouterTest {
     @Test
     fun `maps forecast deep link parses all parameters`() {
         val target = UniversalLinkRouter.navigationTarget(
-            "https://weather.flyfun.aero/maps.html?tab=forecast&fc.day=1&fc.hour=15&fc.model=icon&fc.metric=crosswind&fc.gramet_init=2026040512&now.view=gramet"
+            "https://weather.flyfun.aero/maps.html?tab=forecast&fc.day=1&fc.hour=15&fc.model=icon&fc.metric=crosswind_kt" +
+                "&fc.apt=EGTK&fc.gramet_init=2026040512&fc.view=51.50,-1.20,7"
         )
         assertEquals(
             NavigationTarget.ForecastMap(
                 dayOffset = 1,
                 hourUtc = 15,
                 model = "icon",
-                metric = "crosswind",
+                metric = "crosswind_kt",
+                airport = "EGTK",
                 grametInitKey = "2026040512",
-                viewMode = "gramet",
+                view = MapViewport(lat = 51.5, lon = -1.2, zoom = 7),
             ),
             target,
+        )
+    }
+
+    @Test
+    fun `maps link to a web-only tab lands on the forecast map at that tab's view`() {
+        val target = UniversalLinkRouter.navigationTarget(
+            "https://weather.flyfun.aero/maps.html?tab=now&now.view=45.00,6.00,8&fc.view=50.00,2.00,5"
+        )
+        assertEquals(NavigationTarget.ForecastMap(view = MapViewport(lat = 45.0, lon = 6.0, zoom = 8)), target)
+        // A malformed or out-of-range view is dropped, not guessed
+        assertEquals(
+            NavigationTarget.ForecastMap(),
+            UniversalLinkRouter.navigationTarget("https://weather.flyfun.aero/maps.html?fc.view=95.00,6.00,8"),
+        )
+        assertEquals(
+            NavigationTarget.ForecastMap(),
+            UniversalLinkRouter.navigationTarget("https://weather.flyfun.aero/maps.html?fc.view=gramet"),
         )
     }
 
@@ -132,14 +152,18 @@ class UniversalLinkRouterTest {
     @Test
     fun `maps historical deep link parses all parameters`() {
         val target = UniversalLinkRouter.navigationTarget(
-            "https://weather.flyfun.aero/maps.html?tab=historical&hist.date=2026-03-15&hist.hour=9&hist.metric=alert&clim.view=verify"
+            "https://weather.flyfun.aero/maps.html?tab=historical&hist.date=2026-03-15&hist.time=09:30&hist.lead=2" +
+                "&hist.source=taf&hist.metric=ceiling_ft&hist.apt=LFPB&hist.view=48.90,2.40,9"
         )
         assertEquals(
             NavigationTarget.HistoricalMap(
                 date = "2026-03-15",
-                hourUtc = 9,
-                metric = "alert",
-                viewMode = "verify",
+                time = "09:30",
+                lead = 2,
+                source = "taf",
+                metric = "ceiling_ft",
+                airport = "LFPB",
+                view = MapViewport(lat = 48.9, lon = 2.4, zoom = 9),
             ),
             target,
         )

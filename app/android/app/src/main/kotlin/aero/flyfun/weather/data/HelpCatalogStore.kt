@@ -14,7 +14,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import okhttp3.Request
 import java.io.File
@@ -58,7 +61,20 @@ data class MapMetricColor(
     val kind: String = "",
     val scale: String = "",
     val field: String? = null,
-)
+    /** Categorical: the key used when the cell has no value (e.g. `"none"`). */
+    val default: String? = null,
+    /**
+     * Polymorphic: a hex string for categorical / alternate_needed, a number (or null) substituted
+     * before banding for bands. Read through [fallbackColor] / [fallbackNumber].
+     */
+    val fallback: JsonElement? = null,
+) {
+    val fallbackColor: String?
+        get() = (fallback as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    val fallbackNumber: Double?
+        get() = (fallback as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
+}
 
 @Serializable
 data class MapLegend(

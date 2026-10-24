@@ -189,14 +189,14 @@ fun FlyFunWeatherRoot(
 
     val forecastMapViewModel: ForecastMapViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "forecastMap") {
         ForecastMapViewModel(
-            apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
+            api = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
             isMockModeProvider = { isMockMode || isGuestBrowsing },
         )
     }
 
     val historicalMapViewModel: HistoricalMapViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "historicalMap") {
         HistoricalMapViewModel(
-            apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
+            api = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
             isMockModeProvider = { isMockMode || isGuestBrowsing },
         )
     }

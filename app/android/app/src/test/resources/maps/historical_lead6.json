@@ -1,0 +1,146 @@
+{
+ "at": "2026-10-23T12:00:00+00:00",
+ "lead_days": 6,
+ "run_cutoff": "2026-10-17T12:00:00+00:00",
+ "sources": {
+  "metar": {
+   "available": true,
+   "count": 602,
+   "max_age_min": 90
+  },
+  "taf": {
+   "available": true,
+   "count": 554
+  },
+  "icon": {
+   "available": false,
+   "reason": "beyond_horizon"
+  },
+  "gfs": {
+   "available": false,
+   "reason": "no_run"
+  },
+  "ecmwf": {
+   "available": false,
+   "reason": "no_run"
+  }
+ },
+ "airports": [
+  {
+   "icao": "BIAR",
+   "lat": 65.656573,
+   "lon": -18.072018,
+   "approach_type": "ILS",
+   "models": {},
+   "consensus": null,
+   "consensus_majority": null,
+   "observed": {
+    "metar": {
+     "flight_category": "VFR",
+     "ceiling_ft": null,
+     "visibility_m": 10000,
+     "wind_speed_kt": 4,
+     "wind_dir_deg": 190,
+     "wind_gust_kt": null,
+     "temperature_c": -3,
+     "dewpoint_c": -6,
+     "qnh": 998.0,
+     "weather": [],
+     "observation_time": "2026-10-23T12:00:00+00:00",
+     "age_min": 0,
+     "report_type": "METAR",
+     "raw": "METAR BIAR 231200Z 19004KT CAVOK M03/M06 Q0998",
+     "crosswind_kt": 1.0,
+     "headwind_kt": 3.9,
+     "best_runway_id": "19",
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    },
+    "taf": {
+     "flight_category": "VFR",
+     "prevailing_category": "VFR",
+     "temporary_category": null,
+     "temporary_type": null,
+     "trend_type": null,
+     "ceiling_ft": null,
+     "visibility_m": 10000,
+     "wind_speed_kt": 5,
+     "wind_dir_deg": 170,
+     "wind_gust_kt": null,
+     "significant_weather": [],
+     "issue_time": "2026-10-23T10:32:00+00:00",
+     "raw": "TAF BIAR 231032Z 2312/2412 17005KT 9999 SCT050 TX03/2316Z TNM06/2312Z",
+     "crosswind_kt": 0.5,
+     "headwind_kt": 5.0,
+     "best_runway_id": "19",
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    }
+   }
+  },
+  {
+   "icao": "EGLL",
+   "lat": 51.470748,
+   "lon": -0.459909,
+   "approach_type": "ILS",
+   "models": {},
+   "consensus": null,
+   "consensus_majority": null,
+   "observed": {
+    "metar": {
+     "flight_category": "IFR",
+     "ceiling_ft": 1700,
+     "visibility_m": 2600,
+     "wind_speed_kt": 10,
+     "wind_dir_deg": 290,
+     "wind_gust_kt": null,
+     "temperature_c": 13,
+     "dewpoint_c": 12,
+     "qnh": 992.0,
+     "weather": [
+      "RA"
+     ],
+     "observation_time": "2026-10-23T11:50:00+00:00",
+     "age_min": 10,
+     "report_type": "METAR",
+     "raw": "METAR EGLL 231150Z AUTO 29010KT 2600 RA SCT008/// BKN017/// BKN022/// //////CB 13/12 Q0992",
+     "crosswind_kt": 3.4,
+     "headwind_kt": 9.4,
+     "best_runway_id": "27L",
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    },
+    "taf": {
+     "flight_category": "IFR",
+     "prevailing_category": "MVFR",
+     "temporary_category": "IFR",
+     "temporary_type": "PROB40 TEMPO",
+     "trend_type": "PROB40 TEMPO",
+     "ceiling_ft": 800,
+     "visibility_m": 3000,
+     "wind_speed_kt": 20,
+     "wind_dir_deg": 300,
+     "wind_gust_kt": 32,
+     "significant_weather": [],
+     "issue_time": "2026-10-23T04:53:00+00:00",
+     "raw": "TAF EGLL 230453Z 2306/2412 13012KT 9999 BKN018\nBECMG 2306/2309 04008KT\nTEMPO 2306/2319 6000 SHRA RA BKN012\nPROB40\nTEMPO 2306/2307 11016G26KT 3000 +SHRA BKN009CB\nPROB40\nTEMPO 2307/2317 3000 +RA BKN008\nBECMG 2310/2313 30020G32KT\nTEMPO 2313/2319 29028G42KT\nBECMG 2319/2322 27013KT\nPROB30\nTEMPO 2319/2323 28015G26KT 8000 -RA\nPROB30\nTEMPO 2323/2403 26015G25KT\nBECMG 2406/2409 21008KT\nTEMPO 2409/2412 6000 RA BKN012\nPROB40\nTEMPO 2410/2412 22015G26KT 3000 +RA BKN009",
+     "crosswind_kt": 10.0,
+     "headwind_kt": 17.3,
+     "best_runway_id": "27L",
+     "gust_crosswind_kt": 16.0,
+     "gust_headwind_kt": 27.7,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    }
+   }
+  }
+ ]
+}

@@ -65,25 +65,38 @@ object UniversalLinkRouter {
             }
 
             path == "/maps.html" -> {
-                if (params["tab"] == "historical") {
-                    val view = params["hist.view"] ?: params["clim.view"]
+                fun value(name: String) = params[name]?.takeIf { it.isNotEmpty() }
+                val tab = params["tab"]
+                if (tab == "historical") {
+                    // The web's `hist.*` share state (iOS `historicalMapDeepLink`)
                     NavigationTarget.HistoricalMap(
-                        date = params["hist.date"]?.takeIf { it.isNotEmpty() },
-                        hourUtc = params["hist.hour"]?.toIntOrNull(),
-                        metric = params["hist.metric"]?.takeIf { it.isNotEmpty() },
-                        viewMode = view?.takeIf { it.isNotEmpty() },
+                        date = value("hist.date"),
+                        time = value("hist.time"),
+                        lead = value("hist.lead")?.toIntOrNull(),
+                        source = value("hist.source"),
+                        metric = value("hist.metric"),
+                        airport = value("hist.apt"),
+                        view = MapViewport.parse(value("hist.view")),
                     )
                 } else {
-                    val view = params["fc.view"] ?: params["now.view"] ?: params["syn.view"]
+                    // A link to a web tab the app doesn't have (now, synoptic, climatology) still
+                    // lands on the forecast map, positioned on that tab's own `*.view`
+                    val tabViewKey = when (tab) {
+                        "now" -> "now.view"
+                        "synoptic" -> "syn.view"
+                        "climatology" -> "clim.view"
+                        else -> null
+                    }
                     NavigationTarget.ForecastMap(
-                        dayOffset = params["fc.day"]?.toIntOrNull(),
+                        dayOffset = value("fc.day")?.toIntOrNull(),
                         // Malformed → dropped, so `fc.day` applies
-                        date = params["fc.date"]?.takeIf { ForecastLinkedDate.parse(it) != null },
-                        hourUtc = params["fc.hour"]?.toIntOrNull(),
-                        model = params["fc.model"]?.takeIf { it.isNotEmpty() },
-                        metric = params["fc.metric"]?.takeIf { it.isNotEmpty() },
-                        grametInitKey = params["fc.gramet_init"]?.takeIf { it.isNotEmpty() },
-                        viewMode = view?.takeIf { it.isNotEmpty() },
+                        date = value("fc.date")?.takeIf { ForecastLinkedDate.parse(it) != null },
+                        hourUtc = value("fc.hour")?.toIntOrNull(),
+                        model = value("fc.model"),
+                        metric = value("fc.metric"),
+                        airport = value("fc.apt"),
+                        grametInitKey = value("fc.gramet_init"),
+                        view = tabViewKey?.let { MapViewport.parse(value(it)) } ?: MapViewport.parse(value("fc.view")),
                     )
                 }
             }

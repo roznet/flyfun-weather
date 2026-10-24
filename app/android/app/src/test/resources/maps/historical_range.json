@@ -1,0 +1,80 @@
+{
+ "latest": "2026-10-24T14:00:00+00:00",
+ "earliest_observation": "2026-04-01T18:00:00+00:00",
+ "earliest_model": "2026-10-14T19:19:42.270433+00:00",
+ "step_minutes": 30,
+ "model_sample_hours": [
+  6,
+  9,
+  12,
+  15,
+  18
+ ],
+ "metar_max_age_min": 90,
+ "model_max_age_min": 180,
+ "models": [
+  "gfs",
+  "icon",
+  "ecmwf"
+ ],
+ "observed_sources": [
+  "metar",
+  "taf"
+ ],
+ "leads": [
+  {
+   "lead_days": 0,
+   "models": [
+    "gfs",
+    "icon",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 1,
+   "models": [
+    "gfs",
+    "icon",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 2,
+   "models": [
+    "gfs",
+    "icon",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 3,
+   "models": [
+    "gfs",
+    "icon",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 4,
+   "models": [
+    "gfs",
+    "icon",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 5,
+   "models": [
+    "gfs",
+    "ecmwf"
+   ]
+  },
+  {
+   "lead_days": 6,
+   "models": [
+    "gfs",
+    "ecmwf"
+   ]
+  }
+ ]
+}

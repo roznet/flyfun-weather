@@ -1,0 +1,29 @@
+{
+ "at": "2026-10-01T12:00:00+00:00",
+ "lead_days": 0,
+ "run_cutoff": "2026-10-01T12:00:00+00:00",
+ "sources": {
+  "metar": {
+   "available": false,
+   "count": 0,
+   "max_age_min": 90
+  },
+  "taf": {
+   "available": false,
+   "count": 0
+  },
+  "gfs": {
+   "available": false,
+   "reason": "no_run"
+  },
+  "icon": {
+   "available": false,
+   "reason": "no_run"
+  },
+  "ecmwf": {
+   "available": false,
+   "reason": "no_run"
+  }
+ },
+ "airports": []
+}

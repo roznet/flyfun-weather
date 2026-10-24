@@ -1,0 +1,533 @@
+{
+ "at": "2026-10-24T12:00:00+00:00",
+ "lead_days": 0,
+ "run_cutoff": "2026-10-24T12:00:00+00:00",
+ "sources": {
+  "metar": {
+   "available": true,
+   "count": 588,
+   "max_age_min": 90
+  },
+  "taf": {
+   "available": true,
+   "count": 486
+  },
+  "gfs": {
+   "available": true,
+   "valid_time": "2026-10-24T12:00:00+00:00",
+   "model_init_time": "2026-10-24T00:00:00+00:00",
+   "fetched_at": "2026-10-24T07:36:41.440219+00:00",
+   "lead_hours": 12,
+   "count": 619
+  },
+  "icon": {
+   "available": true,
+   "valid_time": "2026-10-24T12:00:00+00:00",
+   "model_init_time": "2026-10-24T00:00:00+00:00",
+   "fetched_at": "2026-10-24T07:40:49.756318+00:00",
+   "lead_hours": 12,
+   "count": 619
+  },
+  "ecmwf": {
+   "available": true,
+   "valid_time": "2026-10-24T12:00:00+00:00",
+   "model_init_time": "2026-10-23T18:00:00+00:00",
+   "fetched_at": "2026-10-24T07:41:24.842038+00:00",
+   "lead_hours": 18,
+   "count": 619
+  }
+ },
+ "airports": [
+  {
+   "icao": "EDDV",
+   "lat": 52.461102,
+   "lon": 9.68508,
+   "approach_type": "ILS",
+   "models": {
+    "gfs": {
+     "ceiling_ft": 1337.0,
+     "visibility_m": 24140.0,
+     "wind_speed_kt": 14.0,
+     "wind_dir_deg": 241.0,
+     "wind_gust_kt": 25.7,
+     "cloud_cover_pct": 100.0,
+     "cape_jkg": 10.0,
+     "convective_risk": "marginal",
+     "temperature_c": 9.7,
+     "freezing_level_ft": 4918.0,
+     "flight_category": "MVFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 7.2,
+     "headwind_kt": 12.0,
+     "best_runway_id": "27C",
+     "gust_crosswind_kt": 13.2,
+     "gust_headwind_kt": 22.0,
+     "alt_required": {
+      "faa": true,
+      "easa": false
+     }
+    },
+    "icon": {
+     "ceiling_ft": 988.0,
+     "visibility_m": 36020.0,
+     "wind_speed_kt": 15.2,
+     "wind_dir_deg": 242.0,
+     "wind_gust_kt": 27.2,
+     "cloud_cover_pct": 100.0,
+     "cape_jkg": 10.0,
+     "convective_risk": "marginal",
+     "temperature_c": 10.6,
+     "freezing_level_ft": 4980.0,
+     "flight_category": "IFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 7.6,
+     "headwind_kt": 13.2,
+     "best_runway_id": "27C",
+     "gust_crosswind_kt": 13.6,
+     "gust_headwind_kt": 23.6,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    },
+    "ecmwf": {
+     "ceiling_ft": 2102.0,
+     "visibility_m": null,
+     "wind_speed_kt": 13.5,
+     "wind_dir_deg": 238.0,
+     "wind_gust_kt": 27.8,
+     "cloud_cover_pct": 94.0,
+     "cape_jkg": 0.0,
+     "convective_risk": "none",
+     "temperature_c": 10.8,
+     "freezing_level_ft": 5116.0,
+     "flight_category": "MVFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-23T18:00:00+00:00",
+     "crosswind_kt": 7.5,
+     "headwind_kt": 11.2,
+     "best_runway_id": "27C",
+     "gust_crosswind_kt": 15.5,
+     "gust_headwind_kt": 23.0,
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    }
+   },
+   "consensus": {
+    "flight_category": "IFR",
+    "agreement": {
+     "flight_category": "mixed",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "mixed",
+     "cape_jkg": "consistent",
+     "visibility_m": "divergent",
+     "cloud_cover_pct": "consistent"
+    },
+    "convective_risk": "marginal",
+    "wind_speed_kt": 15.2,
+    "ceiling_ft": 988.0,
+    "cape_jkg": 10.0,
+    "visibility_m": 24140.0,
+    "crosswind_kt": 7.6,
+    "headwind_kt": 11.2,
+    "cloud_cover_pct": 100.0,
+    "freezing_level_ft": 4918.0,
+    "wind_dir_deg": 240.3
+   },
+   "consensus_majority": {
+    "flight_category": "MVFR",
+    "agreement": {
+     "flight_category": "mixed",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "mixed",
+     "cape_jkg": "consistent",
+     "visibility_m": "divergent",
+     "cloud_cover_pct": "consistent"
+    },
+    "convective_risk": "marginal",
+    "wind_speed_kt": 13.8,
+    "ceiling_ft": 1719.5,
+    "cape_jkg": 5.0,
+    "visibility_m": 24140.0,
+    "crosswind_kt": 7.3,
+    "headwind_kt": 11.6,
+    "cloud_cover_pct": 97.0,
+    "freezing_level_ft": 5017.0,
+    "wind_dir_deg": 239.5
+   },
+   "observed": {
+    "metar": {
+     "flight_category": "VFR",
+     "ceiling_ft": 3300,
+     "visibility_m": 10000,
+     "wind_speed_kt": 15,
+     "wind_dir_deg": 240,
+     "wind_gust_kt": null,
+     "temperature_c": 10,
+     "dewpoint_c": 7,
+     "qnh": 1009.0,
+     "weather": [
+      "-DZ"
+     ],
+     "observation_time": "2026-10-24T11:50:00+00:00",
+     "age_min": 10,
+     "report_type": "METAR",
+     "raw": "METAR EDDV 241150Z AUTO 24015KT 180V270 9999 -DZ SCT017 BKN033 OVC043 10/07 Q1009 TEMPO 24015G25KT",
+     "crosswind_kt": 7.9,
+     "headwind_kt": 12.7,
+     "best_runway_id": "27C",
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    },
+    "taf": {
+     "flight_category": "IFR",
+     "prevailing_category": "MVFR",
+     "temporary_category": "IFR",
+     "temporary_type": "TEMPO",
+     "trend_type": "TEMPO",
+     "ceiling_ft": 3000,
+     "visibility_m": 4500,
+     "wind_speed_kt": 13,
+     "wind_dir_deg": 230,
+     "wind_gust_kt": null,
+     "significant_weather": [],
+     "issue_time": "2026-10-24T05:00:00+00:00",
+     "raw": "TAF EDDV 240500Z 2406/2506 23013KT 9999 BKN030\nTEMPO 2406/2412 4500 RADZ\nPROB30\nTEMPO 2406/2412 BKN013\nTEMPO 2500/2506 20015G25KT RA\nPROB30\nTEMPO 2500/2506 21025G40KT BKN012",
+     "crosswind_kt": 8.7,
+     "headwind_kt": 9.7,
+     "best_runway_id": "27C",
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    }
+   }
+  },
+  {
+   "icao": "EDFM",
+   "lat": 49.473057,
+   "lon": 8.514167,
+   "approach_type": "RNAV",
+   "models": {
+    "gfs": {
+     "ceiling_ft": 3925.0,
+     "visibility_m": 24140.0,
+     "wind_speed_kt": 10.7,
+     "wind_dir_deg": 258.0,
+     "wind_gust_kt": 17.7,
+     "cloud_cover_pct": 30.0,
+     "cape_jkg": 40.0,
+     "convective_risk": "marginal",
+     "temperature_c": 12.6,
+     "freezing_level_ft": 4335.0,
+     "flight_category": "VFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 2.6,
+     "headwind_kt": 10.4,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 4.3,
+     "gust_headwind_kt": 17.2,
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    },
+    "icon": {
+     "ceiling_ft": 13967.0,
+     "visibility_m": 41800.0,
+     "wind_speed_kt": 8.5,
+     "wind_dir_deg": 253.0,
+     "wind_gust_kt": 20.0,
+     "cloud_cover_pct": 81.0,
+     "cape_jkg": 10.0,
+     "convective_risk": "none",
+     "temperature_c": 12.6,
+     "freezing_level_ft": 4594.0,
+     "flight_category": "VFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 2.8,
+     "headwind_kt": 8.0,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 6.5,
+     "gust_headwind_kt": 18.9,
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    },
+    "ecmwf": {
+     "ceiling_ft": 4148.0,
+     "visibility_m": null,
+     "wind_speed_kt": 11.1,
+     "wind_dir_deg": 254.0,
+     "wind_gust_kt": 25.3,
+     "cloud_cover_pct": 63.0,
+     "cape_jkg": 0.0,
+     "convective_risk": "none",
+     "temperature_c": 12.1,
+     "freezing_level_ft": 4365.0,
+     "flight_category": "VFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-23T18:00:00+00:00",
+     "crosswind_kt": 3.4,
+     "headwind_kt": 10.6,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 7.8,
+     "gust_headwind_kt": 24.1,
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    }
+   },
+   "consensus": {
+    "flight_category": "VFR",
+    "agreement": {
+     "flight_category": "consistent",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "divergent",
+     "cape_jkg": "consistent",
+     "visibility_m": "divergent",
+     "cloud_cover_pct": "divergent"
+    },
+    "convective_risk": "marginal",
+    "wind_speed_kt": 11.1,
+    "ceiling_ft": 3925.0,
+    "cape_jkg": 40.0,
+    "visibility_m": 24140.0,
+    "crosswind_kt": 3.4,
+    "headwind_kt": 8.0,
+    "cloud_cover_pct": 81.0,
+    "freezing_level_ft": 4335.0,
+    "wind_dir_deg": 255.0
+   },
+   "consensus_majority": {
+    "flight_category": "VFR",
+    "agreement": {
+     "flight_category": "consistent",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "divergent",
+     "cape_jkg": "consistent",
+     "visibility_m": "divergent",
+     "cloud_cover_pct": "divergent"
+    },
+    "convective_risk": "none",
+    "wind_speed_kt": 10.7,
+    "ceiling_ft": 4148.0,
+    "cape_jkg": 10.0,
+    "visibility_m": 32970.0,
+    "crosswind_kt": 2.8,
+    "headwind_kt": 10.4,
+    "cloud_cover_pct": 63.0,
+    "freezing_level_ft": 4365.0,
+    "wind_dir_deg": 255.0
+   },
+   "observed": {
+    "metar": {
+     "flight_category": "VFR",
+     "ceiling_ft": 4300,
+     "visibility_m": 10000,
+     "wind_speed_kt": 12,
+     "wind_dir_deg": 240,
+     "wind_gust_kt": null,
+     "temperature_c": 12,
+     "dewpoint_c": 2,
+     "qnh": 1018.0,
+     "weather": [],
+     "observation_time": "2026-10-24T11:50:00+00:00",
+     "age_min": 10,
+     "report_type": "METAR",
+     "raw": "METAR EDFM 241150Z 24012KT 200V280 9999 BKN043 12/02 Q1018",
+     "crosswind_kt": 6.4,
+     "headwind_kt": 10.2,
+     "best_runway_id": "27R",
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    }
+   }
+  },
+  {
+   "icao": "EGLL",
+   "lat": 51.470748,
+   "lon": -0.459909,
+   "approach_type": "ILS",
+   "models": {
+    "gfs": {
+     "ceiling_ft": 617.0,
+     "visibility_m": 22780.0,
+     "wind_speed_kt": 11.6,
+     "wind_dir_deg": 207.0,
+     "wind_gust_kt": 26.0,
+     "cloud_cover_pct": 100.0,
+     "cape_jkg": 0.0,
+     "convective_risk": "none",
+     "temperature_c": 11.0,
+     "freezing_level_ft": 5739.0,
+     "flight_category": "IFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 10.3,
+     "headwind_kt": 5.3,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 23.1,
+     "gust_headwind_kt": 12.0,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    },
+    "icon": {
+     "ceiling_ft": 865.0,
+     "visibility_m": 24460.0,
+     "wind_speed_kt": 9.2,
+     "wind_dir_deg": 201.0,
+     "wind_gust_kt": 17.3,
+     "cloud_cover_pct": 100.0,
+     "cape_jkg": 20.0,
+     "convective_risk": "low",
+     "temperature_c": 11.3,
+     "freezing_level_ft": 5535.0,
+     "flight_category": "IFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-24T00:00:00+00:00",
+     "crosswind_kt": 8.6,
+     "headwind_kt": 3.4,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 16.1,
+     "gust_headwind_kt": 6.3,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    },
+    "ecmwf": {
+     "ceiling_ft": 865.0,
+     "visibility_m": null,
+     "wind_speed_kt": 10.9,
+     "wind_dir_deg": 204.0,
+     "wind_gust_kt": 20.4,
+     "cloud_cover_pct": 100.0,
+     "cape_jkg": 20.0,
+     "convective_risk": "marginal",
+     "temperature_c": 10.2,
+     "freezing_level_ft": 5645.0,
+     "flight_category": "IFR",
+     "valid_time": "2026-10-24T12:00:00+00:00",
+     "model_init_time": "2026-10-23T18:00:00+00:00",
+     "crosswind_kt": 9.9,
+     "headwind_kt": 4.5,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 18.6,
+     "gust_headwind_kt": 8.4,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    }
+   },
+   "consensus": {
+    "flight_category": "IFR",
+    "agreement": {
+     "flight_category": "consistent",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "consistent",
+     "cape_jkg": "consistent",
+     "visibility_m": "consistent",
+     "cloud_cover_pct": "consistent"
+    },
+    "convective_risk": "low",
+    "wind_speed_kt": 11.6,
+    "ceiling_ft": 617.0,
+    "cape_jkg": 20.0,
+    "visibility_m": 22780.0,
+    "crosswind_kt": 10.3,
+    "headwind_kt": 3.4,
+    "cloud_cover_pct": 100.0,
+    "freezing_level_ft": 5535.0,
+    "wind_dir_deg": 204.0
+   },
+   "consensus_majority": {
+    "flight_category": "IFR",
+    "agreement": {
+     "flight_category": "consistent",
+     "wind_speed_kt": "consistent",
+     "ceiling_ft": "consistent",
+     "cape_jkg": "consistent",
+     "visibility_m": "consistent",
+     "cloud_cover_pct": "consistent"
+    },
+    "convective_risk": "low",
+    "wind_speed_kt": 10.9,
+    "ceiling_ft": 865.0,
+    "cape_jkg": 20.0,
+    "visibility_m": 23620.0,
+    "crosswind_kt": 9.9,
+    "headwind_kt": 4.5,
+    "cloud_cover_pct": 100.0,
+    "freezing_level_ft": 5645.0,
+    "wind_dir_deg": 204.0
+   },
+   "observed": {
+    "metar": {
+     "flight_category": "MVFR",
+     "ceiling_ft": 2100,
+     "visibility_m": 10000,
+     "wind_speed_kt": 12,
+     "wind_dir_deg": 200,
+     "wind_gust_kt": null,
+     "temperature_c": 11,
+     "dewpoint_c": 10,
+     "qnh": 1007.0,
+     "weather": [
+      "-RA"
+     ],
+     "observation_time": "2026-10-24T11:50:00+00:00",
+     "age_min": 10,
+     "report_type": "METAR",
+     "raw": "METAR EGLL 241150Z AUTO 20012KT 9999 -RA SCT016/// BKN021/// BKN044/// //////TCU 11/10 Q1007",
+     "crosswind_kt": 11.2,
+     "headwind_kt": 4.2,
+     "best_runway_id": "27R",
+     "alt_required": {
+      "faa": false,
+      "easa": false
+     }
+    },
+    "taf": {
+     "flight_category": "IFR",
+     "prevailing_category": "VFR",
+     "temporary_category": "IFR",
+     "temporary_type": "PROB40 TEMPO",
+     "trend_type": "PROB40 TEMPO",
+     "ceiling_ft": 900,
+     "visibility_m": 2500,
+     "wind_speed_kt": 20,
+     "wind_dir_deg": 200,
+     "wind_gust_kt": 32,
+     "significant_weather": [],
+     "issue_time": "2026-10-24T04:59:00+00:00",
+     "raw": "TAF EGLL 240459Z 2406/2512 26010KT 9999 SCT030\nBECMG 2406/2408 20010KT\nTEMPO 2409/2423 6000 RA BKN012\nPROB40\nTEMPO 2410/2421 2500 +RA BKN009\nBECMG 2412/2415 20020G32KT\nPROB30\nTEMPO 2415/2421 21024G42KT\nBECMG 2420/2423 26018G30KT",
+     "crosswind_kt": 18.7,
+     "headwind_kt": 7.0,
+     "best_runway_id": "27R",
+     "gust_crosswind_kt": 30.0,
+     "gust_headwind_kt": 11.2,
+     "alt_required": {
+      "faa": true,
+      "easa": true
+     }
+    }
+   }
+  }
+ ]
+}
