@@ -423,6 +423,13 @@ def fill_grib_primary_gaps(
         outcome.open_meteo_calls = client.call_count - calls_before
         if fetched is None:
             continue
+        if len(fetched) != len(missing):
+            # zip() below would silently drop the tail; those points stay
+            # short and show up in the "still short" count.
+            logger.warning(
+                "GRIB-primary %s: Open-Meteo fallback returned %d forecasts for %d points",
+                model.value, len(fetched), len(missing),
+            )
         for i, om_wf in zip(missing, fetched):
             splice_open_meteo(pfs[i], om_wf)
         still = uncovered_points([pfs[i] for i in missing], hours)

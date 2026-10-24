@@ -493,7 +493,7 @@ def test_icon_surface_decode_from_grib(tmp_path):
 
 
 def test_icon_surface_time_interpolated_across_3h_steps():
-    from weatherbrief.fetch.grib.fill import _linear_interp_ecmwf_surface
+    from weatherbrief.fetch.grib.fill import _linear_interp_grib_surface
     from weatherbrief.models import NWPCloudDiagnostics
 
     pts = _points(1)
@@ -507,7 +507,7 @@ def test_icon_surface_time_interpolated_across_3h_steps():
         h.temperature_2m_c = 10.0
     cs = RouteCrossSection(model=ModelSource.ICON, route_points=pts,
                            fetched_at=DEP, point_forecasts=skel)
-    _linear_interp_ecmwf_surface([cs], [])
+    _linear_interp_grib_surface([cs], [])
     assert by_h[10].pressure_msl_hpa == pytest.approx(1012.0)
     assert by_h[11].cloud_cover_pct == pytest.approx(50.0)
 

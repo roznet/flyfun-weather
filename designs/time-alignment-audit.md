@@ -160,7 +160,7 @@ Open-Meteo provides **hourly** forecast data for the full 24h cross-section, inc
 | `cloud_cover_low/mid/high_pct` (bulk OM field) | Open-Meteo hourly interp (never written by GRIB enrichment) | same | same |
 | `cloud_liquid_water_kg_kg` / `ice_mixing_ratio_kg_kg` (per level) | GRIB CLMR / ICMR | Step-time linear interp (`_interp_gfs_clw_hourly`) | Forward-filled (`_fill_clw_hourly`) for GFS without `gfs_init`; ECMWF / ICON rebuild full `pressure_levels` via `_linear_interp_pressure_levels` |
 
-`propagate_all` runs its passes in a **required order**: `_linear_interp_ecmwf_surface` → `_fill_cloud_diagnostics` → `_linear_interp_pressure_levels` → `_fill_cloud_water`. The ECMWF surface pass detects GRIB anchors by `nwp_cloud_diagnostics is not None`; once diag fill has run, every hour looks like an anchor, so moving it later silently breaks it.
+`propagate_all` runs its passes in a **required order**: `_linear_interp_grib_surface` → `_fill_cloud_diagnostics` → `_linear_interp_pressure_levels` → `_fill_cloud_water`. The ECMWF surface pass detects GRIB anchors by `nwp_cloud_diagnostics is not None`; once diag fill has run, every hour looks like an anchor, so moving it later silently breaks it.
 
 **Cloud diagnostics propagation** (`_fill_cloud_diagnostics` in `fetch/grib/fill.py`, called from `propagate_all`):
 

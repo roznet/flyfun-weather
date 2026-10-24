@@ -615,7 +615,6 @@ def confirm_candidate(
             fill_grib_primary_gaps,
         )
         from weatherbrief.fetch.open_meteo import OpenMeteoClient
-
         from weatherbrief.tasks.artifacts import load_fetch_meta
 
         # Only the slots the briefing built from GRIB (fetch_facts, #912): an

@@ -92,7 +92,7 @@ def propagate_all(
             averaged-window phantom-layer pathology — issue #148) and linear
             interp for CLW/ICMR. When None, all sections use forward-fill.
     """
-    # ECMWF surface linear interp must run BEFORE cloud-diag fill: it uses
+    # GRIB surface linear interp must run BEFORE cloud-diag fill: it uses
     # ``nwp_cloud_diagnostics is not None`` as the GRIB-anchor detector, and
     # diag fill propagates / interpolates diagnostics onto gap hours, making
     # every hour look like an anchor afterwards.
@@ -105,7 +105,7 @@ def propagate_all(
     # over (unlike the ECMWF gust, whose window spans the gap), so any fill
     # would fabricate a maximum for an unmeasured hour. Never linearly
     # interpolate dBZ (logarithmic) either.
-    _linear_interp_ecmwf_surface(sections, all_forecasts)
+    _linear_interp_grib_surface(sections, all_forecasts)
     _fill_cloud_diagnostics(sections, all_forecasts, gfs_init=gfs_init)
     _linear_interp_pressure_levels(sections, all_forecasts)
     # CLW/ICMR overlay onto OM pressure_levels (GFS path only — for ECMWF/ICON
@@ -166,7 +166,7 @@ def _fill_diag_hourly(hourly_list: list[HourlyForecast]) -> int:
     ``NWP_CLOUD_DIAG_RATE_SCALARS`` are the exception: a de-accumulated rate at
     anchor N describes the window ``(N-w, N]``, so a gap hour between anchors N
     and N+w falls inside the NEXT anchor's window and takes THAT value. This is
-    a covering-interval hold, matching what ``_linear_interp_ecmwf_surface``
+    a covering-interval hold, matching what ``_linear_interp_grib_surface``
     already does for the 10fg gust. Forward-filling the rate instead presented
     the previous window's value inside the current window — shifting convective
     precip by up to 6 h at 6-hourly cadence, so a firing window could read
@@ -1161,11 +1161,11 @@ _GRIB_PRIMARY_FILL_FIELDS: tuple[str, ...] = (
 _GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon"})
 
 
-def _linear_interp_ecmwf_surface(
+def _linear_interp_grib_surface(
     sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
 ) -> None:
-    """Linearly interpolate ECMWF GRIB-derived surface scalars across intra-window gaps.
+    """Linearly interpolate ECMWF and ICON GRIB surface scalars across intra-window gaps.
 
     GRIB delivers surface fields at native step times (1h cadence to 90h, then
     3h, then 6h past 144h). Open-Meteo provides hourly values from its own
