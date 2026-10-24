@@ -55,6 +55,16 @@ _STEP_ATTEMPTS = 2
 # How many older cycles to try when the newest one is not complete yet.
 _MAX_STEP_BACK = 2
 _ICON_DOWNLOAD_WORKERS = 12
+# The newest cycle each model should have out in full by a given time:
+# (cycle interval, hours from init until the whole 0-117 h run is published),
+# with margin. ECMWF a2 lands ~6 h 40 min after 00Z/12Z (the compute node syncs
+# it at 07:15/19:15); GFS and ICON-EU finish their 120 h runs ~4 h after init.
+# At the 08Z/20Z sample hours this expects the 00Z/12Z run of every model.
+_EXPECTED_CYCLE_HOURS: dict[str, tuple[int, float]] = {
+    "ecmwf": (12, 7.5),
+    "gfs": (6, 5.0),
+    "icon": (6, 5.0),
+}
 
 SOURCE_LABELS = {
     "ecmwf": "ecmwf-ecpds",
@@ -424,6 +434,21 @@ def resolve_run(
     )
 
 
+def expected_init(model: str, now: datetime | None = None) -> datetime:
+    """The newest init of ``model`` that should be complete by ``now``.
+
+    A resolved run older than this is stale: its delivery or sync failed (the
+    ECMWF resolver then falls back to an older ready run, GFS/ICON step back a
+    cycle). ``run_once`` reports that as a failure instead of quietly
+    publishing, or keeping, the older run (#911).
+    """
+    interval, lag = _EXPECTED_CYCLE_HOURS[model]
+    now = now or datetime.now(timezone.utc)
+    ref = now - timedelta(hours=lag)
+    day = ref.replace(hour=0, minute=0, second=0, microsecond=0)
+    return day + timedelta(hours=(ref.hour // interval) * interval)
+
+
 def forecast_step_hours(forecast_days: int, stride_hours: int) -> list[int]:
     """Forecast hours a snapshot holds: ``0, stride, …`` below ``forecast_days``.
 
@@ -442,6 +467,7 @@ __all__ = [
     "HEWSON_GRIB_VARS",
     "SOURCE_LABELS",
     "dewpoint_magnus_c",
+    "expected_init",
     "forecast_step_hours",
     "lattice_indices",
     "level_inputs",
