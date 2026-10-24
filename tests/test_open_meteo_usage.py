@@ -60,6 +60,17 @@ class TestRequestWeight:
         assert request_weight(one_day) == 2.0
         assert request_weight(four_weeks) == 4.0
 
+    def test_date_range_overrides_forecast_days(self):
+        params = {"latitude": "1", "hourly": _vars(20), "forecast_days": 28,
+                  "start_date": "2026-10-24", "end_date": "2026-10-24"}
+        assert request_weight(params) == 2.0
+
+    def test_unparseable_window_falls_back_instead_of_raising(self):
+        # 20 vars over the 7-day default: 2.0. Accounting never breaks a fetch.
+        base = {"latitude": "1", "hourly": _vars(20)}
+        assert request_weight({**base, "start_date": "2026-10-24", "end_date": "nope"}) == 2.0
+        assert request_weight({**base, "forecast_days": "seven"}) == 2.0
+
     def test_past_days_extend_the_window(self):
         params = {"latitude": "1", "hourly": _vars(10), "forecast_days": 14, "past_days": 14}
         assert request_weight(params) == 2.0

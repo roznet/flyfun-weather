@@ -196,21 +196,38 @@ def _param_items(value: object) -> list[str]:
     return [str(value)]
 
 
+def _request_days(params: dict) -> int:
+    """Days the request covers. An explicit date range wins and
+    ``forecast_days`` / ``past_days`` are then ignored, as on the server.
+
+    Runs at the HTTP choke point before every request, so a window it can't
+    parse falls back to the default instead of raising: accounting must never
+    break a fetch.
+    """
+    try:
+        if params.get("start_date") and params.get("end_date"):
+            return (
+                date.fromisoformat(str(params["end_date"]))
+                - date.fromisoformat(str(params["start_date"]))
+            ).days + 1
+        days = int(params.get("forecast_days") or _DEFAULT_FORECAST_DAYS)
+        return days + int(params.get("past_days") or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Open-Meteo weight: unparseable time window in %s, assuming %d days",
+            {k: params.get(k) for k in ("start_date", "end_date", "forecast_days", "past_days")},
+            _DEFAULT_FORECAST_DAYS,
+        )
+        return _DEFAULT_FORECAST_DAYS
+
+
 def request_weight(params: dict) -> float:
     """Billed Open-Meteo calls for one request with these query params."""
     locations = max(1, len(_param_items(params.get("latitude"))))
     n_vars = sum(len(_param_items(params.get(s))) for s in _VARIABLE_SECTIONS)
     n_models = max(1, len(_param_items(params.get("models"))))
 
-    if params.get("start_date") and params.get("end_date"):
-        days = (
-            date.fromisoformat(str(params["end_date"]))
-            - date.fromisoformat(str(params["start_date"]))
-        ).days + 1
-    else:
-        days = int(params.get("forecast_days") or _DEFAULT_FORECAST_DAYS)
-        days += int(params.get("past_days") or 0)
-
+    days = _request_days(params)
     variables_fraction = n_vars * n_models / _REFERENCE_VARIABLES
     time_fraction = days / _REFERENCE_DAYS
     per_location = max(1.0, variables_fraction * max(1.0, time_fraction))

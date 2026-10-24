@@ -95,23 +95,35 @@ def _default_db_path() -> str:
     return os.environ.get("AIRPORTS_DB", "")
 
 
-def _log_open_meteo(db, pipeline: str, meter, user_id: str, flight_id: str) -> None:
-    """Record and commit a job's metered Open-Meteo usage (no row when it
-    fetched nothing). Committed here because the jobs can return early without
-    reaching their own commit, and the calls were spent either way.
+def _log_open_meteo(pipeline: str, meter, user_id: str, flight_id: str) -> None:
+    """Record a job's metered Open-Meteo usage (no row when it fetched nothing).
+
+    Called from a ``finally``: the calls were spent whether the job returns
+    early, raises or completes. Own session, so it never commits the job's
+    pending work, and a logging failure never fails the job.
 
     Separate from the ``service="time_scan"`` rows below, which count jobs for
     the per-user limit, not provider calls.
     """
+    from flyfun_common.db import SessionLocal
     from weatherbrief.api.usage import log_api_usage
 
     usage = meter.usage
-    log_api_usage(
-        db, service="open_meteo", pipeline=pipeline,
-        api_calls=usage.calls, weighted_calls=usage.weight,
-        user_id=user_id, flight_id=flight_id,
-    )
-    db.commit()
+    if usage.calls <= 0:
+        return
+    db = SessionLocal()
+    try:
+        log_api_usage(
+            db, service="open_meteo", pipeline=pipeline,
+            api_calls=usage.calls, weighted_calls=usage.weight,
+            user_id=user_id, flight_id=flight_id,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("time-scan: failed to log %s API usage", pipeline, exc_info=True)
+    finally:
+        db.close()
 
 
 def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: str) -> None:
@@ -163,26 +175,27 @@ def _run_scan_job(flight_id: str, pack_dir: Path, fetch_ts: datetime, db_path: s
             from weatherbrief.fetch.open_meteo import open_meteo_meter
 
             with open_meteo_meter() as om_meter:
-                scan = run_time_scan(
-                    pack_dir, route, flight.departure_time,
-                    flexibility=flight.flexibility,
-                    alt_departure_time=flight.alt_departure_time,
-                    advisory_models=adv_models,
-                    enabled_ids=enabled_ids,
-                    advisory_enabled=enabled_map,
-                    user_params=user_params,
-                    aggregation=aggregation,
-                    airports_db_path=db_path,
-                    airport_conditions_recompute=recompute_conds,
-                    icing_method=icing_method,
-                    cloud_source=cloud_source,
-                    convective_method=convective_method,
-                    locale=locale,
-                    equipage=_resolve_equipage(db, flight),
-                    declared_approach_icaos=declared_approaches,
-                )
-            # Before the no-data return: the fetches were spent either way.
-            _log_open_meteo(db, "time_scan", om_meter, flight.user_id, flight_id)
+                try:
+                    scan = run_time_scan(
+                        pack_dir, route, flight.departure_time,
+                        flexibility=flight.flexibility,
+                        alt_departure_time=flight.alt_departure_time,
+                        advisory_models=adv_models,
+                        enabled_ids=enabled_ids,
+                        advisory_enabled=enabled_map,
+                        user_params=user_params,
+                        aggregation=aggregation,
+                        airports_db_path=db_path,
+                        airport_conditions_recompute=recompute_conds,
+                        icing_method=icing_method,
+                        cloud_source=cloud_source,
+                        convective_method=convective_method,
+                        locale=locale,
+                        equipage=_resolve_equipage(db, flight),
+                        declared_approach_icaos=declared_approaches,
+                    )
+                finally:
+                    _log_open_meteo("time_scan", om_meter, flight.user_id, flight_id)
             if scan is None:
                 _write_status(pack_dir, "skipped", flight.flexibility, reason="no_data")
                 return
@@ -306,25 +319,26 @@ def _run_confirm_job(
             from weatherbrief.fetch.open_meteo import open_meteo_meter
 
             with open_meteo_meter() as om_meter:
-                result = confirm_candidate(
-                    pack_dir, route, candidate_time,
-                    data_dir=Path(os.environ.get("DATA_DIR", "data")),
-                    advisory_models=adv_models,
-                    enabled_ids=enabled_ids,
-                    advisory_enabled=enabled_map,
-                    user_params=user_params,
-                    aggregation=aggregation,
-                    airports_db_path=db_path,
-                    airport_conditions_recompute=recompute_conds,
-                    icing_method=icing_method,
-                    cloud_source=cloud_source,
-                    convective_method=convective_method,
-                    locale=locale,
-                    equipage=_resolve_equipage(db, flight),
-                    declared_approach_icaos=declared_approaches,
-                )
-            # Before any early return: the fetches were spent either way.
-            _log_open_meteo(db, "time_confirm", om_meter, flight.user_id, flight_id)
+                try:
+                    result = confirm_candidate(
+                        pack_dir, route, candidate_time,
+                        data_dir=Path(os.environ.get("DATA_DIR", "data")),
+                        advisory_models=adv_models,
+                        enabled_ids=enabled_ids,
+                        advisory_enabled=enabled_map,
+                        user_params=user_params,
+                        aggregation=aggregation,
+                        airports_db_path=db_path,
+                        airport_conditions_recompute=recompute_conds,
+                        icing_method=icing_method,
+                        cloud_source=cloud_source,
+                        convective_method=convective_method,
+                        locale=locale,
+                        equipage=_resolve_equipage(db, flight),
+                        declared_approach_icaos=declared_approaches,
+                    )
+                finally:
+                    _log_open_meteo("time_confirm", om_meter, flight.user_id, flight_id)
 
             # Re-load before mutating — the artifact may have moved while the
             # fetch ran (another confirm finishing, never a concurrent write:

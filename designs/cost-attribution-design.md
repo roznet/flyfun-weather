@@ -127,6 +127,9 @@ overage (#910). Read `weighted_calls` against the plan, never `api_calls`.
   `fetch.open_meteo.request_weight(params)` is a port of the server's
   `calculateQueryWeight`; `OpenMeteoClient._send_with_network_retry` bills
   every attempt (retries included) into a lock-protected `call_weight`.
+  Accounting never fails a fetch: an unparseable time window bills the
+  7-day default with a warning, and every usage write is on its own session
+  with errors swallowed.
 - **`open_meteo_meter()`** — a ContextVar meter for callers that don't hold the
   client. A client binds to the meter active at *construction*, so pool
   threads count when the client was built inside the block or the thread runs

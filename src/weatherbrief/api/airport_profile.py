@@ -355,6 +355,7 @@ def _fetch_pressure_levels(
     lon: float,
     model: str,
     hours: list[datetime],
+    user_id: str | None = None,
 ) -> Any:
     """Fetch hourly pressure-level data from Open-Meteo for one airport.
 
@@ -388,11 +389,11 @@ def _fetch_pressure_levels(
         )
         return None
     finally:
-        _log_open_meteo_usage(client)
+        _log_open_meteo_usage(client, user_id)
     return forecasts[0] if forecasts else None
 
 
-def _log_open_meteo_usage(client) -> None:
+def _log_open_meteo_usage(client, user_id: str | None) -> None:
     """Record the fetch's Open-Meteo usage; accounting never fails the stream.
 
     Own short-lived session for the same reason as the surface read in
@@ -400,11 +401,14 @@ def _log_open_meteo_usage(client) -> None:
     """
     from weatherbrief.api.usage import log_api_usage
 
+    if client.call_count <= 0:  # cache hit: nothing billed, no session needed
+        return
     db = SessionLocal()
     try:
         log_api_usage(
             db, service="open_meteo", pipeline="airport_profile",
             api_calls=client.call_count, weighted_calls=client.call_weight,
+            user_id=user_id,
         )
         db.commit()
     except Exception:
@@ -696,7 +700,7 @@ async def get_airport_profile(
             loop = asyncio.get_running_loop()
             try:
                 wf = await loop.run_in_executor(
-                    None, _fetch_pressure_levels, icao, lat, lon, model, hours,
+                    None, _fetch_pressure_levels, icao, lat, lon, model, hours, _user_id,
                 )
             except Exception as exc:
                 logger.warning("Airport profile: levels fetch raised: %s", exc, exc_info=True)

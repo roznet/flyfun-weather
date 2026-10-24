@@ -1959,6 +1959,7 @@ def run_standalone_cycle(
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.grib import DecodePriority
     from weatherbrief.fetch.model_status import fetch_model_metadata
+    from weatherbrief.fetch.open_meteo import open_meteo_meter
 
     if fetch_forecasts and score_observations:
         cycle_type = "full"
@@ -2067,8 +2068,6 @@ def run_standalone_cycle(
                                 model, init_time, len(airports))
                     # GFS/ICON GRIB diagnostics are fetched alongside and
                     # attached before the sounding pass (#635).
-                    from weatherbrief.fetch.open_meteo import open_meteo_meter
-
                     with open_meteo_meter() as om_meter:
                         snapshots, api_calls = fetch_model_snapshots(
                             model, init_time, airports, session, edr_acc=edr_acc,
