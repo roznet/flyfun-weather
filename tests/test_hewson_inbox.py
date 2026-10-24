@@ -305,3 +305,20 @@ def test_fallback_runs_only_missing_models(monkeypatch):
     monkeypatch.setattr("weatherbrief.hewson.run_once", fake_run_once)
     sched._run_hewson_precompute_once(["ecmwf"])
     assert seen["models"] == ["ecmwf"]
+
+
+def test_expected_inits_wait_for_the_cycle_when_local_run_is_stale(monkeypatch):
+    """This box's ECMWF is a cycle behind: expect the cycle's init from the
+    node, so an old snapshot on disk does not count as delivered."""
+    import weatherbrief.scheduler as sched
+    from weatherbrief.hewson import grib_source
+
+    cycle = datetime(2026, 10, 24, 0, tzinfo=timezone.utc)
+    stale = SimpleNamespace(init_unix=int((cycle - timedelta(hours=12)).timestamp()))
+    current = SimpleNamespace(init_unix=int(cycle.timestamp()))
+    monkeypatch.setattr(grib_source, "resolve_run",
+                        lambda m, h, L: stale if m == "ecmwf" else current)
+    monkeypatch.setattr(grib_source, "expected_init", lambda m: cycle)
+    assert sched._hewson_expected_inits(["ecmwf", "gfs"]) == {
+        "ecmwf": int(cycle.timestamp()), "gfs": int(cycle.timestamp()),
+    }

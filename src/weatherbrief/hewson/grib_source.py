@@ -291,7 +291,11 @@ def _resolve_ecmwf(
 
 def _new_session() -> requests.Session:
     """A session whose connection pool fits the ICON download pool, so the
-    workers share it without "connection pool is full" churn."""
+    workers share it without "connection pool is full" churn.
+
+    Shared across those threads for plain GETs only (no auth, no cookies to
+    mutate), the common and safe use of a ``requests.Session``.
+    """
     session = requests.Session()
     adapter = requests.adapters.HTTPAdapter(
         pool_connections=4, pool_maxsize=_ICON_DOWNLOAD_WORKERS,

@@ -2568,7 +2568,11 @@ def _hewson_expected_inits(models: list[str]) -> dict[str, int]:
     Re-reading at each poll would be wrong: a run that lands during the 30 min
     wait would demand an init the node never saw and force a needless local run.
     """
-    from weatherbrief.hewson.grib_source import forecast_step_hours, resolve_run
+    from weatherbrief.hewson.grib_source import (
+        expected_init,
+        forecast_step_hours,
+        resolve_run,
+    )
     from weatherbrief.hewson.precompute import (
         DEFAULT_FORECAST_DAYS,
         DEFAULT_LEVELS,
@@ -2583,7 +2587,15 @@ def _hewson_expected_inits(models: list[str]) -> dict[str, int]:
         except Exception:
             logger.warning("Hewson inbox: %s GRIB run unresolved", m, exc_info=True)
             run = None
-        out[m] = run.init_unix if run is not None else 0
+        if run is None:
+            out[m] = 0
+            continue
+        # A run behind the current cycle here (this box's ECMWF delivery
+        # failed too) is not what the node should deliver: an old snapshot on
+        # disk would count as delivered and nothing would be reported. Wait for
+        # the cycle's init instead; the node either has it or fails, and the
+        # local fallback logs the stale-init error.
+        out[m] = max(run.init_unix, int(expected_init(m).timestamp()))
     return out
 
 
