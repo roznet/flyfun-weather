@@ -32,7 +32,9 @@ from weatherbrief.costs import (
 from flyfun_common.costs import record_cost
 from flyfun_common.db import current_user_id, get_db, optional_user_id
 from flyfun_common.db.models import CostLedgerRow, UserRow
-from weatherbrief.api.preferences import FxBlock, fx_block_for_user, usd_fx_block
+from weatherbrief.api.preferences import (
+    FxBlock, fx_block_for_currency, fx_block_for_user, usd_fx_block,
+)
 from weatherbrief.db.models import CostConfigRow
 from weatherbrief.impact import UsageFootprint, usage_footprint
 from weatherbrief.storage.flights import ensure_utc
@@ -626,6 +628,8 @@ def other_llm_spend(
 
 #: Columns of the admin cost table.
 _TABLE_WINDOWS = (("7d", 7), ("30d", 30), ("365d", 365))
+#: Currencies the admin cost table can be shown in, at today's ECB rate.
+_TABLE_CURRENCIES = ("USD", "EUR", "GBP", "CHF")
 
 
 def build_cost_table_report(db: Session, now: datetime | None = None) -> dict | None:
@@ -733,8 +737,18 @@ def get_cost_table(
     _admin_id: str = Depends(require_admin),
     db: Session = Depends(get_db, scope="function"),
 ):
-    """Admin cost table: fixed / variable / usage rows × 7d, 30d, 365d."""
-    return build_cost_table_report(db)
+    """Admin cost table: fixed / variable / usage rows × 7d, 30d, 365d.
+
+    ``fx`` maps each offered currency to today's rate.  A currency whose rate
+    is unavailable comes back as a USD block (``fx_block_for_currency``
+    degrades rather than fails), which the page reads as "not offered".
+    """
+    out = build_cost_table_report(db)
+    if out is not None:
+        out["fx"] = {
+            c: fx_block_for_currency(c).model_dump() for c in _TABLE_CURRENCIES
+        }
+    return out
 
 
 @report_router.get("")

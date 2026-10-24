@@ -17,7 +17,9 @@ import {
   fetchCostReport, fetchCostTable, fetchCostConfig, fetchCostConfigHistory, updateCostConfig,
   type CostTable, type CostConfigData, type CostConfigVersion, type OtherLlmSpend,
 } from './adapters/admin-adapter';
-import { escapeHtml, formatDate, usd4, signedUsd4 } from './utils';
+import { escapeHtml, formatDate } from './utils';
+import { resolveInitialCurrency } from './currency';
+import type { FxBlock } from './adapters/donations-adapter';
 
 type Window = '7d' | '30d';
 
@@ -28,9 +30,48 @@ let subItems: Array<{ name: string; amount: number }> = [];
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
+// Display currency for the report sections (table + Other LLM spend). Amounts
+// stay USD on the wire; `fxRates` is today's rate per offered currency, sent
+// with the table. The rate-card editor always edits USD.
+let currency = 'USD';
+let fxRates: Record<string, FxBlock> = {};
+let lastTable: CostTable | null = null;
+let lastOtherLlm: OtherLlmSpend | null = null;
+
+function money(n: number, dp = 2): string {
+  const fx = fxRates[currency];
+  const code = fx ? currency : 'USD';
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency', currency: code, minimumFractionDigits: dp, maximumFractionDigits: dp,
+  }).format(n * (fx?.rate ?? 1));
+}
+const money4 = (n: number) => money(n, 4);
+
+function renderCurrencyToggle(): void {
+  const el = document.getElementById('cost-currency-toggle');
+  if (!el) return;
+  // A currency whose rate was unavailable comes back as a USD block: not offered.
+  const offered = Object.entries(fxRates).filter(([code, b]) => b.currency === code).map(([code]) => code);
+  if (!offered.includes(currency)) currency = 'USD';
+  el.innerHTML = offered.length > 1
+    ? offered.map((c) => `<button class="toggle-btn${c === currency ? ' active' : ''}" data-currency="${c}">${c}</button>`).join('')
+    : '';
+  el.querySelectorAll('.toggle-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const c = (btn as HTMLElement).dataset.currency!;
+      if (c === currency) return;
+      currency = c;
+      renderCurrencyToggle();
+      renderTable(lastTable);
+      renderOtherLlm(lastOtherLlm);
+    });
+  });
+}
+
 export async function initCostTab(): Promise<void> {
   if (costInitialized) return;
   costInitialized = true;
+  currency = resolveInitialCurrency();
 
   document.querySelectorAll('#cost-period-toggle .toggle-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -68,7 +109,11 @@ async function loadReport(): Promise<void> {
 
 async function loadTable(): Promise<void> {
   try {
-    renderTable(await fetchCostTable());
+    lastTable = await fetchCostTable();
+    fxRates = lastTable?.fx ?? {};
+    renderCurrencyToggle();
+    renderTable(lastTable);
+    renderOtherLlm(lastOtherLlm);
   } catch (err) {
     showError(`Failed to load cost table: ${err}`);
   }
@@ -78,7 +123,8 @@ async function loadTable(): Promise<void> {
 async function loadOtherLlm(): Promise<void> {
   try {
     const r = await fetchCostReport(reportWindow);
-    renderOtherLlm(r?.other_llm ?? null);
+    lastOtherLlm = r?.other_llm ?? null;
+    renderOtherLlm(lastOtherLlm);
   } catch (err) {
     showError(`Failed to load cost report: ${err}`);
   }
@@ -114,25 +160,28 @@ function renderTable(t: CostTable | null): void {
 
   let html = '';
   for (const sec of t.sections) {
-    html += row('cost-section', sec.label, sec.values, usd);
+    html += row('cost-section', sec.label, sec.values, money);
     for (const r of sec.rows) {
-      html += row('', r.label, r.values, usd, 'cost-line');
+      html += row('', r.label, r.values, money, 'cost-line');
       // Reporting-only: the saving is already netted off inside the token line.
       if (r.label.startsWith('LLM tokens') && t.cache_saving_usd.some((v) => v != null)) {
-        html += row('cost-aside muted', 'of which cache saved', t.cache_saving_usd, signedUsd4, 'cost-line');
+        html += row('cost-aside muted', 'of which cache saved', t.cache_saving_usd, money4, 'cost-line');
       }
     }
   }
-  html += row('cost-total', 'Total', t.total, usd);
+  html += row('cost-total', 'Total', t.total, money);
   html += `<tr class="cost-section"><td>Usage</td>${blank}</tr>`;
   for (const u of t.usage) {
-    html += row('', u.label, u.values, u.kind === 'count' ? (n) => String(n) : usd4, 'cost-line');
+    html += row('', u.label, u.values, u.kind === 'count' ? (n) => String(n) : money4, 'cost-line');
   }
   body.innerHTML = html;
 
   note.innerHTML = 'Fixed cost is prorated from each rate-card version over the part of the window it was active '
     + '(monthly &times; days/30). Variable is the LLM and storage cost actually charged. '
-    + `Extra is ${t.margin_percent}% of everything else. Cost per briefing / user divide the total.`;
+    + `Extra is ${t.margin_percent}% of everything else. Cost per briefing / user divide the total.`
+    + (currency !== 'USD' && fxRates[currency]
+      ? ` Converted from USD at 1 USD = ${fxRates[currency].rate} ${currency} (ECB, ${fxRates[currency].as_of ?? 'today'}).`
+      : '');
 }
 
 /** Rows shown per table before the rest is cut (30d of daily rows per
@@ -152,7 +201,7 @@ function renderOtherLlm(o: OtherLlmSpend | null): void {
   }
 
   const cards = o.by_category.map((c) => `
-    <div class="summary-card"><div class="value">${usd4(c.cost_usd)}</div><div class="label">${escapeHtml(c.category)} (${c.calls})</div></div>`).join('');
+    <div class="summary-card"><div class="value">${money4(c.cost_usd)}</div><div class="label">${escapeHtml(c.category)} (${c.calls})</div></div>`).join('');
 
   const table = (head: string, rows: string[]): string => `
     <div style="overflow-x:auto;margin-top:0.5rem;">
@@ -166,16 +215,16 @@ function renderOtherLlm(o: OtherLlmSpend | null): void {
     </div>`;
 
   const dayRows = o.by_day.map((d) => `
-    <tr><td>${escapeHtml(d.date)}</td><td>${escapeHtml(d.category)}</td><td class="num">${d.calls}</td><td class="num">${usd4(d.cost_usd)}</td></tr>`);
+    <tr><td>${escapeHtml(d.date)}</td><td>${escapeHtml(d.category)}</td><td class="num">${d.calls}</td><td class="num">${money4(d.cost_usd)}</td></tr>`);
   const userRows = o.by_user.map((u) => `
     <tr>
       <td><a href="/user-costs.html?user=${encodeURIComponent(u.user_id)}">${escapeHtml(u.email ?? u.user_id)}</a></td>
-      <td class="num">${u.calls}</td><td class="num">${usd4(u.cost_usd)}</td>
+      <td class="num">${u.calls}</td><td class="num">${money4(u.cost_usd)}</td>
     </tr>`);
 
   el.innerHTML = `
     <div class="summary-bar">
-      <div class="summary-card"><div class="value">${usd4(o.total_usd)}</div><div class="label">Total (${o.calls} calls)</div></div>
+      <div class="summary-card"><div class="value">${money4(o.total_usd)}</div><div class="label">Total (${o.calls} calls)</div></div>
       ${cards}
     </div>
     <details style="margin-top:0.5rem;"><summary style="cursor:pointer;font-size:0.85rem;">By day</summary>
