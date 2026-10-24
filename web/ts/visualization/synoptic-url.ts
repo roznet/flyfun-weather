@@ -28,7 +28,7 @@ export const SYNOPTIC_URL_SCHEMA = {
   // Percent, so the int codec applies (the map takes 0..1).
   'syn.opacity': { default: 50, values: Array.from({ length: 101 }, (_, i) => i) as readonly number[] },
   'syn.scale':   { default: 'default' as ColorScale, values: ['default', 'storm'] as readonly ColorScale[] },
-  'syn.fronts':  { default: 'off', values: SYNOPTIC_FRONT_GATES },
+  'syn.fronts':  { default: 'default', values: SYNOPTIC_FRONT_GATES },
   'syn.view':    mapViewField(),
 };
 
