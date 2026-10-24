@@ -3749,8 +3749,8 @@ def read_gfs_grib_points(
     lead = _gfs_previous_step(fhours[0])
     surface_steps = ([lead] if lead is not None and lead not in fhours else []) + fhours
 
-    # Hours download side by side (~177 MB each on a cold cache, review of
-    # PR 927). Each blob streams to disk, never into memory.
+    # Hours download side by side (~177 MB each on a cold cache). Each blob
+    # streams to disk, never into memory.
     with ThreadPoolExecutor(max_workers=_GFS_DOWNLOAD_WORKERS) as pool:
         snd_futures = {
             f: _submit_with_context(
@@ -3766,8 +3766,8 @@ def read_gfs_grib_points(
             )
             for f in surface_steps
         }
-    sounding_hours = [f for f, fut in snd_futures.items() if fut.result()]
-    surface_hours = [f for f, fut in sfc_futures.items() if fut.result()]
+    sounding_hours = _gfs_ready_hours(snd_futures, "sounding")
+    surface_hours = _gfs_ready_hours(sfc_futures, "surface")
     jobs = [
         ("decode_gfs_sounding", (str(run_dir / _gfs_sounding_cache_key(f, levels)), point_lats, point_lons))
         for f in sounding_hours
@@ -3785,6 +3785,24 @@ def read_gfs_grib_points(
             continue
         (sounding_by_fhour if name == "decode_gfs_sounding" else surface_by_fhour)[fhour] = res
     return sounding_by_fhour, surface_by_fhour, surface_steps
+
+
+def _gfs_ready_hours(futures: dict[int, Future], what: str) -> list[int]:
+    """Hours whose blob is on disk; one hour raising loses only that hour."""
+    ready: list[int] = []
+    for fhour, fut in futures.items():
+        try:
+            if fut.result():
+                ready.append(fhour)
+        except Exception:
+            logger.warning("GFS %s f%03d failed", what, fhour, exc_info=True)
+    missing = [f for f in futures if f not in ready]
+    if missing:
+        logger.warning(
+            "GFS %s: %d/%d hours missing (f%s)", what, len(missing), len(futures),
+            ",f".join(f"{f:03d}" for f in missing),
+        )
+    return ready
 
 
 def _enrich_gfs_from_grib_inner(

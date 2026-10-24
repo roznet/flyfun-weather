@@ -427,6 +427,7 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
     from weatherbrief.fetch import grib as grib_mod
 
     asked: dict[str, list[int]] = {"snd": [], "sfc": []}
+    sounding_flag = {"raise": False}
 
     def fake_snd(init_date, init_hour, fhour, run_dir, idx, session, levels):
         asked["snd"].append(fhour)
@@ -434,6 +435,8 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
 
     def fake_sfc(init_date, init_hour, fhour, run_dir, idx, session):
         asked["sfc"].append(fhour)
+        if fhour == 7 and sounding_flag["raise"]:
+            raise ValueError("bad .idx")
         return True
 
     def fake_dispatch(jobs, return_exceptions=False):
@@ -454,7 +457,7 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
             "20260504", 0, [9, 8], [50.0, 51.0], [1.0, 2.0],
             run_dir=tmp_path, session=None,
         )
-    assert asked == {"snd": [8, 9], "sfc": [7, 8, 9]}
+    assert {k: sorted(v) for k, v in asked.items()} == {"snd": [8, 9], "sfc": [7, 8, 9]}
     assert steps == [7, 8, 9]
     assert sorted(snd) == [9]
     assert sorted(sfc) == [7, 8]     # f009 decode failed: absent, no raise
@@ -469,3 +472,13 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
             sounding=False,
         )
     assert snd == {} and asked["snd"] == []
+
+    # One hour raising (e.g. an .idx parse error) loses that hour only.
+    sounding_flag["raise"] = True
+    with patch.object(grib_mod, "_ensure_gfs_sounding", new=fake_snd), patch.object(
+        grib_mod, "_ensure_gfs_surface", new=fake_sfc,
+    ), patch.object(grib_mod, "_dispatch_decode_parallel", new=fake_dispatch):
+        snd, sfc, _ = grib_mod.read_gfs_grib_points(
+            "20260504", 0, [8, 9], [50.0], [1.0], run_dir=tmp_path, session=None,
+        )
+    assert sorted(snd) == [9] and sorted(sfc) == [8]
