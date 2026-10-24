@@ -2548,7 +2548,15 @@ def _hewson_inbox_models() -> list[str]:
         logger.warning(
             "%s: ignoring unknown model(s) %s", _HEWSON_INBOX_MODELS_ENV, sorted(unknown),
         )
-    return [m for m in DEFAULT_MODELS if m in wanted]
+    models = [m for m in DEFAULT_MODELS if m in wanted]
+    if not models:
+        # A typo must not silently turn the offload off.
+        logger.warning(
+            "%s=%r names no known model; expecting all of %s",
+            _HEWSON_INBOX_MODELS_ENV, raw, list(DEFAULT_MODELS),
+        )
+        return list(DEFAULT_MODELS)
+    return models
 
 
 def _hewson_expected_inits(models: list[str]) -> dict[str, int]:

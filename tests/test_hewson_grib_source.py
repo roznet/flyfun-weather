@@ -325,6 +325,16 @@ def test_run_once_grib_incomplete_step_skips_model(tmp_path, flat_terrain, no_op
     assert not list(tmp_path.rglob("gfs/*.npz"))
 
 
+def test_run_once_grib_holey_level_skips_model(tmp_path, flat_terrain, no_open_meteo):
+    """A level too sparse to prepare must drop the model, not leave a NaN slice."""
+    with patch.object(grib_source, "resolve_run", return_value=_fake_run()), \
+         patch("weatherbrief.hewson.precompute.prepare_level_fields", return_value=None):
+        result = run_once(models=["gfs"], output_dir=tmp_path, forecast_days=1,
+                          stride_hours=12, now=SAMPLE_NOW)
+    assert result.skipped == {"gfs": "incomplete"}
+    assert not list(tmp_path.rglob("gfs/*.npz"))
+
+
 def test_run_once_grib_unresolved_model_skipped(tmp_path, flat_terrain, no_open_meteo):
     with patch.object(grib_source, "resolve_run", return_value=None):
         result = run_once(models=["ecmwf"], output_dir=tmp_path, forecast_days=1)
