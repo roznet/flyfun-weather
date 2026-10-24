@@ -63,6 +63,7 @@ import aero.flyfun.weather.model.AlternateAirport
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.SigmetAlongRoute
+import aero.flyfun.weather.model.rules.LiveStormRules
 import aero.flyfun.weather.model.viz.VizDataExtractor
 import aero.flyfun.weather.model.viz.VizPoint
 import aero.flyfun.weather.model.viz.VizRouteData
@@ -85,7 +86,6 @@ enum class RouteMapOverlay(val id: String, val label: String) {
     RADAR("radar", "Radar"),
     SAT_IR("sat_ir", "Satellite IR"),
     STORM_CELLS("cells", "Storm Cells"),
-    LIGHTNING("lightning", "Lightning ⚡"),
     SIGMETS("sigmets", "SIGMETs"),
     ALTERNATES("alternates", "Alternates"),
     OBS_AIRPORTS("obs_airports", "METAR Pins"),
@@ -187,7 +187,6 @@ fun RouteMapTabScreen(
             activeOverlays = activeOverlays + setOf(
                 RouteMapOverlay.RADAR,
                 RouteMapOverlay.STORM_CELLS,
-                RouteMapOverlay.LIGHTNING,
                 RouteMapOverlay.SIGMETS,
             )
         } else if (!intent.preset.isNullOrBlank()) {
@@ -216,7 +215,6 @@ fun RouteMapTabScreen(
 
     val effectiveObservations = liveLayer?.routeObservations ?: snapshot?.routeObservations
     val effectiveSigmets = liveLayer?.routeSigmets ?: snapshot?.routeSigmets
-    val effectiveObserved = liveLayer?.observedConditions ?: snapshot?.observedConditions
     val liveStorms = liveLayer?.storms
 
     val routeBounds: GeoBounds? = remember(vizData, alternates) {
@@ -333,8 +331,7 @@ fun RouteMapTabScreen(
 
             if (RouteMapOverlay.RADAR in activeOverlays ||
                 RouteMapOverlay.SAT_IR in activeOverlays ||
-                RouteMapOverlay.STORM_CELLS in activeOverlays ||
-                RouteMapOverlay.LIGHTNING in activeOverlays
+                RouteMapOverlay.STORM_CELLS in activeOverlays
             ) {
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -426,43 +423,31 @@ fun RouteMapTabScreen(
                 // A. Draw SIGMET Polygons
                 if (RouteMapOverlay.SIGMETS in activeOverlays) {
                     val sigList = effectiveSigmets?.sigmets.orEmpty()
-                    sigList.forEachIndexed { idx, sig ->
-                        val poly = buildSigmetPolygon(sig, idx, pts)
+                    sigList.forEach { sig ->
                         drawSigmetPolygonOnMap(
-                            polygonLatLon = poly,
+                            polygonLatLon = sigmetPolygon(sig),
                             label = "${sig.firId} ${sig.hazard.uppercase()}",
-                            isSevere = sig.qualifier?.contains("SEV", ignoreCase = true) == true ||
-                                effectiveSigmets?.hasSevere == true,
+                            isSevere = sig.qualifier?.contains("SEV", ignoreCase = true) == true,
                             projection = proj,
                         )
                     }
                 }
 
-                // B. Draw Radar / Storm Cells + Motion Arrows
+                // B. Draw the server's route storms at their observed positions (#886)
                 if (RouteMapOverlay.STORM_CELLS in activeOverlays) {
-                    val cells = buildStormCellGeometries(pts, liveStorms, effectiveObserved)
-                    cells.forEach { cell ->
-                        drawStormCellOverlay(
-                            polygonLatLon = cell.polygon,
-                            centroid = cell.centroid,
-                            severity = cell.severity,
-                            motionEndLatLon = cell.motionEnd,
-                            projection = proj,
+                    liveStorms?.cells.orEmpty().forEach { storm ->
+                        val lat = storm.lat ?: return@forEach
+                        val lon = storm.lon ?: return@forEach
+                        drawStormDotOnMap(
+                            center = proj.latLonToScreen(lat, lon),
+                            trendColor = Color(LiveStormRules.trendColorArgb(storm.trend)),
+                            hasLightning = storm.flashCount > 0,
+                            isBehind = storm.ahead == false,
                         )
                     }
                 }
 
-                // C. Draw Lightning Strikes along corridor
-                if (RouteMapOverlay.LIGHTNING in activeOverlays) {
-                    val strikes = buildCorridorLightningStrikes(pts, liveStorms, effectiveObserved)
-                    strikes.forEachIndexed { idx, latLon ->
-                        val screen = proj.latLonToScreen(latLon.lat, latLon.lon)
-                        val ageFactor = 1f - (idx % 4) * 0.15f
-                        drawLightningFlashMarker(center = screen, ageFactor = ageFactor)
-                    }
-                }
-
-                // D. Draw Alternate airport dashed connectors + diamond pins
+                // C. Draw Alternate airport dashed connectors + diamond pins
                 if (RouteMapOverlay.ALTERNATES in activeOverlays) {
                     val destPt = pts.lastOrNull()
                     alternates?.candidates.orEmpty().forEach { alt ->
@@ -490,7 +475,7 @@ fun RouteMapTabScreen(
                     }
                 }
 
-                // E. Draw En-route METAR/TAF Observation Airport Pins
+                // D. Draw En-route METAR/TAF Observation Airport Pins
                 if (RouteMapOverlay.OBS_AIRPORTS in activeOverlays) {
                     effectiveObservations?.airports.orEmpty().forEach { ap ->
                         val lat = ap.lat ?: return@forEach
@@ -510,7 +495,7 @@ fun RouteMapTabScreen(
                     }
                 }
 
-                // F. Draw Route Segments colored & sized by selectedMetric at selectedAltitudeFt
+                // E. Draw Route Segments colored & sized by selectedMetric at selectedAltitudeFt
                 if (pts.size >= 2) {
                     for (i in 0 until pts.size - 1) {
                         val p0 = pts[i]
@@ -1097,109 +1082,14 @@ private fun RouteMapSelectionCard(
 }
 
 // ============================================================================
-// Geometry Builders for SIGMETs, Storm Cells, and Corridor Lightning
+// Geometry for SIGMETs
 // ============================================================================
 
-private data class StormCellRenderGeometry(
-    val centroid: LatLon,
-    val polygon: List<LatLon>,
-    val severity: String,
-    val motionEnd: LatLon?,
-)
-
-private fun buildSigmetPolygon(
-    sigmet: SigmetAlongRoute,
-    index: Int,
-    routePoints: List<VizPoint>,
-): List<LatLon> {
-    if (routePoints.isEmpty()) return emptyList()
-    val midIdx = ((index + 1) * routePoints.size / 3).coerceIn(0, routePoints.lastIndex)
-    val anchor = routePoints[midIdx]
-    val dLat = 0.45
-    val dLon = 0.65
-    return listOf(
-        LatLon(anchor.lat + dLat, anchor.lon - dLon),
-        LatLon(anchor.lat + dLat * 0.8, anchor.lon + dLon),
-        LatLon(anchor.lat - dLat, anchor.lon + dLon * 0.7),
-        LatLon(anchor.lat - dLat * 0.7, anchor.lon - dLon * 0.9),
-    )
-}
-
-private fun buildStormCellGeometries(
-    routePoints: List<VizPoint>,
-    liveStorms: aero.flyfun.weather.model.LiveStorms?,
-    observed: aero.flyfun.weather.model.ObservedConditions?,
-): List<StormCellRenderGeometry> {
-    if (routePoints.isEmpty()) return emptyList()
-    val result = mutableListOf<StormCellRenderGeometry>()
-
-    val stormCells = liveStorms?.cells.orEmpty()
-    if (stormCells.isNotEmpty()) {
-        stormCells.forEachIndexed { idx, cell ->
-            val anchor = routePoints[((idx + 1) * routePoints.size / (stormCells.size + 1)).coerceIn(0, routePoints.lastIndex)]
-            val offsetLat = (cell.distanceNm / 60.0) * if (idx % 2 == 0) 1.0 else -1.0
-            val center = LatLon(anchor.lat + offsetLat, anchor.lon + 0.18 * (idx + 1))
-            val rLat = 0.14
-            val rLon = 0.20
-            val poly = listOf(
-                LatLon(center.lat + rLat, center.lon - rLon * 0.5),
-                LatLon(center.lat + rLat * 0.5, center.lon + rLon),
-                LatLon(center.lat - rLat * 0.8, center.lon + rLon * 0.7),
-                LatLon(center.lat - rLat, center.lon - rLon * 0.6),
-                LatLon(center.lat, center.lon - rLon),
-            )
-            val motionEnd = LatLon(center.lat + 0.18, center.lon + 0.28)
-            result.add(
-                StormCellRenderGeometry(
-                    centroid = center,
-                    polygon = poly,
-                    severity = cell.severity,
-                    motionEnd = motionEnd,
-                ),
-            )
-        }
-    } else if (observed != null) {
-        routePoints.filter {
-            (it.capeSurfaceJkg ?: 0.0) >= 250.0 ||
-                it.thermoConvective.riskLevel != "none" ||
-                (it.nwpConvective != null && it.nwpConvective.riskLevel != "none")
-        }
-            .take(2)
-            .forEachIndexed { idx, pt ->
-                val center = LatLon(pt.lat + 0.12 * (idx + 1), pt.lon - 0.15)
-                val poly = listOf(
-                    LatLon(center.lat + 0.12, center.lon - 0.08),
-                    LatLon(center.lat + 0.06, center.lon + 0.16),
-                    LatLon(center.lat - 0.11, center.lon + 0.10),
-                    LatLon(center.lat - 0.10, center.lon - 0.14),
-                )
-                result.add(
-                    StormCellRenderGeometry(
-                        centroid = center,
-                        polygon = poly,
-                        severity = pt.thermoConvective.riskLevel.takeIf { it != "none" }
-                            ?: pt.nwpConvective?.riskLevel
-                            ?: "moderate",
-                        motionEnd = LatLon(center.lat + 0.15, center.lon + 0.22),
-                    ),
-                )
-            }
+/**
+ * The SIGMET's own outline from the server (`coords`, (lon, lat) vertices). Empty for a
+ * SIGMET matched by FIR only: nothing is drawn rather than a shape the server never sent.
+ */
+private fun sigmetPolygon(sigmet: SigmetAlongRoute): List<LatLon> =
+    sigmet.coords.mapNotNull { pair ->
+        if (pair.size < 2) null else LatLon(lat = pair[1], lon = pair[0])
     }
-    return result
-}
-
-private fun buildCorridorLightningStrikes(
-    routePoints: List<VizPoint>,
-    liveStorms: aero.flyfun.weather.model.LiveStorms?,
-    observed: aero.flyfun.weather.model.ObservedConditions?,
-): List<LatLon> {
-    if (routePoints.isEmpty()) return emptyList()
-    val cells = buildStormCellGeometries(routePoints, liveStorms, observed)
-    val strikes = mutableListOf<LatLon>()
-    cells.forEach { cell ->
-        strikes.add(cell.centroid)
-        strikes.add(LatLon(cell.centroid.lat + 0.05, cell.centroid.lon - 0.06))
-        strikes.add(LatLon(cell.centroid.lat - 0.04, cell.centroid.lon + 0.07))
-    }
-    return strikes
-}

@@ -3,6 +3,7 @@ package aero.flyfun.weather.ui.observed
 import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.model.LiveStorm
 import aero.flyfun.weather.model.LiveStorms
+import aero.flyfun.weather.model.rules.LiveStormRules
 import aero.flyfun.weather.ui.theme.AssessmentAmber
 import aero.flyfun.weather.ui.theme.AssessmentGreen
 import aero.flyfun.weather.ui.theme.AssessmentRed
@@ -43,7 +44,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -191,7 +191,7 @@ private fun LiveStormCellCard(
     onSelectFocus: ((LiveFocus) -> Unit)?,
 ) {
     // Toned by the server's own words (#688): its VIP intensity and `ahead`.
-    // The server sends no disposition or severity, so none is read here (#883).
+    // The server sends no disposition or severity, so none is read here (#883, #886).
     val isBehind = storm.ahead == false
     val accentColor = when {
         isBehind -> MaterialTheme.colorScheme.outline
@@ -236,7 +236,7 @@ private fun LiveStormCellCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 StormBadgePill(
-                    text = stormTitle(storm),
+                    text = LiveStormRules.title(storm),
                     color = accentColor,
                 )
                 if (isBehind) {
@@ -293,21 +293,14 @@ private fun LiveStormCellCard(
                     )
                 }
 
-                // The server's 30-min trend: developing / steady / decaying / mixed / new.
-                storm.trend?.takeIf { it.isNotBlank() }?.let { trend ->
-                    StormBadgePill(
-                        text = trend.replaceFirstChar { it.uppercase() },
-                        color = when (trend.lowercase()) {
-                            "decaying" -> AssessmentGreen
-                            "developing", "new" -> AssessmentAmber
-                            else -> MaterialTheme.colorScheme.secondary
-                        },
-                    )
+                // The server's 30-min trend, in the map's colours (iOS/web `trendHex`).
+                LiveStormRules.trendLabel(storm)?.let { label ->
+                    TrendPill(text = label, trendColor = Color(LiveStormRules.trendColorArgb(storm.trend)))
                 }
             }
 
             // Headline & relative position to route
-            val posText = buildStormPositionSummary(storm)
+            val posText = LiveStormRules.positionText(storm)
             Text(
                 text = storm.headline.ifBlank { posText },
                 style = MaterialTheme.typography.bodyMedium,
@@ -351,14 +344,25 @@ private fun LiveStormCellCard(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
-                    val closingText = buildClosingSummary(storm)
-                    if (closingText.isNotBlank()) {
-                        val isClosing = (storm.closingKt ?: 0.0) > 1.0
+                    // The server's relative motion and abeam time (#886), not a phone threshold.
+                    val closingText = listOfNotNull(LiveStormRules.motionText(storm), LiveStormRules.abeamText(storm))
+                        .joinToString(" · ")
+                    Text(
+                        text = closingText,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = when (storm.relativeMotion) {
+                            "closing" -> AssessmentRed
+                            "moving_away" -> AssessmentGreen
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    val caveats = LiveStormRules.caveats(storm)
+                    if (caveats.isNotEmpty()) {
                         Text(
-                            text = closingText,
+                            text = caveats.joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (isClosing) AssessmentRed else AssessmentGreen,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -453,6 +457,40 @@ private fun StormDistanceSparkline(
     }
 }
 
+/**
+ * The trend pill: the map's trend colour as a swatch, text in the theme colour, since
+ * "new" is white and "steady" grey would not read as text on the card.
+ */
+@Composable
+private fun TrendPill(
+    text: String,
+    trendColor: Color,
+) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        ) {
+            Canvas(modifier = Modifier.size(8.dp)) {
+                drawCircle(color = trendColor)
+                drawCircle(color = Color.Black.copy(alpha = 0.35f), style = Stroke(width = 1.dp.toPx()))
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
 @Composable
 private fun StormBadgePill(
     text: String,
@@ -474,27 +512,6 @@ private fun StormBadgePill(
     }
 }
 
-/** "Heavy cell" / "Cell": the server's VIP intensity, as the iOS list words it. */
-internal fun stormTitle(storm: LiveStorm): String =
-    storm.intensity?.takeIf { it.isNotBlank() }?.let { "${it.replaceFirstChar { c -> c.uppercase() }} cell" } ?: "Cell"
-
-private fun buildStormPositionSummary(storm: LiveStorm): String {
-    val sideStr = when (storm.side?.lowercase()) {
-        "left", "l" -> "left of track"
-        "right", "r" -> "right of track"
-        "on_track", "ontrack", "center" -> "on track"
-        else -> storm.bearingFromRoute?.let { "$it of track" } ?: "from track"
-    }
-    val distStr = if (storm.distanceNm < 1.0) {
-        "On route centerline"
-    } else {
-        "${storm.distanceNm.roundToInt()} NM $sideStr"
-    }
-    val abeamStr = "abeam ${storm.enrouteDistanceNm.roundToInt()} NM"
-    val placeStr = storm.place?.text?.takeIf { it.isNotBlank() }?.let { " · near $it" }.orEmpty()
-    return "$distStr · $abeamStr$placeStr"
-}
-
 private fun buildMotionSummary(storm: LiveStorm): String {
     val parts = mutableListOf<String>()
     if (storm.trackDeg != null && storm.speedKt != null) {
@@ -502,24 +519,6 @@ private fun buildMotionSummary(storm: LiveStorm): String {
     }
     if (storm.areaKm2 > 0) {
         parts += "${storm.areaKm2.roundToInt()} km²"
-    }
-    return parts.joinToString(" · ")
-}
-
-private fun buildClosingSummary(storm: LiveStorm): String {
-    val closing = storm.closingKt
-    val parts = mutableListOf<String>()
-    if (closing != null) {
-        when {
-            closing > 2.0 -> parts += "Closing at ${closing.roundToInt()} kt"
-            closing < -2.0 -> parts += "Moving away (${abs(closing).roundToInt()} kt)"
-            else -> parts += "Nearly stationary relative to track"
-        }
-    }
-    if (storm.cpaNm != null && storm.cpaMinutes != null && storm.cpaMinutes > 0) {
-        parts += "CPA ${storm.cpaNm.roundToInt()} NM in ${storm.cpaMinutes.roundToInt()}m"
-    } else if (storm.interceptMinutes != null && storm.interceptMinutes > 0) {
-        parts += "Track intercept in ${storm.interceptMinutes.roundToInt()}m"
     }
     return parts.joinToString(" · ")
 }

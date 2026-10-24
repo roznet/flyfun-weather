@@ -839,70 +839,28 @@ fun DrawScope.drawFrontSymbolOnMap(
 }
 
 /**
- * Draw an observed storm cell polygon (`CellDisplay`) and its forward motion vector arrow.
+ * Draw one of the server's route storms (`LiveStorm`, #886) at its observed position:
+ * a dot in the map's trend colour (iOS/web `trendHex`), a gold ring when it has
+ * lightning, faded once the flight has passed it.
  */
-fun DrawScope.drawStormCellOverlay(
-    polygonLatLon: List<LatLon>,
-    centroid: LatLon,
-    severity: String,
-    motionEndLatLon: LatLon?,
-    projection: SlippyMapProjection,
-) {
-    val baseColor = when (severity.lowercase(Locale.US)) {
-        "severe", "high", "extreme" -> Color(0xFFEF4444)
-        "moderate", "medium" -> Color(0xFFF97316)
-        else -> Color(0xFFFACC15)
-    }
-
-    if (polygonLatLon.size >= 3) {
-        val path = Path()
-        polygonLatLon.forEachIndexed { idx, pt ->
-            val screen = projection.latLonToScreen(pt.lat, pt.lon)
-            if (idx == 0) path.moveTo(screen.x, screen.y) else path.lineTo(screen.x, screen.y)
-        }
-        path.close()
-        drawPath(path = path, color = baseColor.copy(alpha = 0.36f))
-        drawPath(path = path, color = baseColor, style = Stroke(width = 2.4f))
-    } else {
-        val cScreen = projection.latLonToScreen(centroid.lat, centroid.lon)
-        drawCircle(color = baseColor.copy(alpha = 0.4f), radius = 12f, center = cScreen)
-        drawCircle(color = baseColor, radius = 12f, center = cScreen, style = Stroke(width = 2.2f))
-    }
-
-    if (motionEndLatLon != null) {
-        val start = projection.latLonToScreen(centroid.lat, centroid.lon)
-        val end = projection.latLonToScreen(motionEndLatLon.lat, motionEndLatLon.lon)
-        drawLine(
-            color = baseColor,
-            start = start,
-            end = end,
-            strokeWidth = 2.5f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f)),
-        )
-        drawCircle(color = baseColor, radius = 3.5f, center = end)
-    }
-}
-
-/**
- * Draw a lightning flash bolt marker at [center].
- */
-fun DrawScope.drawLightningFlashMarker(
+fun DrawScope.drawStormDotOnMap(
     center: Offset,
-    ageFactor: Float = 1f,
+    trendColor: Color,
+    hasLightning: Boolean,
+    isBehind: Boolean,
+    radiusPx: Float = 9f,
 ) {
-    val boltColor = Color(0xFFFACC15).copy(alpha = ageFactor.coerceIn(0.35f, 1f))
-    val glowColor = Color(0xFFF59E0B).copy(alpha = (ageFactor * 0.4f).coerceIn(0.15f, 0.5f))
-    drawCircle(color = glowColor, radius = 8f, center = center)
-    val path = Path().apply {
-        moveTo(center.x + 1.5f, center.y - 6.5f)
-        lineTo(center.x - 3.5f, center.y + 0.5f)
-        lineTo(center.x + 0.5f, center.y + 0.5f)
-        lineTo(center.x - 1.5f, center.y + 6.5f)
-        lineTo(center.x + 3.5f, center.y - 0.5f)
-        lineTo(center.x - 0.5f, center.y - 0.5f)
-        close()
+    val alpha = if (isBehind) 0.4f else 1f
+    drawCircle(color = trendColor.copy(alpha = 0.85f * alpha), radius = radiusPx, center = center)
+    drawCircle(color = Color.Black.copy(alpha = 0.7f * alpha), radius = radiusPx, center = center, style = Stroke(width = 1.5f))
+    if (hasLightning) {
+        drawCircle(
+            color = Color(0xFFFACC15).copy(alpha = alpha),
+            radius = radiusPx + 4f,
+            center = center,
+            style = Stroke(width = 2.2f),
+        )
     }
-    drawPath(path = path, color = boltColor)
 }
 
 /**

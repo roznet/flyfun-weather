@@ -1,7 +1,6 @@
 package aero.flyfun.weather.rules
 
 import aero.flyfun.weather.model.LiveRibbonSegment
-import aero.flyfun.weather.model.LiveStorm
 import aero.flyfun.weather.model.ObsProxy
 import aero.flyfun.weather.model.RibbonSigmet
 import aero.flyfun.weather.model.RibbonStation
@@ -159,26 +158,6 @@ class RouteRibbonRulesTest {
         assertEquals(0.0, RouteRibbonRules.flownFraction(-15.0, 200.0)!!, 1e-6)
         assertEquals(0.35, RouteRibbonRules.flownFraction(70.0, 200.0)!!, 1e-6)
         assertEquals(1.0, RouteRibbonRules.flownFraction(250.0, 200.0)!!, 1e-6)
-    }
-
-    @Test
-    fun `groupStormTicks merges proximate storm ticks and tracks worst severity`() {
-        val rawStorms = listOf(
-            LiveStorm(id = "s1", severity = "moderate", enrouteDistanceNm = 20.0, distanceNm = 5.0),
-            LiveStorm(id = "s2", severity = "severe", enrouteDistanceNm = 60.0, distanceNm = 3.0),
-            LiveStorm(id = "s3", severity = "developing", enrouteDistanceNm = 180.0, distanceNm = 10.0),
-        )
-        val ticks = RouteRibbonRules.extractStorms(rawStorms, totalDistanceNm = 250.0)
-        val groups = RouteRibbonRules.groupStormTicks(ticks, proximityNm = 55.0)
-
-        assertEquals(2, groups.size)
-        assertEquals(2, groups[0].count)
-        assertEquals(20.0, groups[0].startNm, 1e-6)
-        assertEquals(60.0, groups[0].endNm, 1e-6)
-        assertEquals("severe", groups[0].worstSeverity)
-
-        assertEquals(1, groups[1].count)
-        assertEquals(180.0, groups[1].startNm, 1e-6)
     }
 
     @Test

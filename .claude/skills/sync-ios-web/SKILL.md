@@ -177,7 +177,8 @@ run both — a green pair means the labels and geometry still agree.
   (`layer-legends.ts`) so the ribbon matches the radar legend beside it. The
   *boundaries* are shared exactly and must stay so.
 - The web has no standalone cells list (iOS `ObservedCellsSection`, which reads
-  the server's `/live` storms since #816, words in `LiveStormListRules.swift`)
+  the server's `/live` storms since #816, words in `LiveStormListRules.swift`;
+  Android's port is `model/rules/LiveStormRules.kt`, #886, keep the two in step)
   — cells are on the route map's toggle and the "Now" tab there. "Since this briefing" is a
   page-level banner on web, a section on iOS.
 
