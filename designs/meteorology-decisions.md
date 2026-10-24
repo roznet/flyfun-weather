@@ -6811,8 +6811,8 @@ values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
 covers, rain/showers split, and all ICON surface fields now come from the
 model's own GRIB instead of Open-Meteo's processing of the same model
 (Open-Meteo's ICON is a D2/EU/global blend, ours one variant). ICON soundings
-anchor on the model MSLP instead of Open-Meteo's level heights: expect level
-heights within a few tens of metres. Not touched: #849 (fake ceiling at cloud
+anchor on the model MSLP instead of Open-Meteo's level heights. Expected
+(not yet measured): level heights within a few tens of metres. Not touched: #849 (fake ceiling at cloud
 edges) is a diagnostics sampling issue and unchanged here.
 
 **Measured.** Advisory replay diff with `scripts/compare_grib_primary.py`
