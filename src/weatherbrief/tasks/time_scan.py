@@ -606,7 +606,9 @@ def confirm_candidate(
 
     # A GRIB-primary slot (#912) has no Open-Meteo values under the candidate
     # window: fetch them for the points GRIB left short, as the briefing
-    # fetch does. A no-op (no request) on slots that have their values.
+    # fetch does. A no-op (no request) on slots that have their values. A
+    # failed fill means empty hours in the window: refuse, like a failed
+    # enrichment, rather than grade them as "all models checked".
     try:
         from weatherbrief.fetch.grib.primary import (
             GRIB_PRIMARY_MODELS,
@@ -614,7 +616,7 @@ def confirm_candidate(
         )
         from weatherbrief.fetch.open_meteo import OpenMeteoClient
 
-        fill_grib_primary_gaps(
+        outcomes = fill_grib_primary_gaps(
             cross_sections, route_points,
             [cs.model for cs in cross_sections if cs.model in GRIB_PRIMARY_MODELS],
             cand, route.flight_duration_hours,
@@ -625,6 +627,13 @@ def confirm_candidate(
         )
     except Exception:
         logger.warning("time-scan confirm: GRIB-primary gap fill failed", exc_info=True)
+        return None
+    failed = [o.model for o in outcomes if o.failed]
+    if failed:
+        logger.warning(
+            "time-scan confirm: GRIB-primary gap fill failed for %s", ", ".join(failed),
+        )
+        return None
 
     def _grade(t: datetime):
         res = run_alt_from_pack(

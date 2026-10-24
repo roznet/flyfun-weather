@@ -550,3 +550,29 @@ def test_open_meteo_slot_keeps_its_values():
     )
     assert all(h.temperature_2m_c == 99.0 for h in icon[0].hourly)
     assert all(h.precipitation_mm == 0.0 for h in icon[0].hourly)
+
+
+def test_time_scan_confirm_refuses_when_gap_fill_fails(tmp_path, monkeypatch, caplog):
+    """A failed fallback leaves empty hours: the confirm refuses, never grades them."""
+    from weatherbrief.tasks import artifacts, time_scan
+    import weatherbrief.fetch.grib as grib_mod
+
+    pts = _points()
+    sections = _sections(ModelSource.ICON, pts, covered=set())
+    monkeypatch.setattr(artifacts, "load_cross_sections", lambda _: sections)
+    monkeypatch.setattr(artifacts, "load_route_points", lambda _: pts)
+    monkeypatch.setattr(grib_mod, "enrich_forecasts", lambda *a, **k: ({}, {}, {}))
+    monkeypatch.setattr(primary, "fill_grib_primary_gaps", lambda *a, **k: [
+        primary.GribPrimaryOutcome(model="icon", points_total=3, empty=True),
+    ])
+    graded = []
+    monkeypatch.setattr(
+        "weatherbrief.tasks.advise.run_alt_from_pack",
+        lambda *a, **k: graded.append(1),
+    )
+    with caplog.at_level("WARNING"):
+        assert time_scan.confirm_candidate(
+            tmp_path, _route(), DEP, data_dir=tmp_path,
+        ) is None
+    assert graded == []
+    assert "GRIB-primary gap fill failed for icon" in caplog.text
