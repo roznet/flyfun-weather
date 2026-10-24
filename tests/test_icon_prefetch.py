@@ -24,6 +24,9 @@ from weatherbrief.fetch.grib.icon_eu_fetch import (
     ICON_EU,
     ICON_EU_CLOUD_DIAG_CACHE_KEY,
     ICON_EU_VARIABLES,
+    ICON_SURFACE_VARIABLES,
+    icon_surface_cache_key,
+    icon_surface_steps,
 )
 
 
@@ -47,6 +50,7 @@ def tracker(monkeypatch):
     state = {
         "var_calls": [],
         "diag_calls": [],
+        "sfc_calls": [],
         "active": 0,
         "peak": 0,
         "lock": threading.Lock(),
@@ -83,6 +87,12 @@ def tracker(monkeypatch):
         _enter()
         try:
             (fhour,) = fhours
+            if variables is not None:
+                # GRIB-primary surface fields (#912): one file per variable,
+                # tracked apart so the diag assertions below stay exact.
+                with state["lock"]:
+                    state["sfc_calls"].append((fhour, tuple(variables)))
+                return {fhour: f"sfc-{fhour}-{variables[0]}".encode()}
             with state["lock"]:
                 state["diag_calls"].append((fhour, max_workers))
             return {fhour: f"diag-{fhour}".encode()}
@@ -199,6 +209,10 @@ def test_abort_if_ignored_when_nothing_to_fetch(tmp_path, tracker):
     put_cached(tmp_path, cache_key(6, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"diag")
     # Leading rain_con de-accumulation step (#421) is a job too — cache it.
     put_cached(tmp_path, cache_key(5, ICON_EU_CLOUD_DIAG_CACHE_KEY), b"diag")
+    # GRIB-primary surface files (#912), window hour plus lead step.
+    for fh in icon_surface_steps([6], ICON_EU):
+        for var in ICON_SURFACE_VARIABLES:
+            put_cached(tmp_path, cache_key(fh, icon_surface_cache_key(var, ICON_EU)), b"sfc")
 
     ctx = _make_ctx(tmp_path, forecast_hours=[6])
     completed = _prefetch_icon_eu_data_inner(ctx, abort_if=lambda: True)

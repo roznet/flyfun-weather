@@ -201,6 +201,52 @@ ICON_D2_CLOUD_DIAG_VARIABLES = (
     "cape_ml", "cin_ml",
 )
 
+# Single-level SURFACE fields for a GRIB-primary icon slot (#912) — everything
+# HourlyForecast used to take from Open-Meteo for ICON. Same names on both
+# variants (D2's lowercase file suffix is handled by _icon_var_suffix). Cached
+# ONE FILE PER VARIABLE (icon_surface_cache_key), not in the cloud-diag blob:
+# the decoder then knows each field by its file rather than by a decoded
+# shortName (DWD's are unreliable — RAIN_CON decodes as `crr`), a missing
+# variable is visibly missing instead of silently absent from a blob, and the
+# cloud-diag blob keeps its _V3 key, so warm caches stay valid.
+#
+# Accumulated since init: tot_prec, rain_gsp, rain_con, snow_gsp, snow_con
+# (kg/m² ≡ mm water) — de-accumulated in the enrichment loop. vmax_10m is the
+# maximum since the previous output step. hzerocl is m above MSL.
+#
+# NOT verified against a live listing when written (opendata.dwd.de is not
+# reachable from the build environment): the names follow DWD's published
+# ICON-EU/D2 single-level product list. A name DWD does not publish 404s,
+# its field stays None and the fetch logs the 404 count — and the briefing
+# then falls back to Open-Meteo for any point whose REQUIRED fields
+# (``ICON_SURFACE_REQUIRED``) are missing, so a wrong name costs calls, not
+# correctness.
+ICON_SURFACE_VARIABLES = (
+    "t_2m", "td_2m", "relhum_2m",
+    "u_10m", "v_10m", "vmax_10m",
+    "pmsl", "ps",
+    "tot_prec", "rain_gsp", "rain_con", "snow_gsp", "snow_con",
+    "vis", "hzerocl",
+)
+
+# The subset without which an hour is not a usable GRIB-primary surface: the
+# Open-Meteo fallback looks for the HourlyForecast fields these produce.
+ICON_SURFACE_REQUIRED = ("t_2m", "td_2m", "u_10m", "v_10m", "pmsl", "ps", "tot_prec")
+
+# Accumulated-since-init surface fields (need the previous step).
+ICON_SURFACE_ACCUMULATED = ("tot_prec", "rain_gsp", "rain_con", "snow_gsp", "snow_con")
+
+
+def icon_surface_cache_key(variable: str, variant: "IconVariant") -> str:
+    """Cache-key label for one ICON surface variable's file (#912).
+
+    ``{cache_prefix}_SFC_{VAR}_V1`` → ``f012_ICON_EU_SFC_T_2M_V1.grib2``.
+    One file per variable, so a failed download is a missing file, never a
+    short blob cached as complete.
+    """
+    return f"{variant.cache_prefix}_SFC_{variable.upper()}_V1"
+
+
 # Explicit-convection storm diagnostics for ICON-D2 (#462) — the convection-
 # permitting replacement for the parameterized hbas_con/htop_con/rain_con
 # track. All verified live against opendata.dwd.de (2026-07-21):
@@ -911,6 +957,22 @@ def icon_eu_previous_step(fhour: int, variant: IconVariant = ICON_EU) -> int | N
     if fhour <= variant.hourly_to_h:
         return fhour - 1
     return fhour - variant.coarse_step_h
+
+
+def icon_surface_steps(
+    forecast_hours: list[int], variant: IconVariant = ICON_EU,
+) -> list[int]:
+    """Steps whose surface files a window needs (#912): the window's own
+    forecast hours plus the step before the first, so the first hour's
+    accumulated precipitation has something to difference against. Same for
+    every variant — unlike ``needs_predecessor_step``, which is about the
+    cloud-diag and explicit-convection files."""
+    steps = sorted(set(forecast_hours))
+    if steps:
+        lead = icon_eu_previous_step(steps[0], variant)
+        if lead is not None and lead not in steps:
+            steps.insert(0, lead)
+    return steps
 
 
 def icon_eu_conv_rain_rate_mm_h(

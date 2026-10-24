@@ -86,7 +86,8 @@ All models share the same computation pipeline; inputs vary by what the raw data
 |-----|-------|--------|
 | `z` on pressure levels | ECMWF | **Closed by the 2026-04-22 amendment**: `gh` is now delivered on all 25 levels and decoded directly. `z` itself is still 1 hPa only (catalogue limitation), and the `z`/g + hypsometric fills survive only as fallbacks for pre-amendment archives. |
 | `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (the same fallback path). |
-| Remaining a1 surface vars | ECMWF | The ~10 vars in `build_ecmwf_surface_snapshot` are now live on the user-facing forecast too (see B). The rest of the a1 manifest (10fg, capes, degm10l, fzra, lsp, msl, ptype) is still undecoded. |
+| Remaining a1 surface vars | ECMWF | The vars in `build_ecmwf_surface_snapshot` are live on the user-facing forecast too (see B); #912 added `msl`, RH (from t2m/d2m), CIN (`mlcin100`) and the rain/showers split from `cp`. Still undecoded: capes, degm10l, fzra, lsp (rain is tp − cp − sf instead), ptype. |
+| `precipitation_probability_pct`, `lifted_index_raw` | ECMWF, ICON (GRIB-primary) | No deterministic GRIB field. None on a GRIB-primary slot (#912); LI is only a fallback behind the sounding's own LI. |
 
 ## What's Implemented
 
@@ -116,6 +117,26 @@ Via `fetch/grib/` (hrrr_fetch.py, decode.py):
 - Freshness source `hrrr:noaa` tracks **extended cycles only** (00/06/12/18z): tracking all 24 hourly cycles would flag short-lead US packs stale (and auto-refresh them) every hour.
 - Out of scope: HRRR-Alaska, sub-hourly output, HRRR ensemble; RRFS migration is designed to be a bucket/path + grid-constants swap inside `hrrr_fetch.py`.
 
+### GRIB-primary ECMWF / ICON slots (#912)
+When a network-free gate says GRIB covers the flight (ECMWF: a ready ECPDS run reaching the window end; ICON: route in the ICON-EU domain, window in range, not historical), `run_fetch` makes **no Open-Meteo request** for that slot. It starts as an empty skeleton over Open-Meteo's day span, enrichment fills the sounding and every surface field from GRIB, and `fill_grib_primary_gaps` fetches Open-Meteo (full variable set) only for the points GRIB left short in the flight window, splicing values into gaps only. If that fallback fails the slot is dropped like a failed Open-Meteo fetch. Kill switch `WB_GRIB_PRIMARY=0`. Flow and coverage rule: `fetch.md` "GRIB-primary slots"; value changes: meteorology-decisions §61.
+
+Surface field sources on a GRIB-primary slot:
+
+| `HourlyForecast` field | ECMWF (a1) | ICON-EU / D2 |
+|---|---|---|
+| T, Td 2 m | 2t, 2d | t_2m, td_2m |
+| RH 2 m | from 2t/2d (Magnus) | relhum_2m, else from T/Td |
+| wind 10 m, gust | 10u/10v (U/V interp), 10fg (window max) | u_10m/v_10m, vmax_10m (max since last output) |
+| MSLP, surface pressure | msl, sp | pmsl, ps |
+| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) |
+| cloud cover total/low/mid/high | tcc/lcc/mcc/hcc | clct/clcl/clcm/clch (cloud-diag blob) |
+| CAPE / CIN | mucape / mlcin100 | cape_ml / None |
+| visibility | vis | vis |
+| freezing level | deg0l (→ MSL) | hzerocl (MSL; negative = none) |
+| precip probability, lifted index | None | None |
+
+On a slot that still has Open-Meteo underneath (gate refused) every field in the table that Open-Meteo supplies keeps Open-Meteo's value: the #912 writes are fill-only.
+
 ### ECMWF IFS GRIB2 enrichment
 Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
 - **Full sounding replacement** — pressure levels (a2 files): t, r, u, v, z, w, d, cc, clwc, ciwc at 25 levels. **Replaces entire `pressure_levels` list**, discarding Open-Meteo levels.
@@ -128,6 +149,7 @@ Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
 Via `fetch/grib/` (icon_eu_fetch.py, icon_eu_levels.py, decode.py):
 - **Full sounding replacement** — model levels 35–74 (EU) / 16–65 (D2): t, qv, u, v, qc, qi, clc, p, w. Log-pressure interpolated to standard pressure levels. **Replaces entire `pressure_levels` list**. `w` (m/s) is converted to omega (`vertical_velocity_pa_s`) per level via −ρ·g·w.
 - **Cloud diagnostics** — single-level: ceiling, hbas_con, htop_con, clcl, clcm, clch, clct, cape_ml, cin_ml, rain_con → `NWPCloudDiagnostics`
+- **Surface (#912)** — `ICON_SURFACE_VARIABLES`, one cached file per variable and step, decoded keyed by file; written fill-only onto `HourlyForecast` (table above). ~15 small single-level files per hour on top of the ~240-file sounding.
 - Source: `opendata.dwd.de/weather/nwp/{icon-eu,icon-d2}/grib/` (public, no auth)
 - Individual bz2-compressed files per variable/level/timestep
 - Parallel download with ThreadPoolExecutor (`MAX_DOWNLOAD_WORKERS`, default 16 — 37.1 MB/s vs 29.6 at 8, #469; env-tunable)
@@ -365,7 +387,7 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 | Axis | Strategy | Module | Applies to |
 |------|----------|--------|------------|
 | **Time — GFS averaged fields** | Window-midpoint linear interp between native steps; layer geometry held from higher-cover endpoint; sub-5 % covers dropped; followed by RH/condensate gate that drops bands where pressure-level RH and condensate disagree with averaged cover. Requires `gfs_init`. See [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate). | `fetch/grib/fill.py` | GFS low/mid/high cloud cover + geometry |
-| **Time — everything else** | Forward-fill for ICON-EU / ECMWF cloud diagnostics, the GFS fallback path (no `gfs_init`), and the HRRR-sourced gfs slot (all-instantaneous, so `gfs_init=None` is passed deliberately, #457); step-time linear interp for GFS CLW/ICMR overlay; linear interp for ECMWF surface scalars and replaced pressure-level soundings (ECMWF / ICON / HRRR — dewpoint derived from interpolated T+RH via Magnus). | `fetch/grib/fill.py` | Cloud diagnostics (non-GFS bands), CLW, ICMR, ECMWF surface, sounding rebuild |
+| **Time — everything else** | Forward-fill for ICON-EU / ECMWF cloud diagnostics, the GFS fallback path (no `gfs_init`), and the HRRR-sourced gfs slot (all-instantaneous, so `gfs_init=None` is passed deliberately, #457); step-time linear interp for GFS CLW/ICMR overlay; linear interp for ECMWF and ICON surface scalars (ICON and the #912 fields into empty hours only) and replaced pressure-level soundings (ECMWF / ICON / HRRR — dewpoint derived from interpolated T+RH via Magnus). | `fetch/grib/fill.py` | Cloud diagnostics (non-GFS bands), CLW, ICMR, ECMWF surface, sounding rebuild |
 | **Spatial** | Linear interpolation between neighboring route points (max 100 nm gap, both neighbors required) | `analysis/spatial_interpolation.py` | Cloud diagnostics, CLW, ICMR |
 | **Vertical** | Linear interpolation in pressure-space between native GRIB pressure levels | `analysis/sounding/__init__.py` | CLW, ICMR only |
 

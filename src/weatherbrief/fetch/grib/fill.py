@@ -1138,6 +1138,28 @@ _ECMWF_SURFACE_INSTANT_FIELDS: tuple[str, ...] = (
     "nwp_total_totals",
 )
 
+# GRIB-primary (#912): fields Open-Meteo supplies hourly when it sits under a
+# slot. They are interpolated into EMPTY gap hours only, so an Open-Meteo
+# slot keeps its hourly values and only a GRIB-primary skeleton is filled.
+_GRIB_PRIMARY_FILL_FIELDS: tuple[str, ...] = (
+    "pressure_msl_hpa",
+    "relative_humidity_2m_pct",
+    "convective_inhibition_jkg",
+    "cloud_cover_pct",
+    "cloud_cover_low_pct",
+    "cloud_cover_mid_pct",
+    "cloud_cover_high_pct",
+    "freezing_level_m",
+)
+
+# Slots whose surface scalars are written from GRIB at native steps: ECMWF a1
+# (``_apply_ecmwf_surface_to_hourly``) and the ICON surface files (#912,
+# ``_apply_icon_surface_to_sections``). Both write alongside the step's
+# cloud diagnostics, which is what the anchor detector below relies on.
+# ICON's GRIB surface is fill-only end to end, so on ICON every field —
+# the ECMWF overwrite set included — is interpolated into empty hours only.
+_GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon"})
+
 
 def _linear_interp_ecmwf_surface(
     sections: list[RouteCrossSection],
@@ -1167,35 +1189,56 @@ def _linear_interp_ecmwf_surface(
     the two writes coupled, or replace this detector with an explicit
     anchor list passed from the caller.
 
+    ICON (#912) follows the same rule: its surface step is written right
+    after the same step's single-level cloud diagnostics. ICON-EU is hourly
+    to 78h and 3-hourly after, so the gaps only appear on long-range flights.
+    ``freezing_level_m`` is listed for ICON (``hzerocl``); on ECMWF the
+    diagnostics fill mirrors ``deg0l`` over it afterwards anyway.
+
     Wind speed/direction are interpolated as U/V components (``_lerp_wind``),
     not as scalars. Gust is a window maximum and is held over the covering
     interval rather than linearly interpolated. See findings #6/#7.
     """
     total = 0
     for cs in sections:
-        if cs.model.value != "ecmwf":
+        if cs.model.value not in _GRIB_SURFACE_MODELS:
             continue
         for wf in cs.point_forecasts:
-            total += _interp_surface_hourly(wf.hourly)
+            total += _interp_surface_hourly(
+                wf.hourly, fill_only=cs.model.value != "ecmwf",
+            )
     for wf in all_forecasts:
-        if wf.model.value != "ecmwf":
+        if wf.model.value not in _GRIB_SURFACE_MODELS:
             continue
-        total += _interp_surface_hourly(wf.hourly)
+        total += _interp_surface_hourly(
+            wf.hourly, fill_only=wf.model.value != "ecmwf",
+        )
 
     if total:
         logger.info(
-            "ECMWF surface scalars linearly interpolated for %d gap hourly entries",
+            "ECMWF/ICON surface scalars linearly interpolated for %d gap hourly entries",
             total,
         )
 
 
-def _interp_surface_hourly(hourly_list: list[HourlyForecast]) -> int:
+def _interp_surface_hourly(
+    hourly_list: list[HourlyForecast], *, fill_only: bool = False,
+) -> int:
     """Linearly interpolate surface scalars on gap hours between two GRIB anchors.
 
     Anchors: hours with ``nwp_cloud_diagnostics`` set. Only fills gaps strictly
     between the first and last anchor; hours outside that range keep their
     existing values (Open-Meteo, in practice).
+
+    The ECMWF set (``_ECMWF_SURFACE_INSTANT_FIELDS``, wind, gust) overwrites the
+    gap hour unless ``fill_only``; ``_GRIB_PRIMARY_FILL_FIELDS`` are always
+    written into empty fields only (#912).
     """
+
+    def _set(h: HourlyForecast, f: str, v: float | None, only_empty: bool) -> None:
+        if v is not None and (not only_empty or getattr(h, f) is None):
+            setattr(h, f, v)
+
     sorted_hours = sorted(hourly_list, key=lambda h: h.time)
     if not sorted_hours:
         return 0
@@ -1220,25 +1263,24 @@ def _interp_surface_hourly(hourly_list: list[HourlyForecast]) -> int:
             h = sorted_hours[i]
             frac = (h.time - prev_h.time).total_seconds() / span
             for f in _ECMWF_SURFACE_INSTANT_FIELDS:
-                v = _lerp(getattr(prev_h, f), getattr(next_h, f), frac)
-                if v is not None:
-                    setattr(h, f, v)
+                _set(h, f, _lerp(getattr(prev_h, f), getattr(next_h, f), frac), fill_only)
+            for f in _GRIB_PRIMARY_FILL_FIELDS:
+                _set(h, f, _lerp(getattr(prev_h, f), getattr(next_h, f), frac), True)
             # Wind: interpolate as U/V components, then derive speed + direction.
             ws, wd = _lerp_wind(
                 prev_h.wind_speed_10m_kt, prev_h.wind_direction_10m_deg,
                 next_h.wind_speed_10m_kt, next_h.wind_direction_10m_deg,
                 frac,
             )
-            if ws is not None:
-                h.wind_speed_10m_kt = ws
-            if wd is not None:
-                h.wind_direction_10m_deg = wd
+            if not fill_only or h.wind_speed_10m_kt is None:
+                _set(h, "wind_speed_10m_kt", ws, False)
+                _set(h, "wind_direction_10m_deg", wd, False)
             # Gust (10fg) is a window MAXIMUM ("max gust since previous
             # post-processing"), not an instantaneous value — a max is not
             # linearly interpolable. Hold the reported max of the covering
             # interval: the next anchor's window contains this gap hour. (#441 #6)
-            if next_h.wind_gusts_10m_kt is not None:
-                h.wind_gusts_10m_kt = next_h.wind_gusts_10m_kt
+            # ICON's vmax_10m is likewise the maximum since the previous output.
+            _set(h, "wind_gusts_10m_kt", next_h.wind_gusts_10m_kt, fill_only)
             filled += 1
     return filled
 

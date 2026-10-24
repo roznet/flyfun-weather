@@ -604,6 +604,28 @@ def confirm_candidate(
         logger.warning("time-scan confirm: enrichment failed", exc_info=True)
         return None
 
+    # A GRIB-primary slot (#912) has no Open-Meteo values under the candidate
+    # window: fetch them for the points GRIB left short, as the briefing
+    # fetch does. A no-op (no request) on slots that have their values.
+    try:
+        from weatherbrief.fetch.grib.primary import (
+            GRIB_PRIMARY_MODELS,
+            fill_grib_primary_gaps,
+        )
+        from weatherbrief.fetch.open_meteo import OpenMeteoClient
+
+        fill_grib_primary_gaps(
+            cross_sections, route_points,
+            [cs.model for cs in cross_sections if cs.model in GRIB_PRIMARY_MODELS],
+            cand, route.flight_duration_hours,
+            client=OpenMeteoClient(),
+            start_date=cand.strftime("%Y-%m-%d"),
+            end_date=cand_end.strftime("%Y-%m-%d"),
+            reason="time-scan confirm window",
+        )
+    except Exception:
+        logger.warning("time-scan confirm: GRIB-primary gap fill failed", exc_info=True)
+
     def _grade(t: datetime):
         res = run_alt_from_pack(
             pack_dir, t, route,
