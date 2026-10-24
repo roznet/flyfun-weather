@@ -8,8 +8,8 @@ whole-column blob once, when it is written, into a zarr v3 store tiled
 
 Layout. One store per cached blob, i.e. per (run, forecast hour, variable):
 ``f003_ICON_EU_T.grib2`` becomes ``f003_ICON_EU_T.zarr/`` beside it, then
-the GRIB is deleted. A store is two files (``zarr.json`` + one shard), so a
-forecast hour is ~18 files. Keeping the existing per-variable cache key
+the GRIB is deleted. A store is ``zarr.json`` plus one shard per row of
+64-cell tiles (11 for ICON-EU), so a forecast hour is ~108 files. Keeping the existing per-variable cache key
 (rather than one store per hour holding every variable) means the prefetch,
 which downloads each variable as its own unit, and the decode completeness
 check (#478) keep working unchanged on "is this variable cached".
@@ -118,11 +118,11 @@ def _scan_levels(grib_path: Path):
         if ident is None:
             ident = key
         elif key != ident:
-            logger.info("zarr convert: %s holds more than one series, keeping GRIB", grib_path.name)
+            logger.warning("zarr convert: %s holds more than one series, keeping GRIB", grib_path.name)
             return None
         seen = headers.setdefault(msg.level, msg.header)
         if seen != msg.header:
-            logger.info("zarr convert: %s has >1 step/member per level, keeping GRIB", grib_path.name)
+            logger.warning("zarr convert: %s has >1 step/member per level, keeping GRIB", grib_path.name)
             return None
     if ident is None or len(headers) < 2:
         return None
@@ -189,7 +189,7 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
         if grid is None:
             grid = msg.grid()
             if grid is None:
-                logger.info("zarr convert: %s is not a regular lat/lon grid, keeping GRIB", grib_path.name)
+                logger.warning("zarr convert: %s is not a regular lat/lon grid, keeping GRIB", grib_path.name)
                 return False
             cube = np.empty((len(levels), *grid.shape), dtype=np.float32)
         values = msg.values(grid)
@@ -227,12 +227,21 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
             shards=(len(levels), TILE, math.ceil(nx / TILE) * TILE),
             compressors=BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle"),
             fill_value=np.nan,
+            chunk_key_encoding={"name": "default", "separator": "/"},
+            # Write every shard, even an all-NaN one: zarr reads an absent
+            # shard as fill (NaN), so the reader treats a missing shard file
+            # as corruption rather than as data, which needs them all on disk.
+            config={"write_empty_chunks": True},
             attributes=attrs,
             zarr_format=3,
         )
         for y0 in range(0, ny, TILE):
             arr[:, y0:y0 + TILE, :] = cube[:, y0:y0 + TILE, :]
         del cube
+        missing = [r for r in range(math.ceil(ny / TILE)) if not _shard_path(tmp, r).is_file()]
+        if missing:
+            raise RuntimeError(f"zarr convert: {store_path.name} shard rows {missing} not written")
+        os.chmod(tmp, store_path.parent.stat().st_mode & 0o777)  # mkdtemp is 0700
         _fsync_tree(tmp)
         try:
             os.rename(tmp, store_path)
@@ -253,6 +262,11 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
 # ---------------------------------------------------------------------------
 
 
+def _shard_path(store_path: Path, shard_row: int) -> Path:
+    """The shard file holding tile row ``shard_row`` (one shard per row)."""
+    return Path(store_path) / "c" / "0" / str(shard_row) / "0"
+
+
 class StoreCorrupt(Exception):
     """The store itself is unreadable: metadata, attributes or a shard.
 
@@ -270,6 +284,9 @@ def _store_reads(store_path):
     except (OSError, MemoryError):
         raise
     except Exception as e:
+        if not (Path(store_path) / "zarr.json").exists():
+            # Removed under the reader (TTL expiry or purge), not corrupt.
+            raise FileNotFoundError(f"{store_path} removed during read") from e
         raise StoreCorrupt(f"{store_path}: {e!r}") from e
 
 
@@ -317,11 +334,18 @@ def read_model_level_columns(
     cell_rows, cell_cols = cells // nx, cells % nx
     compact = np.empty((len(levels), cells.size), dtype=np.float32)
     tiles = (cell_rows // TILE) * math.ceil(nx / TILE) + (cell_cols // TILE)
+    checked_rows: set[int] = set()
     for tile in np.unique(tiles):
         sel = np.flatnonzero(tiles == tile)
         y0 = int(cell_rows[sel[0]] // TILE) * TILE
         x0 = int(cell_cols[sel[0]] // TILE) * TILE
         with _store_reads(store_path):
+            if y0 // TILE not in checked_rows:
+                # zarr reads an absent shard as NaN; every shard is written
+                # at convert time, so a missing one is a damaged store.
+                if not _shard_path(Path(store_path), y0 // TILE).is_file():
+                    raise ValueError(f"shard row {y0 // TILE} missing")
+                checked_rows.add(y0 // TILE)
             block = arr[:, y0:min(y0 + TILE, ny), x0:min(x0 + TILE, nx)]
         compact[:, sel] = block[:, cell_rows[sel] - y0, cell_cols[sel] - x0]
 

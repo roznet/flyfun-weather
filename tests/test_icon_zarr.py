@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -349,6 +350,49 @@ def test_unreadable_store_is_removed_so_prefetch_refetches(tmp_path):
     assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
     assert not store.exists()
     assert icon_zarr.cached_model_level_entry(tmp_path, grib.name) is None
+
+
+def test_missing_shard_is_corruption_not_missing_data(tmp_path):
+    """zarr reads an absent shard as NaN: without the check a damaged store
+    would decode as all-None columns and stay cached until TTL."""
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+    grib.unlink()
+    for shard in (p for p in store.rglob("*") if p.is_file() and p.name != "zarr.json"):
+        shard.unlink()
+
+    assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
+    assert not store.exists()
+
+
+def test_all_nan_band_still_writes_its_shard(tmp_path):
+    """Every shard row is on disk even when a whole band is masked, so a
+    missing shard always means damage."""
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t",
+                      mask=lambda la, lo: la > 60.0)
+    store = _convert(tmp_path, grib)
+    lats, lons = [65.0, 48.0], [10.0, 11.5]
+
+    want = dec._decode_icon_eu_single_var(grib.read_bytes(), lats, lons)
+    got = dec._decode_icon_eu_single_var(store, lats, lons)
+
+    _assert_identical(got, want)
+    assert all(v[0] is None for v in got.values())
+    assert store.exists()
+
+
+def test_store_removed_during_read_is_not_corruption(tmp_path, monkeypatch):
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+    real_shard_path = icon_zarr._shard_path
+
+    def vanish(store_path, row):
+        shutil.rmtree(store_path, ignore_errors=True)  # TTL expiry mid-read
+        return real_shard_path(store_path, row)
+
+    monkeypatch.setattr(icon_zarr, "_shard_path", vanish)
+    with pytest.raises(FileNotFoundError):
+        icon_zarr.read_model_level_columns(store, [48.0], [11.5])
 
 
 def test_transient_read_error_keeps_the_store(tmp_path, monkeypatch):
