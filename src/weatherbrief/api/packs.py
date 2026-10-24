@@ -2058,6 +2058,16 @@ def _persist_pack_finalize(
         service="open_meteo",
         pipeline="briefing",
         api_calls=result.usage.open_meteo_calls,
+        weighted_calls=result.usage.open_meteo_weighted_calls,
+        user_id=user_id,
+        flight_id=flight_id,
+    )
+    log_api_usage(
+        db,
+        service="open_meteo",
+        pipeline="alternates",
+        api_calls=result.usage.alternates_open_meteo_calls,
+        weighted_calls=result.usage.alternates_open_meteo_weighted_calls,
         user_id=user_id,
         flight_id=flight_id,
     )

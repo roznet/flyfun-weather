@@ -1900,6 +1900,10 @@ class ApiUsageRow(Base):
     service: Mapped[str] = mapped_column(String(32), nullable=False)  # open_meteo, ecmwf, ...
     pipeline: Mapped[str] = mapped_column(String(32), nullable=False)  # briefing, verification, frontal, ...
     api_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Calls as the provider bills them (Open-Meteo: locations x variables x
+    # days, see fetch.open_meteo.request_weight). NULL for rows written before
+    # migration 114 and for services billed per request.
+    weighted_calls: Mapped[float | None] = mapped_column(Float, nullable=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     flight_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
 

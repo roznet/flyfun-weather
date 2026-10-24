@@ -359,6 +359,39 @@ class TestTimeScanUsage:
         assert summary.time_scan_count == 1
 
 
+class TestApiUsageWeighted:
+    """``weighted_calls`` (provider-billed) alongside the request count."""
+
+    def test_log_persists_weight(self, db_session):
+        log_api_usage(
+            db_session, service="open_meteo", pipeline="briefing",
+            api_calls=6, weighted_calls=4512.5, user_id=DEV_USER_ID, flight_id="f-1",
+        )
+        db_session.commit()
+        row = db_session.query(ApiUsageRow).one()
+        assert row.api_calls == 6
+        assert row.weighted_calls == 4512.5
+
+    def test_summary_sums_weight_and_skips_unweighted_rows(self, db_session):
+        from weatherbrief.api.usage import get_api_usage_summary
+
+        # Pre-114 row: no weight recorded.
+        db_session.add(ApiUsageRow(service="open_meteo", pipeline="briefing", api_calls=3))
+        log_api_usage(db_session, service="open_meteo", pipeline="briefing",
+                      api_calls=2, weighted_calls=1500.0)
+        log_api_usage(db_session, service="open_meteo", pipeline="alternates",
+                      api_calls=3, weighted_calls=90.0)
+        db_session.commit()
+
+        period = get_api_usage_summary(db_session).last_30d
+        by_pipeline = {b.pipeline: b for b in period.by_service}
+        assert by_pipeline["briefing"].total_calls == 5
+        assert by_pipeline["briefing"].total_weighted_calls == 1500.0
+        assert by_pipeline["alternates"].total_weighted_calls == 90.0
+        assert period.total_calls == 8
+        assert period.total_weighted_calls == 1590.0
+
+
 class TestUsageAPI:
     """Test GET /api/user/usage endpoint."""
 
