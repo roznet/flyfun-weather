@@ -433,7 +433,9 @@ struct DialogTests {
 private func makeLiveLayer(
     liveUpdatedAt: String? = "2026-07-08T14:30:00Z",
     alert: String? = "New SIGMET at LFML",
-    highlight: String? = "Route as briefed, storms building near LFML"
+    highlight: String? = "Route as briefed, storms building near LFML",
+    headline: String = "Observed 14:30Z · as briefed",
+    withGlance: Bool = true
 ) throws -> LiveLayerResponse {
     var lines: [[String: Any]] = [["phase": "departure", "icao": "LFMD", "alert": false, "text": "LFMD VFR"]]
     if let alert {
@@ -441,14 +443,15 @@ private func makeLiveLayer(
     }
     var glance: [String: Any] = [
         "as_of": "2026-07-08T14:30:00Z",
-        "headline": "Observed 14:30Z · as briefed",
+        "headline": headline,
         "comparison": "as_briefed",
         "lines": lines,
     ]
     if let highlight {
         glance["highlight"] = ["text": highlight, "model": "fixture", "generated_at": "2026-07-08T14:29:00Z"]
     }
-    var payload: [String: Any] = ["flight_id": "flt-1", "pack_timestamp": "2026-07-08T07:12:00Z", "glance": glance]
+    var payload: [String: Any] = ["flight_id": "flt-1", "pack_timestamp": "2026-07-08T07:12:00Z"]
+    if withGlance { payload["glance"] = glance }
     if let liveUpdatedAt { payload["live_updated_at"] = liveUpdatedAt }
     let data = try JSONSerialization.data(withJSONObject: payload)
     return try JSONDecoder.weatherBrief.decode(LiveLayerResponse.self, from: data)
@@ -503,6 +506,49 @@ struct LiveCheckDialogTests {
         #expect(lines.alerts == ["New SIGMET at LFML"])
         #expect(lines.summary == "Route as briefed, storms building near LFML")
         #expect(lines.summaryTime == "14:29Z")
+    }
+
+    @Test("a layer with data but no glance leaves today's line unchanged")
+    func noGlance() throws {
+        let live = try makeLiveLayer(withGlance: false)
+        #expect(IntentDialogs.liveCheckLines(live) == nil)
+        #expect(IntentDialogs.checkSummary(flight(), live: live) == IntentDialogs.checkSummary(flight()))
+    }
+
+    @Test("blank alert text is dropped; nothing left to say means no live lead")
+    func blankLiveText() throws {
+        let blankAlert = try #require(IntentDialogs.liveCheckLines(try makeLiveLayer(alert: "  ")))
+        #expect(blankAlert.alerts.isEmpty)
+        #expect(blankAlert.summary == "Route as briefed, storms building near LFML")
+
+        let empty = try makeLiveLayer(alert: " ", highlight: nil, headline: "")
+        #expect(IntentDialogs.liveCheckLines(empty) == nil)
+        #expect(IntentDialogs.checkSummary(flight(), live: empty) == IntentDialogs.checkSummary(flight()))
+    }
+
+    @Test("briefing grade line: two concerns, outlook, no assessment, not briefed")
+    func briefingGradeLineBranches() {
+        let twoConcerns = makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: makeBriefingStatus(
+            assessment: "RED",
+            advisorySummary: AdvisorySummary(red: 1, amber: 1, top: [
+                AdvisoryChip(status: "RED", name: "convective"), AdvisoryChip(status: "AMBER", name: "icing"),
+            ]),
+            fetchTimestamp: "2026-07-08T07:12:00Z"))
+        #expect(IntentDialogs.briefingGradeLine(twoConcerns)
+            == "The 07:12Z briefing graded it red; top concerns: convective and icing.")
+
+        let outlook = makeFlight(waypoints: ["LFMD", "LFML"],
+                                 latestBriefing: makeBriefingStatus(outlook: "LIKELY_FLYABLE"))
+        #expect(IntentDialogs.briefingGradeLine(outlook) == "The briefing gave a long-range outlook of likely flyable.")
+        #expect(IntentDialogs.checkSummary(outlook) == "Your LFMD → LFML flight has a long-range outlook of likely flyable.")
+
+        let none = makeFlight(waypoints: ["LFMD", "LFML"],
+                              latestBriefing: makeBriefingStatus(fetchTimestamp: "2026-07-08T07:12:00Z"))
+        #expect(IntentDialogs.briefingGradeLine(none) == "The 07:12Z briefing has no assessment yet.")
+        #expect(IntentDialogs.checkSummary(none) == "Your LFMD → LFML flight has no assessment yet.")
+
+        #expect(IntentDialogs.briefingGradeLine(makeFlight(waypoints: ["LFMD", "LFML"]))
+            == "Your LFMD → LFML flight hasn't been briefed yet.")
     }
 
     @Test("card note: nil for a traffic-light grade, the dialog's words otherwise")

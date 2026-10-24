@@ -226,7 +226,10 @@ with its `live` block. `CheckBriefingIntent` does the same:
   verbatim; the only client touch is adding a full stop where a line has no
   closing punctuation, so spoken lines don't run on.
 - Pure builders: `IntentDialogs.liveCheckLines` (returns `LiveCheckLines`; nil means
-  behave as without live) and `checkSummary(_:live:)`. Tested in
+  behave as without live) and `checkSummary(_:live:)`. The briefing-only line and
+  `briefingGradeLine` word the same private `briefingState` (not briefed /
+  unavailable / graded + top / outlook / none), so they can't drift on which
+  case applies. Tested in
   `AppIntentsResolverTests` ("Check briefing — live layer first").
 
 **Result card** (`CheckBriefingSnippetView`): route + departure, the live block
@@ -240,7 +243,10 @@ gained `init(flight:)`. Error paths (signed out, not found, load failed) still
 return a card, because an opaque `some IntentResult & ... & ShowsSnippetView`
 needs one view type on every path: `content: nil` draws just an "Open FlyFun"
 button. The card makes no request of its own; it draws what `perform()`
-already loaded.
+already loaded. So tapping Refresh does not update it: the card keeps the old
+grade and live block until Check Briefing is run again. Accepted: a refresh
+takes ~2 minutes, longer than a Siri card stays up, and
+`RefreshBriefingIntent` speaks its own line.
 
 ### Navigation from an intent (built, #364)
 

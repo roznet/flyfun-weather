@@ -15,28 +15,51 @@ enum IntentDialogs {
             return liveCheckSummary(flight, lines: lines)
         }
         let route = flight.shortTitle
-        guard let briefing = flight.latestBriefing else {
+        switch briefingState(flight.latestBriefing) {
+        case .notBriefed:
             if let coverage = flight.coverage, let day = coverage.availableDay {
                 return "Your \(route) flight isn't in forecast range yet — a briefing is expected \(IntentSupport.mediumDate(day))."
             }
             return "Your \(route) flight hasn't been briefed yet."
-        }
-        if let assessment = briefing.assessment?.uppercased() {
+        case .unavailable:
             // #392: "graded unavailable" reads as a verdict. It is the absence of
             // one — say so, in the same register as the web/iOS copy.
-            if assessment == "UNAVAILABLE" {
-                return "I couldn't assess your \(route) flight — there's no usable model data for that route yet."
-            }
-            var line = "Your \(route) flight is graded \(assessment.lowercased())."
-            if let top = briefing.advisorySummary?.top, !top.isEmpty {
-                line += " Top concern\(top.count > 1 ? "s" : ""): \(concernNames(top))."
+            return "I couldn't assess your \(route) flight — there's no usable model data for that route yet."
+        case .graded(let grade, let top):
+            var line = "Your \(route) flight is graded \(grade)."
+            if !top.isEmpty {
+                line += " Top \(concerns(top))."
             }
             return line
+        case .outlook(let outlook):
+            return "Your \(route) flight has a long-range outlook of \(outlook)."
+        case .noAssessment:
+            return "Your \(route) flight has no assessment yet."
         }
-        if let outlook = briefing.outlook {
-            return "Your \(route) flight has a long-range outlook of \(humanize(outlook))."
+    }
+
+    /// What the latest briefing says, before it is worded. The one decision
+    /// ladder behind `checkSummary` (briefing-only) and `briefingGradeLine`
+    /// (closing a live check), which phrase it differently.
+    private enum BriefingState {
+        case notBriefed
+        /// `UNAVAILABLE`: the absence of a grade, never said as one (#392).
+        case unavailable
+        /// Lowercased grade and the server's top concerns (possibly empty).
+        case graded(String, top: [AdvisoryChip])
+        /// Humanized long-range outlook.
+        case outlook(String)
+        case noAssessment
+    }
+
+    private static func briefingState(_ briefing: BriefingStatusInfo?) -> BriefingState {
+        guard let briefing else { return .notBriefed }
+        if let assessment = briefing.assessment?.uppercased() {
+            if assessment == "UNAVAILABLE" { return .unavailable }
+            return .graded(assessment.lowercased(), top: briefing.advisorySummary?.top ?? [])
         }
-        return "Your \(route) flight has no assessment yet."
+        if let outlook = briefing.outlook { return .outlook(humanize(outlook)) }
+        return .noAssessment
     }
 
     /// The card's note for a flight with no traffic-light grade to show (not
@@ -111,20 +134,20 @@ enum IntentDialogs {
             return "Your \(flight.shortTitle) flight hasn't been briefed yet."
         }
         let label = briefingTime(briefing).map { "The \($0) briefing" } ?? "The briefing"
-        if let assessment = briefing.assessment?.uppercased() {
-            if assessment == "UNAVAILABLE" {
-                return "\(label) couldn't assess it: there was no usable model data for that route."
-            }
-            var line = "\(label) graded it \(assessment.lowercased())"
-            if let top = briefing.advisorySummary?.top, !top.isEmpty {
-                line += "; top concern\(top.count > 1 ? "s" : ""): \(concernNames(top))"
+        switch briefingState(briefing) {
+        case .notBriefed, .noAssessment:
+            return "\(label) has no assessment yet."
+        case .unavailable:
+            return "\(label) couldn't assess it: there was no usable model data for that route."
+        case .graded(let grade, let top):
+            var line = "\(label) graded it \(grade)"
+            if !top.isEmpty {
+                line += "; top \(concerns(top))"
             }
             return line + "."
+        case .outlook(let outlook):
+            return "\(label) gave a long-range outlook of \(outlook)."
         }
-        if let outlook = briefing.outlook {
-            return "\(label) gave a long-range outlook of \(humanize(outlook))."
-        }
-        return "\(label) has no assessment yet."
     }
 
     /// "07:12Z" for the briefing's pack, or nil when the server sent none.
@@ -132,9 +155,9 @@ enum IntentDialogs {
         briefing.fetchTimestamp.flatMap(Date.parseISO8601).map(LiveTime.zulu)
     }
 
-    /// The first two named concerns, "convective and icing".
-    private nonisolated static func concernNames(_ top: [AdvisoryChip]) -> String {
-        top.prefix(2).map(\.name).joined(separator: " and ")
+    /// "concern: convective" / "concerns: convective and icing" (first two).
+    private nonisolated static func concerns(_ top: [AdvisoryChip]) -> String {
+        "concern\(top.count > 1 ? "s" : ""): " + top.prefix(2).map(\.name).joined(separator: " and ")
     }
 
     /// One-line-per-flight traffic-light overview of upcoming flights, always
