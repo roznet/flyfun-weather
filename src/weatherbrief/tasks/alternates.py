@@ -98,7 +98,8 @@ def _fetch_eta_snapshots(
 
     Returns ``{icao: {model: snapshot_dict}}`` keeping only the snapshot whose
     ``forecast_hour`` matches ``eta_dt``. Per-model split mirrors the forecast
-    map: GFS/ICON via Open-Meteo + GRIB ceiling, ECMWF via local GRIB (the only
+    map: GFS via Open-Meteo + GRIB ceiling, ICON GRIB-primary with a per-airport
+    Open-Meteo fallback (#914), ECMWF via local GRIB (the only
     source of ECMWF visibility), with an Open-Meteo fallback when no local GRIB
     run is available (degraded — ECMWF visibility absent — but consensus still
     works). Each model's failure is non-fatal.
@@ -160,12 +161,15 @@ def _fetch_eta_snapshots(
                 )
                 snaps, _ = fetch_model_snapshots(
                     model, om_init_time, airports, session, sample_hours,
+                    only_valid_time=eta_dt,
                 )
         else:
-            # GFS/ICON: GRIB diagnostics fetched alongside Open-Meteo and
-            # attached before the sounding pass (#635) — no added serial leg.
+            # GFS/ICON: GRIB diagnostics fetched alongside and attached before
+            # the sounding pass (#635); ICON's sounding and surface come from
+            # GRIB too, Open-Meteo only for airports GRIB left short (#914).
             snaps, _ = fetch_model_snapshots(
                 model, om_init_time, airports, session, sample_hours,
+                only_valid_time=eta_dt,
             )
 
         result: dict[str, dict] = {}

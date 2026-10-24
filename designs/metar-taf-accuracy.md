@@ -55,6 +55,7 @@ tasks/standalone_verification.py        ← standalone airport monitoring
 ├── run_metar_ingest_cycle()            ← fetch METAR/TAF → verification_observations (source 'metar_ingest')
 ├── run_standalone_cycle()              ← forecast / light / full (legacy) cycle
 ├── fetch_model_snapshots()             ← GFS/ICON entry: GRIB cloud diag alongside Open-Meteo, attached before soundings (#635)
+├── _fetch_grib_primary_snapshots()     ← ICON (WB_GRIB_SNAPSHOTS): GRIB sounding + surface, Open-Meteo per-airport fallback (#914)
 ├── _fetch_forecasts_for_model()        ← Open-Meteo multi-point (batches of 100)
 ├── _enrich_with_sounding()             ← pressure-level sounding analysis
 ├── _fetch_grib_diagnostics() / _apply_grib_columns()  ← GFS/ICON cloud diagnostics + ceiling columns
@@ -347,8 +348,9 @@ METAR ingest cycle (run_metar_ingest_cycle, every 30 min):
     (source='metar_ingest' on the cycle row; observations are source-agnostic)
 
 Forecast cycle (fetch_forecasts=True, score=False):
-  A. Fetch Open-Meteo forecasts per model (batches of 100, with pressure levels);
-     ECMWF prefers direct GRIB delivery when its init is fresher than Open-Meteo
+  A. Fetch forecasts per model: ECMWF from local GRIB when its init is fresher
+     than Open-Meteo's; ICON from DWD GRIB (GRIB-primary, #914); GFS from
+     Open-Meteo (batches of 100, with pressure levels)
   B. Enrich with sounding analysis + GRIB cloud diagnostics, store snapshots
   E. Prune old snapshots (>10 days)
 
@@ -378,6 +380,35 @@ During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `Soun
 - **Error recording**: `_record_failed_cycle()` captures last 500 chars of traceback in the `error` column
 - **Sounding fault tolerance**: `_enrich_with_sounding()` fails silently — surface data preserved
 - **GRIB fallback**: GRIB failures logged but don't block the cycle
+
+### GRIB-primary ICON snapshots (#914)
+
+ICON snapshot rows (map cycle and alternates alike, both through
+`fetch_model_snapshots`) are built from DWD ICON-EU GRIB, not Open-Meteo:
+`standalone_grib.fetch_icon_snapshot_fields` downloads, per sampled step, the
+isobaric files `t, relhum, u, v, fi` on 1000-200 hPa
+(`ICON_SNAPSHOT_PRESSURE_LEVELS`, ~1 MB each, not the ~189 MB/h model-level
+column the briefing reads) plus the #912 single-level surface files and the
+predecessor step's accumulated precipitation. Every file is its own cache
+entry in the shared `icon-eu` run directory (12 h TTL), so surface files a
+briefing pulled are reused. Rows record precipitation as the total over
+`precip_period_h` (1 h to +78 h, 3 h after), like the ECMWF GRIB rows.
+
+- **Coverage per (airport, hour):** required surface fields (#912's
+  `_REQUIRED_HOURLY_FIELDS`) and at least `_MIN_GRIB_SNAPSHOT_LEVELS` (8)
+  levels. An airport with any uncovered hour is fetched from Open-Meteo and
+  only its uncovered hours are kept, so an outage degrades to the old path one
+  airport at a time. Off-grid hours (alternates ETA past +78 h) are uncovered
+  by construction.
+- **Switches:** `WB_GRIB_SNAPSHOTS=0` → Open-Meteo first, as before (a comma
+  list limits models); `WB_GRIB_SNAPSHOTS_DRILL=icon` / `icon:half` discards
+  GRIB rows after the build to exercise the fallback. Separate from
+  `WB_GRIB_PRIMARY` so the map rolls back without touching briefings.
+- **Alternates** pass `only_valid_time=eta`, so GRIB (cloud diag included,
+  GFS too) is fetched for the ETA hour only. The Open-Meteo window is left
+  alone: Open-Meteo bills any window up to 14 days as one.
+- Log line per model: `GRIB-primary icon snapshots: N/M airports fully from
+  GRIB … K to Open-Meteo fallback (C calls)`. GFS joins with #913's reader.
 
 ### Open-Meteo Batching
 

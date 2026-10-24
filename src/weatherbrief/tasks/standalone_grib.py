@@ -366,6 +366,193 @@ def fetch_icon_cloud_diag(
     return result
 
 
+@dataclass
+class IconSnapshotStep:
+    """One ICON-EU forecast step's raw fields at the airports (#914).
+
+    Per-point lists in ``lats``/``lons`` order. ``pressure`` is the
+    ``{level_hpa: {raw_key: value}}`` shape ``build_pressure_levels_from_grib``
+    takes; ``surface`` / ``prev_surface`` are keyed by DWD variable name (the
+    predecessor step carries the accumulated fields only), ``window_h`` the
+    hours between them. ``prev_surface`` is None when the predecessor could
+    not be had, which leaves the step without precipitation.
+    """
+
+    pressure: list[dict[int, dict[str, float]]]
+    surface: list[dict[str, float]]
+    prev_surface: list[dict[str, float]] | None
+    window_h: int | None
+
+
+def fetch_icon_snapshot_fields(
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    lats: list[float],
+    lons: list[float],
+    data_dir: Path | None = None,
+    session: requests.Session | None = None,
+    priority: "int | DecodePriority | None" = None,
+) -> dict[int, IconSnapshotStep]:
+    """ICON-EU pressure-level sounding + surface fields at airports (#914).
+
+    The GRIB-primary source for the ICON forecast-map and alternates
+    snapshots. Downloads, per forecast hour, the isobaric files
+    (``ICON_SNAPSHOT_PRESSURE_*``) and the #912 single-level surface files,
+    plus the accumulated surface fields of the preceding published step so
+    precipitation can be de-accumulated. Every file is its own cache entry in
+    the shared ICON-EU run directory, so the surface files a briefing already
+    pulled are reused, and a second alternates search on the same run is
+    decode-only.
+
+    A forecast hour with no pressure-level or no surface file at all is
+    absent from the result; partial levels are kept (the caller decides
+    whether a point is covered). Never raises for a download or decode
+    failure: those are logged and cost the hour.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU,
+        ICON_SNAPSHOT_PRESSURE_LEVELS,
+        ICON_SNAPSHOT_PRESSURE_VARIABLES,
+        ICON_SURFACE_ACCUMULATED,
+        ICON_SURFACE_VARIABLES,
+        _default_download_workers,
+        _download_one_file,
+        _format_failure_summary,
+        icon_eu_pressure_level_url,
+        icon_eu_previous_step,
+        icon_eu_single_level_url,
+        icon_pressure_cache_key,
+        icon_surface_cache_key,
+    )
+
+    if not forecast_hours:
+        return {}
+    if data_dir is None:
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    if session is None:
+        session = requests.Session()
+
+    variant = ICON_EU
+    purge_old_runs(data_dir, model="icon-eu")  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
+
+    steps = sorted(set(forecast_hours))
+    predecessor_of = {
+        fhour: prev for fhour in steps
+        if (prev := icon_eu_previous_step(fhour, variant)) is not None
+    }
+
+    # (step, kind, key) → (url, cache filename). kind: "pl" | "sfc".
+    wanted: dict[tuple, tuple[str, str]] = {}
+    for fhour in steps:
+        for level in ICON_SNAPSHOT_PRESSURE_LEVELS:
+            for var in ICON_SNAPSHOT_PRESSURE_VARIABLES:
+                wanted[(fhour, "pl", level, var)] = (
+                    icon_eu_pressure_level_url(
+                        init_date, init_hour, fhour, level, var, variant,
+                    ),
+                    cache_key(fhour, icon_pressure_cache_key(var, level, variant)),
+                )
+        for var in ICON_SURFACE_VARIABLES:
+            wanted[(fhour, "sfc", var)] = (
+                icon_eu_single_level_url(init_date, init_hour, fhour, var, variant),
+                cache_key(fhour, icon_surface_cache_key(var, variant)),
+            )
+    for prev in set(predecessor_of.values()):
+        for var in ICON_SURFACE_ACCUMULATED:
+            wanted.setdefault((prev, "sfc", var), (
+                icon_eu_single_level_url(init_date, init_hour, prev, var, variant),
+                cache_key(prev, icon_surface_cache_key(var, variant)),
+            ))
+
+    # Phase 1: download what the run directory lacks, in parallel (the same
+    # per-file helper and worker count the ICON-EU fetchers use).
+    missing = [(url, ck) for url, ck in wanted.values() if not is_cached(run_dir, ck)]
+    failures: dict[int | str, int] = {}
+    if missing:
+        def _get(item: tuple[str, str]) -> int | str:
+            url, ck = item
+            data, status = _download_one_file(url, session)
+            if data is None:
+                return status
+            put_cached(run_dir, ck, data)
+            return 200
+
+        with ThreadPoolExecutor(max_workers=_default_download_workers()) as pool:
+            for status in pool.map(_get, missing):
+                if status != 200:
+                    failures[status] = failures.get(status, 0) + 1
+        n_failed = sum(failures.values())
+        log = logger.warning if n_failed else logger.info
+        log(
+            "ICON snapshot GRIB %s%02dz: downloaded %d/%d files for %d step(s)%s",
+            init_date, init_hour, len(missing) - n_failed, len(missing),
+            len(steps), _format_failure_summary(failures),
+        )
+
+    def _path(key: tuple) -> str | None:
+        ck = wanted[key][1]
+        return str(run_dir / ck) if is_cached(run_dir, ck) else None
+
+    # Phase 2: one pressure job and one surface job per step, plus one surface
+    # job per predecessor that is not itself a sampled step.
+    jobs: list[tuple[str, tuple]] = []
+    job_keys: list[tuple[str, int]] = []
+    for fhour in steps:
+        level_paths: dict[int, dict[str, str]] = {}
+        for level in ICON_SNAPSHOT_PRESSURE_LEVELS:
+            for var in ICON_SNAPSHOT_PRESSURE_VARIABLES:
+                path = _path((fhour, "pl", level, var))
+                if path is not None:
+                    level_paths.setdefault(level, {})[var] = path
+        if level_paths:
+            jobs.append(("decode_icon_pressure", (level_paths, lats, lons)))
+            job_keys.append(("pl", fhour))
+    surface_steps = sorted(set(steps) | set(predecessor_of.values()))
+    for fhour in surface_steps:
+        var_names = ICON_SURFACE_VARIABLES if fhour in steps else ICON_SURFACE_ACCUMULATED
+        var_paths = {
+            var: path for var in var_names
+            if (path := _path((fhour, "sfc", var))) is not None
+        }
+        if var_paths:
+            jobs.append(("decode_icon_surface", (var_paths, lats, lons)))
+            job_keys.append(("sfc", fhour))
+
+    if not jobs:
+        return {}
+    decoded = _dispatch_decode_parallel(jobs, priority=priority, return_exceptions=True)
+
+    pressure_by_step: dict[int, list] = {}
+    surface_by_step: dict[int, list] = {}
+    for (kind, fhour), res in zip(job_keys, decoded):
+        if isinstance(res, Exception):
+            logger.warning("ICON snapshot %s decode failed f%03d", kind, fhour, exc_info=res)
+            continue
+        if res:
+            (pressure_by_step if kind == "pl" else surface_by_step)[fhour] = res
+
+    result: dict[int, IconSnapshotStep] = {}
+    for fhour in steps:
+        pressure = pressure_by_step.get(fhour)
+        surface = surface_by_step.get(fhour)
+        if not pressure or not surface:
+            continue
+        prev_step = predecessor_of.get(fhour)
+        prev_surface = surface_by_step.get(prev_step) if prev_step is not None else None
+        result[fhour] = IconSnapshotStep(
+            pressure=pressure,
+            surface=surface,
+            prev_surface=prev_surface,
+            window_h=(fhour - prev_step) if prev_surface is not None else None,
+        )
+    return result
+
+
 def datetime_to_init_parts(dt: datetime) -> tuple[str, int]:
     """Convert a datetime to (init_date_YYYYMMDD, init_hour) tuple."""
     utc = dt.astimezone(timezone.utc)

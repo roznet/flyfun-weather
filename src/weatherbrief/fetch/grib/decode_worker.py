@@ -371,6 +371,27 @@ def decode_icon_surface(
         )
 
 
+def decode_icon_pressure(
+    level_paths: dict[int, dict[str, str]],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """ICON per-(level, variable) pressure-level files → per-point raw levels (#914)."""
+    n_files = sum(len(v) for v in level_paths.values())
+    rep_path = next(
+        (p for v in level_paths.values() for p in v.values()), "",
+    )
+    with _log_decode(f"decode_icon_pressure[{n_files}f]", rep_path):
+        from weatherbrief.fetch.grib.decode import decode_icon_pressure_per_point
+        return decode_icon_pressure_per_point(
+            {
+                int(level): {var: Path(p) for var, p in var_paths.items()}
+                for level, var_paths in level_paths.items()
+            },
+            latitudes, longitudes,
+        )
+
+
 def decode_icon_d2_explicit_conv(
     var_paths: dict[str, str],
     latitudes: list[float],

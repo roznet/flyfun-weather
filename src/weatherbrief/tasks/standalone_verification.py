@@ -543,34 +543,8 @@ def _fetch_forecasts_for_model(
                 if not _keeps_hour(day_offset, utc_hour, forecast_days, explicit_hours):
                     continue
 
-                # Compute LCL from T-Td
-                lcl_ft = None
-                if hourly.temperature_2m_c is not None and hourly.dewpoint_2m_c is not None:
-                    spread = hourly.temperature_2m_c - hourly.dewpoint_2m_c
-                    if spread >= 0:
-                        lcl_ft = _LCL_CONSTANT_FT * spread
-
-                snap = {
-                    "icao": airport.icao,
-                    "model": model,
-                    "model_init_time": init_time,
-                    "forecast_hour": hourly.time,
-                    "temperature_2m_c": hourly.temperature_2m_c,
-                    "dewpoint_2m_c": hourly.dewpoint_2m_c,
-                    "visibility_m": hourly.visibility_m,
-                    "wind_speed_10m_kt": hourly.wind_speed_10m_kt,
-                    "wind_direction_10m_deg": hourly.wind_direction_10m_deg,
-                    "wind_gusts_10m_kt": hourly.wind_gusts_10m_kt,
-                    "precipitation_mm": hourly.precipitation_mm,
-                    "snowfall_cm": hourly.snowfall_cm,
-                    "precip_period_h": 1,  # Open-Meteo reports hourly totals
-                    "cape_jkg": hourly.cape_jkg,
-                    "cloud_cover_pct": hourly.cloud_cover_pct,
-                    "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
-                    "cloud_cover_mid_pct": hourly.cloud_cover_mid_pct,
-                    "cloud_cover_high_pct": hourly.cloud_cover_high_pct,
-                    "lcl_ft": lcl_ft,
-                }
+                # Open-Meteo reports hourly totals: a 1 h precipitation period.
+                snap = _snapshot_row(airport.icao, model, init_time, hourly)
 
                 # Model-native diagnostics on the hour before the sounding pass,
                 # as the ECMWF GRIB-first path does, so `assess_convective_nwp`
@@ -670,6 +644,50 @@ def _fetch_forecasts_for_model(
     return all_results, client.call_count
 
 
+def _snapshot_row(
+    icao: str,
+    model: str,
+    init_time: datetime,
+    hourly,
+    precip_period_h: int = 1,
+) -> dict:
+    """The surface columns of one snapshot row, from one ``HourlyForecast``.
+
+    Shared by the Open-Meteo chunk loop and the ICON GRIB builder (#914), so
+    both write the same columns. ``hourly.precipitation_mm`` / ``snowfall_cm``
+    are totals over ``precip_period_h`` hours ending at the valid time; the
+    sounding columns are added later by the sounding pass.
+    """
+    # LCL from T-Td
+    lcl_ft = None
+    if hourly.temperature_2m_c is not None and hourly.dewpoint_2m_c is not None:
+        spread = hourly.temperature_2m_c - hourly.dewpoint_2m_c
+        if spread >= 0:
+            lcl_ft = _LCL_CONSTANT_FT * spread
+
+    return {
+        "icao": icao,
+        "model": model,
+        "model_init_time": init_time,
+        "forecast_hour": hourly.time,
+        "temperature_2m_c": hourly.temperature_2m_c,
+        "dewpoint_2m_c": hourly.dewpoint_2m_c,
+        "visibility_m": hourly.visibility_m,
+        "wind_speed_10m_kt": hourly.wind_speed_10m_kt,
+        "wind_direction_10m_deg": hourly.wind_direction_10m_deg,
+        "wind_gusts_10m_kt": hourly.wind_gusts_10m_kt,
+        "precipitation_mm": hourly.precipitation_mm,
+        "snowfall_cm": hourly.snowfall_cm,
+        "precip_period_h": precip_period_h,
+        "cape_jkg": hourly.cape_jkg,
+        "cloud_cover_pct": hourly.cloud_cover_pct,
+        "cloud_cover_low_pct": hourly.cloud_cover_low_pct,
+        "cloud_cover_mid_pct": hourly.cloud_cover_mid_pct,
+        "cloud_cover_high_pct": hourly.cloud_cover_high_pct,
+        "lcl_ft": lcl_ft,
+    }
+
+
 def _enrich_with_sounding(
     snap: dict, hourly, model: str, edr_acc: "EdrAccumulator | None" = None,
 ) -> None:
@@ -739,12 +757,14 @@ def _keeps_hour(
 
 def _planned_valid_times(
     init_time: datetime, forecast_days: int, sample_hours: list[int] | None,
+    only_valid_time: datetime | None = None,
 ) -> list[datetime]:
     """Valid times ``_fetch_forecasts_for_model`` will keep, known up front.
 
     Shares that function's per-hour filter (:func:`_keeps_hour`) so the GRIB
     fetch can be planned before the Open-Meteo response exists. Hours before ``init_time`` are
-    dropped, as the GRIB planning always did.
+    dropped, as the GRIB planning always did. ``only_valid_time`` keeps just
+    that hour (when it is one of them): the caller reads nothing else.
     """
     init_date = init_time.date()
     explicit_hours = set(sample_hours) if sample_hours is not None else None
@@ -757,6 +777,9 @@ def _planned_valid_times(
             valid = datetime.combine(day, dt_time(hour), tzinfo=init_time.tzinfo)
             if valid >= init_time:
                 out.append(valid)
+    if only_valid_time is not None:
+        wanted = _snapshot_hour_key("", only_valid_time)
+        out = [v for v in out if _snapshot_hour_key("", v) == wanted]
     return out
 
 
@@ -956,6 +979,7 @@ def fetch_model_snapshots(
     days: int | None = None,
     pool_soundings: bool = False,
     priority: "int | DecodePriority | None" = None,
+    only_valid_time: datetime | None = None,
 ) -> tuple[list[dict], int]:
     """Open-Meteo snapshots for one model, graded with its GRIB diagnostics.
 
@@ -973,7 +997,15 @@ def fetch_model_snapshots(
     through to ``_fetch_forecasts_for_model``.
 
     Arguments are ``_fetch_forecasts_for_model``'s, plus ``priority`` for the
-    GRIB decodes (see :func:`_fetch_grib_diagnostics`).
+    GRIB decodes (see :func:`_fetch_grib_diagnostics`), and
+    ``only_valid_time``: the one hour the caller will read (alternates' ETA).
+    It limits the GRIB fetches to that hour instead of the sample hour on every
+    day of the horizon. The Open-Meteo request is unchanged by it: Open-Meteo
+    bills a window of up to 14 days as one, so a shorter window saves nothing.
+
+    For a model in ``WB_GRIB_SNAPSHOTS`` (ICON, #914) GRIB is the primary
+    source and Open-Meteo only fills what GRIB left short — see
+    :func:`_fetch_grib_primary_snapshots`.
     """
     if model not in _GRIB_DIAG_MODELS:
         return _fetch_forecasts_for_model(
@@ -981,8 +1013,17 @@ def fetch_model_snapshots(
             edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
         )
 
+    from weatherbrief.fetch.grib.primary import grib_snapshot_models
+
+    if model in grib_snapshot_models():
+        return _fetch_grib_primary_snapshots(
+            model, init_time, airports, session, sample_hours,
+            edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
+            priority=priority, only_valid_time=only_valid_time,
+        )
+
     valid_times = _planned_valid_times(
-        init_time, _forecast_days(model, days), sample_hours,
+        init_time, _forecast_days(model, days), sample_hours, only_valid_time,
     )
 
     def _resolve(future: "concurrent.futures.Future") -> _GribDiagLookup | None:
@@ -1018,6 +1059,289 @@ def fetch_model_snapshots(
     if lookup is not None:
         _apply_grib_columns(snapshots, model, lookup)
     return snapshots, api_calls
+
+
+# ---------------------------------------------------------------------------
+# GRIB-primary GFS/ICON snapshots (#914)
+# ---------------------------------------------------------------------------
+
+# A GRIB point-hour needs at least this many pressure levels to count as a
+# sounding; below it the point goes to the Open-Meteo fallback. Half of the
+# 16 requested levels: enough for the lite sounding's layers and parcel.
+_MIN_GRIB_SNAPSHOT_LEVELS = 8
+
+
+def _snapshot_hour_key(icao: str, valid: datetime) -> tuple[str, int]:
+    """(ICAO, UTC epoch hour): one key for GRIB and Open-Meteo rows alike."""
+    if valid.tzinfo is None:
+        valid = valid.replace(tzinfo=timezone.utc)
+    return icao, int(valid.timestamp() // 3600)
+
+
+def _fetch_grib_primary_snapshots(
+    model: str,
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    session: requests.Session,
+    sample_hours: list[int] | None = None,
+    edr_acc: "EdrAccumulator | None" = None,
+    days: int | None = None,
+    pool_soundings: bool = False,
+    priority: "int | DecodePriority | None" = None,
+    only_valid_time: datetime | None = None,
+) -> tuple[list[dict], int]:
+    """GFS/ICON snapshots from GRIB, Open-Meteo only for what GRIB left short.
+
+    Same contract as :func:`fetch_model_snapshots` (snapshot dicts, Open-Meteo
+    HTTP calls). The model's GRIB cloud diagnostics (the #635 feed) run on
+    their own thread while the sounding/surface GRIB downloads, and are
+    attached before the sounding pass, as on the Open-Meteo path.
+
+    Coverage is per (airport, valid hour): a point-hour with the required
+    surface fields and a sounding of at least ``_MIN_GRIB_SNAPSHOT_LEVELS``
+    levels is covered. An airport with any planned hour uncovered goes to
+    Open-Meteo, and only its uncovered hours are taken from that response, so a
+    GRIB outage degrades to today's Open-Meteo snapshots one airport at a time
+    and a fully covered cycle costs zero Open-Meteo calls. Hours off the
+    model's published GRIB grid (an alternates ETA hour past ICON's hourly
+    range) are uncovered by construction.
+    """
+    from weatherbrief.fetch.grib.primary import grib_snapshot_drill
+
+    forecast_days = _forecast_days(model, days)
+    valid_times = _planned_valid_times(
+        init_time, forecast_days, sample_hours, only_valid_time,
+    )
+
+    def _resolve(future: "concurrent.futures.Future") -> _GribDiagLookup | None:
+        try:
+            return future.result()
+        except Exception:
+            logger.warning("GRIB diagnostics thread failed for %s", model, exc_info=True)
+            return None
+
+    t_start = time.monotonic()
+    ctx = contextvars.copy_context()
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix=f"grib-diag-{model}",
+    ) as executor:
+        future = executor.submit(
+            ctx.run, _fetch_grib_diagnostics,
+            model, init_time, airports, session, valid_times, priority,
+        )
+        try:
+            snapshots = _build_grib_snapshots(
+                model, init_time, airports, valid_times,
+                lambda: _resolve(future),
+                edr_acc=edr_acc, pool_soundings=pool_soundings, priority=priority,
+            )
+        except Exception:
+            # Never worse than before #914: a builder bug falls back whole.
+            logger.warning(
+                "GRIB-primary %s snapshots failed, all airports to Open-Meteo",
+                model, exc_info=True,
+            )
+            snapshots = []
+        lookup = _resolve(future)
+
+    drill = grib_snapshot_drill(model)
+    if drill is not None:
+        drilled = {
+            a.icao for i, a in enumerate(airports) if drill == "all" or i % 2 == 0
+        }
+        snapshots = [s for s in snapshots if s["icao"] not in drilled]
+        logger.warning(
+            "GRIB-primary %s snapshots: failure drill (%s) dropped %d airport(s)",
+            model, drill, len(drilled),
+        )
+
+    covered = {_snapshot_hour_key(s["icao"], s["forecast_hour"]) for s in snapshots}
+    uncovered = [
+        a for a in airports
+        if any(_snapshot_hour_key(a.icao, v) not in covered for v in valid_times)
+    ]
+    t_grib = time.monotonic() - t_start
+
+    api_calls = 0
+    if uncovered:
+        fallback, api_calls = _fetch_forecasts_for_model(
+            model, init_time, uncovered, session, sample_hours,
+            edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
+            grib_diag=lambda: lookup,
+        )
+        snapshots.extend(
+            s for s in fallback
+            if _snapshot_hour_key(s["icao"], s["forecast_hour"]) not in covered
+        )
+
+    if lookup is not None:
+        _apply_grib_columns(snapshots, model, lookup)
+
+    logger.info(
+        "GRIB-primary %s snapshots: %d/%d airports fully from GRIB "
+        "(%d point-hours, %.1fs), %d to Open-Meteo fallback (%d calls)",
+        model, len(airports) - len(uncovered), len(airports), len(covered),
+        t_grib, len(uncovered), api_calls,
+    )
+    return snapshots, api_calls
+
+
+def _build_grib_snapshots(
+    model: str,
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    valid_times: list[datetime],
+    grib_diag: "Callable[[], _GribDiagLookup | None]",
+    edr_acc: "EdrAccumulator | None" = None,
+    pool_soundings: bool = False,
+    priority: "int | DecodePriority | None" = None,
+) -> list[dict]:
+    """Covered snapshot rows for *model* built from its GRIB alone (#914).
+
+    Only ICON has a builder today; GFS joins with #913's reader. A
+    point-hour that is not covered is simply absent.
+    """
+    if model != "icon":
+        return []
+
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        _snap_to_icon_eu_grid,
+        icon_eu_model_level_max_hour,
+    )
+    from weatherbrief.tasks.standalone_grib import (
+        datetime_to_init_parts,
+        fetch_icon_snapshot_fields,
+    )
+
+    init_date, init_hour = datetime_to_init_parts(init_time)
+    max_hour = icon_eu_model_level_max_hour(init_hour)
+    step_of: dict[datetime, int] = {}
+    for valid in valid_times:
+        offset = int((valid - init_time).total_seconds() // 3600)
+        # Only published steps: an off-grid hour would need time interpolation
+        # the Open-Meteo fallback already does for us.
+        if 0 < offset <= max_hour and _snap_to_icon_eu_grid(offset) == offset:
+            step_of[valid] = offset
+    if not step_of:
+        return []
+
+    fields = fetch_icon_snapshot_fields(
+        init_date, init_hour, sorted(set(step_of.values())),
+        [a.lat for a in airports], [a.lon for a in airports],
+        # Own session: the concurrent cloud-diag thread owns the caller's.
+        session=None, priority=priority,
+    )
+    lookup = grib_diag()
+
+    pooled = _pooled_soundings_active(pool_soundings)
+    results: list[dict] = []
+    pending: list[tuple[int, dict]] = []
+    analysis_started = time.monotonic()
+    for valid, fhour in step_of.items():
+        step = fields.get(fhour)
+        if step is None:
+            continue
+        for i, airport in enumerate(airports):
+            built = _icon_grib_hourly(valid, step, i)
+            if built is None:
+                continue
+            hourly, window_h = built
+            cd = lookup.get(airport.icao, valid) if lookup is not None else None
+            if cd is not None and cd.diagnostics is not None:
+                from weatherbrief.fetch.grib import _icon_diag_surface_fields
+
+                for key, value in _icon_diag_surface_fields(cd.diagnostics).items():
+                    setattr(hourly, key, value)
+                hourly.attach_nwp_diagnostics(cd.diagnostics)
+            if not _grib_hour_covered(hourly):
+                continue
+
+            snap = _snapshot_row(
+                airport.icao, model, init_time, hourly, precip_period_h=window_h,
+            )
+            # The hourly carries per-hour rates (what the sounding pass and the
+            # briefing read); the row records the total over its period, as the
+            # ECMWF GRIB rows do.
+            for key in ("precipitation_mm", "snowfall_cm"):
+                rate = getattr(hourly, key)
+                snap[key] = rate * window_h if rate is not None else None
+
+            if pooled:
+                from weatherbrief.analysis.sounding.snapshot_fields import (
+                    build_sounding_payload,
+                )
+
+                pending.append((len(results), build_sounding_payload(hourly, model)))
+            else:
+                _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
+            results.append(snap)
+
+            if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
+                from weatherbrief.fetch.grib import DecodePriority
+
+                _analyze_soundings_pooled(
+                    pending, results, priority=DecodePriority.BACKGROUND,
+                )
+                pending.clear()
+    if pending:
+        from weatherbrief.fetch.grib import DecodePriority
+
+        _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
+    logger.info(
+        "Model %s GRIB: analyzed %d snapshots over %d step(s) in %.1fs%s",
+        model, len(results), len(fields), time.monotonic() - analysis_started,
+        " (pooled)" if pooled else "",
+    )
+    return results
+
+
+def _icon_grib_hourly(valid: datetime, step, i: int):
+    """``(HourlyForecast, precip window h)`` for point *i* of an ICON step, or None.
+
+    Surface from the #912 decoders (instantaneous fields + de-accumulated
+    rates), sounding from the pressure-level files with the model's own MSL
+    pressure as the height datum. None when the point has no surface values
+    or too few levels; cover and CAPE are added by the caller from the cloud
+    diagnostics.
+    """
+    from weatherbrief.fetch.grib import _icon_surface_rates
+    from weatherbrief.fetch.grib.decode import (
+        build_icon_surface_snapshot,
+        build_pressure_levels_from_grib,
+    )
+    from weatherbrief.models.analysis import HourlyForecast
+
+    raw = step.surface[i] if i < len(step.surface) else {}
+    if not raw:
+        return None
+    inst = build_icon_surface_snapshot(raw)
+    point_levels = step.pressure[i] if i < len(step.pressure) else {}
+    if len(point_levels) < _MIN_GRIB_SNAPSHOT_LEVELS:
+        return None
+    levels = build_pressure_levels_from_grib(
+        point_levels, msl_pressure_hpa=inst.get("pressure_msl_hpa"),
+    )
+    if len(levels) < _MIN_GRIB_SNAPSHOT_LEVELS:
+        return None
+    prev = (
+        step.prev_surface[i]
+        if step.prev_surface is not None and i < len(step.prev_surface)
+        else None
+    )
+    rates = _icon_surface_rates(raw, prev, step.window_h)
+    hourly = HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
+    return hourly, (step.window_h or 1)
+
+
+def _grib_hour_covered(hourly) -> bool:
+    """Does a GRIB-built hour carry what a snapshot row needs? (#914)
+
+    The fields #912 requires of a GRIB-primary briefing hour, so a map row and
+    a briefing hour count as covered by the same rule.
+    """
+    from weatherbrief.fetch.grib.primary import _REQUIRED_HOURLY_FIELDS
+
+    return all(getattr(hourly, f, None) is not None for f in _REQUIRED_HOURLY_FIELDS)
 
 
 # ---------------------------------------------------------------------------
