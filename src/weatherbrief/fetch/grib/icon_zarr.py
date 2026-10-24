@@ -362,25 +362,39 @@ def cached_model_level_entry(run_dir: Path, filename: str) -> Path | None:
 
 
 def cache_model_level_blob(
-    run_dir: Path, filename: str, data: bytes, *, priority=None,
+    run_dir: Path, filename: str, data: bytes, *, priority=None, wait: bool = True,
 ) -> Path:
-    """Cache one ICON-EU whole-column blob, converting it to zarr on write.
+    """Cache one ICON-EU whole-column blob and convert it to zarr.
 
-    Writes the GRIB with ``put_cached`` (so a failed conversion still leaves a
-    valid cache entry), converts it in a decode-pool worker (the conversion is
-    CPU and ~145 MB, so it stays off the uvicorn process, and the dispatcher's
-    priority ordering lets interactive decodes overtake a warm-loop
-    conversion), and deletes the GRIB once the store is in place. With no
-    decode pool it does not convert at all. ICON is
-    re-downloadable for about a day, so the GRIB is not kept as a backup.
-    ``priority`` defaults to the caller's decode priority (the ContextVar).
+    Writes the GRIB with ``put_cached`` first, so it is a valid cache entry
+    whatever happens to the conversion. The conversion runs in a decode-pool
+    worker (CPU and ~360 MB peak, kept off the uvicorn process) and deletes
+    the GRIB once the store is in place. ICON is re-downloadable for about a
+    day, so the GRIB is not kept as a backup. With no decode pool there is no
+    conversion at all.
 
-    Returns the path of the cache entry that holds the data now.
+    ``wait=True`` (the warm loop) blocks until the store is written.
+    ``wait=False`` (a briefing prefetch) queues the conversion and returns at
+    once: the briefing decodes the GRIB exactly as before #705, so a cold
+    briefing never waits on a conversion, and the store serves the next one.
+    Pass ``priority=BACKGROUND`` with it so the queued job only takes idle pool
+    time. ``priority`` otherwise defaults to the caller's (the ContextVar).
+
+    The job is safe under the dispatcher's at-least-once delivery: a re-run
+    finds the store and returns at once, and the GRIB is deleted here in the
+    parent, never in the job.
+
+    Returns the cache entry that holds the data now (the GRIB when the
+    conversion was only queued).
     """
-    from weatherbrief.fetch.grib import _dispatch_decode
+    from weatherbrief.fetch.grib import (
+        _dispatch_decode,
+        _get_dispatcher,
+        _priority_enabled,
+        _resolve_priority,
+        decode_pool_enabled,
+    )
     from weatherbrief.fetch.grib.cache import put_cached
-
-    from weatherbrief.fetch.grib import decode_pool_enabled
 
     grib_path = put_cached(run_dir, filename, data)
     # No pool (GRIB_DECODE_WORKERS=0, the kill switch / some dev setups): the
@@ -389,14 +403,51 @@ def cache_model_level_blob(
     if not zarr_enabled() or not decode_pool_enabled():
         return grib_path
     store_path = run_dir / store_name(filename)
-    try:
-        ok = _dispatch_decode(
-            "convert_icon_zarr", str(grib_path), str(store_path), priority=priority,
+    args = (str(grib_path), str(store_path))
+
+    if not wait:
+        # The legacy FIFO path (GRIB_DECODE_PRIORITY_ENABLED=0) has no
+        # non-blocking submit; a rollback switch, so it just keeps the GRIB.
+        if not _priority_enabled():
+            return grib_path
+        future = _get_dispatcher().submit_one(
+            "convert_icon_zarr", args, _resolve_priority(priority),
         )
+        future.add_done_callback(
+            lambda f: _finish_conversion(f, grib_path, store_path, filename),
+        )
+        return grib_path
+
+    try:
+        ok = _dispatch_decode("convert_icon_zarr", *args, priority=priority)
     except Exception:
         logger.warning("ICON zarr conversion failed for %s, keeping GRIB", filename, exc_info=True)
-        return grib_path
-    if not ok:
-        return grib_path
-    grib_path.unlink(missing_ok=True)
-    return store_path
+        ok = False
+    return _after_conversion(ok, grib_path, store_path)
+
+
+def _after_conversion(ok: bool, grib_path: Path, store_path: Path) -> Path:
+    """Drop the GRIB once its store exists; return the entry now holding it.
+
+    Also checks the store when the job failed: a racing writer may have
+    finished it (and deleted the GRIB) while this conversion read the file.
+    """
+    if ok or (store_path / "zarr.json").exists():
+        grib_path.unlink(missing_ok=True)
+        return store_path
+    return grib_path
+
+
+def _finish_conversion(future, grib_path: Path, store_path: Path, filename: str) -> None:
+    """Done-callback of a queued conversion. Never raises (dispatcher thread)."""
+    try:
+        try:
+            ok = bool(future.result())
+        except Exception:
+            # Includes a dispatcher shutdown failing the pending job: the GRIB
+            # stays and decodes as before.
+            logger.warning("ICON zarr conversion failed for %s, keeping GRIB", filename, exc_info=True)
+            ok = False
+        _after_conversion(ok, grib_path, store_path)
+    except Exception:  # pragma: no cover - a callback must not raise
+        logger.warning("ICON zarr post-conversion step failed for %s", filename, exc_info=True)
