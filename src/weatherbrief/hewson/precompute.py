@@ -628,6 +628,7 @@ def run_once(
     client=None,
     now: datetime | None = None,
     init: datetime | None = None,
+    require_current: bool = True,
 ) -> SnapshotResult:
     """Fetch + compute + write one snapshot per model.
 
@@ -663,6 +664,11 @@ def run_once(
     init : GRIB source only — read this run (aware UTC) instead of the newest,
         e.g. to recompute a cycle that has an Open-Meteo snapshot for the
         side-by-side check. Purge is skipped, like a backdated run.
+    require_current : GRIB source, newest run only. A model whose newest
+        complete run is older than ``grib_source.expected_init`` (its
+        delivery or sync failed) is skipped as ``"stale-init"`` and logged at
+        ERROR, rather than keeping or publishing the older run. The other
+        models still run.
     """
     if source not in SOURCES:
         raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
@@ -709,6 +715,22 @@ def run_once(
                     result.skipped[model] = "no-grib-run"
                     continue
                 result.sources[model] = run.describe()
+                if require_current and init is None:
+                    from weatherbrief.hewson.grib_source import expected_init
+
+                    want = expected_init(model, now)
+                    if run.init < want:
+                        # Never quietly keep (or publish) an older run: the
+                        # delivery or sync for this cycle failed (#911).
+                        logger.error(
+                            "Hewson precompute: %s newest complete GRIB run is "
+                            "%s, expected init %s or later; delivery missing or "
+                            "incomplete, %s not updated this cycle",
+                            model, run.describe(),
+                            want.strftime("%Y-%m-%dT%H:%MZ"), model,
+                        )
+                        result.skipped[model] = "stale-init"
+                        continue
                 logger.info(
                     "Hewson precompute: %s from GRIB %s (%d steps, f%03d-f%03d)",
                     model, run.describe(), len(hours), hours[0], hours[-1],

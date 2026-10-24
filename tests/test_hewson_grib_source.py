@@ -252,6 +252,8 @@ class TestResolve:
 # ---------------------------------------------------------------------------
 
 INIT = datetime(2026, 10, 24, 0, tzinfo=timezone.utc)
+# The 08Z sample hour after INIT: INIT is the cycle every model should have.
+SAMPLE_NOW = INIT + timedelta(hours=8)
 
 
 @pytest.fixture
@@ -290,7 +292,7 @@ def test_run_once_grib_writes_trimmed_snapshot(tmp_path, flat_terrain, no_open_m
     with patch.object(grib_source, "resolve_run", return_value=_fake_run()):
         result = run_once(
             models=["gfs"], output_dir=tmp_path, forecast_days=1, stride_hours=6,
-            retention_hours=10**6, source=SOURCE_GRIB,
+            retention_hours=10**6, source=SOURCE_GRIB, now=SAMPLE_NOW,
         )
     path = result.snapshots["gfs"]
     assert path == snapshot_path("gfs", int(INIT.timestamp()), tmp_path)
@@ -317,6 +319,7 @@ def test_run_once_grib_incomplete_step_skips_model(tmp_path, flat_terrain, no_op
     with patch.object(grib_source, "resolve_run", return_value=_fake_run(fail_hours={12})):
         result = run_once(
             models=["gfs"], output_dir=tmp_path, forecast_days=1, stride_hours=6,
+            now=SAMPLE_NOW,
         )
     assert result.skipped == {"gfs": "incomplete"}
     assert not list(tmp_path.rglob("gfs/*.npz"))
@@ -334,7 +337,8 @@ def test_run_once_grib_skip_existing_reads_nothing(tmp_path, flat_terrain, no_op
     existing.write_bytes(b"")
     calls: list[int] = []
     with patch.object(grib_source, "resolve_run", return_value=_fake_run("icon", calls=calls)):
-        result = run_once(models=["icon"], output_dir=tmp_path, forecast_days=1)
+        result = run_once(models=["icon"], output_dir=tmp_path, forecast_days=1,
+                          now=SAMPLE_NOW)
     assert result.skipped == {"icon": "fresh"}
     assert calls == []
 
@@ -353,6 +357,72 @@ def test_run_once_pinned_init_skips_purge(tmp_path, flat_terrain, no_open_meteo)
     assert seen["init"] == INIT
     assert result.snapshots["gfs"] is not None
     purge.assert_not_called()
+
+
+@pytest.mark.parametrize("model,now,want", [
+    # 08Z / 20Z sample hours expect the 00Z / 12Z run of every model.
+    ("ecmwf", "2026-10-24T08:00", "2026-10-24T00:00"),
+    ("ecmwf", "2026-10-24T20:00", "2026-10-24T12:00"),
+    ("gfs", "2026-10-24T08:00", "2026-10-24T00:00"),
+    ("icon", "2026-10-24T20:00", "2026-10-24T12:00"),
+    # Before the morning ECMWF delivery, yesterday's 12Z is still current.
+    ("ecmwf", "2026-10-24T07:00", "2026-10-23T12:00"),
+    ("gfs", "2026-10-24T11:30", "2026-10-24T06:00"),
+])
+def test_expected_init(model, now, want):
+    got = grib_source.expected_init(
+        model, datetime.fromisoformat(now).replace(tzinfo=timezone.utc))
+    assert got == datetime.fromisoformat(want).replace(tzinfo=timezone.utc)
+
+
+def test_run_once_stale_ecmwf_fails_others_still_written(
+        tmp_path, flat_terrain, no_open_meteo):
+    """Option A: the node's 07:15 ECMWF sync did not land. The resolver finds
+    only yesterday's 12Z, which is already on disk; that must be a reported
+    failure, not "fresh", and GFS still publishes."""
+    old = INIT - timedelta(hours=12)
+    on_disk = snapshot_path("ecmwf", int(old.timestamp()), tmp_path)
+    on_disk.parent.mkdir(parents=True)
+    on_disk.write_bytes(b"")
+    calls: list[int] = []
+
+    def fake_resolve(model, hours, levels, now=None, init=None):
+        if model == "ecmwf":
+            run = _fake_run("ecmwf", calls=calls)
+            run.init = old
+            return run
+        return _fake_run(model)
+
+    with patch.object(grib_source, "resolve_run", side_effect=fake_resolve):
+        result = run_once(models=["ecmwf", "gfs"], output_dir=tmp_path,
+                          forecast_days=1, stride_hours=12, now=SAMPLE_NOW)
+    assert result.skipped == {"ecmwf": "stale-init"}
+    assert calls == []
+    assert result.snapshots["gfs"] is not None
+    assert result.sources["ecmwf"] == "ecmwf-ecpds init 2026-10-23T12:00Z"
+
+
+def test_run_once_allows_stale_when_asked(tmp_path, flat_terrain, no_open_meteo):
+    run = _fake_run("ecmwf")
+    run.init = INIT - timedelta(hours=12)
+    with patch.object(grib_source, "resolve_run", return_value=run):
+        result = run_once(models=["ecmwf"], output_dir=tmp_path, forecast_days=1,
+                          stride_hours=12, now=SAMPLE_NOW, require_current=False)
+    assert result.skipped == {}
+    assert result.snapshots["ecmwf"] is not None
+
+
+def test_cli_exits_1_on_stale_model(tmp_path, capsys):
+    from weatherbrief.hewson import cli
+    from weatherbrief.hewson.precompute import SnapshotResult
+
+    fake = SnapshotResult(snapshots={"gfs": tmp_path / "g.npz"},
+                          skipped={"ecmwf": "stale-init", "icon": "fresh"})
+    with patch.object(cli, "run_once", return_value=fake) as ro:
+        rc = cli.main(["precompute", "--output-dir", str(tmp_path)])
+    assert rc == 1
+    assert ro.call_args.kwargs["require_current"] is True
+    assert "FAILED: ecmwf (stale-init)" in capsys.readouterr().err
 
 
 def test_run_once_pinned_init_rejects_open_meteo(tmp_path):

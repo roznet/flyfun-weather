@@ -65,6 +65,16 @@ retrospective set). `scheduler.py` only wraps it in a loop.
   the model for the cycle (`skipped="incomplete"`), never a snapshot with a hole
   (it would read as "no front" there). No Open-Meteo fallback: it would put the
   ~4.2M billed calls / 30 d back.
+- **The current cycle or a failure.** A model whose newest complete run is
+  older than `grib_source.expected_init` (00Z/12Z at the 08Z/20Z sample hours;
+  per-model cycle and publication lag in `_EXPECTED_CYCLE_HOURS`) is skipped as
+  `"stale-init"` at ERROR, never kept as "fresh" or published. This is the
+  check for the compute node's dependency on its 07:15/19:15 ECMWF a2 sync: a
+  missing or partial sync leaves only the previous run ready. Every model runs
+  on its own, so the others still publish; any skip but `"fresh"` makes the CLI
+  exit 1 (the node withholds its deadman ping) and the serving box computes
+  that model from its own files after the inbox wait. `--allow-stale` turns
+  the check off for manual runs.
 - `--source open-meteo` keeps the old fetch for side-by-side checks, and every
   backdated `--date` run uses it (no GRIB archive). `--init 2026-10-24T00Z`
   pins the GRIB run instead of taking the newest (no purge), so a cycle that

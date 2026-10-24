@@ -70,6 +70,7 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         end_date=args.date,
         source=args.source,
         init=_parse_init(args.init) if getattr(args, "init", None) else None,
+        require_current=not getattr(args, "allow_stale", False),
     )
     for model, src in result.sources.items():
         print(f"  {model}: source {src}")
@@ -90,7 +91,14 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
     # Non-zero when any model failed (anything but "already on disk"), so a
     # compute-node runner withholds its deadman ping; the serving box computes
     # the missing models itself at its deadline.
+    # The other models are still written: one failed delivery (e.g. the ECMWF
+    # sync, "stale-init") costs only that model.
     failed = [m for m, reason in result.skipped.items() if reason != "fresh"]
+    if failed:
+        print(
+            "FAILED: " + ", ".join(f"{m} ({result.skipped[m]})" for m in failed),
+            file=sys.stderr,
+        )
     return 1 if failed else 0
 
 
@@ -217,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="GRIB source only: read this run (e.g. 2026-10-24T00Z) instead of "
              "the newest, to recompute a cycle that has an Open-Meteo snapshot "
              "for scripts/compare_hewson_sources.py. Skips the purge.",
+    )
+    p_pc.add_argument(
+        "--allow-stale", action="store_true",
+        help="GRIB source: accept a newest run older than the cycle that should "
+             "be out by now (default: such a model fails as 'stale-init', exit 1).",
     )
     p_pc.add_argument(
         "--date", default=None,
