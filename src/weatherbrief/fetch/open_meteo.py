@@ -169,6 +169,17 @@ _HISTORICAL_MODEL_MAP: dict[str, str] = {
 }
 
 
+def key_fingerprint(api_key: str) -> str:
+    """Short, log-safe label for an API key: its last 4 characters.
+
+    Enough to tell the per-environment keys apart in logs and on the
+    Open-Meteo dashboard; a key of 8 characters or fewer is fully masked.
+    """
+    if len(api_key) <= 8:
+        return "****"
+    return f"…{api_key[-4:]}"
+
+
 class OpenMeteoClient:
     """Client for fetching forecasts from the Open-Meteo API."""
 
@@ -184,7 +195,14 @@ class OpenMeteoClient:
         self._api_key = os.environ.get("OPENMETEO_API_KEY")
         self.has_api_key = bool(self._api_key)
         if self._api_key:
-            logger.info("Using Open-Meteo customer API (paid plan)")
+            # Each environment (prod droplet, Mac mini, local dev) has its own
+            # key so billing can be split on the Open-Meteo dashboard (#918).
+            # The fingerprint shows which one a process is on, never the key.
+            logger.info(
+                "Using Open-Meteo customer API (paid plan), key %s, environment %s",
+                key_fingerprint(self._api_key),
+                os.environ.get("ENVIRONMENT", "development"),
+            )
         if historical:
             logger.info("Using Open-Meteo historical forecast API (free tier)")
 

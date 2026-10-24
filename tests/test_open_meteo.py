@@ -606,3 +606,23 @@ def test_unrecognised_unit_logs_once(caplog, _fresh_vv_log):
         for _ in range(3):
             assert vertical_velocity_unit(body) is None
     assert caplog.text.count("not recognised") == 1
+
+
+def test_key_fingerprint_shows_only_last_four():
+    from weatherbrief.fetch.open_meteo import key_fingerprint
+
+    assert key_fingerprint("abcdefghijkl1234") == "…1234"
+    assert key_fingerprint("short") == "****"
+    assert key_fingerprint("12345678") == "****"
+
+
+def test_customer_key_logged_as_fingerprint_only(monkeypatch, caplog):
+    monkeypatch.setenv("OPENMETEO_API_KEY", "secret-dev-key-9z9z")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    with caplog.at_level("INFO", logger="weatherbrief.fetch.open_meteo"):
+        client = OpenMeteoClient()
+    assert client.has_api_key
+    text = caplog.text
+    assert "key …9z9z" in text
+    assert "environment development" in text
+    assert "secret-dev-key" not in text

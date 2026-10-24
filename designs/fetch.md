@@ -72,6 +72,10 @@ The pipeline uses `fetch_multi_point()` to consolidate API calls: **1 call per m
 - Logging includes attempt count, wait time, and truncated URL for debugging
 - `_prepare_request()` swaps the host for historical (`historical-forecast-api`) or customer-API-key (`customer-api`) modes; `get_json()` is the public GET-with-retry entry used by callers building their own URLs (e.g. frontal grid fetch)
 
+### API key per environment (#918)
+
+`OPENMETEO_API_KEY` is the only way a key reaches Open-Meteo (read in `OpenMeteoClient.__init__`; elevation and model `meta.json` probes use the free host, unkeyed). Separating billing is therefore configuration, not code: each machine's `.env` holds its own key (prod droplet, Mac mini node, local dev; worktrees copy main's `.env` and share the dev key). Same variable name everywhere on purpose, so no code path can pick the wrong one. Client init logs `key …abcd, environment <ENVIRONMENT>` via `key_fingerprint()` to check which key a process runs on; the full key is never logged. Unset key = free tier, which is not a cheap dev option: it is non-commercial and capped far below a briefing day's weighted calls.
+
 ### Route Walking + Interpolation (`fetch/route_walk.py`, `fetch/route_points.py`)
 
 `walk_route()` is the common generator used by both cross-section interpolation and elevation profiling: it yields `(lat, lon, distance_nm, icao, name)` along multi-leg routes at configurable spacing, always including the real waypoints, using `euro_aip.models.navpoint.NavPoint` for great-circle math. `interpolate_route()` wraps it into `RoutePoint` objects.
