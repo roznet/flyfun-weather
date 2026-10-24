@@ -239,12 +239,16 @@ def precache_icon_eu_run(
     ``deferred=1`` in the stats. Callers must then leave the run un-recorded
     so the next tick resumes it.
     """
-    from weatherbrief.fetch.grib import _grib_session
+    from weatherbrief.fetch.grib import DecodePriority, _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
+    )
+    from weatherbrief.fetch.grib.icon_zarr import (
+        cache_model_level_blob,
+        cached_model_level_entry,
     )
 
     init_date = init.strftime("%Y%m%d")
@@ -277,7 +281,7 @@ def precache_icon_eu_run(
 
         for var in ICON_EU_PRECACHE_VARS:
             ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
-            if is_cached(run_dir, ck):
+            if cached_model_level_entry(run_dir, ck) is not None:
                 continue
             # Per-variable, not just per-hour: one hour is 9 downloads, and a
             # refresh that arrives mid-hour shouldn't wait for all of them.
@@ -300,7 +304,12 @@ def precache_icon_eu_run(
                 )
                 data = per_var.get(var)
                 if data:
-                    put_cached(run_dir, ck, data)
+                    # Converted to zarr on write (#705); the warm loop is
+                    # thus where most conversion CPU is spent, so it goes to
+                    # the pool at the lowest priority (this loop sets none).
+                    cache_model_level_blob(
+                        run_dir, ck, data, priority=DecodePriority.BACKGROUND,
+                    )
                     vars_fetched += 1
                     bytes_downloaded += len(data)
             except Exception:

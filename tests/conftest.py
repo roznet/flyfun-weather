@@ -31,6 +31,10 @@ def _clean_env_leaks(monkeypatch):
     # would have the suite call Anthropic — and be billed for it. Tests that
     # want the path set the key themselves.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # #705: ICON-EU blobs convert to zarr on write in the decode pool. Prefetch
+    # tests cache placeholder bytes, which would otherwise spawn a real pool
+    # just to refuse them. tests/test_icon_zarr.py turns it back on.
+    monkeypatch.setenv("WB_ICON_ZARR", "0")
 
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost", "testserver"}
