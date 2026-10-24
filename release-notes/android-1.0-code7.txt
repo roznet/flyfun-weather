@@ -1,0 +1,5 @@
+- Setup wizard on first launch, including whether your aircraft is cleared for known icing
+- Forecast and historical weather maps
+- Route map: storm cell outlines and lightning flashes
+- Storm cells use the same wording and trend colours as the alerts and the website, at their real positions on the map
+- Fixes: airport data and help now load reliably, and a tapped storm's card clears when Storm Cells is hidden
