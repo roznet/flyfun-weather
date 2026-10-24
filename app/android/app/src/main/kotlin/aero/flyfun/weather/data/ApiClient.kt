@@ -4,6 +4,9 @@ import aero.flyfun.common.InMemoryTokenStore
 import aero.flyfun.common.RollingBearerInterceptor
 import aero.flyfun.common.TokenStore
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.model.rules.CellsOverlayRules
+import aero.flyfun.weather.model.rules.LatLonBox
+import aero.flyfun.weather.model.rules.ObservedLightningRules
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -572,24 +575,21 @@ class ApiClient(
         return get("/api/observed/${encodePathSegment(layer)}/frames", query)
     }
 
-    suspend fun getObservedFlashes(bbox: String, validTime: String? = null): ObservedFlashesResponse {
-        val query = buildList {
-            add("bbox" to bbox)
-            if (validTime != null) add("t" to validTime)
-        }
-        return get("/api/observed/lightning/flashes", query)
-    }
+    /** Lightning in [box], last [ObservedLightningRules.TRAIL_MINUTES] (`observed.py::observed_flashes`). */
+    suspend fun getObservedFlashes(box: LatLonBox): ObservedFlashesResponse =
+        get("/api/observed/flashes", ObservedLightningRules.flashesQuery(box))
 
-    suspend fun getCellFrames(bbox: String): CellFramesResponse =
-        get("/api/observed/cells/frames", listOf("bbox" to bbox))
+    /** The cell overlay listing; the server takes no box here. */
+    suspend fun getCellFrames(): CellFramesResponse =
+        get("/api/observed/cells/frames")
 
-    suspend fun getObservedCells(bbox: String, validTime: String? = null): CellDisplay {
-        val query = buildList {
-            add("bbox" to bbox)
-            if (validTime != null) add("t" to validTime)
-        }
-        return get("/api/observed/cells", query)
-    }
+    /**
+     * One cell overlay clipped to [box]. [key] is a frame's [CellFrame.displayKey]. The path is
+     * the listing's `url_template` (`/api/observed/cells/{stamp}.json`) spelled out, so the
+     * Android API contract test can check it against the server.
+     */
+    suspend fun getObservedCellDisplay(key: String, box: LatLonBox?): CellDisplay =
+        get("/api/observed/cells/${encodePathSegment(key)}.json", CellsOverlayRules.boxQuery(box))
 
     // ========================================================================
     // Debrief

@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,13 +64,17 @@ import aero.flyfun.weather.model.AlternateAirport
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.SigmetAlongRoute
-import aero.flyfun.weather.model.rules.LiveStormRules
+import aero.flyfun.weather.model.DisplayCell
+import aero.flyfun.weather.model.rules.CellsOverlayRules
+import aero.flyfun.weather.model.rules.ObservedMapRules
 import aero.flyfun.weather.model.viz.VizDataExtractor
 import aero.flyfun.weather.model.viz.VizPoint
 import aero.flyfun.weather.model.viz.VizRouteData
 import aero.flyfun.weather.ui.briefing.FlightCategoryPillBadge
 import aero.flyfun.weather.ui.briefing.shortModelName
 import aero.flyfun.weather.viewmodel.BriefingViewModel
+import aero.flyfun.weather.viewmodel.RouteCellsModel
+import aero.flyfun.weather.viewmodel.RouteLightningModel
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -86,6 +91,7 @@ enum class RouteMapOverlay(val id: String, val label: String) {
     RADAR("radar", "Radar"),
     SAT_IR("sat_ir", "Satellite IR"),
     STORM_CELLS("cells", "Storm Cells"),
+    LIGHTNING("lightning", "Lightning"),
     SIGMETS("sigmets", "SIGMETs"),
     ALTERNATES("alternates", "Alternates"),
     OBS_AIRPORTS("obs_airports", "METAR Pins"),
@@ -108,13 +114,19 @@ sealed interface RouteMapSelection {
     data class AlternatePin(
         val alternate: AlternateAirport,
     ) : RouteMapSelection
+
+    /** A radar-cell core from the raw cell feed: its measurements, as the iOS callout. */
+    data class Cell(
+        val cell: DisplayCell,
+    ) : RouteMapSelection
 }
 
 /**
  * Interactive **Briefing Route Map** tab screen (`BriefingTab.MAP`):
  * - Renders route corridor segments colored and sized by any of the 13 [RouteMapMetric]s.
  * - Supports interactive altitude scrubbing, NWP model switching, wind barbs, frontal boundaries,
- *   SIGMET polygons, radar/IR imagery tiles, storm cell polygons + motion tracks, lightning strikes,
+ *   SIGMET polygons, radar/IR imagery tiles, the raw radar-cell feed (outlines, cores, the feed's own
+ *   30-min motion arrows) and lightning flashes fading by age (#907),
  *   en-route METAR airport pins, and alternate airport diamonds.
  * - Tapping any route point or airport opens a rich inspector card with a 1-tap jump to the
  *   Cross-Section & Skew-T diagram at that exact route distance.
@@ -172,11 +184,15 @@ fun RouteMapTabScreen(
                 RouteMapOverlay.SIGMETS,
                 RouteMapOverlay.ALTERNATES,
                 RouteMapOverlay.OBS_AIRPORTS,
+                // On by default, as on iOS: a measurement, not an experimental analysis. Storm
+                // Cells stays opt-in (experimental), and both need observed conditions.
+                RouteMapOverlay.LIGHTNING,
             ),
         )
     }
 
     var selection by remember { mutableStateOf<RouteMapSelection?>(null) }
+    var showObservedDetails by remember { mutableStateOf(false) }
 
     // Apply FocusIntent when navigated from Observed Tab ("Show radar & cells on map") or Advisories
     LaunchedEffect(focusIntent, vizData) {
@@ -215,7 +231,49 @@ fun RouteMapTabScreen(
 
     val effectiveObservations = liveLayer?.routeObservations ?: snapshot?.routeObservations
     val effectiveSigmets = liveLayer?.routeSigmets ?: snapshot?.routeSigmets
-    val liveStorms = liveLayer?.storms
+
+    // Observed layers (#907): the raw cell feed and lightning, polled only while this map is
+    // composed (the LaunchedEffects end when the tab is left) and only for a briefing that
+    // collected observed conditions, as on iOS. The `/live` storm dots are gone: like iOS, the
+    // map draws the raw feed and the Observed tab lists the storms.
+    val observedConditions = snapshot?.observedConditions
+    val showsObserved = ObservedMapRules.showsObserved(observedConditions)
+    val showsCells = showsObserved && RouteMapOverlay.STORM_CELLS in activeOverlays
+    val showsLightning = showsObserved && RouteMapOverlay.LIGHTNING in activeOverlays
+    val routeLatLons = remember(vizData) {
+        vizData?.points.orEmpty().filter { it.lat != 0.0 || it.lon != 0.0 }.map { it.lat to it.lon }
+    }
+    val corridorNm = ObservedMapRules.corridorRadius(observedConditions)
+    val cellsBox = remember(routeLatLons, corridorNm) { CellsOverlayRules.cellsBox(routeLatLons, corridorNm) }
+    val lightningBox = remember(routeLatLons, corridorNm) {
+        corridorNm?.let { ObservedMapRules.corridorBox(routeLatLons, it) }
+    }
+    val cellsModel = remember(briefingViewModel.repository) { RouteCellsModel(briefingViewModel.repository) }
+    val lightningModel = remember(briefingViewModel.repository) { RouteLightningModel(briefingViewModel.repository) }
+    val cellsState by cellsModel.state.collectAsState()
+    val lightningState by lightningModel.state.collectAsState()
+    LaunchedEffect(cellsModel, showsCells, cellsBox) {
+        val box = cellsBox
+        if (showsCells && box != null) cellsModel.poll(box)
+    }
+    LaunchedEffect(lightningModel, showsLightning, lightningBox) {
+        val box = lightningBox
+        // Hidden → forget the flashes, so toggling back on shows no stale bolts or badge.
+        if (!showsLightning || box == null) {
+            lightningModel.reset()
+        } else {
+            lightningModel.poll(box)
+        }
+    }
+    // Cells first (the overlay the pilot opted into), then lightning (iOS order).
+    val observedChips = listOfNotNull(
+        cellsState.chip.takeIf { showsCells },
+        lightningState.chip.takeIf { showsLightning },
+    )
+    val observedBadges = listOfNotNull(
+        cellsState.badge.takeIf { showsCells },
+        lightningState.badge.takeIf { showsLightning },
+    )
 
     val routeBounds: GeoBounds? = remember(vizData, alternates) {
         val pts = vizData?.points.orEmpty().filter { it.lat != 0.0 || it.lon != 0.0 }
@@ -300,8 +358,11 @@ fun RouteMapTabScreen(
                 modifier = Modifier.size(18.dp),
             )
             RouteMapOverlay.entries.forEach { overlay ->
+                val observedOnly = overlay == RouteMapOverlay.STORM_CELLS || overlay == RouteMapOverlay.LIGHTNING
+                if (observedOnly && !showsObserved) return@forEach
                 val isSelected = overlay in activeOverlays
                 FilterChip(
+                    modifier = Modifier.testTag("map.overlayChip.${overlay.id}"),
                     selected = isSelected,
                     onClick = {
                         activeOverlays = if (isSelected) {
@@ -329,10 +390,8 @@ fun RouteMapTabScreen(
                 )
             }
 
-            if (RouteMapOverlay.RADAR in activeOverlays ||
-                RouteMapOverlay.SAT_IR in activeOverlays ||
-                RouteMapOverlay.STORM_CELLS in activeOverlays
-            ) {
+            // Cells and lightning carry their own times in the footer chips.
+            if (RouteMapOverlay.RADAR in activeOverlays || RouteMapOverlay.SAT_IR in activeOverlays) {
                 Surface(
                     shape = RoundedCornerShape(50),
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -362,6 +421,14 @@ fun RouteMapTabScreen(
                 onTap = { tapOffset, _, proj ->
                     val pts = vizData?.points.orEmpty()
                     val hitThresholdPx = with(density) { 28.dp.toPx() }
+
+                    // 0. A radar-cell core (drawn above the route): its measurements
+                    if (showsCells) {
+                        hitCell(cellsState.display, tapOffset, proj, with(density) { 14.dp.toPx() })?.let {
+                            selection = RouteMapSelection.Cell(it)
+                            return@SlippyMapCanvas
+                        }
+                    }
 
                     // 1. Check Alternate airports first
                     if (RouteMapOverlay.ALTERNATES in activeOverlays) {
@@ -429,20 +496,6 @@ fun RouteMapTabScreen(
                             label = "${sig.firId} ${sig.hazard.uppercase()}",
                             isSevere = sig.qualifier?.contains("SEV", ignoreCase = true) == true,
                             projection = proj,
-                        )
-                    }
-                }
-
-                // B. Draw the server's route storms at their observed positions (#886)
-                if (RouteMapOverlay.STORM_CELLS in activeOverlays) {
-                    liveStorms?.cells.orEmpty().forEach { storm ->
-                        val lat = storm.lat ?: return@forEach
-                        val lon = storm.lon ?: return@forEach
-                        drawStormDotOnMap(
-                            center = proj.latLonToScreen(lat, lon),
-                            trendColor = Color(LiveStormRules.trendColorArgb(storm.trend)),
-                            hasLightning = storm.flashCount > 0,
-                            isBehind = storm.ahead == false,
                         )
                     }
                 }
@@ -523,6 +576,10 @@ fun RouteMapTabScreen(
                         )
                     }
                 }
+
+                // F. The raw radar-cell feed over the route, then lightning on top (iOS order)
+                if (showsCells) cellsState.display?.let { drawCellsOverlayOnMap(it, proj) }
+                if (showsLightning) drawLightningOnMap(lightningState.drawable, proj)
 
                 // G. Draw Wind Barbs along route sample points
                 if (RouteMapOverlay.WIND_BARBS in activeOverlays && pts.isNotEmpty()) {
@@ -610,6 +667,25 @@ fun RouteMapTabScreen(
                     )
                 }
             }
+
+            // Each observed layer's age, tappable for the full lines, legends and caveats.
+            ObservedLayersFooter(
+                chips = observedChips,
+                badges = observedBadges,
+                onClick = { showObservedDetails = true },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(10.dp),
+            )
+        }
+
+        if (showObservedDetails) {
+            ObservedLayersDetailsDialog(
+                badges = observedBadges,
+                showsCells = showsCells,
+                showsLightning = showsLightning,
+                onDismiss = { showObservedDetails = false },
+            )
         }
 
         // 4. Horizontal Color Scale Legend Bar
@@ -1031,6 +1107,27 @@ private fun RouteMapSelectionCard(
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+
+                is RouteMapSelection.Cell -> {
+                    val cell = selection.cell
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = CellsOverlayRules.tierLabel(cell.tier) + " · experimental",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    CellsOverlayRules.detailLines(cell).forEach { line ->
+                        Text(text = line, style = MaterialTheme.typography.bodySmall)
                     }
                 }
 

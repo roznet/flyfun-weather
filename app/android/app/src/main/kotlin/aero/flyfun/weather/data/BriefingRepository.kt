@@ -1,6 +1,7 @@
 package aero.flyfun.weather.data
 
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.model.rules.LatLonBox
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -72,9 +73,9 @@ interface BriefingRepository {
     // Observed imagery (radar / cloud tops / lightning / storm cells)
     suspend fun observedStatus(): ObservedImageryStatusResponse
     suspend fun observedFrames(layer: String, bbox: String? = null): ObservedFramesResponse
-    suspend fun observedFlashes(bbox: String, validTime: String? = null): ObservedFlashesResponse
-    suspend fun cellFrames(bbox: String): CellFramesResponse
-    suspend fun observedCells(bbox: String, validTime: String? = null): CellDisplay
+    suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse
+    suspend fun cellFrames(): CellFramesResponse
+    suspend fun observedCellDisplay(key: String, box: LatLonBox?): CellDisplay
 
     // Debrief
     suspend fun debrief(flightId: String): DebriefResponse
@@ -254,14 +255,14 @@ open class OnlineBriefingRepository(
     override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
         api.getObservedFrames(layer, bbox)
 
-    override suspend fun observedFlashes(bbox: String, validTime: String?): ObservedFlashesResponse =
-        api.getObservedFlashes(bbox, validTime)
+    override suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse =
+        api.getObservedFlashes(box)
 
-    override suspend fun cellFrames(bbox: String): CellFramesResponse =
-        api.getCellFrames(bbox)
+    override suspend fun cellFrames(): CellFramesResponse =
+        api.getCellFrames()
 
-    override suspend fun observedCells(bbox: String, validTime: String?): CellDisplay =
-        api.getObservedCells(bbox, validTime)
+    override suspend fun observedCellDisplay(key: String, box: LatLonBox?): CellDisplay =
+        api.getObservedCellDisplay(key, box)
 
     override suspend fun debrief(flightId: String): DebriefResponse =
         api.getDebrief(flightId)

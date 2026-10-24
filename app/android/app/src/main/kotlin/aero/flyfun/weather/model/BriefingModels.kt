@@ -1063,52 +1063,207 @@ data class ObservedImageryStatusResponse(
     val attribution: List<ObservedAttribution>? = null,
 )
 
+// =============================================================================
+// SYNC — `GET /api/observed/flashes` (src/weatherbrief/api/observed.py) and the
+// iOS `Models/API/ObservedFlashes.swift`. Online only: the route map asks while
+// it is on screen, nothing is cached to disk.
+// =============================================================================
+
+/** One lightning flash with its own time, so the map can fade it by age. */
+@Serializable
+data class ObservedFlash(
+    val lat: Double,
+    val lon: Double,
+    /** ISO-8601 instant of the flash itself (not of the frame it came in). */
+    val time: String,
+)
+
+/** Lightning inside a box: every retained flash (or the last `minutes`). */
 @Serializable
 data class ObservedFlashesResponse(
+    @Serializable(with = LossyListSerializer.FlashList::class)
+    val flashes: List<ObservedFlash> = emptyList(),
+    val count: Int? = null,
+    /** The newest lightning frame's valid time; null when no frame is held. */
+    @SerialName("newest_valid_time")
+    val newestValidTime: String? = null,
+    /** The product's own accumulation window (10 min for MTG LI). */
+    @SerialName("window_minutes")
+    val windowMinutes: Double? = null,
+    @SerialName("retention_minutes")
+    val retentionMinutes: Double? = null,
+    /** `{}` when no frame is held: every field optional. */
+    val attribution: ObservedAttribution? = null,
+)
+
+// =============================================================================
+// SYNC — `src/weatherbrief/observed/cells/display.py` (DISPLAY_SCHEMA
+// `observed-cells-display/1`), `observed/cells_display.py::frames_status`, and
+// the iOS `Models/API/ObservedCells.swift`. Every number is nullable: the node
+// writes rounded floats and nulls freely, and a missing value must read as "–",
+// never as zero.
+// =============================================================================
+
+/** `/api/observed/cells/frames`: overlay stamps newest first plus the stale state. */
+@Serializable
+data class CellFramesResponse(
+    /** False when the server runs without `WB_CELLS_INGEST_ENABLED`: an answer, not an error. */
+    val enabled: Boolean = false,
+    val frames: List<CellFrame> = emptyList(),
+    val newest: CellFrame? = null,
+    val stale: Boolean = true,
+    /** Shipped by the server so the client never hard-codes the threshold. */
+    @SerialName("stale_after_minutes")
+    val staleAfterMinutes: Double = 25.0,
+    @SerialName("unavailable_since")
+    val unavailableSince: String? = null,
+    /** `/api/observed/cells/{stamp}.json`: `{stamp}` takes a frame's [CellFrame.displayKey]. */
+    @SerialName("url_template")
+    val urlTemplate: String = "/api/observed/cells/{stamp}.json",
+)
+
+@Serializable
+data class CellFrame(
+    /** `YYYYMMDDTHHMM`: string order is time order. */
+    val stamp: String,
+    @SerialName("valid_time")
+    val validTime: String,
+    @SerialName("received_at")
+    val receivedAt: String? = null,
+    @SerialName("age_minutes")
+    val ageMinutes: Double? = null,
+    /** `<stamp>.r<n>`: the frame's newest revision (#666). Null from a server older than revisions. */
+    val key: String? = null,
+    val revision: Int? = null,
+) {
+    /** What goes into the URL: the newest revision (immutable), else the bare stamp. */
+    val displayKey: String get() = key ?: stamp
+}
+
+/**
+ * One display file: one radar frame's cells, outlines and the frame's own times.
+ *
+ * Decoded leniently, as on iOS: `cells` is decoded element by element, so a cell missing a
+ * required field is dropped, not the whole overlay.
+ */
+@Serializable
+data class CellDisplay(
+    val schema: String? = null,
+    @SerialName("policy_version")
+    val policyVersion: String? = null,
+    @SerialName("code_revision")
+    val codeRevision: String? = null,
     @SerialName("valid_time")
     val validTime: String? = null,
     @SerialName("window_minutes")
     val windowMinutes: Double? = null,
-    val flashes: List<List<Double>> = emptyList(),
+    val times: CellDisplayTimes? = null,
+    /** Inputs still on their way (`["lightning"]` until its frame lands, #666): "pending", never "none". */
+    val pending: List<String>? = null,
+    val unavailable: List<CellUnavailable>? = null,
+    /** 0 when first published, 1 once its lightning landed (#666). */
+    val revision: Int? = null,
+    @SerialName("rain_min_area_km2")
+    val rainMinAreaKm2: Double? = null,
+    @SerialName("arrow_minutes")
+    val arrowMinutes: Double? = null,
+    /** Tier (`rain20` / `core35` / `core41`) → polylines, each `[[lat, lon], …]`. */
+    val outlines: Map<String, List<List<List<Double>>>>? = null,
+    @Serializable(with = LossyListSerializer.CellList::class)
+    val cells: List<DisplayCell> = emptyList(),
 )
 
 @Serializable
-data class CellFramesResponse(
-    val frames: List<ObservedImageryFrame> = emptyList(),
+data class CellDisplayTimes(
+    val radar: String? = null,
+    val rate: String? = null,
+    val lightning: String? = null,
+    @SerialName("cloud_top")
+    val cloudTop: String? = null,
 )
 
 @Serializable
-data class CellDisplay(
-    @SerialName("valid_time")
-    val validTime: String? = null,
-    val cells: List<DisplayCell>? = null,
+data class CellUnavailable(
+    val what: String,
+    val reason: String? = null,
 )
 
 @Serializable
 data class DisplayCell(
-    val id: String = "",
-    val severity: String = "",
-    val lat: Double = 0.0,
-    val lon: Double = 0.0,
+    val id: String,
+    /** `rain20` | `core35` | `core41` */
+    val tier: String,
+    val lat: Double,
+    val lon: Double,
     @SerialName("area_km2")
     val areaKm2: Double? = null,
-    @SerialName("flash_count")
-    val flashCount: Int? = null,
-    @SerialName("flash_rate_per_min")
-    val flashRatePerMin: Double? = null,
-    @SerialName("max_dbz")
-    val maxDbz: Double? = null,
-    @SerialName("max_top_ft")
-    val maxTopFt: Double? = null,
-    @SerialName("track_deg")
-    val trackDeg: Double? = null,
+    @SerialName("peak_dbz")
+    val peakDbz: Double? = null,
+    @SerialName("rate_peak_mm_h")
+    val ratePeakMmH: Double? = null,
+    val flashes: Double? = null,
+    /** True while the frame's lightning has not landed yet (#666). */
+    @SerialName("flashes_pending")
+    val flashesPending: Boolean? = null,
+    /** The rain rate's own time when it is older than the radar (#666). */
+    @SerialName("rate_as_of")
+    val rateAsOf: String? = null,
+    @SerialName("top_fl")
+    val topFl: Double? = null,
+    val truncated: Boolean? = null,
+    @SerialName("age_min")
+    val ageMin: Double? = null,
+    val event: String? = null,
+    val trend: CellTrend? = null,
+    val motion: CellMotion? = null,
+    /** `[lat, lon]` after `arrow_minutes` at the current motion; null unless the motion is `available`. */
+    val arrow: List<Double>? = null,
+) {
+    val isCore: Boolean get() = tier != "rain20"
+}
+
+@Serializable
+data class CellTrend(
+    /** developing | decaying | steady | mixed | new (others possible) */
+    val state: String? = null,
+    @SerialName("window_min")
+    val windowMin: Double? = null,
+    @SerialName("d_peak_db")
+    val dPeakDb: Double? = null,
+    @SerialName("area_ratio")
+    val areaRatio: Double? = null,
+    @SerialName("d_flashes")
+    val dFlashes: Double? = null,
+)
+
+@Serializable
+data class CellMotion(
+    /** available | withheld | unsupported | no_pair (others possible) */
+    val status: String? = null,
+    val reason: String? = null,
     @SerialName("speed_kt")
     val speedKt: Double? = null,
-    val polygon: List<List<Double>>? = null,
-    val forecast: List<List<Double>>? = null,
-    @SerialName("forecast_polygons")
-    val forecastPolygons: List<List<List<Double>>>? = null,
+    @SerialName("toward_deg")
+    val towardDeg: Double? = null,
 )
+
+/** A list decoded element by element: an element that does not decode is skipped, not the list. */
+open class LossyListSerializer<T>(private val element: KSerializer<T>) : KSerializer<List<T>> {
+    override val descriptor: SerialDescriptor = ListSerializer(element).descriptor
+
+    override fun deserialize(decoder: Decoder): List<T> {
+        val json = decoder as? JsonDecoder ?: return ListSerializer(element).deserialize(decoder)
+        val array = json.decodeJsonElement() as? JsonArray ?: return emptyList()
+        return array.mapNotNull { item -> runCatching { json.json.decodeFromJsonElement(element, item) }.getOrNull() }
+    }
+
+    override fun serialize(encoder: Encoder, value: List<T>) {
+        ListSerializer(element).serialize(encoder, value)
+    }
+
+    object CellList : LossyListSerializer<DisplayCell>(DisplayCell.serializer())
+    object FlashList : LossyListSerializer<ObservedFlash>(ObservedFlash.serializer())
+}
 
 // ============================================================================
 // Route Analyses (cross-section + model comparison)

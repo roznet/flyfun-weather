@@ -1,6 +1,7 @@
 package aero.flyfun.weather.data
 
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.model.rules.LatLonBox
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.builtins.ListSerializer
@@ -302,13 +303,15 @@ open class FixtureBriefingRepository(
     override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
         ObservedFramesResponse()
 
-    override suspend fun observedFlashes(bbox: String, validTime: String?): ObservedFlashesResponse =
+    // The fixtures carry no observed imagery: no lightning frame, and a cell analysis this
+    // "server" does not run, so the map says so rather than drawing nothing silently.
+    override suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse =
         ObservedFlashesResponse()
 
-    override suspend fun cellFrames(bbox: String): CellFramesResponse =
-        CellFramesResponse()
+    override suspend fun cellFrames(): CellFramesResponse =
+        CellFramesResponse(enabled = false)
 
-    override suspend fun observedCells(bbox: String, validTime: String?): CellDisplay =
+    override suspend fun observedCellDisplay(key: String, box: LatLonBox?): CellDisplay =
         CellDisplay()
 
     override suspend fun debrief(flightId: String): DebriefResponse =
