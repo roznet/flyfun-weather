@@ -102,7 +102,9 @@ def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
     off, off_status, _, off_dir = _run(flight_id, user_id, force_live, "0")
     on, on_status, on_log, on_dir = _run(flight_id, user_id, force_live, "1")
 
-    print(f"Open-Meteo calls: off={off.usage.open_meteo_calls} on={on.usage.open_meteo_calls}")
+    print(f"Open-Meteo calls: off={off.usage.open_meteo_calls} on={on.usage.open_meteo_calls}; "
+          f"billed weight: off={off.usage.open_meteo_weighted_calls:.1f} "
+          f"on={on.usage.open_meteo_weighted_calls:.1f}")
     for line in on_log:
         print(f"  {line}")
     print(f"GRIB init times: off={off.grib_init_times} on={on.grib_init_times}")

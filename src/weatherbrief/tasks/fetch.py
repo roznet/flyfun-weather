@@ -639,6 +639,7 @@ def run_fetch(
             fetch_facts={
                 "grib_primary": grib_primary,
                 "open_meteo_calls": client.call_count,
+                "open_meteo_weighted_calls": round(client.call_weight, 2),
                 "grib_init_times": grib_init_times,
                 "grib_sources": grib_sources,
             },
