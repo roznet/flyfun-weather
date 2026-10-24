@@ -291,10 +291,16 @@ def _icon_var_source(paths: list[str]) -> bytes | Path:
         p = Path(paths[0])
         if is_store_path(p):
             return p
-        if not p.exists():
+        # Try the read rather than checking exists() first: a queued
+        # conversion's done-callback can delete the GRIB at any moment,
+        # including between a check and the read.
+        try:
+            return p.read_bytes()
+        except FileNotFoundError:
             store = p.with_name(store_name(p.name))
             if (store / "zarr.json").exists():
                 return store
+            raise
     return b"".join(Path(p).read_bytes() for p in paths)
 
 

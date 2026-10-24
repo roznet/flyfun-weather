@@ -445,3 +445,21 @@ def test_failed_job_still_returns_a_store_a_racing_writer_finished(tmp_path):
 
     assert icon_zarr._after_conversion(False, grib, store) == store
     assert not grib.exists()
+
+
+def test_worker_reads_store_when_grib_vanishes_at_read_time(tmp_path, monkeypatch):
+    """The GRIB passes any existence check, then a queued conversion deletes
+    it just before the read: the read itself falls back to the store."""
+    from weatherbrief.fetch.grib.decode_worker import _icon_var_source
+
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+    real_read = Path.read_bytes
+
+    def read_after_unlink(self):
+        if self == grib:
+            grib.unlink(missing_ok=True)
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_after_unlink)
+    assert _icon_var_source([str(grib)]) == store
