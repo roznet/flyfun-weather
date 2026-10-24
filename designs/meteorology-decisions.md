@@ -6953,3 +6953,47 @@ ecmwf,icon --on 1`, so only GFS differs) and the daily pack compare with
 sounding levels (`scripts/compare_pack_surface_openmeteo.py --levels
 850,700,500`, Open-Meteo `ncep_gfs025` same run) are **pending on the Mac**
 (Open-Meteo is not reachable from the sandbox).
+
+## 63. ICON map and alternates snapshots from DWD pressure-level GRIB (#914)
+
+**Date:** 2026-10-24. **Part of** #910 (cut Open-Meteo usage). Mechanics:
+`metar-taf-accuracy.md` "GRIB-primary ICON snapshots".
+
+The ICON forecast-map rows (619 watchlist airports, twice a day) and the ICON
+alternates rows were Open-Meteo requests with the full variable set, ~1.3M +
+~0.55M billed calls per 30 days across GFS and ICON. ICON now builds them from
+ICON-EU GRIB; Open-Meteo only for airports GRIB left short.
+
+**Decisions (owner, 2026-10-24).**
+
+- **Isobaric files, not the model-level column.** The map's ICON sounding was
+  Open-Meteo's isobaric ICON, so DWD's own isobaric product is the closest
+  replacement, at ~1 MB a file instead of the ~189 MB/h column the briefing
+  interpolates (§61). Briefing and map ICON soundings therefore keep coming
+  from different products, as they did before.
+- **1000-200 hPa, t / relhum / u / v / fi, no omega.** The lite sounding's DD
+  cloud layers need the low levels, CAPE/EL needs ~200 hPa, nothing it computes
+  reads above or uses vertical motion. Open-Meteo gave 19 levels to 30 hPa.
+  Heights come from `fi` (delivered geopotential), with `pmsl` as the
+  reconstruction datum only where a level lacks it.
+- **Surface from the #912 ICON decoders, bilinear.** Same cell rule as the
+  GRIB-primary briefing slot (§61), so the map's ICON surface and the
+  briefing's ICON-EU surface now agree; Open-Meteo's land-cell selection
+  (#924) and its D2 blend are gone from the map's ICON column too.
+- **Precipitation over the step window.** Past +78 h ICON-EU is 3-hourly, so a
+  row records the 3 h total with `precip_period_h = 3`, as ECMWF rows do
+  (Open-Meteo gave an hourly value interpolated from the same 3 h data).
+- **Per-airport fallback** (owner call 6), same coverage rule as §61 plus a
+  minimum of 8 levels. Not chosen: a whole-model fallback.
+- **No interim Open-Meteo trims.** A one-day alternates window saves nothing
+  (Open-Meteo bills up to 14 days as one); a reduced GFS level set would change
+  GFS soundings twice in a few weeks.
+
+**What changes in values.** ICON map and alternates rows only: soundings from
+DWD isobaric ICON-EU instead of Open-Meteo's blend (fewer, coarser upper
+levels; 875/825/775 hPa added), surface from ICON-EU bilinear. GFS and ECMWF
+rows untouched.
+
+**Measured:** pending. `scripts/compare_grib_snapshots.py` on the mini gives
+the side-by-side (category agreement, ceiling, visibility, wind, gust, T,
+freezing level, precipitation) and the download/decode time; record it here.

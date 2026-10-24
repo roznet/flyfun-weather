@@ -2013,34 +2013,100 @@ def decode_icon_surface_per_point(
     """
     import numpy as np
 
-    from weatherbrief.fetch.grib.grib_reader import gather_bilinear, iter_messages
-
     n_points = len(latitudes)
     results: list[dict[str, float]] = [{} for _ in range(n_points)]
     targets_lat = np.asarray(latitudes, dtype=np.float64)
     targets_lon = np.asarray(longitudes, dtype=np.float64)
 
     for var, source in var_sources.items():
-        try:
-            for msg in iter_messages(source):
-                grid = msg.grid()
-                if grid is None:
-                    continue
-                bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
-                if bw is None or not bw.inb_idx.size:
-                    break
-                values = msg.values(grid)
-                if values is None:
-                    logger.warning("ICON surface %s: value count disagrees with grid", var)
-                    break
-                gathered = gather_bilinear(values, bw)
-                for k, idx in enumerate(bw.inb_idx):
-                    val = float(gathered[k])
-                    if not math.isnan(val):
-                        results[int(idx)][var] = val
+        for idx, val in _gather_first_field(
+            source, targets_lat, targets_lon, f"ICON surface {var}",
+        ).items():
+            results[idx][var] = val
+    return results
+
+
+def _gather_first_field(
+    source: "Path | str | bytes",
+    targets_lat,
+    targets_lon,
+    label: str,
+) -> dict[int, float]:
+    """Bilinear values of a file's first regular lat/lon message at the targets.
+
+    ``{target index: value}``; a target outside the grid or on masked cells is
+    absent (missing, not 0). Never raises: a decode failure is logged under
+    ``label`` and returns what was gathered so far (nothing). Shared by the
+    one-field-per-file ICON decoders (surface #912, pressure levels #914).
+    """
+    from weatherbrief.fetch.grib.grib_reader import gather_bilinear, iter_messages
+
+    out: dict[int, float] = {}
+    try:
+        for msg in iter_messages(source):
+            grid = msg.grid()
+            if grid is None:
+                continue
+            bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
+            if bw is None or not bw.inb_idx.size:
                 break
-        except Exception:
-            logger.warning("ICON surface %s: decode failed", var, exc_info=True)
+            values = msg.values(grid)
+            if values is None:
+                logger.warning("%s: value count disagrees with grid", label)
+                break
+            gathered = gather_bilinear(values, bw)
+            for k, idx in enumerate(bw.inb_idx):
+                val = float(gathered[k])
+                if not math.isnan(val):
+                    out[int(idx)] = val
+            break
+    except Exception:
+        logger.warning("%s: decode failed", label, exc_info=True)
+    return out
+
+
+# ICON pressure-level file variable → the raw key ``_convert_raw_sounding``
+# reads (#914). ``fi`` is geopotential (m²/s²), ``relhum`` RH over water (%).
+ICON_PRESSURE_RAW_KEYS: dict[str, str] = {
+    "t": "raw_temperature_k",
+    "relhum": "raw_relative_humidity_pct",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
+    "fi": "raw_geopotential_m2_s2",
+}
+
+
+def decode_icon_pressure_per_point(
+    level_sources: dict[int, dict[str, "Path | str | bytes"]],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """Decode ICON pressure-level files, one file per (level, variable) (#914).
+
+    ``level_sources`` is ``{level_hpa: {dwd_variable: file}}`` with the
+    variables of :data:`ICON_PRESSURE_RAW_KEYS`. Like the surface decoder, a
+    field is identified by its file, not its decoded shortName.
+
+    Returns one ``{level_hpa: {raw_key: value}}`` dict per target point, the
+    shape ``build_pressure_levels_from_grib`` takes. A level with no value for
+    a point is absent from that point's dict.
+    """
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+
+    for level, var_sources in level_sources.items():
+        for var, source in var_sources.items():
+            raw_key = ICON_PRESSURE_RAW_KEYS.get(var)
+            if raw_key is None:
+                continue
+            for idx, val in _gather_first_field(
+                source, targets_lat, targets_lon, f"ICON {var} {level} hPa",
+            ).items():
+                results[idx].setdefault(int(level), {})[raw_key] = val
     return results
 
 

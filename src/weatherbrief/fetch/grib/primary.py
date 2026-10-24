@@ -90,6 +90,44 @@ def grib_primary_models() -> tuple[ModelSource, ...]:
     return tuple(m for m in GRIB_PRIMARY_MODELS if m.value in wanted)
 
 
+# Standalone snapshots (forecast map + alternates, #914) have their own
+# switch, so the map can be rolled back without touching briefings. ECMWF is
+# not listed: its snapshots were GRIB-first before this switch existed. GFS
+# joins once its GRIB reader lands (#913).
+GRIB_SNAPSHOT_MODELS: tuple[str, ...] = ("icon",)
+
+
+def grib_snapshot_models() -> tuple[str, ...]:
+    """Snapshot models ``WB_GRIB_SNAPSHOTS`` allows (default: all of them).
+
+    Same grammar as ``WB_GRIB_PRIMARY``: ``0`` turns GRIB-primary snapshots
+    off (Open-Meteo first, as before #914), a comma list limits it.
+    """
+    raw = os.environ.get("WB_GRIB_SNAPSHOTS", "1").strip().lower()
+    if raw in ("", "1", "true", "yes", "on"):
+        return GRIB_SNAPSHOT_MODELS
+    if raw in ("0", "false", "no", "off"):
+        return ()
+    wanted = {part.strip() for part in raw.split(",") if part.strip()}
+    return tuple(m for m in GRIB_SNAPSHOT_MODELS if m in wanted)
+
+
+def grib_snapshot_drill(model: str) -> str | None:
+    """Failure drill for GRIB-primary snapshots: ``"all"``, ``"half"`` or None.
+
+    ``WB_GRIB_SNAPSHOTS_DRILL=icon`` discards every GRIB snapshot of that
+    model after the build, ``icon:half`` every other airport's, so the
+    Open-Meteo fallback can be exercised on a live cycle. Mirrors
+    ``WB_GRIB_PRIMARY_DRILL``.
+    """
+    raw = os.environ.get("WB_GRIB_SNAPSHOTS_DRILL", "").strip().lower()
+    for part in raw.split(","):
+        name, _, mode = part.strip().partition(":")
+        if name == model:
+            return "half" if mode == "half" else "all"
+    return None
+
+
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 

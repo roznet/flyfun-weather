@@ -239,6 +239,33 @@ ICON_SURFACE_REQUIRED = ("t_2m", "td_2m", "u_10m", "v_10m", "pmsl", "ps", "tot_p
 ICON_SURFACE_ACCUMULATED = ("tot_prec", "rain_gsp", "rain_con", "snow_gsp", "snow_con")
 
 
+# Pressure-level sounding for the standalone snapshots (forecast map +
+# alternates, #914): ICON-EU's published isobaric files, ~1 MB each, instead
+# of the ~189 MB-per-hour model-level column the briefing reads. Owner call
+# (2026-10-24): 1000-200 hPa only — the lite sounding's cloud layers live in
+# the low levels and CAPE/EL needs ~200 hPa; nothing reads above. No omega:
+# the lite sounding runs no vertical-motion pass. A level DWD does not
+# publish 404s and the profile is built from the levels that arrived; a point
+# with too few levels goes to the Open-Meteo fallback. The list follows DWD's
+# ICON-EU product description (1000-200 hPa part); not checked against a live
+# listing when written (opendata.dwd.de is unreachable from the build box) —
+# the fetch logs 404 counts per step, so a wrong level shows up there.
+ICON_SNAPSHOT_PRESSURE_LEVELS: tuple[int, ...] = (
+    1000, 950, 925, 900, 875, 850, 825, 800, 775,
+    700, 600, 500, 400, 300, 250, 200,
+)
+ICON_SNAPSHOT_PRESSURE_VARIABLES: tuple[str, ...] = ("t", "relhum", "u", "v", "fi")
+
+
+def icon_pressure_cache_key(variable: str, level_hpa: int, variant: "IconVariant") -> str:
+    """Cache-key label for one ICON pressure-level file (#914).
+
+    ``f012_ICON_EU_PL_T_850_V1.grib2``: one file per (variable, level), so a
+    failed download is a missing file, never a short blob cached as complete.
+    """
+    return f"{variant.cache_prefix}_PL_{variable.upper()}_{level_hpa}_V1"
+
+
 def icon_surface_cache_key(variable: str, variant: "IconVariant") -> str:
     """Cache-key label for one ICON surface variable's file (#912).
 
