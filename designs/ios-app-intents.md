@@ -5,17 +5,18 @@
 > what capabilities to surface — this doc is its on-device sibling.
 
 **Status: PHASE 1 IMPLEMENTED (#364, resolver #367).** The Tier-1 App Intents
-surface ships in `app/flyfun-weather/flyfun-weather/AppIntents/` (17 files):
+surface ships in `app/flyfun-weather/flyfun-weather/AppIntents/` (18 files):
 `FlightEntity` (`AppEntity` + `IndexedEntity`) + `AirportEntity`, the six intents
 (open-list / open-briefing / check / overview / refresh / airport-weather), all
 six registered in `FlyFunShortcuts`, the full tiered resolver (deterministic +
 Foundation Models grounded selection over the candidate flights), the spoken-line
 builders in `IntentDialogs`, the typed `PendingNavigation` seam, and Spotlight
 reconciliation on flight-list load. Unit coverage:
-`flyfun-weatherTests/AppIntentsResolverTests.swift`.
+`flyfun-weatherTests/AppIntentsResolverTests.swift`. **#365** added the
+flight-day live lead and a result card to `CheckBriefingIntent` (see "Check Briefing
+on flight day"); the rest of the old Phase 2 was dropped (see Phase 2).
 The push prerequisite (Issue 3) has **also landed** (#366 server + #371 prefs) —
-see [Briefing Refresh Notifications](./ios-app-briefing-notifications.md). Phase 2
-(View Annotations, App Intents Testing framework) remains proposed. It has **no
+see [Briefing Refresh Notifications](./ios-app-briefing-notifications.md). It has **no
 SiriKit**, so there was nothing to migrate — a clean start on the modern App
 Intents path.
 
@@ -50,8 +51,8 @@ So every intent here is a *custom* App Intent. Consequences:
   parameter resolution is *our* code, via an `EntityStringQuery` (see Resolver Design).
   WWDC26's semantic index (`IndexedEntity`) improves match quality but the resolver is ours.
 
-Everything degrades gracefully across iOS 26 → 27: Phase 1 works today; Phase 2
-layers on WWDC26-only APIs where present.
+Everything here runs on the iOS 26.2 deployment target; nothing depends on an
+iOS 27-only API or on Siri AI (the iOS 27 on-screen work was dropped, see Phase 2).
 
 ---
 
@@ -77,7 +78,7 @@ Target utterances (all require the "FlyFun" token in the phrase):
 |---|---|---|---|
 | `OpenFlightListIntent` | opens app | `list_flights` | Navigate to the flight list page. No parameter. |
 | `OpenBriefingIntent` | opens app | `get_briefing` | `@Parameter var flight: FlightEntity?`. If nil → compute the **next** upcoming flight and open its briefing. |
-| `CheckBriefingIntent` | background (spoken) | `get_briefing` | `@Parameter var flight: FlightEntity`. Speaks assessment (GREEN/AMBER/RED) + the top one or two advisories. Reads from cache when offline. |
+| `CheckBriefingIntent` | background (spoken + card) | `get_briefing` (+ its `live` block) | `@Parameter var flight: FlightEntity`. Speaks assessment (GREEN/AMBER/RED) + the top one or two advisories, led on flight day by the live layer (#365). Also returns a `ShowsSnippetView` card. Reads from cache when offline. |
 | `FlightsOverviewIntent` | background (spoken) | `list_flights` | No parameter. Speaks a one-line-per-flight traffic-light summary of upcoming flights. |
 | `RefreshBriefingIntent` | background | `refresh_briefing` | `@Parameter var flight: FlightEntity`. `RefreshDriver` returns on the **first** SSE signal, speaking one of `alreadyFresh` / `started` / `completed` / `alreadyInProgress` / `rateLimited` / `failed`; a detached drain keeps the server run alive past our early return. See loop-closure note. |
 | `AirportWeatherIntent` | background (spoken) | `get_airport_weather` | `@Parameter var airport: AirportEntity`, `@Parameter var day: AirportWeatherDay` (`@AppEnum` today/tomorrow/in-2/in-3 → the server's 0…3; hour pinned to 12). Spoken consensus category + wind, plus the latest observation and a "snapped to nearest monitored airport" note. |
@@ -85,8 +86,8 @@ Target utterances (all require the "FlyFun" token in the phrase):
 Notes:
 - All six speak through `IntentDialogs` (pure, `FlightResponse`-driven, unit-tested), so the
   voice phrasing — including the empty-state and `UNAVAILABLE`-is-not-a-verdict lines
-  (#392) — lives in one file. Background intents return `ProvidesDialog` only; no
-  `ShowsSnippetView` yet.
+  (#392) — lives in one file. Background intents return `ProvidesDialog`; only
+  `CheckBriefingIntent` also returns a `ShowsSnippetView` card (#365).
 - **`RefreshBriefingIntent` closes its loop via** [Briefing Refresh Notifications](./ios-app-briefing-notifications.md):
   a refresh is ~2 min server-side and a background intent can't wait, so `RefreshDriver`
   reports the early gate outcome and returns. It refreshes with `source: .siri`, which the
@@ -204,6 +205,43 @@ Reuse:
 *Naming note: the resolver's tiers 1–3 are internal to this algorithm and unrelated to
 the product **Tier 1 / Tier 2** issue split below.*
 
+### Check Briefing on flight day (#365)
+
+Since #637 a flight on its day has a live layer, and the MCP `get_briefing` leads
+with its `live` block. `CheckBriefingIntent` does the same:
+
+- **When:** `flight.isInLiveObservationWindow(started:)`, with `started` read from
+  `AppState.current?.livePositions` (only knowable when the app is alive; a cold
+  Siri process uses the planned window). Then `repo.liveLayer(flightId:)`, which
+  falls back to the on-disk copy offline. Outside the window, on any throw, or with
+  `!hasData` / no glance text, the output is the briefing-only line, unchanged. A
+  live failure never becomes an error line.
+- **Order:** `glance.alertItems` texts, then `glance.highlight.text` as "As of
+  14:29Z: ..." (time from `highlight.generatedAt`), or `glance.headline` when there
+  is no highlight (it carries its own "Observed 14:30Z"), then
+  `IntentDialogs.briefingGradeLine`: "The 07:12Z briefing graded it amber; top
+  concern: convective." (time from `latestBriefing.fetchTimestamp`).
+- **Never re-grades:** the grade is said as the briefing's and not reconciled
+  with the live text, same rule as the MCP `live` block. Server text is used
+  verbatim; the only client touch is adding a full stop where a line has no
+  closing punctuation, so spoken lines don't run on.
+- Pure builders: `IntentDialogs.liveCheckLines` (returns `LiveCheckLines`; nil means
+  behave as without live) and `checkSummary(_:live:)`. Tested in
+  `AppIntentsResolverTests` ("Check briefing — live layer first").
+
+**Result card** (`CheckBriefingSnippetView`): route + departure, the live block
+(alerts, then highlight/headline and its time) in a tinted box above the
+briefing part, then the briefing's `AssessmentStringBadge`, "Briefing 07:12Z" and
+up to three `advisorySummary.top` chips. With no traffic-light grade the
+briefing part is `IntentDialogs.briefingNote` (the dialog's own empty-state
+words). Buttons: `Button(intent: RefreshBriefingIntent(flight:))` and
+`Button(intent: OpenBriefingIntent(flight:))`, which is why those two intents
+gained `init(flight:)`. Error paths (signed out, not found, load failed) still
+return a card, because an opaque `some IntentResult & ... & ShowsSnippetView`
+needs one view type on every path: `content: nil` draws just an "Open FlyFun"
+button. The card makes no request of its own; it draws what `perform()`
+already loaded.
+
 ### Navigation from an intent (built, #364)
 
 Foregrounding intents set a pending navigation target the UI consumes. Implemented as a
@@ -258,48 +296,23 @@ are never donated (`AppState.isUITesting` guard).
 
 ---
 
-## Phase 2 — On-screen context (iOS 27 / WWDC26)
+## Phase 2 — dropped (decided 2026-10-24, #365)
 
-Goal: act on **what's on screen** conversationally. Phase 2 is scoped strictly to what
-genuinely needs the next iOS release — the **View Annotations API** and the **App Intents
-Testing framework**. (Foundation Models is *not* here: it ships in iOS 26 and lives in
-Phase 1 — the resolver fallback, and the optional on-device narration below.)
+The old Phase 2 bet on on-screen context. After iOS 27 shipped it was re-scoped
+to the flight-day live lead + result card above, and the rest dropped:
 
-### View Annotations ("explain this", "show me the cross-section")
+- **`AdvisoryEntity` / `ExplainAdvisoryIntent`:** not useful enough as a voice
+  action. The MCP `get_advisory_detail` has no intent mirror.
+- **iOS 27 on-screen annotations** (`.appEntityIdentifier`,
+  `ShowCrossSectionIntent`): consumed only by Siri AI, which is not available on
+  EU devices.
+- **`AppIntentsTesting`:** the pure `IntentDialogs` unit tests cover the logic.
+  (CI also builds with Xcode 26.6, which ships neither iOS 27 API.)
+- **On-device narration** of advisory detail: duplicates the server digest, with
+  hallucination risk on safety text.
 
-The View Annotations API tags on-screen SwiftUI views with App Entities so Siri
-knows the referent. Surface, smallest-first:
-
-| Utterance (while viewing a briefing) | Annotate | Intent | Maps to |
-|---|---|---|---|
-| "Explain this" (on an advisory row) | `AdvisoryEntity` on each advisory row | `ExplainAdvisoryIntent(advisory:)` | `get_advisory_detail` |
-| "Show me the cross-section" | `FlightEntity` on the briefing container | `ShowCrossSectionIntent` | in-app nav (Cross-Section tab) |
-| "Is this still green / what changed?" | `FlightEntity` on the container | `CheckBriefingIntent` (reused) | `get_briefing` |
-| "Explain the icing at waypoint 3" / "Skew-T here" | per-point annotations | (deferred — large surface, low marginal value) | — |
-
-`ExplainAdvisoryIntent` resolves the on-screen `AdvisoryEntity` → `repository.advisoryDetail(...)`
-→ speaks/shows the "why" (the same per-model, cross-check reasoning the MCP
-`get_advisory_detail` returns).
-
-### On-device narration (Foundation Models — iOS 26, so Tier-1-capable)
-
-Not an OS constraint, a packaging choice: the on-device model can narrate our **cached**
-`AdvisoryDetailResponse` into a natural sentence, fully offline in the cockpit, today. It
-rides with Phase 2 only because the on-screen "explain this" is its natural trigger; a
-parameterized `ExplainAdvisoryIntent(advisory:)` could ship now. Split of authority: the
-authoritative digest stays server-side (LangGraph) and the on-device narration only fills
-the offline gap — it never replaces it.
-
-Optional: use the model to improve voice-PIREP parsing beyond the regex `PIREPParser`
-(cross-ref Phase 3a in the roadmap).
-
-### Testing
-
-Adopt the **App Intents Testing framework** (WWDC26) to validate Siri / Shortcuts /
-Spotlight through real system pathways without UI automation, alongside the existing
-XCTest suite.
-
----
+Not in #365 either, still open: the refresh spoken line promising the push, and
+live awareness in `FlightsOverviewIntent`.
 
 ## MCP ⇆ App Intents parity
 
@@ -310,10 +323,10 @@ shape changes, check the mirroring intent. Current mapping:
 | MCP tool | Intent(s) |
 |---|---|
 | `list_flights` | `OpenFlightListIntent`, `FlightsOverviewIntent` |
-| `get_briefing` | `OpenBriefingIntent`, `CheckBriefingIntent` |
+| `get_briefing` (incl. `live`) | `OpenBriefingIntent`, `CheckBriefingIntent` (live lead + card, #365) |
 | `refresh_briefing` | `RefreshBriefingIntent` |
 | `get_airport_weather` | `AirportWeatherIntent` |
-| `get_advisory_detail` | `ExplainAdvisoryIntent` (Phase 2) |
+| `get_advisory_detail` | *(dropped in #365: not useful enough by voice)* |
 | `create_flight` | *(kept in-app / Shortcuts-only — route+time too complex for voice)* |
 | `get_alternates`, `get_digest_context` | *(not surfaced initially — deep/niche)* |
 
@@ -326,11 +339,9 @@ Tiering is by **OS availability**: Tier 1 = everything implementable on **today'
    intents, `FlyFunShortcuts`, the full tiered resolver, the `PendingNavigation` seam,
    Spotlight reconciliation, the expired-token fallback (Decision 4). App Group
    provisioning (Decision 1) was **deferred** — see the status block up top.
-2. **Tier 2 — iOS 27 / WWDC26 only. Not started.** The **View Annotations API**
-   (on-screen "explain this" / "show the cross-section") and the **App Intents Testing
-   framework**. By packaging choice, `ExplainAdvisoryIntent` + on-device advisory
-   narration ride along here (their natural UX is the on-screen trigger) — though both
-   are iOS-26-capable and could move to Tier 1 (see Phase 2 note).
+2. **Tier 2 — re-scoped and done in #365.** The flight-day live lead and the
+   `CheckBriefingIntent` result card shipped; View Annotations, App Intents Testing,
+   `ExplainAdvisoryIntent` and on-device narration were dropped (see Phase 2).
 3. **Notification — briefing-refresh push. ✅ SHIPPED (#366, #371).** See
    [ios-app-briefing-notifications.md](./ios-app-briefing-notifications.md). The refresh
    intent's loop now closes through it (`source: .siri` → non-present → push/email); only
@@ -391,7 +402,8 @@ Locked (★) decisions first, then defaults still open to revision.
 
 ## Open Questions
 
-Resolved and kept only as pointers: the **day parameter** is now the `AirportWeatherDay`
+Resolved and kept only as pointers: the **Siri output shape** is dialog plus a
+`ShowsSnippetView` card for `CheckBriefingIntent` only (#365); the **day parameter** is now the `AirportWeatherDay`
 `@AppEnum`; **"next flight"** is `FlightResolver.nextFlight` (soonest by departure,
 duration-aware, briefing-agnostic — see the #536 section); **refresh feedback** is the
 push (#366), leaving only the interim spoken wording.
@@ -404,8 +416,6 @@ Still open:
   is honest; the intent still says "open FlyFun shortly". Worth gating on whether push is
   actually enabled for that user/device before promising it.
 - **iPhone vs iPad** — intents are universal; confirm navigation targets exist on both size classes.
-- **Siri output shape** — everything speaks via `ProvidesDialog` today; whether
-  `CheckBriefingIntent` should also return a `ShowsSnippetView` result card is undecided.
 - **Resolver tier-1 recall** — place matching needs a ≥4-char non-stopword token overlap,
   so short/awkward names ("Nice", "Ronaldsway") fall through to the model tier. Fine, but
   it means devices without Apple Intelligence lose those phrases entirely.

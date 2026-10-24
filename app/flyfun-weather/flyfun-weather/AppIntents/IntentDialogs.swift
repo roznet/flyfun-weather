@@ -5,7 +5,15 @@ import Foundation
 enum IntentDialogs {
     /// One flight's assessment + top concerns, e.g.
     /// "Your LFMD → LFML flight is graded amber. Top concerns: convective and icing."
-    static func checkSummary(_ flight: FlightResponse) -> String {
+    ///
+    /// With a `live` layer that carries data (#365), the live lines lead and the
+    /// grade follows, labelled as the briefing's: see `liveCheckSummary`.
+    /// Without one (outside the window, fetch failed, no data yet) the line is
+    /// exactly the briefing-only one.
+    static func checkSummary(_ flight: FlightResponse, live: LiveLayerResponse? = nil) -> String {
+        if let lines = liveCheckLines(live) {
+            return liveCheckSummary(flight, lines: lines)
+        }
         let route = flight.shortTitle
         guard let briefing = flight.latestBriefing else {
             if let coverage = flight.coverage, let day = coverage.availableDay {
@@ -21,8 +29,7 @@ enum IntentDialogs {
             }
             var line = "Your \(route) flight is graded \(assessment.lowercased())."
             if let top = briefing.advisorySummary?.top, !top.isEmpty {
-                let names = top.prefix(2).map(\.name).joined(separator: " and ")
-                line += " Top concern\(top.count > 1 ? "s" : ""): \(names)."
+                line += " Top concern\(top.count > 1 ? "s" : ""): \(concernNames(top))."
             }
             return line
         }
@@ -30,6 +37,104 @@ enum IntentDialogs {
             return "Your \(route) flight has a long-range outlook of \(humanize(outlook))."
         }
         return "Your \(route) flight has no assessment yet."
+    }
+
+    /// The card's note for a flight with no traffic-light grade to show (not
+    /// briefed, out of range, `UNAVAILABLE`, outlook only): the same words the
+    /// dialog speaks. nil when there is a GREEN / AMBER / RED grade, which the
+    /// card draws as a badge instead.
+    static func briefingNote(_ flight: FlightResponse) -> String? {
+        switch flight.latestBriefing?.assessment?.uppercased() {
+        case "GREEN", "AMBER", "RED": return nil
+        default: return checkSummary(flight)
+        }
+    }
+
+    // MARK: - Live layer (#365)
+
+    /// What a flight-day check takes from the live layer, in the order it is
+    /// said: alert-tier lines, then the highlight (with when it was written) or
+    /// the headline. Server text verbatim: clients render, they don't derive
+    /// (the `LiveGlance` SYNC contract).
+    nonisolated struct LiveCheckLines: Equatable, Sendable {
+        /// `glance.alertItems` texts: never folded, always first.
+        let alerts: [String]
+        /// The highlight, or the headline when there is no highlight.
+        let summary: String?
+        /// "14:29Z" when `summary` is the highlight. nil for the headline,
+        /// which carries its own "Observed 14:29Z".
+        let summaryTime: String?
+    }
+
+    /// The live lines to lead a check with, or nil when the layer has nothing
+    /// to say (absent, `!hasData`, no glance, or a glance with neither alerts
+    /// nor a highlight / headline). nil means "behave exactly as without live".
+    static func liveCheckLines(_ layer: LiveLayerResponse?) -> LiveCheckLines? {
+        guard let layer, layer.hasData, let glance = layer.glance else { return nil }
+        let alerts = glance.alertItems.compactMap { nonEmpty($0.text) }
+        let summary: String?
+        let summaryTime: String?
+        if let highlight = glance.highlight, let text = nonEmpty(highlight.text) {
+            summary = text
+            summaryTime = highlight.generatedAt.flatMap(Date.parseISO8601).map(LiveTime.zulu)
+        } else {
+            summary = nonEmpty(glance.headline)
+            summaryTime = nil
+        }
+        guard !alerts.isEmpty || summary != nil else { return nil }
+        return LiveCheckLines(alerts: alerts, summary: summary, summaryTime: summaryTime)
+    }
+
+    /// "SIGMET 6 EMBD TS now covers EGTF. As of 14:29Z: Departure and route
+    /// as briefed. The 07:12Z briefing graded it amber; top concern: convective."
+    ///
+    /// The grade is the briefing's, said as such and never reconciled with the
+    /// live text: the live layer annotates, it never re-grades (same rule as
+    /// the MCP `live` block).
+    private static func liveCheckSummary(_ flight: FlightResponse, lines: LiveCheckLines) -> String {
+        var parts = lines.alerts.map(sentence)
+        if let summary = lines.summary {
+            if let time = lines.summaryTime {
+                parts.append("As of \(time): \(sentence(summary))")
+            } else {
+                parts.append(sentence(summary))
+            }
+        }
+        parts.append(briefingGradeLine(flight))
+        return parts.joined(separator: " ")
+    }
+
+    /// The briefing's grade as the closing line of a live check, labelled with
+    /// when the briefing was built ("The 07:12Z briefing graded it amber").
+    static func briefingGradeLine(_ flight: FlightResponse) -> String {
+        guard let briefing = flight.latestBriefing else {
+            return "Your \(flight.shortTitle) flight hasn't been briefed yet."
+        }
+        let label = briefingTime(briefing).map { "The \($0) briefing" } ?? "The briefing"
+        if let assessment = briefing.assessment?.uppercased() {
+            if assessment == "UNAVAILABLE" {
+                return "\(label) couldn't assess it: there was no usable model data for that route."
+            }
+            var line = "\(label) graded it \(assessment.lowercased())"
+            if let top = briefing.advisorySummary?.top, !top.isEmpty {
+                line += "; top concern\(top.count > 1 ? "s" : ""): \(concernNames(top))"
+            }
+            return line + "."
+        }
+        if let outlook = briefing.outlook {
+            return "\(label) gave a long-range outlook of \(humanize(outlook))."
+        }
+        return "\(label) has no assessment yet."
+    }
+
+    /// "07:12Z" for the briefing's pack, or nil when the server sent none.
+    static func briefingTime(_ briefing: BriefingStatusInfo) -> String? {
+        briefing.fetchTimestamp.flatMap(Date.parseISO8601).map(LiveTime.zulu)
+    }
+
+    /// The first two named concerns, "convective and icing".
+    private nonisolated static func concernNames(_ top: [AdvisoryChip]) -> String {
+        top.prefix(2).map(\.name).joined(separator: " and ")
     }
 
     /// One-line-per-flight traffic-light overview of upcoming flights, always
@@ -107,6 +212,18 @@ enum IntentDialogs {
 
     private nonisolated static func humanize(_ raw: String) -> String {
         raw.replacingOccurrences(of: "_", with: " ").lowercased()
+    }
+
+    private nonisolated static func nonEmpty(_ text: String?) -> String? {
+        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
+    /// Server text as a spoken sentence: verbatim, with a full stop added only
+    /// when it has no closing punctuation, so consecutive lines don't run on.
+    private nonisolated static func sentence(_ text: String) -> String {
+        guard let last = text.last, !".!?".contains(last) else { return text }
+        return text + "."
     }
 
 }
