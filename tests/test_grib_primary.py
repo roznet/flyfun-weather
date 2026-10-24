@@ -576,3 +576,92 @@ def test_time_scan_confirm_refuses_when_gap_fill_fails(tmp_path, monkeypatch, ca
         ) is None
     assert graded == []
     assert "GRIB-primary gap fill failed for icon" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Post-rollout checks: fetch facts in the pack, pack-vs-Open-Meteo script
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_facts_written_and_survive_meta_rewrite(monkeypatch, tmp_path):
+    import json
+
+    from weatherbrief.tasks.artifacts import write_pack_meta
+
+    monkeypatch.setenv("WB_GRIB_PRIMARY", "1")
+
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        self._record_call()
+        return _FakeClient().fetch_multi_point(points, model, start_date=start_date, end_date=end_date)
+
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ), patch.object(fetch_module, "_open_meteo_live_horizons", return_value={}), patch(
+        "weatherbrief.fetch.grib.enrich_forecasts", new=lambda cs, *a, **k: _cover_all(ModelSource.ECMWF)(cs),
+    ), patch.object(primary, "grib_primary_skip_reason",
+                    new=lambda m, *a, **k: None if m == ModelSource.ECMWF else "disabled"):
+        fetch_module.run_fetch(
+            route=_route(), departure_time=DEP,
+            models=[ModelSource.GFS, ModelSource.ECMWF],
+            enrich_grib=True, pack_dir=tmp_path,
+        )
+    facts = json.loads((tmp_path / "fetch_meta.json").read_text())["fetch_facts"]
+    assert facts["grib_primary"] == {"ecmwf": 0}
+    assert facts["open_meteo_calls"] == 1  # GFS only: no leak for the GRIB slot
+    assert facts["grib_init_times"] == {"ecmwf": 1}
+    # The pipeline's end-of-run rewrite does not know them and must keep them.
+    write_pack_meta(tmp_path, models_fetched=["gfs", "ecmwf"], diagnostics=[])
+    again = json.loads((tmp_path / "fetch_meta.json").read_text())["fetch_facts"]
+    assert again == facts
+
+
+def test_pack_vs_open_meteo_helpers():
+    from scripts.compare_pack_surface_openmeteo import (
+        VarStats,
+        billed_units,
+        compare_point,
+        sample_indices,
+    )
+
+    assert sample_indices(10, 3) == [0, 4, 9]
+    assert sample_indices(2, 5) == [0, 1]
+    assert sample_indices(7, 1) == [3]
+    assert billed_units(3) == pytest.approx(4.8)  # 16 variables → 1.6 per point
+
+    hours = [HourlyForecast(time=datetime(2026, 5, 4, h, tzinfo=UTC)) for h in (9, 10, 11)]
+    hours[0].temperature_2m_c, hours[0].precipitation_mm = 10.0, 3.0
+    hours[1].temperature_2m_c, hours[1].precipitation_mm = 11.0, 3.0
+    # 11Z has no GRIB value: not compared.
+    om = {
+        "time": ["2026-05-04T09:00", "2026-05-04T10:00", "2026-05-04T11:00"],
+        "temperature_2m": [9.0, 15.0, 0.0],
+        "precipitation": [1.0, 1.0, 0.0],
+    }
+    stats: dict[str, VarStats] = {}
+    assert compare_point(stats, hours, om, "pk pt0") == 2
+    t = stats["temperature_2m_c"]
+    assert t.n == 2 and t.sum_d / t.n == pytest.approx(-1.5)
+    assert t.max_abs == pytest.approx(4.0) and "10:00" in t.max_where
+    assert len(t.suspects) == 1  # |Δ| 4 > 3 °C
+    p = stats["precipitation_mm"]
+    assert p.total_pack / p.total_om == pytest.approx(3.0)  # an accumulation slip shows as ×3
+
+
+def test_failure_drill_sends_points_to_the_fallback(monkeypatch):
+    monkeypatch.setenv("WB_GRIB_PRIMARY_DRILL", "ecmwf:half")
+    result, om_calls = _run_fetch(monkeypatch, enrich=_cover_all(ModelSource.ECMWF))
+    n = len(result.route_points)
+    assert [c for m, c in om_calls if m == "ecmwf"] == [len(range(0, n, 2))]
+    assert result.grib_primary == {"ecmwf": len(range(0, n, 2))}
+
+
+def test_pack_as_open_meteo_round_trip():
+    from scripts.compare_pack_surface_openmeteo import compare_point, hourly_as_open_meteo
+
+    pts = _points(1)
+    skel = build_skeleton(pts, ModelSource.ICON, start_date="2026-05-04", end_date="2026-05-04")
+    _fill_window(skel[0], required_hours(DEP, 2.0))
+    stats = {}
+    assert compare_point(stats, skel[0].hourly, hourly_as_open_meteo(skel[0].hourly), "x") == 4
+    assert all(s.max_abs == 0 for s in stats.values())
