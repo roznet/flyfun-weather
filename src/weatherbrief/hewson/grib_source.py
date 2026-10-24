@@ -283,6 +283,18 @@ def _resolve_ecmwf(
     return None
 
 
+def _new_session() -> requests.Session:
+    """A session whose connection pool fits the ICON download pool, so the
+    workers share it without "connection pool is full" churn."""
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=4, pool_maxsize=_ICON_DOWNLOAD_WORKERS,
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 def _head_ok(session: requests.Session, url: str) -> bool:
     try:
         return session.head(url, timeout=10).status_code == 200
@@ -430,7 +442,7 @@ def resolve_run(
     return resolver(
         list(hours), [int(L) for L in levels],
         now=now or datetime.now(timezone.utc),
-        session=session or requests.Session(),
+        session=session or _new_session(),
         init=init,
     )
 
