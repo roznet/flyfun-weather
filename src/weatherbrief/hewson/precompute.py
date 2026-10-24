@@ -74,6 +74,8 @@ DEFAULT_STRIDE_HOURS = 3
 # Where the fields come from. "grib" reads each model's own GRIB (0 Open-Meteo
 # calls, #911); "open-meteo" is the pre-#911 grid fetch, kept for backdated
 # calibration runs (no GRIB archive) and side-by-side source comparisons.
+SKIP_INCOMPLETE = "incomplete"
+SKIP_TOO_MANY_MISSING = "too-many-missing"
 SOURCE_GRIB = "grib"
 SOURCE_OPEN_METEO = "open-meteo"
 SOURCES: tuple[str, ...] = (SOURCE_GRIB, SOURCE_OPEN_METEO)
@@ -384,7 +386,7 @@ def _build_one_snapshot_grib(
     levels: list[int],
     hours: list[int],
     stride_hours: int,
-) -> _BuiltSnapshot | None:
+) -> _BuiltSnapshot | str:
     """Read one resolved GRIB run step by step and compute its diagnostics.
 
     ``run`` is a :class:`~weatherbrief.hewson.grib_source.GribRun`. Steps are
@@ -392,7 +394,8 @@ def _build_one_snapshot_grib(
     Any step that cannot be read in full (after one retry) drops the model
     for this cycle — a snapshot with a hole would read as "no front" there.
     Returns ``(init_time_unix, valid_times, per_level_stacks, fetch_secs,
-    compute_secs)`` or None.
+    compute_secs)``, or the skip reason: ``SKIP_INCOMPLETE`` (a step unreadable)
+    or ``SKIP_TOO_MANY_MISSING`` (a level over ``prepare_field``'s 5 % limit).
     """
     from weatherbrief.hewson.grib_source import (
         HEWSON_GRIB_VARS,
@@ -417,7 +420,7 @@ def _build_one_snapshot_grib(
                 "Hewson precompute: %s %s f%03d unreadable — skipping the model "
                 "this cycle", run.model, run.describe(), h,
             )
-            return None
+            return SKIP_INCOMPLETE
         t0 = time.monotonic()
         for L in levels:
             inputs = level_inputs(step[L])
@@ -440,7 +443,7 @@ def _build_one_snapshot_grib(
                     "cells (%s) — skipping the model this cycle",
                     run.model, run.describe(), h, L, missing,
                 )
-                return None
+                return SKIP_TOO_MANY_MISSING
             _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)
         compute_secs += time.monotonic() - t0
     t0 = time.monotonic()
@@ -780,8 +783,8 @@ def run_once(
                 built = _build_one_snapshot_grib(
                     run, lat, lon, terrain_mask, levels, hours, stride_hours,
                 )
-                if built is None:
-                    result.skipped[model] = "incomplete"
+                if isinstance(built, str):
+                    result.skipped[model] = built
                     continue
             else:
                 result.sources[model] = SOURCE_OPEN_METEO

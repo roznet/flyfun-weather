@@ -224,7 +224,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--init", default=None,
         help="GRIB source only: read this run (e.g. 2026-10-24T00Z) instead of "
              "the newest, to recompute a cycle that has an Open-Meteo snapshot "
-             "for scripts/compare_hewson_sources.py. Skips the purge.",
+             "for scripts/compare_hewson_sources.py. Skips the purge. Give it its own "
+             "--output-dir (or --force): an existing snapshot of that init in the "
+             "default dir counts as fresh.",
     )
     p_pc.add_argument(
         "--allow-stale", action="store_true",

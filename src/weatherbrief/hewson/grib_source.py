@@ -26,6 +26,7 @@ there is no Open-Meteo fallback, which would put the cost back.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -52,6 +53,9 @@ _COORD_TOL_DEG = 1e-4
 # One retry per step: a single dropped byte range or 5xx should not cost a
 # model its whole cycle, a persistent one should.
 _STEP_ATTEMPTS = 2
+# Pause before the retry, so a throttled or briefly failing server gets a
+# moment instead of a second request in the same millisecond.
+_STEP_RETRY_DELAY_S = 2.0
 # How many older cycles to try when the newest one is not complete yet.
 _MAX_STEP_BACK = 2
 _ICON_DOWNLOAD_WORKERS = 12
@@ -218,6 +222,8 @@ def read_step(
     snapshot with a hole in it.
     """
     for attempt in range(1, _STEP_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_STEP_RETRY_DELAY_S)
         try:
             data = run.fetch_step(hour)
             if data is not None:
