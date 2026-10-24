@@ -590,6 +590,31 @@ def icon_eu_file_url(
     )
 
 
+def icon_eu_pressure_level_url(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    level_hpa: int,
+    variable: str,
+    variant: IconVariant = ICON_EU,
+) -> str:
+    """Build URL for a single DWD ICON pressure-level GRIB2 bz2 file.
+
+    Used by the Hewson grid precompute (#911), which reads whole fields on
+    isobaric surfaces rather than a model-level column.
+
+    Example:
+        ICON-EU: .../icon-eu/grib/00/relhum/
+          icon-eu_europe_regular-lat-lon_pressure-level_2026102400_117_850_RELHUM.grib2.bz2
+    """
+    return (
+        f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
+        f"{variant.slug}_{variant.grid_label}_regular-lat-lon_pressure-level_"
+        f"{init_date}{init_hour:02d}_{forecast_hour:03d}_{level_hpa}_"
+        f"{_icon_var_suffix(variable, variant)}.grib2.bz2"
+    )
+
+
 def icon_eu_single_level_url(
     init_date: str,
     init_hour: int,

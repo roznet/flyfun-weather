@@ -236,6 +236,31 @@ class TestTryIngestHewsonSnapshots:
                sched_env.init - 24 * 3600, n_time=1)
         assert asyncio.run(sched_env.sched._try_ingest_hewson_snapshots()) == {"ecmwf"}
 
+    def test_local_only_models_are_not_waited_for(self, sched_env, monkeypatch):
+        """HEWSON_INBOX_MODELS=gfs,icon: ECMWF is computed here, no 30-min wait."""
+        monkeypatch.setenv("HEWSON_INBOX_MODELS", "gfs,icon")
+        for m in ("gfs", "icon"):
+            _write(sched_env.inbox, m, sched_env.init, n_time=1)
+        missing = asyncio.run(sched_env.sched._try_ingest_hewson_snapshots())
+        assert missing == {"ecmwf"}
+        assert sched_env.clock["t"] == 0
+        assert sched_env.pings == ["HEWSON_INGEST_HEALTHCHECK_URL"]
+
+    def test_local_only_models_added_to_fallback(self, sched_env, monkeypatch):
+        monkeypatch.setenv("HEWSON_INBOX_MODELS", "gfs,icon")
+        _write(sched_env.inbox, "gfs", sched_env.init, n_time=1)
+        missing = asyncio.run(sched_env.sched._try_ingest_hewson_snapshots())
+        assert missing == {"ecmwf", "icon"}
+        assert sched_env.pings == ["HEWSON_INGEST_HEALTHCHECK_URL/fail"]
+
+    def test_inbox_models_unknown_names_ignored(self, monkeypatch):
+        from weatherbrief import scheduler as sched
+
+        monkeypatch.setenv("HEWSON_INBOX_MODELS", "gfs, bogus")
+        assert sched._hewson_inbox_models() == ["gfs"]
+        monkeypatch.delenv("HEWSON_INBOX_MODELS")
+        assert sched._hewson_inbox_models() == ["ecmwf", "gfs", "icon"]
+
     def test_fail_ping_names_rejected_files(self, sched_env):
         for m in ("gfs", "icon"):
             _write(sched_env.inbox, m, sched_env.init, n_time=1)
@@ -256,11 +281,12 @@ def test_cli_exit_code_flags_failed_models(monkeypatch, skipped, rc):
     from weatherbrief.hewson import cli
 
     monkeypatch.setattr(cli, "run_once", lambda **kw: SimpleNamespace(
-        snapshots={}, skipped=skipped, elapsed_seconds=0.0, purged=0,
+        snapshots={}, skipped=skipped, sources={}, elapsed_seconds=0.0, purged=0,
         api_calls_total=0))
     args = argparse.Namespace(
         models=None, levels=None, output_dir=None, forecast_days=5,
-        stride_hours=3, retention_hours=48, dry_run=False, force=False, date=None)
+        stride_hours=3, retention_hours=48, dry_run=False, force=False, date=None,
+        source="grib")
     assert cli._cmd_precompute(args) == rc
 
 

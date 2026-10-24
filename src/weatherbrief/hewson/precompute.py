@@ -5,8 +5,12 @@ precompute`` CLI:
 
     1. build / load terrain mask (cached to disk)
     2. for each model:
-         a. fetch multi-level grid (925/850/700 hPa) via Open-Meteo
-         b. reshape per (hour, level) into 2D fields
+         a. resolve the model's GRIB run (ECMWF a2 on local disk, GFS on
+            NOAA S3, ICON-EU on DWD open data — ``grib_source.py``, #911) and
+            read 925/850/700 hPa T/RH/u/v per forecast step on the lattice.
+            ``source="open-meteo"`` (and every backdated ``--date`` run)
+            keeps the old Open-Meteo grid fetch instead.
+         b. prepare per (hour, level) into 2D fields
          c. compute Hewson diagnostics (gradient / TFP / −∇²θe / advection)
          d. derive tendency ∂θe/∂t across consecutive hours
          e. write one NPZ per (model, init cycle) with level-suffixed keys
@@ -47,6 +51,7 @@ from weatherbrief.frontal.grid import (
     build_grid_coords,
     build_terrain_elevation,
     fetch_grid_fields,
+    prepare_level_fields,
     reshape_to_fields,
 )
 
@@ -66,6 +71,12 @@ DEFAULT_RETENTION_HOURS = 48  # § 4.6
 # Per-flight briefings compute at a finer grain at briefing time (§ 6.2
 # stencil path) — they don't read the synoptic snapshot for leg advisories.
 DEFAULT_STRIDE_HOURS = 3
+# Where the fields come from. "grib" reads each model's own GRIB (0 Open-Meteo
+# calls, #911); "open-meteo" is the pre-#911 grid fetch, kept for backdated
+# calibration runs (no GRIB archive) and side-by-side source comparisons.
+SOURCE_GRIB = "grib"
+SOURCE_OPEN_METEO = "open-meteo"
+SOURCES: tuple[str, ...] = (SOURCE_GRIB, SOURCE_OPEN_METEO)
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +236,20 @@ def _load_or_build_terrain_mask(
     return mask
 
 
+def ensure_terrain_cache(output_dir: Path | str | None = None) -> np.ndarray:
+    """Make ``terrain_mask.npz`` match the current grid; return the flat mask.
+
+    The serving box reads the cache (fronts, map overlay) but only rewrites it
+    when it runs a precompute itself. With every model delivered off-box it
+    never does, so a grid change (#911) would leave readers on a stale cache
+    and no terrain masking. The scheduler calls this once at startup.
+    """
+    lat, lon = build_grid_coords()
+    return _load_or_build_terrain_mask(
+        lat, lon, Path(output_dir) if output_dir is not None else None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tendency helper
 # ---------------------------------------------------------------------------
@@ -280,12 +305,15 @@ class SnapshotResult:
     snapshots: dict[str, Path | None] = field(default_factory=dict)
     skipped: dict[str, str] = field(default_factory=dict)
     init_times: dict[str, int] = field(default_factory=dict)
+    # model → where its fields came from, e.g. "gfs-s3 init 2026-10-24T00:00Z"
+    # (GRIB) or "open-meteo" — the per-model source line the node logs.
+    sources: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     purged: int = 0
     api_calls_total: int = 0
     # Per-model timing breakdown in seconds. Helpful when correlating slow
-    # cycles with droplet load — fetch is network-bound (Open-Meteo round
-    # trips), compute is GIL-bound (numpy gradients + MetPy θe), write is
+    # cycles with droplet load — fetch is network/disk-bound (GRIB download +
+    # unpack, or Open-Meteo round trips), compute is GIL-bound (numpy gradients + MetPy θe), write is
     # disk-bound (np.savez_compressed).
     fetch_seconds: dict[str, float] = field(default_factory=dict)
     compute_seconds: dict[str, float] = field(default_factory=dict)
@@ -296,8 +324,115 @@ class SnapshotResult:
 # Per-model snapshot builder
 # ---------------------------------------------------------------------------
 
+_BuiltSnapshot = tuple[int, np.ndarray, dict[int, dict[str, np.ndarray]], float, float]
 
-def _build_one_snapshot(
+
+def _empty_stacks(
+    levels: list[int], n_time: int, n_lat: int, n_lon: int,
+) -> dict[int, dict[str, np.ndarray]]:
+    """metric_name → (n_time, n_lat, n_lon) float32 NaN stacks, per level."""
+    return {
+        L: {
+            metric: np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32)
+            for metric in ("theta_e", "gradient", "neg_laplacian", "tfp", "advection")
+        }
+        for L in levels
+    }
+
+
+def _store_diagnostics(
+    per_level: dict[int, dict[str, np.ndarray]],
+    i: int,
+    L: int,
+    fields: dict,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    terrain_mask: np.ndarray,
+) -> None:
+    """Compute the Hewson diagnostics of one (hour, level) into the stacks."""
+    # prepare_level_fields returns level-specific winds under the historical
+    # u850/v850 keys regardless of the actual level (see frontal/grid.py
+    # reshape_to_fields docstring) — values here are from level L, not 850 hPa.
+    diag = compute_hewson_diagnostics(
+        fields["theta_e"], lat, lon,
+        fields["u850"], fields["v850"],
+        terrain_mask=terrain_mask,
+    )
+    per_level[L]["theta_e"][i] = fields["theta_e"]
+    per_level[L]["gradient"][i] = diag["gradient"]
+    per_level[L]["neg_laplacian"][i] = diag["neg_laplacian"]
+    per_level[L]["tfp"][i] = diag["tfp"]
+    per_level[L]["advection"][i] = diag["advection"]
+
+
+def _add_tendency(
+    per_level: dict[int, dict[str, np.ndarray]], levels: list[int], stride_hours: int,
+) -> None:
+    # Derive tendency across the decimated stack — step_hours matches stride
+    # so the result is still K per hour regardless of cadence.
+    for L in levels:
+        per_level[L]["tendency"] = tendency_k_per_hour(
+            per_level[L]["theta_e"], step_hours=stride_hours,
+        )
+
+
+def _build_one_snapshot_grib(
+    run,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    terrain_mask: np.ndarray,
+    levels: list[int],
+    hours: list[int],
+    stride_hours: int,
+) -> _BuiltSnapshot | None:
+    """Read one resolved GRIB run step by step and compute its diagnostics.
+
+    ``run`` is a :class:`~weatherbrief.hewson.grib_source.GribRun`. Steps are
+    read and computed one at a time, so only one step's raw fields are held.
+    Any step that cannot be read in full (after one retry) drops the model
+    for this cycle — a snapshot with a hole would read as "no front" there.
+    Returns ``(init_time_unix, valid_times, per_level_stacks, fetch_secs,
+    compute_secs)`` or None.
+    """
+    from weatherbrief.hewson.grib_source import level_inputs, read_step
+
+    n_time = len(hours)
+    valid_times = np.array(
+        [np.datetime64(run.init.replace(tzinfo=None) + timedelta(hours=h), "ns")
+         for h in hours],
+        dtype="datetime64[ns]",
+    )
+    per_level = _empty_stacks(levels, n_time, len(lat), len(lon))
+    fetch_secs = compute_secs = 0.0
+    for i, h in enumerate(hours):
+        t0 = time.monotonic()
+        step = read_step(run, h, levels, lat, lon)
+        fetch_secs += time.monotonic() - t0
+        if step is None:
+            logger.warning(
+                "Hewson precompute: %s %s f%03d unreadable — skipping the model "
+                "this cycle", run.model, run.describe(), h,
+            )
+            return None
+        t0 = time.monotonic()
+        for L in levels:
+            inputs = level_inputs(step[L])
+            fields = (
+                prepare_level_fields(
+                    *inputs, terrain_mask=terrain_mask, level_hPa=L, hour_index=h,
+                )
+                if inputs is not None else None
+            )
+            if fields is not None:
+                _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)
+        compute_secs += time.monotonic() - t0
+    t0 = time.monotonic()
+    _add_tendency(per_level, levels, stride_hours)
+    compute_secs += time.monotonic() - t0
+    return run.init_unix, valid_times, per_level, fetch_secs, compute_secs
+
+
+def _build_one_snapshot_open_meteo(
     client,
     model: str,
     lat: np.ndarray,
@@ -308,20 +443,20 @@ def _build_one_snapshot(
     stride_hours: int = DEFAULT_STRIDE_HOURS,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> tuple[int, np.ndarray, dict[int, dict[str, np.ndarray]], float, float] | None:
-    """Fetch + compute diagnostics for one model.
+) -> _BuiltSnapshot | None:
+    """Fetch + compute diagnostics for one model from Open-Meteo (pre-#911 path).
+
+    Kept for backdated calibration runs and side-by-side source comparisons;
+    the live precompute reads GRIB (:func:`_build_one_snapshot_grib`).
 
     Fetches hourly data from Open-Meteo (its native cadence), then decimates
     to every ``stride_hours``-th forecast hour before the Hewson compute loop
     — this both shrinks the output NPZ and skips ``stride_hours - 1`` compute
-    passes per step. See ``DEFAULT_STRIDE_HOURS`` for the rationale.
+    passes per step. See ``DEFAULT_STRIDE_HOURS`` for the rationale. Note the
+    series is anchored at 00 Z of the request day, not at the model init.
 
     Returns ``(init_time_unix, valid_times, per_level_stacks, fetch_secs,
-    compute_secs)`` where ``per_level_stacks[L]`` is a dict of metric-name
-    → (n_time, n_lat, n_lon) float32 stacks. ``fetch_secs`` and
-    ``compute_secs`` are wall-time measurements for instrumentation; the
-    write step happens in :func:`run_once` so it's timed there. Returns
-    ``None`` if Open-Meteo returns no usable data.
+    compute_secs)``; None if Open-Meteo returns no usable data.
 
     When ``start_date`` and ``end_date`` are set the fetch covers that
     historical (or forward) window instead of the live forecast. The
@@ -349,56 +484,21 @@ def _build_one_snapshot(
     if stride_hours < 1:
         raise ValueError(f"stride_hours must be >= 1, got {stride_hours}")
 
-    # Decimate to stride_hours cadence. Anchored at the model init (index 0)
-    # so the series lands on synoptic hours when init is on a synoptic hour.
+    # Decimate to stride_hours cadence, anchored at index 0.
     keep_indices = list(range(0, len(timestamps), stride_hours))
     kept_timestamps = [timestamps[i] for i in keep_indices]
-
-    n_time = len(kept_timestamps)
-    n_lat, n_lon = len(lat), len(lon)
     valid_times = np.array(
         [np.datetime64(ts) for ts in kept_timestamps], dtype="datetime64[ns]",
     )
-
-    # metric_name → (n_time, n_lat, n_lon) float32
-    per_level: dict[int, dict[str, np.ndarray]] = {
-        L: {
-            "theta_e": np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32),
-            "gradient": np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32),
-            "neg_laplacian": np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32),
-            "tfp": np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32),
-            "advection": np.full((n_time, n_lat, n_lon), np.nan, dtype=np.float32),
-        }
-        for L in levels
-    }
+    per_level = _empty_stacks(levels, len(kept_timestamps), len(lat), len(lon))
 
     compute_t0 = time.monotonic()
     for i, h in enumerate(keep_indices):
         for L in levels:
             fields = reshape_to_fields(raw, lat, lon, h, terrain_mask, level_hPa=L)
-            if fields is None:
-                continue
-            # reshape_to_fields returns level-specific winds under the
-            # historical u850/v850 keys regardless of the actual level
-            # (see frontal/grid.py reshape_to_fields docstring) — values
-            # here are from level L, not 850 hPa.
-            diag = compute_hewson_diagnostics(
-                fields["theta_e"], lat, lon,
-                fields["u850"], fields["v850"],
-                terrain_mask=terrain_mask,
-            )
-            per_level[L]["theta_e"][i] = fields["theta_e"]
-            per_level[L]["gradient"][i] = diag["gradient"]
-            per_level[L]["neg_laplacian"][i] = diag["neg_laplacian"]
-            per_level[L]["tfp"][i] = diag["tfp"]
-            per_level[L]["advection"][i] = diag["advection"]
-
-    # Derive tendency across the decimated stack — step_hours matches stride
-    # so the result is still K per hour regardless of cadence.
-    for L in levels:
-        per_level[L]["tendency"] = tendency_k_per_hour(
-            per_level[L]["theta_e"], step_hours=stride_hours,
-        )
+            if fields is not None:
+                _store_diagnostics(per_level, i, L, fields, lat, lon, terrain_mask)
+    _add_tendency(per_level, levels, stride_hours)
     compute_secs = time.monotonic() - compute_t0
 
     return init_time, valid_times, per_level, fetch_secs, compute_secs
@@ -524,13 +624,16 @@ def run_once(
     skip_existing: bool = True,
     start_date: str | None = None,
     end_date: str | None = None,
+    source: str = SOURCE_GRIB,
     client=None,
+    now: datetime | None = None,
+    init: datetime | None = None,
 ) -> SnapshotResult:
     """Fetch + compute + write one snapshot per model.
 
     Single entry point shared by the scheduler loop and the ``hewson precompute``
-    CLI. Safe to call any time — Open-Meteo serves whatever init it currently
-    publishes, so calling twice in quick succession for the same cycle is a
+    CLI. Safe to call any time — each model's newest complete run is resolved
+    first, so calling twice in quick succession for the same cycle is a
     no-op when ``skip_existing=True`` (default).
 
     Parameters
@@ -538,67 +641,117 @@ def run_once(
     models : list of model keys (default ``("ecmwf", "gfs", "icon")``).
     levels : pressure levels in hPa (default ``(925, 850, 700)``).
     output_dir : root dir for snapshots; defaults to ``${DATA_DIR}/hewson``.
-    forecast_days : horizon requested from Open-Meteo (default 5, § 4.3).
-    stride_hours : decimation cadence applied to hourly Open-Meteo output
-        before the compute loop (default 3, see ``DEFAULT_STRIDE_HOURS``).
-        Set to 1 to keep every hour.
+    forecast_days : horizon (default 5, § 4.3): forecast hours
+        ``0, stride, …`` below ``forecast_days × 24`` from init.
+    stride_hours : cadence of the stored steps (default 3, see
+        ``DEFAULT_STRIDE_HOURS``). Set to 1 to keep every hour.
     retention_hours : purge window applied after writing (default 48).
     dry_run : compute but do not write NPZ or purge.
     skip_existing : if an NPZ for a model's current init already exists,
         skip the fetch + compute. Disable for forced recomputation.
-        Automatically forced to False when ``start_date`` is set, since
-        the live model-status init is meaningless for a backdated run.
+        Automatically forced to False when ``start_date`` is set.
     start_date, end_date : ``YYYY-MM-DD`` strings. When set, the fetch
         targets that historical (or forward) window instead of the live
-        forecast. The snapshot is keyed by ``start_date`` 00 Z. Purge is
-        skipped so calibration runs aren't garbage-collected by retention.
-    client : optional OpenMeteoClient (for testing / dependency injection).
+        forecast, from Open-Meteo (there is no GRIB archive to read). The
+        snapshot is keyed by ``start_date`` 00 Z. Purge is skipped so
+        calibration runs aren't garbage-collected by retention.
+    source : ``"grib"`` (default, #911: ECMWF a2 / GFS S3 / ICON-EU DWD, no
+        Open-Meteo call) or ``"open-meteo"`` (the pre-#911 grid fetch, for
+        side-by-side comparisons).
+    client : optional OpenMeteoClient (Open-Meteo source only; tests).
+    now : reference time for GRIB run resolution (tests).
+    init : GRIB source only — read this run (aware UTC) instead of the newest,
+        e.g. to recompute a cycle that has an Open-Meteo snapshot for the
+        side-by-side check. Purge is skipped, like a backdated run.
     """
-    from weatherbrief.fetch.open_meteo import OpenMeteoClient
-
+    if source not in SOURCES:
+        raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
     models = list(models) if models else list(DEFAULT_MODELS)
     levels = sorted(int(L) for L in (levels if levels else DEFAULT_LEVELS))
     backdated = bool(start_date)
     if backdated and not end_date:
         end_date = start_date
+    if init is not None and (backdated or source != SOURCE_GRIB):
+        raise ValueError("init= pins a GRIB run; it cannot combine with "
+                         "start_date or the Open-Meteo source")
     if backdated:
         skip_existing = False
+        if source != SOURCE_OPEN_METEO:
+            logger.info(
+                "Hewson precompute: backdated run (%s) reads Open-Meteo's "
+                "archived forecast — no GRIB archive", start_date,
+            )
+            source = SOURCE_OPEN_METEO
 
     started = time.monotonic()
     result = SnapshotResult()
 
-    client = client or OpenMeteoClient()
+    if source == SOURCE_OPEN_METEO and client is None:
+        from weatherbrief.fetch.open_meteo import OpenMeteoClient
+
+        client = OpenMeteoClient()
     lat, lon = build_grid_coords()
     terrain_mask = _load_or_build_terrain_mask(lat, lon, output_dir)
+    hours = None
+    if source == SOURCE_GRIB:
+        from weatherbrief.hewson.grib_source import forecast_step_hours
+
+        hours = forecast_step_hours(forecast_days, stride_hours)
 
     for model in models:
         try:
-            # Peek at init time first — lets us skip the grid fetch when the
-            # snapshot for this cycle is already on disk.
-            if skip_existing:
+            run = None
+            if source == SOURCE_GRIB:
+                from weatherbrief.hewson.grib_source import resolve_run
+
+                run = resolve_run(model, hours, levels, now=now, init=init)
+                if run is None:
+                    result.skipped[model] = "no-grib-run"
+                    continue
+                result.sources[model] = run.describe()
+                logger.info(
+                    "Hewson precompute: %s from GRIB %s (%d steps, f%03d-f%03d)",
+                    model, run.describe(), len(hours), hours[0], hours[-1],
+                )
+                expected_init = run.init_unix
+            elif skip_existing:
+                # Peek at init time first — lets us skip the grid fetch when
+                # the snapshot for this cycle is already on disk.
                 from weatherbrief.fetch.model_status import fetch_model_metadata
 
                 meta = fetch_model_metadata(models=[model])
-                if model in meta:
-                    expected_init = meta[model].last_init_time
-                    expected_path = snapshot_path(model, expected_init, output_dir)
-                    if expected_init and expected_path.exists():
-                        logger.info(
-                            "Hewson precompute: %s init %s already on disk, "
-                            "skipping", model, _init_to_iso_z(expected_init),
-                        )
-                        result.skipped[model] = "fresh"
-                        result.init_times[model] = expected_init
-                        continue
+                expected_init = meta[model].last_init_time if model in meta else 0
+            else:
+                expected_init = 0
 
-            built = _build_one_snapshot(
-                client, model, lat, lon, terrain_mask,
-                levels, forecast_days, stride_hours,
-                start_date=start_date, end_date=end_date,
-            )
-            if built is None:
-                result.skipped[model] = "no-data"
-                continue
+            if skip_existing and expected_init:
+                expected_path = snapshot_path(model, expected_init, output_dir)
+                if expected_path.exists():
+                    logger.info(
+                        "Hewson precompute: %s init %s already on disk, "
+                        "skipping", model, _init_to_iso_z(expected_init),
+                    )
+                    result.skipped[model] = "fresh"
+                    result.init_times[model] = expected_init
+                    continue
+
+            if run is not None:
+                built = _build_one_snapshot_grib(
+                    run, lat, lon, terrain_mask, levels, hours, stride_hours,
+                )
+                if built is None:
+                    result.skipped[model] = "incomplete"
+                    continue
+            else:
+                result.sources[model] = SOURCE_OPEN_METEO
+                built = _build_one_snapshot_open_meteo(
+                    client, model, lat, lon, terrain_mask,
+                    levels, forecast_days, stride_hours,
+                    start_date=start_date, end_date=end_date,
+                )
+                if built is None:
+                    result.skipped[model] = "no-data"
+                    continue
             init_time, valid_times, per_level, fetch_secs, compute_secs = built
             result.init_times[model] = init_time
             result.fetch_seconds[model] = fetch_secs
@@ -630,11 +783,11 @@ def run_once(
                 result.write_seconds[model] = write_secs
                 size_kb = path.stat().st_size / 1024
                 logger.info(
-                    "Hewson precompute: wrote %s "
+                    "Hewson precompute: wrote %s from %s "
                     "(%d timesteps × %d levels, stride=%dh, %.1f KB) "
                     "fetch=%.1fs compute=%.1fs write=%.1fs",
-                    path, len(valid_times), len(levels),
-                    stride_hours, size_kb,
+                    path, result.sources.get(model, source), len(valid_times),
+                    len(levels), stride_hours, size_kb,
                     fetch_secs, compute_secs, write_secs,
                 )
                 result.snapshots[model] = path
@@ -642,25 +795,26 @@ def run_once(
             logger.exception("Hewson precompute: %s failed", model)
             result.skipped[model] = "error"
 
-    if not dry_run and not backdated:
+    if not dry_run and not backdated and init is None:
         result.purged = purge_old_snapshots(
             output_dir=output_dir, retention_hours=retention_hours,
         )
 
-    result.api_calls_total = getattr(client, "call_count", 0)
+    result.api_calls_total = getattr(client, "call_count", 0) if client is not None else 0
     result.elapsed_seconds = time.monotonic() - started
     fetch_total = sum(result.fetch_seconds.values())
     compute_total = sum(result.compute_seconds.values())
     write_total = sum(result.write_seconds.values())
     logger.info(
         "Hewson precompute: done (%.1fs) — %d written, %d skipped, "
-        "%d purged, %d Open-Meteo API calls "
+        "%d purged, %d Open-Meteo API calls, sources %s "
         "[fetch=%.1fs compute=%.1fs write=%.1fs]",
         result.elapsed_seconds,
         len([p for p in result.snapshots.values() if p is not None]),
         len(result.skipped),
         result.purged,
         result.api_calls_total,
+        result.sources or "-",
         fetch_total, compute_total, write_total,
     )
     log_memory("hewson precompute", logger)

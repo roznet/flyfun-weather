@@ -6663,3 +6663,65 @@ tables: E-Shear layers can split where a calm level sits inside; Ri unchanged.
 Replay before landing: `scripts/replay_cat_layers.py` on `main` vs the branch
 (see its docstring).
 
+
+## 60. Hewson fields from each model's own GRIB, on the ECMWF Europe grid (#911)
+
+**Date:** 2026-10-24. **Part of** #910 (cut Open-Meteo usage).
+
+The Hewson precompute (θe, |∇θe|, TFP, −∇²θe, advection, tendency at
+925/850/700 hPa) read T, Td and wind from Open-Meteo: ~70k billed calls per run,
+~4.2M per 30 days, the largest single source. It now reads T, RH, u, v from the
+models' GRIB: ECMWF a2 (ECPDS, local disk), GFS pgrb2.0p25 (NOAA S3) and
+ICON-EU pressure levels (DWD). Mechanics: `designs/frontal-detection.md`,
+"Hewson snapshots from GRIB".
+
+**Decisions.**
+
+- **Domain trimmed to 35–59.5°N, 17.5°W–28°E** (99 × 183, was 35–60°N /
+  20°W, 101 × 193). That is the ECMWF Europe delivery sub-grid, so ECMWF is a
+  slice. Lost: the 60°N row (no single ECMWF grid holds 59.5–60°N) and the
+  20–17.5°W Atlantic strip. A front entering from the west shows up one 2.5°
+  strip later; no route endpoint we serve sits in either strip. Not chosen:
+  bridging the 59.5/60°N seam like the route decoder (§ grid seam, #672) — a
+  whole-row interpolation for one row of a synoptic field is not worth it.
+- **No interpolation anywhere.** Every model's grid holds the 0.25° lattice
+  exactly (ICON-EU 0.0625° subsampled every 4th point). A grid that misses a
+  point is not used. Not chosen: bilinear onto the lattice — it would smooth
+  ICON-EU's finer gradients differently from the others.
+- **ICON is ICON-EU everywhere.** Open-Meteo's `dwd-icon` endpoint blends
+  ICON-D2 / ICON-EU / ICON global (probably serving ICON-D2 over central Europe
+  in the first 48 h; not checked). ICON-EU at 0.0625° subsampled to 0.25° is a
+  single, consistent model over the whole grid and horizon.
+- **ECMWF is our ECPDS IFS (`ifs-ens-cf`), not Open-Meteo's IFS 0.25° open
+  data.** The same feed already replaces the ECMWF sounding in ~99 % of
+  briefings (#910), so the Hewson field and the briefing's ECMWF profile now
+  come from the same run.
+- **Td from T + RH by the sounding path's Magnus** (17.67, 243.5 °C, RH ≥
+  0.1 %). The GRIB RH is the models' own (mixed-phase below 0 °C for ECMWF and
+  GFS); Magnus over water is applied as in the briefing soundings, so a
+  briefing and a Hewson θe at the same point use one definition.
+- **Native u/v** instead of Open-Meteo's rounded speed (kn) + direction (°).
+- **Time axis anchored at init:** 0–117 h every 3 h (40 steps, as before). The
+  Open-Meteo series started at 00 Z of its day, so a 12Z snapshot also carried
+  00–09Z values from earlier runs; those hours are gone (never read: the
+  front stage picks a snapshot whose init precedes the flight window).
+- **A model is all or nothing per cycle.** A step that cannot be read after one
+  retry drops the model for the cycle; the front stage then falls back to that
+  model's previous snapshot (or reports it missing), exactly as for a failed
+  Open-Meteo fetch. No Open-Meteo fallback (it would restore the cost).
+
+**Expected effect.** Small value changes, not new behaviour: same models
+(ECMWF, GFS) or a sibling configuration (ICON-EU vs the blended ICON), same
+lattice, same derivation. Where Open-Meteo interpolated from a native grid to
+our points (ICON-D2/EU, ECMWF 9 km), gradients may now be slightly sharper.
+The fronts advisory is off by default (`auto_front_detection`), so the
+pilot-visible surface is the Hewson map overlay and, for users who enabled it,
+front crossings in briefings.
+
+**Measured.** Side-by-side diff per model and level (`scripts/compare_hewson_sources.py`,
+θe and |∇θe| max/mean |Δ|, share of cells where only one source reaches
+4 K/100 km, plus route crossings with `--route`): **pending, to be run on the
+compute node** for one cycle against the last Open-Meteo snapshot of the same
+init (`hewson precompute --init <that init> --output-dir …`; recorded on the PR). The cloud session that wrote this could reach only
+GFS on S3 (one real run, 2026-10-24 06Z: θe 283–333 K, no NaN, a cold front
+picked up near Paris by the route detector), not Open-Meteo, DWD or ECMWF.
