@@ -231,23 +231,31 @@ def log_api_usage(
     service: str,
     pipeline: str,
     api_calls: int,
+    weighted_calls: float | None = None,
     user_id: str | None = None,
     flight_id: str | None = None,
 ) -> None:
-    """Log external API calls for subscription limit monitoring."""
+    """Log external API calls for subscription limit monitoring.
+
+    ``weighted_calls`` is what the provider bills (Open-Meteo's fractional
+    calls); the plan limit is in those units, not in ``api_calls`` requests.
+    """
     if api_calls <= 0:
         return
     db.add(ApiUsageRow(
         service=service,
         pipeline=pipeline,
         api_calls=api_calls,
+        weighted_calls=weighted_calls,
         user_id=user_id,
         flight_id=flight_id,
     ))
     db.flush()
     logger.info(
-        "API usage: service=%s pipeline=%s calls=%d user=%s",
-        service, pipeline, api_calls, user_id or "-",
+        "API usage: service=%s pipeline=%s calls=%d weighted=%s user=%s",
+        service, pipeline, api_calls,
+        f"{weighted_calls:.0f}" if weighted_calls is not None else "-",
+        user_id or "-",
     )
 
 
@@ -255,12 +263,15 @@ class ApiUsageBucket(BaseModel):
     service: str
     pipeline: str
     total_calls: int
+    # Sum over rows that carry a weight (migration 114 onwards); 0 when none do.
+    total_weighted_calls: float = 0.0
 
 
 class ApiUsagePeriod(BaseModel):
     label: str
     by_service: list[ApiUsageBucket]
     total_calls: int
+    total_weighted_calls: float = 0.0
 
 
 class ApiUsageResponse(BaseModel):
@@ -274,12 +285,16 @@ def _query_api_usage(db: Session, since: datetime | None = None) -> list[ApiUsag
         ApiUsageRow.service,
         ApiUsageRow.pipeline,
         func.coalesce(func.sum(ApiUsageRow.api_calls), 0).label("total"),
+        func.coalesce(func.sum(ApiUsageRow.weighted_calls), 0).label("weighted"),
     )
     if since is not None:
         q = q.filter(ApiUsageRow.timestamp >= since)
     rows = q.group_by(ApiUsageRow.service, ApiUsageRow.pipeline).all()
     return [
-        ApiUsageBucket(service=r.service, pipeline=r.pipeline, total_calls=int(r.total))
+        ApiUsageBucket(
+            service=r.service, pipeline=r.pipeline, total_calls=int(r.total),
+            total_weighted_calls=float(r.weighted),
+        )
         for r in rows
     ]
 
@@ -288,6 +303,7 @@ def _make_period(label: str, buckets: list[ApiUsageBucket]) -> ApiUsagePeriod:
     return ApiUsagePeriod(
         label=label, by_service=buckets,
         total_calls=sum(b.total_calls for b in buckets),
+        total_weighted_calls=sum(b.total_weighted_calls for b in buckets),
     )
 
 

@@ -2822,9 +2822,11 @@ def _run_hewson_precompute_once(models: list[str] | None = None) -> None:
     standalone). Matches the pattern in
     :mod:`weatherbrief.tasks.standalone_verification`.
     """
+    from weatherbrief.fetch.open_meteo import open_meteo_meter
     from weatherbrief.hewson import run_once
 
-    result = run_once(models)
+    with open_meteo_meter() as om_meter:
+        result = run_once(models)
     logger.info(
         "Hewson precompute: %d written, %d skipped, %d purged, "
         "%d Open-Meteo calls (%.1fs)",
@@ -2847,6 +2849,7 @@ def _run_hewson_precompute_once(models: list[str] | None = None) -> None:
                 service="open_meteo",
                 pipeline="hewson_precompute",
                 api_calls=result.api_calls_total,
+                weighted_calls=om_meter.usage.weight,
             )
             db.commit()
         except Exception:

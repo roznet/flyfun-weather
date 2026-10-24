@@ -113,6 +113,33 @@ since, user_id)` aggregates every category except `briefing`/`topup` into
   (`get_recent_transactions`) has no category filter, so highlight rows already
   appear there while the pilot's totals exclude them.
 
+## External API call accounting (`api_usage_log`)
+
+`api_usage_log` (`ApiUsageRow`) records provider calls per pipeline run:
+`api_calls` is HTTP requests, `weighted_calls` (migration 114) is what the
+provider bills. The two diverge by orders of magnitude for Open-Meteo, which
+bills fractional calls: per location `max(1, v/10 × max(1, days/14))` with
+`v` = variables × models, summed over locations. A briefing's route fetch is a
+handful of requests but thousands of billed calls; counting requests hid a 13.6× plan
+overage (#910). Read `weighted_calls` against the plan, never `api_calls`.
+
+- **Weight is computed once, at the HTTP choke point.**
+  `fetch.open_meteo.request_weight(params)` is a port of the server's
+  `calculateQueryWeight`; `OpenMeteoClient._send_with_network_retry` bills
+  every attempt (retries included) into a lock-protected `call_weight`.
+- **`open_meteo_meter()`** — a ContextVar meter for callers that don't hold the
+  client. A client binds to the meter active at *construction*, so pool
+  threads count when the client was built inside the block or the thread runs
+  under `copy_context()`. Used by alternates (a separate `alternates` row next
+  to `briefing`), the time scan (`time_scan` / `time_confirm`), the standalone
+  cycle (`verification`) and the Hewson precompute.
+- **Pipelines logged:** `briefing`, `alternates`, `time_scan`, `time_confirm`,
+  `verification`, `hewson_precompute`, `airport_profile`. CLI runs (frontal,
+  Hewson) still log nothing, and anything run on dev or the compute node lands
+  in *that* node's DB, not prod's — the node → prod usage upload is the next step.
+- `NULL` `weighted_calls` = written before migration 114; summaries sum only
+  the weighted rows.
+
 ## DB Schema
 
 ### cost_ledger (shared, in flyfun-common)
