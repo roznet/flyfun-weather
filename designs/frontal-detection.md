@@ -74,7 +74,10 @@ retrospective set). `scheduler.py` only wraps it in a loop.
   missing or partial sync leaves only the previous run ready. Every model runs
   on its own, so the others still publish; any skip but `"fresh"` makes the CLI
   exit 1 (the node withholds its deadman ping) and the serving box computes
-  that model from its own files after the inbox wait. `--allow-stale` turns
+  that model from its own files after the inbox wait. The serving box waits
+  for the cycle's init even when its own run is stale, so an old snapshot on
+  disk never counts as delivered; its local run then logs the same error.
+  `--allow-stale` turns
   the check off for manual runs.
 - `--source open-meteo` keeps the old fetch for side-by-side checks, and every
   backdated `--date` run uses it (no GRIB archive). `--init 2026-10-24T00Z`

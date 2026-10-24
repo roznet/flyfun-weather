@@ -74,11 +74,13 @@ DEFAULT_STRIDE_HOURS = 3
 # Where the fields come from. "grib" reads each model's own GRIB (0 Open-Meteo
 # calls, #911); "open-meteo" is the pre-#911 grid fetch, kept for backdated
 # calibration runs (no GRIB archive) and side-by-side source comparisons.
-SKIP_INCOMPLETE = "incomplete"
-SKIP_TOO_MANY_MISSING = "too-many-missing"
 SOURCE_GRIB = "grib"
 SOURCE_OPEN_METEO = "open-meteo"
 SOURCES: tuple[str, ...] = (SOURCE_GRIB, SOURCE_OPEN_METEO)
+# GRIB build failures (``SnapshotResult.skipped`` reasons): a step that stays
+# unreadable, or a level over ``prepare_field``'s 5 % missing-cell limit.
+SKIP_INCOMPLETE = "incomplete"
+SKIP_TOO_MANY_MISSING = "too-many-missing"
 
 
 # ---------------------------------------------------------------------------
