@@ -66,7 +66,7 @@ def _run(flight_id: str, user_id: str, force_live: bool, switch: str):
     try:
         flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
         db_path = os.environ.get("AIRPORTS_DB", "") or str(ROOT / "data" / "nav.db")
-        route, _ts, _pack, options, _meta = _prepare_refresh(
+        route, _ts, _pack, options, _meta, _as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db, is_privileged=True,
         )
     finally:
@@ -95,6 +95,28 @@ def _run(flight_id: str, user_id: str, force_live: bool, switch: str):
         (pack_dir / "route_advisories.json").read_text()
     )
     return result, per_model_status_from_manifest(manifest), handler.lines, pack_dir
+
+
+def _print_fetch_facts(pack_dir: Path) -> None:
+    facts = json.loads((pack_dir / "fetch_meta.json").read_text()).get("fetch_facts") or {}
+    for key in ("grib_primary", "grib_primary_dropped", "open_meteo_calls",
+                "open_meteo_weighted_calls"):
+        if key in facts:
+            print(f"  fetch_facts.{key}: {facts[key]}")
+
+
+def _single(flight_id: str, user_id: str, force_live: bool, side: str) -> int:
+    """One side only: a quick look at a run without the diff."""
+    print(f"=== {flight_id} ({side} only)")
+    res, _status, log, pack_dir = _run(flight_id, user_id, force_live, "1" if side == "on" else "0")
+    print(f"Open-Meteo calls: {res.usage.open_meteo_calls}; "
+          f"billed weight: {res.usage.open_meteo_weighted_calls:.1f}")
+    for line in log:
+        print(f"  {line}")
+    print(f"GRIB init times: {res.grib_init_times}")
+    _print_fetch_facts(pack_dir)
+    print(f"pack: {pack_dir}\n")
+    return 0
 
 
 def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
@@ -164,11 +186,26 @@ def main() -> int:
     ap.add_argument("--user-id", default="dev-user-001")
     ap.add_argument("--force-live", action="store_true",
                     help="Brief as live even if the departure has passed")
+    ap.add_argument("--side", choices=("both", "on", "off"), default="both",
+                    help="Run one side only (no diff), e.g. 'on' to shake out a GRIB-primary run")
+    ap.add_argument("--om-ecmwf-model", metavar="MODEL",
+                    help="Open-Meteo ECMWF model for this process only (e.g. ecmwf_ifs, "
+                         "when ecmwf_ifs025 lags our ECPDS run). Changes the 'off' baseline "
+                         "and the ECMWF fallback, so it is no longer prod's exact path")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("weatherbrief").setLevel(logging.INFO)
+    if args.om_ecmwf_model:
+        from weatherbrief.fetch.variables import MODEL_ENDPOINTS
+
+        MODEL_ENDPOINTS["ecmwf"].model_param = args.om_ecmwf_model
+        print(f"Open-Meteo ECMWF model: {args.om_ecmwf_model} (this process only)")
     init_shared_db()
+    if args.side != "both":
+        for fid in args.flight_ids:
+            _single(fid, args.user_id, args.force_live, args.side)
+        return 0
     total = sum(_compare(fid, args.user_id, args.force_live) for fid in args.flight_ids)
     print(f"Total status changes across {len(args.flight_ids)} flight(s): {total}")
     return 0

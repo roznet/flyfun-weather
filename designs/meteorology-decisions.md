@@ -6811,11 +6811,67 @@ values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
 covers, rain/showers split, and all ICON surface fields now come from the
 model's own GRIB instead of Open-Meteo's processing of the same model
 (Open-Meteo's ICON is a D2/EU/global blend, ours one variant). ICON soundings
-anchor on the model MSLP instead of Open-Meteo's level heights. Expected
-(not yet measured): level heights within a few tens of metres. Not touched: #849 (fake ceiling at cloud
+anchor on the model MSLP instead of Open-Meteo's level heights: measured
+within a few tens of metres (below). Not touched: #849 (fake ceiling at cloud
 edges) is a diagnostics sampling issue and unchanged here.
 
-**Measured.** Advisory replay diff with `scripts/compare_grib_primary.py`
-(same flight, `WB_GRIB_PRIMARY=0` vs on, back to back): **pending**, it needs
-ECPDS, DWD and Open-Meteo, none reachable from the cloud session that wrote
-this. To be run on the mini and recorded here and on the PR.
+**Measured** (2026-10-24, MacBook, `scripts/compare_grib_primary.py`: same
+flight, `WB_GRIB_PRIMARY=0` vs on, back to back; ECMWF 12Z synced from prod).
+Five dev flights: F1 EDDM→LIPZ (Alps, ICON-D2), F2 EGTF→LEMG (Iberia, 5 h,
+leaves D2 so ICON-EU), F3 LFPN→LEBL at +88 h (3-hourly steps), F4 EGTF→EHRD
+(night), F5 LPPT→LPPD (Azores: outside ICON-EU and the ECPDS Europe area).
+
+- **No Open-Meteo leak.** F1–F4: both slots `all N points covered from GRIB`,
+  `fetch_facts.grib_primary` 0 fallback points, `grib_primary_dropped` empty;
+  the one remaining Open-Meteo request is GFS. F5: ICON `not eligible
+  (out_of_domain)`, ECMWF fallback for the 40/80 points west of 17.5°W, none
+  still short. No DWD surface variable missing on D2 or EU; first window hour
+  precipitation present at every point of every flight.
+- **Cost.** Open-Meteo requests per briefing 3 → 1 (ECMWF, ICON, GFS → GFS);
+  billed weight 878 → 414 (F1), 4,204 → 1,984 (F2).
+- **Advisories.** 0 status changes on F1 and F2 (ICON on the same run both
+  sides: D2 15Z, EU 12Z).
+- **ICON surface vs Open-Meteo** (same run): T 2 m mean |Δ| 0.2–0.6 °C, wind
+  0.4–0.6 kt, MSLP 0.1 hPa. Best match at lag 0 for every field (no time
+  shift). GRIB ICON-EU precipitation matches Open-Meteo `icon_eu` hour by hour
+  at the wettest points (6.61 vs 6.70 mm), so the de-accumulation is right.
+  Three expected differences:
+  - *Model on routes that leave D2.* F2 precipitation ×1.52, all inside the D2
+    domain: Open-Meteo's `icon_seamless` serves D2 there, our slot is ICON-EU
+    for the whole route (`_prepare_icon_eu`). The sounding was already ICON-EU,
+    so surface and column now agree; D2's finer surface is lost on such routes.
+  - *Cell selection.* Open-Meteo's default `cell_selection=land` picks the
+    neighbouring land cell whose terrain matches the real elevation; we blend the
+    4 surrounding cells bilinearly, as for the soundings. F1 pt7: visibility
+    1,560 m (Open-Meteo `land`, a fogged valley cell) vs 32,340 m (Open-Meteo
+    `nearest`) vs 32,642 m (ours).
+  - *Model terrain.* Surface pressure up to −34 hPa (F1 pt4, Alps edge: 897 vs
+    922 hPa) with 2 m T 1.5 °C lower: the blend sits on ≈ 200 m higher model
+    terrain, the terrain the GRIB column and the #807 clip use. ECMWF has done
+    this since before #912 (its `sp` diff is 0).
+  Bilinear is kept en route for that consistency. For departure / arrival a
+  terrain-matched cell may be better (valley fog, coastal fields): #924.
+- **ICON level heights** (pmsl anchor vs Open-Meteo's levels, same run): mean
+  −0.3 to +4.4 m, mean |Δ| ≤ 5.1 m, max 35.6 m at 500–850 hPa (F2).
+- **Failure drill** (F4): `DRILL=icon` → fallback 20/20, `ecmwf:half` →
+  10/20, empty `ECMWF_GRIB_DIR` → `not eligible (no_run)`, Open-Meteo first.
+  Packs complete, nothing dropped, fallback calls counted in usage and
+  `fetch_facts`.
+- **ECMWF surface vs Open-Meteo, same run.** Open-Meteo `ecmwf_ifs025` (what
+  briefings use) was still on 06Z hours after our 12Z, so the reference is
+  Open-Meteo's 9 km `ecmwf_ifs` 12Z, via `compare_grib_primary.py
+  --om-ecmwf-model ecmwf_ifs` (this process only). All five flights: **0
+  advisory status changes**. T, Td, wind, gust, visibility, CAPE, sp,
+  precipitation, freezing level identical (GRIB in both runs since before
+  #912). The new GRIB fields: RH mean |Δ| 0.3–2.7 %, MSLP 0.01–0.21 hPa, total
+  cover 2.6–9.0 %, low cover 2.6–6.5 %. Precipitation total ratio 1.00 on every
+  flight; the rain / showers split 1.00 / 0.93 on F2, the only flight with real
+  rain (×3.57 and ×1.22 elsewhere are on totals under 0.1 mm). The ratio of
+  0.70 seen earlier on F2 was the 06Z-vs-12Z run mismatch, not the split.
+  The 0.25° GRIB vs the 9 km reference adds some spread at the cloud maxima
+  (84 % on one F2 point at a front), which is resolution, not error.
+  Reading prod later: `ecmwf_ifs025` is 3-hourly (interpolated hourly by
+  Open-Meteo) where our GRIB is hourly to 90 h, and on the 06Z / 18Z cycles
+  prod's Open-Meteo ECMWF is a newer run than our 00/12Z ECPDS one; GRIB-primary
+  now takes RH, MSLP, covers and the rain split from the same run as the
+  sounding.
