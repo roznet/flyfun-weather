@@ -17,6 +17,7 @@ import pytest
 
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
+    SOURCE_OPEN_METEO,
     _init_to_iso_z,
     tendency_k_per_hour,
     load_snapshot,
@@ -283,6 +284,7 @@ def test_run_once_writes_snapshot_with_expected_schema(
         retention_hours=10**6,
         skip_existing=False,
         client=client,
+        source=SOURCE_OPEN_METEO,
     )
 
     assert "gfs" in result.snapshots
@@ -300,13 +302,13 @@ def test_run_once_writes_snapshot_with_expected_schema(
         ):
             key = f"{metric}_{L}"
             assert key in snap, f"missing key {key}"
-            # 4 hours × 101 lat × 193 lon per § 6.1 grid
-            assert snap[key].shape == (4, 101, 193), (
-                f"{key} shape {snap[key].shape} — expected (4, 101, 193)"
+            # 4 hours × 99 lat × 183 lon (#911 trimmed grid)
+            assert snap[key].shape == (4, 99, 183), (
+                f"{key} shape {snap[key].shape} — expected (4, 99, 183)"
             )
     # Coordinate arrays and metadata
-    assert snap["lat"].shape == (101,)
-    assert snap["lon"].shape == (193,)
+    assert snap["lat"].shape == (99,)
+    assert snap["lon"].shape == (183,)
     assert snap["valid_times"].shape == (4,)
     assert snap["levels"].tolist() == sorted(DEFAULT_LEVELS)
     assert int(snap["stride_hours"]) == 1
@@ -337,6 +339,7 @@ def test_run_once_captures_api_call_count(
         stride_hours=1,
         skip_existing=False,
         client=client,
+        source=SOURCE_OPEN_METEO,
     )
     assert result.api_calls_total > 0
     assert result.api_calls_total == _Counting.call_count
@@ -357,12 +360,13 @@ def test_run_once_stride_hours_decimates(
         retention_hours=10**6,
         skip_existing=False,
         client=client,
+        source=SOURCE_OPEN_METEO,
     )
     snap = load_snapshot(result.snapshots["gfs"])
     assert int(snap["stride_hours"]) == 3
     # Every metric stack should have 3 timesteps now
     for L in DEFAULT_LEVELS:
-        assert snap[f"theta_e_{L}"].shape == (3, 101, 193)
+        assert snap[f"theta_e_{L}"].shape == (3, 99, 183)
     assert snap["valid_times"].shape == (3,)
 
 
@@ -377,6 +381,7 @@ def test_run_once_dry_run_writes_nothing(
         dry_run=True,
         skip_existing=False,
         client=client,
+        source=SOURCE_OPEN_METEO,
     )
     assert result.snapshots["gfs"] is None
     # No NPZ on disk, but terrain_mask cache may be created
@@ -402,6 +407,7 @@ def test_run_once_skips_when_snapshot_exists(
         output_dir=tmp_path,
         forecast_days=1,
         client=client,
+        source=SOURCE_OPEN_METEO,
     )
     assert result.skipped.get("gfs") == "fresh"
     assert client.calls == 0, "fetch should be short-circuited when fresh"

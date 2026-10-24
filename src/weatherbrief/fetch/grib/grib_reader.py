@@ -47,6 +47,17 @@ from pathlib import Path
 
 import numpy as np
 
+# pyproj must be loaded before eccodes is first used. On Linux the two wheels'
+# bundled native libraries clash when pyproj (MetPy imports it) comes second,
+# and the process aborts at exit with "double free or corruption" / rc 134 —
+# which turned a successful Hewson CLI run into a failed one (#911). Loading it
+# here, ahead of every eccodes call in this module, fixes the order for all
+# callers. Cheap: MetPy pulls it in anyway.
+try:
+    import pyproj  # noqa: F401
+except ImportError:  # pragma: no cover - pyproj is a MetPy dependency
+    pass
+
 logger = logging.getLogger(__name__)
 
 # cfgrib's MISSING_VAUE_INDICATOR: the value it sets ``missingValue`` to, so

@@ -2,7 +2,8 @@
 
 Defines the 0.25° European grid (standard lat-lon multiples, aligned with
 ERA5's default regridded output). Fetches 850hPa fields via the existing
-OpenMeteoClient HTTP infrastructure, and prepares raw data into NaN-free
+OpenMeteoClient HTTP infrastructure (frontal CLI / ERA5 comparisons; the Hewson
+precompute reads GRIB instead, #911), and prepares raw data into NaN-free
 2D numpy arrays ready for gradient computation.
 
 The 0.25° grid is chosen so that Open-Meteo (ECMWF/GFS/ICON regridded to
@@ -32,10 +33,14 @@ logger = logging.getLogger(__name__)
 # Grid constants
 # ---------------------------------------------------------------------------
 
+# Trimmed to the ECMWF Europe delivery sub-grid (35–59.5°N, 17.5°W–39.5°E)
+# in #911 so the Hewson precompute reads ECMWF a2 as a plain slice. The old
+# 60°N row and 20–17.5°W strip are in no single ECMWF grid (Nordic starts at
+# 60°N but only east of 2.5°E). GFS and ICON-EU cover it all.
 FRONTAL_GRID = {
     "lat_min": 35.0,
-    "lat_max": 60.0,
-    "lon_min": -20.0,
+    "lat_max": 59.5,
+    "lon_min": -17.5,
     "lon_max": 28.0,
     "resolution": 0.25,
 }
@@ -76,12 +81,13 @@ def build_grid_coords() -> tuple[np.ndarray, np.ndarray]:
     """Return 1D lat and lon arrays for the frontal analysis grid.
 
     At 0.25° resolution:
-      lat: 35.0, 35.25, ..., 60.0  (101 points)
-      lon: -20.0, -19.75, ..., 28.0  (193 points)
-      total: 19,493 grid points.
+      lat: 35.0, 35.25, ..., 59.5  (99 points)
+      lon: -17.5, -17.25, ..., 28.0  (183 points)
+      total: 18,117 grid points.
 
     Aligned with ERA5's default regridded output and standard 0.25°
-    lat-lon multiples, so Open-Meteo and ERA5 deliver at identical points.
+    lat-lon multiples, so GRIB (ECMWF / GFS / ICON-EU), Open-Meteo and ERA5
+    all deliver at identical points.
     """
     g = FRONTAL_GRID
     lat = np.arange(g["lat_min"], g["lat_max"] + g["resolution"] / 2, g["resolution"])
@@ -567,27 +573,50 @@ def reshape_to_fields(
     ws_raw = _extract(ws_var)
     wd_raw = _extract(wd_var)
 
+    # Convert wind to u/v BEFORE NaN fill — direction has circular
+    # wraparound (359° ≈ 1°) so nearest-neighbor on raw direction can
+    # introduce large jumps. Filling on Cartesian u/v is safe.
+    u_raw, v_raw = wind_to_uv(ws_raw, wd_raw)
+    return prepare_level_fields(
+        T_raw, Td_raw, u_raw, v_raw,
+        terrain_mask=terrain_mask, level_hPa=level_hPa, hour_index=hour_index,
+    )
+
+
+def prepare_level_fields(
+    T_raw: np.ndarray,
+    Td_raw: np.ndarray,
+    u_raw: np.ndarray,
+    v_raw: np.ndarray,
+    terrain_mask: np.ndarray | None = None,
+    level_hPa: int = 850,
+    hour_index: int | None = None,
+) -> dict | None:
+    """NaN-fill, terrain-fill and derive θe for one (hour, level) of 2D fields.
+
+    Inputs are ``(n_lat, n_lon)`` arrays: T and Td in °C, u and v in km/h.
+    Shared by the Open-Meteo reshape above and the GRIB path
+    (``hewson/grib_source.py``), so both sources go through identical field
+    preparation. Returns the ``T850/Td850/theta_e/u850/v850`` dict documented
+    on :func:`reshape_to_fields`, or None if too much data is missing.
+    """
     # Prepare fields — resolve NaN before any computation
     T = prepare_field(T_raw)
     Td = prepare_field(Td_raw)
 
     if any(f is None for f in (T, Td)):
         logger.warning(
-            "Hour %d level %d hPa: too much missing T/Td data, skipping",
+            "Hour %s level %d hPa: too much missing T/Td data, skipping",
             hour_index, level_hPa,
         )
         return None
 
-    # Convert wind to u/v BEFORE NaN fill — direction has circular
-    # wraparound (359° ≈ 1°) so nearest-neighbor on raw direction can
-    # introduce large jumps. Filling on Cartesian u/v is safe.
-    u_raw, v_raw = wind_to_uv(ws_raw, wd_raw)
     u = prepare_field(u_raw)
     v = prepare_field(v_raw)
 
     if any(f is None for f in (u, v)):
         logger.warning(
-            "Hour %d level %d hPa: too much missing wind data, skipping",
+            "Hour %s level %d hPa: too much missing wind data, skipping",
             hour_index, level_hPa,
         )
         return None

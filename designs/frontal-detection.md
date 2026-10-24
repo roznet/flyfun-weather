@@ -10,7 +10,7 @@ Detect fronts at zone scale (~200-400km) to answer "which fronts are active, whe
 
 Cross-section annotation is explicitly deferred — the cross-section already shows front effects (cloud, icing, wind shifts) at route-point resolution.
 
-**Integration status**: integrated but experimental. The per-leg Hewson direction is wired into the briefing pipeline (`pipeline.py` / `advise.py` call `run_fronts`, gated by the `auto_front_detection` pref, default off) and the Hewson fields are precomputed by `run_hewson_precompute_loop` in `scheduler.py` (08Z/20Z, once Open-Meteo has all three models' 00Z/12Z run — ECMWF IFS lands ~7.6 h after init). **Compute offload:** when `HEWSON_INBOX_DIR` holds a model dir, the loop first waits up to 30 min for a home node's snapshots (an `rsync --delete` mirror of its `hewson/<model>/*.npz`), copies each fully-validated one into `DATA_DIR/hewson` (`hewson/inbox.py`: every array read for the zip CRC, grid/schema checked, temp name + `os.replace`), and computes locally only the models whose top-of-hour Open-Meteo init never arrived. Readers only ever see `DATA_DIR/hewson`. Expected inits are read once at HH:00, not per poll — a run landing mid-wait would otherwise force a needless local run. The original **zone-aggregation** path (zones.py + tracking.py) remains CLI-only — calibration-first, never wired into a briefing. Baselines for the zone path still pending the ERA5 retrospective set (see Calibration).
+**Integration status**: integrated but experimental. The per-leg Hewson direction is wired into the briefing pipeline (`pipeline.py` / `advise.py` call `run_fronts`, gated by the `auto_front_detection` pref, default off) and the Hewson fields are precomputed by `run_hewson_precompute_loop` in `scheduler.py` (08Z/20Z, picking up all three models' 00Z/12Z run) **from each model's own GRIB since #911** — ECMWF a2 in `ECMWF_GRIB_DIR`, GFS pgrb2.0p25 from NOAA S3 by `.idx` byte ranges, ICON-EU pressure-level files from DWD (`hewson/grib_source.py`); 0 Open-Meteo calls on this path. **Compute offload:** when `HEWSON_INBOX_DIR` holds a model dir, the loop first waits up to 30 min for a home node's snapshots (an `rsync --delete` mirror of its `hewson/<model>/*.npz`), copies each fully-validated one into `DATA_DIR/hewson` (`hewson/inbox.py`: every array read for the zip CRC, grid/schema checked, temp name + `os.replace`), and computes locally only the models whose top-of-hour GRIB init (resolved the same way the node does: dir scan / HEAD probes, `_hewson_expected_inits`) never arrived, plus any model outside `HEWSON_INBOX_MODELS` (default all three; e.g. `gfs,icon` when the node has no ECMWF a2 files), which is computed here without the wait. Readers only ever see `DATA_DIR/hewson`; the loop rebuilds `terrain_mask.npz` at startup if the grid changed (`ensure_terrain_cache`), since a fully-offloaded box would otherwise never rewrite it. Expected inits are read once at HH:00, not per poll — a run landing mid-wait would otherwise force a needless local run. The original **zone-aggregation** path (zones.py + tracking.py) remains CLI-only — calibration-first, never wired into a briefing. Baselines for the zone path still pending the ERA5 retrospective set (see Calibration).
 
 ## Architecture
 
@@ -37,8 +37,40 @@ src/weatherbrief/frontal/
 The precomputed Hewson NPZ snapshots that `SnapshotFieldSource` reads are
 *produced* by a sibling package, `src/weatherbrief/hewson/` (`precompute.py`
 `run_once` — also the CLI entry point, so scheduler and ad-hoc re-runs exercise
-identical code; `era5_case.py` for the retrospective set). `scheduler.py` only
-wraps it in a loop.
+identical code; `grib_source.py` for the GRIB reads; `era5_case.py` for the
+retrospective set). `scheduler.py` only wraps it in a loop.
+
+### Hewson snapshots from GRIB (#911)
+
+- **Exact lattice, no regrid.** All three products hold the 0.25° lattice:
+  ECMWF Europe (35–59.5°N, 17.5°W–39.5°E) and GFS 0.25° are slices, ICON-EU
+  0.0625° from 29.5°N/23.5°W is every 4th point. `lattice_indices` matches
+  coordinates exactly (1e-4°) after aligning target longitudes to the grid's
+  convention (`decode._align_lons_to_axis`, 0–360 for GFS); a grid missing any
+  target point is skipped, never nearest-filled. In an ECMWF a2 file the Nordic
+  and US sub-grids fail that test and the Europe grid wins.
+- **Inputs:** `t`/`r`/`u`/`v` at 925/850/700 hPa (same cfVarNames for all three).
+  Td from T + RH by the sounding path's Magnus (17.67 / 243.5 °C, RH ≥ 0.1 %),
+  u/v m/s × 3.6 → km/h. Field preparation (NaN fill, terrain fill, θe) is
+  `grid.prepare_level_fields`, shared with the Open-Meteo reshape.
+- **Run choice:** newest run that is complete for the last wanted step: ECMWF
+  newest *ready* run (sentinel) with every a2 step on disk; GFS newest cycle
+  whose f117 `.idx` exists; ICON-EU newest **main** run (short runs stop at
+  30 h) whose f117 850 hPa T file exists. Up to two older cycles are tried.
+- **Time axis:** `init + 0, 3, …, 117 h` (40 steps, `forecast_step_hours`). The
+  Open-Meteo series started at 00 Z of the request day, so a 12Z snapshot no
+  longer carries the 00–09Z hours before its own init (never used: readers pick
+  a snapshot whose init precedes the flight).
+- **All or nothing per model.** A step still unreadable after one retry drops
+  the model for the cycle (`skipped="incomplete"`), never a snapshot with a hole
+  (it would read as "no front" there). No Open-Meteo fallback: it would put the
+  ~4.2M billed calls / 30 d back.
+- `--source open-meteo` keeps the old fetch for side-by-side checks, and every
+  backdated `--date` run uses it (no GRIB archive). `--init 2026-10-24T00Z`
+  pins the GRIB run instead of taking the newest (no purge), so a cycle that
+  already has an Open-Meteo snapshot can be recomputed within its 48 h
+  retention. Diff two trees with `scripts/compare_hewson_sources.py` (fields,
+  plus route crossings with `--route`).
 
 ### Front detection: source-agnostic, config-driven (#195)
 
@@ -96,8 +128,8 @@ Open-Meteo 850hPa grid (T, Td, wind) per model
 ## Key Components
 
 ### Grid (`grid.py`)
-- **Domain**: 35-60°N, -20 to 28°E at **0.25° resolution** (101 × 193 = 19,493 points). Aligned with ERA5's default CDS regridding so ERA5 and Open-Meteo land on identical grid points (see `designs/future/hewson-fields-aviation-advisories.md` for rationale).
-- **Fetch**: Lightweight `fetch_grid_fields(client, model_key, ...)` module-level helper (takes an `OpenMeteoClient`, not a method on it) — 4 variables per level (T, Td, wind speed/dir), `_GRID_CHUNK_SIZE=500`, returns raw arrays (no WaypointForecast objects). `levels` defaults to `[850]` for single-level detection; pass `[925, 850, 700]` for Hewson multi-level precompute (variable names are level-suffixed, e.g. `temperature_850hPa`)
+- **Domain**: 35–59.5°N, 17.5°W–28°E at **0.25° resolution** (99 × 183 = 18,117 points), trimmed from 35–60°N / 20°W in #911 to the ECMWF Europe delivery sub-grid so ECMWF a2 is a plain slice (the 60°N row and the 20–17.5°W strip are in no single ECMWF grid). Aligned with ERA5's default CDS regridding so ERA5, GRIB and Open-Meteo land on identical grid points (see `designs/future/hewson-fields-aviation-advisories.md` for rationale). Readers take lat/lon from each snapshot, so old-shape snapshots stay readable (terrain masking is skipped for them once the cache has the new shape).
+- **Fetch (Open-Meteo, frontal CLI / comparisons only)**: Lightweight `fetch_grid_fields(client, model_key, ...)` module-level helper (takes an `OpenMeteoClient`, not a method on it) — 4 variables per level (T, Td, wind speed/dir), `_GRID_CHUNK_SIZE=500`, returns raw arrays (no WaypointForecast objects). `levels` defaults to `[850]` for single-level detection; pass `[925, 850, 700]` for Hewson multi-level precompute (variable names are level-suffixed, e.g. `temperature_850hPa`)
 - **Field prep**: `prepare_field()` — nearest-neighbor NaN fill, rejects fields with >5% missing. Must run before any gradient computation (gaussian_filter silently corrupts NaN neighbors)
 - **Terrain**: `build_terrain_mask()` from SRTM3 data (>1500m masked) is the 850-only flat threshold. For multi-level Hewson work use `build_terrain_elevation()` (heights, NaN where SRTM has no data) + `terrain_mask_for_level(elev, level_hPa)` — masks where terrain reaches the level's standard-atmosphere height (925 ≈ 762m, 700 ≈ 3012m), so low-level Alpine artefacts are caught without hiding genuine 700hPa fronts (#216 Fix 3). `fill_terrain()` linearly interpolates across masked cells
 - **θe**: `compute_theta_e()` via MetPy from T850 + Td850

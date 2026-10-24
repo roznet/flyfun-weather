@@ -9,6 +9,8 @@ Usage:
     python -m weatherbrief.hewson precompute
     python -m weatherbrief.hewson precompute --model ecmwf --dry-run
     python -m weatherbrief.hewson precompute --levels 925,850,700 --force
+    python -m weatherbrief.hewson precompute --source open-meteo \
+        --output-dir /tmp/hewson-om        # side-by-side vs the GRIB default
     python -m weatherbrief.hewson list
     python -m weatherbrief.hewson purge --retention-hours 24
     python -m weatherbrief.hewson era5-case \
@@ -28,6 +30,8 @@ from weatherbrief.hewson.precompute import (
     DEFAULT_MODELS,
     DEFAULT_RETENTION_HOURS,
     DEFAULT_STRIDE_HOURS,
+    SOURCE_GRIB,
+    SOURCES,
     load_snapshot,
     purge_old_snapshots,
     resolve_output_dir,
@@ -45,6 +49,13 @@ def _parse_models(s: str) -> list[str]:
     return [tok.strip() for tok in s.split(",") if tok.strip()]
 
 
+def _parse_init(s: str) -> datetime:
+    """``2026-10-24T00Z`` / ``2026-10-24T00:00:00Z`` → aware UTC datetime."""
+    s = s.strip().upper().rstrip("Z")
+    fmt = "%Y-%m-%dT%H" if len(s) == 13 else "%Y-%m-%dT%H:%M:%S" if s.count(":") == 2 else "%Y-%m-%dT%H:%M"
+    return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+
+
 def _cmd_precompute(args: argparse.Namespace) -> int:
     result = run_once(
         models=args.models,
@@ -57,7 +68,11 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         skip_existing=not args.force,
         start_date=args.date,
         end_date=args.date,
+        source=args.source,
+        init=_parse_init(args.init) if getattr(args, "init", None) else None,
     )
+    for model, src in result.sources.items():
+        print(f"  {model}: source {src}")
     for model, path in result.snapshots.items():
         if path is None:
             print(f"  {model}: (dry-run, no file written)")
@@ -154,7 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     # precompute
     p_pc = sub.add_parser(
         "precompute",
-        help="Fetch Open-Meteo, compute diagnostics, write NPZ snapshots.",
+        help="Read GRIB (or Open-Meteo), compute diagnostics, write NPZ snapshots.",
     )
     p_pc.add_argument(
         "--models", type=_parse_models, default=list(DEFAULT_MODELS),
@@ -192,11 +207,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recompute even if a snapshot for the current init exists.",
     )
     p_pc.add_argument(
+        "--source", choices=SOURCES, default=SOURCE_GRIB,
+        help="Field source (default: grib — ECMWF a2 in ECMWF_GRIB_DIR, GFS "
+             "from NOAA S3, ICON-EU from DWD; no Open-Meteo call). "
+             "'open-meteo' is the pre-#911 grid fetch, for comparisons.",
+    )
+    p_pc.add_argument(
+        "--init", default=None,
+        help="GRIB source only: read this run (e.g. 2026-10-24T00Z) instead of "
+             "the newest, to recompute a cycle that has an Open-Meteo snapshot "
+             "for scripts/compare_hewson_sources.py. Skips the purge.",
+    )
+    p_pc.add_argument(
         "--date", default=None,
         help="Backdate the fetch to a single ``YYYY-MM-DD`` (UTC) — fetches "
              "Open-Meteo's archived forecast for that day across all 24 hours. "
              "Snapshot is keyed by the requested date 00 Z and is exempt from "
-             "the retention purge. Use --stride-hours 1 for hourly granularity.",
+             "the retention purge. Always Open-Meteo (there is no GRIB archive). "
+             "Use --stride-hours 1 for hourly granularity.",
     )
     p_pc.set_defaults(func=_cmd_precompute)
 

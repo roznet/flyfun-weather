@@ -124,9 +124,10 @@ _SNAPSHOT_INBOX_DIR_DEFAULT = "/app/snapshot_inbox"
 _ARTIFACT_WAIT_MAX_SECONDS = 3000  # 50 min past the hour
 _ARTIFACT_POLL_INTERVAL_SECONDS = 60
 # Hewson precompute fires once per init cycle. 08Z and 20Z pick up the 00Z /
-# 12Z inits of all 3 models: Open-Meteo publishes ICON ~4.7 h, GFS ~5.7 h and
-# ECMWF IFS ~7.6 h after init (meta.json, 2026-10-18), so the old 06Z / 18Z
-# always paired a fresh ICON with the previous ECMWF/GFS run. A late model just
+# 12Z inits of all 3 models. The hours were set for Open-Meteo's lag (ICON
+# ~4.7 h, GFS ~5.7 h, ECMWF IFS ~7.6 h after init, meta.json 2026-10-18); the
+# GRIB sources the precompute reads since #911 publish no later (ICON-EU ~3-4 h,
+# GFS ~4.5-5 h, ECMWF ECPDS ~6-8 h), so the schedule stands. A late model just
 # falls back to its previous init. Must match the compute node's UTC guard
 # (flyfun-hewson.sh in roznet/scripts).
 _HEWSON_SAMPLE_HOURS_UTC = [8, 20]
@@ -135,10 +136,14 @@ _HEWSON_STARTUP_DELAY_SECONDS = 300  # let other loops settle; Hewson is cold-ca
 # rsyncs its hewson/<model>/*.npz tree here. Absent dir = offload not in use,
 # and the loop computes locally with no wait (non-offload deploys unaffected).
 _HEWSON_INBOX_DIR_DEFAULT = "/app/hewson_inbox"
+# Which models the node delivers (comma list, default all). The rest are
+# computed here straight away instead of after the full inbox wait — e.g.
+# ``gfs,icon`` when the node has no ECMWF a2 files and this box does (#911).
+_HEWSON_INBOX_MODELS_ENV = "HEWSON_INBOX_MODELS"
 # The node takes ~3 min plus a ~140 MB push. 30 min is generous on purpose and
 # still leaves a local fallback (~3 min) done well before the HH+1 forecast cycle.
 _HEWSON_INBOX_WAIT_MAX_SECONDS = 1800
-# With the Open-Meteo init unknown, a local snapshot this recent counts as this
+# With the GRIB init unknown, a local snapshot this recent counts as this
 # cycle's. Current inits are 6-12 h old at a sample hour; the previous cycle's are
 # >= 18 h old, so 15 h separates the two.
 _HEWSON_UNKNOWN_INIT_MAX_AGE_SECONDS = 15 * 3600
@@ -2455,6 +2460,15 @@ async def run_hewson_precompute_loop(app_state) -> None:
         _HEWSON_SAMPLE_HOURS_UTC,
     )
     await asyncio.sleep(_HEWSON_STARTUP_DELAY_SECONDS)
+    # Readers (fronts, map overlay) take the terrain cache as is; it is only
+    # rewritten by a local precompute, which never runs while the node delivers
+    # everything. Rebuild it now if the grid changed (#911).
+    try:
+        from weatherbrief.hewson.precompute import ensure_terrain_cache
+
+        await asyncio.to_thread(ensure_terrain_cache)
+    except Exception:
+        logger.error("Hewson terrain cache check failed", exc_info=True)
     # Pick up anything the node pushed while this process was down (a deploy
     # inside the wait window would otherwise leave fronts a cycle stale).
     await _ingest_hewson_inbox_now()
@@ -2521,22 +2535,48 @@ async def _ingest_hewson_inbox_now() -> None:
         logger.error("Hewson inbox: startup pass failed", exc_info=True)
 
 
+def _hewson_inbox_models() -> list[str]:
+    """Models the node is expected to deliver (``HEWSON_INBOX_MODELS``)."""
+    from weatherbrief.hewson.precompute import DEFAULT_MODELS
+
+    raw = os.environ.get(_HEWSON_INBOX_MODELS_ENV, "").strip()
+    if not raw:
+        return list(DEFAULT_MODELS)
+    wanted = {tok.strip() for tok in raw.split(",") if tok.strip()}
+    unknown = wanted - set(DEFAULT_MODELS)
+    if unknown:
+        logger.warning(
+            "%s: ignoring unknown model(s) %s", _HEWSON_INBOX_MODELS_ENV, sorted(unknown),
+        )
+    return [m for m in DEFAULT_MODELS if m in wanted]
+
+
 def _hewson_expected_inits(models: list[str]) -> dict[str, int]:
-    """Each model's current Open-Meteo init (unix); 0 when unknown.
+    """Each model's current GRIB init (unix), as the node resolves it; 0 when unknown.
 
+    The same resolution ``run_once`` does (#911): ECMWF from this box's
+    ECMWF_GRIB_DIR, GFS / ICON-EU by HEAD probes, so nothing is downloaded.
     Taken ONCE at the top of the sample hour, the same moment the node reads it.
-    Re-reading at each poll would be wrong: a run that lands on Open-Meteo
-    during the 30 min wait would demand an init the node never saw and force a
-    needless local run.
+    Re-reading at each poll would be wrong: a run that lands during the 30 min
+    wait would demand an init the node never saw and force a needless local run.
     """
-    from weatherbrief.fetch.model_status import fetch_model_metadata
+    from weatherbrief.hewson.grib_source import forecast_step_hours, resolve_run
+    from weatherbrief.hewson.precompute import (
+        DEFAULT_FORECAST_DAYS,
+        DEFAULT_LEVELS,
+        DEFAULT_STRIDE_HOURS,
+    )
 
-    try:
-        meta = fetch_model_metadata(models=models)
-    except Exception:
-        logger.warning("Hewson inbox: model metadata unavailable", exc_info=True)
-        meta = {}
-    return {m: int(meta[m].last_init_time or 0) if m in meta else 0 for m in models}
+    hours = forecast_step_hours(DEFAULT_FORECAST_DAYS, DEFAULT_STRIDE_HOURS)
+    out: dict[str, int] = {}
+    for m in models:
+        try:
+            run = resolve_run(m, hours, DEFAULT_LEVELS)
+        except Exception:
+            logger.warning("Hewson inbox: %s GRIB run unresolved", m, exc_info=True)
+            run = None
+        out[m] = run.init_unix if run is not None else 0
+    return out
 
 
 async def _try_ingest_hewson_snapshots() -> set[str] | None:
@@ -2544,10 +2584,12 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
 
     Returns None when no inbox is mounted (caller computes everything, no
     wait), else the set of models still missing at the end — empty when the
-    node delivered all of them. A model counts as delivered once a local
-    snapshot reaches the init Open-Meteo served at the top of the hour; when
-    that init is unknown, once a snapshot was ingested this cycle or a local one
-    is recent enough to be this cycle's (startup pass, earlier poll).
+    node delivered all of them. Models outside ``HEWSON_INBOX_MODELS`` are
+    never waited for and always come back as missing (computed here). A model
+    counts as delivered once a local snapshot reaches the GRIB init resolved at
+    the top of the hour; when that init is unknown, once a snapshot was
+    ingested this cycle or a local one is recent enough to be this cycle's
+    (startup pass, earlier poll).
     """
     inbox = _hewson_inbox_dir()
     if not inbox:
@@ -2556,18 +2598,22 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
     from weatherbrief.hewson.inbox import ingest_inbox, newest_local_init
     from weatherbrief.hewson.precompute import DEFAULT_MODELS, _init_to_iso_z
 
-    models = list(DEFAULT_MODELS)
+    models = _hewson_inbox_models()
+    local_only = {m for m in DEFAULT_MODELS if m not in models}
+    if not models:
+        return local_only
     expected = await asyncio.to_thread(_hewson_expected_inits, models)
     ingested: set[str] = set()
     rejected: set[Path] = set()
     deadline = time.monotonic() + _HEWSON_INBOX_WAIT_MAX_SECONDS
     logger.info(
-        "Hewson inbox %s: waiting up to %d min for %s",
+        "Hewson inbox %s: waiting up to %d min for %s%s",
         inbox, _HEWSON_INBOX_WAIT_MAX_SECONDS // 60,
         ", ".join(
             f"{m}>={_init_to_iso_z(i)}" if i else f"{m}(init unknown)"
             for m, i in expected.items()
         ),
+        f" (computed here: {', '.join(sorted(local_only))})" if local_only else "",
     )
 
     def _missing() -> set[str]:
@@ -2601,7 +2647,7 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
                 detail=f"ingested {sorted(ingested)}",
                 env="HEWSON_INGEST_HEALTHCHECK_URL",
             )
-            return set()
+            return set(local_only)
         if time.monotonic() >= deadline:
             logger.warning(
                 "Hewson inbox: %s not delivered after %d min — computing "
@@ -2617,7 +2663,7 @@ async def _try_ingest_hewson_snapshots() -> set[str] | None:
                 f"— computing locally",
                 env="HEWSON_INGEST_HEALTHCHECK_URL",
             )
-            return missing
+            return missing | local_only
         await asyncio.sleep(_ARTIFACT_POLL_INTERVAL_SECONDS)
 
 

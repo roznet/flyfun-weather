@@ -211,6 +211,11 @@ Advisory evaluators and cross-section bands that need finer temporal resolution 
 
 ### 6.1 Precompute pipeline (dedicated scheduler loop)
 
+> **As built since #911:** the fields come from each model's GRIB (ECMWF a2,
+> GFS S3, ICON-EU DWD), not Open-Meteo, on a grid trimmed to 35–59.5°N /
+> 17.5°W–28°E (99 × 183). The schedule below is unchanged. See
+> `designs/frontal-detection.md` → "Hewson snapshots from GRIB".
+
 **Key decision (2026-04-24, revised)**: the frontal-detection module is CLI-only — there is **no existing 6 h cron** to piggyback on (the earlier draft of this section assumed one; that was wrong). Hewson precompute is therefore a **new, independent loop** inside `scheduler.py`, following the same pattern as the five existing loops (`run_retention_loop`, `run_verification_loop`, `run_standalone_verification_loop`, `run_digest_loop`, `run_ecmwf_watcher_loop`).
 
 **Timing**: fires at **08 Z** and **20 Z** (`_HEWSON_SAMPLE_HOURS_UTC = [8, 20]` in `scheduler.py`), once Open-Meteo has published all three models' 00 Z / 12 Z run. Measured lags from `meta.json` (2026-10-18): ICON ~4.7 h, GFS ~5.7 h, ECMWF IFS ~7.6 h after init. The earlier 06 Z / 18 Z hours assumed "all three by ~6 h", which held only for ICON — every 06 Z run paired ICON 00 Z with the previous 18 Z ECMWF/GFS. A model that is still late at the sample hour simply falls back to its previous init. The precompute now runs on the home compute node (see `designs/frontal-detection.md`, compute offload), so the hours are not constrained by droplet load; the node's runner has a matching UTC guard. Other loops are light (ECMWF watcher is disk-only, retention is once/day, etc.).
