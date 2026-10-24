@@ -213,6 +213,27 @@ def test_fill_gaps_no_call_when_covered():
     assert out.points_fallback == 0 and not out.failed
 
 
+def test_fill_gaps_ignores_window_hours_past_the_slot_span():
+    """21:40 + 2 h (prod, #912): the window's ceil hour is 00Z next day, which
+    a one-day slot cannot hold. A slot covered through 23Z needs no fallback."""
+    pts = _points()
+    dep = datetime(2026, 5, 4, 21, 40, tzinfo=UTC)
+    skel = build_skeleton(pts, ModelSource.ECMWF, start_date="2026-05-04", end_date="2026-05-04")
+    in_span = [t for t in required_hours(dep, 2.0) if t.day == 4]
+    assert len(in_span) < len(required_hours(dep, 2.0))
+    for wf in skel:
+        _fill_window(wf, in_span)
+    sections = [RouteCrossSection(model=ModelSource.ECMWF, route_points=pts,
+                                  fetched_at=datetime.now(UTC), point_forecasts=skel)]
+    client = _FakeClient()
+    (out,) = fill_grib_primary_gaps(
+        sections, pts, [ModelSource.ECMWF], dep, 2.0,
+        client=client, start_date="2026-05-04", end_date="2026-05-04",
+    )
+    assert client.calls == []
+    assert out.points_fallback == 0
+
+
 def test_fill_gaps_fetches_only_short_points(caplog):
     pts = _points()
     sections = _sections(ModelSource.ICON, pts, covered={0, 2})

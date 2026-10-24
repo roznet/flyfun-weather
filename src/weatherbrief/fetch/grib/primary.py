@@ -378,7 +378,15 @@ def fill_grib_primary_gaps(
     """
     from weatherbrief.fetch.open_meteo import EmptyForecastError
 
-    hours = required_hours(departure_time, flight_duration_hours)
+    # Only the hours the slot can hold: the window ends at ceil(arrival), which
+    # for an arrival late in the day is 00Z of a day the fetch span
+    # (start_date..end_date) does not reach. Neither GRIB nor the Open-Meteo
+    # fallback has that hour, and an Open-Meteo slot never carried it either.
+    span_lo = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    span_hi = (datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+               + timedelta(hours=23))
+    hours = [t for t in required_hours(departure_time, flight_duration_hours)
+             if span_lo <= t <= span_hi]
     outcomes: list[GribPrimaryOutcome] = []
     for model in primary_models:
         section = next((cs for cs in cross_sections if cs.model == model), None)

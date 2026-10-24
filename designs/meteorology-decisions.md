@@ -6768,7 +6768,8 @@ values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
 **Decisions.**
 
 - **Fallback is per point, full variable set, gaps only.** A point is covered
-  when every flight-window hour has a sounding plus T 2 m, wind 10 m,
+  when every flight-window hour inside the slot's day span (an arrival near
+  midnight rounds up to a 00Z the fetch never reaches) has a sounding plus T 2 m, wind 10 m,
   precipitation and total cover. Not chosen: a surface-only top-up call for the
   fields GRIB lacks (precipitation probability, lifted index), since nothing
   grades on them (below).
