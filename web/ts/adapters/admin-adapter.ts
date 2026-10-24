@@ -275,6 +275,27 @@ export async function fetchCostReport(window: '7d' | '30d' = '30d'): Promise<Cos
   return apiFetch<CostReport | null>(`/admin/cost-report?window=${window}`);
 }
 
+export interface CostTableRow {
+  label: string;
+  /** One per column; `null` when undefined (e.g. cost per briefing with none). */
+  values: Array<number | null>;
+}
+
+export interface CostTable {
+  columns: Array<{ key: string; days: number; covered_days: number }>;
+  margin_percent: number;
+  /** Fixed, Variable: header `values` are the section subtotal. */
+  sections: Array<CostTableRow & { rows: CostTableRow[] }>;
+  total: number[];
+  /** Reporting-only, already inside the briefing token line. */
+  cache_saving_usd: Array<number | null>;
+  usage: Array<CostTableRow & { kind: 'count' | 'usd' }>;
+}
+
+export async function fetchCostTable(): Promise<CostTable | null> {
+  return apiFetch<CostTable | null>('/admin/cost-report/table');
+}
+
 export async function fetchCostConfig(): Promise<CostConfigVersion | null> {
   return apiFetch<CostConfigVersion | null>('/admin/cost-config');
 }

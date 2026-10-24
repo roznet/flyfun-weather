@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
+from datetime import datetime
 
 
 # --- Prompt-cache pricing ---------------------------------------------------
@@ -298,6 +300,18 @@ class ProgramCostReport:
     config_id: int
 
 
+def fixed_monthly_lines(config: CostConfig) -> list[tuple[str, float]]:
+    """The rate card's fixed lines as ``(label, monthly USD)``, display order."""
+    lines = [("Server (droplet)", config.droplet_monthly_usd)]
+    details = config.subscription_details or {}
+    if details:
+        lines.extend((f"Subscription: {name}", float(m)) for name, m in details.items())
+    elif config.subscriptions_monthly_usd:
+        lines.append(("Subscriptions", config.subscriptions_monthly_usd))
+    lines.append(("Misc", config.misc_monthly_usd))
+    return lines
+
+
 def compute_program_cost(
     config: CostConfig,
     config_id: int,
@@ -328,16 +342,7 @@ def compute_program_cost(
             prorated_usd=round(monthly * months, 4),
         )
 
-    lines: list[FixedCostLine] = [
-        _line("Server (droplet)", config.droplet_monthly_usd),
-        _line("Misc", config.misc_monthly_usd),
-    ]
-    details = config.subscription_details or {}
-    if details:
-        for name, monthly in details.items():
-            lines.append(_line(f"Subscription: {name}", float(monthly)))
-    elif config.subscriptions_monthly_usd:
-        lines.append(_line("Subscriptions", config.subscriptions_monthly_usd))
+    lines = [_line(label, monthly) for label, monthly in fixed_monthly_lines(config)]
 
     fixed_monthly = sum(line.monthly_usd for line in lines)
     fixed_prorated = sum(line.prorated_usd for line in lines)
@@ -392,6 +397,138 @@ def program_report_to_dict(r: ProgramCostReport) -> dict:
         "cost_per_briefing_usd": r.cost_per_briefing_usd,
         "cost_per_user_usd": r.cost_per_user_usd,
         "config_id": r.config_id,
+    }
+
+
+# --- Admin cost table (7d / 30d / 365d side by side) ------------------------
+
+
+def prorate_fixed(
+    versions: Sequence[tuple[CostConfig, datetime, datetime | None]],
+    start: datetime,
+    end: datetime,
+) -> dict[str, float]:
+    """Fixed cost per line over ``[start, end)``, version by version.
+
+    Each rate-card version ``(config, active_from, active_until)`` is charged
+    only for the part of the window it was active, so a year-long window does
+    not price the months before a price change at today's card.  Time before
+    the first version is not charged at all.
+    """
+    out: dict[str, float] = {}
+    for config, active_from, active_until in versions:
+        lo = max(start, active_from)
+        hi = min(end, active_until or end)
+        if hi <= lo:
+            continue
+        months = (hi - lo).total_seconds() / 86400 / _DAYS_PER_MONTH
+        for label, monthly in fixed_monthly_lines(config):
+            out[label] = out.get(label, 0.0) + monthly * months
+    return out
+
+
+@dataclass(frozen=True)
+class CostWindowInputs:
+    """What one column of the admin cost table is computed from."""
+
+    key: str  # "7d", "30d", "365d"
+    days: int
+    covered_days: float  # the window clipped to the first rate card
+    fixed: dict[str, float]  # label → prorated USD (``prorate_fixed``)
+    briefing_token_usd: float
+    storage_usd: float
+    other_llm_usd: dict[str, float]  # ledger category → USD
+    cache_saving_usd: float | None  # None: no row in the window records it
+    num_briefings: int
+    num_users: int
+    num_signups: int
+
+
+_OTHER_LLM_LABELS = {
+    "live_highlight": "LLM – live highlight",
+    "trip_summary": "LLM – trip summary",
+}
+
+
+def _fixed_sort_key(label: str) -> int:
+    # Server first, Misc last, subscriptions in between in first-seen order.
+    return 0 if label.startswith("Server") else 2 if label == "Misc" else 1
+
+
+def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float) -> dict:
+    """Assemble the admin cost table: one value per window on every row.
+
+    Sections carry their own subtotal (``values``) so the header row reads as
+    the total of its lines.  "Extra" is the rate card's margin percent, applied
+    to everything else in the table (fixed + all variable, including the
+    per-call LLM features), and sits inside Variable.
+    """
+    n = len(windows)
+
+    def _row(label: str, values: list[float | None]) -> dict:
+        return {"label": label, "values": [None if v is None else round(v, 4) for v in values]}
+
+    fixed_labels: list[str] = []
+    for w in windows:
+        fixed_labels.extend(k for k in w.fixed if k not in fixed_labels)
+    fixed_labels.sort(key=_fixed_sort_key)
+    fixed_rows = [_row(k, [w.fixed.get(k, 0.0) for w in windows]) for k in fixed_labels]
+    fixed_tot = [sum(w.fixed.values()) for w in windows]
+
+    # Other LLM categories, heaviest over the widest window first.
+    widest = max(windows, key=lambda w: w.days) if windows else None
+    cats: list[str] = []
+    for w in windows:
+        cats.extend(c for c in w.other_llm_usd if c not in cats)
+    if widest is not None:
+        cats.sort(key=lambda c: -widest.other_llm_usd.get(c, 0.0))
+
+    pre_extra = [
+        fixed_tot[i] + w.briefing_token_usd + w.storage_usd + sum(w.other_llm_usd.values())
+        for i, w in enumerate(windows)
+    ]
+    extra = [p * margin_percent / 100 for p in pre_extra]
+    variable_rows = [
+        _row("LLM tokens – briefings", [w.briefing_token_usd for w in windows]),
+        *(
+            _row(
+                _OTHER_LLM_LABELS.get(c, f"LLM – {c.replace('_', ' ')}"),
+                [w.other_llm_usd.get(c, 0.0) for w in windows],
+            )
+            for c in cats
+        ),
+        _row("Disk / storage", [w.storage_usd for w in windows]),
+        _row(f"Extra ({margin_percent:g}%)", extra),
+    ]
+    variable_tot = [pre_extra[i] - fixed_tot[i] + extra[i] for i in range(n)]
+    total = [fixed_tot[i] + variable_tot[i] for i in range(n)]
+
+    def _per(i: int, count: int) -> float | None:
+        return total[i] / count if count else None
+
+    return {
+        "columns": [
+            {"key": w.key, "days": w.days, "covered_days": round(w.covered_days, 1)}
+            for w in windows
+        ],
+        "margin_percent": margin_percent,
+        "sections": [
+            {**_row("Fixed", fixed_tot), "rows": fixed_rows},
+            {**_row("Variable", variable_tot), "rows": variable_rows},
+        ],
+        "total": [round(t, 4) for t in total],
+        # Reporting-only: already inside the briefing token line.
+        "cache_saving_usd": [
+            None if w.cache_saving_usd is None else round(w.cache_saving_usd, 4)
+            for w in windows
+        ],
+        "usage": [
+            {"kind": "count", **_row("Active users (made a briefing)", [w.num_users for w in windows])},
+            {"kind": "count", **_row("Briefings", [w.num_briefings for w in windows])},
+            {"kind": "count", **_row("New sign-ups", [w.num_signups for w in windows])},
+            {"kind": "usd", **_row("Cost / briefing", [_per(i, w.num_briefings) for i, w in enumerate(windows)])},
+            {"kind": "usd", **_row("Cost / active user", [_per(i, w.num_users) for i, w in enumerate(windows)])},
+        ],
     }
 
 
