@@ -319,3 +319,15 @@ def test_unreadable_store_is_removed_so_prefetch_refetches(tmp_path):
     assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
     assert not store.exists()
     assert icon_zarr.cached_model_level_entry(tmp_path, grib.name) is None
+
+
+def test_transient_read_error_keeps_the_store(tmp_path, monkeypatch):
+    grib = _blob_file(tmp_path / "f003_ICON_EU_T.grib2", "t")
+    store = _convert(tmp_path, grib)
+
+    def boom(*a, **k):
+        raise OSError("I/O pressure")
+
+    monkeypatch.setattr(icon_zarr, "read_model_level_columns", boom)
+    assert dec._decode_icon_eu_single_var(store, [48.0], [11.5]) == {}
+    assert (store / "zarr.json").exists()

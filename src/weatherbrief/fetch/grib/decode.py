@@ -1387,8 +1387,14 @@ def _decode_icon_eu_single_var(
 
         try:
             return read_model_level_columns(grib_bytes, latitudes, longitudes)
+        except (OSError, MemoryError):
+            # Transient (I/O pressure, a tight worker) or the store vanished
+            # under us: skip this read, keep the store.
+            logger.warning("failed to read ICON-EU zarr store %s", grib_bytes, exc_info=True)
+            return {}
         except Exception:
-            # The GRIB is gone, so an unreadable store would otherwise be
+            # Anything else is the store itself (bad schema, codec or shard
+            # error). The GRIB is gone, so an unreadable store would otherwise be
             # re-read and re-fail on every briefing until TTL. Drop it: the
             # next prefetch sees the variable missing and downloads it again,
             # and this hour is skipped like any variable that failed to decode.

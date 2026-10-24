@@ -157,16 +157,10 @@ def convert_grib_to_store(grib_path: str | Path, store_path: str | Path) -> bool
     Returns True when ``store_path`` exists afterwards (written here or by a
     racing writer), False when the blob was refused or conversion failed.
     """
-    import numcodecs.blosc
     import zarr
     from zarr.codecs import BloscCodec
 
     from weatherbrief.fetch.grib.grib_reader import iter_messages
-
-    # One compression thread: this runs in a decode-pool worker, and the pool
-    # size is what bounds GRIB CPU on the box. Blosc defaults to every core.
-    # Process-global, which is fine: pool workers have no other blosc user.
-    numcodecs.blosc.set_nthreads(1)
 
     grib_path = Path(grib_path)
     store_path = Path(store_path)

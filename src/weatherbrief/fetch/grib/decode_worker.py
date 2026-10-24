@@ -66,6 +66,17 @@ def _worker_init() -> None:
     import xarray  # noqa: F401
     import weatherbrief.fetch.grib.decode  # noqa: F401
 
+    # ICON-EU zarr conversion (#705): one blosc compression thread per worker,
+    # since the pool size is what bounds GRIB CPU on the box and blosc
+    # defaults to every core. Set here, not per call, so an in-process
+    # fallback (GRIB_DECODE_WORKERS=0) leaves the app process alone.
+    try:
+        import numcodecs.blosc
+
+        numcodecs.blosc.set_nthreads(1)
+    except ImportError:
+        pass
+
     # One-line baseline so we know which cfgrib / eccodes versions a hang
     # report came from, and whether idx caching is on.
     try:
