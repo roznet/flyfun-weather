@@ -2874,19 +2874,28 @@ def _enrich_gfs_inner(
 
     session = _grib_session()
 
+    # A GRIB-primary slot (#913) carries no Open-Meteo sounding: some of its
+    # hours have no levels at all. The fetch gate kept HRRR routes off that
+    # path, so the HRRR upgrade (which keeps Open-Meteo's surface) never runs
+    # on one.
+    grib_built = _gfs_slot_grib_built(gfs_sections)
+
     # HRRR short-range upgrade (issue #457): when the whole route fits the
     # HRRR CONUS domain AND a run's horizon covers the flight window, the gfs
     # slot is sourced from HRRR (3 km, convection-allowing) as a FULL sounding
     # replacement instead of the GFS patch. All-or-nothing: any gate failure
     # or a completely-failed HRRR enrichment falls back to plain GFS for the
     # whole slot — never a mixed HRRR/GFS briefing.
-    hrrr_ts = _try_enrich_gfs_from_hrrr(
-        gfs_sections, all_forecasts, route_points, departure_time,
-        data_dir=data_dir, flight_duration_hours=flight_duration_hours,
-        as_of_time=as_of_time, session=session,
-    )
-    if hrrr_ts is not None:
-        return hrrr_ts, "hrrr:noaa"
+    if grib_built:
+        logger.info("GFS slot built from GRIB (#913): HRRR upgrade not tried")
+    else:
+        hrrr_ts = _try_enrich_gfs_from_hrrr(
+            gfs_sections, all_forecasts, route_points, departure_time,
+            data_dir=data_dir, flight_duration_hours=flight_duration_hours,
+            as_of_time=as_of_time, session=session,
+        )
+        if hrrr_ts is not None:
+            return hrrr_ts, "hrrr:noaa"
 
     with _grib_time("gfs_find_run"):
         run_info = find_latest_run(departure_time, session=session, as_of_time=as_of_time)
@@ -2899,8 +2908,32 @@ def _enrich_gfs_inner(
         init_date, init_hour, departure_time, flight_duration_hours,
     )
 
-    purge_old_runs(data_dir, model="gfs")
+    # Pinned from the first download to the last decode, as for HRRR (PR #508
+    # r4): the GRIB-primary sounding (#913) takes long enough that another
+    # briefing's purge could otherwise remove this run under it.
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
+    with pin_run_dir(run_dir):
+        purge_old_runs(data_dir, model="gfs")
+        return _enrich_gfs_run(
+            gfs_sections, all_forecasts, route_points,
+            init_date, init_hour, forecast_hours,
+            run_dir=run_dir, session=session, grib_built=grib_built,
+        )
+
+
+def _enrich_gfs_run(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    *,
+    run_dir: Path,
+    session: requests.Session,
+    grib_built: bool,
+) -> tuple[int | None, str | None]:
+    """Body of :func:`_enrich_gfs_inner` once the run is chosen and pinned."""
 
     point_lats = [rp.lat for rp in route_points]
     point_lons = [rp.lon for rp in route_points]
@@ -2918,24 +2951,43 @@ def _enrich_gfs_inner(
         logger.warning("No .idx files retrieved for enrichment")
         return None, None
 
-    # Run both enrichment paths in parallel — they write to different fields
-    # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on HourlyForecast).
+    # GRIB-primary (#913): hours with no sounding underneath get the full GFS
+    # column and surface from GRIB; hours with an Open-Meteo sounding keep the
+    # CLMR/ICMR patch exactly as before. On an Open-Meteo slot that is every
+    # hour, on a GRIB-primary skeleton none.
+    full_hours = _gfs_hours_without_sounding(
+        gfs_sections, init_date, init_hour, forecast_hours,
+    ) if grib_built else []
+    patch_hours = [f for f in forecast_hours if f not in full_hours]
+
+    # Run the enrichment paths in parallel — they write to different fields
+    # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on
+    # HourlyForecast; the GRIB-primary sounding replaces only the levels of
+    # hours that have none, and its surface fills empty fields only).
     # Use _submit_with_context so per-fhour _grib_time(...) calls in the inner
     # workers see the same _GRIB_TIMER as the outer enrich_forecasts call.
     with _grib_time("gfs_workers"):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            _submit_with_context(
-                pool, _enrich_clwmr_icmr,
-                gfs_sections, all_forecasts, route_points,
-                init_date, init_hour, forecast_hours,
-                run_dir, idx_by_fhour, point_lats, point_lons, session,
-            )
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            if patch_hours:
+                _submit_with_context(
+                    pool, _enrich_clwmr_icmr,
+                    gfs_sections, all_forecasts, route_points,
+                    init_date, init_hour, patch_hours,
+                    run_dir, idx_by_fhour, point_lats, point_lons, session,
+                )
             _submit_with_context(
                 pool, _enrich_cloud_diagnostics,
                 gfs_sections, all_forecasts, route_points,
                 init_date, init_hour, forecast_hours,
                 run_dir, idx_by_fhour, point_lats, point_lons, session,
             )
+            if full_hours:
+                _submit_with_context(
+                    pool, _enrich_gfs_from_grib,
+                    gfs_sections, all_forecasts, route_points,
+                    init_date, init_hour, full_hours,
+                    run_dir, idx_by_fhour, point_lats, point_lons, session,
+                )
             # ThreadPoolExecutor.__exit__ waits for all futures to complete
 
     return _run_info_to_timestamp(init_date, init_hour), "gfs:noaa"
@@ -3390,6 +3442,451 @@ def _hrrr_decode_reason(
     return None
 
 
+# ---------------------------------------------------------------------------
+# GRIB-primary GFS slot (#913): full sounding + surface from pgrb2/pgrb2b
+# ---------------------------------------------------------------------------
+
+# One file per forecast hour each, route-independent like every GFS key.
+GFS_SOUNDING_CACHE_KEY = "GFS_SOUNDING_V1"
+GFS_SURFACE_CACHE_KEY = "GFS_SURFACE_V1"
+
+# The surface fields a GRIB-primary GFS step writes, into empty fields only.
+_GFS_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
+    "temperature_2m_c",
+    "dewpoint_2m_c",
+    "relative_humidity_2m_pct",
+    "wind_speed_10m_kt",
+    "wind_direction_10m_deg",
+    "wind_gusts_10m_kt",
+    "pressure_msl_hpa",
+    "surface_pressure_hpa",
+    "visibility_m",
+    "freezing_level_m",
+    "cape_jkg",
+    "convective_inhibition_jkg",
+    "lifted_index_raw",
+    "cloud_cover_pct",
+    "cloud_cover_low_pct",
+    "cloud_cover_mid_pct",
+    "cloud_cover_high_pct",
+)
+
+# De-accumulated, spread as a per-hour rate over (prev, valid].
+_GFS_HOURLY_RATE_FIELDS: tuple[str, ...] = (
+    "precipitation_mm",
+    "rain_mm",
+    "showers_mm",
+    "snowfall_cm",
+)
+
+# Decoded raw keys every sounding level needs (``gfs_idx.GFS_SOUNDING_MANDATORY``).
+_GFS_REQUIRED_DECODED = (
+    "raw_temperature_k", "raw_relative_humidity_pct",
+    "raw_u_wind_m_s", "raw_v_wind_m_s", "geopotential_height_m",
+)
+
+
+def gfs_sounding_levels() -> list[int]:
+    """The GRIB-primary GFS levels: the ones the Open-Meteo GFS slot carried.
+
+    20 of the 28 are in pgrb2; 875, 825 … 525 hPa only in pgrb2b.
+    """
+    from weatherbrief.fetch.variables import MODEL_ENDPOINTS
+
+    return sorted(MODEL_ENDPOINTS[ModelSource.GFS.value].pressure_levels, reverse=True)
+
+
+def _gfs_previous_step(fhour: int) -> int | None:
+    """The native GFS step before ``fhour`` (hourly to f120, 3-hourly after)."""
+    if fhour <= 0:
+        return None
+    return fhour - 1 if fhour <= 120 else fhour - 3
+
+
+def _gfs_slot_grib_built(gfs_sections: list[RouteCrossSection]) -> bool:
+    """True when the gfs slot has hours with no sounding (GRIB-primary, #913).
+
+    An Open-Meteo slot carries its levels on every hour it returned; a
+    GRIB-primary skeleton has none outside what GRIB filled.
+    """
+    return any(
+        not h.pressure_levels
+        for cs in gfs_sections for wf in cs.point_forecasts for h in wf.hourly
+    )
+
+
+def _gfs_hours_without_sounding(
+    gfs_sections: list[RouteCrossSection],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+) -> list[int]:
+    """Forecast hours at which some gfs point has no sounding to patch."""
+    out: list[int] = []
+    for fhour in forecast_hours:
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        if any(
+            _matches_valid_time(h.time, valid_utc) and not h.pressure_levels
+            for cs in gfs_sections for wf in cs.point_forecasts for h in wf.hourly
+        ):
+            out.append(fhour)
+    return out
+
+
+def _gfs_sounding_cache_key(fhour: int, levels: list[int]) -> str:
+    """Cache key of a sounding blob; a level subset gets its own file.
+
+    The briefing needs all of ``gfs_sounding_levels()``, so a blob cached
+    for a smaller set (map snapshots, #914) must never stand in for it.
+    """
+    if sorted(levels) == sorted(gfs_sounding_levels()):
+        return cache_key(fhour, GFS_SOUNDING_CACHE_KEY)
+    return cache_key(fhour, f"{GFS_SOUNDING_CACHE_KEY}_L{'-'.join(str(p) for p in sorted(levels))}")
+
+
+def _gfs_column_problem(
+    point_data: dict[int, dict[str, float]], levels: list[int],
+) -> str | None:
+    """Why a decoded GFS column is not a full sounding, or None."""
+    if not point_data:
+        return "no levels decoded"
+    for level in levels:
+        fields = point_data.get(level) or {}
+        missing = [k for k in _GFS_REQUIRED_DECODED if fields.get(k) is None]
+        if missing:
+            return f"{level}hPa missing {'+'.join(missing)}"
+    return None
+
+
+def _gfs_idx_for(
+    init_date: str, init_hour: int, fhour: int,
+    idx_by_fhour: dict[int, str], session: requests.Session,
+    product: str = "pgrb2",
+) -> str | None:
+    if product == "pgrb2" and fhour in idx_by_fhour:
+        return idx_by_fhour[fhour]
+    try:
+        return fetch_idx(init_date, init_hour, fhour, session=session, product=product)
+    except Exception:
+        logger.warning("GFS %s .idx f%03d unavailable", product, fhour, exc_info=True)
+        return None
+
+
+def _ensure_gfs_sounding(
+    init_date: str, init_hour: int, fhour: int, run_dir: Path,
+    idx_by_fhour: dict[int, str], session: requests.Session, levels: list[int],
+) -> bool:
+    """Cache the GRIB-primary sounding blob for ``fhour``; True when on disk.
+
+    pgrb2 then pgrb2b messages, streamed into one file. The plan is checked
+    first (every level, every mandatory variable) and any failed byte range
+    aborts the file, so a cached blob is always complete: like the HRRR
+    sounding, it replaces whole columns.
+    """
+    import itertools
+
+    from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+    from weatherbrief.fetch.grib.gfs_idx import (
+        GFS_SOUNDING_VARIABLES,
+        gfs_sounding_plan_problem,
+    )
+    from weatherbrief.fetch.grib.grib_fetch import gfs_grib2_url
+    from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges, iter_hrrr_range_chunks
+
+    ck = _gfs_sounding_cache_key(fhour, levels)
+    if is_cached(run_dir, ck):
+        return True
+    plans = []
+    for product in ("pgrb2", "pgrb2b"):
+        # pgrb2b only when pgrb2 lacks a requested level (875, 825 … 525 hPa).
+        if plans and gfs_sounding_plan_problem(plans[0][1], levels) is None:
+            break
+        idx = _gfs_idx_for(init_date, init_hour, fhour, idx_by_fhour, session, product)
+        if idx is None:
+            return False
+        plans.append((product, plan_byte_ranges(
+            idx, target_levels=levels, variables=GFS_SOUNDING_VARIABLES,
+        )))
+    problem = gfs_sounding_plan_problem([r for _, rs in plans for r in rs], levels)
+    if problem is not None:
+        logger.warning("GFS sounding f%03d not offered in full: %s", fhour, problem)
+        return False
+    chunks = itertools.chain.from_iterable(
+        iter_hrrr_range_chunks(
+            gfs_grib2_url(init_date, init_hour, fhour, product),
+            coalesce_ranges(ranges), session,
+        )
+        for product, ranges in plans
+    )
+    try:
+        with _grib_time("gfs_sounding_download"):
+            path = put_cached_from_chunks(run_dir, ck, chunks)
+    except Exception:
+        logger.warning("GFS sounding f%03d download failed", fhour, exc_info=True)
+        return False
+    if path is None:
+        return False
+    logger.info(
+        "Downloaded GFS sounding f%03d: %d messages, %.1f MB",
+        fhour, sum(len(rs) for _, rs in plans), path.stat().st_size / 1e6,
+    )
+    return True
+
+
+def _ensure_gfs_surface(
+    init_date: str, init_hour: int, fhour: int, run_dir: Path,
+    idx_by_fhour: dict[int, str], session: requests.Session,
+) -> bool:
+    """Cache the GRIB-primary surface blob for ``fhour``; True when on disk."""
+    from weatherbrief.fetch.grib.cache import put_cached_from_chunks
+    from weatherbrief.fetch.grib.gfs_idx import (
+        GFS_SURFACE_REQUIRED,
+        plan_gfs_surface_byte_ranges,
+    )
+    from weatherbrief.fetch.grib.grib_fetch import gfs_grib2_url
+    from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges, iter_hrrr_range_chunks
+
+    ck = cache_key(fhour, GFS_SURFACE_CACHE_KEY)
+    if is_cached(run_dir, ck):
+        return True
+    idx = _gfs_idx_for(init_date, init_hour, fhour, idx_by_fhour, session)
+    if idx is None:
+        return False
+    ranges = plan_gfs_surface_byte_ranges(idx, fhour)
+    planned = {r.variable for r in ranges}
+    missing = [v for v in GFS_SURFACE_REQUIRED if v not in planned and not (v == "APCP" and fhour == 0)]
+    if missing:
+        logger.warning("GFS surface f%03d: .idx lacks %s", fhour, "+".join(missing))
+        return False
+    try:
+        with _grib_time("gfs_surface_download"):
+            path = put_cached_from_chunks(run_dir, ck, iter_hrrr_range_chunks(
+                gfs_grib2_url(init_date, init_hour, fhour),
+                coalesce_ranges(ranges), session,
+            ))
+    except Exception:
+        logger.warning("GFS surface f%03d download failed", fhour, exc_info=True)
+        return False
+    return path is not None
+
+
+def _enrich_gfs_from_grib(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    run_dir: Path,
+    idx_by_fhour: dict[int, str],
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+) -> None:
+    """Full GFS sounding and surface for hours with no sounding (#913).
+
+    The GRIB-primary counterpart of ``_enrich_clwmr_icmr``. Per forecast hour:
+    TMP, RH, UGRD, VGRD, HGT, VVEL, CLMR and ICMR on the 28 Open-Meteo GFS
+    levels (pgrb2 + pgrb2b), and the surface messages of
+    ``gfs_idx.GFS_SURFACE_FIELDS``. The surface of the step before the
+    window is read too, so the first window hour gets its precipitation.
+
+    Downloads run hour by hour; the decodes then go to the pool together.
+    Anything that fails leaves those hours empty for that point, and the
+    briefing's Open-Meteo fallback (``fill_grib_primary_gaps``) fills them,
+    so nothing here raises.
+    """
+    try:
+        _enrich_gfs_from_grib_inner(
+            gfs_sections, all_forecasts, route_points, init_date, init_hour,
+            forecast_hours, run_dir, idx_by_fhour, point_lats, point_lons, session,
+        )
+    except Exception:
+        logger.warning("GFS GRIB-primary enrichment failed", exc_info=True)
+
+
+def read_gfs_grib_points(
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    point_lats: list[float],
+    point_lons: list[float],
+    *,
+    run_dir: Path,
+    session: requests.Session,
+    idx_by_fhour: dict[int, str] | None = None,
+    sounding: bool = True,
+    levels: list[int] | None = None,
+) -> tuple[dict[int, list], dict[int, list], list[int]]:
+    """GFS GRIB values at arbitrary points: the briefing's GFS reader (#913).
+
+    Downloads (cached in ``run_dir``, see ``cache.cache_dir_for_run``) and
+    decodes, per forecast hour, the surface messages of
+    ``gfs_idx.GFS_SURFACE_FIELDS`` and, with ``sounding``, the full column
+    on ``levels`` (default ``gfs_sounding_levels()``; a subset cuts the
+    byte ranges, skips pgrb2b when pgrb2 has them all, and caches apart).
+    The surface of the
+    native step before the first hour is read too, so its precipitation
+    can be differenced.
+
+    Returns ``(sounding_by_fhour, surface_by_fhour, surface_steps)``:
+    sounding is ``{fhour: [ {level: {raw key: value}} per point ]}`` (the
+    ``decode_gfs_sounding_per_point`` shape), surface is
+    ``{fhour: [ {idx var: value} per point ]}`` (feed it to
+    ``decode.build_gfs_surface_snapshot`` / ``decode.gfs_surface_rates``),
+    and ``surface_steps`` is every step asked for. Hours that fail to
+    download or decode are absent; nothing raises for one bad hour.
+    Callers hold ``pin_run_dir(run_dir)`` if a purge could run meanwhile.
+    """
+    levels = levels or gfs_sounding_levels()
+    idx_by_fhour = idx_by_fhour if idx_by_fhour is not None else {}
+    fhours = sorted(forecast_hours)
+    if not fhours:
+        return {}, {}, []
+    lead = _gfs_previous_step(fhours[0])
+    surface_steps = ([lead] if lead is not None and lead not in fhours else []) + fhours
+
+    sounding_hours = [
+        f for f in fhours
+        if sounding
+        and _ensure_gfs_sounding(init_date, init_hour, f, run_dir, idx_by_fhour, session, levels)
+    ]
+    surface_hours = [
+        f for f in surface_steps
+        if _ensure_gfs_surface(init_date, init_hour, f, run_dir, idx_by_fhour, session)
+    ]
+    jobs = [
+        ("decode_gfs_sounding", (str(run_dir / _gfs_sounding_cache_key(f, levels)), point_lats, point_lons))
+        for f in sounding_hours
+    ] + [
+        ("decode_gfs_surface", (str(run_dir / cache_key(f, GFS_SURFACE_CACHE_KEY)), point_lats, point_lons))
+        for f in surface_hours
+    ]
+    with _grib_time("gfs_grib_primary_decode"):
+        results = _dispatch_decode_parallel(jobs, return_exceptions=True)
+    sounding_by_fhour: dict[int, list] = {}
+    surface_by_fhour: dict[int, list] = {}
+    for (name, _), fhour, res in zip(jobs, sounding_hours + surface_hours, results):
+        if isinstance(res, BaseException) or not res:
+            logger.warning("GFS %s f%03d decode failed: %s", name, fhour, res)
+            continue
+        (sounding_by_fhour if name == "decode_gfs_sounding" else surface_by_fhour)[fhour] = res
+    return sounding_by_fhour, surface_by_fhour, surface_steps
+
+
+def _enrich_gfs_from_grib_inner(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    run_dir: Path,
+    idx_by_fhour: dict[int, str],
+    point_lats: list[float],
+    point_lons: list[float],
+    session: requests.Session,
+) -> None:
+    levels = gfs_sounding_levels()
+    fhours = sorted(forecast_hours)
+    sounding_by_fhour, surface_by_fhour, surface_steps = read_gfs_grib_points(
+        init_date, init_hour, fhours, point_lats, point_lons,
+        run_dir=run_dir, session=session, idx_by_fhour=idx_by_fhour, levels=levels,
+    )
+    sounding_hours = sorted(sounding_by_fhour)
+
+    replaced = 0
+    for fhour in fhours:
+        decoded = sounding_by_fhour.pop(fhour, None)
+        if not decoded:
+            continue
+        for i, point_data in enumerate(decoded):
+            why = _gfs_column_problem(point_data, levels)
+            if why is not None:
+                logger.warning("GFS f%03d point %d sounding unusable: %s", fhour, i, why)
+                decoded[i] = {}
+        replaced += _replace_pressure_levels_from_grib(
+            gfs_sections, all_forecasts, route_points, decoded,
+            valid_utc=_forecast_hour_to_utc(init_date, init_hour, fhour),
+            model_source=ModelSource.GFS, only_empty=True,
+        )
+    _grib_gc("gfs_grib_primary")
+    _apply_gfs_surface_to_sections(
+        gfs_sections, all_forecasts, route_points, init_date, init_hour,
+        surface_by_fhour,
+    )
+    logger.info(
+        "GFS from GRIB (#913): %d hourly soundings, %d/%d sounding hours, "
+        "%d/%d surface steps (run %s %02dz)",
+        replaced, len(sounding_hours), len(fhours),
+        len(surface_by_fhour), len(surface_steps), init_date, init_hour,
+    )
+
+
+def _apply_gfs_surface_to_sections(
+    gfs_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    surface_by_fhour: dict[int, list[dict[str, float]]],
+) -> None:
+    """Write GFS surface steps onto the gfs slot's hourlies (#913).
+
+    The ICON pattern (``_apply_icon_surface_to_sections``): instantaneous
+    fields on the matching valid hour, precipitation as a per-hour rate over
+    ``(prev, valid]``, everything fill-only so an Open-Meteo value already
+    there is kept. The leading step only seeds the difference.
+    """
+    from weatherbrief.fetch.grib.decode import build_gfs_surface_snapshot, gfs_surface_rates
+    from weatherbrief.fetch.grib.gfs_idx import GFS_SURFACE_ACCUMULATED
+
+    n_points = len(route_points)
+    prev_raw: list[dict[str, float] | None] = [None] * n_points
+    prev_valid_utc: datetime | None = None
+    wp_idx = {
+        rp.waypoint_icao: i for i, rp in enumerate(route_points) if rp.waypoint_icao
+    }
+    for fhour in sorted(surface_by_fhour):
+        points = surface_by_fhour[fhour]
+        valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+        window_h = (
+            (valid_utc - prev_valid_utc).total_seconds() / 3600.0
+            if prev_valid_utc is not None else None
+        )
+        inst_snaps: list[dict] = []
+        rate_snaps: list[dict] = []
+        for i in range(n_points):
+            raw = points[i] if i < len(points) else {}
+            inst_snaps.append({
+                k: v for k, v in build_gfs_surface_snapshot(raw).items() if v is not None
+            })
+            rate_snaps.append(gfs_surface_rates(raw, prev_raw[i], window_h))
+            prev_raw[i] = (
+                {k: raw[k] for k in GFS_SURFACE_ACCUMULATED if k in raw}
+                or None
+            )
+
+        def _write(wf: WaypointForecast, i: int) -> None:
+            _write_surface_step(
+                wf.hourly, inst_snaps[i], rate_snaps[i],
+                inst_fields=_GFS_HOURLY_INSTANT_FIELDS,
+                rate_fields=_GFS_HOURLY_RATE_FIELDS,
+                valid_utc=valid_utc, prev_valid_utc=prev_valid_utc,
+            )
+
+        for cs in gfs_sections:
+            for i, wf in enumerate(cs.point_forecasts[:n_points]):
+                _write(wf, i)
+        for wf in all_forecasts:
+            if wf.model != ModelSource.GFS:
+                continue
+            i = wp_idx.get(wf.waypoint.icao)
+            if i is not None:
+                _write(wf, i)
+        prev_valid_utc = valid_utc
+
+
 def _fetch_clwmr_icmr_for_fhour(
     init_date: str,
     init_hour: int,
@@ -3453,11 +3950,15 @@ def _enrich_clwmr_icmr(
     session: requests.Session,
 ) -> None:
     """Enrich pressure-level data with CLWMR/ICMR from GFS GRIB2."""
-    # Extract target pressure levels from existing forecasts
+    # Extract target pressure levels from existing forecasts: the first hour
+    # that has any (a GRIB-built slot, #913, has empty hours outside its
+    # window).
     target_levels: list[int] = []
     for cs in gfs_sections:
         for pf in cs.point_forecasts:
             for h in pf.hourly:
+                if not h.pressure_levels:
+                    continue
                 for pl in h.pressure_levels:
                     if pl.pressure_hpa not in target_levels:
                         target_levels.append(pl.pressure_hpa)
@@ -3792,6 +4293,7 @@ def _replace_pressure_levels_from_grib(
     valid_utc: datetime | None = None,
     model_source: ModelSource = ModelSource.ECMWF,
     msl_hpa_per_point: list[float | None] | None = None,
+    only_empty: bool = False,
 ) -> int:
     """Replace pressure_levels on hourly forecasts with full GRIB sounding.
 
@@ -3813,6 +4315,9 @@ def _replace_pressure_levels_from_grib(
     ``msl_hpa_per_point`` — the model's own MSLP at each route point and this
     valid time — supplies the datum instead. The Open-Meteo reference still
     wins when both exist.
+
+    ``only_empty`` (GFS, #913) writes only hours that carry no levels, so an
+    Open-Meteo sounding already there is never replaced.
 
     Returns:
         Number of hourly entries whose pressure levels were replaced.
@@ -3836,6 +4341,8 @@ def _replace_pressure_levels_from_grib(
             for hourly in wf.hourly:
                 if not _matches_valid_time(hourly.time, valid_utc):
                     continue
+                if only_empty and hourly.pressure_levels:
+                    continue
                 new_levels = build_pressure_levels_from_grib(
                     point_data, _geopotential_reference(hourly), _msl(point_idx),
                 )
@@ -3858,6 +4365,8 @@ def _replace_pressure_levels_from_grib(
         rp_idx, point_data = found
         for hourly in wf.hourly:
             if not _matches_valid_time(hourly.time, valid_utc):
+                continue
+            if only_empty and hourly.pressure_levels:
                 continue
             new_levels = build_pressure_levels_from_grib(
                 point_data, _geopotential_reference(hourly), _msl(rp_idx),

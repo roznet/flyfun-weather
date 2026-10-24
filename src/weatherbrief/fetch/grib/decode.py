@@ -3090,6 +3090,298 @@ def decode_hrrr_pressure_per_point(
             ds.close()
 
 
+# Full GFS sounding for a GRIB-primary gfs slot (#913): eccodes cfVarName →
+# raw field, the HRRR map minus its dewpoint and grid-relative winds. GFS
+# pgrb2/pgrb2b winds are earth-relative on a regular lat/lon grid, so U/V go
+# straight to speed/direction. VVEL is omega (Pa/s) already; HGT is gpm.
+_GFS_FULL_VAR_MAP = {
+    "t": "raw_temperature_k",
+    "r": "raw_relative_humidity_pct",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
+    "gh": "geopotential_height_m",
+    "w": "vertical_velocity_pa_s",
+    "clwmr": "cloud_liquid_water_kg_kg",
+    "clmr": "cloud_liquid_water_kg_kg",
+    "icmr": "ice_mixing_ratio_kg_kg",
+}
+
+# GRIB-primary GFS surface (#913): (cfVarName, typeOfLevel) → the .idx
+# variable name ``gfs_idx.GFS_SURFACE_FIELDS`` plans, so the snapshot builder
+# and the plan speak the same names. Read from a live gfs.20261024/00z f012
+# file with eccodes, not assumed.
+_GFS_SURFACE_MSG_MAP: dict[tuple[str, str], str] = {
+    ("t2m", "heightAboveGround"): "TMP",
+    ("d2m", "heightAboveGround"): "DPT",
+    ("r2", "heightAboveGround"): "RH",
+    ("u10", "heightAboveGround"): "UGRD",
+    ("v10", "heightAboveGround"): "VGRD",
+    ("gust", "surface"): "GUST",
+    ("prmsl", "meanSea"): "PRMSL",
+    ("sp", "surface"): "PRES",
+    ("vis", "surface"): "VIS",
+    ("cape", "surface"): "CAPE",
+    ("cin", "surface"): "CIN",
+    ("lftx", "surface"): "LFTX",
+    ("gh", "isothermZero"): "HGT",
+    ("lcc", "lowCloudLayer"): "LCDC",
+    ("mcc", "middleCloudLayer"): "MCDC",
+    ("hcc", "highCloudLayer"): "HCDC",
+    ("tcc", "atmosphere"): "TCDC",
+    ("cpofp", "surface"): "CPOFP",
+    ("csnow", "surface"): "CSNOW",
+    ("tp", "surface"): "APCP",
+    ("acpcp", "surface"): "ACPCP",
+}
+
+
+def decode_gfs_sounding_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """Decode a GRIB-primary GFS sounding blob per route point (#913).
+
+    The blob is the pgrb2 + pgrb2b messages for TMP, RH, UGRD, VGRD, HGT, VVEL,
+    CLMR and ICMR on the Open-Meteo GFS levels. Direct eccodes read on the
+    shared bilinear weights (the global grid's seam closed by
+    ``_bilinear_grid_weights``, #484). Same output shape as the ECMWF / HRRR
+    decoders: ``[{pressure_hpa: {raw field: value}}]``, which
+    ``build_pressure_levels_from_grib`` turns into a column.
+    """
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[int, dict[str, float]]] = [{} for _ in range(n_points)]
+    if n_points == 0:
+        return results
+
+    def select(msg) -> bool:
+        return (
+            msg.type_of_level == "isobaricInhPa"
+            and msg.var.lower() in _GFS_FULL_VAR_MAP
+        )
+
+    try:
+        series = _gather_series(file_path, latitudes, longitudes, select)
+    except Exception:
+        logger.warning("Failed to decode GFS sounding from %s", file_path, exc_info=True)
+        return [{} for _ in range(n_points)]
+    for s in series:
+        field_name = _GFS_FULL_VAR_MAP[s.var.lower()]
+        inb_idx = s.bw.inb_idx
+        for lev in sorted(s.levels, reverse=True):
+            row = s.level_values(lev)
+            if row is None:
+                continue
+            p_hpa = int(lev)
+            for pt_idx, v in zip(inb_idx.tolist(), np.asarray(row, dtype=np.float64).tolist()):
+                if math.isnan(v):
+                    continue
+                results[pt_idx].setdefault(p_hpa, {}).setdefault(field_name, v)
+    return results
+
+
+def decode_gfs_surface_per_point(
+    file_path: Path,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Decode a GRIB-primary GFS surface blob per route point (#913).
+
+    Returns one flat dict per point keyed by the .idx variable name
+    (``TMP``, ``APCP`` …) in native units, the input of
+    :func:`build_gfs_surface_snapshot`. A field outside the grid or masked is
+    absent, never 0.
+    """
+    import numpy as np
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    if n_points == 0:
+        return results
+
+    def select(msg) -> bool:
+        return (msg.var.lower(), msg.type_of_level) in _GFS_SURFACE_MSG_MAP
+
+    try:
+        series = _gather_series(file_path, latitudes, longitudes, select)
+    except Exception:
+        logger.warning("Failed to decode GFS surface from %s", file_path, exc_info=True)
+        return results
+    for s in series:
+        name = _GFS_SURFACE_MSG_MAP[(s.var.lower(), s.type_of_level)]
+        for lev in s.levels:
+            row = s.level_values(lev)
+            if row is None:
+                continue
+            for pt_idx, v in zip(s.bw.inb_idx.tolist(), np.asarray(row, dtype=np.float64).tolist()):
+                if not math.isnan(v):
+                    results[pt_idx].setdefault(name, v)
+    return results
+
+
+def build_gfs_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]:
+    """GFS instantaneous surface fields in ``HourlyForecast`` units (#913).
+
+    ``raw`` is one point from :func:`decode_gfs_surface_per_point`. The two
+    accumulations (``APCP``, ``ACPCP``) need the previous step and are
+    handled by :func:`gfs_surface_rates`.
+
+    - K → °C; RH from the 2 m RH, else from T/Td.
+    - m/s → kt; GUST is the surface gust.
+    - Pa → hPa (PRMSL, surface PRES).
+    - VIS m; HGT of the 0 °C isotherm is gpm above MSL (≈ m), the same field
+      Open-Meteo calls ``freezing_level_height``.
+    - CAPE / CIN are SURFACE-based, what Open-Meteo served for GFS
+      (``NWP_CAPE_TYPE["gfs"] = "sb"``); CIN keeps the NCEP negative
+      convention through :func:`_ncep_cin_jkg`.
+    - Covers are the instantaneous LCDC/MCDC/HCDC/TCDC, already %.
+    """
+    out: dict[str, float | None] = {
+        "temperature_2m_c": None,
+        "dewpoint_2m_c": None,
+        "relative_humidity_2m_pct": None,
+        "wind_speed_10m_kt": None,
+        "wind_direction_10m_deg": None,
+        "wind_gusts_10m_kt": None,
+        "pressure_msl_hpa": None,
+        "surface_pressure_hpa": None,
+        "visibility_m": None,
+        "freezing_level_m": None,
+        "cape_jkg": None,
+        "convective_inhibition_jkg": None,
+        "lifted_index_raw": None,
+        "cloud_cover_pct": None,
+        "cloud_cover_low_pct": None,
+        "cloud_cover_mid_pct": None,
+        "cloud_cover_high_pct": None,
+    }
+    if not raw:
+        return out
+
+    t_k, td_k = raw.get("TMP"), raw.get("DPT")
+    if t_k is not None:
+        out["temperature_2m_c"] = t_k - 273.15
+    if td_k is not None:
+        out["dewpoint_2m_c"] = td_k - 273.15
+    rh = raw.get("RH")
+    if rh is not None:
+        out["relative_humidity_2m_pct"] = min(100.0, max(0.0, rh))
+    elif t_k is not None and td_k is not None:
+        out["relative_humidity_2m_pct"] = relative_humidity_from_dewpoint_pct(
+            t_k - 273.15, td_k - 273.15,
+        )
+
+    u, v = raw.get("UGRD"), raw.get("VGRD")
+    if u is not None and v is not None:
+        speed_ms = math.sqrt(u * u + v * v)
+        out["wind_speed_10m_kt"] = speed_ms * _KT_PER_MS
+        out["wind_direction_10m_deg"] = (
+            (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0 if speed_ms > 0.01 else 0.0
+        )
+    gust = raw.get("GUST")
+    if gust is not None and gust >= 0:
+        out["wind_gusts_10m_kt"] = gust * _KT_PER_MS
+
+    if raw.get("PRMSL") is not None:
+        out["pressure_msl_hpa"] = raw["PRMSL"] / 100.0
+    if raw.get("PRES") is not None:
+        out["surface_pressure_hpa"] = raw["PRES"] / 100.0
+    vis = raw.get("VIS")
+    if vis is not None and vis >= 0:
+        out["visibility_m"] = vis
+    frz = raw.get("HGT")
+    if frz is not None and frz >= 0:
+        out["freezing_level_m"] = frz
+
+    cape = raw.get("CAPE")
+    if cape is not None:
+        out["cape_jkg"] = max(0.0, cape)
+    out["convective_inhibition_jkg"] = _ncep_cin_jkg(raw, "CIN")
+    out["lifted_index_raw"] = raw.get("LFTX")
+
+    for key, field in (
+        ("TCDC", "cloud_cover_pct"),
+        ("LCDC", "cloud_cover_low_pct"),
+        ("MCDC", "cloud_cover_mid_pct"),
+        ("HCDC", "cloud_cover_high_pct"),
+    ):
+        val = raw.get(key)
+        if val is not None:
+            out[field] = min(100.0, max(0.0, val))
+    return out
+
+
+def gfs_frozen_fraction(raw: dict[str, float]) -> float | None:
+    """Frozen share of the precipitation at this GFS step, 0–1, or None.
+
+    ``CPOFP`` is the percent of frozen precipitation; NCEP writes a negative
+    fill (−50) where nothing falls, and packs a real 0 a hair below zero
+    (−6e-6 seen on gfs.20261024/00z f012). Without it the categorical
+    ``CSNOW`` (0/1) is used.
+    """
+    cpofp = raw.get("CPOFP")
+    if cpofp is not None and cpofp > -1.0:
+        return min(100.0, max(0.0, cpofp)) / 100.0
+    csnow = raw.get("CSNOW")
+    if csnow is not None and csnow >= 0:
+        return 1.0 if csnow >= 0.5 else 0.0
+    return None
+
+
+def gfs_surface_rates(
+    raw: dict[str, float],
+    prev: dict[str, float] | None,
+    window_h: float | None,
+) -> dict[str, float]:
+    """Per-hour precipitation for one point from two GFS steps (#913).
+
+    ``APCP`` and ``ACPCP`` are running totals since init (kg/m² ≡ mm), so the
+    window's amount is their difference, spread evenly over ``window_h``.
+
+    - ``precipitation_mm`` = ΔAPCP
+    - ``showers_mm`` = ΔACPCP, the convective precipitation, as Open-Meteo
+      defines showers
+    - ``snowfall_cm`` = ΔAPCP × frozen share at the step × 0.7 cm/mm
+    - ``rain_mm`` = ΔAPCP − ΔACPCP − frozen part, floored at 0: the
+      large-scale liquid part, the ECMWF ``tp − cp − sf`` rule (#912).
+
+    The frozen share is the step's instantaneous ``CPOFP`` applied to the
+    window ending there. A missing component makes its field absent (unknown),
+    never a smaller number; no precipitation means 0 snow and 0 rain whatever
+    the share.
+    """
+    from weatherbrief.units import SNOW_CM_PER_MM_WATER
+
+    if prev is None or window_h is None or window_h <= 0:
+        return {}
+
+    def _rate(var: str) -> float | None:
+        cur, before = raw.get(var), prev.get(var)
+        if cur is None or before is None:
+            return None
+        return max(0.0, (cur - before) / window_h)
+
+    out: dict[str, float] = {}
+    tot = _rate("APCP")
+    conv = _rate("ACPCP")
+    if tot is not None:
+        out["precipitation_mm"] = tot
+    if conv is not None:
+        out["showers_mm"] = conv
+    if tot is None:
+        return out
+    frozen = 0.0 if tot == 0.0 else gfs_frozen_fraction(raw)
+    if frozen is None:
+        return out
+    snow_water = tot * frozen
+    out["snowfall_cm"] = snow_water * SNOW_CM_PER_MM_WATER
+    if conv is not None:
+        out["rain_mm"] = max(0.0, tot - conv - snow_water)
+    return out
+
+
 def decode_hrrr_cloud_diag_per_point(
     file_path: Path,
     latitudes: list[float],

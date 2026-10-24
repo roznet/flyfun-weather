@@ -206,6 +206,28 @@ def decode_gfs_cloud_diag(
         return decode_cloud_diag_per_point(grib_bytes, latitudes, longitudes)
 
 
+def decode_gfs_sounding(
+    file_path: str,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[int, dict[str, float]]]:
+    """GRIB-primary GFS sounding blob → per-point columns (#913)."""
+    with _log_decode("decode_gfs_sounding", file_path):
+        from weatherbrief.fetch.grib.decode import decode_gfs_sounding_per_point
+        return decode_gfs_sounding_per_point(Path(file_path), latitudes, longitudes)
+
+
+def decode_gfs_surface(
+    file_path: str,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """GRIB-primary GFS surface blob → per-point raw values (#913)."""
+    with _log_decode("decode_gfs_surface", file_path):
+        from weatherbrief.fetch.grib.decode import decode_gfs_surface_per_point
+        return decode_gfs_surface_per_point(Path(file_path), latitudes, longitudes)
+
+
 def decode_arome_pressure(
     file_path: str,
     fhours: list[int],

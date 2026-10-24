@@ -1,9 +1,10 @@
-"""Check a day's GRIB-built packs against Open-Meteo for the same model run (#912).
+"""Check a day's GRIB-built packs against Open-Meteo for the same model run (#912, #913).
 
 Since #912 the ECMWF and ICON slots of a briefing are built from GRIB when
-the GRIB gate passes, and Open-Meteo is no longer fetched for them. This
-script is the post-rollout check that our GRIB decode (units, accumulation,
-domain edges) agrees with Open-Meteo's processing of the SAME run:
+the GRIB gate passes, and since #913 the GFS slot too; Open-Meteo is no
+longer fetched for them. This script is the post-rollout check that our GRIB
+decode (units, accumulation, domain edges) agrees with Open-Meteo's
+processing of the SAME run:
 
 1. find the packs fetched on ``--date`` whose ``fetch_meta.json`` says a slot
    was GRIB-primary (``fetch_facts.grib_primary``, written since #912);
@@ -15,9 +16,15 @@ domain edges) agrees with Open-Meteo's processing of the SAME run:
    accumulation or unit slip shows up as (×3 on a 3-hourly step, ×1000 on
    metres vs mm).
 
+For GFS the sounding is new from GRIB as well (ECMWF's and ICON's already
+were before #912), so its slots also compare temperature, RH, wind and
+height at ``--levels`` (default 850, 700, 500 hPa), reported as
+``field@level``.
+
 Billing: each request is one location-set × ~1.6 (16 variables / 10) per
-point. ``--budget`` (default 300 units) stops before it is exceeded and
-``--dry-run`` only prints the estimate.
+point, ~2.8 for GFS with the default levels. ``--budget`` (default 300
+units) stops before it is exceeded and ``--dry-run`` only prints the
+estimate.
 
 Points that fell back to Open-Meteo in the briefing compare against
 Open-Meteo by construction (Δ≈0); the per-pack line says how many there
@@ -30,7 +37,8 @@ Run where the packs are (prod or a pulled copy):
 The single-run endpoint and its ``models`` names are configurable because
 they were not checked from the session that wrote this:
 ``--base-url`` (default the Open-Meteo Single Runs API) and
-``--om-model ecmwf=ecmwf_ifs --om-model icon_d2:dwd=icon_d2``.
+``--om-model ecmwf=ecmwf_ifs --om-model icon_d2:dwd=icon_d2
+--om-model gfs:noaa=gfs_global``.
 """
 
 from __future__ import annotations
@@ -73,6 +81,18 @@ SURFACE_VARS: dict[str, str] = {
 }
 ACCUMULATED = ("precipitation_mm", "rain_mm", "showers_mm", "snowfall_cm")
 
+# PressureLevelData field → Open-Meteo per-level variable stem (#913).
+LEVEL_VARS: dict[str, str] = {
+    "temperature_c": "temperature",
+    "relative_humidity_pct": "relative_humidity",
+    "wind_speed_kt": "wind_speed",
+    "geopotential_height_m": "geopotential_height",
+}
+# Sources whose sounding is compared too: the slots whose column came from
+# Open-Meteo before GRIB-primary.
+SOUNDING_SOURCES = ("gfs", "gfs:noaa")
+DEFAULT_LEVELS = (850, 700, 500)
+
 # |Δ| above which one sample is listed as suspect.
 SUSPECT: dict[str, float] = {
     "temperature_2m_c": 3.0, "dewpoint_2m_c": 4.0, "relative_humidity_2m_pct": 25.0,
@@ -81,6 +101,8 @@ SUSPECT: dict[str, float] = {
     "precipitation_mm": 2.0, "rain_mm": 2.0, "showers_mm": 2.0, "snowfall_cm": 1.0,
     "cloud_cover_pct": 50.0, "cloud_cover_low_pct": 50.0,
     "visibility_m": 20000.0, "freezing_level_m": 400.0, "cape_jkg": 500.0,
+    "temperature_c": 3.0, "relative_humidity_pct": 30.0, "wind_speed_kt": 15.0,
+    "geopotential_height_m": 60.0,
 }
 
 DEFAULT_OM_MODELS: dict[str, str] = {
@@ -88,6 +110,9 @@ DEFAULT_OM_MODELS: dict[str, str] = {
     "icon_eu:dwd": "icon_eu",
     "icon_d2:dwd": "icon_d2",
     "icon": "icon_eu",
+    # GFS 0.25° alone, not the gfs_seamless blend briefings fetched (#913).
+    "gfs:noaa": "ncep_gfs025",
+    "gfs": "ncep_gfs025",
 }
 DEFAULT_BASE_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
 
@@ -112,7 +137,7 @@ class VarStats:
         self.total_om += om_v
         if abs(d) > self.max_abs:
             self.max_abs, self.max_where = abs(d), where
-        if abs(d) > SUSPECT.get(var, math.inf) and len(self.suspects) < 5:
+        if abs(d) > SUSPECT.get(var.split("@")[0], math.inf) and len(self.suspects) < 5:
             self.suspects.append(f"{where}: pack {pack_v:.2f} vs OM {om_v:.2f}")
 
 
@@ -132,13 +157,20 @@ def billed_units(n_points: int, n_vars: int = len(SURFACE_VARS)) -> float:
     return n_points * max(1.0, n_vars / 10.0)
 
 
+def level_variables(levels) -> list[str]:
+    """Open-Meteo hourly names of the compared sounding fields at ``levels``."""
+    return [f"{stem}_{p}hPa" for p in levels for stem in LEVEL_VARS.values()]
+
+
 def compare_point(
     stats: dict[str, VarStats], pack_hourly, om_hourly: dict, where: str,
+    levels=(),
 ) -> int:
     """Fold one point's pack hours vs Open-Meteo's into ``stats``.
 
-    Only hours where the pack has a GRIB value are compared. Returns the
-    number of hours matched.
+    Only hours where the pack has a GRIB value are compared. ``levels`` adds
+    the sounding fields at those pressure levels, keyed ``field@level``.
+    Returns the number of hours matched.
     """
     om_times = om_hourly.get("time") or []
     index = {t: i for i, t in enumerate(om_times)}
@@ -156,6 +188,18 @@ def compare_point(
             if pv is None or ov is None:
                 continue
             stats.setdefault(f, VarStats()).add(float(pv), float(ov), f"{where} {t}", f)
+        for p in levels:
+            lvl = h.level_at(p)
+            if lvl is None:
+                continue
+            for f, stem in LEVEL_VARS.items():
+                pv = getattr(lvl, f)
+                arr = om_hourly.get(f"{stem}_{p}hPa")
+                ov = arr[i] if arr is not None and i < len(arr) else None
+                if pv is None or ov is None:
+                    continue
+                key = f"{f}@{p}"
+                stats.setdefault(key, VarStats()).add(float(pv), float(ov), f"{where} {t}", key)
     return matched
 
 
@@ -170,6 +214,13 @@ def hourly_as_open_meteo(hourly) -> dict:
     }
     for f, om_var in SURFACE_VARS.items():
         out[om_var] = [getattr(h, f) for h in hourly]
+    levels = sorted({pl.pressure_hpa for h in hourly for pl in h.pressure_levels})
+    for p in levels:
+        for f, stem in LEVEL_VARS.items():
+            out[f"{stem}_{p}hPa"] = [
+                getattr(lvl, f) if (lvl := h.level_at(p)) is not None else None
+                for h in hourly
+            ]
     return out
 
 
@@ -178,7 +229,11 @@ def print_stats(stats: dict[str, dict[str, VarStats]]) -> None:
     for source, per_var in sorted(stats.items()):
         print(f"\n=== {source}")
         print(f"{'field':<26} {'n':>5} {'bias':>8} {'mean|Δ|':>8} {'max|Δ|':>8}  total ratio")
-        for f in SURFACE_VARS:
+        level_keys = sorted(
+            (k for k in per_var if "@" in k),
+            key=lambda k: (-int(k.split("@")[1]), list(LEVEL_VARS).index(k.split("@")[0])),
+        )
+        for f in [*SURFACE_VARS, *level_keys]:
             s = per_var.get(f)
             if s is None or s.n == 0:
                 print(f"{f:<26} {'0':>5}  (no pairs: field missing on one side)")
@@ -190,7 +245,7 @@ def print_stats(stats: dict[str, dict[str, VarStats]]) -> None:
                   f"{s.max_abs:>8.2f}  {ratio}")
             for line in s.suspects:
                 print(f"    suspect: {line}")
-            if s.max_where and s.max_abs > SUSPECT.get(f, math.inf):
+            if s.max_where and s.max_abs > SUSPECT.get(f.split("@")[0], math.inf):
                 print(f"    max at {s.max_where}")
 
 
@@ -214,13 +269,13 @@ def find_packs(packs_root: Path, day: date) -> list[tuple[Path, dict]]:
 
 
 def fetch_open_meteo(base_url: str, points, om_model: str, run: datetime,
-                     start: date, end: date) -> list[dict]:
+                     start: date, end: date, levels=()) -> list[dict]:
     import requests
 
     params = {
         "latitude": ",".join(f"{p.lat:.4f}" for p in points),
         "longitude": ",".join(f"{p.lon:.4f}" for p in points),
-        "hourly": ",".join(SURFACE_VARS.values()),
+        "hourly": ",".join([*SURFACE_VARS.values(), *level_variables(levels)]),
         "models": om_model,
         "run": run.strftime("%Y-%m-%dT%H:%M"),
         "start_date": start.isoformat(),
@@ -252,6 +307,8 @@ def main() -> int:
     ap.add_argument("--base-url", default=DEFAULT_BASE_URL)
     ap.add_argument("--om-model", action="append", default=[],
                     help="override a source→Open-Meteo model name, e.g. ecmwf=ecmwf_ifs")
+    ap.add_argument("--levels", default=",".join(str(p) for p in DEFAULT_LEVELS),
+                    help="pressure levels (hPa) compared on GFS slots; '' for none")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -260,6 +317,7 @@ def main() -> int:
         k, _, v = item.partition("=")
         om_models[k] = v
 
+    levels = tuple(int(p) for p in args.levels.split(",") if p.strip())
     packs = find_packs(args.packs_root, args.date)[: args.max_packs]
     print(f"{len(packs)} GRIB-primary pack(s) fetched on {args.date} under {args.packs_root}")
 
@@ -277,7 +335,8 @@ def main() -> int:
                 print(f"  {pack_dir}: {model} skipped (no section / GRIB run / OM model)")
                 continue
             idx = sample_indices(len(route_points), args.points)
-            cost = billed_units(len(idx))
+            slot_levels = levels if source in SOUNDING_SOURCES or model in SOUNDING_SOURCES else ()
+            cost = billed_units(len(idx), len(SURFACE_VARS) + len(level_variables(slot_levels)))
             label = f"{pack_dir.parent.name}/{pack_dir.name} {source}"
             if spent + cost > args.budget:
                 print(f"  budget reached ({spent:.0f}/{args.budget:.0f} units), stopping")
@@ -295,7 +354,7 @@ def main() -> int:
             try:
                 om = fetch_open_meteo(
                     args.base_url, [route_points[i] for i in idx], om_model, run,
-                    min(times).date(), max(times).date(),
+                    min(times).date(), max(times).date(), slot_levels,
                 )
             except Exception as exc:  # noqa: BLE001 — report and go on
                 print(f"    Open-Meteo request failed: {exc}")
@@ -305,7 +364,7 @@ def main() -> int:
                 rp = route_points[i]
                 where = f"{label} pt{i} ({rp.distance_from_origin_nm:.0f} nm)"
                 compare_point(per_model, cs.point_forecasts[i].hourly,
-                              point_om.get("hourly") or {}, where)
+                              point_om.get("hourly") or {}, where, slot_levels)
 
     print(f"\nBilled units {'estimated' if args.dry_run else 'spent'}: ~{spent:.0f}")
     print_stats(stats)

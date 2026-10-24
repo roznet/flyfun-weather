@@ -1,4 +1,4 @@
-"""Advisory replay diff for GRIB-primary ECMWF / ICON slots (#912).
+"""Advisory replay diff for GRIB-primary ECMWF / ICON / GFS slots (#912, #913).
 
 Runs the same flight twice through the production refresh path, once with
 ``WB_GRIB_PRIMARY=0`` (Open-Meteo first, today's behaviour) and once with
@@ -9,16 +9,22 @@ the GRIB-primary gate on, then prints:
 - every (advisory, model) status that differs between the two runs,
 - the surface fields of each GRIB-built slot against the same slot from
   Open-Meteo (bias, mean/max |Δ|, total ratio of the accumulated fields,
-  suspects with their distance along the route, for domain-edge jumps).
+  suspects with their distance along the route, for domain-edge jumps),
+  plus the sounding fields at 850/700/500 hPa for GFS slots (#913 builds
+  the whole GFS column from NOAA GRIB).
 
-Needs the ECMWF ECPDS disk, DWD opendata and Open-Meteo, so run it where
+``--off`` / ``--on`` set the two switch values. To isolate one model against
+what prod runs today, keep the others GRIB-primary on both sides, e.g. for
+GFS: ``--off ecmwf,icon --on 1``.
+
+Needs the ECMWF ECPDS disk, DWD opendata, NOAA S3 and Open-Meteo, so run it where
 the briefings run (droplet or Mac mini), not in a sandbox. Runs back to back
 use the same model runs as long as no new run lands in between: the script
 prints both runs' GRIB init times so a run change is visible.
 
 Usage:
     python scripts/compare_grib_primary.py <flight-id> [<flight-id> ...]
-        [--user-id dev-user-001] [--force-live]
+        [--user-id dev-user-001] [--force-live] [--off 0] [--on 1]
 
 Packs go under ``profiles/_packs/<flight-id>/grib_primary_{off,on}/``.
 """
@@ -60,7 +66,7 @@ class _GribPrimaryLog(logging.Handler):
             self.lines.append(msg)
 
 
-def _run(flight_id: str, user_id: str, force_live: bool, switch: str):
+def _run(flight_id: str, user_id: str, force_live: bool, switch: str, label: str):
     os.environ["WB_GRIB_PRIMARY"] = switch
     db = SessionLocal()
     try:
@@ -72,7 +78,6 @@ def _run(flight_id: str, user_id: str, force_live: bool, switch: str):
     finally:
         db.close()
 
-    label = "on" if switch != "0" else "off"
     pack_dir = ROOT / "profiles" / "_packs" / flight_id / f"grib_primary_{label}"
     pack_dir.mkdir(parents=True, exist_ok=True)
     options.output_dir = pack_dir
@@ -105,10 +110,10 @@ def _print_fetch_facts(pack_dir: Path) -> None:
             print(f"  fetch_facts.{key}: {facts[key]}")
 
 
-def _single(flight_id: str, user_id: str, force_live: bool, side: str) -> int:
+def _single(flight_id: str, user_id: str, force_live: bool, side: str, switch: str) -> int:
     """One side only: a quick look at a run without the diff."""
-    print(f"=== {flight_id} ({side} only)")
-    res, _status, log, pack_dir = _run(flight_id, user_id, force_live, "1" if side == "on" else "0")
+    print(f"=== {flight_id} ({side} only, WB_GRIB_PRIMARY={switch})")
+    res, _status, log, pack_dir = _run(flight_id, user_id, force_live, switch, side)
     print(f"Open-Meteo calls: {res.usage.open_meteo_calls}; "
           f"billed weight: {res.usage.open_meteo_weighted_calls:.1f}")
     for line in log:
@@ -119,10 +124,10 @@ def _single(flight_id: str, user_id: str, force_live: bool, side: str) -> int:
     return 0
 
 
-def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
-    print(f"=== {flight_id}")
-    off, off_status, _, off_dir = _run(flight_id, user_id, force_live, "0")
-    on, on_status, on_log, on_dir = _run(flight_id, user_id, force_live, "1")
+def _compare(flight_id: str, user_id: str, force_live: bool, off_switch: str, on_switch: str) -> int:
+    print(f"=== {flight_id} (WB_GRIB_PRIMARY off={off_switch} on={on_switch})")
+    off, off_status, _, off_dir = _run(flight_id, user_id, force_live, off_switch, "off")
+    on, on_status, on_log, on_dir = _run(flight_id, user_id, force_live, on_switch, "on")
 
     print(f"Open-Meteo calls: off={off.usage.open_meteo_calls} on={on.usage.open_meteo_calls}; "
           f"billed weight: off={off.usage.open_meteo_weighted_calls:.1f} "
@@ -151,9 +156,13 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
     Every route point and every hour the GRIB pack has a value for. Watch the
     total ratio on the accumulated fields (an accumulation or unit slip), and
     the suspects for jumps at a domain edge (their distance along the route).
+    GFS slots also diff the sounding at ``SOUNDING_LEVELS``. Slots that were
+    GRIB-primary on both sides are skipped (nothing to compare against).
     """
     sys.path.insert(0, str(ROOT))
     from scripts.compare_pack_surface_openmeteo import (
+        DEFAULT_LEVELS,
+        SOUNDING_SOURCES,
         compare_point,
         hourly_as_open_meteo,
         print_stats,
@@ -162,8 +171,10 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
 
     facts = json.loads((on_dir / "fetch_meta.json").read_text()).get("fetch_facts") or {}
     primary = facts.get("grib_primary") or {}
+    off_facts = json.loads((off_dir / "fetch_meta.json").read_text()).get("fetch_facts") or {}
+    primary = {m: v for m, v in primary.items() if m not in (off_facts.get("grib_primary") or {})}
     if not primary:
-        print("No slot was GRIB-primary in the 'on' run: nothing to diff.")
+        print("No slot was GRIB-primary only in the 'on' run: nothing to diff.")
         return
     off_cs = {cs.model.value: cs for cs in load_cross_sections(off_dir)}
     on_cs = {cs.model.value: cs for cs in load_cross_sections(on_dir)}
@@ -173,10 +184,14 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
         if model not in off_cs or model not in on_cs:
             continue
         per_model = stats.setdefault(model, {})
+        levels = DEFAULT_LEVELS if model in SOUNDING_SOURCES else ()
         for i, (a, b) in enumerate(zip(off_cs[model].point_forecasts, on_cs[model].point_forecasts)):
             nm = points[i].distance_from_origin_nm if i < len(points) else float(i)
-            compare_point(per_model, b.hourly, hourly_as_open_meteo(a.hourly), f"pt{i} ({nm:.0f} nm)")
-    print("Surface, GRIB pack minus Open-Meteo pack:")
+            compare_point(
+                per_model, b.hourly, hourly_as_open_meteo(a.hourly), f"pt{i} ({nm:.0f} nm)",
+                levels=levels,
+            )
+    print("Surface (and GFS sounding), GRIB pack minus Open-Meteo pack:")
     print_stats(stats)
 
 
@@ -188,6 +203,11 @@ def main() -> int:
                     help="Brief as live even if the departure has passed")
     ap.add_argument("--side", choices=("both", "on", "off"), default="both",
                     help="Run one side only (no diff), e.g. 'on' to shake out a GRIB-primary run")
+    ap.add_argument("--off", default="0", metavar="SWITCH",
+                    help="WB_GRIB_PRIMARY for the baseline run (default 0, all Open-Meteo). "
+                         "Use 'ecmwf,icon' to compare GFS against prod today")
+    ap.add_argument("--on", default="1", metavar="SWITCH",
+                    help="WB_GRIB_PRIMARY for the GRIB run (default 1, every GRIB-primary model)")
     ap.add_argument("--om-ecmwf-model", metavar="MODEL",
                     help="Open-Meteo ECMWF model for this process only (e.g. ecmwf_ifs, "
                          "when ecmwf_ifs025 lags our ECPDS run). Changes the 'off' baseline "
@@ -204,9 +224,12 @@ def main() -> int:
     init_shared_db()
     if args.side != "both":
         for fid in args.flight_ids:
-            _single(fid, args.user_id, args.force_live, args.side)
+            _single(fid, args.user_id, args.force_live, args.side,
+                    args.on if args.side == "on" else args.off)
         return 0
-    total = sum(_compare(fid, args.user_id, args.force_live) for fid in args.flight_ids)
+    total = sum(
+        _compare(fid, args.user_id, args.force_live, args.off, args.on) for fid in args.flight_ids
+    )
     print(f"Total status changes across {len(args.flight_ids)} flight(s): {total}")
     return 0
 

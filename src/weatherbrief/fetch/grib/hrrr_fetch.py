@@ -602,6 +602,10 @@ def iter_hrrr_range_chunks(
     skipped span produced a truncated file that then served as a valid cache
     hit for the full-sounding key for hours. ``put_cached_from_chunks``
     unlinks its tempfile when the iterator raises, so nothing is committed.
+
+    Also the downloader of the GRIB-primary GFS sounding and surface (#913),
+    which replace whole columns for the same reason: nothing here is
+    HRRR-specific but the name.
     """
     for i in range(0, len(spans), _DOWNLOAD_BATCH_REQUESTS):
         batch = spans[i:i + _DOWNLOAD_BATCH_REQUESTS]
@@ -612,7 +616,7 @@ def iter_hrrr_range_chunks(
                 if data is None:
                     raise HrrrIncompleteArtifact(
                         f"byte range {span} failed; refusing to commit a "
-                        f"partial HRRR artifact from {url}"
+                        f"partial artifact from {url}"
                     )
                 yield data
 

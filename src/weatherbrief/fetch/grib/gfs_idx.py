@@ -362,3 +362,127 @@ def plan_cloud_diag_byte_ranges(
         ))
 
     return ranges
+
+
+# ---------------------------------------------------------------------------
+# GRIB-primary GFS slot (#913): full sounding + surface
+# ---------------------------------------------------------------------------
+
+# Pressure-level variables of the full GFS sounding, the HRRR set (#457)
+# without its dewpoint: GFS ships no DPT on pressure levels, so the dewpoint is
+# derived from T + RH like Open-Meteo does. All earth-relative on a regular
+# lat/lon grid, so no rotation and no projection.
+GFS_SOUNDING_VARIABLES = frozenset({
+    "TMP", "RH", "UGRD", "VGRD", "HGT", "VVEL", "CLMR", "ICMR",
+})
+
+# Variables every sounding level must carry for the column to count as
+# complete; VVEL and the condensates are optional, as for HRRR.
+GFS_SOUNDING_MANDATORY = ("TMP", "RH", "UGRD", "VGRD", "HGT")
+
+# Surface messages of a GRIB-primary GFS slot: what HourlyForecast used to
+# take from Open-Meteo for GFS. ``(variable, level string)`` as in the .idx.
+# All are read at the step itself ("N hour fcst"; "anl" at f000), except the
+# two accumulations, read as the running total since init ("0-N hour acc"),
+# which the pgrb2 file carries next to the 6-hour bucket at every step
+# (checked on gfs.20261024/00z f001…f126). The total needs no bucket
+# arithmetic: the precipitation of a window is the difference of two totals,
+# as for ECMWF ``tp``.
+#
+# Instantaneous LCDC/MCDC/HCDC go to the hourly ``cloud_cover_*`` fields only.
+# The cloud-diagnostic blob keeps reading their averaged twins, which pair
+# with the averaged-only layer geometry (meteorology-decisions §3).
+GFS_SURFACE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("TMP", "2 m above ground"),
+    ("DPT", "2 m above ground"),
+    ("RH", "2 m above ground"),
+    ("UGRD", "10 m above ground"),
+    ("VGRD", "10 m above ground"),
+    ("GUST", "surface"),
+    ("PRMSL", "mean sea level"),
+    ("PRES", "surface"),
+    ("VIS", "surface"),
+    ("CAPE", "surface"),
+    ("CIN", "surface"),
+    ("LFTX", "surface"),
+    ("HGT", "0C isotherm"),
+    ("LCDC", "low cloud layer"),
+    ("MCDC", "middle cloud layer"),
+    ("HCDC", "high cloud layer"),
+    ("TCDC", "entire atmosphere"),
+    ("CPOFP", "surface"),
+    ("CSNOW", "surface"),
+    ("APCP", "surface"),
+    ("ACPCP", "surface"),
+)
+
+# Accumulated since init; everything else is instantaneous.
+GFS_SURFACE_ACCUMULATED = frozenset({"APCP", "ACPCP"})
+
+# Without these an hour is not a usable GRIB-primary surface.
+GFS_SURFACE_REQUIRED = ("TMP", "UGRD", "VGRD", "PRMSL", "APCP", "TCDC")
+
+
+def _gfs_surface_step_matches(variable: str, forecast_step: str, fhour: int) -> bool:
+    """Is this the step form we want for ``variable`` at ``fhour``?"""
+    if variable in GFS_SURFACE_ACCUMULATED:
+        return forecast_step == f"0-{fhour} hour acc fcst"
+    if fhour == 0:
+        return forecast_step == "anl"
+    return forecast_step == f"{fhour} hour fcst"
+
+
+def plan_gfs_surface_byte_ranges(idx_text: str, fhour: int) -> list[CloudDiagByteRange]:
+    """Byte ranges of the GRIB-primary surface messages at ``fhour`` (#913).
+
+    One message per :data:`GFS_SURFACE_FIELDS` entry, the first in file order
+    when the .idx lists the same message twice (f001–f006 repeat the 0-N
+    accumulation, whose bucket and running total coincide there). A field the
+    index lacks is simply absent; the decoder leaves it None.
+    """
+    wanted = set(GFS_SURFACE_FIELDS)
+    all_offsets = _collect_all_offsets(idx_text)
+    seen: set[tuple[str, str]] = set()
+    ranges: list[CloudDiagByteRange] = []
+    for line in idx_text.strip().splitlines():
+        parts = line.strip().split(":")
+        if len(parts) < 7:
+            continue
+        var, level_str, fcst_step = parts[3], parts[4], parts[5]
+        key = (var, level_str)
+        if key not in wanted or key in seen:
+            continue
+        if not _gfs_surface_step_matches(var, fcst_step, fhour):
+            continue
+        try:
+            start = int(parts[1])
+        except ValueError:
+            continue
+        seen.add(key)
+        ranges.append(CloudDiagByteRange(
+            variable=var, level_str=level_str, start=start,
+            end=_find_next_offset(all_offsets, start),
+        ))
+    return ranges
+
+
+def gfs_sounding_plan_problem(
+    ranges: list[ByteRange], levels: list[int],
+) -> str | None:
+    """Why a planned GFS sounding cannot make complete columns, or None.
+
+    Checked before the ~160 MB download: every wanted level must offer every
+    :data:`GFS_SOUNDING_MANDATORY` variable across the two products.
+    """
+    by_level: dict[int, set[str]] = {}
+    for r in ranges:
+        by_level.setdefault(r.level_hpa, set()).add(r.variable.upper())
+    problems = []
+    for level in sorted(levels, reverse=True):
+        missing = [v for v in GFS_SOUNDING_MANDATORY if v not in by_level.get(level, set())]
+        if missing:
+            problems.append(f"{level}hPa missing {'+'.join(missing)}")
+    if not problems:
+        return None
+    more = f" (+{len(problems) - 3} more levels)" if len(problems) > 3 else ""
+    return "; ".join(problems[:3]) + more

@@ -1,4 +1,4 @@
-"""GRIB-primary briefing slots: ECMWF and ICON without Open-Meteo (#912).
+"""GRIB-primary briefing slots: ECMWF, ICON (#912) and GFS (#913) without Open-Meteo.
 
 The briefing fetch used to pull every model from Open-Meteo with the full
 variable set and then let GRIB enrichment overwrite the ECMWF and ICON
@@ -14,6 +14,10 @@ should cover it:
 * ICON: the whole route inside the ICON-EU domain, the window inside a
   publishable run's horizon (``icon_eu_window_out_of_range``), and not a
   historical briefing (DWD keeps current runs only).
+* GFS (#913): the window inside the newest publishable run's 384 h horizon
+  (``gfs_window_out_of_range``), not a historical briefing, and not a route
+  the HRRR upgrade takes (whole route in the CONUS domain, window inside an
+  HRRR horizon): that slot keeps today's path, HRRR sounding over Open-Meteo.
 
 A GRIB-primary slot starts as a **skeleton**: one ``WaypointForecast`` per
 route point carrying the same day span of hours Open-Meteo would have
@@ -25,7 +29,7 @@ GRIB outage degrades to exactly today's Open-Meteo slot, one point at a
 time, and a covered slot costs zero Open-Meteo calls.
 
 ``WB_GRIB_PRIMARY`` is the kill switch: ``0`` turns it off (every slot back
-to Open-Meteo first), a comma list (``ecmwf``) limits it to those models.
+to Open-Meteo first), a comma list (``ecmwf,icon``) limits it to those models.
 """
 
 from __future__ import annotations
@@ -51,7 +55,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-GRIB_PRIMARY_MODELS: tuple[ModelSource, ...] = (ModelSource.ECMWF, ModelSource.ICON)
+GRIB_PRIMARY_MODELS: tuple[ModelSource, ...] = (
+    ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS,
+)
 
 # Fields every flight-window hour must carry for a point to count as covered.
 # The sounding plus the surface fields the advisories lean on hardest; a hole
@@ -74,7 +80,7 @@ _SPLICE_SKIP_FIELDS: frozenset[str] = frozenset({
 
 
 def grib_primary_models() -> tuple[ModelSource, ...]:
-    """Models the ``WB_GRIB_PRIMARY`` switch allows (default: ECMWF and ICON)."""
+    """Models the ``WB_GRIB_PRIMARY`` switch allows (default: ECMWF, ICON, GFS)."""
     raw = os.environ.get("WB_GRIB_PRIMARY", "1").strip().lower()
     if raw in ("", "1", "true", "yes", "on"):
         return GRIB_PRIMARY_MODELS
@@ -99,7 +105,8 @@ def grib_primary_skip_reason(
 ) -> str | None:
     """Why *model* can't be GRIB-primary for this flight, or None if it can.
 
-    Network-free and cheap: a directory scan for ECMWF, arithmetic for ICON.
+    Network-free and cheap: a directory scan for ECMWF, arithmetic for ICON
+    and GFS.
     A pass is a prediction, not a promise; what GRIB then fails to deliver is
     caught per point by :func:`fill_grib_primary_gaps`.
     """
@@ -110,6 +117,11 @@ def grib_primary_skip_reason(
         return _ecmwf_skip_reason(departure_time, flight_duration_hours, as_of_time)
     if model == ModelSource.ICON:
         return _icon_skip_reason(
+            route_points, departure_time, flight_duration_hours,
+            as_of_time, historical_mode,
+        )
+    if model == ModelSource.GFS:
+        return _gfs_skip_reason(
             route_points, departure_time, flight_duration_hours,
             as_of_time, historical_mode,
         )
@@ -179,6 +191,60 @@ def _icon_skip_reason(
     ):
         return "out_of_range"
     return None
+
+
+def _gfs_skip_reason(
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    flight_duration_hours: float,
+    as_of_time: datetime | None,
+    historical_mode: bool,
+) -> str | None:
+    from weatherbrief.fetch.grib.grib_fetch import gfs_window_out_of_range
+
+    if historical_mode:
+        # NOAA keeps old GFS runs, but replays and backdated briefings stay on
+        # Open-Meteo until that rule is decided for every GRIB-primary model.
+        return "historical"
+    if _hrrr_takes_route(route_points, departure_time, flight_duration_hours, as_of_time):
+        # The HRRR upgrade (#457) replaces the sounding of an Open-Meteo slot
+        # and keeps Open-Meteo's surface. Left exactly as it is.
+        return "hrrr_route"
+    if gfs_window_out_of_range(departure_time, flight_duration_hours, as_of_time):
+        return "out_of_range"
+    return None
+
+
+def _hrrr_takes_route(
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    flight_duration_hours: float,
+    as_of_time: datetime | None,
+) -> bool:
+    """Would ``_try_enrich_gfs_from_hrrr`` pass its network-free gates?
+
+    Same three checks in the same order: the ``WB_HRRR_ENABLED`` switch, the
+    whole route in the CONUS domain, a publishable run reaching the window
+    end. A probe failure later still falls back to plain GFS there.
+    """
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        hrrr_window_out_of_range,
+        route_in_hrrr_domain,
+    )
+
+    if os.environ.get("WB_HRRR_ENABLED", "true").strip().lower() not in (
+        "1", "true", "yes",
+    ):
+        return False
+    try:
+        if not route_in_hrrr_domain(route_points):
+            return False
+    except Exception:
+        logger.warning("GRIB-primary gfs: HRRR domain check failed", exc_info=True)
+        return False
+    return not hrrr_window_out_of_range(
+        departure_time, flight_duration_hours, as_of_time,
+    )
 
 
 def _waypoint_for(point: RoutePoint) -> Waypoint:
@@ -312,7 +378,7 @@ def apply_failure_drill(
     """Dev-only drill: pretend GRIB delivered nothing for some slots.
 
     ``WB_GRIB_PRIMARY_DRILL=icon`` empties every point of the icon skeleton
-    after enrichment, ``icon:half`` every other point (ECMWF likewise), so
+    after enrichment, ``icon:half`` every other point (ECMWF and GFS likewise), so
     the Open-Meteo fallback and its reporting can be watched end to end on a
     machine where GRIB is healthy. Unset in production.
     """

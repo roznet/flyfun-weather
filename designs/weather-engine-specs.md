@@ -117,25 +117,25 @@ Via `fetch/grib/` (hrrr_fetch.py, decode.py):
 - Freshness source `hrrr:noaa` tracks **extended cycles only** (00/06/12/18z): tracking all 24 hourly cycles would flag short-lead US packs stale (and auto-refresh them) every hour.
 - Out of scope: HRRR-Alaska, sub-hourly output, HRRR ensemble; RRFS migration is designed to be a bucket/path + grid-constants swap inside `hrrr_fetch.py`.
 
-### GRIB-primary ECMWF / ICON slots (#912)
-When a network-free gate says GRIB covers the flight (ECMWF: a ready ECPDS run reaching the window end; ICON: route in the ICON-EU domain, window in range, not historical), `run_fetch` makes **no Open-Meteo request** for that slot. It starts as an empty skeleton over Open-Meteo's day span, enrichment fills the sounding and every surface field from GRIB, and `fill_grib_primary_gaps` fetches Open-Meteo (full variable set) only for the points GRIB left short in the flight window, splicing values into gaps only. If that fallback fails the slot is dropped like a failed Open-Meteo fetch. Kill switch `WB_GRIB_PRIMARY=0`. Flow and coverage rule: `fetch.md` "GRIB-primary slots"; value changes: meteorology-decisions §61.
+### GRIB-primary ECMWF / ICON / GFS slots (#912, #913)
+When a network-free gate says GRIB covers the flight (ECMWF: a ready ECPDS run reaching the window end; ICON: route in the ICON-EU domain, window in range, not historical; GFS: not historical, not an HRRR route, window within 384 h of the newest cycle), `run_fetch` makes **no Open-Meteo request** for that slot. It starts as an empty skeleton over Open-Meteo's day span, enrichment fills the sounding and every surface field from GRIB, and `fill_grib_primary_gaps` fetches Open-Meteo (full variable set) only for the points GRIB left short in the flight window, splicing values into gaps only. If that fallback fails the slot is dropped like a failed Open-Meteo fetch. Kill switch `WB_GRIB_PRIMARY=0`. Flow and coverage rule: `fetch.md` "GRIB-primary slots"; value changes: meteorology-decisions §61 (ECMWF / ICON) and §62 (GFS: whole 28-level column TMP/RH/UGRD/VGRD/HGT/VVEL/CLMR/ICMR from NOAA pgrb2 + pgrb2b).
 
 Surface field sources on a GRIB-primary slot:
 
-| `HourlyForecast` field | ECMWF (a1) | ICON-EU / D2 |
-|---|---|---|
-| T, Td 2 m | 2t, 2d | t_2m, td_2m |
-| RH 2 m | from 2t/2d (Magnus) | relhum_2m, else from T/Td |
-| wind 10 m, gust | 10u/10v (U/V interp), 10fg (window max) | u_10m/v_10m, vmax_10m (max since last output) |
-| MSLP, surface pressure | msl, sp | pmsl, ps |
-| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) |
-| cloud cover total/low/mid/high | tcc/lcc/mcc/hcc | clct/clcl/clcm/clch (cloud-diag blob) |
-| CAPE / CIN | mucape / mlcin100 | cape_ml / None |
-| visibility | vis | vis |
-| freezing level | deg0l (→ MSL) | hzerocl (MSL; negative = none) |
-| precip probability, lifted index | None | None |
+| `HourlyForecast` field | ECMWF (a1) | ICON-EU / D2 | GFS 0.25° (pgrb2) |
+|---|---|---|---|
+| T, Td 2 m | 2t, 2d | t_2m, td_2m | TMP, DPT 2 m |
+| RH 2 m | from 2t/2d (Magnus) | relhum_2m, else from T/Td | RH 2 m, else from T/Td |
+| wind 10 m, gust | 10u/10v (U/V interp), 10fg (window max) | u_10m/v_10m, vmax_10m (max since last output) | UGRD/VGRD 10 m, GUST surface |
+| MSLP, surface pressure | msl, sp | pmsl, ps | PRMSL, PRES |
+| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) | APCP, APCP − ACPCP − snow, ACPCP, APCP × CPOFP × 0.7 (0-N totals differenced) |
+| cloud cover total/low/mid/high | tcc/lcc/mcc/hcc | clct/clcl/clcm/clch (cloud-diag blob) | instantaneous TCDC/LCDC/MCDC/HCDC |
+| CAPE / CIN | mucape / mlcin100 | cape_ml / None | surface CAPE / CIN |
+| visibility | vis | vis | VIS |
+| freezing level | deg0l (→ MSL) | hzerocl (MSL; negative = none) | HGT at 0C isotherm |
+| precip probability, lifted index | None | None | None, LFTX |
 
-On a slot that still has Open-Meteo underneath (gate refused) every field in the table that Open-Meteo supplies keeps Open-Meteo's value: the #912 writes are fill-only.
+On a slot that still has Open-Meteo underneath (gate refused) every field in the table that Open-Meteo supplies keeps Open-Meteo's value: the #912 / #913 writes are fill-only.
 
 ### ECMWF IFS GRIB2 enrichment
 Via `fetch/grib/` (ecmwf_fetch.py, decode.py):
@@ -415,7 +415,7 @@ GRIB enrichment targets native model forecast hours only (e.g. every 3h for GFS 
 - `CAPE`, `CIN` — surface-based convective indices at 0.25° resolution
 - Full temperature/wind column — could enable full sounding replacement for GFS too
 
-**4. Time interpolation (linear)** — GFS cloud diagnostics now use window-midpoint linear interpolation when `gfs_init` is provided (see [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)), GFS CLW/ICMR use step-time linear interp, and ECMWF / ICON-EU pressure-level soundings + ECMWF surface scalars are linearly interpolated between native steps. ICON-EU / ECMWF cloud diagnostics still use forward-fill (instantaneous fields where persistence is the right semantic). The remaining linear-interp opportunity is GFS pressure-level fields (T, RH, wind) — currently sourced from Open-Meteo, so this only becomes relevant if/when GFS moves to full GRIB-primary sourcing (item 6). Infrastructure exists (`bracket_forecast_hours()`).
+**4. Time interpolation (linear)** — GFS cloud diagnostics now use window-midpoint linear interpolation when `gfs_init` is provided (see [meteorology-decisions §3](./meteorology-decisions.md#3-gfs-cloud-diagnostics-window-midpoint-interp--rhcondensate-gate)), GFS CLW/ICMR use step-time linear interp, and ECMWF / ICON-EU pressure-level soundings + ECMWF surface scalars are linearly interpolated between native steps. ICON-EU / ECMWF cloud diagnostics still use forward-fill (instantaneous fields where persistence is the right semantic). GFS pressure-level fields (T, RH, wind) on a GRIB-primary GFS slot (#913) take the same model-agnostic sounding interp between native steps (3-hourly past f120); on an Open-Meteo GFS slot they stay Open-Meteo's hourly values.
 
 **5. Ellrod turbulence index** — Grid-based CAT metric:
 ```
