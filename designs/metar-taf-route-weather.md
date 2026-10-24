@@ -194,10 +194,13 @@ corridor station's: EGTF → EGLL, EGLK → EGLF. Rules and rationale:
   web and iOS show under the glance line, the dial and the airport tile.
 - **Observations tables** (web, iOS Advisory tab, HTML/PDF report, #776): the
   proxied field still has no row (it has no report of its own); instead each
-  table carries one gray `"<ICAO>: <proxy_caption>"` line above it
-  (`.obs-proxy` on web and in `briefing.html`, `RouteObservations.proxyLines`
-  + `routeObservationsProxy` on iOS). Only the `ICAO: ` prefix is client-side,
-  the caption is the server's string, so all three read the same.
+  table carries one gray line above it, the server-built
+  `AirportObservation.proxy_line` ("EGTF: using EGLL as proxy · 8 NM NE"):
+  `.obs-proxy` on web and in `briefing.html`, `RouteObservations.proxyLines`
+  + `routeObservationsProxy` on iOS. No client composes it, so all three read
+  the same. Packs written before #776 carry no `proxy_line` and show no line;
+  a D-0 pack with a live layer re-serializes `route_observations` on read, so
+  it gets one.
 
 ### Comparison (`run_observation_comparison`)
 

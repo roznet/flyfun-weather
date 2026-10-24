@@ -251,7 +251,8 @@
      "gust_kt": 20,
      "text": "12G20 kt"
     },
-    "proxy_caption": null
+    "proxy_caption": null,
+    "proxy_line": null
    },
    "folded": false,
    "folded_at": null,
@@ -536,7 +537,8 @@
      "gust_kt": null,
      "text": "6 kt"
     },
-    "proxy_caption": null
+    "proxy_caption": null,
+    "proxy_line": null
    }
   }
  },
@@ -791,7 +793,8 @@
      "gust_kt": 20,
      "text": "12G20 kt"
     },
-    "proxy_caption": null
+    "proxy_caption": null,
+    "proxy_line": null
    },
    "folded": true,
    "folded_at": "2026-10-23T10:04:00Z",
@@ -1076,7 +1079,8 @@
      "gust_kt": null,
      "text": "6 kt"
     },
-    "proxy_caption": null
+    "proxy_caption": null,
+    "proxy_line": null
    }
   }
  }

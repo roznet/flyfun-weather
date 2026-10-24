@@ -1277,10 +1277,11 @@ export function renderRouteObservations(
     : '';
 
   // #767: a departure/destination with no METAR/TAF of its own reads a nearby
-  // station's; its row has no report, so name the stand-in above the table.
+  // station's; its row has no report, so name the stand-in above the table
+  // with the server's line (#776), the same one iOS and the PDF report show.
   const proxyHtml = obs.airports
-    .filter((apt) => apt.proxy_caption)
-    .map((apt) => `<p class="obs-proxy">${escapeHtml(apt.icao)}: ${escapeHtml(apt.proxy_caption!)}</p>`)
+    .filter((apt) => apt.proxy_line)
+    .map((apt) => `<p class="obs-proxy">${escapeHtml(apt.proxy_line!)}</p>`)
     .join('');
 
   // Table rows — only airports with METAR or TAF

@@ -287,6 +287,7 @@
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": null,
     "taf_applicable_lines": [],
@@ -412,6 +413,7 @@
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LEMI",
@@ -2294,6 +2296,7 @@
     "name": "Sabadell Airfield",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": null,
     "taf_applicable_lines": [],
@@ -2372,6 +2375,7 @@
     "name": "Josep Tarradellas Barcelona-El Prat Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LEBL",
@@ -2583,6 +2587,7 @@
     "name": "Reus Airport",
     "nearest_waypoint_icao": "LELL",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LERS",
@@ -2718,6 +2723,7 @@
     "name": "Castell\u00f3n-Costa Azahar Airport",
     "nearest_waypoint_icao": "DIKUT",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LECH",
@@ -2853,6 +2859,7 @@
     "name": "Valencia Airport",
     "nearest_waypoint_icao": "VLC",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LEVC",
@@ -2988,6 +2995,7 @@
     "name": "Alicante-Elche Miguel Hern\u00e1ndez Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LEAL",
@@ -3123,6 +3131,7 @@
     "name": "Alcantarilla Air Base",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LERI",
@@ -3258,6 +3267,7 @@
     "name": "San Javier Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LELC",
@@ -3427,6 +3437,7 @@
     "name": "Region of Murcia International Airport",
     "nearest_waypoint_icao": "LEMI",
     "proxy_caption": null,
+    "proxy_line": null,
     "route_end": null,
     "runway_wind": {
      "icao": "LEMI",

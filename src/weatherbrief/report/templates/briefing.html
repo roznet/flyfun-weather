@@ -176,8 +176,8 @@
   {% endif %}
   {# #776: a field with no METAR/TAF of its own reads a nearby station's (#767);
      its row has no report, so name the stand-in above the table, as the web does. #}
-  {% for apt in route_observations.airports if apt.proxy_caption %}
-  <p class="obs-proxy">{{ apt.icao }}: {{ apt.proxy_caption }}</p>
+  {% for apt in route_observations.airports if apt.proxy_line %}
+  <p class="obs-proxy">{{ apt.proxy_line }}</p>
   {% endfor %}
   <table>
     <thead>

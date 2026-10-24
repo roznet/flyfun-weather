@@ -751,6 +751,10 @@ export interface AirportObservation {
   /** #767 — server-built gray line for a proxied field ("using EGLL as proxy ·
    *  8 NM NE"); null otherwise. */
   proxy_caption?: string | null;
+  /** #776 — the caption named for its field ("EGTF: using EGLL as proxy ·
+   *  8 NM NE"), for the line above the observations table. Absent on packs
+   *  written before #776; null when the field reports itself. */
+  proxy_line?: string | null;
   // --- #880: the airport card's readings, all server-computed. Absent on
   // older servers; the card leaves a missing one out rather than derive it.
   /** The TAF hour by hour: the card's strip. Empty without a TAF. */

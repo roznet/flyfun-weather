@@ -129,12 +129,10 @@ nonisolated struct RouteObservations: Codable, Sendable {
 
     /// #776: one gray line per field reading a nearby station's METAR/TAF
     /// (#767), shown above the table: "EGTF: using EGLL as proxy · 8 NM NE".
-    /// The caption is the server's string; only the "ICAO: " prefix is added
-    /// here, exactly as the web (`renderRouteObservations`) and the PDF report do.
+    /// The server builds the whole line (`proxy_line`), so the web, iOS and
+    /// the PDF report read one string.
     var proxyLines: [String] {
-        (airports ?? []).compactMap { apt in
-            apt.proxyCaption.map { "\(apt.icao): \($0)" }
-        }
+        (airports ?? []).compactMap(\.proxyLine)
     }
 
     /// The subset a phone-width table shows before "Show all": the `limit`
@@ -265,6 +263,10 @@ nonisolated struct AirportObservation: Codable, Identifiable, Sendable, Equatabl
     let metarProxy: ObsProxy?
     let tafProxy: ObsProxy?
     let proxyCaption: String?
+    /// #776: the caption named for its field ("EGTF: using EGLL as proxy ·
+    /// 8 NM NE"), for the line above the observations table. Nil when the
+    /// field reports itself, and on packs written before #776.
+    let proxyLine: String?
 
     // Airport card readings (#880), all server-computed; absent on older
     // servers, and the card leaves a missing one out rather than derive it.
