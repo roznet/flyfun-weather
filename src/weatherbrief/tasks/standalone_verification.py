@@ -1279,6 +1279,18 @@ def _build_grib_snapshots(
     if not eu_steps and not d2_steps:
         return [], set()
 
+    # EU up front only where D2 can't serve: steps past the D2 horizon, or
+    # every step when some airport is outside D2 (EU files are whole-grid, so
+    # the bytes are per step, not per airport). A D2 shortfall inside that is
+    # topped up from EU afterwards, from the same cache when it was fetched.
+    d2_icaos = {a.icao for a in d2_airports}
+    d2_step_set = set(d2_steps.values())
+    some_outside = any(a.icao not in d2_icaos for a in airports)
+    eu_first = sorted({
+        fhour for fhour in eu_steps.values()
+        if some_outside or fhour not in d2_step_set
+    })
+
     # D2 fields, D2 cloud diagnostics and EU fields download side by side,
     # each on its own session: the caller's belongs to the EU cloud-diag
     # thread. Each task gets the caller's context (decode priority).
@@ -1288,7 +1300,7 @@ def _build_grib_snapshots(
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=3, thread_name_prefix="grib-icon-snap",
     ) as pool:
-        d2_list = sorted(set(d2_steps.values()))
+        d2_list = sorted(d2_step_set)
         d2_fields_f = _submit(
             pool, _fetch_icon_fields, init_date, init_hour, d2_list, d2_airports,
             ICON_D2, priority,
@@ -1297,9 +1309,9 @@ def _build_grib_snapshots(
             pool, _fetch_icon_d2_lookup, init_time, d2_airports, d2_list, priority,
         ) if d2_steps else None
         eu_fields_f = _submit(
-            pool, _fetch_icon_fields, init_date, init_hour,
-            sorted(set(eu_steps.values())), airports, ICON_EU, priority,
-        ) if eu_steps else None
+            pool, _fetch_icon_fields, init_date, init_hour, eu_first, airports,
+            ICON_EU, priority,
+        ) if eu_first else None
         d2_fields = d2_fields_f.result() if d2_fields_f is not None else {}
         d2_lookup = d2_lookup_f.result() if d2_lookup_f is not None else None
         eu_fields = eu_fields_f.result() if eu_fields_f is not None else {}
@@ -1314,6 +1326,24 @@ def _build_grib_snapshots(
         d2_keys.add(_snapshot_hour_key(snap["icao"], snap["forecast_hour"]))
         built.append((snap, hourly))
     n_d2 = len(built)
+    if d2_airports and d2_steps and n_d2 == 0:
+        # Every D2 airport is on EU (or worse): a D2 outage, a late run or a
+        # failed diagnostics fetch, told apart from "no airport inside D2".
+        logger.warning(
+            "ICON_D2_SNAPSHOTS_EMPTY %s%02dz: 0 D2 rows for %d airport(s) in the "
+            "domain (%d/%d D2 steps, diagnostics %s); ICON-EU instead",
+            init_date, init_hour, len(d2_airports), len(d2_fields), len(d2_list),
+            "ok" if d2_lookup is not None else "failed",
+        )
+    short_steps = sorted({
+        fhour for valid, fhour in eu_steps.items()
+        if fhour not in eu_fields
+        and any(_snapshot_hour_key(a.icao, valid) not in d2_keys for a in d2_airports)
+    } - set(eu_first))
+    if short_steps:
+        eu_fields = {**eu_fields, **_fetch_icon_fields(
+            init_date, init_hour, short_steps, airports, ICON_EU, priority,
+        )}
     for snap, hourly in _icon_rows(
         model, init_time, airports, eu_steps, eu_fields, lookup,
         skip=d2_keys,
@@ -1393,6 +1423,8 @@ def _icon_d2_airports(
     ]
     if not inside:
         return []
+    # Serial, before the parallel downloads: one small DWD file on the first
+    # call per process, then the mask is read from disk.
     try:
         with requests.Session() as session:
             mask = load_d2_validity_mask(

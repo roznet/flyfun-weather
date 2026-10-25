@@ -36,6 +36,7 @@ from weatherbrief.fetch.grib.cache import (
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
+    from weatherbrief.fetch.grib.icon_eu_fetch import IconVariant
     from weatherbrief.models.analysis import NWPCloudDiagnostics
 
 logger = logging.getLogger(__name__)
@@ -202,7 +203,7 @@ def fetch_icon_cloud_diag(
     data_dir: Path | None = None,
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
-    variant=None,
+    variant: "IconVariant | None" = None,
 ) -> dict[int, list[AirportGribDiagnostics]]:
     """Fetch ICON cloud diagnostics for airports at specified forecast hours.
 
@@ -411,6 +412,10 @@ def _recent_404(url: str, now: float) -> bool:
 
 def _note_404(url: str, now: float) -> None:
     with _ICON_404_LOCK:
+        # Expired entries go here too, so a long-lived worker doesn't keep
+        # every URL that ever 404'd.
+        for stale in [u for u, until in _ICON_404_UNTIL.items() if until <= now]:
+            del _ICON_404_UNTIL[stale]
         _ICON_404_UNTIL[url] = now + _ICON_404_TTL_S
 
 
@@ -535,7 +540,7 @@ def ensure_icon_snapshot_files(
     init_hour: int,
     steps: list[int],
     *,
-    variant=None,
+    variant: "IconVariant | None" = None,
     session: requests.Session | None = None,
     data_dir: Path | None = None,
 ) -> int:
@@ -578,7 +583,7 @@ def fetch_icon_snapshot_fields(
     data_dir: Path | None = None,
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
-    variant=None,
+    variant: "IconVariant | None" = None,
 ) -> dict[int, IconSnapshotStep]:
     """ICON pressure-level sounding + surface fields at airports (#914, #928).
 
