@@ -152,7 +152,7 @@ class TestWarmFlights:
         seen: list = []
         stats, _ = _run("hrrr", [_Row("f1")], _writing_unit(tmp_path, 1, seen))
         assert seen == ["f1"]
-        assert "disabled" not in stats
+        assert stats["disabled"] == 0
 
     def test_horizon_is_the_sources(self, monkeypatch):
         monkeypatch.setenv("WB_FLIGHT_WARM_HORIZON_HOURS_GFS", "30")
