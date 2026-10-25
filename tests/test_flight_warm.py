@@ -537,20 +537,44 @@ class TestWarmIconAlternates:
     def _flight(self, hours_out: float = 0.0, route=object()):
         return _Flight("f1", NOW + timedelta(hours=hours_out), 2.0, ["pt"], route=route)
 
-    def _run(self, source, flight, tmp_path, plan, stop=lambda: False):
+    def _run(self, source, flight, tmp_path, plan, stop=lambda: False, land=True):
+        from weatherbrief.fetch.grib.cache import cache_dir_for_run
         from weatherbrief.fetch.grib.flight_warm import _warm_icon_alternates
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_EU_RAIN_CON_CACHE_KEY,
+            icon_cloud_diag_cache_key,
+            icon_eu_previous_step,
+        )
+        from weatherbrief.tasks.standalone_grib import _icon_snapshot_plan
 
         calls: list = []
+
+        def _snapshot(d, h, steps, *, variant, data_dir, **kw):
+            calls.append(("snapshot", variant.slug, steps))
+            run_dir = cache_dir_for_run(data_dir, d, h, model=variant.slug)
+            wanted, _ = _icon_snapshot_plan(d, h, steps, variant)
+            for _url, ck in wanted.values() if land else ():
+                put_cached(run_dir, ck, b"x")
+            return 0
+
+        def _diag(d, h, steps, *, variant, data_dir, **kw):
+            calls.append(("diag", variant.slug, steps))
+            run_dir = cache_dir_for_run(data_dir, d, h, model=variant.slug)
+            for f in steps if land else ():
+                put_cached(run_dir, cache_key(f, icon_cloud_diag_cache_key(variant)), b"x")
+                prev = icon_eu_previous_step(f, variant)
+                if prev is not None and "rain_con" in variant.cloud_diag_variables:
+                    put_cached(run_dir, cache_key(prev, ICON_EU_RAIN_CON_CACHE_KEY), b"x")
+            return steps if land else []
+
         with patch("weatherbrief.tasks.alternates.alternates_fetch_airports",
                    return_value=["dest", "alt"]) as airports, \
                 patch("weatherbrief.tasks.standalone_verification.icon_snapshot_fetch_plan",
                       return_value=plan) as planner, \
                 patch("weatherbrief.tasks.standalone_grib.ensure_icon_snapshot_files",
-                      side_effect=lambda d, h, steps, **kw: calls.append(
-                          ("snapshot", kw["variant"].slug, steps)) or 0), \
+                      side_effect=_snapshot), \
                 patch("weatherbrief.tasks.standalone_grib.ensure_icon_cloud_diag_files",
-                      side_effect=lambda d, h, steps, **kw: calls.append(
-                          ("diag", kw["variant"].slug, steps)) or steps):
+                      side_effect=_diag):
             out = _warm_icon_alternates(
                 source, INIT, flight, tmp_path, stop, db_path="/db", now=NOW,
             )
@@ -599,6 +623,14 @@ class TestWarmIconAlternates:
             "icon-eu", self._flight(route=None), tmp_path, _plan([5], [5]),
         )
         assert out.reason == "alternates_no_route" and calls == []
+
+    def test_downloads_that_leave_files_cold_are_failed(self, tmp_path):
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(), tmp_path, _plan([5], []), land=False,
+        )
+        assert len(calls) == 2
+        assert out.status == "failed" and "icon-eu diag [5]" in out.reason
+        assert out.hours == set()
 
     def test_stop_is_only_consulted_ahead_of_a_download(self, tmp_path):
         from weatherbrief.fetch.grib.cache import cache_dir_for_run
@@ -661,6 +693,13 @@ class TestIconUnitWithAlternates:
             lambda *a, **kw: _Outcome("stopped"),
         )
         assert out.status == "stopped" and out.hours == {("r", 1)}
+
+    def test_cold_alternates_files_fail_the_flight(self):
+        out = self._unit(
+            "icon-eu", _Outcome("warmed", hours={("r", 1)}),
+            lambda *a, **kw: _Outcome("failed", reason="alternates cold: x"),
+        )
+        assert out.status == "failed" and out.reason == "alternates cold: x"
 
     def test_alternates_failure_keeps_the_briefing_outcome(self):
         def boom(*a, **kw):
