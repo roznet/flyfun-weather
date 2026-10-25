@@ -36,6 +36,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from weatherbrief.fetch.grib.http_retry import get_with_retry
+
 logger = logging.getLogger(__name__)
 
 # DWD Open Data base URL (ICON-EU). ICON-D2 lives under a sibling path — see
@@ -1067,7 +1069,7 @@ def _download_one_file(
     aggregate failure modes (HTTP 404 vs network errors).
     """
     try:
-        resp = session.get(url, timeout=REQUEST_TIMEOUT)
+        resp = get_with_retry(session, url, timeout=REQUEST_TIMEOUT)
         if resp.status_code != 200:
             logger.debug("HTTP %d for %s", resp.status_code, url.split("/")[-1])
             return None, resp.status_code

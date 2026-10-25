@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from weatherbrief.fetch.grib.gfs_idx import ByteRange, CloudDiagByteRange
+from weatherbrief.fetch.grib.http_retry import get_with_retry
 
 MAX_DOWNLOAD_WORKERS = 8
 
@@ -259,7 +260,7 @@ def fetch_idx(
     sess = session or requests.Session()
     url = gfs_idx_url(init_date, init_hour, forecast_hour, product)
     logger.debug("Fetching .idx: %s", url)
-    resp = sess.get(url, timeout=_REQUEST_TIMEOUT)
+    resp = get_with_retry(sess, url, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()
     return resp.text
 
@@ -273,8 +274,8 @@ def _fetch_one_byte_range(
     range_end = br.end if br.end is not None else ""
     range_header = f"bytes={br.start}-{range_end}"
     try:
-        resp = session.get(
-            url,
+        resp = get_with_retry(
+            session, url,
             headers={"Range": range_header},
             timeout=_REQUEST_TIMEOUT,
         )
@@ -347,8 +348,8 @@ def _fetch_one_cloud_diag_range(
     range_end = br.end if br.end is not None else ""
     range_header = f"bytes={br.start}-{range_end}"
     try:
-        resp = session.get(
-            url,
+        resp = get_with_retry(
+            session, url,
             headers={"Range": range_header},
             timeout=_REQUEST_TIMEOUT,
         )

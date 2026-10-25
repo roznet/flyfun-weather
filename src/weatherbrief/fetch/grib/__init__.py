@@ -68,11 +68,13 @@ from weatherbrief.models.analysis import CONDENSATE_LEVEL_FIELDS
 
 logger = logging.getLogger(__name__)
 
-# GFS enrichment fans out into two parallel branches (_enrich_clwmr_icmr +
-# _enrich_cloud_diagnostics) that share one session, each running 8 download
-# workers — peak 16 concurrent connections. Sized to 20 to leave headroom for
-# concurrent .idx fetches and avoid urllib3 "Connection pool is full" warnings.
-_POOL_MAXSIZE = 20
+# Peak concurrent connections on the shared GRIB session: the GRIB-primary GFS
+# reader downloads _GFS_DOWNLOAD_WORKERS (4) hours side by side, each in
+# batches of MAX_DOWNLOAD_WORKERS (8) range requests (#913), alongside the
+# cloud-diagnostics branch (8) and .idx fetches. Sized above that sum so
+# urllib3 does not churn connections ("Connection pool is full"), which the
+# old 20 did once #913 landed.
+_POOL_MAXSIZE = 48
 
 _M_TO_FT = 3.28084
 
