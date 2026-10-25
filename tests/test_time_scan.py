@@ -1140,6 +1140,32 @@ class TestExtendOpenMeteoAdjacentDay:
         for span in per_point["meteofrance"]:
             assert span is not None and span[1] >= DAY + timedelta(days=1)
 
+    def test_grib_only_meteofrance_is_not_fetched(self, monkeypatch):
+        """A meteofrance slot built from AROME GRIB (#940) has no Open-Meteo
+        source: the extension leaves it alone and calls nothing for it."""
+        import weatherbrief.fetch.open_meteo as om
+        from weatherbrief.tasks.time_scan import extend_openmeteo_adjacent_day
+
+        calls: list = []
+
+        class _Recording(_FakeOMClient):
+            def fetch_multi_point(self, points, model, **k):
+                calls.append(model)
+                return super().fetch_multi_point(points, model, **k)
+
+        cs = _cs(ModelSource.METEOFRANCE, [_wf(ModelSource.METEOFRANCE)])
+        n_before = len(cs.point_forecasts[0].hourly)
+        monkeypatch.setattr(om, "OpenMeteoClient", _Recording)
+
+        next_day = (DAY + timedelta(days=1)).date()
+        extended = extend_openmeteo_adjacent_day(
+            [cs], cs.route_points, next_day, next_day,
+            grib_only={ModelSource.METEOFRANCE},
+        )
+        assert extended == 0
+        assert calls == []
+        assert len(cs.point_forecasts[0].hourly) == n_before
+
     def test_dedups_existing_day(self, monkeypatch):
         """Re-fetching a day the pack already holds adds nothing (dedup by
         time) — the hourly count is unchanged, no double rows."""
