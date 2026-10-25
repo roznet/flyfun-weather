@@ -522,8 +522,9 @@ def _warm_icon_alternates(
 def _merge(briefing: _Outcome, alternates: _Outcome) -> _Outcome:
     """One flight's outcome from its briefing warm and its alternates warm."""
     hours = briefing.hours | alternates.hours
-    if alternates.status in ("stopped", "failed"):
-        return _Outcome(alternates.status, hours=hours, reason=alternates.reason)
+    for part in (alternates, briefing):
+        if part.status in ("stopped", "failed"):
+            return _Outcome(part.status, hours=hours, reason=part.reason)
     if briefing.status == "skipped" and alternates.status == "skipped":
         return briefing
     return _Outcome("warmed", hours=hours)
