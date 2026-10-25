@@ -161,14 +161,10 @@ def _rule_window(
     dep_end = dep + timedelta(hours=max(duration_hours, 1.0))
     if model == ModelSource.ECMWF:
         return dep - _ECMWF_ENRICH_MARGIN, dep_end + _ECMWF_ENRICH_MARGIN
-    floor = dep.replace(minute=0, second=0, microsecond=0)
-    import math
+    from weatherbrief.fetch.grib.primary import window_end_hour
 
-    end = dep + timedelta(hours=max(1, math.ceil(max(duration_hours, 0.0))))
-    hi = end.replace(minute=0, second=0, microsecond=0)
-    if hi < end:
-        hi += timedelta(hours=1)
-    return floor, hi
+    floor = dep.replace(minute=0, second=0, microsecond=0)
+    return floor, window_end_hour(dep, duration_hours)
 
 
 def compute_model_coverage(
@@ -584,7 +580,11 @@ def confirm_candidate(
     # OM values and the multi-model grade below is honest across the day
     # boundary. Same-day candidates already have their OM base — the bounds
     # check skips the fetch for them.
-    cand_end = cand + timedelta(hours=max(route.flight_duration_hours, 1.0))
+    # The window runs through the hour after the arrival, as the briefing
+    # fetch does (#925): a 23:40Z arrival needs 00Z of the next day.
+    from weatherbrief.fetch.grib.primary import window_end_hour
+
+    cand_end = window_end_hour(cand, route.flight_duration_hours)
     bounds = _pack_hourly_bounds(cross_sections)
     if bounds is None or cand < bounds[0] or cand_end > bounds[1]:
         extend_openmeteo_adjacent_day(

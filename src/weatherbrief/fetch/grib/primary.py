@@ -351,14 +351,39 @@ def required_hours(
     (``contiguous_window_forecast_hours``) and the window the advisories
     sample at.
     """
+    lo = _aware(departure_time).replace(minute=0, second=0, microsecond=0)
+    hi = window_end_hour(departure_time, flight_duration_hours)
+    n = int((hi - lo).total_seconds() // 3600)
+    return [lo + timedelta(hours=h) for h in range(n + 1)]
+
+
+def window_end_hour(
+    departure_time: datetime, flight_duration_hours: float,
+) -> datetime:
+    """The last hour of the flight window: ``ceil(departure + ceil(duration))``.
+
+    The upper bound of :func:`required_hours`, so the hour *after* the
+    arrival: a 23:40Z arrival ends the window at 00Z the next day.
+    """
     dep = _aware(departure_time)
-    lo = dep.replace(minute=0, second=0, microsecond=0)
     end = dep + timedelta(hours=max(1, math.ceil(max(flight_duration_hours, 0.0))))
     hi = end.replace(minute=0, second=0, microsecond=0)
     if hi < end:
         hi += timedelta(hours=1)
-    n = int((hi - lo).total_seconds() // 3600)
-    return [lo + timedelta(hours=h) for h in range(n + 1)]
+    return hi
+
+
+def fetch_end_date(
+    departure_time: datetime, flight_duration_hours: float,
+) -> str:
+    """``end_date`` (YYYY-MM-DD) of a briefing's fetch span (#925).
+
+    The date of :func:`window_end_hour`, so the span holds the hour after the
+    arrival for every model, Open-Meteo and the GRIB-primary skeleton alike.
+    Only an arrival in the last hour before midnight gains a day; an
+    Open-Meteo span up to 14 days costs the same billed weight.
+    """
+    return window_end_hour(departure_time, flight_duration_hours).strftime("%Y-%m-%d")
 
 
 def _hour_covered(h: HourlyForecast | None) -> bool:
@@ -492,10 +517,9 @@ def fill_grib_primary_gaps(
     """
     from weatherbrief.fetch.open_meteo import EmptyForecastError
 
-    # Only the hours the slot can hold: the window ends at ceil(arrival), which
-    # for an arrival late in the day is 00Z of a day the fetch span
-    # (start_date..end_date) does not reach. Neither GRIB nor the Open-Meteo
-    # fallback has that hour, and an Open-Meteo slot never carried it either.
+    # Only the hours the slot can hold. The briefing span ends on
+    # fetch_end_date, which reaches ceil(arrival) (#925); this clip stays as a
+    # guard for a caller whose span stops short of it.
     span_lo = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     span_hi = (datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                + timedelta(hours=23))

@@ -367,7 +367,11 @@ def run_fetch(
     )
     if window_end_dt.tzinfo is None:
         window_end_dt = window_end_dt.replace(tzinfo=timezone.utc)
-    end_date = window_end_dt.strftime("%Y-%m-%d")
+    # Through the hour after the arrival, not the arrival's date: a 23:40Z
+    # arrival needs 00Z of the next day (#925).
+    from weatherbrief.fetch.grib.primary import fetch_end_date
+
+    end_date = fetch_end_date(departure_time, route.flight_duration_hours or 0)
 
     # Filter models up-front so we don't waste worker threads on skipped models.
     live_horizons = _open_meteo_live_horizons() if not historical_mode else {}
