@@ -3544,15 +3544,25 @@ def _gfs_hours_without_sounding(
     return out
 
 
-def _gfs_sounding_cache_key(fhour: int, levels: list[int]) -> str:
-    """Cache key of a sounding blob; a level subset gets its own file.
+def _gfs_sounding_cache_key(
+    fhour: int, levels: list[int], variables: frozenset[str] | None = None,
+) -> str:
+    """Cache key of a sounding blob; a level or variable subset gets its own file.
 
-    The briefing needs all of ``gfs_sounding_levels()``, so a blob cached
-    for a smaller set (map snapshots, #914) must never stand in for it.
+    The briefing needs all of ``gfs_sounding_levels()`` and
+    ``GFS_SOUNDING_VARIABLES``, so a blob cached for a smaller set (map
+    snapshots, #914) must never stand in for it.
     """
-    if sorted(levels) == sorted(gfs_sounding_levels()):
+    from weatherbrief.fetch.grib.gfs_idx import GFS_SOUNDING_VARIABLES
+
+    full_levels = sorted(levels) == sorted(gfs_sounding_levels())
+    full_vars = variables is None or set(variables) == set(GFS_SOUNDING_VARIABLES)
+    if full_levels and full_vars:
         return cache_key(fhour, GFS_SOUNDING_CACHE_KEY)
-    return cache_key(fhour, f"{GFS_SOUNDING_CACHE_KEY}_L{'-'.join(str(p) for p in sorted(levels))}")
+    suffix = "" if full_levels else f"_L{'-'.join(str(p) for p in sorted(levels))}"
+    if not full_vars:
+        suffix += f"_V{'-'.join(sorted(v.upper() for v in variables))}"
+    return cache_key(fhour, f"{GFS_SOUNDING_CACHE_KEY}{suffix}")
 
 
 def _gfs_hour_has_sounding(
@@ -3600,6 +3610,7 @@ def _gfs_idx_for(
 def _ensure_gfs_sounding(
     init_date: str, init_hour: int, fhour: int, run_dir: Path,
     idx_by_fhour: dict[int, str], session: requests.Session, levels: list[int],
+    variables: frozenset[str] | None = None,
 ) -> bool:
     """Cache the GRIB-primary sounding blob for ``fhour``; True when on disk.
 
@@ -3618,9 +3629,10 @@ def _ensure_gfs_sounding(
     from weatherbrief.fetch.grib.grib_fetch import gfs_grib2_url
     from weatherbrief.fetch.grib.hrrr_fetch import coalesce_ranges, iter_hrrr_range_chunks
 
-    ck = _gfs_sounding_cache_key(fhour, levels)
+    ck = _gfs_sounding_cache_key(fhour, levels, variables)
     if is_cached(run_dir, ck):
         return True
+    variables = variables or GFS_SOUNDING_VARIABLES
     plans = []
     for product in ("pgrb2", "pgrb2b"):
         # pgrb2b only when pgrb2 lacks a requested level (875, 825 … 525 hPa).
@@ -3630,7 +3642,7 @@ def _ensure_gfs_sounding(
         if idx is None:
             return False
         plans.append((product, plan_byte_ranges(
-            idx, target_levels=levels, variables=GFS_SOUNDING_VARIABLES,
+            idx, target_levels=levels, variables=variables,
         )))
     problem = gfs_sounding_plan_problem([r for _, rs in plans for r in rs], levels)
     if problem is not None:
@@ -3742,6 +3754,9 @@ def read_gfs_grib_points(
     idx_by_fhour: dict[int, str] | None = None,
     sounding: bool = True,
     levels: list[int] | None = None,
+    variables: frozenset[str] | None = None,
+    every_previous_step: bool = False,
+    priority: int | DecodePriority | None = None,
 ) -> tuple[dict[int, list], dict[int, list], list[int]]:
     """GFS GRIB values at arbitrary points: the briefing's GFS reader (#913).
 
@@ -3750,9 +3765,13 @@ def read_gfs_grib_points(
     ``gfs_idx.GFS_SURFACE_FIELDS`` and, with ``sounding``, the full column
     on ``levels`` (default ``gfs_sounding_levels()``; a subset cuts the
     byte ranges, skips pgrb2b when pgrb2 has them all, and caches apart).
-    The surface of the
-    native step before the first hour is read too, so its precipitation
-    can be differenced.
+    ``variables`` narrows the sounding the same way (default
+    ``gfs_idx.GFS_SOUNDING_VARIABLES``; the mandatory five are always
+    needed). The surface of the native step before the first hour is read
+    too, so its precipitation can be differenced; ``every_previous_step``
+    reads the step before every hour, for hours that are not contiguous
+    (map snapshots, #914). ``priority`` goes to the decode pool (``None``:
+    the decode-priority ContextVar).
 
     Returns ``(sounding_by_fhour, surface_by_fhour, surface_steps)``:
     sounding is ``{fhour: [ {level: {raw key: value}} per point ]}`` (the
@@ -3768,8 +3787,11 @@ def read_gfs_grib_points(
     fhours = sorted(forecast_hours)
     if not fhours:
         return {}, {}, []
-    lead = _gfs_previous_step(fhours[0])
-    surface_steps = ([lead] if lead is not None and lead not in fhours else []) + fhours
+    leads = {
+        prev for f in (fhours if every_previous_step else fhours[:1])
+        if (prev := _gfs_previous_step(f)) is not None and prev not in fhours
+    }
+    surface_steps = sorted(leads | set(fhours))
 
     # Hours download side by side (~177 MB each on a cold cache). Each blob
     # streams to disk, never into memory.
@@ -3778,6 +3800,7 @@ def read_gfs_grib_points(
             f: _submit_with_context(
                 pool, _ensure_gfs_sounding,
                 init_date, init_hour, f, run_dir, idx_by_fhour, session, levels,
+                variables,
             )
             for f in (fhours if sounding else [])
         }
@@ -3791,14 +3814,14 @@ def read_gfs_grib_points(
     sounding_hours = _gfs_ready_hours(snd_futures, "sounding")
     surface_hours = _gfs_ready_hours(sfc_futures, "surface")
     jobs = [
-        ("decode_gfs_sounding", (str(run_dir / _gfs_sounding_cache_key(f, levels)), point_lats, point_lons))
+        ("decode_gfs_sounding", (str(run_dir / _gfs_sounding_cache_key(f, levels, variables)), point_lats, point_lons))
         for f in sounding_hours
     ] + [
         ("decode_gfs_surface", (str(run_dir / cache_key(f, GFS_SURFACE_CACHE_KEY)), point_lats, point_lons))
         for f in surface_hours
     ]
     with _grib_time("gfs_grib_primary_decode"):
-        results = _dispatch_decode_parallel(jobs, return_exceptions=True)
+        results = _dispatch_decode_parallel(jobs, priority=priority, return_exceptions=True)
     sounding_by_fhour: dict[int, list] = {}
     surface_by_fhour: dict[int, list] = {}
     for (name, _), fhour, res in zip(jobs, sounding_hours + surface_hours, results):

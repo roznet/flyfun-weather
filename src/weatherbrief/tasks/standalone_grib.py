@@ -374,14 +374,14 @@ def fetch_icon_cloud_diag(
 
 
 @dataclass
-class IconSnapshotStep:
-    """One ICON-EU forecast step's raw fields at the airports (#914).
+class GribSnapshotStep:
+    """One ICON or GFS forecast step's raw fields at the airports (#914).
 
     Per-point lists in ``lats``/``lons`` order. ``pressure`` is the
     ``{level_hpa: {raw_key: value}}`` shape ``build_pressure_levels_from_grib``
-    takes; ``surface`` / ``prev_surface`` are keyed by DWD variable name (the
-    predecessor step carries the accumulated fields only), ``window_h`` the
-    hours between them. ``prev_surface`` is None when the predecessor could
+    takes; ``surface`` / ``prev_surface`` are keyed by the producer's variable
+    name (DWD's, or the GFS .idx name; an ICON predecessor carries the
+    accumulated fields only), ``window_h`` the hours between them. ``prev_surface`` is None when the predecessor could
     not be had, which leaves the step without precipitation.
     """
 
@@ -584,7 +584,7 @@ def fetch_icon_snapshot_fields(
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
     variant: "IconVariant | None" = None,
-) -> dict[int, IconSnapshotStep]:
+) -> dict[int, GribSnapshotStep]:
     """ICON pressure-level sounding + surface fields at airports (#914, #928).
 
     The GRIB-primary source for the ICON forecast-map and alternates
@@ -677,7 +677,7 @@ def fetch_icon_snapshot_fields(
         if res:
             (pressure_by_step if kind == "pl" else surface_by_step)[fhour] = res
 
-    result: dict[int, IconSnapshotStep] = {}
+    result: dict[int, GribSnapshotStep] = {}
     for fhour in steps:
         pressure = pressure_by_step.get(fhour)
         surface = surface_by_step.get(fhour)
@@ -685,12 +685,81 @@ def fetch_icon_snapshot_fields(
             continue
         prev_step = predecessor_of.get(fhour)
         prev_surface = surface_by_step.get(prev_step) if prev_step is not None else None
-        result[fhour] = IconSnapshotStep(
+        result[fhour] = GribSnapshotStep(
             pressure=pressure,
             surface=surface,
             prev_surface=prev_surface,
             window_h=(fhour - prev_step) if prev_surface is not None else None,
         )
+    return result
+
+
+def fetch_gfs_snapshot_fields(
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    lats: list[float],
+    lons: list[float],
+    data_dir: Path | None = None,
+    priority: "int | DecodePriority | None" = None,
+) -> dict[int, GribSnapshotStep]:
+    """GFS pressure-level sounding + surface fields at airports (#914).
+
+    The GFS counterpart of :func:`fetch_icon_snapshot_fields`, on #913's
+    reader (``read_gfs_grib_points``): per forecast hour the
+    ``GFS_SNAPSHOT_LEVELS`` column of ``GFS_SNAPSHOT_VARIABLES`` (pgrb2 only)
+    and the #913 surface blob, plus the surface of the native step before
+    each hour so precipitation can be de-accumulated (map hours are not
+    contiguous). The surface blobs are the briefing's own cache entries; the
+    reduced column caches under its own key.
+
+    An hour with no sounding or no surface is absent from the result. Never
+    raises: a failure is logged and costs the hours it touched.
+    """
+    from weatherbrief.fetch.grib import _gfs_previous_step, read_gfs_grib_points
+    from weatherbrief.fetch.grib.cache import pin_run_dir
+    from weatherbrief.fetch.grib.gfs_idx import (
+        GFS_SNAPSHOT_LEVELS,
+        GFS_SNAPSHOT_VARIABLES,
+    )
+
+    if not forecast_hours:
+        return {}
+    if data_dir is None:
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    purge_old_runs(data_dir, model="gfs")  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
+    steps = sorted(set(forecast_hours))
+    try:
+        # Own session (the concurrent cloud-diag thread owns the caller's);
+        # pinned so a purge from another caller can't evict the run mid-read.
+        with requests.Session() as session, pin_run_dir(run_dir):
+            sounding, surface, _ = read_gfs_grib_points(
+                init_date, init_hour, steps, lats, lons,
+                run_dir=run_dir, session=session,
+                levels=list(GFS_SNAPSHOT_LEVELS), variables=GFS_SNAPSHOT_VARIABLES,
+                every_previous_step=True, priority=priority,
+            )
+    except Exception:
+        logger.warning("GFS snapshot GRIB %s%02dz failed", init_date, init_hour, exc_info=True)
+        return {}
+
+    result: dict[int, GribSnapshotStep] = {}
+    for fhour in steps:
+        if not sounding.get(fhour) or not surface.get(fhour):
+            continue
+        prev_step = _gfs_previous_step(fhour)
+        prev_surface = surface.get(prev_step) if prev_step is not None else None
+        result[fhour] = GribSnapshotStep(
+            pressure=sounding[fhour],
+            surface=surface[fhour],
+            prev_surface=prev_surface,
+            window_h=(fhour - prev_step) if prev_surface is not None else None,
+        )
+    logger.info(
+        "GFS snapshot GRIB %s%02dz: %d/%d step(s) with sounding and surface",
+        init_date, init_hour, len(result), len(steps),
+    )
     return result
 
 

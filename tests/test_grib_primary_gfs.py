@@ -190,6 +190,25 @@ def test_sounding_cache_key_separates_level_subsets():
     assert len(gfs_sounding_levels()) == 28
 
 
+def test_sounding_cache_key_separates_variable_subsets():
+    # The map's reduced column (#914) must never stand in for the briefing's.
+    from weatherbrief.fetch.grib import _gfs_sounding_cache_key, gfs_sounding_levels
+    from weatherbrief.fetch.grib.gfs_idx import (
+        GFS_SNAPSHOT_LEVELS,
+        GFS_SNAPSHOT_VARIABLES,
+        GFS_SOUNDING_VARIABLES,
+    )
+
+    full = _gfs_sounding_cache_key(6, gfs_sounding_levels())
+    assert _gfs_sounding_cache_key(6, gfs_sounding_levels(), GFS_SOUNDING_VARIABLES) == full
+    reduced_vars = _gfs_sounding_cache_key(6, gfs_sounding_levels(), GFS_SNAPSHOT_VARIABLES)
+    snapshot = _gfs_sounding_cache_key(6, list(GFS_SNAPSHOT_LEVELS), GFS_SNAPSHOT_VARIABLES)
+    assert len({full, reduced_vars, snapshot}) == 3
+    assert "_V" in snapshot and "_L" in snapshot
+    # pgrb2 only: no level the snapshot asks for lives in pgrb2b.
+    assert not {875, 825, 775, 725, 675, 625, 575, 525} & set(GFS_SNAPSHOT_LEVELS)
+
+
 # ---------------------------------------------------------------------------
 # Units and rates
 # ---------------------------------------------------------------------------
@@ -441,7 +460,7 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
     asked: dict[str, list[int]] = {"snd": [], "sfc": []}
     sounding_flag = {"raise": False}
 
-    def fake_snd(init_date, init_hour, fhour, run_dir, idx, session, levels):
+    def fake_snd(init_date, init_hour, fhour, run_dir, idx, session, levels, variables=None):
         asked["snd"].append(fhour)
         return fhour != 8
 
@@ -451,7 +470,7 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
             raise ValueError("bad .idx")
         return True
 
-    def fake_dispatch(jobs, return_exceptions=False):
+    def fake_dispatch(jobs, return_exceptions=False, priority=None):
         out = []
         for name, (path, lats, lons) in jobs:
             if "f009" in path and name == "decode_gfs_surface":
@@ -484,6 +503,25 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
             sounding=False,
         )
     assert snd == {} and asked["snd"] == []
+
+    # every_previous_step: the step before each hour, not only the first
+    # (map hours are 3 h apart, #914); variables reach the sounding fetch.
+    seen_vars: list = []
+
+    def fake_snd_vars(init_date, init_hour, fhour, run_dir, idx, session, levels, variables=None):
+        seen_vars.append(variables)
+        return True
+
+    with patch.object(grib_mod, "_ensure_gfs_sounding", new=fake_snd_vars), patch.object(
+        grib_mod, "_ensure_gfs_surface", new=fake_sfc,
+    ), patch.object(grib_mod, "_dispatch_decode_parallel", new=fake_dispatch):
+        asked = {"snd": [], "sfc": []}
+        _, _, steps = grib_mod.read_gfs_grib_points(
+            "20260504", 0, [6, 9, 126], [50.0], [1.0], run_dir=tmp_path, session=None,
+            variables=frozenset({"TMP"}), every_previous_step=True,
+        )
+    assert steps == [5, 6, 8, 9, 123, 126]
+    assert seen_vars == [frozenset({"TMP"})] * 3
 
     # One hour raising (e.g. an .idx parse error) loses that hour only.
     sounding_flag["raise"] = True
