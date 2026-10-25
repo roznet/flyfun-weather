@@ -55,19 +55,26 @@ def _put(run_dir, fhour: int, label: str, value: float) -> None:
     put_cached(run_dir, cache_key(fhour, label), _const(value, fhour))
 
 
-def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS):
-    """Cache everything the ICON snapshot builder and the cloud diag read."""
+def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS,
+                   variant=None, t2m_k=288.15, cover_pct=40.0):
+    """Cache everything the ICON snapshot builder and the cloud diag read.
+
+    ICON-EU by default; ``variant=ICON_D2`` seeds the D2 run (#928), whose
+    cloud diagnostics carry no accumulated ``rain_con``.
+    """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
-        ICON_EU_CLOUD_DIAG_CACHE_KEY,
         ICON_EU_RAIN_CON_CACHE_KEY,
-        ICON_SNAPSHOT_PRESSURE_LEVELS,
+        icon_cloud_diag_cache_key,
         icon_pressure_cache_key,
+        icon_snapshot_pressure_levels,
         icon_surface_cache_key,
     )
 
-    run_dir = cache_dir_for_run(data_dir, INIT_DATE, 0, model="icon-eu")
-    levels = ICON_SNAPSHOT_PRESSURE_LEVELS if levels is None else levels
+    variant = variant or ICON_EU
+    is_eu = variant.slug == "icon-eu"
+    run_dir = cache_dir_for_run(data_dir, INIT_DATE, 0, model=variant.slug)
+    levels = icon_snapshot_pressure_levels(variant) if levels is None else levels
     for fhour in steps:
         if fhour not in skip_pressure_steps:
             for level in levels:
@@ -77,29 +84,29 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS
                     ("t", t_k), ("relhum", 60.0), ("u", 10.0), ("v", 0.0),
                     ("fi", 9.80665 * h_m),
                 ):
-                    _put(run_dir, fhour, icon_pressure_cache_key(var, level, ICON_EU), value)
+                    _put(run_dir, fhour, icon_pressure_cache_key(var, level, variant), value)
         for var, value in (
-            ("t_2m", 288.15), ("td_2m", 283.15), ("relhum_2m", 72.0),
+            ("t_2m", t2m_k), ("td_2m", 283.15), ("relhum_2m", 72.0),
             ("u_10m", 5.0), ("v_10m", 0.0), ("vmax_10m", 8.0),
             ("pmsl", 101325.0), ("ps", 101000.0), ("vis", 20000.0),
             ("hzerocl", 2500.0),
         ):
-            _put(run_dir, fhour, icon_surface_cache_key(var, ICON_EU), value)
+            _put(run_dir, fhour, icon_surface_cache_key(var, variant), value)
         # Accumulated since init, on the step and its hourly predecessor.
         for h in (h for h in (fhour - 1, fhour) if h >= 0):
             for var in ("tot_prec", "rain_gsp", "rain_con", "snow_gsp", "snow_con"):
                 mm = PRECIP_MM_PER_H * h if var == "tot_prec" else 0.0
-                _put(run_dir, h, icon_surface_cache_key(var, ICON_EU), mm)
+                _put(run_dir, h, icon_surface_cache_key(var, variant), mm)
         # Cloud diagnostics (#635 feed): total cover + accumulated RAIN_CON.
         # (No accumulated message at step 0: eccodes refuses an empty window.)
         rain_con = _grib_message(centre=78, category=1, number=76, value=0.0,
-                                 step_h=fhour, accumulated=True) if fhour else b""
+                                 step_h=fhour, accumulated=True) if fhour and is_eu else b""
         put_cached(
-            run_dir, cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY),
-            _grib_message(centre=78, category=6, number=1, value=40.0, step_h=fhour)
+            run_dir, cache_key(fhour, icon_cloud_diag_cache_key(variant)),
+            _grib_message(centre=78, category=6, number=1, value=cover_pct, step_h=fhour)
             + rain_con,
         )
-        if fhour > 1:
+        if fhour > 1 and is_eu:
             put_cached(
                 run_dir, cache_key(fhour - 1, ICON_EU_RAIN_CON_CACHE_KEY),
                 _grib_message(centre=78, category=1, number=76, value=0.0,
@@ -166,6 +173,11 @@ def env(monkeypatch, tmp_path):
     monkeypatch.delenv("WB_GRIB_SNAPSHOTS_DRILL", raising=False)
     # Seeded under a fixed INIT that a wall-clock TTL purge would delete.
     monkeypatch.setattr(sg, "purge_old_runs", lambda *a, **kw: None)
+    monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2", raising=False)
+    monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+    # No validity mask (it would be a DWD download): the D2 bbox decides.
+    monkeypatch.setattr("weatherbrief.fetch.grib.load_d2_validity_mask",
+                        lambda *a, **kw: None)
     monkeypatch.setattr(
         "weatherbrief.fetch.grib.icon_eu_fetch._download_one_file",
         lambda url, session: (None, 404),
@@ -403,3 +415,188 @@ class TestThreeHourlyPrecipitation:
 
         assert row["precip_period_h"] == 1
         assert row["precipitation_mm"] == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# ICON-D2 for the short range inside its domain (#928)
+# ---------------------------------------------------------------------------
+
+D2_T2M_K = 296.15     # 23 °C: tells a D2 row from an EU (15 °C) or Open-Meteo (20 °C) one
+D2_COVER = 70.0
+IN_D2 = {"EGLL", "LFPG", "EDDF"}   # LIRF (41.8 N) is south of the D2 box
+
+
+def _seed_d2(data_dir, **kw):
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+
+    return _seed_icon_run(data_dir, variant=ICON_D2, t2m_k=D2_T2M_K,
+                          cover_pct=D2_COVER, **kw)
+
+
+def _by(snaps):
+    return {
+        (s["icao"], int((s["forecast_hour"] - INIT).total_seconds() // 3600)): s
+        for s in snaps
+    }
+
+
+class TestIconD2:
+    def test_d2_inside_the_domain_eu_outside(self, env):
+        data_dir, om = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir)
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0 and om.calls == []
+        assert len(snaps) == len(AIRPORTS) * len(STEPS)
+        for (icao, _h), s in _by(snaps).items():
+            if icao in IN_D2:
+                assert s["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+                assert s["cloud_cover_pct"] == pytest.approx(D2_COVER)
+            else:
+                assert s["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+                assert s["cloud_cover_pct"] == pytest.approx(40.0)
+            assert s["precipitation_mm"] == pytest.approx(PRECIP_MM_PER_H, abs=1e-3)
+            assert s.get("freezing_level_ft") is not None
+
+    def test_d2_hour_short_falls_back_to_eu_not_open_meteo(self, env):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir, skip_pressure_steps=(30,))
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0
+        by = _by(snaps)
+        for icao in IN_D2:
+            assert by[(icao, 30)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+            assert by[(icao, 36)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_beyond_the_d2_horizon_is_eu(self, env):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        data_dir, _ = env
+        _seed_icon_run(data_dir, steps=[6, 30, 54])
+        _seed_d2(data_dir, steps=[6, 30])
+
+        snaps, api_calls = sv.fetch_model_snapshots(
+            "icon", INIT, AIRPORTS, MagicMock(), sample_hours=[6], days=2,
+        )
+        by = _by(snaps)
+        assert api_calls == 0
+        assert by[("EGLL", 6)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+        assert by[("EGLL", 54)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+
+    def test_switch_off_is_eu_only(self, env, monkeypatch):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir)
+        monkeypatch.setenv("WB_GRIB_SNAPSHOTS_D2", "0")
+
+        snaps, _ = _run()
+
+        assert all(s["temperature_2m_c"] == pytest.approx(15.0, abs=0.01) for s in snaps)
+
+    def test_validity_mask_keeps_masked_airports_on_eu(self, env, monkeypatch):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir)
+        monkeypatch.setattr("weatherbrief.fetch.grib.load_d2_validity_mask",
+                            lambda *a, **kw: {"mask": True})
+        # Pretend EDDF sits in a masked corner.
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.decode.d2_corridor_fully_valid",
+            lambda mask, lats, lons, radius_nm: lons[0] < 5.0,
+        )
+
+        snaps, _ = _run()
+
+        by = _by(snaps)
+        assert by[("EDDF", 6)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+        assert by[("EGLL", 6)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_d2_rows_keep_their_own_grib_columns(self):
+        from weatherbrief.tasks.standalone_verification import (
+            _apply_grib_columns,
+            _snapshot_hour_key,
+        )
+
+        class _Lookup:
+            def get(self, icao, valid):
+                return MagicMock(nwp_ceiling_ft=1200.0, cloud_base_ft=900.0)
+
+        d2 = {"icao": "EGLL", "model": "icon", "forecast_hour": INIT,
+              "nwp_ceiling_ft": 3000.0}
+        eu = {"icao": "LIRF", "model": "icon", "forecast_hour": INIT}
+        _apply_grib_columns([d2, eu], "icon", _Lookup(),
+                            skip={_snapshot_hour_key("EGLL", INIT)})
+        assert d2["nwp_ceiling_ft"] == 3000.0
+        assert eu["nwp_ceiling_ft"] == 1200.0
+
+
+class TestDownloads:
+    def test_a_404_is_not_asked_again_within_the_ttl(self, tmp_path, monkeypatch):
+        import weatherbrief.tasks.standalone_grib as sg
+
+        monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+        asked: list[str] = []
+
+        def fake(url, session):
+            asked.append(url)
+            return (None, 404) if url.endswith("missing") else (b"GRIB", 200)
+
+        monkeypatch.setattr("weatherbrief.fetch.grib.icon_eu_fetch._download_one_file", fake)
+        files = [("https://x/missing", "f001_A.grib2"), ("https://x/ok", "f001_B.grib2")]
+
+        assert sg._download_icon_files(tmp_path, files, None, "t") == 4
+        assert sg._download_icon_files(tmp_path, files, None, "t") == 0
+        assert asked == ["https://x/missing", "https://x/ok"]
+
+        monkeypatch.setattr(sg, "_ICON_404_TTL_S", -1.0)
+        monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+        sg._download_icon_files(tmp_path, files, None, "t")
+        sg._download_icon_files(tmp_path, files, None, "t")
+        assert asked.count("https://x/missing") == 3
+
+    def test_ensure_fetches_the_files_the_snapshot_reads(self, tmp_path, monkeypatch):
+        """The pre-warm helper (#929) leaves exactly the snapshot path's cache."""
+        import weatherbrief.tasks.standalone_grib as sg
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+
+        monkeypatch.setattr(sg, "purge_old_runs", lambda *a, **kw: None)
+        monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.icon_eu_fetch._download_one_file",
+            lambda url, session: (b"12345", 200),
+        )
+        n = sg.ensure_icon_snapshot_files(
+            INIT_DATE, 0, [6], variant=ICON_D2, session=MagicMock(), data_dir=tmp_path,
+        )
+        wanted, _ = sg._icon_snapshot_plan(INIT_DATE, 0, [6], ICON_D2)
+        run_dir = cache_dir_for_run(tmp_path, INIT_DATE, 0, model="icon-d2")
+        assert n == 5 * len(wanted)
+        assert all((run_dir / ck).exists() for _url, ck in wanted.values())
+        # 11 levels x 5 variables + 15 surface + 5 accumulated at f005.
+        assert len(wanted) == 11 * 5 + 15 + 5
+
+
+class TestFallbackAlert:
+    def _airports(self, n):
+        return [WatchlistAirport(icao=f"X{i:03d}", lat=35.0, lon=float(i % 10))
+                for i in range(n)]
+
+    def test_large_fallback_share_logs_the_token(self, env, caplog):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        with caplog.at_level("WARNING", logger="weatherbrief"):
+            sv.fetch_model_snapshots(
+                "icon", INIT, self._airports(60), MagicMock(),
+                sample_hours=SAMPLE_HOURS, days=DAYS,
+            )
+        assert "GRIB_PRIMARY_FALLBACK_HIGH icon" in caplog.text
+
+    def test_small_calls_stay_quiet(self, env, caplog):
+        with caplog.at_level("WARNING", logger="weatherbrief"):
+            _run()  # 4 airports, all on the fallback: an alternates-sized call
+        assert "GRIB_PRIMARY_FALLBACK_HIGH" not in caplog.text

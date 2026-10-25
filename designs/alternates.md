@@ -131,7 +131,7 @@ Per-model split reuses `tasks/standalone_verification.py`:
 | Model | Source |
 |-------|--------|
 | GFS | Open-Meteo multi-point + GFS GRIB cloud diagnostics (`fetch_model_snapshots`: the GRIB fetch runs alongside Open-Meteo and is attached to each hour before the sounding pass, #635) |
-| ICON | DWD ICON-EU GRIB: isobaric sounding + surface + cloud diagnostics, Open-Meteo only for candidates GRIB left short (#914, `WB_GRIB_SNAPSHOTS`; see `metar-taf-accuracy.md` "GRIB-primary ICON snapshots") |
+| ICON | DWD ICON-D2 GRIB inside the D2 domain within its 48 h, else ICON-EU GRIB: isobaric sounding + surface + cloud diagnostics, Open-Meteo only for candidates GRIB left short (#914/#928, `WB_GRIB_SNAPSHOTS`, `WB_GRIB_SNAPSHOTS_D2`; see `metar-taf-accuracy.md` "GRIB-primary ICON snapshots") |
 | ECMWF | local GRIB a1 (surface incl. **visibility**) + a2 (pressure) (`fetch_ecmwf_grib_snapshots`) |
 
 GFS and ICON pass `only_valid_time=eta`, so their GRIB is fetched for the ETA

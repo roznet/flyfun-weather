@@ -916,6 +916,7 @@ def _fetch_grib_diagnostics(
 
 def _apply_grib_columns(
     snapshots: list[dict], model: str, lookup: _GribDiagLookup,
+    skip: "set[tuple[str, int]] | None" = None,
 ) -> None:
     """Copy the persisted GRIB columns onto the snapshot dicts in-place.
 
@@ -924,9 +925,13 @@ def _apply_grib_columns(
     always was for GFS/ICON, even where the native assessment reported a
     different envelope (e.g. an ICON top below the LCL, which the assessment
     drops). ``nwp_conv_method`` is the sounding pass's and is never touched.
+    Rows keyed in ``skip`` (ICON-D2 rows, #928, which carry D2's own columns)
+    are left alone.
     """
     for snap in snapshots:
         if snap["model"] != model:
+            continue
+        if skip and _snapshot_hour_key(snap["icao"], snap["forecast_hour"]) in skip:
             continue
         cd = lookup.get(snap["icao"], snap["forecast_hour"])
         if cd is None:
@@ -1077,6 +1082,17 @@ def fetch_model_snapshots(
 # 16 requested levels: enough for the lite sounding's layers and parcel.
 _MIN_GRIB_SNAPSHOT_LEVELS = 8
 
+# More than this share of airports on the Open-Meteo fallback, on a call with
+# at least this many airports, logs GRIB_PRIMARY_FALLBACK_HIGH. ICON-EU's
+# domain leaves ~2 % of the watchlist outside it every cycle.
+_FALLBACK_ALERT_SHARE = 0.10
+_FALLBACK_ALERT_MIN_AIRPORTS = 50
+
+# An airport is served by ICON-D2 (#928) when every D2 cell within this radius
+# carries data: bilinear needs its four neighbours (2.2 km cells), and the
+# margin keeps the masked corners of the product out.
+_D2_POINT_RADIUS_NM = 5.0
+
 
 def _snapshot_hour_key(icao: str, valid: datetime) -> tuple[str, int]:
     """(ICAO, UTC epoch hour): one key for GRIB and Open-Meteo rows alike."""
@@ -1144,8 +1160,9 @@ def _fetch_grib_primary_snapshots(
                 resolved.append(_resolve(future))
             return resolved[0]
 
+        own_columns: set[tuple[str, int]] = set()
         try:
-            snapshots = _build_grib_snapshots(
+            snapshots, own_columns = _build_grib_snapshots(
                 model, init_time, airports, valid_times, _lookup,
                 edr_acc=edr_acc, pool_soundings=pool_soundings, priority=priority,
             )
@@ -1195,7 +1212,7 @@ def _fetch_grib_primary_snapshots(
         snapshots.extend(fallback)
 
     if lookup is not None:
-        _apply_grib_columns(snapshots, model, lookup)
+        _apply_grib_columns(snapshots, model, lookup, skip=own_columns)
 
     logger.info(
         "GRIB-primary %s snapshots: %d/%d airports fully from GRIB "
@@ -1203,6 +1220,18 @@ def _fetch_grib_primary_snapshots(
         model, len(airports) - len(uncovered), len(airports), len(covered),
         t_grib, len(uncovered), api_calls,
     )
+    if (
+        drill is None
+        and len(airports) >= _FALLBACK_ALERT_MIN_AIRPORTS
+        and len(uncovered) > _FALLBACK_ALERT_SHARE * len(airports)
+    ):
+        # A DWD outage or a late run silently costs the pre-#914 Open-Meteo
+        # price; the token makes that alertable. Map cycles only: an
+        # alternates search has too few airports for a share to mean much.
+        logger.warning(
+            "GRIB_PRIMARY_FALLBACK_HIGH %s snapshots: %d/%d airports to "
+            "Open-Meteo (%d calls)", model, len(uncovered), len(airports), api_calls,
+        )
     return snapshots, api_calls
 
 
@@ -1215,58 +1244,233 @@ def _build_grib_snapshots(
     edr_acc: "EdrAccumulator | None" = None,
     pool_soundings: bool = False,
     priority: "int | DecodePriority | None" = None,
-) -> list[dict]:
+) -> tuple[list[dict], set[tuple[str, int]]]:
     """Covered snapshot rows for *model* built from its GRIB alone (#914).
 
-    Only ICON has a builder today; GFS joins with #913's reader. A
-    point-hour that is not covered is simply absent.
+    ICON only today; GFS joins with #913's reader. Inside the ICON-D2 domain
+    and the D2 run's 48 h (#928) a row comes from ICON-D2, as Open-Meteo's
+    ``icon_seamless`` served it; elsewhere, or where D2 fell short, from
+    ICON-EU. A point-hour that neither covers is simply absent.
+
+    Returns the rows and the ``_snapshot_hour_key`` of those that carry their
+    own GRIB columns already (the D2 rows: their ceiling and convective
+    columns are D2's, not the ICON-EU diagnostics the caller applies).
     """
     if model != "icon":
-        return []
+        return [], set()
 
     from weatherbrief.analysis.sounding.snapshot_fields import build_sounding_payload
-    from weatherbrief.fetch.grib import DecodePriority, _icon_diag_surface_fields
-    from weatherbrief.fetch.grib.icon_eu_fetch import (
-        _snap_to_icon_eu_grid,
-        icon_eu_model_level_max_hour,
-    )
-    from weatherbrief.tasks.standalone_grib import (
-        datetime_to_init_parts,
-        fetch_icon_snapshot_fields,
-    )
+    from weatherbrief.fetch.grib import DecodePriority
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
+    from weatherbrief.fetch.grib.primary import grib_snapshot_d2_enabled
+    from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
 
     init_date, init_hour = datetime_to_init_parts(init_time)
-    max_hour = icon_eu_model_level_max_hour(init_hour)
-    step_of: dict[datetime, int] = {}
-    for valid in valid_times:
-        offset = int((valid - init_time).total_seconds() // 3600)
-        # Only published steps: an off-grid hour would need time interpolation
-        # the Open-Meteo fallback already does for us. Step 0 is published and
-        # is a planned hour whenever a sample hour equals the init hour (06/12/
-        # 18Z runs on the map grid), so it must be covered too, or every
-        # airport would fall back at the full Open-Meteo price.
-        if 0 <= offset <= max_hour and _snap_to_icon_eu_grid(offset) == offset:
-            step_of[valid] = offset
-    if not step_of:
-        return []
-
-    fields = fetch_icon_snapshot_fields(
-        init_date, init_hour, sorted(set(step_of.values())),
-        [a.lat for a in airports], [a.lon for a in airports],
-        # Own session: the concurrent cloud-diag thread owns the caller's.
-        session=None, priority=priority,
+    eu_steps = _icon_snapshot_steps(init_time, valid_times, ICON_EU)
+    d2_steps = (
+        _icon_snapshot_steps(init_time, valid_times, ICON_D2)
+        if grib_snapshot_d2_enabled() else {}
     )
+    d2_airports = (
+        _icon_d2_airports(airports, init_date, init_hour) if d2_steps else []
+    )
+    if not d2_airports:
+        d2_steps = {}
+    if not eu_steps and not d2_steps:
+        return [], set()
+
+    # D2 fields, D2 cloud diagnostics and EU fields download side by side,
+    # each on its own session: the caller's belongs to the EU cloud-diag
+    # thread. Each task gets the caller's context (decode priority).
+    def _submit(pool, fn, *args):
+        return pool.submit(contextvars.copy_context().run, fn, *args)
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=3, thread_name_prefix="grib-icon-snap",
+    ) as pool:
+        d2_list = sorted(set(d2_steps.values()))
+        d2_fields_f = _submit(
+            pool, _fetch_icon_fields, init_date, init_hour, d2_list, d2_airports,
+            ICON_D2, priority,
+        ) if d2_steps else None
+        d2_lookup_f = _submit(
+            pool, _fetch_icon_d2_lookup, init_time, d2_airports, d2_list, priority,
+        ) if d2_steps else None
+        eu_fields_f = _submit(
+            pool, _fetch_icon_fields, init_date, init_hour,
+            sorted(set(eu_steps.values())), airports, ICON_EU, priority,
+        ) if eu_steps else None
+        d2_fields = d2_fields_f.result() if d2_fields_f is not None else {}
+        d2_lookup = d2_lookup_f.result() if d2_lookup_f is not None else None
+        eu_fields = eu_fields_f.result() if eu_fields_f is not None else {}
     lookup = grib_diag()
+
+    # (snap, hourly) per covered point-hour: D2 first, then EU for the rest.
+    built: list[tuple[dict, object]] = []
+    d2_keys: set[tuple[str, int]] = set()
+    for snap, hourly in _icon_rows(
+        model, init_time, d2_airports, d2_steps, d2_fields, d2_lookup,
+    ):
+        d2_keys.add(_snapshot_hour_key(snap["icao"], snap["forecast_hour"]))
+        built.append((snap, hourly))
+    n_d2 = len(built)
+    for snap, hourly in _icon_rows(
+        model, init_time, airports, eu_steps, eu_fields, lookup,
+        skip=d2_keys,
+    ):
+        built.append((snap, hourly))
 
     pooled = _pooled_soundings_active(pool_soundings)
     results: list[dict] = []
     pending: list[tuple[int, dict]] = []
     analysis_started = time.monotonic()
+    for snap, hourly in built:
+        if pooled:
+            pending.append((len(results), build_sounding_payload(hourly, model)))
+        else:
+            _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
+        results.append(snap)
+        if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
+            _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
+            pending.clear()
+    if pending:
+        _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
+    if d2_lookup is not None:
+        # After the sounding pass, as the caller does for the EU rows.
+        _apply_grib_columns(results[:n_d2], model, d2_lookup)
+    logger.info(
+        "Model %s GRIB: analyzed %d snapshots (%d ICON-D2 from %d/%d airports, "
+        "%d ICON-EU) over %d D2 + %d EU step(s) in %.1fs%s",
+        model, len(results), n_d2, len(d2_airports), len(airports),
+        len(results) - n_d2, len(d2_fields), len(eu_fields),
+        time.monotonic() - analysis_started, " (pooled)" if pooled else "",
+    )
+    return results, d2_keys
+
+
+def _icon_snapshot_steps(
+    init_time: datetime, valid_times: list[datetime], variant,
+) -> dict[datetime, int]:
+    """``valid -> step`` for the planned hours *variant* publishes.
+
+    Only published steps: an off-grid hour would need time interpolation the
+    Open-Meteo fallback already does for us. Step 0 is published and is a
+    planned hour whenever a sample hour equals the init hour (06/12/18Z runs
+    on the map grid), so it must be covered too, or every airport would fall
+    back at the full Open-Meteo price. ICON-D2 uses the run of the ICON-EU
+    init (D2 runs every 3 h and publishes sooner), so a row's
+    ``model_init_time`` stays true for both.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        _snap_to_icon_eu_grid,
+        icon_eu_model_level_max_hour,
+    )
+
+    max_hour = icon_eu_model_level_max_hour(init_time.hour, variant)
+    out: dict[datetime, int] = {}
+    for valid in valid_times:
+        offset = int((valid - init_time).total_seconds() // 3600)
+        if 0 <= offset <= max_hour and _snap_to_icon_eu_grid(offset, variant) == offset:
+            out[valid] = offset
+    return out
+
+
+def _icon_d2_airports(
+    airports: list[WatchlistAirport], init_date: str, init_hour: int,
+) -> list[WatchlistAirport]:
+    """The airports ICON-D2 serves: in its bbox and, when the product's
+    validity mask can be had, with every cell around them carrying data.
+    Without the mask (logged) the bbox alone decides; a masked corner point
+    then decodes short and goes to ICON-EU by the coverage rule anyway."""
+    from weatherbrief.fetch.grib import load_d2_validity_mask
+    from weatherbrief.fetch.grib.decode import d2_corridor_fully_valid
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+
+    v = ICON_D2
+    inside = [
+        a for a in airports
+        if v.lat_min <= a.lat <= v.lat_max and v.lon_min <= a.lon <= v.lon_max
+    ]
+    if not inside:
+        return []
+    try:
+        with requests.Session() as session:
+            mask = load_d2_validity_mask(
+                init_date, init_hour, data_dir=Path(os.environ.get("DATA_DIR", "data")),
+                session=session, variant=v,
+            )
+    except Exception:
+        logger.warning("ICON-D2 validity mask failed; bbox only", exc_info=True)
+        mask = None
+    if mask is None:
+        return inside
+    return [
+        a for a in inside
+        if d2_corridor_fully_valid(mask, [a.lat], [a.lon], radius_nm=_D2_POINT_RADIUS_NM)
+    ]
+
+
+def _fetch_icon_fields(init_date, init_hour, steps, airports, variant, priority):
+    from weatherbrief.tasks.standalone_grib import fetch_icon_snapshot_fields
+
+    return fetch_icon_snapshot_fields(
+        init_date, init_hour, steps,
+        [a.lat for a in airports], [a.lon for a in airports],
+        session=None, priority=priority, variant=variant,
+    )
+
+
+def _fetch_icon_d2_lookup(init_time, airports, steps, priority) -> "_GribDiagLookup | None":
+    """ICON-D2's own cloud diagnostics (cover, ceiling, CAPE) at *airports*."""
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+    from weatherbrief.tasks.standalone_grib import (
+        datetime_to_init_parts,
+        fetch_icon_cloud_diag,
+    )
+
+    init_date, init_hour = datetime_to_init_parts(init_time)
+    try:
+        with requests.Session() as session:
+            by_fhour = fetch_icon_cloud_diag(
+                init_date, init_hour, steps,
+                [a.lat for a in airports], [a.lon for a in airports],
+                session=session, priority=priority, variant=ICON_D2,
+            )
+    except Exception:
+        logger.warning("ICON-D2 cloud diagnostics failed", exc_info=True)
+        return None
+    return _GribDiagLookup(
+        init_time=init_time,
+        snap_step=lambda fhour: fhour,
+        icao_to_idx={a.icao: i for i, a in enumerate(airports)},
+        by_fhour=by_fhour,
+    )
+
+
+def _icon_rows(
+    model: str,
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    step_of: dict[datetime, int],
+    fields: dict,
+    lookup: "_GribDiagLookup | None",
+    skip: "set[tuple[str, int]] | None" = None,
+):
+    """``(snap, hourly)`` for each covered point-hour of one ICON variant.
+
+    Cover and CAPE come from the variant's own cloud diagnostics (#912),
+    attached before the sounding pass; a point-hour without them is not
+    covered (cloud cover is required) and is left to the next source.
+    """
+    from weatherbrief.fetch.grib import _icon_diag_surface_fields
+
     for valid, fhour in step_of.items():
         step = fields.get(fhour)
         if step is None:
             continue
         for i, airport in enumerate(airports):
+            if skip and _snapshot_hour_key(airport.icao, valid) in skip:
+                continue
             hourly = _icon_grib_hourly(valid, step, i)
             if hourly is None:
                 continue
@@ -1277,32 +1481,11 @@ def _build_grib_snapshots(
                 hourly.attach_nwp_diagnostics(cd.diagnostics)
             if not _grib_hour_covered(hourly, analysis_step=fhour == 0):
                 continue
-
             # Per-hour rates over the step window, recorded as a 1 h period:
             # what Open-Meteo gave for ICON and what scoring and the airport
             # profile read (they ignore precip_period_h, #415). A 3 h total
             # past +78 h would read as three times the rain there.
-            snap = _snapshot_row(airport.icao, model, init_time, hourly)
-
-            if pooled:
-                pending.append((len(results), build_sounding_payload(hourly, model)))
-            else:
-                _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
-            results.append(snap)
-
-            if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
-                _analyze_soundings_pooled(
-                    pending, results, priority=DecodePriority.BACKGROUND,
-                )
-                pending.clear()
-    if pending:
-        _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
-    logger.info(
-        "Model %s GRIB: analyzed %d snapshots over %d step(s) in %.1fs%s",
-        model, len(results), len(fields), time.monotonic() - analysis_started,
-        " (pooled)" if pooled else "",
-    )
-    return results
+            yield _snapshot_row(airport.icao, model, init_time, hourly), hourly
 
 
 def _icon_grib_hourly(valid: datetime, step, i: int):

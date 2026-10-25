@@ -4562,37 +4562,23 @@ class _IconEuContext:
         self.variant = variant
 
 
-def _d2_corridor_mask_ok(
-    route_points: list[RoutePoint],
+def load_d2_validity_mask(
     init_date: str,
     init_hour: int,
     *,
     data_dir: Path,
     session: requests.Session,
     variant,
-) -> bool:
-    """Domain-gate hardening (#462): corridor-buffer check against the D2 bitmap.
+) -> dict | None:
+    """The D2 product's validity mask (#462), cached beside the GRIB cache.
 
-    The D2 regular-lat-lon product masks ~17% of cells (native domain is not a
-    lat/lon rectangle, and the delivered files carry no rotated-pole metadata),
-    so a route can pass the bbox gate yet clip masked corner cells. This builds
-    a validity mask ONCE from a delivered message's bitmap (an invariant of the
-    product — any field carries the same bitmap), caches it beside the GRIB
-    cache, and requires the route's ENTIRE corridor buffer (not just the
-    centreline) to lie in valid cells.
-
-    Returns False only when the mask POSITIVELY shows the corridor clipping
-    masked cells (→ caller falls back to ICON-EU, all-or-nothing). Any failure
-    to obtain the mask fails OPEN (True, logged): behaviour is then no worse
-    than the pre-#462 bbox gate — corner points decode as unavailable rather
-    than wrong — and a DWD hiccup on one probe file can't flip the whole slot.
+    Built ONCE from a delivered message's bitmap (an invariant of the
+    product: any field carries the same bitmap) and saved; None when it
+    cannot be had (logged), so callers fail open.
     """
     import numpy as np
 
-    from weatherbrief.fetch.grib.decode import (
-        build_d2_validity_mask,
-        d2_corridor_fully_valid,
-    )
+    from weatherbrief.fetch.grib.decode import build_d2_validity_mask
     from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
 
     mask_path = data_dir / ".cache" / "grib" / f"{variant.slug}-validity-mask-v1.npz"
@@ -4626,6 +4612,38 @@ def _d2_corridor_mask_ok(
 
     if mask is None:
         logger.info("D2 validity mask unavailable; keeping bbox-gate behaviour")
+    return mask
+
+
+def _d2_corridor_mask_ok(
+    route_points: list[RoutePoint],
+    init_date: str,
+    init_hour: int,
+    *,
+    data_dir: Path,
+    session: requests.Session,
+    variant,
+) -> bool:
+    """Domain-gate hardening (#462): corridor-buffer check against the D2 bitmap.
+
+    The D2 regular-lat-lon product masks ~17% of cells (native domain is not a
+    lat/lon rectangle, and the delivered files carry no rotated-pole metadata),
+    so a route can pass the bbox gate yet clip masked corner cells. The
+    validity mask (:func:`load_d2_validity_mask`) is required to hold the
+    route's ENTIRE corridor buffer (not just the centreline).
+
+    Returns False only when the mask POSITIVELY shows the corridor clipping
+    masked cells (→ caller falls back to ICON-EU, all-or-nothing). Any failure
+    to obtain the mask fails OPEN (True, logged): behaviour is then no worse
+    than the pre-#462 bbox gate — corner points decode as unavailable rather
+    than wrong — and a DWD hiccup on one probe file can't flip the whole slot.
+    """
+    from weatherbrief.fetch.grib.decode import d2_corridor_fully_valid
+
+    mask = load_d2_validity_mask(
+        init_date, init_hour, data_dir=data_dir, session=session, variant=variant,
+    )
+    if mask is None:
         return True
 
     ok = d2_corridor_fully_valid(
