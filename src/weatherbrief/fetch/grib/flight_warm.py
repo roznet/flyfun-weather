@@ -56,9 +56,14 @@ WARM_SOURCES: tuple[str, ...] = ("icon-d2", "icon-eu", "gfs", "hrrr")
 
 # Defaults per source. D2's horizon is its model-level horizon (no run can
 # serve a flight past 48 h). EU and GFS reach further, 72 h covers the
-# flights people brief in the days before. HRRR's extended cycles stop at 48 h.
+# flights people brief in the days before. A horizon of 0 turns the source
+# off. HRRR is off by default (owner, 2026-10-25): the warm can only fire on
+# the 6-hourly extended cycles the freshness registry tracks, while a briefing
+# takes the freshest hourly run, so the warmed run is mostly one the briefing
+# never reads. ``WB_FLIGHT_WARM_HORIZON_HOURS_HRRR=48`` (the extended cycles'
+# horizon) turns it back on.
 _DEFAULT_HORIZON_HOURS: dict[str, float] = {
-    "icon-d2": 48.0, "icon-eu": 72.0, "gfs": 72.0, "hrrr": 48.0,
+    "icon-d2": 48.0, "icon-eu": 72.0, "gfs": 72.0, "hrrr": 0.0,
 }
 # GB (1e9) of new downloads per pass. GFS 6 GB is ~34 window hours at
 # ~177 MB, ICON-EU ~30 hours at ~200 MB (189 MB model levels + ~10 MB
@@ -491,6 +496,10 @@ def warm_flights(
         return stats
 
     limits = warm_limits(source)
+    if limits.horizon_hours <= 0:
+        stats["disabled"] = 1
+        logger.debug("%s: off (horizon 0)", label)
+        return stats
     data_dir = _data_dir()
     free = free_disk_bytes(data_dir)
     if free is not None and free < limits.min_free_bytes:
