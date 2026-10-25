@@ -344,6 +344,8 @@ class TestAnalysisStep:
         for s in snaps:
             at_init = s["forecast_hour"] == INIT
             assert (s["precipitation_mm"] is None) == at_init
+            # vmax_10m has no window at step 0 either: no gust, not a 0 kt one.
+            assert (s["wind_gusts_10m_kt"] is None) == at_init
 
 
 class TestAlternatesEtaHour:

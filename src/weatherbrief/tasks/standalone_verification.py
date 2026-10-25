@@ -1601,6 +1601,11 @@ def _icon_rows(
             hourly = _icon_grib_hourly(valid, step, i)
             if hourly is None:
                 continue
+            if fhour == 0:
+                # vmax_10m is the maximum since the previous output step, so at
+                # step 0 it is no gust at all (ICON-D2 publishes 0): None, as
+                # precipitation, rather than a calm the run never forecast.
+                hourly.wind_gusts_10m_kt = None
             cd = lookup.get(airport.icao, valid) if lookup is not None else None
             if cd is not None and cd.diagnostics is not None:
                 for key, value in _icon_diag_surface_fields(cd.diagnostics).items():

@@ -6990,7 +6990,10 @@ ICON-EU GRIB; Open-Meteo only for airports GRIB left short.
   hour equal to the init hour, every 06/12/18Z run on the map grid) is
   covered without precipitation: accumulation is 0 at init, so the row
   records None rather than a made-up 0. Requiring it would send every airport
-  to Open-Meteo at full price.
+  to Open-Meteo at full price. The gust is None there too: `vmax_10m` is the
+  maximum since the previous output step, which step 0 doesn't have, and
+  ICON-D2 publishes 0 (mini test 2026-10-25: 0 kt against Open-Meteo's
+  39–45 kt).
 - **No interim Open-Meteo trims.** A one-day alternates window saves nothing
   (Open-Meteo bills up to 14 days as one); a reduced GFS level set would change
   GFS soundings twice in a few weeks.
