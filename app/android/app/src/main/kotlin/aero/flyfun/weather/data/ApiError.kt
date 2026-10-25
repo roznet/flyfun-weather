@@ -11,7 +11,10 @@ sealed class ApiError(
 
     data object Unauthorized : ApiError("Session expired. Please sign in again.")
 
-    data object Forbidden : ApiError("Access denied.")
+    /** [detail] is the server's `detail` string (e.g. why a refresh was refused). */
+    data class Forbidden(
+        val detail: String? = null,
+    ) : ApiError(detail?.takeIf { it.isNotBlank() } ?: "Access denied.")
 
     data object NotFound : ApiError("Not found.")
 

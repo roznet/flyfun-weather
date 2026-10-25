@@ -325,15 +325,20 @@ actor APIClient {
             throw APIError.networkError(error)
         }
 
-        switch http.statusCode {
-        case 200...299:
-            return data
-        case 403:
-            throw APIError.forbidden(Self.detailMessage(from: data) ?? "Forbidden")
-        case 404:
-            throw APIError.notFound
-        default:
-            throw APIError.serverError(http.statusCode, Self.detailMessage(from: data))
+        if (200...299).contains(http.statusCode) { return data }
+        throw Self.statusError(http.statusCode, body: data)
+    }
+
+    /// The `APIError` for a non-2xx response, carrying the server's `detail` so
+    /// a refusal says why (e.g. "Historical flight refresh requires admin
+    /// access") instead of a bare "Forbidden". Shared by plain requests and the
+    /// streaming delegates below.
+    fileprivate static func statusError(_ code: Int, body: Data) -> APIError {
+        switch code {
+        case 401: .unauthorized
+        case 403: .forbidden(detailMessage(from: body) ?? "Forbidden")
+        case 404: .notFound
+        default: .serverError(code, detailMessage(from: body))
         }
     }
 
@@ -347,7 +352,7 @@ actor APIClient {
     /// so no information is ever lost, and substring matchers on the message
     /// (e.g. the `autorouter_not_linked` 409) keep working because a
     /// single-string `detail` passes through unchanged.
-    private static func detailMessage(from data: Data) -> String? {
+    fileprivate static func detailMessage(from data: Data) -> String? {
         let raw = String(data: data, encoding: .utf8)
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let dict = object as? [String: Any] else { return raw }
@@ -420,17 +425,10 @@ private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate,
             continuation.resume(throwing: APIError.networkError(URLError(.badServerResponse)))
             return
         }
-        switch http.statusCode {
-        case 200...299:
+        if (200...299).contains(http.statusCode) {
             continuation.resume(returning: buffer)
-        case 401:
-            continuation.resume(throwing: APIError.unauthorized)
-        case 403:
-            continuation.resume(throwing: APIError.forbidden("Forbidden"))
-        case 404:
-            continuation.resume(throwing: APIError.notFound)
-        default:
-            continuation.resume(throwing: APIError.serverError(http.statusCode, String(data: buffer, encoding: .utf8)))
+        } else {
+            continuation.resume(throwing: APIClient.statusError(http.statusCode, body: buffer))
         }
     }
 }
@@ -449,6 +447,9 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
     private var buffer = Data()
     private var eventCount = 0
     private var finished = false
+    /// Set when the response is non-2xx: the body is then the error JSON, read
+    /// to completion so its `detail` reaches the user, not parsed as frames.
+    private var failedStatus: Int?
 
     /// SSE frames are separated by a blank line, i.e. a double newline.
     private static let frameSeparator = Data([0x0a, 0x0a]) // "\n\n"
@@ -476,8 +477,8 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(code) else {
             logger.error("SSE stream failed: HTTP \(code) for \(self.path, privacy: .public)")
-            finish(throwing: APIError.serverError(code, "SSE stream failed"))
-            completionHandler(.cancel)
+            failedStatus = code
+            completionHandler(.allow)
             return
         }
         logger.info("SSE connected (HTTP \(code)) for \(self.path, privacy: .public)")
@@ -486,6 +487,7 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         buffer.append(data)
+        if failedStatus != nil { return }
         while let range = buffer.range(of: Self.frameSeparator) {
             let frame = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
             buffer.removeSubrange(buffer.startIndex..<range.upperBound)
@@ -498,6 +500,10 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
         defer { session.finishTasksAndInvalidate() }
         if let urlError = error as? URLError, urlError.code == .cancelled {
             finish(throwing: nil) // consumer stopped iterating — not an error
+            return
+        }
+        if let code = failedStatus {
+            finish(throwing: APIClient.statusError(code, body: buffer))
             return
         }
         if let error {

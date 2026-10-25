@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -73,6 +74,7 @@ import aero.flyfun.weather.model.AdvisoriesResponse
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FocusIntent
+import aero.flyfun.weather.model.RefreshGate
 import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.WaypointAnalysis
 import aero.flyfun.weather.service.FlightTrackingService
@@ -236,20 +238,27 @@ fun BriefingContainerScreen(
                             viewModel = viewModel,
                             modifier = Modifier.padding(end = 4.dp),
                         )
-                        IconButton(
-                            onClick = { viewModel.refreshBriefing() },
-                            enabled = !isRefreshing,
-                        ) {
-                            if (isRefreshing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Refresh briefing",
-                                )
+                        // Refresh stays present when gated so the control never disappears;
+                        // tapping it explains why instead of earning a 403 (mirrors iOS).
+                        val refreshGate = flight?.refreshGate()
+                        if (refreshGate != null) {
+                            RefreshGatedButton(gate = refreshGate)
+                        } else {
+                            IconButton(
+                                onClick = { viewModel.refreshBriefing() },
+                                enabled = !isRefreshing,
+                            ) {
+                                if (isRefreshing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Refresh briefing",
+                                    )
+                                }
                             }
                         }
                         val ownFlight = flight?.takeIf { it.isEditable }
@@ -779,6 +788,34 @@ internal fun RouteMapPreviewScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Refresh button for a flight that can't be refreshed: opens a menu carrying the reason. */
+@Composable
+private fun RefreshGatedButton(gate: RefreshGate) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.testTag("refreshGatedMenu"),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Refresh unavailable: ${gate.reason}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Text(
+                text = gate.reason,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
     }
 }
