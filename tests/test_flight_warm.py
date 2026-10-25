@@ -602,7 +602,11 @@ class TestWarmIconAlternates:
 
     def test_stop_is_only_consulted_ahead_of_a_download(self, tmp_path):
         from weatherbrief.fetch.grib.cache import cache_dir_for_run
-        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU, icon_cloud_diag_cache_key
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_EU,
+            ICON_EU_RAIN_CON_CACHE_KEY,
+            icon_cloud_diag_cache_key,
+        )
         from weatherbrief.tasks.standalone_grib import _icon_snapshot_plan
 
         out, calls, *_ = self._run(
@@ -612,6 +616,15 @@ class TestWarmIconAlternates:
 
         run_dir = cache_dir_for_run(tmp_path, "20261025", 3, model="icon-eu")
         put_cached(run_dir, cache_key(5, icon_cloud_diag_cache_key(ICON_EU)), b"x")
+        wanted, _ = _icon_snapshot_plan("20261025", 3, [5], ICON_EU)
+        for _url, ck in wanted.values():
+            put_cached(run_dir, ck, b"x")
+        # The f005 blob alone is not warm: its rain_con predecessor is cold.
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(), tmp_path, _plan([5], []), stop=lambda: True,
+        )
+        assert out.status == "stopped"
+        put_cached(run_dir, cache_key(4, ICON_EU_RAIN_CON_CACHE_KEY), b"x")
         wanted, _ = _icon_snapshot_plan("20261025", 3, [5], ICON_EU)
         for _url, ck in wanted.values():
             put_cached(run_dir, ck, b"x")
