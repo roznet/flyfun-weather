@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from weatherbrief.fetch.grib.cache import (
@@ -372,18 +372,12 @@ def precache_icon_eu_run(
 # ICON-D2 flight warming (#469 phase 3) -----------------------------------
 #
 # Unlike the airport-profile precache above (a fixed D-0..D-3 grid for the
-# maps), this warms ONLY what we already know will be asked for: the routes and
-# window hours of flights actually in the DB for the next WARM_HORIZON_HOURS.
-# It reuses the flight-briefing prepare+prefetch path verbatim
-# (_prepare_icon_eu → _prefetch_icon_eu_data), so the warmed cache is
-# byte-for-byte what an on-demand briefing would fetch — same run, same
-# per-level files over the same full model column — giving a near-100% hit rate
-# instead of the ~20% a broad daylight precache would (the rejected option in
-# #469). Broad daylight precaching was 2–4× more DWD bandwidth than on-demand.
-
-# D2's model-level horizon is 48h, so a flight beyond that can't be served by
-# any single D2 run — no point warming it.
-WARM_HORIZON_HOURS = 48
+# maps), the flight warm fetches ONLY what we already know will be asked for:
+# the routes and window hours of flights actually in the DB. It reuses the
+# briefing's own prepare + prefetch, so the warmed cache is byte-for-byte what
+# an on-demand briefing would fetch, giving a near-100% hit rate instead of the
+# ~20% a broad daylight precache would (the rejected option in #469). #929
+# generalised it to every GRIB source a briefing uses: see ``flight_warm``.
 
 
 def precache_icon_d2_flights(
@@ -392,150 +386,13 @@ def precache_icon_d2_flights(
     *,
     now: datetime | None = None,
     should_defer: Callable[[], bool] | None = None,
-) -> dict[str, int]:
-    """Warm the ICON-D2 cache for flights departing within the next 48h.
+) -> dict:
+    """Warm the ICON-D2 cache for upcoming flights (``warm_flights("icon-d2")``)."""
+    from weatherbrief.fetch.grib.flight_warm import warm_flights
 
-    Called after a D2 run publishes. For each upcoming flight whose route fits
-    the D2 domain and whose window a D2 run covers, this runs the SAME
-    prepare+prefetch the briefing pipeline runs, so the cache it fills is
-    exactly what the briefing will read. Flights served by ICON-EU (outside the
-    D2 domain, or window beyond 48h) are skipped here — EU warming is the
-    airport-profile precache's job.
-
-    ``init`` is the freshly-published run (used only for logging; run selection
-    goes through the normal freshest-run finder so it matches the briefing).
-    ``db_path`` is the airports DB for waypoint resolution; empty → no-op.
-
-    Yields to interactive briefings, but only when real downloads are pending:
-    ``should_defer`` (default :func:`interactive_refresh_active`) is passed to
-    the prefetch as its ``abort_if`` gate, which consults it between every
-    (fhour, variable) download unit — not only once per flight, which left a
-    ~80 s window a warm pass could not step out of (#501). A flight whose files
-    are already on disk has no jobs and completes even mid-refresh, so a
-    resumption pass fast-forwards through the warmed prefix instead of stalling
-    at flight 0 for the whole burst (PR #498 review).
-
-    A gated prefetch stops the pass with ``deferred=1`` so the caller leaves
-    the run un-recorded and the next tick resumes it. Because the gate can now
-    fire mid-flight, the flight it stopped in is left partly warmed and is NOT
-    counted in ``flights_warmed``; its finished units are cached, so the
-    resumed pass picks up where this one left off rather than refetching them.
-    """
-    from weatherbrief.fetch.grib import _prefetch_icon_eu_data, _prepare_icon_eu
-    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
-    from weatherbrief.fetch.route_points import interpolate_route
-    from weatherbrief.models import ModelSource, RouteCrossSection
-
-    stats = {
-        "flights_considered": 0, "flights_warmed": 0, "flights_skipped": 0,
-        "deferred": 0,
-    }
-
-    if not db_path:
-        logger.warning("ICON-D2 flight warm: AIRPORTS_DB not configured, skipping")
-        return stats
-
-    gate = _yield_gate(should_defer)
-
-    from flyfun_common.db import SessionLocal
-    from sqlalchemy import select
-
-    from weatherbrief.api.packs import _build_route_config
-    from weatherbrief.db.models import FlightRow
-    from weatherbrief.storage.flights import _row_to_flight
-
-    reference = now or datetime.now(timezone.utc)
-    horizon_end = reference + timedelta(hours=WARM_HORIZON_HOURS)
-    data_dir = _data_dir()
-
-    db = SessionLocal()
-    try:
-        # Soonest departure first. A pass is not instantaneous — it warms one
-        # flight at a time on a single outer unit, and the yield gate can defer
-        # it repeatedly while briefing traffic is heavy (the 09z run on
-        # 2026-08-20 took six attempts, 11:03Z-11:29Z, to complete). So there
-        # is a window of tens of minutes after a run publishes during which
-        # only *part* of the flight set is warm, and unordered rows put an
-        # arbitrary flight in that prefix. Departure order puts the flights
-        # being briefed right now — today's, the ones whose briefing being
-        # cold matters most — at the front of it.
-        rows = db.execute(
-            select(FlightRow)
-            .where(FlightRow.departure_time >= reference)
-            .where(FlightRow.departure_time <= horizon_end)
-            .order_by(FlightRow.departure_time)
-        ).scalars().all()
-    finally:
-        db.close()
-
-    for row in rows:
-        stats["flights_considered"] += 1
-        try:
-            flight = _row_to_flight(row)
-            route = _build_route_config(flight, db_path)
-            route_points = interpolate_route(route, spacing_nm=10.0)
-            if not route_points:
-                stats["flights_skipped"] += 1
-                continue
-
-            icon_section = RouteCrossSection(
-                model=ModelSource.ICON,
-                route_points=[],
-                fetched_at=reference,
-                point_forecasts=[],
-            )
-            ctx, _skip = _prepare_icon_eu(
-                [icon_section], route_points, flight.departure_time,
-                data_dir=data_dir,
-                flight_duration_hours=route.flight_duration_hours,
-            )
-            # Only warm D2. An EU context means the route/window isn't D2-eligible
-            # (or no covering D2 run) — the airport-profile precache warms EU.
-            if ctx is None or ctx.variant is not ICON_D2:
-                stats["flights_skipped"] += 1
-                continue
-
-            # Half the outer units (and half the connection pool, enforced by
-            # the callee) of an interactive prefetch: warming is discretionary
-            # and must never crowd out a concurrent briefing's memory or
-            # connections (05:09Z OOM, 2026-07-23). The gate rides along as
-            # abort_if: a warmed flight (no pending jobs) completes even
-            # mid-refresh; one that needs downloads defers instead, now
-            # between any two download units rather than only before the
-            # flight's first (#501).
-            #
-            # ONE outer unit, not two: on 2026-07-26 a single warming flight
-            # overlapping one briefing took the container to 5999/6144 MB.
-            # One unit holds a single per-variable level-set in flight
-            # (~80 MB) instead of two. Warming has hours of slack before the
-            # next run publishes, so the halved throughput costs nothing.
-            completed = _prefetch_icon_eu_data(
-                ctx, outer_workers=1, abort_if=gate,
-            )
-            if not completed:
-                stats["deferred"] = 1
-                logger.info(
-                    "ICON-D2 flight warm (run %s) deferring to an active "
-                    "briefing refresh after %d/%d flights fully warmed "
-                    "(the current one may be partly warmed) — will resume "
-                    "next tick",
-                    init.strftime("%Y%m%d_%Hz"),
-                    stats["flights_warmed"], len(rows),
-                )
-                break
-            stats["flights_warmed"] += 1
-        except Exception:
-            stats["flights_skipped"] += 1
-            logger.warning(
-                "ICON-D2 flight warm failed for flight %s",
-                getattr(row, "id", "?"), exc_info=True,
-            )
-
-    logger.info(
-        "ICON-D2 flight warm (run %s): %s",
-        init.strftime("%Y%m%d_%Hz"), stats,
+    return warm_flights(
+        "icon-d2", init, db_path, now=now, should_defer=should_defer,
     )
-    return stats
 
 
 def precache_gfs_run(

@@ -2702,13 +2702,17 @@ async def run_grib_precache_loop(app_state) -> None:
     land in the shared GRIB byte-range cache so flight briefings overlapping
     the same window also benefit.
 
+    Before those sweeps, every new run of ICON-D2, ICON-EU, GFS and HRRR
+    warms the upcoming flights it would serve (#929, ``flight_warm``), within
+    per-pass byte, time, disk and flight limits.
+
     Disable via ``WB_GRIB_PRECACHE_ENABLED=false`` (default in dev).
     """
     from weatherbrief.fetch.grib.cache import purge_old_runs
+    from weatherbrief.fetch.grib.flight_warm import warm_flights
     from weatherbrief.fetch.grib.precache import (
         MAIN_CYCLE_HOURS,
         precache_gfs_run,
-        precache_icon_d2_flights,
         precache_icon_eu_run,
         should_warm,
     )
@@ -2730,11 +2734,59 @@ async def run_grib_precache_loop(app_state) -> None:
         ("gfs:noaa", "gfs", "gfs", precache_gfs_run),
     ]
     main_cycles = set(MAIN_CYCLE_HOURS)
+    # Flight warm (#929): (freshness source key, freshness model key, warm
+    # source = cache slug). Every published run of each model, not only main
+    # cycles: the briefing lands on the freshest run, so that is the one to warm.
+    flight_targets = [
+        ("icon_d2:dwd", "icon_d2", "icon-d2"),
+        ("icon_eu:dwd", "icon_eu", "icon-eu"),
+        ("gfs:noaa", "gfs", "gfs"),
+        ("hrrr:noaa", "hrrr", "hrrr"),
+    ]
+    # What deferred attempts at a run already spent, so a resumed pass stays
+    # inside one budget: slug -> (run key, bytes, seconds).
+    warm_carry: dict[str, tuple[str, int, float]] = {}
 
     while True:
         try:
             now = datetime.now(timezone.utc)
             store = get_store()
+            # Flight warms first: near-100% hit rate on the briefings that will
+            # actually run, ahead of the blanket airport-profile sweeps.
+            for source_key, model, slug in flight_targets:
+                marker = store.get_sync(source_key, model)
+                if marker is None:
+                    continue
+                key = marker.init.strftime("%Y%m%d_%Hz")
+                done_key = f"{slug}:flights"
+                if not should_warm(slug, key, last_done.get(done_key), now):
+                    continue
+                carry_key, carried_bytes, carried_s = warm_carry.get(slug, (key, 0, 0.0))
+                if carry_key != key:
+                    carried_bytes, carried_s = 0, 0.0
+                db_path = getattr(app_state, "db_path", "")
+                stats = await asyncio.to_thread(
+                    warm_flights, slug, marker.init, db_path,
+                    carried_bytes=carried_bytes, carried_seconds=carried_s,
+                )
+                if stats.get("deferred"):
+                    # Yielded to an interactive briefing (#490): leave
+                    # last_done alone so the next tick resumes this run.
+                    warm_carry[slug] = (
+                        key, stats["bytes_downloaded"], stats["wall_seconds"],
+                    )
+                    continue
+                if stats.get("low_disk"):
+                    # Not started; retried each tick until space frees up.
+                    continue
+                warm_carry.pop(slug, None)
+                # Enforce the size cap once per warm, off the per-briefing hot
+                # path (#475): with two live runs each model stays under its cap.
+                await asyncio.to_thread(
+                    purge_old_runs, data_dir, slug, enforce_cap=True,
+                )
+                last_done[done_key] = key
+
             for source_key, model, slug, fn in targets:
                 marker = store.get_sync(source_key, model)
                 if marker is None or marker.init.hour not in main_cycles:
@@ -2774,36 +2826,6 @@ async def run_grib_precache_loop(app_state) -> None:
                 )
                 last_done[source_key] = key
 
-            # ICON-D2 flight warming (#469 phase 3). Distinct from the
-            # airport-profile precache above: it warms the D2 cache for the
-            # actual upcoming flights, on EVERY fresh D2 run (all 8 cycles, not
-            # just the four main ones) so a briefing lands on the freshest run's
-            # warm cache. Keyed separately so a shared run hour can't collide
-            # with an EU/GFS entry in last_done. Gated to the same 03Z-21Z
-            # wall-clock window (issue #475).
-            d2_marker = store.get_sync("icon_d2:dwd", "icon_d2")
-            if d2_marker is not None:
-                d2_key = d2_marker.init.strftime("%Y%m%d_%Hz")
-                if should_warm(
-                    "icon-d2", d2_key, last_done.get("icon_d2:flights"), now,
-                ):
-                    db_path = getattr(app_state, "db_path", "")
-                    logger.info("Warming ICON-D2 cache for upcoming flights (run %s)", d2_key)
-                    stats = await asyncio.to_thread(
-                        precache_icon_d2_flights, d2_marker.init, db_path,
-                    )
-                    if stats.get("deferred"):
-                        logger.info(
-                            "ICON-D2 flight warm %s deferred to interactive "
-                            "refresh: %s", d2_key, stats,
-                        )
-                    else:
-                        logger.info("ICON-D2 flight warm %s done: %s", d2_key, stats)
-                        # Enforce the D2 size cap once per warm, off the hot path.
-                        await asyncio.to_thread(
-                            purge_old_runs, data_dir, "icon-d2", enforce_cap=True,
-                        )
-                        last_done["icon_d2:flights"] = d2_key
         except Exception:
             logger.error("GRIB pre-cache loop cycle failed", exc_info=True)
         await asyncio.sleep(_GRIB_PRECACHE_POLL_SECONDS)
