@@ -818,6 +818,53 @@ class _GribDiagLookup:
         return rows[idx]
 
 
+def _icon_diag_max_hour(init_hour: int) -> int:
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_model_level_max_hour
+
+    return icon_eu_model_level_max_hour(init_hour)
+
+
+def grib_diag_steps(
+    model: str, init_time: datetime, valid_times: list[datetime],
+) -> tuple[list[int], list[int]]:
+    """``(steps, beyond)``: the GRIB cloud-diag steps for *valid_times*.
+
+    Each offset from init is snapped to the model's own output grid. The
+    verification grid samples daily, so offsets land 24 h apart (4, 28, 52,
+    76, 100 …) with no regard for where a model thins out. ICON-EU is hourly
+    only to +78 h and 3-hourly after, so f100 is simply not a published step:
+    it 404'd ten times per run AND left the far-day sample with no ICON cloud
+    diagnostics at all. Snapping to the nearest real step costs an hour of
+    currency at four days out and returns actual data.
+
+    GFS needs no equivalent today, though the map cycle does reach its coarse
+    region (MAP_FORECAST_DAYS["gfs"] = 6, so offsets run to ~160 h, past the
+    hourly-to-+120 h limit): every sample hour (FINE/COARSE_SAMPLE_HOURS) is a
+    multiple of 3 and GFS inits are 6-hourly, so each offset already lands on
+    GFS's 3-hourly grid. An off-grid sample hour would need
+    ``grib_fetch._snap_to_gfs_grid`` here.
+
+    ICON-EU's cloud-diag GRIB stops at 120 h (main cycles): a step past that
+    is nine guaranteed 404s per hour, so those go to ``beyond``, not
+    ``steps``. Shared with the flight pre-warm (#929).
+    """
+    snap_step = _grib_step_snapper(model)
+    fhour_set: set[int] = set()
+    for valid in valid_times:
+        offset = int((valid - init_time).total_seconds() / 3600)
+        if offset >= 0:
+            fhour_set.add(snap_step(offset))
+    steps = sorted(fhour_set)
+    beyond: list[int] = []
+    if model == "icon" and steps:
+        from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
+
+        max_hour = _icon_diag_max_hour(datetime_to_init_parts(init_time)[1])
+        beyond = [h for h in steps if h > max_hour]
+        steps = [h for h in steps if h <= max_hour]
+    return steps, beyond
+
+
 def _fetch_grib_diagnostics(
     model: str,
     init_time: datetime,
@@ -848,49 +895,17 @@ def _fetch_grib_diagnostics(
 
     init_date, init_hour = datetime_to_init_parts(init_time)
 
-    # Offset from init → the model's own output grid. The verification grid
-    # samples daily, so offsets land 24 h apart (4, 28, 52, 76, 100 …) with no
-    # regard for where a model thins out. ICON-EU is hourly only to +78 h and
-    # 3-hourly after, so f100 is simply not a published step: it 404'd ten
-    # times per run AND left the far-day sample with no ICON cloud diagnostics
-    # at all. Snapping to the nearest real step costs an hour of currency at
-    # four days out and returns actual data.
-    #
-    # GFS needs no equivalent today, though the map cycle does reach its coarse
-    # region (MAP_FORECAST_DAYS["gfs"] = 6, so offsets run to ~160 h, past the
-    # hourly-to-+120 h limit): every sample hour (FINE/COARSE_SAMPLE_HOURS) is a
-    # multiple of 3 and GFS inits are 6-hourly, so each offset already lands on
-    # GFS's 3-hourly grid. An off-grid sample hour would need
-    # ``grib_fetch._snap_to_gfs_grid`` here.
+    # Offsets snapped to the model's own output grid (see grib_diag_steps).
     snap_step = _grib_step_snapper(model)
-
-    fhour_set: set[int] = set()
-    for valid in valid_times:
-        offset = int((valid - init_time).total_seconds() / 3600)
-        if offset >= 0:
-            fhour_set.add(snap_step(offset))
-
-    if not fhour_set:
+    forecast_hours, beyond = grib_diag_steps(model, init_time, valid_times)
+    if beyond:
+        logger.info(
+            "ICON-EU cloud diag: %d forecast hour(s) beyond the %dh horizon "
+            "(%s) — no ceiling available, skipping",
+            len(beyond), _icon_diag_max_hour(init_hour), ", ".join(f"{h}h" for h in beyond),
+        )
+    if not forecast_hours:
         return None
-
-    forecast_hours = sorted(fhour_set)
-
-    if model == "icon":
-        # ICON-EU's cloud-diag GRIB stops at 120 h (main cycles). Asking for a
-        # step past that is nine guaranteed 404s per hour, so don't ask.
-        from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_model_level_max_hour
-
-        max_hour = icon_eu_model_level_max_hour(init_hour)
-        beyond = [h for h in forecast_hours if h > max_hour]
-        if beyond:
-            logger.info(
-                "ICON-EU cloud diag: %d forecast hour(s) beyond the %dh horizon "
-                "(%s) — no ceiling available, skipping",
-                len(beyond), max_hour, ", ".join(f"{h}h" for h in beyond),
-            )
-            forecast_hours = [h for h in forecast_hours if h <= max_hour]
-        if not forecast_hours:
-            return None
 
     lats = [a.lat for a in airports]
     lons = [a.lon for a in airports]
@@ -1237,6 +1252,69 @@ def _fetch_grib_primary_snapshots(
     return snapshots, api_calls
 
 
+@dataclass(frozen=True)
+class IconSnapshotFetchPlan:
+    """What an ICON GRIB-primary snapshot fetch downloads (#914, #928).
+
+    ``eu_steps`` / ``d2_steps`` map each planned valid time to its published
+    step (``d2_steps`` empty when ICON-D2 serves no airport). ``d2_airports``
+    are the airports ICON-D2 serves; ``eu_first`` the ICON-EU steps fetched
+    up front (a D2 shortfall is topped up from EU afterwards).
+    """
+
+    init_date: str
+    init_hour: int
+    eu_steps: dict[datetime, int]
+    d2_steps: dict[datetime, int]
+    d2_airports: list[WatchlistAirport]
+    eu_first: list[int]
+
+
+def icon_snapshot_fetch_plan(
+    init_time: datetime,
+    airports: list[WatchlistAirport],
+    valid_times: list[datetime],
+) -> IconSnapshotFetchPlan | None:
+    """The ICON-D2 / ICON-EU split of a snapshot fetch, before any download.
+
+    The one planner :func:`_build_grib_snapshots` and the flight pre-warm
+    (#929) share, so the warm downloads the files the alternates search
+    reads. Inside the ICON-D2 domain and the D2 run's 48 h a point-hour is
+    D2's; ICON-EU is fetched up front only where D2 can't serve: steps past
+    the D2 horizon, or every step when some airport is outside D2 (EU files
+    are whole-grid, so the bytes are per step, not per airport). None when
+    no valid time is on either grid.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
+    from weatherbrief.fetch.grib.primary import grib_snapshot_d2_enabled
+    from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
+
+    init_date, init_hour = datetime_to_init_parts(init_time)
+    eu_steps = _icon_snapshot_steps(init_time, valid_times, ICON_EU)
+    d2_steps = (
+        _icon_snapshot_steps(init_time, valid_times, ICON_D2)
+        if grib_snapshot_d2_enabled() else {}
+    )
+    d2_airports = (
+        _icon_d2_airports(airports, init_date, init_hour) if d2_steps else []
+    )
+    if not d2_airports:
+        d2_steps = {}
+    if not eu_steps and not d2_steps:
+        return None
+    d2_icaos = {a.icao for a in d2_airports}
+    d2_step_set = set(d2_steps.values())
+    some_outside = any(a.icao not in d2_icaos for a in airports)
+    eu_first = sorted({
+        fhour for fhour in eu_steps.values()
+        if some_outside or fhour not in d2_step_set
+    })
+    return IconSnapshotFetchPlan(
+        init_date=init_date, init_hour=init_hour, eu_steps=eu_steps,
+        d2_steps=d2_steps, d2_airports=d2_airports, eu_first=eu_first,
+    )
+
+
 def _build_grib_snapshots(
     model: str,
     init_time: datetime,
@@ -1309,34 +1387,13 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     no step was in range (nothing was fetched).
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
-    from weatherbrief.fetch.grib.primary import grib_snapshot_d2_enabled
-    from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
 
-    init_date, init_hour = datetime_to_init_parts(init_time)
-    eu_steps = _icon_snapshot_steps(init_time, valid_times, ICON_EU)
-    d2_steps = (
-        _icon_snapshot_steps(init_time, valid_times, ICON_D2)
-        if grib_snapshot_d2_enabled() else {}
-    )
-    d2_airports = (
-        _icon_d2_airports(airports, init_date, init_hour) if d2_steps else []
-    )
-    if not d2_airports:
-        d2_steps = {}
-    if not eu_steps and not d2_steps:
+    plan = icon_snapshot_fetch_plan(init_time, airports, valid_times)
+    if plan is None:
         return [], set(), None, None
-
-    # EU up front only where D2 can't serve: steps past the D2 horizon, or
-    # every step when some airport is outside D2 (EU files are whole-grid, so
-    # the bytes are per step, not per airport). A D2 shortfall inside that is
-    # topped up from EU afterwards, from the same cache when it was fetched.
-    d2_icaos = {a.icao for a in d2_airports}
-    d2_step_set = set(d2_steps.values())
-    some_outside = any(a.icao not in d2_icaos for a in airports)
-    eu_first = sorted({
-        fhour for fhour in eu_steps.values()
-        if some_outside or fhour not in d2_step_set
-    })
+    init_date, init_hour = plan.init_date, plan.init_hour
+    eu_steps, d2_steps = plan.eu_steps, plan.d2_steps
+    d2_airports, eu_first = plan.d2_airports, plan.eu_first
 
     # D2 fields, D2 cloud diagnostics and EU fields download side by side,
     # each on its own session: the caller's belongs to the EU cloud-diag
@@ -1347,7 +1404,7 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=3, thread_name_prefix="grib-icon-snap",
     ) as pool:
-        d2_list = sorted(d2_step_set)
+        d2_list = sorted(set(d2_steps.values()))
         d2_fields_f = _submit(
             pool, _fetch_icon_fields, init_date, init_hour, d2_list, d2_airports,
             ICON_D2, priority,

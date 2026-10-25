@@ -223,11 +223,8 @@ def fetch_icon_cloud_diag(
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
-        ICON_EU_RAIN_CON_CACHE_KEY,
-        fetch_icon_eu_single_level,
         icon_cloud_diag_cache_key,
         icon_eu_conv_rain_rate_mm_h,
-        icon_eu_previous_step,
     )
 
     variant = variant or ICON_EU
@@ -241,71 +238,19 @@ def fetch_icon_cloud_diag(
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
     result: dict[int, list[AirportGribDiagnostics]] = {}
 
-    # Phase 1: ensure each hour is cached (sequential network I/O), collecting
-    # decode jobs to fan out — see fetch_gfs_cloud_diag for the rationale (#459).
-    decode_jobs: list[tuple[str, tuple]] = []
-    job_fhours: list[int] = []
-    for fhour in forecast_hours:
-        ck = cache_key(fhour, diag_key)
-
-        if not is_cached(run_dir, ck):
-            try:
-                fetched = fetch_icon_eu_single_level(
-                    init_date, init_hour, [fhour], session=session, variant=variant,
-                )
-                grib_bytes = fetched.get(fhour)
-                if not grib_bytes:
-                    continue
-                put_cached(run_dir, ck, grib_bytes)
-                del grib_bytes
-            except Exception:
-                logger.warning("ICON cloud diag fetch failed f%03d", fhour, exc_info=True)
-                continue
-
-        decode_jobs.append(
-            ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)),
-        )
-        job_fhours.append(fhour)
-
-    # Predecessor steps, only to seed the rain_con de-accumulation, and only
-    # for hours that are actually going to be decoded. A failure here costs
-    # the rate for one sampled hour and nothing else.
-    predecessor_of: dict[int, int] = {}
-    for fhour in job_fhours if "rain_con" in variant.cloud_diag_variables else ():
-        prev = icon_eu_previous_step(fhour, variant)
-        if prev is not None:
-            predecessor_of[fhour] = prev
-    extra_steps = sorted(set(predecessor_of.values()) - set(job_fhours))
-
-    pred_jobs: list[tuple[str, tuple]] = []
-    pred_fhours: list[int] = []
-    for fhour in extra_steps:
-        full_ck = cache_key(fhour, diag_key)
-        ck = (
-            full_ck if is_cached(run_dir, full_ck)
-            else cache_key(fhour, ICON_EU_RAIN_CON_CACHE_KEY)
-        )
-        if not is_cached(run_dir, ck):
-            try:
-                fetched = fetch_icon_eu_single_level(
-                    init_date, init_hour, [fhour],
-                    variables=["rain_con"], session=session,
-                )
-                grib_bytes = fetched.get(fhour)
-                if not grib_bytes:
-                    continue
-                put_cached(run_dir, ck, grib_bytes)
-                del grib_bytes
-            except Exception:
-                logger.warning(
-                    "ICON rain_con predecessor fetch failed f%03d", fhour,
-                    exc_info=True,
-                )
-                continue
-        pred_jobs.append(
-            ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)),
-        )
-        pred_fhours.append(fhour)
+    # Phase 1: ensure each hour is cached (sequential network I/O), then fan
+    # the decodes out — see fetch_gfs_cloud_diag for the rationale (#459).
+    job_fhours, predecessor_of, preds = _ensure_icon_cloud_diag_cached(
+        run_dir, init_date, init_hour, forecast_hours, variant, session,
+    )
+    decode_jobs: list[tuple[str, tuple]] = [
+        ("decode_icon_cloud_diag", (str(run_dir / cache_key(fhour, diag_key)), lats, lons))
+        for fhour in job_fhours
+    ]
+    pred_jobs: list[tuple[str, tuple]] = [
+        ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)) for _, ck in preds
+    ]
+    pred_fhours: list[int] = [fhour for fhour, _ in preds]
 
     if not decode_jobs:
         return result
@@ -371,6 +316,123 @@ def fetch_icon_cloud_diag(
         result[fhour] = airport_data
 
     return result
+
+
+def _ensure_icon_cloud_diag_cached(
+    run_dir: Path,
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    variant: "IconVariant",
+    session: requests.Session,
+) -> tuple[list[int], dict[int, int], list[tuple[int, str]]]:
+    """Download half of :func:`fetch_icon_cloud_diag`: cache what *run_dir* lacks.
+
+    Returns the steps whose cloud-diag blob is cached, ``predecessor_of``
+    (cached step -> its rain_con predecessor) and the ``(step, cache filename)``
+    of each predecessor blob that is cached. Never raises for a step: a failed
+    download is logged and leaves that step out.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_RAIN_CON_CACHE_KEY,
+        fetch_icon_eu_single_level,
+        icon_cloud_diag_cache_key,
+        icon_eu_previous_step,
+    )
+
+    diag_key = icon_cloud_diag_cache_key(variant)
+    job_fhours: list[int] = []
+    for fhour in forecast_hours:
+        ck = cache_key(fhour, diag_key)
+
+        if not is_cached(run_dir, ck):
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    init_date, init_hour, [fhour], session=session, variant=variant,
+                )
+                grib_bytes = fetched.get(fhour)
+                if not grib_bytes:
+                    continue
+                put_cached(run_dir, ck, grib_bytes)
+                del grib_bytes
+            except Exception:
+                logger.warning("ICON cloud diag fetch failed f%03d", fhour, exc_info=True)
+                continue
+        job_fhours.append(fhour)
+
+    # Predecessor steps, only to seed the rain_con de-accumulation, and only
+    # for hours that are actually going to be decoded. A failure here costs
+    # the rate for one sampled hour and nothing else.
+    predecessor_of: dict[int, int] = {}
+    for fhour in job_fhours if "rain_con" in variant.cloud_diag_variables else ():
+        prev = icon_eu_previous_step(fhour, variant)
+        if prev is not None:
+            predecessor_of[fhour] = prev
+    extra_steps = sorted(set(predecessor_of.values()) - set(job_fhours))
+
+    preds: list[tuple[int, str]] = []
+    for fhour in extra_steps:
+        full_ck = cache_key(fhour, diag_key)
+        ck = (
+            full_ck if is_cached(run_dir, full_ck)
+            else cache_key(fhour, ICON_EU_RAIN_CON_CACHE_KEY)
+        )
+        if not is_cached(run_dir, ck):
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    init_date, init_hour, [fhour],
+                    variables=["rain_con"], session=session,
+                )
+                grib_bytes = fetched.get(fhour)
+                if not grib_bytes:
+                    continue
+                put_cached(run_dir, ck, grib_bytes)
+                del grib_bytes
+            except Exception:
+                logger.warning(
+                    "ICON rain_con predecessor fetch failed f%03d", fhour,
+                    exc_info=True,
+                )
+                continue
+        preds.append((fhour, ck))
+    return job_fhours, predecessor_of, preds
+
+
+def ensure_icon_cloud_diag_files(
+    init_date: str,
+    init_hour: int,
+    steps: list[int],
+    *,
+    variant: "IconVariant | None" = None,
+    session: requests.Session | None = None,
+    data_dir: Path | None = None,
+) -> list[int]:
+    """Download-only half of :func:`fetch_icon_cloud_diag`; the steps now cached.
+
+    Same files under the same cache keys (the cloud-diag blob per step, the
+    rain_con predecessor where the variant has it), no decode, so a pre-warm
+    (#929) leaves exactly what the alternates' cloud diagnostics read.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+
+    variant = variant or ICON_EU
+    steps = sorted(set(steps))
+    if not steps:
+        return []
+    if data_dir is None:
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    if session is None:
+        with requests.Session() as own_session:
+            return ensure_icon_cloud_diag_files(
+                init_date, init_hour, steps,
+                variant=variant, session=own_session, data_dir=data_dir,
+            )
+    purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    cached, _, _ = _ensure_icon_cloud_diag_cached(
+        run_dir, init_date, init_hour, steps, variant, session,
+    )
+    return cached
 
 
 @dataclass

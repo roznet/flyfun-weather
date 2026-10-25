@@ -422,8 +422,10 @@ hourly (#415).
   D2 shortfall is topped up from EU after. A D2 pass with airports in the
   domain but 0 D2 rows logs WARNING `ICON_D2_SNAPSHOTS_EMPTY`.
   `WB_GRIB_SNAPSHOTS_D2=0` → EU only. Meteorology: §64.
-- **Downloads:** `ensure_icon_snapshot_files` is the download-only half
-  (same files and cache keys), for the per-flight pre-warm (#929). A DWD 404
+- **Downloads:** `ensure_icon_snapshot_files` (and, for the cloud
+  diagnostics, `ensure_icon_cloud_diag_files`) is the download-only half
+  (same files and cache keys), for the per-flight pre-warm (#929), which
+  plans with the same `icon_snapshot_fetch_plan` as the builder. A DWD 404
   snapshot file is not asked again for 10 min in the same process
   (`_ICON_404_TTL_S`), so a late run doesn't cost a 404 per file on every
   alternates search (the cloud-diag fetch is not memoised). The D2 validity

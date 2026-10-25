@@ -16,9 +16,16 @@ briefing reads, and its first refresh on the new run downloads ~0 MB:
 * ``hrrr``: for a route the HRRR upgrade takes (``_hrrr_takes_route``), the
   sounding and cloud-diagnostics artifacts of every window hour.
 
-ECMWF needs nothing (local ECPDS disk). The alternates' ETA-hour files are
-not warmed yet: they wait on the download-only split of
-``fetch_icon_snapshot_fields`` that #928 brings.
+* alternates: on the ``icon-eu`` and ``icon-d2`` passes, for a flight the
+  briefing computes alternates for (D-2 inward), the ETA-hour files its
+  alternates search reads: the ICON snapshot files (isobaric + surface,
+  ``ensure_icon_snapshot_files``) and the cloud diagnostics
+  (``ensure_icon_cloud_diag_files``), split between ICON-D2 and ICON-EU by
+  the search's own planner (``icon_snapshot_fetch_plan``) over its own
+  candidate list (``alternates_fetch_airports``).
+
+ECMWF needs nothing (local ECPDS disk). GFS alternates read the briefing's
+``CLOUD_DIAG`` blob, which the ``gfs`` pass warms.
 
 **Limits** (owner, 2026-10-25), so a pass cannot run away. Flights are
 taken soonest departure first, so any limit cuts only the flights furthest
@@ -152,6 +159,7 @@ class _Flight:
     departure_time: datetime
     duration_hours: float
     route_points: list
+    route: object | None = None  # RouteConfig, for the alternates candidates
 
 
 @dataclass
@@ -396,9 +404,149 @@ def _warm_hrrr(
     return _Outcome("warmed", hours=hours)
 
 
-def _warm_unit(source: str):
+# The briefing computes alternates for flights up to this many calendar days
+# out (pipeline: ``days_out <= 2``).
+ALTERNATES_MAX_DAYS_OUT = 2
+
+
+def _warm_icon_alternates(
+    source: str,
+    init: datetime,
+    flight: _Flight,
+    data_dir: Path,
+    stop: Callable[[], bool],
+    *,
+    db_path: str,
+    now: datetime,
+) -> _Outcome:
+    """The alternates search's ETA-hour ICON files, download only (#929).
+
+    The search (``alternates._fetch_eta_snapshots``) reads ICON at the
+    destination ETA hour for the destination and its candidates: the cloud
+    diagnostics (ICON-EU always, ICON-D2 for the airports D2 serves) and,
+    GRIB-primary (#914), the snapshot files of each variant, as
+    ``icon_snapshot_fetch_plan`` splits them. The files are whole-grid per
+    step, so a few flights arriving in the same hour share them. The ICON-EU
+    pass warms the EU files, the ICON-D2 pass the D2 files, each on its own
+    fresh run; the search reads that run once Open-Meteo's ICON init
+    reaches it.
+    """
+    from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, pin_run_dir
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU, icon_cloud_diag_cache_key
+    from weatherbrief.fetch.grib.primary import grib_snapshot_models
+    from weatherbrief.tasks.alternates import _eta_hour, alternates_fetch_airports
+    from weatherbrief.tasks.standalone_grib import (
+        _icon_snapshot_plan,
+        datetime_to_init_parts,
+        ensure_icon_cloud_diag_files,
+        ensure_icon_snapshot_files,
+    )
+    from weatherbrief.tasks.standalone_verification import (
+        grib_diag_steps,
+        icon_snapshot_fetch_plan,
+    )
+
+    if flight.route is None or not db_path:
+        return _Outcome("skipped", reason="alternates_no_route")
+    days_out = (
+        flight.departure_time.astimezone(timezone.utc).date()
+        - now.astimezone(timezone.utc).date()
+    ).days
+    if days_out > ALTERNATES_MAX_DAYS_OUT:
+        return _Outcome("skipped", reason="alternates_out_of_range")
+    init_time = _aware(init)
+    eta = _eta_hour(flight.departure_time, flight.duration_hours)
+    if eta < init_time:
+        return _Outcome("skipped", reason="alternates_eta_before_run")
+
+    grib_snapshots = "icon" in grib_snapshot_models()
+    plan = (
+        icon_snapshot_fetch_plan(
+            init_time, alternates_fetch_airports(flight.route, db_path), [eta],
+        )
+        if grib_snapshots else None
+    )
+    # (variant, "snapshot" | "diag", steps)
+    units: list[tuple[object, str, list[int]]] = []
+    if source == "icon-eu":
+        diag_steps, _ = grib_diag_steps("icon", init_time, [eta])
+        units.append((ICON_EU, "diag", diag_steps))
+        if plan is not None:
+            units.append((ICON_EU, "snapshot", plan.eu_first))
+    elif plan is not None:
+        d2_steps = sorted(set(plan.d2_steps.values()))
+        units += [(ICON_D2, "snapshot", d2_steps), (ICON_D2, "diag", d2_steps)]
+    units = [u for u in units if u[2]]
+    if not units:
+        return _Outcome("skipped", reason="alternates_nothing")
+
+    init_date, init_hour = datetime_to_init_parts(init_time)
+    run = f"{init_date}_{init_hour:02d}z"
+    hours: set[tuple[str, int]] = set()
+    for variant, kind, steps in units:
+        run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+        if kind == "diag":
+            diag_key = icon_cloud_diag_cache_key(variant)
+            missing = [f for f in steps if not is_cached(run_dir, cache_key(f, diag_key))]
+        else:
+            wanted, _ = _icon_snapshot_plan(init_date, init_hour, steps, variant)
+            missing = sorted({
+                key[0] for key, (_url, ck) in wanted.items() if not is_cached(run_dir, ck)
+            })
+        if missing:
+            # Only ahead of a real download, as everywhere in the warm.
+            if stop():
+                return _Outcome("stopped", hours=hours)
+            with pin_run_dir(run_dir):
+                if kind == "diag":
+                    ensure_icon_cloud_diag_files(
+                        init_date, init_hour, steps, variant=variant, data_dir=data_dir,
+                    )
+                else:
+                    ensure_icon_snapshot_files(
+                        init_date, init_hour, steps, variant=variant, data_dir=data_dir,
+                    )
+        hours |= {(f"{run} alternates {variant.slug} {kind}", f) for f in steps}
+    return _Outcome("warmed", hours=hours)
+
+
+def _merge(briefing: _Outcome, alternates: _Outcome) -> _Outcome:
+    """One flight's outcome from its briefing warm and its alternates warm."""
+    hours = briefing.hours | alternates.hours
+    if alternates.status == "stopped":
+        return _Outcome("stopped", hours=hours, reason=alternates.reason)
+    if briefing.status == "skipped" and alternates.status == "skipped":
+        return briefing
+    return _Outcome("warmed", hours=hours)
+
+
+def _warm_unit(
+    source: str,
+    init: datetime | None = None,
+    *,
+    db_path: str = "",
+    now: datetime | None = None,
+):
     if source in ("icon-d2", "icon-eu"):
-        return lambda flight, data_dir, stop: _warm_icon(source, flight, data_dir, stop)
+        def _icon(flight, data_dir, stop):
+            out = _warm_icon(source, flight, data_dir, stop)
+            if out.status == "stopped" or init is None:
+                return out
+            try:
+                alternates = _warm_icon_alternates(
+                    source, init, flight, data_dir, stop,
+                    db_path=db_path, now=now or datetime.now(timezone.utc),
+                )
+            except Exception:
+                # The briefing's files are cached: an alternates failure must
+                # not count the flight as failed.
+                logger.warning(
+                    "Flight warm %s: alternates failed for flight %s",
+                    source, flight.id, exc_info=True,
+                )
+                return out
+            return _merge(out, alternates)
+        return _icon
     if source == "gfs":
         return _warm_gfs
     if source == "hrrr":
@@ -447,6 +595,7 @@ def _to_flight(row, db_path: str) -> _Flight | None:
         departure_time=_aware(flight.departure_time),
         duration_hours=route.flight_duration_hours,
         route_points=route_points,
+        route=route,
     )
 
 
@@ -515,8 +664,8 @@ def warm_flights(
     _low_disk_warned.pop(source, None)
 
     gate = _yield_gate(should_defer)
-    unit = _warm_unit(source)
     reference = now or datetime.now(timezone.utc)
+    unit = _warm_unit(source, init, db_path=db_path, now=reference)
     rows = _upcoming_rows(reference, reference + timedelta(hours=limits.horizon_hours))
     stats["flights_considered"] = len(rows)
 

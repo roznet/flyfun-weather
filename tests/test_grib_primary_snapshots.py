@@ -679,6 +679,47 @@ class TestDownloads:
         # 11 levels x 5 variables + 15 surface + 5 accumulated at f005.
         assert len(wanted) == 11 * 5 + 15 + 5
 
+    def test_ensure_cloud_diag_fetches_what_the_diag_fetch_reads(self, tmp_path, monkeypatch):
+        """The cloud-diag pre-warm (#929): the blob per step and, on ICON-EU,
+        the rain_con-only predecessor, under fetch_icon_cloud_diag's keys."""
+        import weatherbrief.tasks.standalone_grib as sg
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_D2,
+            ICON_EU,
+            ICON_EU_RAIN_CON_CACHE_KEY,
+            icon_cloud_diag_cache_key,
+        )
+
+        monkeypatch.setattr(sg, "purge_old_runs", lambda *a, **kw: None)
+        calls: list = []
+
+        def fake_fetch(init_date, init_hour, hours, variables=None, session=None, **kw):
+            calls.append((list(hours), variables, kw.get("variant")))
+            return {h: b"grib" for h in hours}
+
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level", fake_fetch,
+        )
+        cached = sg.ensure_icon_cloud_diag_files(
+            INIT_DATE, 0, [28], variant=ICON_EU, session=MagicMock(), data_dir=tmp_path,
+        )
+        run_dir = cache_dir_for_run(tmp_path, INIT_DATE, 0, model="icon-eu")
+        assert cached == [28]
+        assert (run_dir / cache_key(28, icon_cloud_diag_cache_key(ICON_EU))).exists()
+        assert (run_dir / cache_key(27, ICON_EU_RAIN_CON_CACHE_KEY)).exists()
+        assert [c[:2] for c in calls] == [([28], None), ([27], ["rain_con"])]
+
+        # A second warm is free; ICON-D2 has no rain_con, so no predecessor.
+        calls.clear()
+        sg.ensure_icon_cloud_diag_files(
+            INIT_DATE, 0, [28], variant=ICON_EU, session=MagicMock(), data_dir=tmp_path,
+        )
+        assert calls == []
+        sg.ensure_icon_cloud_diag_files(
+            INIT_DATE, 0, [6], variant=ICON_D2, session=MagicMock(), data_dir=tmp_path,
+        )
+        assert [c[:2] for c in calls] == [([6], None)]
+
 
 class TestFallbackAlert:
     def _airports(self, n):

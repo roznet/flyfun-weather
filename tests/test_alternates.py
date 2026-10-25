@@ -778,3 +778,34 @@ def test_no_cross_border_flag_when_country_unknown():
     assert result is not None
     egmd_alt = next(a for a in result.alternates if a.icao == "EGMD")
     assert egmd_alt.operational_flags == []
+
+
+def test_fetch_airports_are_what_the_search_fetches():
+    """The flight pre-warm's list (#929): destination, then the candidates in
+    the search's batch order, so it warms the files the search reads."""
+    from weatherbrief.tasks.alternates import alternates_fetch_airports
+
+    route = _route()
+    far = _FakeAirport("EGPN", 55.50, -3.40)
+    near_dest = _FakeAirport("EGPK", 55.51, -4.59)
+    short = _FakeAirport("EGPT", 55.40, -3.50, longest_runway_length_ft=1200)
+    near = [
+        {"airport": a, "enroute_distance_nm": 200.0, "segment_distance_nm": 5.0}
+        for a in (far, near_dest, short)
+    ]
+    fetched: list = []
+
+    def _fetch(airports, eta):
+        fetched.extend(a.icao for a in airports)
+        return {a.icao: _all_models(a.icao) for a in airports}
+
+    model = _FakeModel(near)
+    with patch("weatherbrief.airports._load_airport_model", return_value=model), \
+         patch("weatherbrief.airports.get_runway_ends", return_value={}), \
+         patch.object(alt_mod, "_fetch_eta_snapshots", side_effect=_fetch):
+        warm = alternates_fetch_airports(route, "/fake/nav.db")
+        run_alternates(
+            route=route, target_time=DEPARTURE, airports_db_path="/fake/nav.db", now=NOW,
+        )
+    assert [a.icao for a in warm] == ["EGPF", "EGPK", "EGPN"]
+    assert fetched == [a.icao for a in warm]
