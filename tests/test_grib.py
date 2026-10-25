@@ -696,6 +696,63 @@ class TestIconEuFetch:
         assert "icon-eu_europe_regular-lat-lon_model-level_" in head_url
         assert "_74_P.grib2.bz2" in head_url
 
+    def test_find_latest_run_skips_run_still_publishing_needed_hours(self):
+        """A run with f000 up but the window's last hour 404 yields the older run.
+
+        Prod 2026-10-25 15:03Z: ICON-EU 12z had f000 but not f093/f096, so a
+        10-29 flight went entirely to the Open-Meteo fallback while 06z
+        covered it.
+        """
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+
+        def _head(url, timeout=10):
+            resp = MagicMock()
+            # 12z is up to f078 only; 06z is complete.
+            hour = int(url.rsplit("_", 3)[-3])
+            resp.status_code = 404 if "2026102512_" in url and hour > 78 else 200
+            return resp
+
+        session = MagicMock()
+        session.head.side_effect = _head
+        fixed_now = datetime(2026, 10, 25, 15, 3, tzinfo=timezone.utc)
+        departure = datetime(2026, 10, 29, 9, 0, tzinfo=timezone.utc)
+        with patch("weatherbrief.fetch.grib.icon_eu_fetch.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = find_latest_icon_eu_run(
+                departure, session=session,
+                cover_until=departure.replace(hour=11),
+            )
+
+        assert result == ("20261025", 6)
+        probed = [c.args[0] for c in session.head.call_args_list]
+        assert any("2026102512_096_74_P" in u for u in probed)
+
+    def test_find_latest_run_accepts_run_with_needed_hours_published(self):
+        """When the last bracket hour is up, the newest run is kept."""
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+
+        session = MagicMock()
+        session.head.return_value = MagicMock(status_code=200)
+        fixed_now = datetime(2026, 10, 25, 15, 3, tzinfo=timezone.utc)
+        departure = datetime(2026, 10, 27, 9, 0, tzinfo=timezone.utc)
+        with patch("weatherbrief.fetch.grib.icon_eu_fetch.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = find_latest_icon_eu_run(
+                departure, session=session, cover_until=departure,
+            )
+
+        assert result == ("20261025", 12)
+
 
 # --- ICON-EU level interpolation tests ---
 

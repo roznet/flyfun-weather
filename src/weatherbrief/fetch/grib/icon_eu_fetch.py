@@ -853,9 +853,11 @@ def find_latest_icon_eu_run_with_response(
     """Find the latest ICON run + return the matching probe HEAD response.
 
     Tries cycles in reverse chronological order, checking that enough time
-    has passed for publication and that the run's model-level horizon
-    reaches ``cover_until``.  If ``cover_until`` is None, any run that
-    covers ``target_time`` is accepted.
+    has passed for publication, that the run's model-level horizon
+    reaches ``cover_until``, and that DWD has uploaded both f000 and the
+    last forecast hour bracketing ``cover_until`` (a run is published hour
+    by hour).  If ``cover_until`` is None, any run that covers
+    ``target_time`` is accepted.
 
     The response is returned so the freshness dispatch can read its
     ``Last-Modified`` header without re-issuing the same HEAD upstream.
@@ -905,12 +907,31 @@ def find_latest_icon_eu_run_with_response(
             )
             try:
                 resp = sess.head(probe_url, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(
-                        "Found %s run: %s %02dz (horizon %dh)",
-                        variant.slug, date_str, cycle, max_hour,
+                if resp.status_code != 200:
+                    continue
+                # DWD uploads a run hour by hour, so f000 alone says nothing
+                # about the hours the window needs (prod 10-25: 12z picked at
+                # init+3h, f090–f096 404). Probe the last bracket hour too and
+                # step back to the previous run when it isn't up yet.
+                last_hour = bracket_icon_eu_forecast_hours(
+                    date_str, cycle, need_until, variant,
+                )[1]
+                if last_hour > 0:
+                    last_url = icon_eu_file_url(
+                        date_str, cycle, last_hour, variant.level_max, "p", variant,
                     )
-                    return date_str, cycle, resp
+                    if sess.head(last_url, timeout=10).status_code != 200:
+                        logger.info(
+                            "%s %s %02dz not yet published through f%03d, "
+                            "trying an older run",
+                            variant.slug, date_str, cycle, last_hour,
+                        )
+                        continue
+                logger.info(
+                    "Found %s run: %s %02dz (horizon %dh)",
+                    variant.slug, date_str, cycle, max_hour,
+                )
+                return date_str, cycle, resp
             except requests.RequestException:
                 continue
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -176,10 +177,13 @@ def test_find_latest_icon_eu_run_as_of_time():
     # 09z: 3h since init, at the delay boundary — should be skipped (< not <=)
     # 06z: 6h since init — should be found
 
+    # Any 06z P file: the finder probes f000 and the window's last hour.
     responses.add(
         responses.HEAD,
-        "https://opendata.dwd.de/weather/nwp/icon-eu/grib/06/p/"
-        "icon-eu_europe_regular-lat-lon_model-level_2026022006_000_74_P.grib2.bz2",
+        re.compile(
+            r"https://opendata\.dwd\.de/weather/nwp/icon-eu/grib/06/p/"
+            r"icon-eu_europe_regular-lat-lon_model-level_2026022006_\d{3}_74_P\.grib2\.bz2"
+        ),
         status=200,
     )
 
