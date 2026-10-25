@@ -1080,7 +1080,8 @@ def fetch_model_snapshots(
 # A GRIB point-hour needs at least this many pressure levels to count as a
 # sounding; below it the point goes to the Open-Meteo fallback. Half of ICON-EU's
 # 16 requested levels (D2 has 11, GFS 19): enough for the lite sounding's
-# layers and parcel.
+# layers and parcel. GFS columns come whole or not at all (the reader refuses
+# a plan missing any level), so for GFS the floor only guards the decode.
 _MIN_GRIB_SNAPSHOT_LEVELS = 8
 
 # More than this share of airports on the Open-Meteo fallback, on a call with
@@ -1444,7 +1445,6 @@ def _gfs_candidates(model, init_time, airports, valid_times, grib_diag, priority
                 hourly.attach_nwp_diagnostics(cd.diagnostics)
             if not _grib_hour_covered(hourly, analysis_step=fhour == 0):
                 continue
-            # Hourly rate over the step window, as for ICON (3 h past f120).
             built.append((_snapshot_row(airport.icao, model, init_time, hourly), hourly))
     return built, set(), None, f"{len(fields)}/{len(set(step_of.values()))} GFS step(s)"
 
@@ -1642,6 +1642,7 @@ def _gfs_grib_hourly(valid: datetime, step, i: int):
         if step.prev_surface is not None and i < len(step.prev_surface)
         else None
     )
+    # Hourly rate over the step window, as for ICON (3 h past f120).
     rates = gfs_surface_rates(raw, prev, step.window_h)
     return HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
 

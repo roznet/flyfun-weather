@@ -185,7 +185,7 @@ class TestFallback:
         assert calls == 1
         assert all(s["temperature_2m_c"] == pytest.approx(20.0) for s in snaps)
 
-    def test_reader_raising_falls_back_whole(self, env):
+    def test_reader_raising_falls_back_whole(self, env, caplog):
         _, fake, monkeypatch = env
         import weatherbrief.fetch.grib as grib
 
@@ -193,8 +193,10 @@ class TestFallback:
             raise RuntimeError("NOAA down")
 
         monkeypatch.setattr(grib, "read_gfs_grib_points", boom)
-        snaps, calls = _run()
+        with caplog.at_level(logging.ERROR, logger="weatherbrief"):
+            snaps, calls = _run()
         assert calls == 1 and len(snaps) == len(AIRPORTS) * len(STEPS)
+        assert "GFS_SNAPSHOT_GRIB_FAILED" in caplog.text
 
     def test_switch_icon_only_rolls_gfs_back(self, env):
         _, fake, monkeypatch = env

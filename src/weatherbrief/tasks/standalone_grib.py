@@ -381,8 +381,9 @@ class GribSnapshotStep:
     ``{level_hpa: {raw_key: value}}`` shape ``build_pressure_levels_from_grib``
     takes; ``surface`` / ``prev_surface`` are keyed by the producer's variable
     name (DWD's, or the GFS .idx name; an ICON predecessor carries the
-    accumulated fields only), ``window_h`` the hours between them. ``prev_surface`` is None when the predecessor could
-    not be had, which leaves the step without precipitation.
+    accumulated fields only), ``window_h`` the hours between them.
+    ``prev_surface`` is None when the predecessor could not be had, which
+    leaves the step without precipitation.
     """
 
     pressure: list[dict[int, dict[str, float]]]
@@ -743,7 +744,12 @@ def fetch_gfs_snapshot_fields(
                 every_previous_step=True, priority=priority,
             )
     except Exception:
-        logger.warning("GFS snapshot GRIB %s%02dz failed", init_date, init_hour, exc_info=True)
+        # The whole GFS leg on the Open-Meteo fallback: distinct from the
+        # per-hour misses the reader logs itself, so it can be alerted on.
+        logger.error(
+            "GFS_SNAPSHOT_GRIB_FAILED %s%02dz: every GFS row to Open-Meteo",
+            init_date, init_hour, exc_info=True,
+        )
         return {}
 
     result: dict[int, GribSnapshotStep] = {}
