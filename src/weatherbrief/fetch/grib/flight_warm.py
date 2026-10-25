@@ -476,8 +476,9 @@ def warm_flights(
     ``flights_failed`` (raised, or downloads left hours cold), ``flights_cut`` with ``cut_by_flights`` /
     ``cut_by_bytes`` / ``cut_by_time`` and ``cut_ids``, ``distinct_hours``,
     ``bytes_downloaded`` and ``wall_seconds`` (both including the carry),
-    ``deferred`` (1: yielded to a refresh, resume next tick) and
-    ``low_disk`` (1: did not start, free disk under the floor).
+    ``deferred`` (1: yielded to a refresh, resume next tick),
+    ``low_disk`` (1: did not start, free disk under the floor) and
+    ``disabled`` (1: horizon is 0, the source is off; every other stat is 0).
     """
     from weatherbrief.fetch.grib.cache import cache_write_meter
     from weatherbrief.fetch.grib.precache import _data_dir, _yield_gate
@@ -488,7 +489,7 @@ def warm_flights(
         "cut_by_flights": 0, "cut_by_bytes": 0, "cut_by_time": 0, "cut_ids": [],
         "distinct_hours": 0, "bytes_downloaded": carried_bytes,
         "wall_seconds": round(carried_seconds, 1),
-        "deferred": 0, "low_disk": 0,
+        "deferred": 0, "low_disk": 0, "disabled": 0,
     }
     label = f"Flight warm {source} (run {init.strftime('%Y%m%d_%Hz')})"
     if not db_path:
