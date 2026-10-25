@@ -417,7 +417,11 @@ hourly (#415).
   own cloud diagnostics (`fetch_icon_cloud_diag(variant=ICON_D2)`), which
   also give those rows their ceiling columns (the EU diagnostics skip them).
   A D2 hour short falls to ICON-EU, then Open-Meteo. D2 and EU download side
-  by side. `WB_GRIB_SNAPSHOTS_D2=0` → EU only. Meteorology: §64.
+  by side, EU up front only for steps past 48 h or when some airport is
+  outside D2 (EU files are whole-grid: bytes per step, not per airport); a
+  D2 shortfall is topped up from EU after. A D2 pass with airports in the
+  domain but 0 D2 rows logs WARNING `ICON_D2_SNAPSHOTS_EMPTY`.
+  `WB_GRIB_SNAPSHOTS_D2=0` → EU only. Meteorology: §64.
 - **Downloads:** `ensure_icon_snapshot_files` is the download-only half
   (same files and cache keys), for the per-flight pre-warm (#929). A DWD 404
   is not asked again for 10 min in the same process (`_ICON_404_TTL_S`), so a

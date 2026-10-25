@@ -516,6 +516,50 @@ class TestIconD2:
         assert by[("EDDF", 6)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
         assert by[("EGLL", 6)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
 
+    def _spy_eu(self, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        asked: list[list[int]] = []
+        real = sv._fetch_icon_fields
+
+        def spy(init_date, init_hour, steps, airports, variant, priority):
+            if variant.slug == "icon-eu":
+                asked.append(list(steps))
+            return real(init_date, init_hour, steps, airports, variant, priority)
+
+        monkeypatch.setattr(sv, "_fetch_icon_fields", spy)
+        return asked
+
+    def test_all_airports_in_d2_fetch_eu_only_for_d2_shortfalls(self, env, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir, skip_pressure_steps=(30,))
+        asked = self._spy_eu(monkeypatch)
+        inside = [a for a in AIRPORTS if a.icao in IN_D2]
+
+        snaps, api_calls = sv.fetch_model_snapshots(
+            "icon", INIT, inside, MagicMock(), sample_hours=SAMPLE_HOURS, days=DAYS,
+        )
+
+        assert api_calls == 0
+        assert asked == [[30]]  # no EU up front; f030 only, where D2 fell short
+        by = _by(snaps)
+        assert by[("EGLL", 30)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+        assert by[("EGLL", 36)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_no_d2_rows_at_all_logs_the_token(self, env, caplog):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)  # no D2 run on disk; DWD answers 404
+
+        with caplog.at_level("WARNING", logger="weatherbrief"):
+            snaps, api_calls = _run()
+
+        assert api_calls == 0
+        assert "ICON_D2_SNAPSHOTS_EMPTY" in caplog.text
+        assert all(s["temperature_2m_c"] == pytest.approx(15.0, abs=0.01) for s in snaps)
+
     def test_d2_rows_keep_their_own_grib_columns(self):
         from weatherbrief.tasks.standalone_verification import (
             _apply_grib_columns,
@@ -558,6 +602,14 @@ class TestDownloads:
         sg._download_icon_files(tmp_path, files, None, "t")
         sg._download_icon_files(tmp_path, files, None, "t")
         assert asked.count("https://x/missing") == 3
+
+    def test_the_404_memo_drops_expired_entries(self, monkeypatch):
+        import weatherbrief.tasks.standalone_grib as sg
+
+        monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+        sg._note_404("a", 0.0)
+        sg._note_404("b", sg._ICON_404_TTL_S + 1.0)  # "a" has expired by now
+        assert set(sg._ICON_404_UNTIL) == {"b"}
 
     def test_ensure_fetches_the_files_the_snapshot_reads(self, tmp_path, monkeypatch):
         """The pre-warm helper (#929) leaves exactly the snapshot path's cache."""

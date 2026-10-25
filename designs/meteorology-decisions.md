@@ -7068,5 +7068,6 @@ agreement 73.9 % inside D2 within 48 h against 92.6 % beyond (owner analysis,
 
 **To measure** (mini): `compare_grib_snapshots.py` against `icon_seamless`,
 category agreement inside D2 ≤ 48 h back to ~90 %+; disk, downloads and wall
-time of the cycle; DWD 404 count.
+time of the cycle; DWD 404 count; a spot-check that the coarser D2 profile
+does not shift the Richardson CAT tiers (thickness-scaled, §28) against EU.
 

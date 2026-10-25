@@ -42,6 +42,10 @@ load_dotenv(ROOT / ".env")
 import requests  # noqa: E402
 
 from weatherbrief.analysis.airport_consensus import best_ceiling, flight_category  # noqa: E402
+from weatherbrief.fetch.grib.icon_eu_fetch import (  # noqa: E402
+    ICON_D2,
+    icon_eu_model_level_max_hour,
+)
 from weatherbrief.fetch.model_status import fetch_model_metadata  # noqa: E402
 from weatherbrief.fetch.open_meteo import open_meteo_meter  # noqa: E402
 from weatherbrief.tasks.airport_watchlist import (  # noqa: E402
@@ -150,10 +154,11 @@ def main() -> int:
     # #928: inside the ICON-D2 domain within 48 h (D2 rows; Open-Meteo's
     # icon_seamless served D2 there) vs the rest (ICON-EU on both sides).
     d2_icaos = {a.icao for a in _icon_d2_airports(airports, *_init_parts(init_time))}
-    in_d2 = [k for k in keys if k[0] in d2_icaos
-             and (k[1] - init_time).total_seconds() <= 48 * 3600]
-    _category_line(" inside D2 <= 48 h", in_d2)
-    _category_line(" elsewhere", [k for k in keys if k not in set(in_d2)])
+    d2_hours = icon_eu_model_level_max_hour(init_time.hour, ICON_D2)
+    in_d2 = {k for k in keys if k[0] in d2_icaos
+             and (k[1] - init_time).total_seconds() <= d2_hours * 3600}
+    _category_line(f" inside D2 <= {d2_hours} h", [k for k in keys if k in in_d2])
+    _category_line(" elsewhere", [k for k in keys if k not in in_d2])
 
     print(f"\n{'field':<18}{'n':>6}{'bias':>10}{'mean|Δ|':>10}{'max|Δ|':>10}  worst")
     for name, get in _FIELDS:
