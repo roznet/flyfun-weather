@@ -397,6 +397,15 @@ def run_fetch(
         # the arrival day: that was up to ~24 h early, so a model ending
         # mid-window shipped null tails with no MODEL_SKIPPED_HORIZON (#807).
         live_end = live_horizons.get(model.value)
+        if model == ModelSource.ICON and not historical_mode:
+            # ICON is ICON-EU only: past its 120h GRIB horizon Open-Meteo's
+            # dwd-icon serves ICON global, a different and coarser model with
+            # no GRIB enrichment, so the slot is skipped instead (10-25).
+            from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_horizon_end
+
+            eu_end = icon_eu_horizon_end(as_of_time)
+            if eu_end is not None and (live_end is None or eu_end < live_end):
+                live_end = eu_end
         if live_end is not None and window_end_dt > live_end:
             logger.info(
                 "Skipping %s: flight window ends %s, but current run only "

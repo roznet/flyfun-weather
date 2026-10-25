@@ -470,26 +470,19 @@ def icon_eu_model_level_max_hour(
     return variant.horizon_short_h
 
 
-def icon_eu_window_out_of_range(
-    target_time: datetime,
-    flight_duration_hours: float = 0.0,
+def icon_eu_horizon_end(
     as_of_time: datetime | None = None,
     variant: IconVariant = ICON_EU,
-) -> bool:
-    """True when no publishable run of *variant* has enough horizon for the flight.
+) -> datetime | None:
+    """Furthest valid time any publishable run of *variant* reaches, or None.
 
     Deterministic (no network): walks the same cycles and publication-delay
-    logic as :func:`find_latest_icon_eu_run_with_response` and checks whether
-    any run available as-of *as_of_time* reaches ``target_time +
-    flight_duration_hours``. ICON-EU's model-level horizon is only 120h (5
-    days) and ICON-D2's only 48h, so a flight beyond that is out of range.
-
-    Used to distinguish the *expected* "flight beyond horizon" skip (an
-    info-level condition) from a genuine upstream/probe failure — the
-    run-finder returns ``None`` for both.
+    logic as :func:`find_latest_icon_eu_run_with_response`, over runs
+    available as-of *as_of_time*. ICON-EU's model-level horizon is only 120h
+    (5 days) and ICON-D2's only 48h.
     """
     reference_time = as_of_time or datetime.now(timezone.utc)
-    need_until = target_time + timedelta(hours=flight_duration_hours)
+    best: datetime | None = None
     for days_back in range(2):
         check_date = reference_time - timedelta(days=days_back)
         for cycle in variant.cycles:
@@ -504,10 +497,29 @@ def icon_eu_window_out_of_range(
             horizon = init_time + timedelta(
                 hours=icon_eu_model_level_max_hour(cycle, variant),
             )
-            if horizon >= need_until:
-                # At least one publishable run reaches the flight window.
-                return False
-    return True
+            if best is None or horizon > best:
+                best = horizon
+    return best
+
+
+def icon_eu_window_out_of_range(
+    target_time: datetime,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+    variant: IconVariant = ICON_EU,
+) -> bool:
+    """True when no publishable run of *variant* has enough horizon for the flight.
+
+    Checks :func:`icon_eu_horizon_end` against ``target_time +
+    flight_duration_hours``.
+
+    Used to distinguish the *expected* "flight beyond horizon" skip (an
+    info-level condition) from a genuine upstream/probe failure — the
+    run-finder returns ``None`` for both.
+    """
+    end = icon_eu_horizon_end(as_of_time, variant)
+    need_until = target_time + timedelta(hours=flight_duration_hours)
+    return end is None or end < need_until
 
 def icon_tke_enabled(variant: IconVariant) -> bool:
     """True when ``tke`` is explicitly configured for *variant* (#530).

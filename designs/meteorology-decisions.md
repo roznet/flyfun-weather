@@ -7115,3 +7115,29 @@ sounding-derived fields, and how far CAT / icing layer counts and tiers move
 from the Open-Meteo rows on the same levels), bytes per cycle (~28 sounding
 hours × 102 MB + ~56 surface steps × 13 MB ≈ 3.6 GB cold), wall time.
 
+
+
+## 66. No ICON past ICON-EU's horizon: no ICON global from Open-Meteo
+
+**Date:** 2026-10-25. **Part of** #910.
+
+A briefing whose flight window ends past the newest publishable ICON-EU run's
+horizon (120 h from a main cycle) has no ICON slot. Before, the GRIB-primary
+gate refused it (`out_of_range`) and the slot came from Open-Meteo's
+`/v1/dwd-icon`, which past ICON-EU serves ICON global (~13 km, 19 levels, out
+to ~7.5 days), unenriched.
+
+**Decisions.**
+
+- **ICON means ICON-EU (or D2) in briefings**, as in the map rows (§60, §63).
+  ICON global is a different, coarser model; at day 5+ ECMWF and GFS from GRIB
+  carry the briefing. **Owner (2026-10-25):** don't go beyond 5 days on
+  Open-Meteo, focus on ICON-EU.
+- **One gate, the live-horizon one** (`run_fetch`): ICON's horizon is the
+  earlier of Open-Meteo's `data_end` and `icon_eu_horizon_end(as_of_time)`, so
+  the skip is the ordinary `MODEL_SKIPPED_HORIZON` notice, with or without GRIB
+  enrichment. `max_days` stays 7 (the coarse days-out gate).
+- **Historical briefings unchanged:** DWD keeps no old runs, so replays stay on
+  Open-Meteo as before.
+- Inside the horizon nothing changes: the GRIB-primary fallback still fills
+  short points from Open-Meteo, which serves ICON-EU / D2 there.

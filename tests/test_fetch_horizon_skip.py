@@ -58,3 +58,55 @@ def test_model_covering_the_window_is_fetched():
     result = _run(datetime(2026, 5, 4, 11, 0, tzinfo=timezone.utc))
     assert sorted(result.models_fetched) == ["ecmwf", "gfs"]
     assert _horizon_codes(result) == []
+
+
+# ICON is ICON-EU only: past the newest ICON-EU run's 120h horizon the slot is
+# skipped, not fetched from Open-Meteo (whose dwd-icon serves ICON global).
+# As of 12:00Z the newest main run is 06z (09z is a 30h short run): through
+# 2026-05-09 06:00Z.
+AS_OF = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def _run_icon(departure: datetime, *, historical: bool = False):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        self._record_call()
+        return [_make_forecast(p, model) for p in points]
+
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ), patch.object(fetch_module, "_open_meteo_live_horizons", return_value={}):
+        return fetch_module.run_fetch(
+            route=_route(),
+            departure_time=departure,
+            models=[ModelSource.GFS, ModelSource.ICON],
+            enrich_grib=False,
+            as_of_time=AS_OF,
+            historical_mode=historical,
+        )
+
+
+def test_icon_eu_horizon_end_is_the_newest_main_run():
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_horizon_end
+
+    assert icon_eu_horizon_end(AS_OF) == datetime(2026, 5, 9, 6, 0, tzinfo=timezone.utc)
+
+
+def test_icon_past_icon_eu_horizon_is_skipped():
+    # 05:00Z + 2 h ends 07:00Z, an hour past the 06z run's f120.
+    result = _run_icon(datetime(2026, 5, 9, 5, 0, tzinfo=timezone.utc))
+    assert result.models_fetched == ["gfs"]
+    msgs = _horizon_codes(result)
+    assert len(msgs) == 1 and msgs[0].startswith("ICON skipped")
+
+
+def test_icon_inside_icon_eu_horizon_is_fetched():
+    result = _run_icon(datetime(2026, 5, 9, 3, 0, tzinfo=timezone.utc))
+    assert sorted(result.models_fetched) == ["gfs", "icon"]
+    assert _horizon_codes(result) == []
+
+
+def test_historical_icon_keeps_open_meteo():
+    # Replays stay on Open-Meteo as before: DWD keeps no old ICON-EU runs.
+    result = _run_icon(datetime(2026, 5, 9, 5, 0, tzinfo=timezone.utc), historical=True)
+    assert "icon" in result.models_fetched
