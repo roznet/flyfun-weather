@@ -208,7 +208,7 @@ def test_resent_batch_is_idempotent(client, prod_db, node_db, token):
     nid = get_node_db_id(s)
     rows = {
         "api_usage_log": [],
-        "cost_ledger": node_usage.collect_cost_ledger(s, 0, 10),
+        "cost_ledger": node_usage.collect_cost_ledger(s, 0, 10)[0],
     }
     s.close()
     headers = {"Authorization": f"Bearer {token}"}
@@ -219,6 +219,39 @@ def test_resent_batch_is_idempotent(client, prod_db, node_db, token):
     assert client.post("/api/admin/usage/ingest", json=body, headers=headers).json() == {
         "inserted": {"api_usage_log": 0, "cost_ledger": 0},
     }
+
+
+def test_a_row_prod_would_refuse_never_stalls_the_push(client, prod_db, node_db, token):
+    """Review on #939: one refused row used to 422 its batch forever."""
+    s = node_db()
+    s.add_all([
+        ApiUsageRow(timestamp=T0, service="Open Meteo", pipeline="Hewson CLI",
+                    api_calls=1, weighted_calls=5.0),                     # normalised
+        ApiUsageRow(timestamp=T0, service="open_meteo", pipeline="frontal",
+                    api_calls=1, weighted_calls=1e12),                    # over the cap
+        ApiUsageRow(timestamp=T0, service="open_meteo", pipeline="frontal",
+                    api_calls=2, weighted_calls=2.0),
+        CostLedgerRow(user_id="u", service=SERVICE, action="eval" * 30, cost=500.0,
+                      category="node", created_at=T0),                     # over the cap
+        CostLedgerRow(user_id="u", service=SERVICE, action="eval" * 30, cost=0.25,
+                      category="x" * 40, description="d" * 400, created_at=T0,
+                      detail_json="{" + " " * 9000 + "}"),                 # clipped
+    ])
+    s.commit()
+    s.close()
+    result = _push(node_db, client, token, batch_size=1)
+    assert result.error is None
+    assert result.inserted == {"api_usage_log": 2, "cost_ledger": 1}
+    p = prod_db()
+    assert sorted((r.service, r.pipeline) for r in p.query(ApiUsageRow)) == [
+        ("open_meteo", "frontal"), ("open_meteo", "hewson_cli"),
+    ]
+    (cost,) = p.query(CostLedgerRow).all()
+    assert cost.cost == pytest.approx(0.25)
+    assert json.loads(cost.detail_json)["detail"] is None
+    p.close()
+    # The skipped rows are not retried into a stall on the next run either.
+    assert _push(node_db, client, token).error is None
 
 
 def test_push_failure_never_raises(node_db):

@@ -75,7 +75,15 @@ MAX_BATCH = 1000
 #: that a leaked token cannot make the bill read as anything absurd.
 MAX_ROW_COST_USD = 50.0
 MAX_ROW_WEIGHTED_CALLS = 10_000_000.0
-_MAX_JSON_CHARS = 8000
+MAX_ROW_API_CALLS = 1_000_000
+#: Wire-format limits, shared with the API models so the node never sends a
+#: row prod would refuse: one refused row fails its whole batch, and the push
+#: would retry that batch forever with every later row stuck behind it.
+NAME_PATTERN = r"^[a-z0-9_.:-]{1,32}$"
+MAX_ACTION_CHARS = 64
+MAX_CATEGORY_CHARS = 32
+MAX_DESCRIPTION_CHARS = 256
+MAX_JSON_CHARS = 8000
 
 
 def validate_origin(origin: str) -> str:
@@ -93,10 +101,28 @@ def _utc(dt: datetime | None) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
-def _clip(text: str | None) -> str | None:
-    if text is None:
-        return None
-    return text if len(text) <= _MAX_JSON_CHARS else None
+def _wire_name(name: str | None) -> str:
+    """A service / pipeline name in the wire format (``NAME_PATTERN``)."""
+    out = re.sub(r"[^a-z0-9_.:-]", "_", (name or "").lower())[:32]
+    return out or "unknown"
+
+
+def _wire_json(text: str | None, row_id: int, column: str) -> str | None:
+    """A JSON text column, or None (logged) when over the wire limit.
+
+    Not truncated: a cut JSON document is no longer JSON.
+    """
+    if text is None or len(text) <= MAX_JSON_CHARS:
+        return text
+    logger.warning(
+        "Usage push: cost_ledger %d %s is %d chars (> %d), sent without it",
+        row_id, column, len(text), MAX_JSON_CHARS,
+    )
+    return None
+
+
+def _skip(table: str, row_id: int, why: str) -> None:
+    logger.error("Usage push: %s %d not sent, %s", table, row_id, why)
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +142,13 @@ def get_node_db_id(db: Session) -> str:
 
 def collect_api_usage(
     db: Session, after_id: int, limit: int, since: datetime | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], int | None]:
     """This node's own ``api_usage_log`` rows after ``after_id``, wire format.
+
+    Returns ``(rows, last scanned id)``; the id is None when nothing was
+    scanned. A row prod's sanity caps would refuse is skipped with an error
+    log rather than sent (see ``NAME_PATTERN``), and the scan id still moves
+    past it so it cannot stall the rows behind it.
 
     ``origin IS NULL`` only: a row that was itself uploaded here is never
     forwarded again (it would be counted twice).
@@ -127,23 +158,33 @@ def collect_api_usage(
     )
     if since is not None:
         q = q.filter(ApiUsageRow.timestamp >= since)
-    return [
-        {
+    scanned = q.order_by(ApiUsageRow.id).limit(limit).all()
+    rows = []
+    for r in scanned:
+        weighted = r.weighted_calls
+        if weighted is not None and not 0 <= weighted <= MAX_ROW_WEIGHTED_CALLS:
+            _skip(API_USAGE, r.id, f"weighted_calls {weighted} outside [0, {MAX_ROW_WEIGHTED_CALLS:g}]")
+            continue
+        rows.append({
             "local_id": r.id,
             "timestamp": _utc(r.timestamp).isoformat(),
-            "service": r.service,
-            "pipeline": r.pipeline,
-            "api_calls": r.api_calls,
-            "weighted_calls": r.weighted_calls,
-        }
-        for r in q.order_by(ApiUsageRow.id).limit(limit).all()
-    ]
+            "service": _wire_name(r.service),
+            "pipeline": _wire_name(r.pipeline),
+            "api_calls": min(max(r.api_calls or 0, 0), MAX_ROW_API_CALLS),
+            "weighted_calls": weighted,
+        })
+    return rows, (scanned[-1].id if scanned else None)
 
 
 def collect_cost_ledger(
     db: Session, after_id: int, limit: int, since: datetime | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], int | None]:
     """This node's weather ``cost_ledger`` rows after ``after_id``, wire format.
+
+    Same ``(rows, last scanned id)`` contract as ``collect_api_usage``: text
+    is clipped to the wire limits, and a cost outside ``[0, MAX_ROW_COST_USD]``
+    is skipped with an error log (the cap bounds what a leaked token could
+    append, so prod will not take it either).
 
     Every category but the retired zero-cost ``topup``: on a node, briefings,
     side calls and eval runs are all spend the program pays for.
@@ -157,19 +198,26 @@ def collect_cost_ledger(
     )
     if since is not None:
         q = q.filter(CostLedgerRow.created_at >= since)
-    return [
-        {
+    scanned = q.order_by(CostLedgerRow.id).limit(limit).all()
+    rows = []
+    for r in scanned:
+        cost = float(r.cost or 0.0)
+        if not 0 <= cost <= MAX_ROW_COST_USD:
+            _skip(COST_LEDGER, r.id, f"cost ${cost:.4f} outside [0, {MAX_ROW_COST_USD:g}]")
+            continue
+        rows.append({
             "local_id": r.id,
             "created_at": _utc(r.created_at).isoformat(),
-            "action": r.action,
-            "category": r.category,
-            "cost": float(r.cost or 0.0),
-            "description": r.description,
-            "metadata_json": _clip(r.metadata_json),
-            "detail_json": _clip(r.detail_json),
-        }
-        for r in q.order_by(CostLedgerRow.id).limit(limit).all()
-    ]
+            "action": (r.action or "unknown")[:MAX_ACTION_CHARS],
+            "category": r.category[:MAX_CATEGORY_CHARS] if r.category else None,
+            "cost": cost,
+            "description": (
+                r.description[:MAX_DESCRIPTION_CHARS] if r.description else None
+            ),
+            "metadata_json": _wire_json(r.metadata_json, r.id, "metadata_json"),
+            "detail_json": _wire_json(r.detail_json, r.id, "detail_json"),
+        })
+    return rows, (scanned[-1].id if scanned else None)
 
 
 def push_config() -> tuple[str, str] | None:
@@ -229,25 +277,31 @@ def push(
         marks = {t: int(resp.json().get(t) or 0) for t in SOURCE_TABLES}
 
         while True:
-            rows = {
-                API_USAGE: collect_api_usage(db, marks[API_USAGE], batch_size, since),
-                COST_LEDGER: collect_cost_ledger(db, marks[COST_LEDGER], batch_size, since),
-            }
-            if not any(rows.values()):
-                break
-            resp = http.post(
-                endpoint, json={"node_db": node_db, "rows": rows},
-                headers=headers, timeout=60,
+            rows, scanned = {}, {}
+            rows[API_USAGE], scanned[API_USAGE] = collect_api_usage(
+                db, marks[API_USAGE], batch_size, since,
             )
-            if resp.status_code != 200:
-                result.error = f"ingest: HTTP {resp.status_code} {resp.text[:200]}"
+            rows[COST_LEDGER], scanned[COST_LEDGER] = collect_cost_ledger(
+                db, marks[COST_LEDGER], batch_size, since,
+            )
+            if all(v is None for v in scanned.values()):
                 break
-            inserted = resp.json().get("inserted") or {}
-            for table, batch in rows.items():
-                if batch:
-                    marks[table] = batch[-1]["local_id"]
+            if any(rows.values()):
+                resp = http.post(
+                    endpoint, json={"node_db": node_db, "rows": rows},
+                    headers=headers, timeout=60,
+                )
+                if resp.status_code != 200:
+                    result.error = f"ingest: HTTP {resp.status_code} {resp.text[:200]}"
+                    break
+                inserted = resp.json().get("inserted") or {}
+                for table, batch in rows.items():
                     result.sent[table] += len(batch)
                     result.inserted[table] += int(inserted.get(table) or 0)
+            # Past skipped rows too: they would be skipped again.
+            for table, last in scanned.items():
+                if last is not None:
+                    marks[table] = last
     except Exception as exc:  # noqa: BLE001 — a failed push must never fail the node's job
         result.error = f"{type(exc).__name__}: {exc}"
     finally:

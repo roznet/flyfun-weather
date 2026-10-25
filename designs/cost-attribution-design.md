@@ -164,7 +164,10 @@ mini LAN-only), piggybacking on the snapshot artifact (misses dev).
   The node's `api_usage_log` (own rows only, `origin IS NULL`) and weather
   `cost_ledger` (all but `topup`) are the outbox. It reads prod's high-water
   mark per table, then POSTs batches of 500. Never raises, exits 0 (`--strict`
-  for 1): a failure only delays, the next run resends from the mark. The
+  for 1): a failure only delays, the next run resends from the mark. Rows
+  are normalised to the wire limits the API enforces (names lowercased,
+  text clipped); a row over the per-row caps is skipped with an error log,
+  never sent, since one refused row would 422 its batch on every run. The
   first push uploads the node's whole history (`--since` limits it).
 - **Node identity:** a UUID in the node DB (`instance_settings.node_db_id`),
   not a file, so a recreated DB starts a new id space instead of colliding.

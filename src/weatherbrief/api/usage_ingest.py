@@ -22,9 +22,15 @@ from weatherbrief.node_usage import (
     API_USAGE,
     COST_LEDGER,
     INGEST_SCOPE,
+    MAX_ACTION_CHARS,
     MAX_BATCH,
+    MAX_CATEGORY_CHARS,
+    MAX_DESCRIPTION_CHARS,
+    MAX_JSON_CHARS,
+    MAX_ROW_API_CALLS,
     MAX_ROW_COST_USD,
     MAX_ROW_WEIGHTED_CALLS,
+    NAME_PATTERN,
     SERVICE_ACCOUNT_PREFIX,
     OriginMismatch,
     ingest,
@@ -37,7 +43,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/usage/ingest", tags=["admin"])
 
 _NODE_DB = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-_NAME = r"^[a-z0-9_.:-]{1,32}$"
 
 
 def ingest_origin(
@@ -66,21 +71,21 @@ def ingest_origin(
 class ApiUsageIn(BaseModel):
     local_id: int = Field(ge=1)
     timestamp: datetime
-    service: str = Field(pattern=_NAME)
-    pipeline: str = Field(pattern=_NAME)
-    api_calls: int = Field(ge=0, le=1_000_000)
+    service: str = Field(pattern=NAME_PATTERN)
+    pipeline: str = Field(pattern=NAME_PATTERN)
+    api_calls: int = Field(ge=0, le=MAX_ROW_API_CALLS)
     weighted_calls: float | None = Field(default=None, ge=0, le=MAX_ROW_WEIGHTED_CALLS)
 
 
 class CostLedgerIn(BaseModel):
     local_id: int = Field(ge=1)
     created_at: datetime
-    action: str = Field(min_length=1, max_length=64)
-    category: str | None = Field(default=None, max_length=32)
+    action: str = Field(min_length=1, max_length=MAX_ACTION_CHARS)
+    category: str | None = Field(default=None, max_length=MAX_CATEGORY_CHARS)
     cost: float = Field(ge=0, le=MAX_ROW_COST_USD)
-    description: str | None = Field(default=None, max_length=256)
-    metadata_json: str | None = Field(default=None, max_length=8000)
-    detail_json: str | None = Field(default=None, max_length=8000)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_CHARS)
+    metadata_json: str | None = Field(default=None, max_length=MAX_JSON_CHARS)
+    detail_json: str | None = Field(default=None, max_length=MAX_JSON_CHARS)
 
 
 class IngestRows(BaseModel):
