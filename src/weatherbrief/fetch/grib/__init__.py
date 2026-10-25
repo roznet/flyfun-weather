@@ -2963,14 +2963,20 @@ def _enrich_gfs_run(
         logger.warning("No .idx files retrieved for enrichment")
         return None, None
 
-    # GRIB-primary (#913): hours with no sounding underneath get the full GFS
-    # column and surface from GRIB; hours with an Open-Meteo sounding keep the
-    # CLMR/ICMR patch exactly as before. On an Open-Meteo slot that is every
-    # hour, on a GRIB-primary skeleton none.
+    # GRIB-primary (#913): hours where some point has no sounding get the
+    # full GFS column and surface from GRIB (written only where empty); hours
+    # where some point has an Open-Meteo sounding keep the CLMR/ICMR patch
+    # exactly as before. A mixed hour (points that fell back to Open-Meteo,
+    # then a time-scan re-enrichment) gets both. On an Open-Meteo slot every
+    # hour is patched, on a fresh skeleton none.
     full_hours = _gfs_hours_without_sounding(
         gfs_sections, init_date, init_hour, forecast_hours,
     ) if grib_built else []
-    patch_hours = [f for f in forecast_hours if f not in full_hours]
+    patch_hours = [
+        f for f in forecast_hours
+        if f not in full_hours
+        or _gfs_hour_has_sounding(gfs_sections, init_date, init_hour, f)
+    ]
 
     # Run the enrichment paths in parallel — they write to different fields
     # (CLWMR/ICMR on PressureLevelData vs nwp_cloud_diagnostics on
@@ -3545,6 +3551,20 @@ def _gfs_sounding_cache_key(fhour: int, levels: list[int]) -> str:
     if sorted(levels) == sorted(gfs_sounding_levels()):
         return cache_key(fhour, GFS_SOUNDING_CACHE_KEY)
     return cache_key(fhour, f"{GFS_SOUNDING_CACHE_KEY}_L{'-'.join(str(p) for p in sorted(levels))}")
+
+
+def _gfs_hour_has_sounding(
+    gfs_sections: list[RouteCrossSection],
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+) -> bool:
+    """True when some gfs point carries a sounding at ``fhour``."""
+    valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
+    return any(
+        _matches_valid_time(h.time, valid_utc) and h.pressure_levels
+        for cs in gfs_sections for wf in cs.point_forecasts for h in wf.hourly
+    )
 
 
 def _gfs_column_problem(
