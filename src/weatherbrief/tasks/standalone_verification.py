@@ -1015,7 +1015,7 @@ def fetch_model_snapshots(
     day of the horizon. The Open-Meteo request is unchanged by it: Open-Meteo
     bills a window of up to 14 days as one, so a shorter window saves nothing.
 
-    For a model in ``WB_GRIB_SNAPSHOTS`` (ICON, #914) GRIB is the primary
+    For a model in ``WB_GRIB_SNAPSHOTS`` (ICON and GFS, #914) GRIB is the primary
     source and Open-Meteo only fills what GRIB left short — see
     :func:`_fetch_grib_primary_snapshots`.
     """
@@ -1078,8 +1078,9 @@ def fetch_model_snapshots(
 # ---------------------------------------------------------------------------
 
 # A GRIB point-hour needs at least this many pressure levels to count as a
-# sounding; below it the point goes to the Open-Meteo fallback. Half of the
-# 16 requested levels: enough for the lite sounding's layers and parcel.
+# sounding; below it the point goes to the Open-Meteo fallback. Half of ICON-EU's
+# 16 requested levels (D2 has 11, GFS 19): enough for the lite sounding's
+# layers and parcel.
 _MIN_GRIB_SNAPSHOT_LEVELS = 8
 
 # More than this share of airports on the Open-Meteo fallback, on a call with
@@ -1113,7 +1114,7 @@ def _fetch_grib_primary_snapshots(
     priority: "int | DecodePriority | None" = None,
     only_valid_time: datetime | None = None,
 ) -> tuple[list[dict], int]:
-    """GRIB-primary snapshots (ICON today, GFS with #913), Open-Meteo for the rest.
+    """GRIB-primary snapshots (ICON, GFS), Open-Meteo for the rest.
 
     Same contract as :func:`fetch_model_snapshots` (snapshot dicts, Open-Meteo
     HTTP calls). The model's GRIB cloud diagnostics (the #635 feed) run on
@@ -1247,20 +1248,65 @@ def _build_grib_snapshots(
 ) -> tuple[list[dict], set[tuple[str, int]]]:
     """Covered snapshot rows for *model* built from its GRIB alone (#914).
 
-    ICON only today; GFS joins with #913's reader. Inside the ICON-D2 domain
-    and the D2 run's 48 h (#928) a row comes from ICON-D2, as Open-Meteo's
-    ``icon_seamless`` served it; elsewhere, or where D2 fell short, from
-    ICON-EU. A point-hour that neither covers is simply absent.
+    ICON: inside the ICON-D2 domain and the D2 run's 48 h (#928) a row comes
+    from ICON-D2, as Open-Meteo's ``icon_seamless`` served it; elsewhere, or
+    where D2 fell short, from ICON-EU. GFS: #913's pgrb2 reader. A point-hour
+    no source covers is simply absent.
 
     Returns the rows and the ``_snapshot_hour_key`` of those that carry their
     own GRIB columns already (the D2 rows: their ceiling and convective
     columns are D2's, not the ICON-EU diagnostics the caller applies).
     """
-    if model != "icon":
-        return [], set()
-
     from weatherbrief.analysis.sounding.snapshot_fields import build_sounding_payload
     from weatherbrief.fetch.grib import DecodePriority
+
+    if model == "icon":
+        built, own_keys, own_lookup, summary = _icon_candidates(
+            model, init_time, airports, valid_times, grib_diag, priority,
+        )
+    elif model == "gfs":
+        built, own_keys, own_lookup, summary = _gfs_candidates(
+            model, init_time, airports, valid_times, grib_diag, priority,
+        )
+    else:
+        return [], set()
+    if not built and summary is None:
+        return [], set()
+
+    pooled = _pooled_soundings_active(pool_soundings)
+    results: list[dict] = []
+    pending: list[tuple[int, dict]] = []
+    analysis_started = time.monotonic()
+    for snap, hourly in built:
+        if pooled:
+            pending.append((len(results), build_sounding_payload(hourly, model)))
+        else:
+            _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
+        results.append(snap)
+        if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
+            _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
+            pending.clear()
+    if pending:
+        _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
+    if own_lookup is not None and own_keys:
+        # After the sounding pass, as the caller does for the rest.
+        # ``results`` keeps ``built``'s order (the pooled pass writes by
+        # index) and ``built`` puts the own-column rows first: keep both true.
+        _apply_grib_columns(results[:len(own_keys)], model, own_lookup)
+    logger.info(
+        "Model %s GRIB: analyzed %d snapshots (%s) in %.1fs%s",
+        model, len(results), summary, time.monotonic() - analysis_started,
+        " (pooled)" if pooled else "",
+    )
+    return results, own_keys
+
+
+def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priority):
+    """ICON ``(snap, hourly)`` candidates: D2 first, then EU for the rest (#928).
+
+    Returns ``(built, d2_keys, d2_lookup, summary)``; ``summary`` is None when
+    no step was in range (nothing was fetched).
+    """
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
     from weatherbrief.fetch.grib.primary import grib_snapshot_d2_enabled
     from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
@@ -1277,7 +1323,7 @@ def _build_grib_snapshots(
     if not d2_airports:
         d2_steps = {}
     if not eu_steps and not d2_steps:
-        return [], set()
+        return [], set(), None, None
 
     # EU up front only where D2 can't serve: steps past the D2 horizon, or
     # every step when some airport is outside D2 (EU files are whole-grid, so
@@ -1317,7 +1363,6 @@ def _build_grib_snapshots(
         eu_fields = eu_fields_f.result() if eu_fields_f is not None else {}
     lookup = grib_diag()
 
-    # (snap, hourly) per covered point-hour: D2 first, then EU for the rest.
     built: list[tuple[dict, object]] = []
     d2_keys: set[tuple[str, int]] = set()
     for snap, hourly in _icon_rows(
@@ -1349,35 +1394,59 @@ def _build_grib_snapshots(
         skip=d2_keys,
     ):
         built.append((snap, hourly))
-
-    pooled = _pooled_soundings_active(pool_soundings)
-    results: list[dict] = []
-    pending: list[tuple[int, dict]] = []
-    analysis_started = time.monotonic()
-    for snap, hourly in built:
-        if pooled:
-            pending.append((len(results), build_sounding_payload(hourly, model)))
-        else:
-            _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
-        results.append(snap)
-        if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
-            _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
-            pending.clear()
-    if pending:
-        _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
-    if d2_lookup is not None:
-        # After the sounding pass, as the caller does for the EU rows.
-        # ``results`` keeps ``built``'s order (the pooled pass writes by
-        # index) and ``built`` puts the D2 rows first: keep both true.
-        _apply_grib_columns(results[:n_d2], model, d2_lookup)
-    logger.info(
-        "Model %s GRIB: analyzed %d snapshots (%d ICON-D2 from %d/%d airports, "
-        "%d ICON-EU) over %d D2 + %d EU step(s) in %.1fs%s",
-        model, len(results), n_d2, len(d2_airports), len(airports),
-        len(results) - n_d2, len(d2_fields), len(eu_fields),
-        time.monotonic() - analysis_started, " (pooled)" if pooled else "",
+    summary = (
+        f"{n_d2} ICON-D2 from {len(d2_airports)}/{len(airports)} airports, "
+        f"{len(built) - n_d2} ICON-EU; {len(d2_fields)} D2 + {len(eu_fields)} EU step(s)"
     )
-    return results, d2_keys
+    return built, d2_keys, d2_lookup, summary
+
+
+def _gfs_candidates(model, init_time, airports, valid_times, grib_diag, priority):
+    """GFS ``(snap, hourly)`` candidates from #913's reader (#914).
+
+    GFS carries its own TCDC / CAPE in the surface blob, as on Open-Meteo, so
+    the cloud diagnostics only attach (ceiling, convective track); they are
+    not needed for coverage.
+    """
+    from weatherbrief.fetch.grib.grib_fetch import _snap_to_gfs_grid
+    from weatherbrief.tasks.standalone_grib import (
+        datetime_to_init_parts,
+        fetch_gfs_snapshot_fields,
+    )
+
+    init_date, init_hour = datetime_to_init_parts(init_time)
+    step_of: dict[datetime, int] = {}
+    for valid in valid_times:
+        offset = int((valid - init_time).total_seconds() // 3600)
+        # Published steps only (hourly to f120, 3-hourly to f384); step 0 too,
+        # covered without precipitation as for ICON.
+        if 0 <= offset <= 384 and _snap_to_gfs_grid(offset) == offset:
+            step_of[valid] = offset
+    if not step_of:
+        return [], set(), None, None
+    fields = fetch_gfs_snapshot_fields(
+        init_date, init_hour, sorted(set(step_of.values())),
+        [a.lat for a in airports], [a.lon for a in airports], priority=priority,
+    )
+    lookup = grib_diag()
+
+    built: list[tuple[dict, object]] = []
+    for valid, fhour in step_of.items():
+        step = fields.get(fhour)
+        if step is None:
+            continue
+        for i, airport in enumerate(airports):
+            hourly = _gfs_grib_hourly(valid, step, i)
+            if hourly is None:
+                continue
+            cd = lookup.get(airport.icao, valid) if lookup is not None else None
+            if cd is not None and cd.diagnostics is not None:
+                hourly.attach_nwp_diagnostics(cd.diagnostics)
+            if not _grib_hour_covered(hourly, analysis_step=fhour == 0):
+                continue
+            # Hourly rate over the step window, as for ICON (3 h past f120).
+            built.append((_snapshot_row(airport.icao, model, init_time, hourly), hourly))
+    return built, set(), None, f"{len(fields)}/{len(set(step_of.values()))} GFS step(s)"
 
 
 def _icon_snapshot_steps(
@@ -1541,6 +1610,40 @@ def _icon_rows(
             # profile read (they ignore precip_period_h, #415). A 3 h total
             # past +78 h would read as three times the rain there.
             yield _snapshot_row(airport.icao, model, init_time, hourly), hourly
+
+
+def _gfs_grib_hourly(valid: datetime, step, i: int):
+    """``HourlyForecast`` for point *i* of a GFS step, or None.
+
+    Surface from #913's decoders (``build_gfs_surface_snapshot`` +
+    ``gfs_surface_rates``), sounding from the pgrb2 column, which carries its
+    own geopotential height, so it needs no MSL datum. None when the point has
+    no surface values or too few levels.
+    """
+    from weatherbrief.fetch.grib.decode import (
+        build_gfs_surface_snapshot,
+        build_pressure_levels_from_grib,
+        gfs_surface_rates,
+    )
+    from weatherbrief.models.analysis import HourlyForecast
+
+    raw = step.surface[i] if i < len(step.surface) else {}
+    if not raw:
+        return None
+    point_levels = step.pressure[i] if i < len(step.pressure) else {}
+    if len(point_levels) < _MIN_GRIB_SNAPSHOT_LEVELS:
+        return None
+    levels = build_pressure_levels_from_grib(point_levels)
+    if len(levels) < _MIN_GRIB_SNAPSHOT_LEVELS:
+        return None
+    inst = {k: v for k, v in build_gfs_surface_snapshot(raw).items() if v is not None}
+    prev = (
+        step.prev_surface[i]
+        if step.prev_surface is not None and i < len(step.prev_surface)
+        else None
+    )
+    rates = gfs_surface_rates(raw, prev, step.window_h)
+    return HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
 
 
 def _icon_grib_hourly(valid: datetime, step, i: int):

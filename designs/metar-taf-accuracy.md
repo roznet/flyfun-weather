@@ -381,7 +381,7 @@ During scoring (Phase D), `_build_sounding_proxy()` reconstructs a minimal `Soun
 - **Sounding fault tolerance**: `_enrich_with_sounding()` fails silently — surface data preserved
 - **GRIB fallback**: GRIB failures logged but don't block the cycle
 
-### GRIB-primary ICON snapshots (#914)
+### GRIB-primary ICON and GFS snapshots (#914)
 
 ICON snapshot rows (map cycle and alternates alike, both through
 `fetch_model_snapshots`) are built from DWD ICON-EU GRIB, not Open-Meteo:
@@ -434,8 +434,14 @@ hourly (#415).
   ICON-EU (Azores, Svalbard, north of 70.5°N) always fall back: one call per
   cycle is the floor. More than 10 % of ≥ 50 airports on the fallback logs
   WARNING `GRIB_PRIMARY_FALLBACK_HIGH` (a DWD outage costs the old price); a
-  builder exception logs ERROR `GRIB_PRIMARY_BUILDER_FAILED`. GFS joins with
-  #913's reader.
+  builder exception logs ERROR `GRIB_PRIMARY_BUILDER_FAILED`.
+- **GFS (#914, §65):** `standalone_grib.fetch_gfs_snapshot_fields` on #913's
+  `read_gfs_grib_points`, with the reduced column (`GFS_SNAPSHOT_LEVELS`, 19
+  pgrb2 levels 1000-200 hPa, `GFS_SNAPSHOT_VARIABLES` = the mandatory five,
+  ~70 MB/h, cached under its own key) and `every_previous_step=True` (each
+  map hour's own f−1 / f−3 surface for the precipitation rate). The surface
+  blob is the briefing's. Same coverage rule, switch and drill as ICON;
+  `WB_GRIB_SNAPSHOTS=icon` rolls GFS back alone.
 
 ### Open-Meteo Batching
 
