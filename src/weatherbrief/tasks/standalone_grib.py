@@ -454,6 +454,7 @@ def ensure_icon_cloud_diag_files(
     rain_con predecessor where the variant has it), no decode, so a pre-warm
     (#929) leaves exactly what the alternates' cloud diagnostics read.
     """
+    from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
 
     variant = variant or ICON_EU
@@ -463,7 +464,7 @@ def ensure_icon_cloud_diag_files(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        with requests.Session() as own_session:
+        with _grib_session() as own_session:
             return ensure_icon_cloud_diag_files(
                 init_date, init_hour, steps,
                 variant=variant, session=own_session, data_dir=data_dir,
