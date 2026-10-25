@@ -7,10 +7,19 @@ the pre-#914 path) and once GRIB-primary, on the same init, then prints:
 - wall time, Open-Meteo calls and billed weight of each build,
 - how many airports GRIB covered and how many fell back,
 - flight-category agreement (the map's colour) and the off-by-N counts,
-  overall and split inside the ICON-D2 domain within 48 h vs elsewhere (#928;
-  ``WB_GRIB_SNAPSHOTS_D2=0`` makes the GRIB side ICON-EU only),
+  overall and split inside the ICON-D2 domain within 48 h of the ICON-EU init
+  vs elsewhere (#928; ``WB_GRIB_SNAPSHOTS_D2=0`` makes the GRIB side ICON-EU
+  only),
 - bias and mean / max |Δ| of ceiling, visibility, wind, gust, temperature,
   freezing level and precipitation, plus the worst airports for each.
+
+For ICON the GRIB side is built twice by default (#936): with the newest
+published ICON-D2 run (what the cycle does) and with the D2 run of the
+ICON-EU init (``WB_GRIB_SNAPSHOTS_D2_RUN=eu``, #928's choice). Each build
+prints the D2 run its rows came from and the GRIB bytes it downloaded (0 on
+a warm cache), and the category lines of both are printed on the same
+point-hours. ``--d2-runs latest`` builds only the first. The field table is
+for the first build.
 
 Nothing is stored. Needs DWD opendata (or NOAA) and Open-Meteo, so run it on the Mac
 mini (where the map cycle runs), not in a sandbox. The init comes from
@@ -18,7 +27,7 @@ Open-Meteo's metadata, as in the cycle.
 
 Usage:
     python scripts/compare_grib_snapshots.py [--model icon|gfs] [--limit N] [--days D]
-        [--sample-hours 6,12] [--worst 5]
+        [--sample-hours 6,12] [--worst 5] [--d2-runs latest,eu]
 """
 
 from __future__ import annotations
@@ -42,6 +51,7 @@ load_dotenv(ROOT / ".env")
 import requests  # noqa: E402
 
 from weatherbrief.analysis.airport_consensus import best_ceiling, flight_category  # noqa: E402
+from weatherbrief.fetch.grib.cache import cache_write_meter  # noqa: E402
 from weatherbrief.fetch.grib.icon_eu_fetch import (  # noqa: E402
     ICON_D2,
     icon_eu_model_level_max_hour,
@@ -93,13 +103,15 @@ class _GribLog(logging.Handler):
             self.lines.append(msg)
 
 
-def _build(label: str, switch: str, model, init_time, airports, days, sample_hours):
+def _build(label: str, switch: str, model, init_time, airports, days, sample_hours,
+           d2_run: str = "latest"):
     os.environ["WB_GRIB_SNAPSHOTS"] = switch
+    os.environ["WB_GRIB_SNAPSHOTS_D2_RUN"] = d2_run
     log = _GribLog()
     logging.getLogger("weatherbrief").addHandler(log)
     t0 = time.monotonic()
     try:
-        with open_meteo_meter() as meter:
+        with open_meteo_meter() as meter, cache_write_meter() as grib:
             snaps, calls = fetch_model_snapshots(
                 model, init_time, airports, requests.Session(),
                 sample_hours=sample_hours, days=days,
@@ -108,7 +120,16 @@ def _build(label: str, switch: str, model, init_time, airports, days, sample_hou
         logging.getLogger("weatherbrief").removeHandler(log)
     took = time.monotonic() - t0
     print(f"[{label}] {len(snaps)} rows in {took:.0f}s, Open-Meteo "
-          f"{calls} calls, billed weight {meter.usage.weight:.0f}")
+          f"{calls} calls, billed weight {meter.usage.weight:.0f}, GRIB downloaded "
+          f"{grib.bytes_written / 1e9:.2f} GB ({grib.files_written} files)")
+    # #936: a row's init is its run's; for ICON the ones past the EU init are D2's.
+    inits: dict[datetime, int] = {}
+    for s in snaps:
+        inits[s["model_init_time"]] = inits.get(s["model_init_time"], 0) + 1
+    print(f"[{label}]   rows by run: " + ", ".join(
+        f"{t:%d %HZ}{' (EU init)' if t == init_time else ''}: {n}"
+        for t, n in sorted(inits.items())
+    ))
     for line in log.lines:
         print(f"[{label}]   {line}")
     return {(s["icao"], s["forecast_hour"]): s for s in snaps}
@@ -122,6 +143,8 @@ def main() -> int:
     parser.add_argument("--sample-hours", default=None,
                         help="flat UTC hour list (default: the map's per-day grid)")
     parser.add_argument("--worst", type=int, default=5)
+    parser.add_argument("--d2-runs", default="latest,eu",
+                        help="ICON GRIB builds, by D2 run: latest and/or eu (#936)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger("weatherbrief").setLevel(logging.INFO)
@@ -139,16 +162,22 @@ def main() -> int:
     print(f"{model.upper()} init {init_time:%Y-%m-%d %HZ}, {len(airports)} airports, {days} days")
 
     off = _build("open-meteo", "0", model, init_time, airports, days, sample_hours)
-    on = _build("grib", model, model, init_time, airports, days, sample_hours)
+    d2_runs = [r for r in args.d2_runs.split(",") if r] if model == "icon" else ["latest"]
+    builds = {
+        run: _build(f"grib d2={run}" if model == "icon" else "grib", model, model,
+                    init_time, airports, days, sample_hours, d2_run=run)
+        for run in d2_runs
+    }
+    on = builds[d2_runs[0]]
 
-    keys = sorted(set(off) & set(on))
+    keys = sorted(set(off).intersection(*builds.values()))
     print(f"\n{len(keys)} common point-hours "
           f"(only Open-Meteo {len(set(off) - set(on))}, only GRIB {len(set(on) - set(off))})")
 
-    def _category_line(label, subset):
+    def _category_line(label, subset, grib=on):
         same, steps = 0, {}
         for k in subset:
-            a, b = flight_category(off[k]), flight_category(on[k])
+            a, b = flight_category(off[k]), flight_category(grib[k])
             if a == b:
                 same += 1
             else:
@@ -159,16 +188,22 @@ def main() -> int:
                   f"({100 * same / len(subset):.1f} %); GRIB minus Open-Meteo, in categories: "
                   + ", ".join(f"{d:+d}: {n}" for d, n in sorted(steps.items())))
 
-    _category_line("", keys)
-    # #928: inside the ICON-D2 domain within 48 h (D2 rows; Open-Meteo's
-    # icon_seamless served D2 there) vs the rest (ICON-EU on both sides).
+    # #928: inside the ICON-D2 domain within 48 h of the EU init (D2 rows;
+    # Open-Meteo's icon_seamless served D2 there) vs the rest (ICON-EU on both
+    # sides). The same point-hours for every build, so the lines compare.
+    in_d2: set = set()
     if model == "icon":
         d2_icaos = {a.icao for a in _icon_d2_airports(airports, *_init_parts(init_time))}
         d2_hours = icon_eu_model_level_max_hour(init_time.hour, ICON_D2)
         in_d2 = {k for k in keys if k[0] in d2_icaos
                  and (k[1] - init_time).total_seconds() <= d2_hours * 3600}
-        _category_line(f" inside D2 <= {d2_hours} h", [k for k in keys if k in in_d2])
-        _category_line(" elsewhere", [k for k in keys if k not in in_d2])
+    for run, grib in builds.items():
+        tag = f" [d2={run}]" if model == "icon" else ""
+        _category_line(tag, keys, grib)
+        if model == "icon":
+            _category_line(f"{tag} inside D2 <= {d2_hours} h",
+                           [k for k in keys if k in in_d2], grib)
+            _category_line(f"{tag} elsewhere", [k for k in keys if k not in in_d2], grib)
 
     print(f"\n{'field':<18}{'n':>6}{'bias':>10}{'mean|Δ|':>10}{'max|Δ|':>10}  worst")
     for name, get in _FIELDS:

@@ -49,6 +49,7 @@ from weatherbrief.db.models import (
     VerificationObservationRow,
 )
 from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS, all_sample_hours
+from weatherbrief.tasks.snapshot_runs import newest_cycle_rows
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,9 @@ def select_model_runs(
             if not candidates:
                 continue
             init = max(r["model_init_time"] for r in candidates)
-            chosen = [r for r in candidates if r["model_init_time"] == init]
+            # The newest run's cycle: for ICON also the older ICON-EU rows
+            # next to the ICON-D2 ones (#936, snapshot_runs).
+            chosen = newest_cycle_rows(candidates, {m: init})
             rows_by_model[m] = chosen
             meta[m] = {
                 "available": True,
@@ -487,7 +490,8 @@ def get_historical_map_data(
         for r in rows:
             d = snap_to_dict(r, field_elevation_ft=elevations.get(r["icao"]))
             d["valid_time"] = meta["valid_time"]
-            d["model_init_time"] = meta["model_init_time"]
+            # The row's own run: an ICON cycle holds two (#936).
+            d["model_init_time"] = r["model_init_time"].isoformat()
             by_airport.setdefault(r["icao"], {})[model] = d
 
     observed = select_observed(db, at, now)

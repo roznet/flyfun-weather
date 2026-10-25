@@ -156,6 +156,27 @@ def test_latest_init_per_model_is_exported(tmp_path):
     assert rows[0]["model_init_time"].replace(tzinfo=None) == new_init.replace(tzinfo=None)
 
 
+def test_icon_cycle_exports_its_d2_and_eu_inits(tmp_path):
+    """#936: an ICON cycle holds the ICON-D2 run's rows and the older ICON-EU
+    run's; both are the newest cycle, the previous cycle is not."""
+    Src = _make_db()
+    src = Src()
+    eu = datetime(2026, 4, 5, 0, tzinfo=timezone.utc)
+    d2 = eu + timedelta(hours=3)
+    prev = eu - timedelta(hours=12)
+    _seed(src, [
+        _snap("LFPG", "icon", d2, 12),
+        _snap("LIRF", "icon", eu, 12),
+        _snap("LFPG", "icon", prev, 12),
+        _snap("LIRF", "icon", prev, 12),
+    ])
+
+    manifest = export_snapshots(src, str(tmp_path / "icon.sqlite"), generated_at=NOW)
+
+    assert manifest.row_count == 2
+    assert [i[:16] for i in manifest.models["icon"]] == ["2026-04-05T00:00", "2026-04-05T03:00"]
+
+
 # ---------------------------------------------------------------------------
 # Idempotency
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import contextvars
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, time as dt_time, timedelta, timezone
 from itertools import batched
@@ -1257,9 +1258,11 @@ class IconSnapshotFetchPlan:
     """What an ICON GRIB-primary snapshot fetch downloads (#914, #928).
 
     ``eu_steps`` / ``d2_steps`` map each planned valid time to its published
-    step (``d2_steps`` empty when ICON-D2 serves no airport). ``d2_airports``
-    are the airports ICON-D2 serves; ``eu_first`` the ICON-EU steps fetched
-    up front (a D2 shortfall is topped up from EU afterwards).
+    step, of the ICON-EU run and of the ICON-D2 run ``d2_init`` (#936; its
+    own init, newer than ICON-EU's when D2 published sooner). ``d2_steps`` is
+    empty when ICON-D2 serves no airport. ``d2_airports`` are the airports
+    ICON-D2 serves; ``eu_first`` the ICON-EU steps fetched up front (a D2
+    shortfall is topped up from EU afterwards).
     """
 
     init_date: str
@@ -1268,22 +1271,32 @@ class IconSnapshotFetchPlan:
     d2_steps: dict[datetime, int]
     d2_airports: list[WatchlistAirport]
     eu_first: list[int]
+    d2_init: datetime
+
+    @property
+    def d2_init_parts(self) -> tuple[str, int]:
+        from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
+
+        return datetime_to_init_parts(self.d2_init)
 
 
 def icon_snapshot_fetch_plan(
     init_time: datetime,
     airports: list[WatchlistAirport],
     valid_times: list[datetime],
+    d2_init: datetime | None = None,
 ) -> IconSnapshotFetchPlan | None:
     """The ICON-D2 / ICON-EU split of a snapshot fetch, before any download.
 
     The one planner :func:`_build_grib_snapshots` and the flight pre-warm
     (#929) share, so the warm downloads the files the alternates search
-    reads. Inside the ICON-D2 domain and the D2 run's 48 h a point-hour is
-    D2's; ICON-EU is fetched up front only where D2 can't serve: steps past
-    the D2 horizon, or every step when some airport is outside D2 (EU files
-    are whole-grid, so the bytes are per step, not per airport). None when
-    no valid time is on either grid.
+    reads. *init_time* is the ICON-EU run; the D2 run is *d2_init* when
+    given (the warm's D2 pass), else :func:`icon_d2_run` picks the newest
+    published one (#936). Inside the ICON-D2 domain and the D2 run's 48 h a
+    point-hour is D2's; ICON-EU is fetched up front only where D2 can't
+    serve: steps past the D2 horizon, or every step when some airport is
+    outside D2 (EU files are whole-grid, so the bytes are per step, not per
+    airport). None when no valid time is on either grid.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
     from weatherbrief.fetch.grib.primary import grib_snapshot_d2_enabled
@@ -1291,12 +1304,17 @@ def icon_snapshot_fetch_plan(
 
     init_date, init_hour = datetime_to_init_parts(init_time)
     eu_steps = _icon_snapshot_steps(init_time, valid_times, ICON_EU)
-    d2_steps = (
-        _icon_snapshot_steps(init_time, valid_times, ICON_D2)
-        if grib_snapshot_d2_enabled() else {}
-    )
+    d2_steps: dict[datetime, int] = {}
+    if grib_snapshot_d2_enabled():
+        if d2_init is None:
+            d2_init = icon_d2_run(
+                init_time, cover_until=max(valid_times) if valid_times else None,
+            )
+        d2_steps = _icon_snapshot_steps(d2_init, valid_times, ICON_D2)
+    d2_init = d2_init or init_time
     d2_airports = (
-        _icon_d2_airports(airports, init_date, init_hour) if d2_steps else []
+        _icon_d2_airports(airports, *datetime_to_init_parts(d2_init))
+        if d2_steps else []
     )
     if not d2_airports:
         d2_steps = {}
@@ -1312,6 +1330,7 @@ def icon_snapshot_fetch_plan(
     return IconSnapshotFetchPlan(
         init_date=init_date, init_hour=init_hour, eu_steps=eu_steps,
         d2_steps=d2_steps, d2_airports=d2_airports, eu_first=eu_first,
+        d2_init=d2_init,
     )
 
 
@@ -1392,6 +1411,8 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     if plan is None:
         return [], set(), None, None
     init_date, init_hour = plan.init_date, plan.init_hour
+    d2_init = plan.d2_init
+    d2_date, d2_hour = plan.d2_init_parts
     eu_steps, d2_steps = plan.eu_steps, plan.d2_steps
     d2_airports, eu_first = plan.d2_airports, plan.eu_first
 
@@ -1406,11 +1427,11 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     ) as pool:
         d2_list = sorted(set(d2_steps.values()))
         d2_fields_f = _submit(
-            pool, _fetch_icon_fields, init_date, init_hour, d2_list, d2_airports,
+            pool, _fetch_icon_fields, d2_date, d2_hour, d2_list, d2_airports,
             ICON_D2, priority,
         ) if d2_steps else None
         d2_lookup_f = _submit(
-            pool, _fetch_icon_d2_lookup, init_time, d2_airports, d2_list, priority,
+            pool, _fetch_icon_d2_lookup, d2_init, d2_airports, d2_list, priority,
         ) if d2_steps else None
         eu_fields_f = _submit(
             pool, _fetch_icon_fields, init_date, init_hour, eu_first, airports,
@@ -1423,8 +1444,9 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
 
     built: list[tuple[dict, object]] = []
     d2_keys: set[tuple[str, int]] = set()
+    # D2 rows carry the D2 run's own init (#936): model_init_time stays true.
     for snap, hourly in _icon_rows(
-        model, init_time, d2_airports, d2_steps, d2_fields, d2_lookup,
+        model, d2_init, d2_airports, d2_steps, d2_fields, d2_lookup,
     ):
         d2_keys.add(_snapshot_hour_key(snap["icao"], snap["forecast_hour"]))
         built.append((snap, hourly))
@@ -1435,7 +1457,7 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
         logger.warning(
             "ICON_D2_SNAPSHOTS_EMPTY %s%02dz: 0 D2 rows for %d airport(s) in the "
             "domain (%d/%d D2 steps, diagnostics %s); ICON-EU instead",
-            init_date, init_hour, len(d2_airports), len(d2_fields), len(d2_list),
+            d2_date, d2_hour, len(d2_airports), len(d2_fields), len(d2_list),
             "ok" if d2_lookup is not None else "failed",
         )
     short_steps = sorted({
@@ -1453,8 +1475,9 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     ):
         built.append((snap, hourly))
     summary = (
-        f"{n_d2} ICON-D2 from {len(d2_airports)}/{len(airports)} airports, "
-        f"{len(built) - n_d2} ICON-EU; {len(d2_fields)} D2 + {len(eu_fields)} EU step(s)"
+        f"{n_d2} ICON-D2 {d2_date}{d2_hour:02d}z from {len(d2_airports)}/{len(airports)} "
+        f"airports, {len(built) - n_d2} ICON-EU {init_date}{init_hour:02d}z; "
+        f"{len(d2_fields)} D2 + {len(eu_fields)} EU step(s)"
     )
     return built, d2_keys, d2_lookup, summary
 
@@ -1517,9 +1540,9 @@ def _icon_snapshot_steps(
     Open-Meteo fallback already does for us. Step 0 is published and is a
     planned hour whenever a sample hour equals the init hour (06/12/18Z runs
     on the map grid), so it must be covered too, or every airport would fall
-    back at the full Open-Meteo price. ICON-D2 uses the run of the ICON-EU
-    init (D2 runs every 3 h and publishes sooner), so a row's
-    ``model_init_time`` stays true for both.
+    back at the full Open-Meteo price. *init_time* is the variant's own run
+    (ICON-D2's is usually newer than ICON-EU's, #936), so offsets and the
+    horizon are that run's.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         _snap_to_icon_eu_grid,
@@ -1591,6 +1614,76 @@ def _icon_d2_airports(
         if ok:
             out.append(a)
     return out
+
+
+# The D2 run ICON snapshots read is the newest one published, as Open-Meteo's
+# icon_seamless served it, but never one this far or more past the ICON-EU
+# init: rows of one map cycle then stay inside snapshot_runs' cycle spread.
+_D2_RUN_MAX_LEAD = timedelta(hours=12)
+# D2 runs seen on DWD and the last hour each was seen through, kept for the
+# process: a published hour stays published, so alternates searches don't
+# re-probe it. Not-yet-published is not kept.
+_D2_RUN_PUBLISHED: dict[datetime, int] = {}
+_D2_RUN_LOCK = threading.Lock()
+
+
+def icon_d2_run(
+    eu_init: datetime,
+    now: datetime | None = None,
+    cover_until: datetime | None = None,
+) -> datetime:
+    """The ICON-D2 run the snapshots of ICON-EU run *eu_init* read (#936).
+
+    The newest D2 run (every 3 h) that is past the publication delay and on
+    DWD, from *eu_init* up to ``_D2_RUN_MAX_LEAD`` after it. On DWD means the
+    run-finder's probe answers for f000 and for the run's last hour towards
+    *cover_until* (DWD uploads a run hour by hour). *eu_init* itself when
+    none newer is, or with ``WB_GRIB_SNAPSHOTS_D2_RUN=eu`` (#928's choice). A
+    D2 step the chosen run still lacks falls to ICON-EU.
+    """
+    from weatherbrief.fetch.grib import _grib_session
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_D2,
+        bracket_icon_eu_forecast_hours,
+        probe_icon_run,
+    )
+    from weatherbrief.fetch.grib.primary import grib_snapshot_d2_latest_run
+    from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
+
+    if not grib_snapshot_d2_latest_run():
+        return eu_init
+    now = now or datetime.now(timezone.utc)
+    newest = min(
+        now - timedelta(hours=ICON_D2.publish_delay_hours),
+        eu_init + _D2_RUN_MAX_LEAD - timedelta(seconds=1),
+    )
+    candidates = []
+    run = newest.replace(minute=0, second=0, microsecond=0)
+    while run > eu_init:
+        if run.hour in ICON_D2.cycles:
+            candidates.append(run)
+        run -= timedelta(hours=1)
+    if not candidates:
+        return eu_init
+    with _grib_session() as session:
+        for run in candidates:
+            init_date, init_hour = datetime_to_init_parts(run)
+            last_hour = (
+                bracket_icon_eu_forecast_hours(init_date, init_hour, cover_until, ICON_D2)[1]
+                if cover_until is not None and cover_until > run else 0
+            )
+            with _D2_RUN_LOCK:
+                if _D2_RUN_PUBLISHED.get(run, -1) >= last_hour:
+                    return run
+            if probe_icon_run(
+                init_date, init_hour, session, ICON_D2, last_hour=last_hour,
+            ) is not None:
+                with _D2_RUN_LOCK:
+                    for old in [r for r in _D2_RUN_PUBLISHED if r < run - timedelta(days=2)]:
+                        del _D2_RUN_PUBLISHED[old]
+                    _D2_RUN_PUBLISHED[run] = max(_D2_RUN_PUBLISHED.get(run, 0), last_hour)
+                return run
+    return eu_init
 
 
 def _fetch_icon_fields(init_date, init_hour, steps, airports, variant, priority):

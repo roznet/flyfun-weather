@@ -122,6 +122,16 @@ def grib_snapshot_d2_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def grib_snapshot_d2_latest_run() -> bool:
+    """ICON-D2 snapshot rows from the newest published D2 run (#936); default on.
+
+    ``WB_GRIB_SNAPSHOTS_D2_RUN=eu`` reads the D2 run of the ICON-EU init
+    instead, as #928 did, for comparison or rollback.
+    """
+    raw = os.environ.get("WB_GRIB_SNAPSHOTS_D2_RUN", "latest").strip().lower()
+    return raw != "eu"
+
+
 def grib_snapshot_drill(model: str) -> str | None:
     """Failure drill for GRIB-primary snapshots: ``"all"``, ``"half"`` or None.
 

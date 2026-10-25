@@ -7053,10 +7053,8 @@ agreement 73.9 % inside D2 within 48 h against 92.6 % beyond (owner analysis,
   5 NM carrying data) takes D2 for the hours of the D2 run's 48 h; a D2 hour
   short of the coverage rule (§63) takes ICON-EU, then Open-Meteo. Not the
   briefing's all-or-nothing route gate (§61): a map row is one point.
-- **The D2 run of the ICON-EU init.** D2 runs every 3 h and publishes ~1 h
-  sooner, so the same init is always available when EU is, and the row's
-  `model_init_time` stays true. Open-Meteo's seamless blend may have used a
-  D2 run up to 3 h newer; not chosen: a newer D2 run under the EU init time.
+- ~~**The D2 run of the ICON-EU init.**~~ Reversed by §68 (#936): D2 rows
+  now come from the newest published D2 run, under its own init.
 - **D2's isobaric product: 1000, 975, 950, 850, 700, 600, 500, 400, 300,
   250, 200 hPa,** `t / relhum / u / v / fi`. Coarser than §63's EU set
   between 950 and 700 hPa (no 925/900/875/825/800/775). Model levels would be
@@ -7184,3 +7182,57 @@ fallback, which 78eb7832 clipped.
 replay diff is **pending on the Mac**: brief one flight arriving 23:xxZ on
 main and on this change (`scripts/compare_grib_primary.py <id> --side on`
 from each checkout) and compare; a daytime flight should diff empty.
+
+## 68. ICON-D2 map and alternates rows from the newest D2 run, under its own init (#936)
+
+**Date:** 2026-10-25. **Part of** #910. Reverses §64's "D2 run of the ICON-EU
+init". Mechanics: `metar-taf-accuracy.md` "GRIB-primary ICON and GFS
+snapshots"; cycle selection: `src/weatherbrief/tasks/snapshot_runs.py`.
+
+§64 shipped with map category agreement against Open-Meteo `icon_seamless`
+inside D2 ≤ 48 h of 74.6 % (550/737; elsewhere 92.1 %), mini, ICON init 06Z,
+2026-10-25. `icon_seamless` serves the newest D2 run, up to 3 h newer than the
+EU init (D2 runs every 3 h and publishes ~1 h sooner), and at short range a
+3 h newer run moves low cloud and visibility a lot, which is where the
+disagreements were (visibility mean |Δ| 1.23 km, ceiling sentinel flips). The
+run is the likely main cause; the coarser D2 isobaric profile a smaller one.
+
+**Decisions.**
+
+- **The newest published D2 run** (`icon_d2_run`): from the EU init up to
+  strictly less than 12 h after it, past D2's 2 h publication delay and on DWD
+  (the run-finder's probe, `probe_icon_run`: f000 and the run's last hour
+  towards the planned valid times, so a map cycle needs the run through
+  its 48 h and an alternates search through the ETA hour). Nothing newer → the D2 run of the EU
+  init, as §64. A step the chosen run still lacks falls to ICON-EU (§64's
+  chain). In the 07Z/19Z map cycle this is the EU init + 3 h; an alternates
+  search later in the day can read a D2 run 6 or 9 h past the Open-Meteo EU
+  init, which is also the run the flight warm's D2 pass downloaded.
+- **D2 rows carry the D2 run's init** (option (a) of the issue), over keeping
+  the EU init label (b): `model_init_time` stays true for every row, so
+  scoring and `days_out` are by the run that made the forecast. Cost: one
+  ICON cycle now holds two inits. Readers that took "the newest init" per
+  model (forecast map, snapshot artifact export, historical map) now take the
+  newest **cycle**: per model, runs within `CYCLE_RUN_SPREAD` (ICON 12 h; other
+  models exact) of the newest, and per airport-hour the freshest of those. The
+  12 h spread is below the 12 h between map cycles, so a previous cycle's row
+  only shows where the newest cycle has none for that airport-hour.
+  `model_init_times` on the map is the newest run (D2's inside 48 h). Airport
+  profile, scoring, gust verification and the ingest dedupe already work per
+  row and needed no change.
+- **The 12 h bound** keeps the newest-cycle rule and the artifact freshness
+  check (`find_ingestable_artifact`, 07Z expects 00Z) unambiguous: a D2 run
+  from the previous cycle is always older than the next cycle's EU init.
+- **Switch:** `WB_GRIB_SNAPSHOTS_D2_RUN=eu` reads the D2 run of the EU init
+  (§64), for comparison or rollback; `WB_GRIB_SNAPSHOTS_D2=0` still turns D2
+  off.
+- **Not changed:** the D2 isobaric profile (11 levels). If agreement stays
+  well short of ~90 % with the newest run, split the disagreements by input
+  (ceiling, visibility, cover) before adding levels.
+
+**To measure** (mini, Mac test plan): `scripts/compare_grib_snapshots.py
+--model icon --limit 100` builds GRIB with the newest D2 run and with the D2
+run of the EU init on the same cycle and prints both category lines against
+`icon_seamless`, the D2 run each used and the GRIB bytes downloaded. Target
+~90 % inside D2 ≤ 48 h; elsewhere (92.1 %) and GFS (91.9 %) unchanged; no new
+Open-Meteo calls; D2 bytes per cycle (cold §64 cycle: ~1.9 GB of ~9.4 GB).

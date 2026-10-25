@@ -193,6 +193,44 @@ class TestGetForecastMapData:
         assert apt["models"]["gfs"]["temperature_c"] == pytest.approx(15.0)
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
+    def test_icon_cycle_keeps_d2_and_eu_runs(self, _mock_coords, _mock_rwy, db_session):
+        # #936: inside D2 the rows carry the newer D2 run's init, outside the
+        # ICON-EU init of the same cycle. The previous cycle stays out where
+        # the newest one has a row.
+        from weatherbrief.tasks.map_queries import get_forecast_map_data
+
+        d2_init = ICON_INIT + timedelta(hours=3)
+        prev = ICON_INIT - timedelta(hours=12)
+        _insert_snapshot(db_session, icao="LFPG", model="icon",
+                         model_init_time=d2_init, temperature_2m_c=23.0)
+        _insert_snapshot(db_session, icao="EGLL", model="icon",
+                         model_init_time=ICON_INIT, temperature_2m_c=15.0)
+        for icao in ("LFPG", "EGLL", "EHAM"):
+            _insert_snapshot(db_session, icao=icao, model="icon",
+                             model_init_time=prev, temperature_2m_c=5.0)
+        db_session.commit()
+
+        result = get_forecast_map_data(db_session, NOW, "/fake/db")
+
+        assert result["model_init_times"]["icon"].startswith("2026-04-05T03:00:00")
+        temps = {a["icao"]: a["models"]["icon"]["temperature_c"] for a in result["airports"]}
+        assert temps == {"LFPG": pytest.approx(23.0), "EGLL": pytest.approx(15.0)}
+
+    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
+    def test_other_models_keep_only_the_newest_init(self, _mock_coords, _mock_rwy, db_session):
+        from weatherbrief.tasks.map_queries import get_forecast_map_data
+
+        _insert_snapshot(db_session, icao="LFPG", model="gfs",
+                         model_init_time=GFS_INIT, temperature_2m_c=15.0)
+        _insert_snapshot(db_session, icao="EGLL", model="gfs",
+                         model_init_time=GFS_INIT - timedelta(hours=6))
+        db_session.commit()
+
+        result = get_forecast_map_data(db_session, NOW, "/fake/db")
+
+        assert [a["icao"] for a in result["airports"]] == ["LFPG"]
+
+    @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
     def test_flight_category_derived(self, _mock_coords, _mock_rwy, db_session):
         from weatherbrief.tasks.map_queries import get_forecast_map_data
 

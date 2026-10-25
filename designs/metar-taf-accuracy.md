@@ -412,7 +412,10 @@ hourly (#415).
   alone: Open-Meteo bills any window up to 14 days as one.
 - **ICON-D2 short range (#928):** an airport inside the D2 domain (bbox +
   validity mask, `_icon_d2_airports`) takes its rows for the D2 run's 48 h
-  from ICON-D2 (the run of the EU init): D2 isobaric files
+  from ICON-D2, the newest published D2 run under its own init (#936,
+  `icon_d2_run`; `WB_GRIB_SNAPSHOTS_D2_RUN=eu` → the run of the EU init, as
+  #928). One ICON cycle therefore holds two inits; the map, artifact export
+  and historical map pick the newest cycle with `snapshot_runs`. D2 isobaric files
   (`ICON_D2_SNAPSHOT_PRESSURE_LEVELS`, 11 levels), D2 surface files and D2's
   own cloud diagnostics (`fetch_icon_cloud_diag(variant=ICON_D2)`), which
   also give those rows their ceiling columns (the EU diagnostics skip them).
@@ -430,8 +433,8 @@ hourly (#415).
   (`_ICON_404_TTL_S`), so a late run doesn't cost a 404 per file on every
   alternates search (the cloud-diag fetch is not memoised). The D2 validity
   mask and each airport's D2 verdict are kept per process.
-- Log lines per model: `Model icon GRIB: analyzed N snapshots (D ICON-D2 from
-  a/A airports, E ICON-EU)` and `GRIB-primary icon snapshots: N/M airports
+- Log lines per model: `Model icon GRIB: analyzed N snapshots (D ICON-D2
+  <run> from a/A airports, E ICON-EU <run>; …)` and `GRIB-primary icon snapshots: N/M airports
   fully from GRIB … K to Open-Meteo fallback (C calls)`. Airports outside
   ICON-EU (Azores, Svalbard, north of 70.5°N) always fall back: one call per
   cycle is the floor. More than 10 % of ≥ 50 airports on the fallback logs
