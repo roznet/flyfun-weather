@@ -61,7 +61,8 @@ _DEFAULT_HORIZON_HOURS: dict[str, float] = {
     "icon-d2": 48.0, "icon-eu": 72.0, "gfs": 72.0, "hrrr": 48.0,
 }
 # GB (1e9) of new downloads per pass. GFS 6 GB is ~34 window hours at
-# ~177 MB, ICON-EU ~20 hours of its nine model-level variables. D2 has no
+# ~177 MB, ICON-EU ~30 hours at ~200 MB (189 MB model levels + ~10 MB
+# cloud diag, measured 2026-07-21). D2 has no
 # default cap: it ran uncapped before #929 and its traffic is unchanged.
 _DEFAULT_MAX_GB: dict[str, float] = {
     "icon-d2": 0.0, "icon-eu": 6.0, "gfs": 6.0, "hrrr": 2.0,
@@ -71,6 +72,10 @@ _DEFAULT_MIN_FREE_GB = 20.0
 _DEFAULT_MAX_FLIGHTS = 40
 
 _GB = 1_000_000_000
+
+# source -> run label of the last low-disk WARNING. A low-disk pass is retried
+# every precache tick, so later skips of the same run log at DEBUG.
+_low_disk_warned: dict[str, str] = {}
 
 
 def _env_key(source: str) -> str:
@@ -279,7 +284,11 @@ def _warm_gfs(
             # Only ahead of a real download, as everywhere in the warm: a
             # resumption pass must fast-forward through the warmed prefix.
             if stop():
-                return _Outcome("stopped", hours={(run, f) for f in fhours})
+                # Only the hours that landed: the stats line's distinct hours
+                # is what explains the byte spend.
+                return _Outcome(
+                    "stopped", hours={(run, f) for f in fhours if _hour_warm(f)},
+                )
             idx_by_fhour: dict[int, str] = {}
             try:
                 idx_by_fhour[fhour] = fetch_idx(init_date, init_hour, fhour, session=session)
@@ -354,7 +363,10 @@ def _warm_hrrr(
             if is_cached(run_dir, snd_ck) and is_cached(run_dir, diag_ck):
                 continue
             if stop():
-                return _Outcome("stopped", hours={(run, f) for f in fhours})
+                return _Outcome("stopped", hours={
+                    (run, f) for f in fhours
+                    if is_cached(run_dir, cache_key(f, "HRRR_SOUNDING"))
+                })
             try:
                 idx = fetch_hrrr_idx(init_date, init_hour, fhour, session=session)
                 if not is_cached(run_dir, snd_ck):
@@ -483,11 +495,14 @@ def warm_flights(
     free = free_disk_bytes(data_dir)
     if free is not None and free < limits.min_free_bytes:
         stats["low_disk"] = 1
-        logger.warning(
+        repeat = _low_disk_warned.get(source) == label
+        _low_disk_warned[source] = label
+        (logger.debug if repeat else logger.warning)(
             "%s: skipped, %.1f GB free on the data volume (floor %.0f GB)",
             label, free / _GB, limits.min_free_bytes / _GB,
         )
         return stats
+    _low_disk_warned.pop(source, None)
 
     gate = _yield_gate(should_defer)
     unit = _warm_unit(source)

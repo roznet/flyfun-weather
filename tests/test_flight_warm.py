@@ -259,6 +259,18 @@ class TestWarmFlights:
         assert seen == []
         query.assert_not_called()
 
+    def test_low_disk_warns_once_per_run(self, monkeypatch, tmp_path, caplog):
+        import logging
+
+        monkeypatch.setenv("WB_FLIGHT_WARM_MIN_FREE_GB", "20")
+        monkeypatch.setattr(flight_warm, "_low_disk_warned", {})
+        caplog.set_level(logging.DEBUG, logger="weatherbrief.fetch.grib.flight_warm")
+        with patch.object(flight_warm, "free_disk_bytes", return_value=5 * 10**9):
+            for _ in range(3):  # retried every tick
+                _run("gfs", [_Row("f1")], _writing_unit(tmp_path, 1, []))
+        levels = [r.levelno for r in caplog.records if "GB free" in r.getMessage()]
+        assert levels == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+
     def test_skipped_and_failed_flights_do_not_stop_the_pass(self, tmp_path):
         def unit(flight, data_dir, stop):
             if flight.id == "f1":
@@ -423,6 +435,7 @@ class TestWarmGfs:
             out = _warm_gfs(_Flight("f1", NOW, 1.0, ["pt"]), tmp_path, lambda: True)
         assert out.status == "stopped"
         assert calls["surface"] == []
+        assert out.hours == set()  # nothing landed, nothing counted
 
     @pytest.mark.parametrize("reason", ["hrrr_route", "disabled", "out_of_range"])
     def test_not_grib_primary_is_skipped(self, tmp_path, reason):
