@@ -362,6 +362,18 @@ def test_hours_without_sounding():
     assert _gfs_hours_without_sounding([cs], "20260504", 6, [2, 3, 4, 5]) == [4]
 
 
+def test_mixed_hour_keeps_the_patch_for_open_meteo_points():
+    """A point that fell back to Open-Meteo keeps its CLMR/ICMR patch."""
+    from weatherbrief.fetch.grib import _gfs_hour_has_sounding
+
+    pts = _points(2)
+    cs, skel = _gfs_section(pts)
+    assert not _gfs_hour_has_sounding([cs], "20260504", 6, 4)
+    h10 = next(h for h in skel[1].hourly if h.time.hour == 10)
+    h10.pressure_levels = [PressureLevelData(pressure_hpa=850)]
+    assert _gfs_hour_has_sounding([cs], "20260504", 6, 4)
+
+
 @pytest.mark.parametrize("grib_built,hrrr_tried", [(False, True), (True, False)])
 def test_grib_primary_flag_comes_from_the_gate_not_the_data(tmp_path, grib_built, hrrr_tried):
     """An Open-Meteo slot with empty hours still gets HRRR; only the gate's flag skips it."""

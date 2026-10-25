@@ -6917,7 +6917,10 @@ Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
   (1 − CPOFP/100), floored at 0. Unlike ECMWF (§61, `tp − cp − sf` with its
   own `sf` field), GFS has one frozen share for the column, so it is applied
   to the large-scale part rather than subtracting the whole snow amount,
-  which would remove convective snow twice (review of PR 927). CPOFP's −50 fill falls back to
+  which would remove convective snow twice. The share is the step's
+  instantaneous CPOFP applied to the whole window ending there, so past f120
+  (3-hourly) a rain/snow transition inside the window is split by its end
+  state. CPOFP's −50 fill falls back to
   the CSNOW category; no precipitation means 0 snow and 0 rain. The step
   before the first window hour is read too, so that hour has its amount.
 - **None on a GRIB-primary GFS slot:** `precipitation_probability_pct` (as
@@ -6925,7 +6928,15 @@ Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
 - **Cache.** GFS TTL 24 h → 12 h and a 20 GiB default cap
   (`WB_GRIB_CACHE_CAP_GB_GFS`), the run pinned while it is read: ~177 MB per
   forecast hour where the CLWMR patch was ~2 MB. Precache still fetches only
-  the cloud-diagnostic messages, not soundings.
+  the cloud-diagnostic messages, not soundings. Owner choices (2026-10-25):
+  keep all 28 levels, 12 h TTL, 20 GiB cap.
+- **Download volume.** Per briefing on a cold cache: (window hours + 1) ×
+  ~177 MB, e.g. ~1.2 GB for a 6 h window. Hours are shared across briefings
+  on the same run (route-independent blobs), so a cycle's volume is bounded
+  by the distinct forecast hours requested: ~0.18 GB per hour asked for by
+  any briefing (all 121 hourly steps to f120 would be ~21 GB, more than the
+  cap, which then evicts older unpinned runs first). NOAA S3 egress is free; the
+  cost is wall time and disk writes, measured on the Mac before landing.
 
 **What changes in values.** On GRIB-primary GFS slots: the whole sounding and
 every surface field now come from NOAA's GFS 0.25° instead of Open-Meteo's
