@@ -514,3 +514,152 @@ class TestWarmHrrr:
                 patch("weatherbrief.fetch.grib._download_hrrr_sounding", side_effect=boom):
             out = _warm_hrrr(_Flight("f1", NOW, 1.0, ["pt"]), tmp_path, lambda: False)
         assert out.status == "failed"
+
+
+# --- Alternates ETA-hour warm ------------------------------------------------------
+
+
+INIT = datetime(2026, 10, 25, 3, tzinfo=timezone.utc)  # NOW + 2 h ETA = f005
+
+
+def _plan(eu_first, d2_steps):
+    from weatherbrief.tasks.standalone_verification import IconSnapshotFetchPlan
+
+    eta = NOW + timedelta(hours=2)
+    return IconSnapshotFetchPlan(
+        init_date="20261025", init_hour=3,
+        eu_steps={eta: 5}, d2_steps={eta: s for s in d2_steps},
+        d2_airports=[], eu_first=eu_first,
+    )
+
+
+class TestWarmIconAlternates:
+    def _flight(self, hours_out: float = 0.0, route=object()):
+        return _Flight("f1", NOW + timedelta(hours=hours_out), 2.0, ["pt"], route=route)
+
+    def _run(self, source, flight, tmp_path, plan, stop=lambda: False):
+        from weatherbrief.fetch.grib.flight_warm import _warm_icon_alternates
+
+        calls: list = []
+        with patch("weatherbrief.tasks.alternates.alternates_fetch_airports",
+                   return_value=["dest", "alt"]) as airports, \
+                patch("weatherbrief.tasks.standalone_verification.icon_snapshot_fetch_plan",
+                      return_value=plan) as planner, \
+                patch("weatherbrief.tasks.standalone_grib.ensure_icon_snapshot_files",
+                      side_effect=lambda d, h, steps, **kw: calls.append(
+                          ("snapshot", kw["variant"].slug, steps)) or 0), \
+                patch("weatherbrief.tasks.standalone_grib.ensure_icon_cloud_diag_files",
+                      side_effect=lambda d, h, steps, **kw: calls.append(
+                          ("diag", kw["variant"].slug, steps)) or steps):
+            out = _warm_icon_alternates(
+                source, INIT, flight, tmp_path, stop, db_path="/db", now=NOW,
+            )
+        return out, calls, airports, planner
+
+    def test_eu_pass_warms_eu_diag_and_snapshot_at_the_eta_step(self, tmp_path):
+        out, calls, airports, planner = self._run(
+            "icon-eu", self._flight(), tmp_path, _plan([5], [5]),
+        )
+        assert out.status == "warmed"
+        assert calls == [("diag", "icon-eu", [5]), ("snapshot", "icon-eu", [5])]
+        # The search's own candidate list and planner, at the ETA hour only.
+        airports.assert_called_once()
+        assert planner.call_args.args[1] == ["dest", "alt"]
+        assert planner.call_args.args[2] == [NOW + timedelta(hours=2)]
+
+    def test_eu_pass_skips_eu_snapshot_when_d2_serves_every_airport(self, tmp_path):
+        out, calls, *_ = self._run("icon-eu", self._flight(), tmp_path, _plan([], [5]))
+        assert calls == [("diag", "icon-eu", [5])]
+
+    def test_d2_pass_warms_d2_snapshot_and_diag(self, tmp_path):
+        out, calls, *_ = self._run("icon-d2", self._flight(), tmp_path, _plan([5], [5]))
+        assert out.status == "warmed"
+        assert calls == [("snapshot", "icon-d2", [5]), ("diag", "icon-d2", [5])]
+
+    def test_d2_pass_skips_a_flight_d2_does_not_serve(self, tmp_path):
+        out, calls, *_ = self._run("icon-d2", self._flight(), tmp_path, _plan([5], []))
+        assert out.status == "skipped" and calls == []
+
+    def test_open_meteo_icon_snapshots_warm_only_the_eu_diag(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("WB_GRIB_SNAPSHOTS", "0")
+        out, calls, airports, _ = self._run("icon-eu", self._flight(), tmp_path, _plan([5], [5]))
+        assert calls == [("diag", "icon-eu", [5])]
+        airports.assert_not_called()
+        out, calls, *_ = self._run("icon-d2", self._flight(), tmp_path, _plan([5], [5]))
+        assert out.status == "skipped" and calls == []
+
+    def test_only_flights_the_briefing_computes_alternates_for(self, tmp_path):
+        # Three calendar days out: the pipeline skips alternates (days_out <= 2).
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(hours_out=72), tmp_path, _plan([5], [5]),
+        )
+        assert out.status == "skipped" and out.reason == "alternates_out_of_range"
+        assert calls == []
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(route=None), tmp_path, _plan([5], [5]),
+        )
+        assert out.reason == "alternates_no_route" and calls == []
+
+    def test_stop_is_only_consulted_ahead_of_a_download(self, tmp_path):
+        from weatherbrief.fetch.grib.cache import cache_dir_for_run
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU, icon_cloud_diag_cache_key
+        from weatherbrief.tasks.standalone_grib import _icon_snapshot_plan
+
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(), tmp_path, _plan([5], []), stop=lambda: True,
+        )
+        assert out.status == "stopped" and calls == []
+
+        run_dir = cache_dir_for_run(tmp_path, "20261025", 3, model="icon-eu")
+        put_cached(run_dir, cache_key(5, icon_cloud_diag_cache_key(ICON_EU)), b"x")
+        wanted, _ = _icon_snapshot_plan("20261025", 3, [5], ICON_EU)
+        for _url, ck in wanted.values():
+            put_cached(run_dir, ck, b"x")
+        out, calls, *_ = self._run(
+            "icon-eu", self._flight(), tmp_path, _plan([5], []), stop=lambda: True,
+        )
+        assert out.status == "warmed" and calls == []
+
+
+class TestIconUnitWithAlternates:
+    def _unit(self, source, briefing, alternates):
+        unit = flight_warm._warm_unit(source, INIT, db_path="/db", now=NOW)
+        with patch.object(flight_warm, "_warm_icon", return_value=briefing), \
+                patch.object(flight_warm, "_warm_icon_alternates", side_effect=alternates):
+            return unit(_Flight("f1", NOW, 2.0, ["pt"]), Path("/data"), lambda: False)
+
+    def test_served_by_the_other_variant_still_warms_alternates(self):
+        out = self._unit(
+            "icon-eu", _Outcome("skipped", reason="served_by_icon-d2"),
+            lambda *a, **kw: _Outcome("warmed", hours={("alt", 5)}),
+        )
+        assert out.status == "warmed" and out.hours == {("alt", 5)}
+
+    def test_both_skipped_keeps_the_briefing_reason(self):
+        out = self._unit(
+            "icon-eu", _Outcome("skipped", reason="served_by_icon-d2"),
+            lambda *a, **kw: _Outcome("skipped", reason="alternates_nothing"),
+        )
+        assert out.status == "skipped" and out.reason == "served_by_icon-d2"
+
+    def test_alternates_stop_stops_the_flight(self):
+        out = self._unit(
+            "icon-eu", _Outcome("warmed", hours={("r", 1)}),
+            lambda *a, **kw: _Outcome("stopped"),
+        )
+        assert out.status == "stopped" and out.hours == {("r", 1)}
+
+    def test_alternates_failure_keeps_the_briefing_outcome(self):
+        def boom(*a, **kw):
+            raise RuntimeError("euro_aip down")
+
+        briefing = _Outcome("warmed", hours={("r", 1)})
+        assert self._unit("icon-eu", briefing, boom) is briefing
+
+    def test_a_stopped_briefing_warm_skips_alternates(self):
+        called: list = []
+        out = self._unit(
+            "icon-d2", _Outcome("stopped"),
+            lambda *a, **kw: called.append(1) or _Outcome("warmed"),
+        )
+        assert out.status == "stopped" and called == []

@@ -402,9 +402,8 @@ def _qualifies_both_regimes(cand: AlternateAirport) -> bool:
     return faa.verdict == BandVerdict.LIKELY and easa.verdict == BandVerdict.LIKELY
 
 
-def run_alternates(
+def alternate_candidates(
     route: RouteConfig,
-    target_time: datetime,
     airports_db_path: str,
     *,
     corridor_nm: float = ALT_CORRIDOR_NM,
@@ -412,68 +411,20 @@ def run_alternates(
     max_candidates: int = ALT_MAX_CANDIDATES,
     require_hard_runway: bool = True,
     min_runway_ft: int | None = ALT_DEFAULT_MIN_RUNWAY_FT,
-    aggregation: str = "majority",
-    now: datetime | None = None,
-) -> RouteAlternates | None:
-    """Compute weather-based divert candidates for a route's destination.
+) -> list[dict]:
+    """The divert candidates :func:`run_alternates` fetches, nearest to the
+    destination first: ``{"airport", "enroute_distance_nm",
+    "segment_distance_nm", "distance_from_dest_nm"}`` per candidate.
 
-    Args:
-        route: Flight route (destination = last waypoint).
-        target_time: Flight departure time (aware UTC); ETA = departure + duration.
-        airports_db_path: euro_aip SQLite database path.
-        corridor_nm: Near-route corridor half-width for candidate geometry.
-        radius_nm: Great-circle radius around the destination for laterally-offset fields.
-        max_candidates: Cap on fetched candidates (nearest-to-destination first).
-        require_hard_runway: Drop airports without a hard runway.
-        min_runway_ft: Drop airports whose longest runway is shorter (when known).
-        aggregation: Model-consensus mode ("majority"/"worst"), the user's
-            advisory aggregation preference. Passed to ``consensus`` so the
-            alternate card and the airport arrival card agree on the same
-            airport's category / ceiling / crosswind.
-        now: Override for "now" (testing); defaults to current UTC time.
-
-    Returns:
-        A populated ``RouteAlternates``, or ``None`` if the destination
-        assessment could not be computed (caller degrades gracefully).
+    Weather-free (geometry and runways only), so the flight pre-warm (#929)
+    reads the same list to warm the files the alternates search will read.
     """
-    from weatherbrief.airports import (
-        _load_airport_model,
-        get_airport_elevations,
-        get_runway_ends,
-        route_navpoints,
-    )
-    from weatherbrief.analysis.route_geometry import compute_route_distances
-
-    now = now or datetime.now(timezone.utc)
-    eta_dt = _eta_hour(target_time, route.flight_duration_hours)
+    from weatherbrief.airports import _load_airport_model, route_navpoints
 
     model = _load_airport_model(airports_db_path)
     route_points = route_navpoints(route.waypoints)
     dest = route.destination
     origin = route.origin
-
-    # Cross-border operational flag (#344) needs both the departure country (the
-    # border a diversion actually crosses) and the filed-destination country (the
-    # "prepared" baseline — what formalities you already signed up for). Resolved
-    # once here from the euro_aip model. Wrapped like every other model access in
-    # this function — a lookup failure degrades to "no country" (→ no flag), it
-    # must never abort the whole stage.
-    # NB: the departure anchor is strictly the *last departure airport*; for these
-    # single-leg briefings that is route.origin. If multi-leg trips with
-    # intermediate landings ever enter scope, anchor on the last landing instead.
-    origin_iso_country = None
-    dest_iso_country = None
-    try:
-        origin_ap = model.get_airport(origin.icao)
-        origin_iso_country = origin_ap.iso_country if origin_ap is not None else None
-        dest_ap_meta = model.get_airport(dest.icao)
-        dest_iso_country = dest_ap_meta.iso_country if dest_ap_meta is not None else None
-    except Exception:
-        logger.warning("Alternates: origin/destination country lookup failed", exc_info=True)
-
-    route_distances = compute_route_distances(route)
-    dest_enroute_nm = route_distances[-1] if route_distances else 0.0
-    gc_dep_dest = _haversine_nm(origin.lat, origin.lon, dest.lat, dest.lon)
 
     # --- 1. Candidate geometry: near-route corridor ∪ destination radius ---
     candidates: dict[str, dict] = {}
@@ -563,6 +514,98 @@ def run_alternates(
             "Alternates: capped candidates %d → %d (nearest-to-destination)",
             len(filtered), max_candidates,
         )
+
+    return capped
+
+
+def alternates_fetch_airports(route: RouteConfig, airports_db_path: str) -> list[WatchlistAirport]:
+    """Every airport an alternates search may fetch: the destination, then the
+    candidates in batch order. A search that stops early fetches a prefix."""
+    dest = route.destination
+    out = [WatchlistAirport(icao=dest.icao, lat=dest.lat, lon=dest.lon)]
+    for c in alternate_candidates(route, airports_db_path):
+        ap = c["airport"]
+        out.append(WatchlistAirport(icao=ap.ident, lat=ap.latitude_deg, lon=ap.longitude_deg))
+    return out
+
+
+def run_alternates(
+    route: RouteConfig,
+    target_time: datetime,
+    airports_db_path: str,
+    *,
+    corridor_nm: float = ALT_CORRIDOR_NM,
+    radius_nm: float = ALT_DEST_RADIUS_NM,
+    max_candidates: int = ALT_MAX_CANDIDATES,
+    require_hard_runway: bool = True,
+    min_runway_ft: int | None = ALT_DEFAULT_MIN_RUNWAY_FT,
+    aggregation: str = "majority",
+    now: datetime | None = None,
+) -> RouteAlternates | None:
+    """Compute weather-based divert candidates for a route's destination.
+
+    Args:
+        route: Flight route (destination = last waypoint).
+        target_time: Flight departure time (aware UTC); ETA = departure + duration.
+        airports_db_path: euro_aip SQLite database path.
+        corridor_nm: Near-route corridor half-width for candidate geometry.
+        radius_nm: Great-circle radius around the destination for laterally-offset fields.
+        max_candidates: Cap on fetched candidates (nearest-to-destination first).
+        require_hard_runway: Drop airports without a hard runway.
+        min_runway_ft: Drop airports whose longest runway is shorter (when known).
+        aggregation: Model-consensus mode ("majority"/"worst"), the user's
+            advisory aggregation preference. Passed to ``consensus`` so the
+            alternate card and the airport arrival card agree on the same
+            airport's category / ceiling / crosswind.
+        now: Override for "now" (testing); defaults to current UTC time.
+
+    Returns:
+        A populated ``RouteAlternates``, or ``None`` if the destination
+        assessment could not be computed (caller degrades gracefully).
+    """
+    from weatherbrief.airports import (
+        _load_airport_model,
+        get_airport_elevations,
+        get_runway_ends,
+    )
+    from weatherbrief.analysis.route_geometry import compute_route_distances
+
+    now = now or datetime.now(timezone.utc)
+    eta_dt = _eta_hour(target_time, route.flight_duration_hours)
+
+    model = _load_airport_model(airports_db_path)
+    dest = route.destination
+    origin = route.origin
+
+    # Cross-border operational flag (#344) needs both the departure country (the
+    # border a diversion actually crosses) and the filed-destination country (the
+    # "prepared" baseline — what formalities you already signed up for). Resolved
+    # once here from the euro_aip model. Wrapped like every other model access in
+    # this function — a lookup failure degrades to "no country" (→ no flag), it
+    # must never abort the whole stage.
+    # NB: the departure anchor is strictly the *last departure airport*; for these
+    # single-leg briefings that is route.origin. If multi-leg trips with
+    # intermediate landings ever enter scope, anchor on the last landing instead.
+    origin_iso_country = None
+    dest_iso_country = None
+    try:
+        origin_ap = model.get_airport(origin.icao)
+        origin_iso_country = origin_ap.iso_country if origin_ap is not None else None
+        dest_ap_meta = model.get_airport(dest.icao)
+        dest_iso_country = dest_ap_meta.iso_country if dest_ap_meta is not None else None
+    except Exception:
+        logger.warning("Alternates: origin/destination country lookup failed", exc_info=True)
+
+    route_distances = compute_route_distances(route)
+    dest_enroute_nm = route_distances[-1] if route_distances else 0.0
+    gc_dep_dest = _haversine_nm(origin.lat, origin.lon, dest.lat, dest.lon)
+
+    capped = alternate_candidates(
+        route, airports_db_path,
+        corridor_nm=corridor_nm, radius_nm=radius_nm,
+        max_candidates=max_candidates, require_hard_runway=require_hard_runway,
+        min_runway_ft=min_runway_ft,
+    )
 
     # --- 5. Batched fetch (nearest-to-dest first), stop once a non-major
     #        candidate qualifies under BOTH FAA and EASA ---------------------
