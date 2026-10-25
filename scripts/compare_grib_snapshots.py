@@ -76,6 +76,12 @@ _FIELDS = (
 )
 
 
+_LOG_PREFIXES = (
+    "GRIB-primary", "ICON snapshot GRIB", "GFS snapshot GRIB",
+    "Model icon GRIB", "Model gfs GRIB", "GFS_SNAPSHOT_GRIB_FAILED",
+)
+
+
 class _GribLog(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.INFO)
@@ -83,7 +89,7 @@ class _GribLog(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
-        if msg.startswith(("GRIB-primary", "ICON snapshot GRIB", "GFS snapshot GRIB", "Model icon GRIB", "Model gfs GRIB")):
+        if msg.startswith(_LOG_PREFIXES):
             self.lines.append(msg)
 
 
