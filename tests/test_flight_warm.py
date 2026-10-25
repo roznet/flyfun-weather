@@ -529,7 +529,7 @@ def _plan(eu_first, d2_steps):
     return IconSnapshotFetchPlan(
         init_date="20261025", init_hour=3,
         eu_steps={eta: 5}, d2_steps={eta: s for s in d2_steps},
-        d2_airports=[], eu_first=eu_first,
+        d2_airports=[], eu_first=eu_first, d2_init=INIT,
     )
 
 
@@ -596,9 +596,17 @@ class TestWarmIconAlternates:
         assert calls == [("diag", "icon-eu", [5])]
 
     def test_d2_pass_warms_d2_snapshot_and_diag(self, tmp_path):
-        out, calls, *_ = self._run("icon-d2", self._flight(), tmp_path, _plan([5], [5]))
+        out, calls, _, planner = self._run(
+            "icon-d2", self._flight(), tmp_path, _plan([5], [5]),
+        )
         assert out.status == "warmed"
         assert calls == [("snapshot", "icon-d2", [5]), ("diag", "icon-d2", [5])]
+        # The search reads the newest D2 run (#936): this pass's run.
+        assert planner.call_args.kwargs["d2_init"] == INIT
+
+    def test_eu_pass_lets_the_planner_pick_the_d2_run(self, tmp_path):
+        *_, planner = self._run("icon-eu", self._flight(), tmp_path, _plan([5], [5]))
+        assert planner.call_args.kwargs["d2_init"] is None
 
     def test_d2_pass_skips_a_flight_d2_does_not_serve(self, tmp_path):
         out, calls, *_ = self._run("icon-d2", self._flight(), tmp_path, _plan([5], []))

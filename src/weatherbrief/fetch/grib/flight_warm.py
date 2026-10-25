@@ -428,8 +428,8 @@ def _warm_icon_alternates(
     ``icon_snapshot_fetch_plan`` splits them. The files are whole-grid per
     step, so a few flights arriving in the same hour share them. The ICON-EU
     pass warms the EU files, the ICON-D2 pass the D2 files, each on its own
-    fresh run; the search reads that run once Open-Meteo's ICON init
-    reaches it.
+    fresh run. The search reads the newest D2 run straight away (#936) and
+    the EU run once Open-Meteo's ICON init reaches it.
     """
     from weatherbrief.fetch.grib.cache import cache_dir_for_run, pin_run_dir
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
@@ -461,12 +461,14 @@ def _warm_icon_alternates(
         return _Outcome("skipped", reason="alternates_eta_before_run")
 
     grib_snapshots = "icon" in grib_snapshot_models()
-    # Planned on this pass's run. The search plans on Open-Meteo's ICON init,
-    # one init for both variants; once that init reaches this run the D2
-    # mask, the D2 horizon and so the split are the same.
+    # Planned on this pass's run. The search plans ICON-EU on Open-Meteo's
+    # ICON init and ICON-D2 on the newest published D2 run (#936): the D2
+    # pass's run is that one as soon as it lands, and the EU pass gets the
+    # same split once Open-Meteo's init reaches its run.
     plan = (
         icon_snapshot_fetch_plan(
             init_time, alternates_fetch_airports(flight.route, db_path), [eta],
+            d2_init=init_time if source == "icon-d2" else None,
         )
         if grib_snapshots else None
     )

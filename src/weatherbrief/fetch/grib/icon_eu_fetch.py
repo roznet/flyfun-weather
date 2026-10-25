@@ -901,41 +901,59 @@ def find_latest_icon_eu_run_with_response(
                 )
                 continue
 
-            # Probe: check if the bottom-level P file for forecast hour 000 exists
-            probe_url = icon_eu_file_url(
-                date_str, cycle, 0, variant.level_max, "p", variant,
-            )
-            try:
-                resp = sess.head(probe_url, timeout=10)
-                if resp.status_code != 200:
-                    continue
-                # DWD uploads a run hour by hour, so f000 alone says nothing
-                # about the hours the window needs (prod 10-25: 12z picked at
-                # init+3h, f090–f096 404). Probe the last bracket hour too and
-                # step back to the previous run when it isn't up yet.
-                last_hour = bracket_icon_eu_forecast_hours(
-                    date_str, cycle, need_until, variant,
-                )[1]
-                if last_hour > 0:
-                    last_url = icon_eu_file_url(
-                        date_str, cycle, last_hour, variant.level_max, "p", variant,
-                    )
-                    if sess.head(last_url, timeout=10).status_code != 200:
-                        logger.info(
-                            "%s %s %02dz not yet published through f%03d, "
-                            "trying an older run",
-                            variant.slug, date_str, cycle, last_hour,
-                        )
-                        continue
+            # DWD uploads a run hour by hour, so f000 alone says nothing
+            # about the hours the window needs (prod 10-25: 12z picked at
+            # init+3h, f090–f096 404). Probe the last bracket hour too and
+            # step back to the previous run when it isn't up yet.
+            last_hour = bracket_icon_eu_forecast_hours(
+                date_str, cycle, need_until, variant,
+            )[1]
+            resp = probe_icon_run(date_str, cycle, sess, variant, last_hour=last_hour)
+            if resp is not None:
                 logger.info(
                     "Found %s run: %s %02dz (horizon %dh)",
                     variant.slug, date_str, cycle, max_hour,
                 )
                 return date_str, cycle, resp
-            except requests.RequestException:
-                continue
 
     return None
+
+
+def probe_icon_run(
+    init_date: str,
+    init_hour: int,
+    session: requests.Session,
+    variant: IconVariant = ICON_EU,
+    last_hour: int = 0,
+) -> requests.Response | None:
+    """The f000 HEAD response when the run is on DWD Open Data, else None.
+
+    The run-finder's probe: the bottom-level P file of forecast hour 000 and,
+    when *last_hour* > 0, of that hour too (DWD uploads a run hour by hour).
+    The f000 response is the one returned, so freshness keeps reading its
+    ``Last-Modified``.
+    """
+    try:
+        resp = session.head(
+            icon_eu_file_url(init_date, init_hour, 0, variant.level_max, "p", variant),
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        if last_hour > 0:
+            last_url = icon_eu_file_url(
+                init_date, init_hour, last_hour, variant.level_max, "p", variant,
+            )
+            if session.head(last_url, timeout=10).status_code != 200:
+                logger.info(
+                    "%s %s %02dz not yet published through f%03d, "
+                    "trying an older run",
+                    variant.slug, init_date, init_hour, last_hour,
+                )
+                return None
+    except requests.RequestException:
+        return None
+    return resp
 
 
 def bracket_icon_eu_forecast_hours(

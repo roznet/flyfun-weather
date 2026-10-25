@@ -56,7 +56,7 @@ def _put(run_dir, fhour: int, label: str, value: float) -> None:
 
 
 def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS,
-                   variant=None, t2m_k=288.15, cover_pct=40.0):
+                   variant=None, t2m_k=288.15, cover_pct=40.0, init_hour=0):
     """Cache everything the ICON snapshot builder and the cloud diag read.
 
     ICON-EU by default; ``variant=ICON_D2`` seeds the D2 run (#928), whose
@@ -73,7 +73,7 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS
 
     variant = variant or ICON_EU
     is_eu = variant.slug == "icon-eu"
-    run_dir = cache_dir_for_run(data_dir, INIT_DATE, 0, model=variant.slug)
+    run_dir = cache_dir_for_run(data_dir, INIT_DATE, init_hour, model=variant.slug)
     levels = icon_snapshot_pressure_levels(variant) if levels is None else levels
     for fhour in steps:
         if fhour not in skip_pressure_steps:
@@ -181,6 +181,14 @@ def env(monkeypatch, tmp_path):
     # The D2 mask and verdicts are per-process memos: start every test empty.
     monkeypatch.setattr(sv, "_D2_MASK", None)
     monkeypatch.setattr(sv, "_D2_POINT_OK", {})
+    # No newer ICON-D2 run on DWD (#936): D2 reads the run of the EU init
+    # unless a test publishes one.
+    monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2_RUN", raising=False)
+    monkeypatch.setattr(sv, "_D2_RUN_PUBLISHED", {})
+    monkeypatch.setattr(
+        "weatherbrief.fetch.grib.icon_eu_fetch.probe_icon_run",
+        lambda *a, **kw: None,
+    )
     # No validity mask (it would be a DWD download): the D2 bbox decides.
     monkeypatch.setattr("weatherbrief.fetch.grib.load_d2_validity_mask",
                         lambda *a, **kw: None)
@@ -624,6 +632,155 @@ class TestIconD2:
                             skip={_snapshot_hour_key("EGLL", INIT)})
         assert d2["nwp_ceiling_ft"] == 3000.0
         assert eu["nwp_ceiling_ft"] == 1200.0
+
+
+class TestIconD2LatestRun:
+    """#936: D2 rows from the newest published D2 run, with its own init."""
+
+    def _publish(self, monkeypatch, *hours):
+        probed: list[tuple[str, int]] = []
+
+        def probe(init_date, init_hour, session, variant, last_hour=0):
+            probed.append((init_date, init_hour))
+            return MagicMock() if init_hour in hours else None
+
+        monkeypatch.setattr("weatherbrief.fetch.grib.icon_eu_fetch.probe_icon_run", probe)
+        return probed
+
+    def test_d2_rows_come_from_the_newer_run_with_its_init(self, env, monkeypatch):
+        data_dir, om = env
+        self._publish(monkeypatch, 3)
+        _seed_icon_run(data_dir)
+        # The 03Z D2 run reaches 06/12Z on day 0 and 1 at f003/f009/f027/f033.
+        _seed_d2(data_dir, init_hour=3, steps=[s - 3 for s in STEPS])
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0 and om.calls == []
+        assert len(snaps) == len(AIRPORTS) * len(STEPS)
+        for (icao, _h), s in _by(snaps).items():
+            if icao in IN_D2:
+                assert s["model_init_time"] == INIT + timedelta(hours=3)
+                assert s["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+                # Accumulations de-accumulate on the D2 run's own steps.
+                assert s["precipitation_mm"] == pytest.approx(PRECIP_MM_PER_H, abs=1e-3)
+            else:
+                assert s["model_init_time"] == INIT
+                assert s["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
+
+    def test_switch_reads_the_d2_run_of_the_eu_init(self, env, monkeypatch):
+        data_dir, _ = env
+        probed = self._publish(monkeypatch, 3)
+        monkeypatch.setenv("WB_GRIB_SNAPSHOTS_D2_RUN", "eu")
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir)
+
+        snaps, _ = _run()
+
+        assert probed == []
+        assert all(s["model_init_time"] == INIT for s in snaps)
+        assert _by(snaps)[("EGLL", 6)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_newer_run_short_falls_back_to_eu(self, env, monkeypatch):
+        data_dir, om = env
+        self._publish(monkeypatch, 3)  # "published", but no D2 file on disk
+        _seed_icon_run(data_dir)
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0
+        assert all(s["model_init_time"] == INIT for s in snaps)
+
+
+class TestIconD2Run:
+    """``icon_d2_run``: which D2 run a given ICON-EU init reads (#936)."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        import weatherbrief.tasks.standalone_verification as sv
+
+        monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2_RUN", raising=False)
+        monkeypatch.setattr(sv, "_D2_RUN_PUBLISHED", {})
+
+    def _probe(self, monkeypatch, published):
+        probed: list[int] = []
+        self.last_hours: list[int] = []
+
+        def probe(init_date, init_hour, session, variant, last_hour=0):
+            assert variant.slug == "icon-d2"
+            probed.append(init_hour)
+            self.last_hours.append(last_hour)
+            return MagicMock() if init_hour in published else None
+
+        monkeypatch.setattr("weatherbrief.fetch.grib.icon_eu_fetch.probe_icon_run", probe)
+        return probed
+
+    def _run(self, now):
+        from weatherbrief.tasks.standalone_verification import icon_d2_run
+
+        return icon_d2_run(INIT, now=now)
+
+    def test_newest_published_run_past_the_delay(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3, 6})
+        # 08:30: 06Z is 2.5 h old (D2 publishes after 2 h), 09Z doesn't exist yet.
+        assert self._run(INIT + timedelta(hours=8, minutes=30)) == INIT + timedelta(hours=6)
+        assert probed == [6]
+
+    def test_run_inside_the_delay_is_not_asked(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3})
+        assert self._run(INIT + timedelta(hours=4)) == INIT  # 03Z only 1 h old
+        assert probed == []
+
+    def test_unpublished_newest_falls_to_the_one_before(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3})
+        assert self._run(INIT + timedelta(hours=8, minutes=30)) == INIT + timedelta(hours=3)
+        assert probed == [6, 3]
+
+    def test_nothing_newer_is_the_eu_init(self, monkeypatch):
+        probed = self._probe(monkeypatch, set())
+        assert self._run(INIT + timedelta(hours=8, minutes=30)) == INIT
+        assert probed == [6, 3]
+
+    def test_never_twelve_hours_past_the_eu_init(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3, 6, 9, 12, 15})
+        assert self._run(INIT + timedelta(days=3)) == INIT + timedelta(hours=9)
+        assert probed == [9]
+
+    def test_a_published_run_is_not_probed_again(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3})
+        now = INIT + timedelta(hours=8, minutes=30)
+        assert self._run(now) == self._run(now) == INIT + timedelta(hours=3)
+        assert probed == [6, 3, 6]  # 06Z (not yet there) is asked again
+
+    def test_the_last_hour_needed_is_probed_too(self, monkeypatch):
+        from weatherbrief.tasks.standalone_verification import icon_d2_run
+
+        self._probe(monkeypatch, {6})
+        now = INIT + timedelta(hours=8, minutes=30)
+        # An alternates ETA 10 h after the 06Z run: f010 must be up (DWD
+        # uploads a run hour by hour), as the briefing run-finder asks.
+        assert icon_d2_run(INIT, now=now, cover_until=INIT + timedelta(hours=15, minutes=30)) \
+            == INIT + timedelta(hours=6)
+        # A map cycle reaching days ahead needs the run through its 48 h.
+        icon_d2_run(INIT, now=now, cover_until=INIT + timedelta(days=4))
+        assert self.last_hours == [10, 48]
+
+    def test_a_run_seen_through_fewer_hours_is_asked_again(self, monkeypatch):
+        from weatherbrief.tasks.standalone_verification import icon_d2_run
+
+        probed = self._probe(monkeypatch, {6})
+        now = INIT + timedelta(hours=8, minutes=30)
+        icon_d2_run(INIT, now=now, cover_until=INIT + timedelta(hours=10))
+        icon_d2_run(INIT, now=now, cover_until=INIT + timedelta(hours=9))
+        icon_d2_run(INIT, now=now, cover_until=INIT + timedelta(days=4))
+        assert probed == [6, 6]
+        assert self.last_hours == [5, 48]
+
+    def test_switch_off_never_probes(self, monkeypatch):
+        probed = self._probe(monkeypatch, {3})
+        monkeypatch.setenv("WB_GRIB_SNAPSHOTS_D2_RUN", "eu")
+        assert self._run(INIT + timedelta(hours=8)) == INIT
+        assert probed == []
 
 
 class TestDownloads:

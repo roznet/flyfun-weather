@@ -200,14 +200,12 @@ def _select_rows(session, *, region, latest_per_model) -> list[dict]:
     rows = [{c: getattr(r, c) for c in columns} for r in orm_rows]
 
     if latest_per_model:
-        # Keep only the freshest init per model — what a fresh cycle produced
-        # and what a serving replica wants to ingest.
-        latest: dict[str, datetime] = {}
-        for r in rows:
-            m, init = r["model"], r["model_init_time"]
-            if m not in latest or init > latest[m]:
-                latest[m] = init
-        rows = [r for r in rows if r["model_init_time"] == latest[r["model"]]]
+        # Keep only each model's newest cycle — what a fresh cycle produced
+        # and what a serving replica wants to ingest. An ICON cycle holds two
+        # inits (ICON-D2's and ICON-EU's, #936; see snapshot_runs).
+        from weatherbrief.tasks.snapshot_runs import newest_cycle_rows
+
+        rows = newest_cycle_rows(rows)
 
     return rows
 

@@ -205,6 +205,22 @@ class TestModelRuns:
         assert gfs["flight_category"] == "VFR"
         assert gfs["valid_time"] == VT09.isoformat()
 
+    def test_icon_cycle_keeps_d2_and_eu_runs(self, db_session):
+        # #936: the newest ICON cycle holds the ICON-D2 run (LFPG) and the
+        # older ICON-EU run (EDDF here); each airport keeps its own run.
+        fetched = datetime(2026, 4, 5, 7, tzinfo=timezone.utc)
+        eu = datetime(2026, 4, 5, 0, tzinfo=timezone.utc)
+        d2 = _snap(db_session, model="icon", init=eu + timedelta(hours=3),
+                   valid=VT09, fetched=fetched)
+        _snap(db_session, model="icon", icao="EDDF", init=eu, valid=VT09, fetched=fetched)
+        _snap(db_session, model="icon", init=eu - timedelta(hours=12), valid=VT09,
+              fetched=datetime(2026, 4, 4, 19, tzinfo=timezone.utc), ceiling=400.0)
+        data = _get(db_session)
+        assert data["sources"]["icon"]["model_init_time"] == d2.model_init_time.isoformat()
+        assert data["sources"]["icon"]["count"] == 2
+        assert _airport(data)["models"]["icon"]["flight_category"] == "VFR"
+        assert _airport(data, "EDDF")["models"]["icon"]["model_init_time"] == eu.isoformat()
+
     def test_lead_picks_run_fetched_n_days_before(self, db_session):
         _snap(db_session, init=datetime(2026, 4, 5, 0, tzinfo=timezone.utc),
               valid=VT09, fetched=datetime(2026, 4, 5, 7, tzinfo=timezone.utc))

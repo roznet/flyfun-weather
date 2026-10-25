@@ -43,6 +43,7 @@ from weatherbrief.tasks.airport_watchlist import (
     get_configs_dir,
     load_watchlist_with_coords,
 )
+from weatherbrief.tasks.snapshot_runs import cycle_floor, newest_cycle_rows
 
 logger = logging.getLogger(__name__)
 
@@ -316,9 +317,11 @@ def get_forecast_map_data(
     """Return forecast data for all watchlist airports at a given hour.
 
     Finds the latest model_init_time per model that has data for forecast_hour,
-    then returns per-airport, per-model forecasts with both the worst
-    (``consensus``) and majority (``consensus_majority``) consensus baked in, so
-    the clients render without recomputing either.
+    then returns per-airport, per-model forecasts from that run's cycle (an
+    ICON cycle holds the ICON-D2 run and the older ICON-EU run, #936; see
+    ``snapshot_runs``), with both the worst (``consensus``) and majority
+    (``consensus_majority``) consensus baked in, so the clients render without
+    recomputing either. ``model_init_times`` is each model's newest run.
     """
     # Find latest model_init_time per model that has snapshots for this hour
     init_times: dict[str, datetime] = {}
@@ -338,18 +341,26 @@ def get_forecast_map_data(
             "airports": [],
         }
 
-    # Fetch all snapshots for these (model, init_time, hour) combos
+    # Fetch all snapshots of these (model, cycle, hour) combos
     conditions = []
     for model, init_time in init_times.items():
+        floor = cycle_floor(model, init_time)
         conditions.append(
             (AirportForecastSnapshotRow.model == model)
-            & (AirportForecastSnapshotRow.model_init_time == init_time)
+            & (
+                AirportForecastSnapshotRow.model_init_time == init_time
+                if floor is None
+                else AirportForecastSnapshotRow.model_init_time > floor
+            )
             & (AirportForecastSnapshotRow.forecast_hour == forecast_hour)
         )
 
-    snaps = db.execute(
-        select(AirportForecastSnapshotRow).where(or_(*conditions))
-    ).scalars().all()
+    snaps = newest_cycle_rows(
+        db.execute(
+            select(AirportForecastSnapshotRow).where(or_(*conditions))
+        ).scalars().all(),
+        init_times,
+    )
 
     # Group by airport (ceiling → AGL via published field elevation, #441 #3)
     elevations = _get_elevations(airports_db_path)
