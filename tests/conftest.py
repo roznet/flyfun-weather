@@ -35,6 +35,10 @@ def _clean_env_leaks(monkeypatch):
     # tests cache placeholder bytes, which would otherwise spawn a real pool
     # just to refuse them. tests/test_icon_zarr.py turns it back on.
     monkeypatch.setenv("WB_ICON_ZARR", "0")
+    # #922: a developer's usage-push config would start a push loop in every
+    # create_app() and post the suite's rows to prod.
+    monkeypatch.delenv("WB_USAGE_PUSH_URL", raising=False)
+    monkeypatch.delenv("WB_USAGE_PUSH_TOKEN", raising=False)
 
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost", "testserver"}

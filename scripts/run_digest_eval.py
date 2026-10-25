@@ -54,6 +54,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.costs import compute_call_cost
+from weatherbrief.node_usage import record_eval_cost
 from weatherbrief.digest.llm_config import (
     DigestConfig, create_llm, load_digest_config, with_structured,
 )
@@ -418,6 +419,16 @@ def main() -> int:
               f"sum {sum(r['elapsed_s'] for r in ok_rows):.0f}s  |  "
               f"median out {_med('output_tokens')} tok / {_med('output_chars')} chars  |  "
               f"errors {len(results) - len(ok_rows)}")
+
+    # One ledger row per run, priced as computed above (5m cache tier), so the
+    # spend reaches prod's cost report through the usage push (#922).
+    record_eval_cost(
+        "run_digest_eval",
+        sum(r.get("cost_usd") or 0 for r in results),
+        calls=sum(1 for r in results if "cost_usd" in r),
+        model=config.llm.model, cache_ttl="5m",
+        input_tokens=tok_in, output_tokens=tok_out,
+    )
 
     if args.output:
         Path(args.output).write_text(json.dumps(results, indent=2, ensure_ascii=False))

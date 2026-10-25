@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from extract_digest_eval import load_snapshot_from_pack  # noqa: E402
 
+from weatherbrief.costs import compute_call_cost  # noqa: E402
 from weatherbrief.digest.llm_config import (  # noqa: E402
     LLMConfig,
     create_chat_model,
@@ -44,6 +45,7 @@ from weatherbrief.digest.llm_digest import (  # noqa: E402
 )
 from weatherbrief.digest.prompt_builder import build_digest_context  # noqa: E402
 from weatherbrief.models import RouteAdvisoriesManifest  # noqa: E402
+from weatherbrief.node_usage import record_eval_cost  # noqa: E402
 
 PACKS_DIR = Path("data/packs")
 SONNET = LLMConfig(provider="anthropic", model="claude-sonnet-4-6", temperature=0.0)
@@ -95,11 +97,39 @@ def build_ctx(rec: dict) -> tuple[str, list[str]]:
     return ctx, models
 
 
+#: Running spend per model, recorded as one ledger row each at the end (#922).
+_SPEND: dict[str, dict] = defaultdict(lambda: {"cost": 0.0, "calls": 0, "in": 0, "out": 0})
+
+
 def run_model(llmcfg: LLMConfig, system_prompt: str, ctx: str) -> LongRangeDigest:
-    llm = with_structured(create_chat_model(llmcfg), LongRangeDigest, llmcfg)
-    return llm.invoke(
+    llm = with_structured(create_chat_model(llmcfg), LongRangeDigest, llmcfg, include_raw=True)
+    raw = llm.invoke(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": ctx}]
     )
+    msg = raw.get("raw")
+    usage = (getattr(msg, "usage_metadata", None) or {}) if msg else {}
+    details = usage.get("input_token_details") or {}
+    spend = _SPEND[llmcfg.model]
+    spend["calls"] += 1
+    spend["in"] += usage.get("input_tokens") or 0
+    spend["out"] += usage.get("output_tokens") or 0
+    # No cache breakpoint is set here, so cache writes are 0 and the TTL moot.
+    spend["cost"] += compute_call_cost(
+        llmcfg.model, usage.get("input_tokens") or 0, usage.get("output_tokens") or 0,
+        details.get("cache_read") or 0, details.get("cache_creation") or 0,
+    )
+    if raw.get("parsed") is None:
+        raise ValueError(f"{llmcfg.model}: no parsed LongRangeDigest")
+    return raw["parsed"]
+
+
+def _record_spend() -> None:
+    for model, s in _SPEND.items():
+        print(f"  {model}: {s['calls']} calls, ${s['cost']:.4f}")
+        record_eval_cost(
+            "run_longrange_eval", s["cost"], calls=s["calls"], model=model,
+            cache_ttl="none", input_tokens=s["in"], output_tokens=s["out"],
+        )
 
 
 def main():
@@ -131,15 +161,22 @@ def main():
     cfg = load_digest_config("default")
     sys_prompt = cfg.load_prompt("briefer_longrange", locale="en")
 
-    results = []
-    agree = 0
+    results: list = []
+    try:
+        _run_all(recs, cfg, sys_prompt, results)
+    finally:
+        _record_spend()
+    agree = sum(r["match"] for r in results)
+    _report(results, agree, args.output)
+
+
+def _run_all(recs: list, cfg, sys_prompt: str, results: list) -> None:
     for i, r in enumerate(recs, 1):
         ctx, models = build_ctx(r)
         snap = r["snap"]
         h = run_model(cfg.longrange, sys_prompt, ctx)
         s = run_model(SONNET, sys_prompt, ctx)
         match = h.outlook == s.outlook
-        agree += match
         print(f"[{i}/{len(recs)}] D-{snap.days_out} {r['route']} "
               f"({','.join(models)})")
         print(f"    haiku : {h.outlook:<18} | {h.outlook_reason}")
@@ -151,6 +188,8 @@ def main():
             "haiku": h.model_dump(), "sonnet": s.model_dump(), "match": match,
         })
 
+
+def _report(results: list, agree: int, output: Path | None) -> None:
     n = len(results)
     print(f"\n=== outlook agreement: {agree}/{n} "
           f"({100*agree//n if n else 0}%) ===")
@@ -159,9 +198,9 @@ def main():
         for r in results:
             d[r[label]["outlook"]] += 1
         print(f"  {label}: {dict(d)}")
-    if args.output:
-        args.output.write_text(json.dumps(results, indent=2))
-        print(f"wrote {args.output}")
+    if output:
+        output.write_text(json.dumps(results, indent=2))
+        print(f"wrote {output}")
 
 
 if __name__ == "__main__":

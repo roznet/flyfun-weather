@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from weatherbrief.digest.dwd_translate import _split_translation
 from weatherbrief.fetch.dwd_text import DWDDayBlock
 
@@ -187,3 +189,39 @@ def test_a_new_version_prunes_the_same_texts_old_translations(tmp_path, monkeypa
     assert not legacy.exists()
     assert other_mode.exists() and other_text.exists()
     assert len([n for n in left if n.startswith(f"{content_hash}_extract_")]) == 1
+
+
+def test_a_translator_call_writes_one_ledger_row_and_a_cache_hit_none(tmp_path, monkeypatch):
+    """#922: the Haiku call is priced and recorded; a cache hit costs nothing."""
+    import flyfun_common.db as fdb
+    from sqlalchemy.orm import sessionmaker
+
+    from conftest import make_app_engine
+    from flyfun_common.db.models import CostLedgerRow
+    from weatherbrief.digest import dwd_translate
+    from weatherbrief.digest.llm_config import DigestConfig
+
+    engine = make_app_engine()
+    factory = sessionmaker(bind=engine)
+    monkeypatch.setattr(fdb, "SessionLocal", factory)
+
+    class _BilledLLM:
+        def invoke(self, messages):
+            class _R:
+                content = "=== Freitag (2026-10-09) ===\nok"
+                usage_metadata = {"input_tokens": 3000, "output_tokens": 500}
+
+            return _R()
+
+    monkeypatch.setattr(dwd_translate, "create_chat_model", lambda cfg: _BilledLLM())
+    blocks = _blocks(("Freitag", date(2026, 10, 9)))
+    dwd_translate.translate_dwd_blocks(blocks, DigestConfig(), tmp_path)
+    dwd_translate.translate_dwd_blocks(blocks, DigestConfig(), tmp_path)  # cache hit
+
+    s = factory()
+    (row,) = s.query(CostLedgerRow).all()
+    assert (row.category, row.action, row.user_id) == ("dwd_translate", "dwd_translate", "system")
+    # Haiku 5.5 list rate: 3k in x $0.0001/1k + 0.5k out x $0.0005/1k.
+    assert row.cost == pytest.approx(0.00055)
+    s.close()
+    engine.dispose()

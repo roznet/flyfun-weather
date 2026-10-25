@@ -2892,6 +2892,32 @@ def _run_hewson_precompute_once(models: list[str] | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Node usage push (#922): a dev server reports its usage to prod
+# ---------------------------------------------------------------------------
+
+_USAGE_PUSH_STARTUP_DELAY_SECONDS = 60
+_USAGE_PUSH_INTERVAL_SECONDS = 3600
+
+
+async def run_usage_push_loop(app_state) -> None:
+    """Push this node's usage rows to prod at startup, then hourly.
+
+    Only started when the push is configured (``node_usage.push_config``).
+    ``push`` never raises; the guard is for anything around it.
+    """
+    from weatherbrief.node_usage import push_once
+
+    logger.info("Usage push loop started (every %ds)", _USAGE_PUSH_INTERVAL_SECONDS)
+    await asyncio.sleep(_USAGE_PUSH_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            await asyncio.to_thread(push_once)
+        except Exception:
+            logger.error("Usage push failed", exc_info=True)
+        await asyncio.sleep(_USAGE_PUSH_INTERVAL_SECONDS)
+
+
+# ---------------------------------------------------------------------------
 # Usage analytics: daily rollup + weekly digest
 # ---------------------------------------------------------------------------
 

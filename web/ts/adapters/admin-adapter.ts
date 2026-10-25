@@ -486,6 +486,14 @@ export interface ApiUsageBucket {
   total_calls: number;
   /** Provider-billed calls (Open-Meteo weight); 0 for rows before migration 114. */
   total_weighted_calls: number;
+  /** "prod" for the server's own calls, else the node that uploaded them (#922). */
+  origin: string;
+}
+
+export interface ApiUsageOriginTotal {
+  origin: string;
+  total_calls: number;
+  total_weighted_calls: number;
 }
 
 export interface ApiUsagePeriod {
@@ -493,6 +501,8 @@ export interface ApiUsagePeriod {
   by_service: ApiUsageBucket[];
   total_calls: number;
   total_weighted_calls: number;
+  /** Per-origin totals, heaviest billed first (#922). */
+  by_origin: ApiUsageOriginTotal[];
 }
 
 export interface ApiUsageResponse {

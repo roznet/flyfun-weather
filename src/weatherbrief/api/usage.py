@@ -259,11 +259,71 @@ def log_api_usage(
     )
 
 
+def detached_session() -> Session:
+    """A new session on the shared DB, binding the engine first if nothing has.
+
+    The server binds ``SessionLocal`` at startup; a CLI or eval script may
+    never have touched the DB, and an unbound ``SessionLocal`` fails every
+    query. For usage writes from such processes (#922).
+    """
+    from flyfun_common.db import SessionLocal, get_engine
+
+    if SessionLocal.kw.get("bind") is None:
+        get_engine()
+    return SessionLocal()
+
+
+def log_api_usage_detached(
+    *,
+    service: str,
+    pipeline: str,
+    api_calls: int,
+    weighted_calls: float | None = None,
+) -> None:
+    """``log_api_usage`` on its own session, for callers that hold none.
+
+    For CLIs (Hewson, frontal) whose runs would otherwise record nothing: on a
+    node the row is what the usage push uploads (#922). Never raises, so
+    accounting cannot fail the run it measures.
+    """
+    if api_calls <= 0:
+        return
+    try:
+        db = detached_session()
+    except Exception:
+        logger.warning("API usage not logged: no DB session", exc_info=True)
+        return
+    try:
+        log_api_usage(
+            db, service=service, pipeline=pipeline,
+            api_calls=api_calls, weighted_calls=weighted_calls,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("API usage not logged (%s/%s)", service, pipeline, exc_info=True)
+    finally:
+        db.close()
+
+
+#: Label of rows this server recorded itself (``api_usage_log.origin`` NULL).
+LOCAL_ORIGIN = "prod"
+
+
 class ApiUsageBucket(BaseModel):
     service: str
     pipeline: str
     total_calls: int
     # Sum over rows that carry a weight (migration 114 onwards); 0 when none do.
+    total_weighted_calls: float = 0.0
+    # Where the calls were made (#922): "prod" for this server's own rows, else
+    # the node that uploaded them ("dev", "macmini").
+    origin: str = LOCAL_ORIGIN
+
+
+class ApiUsageOriginTotal(BaseModel):
+    origin: str
+    total_calls: int
     total_weighted_calls: float = 0.0
 
 
@@ -272,6 +332,9 @@ class ApiUsagePeriod(BaseModel):
     by_service: list[ApiUsageBucket]
     total_calls: int
     total_weighted_calls: float = 0.0
+    # Per-origin totals, heaviest billed first: the Open-Meteo dashboard figure
+    # should equal the sum of these (one key across every machine).
+    by_origin: list[ApiUsageOriginTotal] = []
 
 
 class ApiUsageResponse(BaseModel):
@@ -284,26 +347,37 @@ def _query_api_usage(db: Session, since: datetime | None = None) -> list[ApiUsag
     q = db.query(
         ApiUsageRow.service,
         ApiUsageRow.pipeline,
+        ApiUsageRow.origin,
         func.coalesce(func.sum(ApiUsageRow.api_calls), 0).label("total"),
         func.coalesce(func.sum(ApiUsageRow.weighted_calls), 0).label("weighted"),
     )
     if since is not None:
         q = q.filter(ApiUsageRow.timestamp >= since)
-    rows = q.group_by(ApiUsageRow.service, ApiUsageRow.pipeline).all()
+    rows = q.group_by(ApiUsageRow.service, ApiUsageRow.pipeline, ApiUsageRow.origin).all()
     return [
         ApiUsageBucket(
             service=r.service, pipeline=r.pipeline, total_calls=int(r.total),
             total_weighted_calls=float(r.weighted),
+            origin=r.origin or LOCAL_ORIGIN,
         )
         for r in rows
     ]
 
 
 def _make_period(label: str, buckets: list[ApiUsageBucket]) -> ApiUsagePeriod:
+    origins: dict[str, list] = {}
+    for b in buckets:
+        agg = origins.setdefault(b.origin, [0, 0.0])
+        agg[0] += b.total_calls
+        agg[1] += b.total_weighted_calls
     return ApiUsagePeriod(
         label=label, by_service=buckets,
         total_calls=sum(b.total_calls for b in buckets),
         total_weighted_calls=sum(b.total_weighted_calls for b in buckets),
+        by_origin=[
+            ApiUsageOriginTotal(origin=o, total_calls=c, total_weighted_calls=w)
+            for o, (c, w) in sorted(origins.items(), key=lambda kv: -kv[1][1])
+        ],
     )
 
 
