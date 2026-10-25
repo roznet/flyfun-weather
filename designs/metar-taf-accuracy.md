@@ -436,9 +436,9 @@ hourly (#415).
   WARNING `GRIB_PRIMARY_FALLBACK_HIGH` (a DWD outage costs the old price); a
   builder exception logs ERROR `GRIB_PRIMARY_BUILDER_FAILED`.
 - **GFS (#914, §65):** `standalone_grib.fetch_gfs_snapshot_fields` on #913's
-  `read_gfs_grib_points`, with the reduced column (`GFS_SNAPSHOT_LEVELS`, 19
-  pgrb2 levels 1000-200 hPa, `GFS_SNAPSHOT_VARIABLES` = the mandatory five,
-  ~70 MB/h, cached under its own key) and `every_previous_step=True` (each
+  `read_gfs_grib_points`, with the reduced column (the 28 `gfs_sounding_levels()`,
+  pgrb2 + pgrb2b, `GFS_SNAPSHOT_VARIABLES` = the mandatory five,
+  ~102 MB/h, cached under its own key) and `every_previous_step=True` (each
   map hour's own f−1 / f−3 surface for the precipitation rate). The surface
   blob is the briefing's. Same coverage rule, switch and drill as ICON;
   `WB_GRIB_SNAPSHOTS=icon` rolls GFS back alone.

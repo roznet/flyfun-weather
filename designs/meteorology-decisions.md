@@ -7074,7 +7074,7 @@ and the same for icing and the boundary-layer / mixed-layer outputs, which see
 one ~150 hPa layer (850 only between 950 and 700) on D2 rows against 25–50 hPa
 layers on EU rows, so one airport could read differently by source.
 
-## 65. GFS map and alternates snapshots from NOAA pgrb2 (#914)
+## 65. GFS map and alternates snapshots from NOAA GRIB (#914)
 
 **Date:** 2026-10-25. **Part of** #910; the GFS half of §63. Mechanics:
 `metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots" (GFS section).
@@ -7086,17 +7086,18 @@ the same coverage rule, switch and drill as ICON (§63).
 
 **Decisions.**
 
-- **Reduced column: the 19 pgrb2 levels 1000-200 hPa, `TMP / RH / UGRD /
-  VGRD / HGT`, no `VVEL`, no condensates** (`GFS_SNAPSHOT_LEVELS`,
-  `GFS_SNAPSHOT_VARIABLES`). Same reasons as ICON (the lite sounding stops at
-  200 hPa and reads no vertical motion). pgrb2b (875, 825 … 525 hPa) is never
-  fetched: ~70 MB per hour against ~99 MB with it and ~144 MB for the
-  briefing's 8-variable column over the same depth (gfs.20261025/00z f024).
-  **Owner to confirm:** Open-Meteo's GFS map had 28 levels, so the GFS lite
-  sounding loses the 25 hPa spacing between 875 and 525 hPa (50 hPa there
-  now). Adding pgrb2b back costs ~40 % more bytes per hour.
-- **Cached apart from the briefing's column** (`GFS_SOUNDING_V1_L…_V…`), so
-  the reduced blob can never stand in for the briefing's 28-level one. The
+- **The same 28 levels as Open-Meteo's GFS (1000-150 hPa, pgrb2 + pgrb2b),
+  `TMP / RH / UGRD / VGRD / HGT` only, no `VVEL`, no condensates**
+  (`gfs_sounding_levels()`, `GFS_SNAPSHOT_VARIABLES`). No omega or
+  condensates for the same reason as ICON (the lite sounding reads no vertical
+  motion). ~102 MB per hour against ~144 MB for the briefing's 8-variable
+  column (gfs.20261025/00z f024).
+  **Owner (2026-10-25):** keep all 28 levels, pgrb2b included, for the 25 hPa
+  spacing between 875 and 525 hPa the flying cross-sections need. Rejected:
+  the 19 pgrb2 levels to 200 hPa (~70 MB per hour, ~30 % fewer bytes, 50 hPa
+  spacing through the cruise band).
+- **Cached apart from the briefing's column** (`GFS_SOUNDING_V1_V…`), so the
+  5-variable blob can never stand in for the briefing's 8-variable one. The
   surface blob is the briefing's own.
 - **Predecessor of every hour** (`every_previous_step`): map hours are 3 h
   apart, so each needs its own f−1 (f−3 past f120) surface for the hourly
@@ -7107,7 +7108,7 @@ the same coverage rule, switch and drill as ICON (§63).
 - `WB_GRIB_SNAPSHOTS=icon` rolls GFS back alone.
 
 **To measure** (mini): the side-by-side for GFS (category agreement,
-sounding-derived fields, and that CAT / icing layer counts and tiers don't
-shift on the 50 hPa spacing), bytes per cycle (~28 sounding hours × 70 MB +
-~56 surface steps × 13 MB ≈ 2.7 GB cold), wall time.
+sounding-derived fields, and how far CAT / icing layer counts and tiers move
+from the Open-Meteo rows on the same levels), bytes per cycle (~28 sounding
+hours × 102 MB + ~56 surface steps × 13 MB ≈ 3.6 GB cold), wall time.
 

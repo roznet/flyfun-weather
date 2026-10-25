@@ -130,7 +130,7 @@ Per-model split reuses `tasks/standalone_verification.py`:
 
 | Model | Source |
 |-------|--------|
-| GFS | NOAA GFS pgrb2 GRIB (19 levels 1000-200 hPa + #913 surface, #914 §65) + GFS GRIB cloud diagnostics attached before the sounding pass (#635), Open-Meteo only for candidates GRIB left short (`WB_GRIB_SNAPSHOTS`) |
+| GFS | NOAA GFS GRIB (28 levels 1000-150 hPa, 5 variables + #913 surface, #914 §65) + GFS GRIB cloud diagnostics attached before the sounding pass (#635), Open-Meteo only for candidates GRIB left short (`WB_GRIB_SNAPSHOTS`) |
 | ICON | DWD ICON-D2 GRIB inside the D2 domain within its 48 h, else ICON-EU GRIB: isobaric sounding + surface + cloud diagnostics, Open-Meteo only for candidates GRIB left short (#914/#928, `WB_GRIB_SNAPSHOTS`, `WB_GRIB_SNAPSHOTS_D2`; see `metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots") |
 | ECMWF | local GRIB a1 (surface incl. **visibility**) + a2 (pressure) (`fetch_ecmwf_grib_snapshots`) |
 
