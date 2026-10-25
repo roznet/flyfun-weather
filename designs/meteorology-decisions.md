@@ -6957,7 +6957,7 @@ sounding levels (`scripts/compare_pack_surface_openmeteo.py --levels
 ## 63. ICON map and alternates snapshots from DWD pressure-level GRIB (#914)
 
 **Date:** 2026-10-24. **Part of** #910 (cut Open-Meteo usage). Mechanics:
-`metar-taf-accuracy.md` "GRIB-primary ICON snapshots".
+`metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots".
 
 The ICON forecast-map rows (619 watchlist airports, twice a day) and the ICON
 alternates rows were Open-Meteo requests with the full variable set, ~1.3M +
@@ -7034,7 +7034,7 @@ after the switch), not from the side-by-side.
 ## 64. ICON-D2 for the short-range ICON map and alternates rows (#928)
 
 **Date:** 2026-10-25. **Part of** #910. Follow-up to §63, deploys with it.
-Mechanics: `metar-taf-accuracy.md` "GRIB-primary ICON snapshots".
+Mechanics: `metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots".
 
 Before #914 the ICON rows came from Open-Meteo `/v1/dwd-icon` with no
 `models=`, i.e. `icon_seamless`, which serves ICON-D2 (2.2 km) inside the D2
@@ -7073,4 +7073,40 @@ does not shift the Richardson CAT tiers (thickness-scaled, §28) against EU;
 and the same for icing and the boundary-layer / mixed-layer outputs, which see
 one ~150 hPa layer (850 only between 950 and 700) on D2 rows against 25–50 hPa
 layers on EU rows, so one airport could read differently by source.
+
+## 65. GFS map and alternates snapshots from NOAA pgrb2 (#914)
+
+**Date:** 2026-10-25. **Part of** #910; the GFS half of §63. Mechanics:
+`metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots" (GFS section).
+
+GFS map rows (619 airports, 6 days) and GFS alternates rows were Open-Meteo
+requests with 28 pressure levels. They now come from #913's NOAA reader
+(`read_gfs_grib_points`), Open-Meteo only for airports GRIB left short, under
+the same coverage rule, switch and drill as ICON (§63).
+
+**Decisions.**
+
+- **Reduced column: the 19 pgrb2 levels 1000-200 hPa, `TMP / RH / UGRD /
+  VGRD / HGT`, no `VVEL`, no condensates** (`GFS_SNAPSHOT_LEVELS`,
+  `GFS_SNAPSHOT_VARIABLES`). Same reasons as ICON (the lite sounding stops at
+  200 hPa and reads no vertical motion). pgrb2b (875, 825 … 525 hPa) is never
+  fetched: ~70 MB per hour against ~99 MB with it and ~144 MB for the
+  briefing's 8-variable column over the same depth (gfs.20261025/00z f024).
+  **Owner to confirm:** Open-Meteo's GFS map had 28 levels, so the GFS lite
+  sounding loses the 25 hPa spacing between 875 and 525 hPa (50 hPa there
+  now). Adding pgrb2b back costs ~40 % more bytes per hour.
+- **Cached apart from the briefing's column** (`GFS_SOUNDING_V1_L…_V…`), so
+  the reduced blob can never stand in for the briefing's 28-level one. The
+  surface blob is the briefing's own.
+- **Predecessor of every hour** (`every_previous_step`): map hours are 3 h
+  apart, so each needs its own f−1 (f−3 past f120) surface for the hourly
+  precipitation rate, stored with `precip_period_h = 1` as for ICON.
+- **Surface from #913's decoders**, bilinear; cover and CAPE from GFS's own
+  TCDC/CAPE, as Open-Meteo's GFS gave them; cloud diagnostics attach for the
+  ceiling and convective columns only.
+- `WB_GRIB_SNAPSHOTS=icon` rolls GFS back alone.
+
+**To measure** (mini): the side-by-side for GFS (category agreement,
+sounding-derived fields), bytes per cycle (~28 sounding hours × 70 MB +
+~56 surface steps × 13 MB ≈ 2.7 GB cold), wall time.
 

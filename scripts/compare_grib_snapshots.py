@@ -1,8 +1,8 @@
-"""Side-by-side for GRIB-primary ICON map snapshots (#914).
+"""Side-by-side for GRIB-primary ICON / GFS map snapshots (#914).
 
-Builds one ICON forecast-map cycle twice for the watchlist airports, once
-with ``WB_GRIB_SNAPSHOTS=0`` (Open-Meteo first, the pre-#914 path) and once
-GRIB-primary, on the same ICON init, then prints:
+Builds one forecast-map cycle of ``--model`` (icon, default, or gfs) twice for
+the watchlist airports, once with ``WB_GRIB_SNAPSHOTS=0`` (Open-Meteo first,
+the pre-#914 path) and once GRIB-primary, on the same init, then prints:
 
 - wall time, Open-Meteo calls and billed weight of each build,
 - how many airports GRIB covered and how many fell back,
@@ -12,12 +12,12 @@ GRIB-primary, on the same ICON init, then prints:
 - bias and mean / max |Δ| of ceiling, visibility, wind, gust, temperature,
   freezing level and precipitation, plus the worst airports for each.
 
-Nothing is stored. Needs DWD opendata and Open-Meteo, so run it on the Mac
-mini (where the map cycle runs), not in a sandbox. The ICON init comes from
+Nothing is stored. Needs DWD opendata (or NOAA) and Open-Meteo, so run it on the Mac
+mini (where the map cycle runs), not in a sandbox. The init comes from
 Open-Meteo's metadata, as in the cycle.
 
 Usage:
-    python scripts/compare_grib_snapshots.py [--limit N] [--days D]
+    python scripts/compare_grib_snapshots.py [--model icon|gfs] [--limit N] [--days D]
         [--sample-hours 6,12] [--worst 5]
 """
 
@@ -83,11 +83,11 @@ class _GribLog(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
-        if msg.startswith(("GRIB-primary", "ICON snapshot GRIB", "Model icon GRIB")):
+        if msg.startswith(("GRIB-primary", "ICON snapshot GRIB", "GFS snapshot GRIB", "Model icon GRIB", "Model gfs GRIB")):
             self.lines.append(msg)
 
 
-def _build(label: str, switch: str, init_time, airports, days, sample_hours):
+def _build(label: str, switch: str, model, init_time, airports, days, sample_hours):
     os.environ["WB_GRIB_SNAPSHOTS"] = switch
     log = _GribLog()
     logging.getLogger("weatherbrief").addHandler(log)
@@ -95,7 +95,7 @@ def _build(label: str, switch: str, init_time, airports, days, sample_hours):
     try:
         with open_meteo_meter() as meter:
             snaps, calls = fetch_model_snapshots(
-                "icon", init_time, airports, requests.Session(),
+                model, init_time, airports, requests.Session(),
                 sample_hours=sample_hours, days=days,
             )
     finally:
@@ -111,7 +111,8 @@ def _build(label: str, switch: str, init_time, airports, days, sample_hours):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--limit", type=int, default=None, help="first N watchlist airports")
-    parser.add_argument("--days", type=int, default=MAP_FORECAST_DAYS.get("icon", 4))
+    parser.add_argument("--model", choices=("icon", "gfs"), default="icon")
+    parser.add_argument("--days", type=int, default=None, help="default: the map's horizon")
     parser.add_argument("--sample-hours", default=None,
                         help="flat UTC hour list (default: the map's per-day grid)")
     parser.add_argument("--worst", type=int, default=5)
@@ -122,15 +123,17 @@ def main() -> int:
     airports = load_watchlist_with_coords(get_configs_dir(), os.environ["AIRPORTS_DB"])
     if args.limit:
         airports = airports[: args.limit]
-    meta = fetch_model_metadata(["icon"])["icon"]
+    model = args.model
+    days = args.days if args.days is not None else MAP_FORECAST_DAYS.get(model, 4)
+    meta = fetch_model_metadata([model])[model]
     init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
     sample_hours = (
         [int(h) for h in args.sample_hours.split(",")] if args.sample_hours else None
     )
-    print(f"ICON init {init_time:%Y-%m-%d %HZ}, {len(airports)} airports, {args.days} days")
+    print(f"{model.upper()} init {init_time:%Y-%m-%d %HZ}, {len(airports)} airports, {days} days")
 
-    off = _build("open-meteo", "0", init_time, airports, args.days, sample_hours)
-    on = _build("grib", "icon", init_time, airports, args.days, sample_hours)
+    off = _build("open-meteo", "0", model, init_time, airports, days, sample_hours)
+    on = _build("grib", model, model, init_time, airports, days, sample_hours)
 
     keys = sorted(set(off) & set(on))
     print(f"\n{len(keys)} common point-hours "
@@ -153,12 +156,13 @@ def main() -> int:
     _category_line("", keys)
     # #928: inside the ICON-D2 domain within 48 h (D2 rows; Open-Meteo's
     # icon_seamless served D2 there) vs the rest (ICON-EU on both sides).
-    d2_icaos = {a.icao for a in _icon_d2_airports(airports, *_init_parts(init_time))}
-    d2_hours = icon_eu_model_level_max_hour(init_time.hour, ICON_D2)
-    in_d2 = {k for k in keys if k[0] in d2_icaos
-             and (k[1] - init_time).total_seconds() <= d2_hours * 3600}
-    _category_line(f" inside D2 <= {d2_hours} h", [k for k in keys if k in in_d2])
-    _category_line(" elsewhere", [k for k in keys if k not in in_d2])
+    if model == "icon":
+        d2_icaos = {a.icao for a in _icon_d2_airports(airports, *_init_parts(init_time))}
+        d2_hours = icon_eu_model_level_max_hour(init_time.hour, ICON_D2)
+        in_d2 = {k for k in keys if k[0] in d2_icaos
+                 and (k[1] - init_time).total_seconds() <= d2_hours * 3600}
+        _category_line(f" inside D2 <= {d2_hours} h", [k for k in keys if k in in_d2])
+        _category_line(" elsewhere", [k for k in keys if k not in in_d2])
 
     print(f"\n{'field':<18}{'n':>6}{'bias':>10}{'mean|Δ|':>10}{'max|Δ|':>10}  worst")
     for name, get in _FIELDS:

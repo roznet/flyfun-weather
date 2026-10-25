@@ -92,9 +92,9 @@ def grib_primary_models() -> tuple[ModelSource, ...]:
 
 # Standalone snapshots (forecast map + alternates, #914) have their own
 # switch, so the map can be rolled back without touching briefings. ECMWF is
-# not listed: its snapshots were GRIB-first before this switch existed. GFS
-# joins once its GRIB reader lands (#913).
-GRIB_SNAPSHOT_MODELS: tuple[str, ...] = ("icon",)
+# not listed: its snapshots were GRIB-first before this switch existed.
+# ``WB_GRIB_SNAPSHOTS=icon`` rolls GFS back alone, ``=gfs`` ICON.
+GRIB_SNAPSHOT_MODELS: tuple[str, ...] = ("icon", "gfs")
 
 
 def grib_snapshot_models() -> tuple[str, ...]:

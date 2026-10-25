@@ -118,8 +118,9 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS
 class _OpenMeteoFake:
     """``OpenMeteoClient.fetch_multi_point`` stand-in that records each call."""
 
-    def __init__(self):
+    def __init__(self, horizon_h: int = (DAYS + 1) * 24):
         self.calls: list[list[str]] = []
+        self.horizon_h = horizon_h
 
     def __call__(self, client, points, model, *, start_date=None, end_date=None,
                  chunk_size=None, hour_filter=None):
@@ -145,7 +146,7 @@ class _OpenMeteoFake:
                         for hpa, tc, rh in _LEVELS
                     ],
                 )
-                for h in range((DAYS + 1) * 24)
+                for h in range(self.horizon_h)
                 if hour_filter is None or (INIT + timedelta(hours=h)).hour in hour_filter
             ]
             out.append(WaypointForecast(
@@ -380,8 +381,8 @@ class TestAlternatesEtaHour:
 
 class TestSwitchGrammar:
     @pytest.mark.parametrize("raw,expected", [
-        (None, ("icon",)), ("1", ("icon",)), ("0", ()), ("off", ()),
-        ("icon", ("icon",)), ("gfs", ()),
+        (None, ("icon", "gfs")), ("1", ("icon", "gfs")), ("0", ()), ("off", ()),
+        ("icon", ("icon",)), ("gfs", ("gfs",)), ("ecmwf", ()),
     ])
     def test_grib_snapshot_models(self, monkeypatch, raw, expected):
         from weatherbrief.fetch.grib.primary import grib_snapshot_models
@@ -396,7 +397,7 @@ class TestSwitchGrammar:
 class TestThreeHourlyPrecipitation:
     def test_row_carries_the_hourly_rate_not_the_window_total(self):
         """Past +78 h the step window is 3 h; consumers read the column as hourly (#415)."""
-        from weatherbrief.tasks.standalone_grib import IconSnapshotStep
+        from weatherbrief.tasks.standalone_grib import GribSnapshotStep
         from weatherbrief.tasks.standalone_verification import (
             _icon_grib_hourly,
             _snapshot_row,
@@ -408,7 +409,7 @@ class TestThreeHourlyPrecipitation:
                 "raw_geopotential_m2_s2": 9.80665 * _isa_height_m(p)}
             for p in (1000, 950, 925, 900, 850, 800, 700, 600, 500, 300)
         }
-        step = IconSnapshotStep(
+        step = GribSnapshotStep(
             pressure=[levels],
             surface=[{"t_2m": 285.0, "td_2m": 280.0, "u_10m": 3.0, "v_10m": 0.0,
                       "pmsl": 101300.0, "tot_prec": 106.0}],
