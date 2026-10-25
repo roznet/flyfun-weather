@@ -1622,8 +1622,13 @@ def _icon_d2_airports(
 _D2_RUN_MAX_LEAD = timedelta(hours=12)
 # D2 runs seen on DWD and the last hour each was seen through, kept for the
 # process: a published hour stays published, so alternates searches don't
-# re-probe it. Not-yet-published is not kept.
+# re-probe it.
 _D2_RUN_PUBLISHED: dict[datetime, int] = {}
+# Not yet published (run, last hour) → monotonic time to ask again: during a
+# DWD outage or before a run is up, each flight's search would otherwise pay
+# every candidate's HEADs again (the 404 TTL of the step fetches, likewise).
+_D2_RUN_MISSING_TTL_S = 600.0
+_D2_RUN_MISSING: dict[tuple[datetime, int], float] = {}
 _D2_RUN_LOCK = threading.Lock()
 
 
@@ -1675,6 +1680,8 @@ def icon_d2_run(
             with _D2_RUN_LOCK:
                 if _D2_RUN_PUBLISHED.get(run, -1) >= last_hour:
                     return run
+                if _D2_RUN_MISSING.get((run, last_hour), 0.0) > time.monotonic():
+                    continue
             if probe_icon_run(
                 init_date, init_hour, session, ICON_D2, last_hour=last_hour,
             ) is not None:
@@ -1683,6 +1690,11 @@ def icon_d2_run(
                         del _D2_RUN_PUBLISHED[old]
                     _D2_RUN_PUBLISHED[run] = max(_D2_RUN_PUBLISHED.get(run, 0), last_hour)
                 return run
+            with _D2_RUN_LOCK:
+                now_s = time.monotonic()
+                for k in [k for k, until in _D2_RUN_MISSING.items() if until <= now_s]:
+                    del _D2_RUN_MISSING[k]
+                _D2_RUN_MISSING[(run, last_hour)] = now_s + _D2_RUN_MISSING_TTL_S
     return eu_init
 
 

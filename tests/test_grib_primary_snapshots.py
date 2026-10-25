@@ -185,6 +185,7 @@ def env(monkeypatch, tmp_path):
     # unless a test publishes one.
     monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2_RUN", raising=False)
     monkeypatch.setattr(sv, "_D2_RUN_PUBLISHED", {})
+    monkeypatch.setattr(sv, "_D2_RUN_MISSING", {})
     monkeypatch.setattr(
         "weatherbrief.fetch.grib.icon_eu_fetch.probe_icon_run",
         lambda *a, **kw: None,
@@ -701,6 +702,7 @@ class TestIconD2Run:
 
         monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2_RUN", raising=False)
         monkeypatch.setattr(sv, "_D2_RUN_PUBLISHED", {})
+        monkeypatch.setattr(sv, "_D2_RUN_MISSING", {})
 
     def _probe(self, monkeypatch, published):
         probed: list[int] = []
@@ -750,7 +752,20 @@ class TestIconD2Run:
         probed = self._probe(monkeypatch, {3})
         now = INIT + timedelta(hours=8, minutes=30)
         assert self._run(now) == self._run(now) == INIT + timedelta(hours=3)
-        assert probed == [6, 3, 6]  # 06Z (not yet there) is asked again
+        assert probed == [6, 3]
+
+    def test_an_unpublished_run_is_asked_again_after_the_ttl(self, monkeypatch):
+        import weatherbrief.tasks.standalone_verification as sv
+
+        probed = self._probe(monkeypatch, {3})
+        clock = [1000.0]
+        monkeypatch.setattr(sv.time, "monotonic", lambda: clock[0])
+        now = INIT + timedelta(hours=8, minutes=30)
+        self._run(now)
+        self._run(now)  # 06Z missing a moment ago, 03Z memoised: no HEADs
+        clock[0] += sv._D2_RUN_MISSING_TTL_S + 1
+        self._run(now)
+        assert probed == [6, 3, 6]
 
     def test_the_last_hour_needed_is_probed_too(self, monkeypatch):
         from weatherbrief.tasks.standalone_verification import icon_d2_run

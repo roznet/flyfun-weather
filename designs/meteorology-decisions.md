@@ -7207,7 +7207,10 @@ run is the likely main cause; the coarser D2 isobaric profile a smaller one.
   init, as §64. A step the chosen run still lacks falls to ICON-EU (§64's
   chain). In the 07Z/19Z map cycle this is the EU init + 3 h; an alternates
   search later in the day can read a D2 run 6 or 9 h past the Open-Meteo EU
-  init, which is also the run the flight warm's D2 pass downloaded.
+  init, which is also the run the flight warm's D2 pass downloaded. A
+  published run is memoised per process; a run (and last hour) not yet on
+  DWD is not asked again for 10 min, so a DWD outage costs each flight's
+  search no HEADs past the first.
 - **D2 rows carry the D2 run's init** (option (a) of the issue), over keeping
   the EU init label (b): `model_init_time` stays true for every row, so
   scoring and `days_out` are by the run that made the forecast. Cost: one
