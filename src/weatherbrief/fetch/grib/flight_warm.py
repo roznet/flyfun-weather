@@ -146,7 +146,8 @@ class _Flight:
 
 @dataclass
 class _Outcome:
-    """One flight's warm: ``warmed``, ``skipped`` (not this source) or ``stopped``."""
+    """One flight's warm: ``warmed``, ``skipped`` (not this source), ``stopped``
+    (a limit or the yield gate) or ``failed`` (downloads left hours cold)."""
 
     status: str
     hours: set[tuple[str, int]] = field(default_factory=set)
@@ -258,16 +259,22 @@ def _warm_gfs(
     run = f"{init_date}_{init_hour:02d}z"
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
 
+    def _wanted(fhour: int) -> list[str]:
+        wanted = [cache_key(fhour, GFS_SURFACE_CACHE_KEY)]
+        if fhour in fhours:
+            wanted += [
+                _gfs_sounding_cache_key(fhour, levels),
+                cache_key(fhour, "CLOUD_DIAG"),
+            ]
+        return wanted
+
+    def _hour_warm(fhour: int) -> bool:
+        return all(is_cached(run_dir, ck) for ck in _wanted(fhour))
+
     with pin_run_dir(run_dir):
         for fhour in steps:
             window = fhour in fhours
-            wanted = [cache_key(fhour, GFS_SURFACE_CACHE_KEY)]
-            if window:
-                wanted += [
-                    _gfs_sounding_cache_key(fhour, levels),
-                    cache_key(fhour, "CLOUD_DIAG"),
-                ]
-            if all(is_cached(run_dir, ck) for ck in wanted):
+            if _hour_warm(fhour):
                 continue
             # Only ahead of a real download, as everywhere in the warm: a
             # resumption pass must fast-forward through the warmed prefix.
@@ -290,7 +297,13 @@ def _warm_gfs(
                 _ensure_gfs_cloud_diag(
                     init_date, init_hour, fhour, run_dir, idx_by_fhour, session,
                 )
-    return _Outcome("warmed", hours={(run, f) for f in fhours})
+        # The helpers log and carry on, so check what actually landed: a
+        # NOAA outage must read as failed in the stats line, not as warmed.
+        cold = [f for f in steps if not _hour_warm(f)]
+    hours = {(run, f) for f in fhours}
+    if cold:
+        return _Outcome("failed", hours=hours, reason=f"{len(cold)}/{len(steps)} steps cold")
+    return _Outcome("warmed", hours=hours)
 
 
 def _warm_hrrr(
@@ -358,7 +371,12 @@ def _warm_hrrr(
                 logger.warning(
                     "Flight warm hrrr: f%02d failed", fhour, exc_info=True,
                 )
-    return _Outcome("warmed", hours={(run, f) for f in fhours})
+        # The sounding is what the briefing needs; diagnostics are optional.
+        cold = [f for f in fhours if not is_cached(run_dir, cache_key(f, "HRRR_SOUNDING"))]
+    hours = {(run, f) for f in fhours}
+    if cold:
+        return _Outcome("failed", hours=hours, reason=f"{len(cold)}/{len(fhours)} hours cold")
+    return _Outcome("warmed", hours=hours)
 
 
 def _warm_unit(source: str):
@@ -438,7 +456,7 @@ def warm_flights(
 
     Returns stats: ``flights_considered`` (in the horizon), ``flights_warmed``,
     ``flights_skipped`` (another source serves them, or nothing to fetch),
-    ``flights_failed``, ``flights_cut`` with ``cut_by_flights`` /
+    ``flights_failed`` (raised, or downloads left hours cold), ``flights_cut`` with ``cut_by_flights`` /
     ``cut_by_bytes`` / ``cut_by_time`` and ``cut_ids``, ``distinct_hours``,
     ``bytes_downloaded`` and ``wall_seconds`` (both including the carry),
     ``deferred`` (1: yielded to a refresh, resume next tick) and
@@ -544,6 +562,12 @@ def warm_flights(
             if outcome.status == "warmed":
                 stats["flights_warmed"] += 1
                 continue
+            if outcome.status == "failed":
+                stats["flights_failed"] += 1
+                logger.warning(
+                    "%s: flight %s not fully warmed (%s)", label, flight.id, outcome.reason,
+                )
+                continue
             # Stopped mid-flight. Its finished units are cached; it counts as
             # neither warmed nor (when deferred) cut. A stop with no recorded
             # reason is treated as a deferral: resuming next tick is the safe
@@ -553,8 +577,8 @@ def warm_flights(
                 logger.info(
                     "%s deferring to an active briefing refresh after %d/%d "
                     "flights fully warmed (the current one may be partly "
-                    "warmed) — will resume next tick",
-                    label, stats["flights_warmed"], len(rows),
+                    "warmed, %d not started) — will resume next tick",
+                    label, stats["flights_warmed"], len(rows), len(rows) - i - 1,
                 )
                 break
             _cut(row, stop_reason[0])
