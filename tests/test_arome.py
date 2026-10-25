@@ -1,10 +1,12 @@
-"""Météo-France AROME condensate enrichment (#529).
+"""Météo-France AROME: the meteofrance slot built from GRIB (#529, #940).
 
 Covers the domain predicate and its derivation, the fetch helpers (URLs,
 package groups, window hours, run finder, streamed download), the
 message-level decode against synthetic GRIB2 written with eccodes, and the
-orchestrator's gating + staged all-or-nothing merge onto the meteofrance slot.
-No network: every HTTP call goes through a fake session.
+orchestrator's gating + staged all-or-nothing build of the meteofrance slot.
+No network: every HTTP call goes through a fake session. The fetch wiring,
+surface mapping, refresh gate and flight warm are in
+``test_grib_primary_meteofrance.py``.
 """
 
 from __future__ import annotations
@@ -146,12 +148,14 @@ class TestDeriveDomainBands:
 
 class TestFetchHelpers:
     def test_enabled_flag(self, monkeypatch):
+        # On by default since #940: the switch only turns the slot off.
         monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
-        assert not af.arome_enabled()
+        assert af.arome_enabled()
         monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
         assert af.arome_enabled()
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "no")
-        assert not af.arome_enabled()
+        for off in ("0", "no", "false", "off"):
+            monkeypatch.setenv(af.AROME_ENABLED_ENV, off)
+            assert not af.arome_enabled()
 
     def test_package_url(self):
         assert af.arome_package_url("20260730", 12, "07H12H") == (
@@ -434,32 +438,26 @@ class TestDecode:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator — gating and staged merge
+# Orchestrator — gating and staged build (#940)
 # ---------------------------------------------------------------------------
 
 _LEVELS = [850, 700]
 
 
 def _mf_section(times, lat=48.9, lon=2.4, model=None):
+    """A GRIB-primary skeleton: hours with no levels and no values."""
     from weatherbrief.models import (
         HourlyForecast,
         ModelSource,
-        PressureLevelData,
         RouteCrossSection,
         Waypoint,
         WaypointForecast,
     )
     model = model or ModelSource.METEOFRANCE
     now = datetime.now(timezone.utc)
-    hourly = [
-        HourlyForecast(
-            time=t, pressure_levels=[PressureLevelData(pressure_hpa=p) for p in _LEVELS],
-        )
-        for t in times
-    ]
     wf = WaypointForecast(
         waypoint=Waypoint(icao="ZZPA", name="Test", lat=lat, lon=lon),
-        model=model, fetched_at=now, hourly=hourly,
+        model=model, fetched_at=now, hourly=[HourlyForecast(time=t) for t in times],
     )
     return RouteCrossSection(
         model=model, route_points=[], fetched_at=now, point_forecasts=[wf],
@@ -471,40 +469,67 @@ def _rp(lat=48.9, lon=2.4):
     return RoutePoint(lat=lat, lon=lon, distance_from_origin_nm=0.0)
 
 
-def _col(clw=2e-4, ice=1e-4):
-    return {p: {"cloud_liquid_water_kg_kg": clw, "ice_mixing_ratio_kg_kg": ice,
-                "cloud_area_fraction_pct": 60.0, "rain_water_kg_kg": 1e-5}
-            for p in _LEVELS}
+def _col(clw=2e-4, ice=1e-4, t_k=270.0):
+    """One point's decoded IP1 + IP2 column."""
+    out = {}
+    for p in _LEVELS:
+        out[p] = {
+            "raw_temperature_k": t_k + (p - 700) / 10.0,
+            "raw_relative_humidity_pct": 85.0,
+            "raw_u_wind_m_s": 5.0, "raw_v_wind_m_s": 0.0,
+            "raw_geopotential_m2_s2": (1500.0 if p == 850 else 3000.0) * 9.80665,
+            "cloud_liquid_water_kg_kg": clw, "ice_mixing_ratio_kg_kg": ice,
+            "cloud_area_fraction_pct": 60.0, "rain_water_kg_kg": 1e-5,
+        }
+    return out
+
+
+def _sfc(tp=0.0):
+    return {"t2m_k": 283.15, "u10_m_s": 3.0, "v10_m_s": 4.0, "tp_kg_m2": tp,
+            "tcc": 40.0, "prmsl_pa": 101300.0}
 
 
 class TestPrepare:
     DEP = datetime(2026, 7, 30, 18, 0, tzinfo=timezone.utc)
     NOW = datetime(2026, 7, 30, 16, 0, tzinfo=timezone.utc)
 
-    def _prepare(self, sections, route, tmp_path, dep=None):
+    def _prepare(self, sections, route, tmp_path, dep=None, grib_primary=None):
         import weatherbrief.fetch.grib as grib_mod
+        from weatherbrief.models import ModelSource
         return grib_mod._prepare_arome(
             sections, route, dep or self.DEP, data_dir=tmp_path,
             flight_duration_hours=2.0, as_of_time=self.NOW,
+            grib_primary=(
+                (ModelSource.METEOFRANCE,) if grib_primary is None else grib_primary
+            ),
         )
 
-    def test_disabled_by_default(self, monkeypatch, tmp_path):
+    def test_not_a_grib_primary_slot(self, monkeypatch, tmp_path):
+        """A pre-#940 Open-Meteo meteofrance slot is never patched any more."""
         monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
-        assert self._prepare([_mf_section([self.DEP])], [_rp()], tmp_path) == (None, None)
+        assert self._prepare(
+            [_mf_section([self.DEP])], [_rp()], tmp_path, grib_primary=(),
+        ) == (None, None)
+
+    def test_switched_off(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(af.AROME_ENABLED_ENV, "0")
+        assert self._prepare([_mf_section([self.DEP])], [_rp()], tmp_path) == (
+            None, "disabled",
+        )
 
     def test_no_meteofrance_section(self, monkeypatch, tmp_path):
         from weatherbrief.models import ModelSource
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
         sections = [_mf_section([self.DEP], model=ModelSource.GFS)]
         assert self._prepare(sections, [_rp()], tmp_path) == (None, None)
 
     def test_out_of_domain(self, monkeypatch, tmp_path):
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
         route = [_rp(), _rp(37.55, 2.0)]
         assert self._prepare([_mf_section([self.DEP])], route, tmp_path) == (None, "out_of_domain")
 
     def test_beyond_horizon(self, monkeypatch, tmp_path):
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
         dep = self.NOW + timedelta(hours=60)
         assert self._prepare([_mf_section([dep])], [_rp()], tmp_path, dep=dep) == (
             None, "out_of_range",
@@ -512,35 +537,54 @@ class TestPrepare:
 
     def test_no_published_run(self, monkeypatch, tmp_path):
         import weatherbrief.fetch.grib as grib_mod
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
         monkeypatch.setattr(grib_mod, "_grib_session", lambda: _Session())
         assert self._prepare([_mf_section([self.DEP])], [_rp()], tmp_path) == (None, "no_data")
 
     def test_resolves_run_and_caps_groups_to_the_window(self, monkeypatch, tmp_path):
         import weatherbrief.fetch.grib as grib_mod
-        monkeypatch.setenv(af.AROME_ENABLED_ENV, "1")
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
         # 12z run; window 18–20z = f006..f008 → two groups, never all nine.
         url = af.arome_package_url("20260730", 12, "07H12H")
         monkeypatch.setattr(grib_mod, "_grib_session", lambda: _Session(published={url}))
         ctx, skip = self._prepare([_mf_section([self.DEP])], [_rp()], tmp_path)
         assert skip is None
         assert (ctx.init_date, ctx.init_hour) == ("20260730", 12)
+        assert ctx.fhours == [6, 7, 8]
         assert ctx.groups == {"00H06H": [6], "07H12H": [7, 8]}
-        assert ctx.levels == sorted(_LEVELS)
+        # SP1 also reads f005, the step before the window, for f006's rain.
+        assert ctx.packages["SP1"] == {"00H06H": [5, 6], "07H12H": [7, 8]}
+        assert ctx.levels == list(af.AROME.pressure_levels)
         assert ctx.run_dir.parent.name == "arome"
+
+    def test_window_reaches_the_hour_after_a_late_arrival(self, monkeypatch, tmp_path):
+        """Same window as fill_grib_primary_gaps checks: ceil(dep + ceil(dur))."""
+        import weatherbrief.fetch.grib as grib_mod
+        monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
+        monkeypatch.setattr(
+            grib_mod, "_grib_session",
+            lambda: _Session(published={af.arome_package_url("20260730", 12, "07H12H")}),
+        )
+        dep = datetime(2026, 7, 30, 18, 30, tzinfo=timezone.utc)
+        ctx, _ = self._prepare([_mf_section([dep])], [_rp()], tmp_path, dep=dep)
+        # 18:30 + 2 h → 20:30 → hours 18..21 = f006..f009.
+        assert ctx.fhours == [6, 7, 8, 9]
 
 
 class TestDecodeAndMerge:
     INIT = ("20260730", 12)
 
-    def _ctx(self, tmp_path, groups):
+    def _ctx(self, tmp_path, fhours):
         import weatherbrief.fetch.grib as grib_mod
         run_dir = tmp_path / "arome" / "20260730_12z"
         run_dir.mkdir(parents=True)
-        for label in groups:
-            (run_dir / af.arome_group_cache_key(label)).write_bytes(b"x")
+        packages = af.arome_package_groups(fhours)
+        for pkg, groups in packages.items():
+            for label in groups:
+                (run_dir / af.arome_group_cache_key(label, package=pkg)).write_bytes(b"x")
         return grib_mod._AromeContext(
-            *self.INIT, groups, run_dir, sorted(_LEVELS), [48.9], [2.4], session=None,
+            *self.INIT, fhours, packages, run_dir, sorted(_LEVELS), [48.9], [2.4],
+            session=None,
         )
 
     @staticmethod
@@ -548,54 +592,76 @@ class TestDecodeAndMerge:
         init = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
         return [init + timedelta(hours=f) for f in fhours]
 
-    def _run(self, monkeypatch, tmp_path, decoded_by_hour, groups):
+    def _run(self, monkeypatch, tmp_path, columns, fhours, surface=None):
         import weatherbrief.fetch.grib as grib_mod
 
-        def fake_dispatch(worker, path, hours, lats, lons, levels):
-            assert worker == "decode_arome_pressure"
-            return {"points": {h: decoded_by_hour[h] for h in hours},
-                    "finite_fraction": 0.828, "dropped": []}
+        surface = surface or {h: [_sfc(tp=0.5 * h)] for h in range(min(fhours) - 1, max(fhours) + 1)}
+
+        def fake_dispatch(worker, path, hours, lats, lons, *args):
+            if worker == "decode_arome_pressure":
+                if "_IP2_" in path:
+                    return {"points": {}, "finite_fraction": 0.828, "dropped": []}
+                return {"points": {h: columns[h] for h in hours},
+                        "finite_fraction": 0.828, "dropped": []}
+            assert worker == "decode_arome_surface"
+            return {"points": {h: surface[h] for h in hours if h in surface}}
 
         monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
-        cs = _mf_section(self._times(*[h for hs in groups.values() for h in hs]))
+        cs = _mf_section(self._times(*fhours))
         result = grib_mod._decode_and_merge_arome(
-            self._ctx(tmp_path, groups), [cs], [], [_rp()],
+            self._ctx(tmp_path, fhours), [cs], [], [_rp()],
         )
         return result, cs
 
-    def test_complete_window_is_merged(self, monkeypatch, tmp_path):
-        groups = {"00H06H": [6], "07H12H": [7]}
+    def test_complete_window_builds_the_column_and_surface(self, monkeypatch, tmp_path):
         (ts, skip), cs = self._run(
-            monkeypatch, tmp_path, {6: [_col()], 7: [_col(clw=3e-4)]}, groups,
+            monkeypatch, tmp_path, {6: [_col()], 7: [_col(clw=3e-4)]}, [6, 7],
         )
         assert skip is None
         assert ts == int(datetime(2026, 7, 30, 12, tzinfo=timezone.utc).timestamp())
         h6, h7 = cs.point_forecasts[0].hourly
         pl = {p.pressure_hpa: p for p in h7.pressure_levels}
+        assert set(pl) == set(_LEVELS)
+        assert pl[850].temperature_c == pytest.approx(285.0 - 273.15)
+        assert pl[850].geopotential_height_m == pytest.approx(1500.0)
+        assert pl[850].wind_speed_kt == pytest.approx(9.72, abs=0.01)
         assert pl[850].cloud_liquid_water_kg_kg == pytest.approx(3e-4)
-        assert pl[850].ice_mixing_ratio_kg_kg == pytest.approx(1e-4)
         assert pl[850].rain_water_kg_kg == pytest.approx(1e-5)
         assert pl[850].cloud_area_fraction_pct == pytest.approx(60.0)
-        assert h6.pressure_levels[0].cloud_liquid_water_kg_kg is not None
+        assert h6.temperature_2m_c == pytest.approx(10.0)
+        assert h6.cloud_cover_pct == 40.0
+        # f005 seeds f006: (3.0 - 2.5) mm in the hour.
+        assert h6.precipitation_mm == pytest.approx(0.5)
+        assert h7.precipitation_mm == pytest.approx(0.5)
 
-    def test_one_incomplete_hour_leaves_the_slot_untouched(self, monkeypatch, tmp_path):
+    def test_one_incomplete_hour_leaves_the_slot_empty(self, monkeypatch, tmp_path):
         bad = _col()
-        del bad[700]["ice_mixing_ratio_kg_kg"]   # liquid without ice
-        groups = {"00H06H": [6], "07H12H": [7]}
-        (ts, skip), cs = self._run(monkeypatch, tmp_path, {6: [_col()], 7: [bad]}, groups)
+        del bad[700]["raw_temperature_k"]
+        (ts, skip), cs = self._run(monkeypatch, tmp_path, {6: [_col()], 7: [bad]}, [6, 7])
         assert (ts, skip) == (None, "incomplete")
         for h in cs.point_forecasts[0].hourly:
-            assert all(p.cloud_liquid_water_kg_kg is None for p in h.pressure_levels)
+            assert not h.pressure_levels and h.temperature_2m_c is None
+
+    def test_missing_condensate_is_not_incomplete(self, monkeypatch, tmp_path):
+        col = _col()
+        for lvl in col.values():
+            del lvl["ice_mixing_ratio_kg_kg"]
+        (ts, skip), _ = self._run(monkeypatch, tmp_path, {6: [col]}, [6])
+        assert skip is None and ts is not None
 
     def test_point_outside_the_data_is_out_of_domain(self, monkeypatch, tmp_path):
-        (ts, skip), _ = self._run(monkeypatch, tmp_path, {6: [{}]}, {"00H06H": [6]})
+        (ts, skip), _ = self._run(monkeypatch, tmp_path, {6: [{}]}, [6])
         assert (ts, skip) == (None, "out_of_domain")
 
     def test_missing_group_file_is_no_data(self, monkeypatch, tmp_path):
         import weatherbrief.fetch.grib as grib_mod
-        ctx = self._ctx(tmp_path, {"00H06H": [6]})
-        (ctx.run_dir / af.arome_group_cache_key("00H06H")).unlink()
+        ctx = self._ctx(tmp_path, [6])
+        (ctx.run_dir / af.arome_group_cache_key("00H06H", package="SP2")).unlink()
         cs = _mf_section(self._times(6))
+        monkeypatch.setattr(
+            grib_mod, "_dispatch_decode",
+            lambda worker, path, hours, *a: {"points": {h: [_col()] for h in hours}},
+        )
         assert grib_mod._decode_and_merge_arome(ctx, [cs], [], [_rp()]) == (None, "no_data")
 
 
@@ -606,28 +672,23 @@ class TestFreshnessRegistration:
         assert cfg.cycles == (0, 3, 6, 9, 12, 15, 18, 21)
         assert cfg.horizon == timedelta(hours=51)
         assert cfg.readiness_check == "arome_mf"
-        assert cfg.role == "cloud-enrichment"
+        assert cfg.role == "primary-sounding"
 
-    def test_env_gated(self, monkeypatch):
+    def test_always_tracked(self, monkeypatch):
+        """The slot is AROME only (#940): its marker is tracked by default."""
         from weatherbrief.fetch.freshness.registry import SOURCE_REGISTRY
         monkeypatch.delenv("WB_AROME_ENABLED", raising=False)
-        assert not SOURCE_REGISTRY["arome:mf"].is_active
-        monkeypatch.setenv("WB_AROME_ENABLED", "1")
         assert SOURCE_REGISTRY["arome:mf"].is_active
 
     def test_readiness_check_is_dispatchable(self):
         from weatherbrief.fetch.freshness.sources import _DISPATCH
         assert "arome_mf" in _DISPATCH
 
-    def test_env_gate_matches_the_fetch_flag(self):
-        from weatherbrief.fetch.freshness.registry import SOURCE_REGISTRY
-        assert SOURCE_REGISTRY["arome:mf"].env_gate == af.AROME_ENABLED_ENV
-
     def test_source_key_matches(self):
         assert af.AROME.source_key == "arome:mf"
 
 
 def test_meteofrance_levels_are_all_published_by_arome():
-    """Every Open-Meteo Météo-France level must be patchable from IP2."""
+    """AROME's 24 levels include every level the Open-Meteo slot carried."""
     from weatherbrief.fetch.variables import METEOFRANCE_PRESSURE_LEVELS
     assert set(METEOFRANCE_PRESSURE_LEVELS) <= set(af.AROME.pressure_levels)

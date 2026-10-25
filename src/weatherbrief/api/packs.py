@@ -849,6 +849,21 @@ def _pack_init_for_source(pack: BriefingPackMeta, model: str, source: str) -> in
     return pack.grib_init_times.get(model) or pack.model_init_times.get(model)
 
 
+def _no_open_meteo_part(pack: BriefingPackMeta, model: str) -> bool:
+    """True when *model*'s slot in *pack* had no Open-Meteo base (#940).
+
+    The meteofrance slot is AROME only: its ``model_init_times`` entry is the
+    AROME run, so there is no Open-Meteo "base" row to show. A pack from
+    before #940 (Open-Meteo slot, maybe AROME-patched) keeps its base row.
+    """
+    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
+
+    if model not in {m.value for m in NO_OPEN_METEO_MODELS}:
+        return False
+    grib = pack.grib_init_times.get(model)
+    return grib is not None and pack.model_init_times.get(model) == grib
+
+
 def _backfill_sources(pack: BriefingPackMeta) -> dict[str, str]:
     """Infer ``model_sources`` for legacy packs created before issue #108.
 
@@ -1006,6 +1021,8 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
         if not source.endswith(":openmeteo"):
             om_source = f"{model}:openmeteo"
             om_pack_init = pack.model_init_times.get(model)
+            if _no_open_meteo_part(pack, model):
+                om_pack_init = None
             if om_pack_init is not None:
                 om_resolved = _resolve_marker(om_source, model)
                 if om_resolved is not None:
@@ -1119,8 +1136,55 @@ def _realtime_what(observed: bool) -> str:
     return "METAR/TAF and observed conditions" if observed else "METAR/TAF"
 
 
+def refresh_counting_models(
+    model_names: list[str], advisory_models: list[str] | None,
+) -> list[str]:
+    """The pack models whose newer runs count toward a full refresh (#940).
+
+    The flight's advisory models, resolved exactly as the advisories resolve
+    them (``None`` → every model; an empty intersection → every model), so
+    the refresh gate and the grades agree on the default. Display-only
+    models (``meteofrance``, ``ukmo``, ``gem`` on the system profiles) still
+    update whenever a refresh runs for another reason.
+    """
+    from weatherbrief.tasks.advise import _compute_advisory_model_names
+
+    return _compute_advisory_model_names(list(model_names), advisory_models)
+
+
+def resolve_flight_advisory_models(flight: Flight) -> list[str] | None:
+    """``advisory_models`` of the profile the flight's refresh would load.
+
+    The same profile lookup as the refresh path (``load_profile_context``,
+    falling back to the user's default profile). None (every model) when the
+    profile sets none or cannot be read: the gate then counts every model,
+    as it did before #940.
+    """
+    from weatherbrief.api.profiles import load_profile_context
+
+    db = None
+    try:
+        db = SessionLocal()
+        settings = load_profile_context(
+            db, getattr(flight, "profile_id", None), getattr(flight, "user_id", ""),
+        ).settings
+        models = settings.get("advisory_models")
+        return list(models) if models else None
+    except Exception:
+        logger.debug("advisory_models lookup failed for %s", getattr(flight, "id", "?"),
+                     exc_info=True)
+        return None
+    finally:
+        if db is not None:
+            db.close()
+
+
 def decide_refresh(
-    status: DataStatus, days_out: int, *, observed: bool = False
+    status: DataStatus,
+    days_out: int,
+    *,
+    observed: bool = False,
+    advisory_models: list[str] | None = None,
 ) -> RefreshDecision:
     """Decide whether a manual refresh runs the full pipeline, a cheap
     real-time observations refresh, or nothing.
@@ -1148,8 +1212,14 @@ def decide_refresh(
 
     The ``min(..., n_eligible)`` cap means small model selections still work:
     2 models selected -> D-2/D-1 both need both; 1 model -> every press runs.
+
+    Only the flight's ``advisory_models`` count toward ``n_eligible`` /
+    ``n_updated`` (#940, :func:`refresh_counting_models`; None = every
+    model): at D-0 one model is enough, so AROME's 3-hourly runs would
+    otherwise turn every press on a meteofrance flight into a full refresh.
     """
-    items = list(status.models.items())
+    counting = set(refresh_counting_models(list(status.models), advisory_models))
+    items = [(name, ms) for name, ms in status.models.items() if name in counting]
     n_eligible = sum(1 for _, ms in items if ms.covers_horizon)
     n_updated = sum(1 for _, ms in items if ms.covers_horizon and ms.state == "stale")
     threshold = _refresh_threshold(days_out)
@@ -1276,12 +1346,16 @@ def apply_params_change_override(
     })
 
 
+_RESOLVE = object()
+
+
 def gated_data_status(
     latest: BriefingPackMeta,
     flight: Flight,
     *,
     now: datetime | None = None,
     params_override: bool = True,
+    advisory_models: "list[str] | None | object" = _RESOLVE,
 ) -> DataStatus:
     """Single entry point for "what would a refresh do for this flight right now?".
 
@@ -1308,12 +1382,19 @@ def gated_data_status(
     ``now`` pins the reference instant for the lead-time computation, so a
     caller with its own clock (the resume path) stays deterministic under test.
 
+    ``advisory_models`` is the flight's profile setting (#940); left out, it
+    is read from the profile here (:func:`resolve_flight_advisory_models`),
+    so every caller counts the same models toward a full refresh.
+
     Callers keep their own ``list_packs``/``if packs:`` guard: several need the
     pack itself afterwards, and "no pack at all" is not a question for the gate.
     """
+    if advisory_models is _RESOLVE:
+        advisory_models = resolve_flight_advisory_models(flight)
     status = _build_data_status(latest, flight)
     decision = decide_refresh(
-        status, _days_out_now(flight, now), observed=observed_enabled()
+        status, _days_out_now(flight, now), observed=observed_enabled(),
+        advisory_models=advisory_models,
     )
     if params_override:
         decision = apply_params_change_override(decision, latest, flight)
@@ -1778,6 +1859,16 @@ def _build_pack_meta(
     # Default = Open-Meteo for every fetched model; overridden to the matching
     # direct-GRIB source where GRIB enrichment succeeded.  Used by the
     # marker-based freshness check (issue #108).
+    # A slot with no Open-Meteo part (meteofrance = AROME, #940) carries its
+    # GRIB run, not the Open-Meteo meta's (which is ARPEGE's for meteofrance).
+    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
+
+    for m in NO_OPEN_METEO_MODELS:
+        if m.value in result.grib_init_times and m.value in result.models_fetched:
+            init_times[m.value] = result.grib_init_times[m.value]
+        else:
+            init_times.pop(m.value, None)
+
     model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
     grib_sources = result.grib_sources or {}
     for m in result.grib_init_times:

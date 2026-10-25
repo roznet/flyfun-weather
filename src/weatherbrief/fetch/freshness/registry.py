@@ -281,7 +281,8 @@ _ICON_D2_HORIZON = timedelta(hours=48)
 # AROME (#529): 8 runs/day, hourly to 51h. The first 6-hour package group of
 # the 12z run was observed landing at 15:13Z on 2026-07-30; later groups
 # follow it. The readiness probe HEADs the first group, so 3h15m is the
-# expected marker lag. Only active where WB_AROME_ENABLED is set.
+# expected marker lag. Always tracked since #940 (the meteofrance slot is
+# AROME only); WB_AROME_ENABLED=0 turns the slot off, not the marker.
 _AROME_OFFSET = timedelta(hours=3, minutes=15)
 _AROME_HORIZON = timedelta(hours=51)
 
@@ -432,20 +433,21 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
         delivery_offset=_AROME_OFFSET,
         horizon=_AROME_HORIZON,
         readiness_check="arome_mf",
-        env_gate="WB_AROME_ENABLED",
         model_label="AROME",
         provider_label="Météo-France",
         provider_url="https://meteo.data.gouv.fr/datasets/paquets-arome-resolution-0-025deg",
-        role="cloud-enrichment",
+        role="primary-sounding",
         resolution="0.025° (~2.5 km)",
         coverage="France and surroundings (~38–55°N, ~10°W–15°E, bowed edges)",
-        pressure_levels=None,
+        pressure_levels=24,
         description=(
             "Direct GRIB2 from Météo-France's public AROME 0.025° packages "
-            "(IP2). Patches cloud liquid water, ice, rain, snow, graupel and "
-            "cloud fraction onto the Open-Meteo Météo-France sounding when "
-            "the whole route lies inside the AROME domain and the flight "
-            "window is within 51h. 8 runs/day (every 3h)."
+            "(IP1, IP2, SP1, SP2). Builds the whole Météo-France slot: "
+            "sounding on 24 pressure levels, cloud liquid water, ice, rain, "
+            "snow, graupel and cloud fraction, and the surface. Only when the "
+            "whole route lies inside the AROME domain and the flight window "
+            "is within the run's 51h; otherwise there is no Météo-France "
+            "slot. 8 runs/day (every 3h)."
         ),
     ),
     "gfs:openmeteo": SourceConfig(

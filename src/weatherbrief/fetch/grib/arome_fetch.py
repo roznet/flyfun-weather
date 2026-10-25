@@ -1,17 +1,20 @@
-"""Météo-France AROME 0.025° GRIB2 download (issue #529).
+"""Météo-France AROME 0.025° GRIB2 download (#529, #940).
 
-Feeds the ``meteofrance`` model slot with AROME's own condensate. Open-Meteo's
-``meteofrance_seamless`` serves that slot's sounding but carries no condensate,
-and blends AROME with ARPEGE outside AROME's footprint without marking the
-seam. AROME's physics (Meso-NH, ICE3 five-species microphysics) is
-independent of the ECMWF IFS we already ingest, which is what makes its
-condensate worth a second opinion.
+Builds the whole ``meteofrance`` briefing slot (#940): the sounding,
+condensate and surface all come from AROME, and the slot never calls
+Open-Meteo. Before #940 the slot was Open-Meteo ``meteofrance_seamless``
+(AROME inside its footprint, ARPEGE elsewhere, the seam unmarked) with
+AROME's condensate patched on top (#529).
 
-What is fetched: the ``IP2`` package only — ``clwc``, ``ciwc``, ``crwc``,
-``cswc``, graupel and ``cc`` on 24 pressure levels (100–1000 hPa), hourly.
-The fields are **patched** onto the Open-Meteo levels (GFS-style), not used
-as a sounding replacement: IP2 has no temperature, humidity or wind. All 19
-Open-Meteo Météo-France levels are among AROME's 24, so every level matches.
+Packages fetched per 6-hour group, all hourly:
+
+* ``IP1``: ``t``, ``r``, ``z``, ``u``, ``v`` on 24 pressure levels
+  (100–1000 hPa), ~408 MB.
+* ``IP2``: ``clwc``, ``ciwc``, ``crwc``, ``cswc``, graupel and ``cc`` on the
+  same levels, ~151 MB.
+* ``SP1``: ``2t``, ``2r``, ``10u``/``10v``, the time-max gust, ``tp``
+  (accumulated since the run start), ``prmsl``, total cloud, ~52 MB.
+* ``SP2``: ``2d``, ``sp``, ``lcc``/``mcc``/``hcc``, ``CAPE_INS``, ~41 MB.
 
 Source: the public OVH mirror, no key::
 
@@ -21,12 +24,14 @@ Source: the public OVH mirror, no key::
 groups (``00H06H`` … ``49H51H``). 8 runs a day, 51 h horizon, first group
 published ≈ +3 h. Do **not** use ``object.data.gouv.fr/meteofrance-pnt``
 (stale since 2026-05-11) or ``public-api.meteofrance.fr`` (keyed, no ranges).
+The mirror keeps about 15 days of runs.
 
-Volume is the constraint that shapes this module: one IP2 group is ~146 MB
-and holds every hour of its 6-hour span, so a briefing downloads only the
-groups its flight window touches (one or two for a typical GA flight) and
-the decode reads them message by message. The whole feature is off unless
-``WB_AROME_ENABLED`` is set — see :func:`arome_enabled`.
+Volume is the constraint that shapes this module: one group of the four
+packages is ~650 MB and holds every hour of its 6-hour span, so a briefing
+downloads only the groups its flight window touches (one or two for a
+typical GA flight; ``SP1`` of the group before, for the first hour's
+precipitation) and the decode reads them message by message.
+``WB_AROME_ENABLED=0`` turns the whole slot off (see :func:`arome_enabled`).
 """
 
 from __future__ import annotations
@@ -44,10 +49,8 @@ logger = logging.getLogger(__name__)
 
 AROME_BASE_URL = "https://meteofrance-pnt.s3.rbx.io.cloud.ovh.net/pnt"
 
-# Off by default. The feature downloads ~146 MB per 6-hour group, GRIB
-# precache is already disabled in production after an OOM, and the feature
-# has only been checked against one real file, not a live briefing — so it
-# is opt-in per deployment rather than live on merge.
+# Kill switch for the whole meteofrance slot (#940), on by default. Off means
+# no meteofrance slot at all, never an Open-Meteo one.
 AROME_ENABLED_ENV = "WB_AROME_ENABLED"
 
 
@@ -66,8 +69,12 @@ class AromeConfig:
             The 12z first group was observed landing at 15:13Z; later groups
             land after it, so the probe targets the group actually needed.
         horizon_h: Last forecast hour published.
-        package: The one package fetched (condensate + cloud fraction).
-        pressure_levels: hPa levels the package carries.
+        package: The condensate package (#529); the default of the
+            per-package helpers.
+        packages: Every package a briefing downloads (#940): the sounding
+            (``IP1``), the condensate (``IP2``) and the surface (``SP1``,
+            ``SP2``).
+        pressure_levels: hPa levels the pressure packages carry.
         groups: ``(label, first_hour, last_hour)`` for each package group.
     """
 
@@ -78,6 +85,7 @@ class AromeConfig:
     publish_delay_hours: float = 3.0
     horizon_h: int = 51
     package: str = "IP2"
+    packages: tuple[str, ...] = ("IP1", "IP2", "SP1", "SP2")
     pressure_levels: tuple[int, ...] = (
         100, 125, 150, 175, 200, 225, 250, 275, 300, 350, 400, 450,
         500, 550, 600, 650, 700, 750, 800, 850, 900, 925, 950, 1000,
@@ -106,12 +114,23 @@ REQUEST_TIMEOUT = (10, 60)  # (connect, read) seconds; read is per chunk
 _CHUNK_BYTES = 1 << 20
 
 
-def arome_enabled() -> bool:
-    """True when ``WB_AROME_ENABLED`` is set to a truthy value.
+#: The package holding the accumulated precipitation, needed one hour before
+#: the window so the first hour gets its own amount.
+AROME_ACCUM_PACKAGE = "SP1"
+#: Surface packages (decoded by ``decode_arome_surface``).
+AROME_SURFACE_PACKAGES: tuple[str, ...] = ("SP1", "SP2")
+#: Pressure-level packages (decoded by ``decode_arome_pressure``).
+AROME_PRESSURE_PACKAGES: tuple[str, ...] = ("IP1", "IP2")
 
-    Read at call time so a test or redeploy can flip it without reimporting.
+
+def arome_enabled() -> bool:
+    """False only when ``WB_AROME_ENABLED`` is set to a falsy value (#940).
+
+    Default on. Read at call time so a test or redeploy can flip it without
+    reimporting.
     """
-    return os.environ.get(AROME_ENABLED_ENV, "").strip().lower() in ("1", "true", "yes")
+    raw = os.environ.get(AROME_ENABLED_ENV, "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _init_dt(init_date: str, init_hour: int) -> datetime:
@@ -130,11 +149,12 @@ def arome_package_url(
     init_hour: int,
     group_label: str,
     config: AromeConfig = AROME,
+    package: str | None = None,
 ) -> str:
     """URL of one package group file on the OVH mirror."""
     run = arome_run_token(init_date, init_hour)
     res = config.resolution_token
-    pkg = config.package
+    pkg = package or config.package
     return (
         f"{AROME_BASE_URL}/{run}/arome/{res}/{pkg}/"
         f"arome__{res}__{pkg}__{group_label}__{run}.grib2"
@@ -166,10 +186,13 @@ def arome_groups_for_fhours(
     return out
 
 
-def arome_group_cache_key(group_label: str, config: AromeConfig = AROME) -> str:
+def arome_group_cache_key(
+    group_label: str, config: AromeConfig = AROME, package: str | None = None,
+) -> str:
     """Cache filename for one downloaded package group."""
     first = next(f for label, f, _ in config.groups if label == group_label)
-    return f"f{first:03d}_AROME_{config.package}_{group_label}_{_CACHE_SCHEMA}.grib2"
+    pkg = package or config.package
+    return f"f{first:03d}_AROME_{pkg}_{group_label}_{_CACHE_SCHEMA}.grib2"
 
 
 def compute_arome_flight_window_hours(
@@ -227,6 +250,72 @@ def arome_window_out_of_range(
         if init_time + timedelta(hours=config.horizon_h) >= need_until:
             return False
     return True
+
+
+def arome_horizon_end(
+    as_of_time: datetime | None = None, config: AromeConfig = AROME,
+) -> datetime:
+    """End of the newest publishable run's horizon (no network, #940).
+
+    The meteofrance slot's horizon in the briefing fetch gate: a window
+    ending after it has no slot (``MODEL_SKIPPED_HORIZON``).
+    """
+    reference_time = as_of_time or datetime.now(timezone.utc)
+    newest = next(_candidate_inits(reference_time, config))
+    return newest + timedelta(hours=config.horizon_h)
+
+
+def arome_window_fhours(
+    init_date: str,
+    init_hour: int,
+    hours_utc: list[datetime],
+    config: AromeConfig = AROME,
+) -> list[int]:
+    """Forecast hours of ``hours_utc`` (whole UTC hours) in this run, sorted.
+
+    Hours outside ``0..horizon_h`` are dropped: the caller's coverage check
+    sees them missing.
+    """
+    init_dt = _init_dt(init_date, init_hour)
+    out = set()
+    for t in hours_utc:
+        fh = round((t - init_dt).total_seconds() / 3600)
+        if 0 <= fh <= config.horizon_h:
+            out.add(fh)
+    return sorted(out)
+
+
+def arome_package_groups(
+    fhours: list[int], config: AromeConfig = AROME,
+) -> dict[str, dict[str, list[int]]]:
+    """Package → group label → forecast hours to read, for a window (#940).
+
+    Every package covers the window's groups. ``SP1`` also reads the hour
+    before the window, which may sit in the previous group: the first window
+    hour's precipitation is the difference of the two accumulations.
+    """
+    if not fhours:
+        return {}
+    window = arome_groups_for_fhours(fhours, config)
+    out: dict[str, dict[str, list[int]]] = {
+        pkg: {label: list(hs) for label, hs in window.items()}
+        for pkg in config.packages
+    }
+    lead = min(fhours) - 1
+    if lead >= 0 and AROME_ACCUM_PACKAGE in out:
+        accum = out[AROME_ACCUM_PACKAGE]
+        label = arome_group_for_fhour(lead, config)
+        accum.setdefault(label, [])
+        if lead not in accum[label]:
+            accum[label].insert(0, lead)
+        out[AROME_ACCUM_PACKAGE] = {
+            k: accum[k] for k in sorted(accum, key=lambda g: _group_first(g, config))
+        }
+    return out
+
+
+def _group_first(label: str, config: AromeConfig = AROME) -> int:
+    return next(f for g, f, _ in config.groups if g == label)
 
 
 def find_latest_arome_run_with_response(
@@ -317,18 +406,21 @@ def download_arome_group(
     run_dir: Path,
     session: requests.Session,
     config: AromeConfig = AROME,
+    package: str | None = None,
 ) -> Path | None:
     """Download one package group into the run cache. Returns its path or None.
 
-    Streams straight to the cache file so the ~146 MB payload never sits in
-    memory. A cached group is reused as-is (cache TTL governs expiry).
+    Streams straight to the cache file so the payload (up to ~410 MB for
+    ``IP1``) never sits in memory. A cached group is reused as-is (cache TTL
+    governs expiry).
     """
     from weatherbrief.fetch.grib.cache import is_cached, put_cached_from_chunks
 
-    filename = arome_group_cache_key(group_label, config)
+    pkg = package or config.package
+    filename = arome_group_cache_key(group_label, config, pkg)
     if is_cached(run_dir, filename):
         return run_dir / filename
-    url = arome_package_url(init_date, init_hour, group_label, config)
+    url = arome_package_url(init_date, init_hour, group_label, config, pkg)
     try:
         path = put_cached_from_chunks(
             run_dir, filename, _iter_group_chunks(url, session),
@@ -339,7 +431,7 @@ def download_arome_group(
     if path is not None:
         logger.info(
             "AROME %s %s %02dz %s: %.1f MB",
-            config.package, init_date, init_hour, group_label,
+            pkg, init_date, init_hour, group_label,
             path.stat().st_size / 1e6,
         )
     return path

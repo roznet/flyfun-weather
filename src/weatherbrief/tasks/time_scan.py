@@ -106,7 +106,11 @@ def _disposition(margin: float, worsens: list[str]) -> Disposition:
     return "neutral"
 
 #: GRIB-enriched models — coverage is windowed; everything else is uniform OM.
-_GRIB_MODELS = {ModelSource.ECMWF, ModelSource.GFS, ModelSource.ICON}
+#: Météo-France is AROME over the flight window only since #940 (a pack from
+#: before it has no level-count step, so it still reads as uniform).
+_GRIB_MODELS = {
+    ModelSource.ECMWF, ModelSource.GFS, ModelSource.ICON, ModelSource.METEOFRANCE,
+}
 
 _ECMWF_MODEL = ModelSource.ECMWF.value
 
@@ -439,6 +443,7 @@ def extend_openmeteo_adjacent_day(
     end_date: date,
     *,
     historical: bool = False,
+    grib_only: "set[ModelSource] | frozenset[ModelSource]" = frozenset(),
 ) -> int:
     """Re-fetch the Open-Meteo base for ``[start_date, end_date]`` and splice it
     onto the in-memory cross-sections (ephemeral — decision G).
@@ -454,17 +459,27 @@ def extend_openmeteo_adjacent_day(
     (ECMWF/GFS/ICON) afterwards, exactly as the target day was built.
 
     Fetches each fetched model over the same date window; a model whose range
-    doesn't reach the day (raises / returns empty) is skipped, not faked.
+    doesn't reach the day (raises / returns empty) is skipped, not faked. A
+    slot in ``grib_only`` with no Open-Meteo source (meteofrance, #940) is
+    not fetched at all.
     Mutates ``cross_sections`` in place; returns the number of sections that
     gained hours.
     """
     from weatherbrief.fetch.open_meteo import EmptyForecastError, OpenMeteoClient
+
+    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
 
     client = OpenMeteoClient(historical=historical)
     s = start_date.strftime("%Y-%m-%d")
     e = end_date.strftime("%Y-%m-%d")
     extended = 0
     for cs in cross_sections:
+        if cs.model in NO_OPEN_METEO_MODELS and cs.model in grib_only:
+            # Built from GRIB only (meteofrance = AROME, #940): the confirm's
+            # enrichment fills its candidate window or the slot is left out.
+            # A pack from before #940 has an Open-Meteo meteofrance slot and
+            # is extended as before.
+            continue
         try:
             new_pfs = client.fetch_multi_point(
                 route_points, cs.model, start_date=s, end_date=e,
@@ -585,11 +600,6 @@ def confirm_candidate(
     from weatherbrief.fetch.grib.primary import window_end_hour
 
     cand_end = window_end_hour(cand, route.flight_duration_hours)
-    bounds = _pack_hourly_bounds(cross_sections)
-    if bounds is None or cand < bounds[0] or cand_end > bounds[1]:
-        extend_openmeteo_adjacent_day(
-            cross_sections, route_points, cand.date(), cand_end.date(),
-        )
 
     # Only the slots the briefing built from GRIB (fetch_facts, #912): an
     # Open-Meteo slot keeps today's behaviour, holes and all.
@@ -606,6 +616,13 @@ def confirm_candidate(
         cs.model for cs in cross_sections
         if cs.model in GRIB_PRIMARY_MODELS and cs.model.value in built
     ]
+
+    bounds = _pack_hourly_bounds(cross_sections)
+    if bounds is None or cand < bounds[0] or cand_end > bounds[1]:
+        extend_openmeteo_adjacent_day(
+            cross_sections, route_points, cand.date(), cand_end.date(),
+            grib_only=set(built_models),
+        )
 
     try:
         enrich_forecasts(
@@ -642,7 +659,19 @@ def confirm_candidate(
     except Exception:
         logger.warning("time-scan confirm: GRIB-primary gap fill failed", exc_info=True)
         return None
-    failed = [o.model for o in outcomes if o.failed]
+    # A slot with no Open-Meteo fallback (meteofrance, #940) that AROME can't
+    # cover at the candidate time is left out of both grades, as the briefing
+    # would have had no such slot: never graded on empty hours.
+    no_fallback = {o.model for o in outcomes if o.no_fallback is not None}
+    if no_fallback:
+        logger.info(
+            "time-scan confirm: %s not covered by GRIB at the candidate, left out",
+            ", ".join(sorted(no_fallback)),
+        )
+        cross_sections[:] = [
+            cs for cs in cross_sections if cs.model.value not in no_fallback
+        ]
+    failed = [o.model for o in outcomes if o.failed and o.no_fallback is None]
     if failed:
         logger.warning(
             "time-scan confirm: GRIB-primary gap fill failed for %s", ", ".join(failed),

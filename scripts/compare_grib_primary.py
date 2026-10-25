@@ -1,4 +1,4 @@
-"""Advisory replay diff for GRIB-primary ECMWF / ICON / GFS slots (#912, #913).
+"""Advisory replay diff for GRIB-primary ECMWF / ICON / GFS / Météo-France slots.
 
 Runs the same flight twice through the production refresh path, once with
 ``WB_GRIB_PRIMARY=0`` (Open-Meteo first, today's behaviour) and once with
@@ -16,6 +16,12 @@ the GRIB-primary gate on, then prints:
 ``--off`` / ``--on`` set the two switch values. To isolate one model against
 what prod runs today, keep the others GRIB-primary on both sides, e.g. for
 GFS: ``--off ecmwf,icon --on 1``.
+
+Météo-France (#940) has no Open-Meteo side any more: with the switch off the
+slot is simply absent, so the 'off' run shows what the advisories do without
+it (they should not change: no profile grades on it), and the surface and
+sounding parity against Open-Meteo's AROME is
+``scripts/compare_pack_surface_openmeteo.py`` on the 'on' packs.
 
 Needs the ECMWF ECPDS disk, DWD opendata, NOAA S3 and Open-Meteo, so run it where
 the briefings run (droplet or Mac mini), not in a sandbox. Runs back to back
@@ -182,6 +188,9 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
     stats: dict = {}
     for model in primary:
         if model not in off_cs or model not in on_cs:
+            if model in on_cs:
+                print(f"{model}: no Open-Meteo slot to diff against (#940); "
+                      "use scripts/compare_pack_surface_openmeteo.py on the 'on' pack")
             continue
         per_model = stats.setdefault(model, {})
         levels = DEFAULT_LEVELS if model in SOUNDING_SOURCES else ()

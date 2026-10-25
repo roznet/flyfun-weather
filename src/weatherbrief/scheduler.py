@@ -2703,8 +2703,8 @@ async def run_grib_precache_loop(app_state) -> None:
     land in the shared GRIB byte-range cache so flight briefings overlapping
     the same window also benefit.
 
-    Before those sweeps, every new run of ICON-D2, ICON-EU, GFS and HRRR
-    warms the upcoming flights it would serve (#929, ``flight_warm``), within
+    Before those sweeps, every new run of ICON-D2, ICON-EU, GFS, HRRR and
+    AROME warms the upcoming flights it would serve (#929, ``flight_warm``), within
     per-pass byte, time, disk and flight limits.
 
     Disable via ``WB_GRIB_PRECACHE_ENABLED=false`` (default in dev).
@@ -2743,6 +2743,8 @@ async def run_grib_precache_loop(app_state) -> None:
         ("icon_eu:dwd", "icon_eu", "icon-eu"),
         ("gfs:noaa", "gfs", "gfs"),
         ("hrrr:noaa", "hrrr", "hrrr"),
+        # AROME (#940): meteofrance flights about D-2 inward.
+        ("arome:mf", "arome", "arome"),
     ]
     # What deferred attempts at a run already spent, so a resumed pass stays
     # inside one budget: slug -> (run key, bytes, seconds).

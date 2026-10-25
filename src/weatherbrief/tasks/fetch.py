@@ -54,7 +54,6 @@ _OM_REGISTRY_KEYS: dict[str, str] = {
     "gfs": "gfs:openmeteo",
     "icon": "icon:openmeteo",
     "ukmo": "ukmo:openmeteo",
-    "meteofrance": "meteofrance:openmeteo",
     "gem": "gem:openmeteo",
 }
 
@@ -168,6 +167,11 @@ class FetchResult:
     grib_primary: dict[str, int] = field(default_factory=dict)
 
 
+def _model_label(model: str) -> str:
+    """Display name in a fetch notice. The meteofrance slot is AROME (#940)."""
+    return "Météo-France (AROME)" if model == "meteofrance" else model.upper()
+
+
 def _build_fetch_diagnostics(
     *,
     requested_models: list[str],
@@ -182,6 +186,7 @@ def _build_fetch_diagnostics(
     grib_enrichment_failed: bool,
     grib_init_times: dict[str, int],
     grib_skip_reasons: dict[str, str] | None = None,
+    models_disabled: list[str] | None = None,
 ) -> list[Diagnostic]:
     """Build user-facing diagnostic messages from the completed fetch state."""
     diags: list[Diagnostic] = []
@@ -208,6 +213,7 @@ def _build_fetch_diagnostics(
         | horizon_skipped_names
         | empty_names
         | set(failed)
+        | set(models_disabled or [])
     )
     for m in requested_models:
         if m not in fetched_or_skipped:
@@ -216,6 +222,13 @@ def _build_fetch_diagnostics(
                 code=FetchCode.MODEL_FETCH_FAILED,
                 message=f"{m.upper()} forecast fetch failed",
             ))
+
+    for m in models_disabled or []:
+        diags.append(Diagnostic.create(
+            level="info", stage="fetch",
+            code=FetchCode.MODEL_DISABLED,
+            message=f"{_model_label(m)} skipped (switched off on this server)",
+        ))
 
     # Models skipped for range (too many days out)
     for m, days_out, max_days in (models_skipped_range or []):
@@ -231,6 +244,9 @@ def _build_fetch_diagnostics(
             level="info", stage="fetch",
             code=FetchCode.MODEL_SKIPPED_HORIZON,
             message=(
+                f"{_model_label(m)} skipped (beyond AROME's ~48 h, newest run "
+                f"ends {data_end.strftime('%Y-%m-%d %H:%MZ')})"
+                if m == "meteofrance" else
                 f"{m.upper()} skipped — current run only serves data through "
                 f"{data_end.strftime('%Y-%m-%d %H:%MZ')}"
             ),
@@ -249,7 +265,11 @@ def _build_fetch_diagnostics(
         diags.append(Diagnostic.create(
             level="info", stage="fetch",
             code=FetchCode.MODEL_SKIPPED_REGION,
-            message=f"{m.upper()} skipped (not available for this route region)",
+            message=(
+                f"{_model_label(m)} skipped (route outside the AROME area)"
+                if m == "meteofrance" else
+                f"{m.upper()} skipped (not available for this route region)"
+            ),
         ))
 
     # GRIB enrichment diagnostics
@@ -264,13 +284,8 @@ def _build_fetch_diagnostics(
             # Per-model GRIB status
             enriched_models = set(grib_init_times.keys())
             skip_reasons = grib_skip_reasons or {}
-            grib_capable = {"gfs", "icon"}
-            # meteofrance gains AROME condensate (#529) only where the
-            # deployment has it switched on; elsewhere its missing GRIB is
-            # the expected state, not a warning.
-            from weatherbrief.fetch.grib.arome_fetch import arome_enabled
-            if arome_enabled():
-                grib_capable.add("meteofrance")
+            # meteofrance exists only as an AROME slot (#940).
+            grib_capable = {"gfs", "icon", "meteofrance"}
             for m in models_fetched:
                 if m in grib_capable and m not in enriched_models:
                     skip_reason = skip_reasons.get(m)
@@ -360,6 +375,8 @@ def run_fetch(
     models_skipped_horizon: list[tuple[str, datetime]] = []
     models_returned_empty: list[str] = []
     models_failed: dict[str, str] = {}
+    # Slots whose only source is switched off here (meteofrance, #940).
+    models_disabled: list[str] = []
 
     route_region = detect_model_region(route)
     window_end_dt = departure_time + timedelta(
@@ -393,6 +410,39 @@ def run_fetch(
                 model.value, endpoint.region.value, route_region.value,
             )
             models_skipped_region.append(model.value)
+            continue
+        if model == ModelSource.METEOFRANCE:
+            # Météo-France is AROME only, from GRIB (§72, #940): its switch
+            # off or GRIB-primary unavailable means no slot, never Open-Meteo.
+            from weatherbrief.fetch.grib.arome_domain import route_in_arome_domain
+            from weatherbrief.fetch.grib.arome_fetch import (
+                arome_enabled,
+                arome_horizon_end,
+            )
+            from weatherbrief.fetch.grib.primary import (
+                grib_primary_models as _gp_models,
+                window_end_hour,
+            )
+
+            if not (enrich_grib and arome_enabled() and model in _gp_models()):
+                logger.info("Skipping meteofrance: AROME slot switched off")
+                models_disabled.append(model.value)
+                continue
+            if not route_in_arome_domain(route_points):
+                logger.info("Skipping meteofrance: route leaves the AROME domain")
+                models_skipped_region.append(model.value)
+                continue
+            arome_end = arome_horizon_end(as_of_time)
+            if window_end_hour(
+                departure_time, route.flight_duration_hours or 0,
+            ) > arome_end:
+                logger.info(
+                    "Skipping meteofrance: flight window ends past the newest "
+                    "AROME run's horizon %s", arome_end.isoformat(),
+                )
+                models_skipped_horizon.append((model.value, arome_end))
+                continue
+            models_to_fetch.append(model)
             continue
         if model == ModelSource.ICON and not historical_mode:
             # ICON is ICON-EU only (meteorology-decisions §66): a route with a
@@ -438,6 +488,7 @@ def run_fetch(
     if enrich_grib:
         from weatherbrief.fetch.grib.primary import (
             GRIB_PRIMARY_MODELS,
+            NO_OPEN_METEO_MODELS,
             grib_primary_skip_reason,
         )
 
@@ -450,6 +501,16 @@ def run_fetch(
                 as_of_time=as_of_time, historical_mode=historical_mode,
             )
             if reason is not None:
+                if model in NO_OPEN_METEO_MODELS:
+                    # Refused after the filter above passed it (a gate the two
+                    # don't share): still no Open-Meteo slot (#940).
+                    logger.info(
+                        "GRIB-primary %s: not eligible (%s), no slot (no Open-Meteo)",
+                        model.value, reason,
+                    )
+                    models_to_fetch.remove(model)
+                    models_disabled.append(model.value)
+                    continue
                 logger.info(
                     "GRIB-primary %s: not eligible (%s), Open-Meteo first as before",
                     model.value, reason,
@@ -627,7 +688,15 @@ def run_fetch(
             cross_sections[:] = [cs for cs in cross_sections if cs.model.value != outcome.model]
             all_forecasts[:] = [wf for wf in all_forecasts if id(wf) not in dropped_ids]
             models_fetched_names[:] = [m for m in models_fetched_names if m != outcome.model]
-            if outcome.empty:
+            if outcome.no_fallback is not None:
+                # No Open-Meteo fallback (meteofrance, #940): the GRIB skip
+                # reason when enrichment gave one, else "grib_incomplete".
+                why = grib_skip_reasons.get(outcome.model) or outcome.no_fallback
+                if grib_enrichment_failed:
+                    why = "grib_enrichment_failed"
+                models_failed[outcome.model] = f"AROME GRIB {why}"
+                grib_primary_dropped[outcome.model] = why
+            elif outcome.empty:
                 models_returned_empty.append(outcome.model)
                 grib_primary_dropped[outcome.model] = "fallback_empty"
             else:
@@ -650,6 +719,7 @@ def run_fetch(
         grib_enrichment_failed=grib_enrichment_failed,
         grib_init_times=grib_init_times,
         grib_skip_reasons=grib_skip_reasons,
+        models_disabled=models_disabled,
     )
 
     # --- Persist artifacts ---
@@ -681,6 +751,7 @@ def run_fetch(
         + [m for m, _, _ in models_skipped_range]
         + [m for m, _ in models_skipped_horizon]
         + models_returned_empty
+        + models_disabled
     )
 
     return FetchResult(

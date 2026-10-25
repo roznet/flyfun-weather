@@ -15,6 +15,14 @@ briefing reads, and its first refresh on the new run downloads ~0 MB:
   preceding step, and the cloud-diagnostics blob of every window hour.
 * ``hrrr``: for a route the HRRR upgrade takes (``_hrrr_takes_route``), the
   sounding and cloud-diagnostics artifacts of every window hour.
+* ``arome`` (#940): for a flight whose briefing has a meteofrance slot (the
+  profile asks for it, the route touches France) and passes the AROME gate
+  (whole route in the footprint, window inside the newest run's 51 h, so
+  about D-2 inward), the IP1/IP2/SP1/SP2 package groups of its window,
+  through ``_prepare_arome`` + ``_prefetch_arome_data``. AROME runs do not
+  force a refresh (only advisory models count, ``decide_refresh``), so the
+  warm only pays off when a refresh happens on that run: hence a tight byte
+  limit.
 
 * alternates: on the ``icon-eu`` and ``icon-d2`` passes, for a flight the
   briefing computes alternates for (D-2 inward), the ETA-hour files its
@@ -59,7 +67,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 #: Warm sources, in the cache-slug spelling (also the warming-window key).
-WARM_SOURCES: tuple[str, ...] = ("icon-d2", "icon-eu", "gfs", "hrrr")
+WARM_SOURCES: tuple[str, ...] = ("icon-d2", "icon-eu", "gfs", "hrrr", "arome")
 
 # Defaults per source. D2's horizon is its model-level horizon (no run can
 # serve a flight past 48 h). EU and GFS reach further, 72 h covers the
@@ -70,14 +78,17 @@ WARM_SOURCES: tuple[str, ...] = ("icon-d2", "icon-eu", "gfs", "hrrr")
 # never reads. ``WB_FLIGHT_WARM_HORIZON_HOURS_HRRR=48`` (the extended cycles'
 # horizon) turns it back on.
 _DEFAULT_HORIZON_HOURS: dict[str, float] = {
-    "icon-d2": 48.0, "icon-eu": 72.0, "gfs": 72.0, "hrrr": 0.0,
+    "icon-d2": 48.0, "icon-eu": 72.0, "gfs": 72.0, "hrrr": 0.0, "arome": 51.0,
 }
 # GB (1e9) of new downloads per pass. GFS 6 GB is ~34 window hours at
 # ~177 MB, ICON-EU ~30 hours at ~200 MB (189 MB model levels + ~10 MB
 # cloud diag, measured 2026-07-21). D2 has no
 # default cap: it ran uncapped before #929 and its traffic is unchanged.
+# AROME 4 GB is ~6 package groups at ~650 MB (IP1+IP2+SP1+SP2), i.e. three
+# to six flights; tighter than the others because an AROME run never forces
+# a refresh on its own (#940).
 _DEFAULT_MAX_GB: dict[str, float] = {
-    "icon-d2": 0.0, "icon-eu": 6.0, "gfs": 6.0, "hrrr": 2.0,
+    "icon-d2": 0.0, "icon-eu": 6.0, "gfs": 6.0, "hrrr": 2.0, "arome": 4.0,
 }
 _DEFAULT_MAX_MINUTES = 20.0
 _DEFAULT_MIN_FREE_GB = 20.0
@@ -120,7 +131,8 @@ def warm_limits(source: str) -> WarmLimits:
     """Limits for ``source``, read from the environment on every call.
 
     ``WB_FLIGHT_WARM_HORIZON_HOURS_<SRC>`` and ``WB_FLIGHT_WARM_MAX_GB_<SRC>``
-    per source (``<SRC>`` = ``ICON_D2``, ``ICON_EU``, ``GFS``, ``HRRR``; a
+    per source (``<SRC>`` = ``ICON_D2``, ``ICON_EU``, ``GFS``, ``HRRR``,
+    ``AROME``; a
     max of 0 or less means uncapped), and for every source
     ``WB_FLIGHT_WARM_MAX_MINUTES``, ``WB_FLIGHT_WARM_MIN_FREE_GB`` and
     ``WB_FLIGHT_WARM_MAX_FLIGHTS``.
@@ -160,6 +172,10 @@ class _Flight:
     duration_hours: float
     route_points: list
     route: object | None = None  # RouteConfig, for the alternates candidates
+    # For the AROME pass: whose profile decides whether the briefing has a
+    # meteofrance slot at all.
+    profile_id: int | None = None
+    user_id: str = ""
 
 
 @dataclass
@@ -404,6 +420,93 @@ def _warm_hrrr(
     return _Outcome("warmed", hours=hours)
 
 
+def _wants_meteofrance(flight: _Flight) -> bool:
+    """Would this flight's briefing request a meteofrance slot?
+
+    The profile's ``models`` (the pipeline default when unset) include it and
+    the route touches France (the fetch's region rule). Errors read as yes:
+    the byte limit still bounds the pass.
+    """
+    try:
+        from flyfun_common.db import SessionLocal
+
+        from weatherbrief.api.profiles import load_profile_context
+        from weatherbrief.fetch.variables import MODEL_ENDPOINTS
+        from weatherbrief.pipeline import DEFAULT_MODELS
+        from weatherbrief.tasks.fetch import _should_skip_for_region, detect_model_region
+
+        db = SessionLocal()
+        try:
+            settings = load_profile_context(db, flight.profile_id, flight.user_id).settings
+        finally:
+            db.close()
+        models = settings.get("models") or [m.value for m in DEFAULT_MODELS]
+        if "meteofrance" not in models:
+            return False
+        if flight.route is None:
+            return True
+        endpoint = MODEL_ENDPOINTS["meteofrance"]
+        return not _should_skip_for_region(
+            endpoint, detect_model_region(flight.route), flight.route,
+        )
+    except Exception:
+        logger.debug("Flight warm arome: profile check failed for %s", flight.id,
+                     exc_info=True)
+        return True
+
+
+def _warm_arome(
+    flight: _Flight, data_dir: Path, stop: Callable[[], bool],
+) -> _Outcome:
+    """AROME package groups of a meteofrance flight's window (#940)."""
+    from weatherbrief.fetch.grib import _prefetch_arome_data, _prepare_arome
+    from weatherbrief.fetch.grib.cache import pin_run_dir
+    from weatherbrief.fetch.grib.primary import grib_primary_skip_reason
+    from weatherbrief.models import ModelSource, RouteCrossSection
+
+    reason = grib_primary_skip_reason(
+        ModelSource.METEOFRANCE, flight.route_points, flight.departure_time,
+        flight.duration_hours,
+    )
+    if reason is not None:
+        return _Outcome("skipped", reason=f"meteofrance_{reason}")
+    if not _wants_meteofrance(flight):
+        return _Outcome("skipped", reason="no_meteofrance_slot")
+
+    section = RouteCrossSection(
+        model=ModelSource.METEOFRANCE,
+        route_points=[],
+        fetched_at=datetime.now(timezone.utc),
+        point_forecasts=[],
+    )
+    ctx, skip = _prepare_arome(
+        [section], flight.route_points, flight.departure_time,
+        data_dir=data_dir,
+        flight_duration_hours=flight.duration_hours,
+        grib_primary=(ModelSource.METEOFRANCE,),
+    )
+    if ctx is None:
+        return _Outcome("skipped", reason=skip or "no_run")
+
+    stopped: list[bool] = []
+
+    def _abort() -> bool:
+        if stop():
+            stopped.append(True)
+            return True
+        return False
+
+    with pin_run_dir(ctx.run_dir):
+        completed = _prefetch_arome_data(ctx, abort_if=_abort)
+    run = f"{ctx.init_date}_{ctx.init_hour:02d}z"
+    hours = {(run, f) for f in ctx.fhours}
+    if completed:
+        return _Outcome("warmed", hours=hours)
+    if stopped:
+        return _Outcome("stopped", hours=hours)
+    return _Outcome("failed", hours=hours, reason="AROME download failed")
+
+
 # The briefing computes alternates for flights up to this many calendar days
 # out (pipeline: ``days_out <= 2``).
 ALTERNATES_MAX_DAYS_OUT = 2
@@ -563,6 +666,8 @@ def _warm_unit(
         return _warm_gfs
     if source == "hrrr":
         return _warm_hrrr
+    if source == "arome":
+        return _warm_arome
     raise ValueError(f"unknown warm source {source!r}")
 
 
@@ -608,6 +713,8 @@ def _to_flight(row, db_path: str) -> _Flight | None:
         duration_hours=route.flight_duration_hours,
         route_points=route_points,
         route=route,
+        profile_id=getattr(flight, "profile_id", None),
+        user_id=getattr(flight, "user_id", "") or "",
     )
 
 
