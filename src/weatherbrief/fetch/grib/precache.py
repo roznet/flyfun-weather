@@ -72,10 +72,13 @@ MAIN_CYCLE_HOURS = (0, 6, 12, 18)
 # 05Z departures whose pilots check around 03-04Z, and they should find a warm
 # cache on the freshest run available.
 #
-# GFS is left ungated on purpose: it's the cheapest model (~1.5 GB/run) so
-# gating saves least, and it is the one thing US expansion would need running
-# around the clock. Per-model config means US expansion is a config change, not
-# a code change.
+# GFS is left ungated on purpose. Its airport sweep is cheap (~1.5 GB/run),
+# but its flight warm (#929) can pull up to 6 GB per run, so the reason is no
+# longer cost: the GFS runs publish ~05/11/17/23Z, and the 23Z (18z) pass is
+# the only warm run for briefings made before ~05Z, the same early-morning
+# pilots the D2 03Z pass serves; the 6 GB pass cap bounds it, and US expansion
+# needs it around the clock anyway. Per-model config: gating it is
+# ``"gfs": (start, end)`` here, not a code change. HRRR is ungated likewise.
 MODEL_WARMING_WINDOW_UTC: dict[str, tuple[int, int]] = {
     "icon-d2": (3, 21),
     "icon-eu": (3, 21),

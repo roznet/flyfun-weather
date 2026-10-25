@@ -238,11 +238,14 @@ class TestWarmFlights:
                 return _Outcome("skipped", reason="served_by_icon-d2")
             if flight.id == "f2":
                 raise RuntimeError("boom")
+            if flight.id == "f3":
+                return _Outcome("failed", hours={("r", 1)}, reason="1/2 steps cold")
             return _Outcome("warmed", hours={("r", 1)})
 
-        stats, _ = _run("icon-eu", [_Row("f1"), _Row("f2", 2), _Row("f3", 3)], unit)
+        rows = [_Row("f1"), _Row("f2", 2), _Row("f3", 3), _Row("f4", 4)]
+        stats, _ = _run("icon-eu", rows, unit)
         assert stats["flights_skipped"] == 1
-        assert stats["flights_failed"] == 1
+        assert stats["flights_failed"] == 2  # raised, and downloads left cold
         assert stats["flights_warmed"] == 1
 
     def test_stats_log_line(self, tmp_path, caplog):
@@ -307,14 +310,32 @@ class TestWarmIcon:
 
 
 class TestWarmGfs:
-    def _patches(self, *, skip=None, cached=(), hours=(12, 13)):
+    def _patches(self, *, skip=None, cached=(), hours=(12, 13), failing=()):
+        """Fake the GFS helpers; a helper "downloads" by marking its key cached,
+        except for the kinds in ``failing``, which log-and-return like a NOAA
+        outage."""
         import contextlib
 
+        from weatherbrief.fetch.grib import (
+            GFS_SURFACE_CACHE_KEY,
+            _gfs_sounding_cache_key,
+            gfs_sounding_levels,
+        )
+
         calls: dict[str, list] = {"surface": [], "sounding": [], "diag": [], "idx": []}
+        cached = set(cached)
+        key_of = {
+            "surface": lambda f: cache_key(f, GFS_SURFACE_CACHE_KEY),
+            "sounding": lambda f: _gfs_sounding_cache_key(f, gfs_sounding_levels()),
+            "diag": lambda f: cache_key(f, "CLOUD_DIAG"),
+        }
 
         def _ensure(kind):
             def fn(init_date, init_hour, fhour, *a, **kw):
                 calls[kind].append(fhour)
+                if kind in failing:
+                    return False
+                cached.add(key_of[kind](fhour))
                 return True
             return fn
 
@@ -360,6 +381,14 @@ class TestWarmGfs:
         assert out.status == "warmed"
         assert calls["idx"] == []
 
+    def test_failed_downloads_report_failed_not_warmed(self, tmp_path):
+        from weatherbrief.fetch.grib.flight_warm import _warm_gfs
+
+        with self._patches(failing=("sounding",)):
+            out = _warm_gfs(_Flight("f1", NOW, 1.0, ["pt"]), tmp_path, lambda: False)
+        assert out.status == "failed"
+        assert out.reason == "2/3 steps cold"
+
     def test_stop_before_a_download(self, tmp_path):
         from weatherbrief.fetch.grib.flight_warm import _warm_gfs
 
@@ -394,6 +423,12 @@ class TestWarmHrrr:
         from weatherbrief.fetch.grib.flight_warm import _warm_hrrr
 
         got: list = []
+
+        def _write(kind, fhour, run_dir):
+            got.append((kind, fhour))
+            label = "HRRR_SOUNDING" if kind == "snd" else "HRRR_CLOUD_DIAG"
+            put_cached(run_dir, cache_key(fhour, label), b"x")
+
         with patch("weatherbrief.fetch.grib.primary._hrrr_takes_route", return_value=True), \
                 patch("weatherbrief.fetch.grib.hrrr_fetch.find_latest_hrrr_run",
                       return_value=("20261025", 6)), \
@@ -401,9 +436,25 @@ class TestWarmHrrr:
                       return_value=[2, 3]), \
                 patch("weatherbrief.fetch.grib.hrrr_fetch.fetch_hrrr_idx", return_value="idx"), \
                 patch("weatherbrief.fetch.grib._download_hrrr_sounding",
-                      side_effect=lambda d, h, f, idx, **kw: got.append(("snd", f))), \
+                      side_effect=lambda d, h, f, idx, run_dir, **kw: _write("snd", f, run_dir)), \
                 patch("weatherbrief.fetch.grib._download_hrrr_cloud_diag",
-                      side_effect=lambda d, h, f, idx, **kw: got.append(("diag", f))):
+                      side_effect=lambda d, h, f, idx, run_dir, **kw: _write("diag", f, run_dir)):
             out = _warm_hrrr(_Flight("f1", NOW, 1.0, ["pt"]), tmp_path, lambda: False)
         assert out.status == "warmed"
         assert got == [("snd", 2), ("diag", 2), ("snd", 3), ("diag", 3)]
+
+    def test_failed_sounding_reports_failed(self, tmp_path):
+        from weatherbrief.fetch.grib.flight_warm import _warm_hrrr
+
+        def boom(*a, **kw):
+            raise RuntimeError("S3 down")
+
+        with patch("weatherbrief.fetch.grib.primary._hrrr_takes_route", return_value=True), \
+                patch("weatherbrief.fetch.grib.hrrr_fetch.find_latest_hrrr_run",
+                      return_value=("20261025", 6)), \
+                patch("weatherbrief.fetch.grib.hrrr_fetch.compute_hrrr_flight_window_hours",
+                      return_value=[2]), \
+                patch("weatherbrief.fetch.grib.hrrr_fetch.fetch_hrrr_idx", return_value="idx"), \
+                patch("weatherbrief.fetch.grib._download_hrrr_sounding", side_effect=boom):
+            out = _warm_hrrr(_Flight("f1", NOW, 1.0, ["pt"]), tmp_path, lambda: False)
+        assert out.status == "failed"
