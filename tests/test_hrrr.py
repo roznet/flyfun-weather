@@ -252,6 +252,14 @@ class TestHrrrWindowHours:
         )
         assert fh == [3, 4, 5, 6]
 
+    def test_zero_duration_spans_one_hour(self):
+        # A zero-duration flight is the "state along the route now" view; it
+        # spans one hour like GFS/ICON (contiguous_window_forecast_hours).
+        fh = compute_hrrr_flight_window_hours(
+            "20260726", 12, _utc(2026, 7, 26, 15), 0.0,
+        )
+        assert fh == [3, 4]
+
     @pytest.mark.parametrize("minute,duration", [
         (0, 0.5), (30, 0.5), (0, 2.0), (30, 2.5), (45, 3.25), (59, 6.0),
     ])

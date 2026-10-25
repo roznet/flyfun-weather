@@ -1716,13 +1716,18 @@ class TestComputeFlightWindowHours:
     """Tests for compute_flight_window_hours (GFS)."""
 
     def test_zero_duration(self):
-        """Duration=0 produces single forecast hour."""
+        """Duration=0 spans one hour (dep, dep+1), the window GRIB-primary
+        coverage requires (``primary.required_hours``); one hour left every
+        point on the Open-Meteo fallback."""
         from datetime import datetime, timezone
         from weatherbrief.fetch.grib.grib_fetch import compute_flight_window_hours
+        from weatherbrief.fetch.grib.primary import required_hours
 
         dep = datetime(2026, 2, 27, 9, tzinfo=timezone.utc)
         hours = compute_flight_window_hours("20260227", 0, dep, 0.0)
-        assert len(hours) == 1
+        assert hours == [9, 10]
+        init = datetime(2026, 2, 27, 0, tzinfo=timezone.utc)
+        assert [init.replace(hour=h) for h in hours] == required_hours(dep, 0.0)
 
     def test_short_flight(self):
         """2-hour flight produces 3 forecast hours (dep, dep+1, dep+2)."""

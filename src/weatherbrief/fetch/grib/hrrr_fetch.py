@@ -387,7 +387,8 @@ def compute_hrrr_flight_window_hours(
         tzinfo=timezone.utc,
     )
     horizon_h = hrrr_run_horizon_hours(init_hour)
-    end_dt = departure_time + timedelta(hours=max(flight_duration_hours, 0.0))
+    # Zero duration spans one hour, as for GFS/ICON (contiguous_window_forecast_hours).
+    end_dt = departure_time + timedelta(hours=max(flight_duration_hours, 0.0) or 1.0)
 
     first = math.floor((departure_time - init_dt).total_seconds() / 3600)
     last = math.ceil((end_dt - init_dt).total_seconds() / 3600)

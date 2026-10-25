@@ -195,8 +195,12 @@ def contiguous_window_forecast_hours(
     after the window end is added, so the window is always bracketed by
     native steps (the forward-fill / interpolation anchors either side).
     """
+    # A zero-duration flight (the "state along the route now" view) still
+    # spans one hour, as GRIB-primary coverage (``primary.required_hours``)
+    # and the time scan read it: fetching departure alone left the next hour
+    # uncovered and sent every point to Open-Meteo.
     end_dt = departure_time + timedelta(
-        hours=math.ceil(max(flight_duration_hours, 0.0))
+        hours=max(1, math.ceil(max(flight_duration_hours, 0.0)))
     )
     first = math.floor((departure_time - init_dt).total_seconds() / 3600)
     last = math.ceil((end_dt - init_dt).total_seconds() / 3600)
