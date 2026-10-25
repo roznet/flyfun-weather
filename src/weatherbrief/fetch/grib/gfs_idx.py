@@ -433,6 +433,10 @@ GFS_SURFACE_REQUIRED = ("TMP", "UGRD", "VGRD", "PRMSL", "APCP", "TCDC")
 def _gfs_surface_step_matches(variable: str, forecast_step: str, fhour: int) -> bool:
     """Is this the step form we want for ``variable`` at ``fhour``?"""
     if variable in GFS_SURFACE_ACCUMULATED:
+        # The .idx writes a whole-day total in days: "0-5 day acc fcst" at
+        # f120, "0-1 day" at f024 (gfs.20261025/06z). The bucket keeps hours.
+        if fhour > 0 and fhour % 24 == 0 and forecast_step == f"0-{fhour // 24} day acc fcst":
+            return True
         return forecast_step == f"0-{fhour} hour acc fcst"
     if fhour == 0:
         return forecast_step == "anl"

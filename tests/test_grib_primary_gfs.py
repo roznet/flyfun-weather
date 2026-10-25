@@ -161,6 +161,26 @@ def test_surface_plan_reads_the_analysis_at_f000():
     assert set(plan) == {"PRMSL", "TMP", "TCDC"}
 
 
+# gfs.20261025/06z f120: a whole-day running total is labelled in days.
+_IDX_F120 = """\
+1:0:d=2026102506:PRMSL:mean sea level:120 hour fcst:
+2:1000:d=2026102506:TMP:2 m above ground:120 hour fcst:
+3:2000:d=2026102506:APCP:surface:114-120 hour acc fcst:
+4:3000:d=2026102506:APCP:surface:0-5 day acc fcst:
+5:4000:d=2026102506:ACPCP:surface:114-120 hour acc fcst:
+6:5000:d=2026102506:ACPCP:surface:0-5 day acc fcst:
+7:6000:d=2026102506:TCDC:entire atmosphere:120 hour fcst:
+"""
+
+
+def test_surface_plan_reads_whole_day_totals_labelled_in_days():
+    plan = _plan(_IDX_F120, 120)
+    assert plan["APCP"] == 3000     # 0-5 day total, not the 114-120 bucket
+    assert plan["ACPCP"] == 5000
+    # f024's "0-1 day" total must not be taken for any other step.
+    assert "APCP" not in _plan(_IDX_F120.replace("0-5 day", "0-1 day"), 120)
+
+
 def test_sounding_plan_problem_names_the_gap():
     from weatherbrief.fetch.grib.gfs_idx import (
         GFS_SOUNDING_MANDATORY,
