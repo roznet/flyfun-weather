@@ -404,6 +404,7 @@ def _fetch_forecasts_for_model(
     days: int | None = None,
     pool_soundings: bool = False,
     grib_diag: "Callable[[], _GribDiagLookup | None] | None" = None,
+    skip_hour: "Callable[[str, datetime], bool] | None" = None,
 ) -> tuple[list[dict], int]:
     """Fetch Open-Meteo surface forecasts for all airports for one model.
 
@@ -427,6 +428,10 @@ def _fetch_forecasts_for_model(
     the Open-Meteo fetch — see :func:`fetch_model_snapshots`, the entry point
     that wires it. ``session`` is not used here (Open-Meteo has its own client),
     which is what lets that concurrent GRIB fetch own it.
+
+    ``skip_hour(icao, valid_time)`` drops an hour before its row is built, so
+    the GRIB-primary fallback (#914) runs no sounding pass for the hours GRIB
+    already covered.
     """
     from weatherbrief.models.analysis import ModelSource, RoutePoint
     from weatherbrief.fetch.open_meteo import OpenMeteoClient
@@ -541,6 +546,8 @@ def _fetch_forecasts_for_model(
                 # cut at 4 days because its ceiling GRIB stops at 120h — so a
                 # row past the horizon is a bug, not a bonus.
                 if not _keeps_hour(day_offset, utc_hour, forecast_days, explicit_hours):
+                    continue
+                if skip_hour is not None and skip_hour(airport.icao, hourly.time):
                     continue
 
                 # Open-Meteo reports hourly totals: a 1 h precipitation period.
@@ -1138,8 +1145,8 @@ def _fetch_grib_primary_snapshots(
         except Exception:
             # Never worse than before #914: a builder bug falls back whole.
             logger.warning(
-                "GRIB-primary %s snapshots failed, all airports to Open-Meteo",
-                model, exc_info=True,
+                "GRIB-primary %s snapshots: builder raised, all %d airports to "
+                "Open-Meteo", model, len(airports), exc_info=True,
             )
             snapshots = []
         lookup = _resolve(future)
@@ -1156,6 +1163,7 @@ def _fetch_grib_primary_snapshots(
         )
 
     covered = {_snapshot_hour_key(s["icao"], s["forecast_hour"]) for s in snapshots}
+    planned = {_snapshot_hour_key(a.icao, v) for a in airports for v in valid_times}
     uncovered = [
         a for a in airports
         if any(_snapshot_hour_key(a.icao, v) not in covered for v in valid_times)
@@ -1168,11 +1176,14 @@ def _fetch_grib_primary_snapshots(
             model, init_time, uncovered, session, sample_hours,
             edr_acc=edr_acc, days=days, pool_soundings=pool_soundings,
             grib_diag=lambda: lookup,
+            # Only the hours GRIB left short; with ``only_valid_time`` only that
+            # hour (the alternates ETA), not the sample hour on every day.
+            skip_hour=lambda icao, valid: (
+                _snapshot_hour_key(icao, valid) in covered
+                or _snapshot_hour_key(icao, valid) not in planned
+            ),
         )
-        snapshots.extend(
-            s for s in fallback
-            if _snapshot_hour_key(s["icao"], s["forecast_hour"]) not in covered
-        )
+        snapshots.extend(fallback)
 
     if lookup is not None:
         _apply_grib_columns(snapshots, model, lookup)

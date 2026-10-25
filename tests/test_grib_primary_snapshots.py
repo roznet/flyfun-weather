@@ -255,6 +255,23 @@ class TestFallback:
             assert by_hour[30]["temperature_2m_c"] == pytest.approx(20.0)
             assert by_hour[6]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
 
+    def test_fallback_runs_no_sounding_for_covered_hours(self, env, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        data_dir, _ = env
+        _seed_icon_run(data_dir, skip_pressure_steps=(30,))
+        calls = []
+        real = sv._enrich_with_sounding
+        monkeypatch.setattr(
+            sv, "_enrich_with_sounding",
+            lambda snap, *a, **kw: (calls.append(snap["icao"]), real(snap, *a, **kw)),
+        )
+
+        _run()
+
+        # One sounding pass per stored row: 3 GRIB hours + the 1 fallback hour.
+        assert len(calls) == len(AIRPORTS) * len(STEPS)
+
     def test_too_few_levels_is_not_a_sounding(self, env):
         data_dir, om = env
         _seed_icon_run(data_dir, levels=(1000, 850, 700, 500))

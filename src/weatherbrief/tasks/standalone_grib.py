@@ -434,7 +434,11 @@ def fetch_icon_snapshot_fields(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        session = requests.Session()
+        with requests.Session() as own_session:
+            return fetch_icon_snapshot_fields(
+                init_date, init_hour, forecast_hours, lats, lons,
+                data_dir=data_dir, session=own_session, priority=priority,
+            )
 
     variant = ICON_EU
     purge_old_runs(data_dir, model="icon-eu")  # see fetch_gfs_cloud_diag

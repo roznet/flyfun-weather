@@ -391,7 +391,9 @@ isobaric files `t, relhum, u, v, fi` on 1000-200 hPa
 column the briefing reads) plus the #912 single-level surface files and the
 predecessor step's accumulated precipitation. Every file is its own cache
 entry in the shared `icon-eu` run directory (12 h TTL), so surface files a
-briefing pulled are reused. Rows record precipitation as the total over
+briefing pulled are reused. A map cycle is ~25 steps × ~95 files (2,370 on
+2026-10-25, ~2.46 GB on disk), retained only until `purge_old_runs` ages the
+run out; an alternates ETA hour is ~100 files (~145 MB). Rows record precipitation as the total over
 `precip_period_h` (1 h to +78 h, 3 h after), like the ECMWF GRIB rows.
 
 - **Coverage per (airport, hour):** required surface fields (#912's
@@ -408,7 +410,9 @@ briefing pulled are reused. Rows record precipitation as the total over
   GFS too) is fetched for the ETA hour only. The Open-Meteo window is left
   alone: Open-Meteo bills any window up to 14 days as one.
 - Log line per model: `GRIB-primary icon snapshots: N/M airports fully from
-  GRIB … K to Open-Meteo fallback (C calls)`. GFS joins with #913's reader.
+  GRIB … K to Open-Meteo fallback (C calls)`. Airports outside ICON-EU
+  (Azores, Svalbard, north of 70.5°N) always fall back: one call per cycle is
+  the floor. GFS joins with #913's reader.
 
 ### Open-Meteo Batching
 
