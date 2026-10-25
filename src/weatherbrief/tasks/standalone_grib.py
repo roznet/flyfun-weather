@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -201,11 +202,13 @@ def fetch_icon_cloud_diag(
     data_dir: Path | None = None,
     session: requests.Session | None = None,
     priority: "int | DecodePriority | None" = None,
+    variant=None,
 ) -> dict[int, list[AirportGribDiagnostics]]:
-    """Fetch ICON-EU cloud diagnostics for airports at specified forecast hours.
+    """Fetch ICON cloud diagnostics for airports at specified forecast hours.
 
     Same interface as fetch_gfs_cloud_diag (incl. the ``priority`` pass-through)
-    but uses DWD ICON-EU data source.
+    but uses DWD ICON-EU data source, or ICON-D2 with ``variant`` (#928; its
+    ``cloud_diag_variables``, no ``rain_con`` and so no predecessor step).
 
     ``rain_con`` (cfgrib ``crr``) is accumulated since init, so a sampled hour
     on its own yields no convective precipitation rate. Each sampled hour is
@@ -218,20 +221,23 @@ def fetch_icon_cloud_diag(
     from weatherbrief.fetch.grib import _dispatch_decode_parallel
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_CLOUD_DIAG_CACHE_KEY,
+        ICON_EU,
         ICON_EU_RAIN_CON_CACHE_KEY,
         fetch_icon_eu_single_level,
+        icon_cloud_diag_cache_key,
         icon_eu_conv_rain_rate_mm_h,
         icon_eu_previous_step,
     )
 
+    variant = variant or ICON_EU
+    diag_key = icon_cloud_diag_cache_key(variant)
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
         session = requests.Session()
 
-    purge_old_runs(data_dir, model="icon-eu")  # see fetch_gfs_cloud_diag
-    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
+    purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
     result: dict[int, list[AirportGribDiagnostics]] = {}
 
     # Phase 1: ensure each hour is cached (sequential network I/O), collecting
@@ -239,12 +245,12 @@ def fetch_icon_cloud_diag(
     decode_jobs: list[tuple[str, tuple]] = []
     job_fhours: list[int] = []
     for fhour in forecast_hours:
-        ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        ck = cache_key(fhour, diag_key)
 
         if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
-                    init_date, init_hour, [fhour], session=session,
+                    init_date, init_hour, [fhour], session=session, variant=variant,
                 )
                 grib_bytes = fetched.get(fhour)
                 if not grib_bytes:
@@ -264,8 +270,8 @@ def fetch_icon_cloud_diag(
     # for hours that are actually going to be decoded. A failure here costs
     # the rate for one sampled hour and nothing else.
     predecessor_of: dict[int, int] = {}
-    for fhour in job_fhours:
-        prev = icon_eu_previous_step(fhour)
+    for fhour in job_fhours if "rain_con" in variant.cloud_diag_variables else ():
+        prev = icon_eu_previous_step(fhour, variant)
         if prev is not None:
             predecessor_of[fhour] = prev
     extra_steps = sorted(set(predecessor_of.values()) - set(job_fhours))
@@ -273,7 +279,7 @@ def fetch_icon_cloud_diag(
     pred_jobs: list[tuple[str, tuple]] = []
     pred_fhours: list[int] = []
     for fhour in extra_steps:
-        full_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        full_ck = cache_key(fhour, diag_key)
         ck = (
             full_ck if is_cached(run_dir, full_ck)
             else cache_key(fhour, ICON_EU_RAIN_CON_CACHE_KEY)
@@ -384,76 +390,59 @@ class IconSnapshotStep:
     window_h: int | None
 
 
-def fetch_icon_snapshot_fields(
-    init_date: str,
-    init_hour: int,
-    forecast_hours: list[int],
-    lats: list[float],
-    lons: list[float],
-    data_dir: Path | None = None,
-    session: requests.Session | None = None,
-    priority: "int | DecodePriority | None" = None,
-) -> dict[int, IconSnapshotStep]:
-    """ICON-EU pressure-level sounding + surface fields at airports (#914).
+# A DWD file that 404'd is not asked for again for this long, in this process
+# (#928): a late or partial run would otherwise cost one 404 per file on every
+# alternates search. Short, because "not yet published" heals within minutes.
+_ICON_404_TTL_S = 600.0
+_ICON_404_UNTIL: dict[str, float] = {}
+_ICON_404_LOCK = threading.Lock()
 
-    The GRIB-primary source for the ICON forecast-map and alternates
-    snapshots. Downloads, per forecast hour, the isobaric files
-    (``ICON_SNAPSHOT_PRESSURE_*``) and the #912 single-level surface files,
-    plus the accumulated surface fields of the preceding published step so
-    precipitation can be de-accumulated. Every file is its own cache entry in
-    the shared ICON-EU run directory, so the surface files a briefing already
-    pulled are reused, and a second alternates search on the same run is
-    decode-only.
 
-    A forecast hour with no pressure-level or no surface file at all is
-    absent from the result; partial levels are kept (the caller decides
-    whether a point is covered). Never raises for a download or decode
-    failure: those are logged and cost the hour.
+def _recent_404(url: str, now: float) -> bool:
+    with _ICON_404_LOCK:
+        until = _ICON_404_UNTIL.get(url)
+        if until is None:
+            return False
+        if until <= now:
+            del _ICON_404_UNTIL[url]
+            return False
+        return True
+
+
+def _note_404(url: str, now: float) -> None:
+    with _ICON_404_LOCK:
+        _ICON_404_UNTIL[url] = now + _ICON_404_TTL_S
+
+
+def _icon_snapshot_plan(
+    init_date: str, init_hour: int, steps: list[int], variant,
+) -> tuple[dict[tuple, tuple[str, str]], dict[int, int]]:
+    """``(wanted, predecessor_of)`` for an ICON snapshot fetch (#914, #928).
+
+    ``wanted`` maps ``(step, "pl", level, var)`` / ``(step, "sfc", var)`` to
+    ``(url, cache filename)``: per step the variant's isobaric files and the
+    #912 surface files, plus the accumulated surface files of each step's
+    predecessor so precipitation can be de-accumulated.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
-    from weatherbrief.fetch.grib import _dispatch_decode_parallel
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU,
-        ICON_SNAPSHOT_PRESSURE_LEVELS,
         ICON_SNAPSHOT_PRESSURE_VARIABLES,
         ICON_SURFACE_ACCUMULATED,
         ICON_SURFACE_VARIABLES,
-        _default_download_workers,
-        _download_one_file,
-        _format_failure_summary,
         icon_eu_pressure_level_url,
         icon_eu_previous_step,
         icon_eu_single_level_url,
         icon_pressure_cache_key,
+        icon_snapshot_pressure_levels,
         icon_surface_cache_key,
     )
 
-    if not forecast_hours:
-        return {}
-    if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
-    if session is None:
-        with requests.Session() as own_session:
-            return fetch_icon_snapshot_fields(
-                init_date, init_hour, forecast_hours, lats, lons,
-                data_dir=data_dir, session=own_session, priority=priority,
-            )
-
-    variant = ICON_EU
-    purge_old_runs(data_dir, model="icon-eu")  # see fetch_gfs_cloud_diag
-    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
-
-    steps = sorted(set(forecast_hours))
     predecessor_of = {
         fhour: prev for fhour in steps
         if (prev := icon_eu_previous_step(fhour, variant)) is not None
     }
-
-    # (step, kind, key) → (url, cache filename). kind: "pl" | "sfc".
     wanted: dict[tuple, tuple[str, str]] = {}
     for fhour in steps:
-        for level in ICON_SNAPSHOT_PRESSURE_LEVELS:
+        for level in icon_snapshot_pressure_levels(variant):
             for var in ICON_SNAPSHOT_PRESSURE_VARIABLES:
                 wanted[(fhour, "pl", level, var)] = (
                     icon_eu_pressure_level_url(
@@ -472,38 +461,174 @@ def fetch_icon_snapshot_fields(
                 icon_eu_single_level_url(init_date, init_hour, prev, var, variant),
                 cache_key(prev, icon_surface_cache_key(var, variant)),
             ))
+    return wanted, predecessor_of
 
-    # Phase 1: download what the run directory lacks, in parallel (the same
-    # per-file helper and worker count the ICON-EU fetchers use).
-    missing = [(url, ck) for url, ck in wanted.values() if not is_cached(run_dir, ck)]
+
+def _download_icon_files(
+    run_dir: Path,
+    files: list[tuple[str, str]],
+    session: requests.Session,
+    label: str,
+) -> int:
+    """Download the ``(url, cache filename)`` pairs the run dir lacks; bytes stored.
+
+    In parallel (the per-file helper and worker count the ICON fetchers use).
+    One file failing costs that file only. A 404 is remembered for
+    ``_ICON_404_TTL_S`` and not asked again meanwhile.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        _default_download_workers,
+        _download_one_file,
+        _format_failure_summary,
+    )
+
+    now = time.monotonic()
+    missing = [(url, ck) for url, ck in files if not is_cached(run_dir, ck)]
+    recent = [item for item in missing if _recent_404(item[0], now)]
+    missing = [item for item in missing if not _recent_404(item[0], now)]
+    if not missing:
+        if recent:
+            logger.info("%s: %d file(s) skipped, 404 within %ds", label,
+                        len(recent), int(_ICON_404_TTL_S))
+        return 0
+
+    def _get(item: tuple[str, str]) -> tuple[int | str, int]:
+        url, ck = item
+        try:
+            data, status = _download_one_file(url, session)
+            if data is None:
+                return status, 0
+            put_cached(run_dir, ck, data)
+        except Exception:  # e.g. a full disk: costs this file, not the step
+            logger.debug("ICON snapshot file %s failed", ck, exc_info=True)
+            return "error", 0
+        return 200, len(data)
+
     failures: dict[int | str, int] = {}
     failed_names: list[str] = []
-    if missing:
-        def _get(item: tuple[str, str]) -> int | str:
-            url, ck = item
-            try:
-                data, status = _download_one_file(url, session)
-                if data is None:
-                    return status
-                put_cached(run_dir, ck, data)
-            except Exception:  # e.g. a full disk: costs this file, not the step
-                logger.debug("ICON snapshot file %s failed", ck, exc_info=True)
-                return "error"
-            return 200
+    stored = 0
+    with ThreadPoolExecutor(max_workers=_default_download_workers()) as pool:
+        for (url, _ck), (status, n_bytes) in zip(missing, pool.map(_get, missing)):
+            stored += n_bytes
+            if status != 200:
+                failures[status] = failures.get(status, 0) + 1
+                failed_names.append(url.rsplit("/", 1)[-1])
+                if status == 404:
+                    _note_404(url, time.monotonic())
+    n_failed = sum(failures.values())
+    log = logger.warning if n_failed else logger.info
+    log(
+        "%s: downloaded %d/%d files, %.1f MB%s%s%s",
+        label, len(missing) - n_failed, len(missing), stored / 1e6,
+        _format_failure_summary(failures),
+        f": {', '.join(failed_names[:6])}" if failed_names else "",
+        f"; {len(recent)} skipped, 404 within {int(_ICON_404_TTL_S)}s" if recent else "",
+    )
+    return stored
 
-        with ThreadPoolExecutor(max_workers=_default_download_workers()) as pool:
-            for (url, _ck), status in zip(missing, pool.map(_get, missing)):
-                if status != 200:
-                    failures[status] = failures.get(status, 0) + 1
-                    failed_names.append(url.rsplit("/", 1)[-1])
-        n_failed = sum(failures.values())
-        log = logger.warning if n_failed else logger.info
-        log(
-            "ICON snapshot GRIB %s%02dz: downloaded %d/%d files for %d step(s)%s%s",
-            init_date, init_hour, len(missing) - n_failed, len(missing),
-            len(steps), _format_failure_summary(failures),
-            f": {', '.join(failed_names[:6])}" if failed_names else "",
-        )
+
+def ensure_icon_snapshot_files(
+    init_date: str,
+    init_hour: int,
+    steps: list[int],
+    *,
+    variant=None,
+    session: requests.Session | None = None,
+    data_dir: Path | None = None,
+) -> int:
+    """Download-only half of :func:`fetch_icon_snapshot_fields`; bytes stored.
+
+    The same files under the same cache keys (isobaric + surface per step,
+    accumulated surface of each predecessor), no decode, so a pre-warm (#929)
+    leaves exactly what the snapshot path reads. Never raises for a file.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+
+    variant = variant or ICON_EU
+    steps = sorted(set(steps))
+    if not steps:
+        return 0
+    if data_dir is None:
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    if session is None:
+        with requests.Session() as own_session:
+            return ensure_icon_snapshot_files(
+                init_date, init_hour, steps,
+                variant=variant, session=own_session, data_dir=data_dir,
+            )
+    purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    wanted, _ = _icon_snapshot_plan(init_date, init_hour, steps, variant)
+    return _download_icon_files(
+        run_dir, list(wanted.values()), session,
+        f"ICON snapshot GRIB {variant.slug} {init_date}{init_hour:02d}z "
+        f"({len(steps)} step(s))",
+    )
+
+
+def fetch_icon_snapshot_fields(
+    init_date: str,
+    init_hour: int,
+    forecast_hours: list[int],
+    lats: list[float],
+    lons: list[float],
+    data_dir: Path | None = None,
+    session: requests.Session | None = None,
+    priority: "int | DecodePriority | None" = None,
+    variant=None,
+) -> dict[int, IconSnapshotStep]:
+    """ICON pressure-level sounding + surface fields at airports (#914, #928).
+
+    The GRIB-primary source for the ICON forecast-map and alternates
+    snapshots, from ICON-EU (default) or ICON-D2 (``variant``). Downloads, per
+    forecast hour, the isobaric files (``icon_snapshot_pressure_levels``) and
+    the #912 single-level surface files, plus the accumulated surface fields
+    of the preceding published step so precipitation can be de-accumulated.
+    Every file is its own cache entry in the variant's run directory, so the
+    surface files a briefing already pulled are reused, and a second
+    alternates search on the same run is decode-only.
+
+    A forecast hour with no pressure-level or no surface file at all is
+    absent from the result; partial levels are kept (the caller decides
+    whether a point is covered). Never raises for a download or decode
+    failure: those are logged and cost the hour.
+    """
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU,
+        ICON_SNAPSHOT_PRESSURE_VARIABLES,
+        ICON_SURFACE_ACCUMULATED,
+        ICON_SURFACE_VARIABLES,
+        icon_snapshot_pressure_levels,
+    )
+
+    if not forecast_hours:
+        return {}
+    variant = variant or ICON_EU
+    if data_dir is None:
+        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    if session is None:
+        with requests.Session() as own_session:
+            return fetch_icon_snapshot_fields(
+                init_date, init_hour, forecast_hours, lats, lons,
+                data_dir=data_dir, session=own_session, priority=priority,
+                variant=variant,
+            )
+
+    purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
+    run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+
+    steps = sorted(set(forecast_hours))
+    wanted, predecessor_of = _icon_snapshot_plan(init_date, init_hour, steps, variant)
+    # Phase 1: download what the run directory lacks.
+    _download_icon_files(
+        run_dir, list(wanted.values()), session,
+        f"ICON snapshot GRIB {variant.slug} {init_date}{init_hour:02d}z "
+        f"({len(steps)} step(s))",
+    )
 
     def _path(key: tuple) -> str | None:
         ck = wanted[key][1]
@@ -515,7 +640,7 @@ def fetch_icon_snapshot_fields(
     job_keys: list[tuple[str, int]] = []
     for fhour in steps:
         level_paths: dict[int, dict[str, str]] = {}
-        for level in ICON_SNAPSHOT_PRESSURE_LEVELS:
+        for level in icon_snapshot_pressure_levels(variant):
             for var in ICON_SNAPSHOT_PRESSURE_VARIABLES:
                 path = _path((fhour, "pl", level, var))
                 if path is not None:

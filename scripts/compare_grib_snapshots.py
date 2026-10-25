@@ -7,6 +7,8 @@ GRIB-primary, on the same ICON init, then prints:
 - wall time, Open-Meteo calls and billed weight of each build,
 - how many airports GRIB covered and how many fell back,
 - flight-category agreement (the map's colour) and the off-by-N counts,
+  overall and split inside the ICON-D2 domain within 48 h vs elsewhere (#928;
+  ``WB_GRIB_SNAPSHOTS_D2=0`` makes the GRIB side ICON-EU only),
 - bias and mean / max |Δ| of ceiling, visibility, wind, gust, temperature,
   freezing level and precipitation, plus the worst airports for each.
 
@@ -47,7 +49,11 @@ from weatherbrief.tasks.airport_watchlist import (  # noqa: E402
     load_watchlist_with_coords,
 )
 from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS  # noqa: E402
-from weatherbrief.tasks.standalone_verification import fetch_model_snapshots  # noqa: E402
+from weatherbrief.tasks.standalone_grib import datetime_to_init_parts as _init_parts  # noqa: E402
+from weatherbrief.tasks.standalone_verification import (  # noqa: E402
+    _icon_d2_airports,
+    fetch_model_snapshots,
+)
 
 _CATEGORIES = ["LIFR", "IFR", "MVFR", "VFR"]
 
@@ -73,7 +79,7 @@ class _GribLog(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
-        if msg.startswith(("GRIB-primary", "ICON snapshot GRIB")):
+        if msg.startswith(("GRIB-primary", "ICON snapshot GRIB", "Model icon GRIB")):
             self.lines.append(msg)
 
 
@@ -126,18 +132,28 @@ def main() -> int:
     print(f"\n{len(keys)} common point-hours "
           f"(only Open-Meteo {len(set(off) - set(on))}, only GRIB {len(set(on) - set(off))})")
 
-    same, steps = 0, {}
-    for k in keys:
-        a, b = flight_category(off[k]), flight_category(on[k])
-        if a == b:
-            same += 1
-        else:
-            d = _CATEGORIES.index(b) - _CATEGORIES.index(a)
-            steps[d] = steps.get(d, 0) + 1
-    if keys:
-        print(f"Flight category: {same}/{len(keys)} same ({100 * same / len(keys):.1f} %); "
-              "GRIB minus Open-Meteo, in categories: "
-              + ", ".join(f"{d:+d}: {n}" for d, n in sorted(steps.items())))
+    def _category_line(label, subset):
+        same, steps = 0, {}
+        for k in subset:
+            a, b = flight_category(off[k]), flight_category(on[k])
+            if a == b:
+                same += 1
+            else:
+                d = _CATEGORIES.index(b) - _CATEGORIES.index(a)
+                steps[d] = steps.get(d, 0) + 1
+        if subset:
+            print(f"Flight category{label}: {same}/{len(subset)} same "
+                  f"({100 * same / len(subset):.1f} %); GRIB minus Open-Meteo, in categories: "
+                  + ", ".join(f"{d:+d}: {n}" for d, n in sorted(steps.items())))
+
+    _category_line("", keys)
+    # #928: inside the ICON-D2 domain within 48 h (D2 rows; Open-Meteo's
+    # icon_seamless served D2 there) vs the rest (ICON-EU on both sides).
+    d2_icaos = {a.icao for a in _icon_d2_airports(airports, *_init_parts(init_time))}
+    in_d2 = [k for k in keys if k[0] in d2_icaos
+             and (k[1] - init_time).total_seconds() <= 48 * 3600]
+    _category_line(" inside D2 <= 48 h", in_d2)
+    _category_line(" elsewhere", [k for k in keys if k not in set(in_d2)])
 
     print(f"\n{'field':<18}{'n':>6}{'bias':>10}{'mean|Δ|':>10}{'max|Δ|':>10}  worst")
     for name, get in _FIELDS:

@@ -112,6 +112,16 @@ def grib_snapshot_models() -> tuple[str, ...]:
     return tuple(m for m in GRIB_SNAPSHOT_MODELS if m in wanted)
 
 
+def grib_snapshot_d2_enabled() -> bool:
+    """ICON-D2 for the short-range ICON snapshots (#928); default on.
+
+    ``WB_GRIB_SNAPSHOTS_D2=0`` builds every ICON row from ICON-EU, as #926
+    did, for comparison or rollback of the D2 part alone.
+    """
+    raw = os.environ.get("WB_GRIB_SNAPSHOTS_D2", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def grib_snapshot_drill(model: str) -> str | None:
     """Failure drill for GRIB-primary snapshots: ``"all"``, ``"half"`` or None.
 

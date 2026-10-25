@@ -410,10 +410,26 @@ hourly (#415).
 - **Alternates** pass `only_valid_time=eta`, so GRIB (cloud diag included,
   GFS too) is fetched for the ETA hour only. The Open-Meteo window is left
   alone: Open-Meteo bills any window up to 14 days as one.
-- Log line per model: `GRIB-primary icon snapshots: N/M airports fully from
-  GRIB … K to Open-Meteo fallback (C calls)`. Airports outside ICON-EU
-  (Azores, Svalbard, north of 70.5°N) always fall back: one call per cycle is
-  the floor. GFS joins with #913's reader.
+- **ICON-D2 short range (#928):** an airport inside the D2 domain (bbox +
+  validity mask, `_icon_d2_airports`) takes its rows for the D2 run's 48 h
+  from ICON-D2 (the run of the EU init): D2 isobaric files
+  (`ICON_D2_SNAPSHOT_PRESSURE_LEVELS`, 11 levels), D2 surface files and D2's
+  own cloud diagnostics (`fetch_icon_cloud_diag(variant=ICON_D2)`), which
+  also give those rows their ceiling columns (the EU diagnostics skip them).
+  A D2 hour short falls to ICON-EU, then Open-Meteo. D2 and EU download side
+  by side. `WB_GRIB_SNAPSHOTS_D2=0` → EU only. Meteorology: §64.
+- **Downloads:** `ensure_icon_snapshot_files` is the download-only half
+  (same files and cache keys), for the per-flight pre-warm (#929). A DWD 404
+  is not asked again for 10 min in the same process (`_ICON_404_TTL_S`), so a
+  late run doesn't cost a 404 per file on every alternates search.
+- Log lines per model: `Model icon GRIB: analyzed N snapshots (D ICON-D2 from
+  a/A airports, E ICON-EU)` and `GRIB-primary icon snapshots: N/M airports
+  fully from GRIB … K to Open-Meteo fallback (C calls)`. Airports outside
+  ICON-EU (Azores, Svalbard, north of 70.5°N) always fall back: one call per
+  cycle is the floor. More than 10 % of ≥ 50 airports on the fallback logs
+  WARNING `GRIB_PRIMARY_FALLBACK_HIGH` (a DWD outage costs the old price); a
+  builder exception logs ERROR `GRIB_PRIMARY_BUILDER_FAILED`. GFS joins with
+  #913's reader.
 
 ### Open-Meteo Batching
 

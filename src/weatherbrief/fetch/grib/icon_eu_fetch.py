@@ -256,6 +256,21 @@ ICON_SNAPSHOT_PRESSURE_LEVELS: tuple[int, ...] = (
 )
 ICON_SNAPSHOT_PRESSURE_VARIABLES: tuple[str, ...] = ("t", "relhum", "u", "v", "fi")
 
+# ICON-D2's isobaric product (#928) is coarser: no 925/900/875/825/800/775 hPa,
+# so between 950 and 700 hPa the snapshot profile has only 850. The list is
+# DWD's ICON-D2 pressure-level set (1000-200 hPa part), as the owner checked it
+# on opendata 2026-10-25. Model levels would be ~10x the bytes.
+ICON_D2_SNAPSHOT_PRESSURE_LEVELS: tuple[int, ...] = (
+    1000, 975, 950, 850, 700, 600, 500, 400, 300, 250, 200,
+)
+
+
+def icon_snapshot_pressure_levels(variant: "IconVariant") -> tuple[int, ...]:
+    """The isobaric levels the map/alternates snapshot reads for *variant*."""
+    if variant.slug == "icon-d2":
+        return ICON_D2_SNAPSHOT_PRESSURE_LEVELS
+    return ICON_SNAPSHOT_PRESSURE_LEVELS
+
 
 def icon_pressure_cache_key(variable: str, level_hpa: int, variant: "IconVariant") -> str:
     """Cache-key label for one ICON pressure-level file (#914).

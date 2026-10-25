@@ -7030,3 +7030,43 @@ rows untouched.
 Whether that is the more accurate column is answerable from this pipeline's
 own METAR scoring (ICON category hit rate and optimistic bias, before vs
 after the switch), not from the side-by-side.
+
+## 64. ICON-D2 for the short-range ICON map and alternates rows (#928)
+
+**Date:** 2026-10-25. **Part of** #910. Follow-up to §63, deploys with it.
+Mechanics: `metar-taf-accuracy.md` "GRIB-primary ICON snapshots".
+
+Before #914 the ICON rows came from Open-Meteo `/v1/dwd-icon` with no
+`models=`, i.e. `icon_seamless`, which serves ICON-D2 (2.2 km) inside the D2
+domain for about 48 h. §63 built every row from ICON-EU (7 km), so on its own
+it silently moved ~88 % of short-range map rows from D2 to EU: category
+agreement 73.9 % inside D2 within 48 h against 92.6 % beyond (owner analysis,
+2026-10-25 00Z, 100 airports). This puts D2 back where Open-Meteo had it.
+
+**Decisions.**
+
+- **Per airport, per hour: D2, then EU, then Open-Meteo.** An airport inside
+  the D2 domain (bbox plus the product's validity mask, every cell within
+  5 NM carrying data) takes D2 for the hours of the D2 run's 48 h; a D2 hour
+  short of the coverage rule (§63) takes ICON-EU, then Open-Meteo. Not the
+  briefing's all-or-nothing route gate (§61): a map row is one point.
+- **The D2 run of the ICON-EU init.** D2 runs every 3 h and publishes ~1 h
+  sooner, so the same init is always available when EU is, and the row's
+  `model_init_time` stays true. Open-Meteo's seamless blend may have used a
+  D2 run up to 3 h newer; not chosen: a newer D2 run under the EU init time.
+- **D2's isobaric product: 1000, 975, 950, 850, 700, 600, 500, 400, 300,
+  250, 200 hPa,** `t / relhum / u / v / fi`. Coarser than §63's EU set
+  between 950 and 700 hPa (no 925/900/875/825/800/775). Model levels would be
+  ~10× the bytes; revisit only if the comparison shows the lite sounding's
+  low cloud suffering.
+- **D2's own cloud diagnostics** (`ceiling`, `clcl/m/h/t`, `cape_ml`,
+  `cin_ml`) give a D2 row its cover, ceiling and CAPE, as on the briefing's
+  D2 slot. D2 has no parameterized convection, so `nwp_conv_*` stay empty on
+  D2 rows, as on the briefing.
+- **Switch:** `WB_GRIB_SNAPSHOTS_D2=0` builds every ICON row from EU (§63
+  behaviour), for comparison or to roll back the D2 part alone.
+
+**To measure** (mini): `compare_grib_snapshots.py` against `icon_seamless`,
+category agreement inside D2 ≤ 48 h back to ~90 %+; disk, downloads and wall
+time of the cycle; DWD 404 count.
+
