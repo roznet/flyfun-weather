@@ -432,7 +432,13 @@ def _warm_icon_alternates(
     reaches it.
     """
     from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, pin_run_dir
-    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU, icon_cloud_diag_cache_key
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_D2,
+        ICON_EU,
+        ICON_EU_RAIN_CON_CACHE_KEY,
+        icon_cloud_diag_cache_key,
+        icon_eu_previous_step,
+    )
     from weatherbrief.fetch.grib.primary import grib_snapshot_models
     from weatherbrief.tasks.alternates import _eta_hour, alternates_fetch_airports
     from weatherbrief.tasks.standalone_grib import (
@@ -488,6 +494,15 @@ def _warm_icon_alternates(
         if kind == "diag":
             diag_key = icon_cloud_diag_cache_key(variant)
             missing = [f for f in steps if not is_cached(run_dir, cache_key(f, diag_key))]
+            if "rain_con" in variant.cloud_diag_variables:
+                # The rain_con predecessor too, as a full or rain_con-only blob.
+                for f in steps:
+                    prev = icon_eu_previous_step(f, variant)
+                    if prev is not None and not any(
+                        is_cached(run_dir, cache_key(prev, k))
+                        for k in (diag_key, ICON_EU_RAIN_CON_CACHE_KEY)
+                    ):
+                        missing.append(f)
         else:
             wanted, _ = _icon_snapshot_plan(init_date, init_hour, steps, variant)
             missing = sorted({
@@ -499,9 +514,16 @@ def _warm_icon_alternates(
                 return _Outcome("stopped", hours=hours)
             with pin_run_dir(run_dir):
                 if kind == "diag":
-                    ensure_icon_cloud_diag_files(
+                    cached = ensure_icon_cloud_diag_files(
                         init_date, init_hour, steps, variant=variant, data_dir=data_dir,
                     )
+                    if set(cached) != set(steps):
+                        # The helper logged why; say which flight it costs.
+                        logger.warning(
+                            "Flight warm %s: alternates cloud diag %s left %s cold "
+                            "for flight %s", source, variant.slug,
+                            sorted(set(steps) - set(cached)), flight.id,
+                        )
                 else:
                     ensure_icon_snapshot_files(
                         init_date, init_hour, steps, variant=variant, data_dir=data_dir,
