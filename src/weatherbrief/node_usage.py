@@ -563,8 +563,9 @@ def _session():
 
     import weatherbrief.db.models  # noqa: F401 — register models
 
+    engine = get_engine()  # binds SessionLocal; prod (mint-token) needs it too
     if os.environ.get("ENVIRONMENT", "development") == "development":
-        init_shared_db(get_engine())
+        init_shared_db(engine)
     return SessionLocal()
 
 

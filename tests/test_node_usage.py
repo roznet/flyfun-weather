@@ -390,6 +390,29 @@ def test_push_floor_keeps_a_forked_db_from_resending_copied_rows(
     s.close()
 
 
+def test_mint_token_cli_runs_on_a_production_server(tmp_path):
+    # Prod never runs init_shared_db: the CLI must still bind its session.
+    import os
+    import subprocess
+    import sys
+
+    from sqlalchemy import create_engine
+
+    from flyfun_common.db.models import Base
+
+    db_path = tmp_path / "prod.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    env = {**os.environ, "ENVIRONMENT": "production", "DATABASE_URL": f"sqlite:///{db_path}"}
+    out = subprocess.run(
+        [sys.executable, "-m", "weatherbrief.node_usage", "mint-token", "--origin", "dev"],
+        env=env, cwd=tmp_path, capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert any(line.startswith("ff_") for line in out.stdout.splitlines())
+
+
 def test_mint_token_rejects_bad_origin(prod_db):
     s = prod_db()
     with pytest.raises(ValueError):
