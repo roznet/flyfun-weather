@@ -393,8 +393,9 @@ predecessor step's accumulated precipitation. Every file is its own cache
 entry in the shared `icon-eu` run directory (12 h TTL), so surface files a
 briefing pulled are reused. A map cycle is ~25 steps × ~95 files (2,370 on
 2026-10-25, ~2.46 GB on disk), retained only until `purge_old_runs` ages the
-run out; an alternates ETA hour is ~100 files (~145 MB). Rows record precipitation as the total over
-`precip_period_h` (1 h to +78 h, 3 h after), like the ECMWF GRIB rows.
+run out; an alternates ETA hour is ~100 files (~145 MB). Rows record precipitation as the step's mean hourly
+rate (`precip_period_h = 1`), not a window total: consumers read the column as
+hourly (#415).
 
 - **Coverage per (airport, hour):** required surface fields (#912's
   `_REQUIRED_HOURLY_FIELDS`) and at least `_MIN_GRIB_SNAPSHOT_LEVELS` (8)

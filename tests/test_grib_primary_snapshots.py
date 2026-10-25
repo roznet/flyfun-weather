@@ -351,3 +351,32 @@ class TestSwitchGrammar:
         else:
             monkeypatch.setenv("WB_GRIB_SNAPSHOTS", raw)
         assert grib_snapshot_models() == expected
+
+
+class TestThreeHourlyPrecipitation:
+    def test_row_carries_the_hourly_rate_not_the_window_total(self):
+        """Past +78 h the step window is 3 h; consumers read the column as hourly (#415)."""
+        from weatherbrief.tasks.standalone_grib import IconSnapshotStep
+        from weatherbrief.tasks.standalone_verification import (
+            _icon_grib_hourly,
+            _snapshot_row,
+        )
+
+        levels = {
+            p: {"raw_temperature_k": 280.0, "raw_relative_humidity_pct": 50.0,
+                "raw_u_wind_m_s": 5.0, "raw_v_wind_m_s": 0.0,
+                "raw_geopotential_m2_s2": 9.80665 * _isa_height_m(p)}
+            for p in (1000, 950, 925, 900, 850, 800, 700, 600, 500, 300)
+        }
+        step = IconSnapshotStep(
+            pressure=[levels],
+            surface=[{"t_2m": 285.0, "td_2m": 280.0, "u_10m": 3.0, "v_10m": 0.0,
+                      "pmsl": 101300.0, "tot_prec": 106.0}],
+            prev_surface=[{"tot_prec": 100.0}],
+            window_h=3,
+        )
+        hourly = _icon_grib_hourly(INIT + timedelta(hours=81), step, 0)
+        row = _snapshot_row("EGLL", "icon", INIT, hourly)
+
+        assert row["precip_period_h"] == 1
+        assert row["precipitation_mm"] == pytest.approx(2.0)

@@ -6980,9 +6980,11 @@ ICON-EU GRIB; Open-Meteo only for airports GRIB left short.
   GRIB-primary briefing slot (§61), so the map's ICON surface and the
   briefing's ICON-EU surface now agree; Open-Meteo's land-cell selection
   (#924) and its D2 blend are gone from the map's ICON column too.
-- **Precipitation over the step window.** Past +78 h ICON-EU is 3-hourly, so a
-  row records the 3 h total with `precip_period_h = 3`, as ECMWF rows do
-  (Open-Meteo gave an hourly value interpolated from the same 3 h data).
+- **Precipitation as an hourly rate.** Past +78 h ICON-EU is 3-hourly; the
+  row records the step's mean hourly rate with `precip_period_h = 1`, as
+  Open-Meteo's ICON did, not the 3 h total the ECMWF rows store: scoring and
+  the airport profile read the column as hourly (#415), so a total would read
+  as three times the rain.
 - **Per-airport fallback** (owner call 6), same coverage rule as §61 plus a
   minimum of 8 levels. Not chosen: a whole-model fallback.
 - **No interim Open-Meteo trims.** A one-day alternates window saves nothing
