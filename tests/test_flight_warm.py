@@ -156,6 +156,33 @@ class TestWarmFlights:
         assert stats["cut_by_flights"] == 2
         assert stats["cut_ids"] == ["f3", "f4"]
 
+    def test_flight_cap_counts_only_this_sources_flights(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("WB_FLIGHT_WARM_MAX_FLIGHTS", "1")
+        seen: list = []
+        writer = _writing_unit(tmp_path, 1, seen)
+
+        def unit(flight, data_dir, stop):
+            if flight.id in ("f1", "f2"):
+                return _Outcome("skipped", reason="served_by_icon-d2")
+            return writer(flight, data_dir, stop)
+
+        rows = [_Row(f"f{i}", i) for i in range(1, 5)]
+        stats, _ = _run("icon-eu", rows, unit)
+        assert seen == ["f3"]
+        assert stats["flights_skipped"] == 2
+        assert stats["flights_warmed"] == 1
+        assert stats["cut_ids"] == ["f4"]
+
+    def test_cut_summary_is_a_warning_with_a_token(self, monkeypatch, tmp_path, caplog):
+        import logging
+
+        monkeypatch.setenv("WB_FLIGHT_WARM_MAX_FLIGHTS", "1")
+        caplog.set_level(logging.INFO, logger="weatherbrief.fetch.grib.flight_warm")
+        _run("gfs", [_Row("f1"), _Row("f2", 2)], _writing_unit(tmp_path, 1, []))
+        rec = next(r for r in caplog.records if "considered" in r.getMessage())
+        assert rec.levelno == logging.WARNING
+        assert rec.getMessage().startswith("FLIGHT_WARM_CUT Flight warm gfs")
+
     def test_byte_budget_cuts_later_flights(self, monkeypatch, tmp_path):
         # 2.5 kB budget, 1 kB per flight: f1, f2 warm; f3 starts, warms (the
         # budget is checked ahead of its download), f4 is cut.
