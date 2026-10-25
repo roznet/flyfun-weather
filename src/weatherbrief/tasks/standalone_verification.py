@@ -1409,7 +1409,7 @@ def _gfs_candidates(model, init_time, airports, valid_times, grib_diag, priority
     the cloud diagnostics only attach (ceiling, convective track); they are
     not needed for coverage.
     """
-    from weatherbrief.fetch.grib.grib_fetch import _snap_to_gfs_grid
+    from weatherbrief.fetch.grib.grib_fetch import GFS_HORIZON_H, _snap_to_gfs_grid
     from weatherbrief.tasks.standalone_grib import (
         datetime_to_init_parts,
         fetch_gfs_snapshot_fields,
@@ -1418,10 +1418,12 @@ def _gfs_candidates(model, init_time, airports, valid_times, grib_diag, priority
     init_date, init_hour = datetime_to_init_parts(init_time)
     step_of: dict[datetime, int] = {}
     for valid in valid_times:
+        # Floors to the hour: valid_times are whole hours (map grid, alternates
+        # ETA hour), and an off-grid offset fails the snap check below.
         offset = int((valid - init_time).total_seconds() // 3600)
         # Published steps only (hourly to f120, 3-hourly to f384); step 0 too,
         # covered without precipitation as for ICON.
-        if 0 <= offset <= 384 and _snap_to_gfs_grid(offset) == offset:
+        if 0 <= offset <= GFS_HORIZON_H and _snap_to_gfs_grid(offset) == offset:
             step_of[valid] = offset
     if not step_of:
         return [], set(), None, None
