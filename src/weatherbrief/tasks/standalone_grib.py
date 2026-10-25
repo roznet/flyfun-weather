@@ -477,25 +477,32 @@ def fetch_icon_snapshot_fields(
     # per-file helper and worker count the ICON-EU fetchers use).
     missing = [(url, ck) for url, ck in wanted.values() if not is_cached(run_dir, ck)]
     failures: dict[int | str, int] = {}
+    failed_names: list[str] = []
     if missing:
         def _get(item: tuple[str, str]) -> int | str:
             url, ck = item
-            data, status = _download_one_file(url, session)
-            if data is None:
-                return status
-            put_cached(run_dir, ck, data)
+            try:
+                data, status = _download_one_file(url, session)
+                if data is None:
+                    return status
+                put_cached(run_dir, ck, data)
+            except Exception:  # e.g. a full disk: costs this file, not the step
+                logger.debug("ICON snapshot file %s failed", ck, exc_info=True)
+                return "error"
             return 200
 
         with ThreadPoolExecutor(max_workers=_default_download_workers()) as pool:
-            for status in pool.map(_get, missing):
+            for (url, _ck), status in zip(missing, pool.map(_get, missing)):
                 if status != 200:
                     failures[status] = failures.get(status, 0) + 1
+                    failed_names.append(url.rsplit("/", 1)[-1])
         n_failed = sum(failures.values())
         log = logger.warning if n_failed else logger.info
         log(
-            "ICON snapshot GRIB %s%02dz: downloaded %d/%d files for %d step(s)%s",
+            "ICON snapshot GRIB %s%02dz: downloaded %d/%d files for %d step(s)%s%s",
             init_date, init_hour, len(missing) - n_failed, len(missing),
             len(steps), _format_failure_summary(failures),
+            f": {', '.join(failed_names[:6])}" if failed_names else "",
         )
 
     def _path(key: tuple) -> str | None:

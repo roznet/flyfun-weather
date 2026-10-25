@@ -1253,10 +1253,9 @@ def _build_grib_snapshots(
         if step is None:
             continue
         for i, airport in enumerate(airports):
-            built = _icon_grib_hourly(valid, step, i)
-            if built is None:
+            hourly = _icon_grib_hourly(valid, step, i)
+            if hourly is None:
                 continue
-            hourly, window_h = built
             cd = lookup.get(airport.icao, valid) if lookup is not None else None
             if cd is not None and cd.diagnostics is not None:
                 from weatherbrief.fetch.grib import _icon_diag_surface_fields
@@ -1267,15 +1266,11 @@ def _build_grib_snapshots(
             if not _grib_hour_covered(hourly):
                 continue
 
-            snap = _snapshot_row(
-                airport.icao, model, init_time, hourly, precip_period_h=window_h,
-            )
-            # The hourly carries per-hour rates (what the sounding pass and the
-            # briefing read); the row records the total over its period, as the
-            # ECMWF GRIB rows do.
-            for key in ("precipitation_mm", "snowfall_cm"):
-                rate = getattr(hourly, key)
-                snap[key] = rate * window_h if rate is not None else None
+            # Per-hour rates over the step window, recorded as a 1 h period:
+            # what Open-Meteo gave for ICON and what scoring and the airport
+            # profile read (they ignore precip_period_h, #415). A 3 h total
+            # past +78 h would read as three times the rain there.
+            snap = _snapshot_row(airport.icao, model, init_time, hourly)
 
             if pooled:
                 from weatherbrief.analysis.sounding.snapshot_fields import (
@@ -1307,7 +1302,7 @@ def _build_grib_snapshots(
 
 
 def _icon_grib_hourly(valid: datetime, step, i: int):
-    """``(HourlyForecast, precip window h)`` for point *i* of an ICON step, or None.
+    """``HourlyForecast`` for point *i* of an ICON step, or None.
 
     Surface from the #912 decoders (instantaneous fields + de-accumulated
     rates), sounding from the pressure-level files with the model's own MSL
@@ -1340,8 +1335,7 @@ def _icon_grib_hourly(valid: datetime, step, i: int):
         else None
     )
     rates = _icon_surface_rates(raw, prev, step.window_h)
-    hourly = HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
-    return hourly, (step.window_h or 1)
+    return HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
 
 
 def _grib_hour_covered(hourly) -> bool:
