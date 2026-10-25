@@ -218,6 +218,18 @@ data class TripLegRef(
         }
 }
 
+/**
+ * Why a briefing refresh is unavailable for a flight. Mirrors `RefreshGate` in
+ * iOS `BriefingContainerView` — keep [reason] wording in step.
+ */
+enum class RefreshGate(val reason: String) {
+    /** Read-only shared flight — refreshing belongs to the owner. */
+    SUBSCRIBER("This is a shared flight — only its owner can refresh the briefing."),
+
+    /** Beyond the server's live window: archive path, admin-only. */
+    HISTORICAL("This flight has already flown. Rebuilding a historical briefing is done from the web app."),
+}
+
 @Serializable
 data class FlightResponse(
     val id: String,
@@ -411,6 +423,18 @@ data class FlightResponse(
         val windowHours = min(flightDurationHours + 3.0, 12.0)
         val liveEndMs = dep + (windowHours * 3_600_000.0).toLong()
         return nowEpochMs > liveEndMs
+    }
+
+    /**
+     * Whether refresh is gated, and why — null when a refresh is allowed.
+     * Subscriber wins over historical so a read-only viewer gets the ownership
+     * reason rather than a date one. Mirrors `refreshGate` in iOS
+     * `BriefingContainerView`.
+     */
+    fun refreshGate(nowEpochMs: Long = System.currentTimeMillis()): RefreshGate? = when {
+        !isEditable -> RefreshGate.SUBSCRIBER
+        isHistoricalForRefresh(nowEpochMs) -> RefreshGate.HISTORICAL
+        else -> null
     }
 
     data class FlightGroup(

@@ -172,6 +172,8 @@ fun BriefingPackToolbar(
     val isDownloadingPack by viewModel.isDownloadingPack.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val refreshProgressText by viewModel.refreshProgressText.collectAsState()
+    val flight by viewModel.flight.collectAsState()
+    val refreshGate = flight?.refreshGate()
 
     val currentPack = selectedPack ?: packs.firstOrNull()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -398,14 +400,24 @@ fun BriefingPackToolbar(
             // Refresh Briefing
             DropdownMenuItem(
                 text = {
-                    Text(
-                        text = if (isRefreshing) {
-                            refreshProgressText ?: "Refreshing Briefing…"
-                        } else {
-                            "Refresh Briefing"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Column {
+                        Text(
+                            text = if (isRefreshing) {
+                                refreshProgressText ?: "Refreshing Briefing…"
+                            } else {
+                                "Refresh Briefing"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (refreshGate != null) {
+                            Text(
+                                text = refreshGate.reason,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.widthIn(max = 260.dp),
+                            )
+                        }
+                    }
                 },
                 leadingIcon = {
                     if (isRefreshing) {
@@ -420,7 +432,7 @@ fun BriefingPackToolbar(
                         )
                     }
                 },
-                enabled = !isRefreshing,
+                enabled = !isRefreshing && refreshGate == null,
                 onClick = {
                     menuExpanded = false
                     viewModel.refreshBriefing()

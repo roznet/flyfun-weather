@@ -2,10 +2,13 @@ package aero.flyfun.weather
 
 import aero.flyfun.weather.model.FlightOrder
 import aero.flyfun.weather.model.FlightResponse
+import aero.flyfun.weather.model.FlightRole
 import aero.flyfun.weather.model.FlightSection
 import aero.flyfun.weather.model.IsoTime
+import aero.flyfun.weather.model.RefreshGate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -197,5 +200,20 @@ class FlightResponseGroupingTest {
         val longFlight = makeFlight(departureTime = "2026-06-24T12:00:00Z", flightDurationHours = 40.0)
         assertFalse(longFlight.isHistoricalForRefresh(at("2026-06-25T00:00:00Z"))) // +12h edge
         assertTrue(longFlight.isHistoricalForRefresh(at("2026-06-25T00:00:01Z")))
+    }
+
+    @Test
+    fun `refreshGate is null for a live flight, historical once flown, subscriber first`() {
+        fun at(iso: String): Long = IsoTime.parseEpochMs(iso)!!
+        val own = makeFlight(departureTime = "2026-06-24T12:00:00Z", flightDurationHours = 2.0)
+
+        assertNull(own.refreshGate(at("2026-06-24T06:00:00Z")))
+        assertNull(own.refreshGate(at("2026-06-24T17:00:00Z")))
+        assertEquals(RefreshGate.HISTORICAL, own.refreshGate(at("2026-06-27T01:20:00Z")))
+
+        // A shared flight gets the ownership reason, even once it has flown.
+        val shared = own.copy(role = FlightRole.SUBSCRIBER)
+        assertEquals(RefreshGate.SUBSCRIBER, shared.refreshGate(at("2026-06-24T06:00:00Z")))
+        assertEquals(RefreshGate.SUBSCRIBER, shared.refreshGate(at("2026-06-27T01:20:00Z")))
     }
 }

@@ -145,7 +145,7 @@ class ApiClient(
         when (statusCode) {
             in 200..299 -> return
             401 -> throw ApiError.Unauthorized
-            403 -> throw ApiError.Forbidden
+            403 -> throw ApiError.Forbidden(extractErrorDetail(bodyBytes))
             404 -> throw ApiError.NotFound
             else -> {
                 val detail = extractErrorDetail(bodyBytes)
@@ -534,7 +534,7 @@ class ApiClient(
                         val bodyBytes = runCatching { response.body?.bytes() ?: ByteArray(0) }.getOrDefault(ByteArray(0))
                         when (code) {
                             401 -> ApiError.Unauthorized
-                            403 -> ApiError.Forbidden
+                            403 -> ApiError.Forbidden(extractErrorDetail(bodyBytes))
                             404 -> ApiError.NotFound
                             else -> ApiError.ServerError(code, extractErrorDetail(bodyBytes))
                         }
