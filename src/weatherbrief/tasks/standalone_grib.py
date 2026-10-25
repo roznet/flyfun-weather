@@ -391,9 +391,11 @@ class IconSnapshotStep:
     window_h: int | None
 
 
-# A DWD file that 404'd is not asked for again for this long, in this process
-# (#928): a late or partial run would otherwise cost one 404 per file on every
-# alternates search. Short, because "not yet published" heals within minutes.
+# A DWD snapshot file that 404'd is not asked for again for this long, in this
+# process (#928): a late or partial run would otherwise cost one 404 per file
+# on every alternates search. Short, because "not yet published" heals within
+# minutes. Snapshot files only (``_download_icon_files``): the cloud-diag
+# fetch still asks once per hour.
 _ICON_404_TTL_S = 600.0
 _ICON_404_UNTIL: dict[str, float] = {}
 _ICON_404_LOCK = threading.Lock()

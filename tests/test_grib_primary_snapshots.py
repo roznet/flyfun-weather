@@ -175,6 +175,11 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(sg, "purge_old_runs", lambda *a, **kw: None)
     monkeypatch.delenv("WB_GRIB_SNAPSHOTS_D2", raising=False)
     monkeypatch.setattr(sg, "_ICON_404_UNTIL", {})
+    import weatherbrief.tasks.standalone_verification as sv
+
+    # The D2 mask and verdicts are per-process memos: start every test empty.
+    monkeypatch.setattr(sv, "_D2_MASK", None)
+    monkeypatch.setattr(sv, "_D2_POINT_OK", {})
     # No validity mask (it would be a DWD download): the D2 bbox decides.
     monkeypatch.setattr("weatherbrief.fetch.grib.load_d2_validity_mask",
                         lambda *a, **kw: None)
@@ -515,6 +520,45 @@ class TestIconD2:
         by = _by(snaps)
         assert by[("EDDF", 6)]["temperature_2m_c"] == pytest.approx(15.0, abs=0.01)
         assert by[("EGLL", 6)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_validity_mask_and_verdicts_are_kept_per_process(self, env, monkeypatch):
+        from weatherbrief.tasks.standalone_verification import _icon_d2_airports
+
+        loads: list = []
+        checks: list = []
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.load_d2_validity_mask",
+            lambda *a, **kw: loads.append(1) or {"mask": True},
+        )
+
+        def check(mask, lats, lons, radius_nm):
+            checks.append(lons[0])
+            return lons[0] > 5.0
+
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.decode.d2_corridor_fully_valid", check,
+        )
+        inside = [
+            WatchlistAirport(icao="EDDF", lat=50.03, lon=8.57),
+            WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55),
+        ]
+        for _ in range(3):
+            assert [a.icao for a in _icon_d2_airports(inside, "20261025", 0)] == ["EDDF"]
+        assert loads == [1]
+        assert sorted(checks) == [2.55, 8.57]
+
+    def test_failed_mask_is_retried_not_kept(self, env, monkeypatch):
+        from weatherbrief.tasks.standalone_verification import _icon_d2_airports
+
+        loads: list = []
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.load_d2_validity_mask",
+            lambda *a, **kw: loads.append(1),
+        )
+        inside = [WatchlistAirport(icao="EDDF", lat=50.03, lon=8.57)]
+        for _ in range(2):
+            assert [a.icao for a in _icon_d2_airports(inside, "20261025", 0)] == ["EDDF"]
+        assert loads == [1, 1]
 
     def _spy_eu(self, monkeypatch):
         from weatherbrief.tasks import standalone_verification as sv

@@ -424,8 +424,10 @@ hourly (#415).
   `WB_GRIB_SNAPSHOTS_D2=0` → EU only. Meteorology: §64.
 - **Downloads:** `ensure_icon_snapshot_files` is the download-only half
   (same files and cache keys), for the per-flight pre-warm (#929). A DWD 404
-  is not asked again for 10 min in the same process (`_ICON_404_TTL_S`), so a
-  late run doesn't cost a 404 per file on every alternates search.
+  snapshot file is not asked again for 10 min in the same process
+  (`_ICON_404_TTL_S`), so a late run doesn't cost a 404 per file on every
+  alternates search (the cloud-diag fetch is not memoised). The D2 validity
+  mask and each airport's D2 verdict are kept per process.
 - Log lines per model: `Model icon GRIB: analyzed N snapshots (D ICON-D2 from
   a/A airports, E ICON-EU)` and `GRIB-primary icon snapshots: N/M airports
   fully from GRIB … K to Open-Meteo fallback (C calls)`. Airports outside

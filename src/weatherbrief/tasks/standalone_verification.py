@@ -1367,6 +1367,8 @@ def _build_grib_snapshots(
         _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
     if d2_lookup is not None:
         # After the sounding pass, as the caller does for the EU rows.
+        # ``results`` keeps ``built``'s order (the pooled pass writes by
+        # index) and ``built`` puts the D2 rows first: keep both true.
         _apply_grib_columns(results[:n_d2], model, d2_lookup)
     logger.info(
         "Model %s GRIB: analyzed %d snapshots (%d ICON-D2 from %d/%d airports, "
@@ -1405,6 +1407,13 @@ def _icon_snapshot_steps(
     return out
 
 
+# The D2 validity mask is a product invariant (#462), so the mask and each
+# airport's verdict are kept for the process: alternates searches and map
+# cycles otherwise re-read the mask and re-scan the grid per airport.
+_D2_MASK: dict | None = None
+_D2_POINT_OK: dict[tuple[float, float], bool] = {}
+
+
 def _icon_d2_airports(
     airports: list[WatchlistAirport], init_date: str, init_hour: int,
 ) -> list[WatchlistAirport]:
@@ -1423,23 +1432,37 @@ def _icon_d2_airports(
     ]
     if not inside:
         return []
-    # Serial, before the parallel downloads: one small DWD file on the first
-    # call per process, then the mask is read from disk.
-    try:
-        with requests.Session() as session:
-            mask = load_d2_validity_mask(
-                init_date, init_hour, data_dir=Path(os.environ.get("DATA_DIR", "data")),
-                session=session, variant=v,
-            )
-    except Exception:
-        logger.warning("ICON-D2 validity mask failed; bbox only", exc_info=True)
-        mask = None
+    global _D2_MASK
+    mask = _D2_MASK
     if mask is None:
-        return inside
-    return [
-        a for a in inside
-        if d2_corridor_fully_valid(mask, [a.lat], [a.lon], radius_nm=_D2_POINT_RADIUS_NM)
-    ]
+        # Serial, before the parallel downloads: one small DWD file on the
+        # first call ever, the cached .npz on the first call per process.
+        # A failure is not memoised, so the next call tries again.
+        try:
+            with requests.Session() as session:
+                mask = load_d2_validity_mask(
+                    init_date, init_hour,
+                    data_dir=Path(os.environ.get("DATA_DIR", "data")),
+                    session=session, variant=v,
+                )
+        except Exception:
+            logger.warning("ICON-D2 validity mask failed; bbox only", exc_info=True)
+            mask = None
+        if mask is None:
+            return inside
+        _D2_MASK = mask
+    out = []
+    for a in inside:
+        key = (a.lat, a.lon)
+        ok = _D2_POINT_OK.get(key)
+        if ok is None:
+            ok = d2_corridor_fully_valid(
+                mask, [a.lat], [a.lon], radius_nm=_D2_POINT_RADIUS_NM,
+            )
+            _D2_POINT_OK[key] = ok
+        if ok:
+            out.append(a)
+    return out
 
 
 def _fetch_icon_fields(init_date, init_hour, steps, airports, variant, priority):
