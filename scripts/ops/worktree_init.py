@@ -234,9 +234,16 @@ def step_fork_db(rep: Report, main: Path, path: Path) -> None:
         s.backup(d)
         # The copy must not push usage as main's node DB (#922): its local ids
         # diverge from main's, so sharing main's id would drop one side's rows.
-        # Without the id, its first push mints a fresh one.
+        # Without the id, its first push mints a fresh one; the floors stop
+        # that fresh id re-sending the copied rows, which main already sent.
         try:
             d.execute("DELETE FROM instance_settings WHERE key = 'node_db_id'")
+            for table in ("api_usage_log", "cost_ledger"):
+                d.execute(
+                    "INSERT OR REPLACE INTO instance_settings (key, value) "
+                    f"SELECT ?, COALESCE(MAX(id), 0) FROM {table}",
+                    (f"push_floor:{table}",),
+                )
         except sqlite3.OperationalError:
             pass  # pre-#922 DB: no table, no id
     env_file = path / ".env"

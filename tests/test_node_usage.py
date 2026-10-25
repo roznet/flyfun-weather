@@ -353,6 +353,43 @@ def test_absurd_rows_are_rejected(client, token):
     assert r.status_code == 422
 
 
+def test_mint_token_creates_the_service_account_once(prod_db):
+    # Prod's api_tokens.user_id keeps migration 007's FK to users.id, which
+    # this create_all DB lacks: assert the users row the FK needs exists.
+    from flyfun_common.db.models import UserRow
+
+    s = prod_db()
+    mint_token(s, "dev")
+    mint_token(s, "dev")  # a second token reuses the account
+    user = s.get(UserRow, "system:dev")
+    assert user is not None and user.approved is False
+    assert s.query(ApiTokenRow).filter(ApiTokenRow.user_id == "system:dev").count() == 2
+    s.close()
+
+
+def test_push_floor_keeps_a_forked_db_from_resending_copied_rows(
+    client, prod_db, node_db, token,
+):
+    # A --fork-db copy: rows up to the floor are main's, already pushed.
+    _seed_node(
+        node_db,
+        api=[("open_meteo", "briefing", 1, 10.0, None)] * 3,
+        costs=[("briefing", 0.1)] * 3,
+    )
+    s = node_db()
+    s.add(InstanceSettingRow(key="push_floor:api_usage_log", value="2"))
+    s.add(InstanceSettingRow(key="push_floor:cost_ledger", value="3"))
+    s.commit()
+    s.close()
+
+    result = _push(node_db, client, token)
+    assert result.error is None
+    assert result.sent == {"api_usage_log": 1, "cost_ledger": 0}
+    s = prod_db()
+    assert [r.local_id for r in s.query(NodeUsageIngestRow).all()] == [3]
+    s.close()
+
+
 def test_mint_token_rejects_bad_origin(prod_db):
     s = prod_db()
     with pytest.raises(ValueError):

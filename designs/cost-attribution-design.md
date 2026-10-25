@@ -158,7 +158,7 @@ to prod MySQL (schema skew, DB exposure), prod pulling (laptops unreachable,
 mini LAN-only), piggybacking on the snapshot artifact (misses dev).
 
 - **Node side:** `python -m weatherbrief.node_usage push` (the mini runs it
-  after its artifact push; a dev server runs it at startup + hourly via
+  after its artifact push, a step of `flyfun-forecast-eu.sh` in roznet/scripts; a dev server runs it at startup + hourly via
   `scheduler.run_usage_push_loop`). Configured by `WB_USAGE_PUSH_URL` +
   `WB_USAGE_PUSH_TOKEN`; ignored when unset or on `ENVIRONMENT=production`.
   The node's `api_usage_log` (own rows only, `origin IS NULL`) and weather
@@ -171,12 +171,16 @@ mini LAN-only), piggybacking on the snapshot artifact (misses dev).
   first push uploads the node's whole history (`--since` limits it).
 - **Node identity:** a UUID in the node DB (`instance_settings.node_db_id`),
   not a file, so a recreated DB starts a new id space instead of colliding.
-  `worktree_init.py --fork-db` deletes it from the copy for the same reason.
+  `worktree_init.py --fork-db` deletes it from the copy for the same reason,
+  and sets `push_floor:<table>` to the copy's max ids so the fork's fresh id
+  never re-sends main's copied rows (it pushes only what it records itself).
 - **Prod side:** `api/usage_ingest.py`, `GET /api/admin/usage/ingest/watermark`
   and `POST /api/admin/usage/ingest`. Explicit JSON rows (not ORM dumps), so
   node and prod may run different SHAs. `node_usage_ingest`
   `UNIQUE(node_db, source_table, local_id)` makes re-sends no-ops; a node DB id
   already used by another origin is a 409. Timestamps stay the node's.
+  `node_usage_ingest` is kept forever, like the rows it points at (a few rows
+  per node cycle).
 - **What lands:** `api_usage_log` rows with `origin`, user/flight dropped
   (node ids mean nothing here). `cost_ledger` rows as `category="node"`,
   original `action` kept, `user_id="system:<origin>"`, provenance + the node's
@@ -190,7 +194,9 @@ mini LAN-only), piggybacking on the snapshot artifact (misses dev).
   Variable and its per-unit rows divide the total without it. Not in
   `other_llm` (that is pilots' side calls).
 - **Auth:** `mint-token --origin <name>` (run on prod) creates an `ff_` token
-  on the service account `system:<name>` with scope `usage:ingest` only. The
+  on the service account `system:<name>` with scope `usage:ingest` only, and
+  the account's unapproved `users` row (prod's `api_tokens.user_id` keeps an
+  FK to `users` from migration 007). The
   origin comes from the token, not the payload. The endpoints read the bearer
   themselves and refuse anything without that scope, admin tokens and
   sessions included; flyfun-common's scope registry has no paths for it, so

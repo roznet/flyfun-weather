@@ -66,6 +66,10 @@ COST_LEDGER = "cost_ledger"
 SOURCE_TABLES = (API_USAGE, COST_LEDGER)
 
 NODE_DB_ID_KEY = "node_db_id"
+#: ``push_floor:<table>``: the highest local id this DB must never send. Set by
+#: ``worktree_init.py --fork-db`` on the copy, whose rows up to the fork point
+#: are main's and already pushed under main's node id.
+PUSH_FLOOR_KEY = "push_floor:{}"
 
 #: Rows per table per POST; also the server's cap on one request.
 BATCH_SIZE = 500
@@ -140,6 +144,15 @@ def get_node_db_id(db: Session) -> str:
     return row.value
 
 
+def push_floors(db: Session) -> dict[str, int]:
+    """Per source table, the local id up to which rows are not this DB's to send."""
+    out = {}
+    for table in SOURCE_TABLES:
+        row = db.get(InstanceSettingRow, PUSH_FLOOR_KEY.format(table))
+        out[table] = int(row.value) if row is not None else 0
+    return out
+
+
 def collect_api_usage(
     db: Session, after_id: int, limit: int, since: datetime | None = None,
 ) -> tuple[list[dict], int | None]:
@@ -165,12 +178,18 @@ def collect_api_usage(
         if weighted is not None and not 0 <= weighted <= MAX_ROW_WEIGHTED_CALLS:
             _skip(API_USAGE, r.id, f"weighted_calls {weighted} outside [0, {MAX_ROW_WEIGHTED_CALLS:g}]")
             continue
+        calls = min(max(r.api_calls or 0, 0), MAX_ROW_API_CALLS)
+        if calls != (r.api_calls or 0):
+            logger.warning(
+                "Usage push: api_usage_log %d api_calls %s sent as %d",
+                r.id, r.api_calls, calls,
+            )
         rows.append({
             "local_id": r.id,
             "timestamp": _utc(r.timestamp).isoformat(),
             "service": _wire_name(r.service),
             "pipeline": _wire_name(r.pipeline),
-            "api_calls": min(max(r.api_calls or 0, 0), MAX_ROW_API_CALLS),
+            "api_calls": calls,
             "weighted_calls": weighted,
         })
     return rows, (scanned[-1].id if scanned else None)
@@ -274,7 +293,10 @@ def push(
         if resp.status_code != 200:
             result.error = f"watermark: HTTP {resp.status_code} {resp.text[:200]}"
             return result
-        marks = {t: int(resp.json().get(t) or 0) for t in SOURCE_TABLES}
+        floors = push_floors(db)
+        marks = {
+            t: max(int(resp.json().get(t) or 0), floors[t]) for t in SOURCE_TABLES
+        }
 
         while True:
             rows, scanned = {}, {}
@@ -491,17 +513,31 @@ def ingest(
 
 
 def mint_token(db: Session, origin: str, *, expires_days: int | None = None) -> str:
-    """Create a node's upload token; returns the raw token (shown once)."""
+    """Create a node's upload token; returns the raw token (shown once).
+
+    Creates the service account's ``users`` row first when missing: prod's
+    ``api_tokens.user_id`` still carries migration 007's FK to ``users.id``
+    (the model does not declare it, so ``create_all`` DBs lack it). Unapproved,
+    like no pilot: the token's scope reaches the ingest endpoints only.
+    """
     from datetime import timedelta
 
     from flyfun_common.admin import generate_api_token
+    from flyfun_common.db.models import UserRow
 
     from weatherbrief.db.models import ApiTokenRow
 
     validate_origin(origin)
+    user_id = f"{SERVICE_ACCOUNT_PREFIX}{origin}"
+    if db.get(UserRow, user_id) is None:
+        db.add(UserRow(
+            id=user_id, provider="api_token", provider_sub=user_id,
+            display_name=f"Usage push: {origin}", approved=False,
+        ))
+        db.flush()
     raw = generate_api_token()
     db.add(ApiTokenRow(
-        user_id=f"{SERVICE_ACCOUNT_PREFIX}{origin}",
+        user_id=user_id,
         token_hash=hashlib.sha256(raw.encode()).hexdigest(),
         name=f"usage push: {origin}",
         scope=INGEST_SCOPE,
