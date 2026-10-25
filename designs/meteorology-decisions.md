@@ -7117,7 +7117,7 @@ hours × 102 MB + ~56 surface steps × 13 MB ≈ 3.6 GB cold), wall time.
 
 
 
-## 66. No ICON past ICON-EU's horizon: no ICON global from Open-Meteo
+## 66. No ICON past ICON-EU's horizon or domain: no ICON global from Open-Meteo
 
 **Date:** 2026-10-25. **Part of** #910.
 
@@ -7137,6 +7137,14 @@ to ~7.5 days), unenriched.
   earlier of Open-Meteo's `data_end` and `icon_eu_horizon_end(as_of_time)`, so
   the skip is the ordinary `MODEL_SKIPPED_HORIZON` notice, with or without GRIB
   enrichment. `max_days` stays 7 (the coarse days-out gate).
+- **Same for the domain:** a route with any point outside ICON-EU's box
+  (29.5-70.5°N, 23.5°W-62.5°E; `route_in_icon_eu_domain`, all-or-nothing) has
+  no ICON slot (`MODEL_SKIPPED_REGION`), where it used to get Open-Meteo's
+  blend, ICON global outside the box (e.g. EGLL-GCLP, the Gulf, Svalbard).
+  **Owner (2026-10-25):** skip ICON outside the ICON-EU domain too. Not
+  chosen: an ICON-EU slot for the in-domain points only (models are
+  all-or-nothing per route). North-American routes were already skipped by
+  region.
 - **Historical briefings unchanged:** DWD keeps no old runs, so replays stay on
   Open-Meteo as before.
 - Inside the horizon nothing changes: the GRIB-primary fallback still fills

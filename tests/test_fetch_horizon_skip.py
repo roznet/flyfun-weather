@@ -110,3 +110,56 @@ def test_historical_icon_keeps_open_meteo():
     # Replays stay on Open-Meteo as before: DWD keeps no old ICON-EU runs.
     result = _run_icon(datetime(2026, 5, 9, 5, 0, tzinfo=timezone.utc), historical=True)
     assert "icon" in result.models_fetched
+
+
+def _run_icon_route(route, *, historical: bool = False):
+    def fake_fetch_multi_point(self, points, model, *, start_date=None, end_date=None, chunk_size=None):
+        self._record_call()
+        return [_make_forecast(p, model) for p in points]
+
+    with _disable_elevation(), patch(
+        "weatherbrief.fetch.open_meteo.OpenMeteoClient.fetch_multi_point",
+        new=fake_fetch_multi_point,
+    ), patch.object(fetch_module, "_open_meteo_live_horizons", return_value={}):
+        return fetch_module.run_fetch(
+            route=route,
+            departure_time=datetime(2026, 5, 5, 9, 0, tzinfo=timezone.utc),
+            models=[ModelSource.GFS, ModelSource.ICON],
+            enrich_grib=False,
+            as_of_time=AS_OF,
+            historical_mode=historical,
+        )
+
+
+def _route_to_canaries():
+    from weatherbrief.models import RouteConfig, Waypoint
+
+    # GCLP (27.9°N) is south of ICON-EU's 29.5°N edge.
+    return RouteConfig(
+        name="EGTK-GCLP",
+        waypoints=[
+            Waypoint(icao="EGTK", name="Oxford", lat=51.8361, lon=-1.32),
+            Waypoint(icao="GCLP", name="Gran Canaria", lat=27.9319, lon=-15.3866),
+        ],
+        cruise_altitude_ft=8000,
+        flight_duration_hours=6.0,
+    )
+
+
+def test_icon_skipped_when_route_leaves_icon_eu_domain():
+    result = _run_icon_route(_route_to_canaries())
+    assert result.models_fetched == ["gfs"]
+    assert any(
+        d.code == FetchCode.MODEL_SKIPPED_REGION and d.message.startswith("ICON")
+        for d in result.diagnostics
+    )
+
+
+def test_icon_kept_inside_icon_eu_domain():
+    result = _run_icon_route(_route())
+    assert sorted(result.models_fetched) == ["gfs", "icon"]
+
+
+def test_historical_icon_outside_domain_keeps_open_meteo():
+    result = _run_icon_route(_route_to_canaries(), historical=True)
+    assert "icon" in result.models_fetched

@@ -390,6 +390,15 @@ def run_fetch(
             )
             models_skipped_region.append(model.value)
             continue
+        if model == ModelSource.ICON and not historical_mode:
+            # ICON is ICON-EU only (meteorology-decisions §66): a route with a
+            # point outside its domain would get ICON global from Open-Meteo.
+            from weatherbrief.fetch.grib.icon_eu_fetch import route_in_icon_eu_domain
+
+            if not route_in_icon_eu_domain(route_points):
+                logger.info("Skipping icon: route leaves the ICON-EU domain")
+                models_skipped_region.append(model.value)
+                continue
         # Live horizon check: Open-Meteo's data_end_time can fall short of
         # the static config horizon for a given run. Skip rather than fetch
         # a structurally-valid response of all-null values. Compared against
