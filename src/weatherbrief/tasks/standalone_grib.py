@@ -438,6 +438,7 @@ def icon_snapshot_cold_steps(
     cold = {key[0] for key, (_url, ck) in wanted.items() if not is_cached(run_dir, ck)}
     return sorted(f for f in steps if f in cold or predecessor_of.get(f) in cold)
 
+
 def ensure_icon_cloud_diag_files(
     init_date: str,
     init_hour: int,
