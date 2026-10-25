@@ -7104,6 +7104,7 @@ the same coverage rule, switch and drill as ICON (§63).
 - `WB_GRIB_SNAPSHOTS=icon` rolls GFS back alone.
 
 **To measure** (mini): the side-by-side for GFS (category agreement,
-sounding-derived fields), bytes per cycle (~28 sounding hours × 70 MB +
+sounding-derived fields, and that CAT / icing layer counts and tiers don't
+shift on the 50 hPa spacing), bytes per cycle (~28 sounding hours × 70 MB +
 ~56 surface steps × 13 MB ≈ 2.7 GB cold), wall time.
 
