@@ -6994,6 +6994,33 @@ DWD isobaric ICON-EU instead of Open-Meteo's blend (fewer, coarser upper
 levels; 875/825/775 hPa added), surface from ICON-EU bilinear. GFS and ECMWF
 rows untouched.
 
-**Measured:** pending. `scripts/compare_grib_snapshots.py` on the mini gives
-the side-by-side (category agreement, ceiling, visibility, wind, gust, T,
-freezing level, precipitation) and the download/decode time; record it here.
+**Measured** (2026-10-25, MacBook, ICON 00Z, `scripts/compare_grib_snapshots.py
+--limit 100`: 4 days, 2,500 point-hours, same init both sides).
+
+- **Cost.** Billed weight 1,340 → 13; 99/100 airports from GRIB, the one
+  fallback outside the grid. Build 96 s (GRIB) vs 12 s (Open-Meteo).
+- **DWD names.** 2,370/2,370 files for 25 steps, 0 failures: the level list
+  and variable names are right.
+- **Flight category: 85.6 % identical** (2,139/2,500). GRIB minus Open-Meteo,
+  in categories: −2: 4, −1: 124, +1: 213, +2: 19, +3: 1, so the GRIB column
+  reads one or more categories *more VFR* about 1.9× as often as less.
+  Visibility bias +349 m (mean |Δ| 1.5 km; worst LFST 10.4 → 38.6 km, LFPN
+  9.8 → 35.5 km, one reverse LFBA 39.6 → 13.5 km): the bilinear ICON-EU cell
+  against Open-Meteo's land cell and D2 blend, the same visibility effect §61
+  measured (#924). Ceiling bias −221 ft (mean |Δ| 1,027 ft, n = 1,595, 113
+  one-sided), the worst GRIB lower (LFMY 38,667 → 4,548 ft).
+- **Other fields** mean |Δ|: wind 0.62 kt, gust 1.03 kt (max 12.8), T 2 m
+  0.30 °C, freezing level 177 ft (max 4,435 ft), precipitation 0.04 mm/h.
+- **Full map cycle** (619 airports, 2 decode workers): 608 from GRIB in
+  288 s, 11 to the fallback in 1 Open-Meteo call. The 11 are outside ICON-EU
+  (Azores, Saint-Pierre, Svalbard, north of 70.5°N), so one call per cycle is
+  the floor. Cycle 452 s, peak RSS 1.7 GB, icon-eu cache +2.46 GB.
+- **Drill** `icon` → 0/9 from GRIB, `icon:half` → 4/9, `WB_GRIB_SNAPSHOTS=0`
+  → Open-Meteo first; no alternates rows lost.
+- **Alternates** cold 12–96 s (96 s on a contended link), warm 6–7 s, against
+  one Open-Meteo request before.
+
+**Open owner call:** ~14 % of map point-hours change colour, leaning VFR.
+Whether that is the more accurate column is answerable from this pipeline's
+own METAR scoring (ICON category hit rate and optimistic bias, before vs
+after the switch), not from the side-by-side.
