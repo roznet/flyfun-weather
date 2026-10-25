@@ -527,8 +527,13 @@ def warm_flights(
             stats[f"cut_by_{why}"] += 1
             stats["cut_ids"].append(str(getattr(row, "id", "?")))
 
+        # The flight cap counts only flights this source actually works on:
+        # in a 72 h window most rows belong to another source (a D2 flight on
+        # the EU pass, a non-US route on the HRRR pass), and spending the cap
+        # on them would cut this source's own flights (PR #931 review).
+        attempted = 0
         for i, row in enumerate(rows):
-            if i >= limits.max_flights:
+            if attempted >= limits.max_flights:
                 _cut(row, CUT_FLIGHTS)
                 continue
             if stop_reason:
@@ -558,6 +563,7 @@ def warm_flights(
                     "%s: flight %s skipped (%s)", label, flight.id, outcome.reason,
                 )
                 continue
+            attempted += 1
             hours |= outcome.hours
             if outcome.status == "warmed":
                 stats["flights_warmed"] += 1
@@ -597,9 +603,13 @@ def warm_flights(
     budget = (
         f"{limits.max_bytes / _GB:.0f} GB" if limits.max_bytes is not None else "uncapped"
     )
-    logger.info(
-        "%s: considered %d, warmed %d, skipped %d, failed %d, cut %d; "
+    # A cut means flights brief cold: WARNING with a fixed token so repeated
+    # cuts (a budget too tight for the traffic) can be alerted on.
+    log = logger.warning if stats["flights_cut"] else logger.info
+    log(
+        "%s%s: considered %d, warmed %d, skipped %d, failed %d, cut %d; "
         "%d distinct hours, %.2f GB new (budget %s), %.0f s%s%s",
+        "FLIGHT_WARM_CUT " if stats["flights_cut"] else "",
         label, stats["flights_considered"], stats["flights_warmed"],
         stats["flights_skipped"], stats["flights_failed"], stats["flights_cut"],
         stats["distinct_hours"], stats["bytes_downloaded"] / _GB, budget,

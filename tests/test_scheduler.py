@@ -1060,6 +1060,21 @@ class TestPrecacheLoopYielding:
         assert warm_calls[0][1] == {"carried_bytes": 0, "carried_seconds": 0.0}
         assert warm_calls[1][1] == {"carried_bytes": 123, "carried_seconds": 4.5}
 
+    def test_failing_flight_warm_does_not_starve_the_sweep(self):
+        done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
+        warm_calls: list = []
+
+        class _Boom(dict):
+            def get(self, *_a):
+                raise RuntimeError("db down")
+
+        calls, purges = self._run_loop(
+            [done], warm_sequence=[_Boom()], warm_calls=warm_calls,
+        )
+        assert len(calls) == 1  # the GFS sweep still ran on tick 1
+        assert len(warm_calls) == 2  # the failed warm is retried on tick 2
+        assert purges == ["gfs", "gfs"]
+
     def test_low_disk_flight_warm_is_retried(self):
         done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
         low = {"deferred": 0, "low_disk": 1, "bytes_downloaded": 0, "wall_seconds": 0.0}

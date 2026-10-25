@@ -2754,38 +2754,46 @@ async def run_grib_precache_loop(app_state) -> None:
             # Flight warms first: near-100% hit rate on the briefings that will
             # actually run, ahead of the blanket airport-profile sweeps.
             for source_key, model, slug in flight_targets:
-                marker = store.get_sync(source_key, model)
-                if marker is None:
-                    continue
-                key = marker.init.strftime("%Y%m%d_%Hz")
-                done_key = f"{slug}:flights"
-                if not should_warm(slug, key, last_done.get(done_key), now):
-                    continue
-                carry_key, carried_bytes, carried_s = warm_carry.get(slug, (key, 0, 0.0))
-                if carry_key != key:
-                    carried_bytes, carried_s = 0, 0.0
-                db_path = getattr(app_state, "db_path", "")
-                stats = await asyncio.to_thread(
-                    warm_flights, slug, marker.init, db_path,
-                    carried_bytes=carried_bytes, carried_seconds=carried_s,
-                )
-                if stats.get("deferred"):
-                    # Yielded to an interactive briefing (#490): leave
-                    # last_done alone so the next tick resumes this run.
-                    warm_carry[slug] = (
-                        key, stats["bytes_downloaded"], stats["wall_seconds"],
+                # Each source on its own: a failing warm (DB error, a purge
+                # raising) must not cost the other sources or the sweeps below.
+                try:
+                    marker = store.get_sync(source_key, model)
+                    if marker is None:
+                        continue
+                    key = marker.init.strftime("%Y%m%d_%Hz")
+                    done_key = f"{slug}:flights"
+                    if not should_warm(slug, key, last_done.get(done_key), now):
+                        continue
+                    carry_key, carried_bytes, carried_s = warm_carry.get(
+                        slug, (key, 0, 0.0),
                     )
-                    continue
-                if stats.get("low_disk"):
-                    # Not started; retried each tick until space frees up.
-                    continue
-                warm_carry.pop(slug, None)
-                # Enforce the size cap once per warm, off the per-briefing hot
-                # path (#475): with two live runs each model stays under its cap.
-                await asyncio.to_thread(
-                    purge_old_runs, data_dir, slug, enforce_cap=True,
-                )
-                last_done[done_key] = key
+                    if carry_key != key:
+                        carried_bytes, carried_s = 0, 0.0
+                    db_path = getattr(app_state, "db_path", "")
+                    stats = await asyncio.to_thread(
+                        warm_flights, slug, marker.init, db_path,
+                        carried_bytes=carried_bytes, carried_seconds=carried_s,
+                    )
+                    if stats.get("deferred"):
+                        # Yielded to an interactive briefing (#490): leave
+                        # last_done alone so the next tick resumes this run.
+                        warm_carry[slug] = (
+                            key, stats["bytes_downloaded"], stats["wall_seconds"],
+                        )
+                        continue
+                    if stats.get("low_disk"):
+                        # Not started; retried each tick until space frees up.
+                        continue
+                    warm_carry.pop(slug, None)
+                    # Enforce the size cap once per warm, off the per-briefing
+                    # hot path (#475): with two live runs each model stays
+                    # under its cap.
+                    await asyncio.to_thread(
+                        purge_old_runs, data_dir, slug, enforce_cap=True,
+                    )
+                    last_done[done_key] = key
+                except Exception:
+                    logger.error("Flight warm %s cycle failed", slug, exc_info=True)
 
             for source_key, model, slug, fn in targets:
                 marker = store.get_sync(source_key, model)
