@@ -137,7 +137,7 @@ def _fetch_eta_snapshots(
         ContextVar (propagated via ``copy_context`` at submit time) — the
         interactive briefing path resolves to INTERACTIVE.
         """
-        import requests
+        from weatherbrief.fetch.grib import _grib_session
 
         meta = metadata.get(model)
         if meta is None:
@@ -145,7 +145,7 @@ def _fetch_eta_snapshots(
             return {}
         om_init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
         days = MODEL_FORECAST_DAYS.get(model, 4)
-        session = requests.Session()
+        session = _grib_session()
 
         snaps: list[dict] = []
         if model == "ecmwf":

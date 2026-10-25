@@ -1548,6 +1548,7 @@ def _fetch_icon_fields(init_date, init_hour, steps, airports, variant, priority)
 
 def _fetch_icon_d2_lookup(init_time, airports, steps, priority) -> "_GribDiagLookup | None":
     """ICON-D2's own cloud diagnostics (cover, ceiling, CAPE) at *airports*."""
+    from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
     from weatherbrief.tasks.standalone_grib import (
         datetime_to_init_parts,
@@ -1556,7 +1557,7 @@ def _fetch_icon_d2_lookup(init_time, airports, steps, priority) -> "_GribDiagLoo
 
     init_date, init_hour = datetime_to_init_parts(init_time)
     try:
-        with requests.Session() as session:
+        with _grib_session() as session:
             by_fhour = fetch_icon_cloud_diag(
                 init_date, init_hour, steps,
                 [a.lat for a in airports], [a.lon for a in airports],
@@ -2654,8 +2655,12 @@ def run_standalone_cycle(
     t_start = time.monotonic()
     now = datetime.now(timezone.utc)
 
+    from weatherbrief.fetch.grib import _grib_session
+
     db = SessionLocal()
-    session = requests.Session()
+    # Pooled for the parallel GRIB downloads it is handed to (a plain
+    # Session's 10 connections overflowed: "Connection pool is full").
+    session = _grib_session()
 
     # Sample parent RSS + cgroup memory every 5s for the entire cycle so
     # transient peaks during fetch (e.g. concurrent in-flight Open-Meteo

@@ -114,7 +114,7 @@ def fetch_gfs_cloud_diag(
         as lats/lons).
         Missing hours are omitted from the dict.
     """
-    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel, _grib_session
     from weatherbrief.fetch.grib.decode import build_cloud_diagnostics
     from weatherbrief.fetch.grib.gfs_idx import plan_cloud_diag_byte_ranges
     from weatherbrief.fetch.grib.grib_fetch import fetch_cloud_diag_ranges, fetch_idx
@@ -122,7 +122,7 @@ def fetch_gfs_cloud_diag(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        session = requests.Session()
+        session = _grib_session()
 
     # TTL purge, as the briefing enrichment path does: on a compute node this is
     # the only thing that ages the cache (no scheduler retention pass runs there),
@@ -219,7 +219,7 @@ def fetch_icon_cloud_diag(
     sampled hour; it is fetched as a ``rain_con``-only blob (one file, not the
     twelve of the full cloud-diag set) unless a full blob is already cached.
     """
-    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel, _grib_session
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
@@ -235,7 +235,7 @@ def fetch_icon_cloud_diag(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        session = requests.Session()
+        session = _grib_session()
 
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
@@ -553,6 +553,7 @@ def ensure_icon_snapshot_files(
     accumulated surface of each predecessor), no decode, so a pre-warm (#929)
     leaves exactly what the snapshot path reads. Never raises for a file.
     """
+    from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
 
     variant = variant or ICON_EU
@@ -562,7 +563,7 @@ def ensure_icon_snapshot_files(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        with requests.Session() as own_session:
+        with _grib_session() as own_session:
             return ensure_icon_snapshot_files(
                 init_date, init_hour, steps,
                 variant=variant, session=own_session, data_dir=data_dir,
@@ -604,7 +605,7 @@ def fetch_icon_snapshot_fields(
     whether a point is covered). Never raises for a download or decode
     failure: those are logged and cost the hour.
     """
-    from weatherbrief.fetch.grib import _dispatch_decode_parallel
+    from weatherbrief.fetch.grib import _dispatch_decode_parallel, _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
         ICON_SNAPSHOT_PRESSURE_VARIABLES,
@@ -619,7 +620,7 @@ def fetch_icon_snapshot_fields(
     if data_dir is None:
         data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if session is None:
-        with requests.Session() as own_session:
+        with _grib_session() as own_session:
             return fetch_icon_snapshot_fields(
                 init_date, init_hour, forecast_hours, lats, lons,
                 data_dir=data_dir, session=own_session, priority=priority,
@@ -721,6 +722,7 @@ def fetch_gfs_snapshot_fields(
     """
     from weatherbrief.fetch.grib import (
         _gfs_previous_step,
+        _grib_session,
         gfs_sounding_levels,
         read_gfs_grib_points,
     )
@@ -735,9 +737,10 @@ def fetch_gfs_snapshot_fields(
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
     steps = sorted(set(forecast_hours))
     try:
-        # Own session (the concurrent cloud-diag thread owns the caller's);
-        # pinned so a purge from another caller can't evict the run mid-read.
-        with requests.Session() as session, pin_run_dir(run_dir):
+        # Own session (the concurrent cloud-diag thread owns the caller's),
+        # pooled for the reader's parallel downloads; pinned so a purge from
+        # another caller can't evict the run mid-read.
+        with _grib_session() as session, pin_run_dir(run_dir):
             sounding, surface, _ = read_gfs_grib_points(
                 init_date, init_hour, steps, lats, lons,
                 run_dir=run_dir, session=session,
