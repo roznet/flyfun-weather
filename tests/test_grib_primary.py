@@ -99,9 +99,12 @@ class _FakeClient:
 # ---------------------------------------------------------------------------
 
 
+_ALL = (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOFRANCE)
+
+
 @pytest.mark.parametrize("value,expected", [
-    (None, (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS)),
-    ("1", (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS)),
+    (None, _ALL),
+    ("1", _ALL),
     ("0", ()),
     ("off", ()),
     ("ecmwf", (ModelSource.ECMWF,)),

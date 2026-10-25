@@ -7391,3 +7391,75 @@ display, briefings and the thermo track were not affected.
   rewritten here. D2 and EU rows are both `model="icon"`; from now on a D2 row
   with a native grade is told apart by `nwp_conv_method="nwp_explicit"`.
 
+## 72. Météo-France slot from AROME GRIB only: no slot, and no Open-Meteo, outside AROME (#940)
+
+**Date:** 2026-10-25. **Part of** #910. Mechanics: `weather-engine-specs.md`
+§ "Météo-France AROME" and section E.
+
+The `meteofrance` slot came from Open-Meteo's `meteofrance_seamless` (AROME
+inside its footprint, ARPEGE outside, an unmarked seam), with AROME condensate
+patched on when `WB_AROME_ENABLED` was set (#529). It was the last mainstream
+slot still billed on Open-Meteo.
+
+**Decisions.**
+
+- **The slot is AROME 0.025° from the Météo-France mirror, or nothing.** Whole
+  column from IP1 (t, r, z, u, v) + IP2 (condensate, cc) on all 24 levels,
+  surface from SP1 (2 m T/RH, 10 m wind, gust, tp, msl, tcc) + SP2 (2 m dew
+  point, surface pressure, low/mid/high cover, CAPE). Never ARPEGE, never
+  Open-Meteo: `meteofrance` is in `NO_OPEN_METEO_MODELS`, so the GRIB-primary
+  fallback never calls Open-Meteo for it.
+- **Gates, all-or-nothing per route:** every route point inside the AROME band
+  table (`MODEL_SKIPPED_REGION`, "route outside the AROME area"), the window's
+  last hour within the newest run's 51 h horizon (`MODEL_SKIPPED_HORIZON`,
+  "beyond AROME's ~48 h"), and the kill switch `WB_AROME_ENABLED` (now **on
+  by default**; `=0` removes the slot with a `model_disabled` notice).
+- **Failure drops the slot** (`no_fallback`): a missing run, a short hour or a
+  point outside the decoded grid leaves no `meteofrance` section and a
+  `models_failed` line ("AROME GRIB ..."), where other GRIB-primary slots fall
+  back to Open-Meteo. A briefing with three models is preferred to an
+  ARPEGE-seamed or mixed-run fourth.
+- **Not used:** `blh` from SP2 (left for a follow-up; nothing on the
+  `meteofrance` slot read it before) and vertical velocity (IP3, deferred by
+  the owner).
+- **Fields AROME does not publish on these packages are None** (missing-data
+  semantics, never zero): visibility, the surface freezing-level field (the
+  sounding's own 0 °C crossing still comes from the column), CIN, lifted
+  index, precipitation probability, and the rain/showers/snowfall split (only total precipitation, from `tp`
+  differences, the first hour seeded from the previous hour's `tp`). The
+  Open-Meteo slot lacked precip probability, freezing level, visibility, CIN
+  and LI already.
+- **Grades and refresh (issue decision 5):** the slot counts toward grades
+  only where the pilot's profile lists it in `advisory_models`. The refresh
+  gate now counts only those models too (`refresh_counting_models`, the same
+  resolution as `advise._compute_advisory_model_names`, profile looked up by
+  `resolve_flight_advisory_models` in `gated_data_status`), so a new AROME,
+  UKMO or GEM run alone no longer turns a D-0 press into a full refresh.
+  **Weakness:** a profile with no `advisory_models` list (None) counts every
+  model, `meteofrance` included, for grades and now for refresh. The issue
+  found no prod profile listing `meteofrance`, but a None profile would see
+  AROME's 8 runs/day as refresh triggers.
+- **Historical / replay:** no refusal in the gate. A historical briefing
+  uses the AROME run at its `as_of_time` while the mirror keeps it (about 15
+  days on 2026-10-25, retention not confirmed); older ones fail the run
+  lookup and have no `meteofrance` slot. No Open-Meteo replay path.
+- **Time scan:** `meteofrance` is a GRIB model; the adjacent-day extension
+  never calls Open-Meteo for it, and a confirm whose AROME slot dropped
+  removes that slot instead of failing the candidate.
+- **Flight warm (#929):** an `arome` pass (horizon 51 h, 4 GB per pass) for
+  upcoming flights whose profile requests `meteofrance` and whose route
+  passes the region rule; cache cap 6 → 12 GiB (~650 MB
+  per 6 h group set: IP1 + IP2 + SP1 + SP2, one or two sets per flight).
+- **Not changed:** `meteofrance:openmeteo` freshness metadata and the
+  `meteofrance` META_URLS stay, because standalone verification and the
+  airport profile still read Open-Meteo Météo-France. Follow-up.
+
+**Measured.** Unit tests only: the OVH mirror is not reachable from cloud
+sessions, so field names (IP1/SP1/SP2 shortNames and the parameter triples in
+`_AROME_SURFACE_PARAM_MAP`) are from the #529 file inventory, not a live
+decode. The advisory replay diff is **pending on the Mac**:
+`scripts/compare_grib_primary.py <id> --side on` on ~5 in-domain flights
+from main and from this branch (main's side has the Open-Meteo slot, this
+branch's the AROME one), plus `scripts/compare_pack_surface_openmeteo.py` on
+the new packs against `meteofrance_arome_france`. Check the decode log for
+"unmapped AROME surface param" lines.

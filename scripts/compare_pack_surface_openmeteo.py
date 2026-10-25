@@ -16,10 +16,10 @@ processing of the SAME run:
    accumulation or unit slip shows up as (×3 on a 3-hourly step, ×1000 on
    metres vs mm).
 
-For GFS the sounding is new from GRIB as well (ECMWF's and ICON's already
-were before #912), so its slots also compare temperature, RH, wind and
-height at ``--levels`` (default 850, 700, 500 hPa), reported as
-``field@level``.
+For GFS and Météo-France (AROME, #940) the sounding is new from GRIB as
+well (ECMWF's and ICON's already were before #912), so their slots also
+compare temperature, RH, wind and height at ``--levels`` (default 850, 700,
+500 hPa), reported as ``field@level``.
 
 Billing: each request is one location-set × ~1.6 (16 variables / 10) per
 point, ~2.8 for GFS with the default levels. ``--budget`` (default 300
@@ -38,7 +38,7 @@ The single-run endpoint and its ``models`` names are configurable because
 they were not checked from the session that wrote this:
 ``--base-url`` (default the Open-Meteo Single Runs API) and
 ``--om-model ecmwf=ecmwf_ifs --om-model icon_d2:dwd=icon_d2
---om-model gfs:noaa=gfs_global``.
+--om-model gfs:noaa=gfs_global --om-model arome:mf=meteofrance_arome_france``.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ LEVEL_VARS: dict[str, str] = {
 }
 # Sources whose sounding is compared too: the slots whose column came from
 # Open-Meteo before GRIB-primary.
-SOUNDING_SOURCES = ("gfs", "gfs:noaa")
+SOUNDING_SOURCES = ("gfs", "gfs:noaa", "arome:mf", "meteofrance")
 DEFAULT_LEVELS = (850, 700, 500)
 
 # |Δ| above which one sample is listed as suspect.
@@ -113,6 +113,11 @@ DEFAULT_OM_MODELS: dict[str, str] = {
     # GFS 0.25° alone, not the gfs_seamless blend briefings fetched (#913).
     "gfs:noaa": "ncep_gfs025",
     "gfs": "ncep_gfs025",
+    # AROME France 0.025° alone, what meteofrance_seamless served inside
+    # AROME's footprint (#940). The name was not checked from the session
+    # that added it: override with --om-model arome:mf=<name> if refused.
+    "arome:mf": "meteofrance_arome_france",
+    "meteofrance": "meteofrance_arome_france",
 }
 DEFAULT_BASE_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
 

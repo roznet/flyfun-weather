@@ -180,10 +180,11 @@ _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     # (12 h, ~2 runs) is the main bound and this cap the backstop for a busy
     # day of many flights. Enforced after each GFS warm and daily.
     "gfs": 20.0,
-    # AROME (#529): ~146 MB per package group, one or two groups per flight
-    # window, ~2 runs live under the 9 h TTL. Not precached, so enforced from
-    # the daily retention pass only; the TTL is the primary bound.
-    "arome": 6.0,
+    # AROME (#940): ~650 MB per 6-hour group across IP1/IP2/SP1/SP2, one or
+    # two groups per flight window (~1.3 GB per run for one flight), ~2-3
+    # runs live under the 9 h TTL. Enforced after each AROME flight warm and
+    # daily; the TTL is the primary bound.
+    "arome": 12.0,
 }
 
 

@@ -20,6 +20,10 @@ class FetchCode(StrEnum):
     # null values across all hourly slots — defensive trap for the same
     # condition when the horizon precheck couldn't catch it.
     MODEL_RETURNED_EMPTY = "model_returned_empty"
+    # The model's only source is switched off on this deployment (#940:
+    # WB_AROME_ENABLED=0, or GRIB enrichment / WB_GRIB_PRIMARY excludes the
+    # meteofrance slot, which has no Open-Meteo fallback).
+    MODEL_DISABLED = "model_disabled"
     GRIB_ENRICHMENT_FAILED = "grib_enrichment_failed"
     GRIB_ENRICHMENT_APPLIED = "grib_enrichment_applied"
     GRIB_SKIPPED_OUT_OF_RANGE = "grib_skipped_out_of_range"

@@ -235,11 +235,25 @@ def decode_arome_pressure(
     longitudes: list[float],
     levels: list[int] | None = None,
 ) -> dict:
-    """Decode one AROME IP2 package group for the given hours (#529)."""
+    """Decode one AROME IP1 or IP2 package group for the given hours (#529, #940)."""
     with _log_decode("decode_arome_pressure", file_path):
         from weatherbrief.fetch.grib.decode import decode_arome_pressure_per_point
         return decode_arome_pressure_per_point(
             Path(file_path), fhours, latitudes, longitudes, levels,
+        )
+
+
+def decode_arome_surface(
+    file_path: str,
+    fhours: list[int],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> dict:
+    """Decode one AROME SP1 or SP2 package group for the given hours (#940)."""
+    with _log_decode("decode_arome_surface", file_path):
+        from weatherbrief.fetch.grib.decode import decode_arome_surface_per_point
+        return decode_arome_surface_per_point(
+            Path(file_path), fhours, latitudes, longitudes,
         )
 
 

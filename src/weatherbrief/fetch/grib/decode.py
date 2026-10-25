@@ -2825,18 +2825,32 @@ def d2_corridor_fully_valid(
 
 
 # ---------------------------------------------------------------------------
-# Météo-France AROME 0.025° condensate (#529)
+# Météo-France AROME 0.025° sounding, condensate and surface (#529, #940)
 # ---------------------------------------------------------------------------
 
 # Standard eccodes shortNames in the IP2 package. clwc/ciwc/cc are the same
 # names the ECMWF path decodes; crwc/cswc are ICE3's rain and snow.
+# IP1 (#940) carries the sounding under the ECMWF names; the raw_ keys are
+# what ``build_pressure_levels_from_grib`` converts (``_ECMWF_FULL_VAR_MAP``).
 _AROME_SHORTNAME_MAP: dict[str, str] = {
     "clwc": "cloud_liquid_water_kg_kg",
     "ciwc": "ice_mixing_ratio_kg_kg",
     "crwc": "rain_water_kg_kg",
     "cswc": "snow_water_kg_kg",
     "cc": "cloud_area_fraction_pct",
+    "t": "raw_temperature_k",
+    "r": "raw_relative_humidity_pct",
+    "z": "raw_geopotential_m2_s2",
+    "gh": "geopotential_height_m",
+    "u": "raw_u_wind_m_s",
+    "v": "raw_v_wind_m_s",
 }
+
+#: Sounding keys every AROME level must decode for its column to be used.
+AROME_SOUNDING_REQUIRED: tuple[str, ...] = (
+    "raw_temperature_k", "raw_relative_humidity_pct",
+    "raw_u_wind_m_s", "raw_v_wind_m_s",
+)
 
 # Météo-France LOCAL parameters, which eccodes reports as ``unknown`` and
 # which are therefore selected by (discipline, parameterCategory,
@@ -2910,7 +2924,12 @@ def decode_arome_pressure_per_point(
     longitudes: list[float],
     levels: list[int] | None = None,
 ) -> dict:
-    """Decode AROME IP2 condensate for the requested hours, per route point.
+    """Decode an AROME pressure package for the requested hours, per point.
+
+    ``IP2``: the condensate and cloud fraction (#529). ``IP1``: the sounding,
+    T / RH / geopotential / u / v (#940), stored under the ``raw_`` keys
+    ``build_pressure_levels_from_grib`` converts. The caller merges the two
+    packages' dicts per level.
 
     Reads the group file one message at a time with eccodes (a 146 MB group
     decoded whole through cfgrib would be ~2.8 GB of float arrays). Messages
@@ -2982,14 +3001,19 @@ def decode_arome_pressure_per_point(
                 if bw is None or bw.inb_idx.size == 0:
                     continue
 
-                vmax = float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
                 limit = (
                     _AROME_CC_FRACTION_MAX if field == "cloud_area_fraction_pct"
                     else _AROME_CONDENSATE_MAX_KG_KG
+                    if field in AROME_CONDENSATE_FIELDS
+                    else None
                 )
-                if vmax > limit:
-                    dropped.append(f"{field}@{level}hPa/f{fhour:03d} max={vmax:.4g}")
-                    continue
+                if limit is not None:
+                    vmax = (
+                        float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
+                    )
+                    if vmax > limit:
+                        dropped.append(f"{field}@{level}hPa/f{fhour:03d} max={vmax:.4g}")
+                        continue
 
                 interp = (
                     bw.w00 * values[bw.i0, bw.j0]
@@ -3006,6 +3030,11 @@ def decode_arome_pressure_per_point(
                         hour_points[int(pt_idx)].setdefault(level, {})[field] = (
                             min(max(v * 100.0, 0.0), 100.0)
                         )
+                        continue
+                    if field not in AROME_CONDENSATE_FIELDS:
+                        # Sounding field (IP1): stored raw, converted when the
+                        # column is built.
+                        hour_points[int(pt_idx)].setdefault(level, {})[field] = v
                         continue
                     # Interpolation can't create negatives from non-negative
                     # corners, but packing noise can; a mixing ratio is >= 0.
@@ -3025,6 +3054,277 @@ def decode_arome_pressure_per_point(
         "finite_fraction": finite_fraction,
         "dropped": dropped,
     }
+
+
+# AROME surface packages SP1 / SP2 (#940). shortName → our raw key. eccodes'
+# names depend on its tables version, so a field has every spelling seen in
+# the ECMWF/WMO tables for it, plus its (discipline, category, number) below.
+_AROME_SURFACE_SHORTNAMES: dict[str, str] = {
+    "2t": "t2m_k",
+    "2r": "rh2m_pct",
+    "2d": "d2m_k",
+    "10u": "u10_m_s",
+    "10v": "v10_m_s",
+    # Time-max of the instantaneous 10 m gust over the hour before the step.
+    "max_i10fg": "gust10_m_s",
+    "i10fg": "gust10_m_s",
+    "10fg": "gust10_m_s",
+    "fg10": "gust10_m_s",
+    "max_10fg": "gust10_m_s",
+    "gust": "gust10_m_s",
+    "tp": "tp_kg_m2",
+    "prmsl": "prmsl_pa",
+    "msl": "prmsl_pa",
+    "sp": "sp_pa",
+    "tcc": "tcc",
+    "lcc": "lcc",
+    "mcc": "mcc",
+    "hcc": "hcc",
+    "cape": "cape_jkg",
+}
+
+# Météo-France local or unnamed parameters, by (discipline, category, number):
+# total cloud (0/6/1, the issue's "local 0/6/1"), the gust (0/2/22) and
+# CAPE_INS (0/7/6).
+_AROME_SURFACE_PARAM_MAP: dict[tuple[int, int, int], str] = {
+    (0, 6, 1): "tcc",
+    (0, 6, 3): "lcc",
+    (0, 6, 4): "mcc",
+    (0, 6, 5): "hcc",
+    (0, 2, 22): "gust10_m_s",
+    (0, 7, 6): "cape_jkg",
+    (0, 1, 8): "tp_kg_m2",
+}
+
+#: Accumulated since the run start; the hourly amount is a step difference.
+AROME_SURFACE_ACCUMULATED: tuple[str, ...] = ("tp_kg_m2",)
+
+_AROME_COVER_KEYS = frozenset({"tcc", "lcc", "mcc", "hcc"})
+
+
+def _arome_surface_key(gid) -> str | None:
+    import eccodes
+
+    short = str(eccodes.codes_get(gid, "shortName")).lower()
+    key = _AROME_SURFACE_SHORTNAMES.get(short)
+    if key is not None:
+        return key
+    try:
+        param = (
+            int(eccodes.codes_get(gid, "discipline")),
+            int(eccodes.codes_get(gid, "parameterCategory")),
+            int(eccodes.codes_get(gid, "parameterNumber")),
+        )
+    except Exception:
+        return None
+    return _AROME_SURFACE_PARAM_MAP.get(param)
+
+
+def decode_arome_surface_per_point(
+    file_path: Path,
+    fhours: list[int],
+    latitudes: list[float],
+    longitudes: list[float],
+) -> dict:
+    """Decode an AROME surface package (SP1 / SP2) per route point (#940).
+
+    Message by message with eccodes, like the pressure packages; isobaric
+    messages are skipped. Values stay in GRIB units (K, %, m/s, Pa,
+    kg/m², J/kg) except the covers: a cover message whose domain maximum is
+    at most 1.5 is a 0–1 fraction and is stored ×100, so every cover leaves
+    here in %. The first message of an unmapped parameter is logged once, so
+    a run on real files lists what the package holds.
+
+    Returns ``{"points": {fhour: [{key: value}, ...]}, "unmapped": [str]}``.
+    """
+    import numpy as np
+
+    wanted_hours = set(int(h) for h in fhours)
+    n_points = len(latitudes)
+    points: dict[int, list[dict[str, float]]] = {
+        h: [{} for _ in range(n_points)] for h in wanted_hours
+    }
+    unmapped: set[str] = set()
+    weights_cache: dict[tuple, object] = {}
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+
+    import eccodes
+
+    with open(file_path, "rb") as f:
+        while True:
+            gid = eccodes.codes_grib_new_from_file(f)
+            if gid is None:
+                break
+            try:
+                if str(eccodes.codes_get(gid, "typeOfLevel")) == "isobaricInhPa":
+                    continue
+                fhour = _arome_message_end_step_h(gid)
+                if fhour is None or fhour not in wanted_hours:
+                    continue
+                key = _arome_surface_key(gid)
+                if key is None:
+                    try:
+                        unmapped.add(
+                            f"{eccodes.codes_get(gid, 'shortName')}"
+                            f"({eccodes.codes_get(gid, 'discipline')}/"
+                            f"{eccodes.codes_get(gid, 'parameterCategory')}/"
+                            f"{eccodes.codes_get(gid, 'parameterNumber')}"
+                            f"@{eccodes.codes_get(gid, 'typeOfLevel')})"
+                        )
+                    except Exception:
+                        pass
+                    continue
+                grid = _d2_read_message_grid(gid)
+                if grid is None:
+                    continue
+                lats_axis, lons_axis, values = grid
+                gkey = (
+                    values.shape, float(lats_axis[0]), float(lats_axis[-1]),
+                    float(lons_axis[0]), float(lons_axis[-1]),
+                )
+                bw = weights_cache.get(gkey)
+                if bw is None:
+                    bw = _bilinear_grid_weights(
+                        lats_axis, lons_axis, targets_lat, targets_lon,
+                    )
+                    weights_cache[gkey] = bw
+                if bw is None or bw.inb_idx.size == 0:
+                    continue
+                scale = 1.0
+                if key in _AROME_COVER_KEYS:
+                    vmax = (
+                        float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
+                    )
+                    if vmax <= 1.5:
+                        scale = 100.0
+                interp = (
+                    bw.w00 * values[bw.i0, bw.j0]
+                    + bw.w01 * values[bw.i0, bw.j1]
+                    + bw.w10 * values[bw.i1, bw.j0]
+                    + bw.w11 * values[bw.i1, bw.j1]
+                )
+                hour_points = points[fhour]
+                for k, pt_idx in enumerate(bw.inb_idx):
+                    v = float(interp[k])
+                    if math.isnan(v):
+                        continue
+                    hour_points[int(pt_idx)][key] = v * scale
+            finally:
+                eccodes.codes_release(gid)
+
+    if unmapped:
+        logger.info(
+            "AROME %s: unmapped surface parameters: %s",
+            Path(file_path).name, ", ".join(sorted(unmapped)),
+        )
+    return {"points": points, "unmapped": sorted(unmapped)}
+
+
+def build_arome_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]:
+    """AROME instantaneous surface fields in ``HourlyForecast`` units (#940).
+
+    ``raw`` is one point of :func:`decode_arome_surface_per_point`, both
+    surface packages merged. Precipitation needs the previous hour and is
+    :func:`arome_surface_rates`'.
+
+    - K → °C; RH from the 2 m RH, else from T/Td; dewpoint from Td, else
+      from T/RH.
+    - m/s → kt. The gust is the time-max over the hour ending at the step,
+      written on that hour (hourly output: the #441 "hold over its window"
+      rule is the hour itself).
+    - Pa → hPa (``prmsl``, ``sp``).
+    - CAPE as delivered (``CAPE_INS``), floored at 0.
+    - Covers already in % (the decode scales fractions).
+
+    AROME publishes no visibility, freezing level, CIN, lifted index or
+    precipitation probability: those stay None (§72).
+    """
+    out: dict[str, float | None] = {
+        "temperature_2m_c": None,
+        "dewpoint_2m_c": None,
+        "relative_humidity_2m_pct": None,
+        "wind_speed_10m_kt": None,
+        "wind_direction_10m_deg": None,
+        "wind_gusts_10m_kt": None,
+        "pressure_msl_hpa": None,
+        "surface_pressure_hpa": None,
+        "cape_jkg": None,
+        "cloud_cover_pct": None,
+        "cloud_cover_low_pct": None,
+        "cloud_cover_mid_pct": None,
+        "cloud_cover_high_pct": None,
+    }
+    if not raw:
+        return out
+
+    t_k, td_k, rh = raw.get("t2m_k"), raw.get("d2m_k"), raw.get("rh2m_pct")
+    if t_k is not None:
+        out["temperature_2m_c"] = t_k - 273.15
+    if rh is not None:
+        out["relative_humidity_2m_pct"] = min(100.0, max(0.0, rh))
+    elif t_k is not None and td_k is not None:
+        out["relative_humidity_2m_pct"] = relative_humidity_from_dewpoint_pct(
+            t_k - 273.15, td_k - 273.15,
+        )
+    if td_k is not None:
+        out["dewpoint_2m_c"] = td_k - 273.15
+    elif t_k is not None and out["relative_humidity_2m_pct"]:
+        out["dewpoint_2m_c"] = magnus_dewpoint_c(
+            t_k - 273.15, out["relative_humidity_2m_pct"],
+        )
+
+    u, v = raw.get("u10_m_s"), raw.get("v10_m_s")
+    if u is not None and v is not None:
+        speed_ms = math.sqrt(u * u + v * v)
+        out["wind_speed_10m_kt"] = speed_ms * _KT_PER_MS
+        out["wind_direction_10m_deg"] = (
+            (math.atan2(-u, -v) * 180.0 / math.pi) % 360.0 if speed_ms > 0.01 else 0.0
+        )
+    gust = raw.get("gust10_m_s")
+    if gust is not None and gust >= 0:
+        out["wind_gusts_10m_kt"] = gust * _KT_PER_MS
+
+    if raw.get("prmsl_pa") is not None:
+        out["pressure_msl_hpa"] = raw["prmsl_pa"] / 100.0
+    if raw.get("sp_pa") is not None:
+        out["surface_pressure_hpa"] = raw["sp_pa"] / 100.0
+    cape = raw.get("cape_jkg")
+    if cape is not None:
+        out["cape_jkg"] = max(0.0, cape)
+
+    for key, field in (
+        ("tcc", "cloud_cover_pct"),
+        ("lcc", "cloud_cover_low_pct"),
+        ("mcc", "cloud_cover_mid_pct"),
+        ("hcc", "cloud_cover_high_pct"),
+    ):
+        val = raw.get(key)
+        if val is not None:
+            out[field] = min(100.0, max(0.0, val))
+    return out
+
+
+def arome_surface_rates(
+    raw: dict[str, float],
+    prev: dict[str, float] | None,
+    window_h: float | None,
+) -> dict[str, float]:
+    """Per-hour precipitation for one point from two AROME steps (#940).
+
+    ``tp`` is the total since the run start (kg/m² ≡ mm), so the hour's
+    amount is the difference with the previous step, floored at 0 (packing
+    noise). AROME's total has no convective / large-scale or liquid / frozen
+    split in these packages, so ``rain_mm``, ``showers_mm`` and
+    ``snowfall_cm`` stay None rather than guessed. A missing step leaves the
+    hour without precipitation, never a smaller number.
+    """
+    if prev is None or window_h is None or window_h <= 0:
+        return {}
+    cur, before = raw.get("tp_kg_m2"), prev.get("tp_kg_m2")
+    if cur is None or before is None:
+        return {}
+    return {"precipitation_mm": max(0.0, (cur - before) / window_h)}
 
 
 # ---------------------------------------------------------------------------

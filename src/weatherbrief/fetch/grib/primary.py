@@ -1,4 +1,4 @@
-"""GRIB-primary briefing slots: ECMWF, ICON (#912) and GFS (#913) without Open-Meteo.
+"""GRIB-primary briefing slots: ECMWF, ICON (#912), GFS (#913) and Météo-France (#940).
 
 The briefing fetch used to pull every model from Open-Meteo with the full
 variable set and then let GRIB enrichment overwrite the ECMWF and ICON
@@ -18,6 +18,10 @@ should cover it:
   (``gfs_window_out_of_range``), not a historical briefing, and not a route
   the HRRR upgrade takes (whole route in the CONUS domain, window inside an
   HRRR horizon): that slot keeps today's path, HRRR sounding over Open-Meteo.
+* Météo-France (#940): AROME only. ``WB_AROME_ENABLED`` on, the whole route
+  inside the AROME footprint and the window inside the newest publishable
+  run's 51 h horizon. Historical briefings pass: the mirror keeps ~15 days
+  of runs, and an older one fails the run probe, which drops the slot.
 
 A GRIB-primary slot starts as a **skeleton**: one ``WaypointForecast`` per
 route point carrying the same day span of hours Open-Meteo would have
@@ -27,6 +31,11 @@ point, and fetches Open-Meteo, with today's full variable set, for the
 points GRIB left short, then splices those values into the gaps only. So a
 GRIB outage degrades to exactly today's Open-Meteo slot, one point at a
 time, and a covered slot costs zero Open-Meteo calls.
+
+Models in :data:`NO_OPEN_METEO_MODELS` (Météo-France) have no Open-Meteo
+fallback at all: a point GRIB left short drops the whole slot, and the fetch
+never builds that slot from Open-Meteo either (the gate refusing it means no
+slot).
 
 ``WB_GRIB_PRIMARY`` is the kill switch: ``0`` turns it off (every slot back
 to Open-Meteo first), a comma list (``ecmwf,icon``) limits it to those models.
@@ -56,8 +65,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 GRIB_PRIMARY_MODELS: tuple[ModelSource, ...] = (
-    ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS,
+    ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOFRANCE,
 )
+
+# Slots that never call Open-Meteo (#940): built from GRIB or not at all. A
+# point GRIB leaves short drops the slot instead of falling back.
+NO_OPEN_METEO_MODELS: frozenset[ModelSource] = frozenset({ModelSource.METEOFRANCE})
 
 # Fields every flight-window hour must carry for a point to count as covered.
 # The sounding plus the surface fields the advisories lean on hardest; a hole
@@ -80,7 +93,11 @@ _SPLICE_SKIP_FIELDS: frozenset[str] = frozenset({
 
 
 def grib_primary_models() -> tuple[ModelSource, ...]:
-    """Models the ``WB_GRIB_PRIMARY`` switch allows (default: ECMWF, ICON, GFS)."""
+    """Models the ``WB_GRIB_PRIMARY`` switch allows (default: all of them).
+
+    A Météo-France slot the switch excludes has no source at all (#940), so
+    the fetch skips it rather than fetch Open-Meteo.
+    """
     raw = os.environ.get("WB_GRIB_PRIMARY", "1").strip().lower()
     if raw in ("", "1", "true", "yes", "on"):
         return GRIB_PRIMARY_MODELS
@@ -183,6 +200,10 @@ def grib_primary_skip_reason(
             route_points, departure_time, flight_duration_hours,
             as_of_time, historical_mode,
         )
+    if model == ModelSource.METEOFRANCE:
+        return _meteofrance_skip_reason(
+            route_points, departure_time, flight_duration_hours, as_of_time,
+        )
     return "not_grib_primary"
 
 
@@ -269,6 +290,34 @@ def _gfs_skip_reason(
         # and keeps Open-Meteo's surface. Left exactly as it is.
         return "hrrr_route"
     if gfs_window_out_of_range(departure_time, flight_duration_hours, as_of_time):
+        return "out_of_range"
+    return None
+
+
+def _meteofrance_skip_reason(
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    flight_duration_hours: float,
+    as_of_time: datetime | None,
+) -> str | None:
+    """AROME gate (#940): kill switch, whole route in the footprint, horizon.
+
+    No historical refusal: the mirror keeps ~15 days of runs and the run
+    finder pins to ``as_of_time``; a run no longer there fails the probe and
+    the slot is dropped, never served from Open-Meteo.
+    """
+    from weatherbrief.fetch.grib.arome_domain import route_in_arome_domain
+    from weatherbrief.fetch.grib.arome_fetch import (
+        arome_enabled,
+        arome_window_out_of_range,
+    )
+
+    if not arome_enabled():
+        return "disabled"
+    if not route_in_arome_domain(route_points):
+        return "out_of_domain"
+    end = window_end_hour(departure_time, flight_duration_hours)
+    if arome_window_out_of_range(end, 0.0, as_of_time):
         return "out_of_range"
     return None
 
@@ -520,10 +569,14 @@ class GribPrimaryOutcome:
     # or empty Open-Meteo fetch is handled today.
     error: BaseException | None = None
     empty: bool = False
+    # A NO_OPEN_METEO_MODELS slot GRIB left short (#940): no fallback, the
+    # caller drops it. The value is the reason recorded in models_failed and
+    # fetch_facts.grib_primary_dropped.
+    no_fallback: str | None = None
 
     @property
     def failed(self) -> bool:
-        return self.error is not None or self.empty
+        return self.error is not None or self.empty or self.no_fallback is not None
 
 
 def fill_grib_primary_gaps(
@@ -571,6 +624,16 @@ def fill_grib_primary_gaps(
             logger.info(
                 "GRIB-primary %s: all %d points covered from GRIB, no Open-Meteo call",
                 model.value, len(pfs),
+            )
+            continue
+        if model in NO_OPEN_METEO_MODELS:
+            # No Open-Meteo for this slot (#940): one short point drops it.
+            outcome.no_fallback = "grib_incomplete"
+            logger.warning(
+                "GRIB-primary %s: %d/%d points short after GRIB, slot dropped "
+                "(no Open-Meteo fallback) (%s)",
+                model.value, len(missing), len(pfs),
+                reason or "GRIB left flight-window hours uncovered",
             )
             continue
         outcome.points_fallback = len(missing)
