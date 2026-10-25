@@ -710,8 +710,8 @@ def fetch_gfs_snapshot_fields(
 
     The GFS counterpart of :func:`fetch_icon_snapshot_fields`, on #913's
     reader (``read_gfs_grib_points``): per forecast hour the
-    ``GFS_SNAPSHOT_LEVELS`` column of ``GFS_SNAPSHOT_VARIABLES`` (pgrb2 only)
-    and the #913 surface blob, plus the surface of the native step before
+    ``gfs_sounding_levels()`` column of ``GFS_SNAPSHOT_VARIABLES`` and the
+    #913 surface blob, plus the surface of the native step before
     each hour so precipitation can be de-accumulated (map hours are not
     contiguous). The surface blobs are the briefing's own cache entries; the
     reduced column caches under its own key.
@@ -719,12 +719,13 @@ def fetch_gfs_snapshot_fields(
     An hour with no sounding or no surface is absent from the result. Never
     raises: a failure is logged and costs the hours it touched.
     """
-    from weatherbrief.fetch.grib import _gfs_previous_step, read_gfs_grib_points
-    from weatherbrief.fetch.grib.cache import pin_run_dir
-    from weatherbrief.fetch.grib.gfs_idx import (
-        GFS_SNAPSHOT_LEVELS,
-        GFS_SNAPSHOT_VARIABLES,
+    from weatherbrief.fetch.grib import (
+        _gfs_previous_step,
+        gfs_sounding_levels,
+        read_gfs_grib_points,
     )
+    from weatherbrief.fetch.grib.cache import pin_run_dir
+    from weatherbrief.fetch.grib.gfs_idx import GFS_SNAPSHOT_VARIABLES
 
     if not forecast_hours:
         return {}
@@ -740,7 +741,7 @@ def fetch_gfs_snapshot_fields(
             sounding, surface, _ = read_gfs_grib_points(
                 init_date, init_hour, steps, lats, lons,
                 run_dir=run_dir, session=session,
-                levels=list(GFS_SNAPSHOT_LEVELS), variables=GFS_SNAPSHOT_VARIABLES,
+                levels=gfs_sounding_levels(), variables=GFS_SNAPSHOT_VARIABLES,
                 every_previous_step=True, priority=priority,
             )
     except Exception:

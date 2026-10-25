@@ -1079,7 +1079,7 @@ def fetch_model_snapshots(
 
 # A GRIB point-hour needs at least this many pressure levels to count as a
 # sounding; below it the point goes to the Open-Meteo fallback. Half of ICON-EU's
-# 16 requested levels (D2 has 11, GFS 19): enough for the lite sounding's
+# 16 requested levels (D2 has 11, GFS 28): enough for the lite sounding's
 # layers and parcel. GFS columns come whole or not at all (the reader refuses
 # a plan missing any level), so for GFS the floor only guards the decode.
 _MIN_GRIB_SNAPSHOT_LEVELS = 8
@@ -1251,7 +1251,7 @@ def _build_grib_snapshots(
 
     ICON: inside the ICON-D2 domain and the D2 run's 48 h (#928) a row comes
     from ICON-D2, as Open-Meteo's ``icon_seamless`` served it; elsewhere, or
-    where D2 fell short, from ICON-EU. GFS: #913's pgrb2 reader. A point-hour
+    where D2 fell short, from ICON-EU. GFS: #913's NOAA reader. A point-hour
     no source covers is simply absent.
 
     Returns the rows and the ``_snapshot_hour_key`` of those that carry their
@@ -1616,7 +1616,7 @@ def _gfs_grib_hourly(valid: datetime, step, i: int):
     """``HourlyForecast`` for point *i* of a GFS step, or None.
 
     Surface from #913's decoders (``build_gfs_surface_snapshot`` +
-    ``gfs_surface_rates``), sounding from the pgrb2 column, which carries its
+    ``gfs_surface_rates``), sounding from the NOAA column, which carries its
     own geopotential height, so it needs no MSL datum. None when the point has
     no surface values or too few levels.
     """

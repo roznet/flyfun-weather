@@ -194,19 +194,17 @@ def test_sounding_cache_key_separates_variable_subsets():
     # The map's reduced column (#914) must never stand in for the briefing's.
     from weatherbrief.fetch.grib import _gfs_sounding_cache_key, gfs_sounding_levels
     from weatherbrief.fetch.grib.gfs_idx import (
-        GFS_SNAPSHOT_LEVELS,
         GFS_SNAPSHOT_VARIABLES,
         GFS_SOUNDING_VARIABLES,
     )
 
     full = _gfs_sounding_cache_key(6, gfs_sounding_levels())
     assert _gfs_sounding_cache_key(6, gfs_sounding_levels(), GFS_SOUNDING_VARIABLES) == full
-    reduced_vars = _gfs_sounding_cache_key(6, gfs_sounding_levels(), GFS_SNAPSHOT_VARIABLES)
-    snapshot = _gfs_sounding_cache_key(6, list(GFS_SNAPSHOT_LEVELS), GFS_SNAPSHOT_VARIABLES)
-    assert len({full, reduced_vars, snapshot}) == 3
-    assert "_V" in snapshot and "_L" in snapshot
-    # pgrb2 only: no level the snapshot asks for lives in pgrb2b.
-    assert not {875, 825, 775, 725, 675, 625, 575, 525} & set(GFS_SNAPSHOT_LEVELS)
+    # The snapshot column: the same 28 levels, the mandatory five only.
+    snapshot = _gfs_sounding_cache_key(6, gfs_sounding_levels(), GFS_SNAPSHOT_VARIABLES)
+    fewer_levels = _gfs_sounding_cache_key(6, [1000, 850, 700], GFS_SNAPSHOT_VARIABLES)
+    assert len({full, snapshot, fewer_levels}) == 3
+    assert "_V" in snapshot and "_L" not in snapshot
 
 
 # ---------------------------------------------------------------------------

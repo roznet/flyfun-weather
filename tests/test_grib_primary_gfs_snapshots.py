@@ -69,11 +69,10 @@ class _Reader:
         self.levels_per_point = levels_per_point
 
     def __call__(self, init_date, init_hour, fhours, lats, lons, **kw):
-        from weatherbrief.fetch.grib import _gfs_previous_step
-        from weatherbrief.fetch.grib.gfs_idx import GFS_SNAPSHOT_LEVELS
+        from weatherbrief.fetch.grib import _gfs_previous_step, gfs_sounding_levels
 
         self.calls.append({"fhours": list(fhours), **kw})
-        levels = self.levels_per_point or GFS_SNAPSHOT_LEVELS
+        levels = self.levels_per_point or gfs_sounding_levels()
         prev = {_gfs_previous_step(f) for f in fhours} - {None}
         sounding = {
             f: [_column(levels) for _ in lats]
@@ -133,16 +132,16 @@ class TestCoveredCycle:
             assert _hours(snaps, a.icao) == STEPS
 
     def test_reader_gets_the_reduced_column_and_every_predecessor(self, env):
-        from weatherbrief.fetch.grib.gfs_idx import (
-            GFS_SNAPSHOT_LEVELS,
-            GFS_SNAPSHOT_VARIABLES,
-        )
+        from weatherbrief.fetch.grib import gfs_sounding_levels
+        from weatherbrief.fetch.grib.gfs_idx import GFS_SNAPSHOT_VARIABLES
 
         reader, _, _ = env
         _run()
         (call,) = reader.calls
         assert call["fhours"] == STEPS
-        assert call["levels"] == list(GFS_SNAPSHOT_LEVELS)
+        # The 28 Open-Meteo GFS levels (owner, #914), pgrb2b included.
+        assert call["levels"] == gfs_sounding_levels()
+        assert {875, 525} <= set(call["levels"])
         assert call["variables"] == GFS_SNAPSHOT_VARIABLES
         assert call["every_previous_step"] is True
 

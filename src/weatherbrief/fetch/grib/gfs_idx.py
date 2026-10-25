@@ -381,14 +381,10 @@ GFS_SOUNDING_VARIABLES = frozenset({
 GFS_SOUNDING_MANDATORY = ("TMP", "RH", "UGRD", "VGRD", "HGT")
 
 # Map and alternates snapshots from GRIB (#914): the lite sounding reads no
-# omega and no condensates, and stops at 200 hPa, so the snapshot column is
-# the mandatory five on the pgrb2 levels from 1000 to 200 hPa. pgrb2b (875,
-# 825 … 525 hPa) is never fetched: ~70 MB per hour instead of ~144 MB for the
-# briefing column over the same depth (gfs.20261025/00z f024).
-GFS_SNAPSHOT_LEVELS = (
-    1000, 975, 950, 925, 900, 850, 800, 750, 700, 650,
-    600, 550, 500, 450, 400, 350, 300, 250, 200,
-)
+# omega and no condensates, so the snapshot column is the mandatory five on
+# the briefing's 28 levels (pgrb2 + pgrb2b; the owner kept the 25 hPa spacing
+# for the cross-sections): ~102 MB per hour against ~144 MB for the
+# briefing's column (gfs.20261025/00z f024).
 GFS_SNAPSHOT_VARIABLES = frozenset(GFS_SOUNDING_MANDATORY)
 
 # Surface messages of a GRIB-primary GFS slot: what HourlyForecast used to
