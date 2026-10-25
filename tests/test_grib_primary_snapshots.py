@@ -55,7 +55,7 @@ def _put(run_dir, fhour: int, label: str, value: float) -> None:
     put_cached(run_dir, cache_key(fhour, label), _const(value, fhour))
 
 
-def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None):
+def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS):
     """Cache everything the ICON snapshot builder and the cloud diag read."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU,
@@ -68,7 +68,7 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None):
 
     run_dir = cache_dir_for_run(data_dir, INIT_DATE, 0, model="icon-eu")
     levels = ICON_SNAPSHOT_PRESSURE_LEVELS if levels is None else levels
-    for fhour in STEPS:
+    for fhour in steps:
         if fhour not in skip_pressure_steps:
             for level in levels:
                 h_m = _isa_height_m(level)
@@ -86,23 +86,25 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None):
         ):
             _put(run_dir, fhour, icon_surface_cache_key(var, ICON_EU), value)
         # Accumulated since init, on the step and its hourly predecessor.
-        for h in (fhour - 1, fhour):
+        for h in (h for h in (fhour - 1, fhour) if h >= 0):
             for var in ("tot_prec", "rain_gsp", "rain_con", "snow_gsp", "snow_con"):
                 mm = PRECIP_MM_PER_H * h if var == "tot_prec" else 0.0
                 _put(run_dir, h, icon_surface_cache_key(var, ICON_EU), mm)
         # Cloud diagnostics (#635 feed): total cover + accumulated RAIN_CON.
+        # (No accumulated message at step 0: eccodes refuses an empty window.)
         rain_con = _grib_message(centre=78, category=1, number=76, value=0.0,
-                                 step_h=fhour, accumulated=True)
+                                 step_h=fhour, accumulated=True) if fhour else b""
         put_cached(
             run_dir, cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY),
             _grib_message(centre=78, category=6, number=1, value=40.0, step_h=fhour)
             + rain_con,
         )
-        put_cached(
-            run_dir, cache_key(fhour - 1, ICON_EU_RAIN_CON_CACHE_KEY),
-            _grib_message(centre=78, category=1, number=76, value=0.0,
-                          step_h=fhour - 1, accumulated=True),
-        )
+        if fhour > 1:
+            put_cached(
+                run_dir, cache_key(fhour - 1, ICON_EU_RAIN_CON_CACHE_KEY),
+                _grib_message(centre=78, category=1, number=76, value=0.0,
+                              step_h=fhour - 1, accumulated=True),
+            )
     return run_dir
 
 
@@ -303,6 +305,27 @@ class TestFallback:
         assert len(snaps) == len(AIRPORTS) * len(STEPS)
         from_om = {s["icao"] for s in snaps if s["temperature_2m_c"] == 20.0}
         assert len(from_om) == n_fallback
+
+
+class TestAnalysisStep:
+    def test_init_hour_is_covered_without_precipitation(self, env):
+        """A sample hour equal to the init hour (06/12/18Z runs) is step 0: no
+        predecessor, so no precipitation rate. It must still count as covered,
+        or every airport would fall back at the full Open-Meteo price."""
+        from weatherbrief.tasks import standalone_verification as sv
+
+        data_dir, om = env
+        _seed_icon_run(data_dir, steps=[0, 6])
+
+        snaps, api_calls = sv.fetch_model_snapshots(
+            "icon", INIT, AIRPORTS, MagicMock(), sample_hours=[0, 6], days=0,
+        )
+
+        assert api_calls == 0 and om.calls == []
+        assert _hours(snaps) == sorted([0, 6] * len(AIRPORTS))
+        for s in snaps:
+            at_init = s["forecast_hour"] == INIT
+            assert (s["precipitation_mm"] is None) == at_init
 
 
 class TestAlternatesEtaHour:

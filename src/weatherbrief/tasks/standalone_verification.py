@@ -1097,7 +1097,7 @@ def _fetch_grib_primary_snapshots(
     priority: "int | DecodePriority | None" = None,
     only_valid_time: datetime | None = None,
 ) -> tuple[list[dict], int]:
-    """GFS/ICON snapshots from GRIB, Open-Meteo only for what GRIB left short.
+    """GRIB-primary snapshots (ICON today, GFS with #913), Open-Meteo for the rest.
 
     Same contract as :func:`fetch_model_snapshots` (snapshot dicts, Open-Meteo
     HTTP calls). The model's GRIB cloud diagnostics (the #635 feed) run on
@@ -1136,20 +1136,29 @@ def _fetch_grib_primary_snapshots(
             ctx.run, _fetch_grib_diagnostics,
             model, init_time, airports, session, valid_times, priority,
         )
+        resolved: list[_GribDiagLookup | None] = []
+
+        def _lookup() -> _GribDiagLookup | None:
+            # Resolved once: a failed diagnostics thread warns once.
+            if not resolved:
+                resolved.append(_resolve(future))
+            return resolved[0]
+
         try:
             snapshots = _build_grib_snapshots(
-                model, init_time, airports, valid_times,
-                lambda: _resolve(future),
+                model, init_time, airports, valid_times, _lookup,
                 edr_acc=edr_acc, pool_soundings=pool_soundings, priority=priority,
             )
         except Exception:
-            # Never worse than before #914: a builder bug falls back whole.
-            logger.warning(
-                "GRIB-primary %s snapshots: builder raised, all %d airports to "
+            # Never worse than before #914: a builder bug falls back whole. The
+            # token is distinct from the per-cycle summary so it can be alerted
+            # on: it means the full Open-Meteo price for this model.
+            logger.error(
+                "GRIB_PRIMARY_BUILDER_FAILED %s snapshots: all %d airports to "
                 "Open-Meteo", model, len(airports), exc_info=True,
             )
             snapshots = []
-        lookup = _resolve(future)
+        lookup = _lookup()
 
     drill = grib_snapshot_drill(model)
     if drill is not None:
@@ -1215,6 +1224,8 @@ def _build_grib_snapshots(
     if model != "icon":
         return []
 
+    from weatherbrief.analysis.sounding.snapshot_fields import build_sounding_payload
+    from weatherbrief.fetch.grib import DecodePriority, _icon_diag_surface_fields
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         _snap_to_icon_eu_grid,
         icon_eu_model_level_max_hour,
@@ -1230,8 +1241,11 @@ def _build_grib_snapshots(
     for valid in valid_times:
         offset = int((valid - init_time).total_seconds() // 3600)
         # Only published steps: an off-grid hour would need time interpolation
-        # the Open-Meteo fallback already does for us.
-        if 0 < offset <= max_hour and _snap_to_icon_eu_grid(offset) == offset:
+        # the Open-Meteo fallback already does for us. Step 0 is published and
+        # is a planned hour whenever a sample hour equals the init hour (06/12/
+        # 18Z runs on the map grid), so it must be covered too, or every
+        # airport would fall back at the full Open-Meteo price.
+        if 0 <= offset <= max_hour and _snap_to_icon_eu_grid(offset) == offset:
             step_of[valid] = offset
     if not step_of:
         return []
@@ -1258,12 +1272,10 @@ def _build_grib_snapshots(
                 continue
             cd = lookup.get(airport.icao, valid) if lookup is not None else None
             if cd is not None and cd.diagnostics is not None:
-                from weatherbrief.fetch.grib import _icon_diag_surface_fields
-
                 for key, value in _icon_diag_surface_fields(cd.diagnostics).items():
                     setattr(hourly, key, value)
                 hourly.attach_nwp_diagnostics(cd.diagnostics)
-            if not _grib_hour_covered(hourly):
+            if not _grib_hour_covered(hourly, analysis_step=fhour == 0):
                 continue
 
             # Per-hour rates over the step window, recorded as a 1 h period:
@@ -1273,25 +1285,17 @@ def _build_grib_snapshots(
             snap = _snapshot_row(airport.icao, model, init_time, hourly)
 
             if pooled:
-                from weatherbrief.analysis.sounding.snapshot_fields import (
-                    build_sounding_payload,
-                )
-
                 pending.append((len(results), build_sounding_payload(hourly, model)))
             else:
                 _enrich_with_sounding(snap, hourly, model, edr_acc=edr_acc)
             results.append(snap)
 
             if len(pending) >= _SOUNDING_FLUSH_THRESHOLD:
-                from weatherbrief.fetch.grib import DecodePriority
-
                 _analyze_soundings_pooled(
                     pending, results, priority=DecodePriority.BACKGROUND,
                 )
                 pending.clear()
     if pending:
-        from weatherbrief.fetch.grib import DecodePriority
-
         _analyze_soundings_pooled(pending, results, priority=DecodePriority.BACKGROUND)
     logger.info(
         "Model %s GRIB: analyzed %d snapshots over %d step(s) in %.1fs%s",
@@ -1338,15 +1342,21 @@ def _icon_grib_hourly(valid: datetime, step, i: int):
     return HourlyForecast(time=valid, pressure_levels=levels, **inst, **rates)
 
 
-def _grib_hour_covered(hourly) -> bool:
+def _grib_hour_covered(hourly, analysis_step: bool = False) -> bool:
     """Does a GRIB-built hour carry what a snapshot row needs? (#914)
 
     The fields #912 requires of a GRIB-primary briefing hour, so a map row and
-    a briefing hour count as covered by the same rule.
+    a briefing hour count as covered by the same rule. Except precipitation at
+    step 0 (``analysis_step``): accumulation is 0 at init, so the run has no
+    rate for that hour and the row records None rather than a made-up 0.
     """
     from weatherbrief.fetch.grib.primary import _REQUIRED_HOURLY_FIELDS
 
-    return all(getattr(hourly, f, None) is not None for f in _REQUIRED_HOURLY_FIELDS)
+    return all(
+        getattr(hourly, f, None) is not None
+        for f in _REQUIRED_HOURLY_FIELDS
+        if not (analysis_step and f == "precipitation_mm")
+    )
 
 
 # ---------------------------------------------------------------------------

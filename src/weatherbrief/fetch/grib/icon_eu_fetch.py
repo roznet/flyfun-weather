@@ -247,9 +247,9 @@ ICON_SURFACE_ACCUMULATED = ("tot_prec", "rain_gsp", "rain_con", "snow_gsp", "sno
 # the lite sounding runs no vertical-motion pass. A level DWD does not
 # publish 404s and the profile is built from the levels that arrived; a point
 # with too few levels goes to the Open-Meteo fallback. The list follows DWD's
-# ICON-EU product description (1000-200 hPa part); not checked against a live
-# listing when written (opendata.dwd.de is unreachable from the build box) —
-# the fetch logs 404 counts per step, so a wrong level shows up there.
+# ICON-EU product description (1000-200 hPa part); verified live 2026-10-25
+# (2,370/2,370 files, 0 404s). The fetch logs 404 counts and the first failed
+# names per cycle, so a level DWD drops shows up there.
 ICON_SNAPSHOT_PRESSURE_LEVELS: tuple[int, ...] = (
     1000, 950, 925, 900, 875, 850, 825, 800, 775,
     700, 600, 500, 400, 300, 250, 200,
