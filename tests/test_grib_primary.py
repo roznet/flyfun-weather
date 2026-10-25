@@ -19,6 +19,7 @@ import pytest
 from weatherbrief.fetch.grib import primary
 from weatherbrief.fetch.grib.primary import (
     build_skeleton,
+    fetch_end_date,
     fill_grib_primary_gaps,
     grib_primary_models,
     required_hours,
@@ -164,6 +165,23 @@ def test_required_hours_window():
     assert len(required_hours(datetime(2026, 5, 4, 9, tzinfo=UTC), 0.0)) == 2
 
 
+@pytest.mark.parametrize("dep,duration,end_date,last_hour", [
+    # Arrival on the hour at 23:00Z: the window ends at 23Z, same day.
+    (datetime(2026, 5, 4, 21, 0, tzinfo=UTC), 2.0, "2026-05-04", datetime(2026, 5, 4, 23, tzinfo=UTC)),
+    # Arrival 23:40Z: the hour after is 00Z next day, so the span gains it (#925).
+    (datetime(2026, 5, 4, 21, 40, tzinfo=UTC), 2.0, "2026-05-05", datetime(2026, 5, 5, 0, tzinfo=UTC)),
+    # Arrival 00:20Z: already on the next day, as before.
+    (datetime(2026, 5, 4, 22, 20, tzinfo=UTC), 2.0, "2026-05-05", datetime(2026, 5, 5, 1, tzinfo=UTC)),
+    # Ordinary daytime flight: unchanged single-day span.
+    (DEP, 2.0, "2026-05-04", datetime(2026, 5, 4, 12, tzinfo=UTC)),
+])
+def test_fetch_end_date_reaches_the_hour_after_arrival(dep, duration, end_date, last_hour):
+    assert fetch_end_date(dep, duration) == end_date
+    assert required_hours(dep, duration)[-1] == last_hour
+    span_end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(hours=23)
+    assert last_hour <= span_end
+
+
 # ---------------------------------------------------------------------------
 # Coverage and splice
 # ---------------------------------------------------------------------------
@@ -270,7 +288,7 @@ def test_fill_gaps_reports_failure():
 # ---------------------------------------------------------------------------
 
 
-def _run_fetch(monkeypatch, *, enrich, fetch_fail=None, gate=None):
+def _run_fetch(monkeypatch, *, enrich, fetch_fail=None, gate=None, dep=DEP):
     """run_fetch with ECMWF gated in, Open-Meteo mocked, enrichment stubbed."""
     monkeypatch.setenv("WB_GRIB_PRIMARY", "1")
     om_calls: list[tuple[str, int]] = []
@@ -295,16 +313,16 @@ def _run_fetch(monkeypatch, *, enrich, fetch_fail=None, gate=None):
         "weatherbrief.fetch.grib.enrich_forecasts", new=fake_enrich,
     ), patch.object(primary, "grib_primary_skip_reason", new=fake_gate):
         result = fetch_module.run_fetch(
-            route=_route(), departure_time=DEP,
+            route=_route(), departure_time=dep,
             models=[ModelSource.GFS, ModelSource.ECMWF],
             enrich_grib=True,
         )
     return result, om_calls
 
 
-def _cover_all(model: ModelSource, skip: set[int] = frozenset()):
+def _cover_all(model: ModelSource, skip: set[int] = frozenset(), dep: datetime = DEP):
     def enrich(cross_sections):
-        hours = required_hours(DEP, 2.0)
+        hours = required_hours(dep, 2.0)
         for cs in cross_sections:
             if cs.model != model:
                 continue
@@ -325,6 +343,25 @@ def test_covered_slot_makes_no_open_meteo_request(monkeypatch):
     # Waypoint forecasts share the skeleton objects, as with an OM slot.
     egtk = [wf for wf in result.all_forecasts if wf.model == ModelSource.ECMWF]
     assert len(egtk) == 2 and egtk[0] is ecmwf.point_forecasts[0]
+
+
+def test_late_evening_arrival_skeleton_holds_the_next_00z(monkeypatch):
+    # 21:40Z + 2 h = 23:40Z arrival: every slot spans into the next day, so
+    # at_time(23:40Z) reads 00Z (20 min) rather than 23Z (#925).
+    dep = datetime(2026, 5, 4, 21, 40, tzinfo=UTC)
+    result, om_calls = _run_fetch(
+        monkeypatch, enrich=_cover_all(ModelSource.ECMWF, dep=dep), dep=dep,
+    )
+    # GRIB covered the whole window, 00Z included: no Open-Meteo fallback.
+    assert [m for m, _ in om_calls] == ["gfs"]
+    assert result.grib_primary == {"ecmwf": 0}
+    midnight = datetime(2026, 5, 5, 0, tzinfo=UTC)
+    for cs in result.cross_sections:
+        times = {h.time for h in cs.point_forecasts[0].hourly}
+        assert midnight in times, cs.model.value
+    ecmwf = next(cs for cs in result.cross_sections if cs.model == ModelSource.ECMWF)
+    wf = ecmwf.point_forecasts[-1]
+    assert wf.at_time(datetime(2026, 5, 4, 23, 40, tzinfo=UTC)).time == midnight
 
 
 def test_partial_slot_falls_back_for_short_points_only(monkeypatch):

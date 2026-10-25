@@ -87,7 +87,7 @@ This replaced a sample-`departure + h`-and-`round()` loop (plus "extra" and floo
 Edge cases:
 - `flight_duration_hours=0`, round departure → departure hour only; a :30 departure with zero duration → its floor and ceil hours
 - GFS init after departure → `max(0, …)` clamp → f000
-- Cross-midnight flights are covered: `run_fetch` sets the Open-Meteo `end_date` from `departure + ceil(duration)`, so next-day window hours exist in the cross-section and receive their GRIB step. (An older version of this audit said they were silently skipped; that predates the `end_date` extension.)
+- Cross-midnight flights are covered: `run_fetch` sets `end_date` from the window's last hour, `ceil(departure + ceil(duration))` (`fetch_end_date`), so next-day window hours exist in the cross-section and receive their GRIB step, including the 00Z after a 23:xxZ arrival (#925). (An older version of this audit said they were silently skipped; that predates the `end_date` extension.)
 - Live-horizon skip: `run_fetch` drops a model whose current Open-Meteo run ends (`data_end`) before the window end `departure + ceil(duration)` — with `MODEL_SKIPPED_HORIZON`. It used to compare against 00:00 of the arrival day, letting a run that ends mid-window ship null tails silently (#807).
 
 ### Enrichment Flow

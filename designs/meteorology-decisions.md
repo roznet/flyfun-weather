@@ -6768,8 +6768,8 @@ values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
 **Decisions.**
 
 - **Fallback is per point, full variable set, gaps only.** A point is covered
-  when every flight-window hour inside the slot's day span (an arrival near
-  midnight rounds up to a 00Z the fetch never reaches) has a sounding plus T 2 m, wind 10 m,
+  when every flight-window hour inside the slot's day span (since §67 the span
+  reaches the window's last hour, so the clip is only a guard) has a sounding plus T 2 m, wind 10 m,
   precipitation and total cover. Not chosen: a surface-only top-up call for the
   fields GRIB lacks (precipitation probability, lifted index), since nothing
   grades on them (below).
@@ -7149,3 +7149,38 @@ to ~7.5 days), unenriched.
   Open-Meteo as before.
 - Inside the horizon nothing changes: the GRIB-primary fallback still fills
   short points from Open-Meteo, which serves ICON-EU / D2 there.
+
+## 67. The fetch span reaches the hour after the arrival (#925)
+
+**Date:** 2026-10-25. **Part of** #910 (follow-up to §61).
+
+A briefing's fetch covers whole UTC days, `start_date` (departure date) to
+`end_date`. `end_date` was the date of `departure + ceil(duration)`, so an
+arrival in the last hour before midnight (21:40Z + 2 h = 23:40Z) got a span
+ending at 23Z: the hour after the arrival, 00Z next day, was fetched by no
+model, and `at_time(23:40Z)` read 23Z (40 min away) instead of 00Z (20 min).
+This predates GRIB-primary; §61 made it visible as a needless Open-Meteo
+fallback, which 78eb7832 clipped.
+
+**Decisions.**
+
+- **`end_date` = the date of the window's last hour**, `ceil(departure +
+  ceil(duration))` (`primary.fetch_end_date`, the upper bound of
+  `required_hours`). The same span feeds every model: Open-Meteo slots, the
+  GRIB-primary skeleton and its fallback. Only an arrival in (23:00Z,
+  24:00Z) gains a day; every other flight fetches the same span as before.
+- **The time-scan confirm window uses the same end** (`window_end_hour`), so a
+  candidate arriving 23:40Z pulls next-day Open-Meteo hours too.
+- **Cost:** none on Open-Meteo (a 2-day span bills the same as 1 day up to
+  14 days; checked with `request_weight` on every model's real parameter
+  set). GRIB already decoded the 00Z step (contiguous window / ECMWF ±3 h).
+- **Kept:** the §61 clip in `fill_grib_primary_gaps`, as a guard; the
+  live-horizon skip still compares against `departure + ceil(duration)`.
+- **Grades:** only arrivals in that last hour change, and only at the
+  arrival-end points, which now read the nearer 00Z hour.
+
+**Measured.** Unit tests only (span at 23:00 / 23:40 / 00:20 arrivals; a
+`run_fetch` whose skeleton holds 00Z for a 23:40Z arrival). The advisory
+replay diff is **pending on the Mac**: brief one flight arriving 23:xxZ on
+main and on this change (`scripts/compare_grib_primary.py <id> --side on`
+from each checkout) and compare; a daytime flight should diff empty.
