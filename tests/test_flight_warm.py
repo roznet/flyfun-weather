@@ -115,6 +115,8 @@ class TestWarmLimits:
         assert gfs.max_flights == 40
         assert warm_limits("icon-eu").max_bytes == 6_000_000_000
         assert warm_limits("hrrr").max_bytes == 2_000_000_000
+        # HRRR is off by default (horizon 0): its warmed run is mostly stale.
+        assert warm_limits("hrrr").horizon_hours == 0
         # D2 ran uncapped before #929 and stays so by default.
         assert warm_limits("icon-d2").max_bytes is None
         assert warm_limits("icon-d2").horizon_hours == 48
@@ -137,6 +139,20 @@ class TestWarmFlights:
     def test_empty_db_path_is_noop(self):
         stats = warm_flights("gfs", NOW, "")
         assert stats["flights_considered"] == 0
+
+    def test_zero_horizon_turns_the_source_off(self, tmp_path):
+        seen: list = []
+        stats, query = _run("hrrr", [_Row("f1")], _writing_unit(tmp_path, 1, seen))
+        assert stats["disabled"] == 1
+        assert seen == []
+        query.assert_not_called()
+
+    def test_hrrr_can_be_turned_back_on(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("WB_FLIGHT_WARM_HORIZON_HOURS_HRRR", "48")
+        seen: list = []
+        stats, _ = _run("hrrr", [_Row("f1")], _writing_unit(tmp_path, 1, seen))
+        assert seen == ["f1"]
+        assert "disabled" not in stats
 
     def test_horizon_is_the_sources(self, monkeypatch):
         monkeypatch.setenv("WB_FLIGHT_WARM_HORIZON_HOURS_GFS", "30")
