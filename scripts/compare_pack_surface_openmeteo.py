@@ -278,8 +278,9 @@ def fetch_open_meteo(base_url: str, points, om_model: str, run: datetime,
         "hourly": ",".join([*SURFACE_VARS.values(), *level_variables(levels)]),
         "models": om_model,
         "run": run.strftime("%Y-%m-%dT%H:%M"),
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
+        # The single-run endpoint rejects start_date/end_date; its time axis
+        # starts at the run, so ask for enough days to reach ``end``.
+        "forecast_days": max(1, (end - run.date()).days + 1),
         "wind_speed_unit": "kn",
         "timezone": "UTC",
     }
