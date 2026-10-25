@@ -6986,7 +6986,11 @@ ICON-EU GRIB; Open-Meteo only for airports GRIB left short.
   the airport profile read the column as hourly (#415), so a total would read
   as three times the rain.
 - **Per-airport fallback** (owner call 6), same coverage rule as §61 plus a
-  minimum of 8 levels. Not chosen: a whole-model fallback.
+  minimum of 8 levels. Not chosen: a whole-model fallback. Step 0 (a sample
+  hour equal to the init hour, every 06/12/18Z run on the map grid) is
+  covered without precipitation: accumulation is 0 at init, so the row
+  records None rather than a made-up 0. Requiring it would send every airport
+  to Open-Meteo at full price.
 - **No interim Open-Meteo trims.** A one-day alternates window saves nothing
   (Open-Meteo bills up to 14 days as one); a reduced GFS level set would change
   GFS soundings twice in a few weeks.
