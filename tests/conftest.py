@@ -74,6 +74,8 @@ def _no_network(monkeypatch, request):
     # The refresh path's model-status probe retries a failed fetch after 5 s
     # then 10 s; against the blocked network that is 15 s of sleep per model.
     monkeypatch.setattr("weatherbrief.fetch.model_status._META_RETRY_BACKOFF", [0, 0])
+    # GRIB downloads retry a failed GET after 1 s then 2 s (http_retry).
+    monkeypatch.setattr("weatherbrief.fetch.grib.http_retry.BACKOFF_S", (0.0, 0.0))
 
 
 @pytest.fixture(autouse=True)

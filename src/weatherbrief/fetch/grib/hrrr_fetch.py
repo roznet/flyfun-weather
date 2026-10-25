@@ -56,6 +56,7 @@ from weatherbrief.fetch.grib.gfs_idx import (
     plan_cloud_diag_byte_ranges,
 )
 from weatherbrief.fetch.grib.grib_fetch import MAX_DOWNLOAD_WORKERS
+from weatherbrief.fetch.grib.http_retry import get_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +411,7 @@ def fetch_hrrr_idx(
     sess = session or requests.Session()
     url = hrrr_idx_url(init_date, init_hour, forecast_hour)
     logger.debug("Fetching HRRR .idx: %s", url)
-    resp = sess.get(url, timeout=_REQUEST_TIMEOUT)
+    resp = get_with_retry(sess, url, timeout=_REQUEST_TIMEOUT)
     resp.raise_for_status()
     return resp.text
 
@@ -580,8 +581,8 @@ def _fetch_span(
     start, end = span
     range_header = f"bytes={start}-{'' if end is None else end}"
     try:
-        resp = session.get(
-            url, headers={"Range": range_header}, timeout=_REQUEST_TIMEOUT,
+        resp = get_with_retry(
+            session, url, headers={"Range": range_header}, timeout=_REQUEST_TIMEOUT,
         )
         if resp.status_code not in (200, 206):
             logger.warning(
