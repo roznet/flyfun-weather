@@ -28,6 +28,12 @@ def _utc(year: int, month: int, day: int, hour: int = 0) -> datetime:
     return datetime(year, month, day, hour, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _no_disk_floor(monkeypatch):
+    """The flight warm's free-disk floor reads the real volume; off in tests."""
+    monkeypatch.setenv("WB_FLIGHT_WARM_MIN_FREE_GB", "0")
+
+
 @pytest.fixture
 def no_interactive_refresh():
     """Pin the yield gate open — it is process-global and time-based.
@@ -457,8 +463,11 @@ class _FakeRow:
 
 
 class _FakeCtx:
-    def __init__(self, variant):
+    def __init__(self, variant, forecast_hours=(12, 13, 14)):
         self.variant = variant
+        self.init_date = "20260721"
+        self.init_hour = 0
+        self.forecast_hours = list(forecast_hours)
 
 
 class TestIconD2FlightWarming:
@@ -559,10 +568,12 @@ class TestIconD2FlightWarming:
                 _utc(2026, 7, 21, 0), db_path="/db",
                 now=_utc(2026, 7, 21, 0),
             )
-        assert stats == {
-            "flights_considered": 3, "flights_warmed": 1, "flights_skipped": 2,
-            "deferred": 0,
-        }
+        assert stats["flights_considered"] == 3
+        assert stats["flights_warmed"] == 1
+        assert stats["flights_skipped"] == 2
+        assert stats["flights_cut"] == 0
+        assert stats["deferred"] == 0
+        assert stats["distinct_hours"] == 3
         assert len(warmed) == 1
         assert warmed[0].variant is ICON_D2
         # Discretionary warm must request the reduced prefetch budget so it
@@ -617,7 +628,7 @@ class TestIconD2FlightWarming:
             )
         assert stats["flights_considered"] == 2
         assert stats["flights_warmed"] == 1   # second flight still warmed
-        assert stats["flights_skipped"] == 1
+        assert stats["flights_failed"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +888,7 @@ class TestWarmYielding:
             # First flight completes (fully cached, say); a refresh is active
             # by the second, which has pending jobs → the gate aborts it.
             if warmed:
-                return False
+                return not kw["abort_if"]()
             warmed.append(ctx)
             return True
 
@@ -888,11 +899,13 @@ class TestWarmYielding:
         ):
             stats = precache_icon_d2_flights(
                 _utc(2026, 7, 21, 0), db_path="/db", now=_utc(2026, 7, 21, 0),
+                should_defer=lambda: True,
             )
 
         assert stats["deferred"] == 1
         assert stats["flights_warmed"] == 1
-        assert stats["flights_considered"] == 2  # flight 3 never started
+        assert stats["flights_considered"] == 3
+        assert stats["flights_cut"] == 0  # a deferral is not a cut
         assert len(warmed) == 1
 
     def test_d2_fast_forwards_warmed_flights_during_refresh(self):

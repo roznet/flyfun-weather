@@ -966,11 +966,13 @@ class TestPrecacheLoopYielding:
     same run instead of skipping it until the next publish.
     """
 
-    def _run_loop(self, stats_sequence, cycles=2):
+    def _run_loop(self, stats_sequence, cycles=2, warm_sequence=None, warm_calls=None):
         """Drive ``run_grib_precache_loop`` for ``cycles`` ticks.
 
-        Returns (gfs_call_inits, purge_calls). Only the GFS target and the D2
-        warm produce marker hits; ICON-EU's marker is absent.
+        Returns (gfs_call_inits, purge_calls). Only the GFS marker is present,
+        so only the GFS airport sweep and the GFS flight warm (#929) run; the
+        flight warm returns ``warm_sequence`` (default: a finished pass each
+        tick) and records its calls in ``warm_calls``.
         """
         import asyncio
 
@@ -992,6 +994,15 @@ class TestPrecacheLoopYielding:
             gfs_calls.append(run_init)
             return remaining.pop(0)
 
+        warm_remaining = list(warm_sequence or [])
+
+        def fake_warm(source, run_init, db_path, **kw):
+            if warm_calls is not None:
+                warm_calls.append((source, kw))
+            if warm_remaining:
+                return warm_remaining.pop(0)
+            return {"deferred": 0, "low_disk": 0, "bytes_downloaded": 0, "wall_seconds": 0.0}
+
         sleeps = {"n": 0}
 
         async def fake_sleep(_seconds):
@@ -1004,6 +1015,8 @@ class TestPrecacheLoopYielding:
                    return_value=_Store()), \
                 patch("weatherbrief.fetch.grib.precache.precache_gfs_run",
                       side_effect=fake_gfs), \
+                patch("weatherbrief.fetch.grib.flight_warm.warm_flights",
+                      side_effect=fake_warm), \
                 patch("weatherbrief.fetch.grib.cache.purge_old_runs",
                       side_effect=lambda d, slug, **kw: purges.append(slug)), \
                 patch("asyncio.sleep", side_effect=fake_sleep):
@@ -1021,14 +1034,39 @@ class TestPrecacheLoopYielding:
         # Same run warmed twice: the deferred pass left last_done unset.
         assert len(calls) == 2
         assert calls[0] == calls[1]
-        # The cap walk only ran for the pass that completed.
-        assert purges == ["gfs"]
+        # The cap walk ran for the flight warm (first tick) and only for the
+        # sweep pass that completed.
+        assert purges == ["gfs", "gfs"]
 
     def test_completed_pass_is_not_repeated(self):
         done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
-        calls, purges = self._run_loop([done])
+        warm_calls: list = []
+        calls, purges = self._run_loop([done], warm_calls=warm_calls)
         assert len(calls) == 1  # second tick skips the already-warmed run
-        assert purges == ["gfs"]
+        assert [src for src, _ in warm_calls] == ["gfs"]  # flight warm too
+        assert purges == ["gfs", "gfs"]
+
+    def test_deferred_flight_warm_resumes_with_its_spend_carried(self):
+        done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
+        deferred = {"deferred": 1, "low_disk": 0, "bytes_downloaded": 123, "wall_seconds": 4.5}
+        finished = {"deferred": 0, "low_disk": 0, "bytes_downloaded": 200, "wall_seconds": 9.0}
+        warm_calls: list = []
+        self._run_loop(
+            [done], cycles=3, warm_sequence=[deferred, finished], warm_calls=warm_calls,
+        )
+        # Tick 1 deferred, tick 2 resumed with the carry and finished, tick 3
+        # skips the recorded run.
+        assert len(warm_calls) == 2
+        assert warm_calls[0][1] == {"carried_bytes": 0, "carried_seconds": 0.0}
+        assert warm_calls[1][1] == {"carried_bytes": 123, "carried_seconds": 4.5}
+
+    def test_low_disk_flight_warm_is_retried(self):
+        done = {"hours_fetched": 64, "forecast_hours_total": 64, "deferred": 0}
+        low = {"deferred": 0, "low_disk": 1, "bytes_downloaded": 0, "wall_seconds": 0.0}
+        warm_calls: list = []
+        _calls, purges = self._run_loop([done], warm_sequence=[low], warm_calls=warm_calls)
+        assert len(warm_calls) == 2
+        assert purges == ["gfs", "gfs"]  # sweep (tick 1), flight warm (tick 2)
 
 
 # ---------------------------------------------------------------------------

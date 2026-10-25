@@ -26,6 +26,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -170,8 +171,8 @@ _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     # HRRR (#457): ~190 MB per cached forecast hour → ~1 GB per run for a
     # typical flight window. The 9h TTL is the primary bound (~2 concurrent
     # runs per flight); the cap backstops many concurrent US flights each
-    # pulling a different hourly run. Enforced from the daily retention pass
-    # (HRRR is not precached, so there is no warm-loop enforcement site).
+    # pulling a different hourly run. Enforced after each HRRR flight warm
+    # (#929) and from the daily retention pass.
     "hrrr": 8.0,
     # GFS (#913): the GRIB-primary sounding + surface is ~177 MB per forecast
     # hour, on top of the airport-profile precache's cloud water and
@@ -326,6 +327,54 @@ def get_cached(
     return path.read_bytes()
 
 
+# ---------------------------------------------------------------------------
+# Write meter (#929)
+#
+# The flight warm caps each pass by the bytes it downloads. Every download
+# lands here through ``put_cached`` / ``put_cached_from_chunks``, so counting
+# writes is counting new downloads; cache hits write nothing and cost nothing.
+# A ContextVar, so only the warm pass's own writes count: worker threads
+# started with ``_submit_with_context`` share the same meter, a concurrent
+# briefing on another thread does not.
+# ---------------------------------------------------------------------------
+
+
+class CacheWriteMeter:
+    """Bytes written to the GRIB cache inside one :func:`cache_write_meter`."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.bytes_written = 0
+        self.files_written = 0
+
+    def add(self, n: int) -> None:
+        with self._lock:
+            self.bytes_written += n
+            self.files_written += 1
+
+
+_WRITE_METER: ContextVar[CacheWriteMeter | None] = ContextVar(
+    "grib_cache_write_meter", default=None,
+)
+
+
+@contextmanager
+def cache_write_meter():
+    """Count the bytes this context writes to the cache (yields the meter)."""
+    meter = CacheWriteMeter()
+    token = _WRITE_METER.set(meter)
+    try:
+        yield meter
+    finally:
+        _WRITE_METER.reset(token)
+
+
+def _meter_write(n: int) -> None:
+    meter = _WRITE_METER.get()
+    if meter is not None:
+        meter.add(n)
+
+
 def put_cached(
     run_dir: Path,
     filename: str,
@@ -365,6 +414,7 @@ def put_cached(
         except FileNotFoundError:
             pass
         raise
+    _meter_write(len(data))
     logger.debug("Cached: %s (%d bytes)", path, len(data))
     return path
 
@@ -413,6 +463,7 @@ def put_cached_from_chunks(
         except FileNotFoundError:
             pass
         raise
+    _meter_write(total)
     logger.debug("Cached (streamed): %s (%d bytes)", path, total)
     return path
 

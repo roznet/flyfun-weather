@@ -3302,6 +3302,67 @@ def _iter_gfs_slot_hourlies(
             yield from wf.hourly
 
 
+def _download_hrrr_sounding(
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    idx_text: str,
+    *,
+    run_dir: Path,
+    session: requests.Session,
+) -> None:
+    """Download the HRRR sounding artifact for ``fhour`` into the cache.
+
+    Raises :class:`HrrrIncompleteArtifact` when the ``.idx`` plan is
+    deficient or no complete cache entry was committed. Shared by the
+    briefing's staging and the flight warm (#929).
+    """
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        HrrrIncompleteArtifact,
+        fetch_hrrr_ranges_to_cache,
+        plan_hrrr_sounding_byte_ranges,
+        validate_hrrr_sounding_plan,
+    )
+
+    ranges = plan_hrrr_sounding_byte_ranges(idx_text)
+    validate_hrrr_sounding_plan(ranges)
+    with _grib_time("hrrr_sounding_download"):
+        ok = fetch_hrrr_ranges_to_cache(
+            init_date, init_hour, fhour, ranges, run_dir,
+            cache_key(fhour, "HRRR_SOUNDING"),
+            session=session, label="sounding",
+        )
+    if not ok:
+        raise HrrrIncompleteArtifact(
+            f"HRRR sounding f{fhour:02d} did not commit a cache entry"
+        )
+
+
+def _download_hrrr_cloud_diag(
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    idx_text: str,
+    *,
+    run_dir: Path,
+    session: requests.Session,
+) -> None:
+    """Download the optional HRRR cloud-diagnostics artifact for ``fhour``."""
+    from weatherbrief.fetch.grib.hrrr_fetch import (
+        fetch_hrrr_ranges_to_cache,
+        plan_hrrr_cloud_diag_byte_ranges,
+    )
+
+    diag_ranges = plan_hrrr_cloud_diag_byte_ranges(idx_text)
+    if diag_ranges:
+        with _grib_time("hrrr_cloud_diag_download"):
+            fetch_hrrr_ranges_to_cache(
+                init_date, init_hour, fhour, diag_ranges, run_dir,
+                cache_key(fhour, "HRRR_CLOUD_DIAG"),
+                session=session, label="cloud diag",
+            )
+
+
 def _stage_one_hrrr_hour(
     route_points: list[RoutePoint],
     init_date: str,
@@ -3339,11 +3400,7 @@ def _stage_one_hrrr_hour(
     from weatherbrief.fetch.grib.hrrr_fetch import (
         HrrrIncompleteArtifact,
         fetch_hrrr_idx,
-        fetch_hrrr_ranges_to_cache,
         hrrr_column_incomplete_reason,
-        plan_hrrr_cloud_diag_byte_ranges,
-        plan_hrrr_sounding_byte_ranges,
-        validate_hrrr_sounding_plan,
     )
 
     sounding_ck = cache_key(fhour, "HRRR_SOUNDING")
@@ -3365,17 +3422,9 @@ def _stage_one_hrrr_hour(
         return idx_cache[0] or ""
 
     def _download_sounding() -> None:
-        ranges = plan_hrrr_sounding_byte_ranges(_idx())
-        validate_hrrr_sounding_plan(ranges)
-        with _grib_time("hrrr_sounding_download"):
-            ok = fetch_hrrr_ranges_to_cache(
-                init_date, init_hour, fhour, ranges, run_dir, sounding_ck,
-                session=session, label="sounding",
-            )
-        if not ok:
-            raise HrrrIncompleteArtifact(
-                f"HRRR sounding f{fhour:02d} did not commit a cache entry"
-            )
+        _download_hrrr_sounding(
+            init_date, init_hour, fhour, _idx(), run_dir=run_dir, session=session,
+        )
 
     if not is_cached(run_dir, sounding_ck):
         _download_sounding()
@@ -3410,13 +3459,9 @@ def _stage_one_hrrr_hour(
     diagnostics: list | None = None
     try:
         if not is_cached(run_dir, diag_ck):
-            diag_ranges = plan_hrrr_cloud_diag_byte_ranges(_idx())
-            if diag_ranges:
-                with _grib_time("hrrr_cloud_diag_download"):
-                    fetch_hrrr_ranges_to_cache(
-                        init_date, init_hour, fhour, diag_ranges, run_dir,
-                        diag_ck, session=session, label="cloud diag",
-                    )
+            _download_hrrr_cloud_diag(
+                init_date, init_hour, fhour, _idx(), run_dir=run_dir, session=session,
+            )
         if is_cached(run_dir, diag_ck):
             with _grib_time("hrrr_cloud_diag_decode"):
                 diag_raw = _dispatch_decode(
@@ -4045,6 +4090,47 @@ def _enrich_clwmr_icmr(
         logger.warning("No GRIB2 CLWMR/ICMR data retrieved for enrichment")
 
 
+def _ensure_gfs_cloud_diag(
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    run_dir: Path,
+    idx_by_fhour: dict[int, str],
+    session: requests.Session,
+) -> bool:
+    """Cache the GFS cloud-diagnostics blob for ``fhour``; True when on disk.
+
+    The download half of :func:`_fetch_cloud_diag_for_fhour`, shared with
+    the flight warm (#929).
+    """
+    ck = cache_key(fhour, "CLOUD_DIAG")
+    if is_cached(run_dir, ck):
+        return True
+    idx_text = idx_by_fhour.get(fhour)
+    if idx_text is None:
+        return False
+    try:
+        ranges = plan_cloud_diag_byte_ranges(idx_text)
+        if not ranges:
+            logger.warning("No cloud diag found in .idx for f%03d", fhour)
+            return False
+        with _grib_time("gfs_cloud_diag_download"):
+            grib_bytes = fetch_cloud_diag_ranges(
+                init_date, init_hour, fhour, ranges, session=session,
+            )
+        if not grib_bytes:
+            return False
+        put_cached(run_dir, ck, grib_bytes)
+        logger.info(
+            "Downloaded cloud diag f%03d: %d ranges, %.1f KB",
+            fhour, len(ranges), len(grib_bytes) / 1024,
+        )
+    except Exception:
+        logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
+        return False
+    return True
+
+
 def _fetch_cloud_diag_for_fhour(
     init_date: str,
     init_hour: int,
@@ -4056,32 +4142,11 @@ def _fetch_cloud_diag_for_fhour(
     session: requests.Session,
 ) -> list[dict[str, float]] | None:
     """Fetch, cache, decode cloud diagnostics for a single GFS forecast hour."""
-    ck = cache_key(fhour, "CLOUD_DIAG")
-    if not is_cached(run_dir, ck):
-        idx_text = idx_by_fhour.get(fhour)
-        if idx_text is None:
-            return None
-        try:
-            ranges = plan_cloud_diag_byte_ranges(idx_text)
-            if not ranges:
-                logger.warning("No cloud diag found in .idx for f%03d", fhour)
-                return None
-            with _grib_time("gfs_cloud_diag_download"):
-                grib_bytes = fetch_cloud_diag_ranges(
-                    init_date, init_hour, fhour, ranges, session=session,
-                )
-            if not grib_bytes:
-                return None
-            put_cached(run_dir, ck, grib_bytes)
-            logger.info(
-                "Downloaded cloud diag f%03d: %d ranges, %.1f KB",
-                fhour, len(ranges), len(grib_bytes) / 1024,
-            )
-        except Exception:
-            logger.warning("Failed to fetch cloud diag f%03d", fhour, exc_info=True)
-            return None
-
-    cache_path = run_dir / ck
+    if not _ensure_gfs_cloud_diag(
+        init_date, init_hour, fhour, run_dir, idx_by_fhour, session,
+    ):
+        return None
+    cache_path = run_dir / cache_key(fhour, "CLOUD_DIAG")
     with _grib_time("gfs_cloud_diag_decode"):
         return _dispatch_decode(
             "decode_gfs_cloud_diag", str(cache_path), point_lats, point_lons,
