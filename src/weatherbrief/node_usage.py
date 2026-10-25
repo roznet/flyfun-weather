@@ -195,6 +195,42 @@ def collect_api_usage(
     return rows, (scanned[-1].id if scanned else None)
 
 
+def _briefing_token_cost(db: Session, row: CostLedgerRow) -> float:
+    """What a node briefing really spent: its LLM tokens at the model's list price.
+
+    A briefing row's ``cost`` is the pilot-facing ``total_usd``: tokens plus
+    the node's own share of droplet and subscriptions, plus margin, all from
+    the node's own rate card. On prod that would count the fixed costs twice
+    and the margin twice, and a stale node card misprices even the tokens
+    (dev's still billed Sonnet 4.6 rates on 5.5 digests). So price the
+    recorded tokens with ``compute_call_cost`` like any side call; fall back
+    to the row's ``token_cost_usd``, never to the total.
+    """
+    from weatherbrief.costs import DIGEST_CACHE_TTL, briefing_ledger_figures, compute_call_cost
+    from weatherbrief.db.models import BriefingUsageRow
+
+    usage = None
+    if row.reference_id and str(row.reference_id).isdigit():
+        usage = db.get(BriefingUsageRow, int(row.reference_id))
+    if usage is not None and usage.llm_model:
+        try:
+            return compute_call_cost(
+                usage.llm_model,
+                usage.llm_input_tokens or 0,
+                usage.llm_output_tokens or 0,
+                usage.llm_cache_read_tokens or 0,
+                usage.llm_cache_write_tokens or 0,
+                cache_ttl=DIGEST_CACHE_TTL,
+            )
+        except ValueError:
+            logger.warning(
+                "Usage push: cost_ledger %d model %r unpriced, sent at its token_cost_usd",
+                row.id, usage.llm_model,
+            )
+    token_usd, _storage, _saving = briefing_ledger_figures(row.detail_json)
+    return token_usd
+
+
 def collect_cost_ledger(
     db: Session, after_id: int, limit: int, since: datetime | None = None,
 ) -> tuple[list[dict], int | None]:
@@ -206,7 +242,8 @@ def collect_cost_ledger(
     append, so prod will not take it either).
 
     Every category but the retired zero-cost ``topup``: on a node, briefings,
-    side calls and eval runs are all spend the program pays for.
+    side calls and eval runs are all spend the program pays for. Briefings go
+    at their token cost only (``_briefing_token_cost``), never their total.
     """
     from weatherbrief.api.credits import SERVICE
 
@@ -221,6 +258,10 @@ def collect_cost_ledger(
     rows = []
     for r in scanned:
         cost = float(r.cost or 0.0)
+        description = r.description
+        if r.category == "briefing":
+            cost = _briefing_token_cost(db, r)
+            description = f"Briefing tokens (${cost:.4f})"
         if not 0 <= cost <= MAX_ROW_COST_USD:
             _skip(COST_LEDGER, r.id, f"cost ${cost:.4f} outside [0, {MAX_ROW_COST_USD:g}]")
             continue
@@ -231,7 +272,7 @@ def collect_cost_ledger(
             "category": r.category[:MAX_CATEGORY_CHARS] if r.category else None,
             "cost": cost,
             "description": (
-                r.description[:MAX_DESCRIPTION_CHARS] if r.description else None
+                description[:MAX_DESCRIPTION_CHARS] if description else None
             ),
             "metadata_json": _wire_json(r.metadata_json, r.id, "metadata_json"),
             "detail_json": _wire_json(r.detail_json, r.id, "detail_json"),

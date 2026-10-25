@@ -353,6 +353,50 @@ def test_absurd_rows_are_rejected(client, token):
     assert r.status_code == 422
 
 
+def test_briefing_rows_go_at_token_cost_not_the_pilot_total(client, prod_db, node_db, token):
+    # A briefing row's ``cost`` is total_usd (tokens + fixed-cost shares +
+    # margin, at the node's own card). Prod already has the fixed costs and
+    # adds margin itself: only the tokens, at list price, may travel.
+    from flyfun_common.db.models import UserRow
+
+    from weatherbrief.costs import compute_call_cost
+    from weatherbrief.db.models import BriefingUsageRow
+
+    s = node_db()
+    s.add(UserRow(id="dev-user", provider="local"))
+    s.flush()
+    usage = BriefingUsageRow(
+        user_id="dev-user", llm_digest=True, llm_model="anthropic:claude-sonnet-5-5",
+        llm_input_tokens=20_000, llm_output_tokens=2_000,
+        llm_cache_read_tokens=5_000, llm_cache_write_tokens=10_000,
+    )
+    s.add(usage)
+    s.flush()
+    stale_card = json.dumps({"token_cost_usd": 0.09, "total_usd": 0.68})
+    s.add_all([
+        CostLedgerRow(  # tokens on record: re-priced at list price
+            user_id="dev-user", service=SERVICE, action="briefing", category="briefing",
+            cost=0.68, created_at=T0, reference_id=str(usage.id),
+            description="Briefing ($0.6800)", detail_json=stale_card,
+        ),
+        CostLedgerRow(  # no usage row: its own token_cost_usd, never the total
+            user_id="dev-user", service=SERVICE, action="briefing", category="briefing",
+            cost=0.68, created_at=T0, reference_id="999999", detail_json=stale_card,
+        ),
+    ])
+    s.commit()
+    s.close()
+
+    assert _push(node_db, client, token).error is None
+    s = prod_db()
+    costs = [c.cost for c in s.query(CostLedgerRow).order_by(CostLedgerRow.id)]
+    expected = compute_call_cost(
+        "claude-sonnet-5-5", 20_000, 2_000, 5_000, 10_000, cache_ttl="1h",
+    )
+    assert costs == [pytest.approx(expected), pytest.approx(0.09)]
+    s.close()
+
+
 def test_mint_token_creates_the_service_account_once(prod_db):
     # Prod's api_tokens.user_id keeps migration 007's FK to users.id, which
     # this create_all DB lacks: assert the users row the FK needs exists.

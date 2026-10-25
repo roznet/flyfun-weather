@@ -185,7 +185,12 @@ mini LAN-only), piggybacking on the snapshot artifact (misses dev).
   (node ids mean nothing here). `cost_ledger` rows as `category="node"`,
   original `action` kept, `user_id="system:<origin>"`, provenance + the node's
   detail in `detail_json`. Never `briefing`: that would inflate the
-  per-briefing figures behind donation economics.
+  per-briefing figures behind donation economics. A node *briefing* row goes
+  at its token cost only, re-priced from its `briefing_usage` tokens at list
+  price (`compute_call_cost`; fallback `token_cost_usd`), never its `cost`:
+  that is the pilot total (tokens + the node card's fixed-cost shares +
+  margin), which would count prod's fixed costs and margin twice and bake in
+  a stale node card (dev's billed 5.5 digests at 4.6 rates, 19x on 10-25).
 - **Reporting:** node cost is *program* cost, not briefing cost.
   `ProgramCostReport.variable_node_usd` is inside `variable_usd` and the total
   (margin applied like every line) but out of `cost_per_briefing_usd`,
