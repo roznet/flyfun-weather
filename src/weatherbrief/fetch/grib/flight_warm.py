@@ -431,21 +431,16 @@ def _warm_icon_alternates(
     fresh run; the search reads that run once Open-Meteo's ICON init
     reaches it.
     """
-    from weatherbrief.fetch.grib.cache import cache_dir_for_run, cache_key, is_cached, pin_run_dir
-    from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_D2,
-        ICON_EU,
-        ICON_EU_RAIN_CON_CACHE_KEY,
-        icon_cloud_diag_cache_key,
-        icon_eu_previous_step,
-    )
+    from weatherbrief.fetch.grib.cache import cache_dir_for_run, pin_run_dir
+    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
     from weatherbrief.fetch.grib.primary import grib_snapshot_models
     from weatherbrief.tasks.alternates import _eta_hour, alternates_fetch_airports
     from weatherbrief.tasks.standalone_grib import (
-        _icon_snapshot_plan,
         datetime_to_init_parts,
         ensure_icon_cloud_diag_files,
         ensure_icon_snapshot_files,
+        icon_cloud_diag_cold_steps,
+        icon_snapshot_cold_steps,
     )
     from weatherbrief.tasks.standalone_verification import (
         grib_diag_steps,
@@ -466,6 +461,9 @@ def _warm_icon_alternates(
         return _Outcome("skipped", reason="alternates_eta_before_run")
 
     grib_snapshots = "icon" in grib_snapshot_models()
+    # Planned on this pass's run. The search plans on Open-Meteo's ICON init,
+    # one init for both variants; once that init reaches this run the D2
+    # mask, the D2 horizon and so the split are the same.
     plan = (
         icon_snapshot_fetch_plan(
             init_time, alternates_fetch_airports(flight.route, db_path), [eta],
@@ -489,54 +487,43 @@ def _warm_icon_alternates(
     init_date, init_hour = datetime_to_init_parts(init_time)
     run = f"{init_date}_{init_hour:02d}z"
     hours: set[tuple[str, int]] = set()
+    failed: list[str] = []
     for variant, kind, steps in units:
         run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
-        if kind == "diag":
-            diag_key = icon_cloud_diag_cache_key(variant)
-            missing = [f for f in steps if not is_cached(run_dir, cache_key(f, diag_key))]
-            if "rain_con" in variant.cloud_diag_variables:
-                # The rain_con predecessor too, as a full or rain_con-only blob.
-                for f in steps:
-                    prev = icon_eu_previous_step(f, variant)
-                    if prev is not None and not any(
-                        is_cached(run_dir, cache_key(prev, k))
-                        for k in (diag_key, ICON_EU_RAIN_CON_CACHE_KEY)
-                    ):
-                        missing.append(f)
-        else:
-            wanted, _ = _icon_snapshot_plan(init_date, init_hour, steps, variant)
-            missing = sorted({
-                key[0] for key, (_url, ck) in wanted.items() if not is_cached(run_dir, ck)
-            })
-        if missing:
+
+        def _cold(run_dir=run_dir, kind=kind, steps=steps, variant=variant) -> list[int]:
+            if kind == "diag":
+                return icon_cloud_diag_cold_steps(run_dir, steps, variant)
+            return icon_snapshot_cold_steps(run_dir, init_date, init_hour, steps, variant)
+
+        if _cold():
             # Only ahead of a real download, as everywhere in the warm.
             if stop():
                 return _Outcome("stopped", hours=hours)
+            ensure = (
+                ensure_icon_cloud_diag_files if kind == "diag" else ensure_icon_snapshot_files
+            )
             with pin_run_dir(run_dir):
-                if kind == "diag":
-                    cached = ensure_icon_cloud_diag_files(
-                        init_date, init_hour, steps, variant=variant, data_dir=data_dir,
-                    )
-                    if set(cached) != set(steps):
-                        # The helper logged why; say which flight it costs.
-                        logger.warning(
-                            "Flight warm %s: alternates cloud diag %s left %s cold "
-                            "for flight %s", source, variant.slug,
-                            sorted(set(steps) - set(cached)), flight.id,
-                        )
-                else:
-                    ensure_icon_snapshot_files(
-                        init_date, init_hour, steps, variant=variant, data_dir=data_dir,
-                    )
-        hours |= {(f"{run} alternates {variant.slug} {kind}", f) for f in steps}
+                ensure(init_date, init_hour, steps, variant=variant, data_dir=data_dir)
+            # The helpers log and carry on: check what landed, so a DWD outage
+            # reads as failed in the stats line (as for GFS and HRRR).
+            cold = _cold()
+            if cold:
+                failed.append(f"{variant.slug} {kind} {cold}")
+            landed = [f for f in steps if f not in cold]
+        else:
+            landed = steps
+        hours |= {(f"{run} alternates {variant.slug} {kind}", f) for f in landed}
+    if failed:
+        return _Outcome("failed", hours=hours, reason="alternates cold: " + "; ".join(failed))
     return _Outcome("warmed", hours=hours)
 
 
 def _merge(briefing: _Outcome, alternates: _Outcome) -> _Outcome:
     """One flight's outcome from its briefing warm and its alternates warm."""
     hours = briefing.hours | alternates.hours
-    if alternates.status == "stopped":
-        return _Outcome("stopped", hours=hours, reason=alternates.reason)
+    if alternates.status in ("stopped", "failed"):
+        return _Outcome(alternates.status, hours=hours, reason=alternates.reason)
     if briefing.status == "skipped" and alternates.status == "skipped":
         return briefing
     return _Outcome("warmed", hours=hours)

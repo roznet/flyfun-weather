@@ -398,6 +398,46 @@ def _ensure_icon_cloud_diag_cached(
     return job_fhours, predecessor_of, preds
 
 
+def icon_cloud_diag_cold_steps(
+    run_dir: Path, steps: list[int], variant: "IconVariant",
+) -> list[int]:
+    """The *steps* whose cloud-diag read would download: the step's blob, or
+    (where the variant has rain_con) its predecessor as a full or
+    rain_con-only blob, is not in *run_dir*. The cache-side mirror of
+    :func:`_ensure_icon_cloud_diag_cached`."""
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU_RAIN_CON_CACHE_KEY,
+        icon_cloud_diag_cache_key,
+        icon_eu_previous_step,
+    )
+
+    diag_key = icon_cloud_diag_cache_key(variant)
+    has_rain_con = "rain_con" in variant.cloud_diag_variables
+    cold = []
+    for fhour in steps:
+        if not is_cached(run_dir, cache_key(fhour, diag_key)):
+            cold.append(fhour)
+            continue
+        prev = icon_eu_previous_step(fhour, variant) if has_rain_con else None
+        if prev is not None and not any(
+            is_cached(run_dir, cache_key(prev, k))
+            for k in (diag_key, ICON_EU_RAIN_CON_CACHE_KEY)
+        ):
+            cold.append(fhour)
+    return cold
+
+
+def icon_snapshot_cold_steps(
+    run_dir: Path, init_date: str, init_hour: int, steps: list[int],
+    variant: "IconVariant",
+) -> list[int]:
+    """The *steps* whose snapshot read would download: a file of the step, or
+    its predecessor's accumulated surface (:func:`_icon_snapshot_plan`), is
+    not in *run_dir*."""
+    wanted, predecessor_of = _icon_snapshot_plan(init_date, init_hour, steps, variant)
+    cold = {key[0] for key, (_url, ck) in wanted.items() if not is_cached(run_dir, ck)}
+    return sorted(f for f in steps if f in cold or predecessor_of.get(f) in cold)
+
 def ensure_icon_cloud_diag_files(
     init_date: str,
     init_hour: int,
