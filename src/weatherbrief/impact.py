@@ -63,9 +63,13 @@ def economics_from_report(report: ProgramCostReport) -> ProgramEconomics:
     per-briefing cost is the monthly run cost divided by the window's briefing
     count scaled to a month — so it, too, excludes margin (unlike
     ``report.cost_per_briefing_usd``, which includes it).
+
+    Node usage (dev laptops, the compute node, #922) is left out: it is in the
+    program total, but no pilot's briefing caused it, so it must not move the
+    per-pilot and per-briefing figures the donation pages are built on.
     """
     scale = _DAYS_PER_MONTH / report.window_days if report.window_days else 0.0
-    variable_monthly = report.variable_usd * scale
+    variable_monthly = (report.variable_usd - report.variable_node_usd) * scale
     monthly = report.fixed_monthly_usd + variable_monthly
     users = report.num_users
     cpum = monthly / users if users > 0 else 0.0

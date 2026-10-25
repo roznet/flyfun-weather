@@ -90,8 +90,7 @@ def _cmd_precompute(args: argparse.Namespace) -> int:
         f"Done in {result.elapsed_seconds:.1f}s — "
         f"{len([p for p in result.snapshots.values() if p])} written, "
         f"{len(result.skipped)} skipped, {result.purged} purged, "
-        f"{result.api_calls_total} Open-Meteo API calls "
-        f"(not logged to DB — CLI runs do not hit ApiUsageRow)"
+        f"{result.api_calls_total} Open-Meteo API calls"
     )
     # Non-zero when any model failed (anything but "already on disk"), so a
     # compute-node runner withholds its deadman ping; the serving box computes
@@ -313,7 +312,23 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    return args.func(args)
+    from weatherbrief.api.usage import log_api_usage_detached
+    from weatherbrief.fetch.open_meteo import open_meteo_meter
+
+    # Every Open-Meteo request of the run goes to this machine's
+    # api_usage_log; on a compute node the usage push uploads it (#922).
+    with open_meteo_meter() as meter:
+        try:
+            return args.func(args)
+        finally:
+            log_api_usage_detached(
+                service="open_meteo",
+                pipeline=(
+                    "hewson_precompute" if args.func is _cmd_precompute else "hewson_cli"
+                ),
+                api_calls=meter.usage.calls,
+                weighted_calls=meter.usage.weight,
+            )
 
 
 if __name__ == "__main__":

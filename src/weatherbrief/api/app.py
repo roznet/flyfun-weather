@@ -71,6 +71,7 @@ from weatherbrief.api.tokens import router as tokens_router
 from weatherbrief.api.account_export import router as account_export_router
 from weatherbrief.privacy import mask_email
 from weatherbrief.api.usage import mcp_router, router as usage_router
+from weatherbrief.api.usage_ingest import router as usage_ingest_router
 from flyfun_common.admin_hub import create_hub_router
 
 logger = logging.getLogger(__name__)
@@ -332,6 +333,16 @@ async def lifespan(app: FastAPI):
             run_analytics_digest_loop(app.state)
         )
 
+    usage_push_task = None
+    # Opt-in: a dev server reports its own usage to prod (#922) only when
+    # WB_USAGE_PUSH_URL / WB_USAGE_PUSH_TOKEN are set; never on prod itself.
+    from weatherbrief.node_usage import push_config
+
+    if push_config() is not None:
+        from weatherbrief.scheduler import run_usage_push_loop
+
+        usage_push_task = asyncio.create_task(run_usage_push_loop(app.state))
+
     grib_precache_task = None
     # Default off in dev so local devs don't pull ~38 GB on startup; on in prod.
     _precache_default = "false" if is_dev_mode() else "true"
@@ -356,7 +367,7 @@ async def lifespan(app: FastAPI):
                  cells_ingest_task,
                  freshness_task,
                  analytics_rollup_task, analytics_digest_task,
-                 grib_precache_task):
+                 usage_push_task, grib_precache_task):
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -652,6 +663,7 @@ def create_app() -> FastAPI:
     app.include_router(profiles_admin_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
     app.include_router(mcp_router, prefix="/api")
+    app.include_router(usage_ingest_router, prefix="/api")
     app.include_router(credits_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
     app.include_router(cost_config_router, prefix="/api")

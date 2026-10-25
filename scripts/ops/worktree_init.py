@@ -232,6 +232,13 @@ def step_fork_db(rep: Report, main: Path, path: Path) -> None:
     with sqlite3.connect(f"file:{src_db}?mode=ro", uri=True) as s, \
             sqlite3.connect(data / "flyfun.db") as d:
         s.backup(d)
+        # The copy must not push usage as main's node DB (#922): its local ids
+        # diverge from main's, so sharing main's id would drop one side's rows.
+        # Without the id, its first push mints a fresh one.
+        try:
+            d.execute("DELETE FROM instance_settings WHERE key = 'node_db_id'")
+        except sqlite3.OperationalError:
+            pass  # pre-#922 DB: no table, no id
     env_file = path / ".env"
     text = env_file.read_text()
     new, n = re.subn(r"(?m)^DATA_DIR=.*$", f"DATA_DIR={data}", text)

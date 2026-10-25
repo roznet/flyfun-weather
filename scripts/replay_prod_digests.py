@@ -33,6 +33,7 @@ from weatherbrief.digest.llm_config import (  # noqa: E402
     create_llm, load_digest_config, with_structured,
 )
 from weatherbrief.digest.llm_digest import WeatherDigest, _system_content  # noqa: E402
+from weatherbrief.node_usage import record_eval_cost  # noqa: E402
 
 _ORDER = ["GREEN", "AMBER", "RED"]
 
@@ -92,6 +93,16 @@ def main() -> int:
                   flush=True)
     if args.output:
         args.output.write_text(json.dumps(results, indent=1, ensure_ascii=False))
+    # One ledger row per run, at production's cache TTL (what run_one priced),
+    # so the spend reaches prod's cost report through the usage push (#922).
+    record_eval_cost(
+        "replay_prod_digests",
+        sum(r.get("cost_usd") or 0 for r in results),
+        calls=sum(1 for r in results if "cost_usd" in r),
+        model=config.llm.model, cache_ttl=DIGEST_CACHE_TTL,
+        input_tokens=sum(r.get("input_tokens") or 0 for r in results),
+        output_tokens=sum(r.get("output_tokens") or 0 for r in results),
+    )
 
     ok = [r for r in results if r.get("got")]
     if not ok:

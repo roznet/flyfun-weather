@@ -96,9 +96,11 @@ cost_per_user     = total / num_users        # distinct briefing users in window
 ### Other LLM spend (non-briefing ledger categories, #741)
 
 Per-call LLM features write their own ledger rows priced by `compute_call_cost`
-(not `compute_cost`): `category="live_highlight"` (reference_id = flight id) and
-`category="trip_summary"` (reference_id = trip id). `credits.other_llm_spend(db,
-since, user_id)` aggregates every category except `briefing`/`topup` into
+(not `compute_cost`): `category="live_highlight"` (reference_id = flight id),
+`category="trip_summary"` (reference_id = trip id) and `category="dwd_translate"`
+(user `system`, one row per translator call; cache hits write nothing, #922).
+`credits.other_llm_spend(db, since, user_id)` aggregates every category except
+`briefing`/`topup`/`node` into
 `{total_usd, calls, by_category, by_day (UTC, newest first), by_user}`.
 
 - **Admin-only, shown apart.** The endpoint attaches it as `other_llm` *next to*
@@ -137,11 +139,64 @@ overage (#910). Read `weighted_calls` against the plan, never `api_calls`.
   to `briefing`), the time scan (`time_scan` / `time_confirm`), the standalone
   cycle (`verification`) and the Hewson precompute.
 - **Pipelines logged:** `briefing`, `alternates`, `time_scan`, `time_confirm`,
-  `verification`, `hewson_precompute`, `airport_profile`. CLI runs (frontal,
-  Hewson) still log nothing, and anything run on dev or the compute node lands
-  in *that* node's DB, not prod's — the node → prod usage upload is the next step.
+  `verification`, `hewson_precompute`, `airport_profile`, and the CLIs
+  (`hewson_precompute` / `hewson_cli`, `frontal`), which meter their whole run
+  in `main()` and log through `log_api_usage_detached` (#922).
 - `NULL` `weighted_calls` = written before migration 114; summaries sum only
   the weighted rows.
+- `origin` (migration 115): `NULL` = recorded by this server; a node name =
+  uploaded by that node. `/api/admin/api-usage` labels NULL as `prod` and adds
+  `by_origin` per period. The Open-Meteo dashboard should equal the sum of the
+  origins (one key on every machine); the difference is usage nobody records.
+
+## Node usage upload (#922)
+
+Dev laptops and the Mac mini spend on the same Open-Meteo key and Anthropic
+account but write usage to their *own* DB. `weatherbrief/node_usage.py` moves
+it to prod over HTTP — one mechanism for every node. Rejected: direct writes
+to prod MySQL (schema skew, DB exposure), prod pulling (laptops unreachable,
+mini LAN-only), piggybacking on the snapshot artifact (misses dev).
+
+- **Node side:** `python -m weatherbrief.node_usage push` (the mini runs it
+  after its artifact push; a dev server runs it at startup + hourly via
+  `scheduler.run_usage_push_loop`). Configured by `WB_USAGE_PUSH_URL` +
+  `WB_USAGE_PUSH_TOKEN`; ignored when unset or on `ENVIRONMENT=production`.
+  The node's `api_usage_log` (own rows only, `origin IS NULL`) and weather
+  `cost_ledger` (all but `topup`) are the outbox. It reads prod's high-water
+  mark per table, then POSTs batches of 500. Never raises, exits 0 (`--strict`
+  for 1): a failure only delays, the next run resends from the mark. The
+  first push uploads the node's whole history (`--since` limits it).
+- **Node identity:** a UUID in the node DB (`instance_settings.node_db_id`),
+  not a file, so a recreated DB starts a new id space instead of colliding.
+  `worktree_init.py --fork-db` deletes it from the copy for the same reason.
+- **Prod side:** `api/usage_ingest.py`, `GET /api/admin/usage/ingest/watermark`
+  and `POST /api/admin/usage/ingest`. Explicit JSON rows (not ORM dumps), so
+  node and prod may run different SHAs. `node_usage_ingest`
+  `UNIQUE(node_db, source_table, local_id)` makes re-sends no-ops; a node DB id
+  already used by another origin is a 409. Timestamps stay the node's.
+- **What lands:** `api_usage_log` rows with `origin`, user/flight dropped
+  (node ids mean nothing here). `cost_ledger` rows as `category="node"`,
+  original `action` kept, `user_id="system:<origin>"`, provenance + the node's
+  detail in `detail_json`. Never `briefing`: that would inflate the
+  per-briefing figures behind donation economics.
+- **Reporting:** node cost is *program* cost, not briefing cost.
+  `ProgramCostReport.variable_node_usd` is inside `variable_usd` and the total
+  (margin applied like every line) but out of `cost_per_briefing_usd`,
+  `cost_per_user_usd` and `impact.economics_from_report` (donation pages
+  unchanged). The admin cost table shows a "Dev & compute nodes" row inside
+  Variable and its per-unit rows divide the total without it. Not in
+  `other_llm` (that is pilots' side calls).
+- **Auth:** `mint-token --origin <name>` (run on prod) creates an `ff_` token
+  on the service account `system:<name>` with scope `usage:ingest` only. The
+  origin comes from the token, not the payload. The endpoints read the bearer
+  themselves and refuse anything without that scope, admin tokens and
+  sessions included; flyfun-common's scope registry has no paths for it, so
+  the token reaches nothing else. Per-row caps ($50, 10M weighted calls) bound
+  what a leaked token could append.
+- **Evals:** `run_digest_eval.py`, `replay_prod_digests.py` and
+  `run_longrange_eval.py` write one `node`/`eval` row per run
+  (`node_usage.record_eval_cost`) at the cost they computed themselves — the
+  eval's 5-minute cache tier never goes through the production pricing path.
 
 ## DB Schema
 
@@ -256,6 +311,8 @@ Versioned: updating creates a new row, deactivates the previous. History queryab
 | `/api/admin/cost-config/history` | GET | Admin | All config versions |
 | `/api/admin/cost-report` | GET | Admin | Program-wide report (`?window=7d\|30d`): fixed/variable/total + per-briefing/per-user, plus `other_llm` over the same window |
 | `/api/admin/users/{id}/costs` | GET | Admin | Per-user cost detail, plus `other_llm` (all-time + this month, by category) |
+| `/api/admin/usage/ingest/watermark` | GET | Node token (`usage:ingest`) | Highest local id received per table for `?node_db=` (#922) |
+| `/api/admin/usage/ingest` | POST | Node token (`usage:ingest`) | Append a node's `api_usage_log` / `cost_ledger` rows, idempotent (#922) |
 | `/api/transparency` | GET | None | Public pricing structure |
 
 ### GET /api/user/credits response

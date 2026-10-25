@@ -233,6 +233,22 @@ class TestComputeProgramCost:
         assert r.fixed_monthly_usd == 56.0
         assert abs(r.fixed_prorated_usd - 56.0 * 7 / 30) < 1e-3
 
+    def test_node_usage_enters_total_but_not_per_unit_figures(self):
+        """#922: dev/compute-node usage is program cost, not briefing cost."""
+        kw = dict(
+            config_id=1, window_days=30, variable_token_usd=0.40,
+            variable_storage_usd=0.10, num_briefings=100, num_users=10,
+        )
+        base = compute_program_cost(_default_config(margin_percent=10.0), **kw)
+        r = compute_program_cost(
+            _default_config(margin_percent=10.0), variable_node_usd=5.0, **kw,
+        )
+        assert r.variable_node_usd == 5.0
+        assert r.variable_usd == pytest.approx(base.variable_usd + 5.0)
+        assert r.total_usd == pytest.approx(base.total_usd + 5.5)  # margin included
+        assert r.cost_per_briefing_usd == pytest.approx(base.cost_per_briefing_usd)
+        assert r.cost_per_user_usd == pytest.approx(base.cost_per_user_usd)
+
     def test_variable_is_token_plus_storage(self):
         r = compute_program_cost(
             _default_config(), config_id=1, window_days=30,
@@ -310,7 +326,7 @@ class TestComputeProgramCost:
         assert d["config_id"] == 7
         assert set(d.keys()) == {
             "window_days", "fixed_lines", "fixed_monthly_usd", "fixed_prorated_usd",
-            "variable_token_usd", "variable_storage_usd", "variable_usd",
+            "variable_token_usd", "variable_storage_usd", "variable_node_usd", "variable_usd",
             "cache_saving_usd",
             "subtotal_usd", "margin_percent", "margin_usd", "total_usd",
             "num_briefings", "num_users", "cost_per_briefing_usd",
@@ -623,6 +639,22 @@ class TestCostTable:
         assert usage["Cost / briefing"] == pytest.approx(6.38)
         assert usage["New sign-ups"] == 2
         assert t["cache_saving_usd"] == [None]
+
+    def test_node_line_is_in_the_total_but_not_per_briefing(self):
+        """#922: node usage gets its own row; Cost / briefing divides without it."""
+        base = build_cost_table([self._window()], margin_percent=10.0)
+        t = build_cost_table(
+            [self._window(other_llm_usd={"live_highlight": 0.5, "node": 4.0})],
+            margin_percent=10.0,
+        )
+        rows = {r["label"]: r for r in t["sections"][1]["rows"]}
+        assert rows["Dev & compute nodes"]["values"] == [4.0]
+        assert rows["Dev & compute nodes"]["key"] == "node"
+        assert t["total"] == [pytest.approx(base["total"][0] + 4.4)]
+        per = {u["label"]: u["values"][0] for u in t["usage"]}
+        base_per = {u["label"]: u["values"][0] for u in base["usage"]}
+        assert per["Cost / briefing"] == pytest.approx(base_per["Cost / briefing"])
+        assert per["Cost / active user"] == pytest.approx(base_per["Cost / active user"])
 
     def test_lines_missing_from_a_window_read_zero_and_empty_counts_none(self):
         narrow = self._window(key="7d", days=7, fixed={"Server (droplet)": 5.6},

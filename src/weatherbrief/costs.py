@@ -298,6 +298,11 @@ class ProgramCostReport:
     cost_per_briefing_usd: float
     cost_per_user_usd: float
     config_id: int
+    # Usage uploaded by dev laptops and compute nodes (ledger ``category="node"``,
+    # #922). Already inside ``variable_usd`` and the totals: it is real program
+    # cost. Left out of ``cost_per_briefing_usd`` / ``cost_per_user_usd`` and the
+    # donation economics, because no pilot's briefing caused it.
+    variable_node_usd: float = 0.0
 
 
 #: Labels of the fixed lines that always exist; the cost table orders its
@@ -327,6 +332,7 @@ def compute_program_cost(
     num_briefings: int,
     num_users: int,
     cache_saving_usd: float | None = None,
+    variable_node_usd: float = 0.0,
 ) -> ProgramCostReport:
     """Compute a program-wide cost report for a time window.
 
@@ -338,6 +344,10 @@ def compute_program_cost(
     ``cache_saving_usd`` is reporting-only — it is *already* inside
     ``variable_token_usd`` and must never be added to or subtracted from any
     total.  ``None`` means no ledger row in the window recorded it.
+
+    ``variable_node_usd`` (node usage, #922) enters the variable side and the
+    total, margin included like every other line, but not the per-briefing or
+    per-user figures, which divide only the briefing-driven part.
     """
     months = window_days / _DAYS_PER_MONTH
 
@@ -352,10 +362,11 @@ def compute_program_cost(
 
     fixed_monthly = sum(line.monthly_usd for line in lines)
     fixed_prorated = sum(line.prorated_usd for line in lines)
-    variable = variable_token_usd + variable_storage_usd
+    variable = variable_token_usd + variable_storage_usd + variable_node_usd
     subtotal = fixed_prorated + variable
     margin = subtotal * (config.margin_percent / 100)
     total = subtotal + margin
+    per_unit_total = (subtotal - variable_node_usd) * (1 + config.margin_percent / 100)
 
     return ProgramCostReport(
         window_days=window_days,
@@ -374,9 +385,12 @@ def compute_program_cost(
         total_usd=round(total, 4),
         num_briefings=num_briefings,
         num_users=num_users,
-        cost_per_briefing_usd=round(total / num_briefings, 4) if num_briefings > 0 else 0.0,
-        cost_per_user_usd=round(total / num_users, 4) if num_users > 0 else 0.0,
+        cost_per_briefing_usd=(
+            round(per_unit_total / num_briefings, 4) if num_briefings > 0 else 0.0
+        ),
+        cost_per_user_usd=round(per_unit_total / num_users, 4) if num_users > 0 else 0.0,
         config_id=config_id,
+        variable_node_usd=round(variable_node_usd, 4),
     )
 
 
@@ -392,6 +406,7 @@ def program_report_to_dict(r: ProgramCostReport) -> dict:
         "fixed_prorated_usd": r.fixed_prorated_usd,
         "variable_token_usd": r.variable_token_usd,
         "variable_storage_usd": r.variable_storage_usd,
+        "variable_node_usd": r.variable_node_usd,
         "variable_usd": r.variable_usd,
         "cache_saving_usd": r.cache_saving_usd,
         "subtotal_usd": r.subtotal_usd,
@@ -500,7 +515,12 @@ class CostWindowInputs:
 _OTHER_LLM_LABELS = {
     "live_highlight": "LLM – live highlight",
     "trip_summary": "LLM – trip summary",
+    "dwd_translate": "LLM – DWD translation",
 }
+
+#: Ledger category of usage uploaded by dev laptops / compute nodes (#922).
+NODE_CATEGORY = "node"
+NODE_LINE = "Dev & compute nodes"
 
 
 def _fixed_sort_key(label: str) -> int:
@@ -549,8 +569,10 @@ def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float)
         _row("LLM tokens – briefings", [w.briefing_token_usd for w in windows], "briefing_tokens"),
         *(
             _row(
-                _OTHER_LLM_LABELS.get(c, f"LLM – {c.replace('_', ' ')}"),
+                NODE_LINE if c == NODE_CATEGORY
+                else _OTHER_LLM_LABELS.get(c, f"LLM – {c.replace('_', ' ')}"),
                 [w.other_llm_usd.get(c, 0.0) for w in windows],
+                "node" if c == NODE_CATEGORY else None,
             )
             for c in cats
         ),
@@ -559,9 +581,15 @@ def build_cost_table(windows: Sequence[CostWindowInputs], margin_percent: float)
     ]
     variable_tot = [pre_extra[i] - fixed_tot[i] + extra[i] for i in range(n)]
     total = [fixed_tot[i] + variable_tot[i] for i in range(n)]
+    # Node usage is in the total but no pilot caused it (#922): the per-unit
+    # rows divide the total without it (and without its share of the extra).
+    per_unit = [
+        total[i] - w.other_llm_usd.get(NODE_CATEGORY, 0.0) * (1 + margin_percent / 100)
+        for i, w in enumerate(windows)
+    ]
 
     def _per(i: int, count: int) -> float | None:
-        return total[i] / count if count else None
+        return per_unit[i] / count if count else None
 
     return {
         "columns": [

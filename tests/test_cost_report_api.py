@@ -358,6 +358,23 @@ class TestOtherLlmSpend:
         assert users[DEV_USER_ID]["calls"] == 2
         assert users["user-b"]["email"] is None  # no account row
 
+    def test_node_usage_is_in_the_report_total_not_in_other_llm(self, client, app_db):
+        """#922: uploaded node rows are a program line, apart from pilots' side calls."""
+        self._seed(app_db)
+        before = client.get("/api/admin/cost-report?window=30d").json()
+        s = app_db()
+        _add_call(s, "system:macmini", "node", 2.0)
+        _add_call(s, "system:dev", "node", 1.0, days_ago=40)  # outside 30d
+        s.commit()
+        s.close()
+        data = client.get("/api/admin/cost-report?window=30d").json()
+        assert data["variable_node_usd"] == pytest.approx(2.0)
+        assert data["variable_usd"] == pytest.approx(before["variable_usd"] + 2.0)
+        assert data["total_usd"] > before["total_usd"]
+        assert data["cost_per_briefing_usd"] == pytest.approx(before["cost_per_briefing_usd"])
+        assert data["num_briefings"] == before["num_briefings"]
+        assert data["other_llm"] == before["other_llm"]
+
     def test_user_costs_keep_briefing_figures_and_add_other_llm(self, client, app_db):
         self._seed(app_db)
         data = client.get(f"/api/admin/users/{DEV_USER_ID}/costs").json()

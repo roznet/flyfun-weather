@@ -69,6 +69,15 @@ class TestEconomicsFromReport:
         assert econ.monthly_run_cost_usd == pytest.approx(56.0 + 60.0)
         assert econ.cost_per_user_month_usd == pytest.approx(116.0 / 4)
 
+    def test_node_usage_stays_out_of_the_economics(self):
+        """#922: dev/compute-node usage must not move per-pilot donation figures."""
+        cfg = CostConfig(subscription_details={"open_meteo": 30})
+        kw = dict(config=cfg, config_id=1, window_days=30, variable_token_usd=3.0,
+                  variable_storage_usd=0.0, num_briefings=30, num_users=10)
+        base = economics_from_report(compute_program_cost(**kw))
+        with_node = economics_from_report(compute_program_cost(**kw, variable_node_usd=20.0))
+        assert with_node == base
+
     def test_no_users_is_unavailable(self):
         econ = economics_from_report(_report(num_users=0))
         assert econ.active_users == 0

@@ -222,6 +222,9 @@ def translate_dwd_blocks(
         {"role": "system", "content": prompt},
         {"role": "user", "content": combined_de},
     ])
+    _record_translation_cost(
+        config.translator.model, getattr(result, "usage_metadata", None), mode_tag,
+    )
     english = result.content
 
     # Cache
@@ -239,6 +242,58 @@ def translate_dwd_blocks(
         logger.warning("Failed to write translation cache", exc_info=True)
 
     return _split_translation(blocks, english)
+
+
+def _record_translation_cost(model: str, usage: dict | None, mode_tag: str) -> None:
+    """One ``dwd_translate`` ledger row per translator call (#922). Never raises.
+
+    Priced by ``compute_call_cost`` (tokens only, the model's own rate), like
+    the other side calls. A system cost, not a pilot's: the translation is
+    cached by content and shared by every briefing that sees the same text,
+    so cache hits cost nothing and write nothing. Written on its own session
+    because the digest holds none.
+    """
+    if not isinstance(usage, dict) or not usage:
+        return
+    try:
+        from flyfun_common.costs import record_cost
+
+        from weatherbrief.api.credits import SERVICE
+        from weatherbrief.api.usage import detached_session
+        from weatherbrief.costs import compute_call_cost
+
+        details = usage.get("input_token_details") or {}
+        input_tokens = usage.get("input_tokens") or 0
+        output_tokens = usage.get("output_tokens") or 0
+        cost = compute_call_cost(
+            model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=details.get("cache_read") or 0,
+            cache_write_tokens=details.get("cache_creation") or 0,
+        )
+        db = detached_session()
+        try:
+            record_cost(
+                db,
+                "system",
+                service=SERVICE,
+                action="dwd_translate",
+                cost=cost,
+                category="dwd_translate",
+                description=f"DWD {mode_tag} (${cost:.4f})",
+                metadata={
+                    "model": model,
+                    "mode": mode_tag,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                },
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("DWD translation cost not recorded", exc_info=True)
 
 
 def _prune_stale_versions(

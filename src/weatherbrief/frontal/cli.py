@@ -135,12 +135,9 @@ def _run_analysis(
         model_timeseries[model_key] = ts
 
     # Surface the Open-Meteo call count so ad-hoc runs can see their own
-    # API consumption. This CLI intentionally does NOT call log_api_usage
-    # (ApiUsageRow) — that's reserved for automated paths (the briefing
-    # pipeline via tasks/fetch.py, and the scheduler loops in
-    # tasks/standalone_verification.py and hewson/precompute.py). If this
-    # pipeline is ever wired into an automated path, add log_api_usage
-    # with service="open_meteo", pipeline="frontal" at the call site there.
+    # API consumption. ``main()`` meters the whole run and logs it to
+    # ApiUsageRow (pipeline="frontal", #922), so a direct caller of this
+    # function that is not the CLI logs nothing and must do its own.
     logger.info("Frontal analysis: %d Open-Meteo API calls", client.call_count)
 
     return {
@@ -2832,7 +2829,19 @@ def main() -> None:
         "front-calibrate": _cmd_front_calibrate,
         "clear-cache": _cmd_clear_cache,
     }
-    commands[args.command](args)
+    from weatherbrief.api.usage import log_api_usage_detached
+    from weatherbrief.fetch.open_meteo import open_meteo_meter
+
+    # The run's Open-Meteo requests go to this machine's api_usage_log; on a
+    # node the usage push uploads them (#922).
+    with open_meteo_meter() as meter:
+        try:
+            commands[args.command](args)
+        finally:
+            log_api_usage_detached(
+                service="open_meteo", pipeline="frontal",
+                api_calls=meter.usage.calls, weighted_calls=meter.usage.weight,
+            )
 
 
 if __name__ == "__main__":

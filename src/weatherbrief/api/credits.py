@@ -19,6 +19,7 @@ from weatherbrief.costs import (
     CostConfig,
     CostWindowInputs,
     DEFAULT_CONFIG,
+    NODE_CATEGORY,
     ProgramCostReport,
     breakdown_to_dict,
     briefing_ledger_figures,
@@ -513,6 +514,20 @@ def _program_variable_and_counts(
     return token_usd, storage_usd, len(rows), len(users), cache_saving_usd
 
 
+def _node_cost_since(db: Session, since: datetime) -> float:
+    """USD of usage uploaded by dev laptops / compute nodes since (#922)."""
+    return float(
+        db.query(func.coalesce(func.sum(CostLedgerRow.cost), 0.0))
+        .filter(
+            CostLedgerRow.service == SERVICE,
+            CostLedgerRow.category == NODE_CATEGORY,
+            CostLedgerRow.created_at >= since,
+        )
+        .scalar()
+        or 0.0
+    )
+
+
 def build_program_report(db: Session, window_days: int) -> ProgramCostReport | None:
     """Build a ProgramCostReport for a window, or None when no config exists.
 
@@ -538,16 +553,18 @@ def build_program_report(db: Session, window_days: int) -> ProgramCostReport | N
         num_briefings=num_briefings,
         num_users=num_users,
         cache_saving_usd=cache_saving_usd,
+        variable_node_usd=_node_cost_since(db, since),
     )
 
 
 #: Ledger categories that are not per-call LLM spend: the per-briefing charge
-#: (reported by the program report itself) and the retired zero-cost topups.
+#: and node usage (both reported by the program report itself, #922) and the
+#: retired zero-cost topups.
 #: Everything else under ``SERVICE`` is a feature priced by
 #: ``compute_call_cost`` — ``live_highlight``, ``trip_summary`` — and is shown
 #: to admins only (#741). Pilot totals and per-briefing figures stay
 #: briefing-only: an experimental feature must not inflate them.
-_NOT_OTHER_LLM = ("briefing", "topup")
+_NOT_OTHER_LLM = ("briefing", "topup", NODE_CATEGORY)
 
 
 def other_llm_spend(

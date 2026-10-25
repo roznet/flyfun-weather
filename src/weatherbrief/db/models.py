@@ -1906,6 +1906,53 @@ class ApiUsageRow(Base):
     weighted_calls: Mapped[float | None] = mapped_column(Float, nullable=True)
     user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     flight_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Where the call was made (#922): NULL = by this server itself; a node name
+    # (``dev``, ``macmini``) = uploaded by that node's usage push. A node only
+    # ever pushes its own NULL rows, so uploaded rows are never forwarded again.
+    origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class NodeUsageIngestRow(Base):
+    """One usage row uploaded by a node (dev laptop, compute node) (#922).
+
+    The idempotency key of the upload: ``(node_db, source_table, local_id)``
+    is the row's identity on the node, so a re-sent batch inserts nothing.
+    ``node_db`` is the node DB's own UUID (``instance_settings``), not the
+    origin name, so a wiped and recreated node DB starts a fresh id space
+    instead of colliding with its old ids. ``target_id`` is the row created
+    here (``api_usage_log.id`` or ``cost_ledger.id``).
+    """
+
+    __tablename__ = "node_usage_ingest"
+    __table_args__ = (
+        UniqueConstraint(
+            "node_db", "source_table", "local_id", name="uq_node_usage_ingest_row",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_db: Mapped[str] = mapped_column(String(36), nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_table: Mapped[str] = mapped_column(String(16), nullable=False)
+    local_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TZDateTime(), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class InstanceSettingRow(Base):
+    """Small per-DB key/value facts that must live and die with the DB itself.
+
+    ``node_db_id`` (#922) is the first: a UUID minted on a node's first usage
+    push. It sits in the DB rather than a file so deleting the DB also drops
+    the id; a file would outlive it and replay the old id over a fresh id space.
+    """
+
+    __tablename__ = "instance_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256), nullable=False)
 
 
 class VerificationCycleRow(Base):
