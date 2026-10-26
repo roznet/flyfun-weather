@@ -85,6 +85,7 @@ fun CrossSectionCanvas(
     onScrubDistanceChanged: (Double?) -> Unit,
     onSelectPointIndex: (Int) -> Unit,
     onHoverAltitudeChanged: ((Double?) -> Unit)? = null,
+    showAdvisoryHighlight: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val viewConfig = LocalViewConfiguration.current
@@ -356,7 +357,7 @@ fun CrossSectionCanvas(
                 )
 
                 // 10. Advisory Highlight scrim + cutout windows
-                vizData.advisoryHighlights?.let { highlights ->
+                vizData.advisoryHighlights?.takeIf { showAdvisoryHighlight }?.let { highlights ->
                     drawAdvisoryHighlightRegions(
                         transform = transform,
                         highlights = highlights,
@@ -366,7 +367,7 @@ fun CrossSectionCanvas(
             }
 
             // 10b. Advisory Highlight 6dp bottom verdict ribbon (just below plotBottom)
-            vizData.advisoryHighlights?.let { highlights ->
+            vizData.advisoryHighlights?.takeIf { showAdvisoryHighlight }?.let { highlights ->
                 drawAdvisoryRibbon(
                     transform = transform,
                     highlights = highlights,

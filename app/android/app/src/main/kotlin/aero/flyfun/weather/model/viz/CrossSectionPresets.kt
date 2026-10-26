@@ -81,7 +81,7 @@ object CrossSectionPresets {
         CrossSectionLayerDef("el", "EL (Equilibrium Level)", "stability", false, "Convective Equilibrium Level (anvil top)."),
         // 8. Observed / Overlays
         CrossSectionLayerDef("current-conditions", "Current Conditions (METAR/TAF/SIGMET)", "conditions", false, "Airport flight category dots and active SIGMET boxes."),
-        CrossSectionLayerDef("fronts", "Frontal Boundaries", "conditions", false, "Surface frontal boundary markers."),
+        CrossSectionLayerDef("fronts", "Air-mass boundary", "stability", false, "Model air-mass boundary (thermal front) markers."),
     )
 
     /**
@@ -204,8 +204,10 @@ object CrossSectionPresets {
     }
 
     val LEVEL_LAYER_IDS: Set<String> = setOf("freezing", "minus-10", "minus-20", "cruise", "ceiling", "ceiling-nwp")
-    val STABILITY_LAYER_IDS: Set<String> = setOf("lcl", "lfc", "el", "inversions")
-    val OBSERVED_LAYER_IDS: Set<String> = setOf("current-conditions", "fronts", "day-night")
+    // The air-mass boundary (`fronts`) is a model diagnostic, not an observation,
+    // so it sits under Stability, matching the web bar.
+    val STABILITY_LAYER_IDS: Set<String> = setOf("lcl", "lfc", "el", "inversions", "fronts")
+    val OBSERVED_LAYER_IDS: Set<String> = setOf("current-conditions", "day-night")
 
     fun familyLayerIds(family: LayerFamily): Set<String> = when (family) {
         LayerFamily.CLOUDS -> MUTUALLY_EXCLUSIVE_GROUPS["clouds"].orEmpty()
@@ -213,8 +215,8 @@ object CrossSectionPresets {
         LayerFamily.TURBULENCE -> setOf("cat", "vertical-motion", "cat-bands", "e-shear-bands", "e-shear")
         LayerFamily.CONVECTION -> MUTUALLY_EXCLUSIVE_GROUPS["convection"].orEmpty()
         LayerFamily.LEVELS -> LEVEL_LAYER_IDS + setOf("freezing-level", "minus-10c", "minus-20c", "cruise-altitude")
-        LayerFamily.STABILITY -> STABILITY_LAYER_IDS + setOf("inversion-bands")
-        LayerFamily.OBSERVED -> OBSERVED_LAYER_IDS + setOf("fronts-markers", "night-shading")
+        LayerFamily.STABILITY -> STABILITY_LAYER_IDS + setOf("inversion-bands", "fronts-markers")
+        LayerFamily.OBSERVED -> OBSERVED_LAYER_IDS + setOf("night-shading")
     }
 
     fun getCompactLayerOverrides(
@@ -276,7 +278,7 @@ object CrossSectionPresets {
             }
             LayerFamily.STABILITY -> {
                 if (isFamilyActive) {
-                    for (id in STABILITY_LAYER_IDS) next[id] = false
+                    for (id in familyLayerIds(LayerFamily.STABILITY)) next[id] = false
                 } else {
                     next["lcl"] = true
                     next["lfc"] = true
@@ -285,7 +287,7 @@ object CrossSectionPresets {
             }
             LayerFamily.OBSERVED -> {
                 if (isFamilyActive) {
-                    for (id in OBSERVED_LAYER_IDS) next[id] = false
+                    for (id in familyLayerIds(LayerFamily.OBSERVED)) next[id] = false
                 } else {
                     next["current-conditions"] = true
                     next["day-night"] = true

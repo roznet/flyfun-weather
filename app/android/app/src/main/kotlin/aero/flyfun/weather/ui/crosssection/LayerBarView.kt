@@ -107,6 +107,9 @@ fun LayerBarView(
     availableModels: List<String> = emptyList(),
     selectedModel: String = "",
     onSelectModel: ((String) -> Unit)? = null,
+    hasAdvisoryHighlight: Boolean = false,
+    advisoryHighlightOn: Boolean = true,
+    onToggleAdvisoryHighlight: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showConfigSheet by remember { mutableStateOf(false) }
@@ -145,6 +148,9 @@ fun LayerBarView(
                 cloudStyle = cloudStyle,
                 expandedFamily = expandedFamily,
                 onToggleExpandedFamily = onToggleExpandedFamily,
+                hasAdvisoryHighlight = hasAdvisoryHighlight,
+                advisoryHighlightOn = advisoryHighlightOn,
+                onToggleAdvisoryHighlight = onToggleAdvisoryHighlight,
             )
 
             // Row 3: Expandable Family Detail Row
@@ -519,6 +525,9 @@ private fun FamilyPillsFlowGrid(
     cloudStyle: CloudStyle,
     expandedFamily: LayerFamily?,
     onToggleExpandedFamily: (LayerFamily) -> Unit,
+    hasAdvisoryHighlight: Boolean,
+    advisoryHighlightOn: Boolean,
+    onToggleAdvisoryHighlight: () -> Unit,
 ) {
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
@@ -586,6 +595,18 @@ private fun FamilyPillsFlowGrid(
                     )
                 }
             }
+        }
+
+        // The advisory highlight belongs to no family, so it gets its own on/off at the
+        // end of the bar while one is active: flicking the scrim is how you compare the
+        // highlighted area with the unmasked chart (web parity).
+        if (hasAdvisoryHighlight) {
+            MethodRadioChip(
+                label = "Highlight",
+                selected = advisoryHighlightOn,
+                enabled = true,
+                onClick = onToggleAdvisoryHighlight,
+            )
         }
     }
 }
@@ -872,6 +893,7 @@ private fun FamilyDetailRow(
                             Triple("lfc", "lfc", "LFC"),
                             Triple("el", "el", "EL"),
                             Triple("inversions", "inversion-bands", "Inversions"),
+                            Triple("fronts", "fronts-markers", "Air-mass boundary"),
                         )
                         stabilityLayers.forEach { (shortId, altId, label) ->
                             val isOn = effectiveLayers[shortId] == true || effectiveLayers[altId] == true
@@ -902,7 +924,6 @@ private fun FamilyDetailRow(
                     ) {
                         val observedLayers = listOf(
                             Triple("current-conditions", "current-conditions", "METAR / SIGMET (D-0)"),
-                            Triple("fronts", "fronts-markers", "Synoptic Fronts"),
                             Triple("day-night", "night-shading", "Day / Night Shading"),
                         )
                         observedLayers.forEach { (shortId, altId, label) ->
@@ -1253,7 +1274,7 @@ private fun layerFamilyForDef(def: CrossSectionLayerDef): LayerFamily = when (de
     "icing" -> LayerFamily.ICING
     "turbulence" -> LayerFamily.TURBULENCE
     "stability" -> LayerFamily.STABILITY
-    "observed", "context" -> LayerFamily.OBSERVED
+    "observed", "context", "conditions" -> LayerFamily.OBSERVED
     else -> LayerFamily.LEVELS
 }
 
@@ -1373,6 +1394,7 @@ private fun familyMethodBadge(
             "LFC" to listOf("lfc"),
             "EL" to listOf("el"),
             "Inv" to listOf("inversions", "inversion-bands"),
+            "Air mass" to listOf("fronts", "fronts-markers"),
         )
         val active = stabPairs.mapNotNull { (label, keys) ->
             if (keys.any { effectiveLayers[it] == true }) label else null
@@ -1387,7 +1409,6 @@ private fun familyMethodBadge(
     LayerFamily.OBSERVED -> {
         val obsPairs = listOf(
             "Airports" to listOf("current-conditions"),
-            "Fronts" to listOf("fronts", "fronts-markers"),
             "Night" to listOf("day-night", "night-shading"),
         )
         val active = obsPairs.mapNotNull { (label, keys) ->
@@ -1417,8 +1438,8 @@ private fun familyHint(family: LayerFamily): String = when (family) {
     LayerFamily.ICING -> "Airframe icing indices: Ogimet-NWP, Ogimet-DD, SFIP, IENG & SLD."
     LayerFamily.TURBULENCE -> "Clear-air turbulence (Richardson number & E-Shear)."
     LayerFamily.LEVELS -> "Isotherms (0°C/−10°C/−20°C), cruise altitude, flight ceiling & cloud ceilings."
-    LayerFamily.STABILITY -> "Parcel stability levels (LCL, LFC, EL) & temperature inversions."
-    LayerFamily.OBSERVED -> "D-0 airport METAR / SIGMET overlays, synoptic fronts & night shading."
+    LayerFamily.STABILITY -> "Parcel stability levels (LCL, LFC, EL), temperature inversions & air-mass boundaries."
+    LayerFamily.OBSERVED -> "D-0 airport METAR / SIGMET overlays & night shading."
 }
 
 private fun familyAboutIntro(family: LayerFamily): String = when (family) {
@@ -1433,7 +1454,7 @@ private fun familyAboutIntro(family: LayerFamily): String = when (family) {
     LayerFamily.LEVELS ->
         "Reference altitudes (cruise & flight ceiling), key icing isotherms (0°C, −10°C, −20°C), and DD/NWP cloud ceiling curves."
     LayerFamily.STABILITY ->
-        "Parcel stability heights: LCL (cumulus cloud base), LFC (level of free convection), EL (equilibrium/anvil top), and stable temperature inversion bands."
+        "Parcel stability heights: LCL (cumulus cloud base), LFC (level of free convection), EL (equilibrium/anvil top), and stable temperature inversion bands, plus the model's air-mass boundaries (thermal fronts)."
     LayerFamily.OBSERVED ->
-        "Live D-0 airport METAR flight-category columns and active SIGMET regions along the route, plus synoptic fronts and solar twilight/night shading."
+        "Live D-0 airport METAR flight-category columns and active SIGMET regions along the route, plus solar twilight/night shading."
 }

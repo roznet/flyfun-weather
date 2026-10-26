@@ -81,6 +81,7 @@ fun CrossSectionTabScreen(
     val unavailableLayers by crossSectionViewModel.unavailableLayers.collectAsState()
     val substitutedLayers by crossSectionViewModel.substitutedLayers.collectAsState()
     val cloudStyle by crossSectionViewModel.cloudStyle.collectAsState()
+    val advisoryHighlightVisible by crossSectionViewModel.advisoryHighlightVisible.collectAsState()
     val effectiveTheme by crossSectionViewModel.selectedTheme.collectAsState()
     val activePresetId by crossSectionViewModel.activePresetId.collectAsState()
     val activeEmulationId by crossSectionViewModel.activeEmulationId.collectAsState()
@@ -271,6 +272,9 @@ fun CrossSectionTabScreen(
             onToggleLayer = { layerId ->
                 crossSectionViewModel.toggleLayer(layerId)
             },
+            hasAdvisoryHighlight = currentVizData.advisoryHighlights != null,
+            advisoryHighlightOn = advisoryHighlightVisible,
+            onToggleAdvisoryHighlight = { crossSectionViewModel.toggleAdvisoryHighlightVisible() },
         )
 
         // 2. Cockpit Readout Strip (with Sounding › quick-jump pill)
@@ -307,6 +311,7 @@ fun CrossSectionTabScreen(
             onHoverAltitudeChanged = { altFt ->
                 hoverAltitudeFt = altFt
             },
+            showAdvisoryHighlight = advisoryHighlightVisible,
         )
 
         // 5. Pixel-Aligned Route Graph Canvas + Controls
