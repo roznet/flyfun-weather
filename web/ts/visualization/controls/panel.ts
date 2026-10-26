@@ -401,6 +401,26 @@ function familyAboutHtml(info: LayerFamilyInfo): string {
   return html;
 }
 
+/** The on/off pill for the advisory highlight, at the end of the bar.
+ *
+ *  `highlight` belongs to no family (it follows the selected advisory, not a
+ *  pilot question), so the family bar alone had no way to reach it and the
+ *  toggle vanished with #591. Flicking the scrim off and on is how you compare
+ *  the highlighted area with the unmasked chart, so it gets its own pill, in
+ *  compact mode too. Callers hide it through `hiddenGroups` while no highlight
+ *  is active, exactly as they did for the old Highlight group row. */
+function highlightPillHtml(
+  enabledLayers: Record<string, boolean>,
+  opts: LayerTogglesOptions,
+): string {
+  if (opts.hiddenGroups?.has('highlight')) return '';
+  const group = getLayerGroups().find((g) => g.group === 'highlight');
+  if (!group) return '';
+  return group.layers
+    .map((layer) => layerPillHtml(layer, t('viz.layer.' + layer.id), enabledLayers))
+    .join('');
+}
+
 /** Build the layer bar plus, when a family is open, its detail row.
  *
  *  The bar is one line of family chips, each naming what it is currently
@@ -461,6 +481,7 @@ export function layerTogglesHtml(
     html += `<span class="viz-family-caret" aria-hidden="true">${expanded ? '⌃' : '⌄'}</span>`;
     html += `</button>`;
   }
+  html += highlightPillHtml(enabledLayers, opts);
   html += '</div>';
 
   const openInfo = open ? families.find((f) => f.family === open) : undefined;

@@ -423,8 +423,9 @@ function panelOrdered(group: LayerGroup, layers: CrossSectionLayer[]): CrossSect
  * A family is one control on the layer bar: a question the pilot asks, which
  * may span more than one registry group. Clouds owns the cloud sources *and*
  * surface obscuration, because "is there cloud in the way" is one question.
- * Observed owns the instruments, the sun shading and the front markers,
- * because they are all "what is actually out there right now".
+ * Observed owns the instruments and the sun shading, because they are
+ * "what is actually out there right now"; the air-mass boundary markers are a
+ * model diagnostic and live under Stability.
  *
  * `LayerGroup` stays the finer tier — a family renders one sub-heading per
  * group it owns, in the order listed in {@link FAMILY_GROUPS}.
@@ -453,8 +454,10 @@ const FAMILY_GROUPS: Record<LayerFamily, LayerGroup[]> = {
   icing: ['icing'],
   turbulence: ['turbulence'],
   levels: ['temperature', 'reference'],
-  stability: ['stability'],
-  observed: ['conditions', 'sun', 'fronts'],
+  // The air-mass boundary is a model diagnostic, not an observation, so it
+  // sits with the other reads of the air mass rather than under Observed.
+  stability: ['stability', 'fronts'],
+  observed: ['conditions', 'sun'],
 };
 
 /** Groups that intentionally belong to no family. Kept explicit so the
