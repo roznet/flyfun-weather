@@ -1438,6 +1438,12 @@ final class BriefingViewModel {
             result = nil  // the usual answer: front detection was off for this pack
         } catch is CancellationError {
             return  // a pack or flight switch; the next load owns the state
+        } catch let error as APIError where error.isCancellation {
+            return  // the same, surfaced by URLSession as URLError.cancelled
+        } catch let error as APIError where error.isTransientNetwork {
+            // Offline with nothing cached: expected for an optional overlay.
+            Self.logger.info("Route fronts unavailable offline: \(error)")
+            result = nil
         } catch {
             Self.logger.error("Failed to load route fronts: \(error)")
             result = nil

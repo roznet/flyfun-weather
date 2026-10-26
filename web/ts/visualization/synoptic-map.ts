@@ -24,6 +24,7 @@ import { COLORMAPS, gradientCss, type HewsonMetric } from './hewson-colormaps';
 import { HewsonGridLayer } from './hewson-grid-layer';
 import type { ChartProjection } from './chart-projection';
 import { bindMapView, DEFAULT_MAP_VIEW, type MapViewBinding } from '../utils/map-view';
+import { SYNOPTIC_URL_SCHEMA } from './synoptic-url';
 
 // Gate-detected front-axis colours (match the CLI DWD overlay: blue cold,
 // red warm, purple quasi-stationary).
@@ -83,7 +84,7 @@ export class SynopticMap {
   // Re-applied across basemap rebuilds.
   private lastSlice: { slice: HewsonSlice; vmin?: number; vmax?: number } | null = null;
   private lastFronts: HewsonFront[] = [];
-  private opacity = 0.2;
+  private opacity = SYNOPTIC_URL_SCHEMA['syn.opacity'].default / 100;
 
   // Hover state — populated via setHoverGrid(); cleared when no grid is loaded.
   private hoverGrid: HewsonAllMetricsSlice | null = null;
