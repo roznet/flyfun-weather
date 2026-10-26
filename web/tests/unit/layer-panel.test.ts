@@ -30,6 +30,9 @@ function hasToggle(html: string, layerId: string): boolean {
   return html.includes(`data-layer-id="${layerId}"`);
 }
 
+/** What the briefing page passes while no advisory highlight is active. */
+const NO_HIGHLIGHT = new Set(['highlight' as const]);
+
 describe('layer panel composition', () => {
   it('offers a toggle for every clouds-group layer the compound control does not own', () => {
     // The clouds group renders a bespoke NWP/DD control plus a style dropdown.
@@ -97,7 +100,9 @@ describe('layer bar (#591)', () => {
     // The resting state is the whole point: a single row that says what is
     // drawn, with nothing expanded. If checkboxes leak into it we are back to
     // the five-row toolbar this replaced.
-    const html = layerTogglesHtml({});
+    // No advisory highlight active, which is how the briefing page calls it
+    // until one is picked (the highlight pill is covered separately below).
+    const html = layerTogglesHtml({}, { hiddenGroups: NO_HIGHLIGHT });
     for (const f of ['clouds', 'convection', 'icing', 'turbulence', 'levels', 'stability', 'observed']) {
       expect(html, `no chip for family "${f}"`).toContain(`data-family="${f}"`);
     }
@@ -146,7 +151,7 @@ describe('layer bar (#591)', () => {
   it('collapses to one on/off per family in compact mode, with no detail row', () => {
     // Compact makes the method decision for you — there is nothing to expand,
     // so a detail row here would be a bug, not a feature.
-    const html = layerTogglesHtml({}, { displayMode: 'compact', openFamily: 'icing' });
+    const html = layerTogglesHtml({}, { displayMode: 'compact', openFamily: 'icing', hiddenGroups: NO_HIGHLIGHT });
     expect(html).toContain('data-family-toggle="icing"');
     expect(html).not.toContain('viz-layer-detail');
     expect(html).not.toContain('data-layer-id=');
@@ -181,8 +186,8 @@ describe('layer bar (#591)', () => {
   });
 
   it('keeps a family whose groups are only partly hidden', () => {
-    // The airport-profile drawer hides `conditions` (route-only) but not `sun`
-    // or `fronts`, both of which live in the same family. Dropping Observed
+    // The airport-profile drawer hides `conditions` (route-only) but not `sun`,
+    // which lives in the same family. Dropping Observed
     // wholesale there would take working toggles with it — the same shape of
     // bug #574 fixed at group level, one tier up.
     const html = layerTogglesHtml({}, {
@@ -196,8 +201,8 @@ describe('layer bar (#591)', () => {
 
   it('drops a family whose every group is hidden', () => {
     // Otherwise the bar offers a chip that opens an empty row.
-    const stability = layersInGroup('stability');
-    const html = layerTogglesHtml({}, { hiddenGroups: new Set(['stability' as const]) });
+    const stability = [...layersInGroup('stability'), ...layersInGroup('fronts')];
+    const html = layerTogglesHtml({}, { hiddenGroups: new Set(['stability' as const, 'fronts' as const]) });
     expect(html).not.toContain('data-family="stability"');
     for (const id of stability) expect(hasToggle(html, id)).toBe(false);
   });
@@ -394,5 +399,37 @@ describe('controls are render output, not DOM state (#597)', () => {
     const cleared = layerTogglesHtml(allOff, { openFamily: 'stability' });
     expect(cleared).toContain('data-none-group');
     expect(cleared).toMatch(/data-none-group="[^"]*" aria-pressed="true"/);
+  });
+});
+
+describe('advisory highlight toggle', () => {
+  // The family bar (#591) has no family for `highlight`, so the scrim's on/off
+  // went missing with it. Flicking it is how you compare the highlighted area
+  // against the unmasked chart, so it lives on the bar itself.
+  it('offers an on/off pill on the bar while a highlight is active', () => {
+    const html = layerTogglesHtml({ 'advisory-highlight': true });
+    expect(html).toContain('class="viz-pill" data-layer-id="advisory-highlight" aria-pressed="true"');
+    const off = layerTogglesHtml({ 'advisory-highlight': false });
+    expect(off).toContain('data-layer-id="advisory-highlight" aria-pressed="false"');
+  });
+
+  it('keeps the pill in compact mode, which has no detail row to put it in', () => {
+    const html = layerTogglesHtml({ 'advisory-highlight': true }, { displayMode: 'compact' });
+    expect(hasToggle(html, 'advisory-highlight')).toBe(true);
+  });
+
+  it('hides the pill when the caller says no highlight is active', () => {
+    const html = layerTogglesHtml({ 'advisory-highlight': true }, { hiddenGroups: NO_HIGHLIGHT });
+    expect(hasToggle(html, 'advisory-highlight')).toBe(false);
+  });
+});
+
+describe('air-mass boundary placement', () => {
+  it('lists the air-mass boundary under Stability, not Observed', () => {
+    // It is a model diagnostic (Hewson thermal front), not an observation.
+    const stab = layerTogglesHtml({}, { openFamily: 'stability' });
+    expect(hasToggle(stab, 'fronts-markers')).toBe(true);
+    const obs = layerTogglesHtml({}, { openFamily: 'observed' });
+    expect(hasToggle(obs, 'fronts-markers')).toBe(false);
   });
 });
