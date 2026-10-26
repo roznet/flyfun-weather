@@ -33,6 +33,11 @@ nonisolated struct VizRouteData {
     /// just before rendering, mirroring web `briefing-main`. nil → the highlight
     /// layer no-ops.
     var advisoryHighlights: VizAdvisoryHighlights? = nil
+    /// Air-mass boundaries (experimental Hewson fronts, #196) linked across
+    /// 925/850/700 hPa by the server, for the rendered model. Empty when the
+    /// pack has no front artifact, the model carries none, or the pack predates
+    /// vertical linking — the layer then greys out.
+    var frontChains: [FrontChain] = []
 }
 
 /// Domain mirror of the API `AdvisoryHighlights` (#374). `Equatable` because the

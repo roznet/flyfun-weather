@@ -552,6 +552,20 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await cachedOrFetch(flightId: flightId, timestamp: timestamp, endpoint: "elevation")
     }
 
+    /// Cached for this exact pack only. Most packs have no fronts artifact, so a
+    /// miss is the normal answer: falling back to another pack's copy, as
+    /// `cachedOrFetch` does offline, would draw boundaries from a different run.
+    func routeFronts(flightId: String, timestamp: String) async throws -> RouteFrontsResponse {
+        let endpoint = "route-fronts"
+        if let data = await cache.readData(flightId: flightId, timestamp: timestamp, endpoint: endpoint),
+           let decoded = try? JSONDecoder.weatherBrief.decode(RouteFrontsResponse.self, from: data) {
+            return decoded
+        }
+        let data = try await client.requestData("/api/flights/\(flightId)/packs/\(timestamp)/route-fronts")
+        try? await cache.writeData(data, flightId: flightId, timestamp: timestamp, endpoint: endpoint)
+        return try JSONDecoder.weatherBrief.decode(RouteFrontsResponse.self, from: data)
+    }
+
     func soundingProfile(flightId: String, timestamp: String, pointIndex: Int, model: String) async throws -> SoundingProfileResponse {
         try await cachedOrFetch(
             flightId: flightId, timestamp: timestamp,

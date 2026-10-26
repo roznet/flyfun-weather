@@ -157,6 +157,9 @@ protocol BriefingRepository: Sendable {
     func snapshot(flightId: String, timestamp: String) async throws -> SnapshotResponse
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse
+    /// The experimental front-detection artifact (#196). Throws `notFound` when
+    /// the pack has none (the "Auto Front Detection" preference was off).
+    func routeFronts(flightId: String, timestamp: String) async throws -> RouteFrontsResponse
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data
     func grametImage(flightId: String, timestamp: String) async throws -> Data
     /// GRAMET for a pack (#799): the PDF (`%PDF` magic), or a PNG for packs
@@ -532,6 +535,10 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse {
         try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/elevation")
+    }
+
+    func routeFronts(flightId: String, timestamp: String) async throws -> RouteFrontsResponse {
+        try await client.request("/api/flights/\(flightId)/packs/\(timestamp)/route-fronts")
     }
 
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data {

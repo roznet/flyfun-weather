@@ -143,6 +143,11 @@ final class BriefingViewModel {
     private(set) var snapshotState: LoadingState<SnapshotResponse> = .idle
     private(set) var routeAnalysesState: LoadingState<RouteAnalysesResponse> = .idle
     private(set) var elevationState: LoadingState<ElevationResponse> = .idle
+    /// The pack's front-detection artifact (#196), or nil when it has none —
+    /// the usual case, since "Auto Front Detection" is an opt-in preference.
+    /// Only the cross-section's air-mass boundary layer reads it, so a miss is
+    /// never an error state.
+    private(set) var routeFronts: RouteFrontsResponse?
     private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
 
     // Timing scenarios (#357) — the latest poll result, or nil when the flight
@@ -888,6 +893,7 @@ final class BriefingViewModel {
             group.addTask { await self.loadSnapshot(timestamp: timestamp, quiet: quiet) }
             group.addTask { await self.loadRouteAnalyses(timestamp: timestamp, quiet: quiet) }
             group.addTask { await self.loadElevation(timestamp: timestamp, quiet: quiet) }
+            group.addTask { await self.loadRouteFronts(timestamp: timestamp) }
         }
         // Kick the timing-scenario poll for this pack (no-op when Flexibility is
         // `none`). Runs after the briefing loads — the scan is a background job
@@ -1415,6 +1421,12 @@ final class BriefingViewModel {
             guard pack?.fetchTimestamp == timestamp else { return }
             if !quiet || !elevationState.hasData { elevationState = .error(error) }
         }
+    }
+
+    private func loadRouteFronts(timestamp: String) async {
+        let result = try? await repository.routeFronts(flightId: flight.id, timestamp: timestamp)
+        guard pack?.fetchTimestamp == timestamp else { return }
+        routeFronts = result
     }
 
     func loadPireps() async {

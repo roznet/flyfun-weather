@@ -310,6 +310,9 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         guard isBriefed(flightId) else { throw APIError.notFound }
         return FixtureBriefingData.elevation
     }
+    func routeFronts(flightId: String, timestamp: String) async throws -> RouteFrontsResponse {
+        throw APIError.notFound  // no fixture pack has front detection on
+    }
 
     // MARK: Not yet needed by a journey
 

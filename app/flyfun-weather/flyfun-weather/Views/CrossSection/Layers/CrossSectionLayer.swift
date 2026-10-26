@@ -28,6 +28,11 @@ enum LayerGroup: String, CaseIterable {
     /// `CrossSectionPresets.resetGroups`, mirroring the web's `RESET_GROUPS` —
     /// applying an advisory lens must not silently drop the measured picture.
     case conditions
+    /// Air-mass boundaries (experimental Hewson fronts, #196). A toggle group
+    /// like `conditions`, and like it absent from `resetGroups` and from every
+    /// emulation: an experimental overlay stays the pilot's choice (web
+    /// `RESET_GROUPS`). Lives in the Stability family (web #945).
+    case fronts
     /// Advisory highlight (scrim + verdict ribbon, #374). Not a toggleable data
     /// layer: its visibility is driven by the active advisory highlight, so it
     /// never appears in the method/reference sections of the config sheet.
@@ -59,6 +64,7 @@ extension LayerGroup {
         case .convection: "Convection"
         case .reference: "Reference"
         case .conditions: "Observed conditions"
+        case .fronts: "Front"
         case .highlight: "Highlight"
         }
     }
@@ -100,6 +106,9 @@ enum CrossSectionLayer {
         StabilityLinesLayer(metric: .lcl),
         StabilityLinesLayer(metric: .lfc),
         StabilityLinesLayer(metric: .el),
+        // Boundary lines span the whole column, so they draw above terrain fill
+        // (web registry order).
+        FrontsMarkersLayer(),
         ReferenceLinesLayer(),
     ]
 
@@ -186,6 +195,7 @@ enum CrossSectionLayer {
         "observed-tops": "Cloud tops",
         "observed-surface": "Rain & lightning",
         "current-conditions": "Airport",
+        "fronts-markers": "Air-mass boundary",
         "terrain": "Terrain",
     ]
 
@@ -198,6 +208,7 @@ enum CrossSectionLayer {
         "nwp-convective-bg": "NWP",
         "inversion-bands": "inversions",
         "cat-bands": "Ri",
+        "fronts-markers": "boundary",
         "observed-surface": "radar",
         "observed-tops": "tops",
         "current-conditions": "airports",
