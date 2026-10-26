@@ -395,6 +395,9 @@ class ApiClient(
     suspend fun getElevation(flightId: String, timestamp: String): ElevationResponse =
         get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/elevation")
 
+    suspend fun getRouteFronts(flightId: String, timestamp: String): RouteFrontsResponse =
+        get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/route-fronts")
+
     suspend fun getSoundingProfile(
         flightId: String,
         timestamp: String,

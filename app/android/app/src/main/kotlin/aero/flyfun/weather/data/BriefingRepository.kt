@@ -44,6 +44,10 @@ interface BriefingRepository {
     suspend fun snapshot(flightId: String, timestamp: String): SnapshotResponse
     suspend fun routeAnalyses(flightId: String, timestamp: String): RouteAnalysesResponse
     suspend fun elevation(flightId: String, timestamp: String): ElevationResponse
+
+    /** The experimental front-detection artifact (#196), or null when the pack
+     *  has none (the "Auto Front Detection" preference was off). */
+    suspend fun routeFronts(flightId: String, timestamp: String): RouteFrontsResponse? = null
     suspend fun soundingProfile(
         flightId: String,
         timestamp: String,
@@ -194,6 +198,9 @@ open class OnlineBriefingRepository(
 
     override suspend fun elevation(flightId: String, timestamp: String): ElevationResponse =
         api.getElevation(flightId, timestamp)
+
+    override suspend fun routeFronts(flightId: String, timestamp: String): RouteFrontsResponse =
+        api.getRouteFronts(flightId, timestamp)
 
     override suspend fun soundingProfile(
         flightId: String,

@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aero.flyfun.weather.model.AdvisoryHighlights
+import aero.flyfun.weather.model.FrontChain
 import aero.flyfun.weather.model.viz.CloudStyle
 import aero.flyfun.weather.model.viz.ColorScales
 import aero.flyfun.weather.model.viz.CoordTransform
@@ -43,7 +44,6 @@ import aero.flyfun.weather.model.viz.CrossSectionTheme
 import aero.flyfun.weather.model.viz.MonotoneCubicSpline
 import aero.flyfun.weather.model.viz.VizCloudLayer
 import aero.flyfun.weather.model.viz.VizCurrentConditions
-import aero.flyfun.weather.model.viz.VizFrontMarker
 import aero.flyfun.weather.model.viz.VizNightInterval
 import aero.flyfun.weather.model.viz.VizPoint
 import aero.flyfun.weather.model.viz.VizRouteData
@@ -343,7 +343,7 @@ fun CrossSectionCanvas(
                 if (isLayerOn(effectiveLayers, "fronts-markers", "fronts")) {
                     drawFrontMarkersLayer(
                         transform = transform,
-                        fronts = vizData.fronts,
+                        chains = vizData.frontChains,
                     )
                 }
 
@@ -1535,36 +1535,113 @@ private fun DrawScope.drawCurrentConditionsLayer(
     }
 }
 
+/** Pressure level → representative MSL altitude (ft), matching the backend
+ *  `_LEVEL_FT` in `tasks/fronts.py`. */
+private val FRONT_LEVEL_FT = mapOf(925 to 2_500.0, 850 to 5_000.0, 700 to 10_000.0)
+
+private const val KM_PER_NM = 1.852
+
+/** Surface-analysis convention (web `FRONT_KIND_COLOR`). */
+private fun frontKindColor(kind: String): Color = when (kind) {
+    "cold" -> Color(0xFF2563EBL)
+    "warm" -> Color(0xFFDC2626L)
+    else -> Color(0xFF7C3AEDL)
+}
+
+/** Line weight by intensity (web `FRONT_INTENSITY_WEIGHT`), in dp. */
+private fun frontIntensityWeight(intensity: String): Float = when (intensity) {
+    "classical" -> 3f
+    "sharp" -> 4.5f
+    else -> 2f
+}
+
+/**
+ * Air-mass boundaries (experimental Hewson fronts, #196): one slanted line per
+ * chain the server linked across 925/850/700 hPa, tilting back over the cold
+ * air with height. Colour = kind, weight = intensity, opacity = depth (a
+ * single-level chain is a faint dashed vertical). Node dots per level, a
+ * triangle under a convective node, and a kind-initial chip on top. Packs built
+ * before vertical linking have no chains and draw nothing.
+ *
+ * SYNC: `web/ts/visualization/cross-section/layers/fronts-markers.ts`, iOS
+ * `FrontsMarkersLayer.swift`.
+ */
 private fun DrawScope.drawFrontMarkersLayer(
     transform: CoordTransform,
-    fronts: List<VizFrontMarker>,
+    chains: List<FrontChain>,
 ) {
-    for (front in fronts) {
-        val x = transform.distanceToX(front.distanceNm)
-        val color = ColorScales.frontTypeColor(front.frontType)
-        val strokeW = (1.5f + front.intensity.toFloat() * 1.2f).coerceIn(1.5f, 3.5f)
-        val dashEffect = if (!front.isWet) {
-            PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f)
+    val yTop = transform.plotTop
+    val yBottom = transform.plotBottom
+    for (chain in chains) {
+        val pts = chain.nodes.map {
+            Offset(
+                transform.distanceToX(it.distanceKm / KM_PER_NM),
+                transform.altitudeToY(FRONT_LEVEL_FT[it.levelHpa] ?: 5_000.0),
+            )
+        }
+        if (pts.isEmpty()) continue
+        val color = frontKindColor(chain.kind)
+        val alpha = if (chain.nLevels >= 2) 0.95f else 0.5f
+        val strokeW = (chain.nodes.maxOfOrNull { frontIntensityWeight(it.intensity) } ?: 2f).dp.toPx()
+        val dash = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 5.dp.toPx()), 0f)
+        val first = pts.first()
+        val last = pts.last()
+
+        if (pts.size == 1) {
+            drawLine(
+                color = color.copy(alpha = alpha),
+                start = Offset(first.x, yTop),
+                end = Offset(first.x, yBottom),
+                strokeWidth = strokeW,
+                pathEffect = dash,
+            )
         } else {
-            PathEffect.dashPathEffect(floatArrayOf(10f, 3f), 0f)
+            // Dashed extrapolation past the outermost levels, along the end
+            // segments' slopes so the dash meets the solid without a kink.
+            val topX = extendFrontTo(pts[pts.size - 2], last, yTop)
+            val botX = extendFrontTo(pts[1], first, yBottom)
+            val faint = color.copy(alpha = alpha * 0.5f)
+            drawLine(faint, Offset(topX, yTop), last, strokeWidth = strokeW, pathEffect = dash)
+            drawLine(faint, first, Offset(botX, yBottom), strokeWidth = strokeW, pathEffect = dash)
+            val path = Path().apply {
+                moveTo(first.x, first.y)
+                for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
+            }
+            drawPath(path, color.copy(alpha = alpha), style = Stroke(width = strokeW, join = StrokeJoin.Round))
         }
 
-        drawLine(
-            color = color.copy(alpha = 0.85f),
-            start = Offset(x, transform.plotTop),
-            end = Offset(x, transform.plotBottom),
-            strokeWidth = strokeW,
-            pathEffect = dashEffect,
-        )
+        val solid = color.copy(alpha = alpha)
+        pts.forEachIndexed { i, p ->
+            drawCircle(solid, radius = 3.dp.toPx(), center = p)
+            if (chain.nodes[i].coLocation == "convective") {
+                val ty = p.y + 5.dp.toPx()
+                val half = 5.dp.toPx()
+                val tri = Path().apply {
+                    moveTo(p.x, ty)
+                    lineTo(p.x - half, ty + 8.dp.toPx())
+                    lineTo(p.x + half, ty + 8.dp.toPx())
+                    close()
+                }
+                drawPath(tri, solid)
+            }
+        }
 
-        val badgeLetter = front.frontType.firstOrNull()?.uppercaseChar()?.toString() ?: "F"
-        drawPillLabel(
-            text = badgeLetter,
-            centerX = x,
-            topY = transform.plotTop + 3f,
-            bgColor = color.copy(alpha = 0.92f),
-        )
+        val label = when (chain.kind) {
+            "cold" -> "C"
+            "warm" -> "W"
+            else -> "Q"
+        }
+        val chipTop = if (pts.size == 1) yTop + 3f else max(yTop + 3f, last.y - 13.dp.toPx() - 4.dp.toPx())
+        drawPillLabel(text = label, centerX = last.x, topY = chipTop, bgColor = color.copy(alpha = 0.92f))
     }
+}
+
+/** The x where the line through [a] and [b] meets [yEdge]; `b.x` when flat. */
+private fun extendFrontTo(a: Offset, b: Offset, yEdge: Float): Float {
+    val dy = b.y - a.y
+    if (abs(dy) < 1e-6f) return b.x
+    val t = (yEdge - a.y) / dy
+    return a.x + t * (b.x - a.x)
 }
 
 // ============================================================================
