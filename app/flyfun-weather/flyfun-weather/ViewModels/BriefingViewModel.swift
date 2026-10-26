@@ -148,6 +148,9 @@ final class BriefingViewModel {
     /// Only the cross-section's air-mass boundary layer reads it, so a miss is
     /// never an error state.
     private(set) var routeFronts: RouteFrontsResponse?
+    /// The pack `routeFronts` belongs to, so a pack switch drops the previous
+    /// pack's boundaries at once instead of drawing them until the fetch lands.
+    private var routeFrontsTimestamp: String?
     private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
 
     // Timing scenarios (#357) — the latest poll result, or nil when the flight
@@ -1424,7 +1427,19 @@ final class BriefingViewModel {
     }
 
     private func loadRouteFronts(timestamp: String) async {
-        let result = try? await repository.routeFronts(flightId: flight.id, timestamp: timestamp)
+        if routeFrontsTimestamp != timestamp {
+            routeFronts = nil
+            routeFrontsTimestamp = timestamp
+        }
+        let result: RouteFrontsResponse?
+        do {
+            result = try await repository.routeFronts(flightId: flight.id, timestamp: timestamp)
+        } catch APIError.notFound {
+            result = nil  // the usual answer: front detection was off for this pack
+        } catch {
+            Self.logger.error("Failed to load route fronts: \(error)")
+            result = nil
+        }
         guard pack?.fetchTimestamp == timestamp else { return }
         routeFronts = result
     }
