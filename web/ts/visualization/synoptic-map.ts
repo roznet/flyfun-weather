@@ -83,7 +83,7 @@ export class SynopticMap {
   // Re-applied across basemap rebuilds.
   private lastSlice: { slice: HewsonSlice; vmin?: number; vmax?: number } | null = null;
   private lastFronts: HewsonFront[] = [];
-  private opacity = 0.5;
+  private opacity = 0.2;
 
   // Hover state — populated via setHoverGrid(); cleared when no grid is loaded.
   private hoverGrid: HewsonAllMetricsSlice | null = null;
