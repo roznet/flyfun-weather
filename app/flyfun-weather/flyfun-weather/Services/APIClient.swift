@@ -453,6 +453,8 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
 
     /// SSE frames are separated by a blank line, i.e. a double newline.
     private static let frameSeparator = Data([0x0a, 0x0a]) // "\n\n"
+    /// Cap on a non-2xx body kept for its `detail`.
+    private static let maxErrorBody = 64 * 1024
 
     init(
         continuation: AsyncThrowingStream<RefreshEvent, Error>.Continuation,
@@ -486,8 +488,15 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        if failedStatus != nil {
+            // The error body is a short JSON `detail`; a misbehaving server
+            // must not grow it without bound.
+            if buffer.count < Self.maxErrorBody {
+                buffer.append(data.prefix(Self.maxErrorBody - buffer.count))
+            }
+            return
+        }
         buffer.append(data)
-        if failedStatus != nil { return }
         while let range = buffer.range(of: Self.frameSeparator) {
             let frame = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
             buffer.removeSubrange(buffer.startIndex..<range.upperBound)
