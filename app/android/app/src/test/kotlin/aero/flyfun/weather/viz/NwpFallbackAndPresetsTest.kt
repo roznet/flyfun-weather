@@ -192,4 +192,20 @@ class NwpFallbackAndPresetsTest {
         )
         assertTrue(toggledOn["clouds-diag-nwp"] == true)
     }
+
+    @Test
+    fun airMassBoundaryBelongsToStabilityNotObserved() {
+        // A model diagnostic, not an observation (web parity).
+        val stability = CrossSectionPresets.familyLayerIds(LayerFamily.STABILITY)
+        val observed = CrossSectionPresets.familyLayerIds(LayerFamily.OBSERVED)
+        assertTrue("fronts" in stability && "fronts-markers" in stability)
+        assertFalse("fronts" in observed || "fronts-markers" in observed)
+    }
+
+    @Test
+    fun stabilityChipOffAlsoClearsAirMassBoundary() {
+        val on = mapOf("lcl" to true, "fronts" to true, "fronts-markers" to true)
+        val next = CrossSectionPresets.getCompactLayerOverrides(LayerFamily.STABILITY, on)
+        assertFalse(next["fronts"] == true || next["fronts-markers"] == true)
+    }
 }

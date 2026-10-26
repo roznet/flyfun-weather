@@ -71,6 +71,12 @@ class CrossSectionViewModel : ViewModel() {
     private val _cloudStyle = MutableStateFlow(CloudStyle.SQUARE)
     val cloudStyle: StateFlow<CloudStyle> = _cloudStyle.asStateFlow()
 
+    /** Whether the advisory highlight scrim + ribbon draw. A visibility switch only:
+     *  turning it off keeps the advisory selected, so the pilot can flick between the
+     *  highlighted and unmasked chart (web parity, #373). */
+    private val _advisoryHighlightVisible = MutableStateFlow(true)
+    val advisoryHighlightVisible: StateFlow<Boolean> = _advisoryHighlightVisible.asStateFlow()
+
     private val _activePresetId = MutableStateFlow<String?>("basic")
     val activePresetId: StateFlow<String?> = _activePresetId.asStateFlow()
 
@@ -265,6 +271,8 @@ class CrossSectionViewModel : ViewModel() {
 
     fun applyAdvisoryFocus(advisoryId: String) {
         activeAdvisoryHighlightId = advisoryId
+        // A fresh advisory pick never lands on an invisible highlight.
+        _advisoryHighlightVisible.value = true
         val mappedId = CrossSectionPresets.ADVISORY_TO_PRESET[advisoryId.lowercase()]
             ?: advisoryId.lowercase()
         val preset = CrossSectionPresets.ADVISORY_PRESETS.firstOrNull { it.id == mappedId }
@@ -318,6 +326,10 @@ class CrossSectionViewModel : ViewModel() {
 
     fun setThemeById(themeId: String) {
         _selectedTheme.value = CrossSectionThemes.byId(themeId)
+    }
+
+    fun toggleAdvisoryHighlightVisible() {
+        _advisoryHighlightVisible.value = !_advisoryHighlightVisible.value
     }
 
     fun setCloudStyle(style: CloudStyle) {
