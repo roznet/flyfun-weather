@@ -29,7 +29,7 @@ struct FrontsMarkersLayer: CrossSectionLayerProtocol {
     private static let levelFt: [Int: Double] = [925: 2_500, 850: 5_000, 700: 10_000]
 
     /// Surface-analysis convention (web `FRONT_KIND_COLOR`).
-    static func color(_ kind: String) -> Color {
+    static func color(_ kind: String?) -> Color {
         switch kind {
         case "cold": Color(.sRGB, red: 37 / 255.0, green: 99 / 255.0, blue: 235 / 255.0)      // #2563eb
         case "warm": Color(.sRGB, red: 220 / 255.0, green: 38 / 255.0, blue: 38 / 255.0)      // #dc2626
@@ -38,7 +38,7 @@ struct FrontsMarkersLayer: CrossSectionLayerProtocol {
     }
 
     /// Line weight by intensity (web `FRONT_INTENSITY_WEIGHT`).
-    private static func weight(_ intensity: String) -> CGFloat {
+    private static func weight(_ intensity: String?) -> CGFloat {
         switch intensity {
         case "significant": 2
         case "classical": 3
@@ -47,7 +47,7 @@ struct FrontsMarkersLayer: CrossSectionLayerProtocol {
         }
     }
 
-    private static func kindInitial(_ kind: String) -> String {
+    private static func kindInitial(_ kind: String?) -> String {
         switch kind {
         case "cold": "C"
         case "warm": "W"
@@ -77,7 +77,7 @@ struct FrontsMarkersLayer: CrossSectionLayerProtocol {
 
         let color = Self.color(chain.kind)
         let lineWidth = chain.nodes.map { Self.weight($0.intensity) }.max() ?? 2
-        let alpha = chain.nLevels >= 2 ? 0.95 : 0.5  // single-level = shallow/suspect → faint
+        let alpha = (chain.nLevels ?? 1) >= 2 ? 0.95 : 0.5  // single-level = shallow/suspect → faint
         let dashed = StrokeStyle(lineWidth: lineWidth, dash: [5, 5])
         var ctx = context
         ctx.opacity = alpha
