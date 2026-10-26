@@ -227,7 +227,7 @@ enum class RefreshGate(val reason: String) {
     SUBSCRIBER("This is a shared flight — only its owner can refresh the briefing."),
 
     /** Beyond the server's live window: archive path, admin-only. */
-    HISTORICAL("This flight has already flown. Rebuilding a historical briefing is done from the web app."),
+    HISTORICAL("This flight has already flown. Rebuilding a historical briefing is not supported."),
 }
 
 @Serializable

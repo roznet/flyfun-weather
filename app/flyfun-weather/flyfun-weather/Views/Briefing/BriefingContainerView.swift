@@ -23,7 +23,7 @@ enum RefreshGate {
         case .historical:
             // No admin escape hatch here on purpose: the app has no admin flag,
             // and the as-of-date historical rebuild is a web-only affordance.
-            return "This flight has already flown. Rebuilding a historical briefing is done from the web app."
+            return "This flight has already flown. Rebuilding a historical briefing is not supported."
         }
     }
 }
