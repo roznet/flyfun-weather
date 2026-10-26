@@ -12,7 +12,10 @@
  *  Pre-linking packs carry no chains → we fall back to the original vertical
  *  marker per crossing. Advisory-only, free-atmosphere boundaries — not drawn
  *  SIGWX, and blind to low IMC / fog (§10a.2). Phase D.4 (GRIB era) will replace
- *  these with continuous-altitude θe from a per-briefing stencil. */
+ *  these with continuous-altitude θe from a per-briefing stencil.
+ *
+ *  SYNC: iOS `FrontsMarkersLayer.swift` ports the chain rendering (not the
+ *  pre-linking fallback). */
 
 import type { CrossSectionLayer, CoordTransform, VizRouteData } from '../../types';
 import type { FrontChain } from '../../../types/fronts';

@@ -102,9 +102,10 @@ enum CloudStyle: String, CaseIterable, Identifiable {
 enum CrossSectionPresets {
     // MARK: - Emulations (ported from web *_ENABLED, translated to iOS IDs)
 
-    /// Every layer an emulation owns: all but the observed conditions.
+    /// Every layer an emulation owns: all but the observed conditions and the
+    /// experimental air-mass boundary, which the web `*_ENABLED` maps never name.
     private static let presetOwnedIds: [String] = CrossSectionLayer.allLayers
-        .filter { $0.group != .conditions }
+        .filter { $0.group != .conditions && $0.group != .fronts }
         .map(\.id)
 
     /// Merge map over `presetOwnedIds` with the given IDs on, the rest off.

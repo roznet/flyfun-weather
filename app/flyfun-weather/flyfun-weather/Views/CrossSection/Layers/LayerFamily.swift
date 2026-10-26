@@ -8,7 +8,7 @@ import SwiftUI
 /// sub-heading per group it owns. `terrain` (always drawn) and `highlight`
 /// (driven by an advisory, not the user) belong to no family, deliberately.
 ///
-/// iOS has no obscuration / sun / fronts groups and no IENG, E-shear or SLD
+/// iOS has no obscuration / sun groups and no IENG, E-shear or SLD
 /// layers, so some families are shorter here; all seven chips stay, so the two
 /// clients use the same vocabulary.
 enum LayerFamily: String, CaseIterable, Identifiable {
@@ -36,7 +36,9 @@ enum LayerFamily: String, CaseIterable, Identifiable {
         case .icing: [.icing]
         case .turbulence: [.turbulence]
         case .levels: [.temperature, .reference]
-        case .stability: [.stability]
+        // The air-mass boundary is a model diagnostic, not an observation, so it
+        // sits with the other reads of the air mass (web #945).
+        case .stability: [.stability, .fronts]
         case .observed: [.conditions]
         }
     }

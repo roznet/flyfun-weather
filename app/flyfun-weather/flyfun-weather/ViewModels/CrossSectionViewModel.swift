@@ -31,9 +31,10 @@ final class CrossSectionViewModel {
     /// the manifest loads. FlyFun and the advisory chip resolve through these.
     /// Not persisted: it belongs to the pack, not to the user.
     private(set) var gradedMethods: [LayerGroup: String] = CrossSectionPresets.engineMethodDefaults
-    /// The cloud style last chosen explicitly. Only consulted while no cloud layer
-    /// is on — otherwise the style is read off the drawn layer (`cloudStyle`), so
-    /// the control can never disagree with the chart. Persisted.
+    /// The cloud style last chosen explicitly (Square until one is). What every
+    /// lens, chip and FlyFun resolves clouds through; the style control reads
+    /// the drawn layer instead (`cloudStyle`), so it can never disagree with the
+    /// chart. Persisted.
     private(set) var cloudStylePreference: CloudStyle
     /// Monotonic identity for `vizData`: bumped only when the data is rebuilt
     /// (model/route/elevation change). `VizRouteData` is a deep value type with no
@@ -250,12 +251,14 @@ final class CrossSectionViewModel {
         model: String,
         observed: ObservedConditions? = nil,
         routeObservations: RouteObservations? = nil,
-        routeSigmets: RouteSigmets? = nil
+        routeSigmets: RouteSigmets? = nil,
+        routeFronts: RouteFrontsResponse? = nil
     ) {
         vizData = Self.extractVizData(
             from: routeAnalyses, model: model, elevation: elevation,
             observed: observed, observedRadiusNm: observedRadiusNm,
-            routeObservations: routeObservations, routeSigmets: routeSigmets
+            routeObservations: routeObservations, routeSigmets: routeSigmets,
+            routeFronts: routeFronts
         )
         dataVersion += 1
         recomputeEffectiveLayers()  // model/route/elevation changed → refresh the cache
@@ -430,19 +433,13 @@ final class CrossSectionViewModel {
         return gradedMethods.merging(CrossSectionPresets.methods(from: preset).methods) { $1 }
     }
 
-    /// The cloud style a lens or chip draws clouds in: the one already on the
-    /// chart, else the emulation's, else the stored preference. Read before a
-    /// lens's clean slate wipes the cloud layer it is read from.
-    private var resolutionCloudStyle: CloudStyle {
-        if CrossSectionPresets.cloudLayerIds.contains(where: { enabledLayers[$0] == true }) {
-            return cloudStyle
-        }
-        if let preset = CrossSectionPresets.emulation(activeEmulation),
-           let style = CrossSectionPresets.methods(from: preset).cloudStyle {
-            return style
-        }
-        return cloudStylePreference
-    }
+    /// The cloud style a lens, a chip or FlyFun draws clouds in: the stored
+    /// preference, as on the web (`vizSettings.cloudStyle`). An emulation still
+    /// paints its own look when it is picked (GRAMET's natural clouds), but it
+    /// never outlives the next lens or chip: falling back to the emulation's
+    /// style whenever the clouds happened to be off is what repainted a chosen
+    /// Square as Natural after a Turbulence lens or a Clouds chip off/on.
+    private var resolutionCloudStyle: CloudStyle { cloudStylePreference }
 
     /// Update the graded methods from a freshly loaded (or recalculated)
     /// advisories manifest. A FlyFun Focus lens that is still intact is
@@ -594,7 +591,8 @@ final class CrossSectionViewModel {
         observed observedConditions: ObservedConditions? = nil,
         observedRadiusNm: Double? = nil,
         routeObservations: RouteObservations? = nil,
-        routeSigmets: RouteSigmets? = nil
+        routeSigmets: RouteSigmets? = nil,
+        routeFronts: RouteFrontsResponse? = nil
     ) -> VizRouteData {
         var points: [VizPoint] = []
         var waypointMarkers: [WaypointMarker] = []
@@ -648,7 +646,10 @@ final class CrossSectionViewModel {
             // the snapshot the live layer patches, so a live tick lands here.
             currentConditions: VizCurrentConditions.build(
                 observations: routeObservations, sigmets: routeSigmets,
-                terrainProfile: terrainProfile)
+                terrainProfile: terrainProfile),
+            // Server-linked air-mass boundaries for the rendered model (#196).
+            // Drawn as they come: nothing is merged or deduped on the phone.
+            frontChains: routeFronts?.frontChains?[model] ?? []
         )
     }
 

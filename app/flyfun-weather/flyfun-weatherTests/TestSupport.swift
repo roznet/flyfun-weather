@@ -338,6 +338,7 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func routeAnalyses(flightId: String, timestamp: String) async throws -> RouteAnalysesResponse { throw MockError.notStubbed("routeAnalyses") }
     func elevation(flightId: String, timestamp: String) async throws -> ElevationResponse { throw MockError.notStubbed("elevation") }
+    func routeFronts(flightId: String, timestamp: String) async throws -> RouteFrontsResponse { throw MockError.notStubbed("routeFronts") }
     func skewtImage(flightId: String, timestamp: String, icao: String, model: String) async throws -> Data { throw MockError.notStubbed("skewtImage") }
     func grametImage(flightId: String, timestamp: String) async throws -> Data { throw MockError.notStubbed("grametImage") }
     func chartImage(_ chart: PackChart) async throws -> Data {

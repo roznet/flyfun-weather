@@ -202,7 +202,9 @@ extension CrossSectionSharedStateTests {
             vm.applyEmulation("windy")
             vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
             #expect(on(vm, in: .icing) == ["sfip-bands"])
-            #expect(on(vm, in: .clouds) == ["nwp-cloud-bands"])
+            // Windy's NWP source, in the pilot's own style (square until chosen),
+            // as the web resolves a lens through `vizSettings.cloudStyle`.
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
             #expect(on(vm, in: .turbulence).isEmpty)  // not in the icing lens
             #expect(vm.activeEmulation == "windy")
             #expect(vm.activeAdvisoryPreset == "icing")
@@ -317,6 +319,50 @@ extension CrossSectionSharedStateTests {
             vm.toggleCloudSource(.nwp)
             #expect(on(vm, in: .clouds) == ["cloud-bands"])
             #expect(vm.cloudStyle == .natural)
+        }
+
+        @Test func aChosenStyleSurvivesLensesAndChipsWhileEmulating() {
+            // GRAMET paints natural clouds when picked; once the pilot picks
+            // Square, no later lens or chip may repaint it natural — including
+            // after a lens that switched the clouds off (Turbulence).
+            let vm = CrossSectionViewModel()
+            vm.applyEmulation("gramet")
+            #expect(vm.cloudStyle == .natural)
+            vm.setCloudStyle(.square)
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
+
+            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["turbulence"]!)
+            #expect(on(vm, in: .clouds).isEmpty)
+            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["clouds"]!)
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
+
+            vm.setFamily(.clouds, on: false)
+            vm.setFamily(.clouds, on: true)
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
+            #expect(vm.cloudStyle == .square)
+            #expect(CrossSectionViewModel().cloudStyle == .square)  // and across a relaunch
+        }
+
+        @Test func anUpgraderOnGrametGetsSquareFromTheFirstLens() {
+            // No style ever chosen: the square default wins as soon as a lens
+            // resolves the clouds, rather than inheriting GRAMET's natural.
+            let vm = CrossSectionViewModel()
+            vm.applyEmulation("gramet")
+            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
+            #expect(on(vm, in: .clouds) == ["square-nwp-cloud-bands"])
+        }
+
+        // MARK: Air-mass boundary
+
+        @Test func lensesAndEmulationsLeaveTheBoundaryAlone() {
+            // An experimental overlay stays the pilot's choice (web RESET_GROUPS).
+            let vm = CrossSectionViewModel()
+            vm.toggleLayer("fronts-markers")
+            vm.applyAdvisoryPreset(CrossSectionPresets.advisory["icing"]!)
+            vm.applyEmulation("gramet")
+            vm.applyEmulation(nil)
+            #expect(vm.isLayerOn("fronts-markers"))
+            #expect(vm.isFamilyOn(.stability))
         }
 
         // MARK: Graded methods

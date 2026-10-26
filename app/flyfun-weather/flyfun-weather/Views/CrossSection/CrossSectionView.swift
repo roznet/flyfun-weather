@@ -79,6 +79,7 @@ struct CrossSectionView: View {
         .onChange(of: viewModel.selectedModel) { updateVizData() }
         .onChange(of: viewModel.routeAnalysesState.isLoaded) { updateVizData() }
         .onChange(of: viewModel.elevationState.isLoaded) { updateVizData() }
+        .onChange(of: viewModel.routeFronts) { updateVizData() }
         // The observed payload rides on the snapshot, and a gated D-0 refresh
         // replaces it in place without minting a new pack — so the chart has to
         // rebuild on a snapshot change, not only on a pack change (#574).
@@ -614,7 +615,8 @@ struct CrossSectionView: View {
                 model: viewModel.selectedModel,
                 observed: snapshot?.observedConditions,
                 routeObservations: snapshot?.routeObservations,
-                routeSigmets: snapshot?.routeSigmets
+                routeSigmets: snapshot?.routeSigmets,
+                routeFronts: viewModel.routeFronts
             )
         }
     }
