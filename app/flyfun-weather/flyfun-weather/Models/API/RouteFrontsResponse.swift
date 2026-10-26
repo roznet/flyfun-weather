@@ -22,19 +22,21 @@ nonisolated struct RouteFrontsResponse: Codable, Sendable, Equatable {
 nonisolated struct FrontChain: Codable, Sendable, Equatable {
     /// Ordered bottom → top (925 → 850 → 700).
     let nodes: [FrontChainNode]
-    /// Consensus kind: `cold` / `warm` / `quasi-stationary`.
-    let kind: String
+    /// Consensus kind: `cold` / `warm` / `quasi-stationary`. Optional, like the
+    /// other descriptive fields, so one missing value never drops the whole
+    /// artifact; the renderer has a fallback for each.
+    let kind: String?
     /// Depth: 1 = shallow / single level.
-    let nLevels: Int
+    let nLevels: Int?
 }
 
 nonisolated struct FrontChainNode: Codable, Sendable, Equatable {
     /// `level_hPa` on the wire; the snake-case decoder lowercases the tail.
     let levelHpa: Int
     let distanceKm: Double
-    let kind: String
+    let kind: String?
     /// `significant` / `classical` / `sharp`.
-    let intensity: String
+    let intensity: String?
     /// Weather at the node (`dry` / `partly` / `wet` / `convective`); drives the
     /// convective glyph.
     let coLocation: String?

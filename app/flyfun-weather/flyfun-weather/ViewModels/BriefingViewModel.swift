@@ -1436,6 +1436,8 @@ final class BriefingViewModel {
             result = try await repository.routeFronts(flightId: flight.id, timestamp: timestamp)
         } catch APIError.notFound {
             result = nil  // the usual answer: front detection was off for this pack
+        } catch is CancellationError {
+            return  // a pack or flight switch; the next load owns the state
         } catch {
             Self.logger.error("Failed to load route fronts: \(error)")
             result = nil
