@@ -6,6 +6,7 @@ import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.PackMetaResponse
 import aero.flyfun.weather.model.RouteAnalysesResponse
+import aero.flyfun.weather.model.RouteFrontsResponse
 import aero.flyfun.weather.model.RoutePointAnalysis
 import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.viz.AdvisoryPreset
@@ -31,6 +32,7 @@ class CrossSectionViewModel : ViewModel() {
     private var cachedElevation: ElevationResponse? = null
     private var cachedSnapshot: SnapshotResponse? = null
     private var cachedAdvisories: AdvisoriesResponse? = null
+    private var cachedRouteFronts: RouteFrontsResponse? = null
     private var cachedPack: PackMetaResponse? = null
     private var cachedFlight: FlightResponse? = null
     private var activeAdvisoryHighlightId: String? = null
@@ -111,8 +113,10 @@ class CrossSectionViewModel : ViewModel() {
         flight: FlightResponse? = null,
         snapshot: SnapshotResponse? = null,
         advisories: AdvisoriesResponse? = null,
+        routeFronts: RouteFrontsResponse? = null,
     ) {
         cachedAnalyses = analyses
+        cachedRouteFronts = routeFronts
         cachedElevation = elevationProfile
         cachedPack = briefingPack
         cachedFlight = flight
@@ -381,6 +385,7 @@ class CrossSectionViewModel : ViewModel() {
             selectedModel = model,
             flight = cachedFlight,
             activeAdvisoryHighlightId = activeAdvisoryHighlightId,
+            routeFronts = cachedRouteFronts,
         )
         _vizRouteData.value = data
         recomputeEffectiveLayers()

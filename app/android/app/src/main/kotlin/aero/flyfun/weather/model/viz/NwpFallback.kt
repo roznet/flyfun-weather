@@ -75,6 +75,12 @@ object NwpFallback {
             unavailable.add("sld-bands")
         }
 
+        // Air-mass boundary: only when the server linked a chain for this model.
+        if (data.frontChains.isEmpty()) {
+            unavailable.add("fronts")
+            unavailable.add("fronts-markers")
+        }
+
         val hasEShear = points.any { it.eShearLayers.isNotEmpty() }
         if (!hasEShear) {
             unavailable.add("e-shear")

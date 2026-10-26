@@ -4,10 +4,12 @@ import aero.flyfun.weather.model.AdvisoriesResponse
 import aero.flyfun.weather.model.AdvisoryHighlights
 import aero.flyfun.weather.model.ElevationResponse
 import aero.flyfun.weather.model.FlightResponse
+import aero.flyfun.weather.model.FrontChain
 import aero.flyfun.weather.model.ModelDivergence
 import aero.flyfun.weather.model.ObservedConditions
 import aero.flyfun.weather.model.ObservedStationRef
 import aero.flyfun.weather.model.RouteAnalysesResponse
+import aero.flyfun.weather.model.RouteFrontsResponse
 import aero.flyfun.weather.model.RoutePointAnalysis
 import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.SoundingAnalysis
@@ -190,6 +192,11 @@ data class VizRouteData(
     val waypoints: List<VizWaypointMarker> = emptyList(),
     val nightIntervals: List<VizNightInterval> = emptyList(),
     val fronts: List<VizFrontMarker> = emptyList(),
+    /** Air-mass boundaries (experimental Hewson fronts, #196) linked across
+     *  925/850/700 hPa by the server, for the rendered model. Empty when the
+     *  pack has no front artifact, the model carries none, or the pack predates
+     *  vertical linking — the layer then greys out. */
+    val frontChains: List<FrontChain> = emptyList(),
     val currentConditions: VizCurrentConditions? = null,
     val advisoryHighlights: AdvisoryHighlights? = null,
 )
@@ -247,6 +254,7 @@ object VizDataExtractor {
         selectedModel: String = "ecmwf",
         flight: FlightResponse? = null,
         activeAdvisoryHighlightId: String? = null,
+        routeFronts: RouteFrontsResponse? = null,
     ): VizRouteData? {
         if (routeAnalyses == null) return null
 
@@ -362,6 +370,8 @@ object VizDataExtractor {
             waypoints = waypoints,
             nightIntervals = nightIntervals,
             fronts = emptyList(),
+            // Drawn as the server linked them: nothing merged or deduped here.
+            frontChains = routeFronts?.frontChains?.get(model).orEmpty(),
             currentConditions = currentConditions,
             advisoryHighlights = advisoryHighlights,
         )

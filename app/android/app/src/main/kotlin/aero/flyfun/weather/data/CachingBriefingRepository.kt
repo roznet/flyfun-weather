@@ -267,6 +267,14 @@ class CachingBriefingRepository(
             endpoint = "elevation",
         ) { online.elevation(flightId, timestamp) }
 
+    override suspend fun routeFronts(flightId: String, timestamp: String): RouteFrontsResponse? =
+        cachedFetch(
+            serializer = RouteFrontsResponse.serializer(),
+            flightId = flightId,
+            timestamp = timestamp,
+            endpoint = "route-fronts",
+        ) { online.routeFronts(flightId, timestamp) ?: error("No route fronts for this pack") }
+
     override suspend fun soundingProfile(
         flightId: String,
         timestamp: String,

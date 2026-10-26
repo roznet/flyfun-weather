@@ -76,6 +76,11 @@ class BriefingViewModel(
     private val _elevation = MutableStateFlow<ElevationResponse?>(null)
     val elevation: StateFlow<ElevationResponse?> = _elevation.asStateFlow()
 
+    /** The pack's front-detection artifact (#196), or null when it has none —
+     *  the usual case, since "Auto Front Detection" is an opt-in preference. */
+    private val _routeFronts = MutableStateFlow<RouteFrontsResponse?>(null)
+    val routeFronts: StateFlow<RouteFrontsResponse?> = _routeFronts.asStateFlow()
+
     private val _alternates = MutableStateFlow<AlternatesResponse?>(null)
     val alternates: StateFlow<AlternatesResponse?> = _alternates.asStateFlow()
 
@@ -268,6 +273,7 @@ class BriefingViewModel(
         var snap: SnapshotResponse? = null
         var analyses: RouteAnalysesResponse? = null
         var elev: ElevationResponse? = null
+        var fronts: RouteFrontsResponse? = null
         var alts: AlternatesResponse? = null
         var times: TimeOptionsResponse? = null
         var deb: DebriefResponse? = null
@@ -279,6 +285,7 @@ class BriefingViewModel(
             val snapD = async { runSuspendCatching { repository.snapshot(flightId, ts) }.getOrNull() }
             val analysesD = async { runSuspendCatching { repository.routeAnalyses(flightId, ts) }.getOrNull() }
             val elevD = async { runSuspendCatching { repository.elevation(flightId, ts) }.getOrNull() }
+            val frontsD = async { runSuspendCatching { repository.routeFronts(flightId, ts) }.getOrNull() }
             val altsD = async { runSuspendCatching { repository.alternates(flightId, ts) }.getOrNull() }
             val timesD = async { runSuspendCatching { repository.timeOptions(flightId) }.getOrNull() }
             val debD = async { runSuspendCatching { repository.debrief(flightId) }.getOrNull() }
@@ -289,6 +296,7 @@ class BriefingViewModel(
             snap = snapD.await()
             analyses = analysesD.await()
             elev = elevD.await()
+            fronts = frontsD.await()
             alts = altsD.await() ?: adv?.alternates
             times = timesD.await()
             deb = debD.await()
@@ -315,6 +323,7 @@ class BriefingViewModel(
         _snapshot.value = effectiveSnapshot
         _routeAnalyses.value = analyses
         _elevation.value = elev
+        _routeFronts.value = fronts
         _alternates.value = alts
         _timeOptions.value = times
         _debrief.value = deb

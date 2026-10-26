@@ -66,6 +66,7 @@ fun CrossSectionTabScreen(
     val selectedPack by briefingViewModel.selectedPack.collectAsState()
     val routeAnalyses by briefingViewModel.routeAnalyses.collectAsState()
     val elevation by briefingViewModel.elevation.collectAsState()
+    val routeFronts by briefingViewModel.routeFronts.collectAsState()
     val snapshot by briefingViewModel.snapshot.collectAsState()
     val advisories by briefingViewModel.advisories.collectAsState()
     val briefingModel by briefingViewModel.selectedModel.collectAsState()
@@ -97,7 +98,7 @@ fun CrossSectionTabScreen(
     var compareProfiles by remember { mutableStateOf<Map<String, SoundingProfileResponse>>(emptyMap()) }
 
     // 1. Sync briefing data into CrossSectionViewModel
-    LaunchedEffect(routeAnalyses, elevation, selectedPack, flight, snapshot, advisories) {
+    LaunchedEffect(routeAnalyses, elevation, selectedPack, flight, snapshot, advisories, routeFronts) {
         crossSectionViewModel.updateBriefingData(
             analyses = routeAnalyses,
             elevationProfile = elevation,
@@ -105,6 +106,7 @@ fun CrossSectionTabScreen(
             flight = flight,
             snapshot = snapshot,
             advisories = advisories,
+            routeFronts = routeFronts,
         )
     }
 
