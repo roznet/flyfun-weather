@@ -62,7 +62,7 @@ let synInitPinned = false;
 let synLevel = 850;
 let synMetric: HewsonMetric = 'tfp';
 let synHour = 0;
-let synOpacity = 0.5;
+let synOpacity = SYNOPTIC_URL_SCHEMA['syn.opacity'].default / 100;
 let synScale: ColorScale = 'default';
 // Gate-detected front overlay: 'off' or a gate preset name. Dev/calibration —
 // draws TFP=0 axes on top of the grid for the current (model, init, level, hour).

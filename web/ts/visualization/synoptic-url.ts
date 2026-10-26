@@ -26,7 +26,7 @@ export const SYNOPTIC_URL_SCHEMA = {
   'syn.metric':  { default: 'tfp' as HewsonMetric, values: SYNOPTIC_METRICS },
   'syn.hour':    { default: 0 },
   // Percent, so the int codec applies (the map takes 0..1).
-  'syn.opacity': { default: 50, values: Array.from({ length: 101 }, (_, i) => i) as readonly number[] },
+  'syn.opacity': { default: 20, values: Array.from({ length: 101 }, (_, i) => i) as readonly number[] },
   'syn.scale':   { default: 'default' as ColorScale, values: ['default', 'storm'] as readonly ColorScale[] },
   'syn.fronts':  { default: 'default', values: SYNOPTIC_FRONT_GATES },
   'syn.view':    mapViewField(),
