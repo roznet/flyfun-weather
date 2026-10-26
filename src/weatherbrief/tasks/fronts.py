@@ -75,6 +75,9 @@ logger = logging.getLogger(__name__)
 FRONT_MODELS: frozenset[str] = frozenset({"ecmwf", "gfs", "icon"})
 
 # Pressure level → representative MSL altitude (design §4.2 / §6.2).
+# SYNC: the cross-section layers place chain nodes with the same table
+# (web fronts-markers.ts LEVEL_FT, iOS FrontsMarkersLayer.levelFt, Android
+# CrossSectionCanvas FRONT_LEVEL_FT).
 _LEVEL_FT: dict[int, int] = {925: 2_500, 850: 5_000, 700: 10_000}
 
 
