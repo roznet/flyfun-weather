@@ -261,8 +261,18 @@ def build_hourly_params(endpoint: ModelEndpoint) -> str:
     return ",".join(surface + pressure)
 
 
-# ICAO prefixes that indicate North American airspace
-_NORTH_AMERICA_PREFIXES = ("K", "C", "P")
+# North America by coordinates, not by identifier: an origin or destination
+# can be a named fix or reporting point (PEPUL, KONAN) whose first letter says
+# nothing about where it is (prod 2026-10-26: EGBO→PEPUL read as a US route).
+# West of 50°W and north of 10°N covers CONUS, Canada, Alaska, Hawaii and the
+# Caribbean; Iceland (~22°W) and the Azores (~25°W) stay outside.
+_NORTH_AMERICA_MAX_LON = -50.0
+_NORTH_AMERICA_MIN_LAT = 10.0
+
+
+def waypoint_in_north_america(wp) -> bool:
+    """True when the waypoint lies in North America (see the bounds above)."""
+    return wp.lon < _NORTH_AMERICA_MAX_LON and wp.lat > _NORTH_AMERICA_MIN_LAT
 
 
 def _is_icao_airport(code: str) -> bool:
@@ -297,15 +307,13 @@ def route_covers_prefixes(route, prefixes: list[str]) -> bool:
 def detect_model_region(route) -> ModelRegion:
     """Classify a route's region for model coverage filtering.
 
-    Only the origin and destination airports are considered — checking the
-    first letter of their ICAO codes:
-    - K, C, P prefixes → NORTH_AMERICA
+    Only the origin and destination are considered, by their coordinates
+    (:func:`waypoint_in_north_america`):
+    - in North America → NORTH_AMERICA
     - Everything else → EUROPE
 
-    Intermediate waypoints are deliberately ignored: they are often named
-    navigation fixes (e.g. KONAN, CINDY) whose names start with a
-    North-American ICAO prefix and would otherwise misclassify a European
-    route as NORTH_AMERICA.
+    Intermediate waypoints are deliberately ignored: a route that only
+    overflies another region is still flown from and to its endpoints.
 
     If origin and destination disagree, defaults to GLOBAL (no filtering —
     safe fallback).
@@ -317,8 +325,7 @@ def detect_model_region(route) -> ModelRegion:
 
     regions: set[ModelRegion] = set()
     for wp in (route.waypoints[0], route.waypoints[-1]):
-        icao = wp.icao.upper()
-        if any(icao.startswith(p) for p in _NORTH_AMERICA_PREFIXES):
+        if waypoint_in_north_america(wp):
             regions.add(ModelRegion.NORTH_AMERICA)
         else:
             regions.add(ModelRegion.EUROPE)

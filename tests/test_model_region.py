@@ -28,6 +28,14 @@ _COORDS: dict[str, tuple[float, float]] = {
     "EDDK": (50.8659, 7.1427),    # Cologne, DE
     "EDDM": (48.3538, 11.7861),   # Munich, DE
     "LSGS": (46.2196, 7.3268),    # Sion, CH
+    "EGBO": (52.5175, -2.2594),   # Wolverhampton, UK
+    "PEPUL": (52.2675, -1.8873),  # UK reporting point that starts with P
+    "KJFK": (40.6413, -73.7781),  # New York JFK, US
+    "KORD": (41.9742, -87.9073),  # Chicago O'Hare, US
+    "CYUL": (45.4706, -73.7408),  # Montreal, CA
+    "CYYZ": (43.6777, -79.6248),  # Toronto, CA
+    "PANC": (61.1743, -149.9963), # Anchorage, US
+    "PAFA": (64.8151, -147.8564), # Fairbanks, US
 }
 
 
@@ -84,6 +92,11 @@ class TestDetectModelRegion:
         """ICAO case-insensitive."""
         route = _route("kjfk", "kord")
         assert detect_model_region(route) == ModelRegion.NORTH_AMERICA
+
+    def test_destination_fix_with_na_prefix_stays_europe(self):
+        """A UK route ending on a point named P... is Europe (prod 2026-10-26)."""
+        route = _route("EGBO", "PEPUL")
+        assert detect_model_region(route) == ModelRegion.EUROPE
 
     def test_intermediate_nav_fix_ignored(self):
         """Only origin/destination count; nav fixes like KONAN/CINDY don't.

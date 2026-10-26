@@ -14,13 +14,26 @@ from weatherbrief.fetch.text_forecasts import (
 from weatherbrief.models import RouteConfig, Waypoint
 
 
+# Destination coordinates: the region comes from where it is, not its name.
+_DEST_COORDS: dict[str, tuple[float, float]] = {
+    "KLAX": (33.9416, -118.4085),
+    "PHNL": (21.3187, -157.9225),
+    "PANC": (61.1743, -149.9963),
+    "EGTK": (51.8369, -1.3200),
+    "LFPB": (48.9694, 2.4414),
+    "LSGS": (46.2196, 7.3268),
+    "PEPUL": (52.2675, -1.8873),
+}
+
+
 def _route(dest_icao: str) -> RouteConfig:
     """Build a minimal route with just a destination."""
+    lat, lon = _DEST_COORDS[dest_icao]
     return RouteConfig(
         name="test",
         waypoints=[
             Waypoint(icao="KSFX", name="Start", lat=40.0, lon=-111.0),
-            Waypoint(icao=dest_icao, name="Dest", lat=40.0, lon=-111.0),
+            Waypoint(icao=dest_icao, name="Dest", lat=lat, lon=lon),
         ],
     )
 
@@ -48,6 +61,11 @@ def test_detect_region_l_prefix():
     """L-prefix destination → Europe."""
     assert detect_region(_route("LFPB")) == ForecastRegion.EUROPE
     assert detect_region(_route("LSGS")) == ForecastRegion.EUROPE
+
+
+def test_detect_region_p_named_uk_fix_is_europe():
+    """A UK destination fix starting with P is Europe (prod 2026-10-26 EGBO→PEPUL)."""
+    assert detect_region(_route("PEPUL")) == ForecastRegion.EUROPE
 
 
 def test_detect_region_mixed_route_uses_destination():

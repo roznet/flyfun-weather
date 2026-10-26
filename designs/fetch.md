@@ -23,7 +23,7 @@ Each model has a `ModelEndpoint` dataclass (`name`, `base_url`, `max_days`, `mod
 | `meteofrance` | `/v1/meteofrance` | 6 | europe, needs `LF…` | No precip_probability, freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
 | `gem` | `/v1/gem` | 10 | north_america | No freezing_level, visibility, convective_inhibition, lifted_index, vertical_velocity |
 
-`region` (`ModelRegion.GLOBAL/EUROPE/NORTH_AMERICA`) and `required_country` let the pipeline skip models irrelevant to a route (`_should_skip_for_region` in `tasks/fetch.py`). The broad region comes from `detect_model_region(route)`, which classifies on the **origin/destination** ICAO prefixes only (`K`/`C`/`P` → North America) — intermediate nav fixes like `KONAN`/`CINDY` are ignored so they can't misclassify a route. Country-specific models (Météo-France→`FR`, UKMO→`GB`) are gated on `airports.route_countries(route)`, which samples the great-circle route into timezone polygons and so detects genuine **overflight**, not just landings. If that geometry can't be resolved it falls back to `route_covers_prefixes(route, prefixes)` (4-letter ICAO airports only).
+`region` (`ModelRegion.GLOBAL/EUROPE/NORTH_AMERICA`) and `required_country` let the pipeline skip models irrelevant to a route (`_should_skip_for_region` in `tasks/fetch.py`). The broad region comes from `detect_model_region(route)`, which classifies the **origin/destination** by coordinates (`waypoint_in_north_america`: west of 50°W and north of 10°N → North America), not by identifier — an endpoint can be a fix or reporting point (`PEPUL`, `KONAN`) whose first letter says nothing about where it is. Intermediate waypoints are ignored. Country-specific models (Météo-France→`FR`, UKMO→`GB`) are gated on `airports.route_countries(route)`, which samples the great-circle route into timezone polygons and so detects genuine **overflight**, not just landings. If that geometry can't be resolved it falls back to `route_covers_prefixes(route, prefixes)` (4-letter ICAO airports only).
 
 `build_hourly_params()` constructs the API parameter string, excluding each model's unavailable variables. Pressure levels are **per-model** via `ModelEndpoint.pressure_levels` (named constants in `variables.py`):
 
@@ -107,7 +107,7 @@ text_fcsts.source_label  # "NWS AFD" or "DWD Synoptic Overview"
 text_fcsts.entries       # list[TextForecastEntry(label, text)]
 ```
 
-**Region detection** (`detect_region(route)`): uses destination (last waypoint) ICAO prefix — `K`/`P` → US, else Europe.
+**Region detection** (`detect_region(route)`): destination (last waypoint) coordinates via `waypoint_in_north_america` → US, else Europe. Not the identifier prefix: a UK route ending on reporting point `PEPUL` read as US and lost its DWD/Met Office charts and European text forecasts (prod 2026-10-26).
 
 ### NWS Area Forecast Discussions (`fetch/nws_text.py`)
 

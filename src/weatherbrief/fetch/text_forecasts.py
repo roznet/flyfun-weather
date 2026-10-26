@@ -44,18 +44,19 @@ class TextForecasts(BaseModel):
 
 
 def detect_region(route: RouteConfig | None) -> ForecastRegion:
-    """Detect the forecast region from the destination ICAO prefix.
+    """Detect the forecast region from the destination's coordinates.
 
-    K-prefix and P-prefix (Alaska, Hawaii) → US.
+    A destination in North America (CONUS, Alaska, Hawaii) → US. Not the
+    identifier's first letter: a destination can be a fix or reporting point
+    such as PEPUL that happens to start with P.
     Everything else → Europe (default).
     """
+    from weatherbrief.fetch.variables import waypoint_in_north_america
+
     if route is None or not route.waypoints:
         return ForecastRegion.EUROPE
 
-    destination = route.waypoints[-1]
-    icao = destination.icao.upper()
-
-    if icao.startswith("K") or icao.startswith("P"):
+    if waypoint_in_north_america(route.waypoints[-1]):
         return ForecastRegion.US
 
     return ForecastRegion.EUROPE
