@@ -186,6 +186,15 @@ def test_find_latest_icon_eu_run_as_of_time():
         ),
         status=200,
     )
+    # ... and the last hour's single-level t_2m.
+    responses.add(
+        responses.HEAD,
+        re.compile(
+            r"https://opendata\.dwd\.de/weather/nwp/icon-eu/grib/06/t_2m/"
+            r"icon-eu_europe_regular-lat-lon_single-level_2026022006_\d{3}_T_2M\.grib2\.bz2"
+        ),
+        status=200,
+    )
 
     result = find_latest_icon_eu_run(as_of, as_of_time=as_of)
     assert result is not None

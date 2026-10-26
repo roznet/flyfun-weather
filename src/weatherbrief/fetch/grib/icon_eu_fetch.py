@@ -929,9 +929,12 @@ def probe_icon_run(
     """The f000 HEAD response when the run is on DWD Open Data, else None.
 
     The run-finder's probe: the bottom-level P file of forecast hour 000 and,
-    when *last_hour* > 0, of that hour too (DWD uploads a run hour by hour).
-    The f000 response is the one returned, so freshness keeps reading its
-    ``Last-Modified``.
+    when *last_hour* > 0, of that hour too (DWD uploads a run hour by hour),
+    plus that hour's single-level ``t_2m``: the single-level files land after
+    the model levels, so a run with the P file up can still 404 the surface
+    the GRIB-primary briefing needs (prod 2026-10-26 15:07Z: ICON-EU 12z
+    f045–f047, 5/5 points to the Open-Meteo fallback). The f000 response is
+    the one returned, so freshness keeps reading its ``Last-Modified``.
     """
     try:
         resp = session.head(
@@ -941,10 +944,18 @@ def probe_icon_run(
         if resp.status_code != 200:
             return None
         if last_hour > 0:
-            last_url = icon_eu_file_url(
-                init_date, init_hour, last_hour, variant.level_max, "p", variant,
+            last_urls = (
+                icon_eu_file_url(
+                    init_date, init_hour, last_hour, variant.level_max, "p", variant,
+                ),
+                icon_eu_single_level_url(
+                    init_date, init_hour, last_hour, "t_2m", variant,
+                ),
             )
-            if session.head(last_url, timeout=10).status_code != 200:
+            if any(
+                session.head(url, timeout=10).status_code != 200
+                for url in last_urls
+            ):
                 logger.info(
                     "%s %s %02dz not yet published through f%03d, "
                     "trying an older run",

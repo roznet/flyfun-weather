@@ -692,7 +692,7 @@ class TestIconEuFetch:
         assert result is not None
         # At 10:00 UTC, cycles 06z (4h ago > 3h delay) should be tried first
         assert mock_session.head.called
-        head_url = mock_session.head.call_args[0][0]
+        head_url = mock_session.head.call_args_list[0][0][0]
         assert "icon-eu_europe_regular-lat-lon_model-level_" in head_url
         assert "_74_P.grib2.bz2" in head_url
 
@@ -731,6 +731,46 @@ class TestIconEuFetch:
         assert result == ("20261025", 6)
         probed = [c.args[0] for c in session.head.call_args_list]
         assert any("2026102512_096_74_P" in u for u in probed)
+
+    def test_find_latest_run_skips_run_without_last_hour_single_level(self):
+        """Model levels up but the last hour's single-level files 404 → older run.
+
+        Prod 2026-10-26 15:07Z: ICON-EU 12z had the window's P files, not the
+        f045–f047 single-level surface, and a briefing sent 5/5 points to the
+        Open-Meteo fallback while 06z covered the window.
+        """
+        from unittest.mock import MagicMock, patch
+        from datetime import datetime, timezone
+        from weatherbrief.fetch.grib.icon_eu_fetch import find_latest_icon_eu_run
+
+        def _head(url, timeout=10):
+            resp = MagicMock()
+            hour = int(url.rsplit("_", 3)[-3])
+            single_level_missing = (
+                "2026102612_" in url and "single-level" in url and hour > 44
+            )
+            resp.status_code = 404 if single_level_missing else 200
+            return resp
+
+        session = MagicMock()
+        session.head.side_effect = _head
+        fixed_now = datetime(2026, 10, 26, 15, 7, tzinfo=timezone.utc)
+        departure = datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc)
+        with patch("weatherbrief.fetch.grib.icon_eu_fetch.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = find_latest_icon_eu_run(
+                departure, session=session,
+                cover_until=departure.replace(hour=11),
+            )
+
+        assert result == ("20261026", 6)
+        probed = [c.args[0] for c in session.head.call_args_list]
+        assert any(
+            "single-level_2026102612_048_T_2M" in u for u in probed
+        ), probed
 
     def test_find_latest_run_accepts_run_with_needed_hours_published(self):
         """When the last bracket hour is up, the newest run is kept."""

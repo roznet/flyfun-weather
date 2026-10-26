@@ -186,8 +186,10 @@ class TestResolve:
         # 03Z (short run) answers its probe but has a 30 h horizon; 00Z is main.
         sess = _FakeSession(["model-level_2026102403_000_74_P",
                              "model-level_2026102400_000_74_P",
-                             # the run finder's last-hour probe (now + 31 h → f040)
+                             # the run finder's last-hour probe (now + 31 h → f040),
+                             # model level and single level
                              "model-level_2026102400_040_74_P",
+                             "single-level_2026102400_040_T_2M",
                              "pressure-level_2026102400_117_850_T.grib2.bz2"])
         run = grib_source.resolve_run("icon", [0, 117], [850], now=NOW, session=sess)
         assert run.init == datetime(2026, 10, 24, 0, tzinfo=timezone.utc)
