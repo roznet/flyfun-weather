@@ -27,6 +27,8 @@ private func point(
     nwpCeilingFt: Double? = nil,
     cinSurfaceJkg: Double = 0,
     temperatureC: Double? = nil,
+    dewpointC: Double? = nil,
+    headwindKt: Double = 0,
     isaDevC: Double? = nil,
     qnhHpa: Double? = nil,
     observed: VizObservedPoint? = nil
@@ -49,7 +51,7 @@ private func point(
         nwpConvectiveCoverPct: nil, nwpConvectiveMethod: nil,
         hasNwpConvective: false,
         cloudCoverTotalPct: 0, cloudCoverLowPct: 0, cloudCoverMidPct: 0,
-        headwindKt: 0, crosswindKt: 0,
+        headwindKt: headwindKt, crosswindKt: 0,
         capeSurfaceJkg: 0,
         worstModelAgreement: "good",
         nwpCloudDiag: nwpCeilingFt.map {
@@ -66,7 +68,8 @@ private func point(
         terrainElevationFt: terrainElevationFt,
         isaDevC: isaDevC,
         qnhHpa: qnhHpa,
-        observed: observed
+        observed: observed,
+        dewpointC: dewpointC
     )
 }
 
@@ -90,7 +93,7 @@ struct RouteGraphRegistryTests {
     /// lens that names it in its `routeGraph` directive.
     static let webIds = [
         "observed-rain-rate", "observed-flash-rate",
-        "headwind", "crosswind", "temperature", "isa-dev",
+        "headwind", "crosswind", "temperature", "dewpoint", "isa-dev",
         "precipitation", "cloud-cover", "cape", "cin", "qnh",
         "freezing-level", "ceiling-dd", "ceiling-nwp",
     ]
@@ -283,6 +286,38 @@ struct MetricSampleTests {
 
 @Suite("Route-graph Y scale")
 struct RouteGraphScaleTests {
+
+    // #948: temperature + dewpoint share one °C axis so the spread is the gap.
+    private let tdPoints = [
+        point(temperatureC: 12, dewpointC: 2, headwindKt: 30),
+        point(temperatureC: 8, dewpointC: -6, headwindKt: 10),
+    ]
+
+    @Test("temperature + dewpoint share one scale fitted to both series")
+    func axisGroupSharesScale() {
+        let (l, r) = RouteGraphScale.scales(
+            points: tdPoints, left: metric("temperature"), right: metric("dewpoint"))
+        #expect(r?.lower == l.lower)
+        #expect(r?.upper == l.upper)
+        #expect(l.lower <= -6)
+        #expect(l.upper >= 12)
+    }
+
+    @Test("metrics without a common axis group keep independent scales")
+    func noGroupKeepsOwnScales() {
+        let (l, r) = RouteGraphScale.scales(
+            points: tdPoints, left: metric("temperature"), right: metric("headwind"))
+        #expect(l.upper < 30)
+        #expect((r?.upper ?? 0) >= 30)
+    }
+
+    @Test("dewpoint reads dewpointC; nil (an old pack) is unavailable")
+    func dewpointValue() {
+        #expect(metric("dewpoint").getValue(point(dewpointC: -5)) == -5)
+        if case .unavailable = metric("dewpoint").sample(at: point()) {} else {
+            Issue.record("a missing dewpoint must be unavailable, not a value")
+        }
+    }
 
     @Test("a capping metric pins its axis verbatim — no padding, no rounding")
     func pinnedAxisIsVerbatim() {
@@ -630,7 +665,7 @@ struct ZeroLineTests {
     @Test("every signed metric the web gives a zero line declares one here")
     func signedMetricsDeclareZeroLine() {
         // From ROUTE_GRAPH_METRICS: these four set showZeroLine on the web.
-        for id in ["headwind", "crosswind", "temperature", "isa-dev", "cin"] {
+        for id in ["headwind", "crosswind", "temperature", "dewpoint", "isa-dev", "cin"] {
             #expect(metric(id).showZeroLine, "\(id) lost its zero line")
         }
     }
@@ -696,7 +731,7 @@ struct ZeroLineTests {
             [-15, 20],           // both sides
             [0],                 // exactly zero
         ]
-        for id in ["headwind", "crosswind", "temperature", "isa-dev", "cin"] {
+        for id in ["headwind", "crosswind", "temperature", "dewpoint", "isa-dev", "cin"] {
             let m = metric(id)
             for shape in shapes {
                 let s = RouteGraphScale(samples: shape.map { MetricSample.value($0) }, metric: m)

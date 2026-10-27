@@ -177,18 +177,20 @@ struct ForecastAirportCard: View {
         .accessibilityLabel("Colour the map by \(row.label.lowercased())")
     }
 
-    /// The bottom Temp row — plain (uncoloured) per-model, consensus "—". Not a
-    /// colour metric, so it isn't tappable.
+    /// The bottom Temp / Dew row — plain (uncoloured) per-model, consensus "—".
+    /// Not a colour metric, so it isn't tappable. One row so the spread reads at
+    /// a glance (#948).
     private func tempRow(cols: [String]) -> some View {
-        let anyTemp = cols.contains { airport.models[$0]?.temperatureC != nil }
+        let cells = cols.map { Self.tempDewCell(airport.models[$0]) }
         return Group {
-            if anyTemp {
+            if cells.contains(where: { $0 != "—" }) {
                 HStack(spacing: 0) {
-                    Text("Temp").font(.caption).foregroundStyle(Theme.textMuted)
+                    Text("Temp / Dew").font(.caption).foregroundStyle(Theme.textMuted)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    ForEach(cols, id: \.self) { m in
-                        Text(airport.models[m]?.temperatureC.map { "\(Int($0.rounded()))°" } ?? "—")
+                    ForEach(Array(zip(cols, cells)), id: \.0) { _, cell in
+                        Text(cell)
                             .font(.caption2).monospacedDigit().foregroundStyle(Theme.text)
+                            .lineLimit(1).minimumScaleFactor(0.7)
                             .frame(width: 56)
                     }
                     Text("—").font(.caption2).foregroundStyle(Theme.textMuted).frame(width: 56)
@@ -249,6 +251,17 @@ struct ForecastAirportCard: View {
         if f.easa { return "EASA" }
         if f.faa { return "FAA" }
         return "None"
+    }
+
+    /// The Temp / Dew cell for one model: `4° / 2°`. A missing half reads "—"
+    /// (`4° / —` on a response without dewpoint); both missing is just "—".
+    /// Port of web `tempDewCell`.
+    static func tempDewCell(_ m: ForecastModelEntry?) -> String {
+        let t = m?.temperatureC
+        let d = m?.dewpointC
+        if t == nil && d == nil { return "—" }
+        func deg(_ v: Double?) -> String { v.map { "\(Int($0.rounded()))°" } ?? "—" }
+        return "\(deg(t)) / \(deg(d))"
     }
 
     /// Narrow matrix-cell value (units live in the row label). Port of `compactCell`.

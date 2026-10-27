@@ -1375,6 +1375,9 @@ data class SoundingAnalysis(
     val cloudCoverMidPct: Double? = null,
     @SerialName("cloud_cover_high_pct")
     val cloudCoverHighPct: Double? = null,
+    /** 2 m dewpoint (°C) for the route graph's dewpoint line (#948). */
+    @SerialName("dewpoint_2m_c")
+    val dewpoint2mC: Double? = null,
     @SerialName("nwp_cloud_diagnostics")
     val nwpCloudDiagnostics: NWPCloudDiagnostics? = null,
 )

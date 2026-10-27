@@ -608,6 +608,9 @@ function extractPoint(
 
   // Extract surface values from model_divergence (per-model values)
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
+  // Dewpoint comes off the selected model's sounding instead (#948): adding it
+  // to model_divergence would also make it count in model-agreement scoring.
+  const dewpointC = sounding?.dewpoint_2m_c ?? null;
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
   const qnhHpa = divergenceValue(rpa, 'pressure_msl_hpa', model);
 
@@ -678,6 +681,7 @@ function extractPoint(
     soundingCeilingFt: indices?.sounding_ceiling_ft ?? null,
     terrainElevationFt,
     temperatureC,
+    dewpointC,
     temperatureCruiseC,
     isaDevC,
     precipitationMm,

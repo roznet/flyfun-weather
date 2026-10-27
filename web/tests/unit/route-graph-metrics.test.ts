@@ -6,6 +6,7 @@ import {
   sampleMetric, formatSample,
 } from '../../ts/visualization/route-graph/metrics';
 import { isaTemperatureC } from '../../ts/visualization/data-extract';
+import { computeYScales } from '../../ts/visualization/route-graph/axes';
 import { makeVizPoint, makeAltitudeLines, makeNwpCloudDiag } from './fixtures/viz-point';
 
 function metric(id: string) {
@@ -215,6 +216,40 @@ describe('precipitation/cape/cloud-cover/temperature metrics', () => {
   it('temperature reads temperatureC, allows null', () => {
     expect(metric('temperature').getValue(makeVizPoint({ temperatureC: -3 }))).toBe(-3);
     expect(metric('temperature').getValue(makeVizPoint({ temperatureC: null }))).toBeNull();
+  });
+
+  it('dewpoint reads dewpointC; null (an old pack) is unavailable, not zero', () => {
+    expect(metric('dewpoint').getValue(makeVizPoint({ dewpointC: -5 }))).toBe(-5);
+    expect(sampleMetric(metric('dewpoint'), makeVizPoint({ dewpointC: null })))
+      .toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('shared axis (axisGroup)', () => {
+  const plot = { left: 0, top: 0, width: 100, height: 100 };
+  const points = [
+    makeVizPoint({ temperatureC: 12, dewpointC: 2, headwindKt: 30 }),
+    makeVizPoint({ temperatureC: 8, dewpointC: -6, headwindKt: 10 }),
+  ];
+
+  it('temperature + dewpoint share one scale fitted to both series', () => {
+    const { left, right } = computeYScales(points, metric('temperature'), metric('dewpoint'), plot);
+    expect(left).toBe(right);
+    expect(left!.min).toBeLessThanOrEqual(-6);
+    expect(left!.max).toBeGreaterThanOrEqual(12);
+  });
+
+  it('metrics without a common group keep independent scales', () => {
+    const { left, right } = computeYScales(points, metric('temperature'), metric('headwind'), plot);
+    expect(left).not.toBe(right);
+    expect(left!.max).toBeLessThan(30);
+    expect(right!.max).toBeGreaterThanOrEqual(30);
+  });
+
+  it('a single selected metric gets its own scale', () => {
+    const { left, right } = computeYScales(points, metric('dewpoint'), null, plot);
+    expect(right).toBeNull();
+    expect(left!.max).toBeLessThan(12);
   });
 });
 

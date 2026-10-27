@@ -11,7 +11,7 @@
  *    1. Verdict: consensus flight-category badge + model-agreement chip
  *    2. Alternate required (FAA/EASA)
  *    3. Metric × model matrix (category, ceiling, vis, wind, xwind,
- *       headwind, convective, CAPE, cloud, temp), cells colored via the
+ *       headwind, convective, CAPE, cloud, temp / dewpoint), cells colored via the
  *       shared scales so they read identically to the markers. Rows where
  *       the models diverge are flagged.
  *
@@ -54,6 +54,16 @@ const MATRIX_ROWS: MatrixRow[] = [
  *  label (see MATRIX_ROWS) and the best-runway id in the row label too, so
  *  cells carry only the number (+ gust in parens). Falls back to the shared
  *  formatter for region-aware fields (visibility). */
+/** The plain "Temp / Dew" cell for one model: `4° / 2°`. A missing half reads
+ *  "—" (`4° / —` on a response without dewpoint); both missing is just "—". */
+export function tempDewCell(m: Pick<ModelForecast, 'temperature_c' | 'dewpoint_c'> | undefined): string {
+  const t = m?.temperature_c;
+  const d = m?.dewpoint_c;
+  if (t == null && d == null) return '—';
+  const deg = (v: number | null | undefined) => (v != null ? `${Math.round(v)}°` : '—');
+  return `${deg(t)} / ${deg(d)}`;
+}
+
 function compactCell(data: { [k: string]: any }, metric: ForecastMetric): string {
   switch (metric) {
     case 'flight_category':
@@ -235,14 +245,13 @@ export function renderAirportSummaryCard(host: HTMLElement, opts: SummaryCardOpt
     html += '</tr>';
   }
 
-  // Temperature row (not a colored map metric — plain per-model values).
-  const temps = present.map((m) => airport.models[m]?.temperature_c);
-  if (temps.some((t) => t != null)) {
-    html += '<tr class="ap-card-row ap-card-row-plain"><td class="ap-card-metric-col">Temp</td>';
-    for (let i = 0; i < present.length; i++) {
-      const t = temps[i];
-      html += `<td>${t != null ? esc(`${Math.round(t)}°C`) : '—'}</td>`;
-    }
+  // Temperature / dewpoint row (not a colored map metric — plain per-model
+  // values). One row, so the spread reads at a glance without growing the card
+  // (#948). Dewpoint is optional: older cached responses don't carry it.
+  const tempDew = present.map((m) => tempDewCell(airport.models[m]));
+  if (tempDew.some((c) => c !== '—')) {
+    html += '<tr class="ap-card-row ap-card-row-plain"><td class="ap-card-metric-col">Temp / Dew</td>';
+    for (const cell of tempDew) html += `<td>${esc(cell)}</td>`;
     html += '<td class="ap-card-consensus-col">—</td></tr>';
   }
 

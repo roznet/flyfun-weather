@@ -79,7 +79,7 @@ def _snap(db, *, icao="LFPG", model="gfs", init, valid, fetched, ceiling=4000.0,
         fetched_at=fetched, visibility_m=vis, wind_speed_10m_kt=wind,
         wind_direction_10m_deg=270.0, wind_gusts_10m_kt=None,
         sounding_ceiling_ft=ceiling, cape_jkg=10.0, cloud_cover_pct=20.0,
-        sounding_convective_risk="none", temperature_2m_c=10.0,
+        sounding_convective_risk="none", temperature_2m_c=10.0, dewpoint_2m_c=6.0,
     )
     db.add(row)
     db.flush()
@@ -314,6 +314,8 @@ class TestArchive:
             a["models"] for a in from_db["airports"]
         ]
         assert _airport(from_archive)["models"]["gfs"]["flight_category"] == "IFR"
+        # #948: the dewpoint column survives the archive round trip.
+        assert _airport(from_archive)["models"]["gfs"]["dewpoint_c"] == 6.0
 
     def test_unarchived_old_day_falls_back_to_db(self, db_session, archive_dir):
         _snap(db_session, init=datetime(2026, 4, 5, 0, tzinfo=timezone.utc),

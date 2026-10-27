@@ -114,6 +114,8 @@ data class VizPoint(
     val windSpeedKt: Double? = null,
     val windDirectionDeg: Double? = null,
     val temperatureC: Double? = null,
+    /** 2 m dewpoint off the selected model's sounding, not model_divergence (#948). */
+    val dewpointC: Double? = null,
     val temperatureCruiseC: Double? = null,
     val isaDevC: Double? = null,
     val precipitationMm: Double? = null,
@@ -585,6 +587,7 @@ object VizDataExtractor {
             windSpeedKt = wind?.windSpeedKt,
             windDirectionDeg = wind?.windDirectionDeg,
             temperatureC = temperatureC,
+            dewpointC = sounding?.dewpoint2mC,
             temperatureCruiseC = temperatureCruiseC,
             isaDevC = isaDevC,
             precipitationMm = precipitationMm,

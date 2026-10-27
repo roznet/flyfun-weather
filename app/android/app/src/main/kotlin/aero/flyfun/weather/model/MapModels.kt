@@ -139,6 +139,9 @@ data class ForecastModelEntry(
     val convectiveRisk: String? = null,
     @SerialName("temperature_c")
     val temperatureC: Double? = null,
+    /** 2 m dewpoint (#948). Absent from responses cached before it was added. */
+    @SerialName("dewpoint_c")
+    val dewpointC: Double? = null,
     @SerialName("flight_category")
     val flightCategory: String? = null,
     @SerialName("crosswind_kt")

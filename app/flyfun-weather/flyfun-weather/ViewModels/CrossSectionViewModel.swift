@@ -781,7 +781,8 @@ final class CrossSectionViewModel {
             soundingCeilingFt: indices?.soundingCeilingFt,
             terrainElevationFt: terrainElevationFt,
             isaDevC: isaDevC,
-            qnhHpa: qnhHpa
+            qnhHpa: qnhHpa,
+            dewpointC: sounding?.dewpoint2mC
         )
     }
 

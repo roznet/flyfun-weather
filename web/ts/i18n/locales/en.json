@@ -910,6 +910,7 @@
   "graph.headwind": "Head/Tailwind",
   "graph.crosswind": "Crosswind",
   "graph.temperature": "Temperature (2m)",
+  "graph.dewpoint": "Dewpoint (2m)",
   "graph.isa-dev": "ISA Deviation (cruise)",
   "graph.precipitation": "Precipitation",
   "graph.cloud-cover": "Cloud Cover",

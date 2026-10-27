@@ -64,8 +64,9 @@ from weatherbrief.tasks.forecast_grid import forecast_days, sample_hours_for_day
 # rebuilt the cache. v2 (#419): added the baked ``consensus_majority`` block.
 # v3 (#520): observation timestamps became TZDateTime reads, so the baked
 # ``observation_time`` strings gained a ``+00:00`` offset. v4 (#841): per-model
-# and consensus ``freezing_level_ft`` (the area outlook reads it).
-FORECAST_MAP_CACHE_VERSION = "v4"
+# and consensus ``freezing_level_ft`` (the area outlook reads it). v5 (#948):
+# per-model ``dewpoint_c`` (the airport card's Temp / Dew row).
+FORECAST_MAP_CACHE_VERSION = "v5"
 
 
 def forecast_map_cache_key(day: int, hour: int) -> str:

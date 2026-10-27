@@ -420,6 +420,7 @@ function synthesizeVizPoint(
     soundingCeilingFt: indices?.sounding_ceiling_ft ?? null,
     terrainElevationFt: elevationFt,
     temperatureC: surface?.temperature_2m_c ?? null,
+    dewpointC: surface?.dewpoint_2m_c ?? null,
     // Single-airport profile has no elected cruise level, so ISA deviation /
     // cruise temperature have no source here — the metric renders empty.
     temperatureCruiseC: null,

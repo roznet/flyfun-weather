@@ -749,6 +749,7 @@
   "graph.headwind": "Viento de cara/cola",
   "graph.crosswind": "Viento cruzado",
   "graph.temperature": "Temperatura (2m)",
+  "graph.dewpoint": "Punto de rocío (2m)",
   "graph.isa-dev": "Desviación ISA (crucero)",
   "graph.precipitation": "Precipitación",
   "graph.cloud-cover": "Cobertura de nubes",

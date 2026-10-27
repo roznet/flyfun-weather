@@ -11,6 +11,7 @@ import aero.flyfun.weather.data.MapMetricsCatalog
 import aero.flyfun.weather.model.AltRequired
 import aero.flyfun.weather.model.ForecastCellData
 import aero.flyfun.weather.model.ForecastMapAirport
+import aero.flyfun.weather.model.ForecastModelEntry
 import aero.flyfun.weather.model.ForecastModelMode
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -164,6 +165,17 @@ object AirportMapCatalog {
         flag.easa -> "EASA"
         flag.faa -> "FAA"
         else -> "None"
+    }
+
+    /** The Temp / Dew cell for one model: `4° / 2°`. A missing half reads "—"
+     *  (`4° / —` on a response without dewpoint); both missing is just "—".
+     *  Mirrors web `tempDewCell` (#948). */
+    fun tempDewCell(m: ForecastModelEntry?): String {
+        val t = m?.temperatureC
+        val d = m?.dewpointC
+        if (t == null && d == null) return "—"
+        fun deg(v: Double?) = v?.let { "${it.roundToInt()}°" } ?: "—"
+        return "${deg(t)} / ${deg(d)}"
     }
 
     /** Narrow matrix-cell value (units live in the row label). */

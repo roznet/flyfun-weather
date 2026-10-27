@@ -251,8 +251,10 @@ fun RouteGraphCanvas(
             val leftSamples = leftMetric?.let { m -> points.map { RouteGraphMetrics.sampleMetric(m, it) } }.orEmpty()
             val rightSamples = rightMetric?.let { m -> points.map { RouteGraphMetrics.sampleMetric(m, it) } }.orEmpty()
 
-            val leftScale = leftMetric?.let { RouteGraphMetrics.computeYScale(it, leftSamples) } ?: (0.0 to 100.0)
-            val rightScale = rightMetric?.let { RouteGraphMetrics.computeYScale(it, rightSamples) } ?: (0.0 to 100.0)
+            // Metrics in one axis group (temperature + dewpoint) share a scale.
+            val (sharedLeft, sharedRight) = RouteGraphMetrics.computeYScales(leftMetric, rightMetric, points)
+            val leftScale = sharedLeft ?: (0.0 to 100.0)
+            val rightScale = sharedRight ?: (0.0 to 100.0)
 
             // 1. Plot background & grid
             drawRouteGraphGrid(

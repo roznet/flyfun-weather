@@ -480,6 +480,10 @@ export interface VizPoint {
   terrainElevationFt: number;
   // Route graph scalars (extracted from model_divergence)
   temperatureC: number | null;
+  /** 2 m dewpoint (°C) for the selected model (#948). Read off the model's
+   *  sounding (`SoundingAnalysis.dewpoint_2m_c`), not `model_divergence`, so
+   *  it doesn't feed model-agreement scoring. `null` when absent. */
+  dewpointC: number | null;
   /** Temperature (°C) at the elected cruise level for the selected model.
    *  `isaDevC` is derived from this; kept as a separate field so a future
    *  raw "cruise temperature" metric (or richer tooltip) needs no re-plumbing. */

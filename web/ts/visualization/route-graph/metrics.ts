@@ -57,6 +57,13 @@ export interface RouteGraphMetric {
   isNoCoverage?: (point: VizPoint) => boolean;
   /** Draw a reference line at y=0 (useful for head/tailwind). */
   showZeroLine?: boolean;
+  /**
+   * Optional: metrics with the same axis group share one Y scale when they are
+   * plotted left and right together, so their gap is read directly off the
+   * graph (temperature vs dewpoint: the spread). Different groups, or none,
+   * keep independent scales.
+   */
+  axisGroup?: string;
   /** Labels drawn above/below the zero line: [aboveLabel, belowLabel]. */
   zeroLineLabels?: [string, string];
 }
@@ -128,7 +135,21 @@ export const ROUTE_GRAPH_METRICS: readonly RouteGraphMetric[] = [
     renderType: 'line',
     color: '#dc2626',
     showZeroLine: true,
+    axisGroup: 'surface-temp',
     getValue: (p) => p.temperatureC,
+    formatValue: (v) => `${v.toFixed(1)}°C`,
+  },
+  {
+    // 2 m dewpoint (#948). Green against temperature's red, as on a Skew-T;
+    // shares temperature's axis so the spread (fog, low cloud, carb icing)
+    // is the visible gap between the two lines.
+    id: 'dewpoint',
+    unit: '°C',
+    renderType: 'line',
+    color: '#16a34a',
+    showZeroLine: true,
+    axisGroup: 'surface-temp',
+    getValue: (p) => p.dewpointC,
     formatValue: (v) => `${v.toFixed(1)}°C`,
   },
   {
