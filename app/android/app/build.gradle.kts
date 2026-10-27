@@ -13,6 +13,21 @@ plugins {
 val uploadKey = rootProject.file("keystore.properties").takeIf { it.exists() }
     ?.let { f -> Properties().apply { f.inputStream().use(::load) } }
 
+// The Firebase project's app config (FCM push), untracked like the upload key: download it
+// from the Firebase console (project flyfun-weather-494e0) into this directory. Without it
+// the app builds with push off (CI, other checkouts); a release build refuses to, so a Play
+// upload can't ship without push. See designs/android-play-release.md.
+val hasFirebaseConfig = file("google-services.json").exists()
+if (hasFirebaseConfig) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+} else {
+    tasks.matching { it.name == "bundleRelease" || it.name == "assembleRelease" }.configureEach {
+        doFirst {
+            throw GradleException("app/google-services.json is missing: a release build would have no push")
+        }
+    }
+}
+
 android {
     namespace = "aero.flyfun.weather"
     compileSdk = 37
@@ -109,6 +124,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.coil.compose)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

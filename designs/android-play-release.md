@@ -31,6 +31,8 @@
 | Service account (one for every FlyFun app) | `~/.googleplaystore/private_keys/play-service-account.json`, or `PLAY_SERVICE_ACCOUNT_JSON`. Needs this app granted in Play Console → Users and permissions |
 | Upload key | `~/.googleplaystore/private_keys/flyfun-weather-upload.jks`, alias `upload`, certificate SHA-256 `91:D5:8A:76:69:4C:99:5F:6A:48:A5:43:DD:9F:EE:3E:20:24:03:C2:B4:C2:85:41:B9:6F:10:FC:3B:09:67:CC` |
 | Its passwords | `~/.googleplaystore/flyfun-weather-keystore.properties`, symlinked as `app/android/keystore.properties` (gitignored) |
+| Firebase app config (FCM push) | `~/.googleplaystore/flyfun-weather-google-services.json`, symlinked as `app/android/app/google-services.json` (gitignored); Firebase project `flyfun-weather-494e0`. A release build fails without it |
+| Firebase server key | the project's service account (Firebase console → Project settings → Service accounts), base64 in prod `.env` as `FCM_SERVICE_ACCOUNT_JSON` |
 | Python deps | `pip install -e '.[release]'` (google-auth) |
 
 Forms has its own upload key (`flyfun-forms-upload.jks`, `keystore.properties`);
@@ -97,13 +99,11 @@ before it reaches the server). OAuth sign-in uses the `flyfunweather://` scheme.
     precise location, only while the pilot runs flight tracking, sent to the
     server and kept with the flight (app functionality); other user content —
     flights, aircraft, debriefs, PIREPs, feedback (app functionality).
-    Push device token once FCM is wired (device or other IDs).
+    FCM push token (device or other IDs; app functionality).
   - *Shared:* none (LLM and weather providers act as service providers).
   - *Encrypted in transit:* yes. *Deletion:* yes, in-app plus the web URL.
 
 ## Not yet done
 
-- FCM client (`firebase-messaging`, `google-services.json`): push is inactive on
-  Android; adding it changes the Data safety answers.
 - R8 (`isMinifyEnabled`) off: enable only with a full drive of the release build.
 - Cross-section, Observed and tablet screenshots (needs a richer demo fixture).

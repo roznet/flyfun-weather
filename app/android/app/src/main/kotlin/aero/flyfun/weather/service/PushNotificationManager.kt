@@ -17,9 +17,15 @@ import aero.flyfun.weather.model.BadgeStatus
 import aero.flyfun.weather.model.DeviceRegistrationRequest
 import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.PendingNavigation
+import com.google.android.gms.tasks.Task
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * Parsed push notification payload for briefing and live weather alerts.
@@ -52,8 +58,13 @@ object PushNotificationManager {
     const val EXTRA_PACK_TIMESTAMP: String = "pack_timestamp"
     const val EXTRA_OPEN_OBSERVED: String = "open_observed"
 
+    private const val TYPE_LIVE_ALERT: String = "live_alert"
+    private const val TYPE_LIVE_CLEAR: String = "live_clear"
+    private const val TYPE_FLIGHT_DAY: String = "flight_day"
+
     private const val PREFS_NAME: String = "flyfun_push_prefs"
     private const val KEY_DEVICE_TOKEN: String = "registered_device_token"
+    private const val KEY_PERMISSION_ASKED: String = "notification_permission_asked"
 
     private val _badgeStatus = MutableStateFlow(BadgeStatus())
     val badgeStatus: StateFlow<BadgeStatus> = _badgeStatus.asStateFlow()
@@ -120,6 +131,18 @@ object PushNotificationManager {
             context,
             Manifest.permission.POST_NOTIFICATIONS,
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * `true` once per install, on Android 13+ without the permission: the caller asks then.
+     * After that the pilot grants it in system settings (the Observed tab's Start also asks).
+     */
+    fun shouldRequestNotificationPermission(context: Context): Boolean {
+        if (hasNotificationPermission(context)) return false
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_PERMISSION_ASKED, false)) return false
+        prefs.edit().putBoolean(KEY_PERMISSION_ASKED, true).apply()
+        return true
     }
 
     /**
@@ -195,6 +218,11 @@ object PushNotificationManager {
 
     /**
      * Parse a notification or push data map into a [PushAlertPayload].
+     *
+     * The server's FCM data (`notify/push.py`) carries `flight_id`, `type` (`live_alert`,
+     * `live_clear`, `flight_day`, absent for a briefing refresh) and `interruption_level`;
+     * the title and body ride in the FCM `notification` block, which the caller merges in.
+     * The channel mirrors the server's `_fcm_channel_id_for_payload`.
      */
     fun parsePayload(data: Map<String, String>): PushAlertPayload? {
         val flightId = data[EXTRA_FLIGHT_ID]?.takeIf { it.isNotBlank() }
@@ -202,12 +230,20 @@ object PushNotificationManager {
             ?: return null
         val packTimestamp = data[EXTRA_PACK_TIMESTAMP]?.takeIf { it.isNotBlank() }
             ?: data["packTimestamp"]?.takeIf { it.isNotBlank() }
-        val openObservedRaw = data[EXTRA_OPEN_OBSERVED] ?: data["openObserved"] ?: data["type"]
-        val openObserved = openObservedRaw.equals("true", ignoreCase = true) ||
-            openObservedRaw.equals("1", ignoreCase = true) ||
-            openObservedRaw.equals("live_weather", ignoreCase = true) ||
-            openObservedRaw.equals("observed", ignoreCase = true)
-        val channel = if (openObserved) CHANNEL_LIVE_WEATHER_ALERTS else CHANNEL_BRIEFING_ALERTS
+        val type = data["type"]?.lowercase()
+        val isLive = type == TYPE_LIVE_ALERT || type == TYPE_LIVE_CLEAR
+        val openObservedRaw = data[EXTRA_OPEN_OBSERVED] ?: data["openObserved"]
+        val openObserved = isLive ||
+            openObservedRaw.equals("true", ignoreCase = true) ||
+            openObservedRaw.equals("1", ignoreCase = true)
+        val channel = when {
+            type == TYPE_LIVE_CLEAR -> CHANNEL_LIVE_CLEAR
+            type == TYPE_LIVE_ALERT && data["interruption_level"] == "active" -> CHANNEL_LIVE_CLEAR
+            type == TYPE_LIVE_ALERT -> CHANNEL_LIVE_WEATHER_ALERTS
+            type == TYPE_FLIGHT_DAY -> CHANNEL_FLIGHT_DAY
+            openObserved -> CHANNEL_LIVE_WEATHER_ALERTS
+            else -> CHANNEL_BRIEFING_ALERTS
+        }
 
         return PushAlertPayload(
             flightId = flightId,
@@ -224,27 +260,58 @@ object PushNotificationManager {
      * Returns the posted [NavigationTarget.Briefing] if matched, or `null`.
      */
     fun handleNotificationIntent(intent: Intent?): NavigationTarget.Briefing? {
-        if (intent == null) return null
-        val extras = intent.extras ?: return null
-        val flightId = extras.getString(EXTRA_FLIGHT_ID)?.takeIf { it.isNotBlank() }
-            ?: extras.getString("extra_flight_id")?.takeIf { it.isNotBlank() }
-            ?: return null
-        val packTimestamp = extras.getString(EXTRA_PACK_TIMESTAMP)?.takeIf { it.isNotBlank() }
-        val openObserved = when {
-            extras.containsKey(EXTRA_OPEN_OBSERVED) -> {
-                extras.getBoolean(EXTRA_OPEN_OBSERVED, false) ||
-                    extras.getString(EXTRA_OPEN_OBSERVED)?.equals("true", ignoreCase = true) == true
-            }
-            else -> false
-        }
+        val extras = intent?.extras ?: return null
+        // Two shapes: the system-shown FCM notification puts the data keys in as strings;
+        // [showLocalNotification] puts `open_observed` in as a Boolean.
+        @Suppress("DEPRECATION")
+        val data = extras.keySet().mapNotNull { key ->
+            extras.get(key)?.let { key to it.toString() }
+        }.toMap()
+        val payload = parsePayload(data) ?: return null
+        return routeAlertTap(payload)
+    }
 
-        val target = NavigationTarget.Briefing(
-            flightId = flightId,
-            packTimestamp = packTimestamp,
-            openObserved = openObserved,
-        )
-        PendingNavigation.post(target)
-        return target
+    /**
+     * Fetch this device's FCM token and register it with the server. Called on every
+     * signed-in app start (cheap: the server upserts) so a token that rotated while signed
+     * out, or a new account on this device, is picked up. No-op when Firebase isn't
+     * configured (a build without `google-services.json`).
+     */
+    suspend fun registerCurrentToken(context: Context, apiClient: ApiClient): Boolean {
+        if (!isFirebaseConfigured(context)) return false
+        val token = runCatching { FirebaseMessaging.getInstance().token.await() }
+            .onFailure { Log.w("PushNotifications", "FCM token fetch failed: $it") }
+            .getOrNull() ?: return false
+        return registerDeviceToken(context, apiClient, token)
+    }
+
+    /**
+     * On sign-out: drop the FCM token, so the server's next send to it comes back
+     * `UNREGISTERED` and deletes the row (the request can't be authenticated any more by
+     * then), and the next sign-in registers a fresh one.
+     */
+    suspend fun forgetDeviceToken(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_DEVICE_TOKEN)
+            .apply()
+        _registeredToken.value = null
+        if (!isFirebaseConfigured(context)) return
+        runCatching { FirebaseMessaging.getInstance().deleteToken().await() }
+            .onFailure { Log.w("PushNotifications", "FCM token delete failed: $it") }
+    }
+
+    private fun isFirebaseConfigured(context: Context): Boolean =
+        FirebaseApp.getApps(context).isNotEmpty()
+
+    private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
+        addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                cont.resume(task.result)
+            } else {
+                cont.resumeWithException(task.exception ?: IllegalStateException("FCM task failed"))
+            }
+        }
     }
 
     /**

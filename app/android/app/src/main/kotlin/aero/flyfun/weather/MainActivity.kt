@@ -1,12 +1,15 @@
 package aero.flyfun.weather
 
+import android.Manifest
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -53,6 +56,7 @@ import aero.flyfun.weather.ui.theme.FlyFunWeatherTheme
 import aero.flyfun.weather.ui.trips.TripDetailScreen
 import aero.flyfun.weather.viewmodel.AddFlightViewModel
 import aero.flyfun.weather.viewmodel.AircraftListViewModel
+import aero.flyfun.weather.service.PushNotificationManager
 import aero.flyfun.weather.viewmodel.AppStateViewModel
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import aero.flyfun.weather.viewmodel.FlightListViewModel
@@ -100,7 +104,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val dataUri = intent?.dataString ?: return
+        val dataUri = intent?.dataString
+        if (dataUri == null) {
+            // A push notification tap carries the flight in its extras, not a URI.
+            PushNotificationManager.handleNotificationIntent(intent)?.let(appState::navigateTo)
+            return
+        }
         appState.handleIncomingUri(dataUri)
     }
 }
@@ -158,6 +167,19 @@ fun FlyFunWeatherRoot(
 
     val sessionKey = "$cacheScope:$isMockMode:$isGuestBrowsing"
     val sessionOwner = viewModelScopes.owner(ViewModelScopes.sessionKey(sessionKey))
+
+    // Android 13+ shows no push without POST_NOTIFICATIONS: ask once, on the first signed-in start.
+    if (!isMockMode && !isGuestBrowsing) {
+        val context = LocalContext.current
+        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { }
+        LaunchedEffect(Unit) {
+            if (PushNotificationManager.shouldRequestNotificationPermission(context)) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     // First-run setup (#900): shown over everything until finished or skipped.
     val showSetupWizard by appState.showSetupWizard.collectAsState()

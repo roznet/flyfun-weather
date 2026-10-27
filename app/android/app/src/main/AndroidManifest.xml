@@ -24,6 +24,20 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
+        <!-- FCM push (briefing refresh, flight-day brief, live alerts) -->
+        <service
+            android:name=".service.FlyFunMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Channel for a server message that names none (the server always names one) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="flyfun_briefing_updates" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

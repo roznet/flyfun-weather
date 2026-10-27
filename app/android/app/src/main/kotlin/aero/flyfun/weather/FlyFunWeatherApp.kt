@@ -1,6 +1,7 @@
 package aero.flyfun.weather
 
 import android.app.Application
+import aero.flyfun.weather.service.PushNotificationManager
 import aero.flyfun.weather.viewmodel.AppStateViewModel
 
 /**
@@ -16,5 +17,7 @@ class FlyFunWeatherApp : Application() {
     override fun onCreate() {
         super.onCreate()
         appState = AppStateViewModel(context = applicationContext)
+        // Before any push arrives: a system-shown FCM notification needs its channel to exist.
+        PushNotificationManager.ensureChannels(this)
     }
 }
