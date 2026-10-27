@@ -309,6 +309,11 @@ _FCM_CHANNEL_FLIGHT_DAY = "flyfun_flight_day"
 _FCM_CHANNEL_LIVE_ALERTS = "flyfun_live_alerts"
 _FCM_CHANNEL_LIVE_CLEAR = "flyfun_live_clear"
 
+# The tap's intent action (MainActivity declares it). Without one, FCM launches the app's
+# launcher intent, and when the app is already running Android only brings its task to the
+# front and drops the extras, so the tap can't open the notified flight.
+_FCM_CLICK_ACTION = "aero.flyfun.weather.OPEN_NOTIFICATION"
+
 # The only FCM errorCode that proves a registration token is dead. Not
 # SENDER_ID_MISMATCH: a wrong FCM_* project/service account returns it for every
 # token, and pruning on it would wipe every Android device on a bad deploy.
@@ -414,6 +419,7 @@ def _apns_payload_to_fcm_message(
         }
         android_block["notification"] = {
             "channel_id": _fcm_channel_id_for_payload(payload),
+            "click_action": _FCM_CLICK_ACTION,
         }
     return {"message": msg}
 
