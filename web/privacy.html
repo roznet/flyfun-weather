@@ -14,7 +14,7 @@
     </div>
 
     <div class="help-section">
-      <p><em>Last updated: 2026-10-02</em></p>
+      <p><em>Last updated: 2026-10-27</em></p>
       <p>
         This document explains what data the app collects, why, and what I do (and don't do) with it.
         FlyFun Weather is a personal project &mdash; I'm a single developer, not a company.
@@ -72,7 +72,7 @@
       </p>
       <h4>Devices &amp; Connected Apps</h4>
       <ul>
-        <li>If you use the iOS app with notifications enabled, the device's push-notification token</li>
+        <li>If you use the iOS or Android app with notifications enabled, the device's push-notification token</li>
         <li>API tokens you create and AI assistants you connect, with when they were created and last used</li>
       </ul>
       <h4>Server Logs</h4>
@@ -126,6 +126,13 @@
         <strong>Apple Push Notification service</strong>. The notification content &mdash; the route
         (e.g. &ldquo;EGTF &rarr; LFAT&rdquo;), the trip name for trip updates, and the new assessment &mdash;
         passes through Apple to reach your device. You can turn notifications off in the app or in iOS Settings.
+      </p>
+      <h4>Push Notifications (Android)</h4>
+      <p>
+        If you allow notifications in the Android app, briefing updates are delivered through Google&rsquo;s
+        <strong>Firebase Cloud Messaging</strong>. The notification content &mdash; the route, the trip name
+        for trip updates, and the new assessment &mdash; passes through Google to reach your device. You can
+        turn notifications off in Android Settings or in your settings on the website.
       </p>
     </div>
 
@@ -205,6 +212,7 @@
           <tr><td style="padding:0.5em;">Google / Apple</td><td style="padding:0.5em;">Sign-in tokens</td><td style="padding:0.5em;">Authentication (sign-in)</td></tr>
           <tr><td style="padding:0.5em;">Stripe (only if you donate)</td><td style="padding:0.5em;">Your account email (unless you opt out), account id, amount; card details entered directly with Stripe</td><td style="padding:0.5em;">Payment processing</td></tr>
           <tr><td style="padding:0.5em;">Apple Push Notification service (iOS, if enabled)</td><td style="padding:0.5em;">Device push token + notification text (route, trip name, assessment)</td><td style="padding:0.5em;">Briefing notifications</td></tr>
+          <tr><td style="padding:0.5em;">Google Firebase Cloud Messaging (Android, if enabled)</td><td style="padding:0.5em;">Device push token + notification text (route, trip name, assessment)</td><td style="padding:0.5em;">Briefing notifications</td></tr>
           <tr><td style="padding:0.5em;">OpenStreetMap / Stadia Maps (map tiles)</td><td style="padding:0.5em;">Your browser loads map images directly from them, so they see your IP address and the map area displayed</td><td style="padding:0.5em;">Background map</td></tr>
         </tbody>
       </table>

@@ -1,6 +1,6 @@
 # FlyFun Weather — Privacy & Data Practices
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-27*
 
 This document explains what data the app collects, why, and what I do (and don't do) with it.
 FlyFun Weather is a personal project — I'm a single developer, not a company.
@@ -49,7 +49,7 @@ If you submit a PIREP, the report is stored with its position, altitude, time, c
 
 ### Devices & Connected Apps
 
-- If you use the iOS app with notifications enabled, the device's push-notification token
+- If you use the iOS or Android app with notifications enabled, the device's push-notification token
 - API tokens you create, and AI assistants you connect (see AI Assistant Connectors), with when they were created and last used
 
 ### Server Logs
@@ -97,6 +97,10 @@ Your email is used **solely** for delivering these briefing notifications and ac
 ### Push Notifications (iOS)
 
 If you allow notifications in the iOS app, briefing updates are delivered through the **Apple Push Notification service**. The notification content — the route (e.g. "EGTF → LFAT"), the trip name for trip updates, and the new assessment — passes through Apple to reach your device. You can turn notifications off in the app or in iOS Settings.
+
+### Push Notifications (Android)
+
+If you allow notifications in the Android app, briefing updates are delivered through Google's **Firebase Cloud Messaging**. The notification content — the route, the trip name for trip updates, and the new assessment — passes through Google to reach your device. You can turn notifications off in Android Settings or in your settings on the website.
 
 ---
 
@@ -175,6 +179,7 @@ The app interacts with these external services during normal operation:
 | **Google / Apple OAuth** | OAuth tokens | Authentication |
 | **Stripe** (only if you donate) | Your account email (unless you opt out), account id, amount; card details entered directly with Stripe | Payment processing |
 | **Apple Push Notification service** (iOS, if enabled) | Device push token + notification text (route, trip name, assessment) | Briefing notifications |
+| **Google Firebase Cloud Messaging** (Android, if enabled) | Device push token + notification text (route, trip name, assessment) | Briefing notifications |
 | **OpenStreetMap / Stadia Maps** (map tiles) | Your browser loads map images directly from them, so they see your IP address and the map area displayed | Background map |
 
 No account identifiers (your name or email) are sent to LLM providers. The context that is sent describes the weather along your route — airports, dates and approximate positions — which carries no personal identifiers. Where LLM-quality tracing is enabled it goes to LangSmith under a data-processing agreement (EU data residency).
