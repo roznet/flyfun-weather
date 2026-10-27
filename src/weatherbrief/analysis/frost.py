@@ -76,8 +76,9 @@ class DepartureFrostAnalysis:
 
     ``in_scope`` is False for a departure in daylight (after the morning
     clear-off margin, before sunset): the evaluator then answers GREEN with no
-    text. ``sunrise`` is the morning the departure belongs to (None for an
-    evening departure, which has no sunrise before it on the same night).
+    text. ``sunrise`` is the sunrise that ended the night, when it is already
+    past at departure; None while the night is still running (evening or
+    pre-dawn departure).
     """
 
     icao: str | None
@@ -97,7 +98,7 @@ class DepartureFrostAnalysis:
         if self.night_start is None:
             return False
         after = self.minutes_after_sunrise()
-        # Evening departure (night started at today's sunset): in scope.
+        # Night still running at departure (no sunrise yet): in scope.
         if after is None:
             return True
         return after <= clear_after_sunrise_min
@@ -118,24 +119,34 @@ def night_bounds(
 ) -> tuple[datetime | None, datetime | None]:
     """``(night_start, sunrise)`` for the night a departure belongs to.
 
-    * Before today's sunset: the night started at *yesterday's* sunset and
-      ends at today's sunrise (a morning, or a daytime, departure).
-    * At/after today's sunset: the night started at today's sunset and has no
-      sunrise before the departure (an evening departure); ``sunrise`` is None.
+    ``night_start`` is the latest sunset at or before the departure;
+    ``sunrise`` the first sunrise after it, or None when that sunrise is still
+    ahead (an evening or pre-dawn departure, always in scope). Events are
+    gathered over the UTC dates either side of the departure, so a longitude
+    where the local evening falls on another UTC date than the departure
+    (a western-US sunset after 00Z) still pairs the right sunset and sunrise.
 
-    Polar day/night (a missing event) returns ``(None, None)``: out of scope.
+    No sunset in that span (polar day/night) returns ``(None, None)``: out of
+    scope.
     """
     dep = _aware(departure)
-    today = _sun_events(lat, lon, dep.date())
-    sunset_today = today.get("evening")
-    if sunset_today is not None and dep >= sunset_today:
-        return sunset_today, None
-    yesterday = _sun_events(lat, lon, dep.date() - timedelta(days=1))
-    sunset_prev = yesterday.get("evening")
-    sunrise = today.get("morning")
-    if sunset_prev is None or sunrise is None:
+    sunsets: list[datetime] = []
+    sunrises: list[datetime] = []
+    for offset in (-2, -1, 0, 1):
+        events = _sun_events(lat, lon, dep.date() + timedelta(days=offset))
+        if events.get("evening") is not None:
+            sunsets.append(events["evening"])
+        if events.get("morning") is not None:
+            sunrises.append(events["morning"])
+    before = [s for s in sunsets if s <= dep]
+    if not before:
         return None, None
-    return sunset_prev, sunrise
+    night_start = max(before)
+    after_start = sorted(r for r in sunrises if r > night_start)
+    if not after_start:
+        return None, None
+    sunrise = after_start[0]
+    return night_start, (sunrise if sunrise <= dep else None)
 
 
 def _departure_point(analyses: list[RoutePointAnalysis]) -> RoutePointAnalysis | None:

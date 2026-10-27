@@ -50,6 +50,9 @@ export interface AdvisoryCatalogEntry {
   category: string;
   default_enabled: boolean;
   altitude_dependent: boolean;
+  /** False for informational advisories (frost, #949): shown, never graded
+   *  into the briefing assessment. Absent on old packs (= true). */
+  affects_grade?: boolean;
   parameters: AdvisoryParameterDef[];
 }
 

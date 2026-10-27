@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
+from weatherbrief.analysis.advisories.registry import grade_neutral_ids
 from weatherbrief.analysis.sounding import compute_sounding_ceiling_ft
 from weatherbrief.models import (
     AircraftEquipage,
@@ -888,13 +889,6 @@ def run_altitude_table_from_pack(
 # ---------------------------------------------------------------------------
 
 
-def _grade_neutral_ids() -> set[str]:
-    """Advisories that are shown but never graded into the assessment (#949)."""
-    from weatherbrief.analysis.advisories.registry import grade_neutral_ids
-
-    return grade_neutral_ids()
-
-
 def advisories_ungradeable(manifest: RouteAdvisoriesManifest | None) -> bool:
     """True when a manifest exists but *nothing in it graded* (issue #392).
 
@@ -914,7 +908,7 @@ def advisories_ungradeable(manifest: RouteAdvisoriesManifest | None) -> bool:
     """
     if manifest is None:
         return False
-    neutral = _grade_neutral_ids()
+    neutral = grade_neutral_ids()
     return all(
         adv.aggregate_status == AdvisoryStatus.UNAVAILABLE.value
         for adv in manifest.advisories
@@ -937,7 +931,7 @@ def derive_assessment_from_advisories(
     short-circuit past it.
     """
     # Informational advisories (frost, #949) never move the grade or its reason.
-    neutral = _grade_neutral_ids()
+    neutral = grade_neutral_ids()
     graded = [adv for adv in manifest.advisories if adv.advisory_id not in neutral]
     statuses = [
         AdvisoryStatus(adv.aggregate_status)
@@ -972,7 +966,7 @@ def per_model_reasons_from_manifest(
     flagged is absent from the result — callers treat absence as all-clear.
     """
     per_model: dict[str, list[str]] = {}
-    neutral = _grade_neutral_ids()
+    neutral = grade_neutral_ids()
     for adv in manifest.advisories:
         if adv.advisory_id in neutral:
             continue
