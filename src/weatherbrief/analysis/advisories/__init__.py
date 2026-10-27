@@ -97,6 +97,19 @@ class RouteContext:
     models_failed: dict[str, str] = field(default_factory=dict)
 
     @cached_property
+    def departure_frost(self):  # -> DepartureFrostAnalysis | None
+        """The night before departure at the origin, per model (frost advisory, #949).
+
+        Derived on demand from the departure point's hourly forecasts already in
+        ``cross_sections``, so every path that builds a context (briefing,
+        recalculation, alternate departure, timing scan) gets it without a
+        pipeline artifact, and a shifted departure shifts the window.
+        """
+        from weatherbrief.analysis.frost import compute_departure_frost
+
+        return compute_departure_frost(self.analyses, self.cross_sections, self.models)
+
+    @cached_property
     def cruise_groundspeed_kt(self) -> float:
         """Route-average groundspeed at cruise (kt), for the extent time axis (#571).
 

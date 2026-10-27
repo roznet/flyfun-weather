@@ -1045,12 +1045,19 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
     name_map = {entry.id: entry.name for entry in manifest.catalog}
 
     lines: list[str] = ["=== ROUTE ADVISORIES ==="]
+    # Informational advisories (frost, #949) are digested, but labelled so the
+    # briefer reads them as advice rather than a hazard that moves the grade.
+    from weatherbrief.analysis.advisories.registry import grade_neutral_ids
+
+    neutral = grade_neutral_ids()
 
     for result in manifest.advisories:
         if result.advisory_id in _DIGEST_EXCLUDE_IDS:
             continue
 
         name = name_map.get(result.advisory_id, result.advisory_id)
+        if result.advisory_id in neutral:
+            name = f"{name} (informational, not part of the grade)"
         status_tag = result.aggregate_status.value.upper()
         detail = result.aggregate_detail
         if result.advisory_id == "airport_wind" and detail:

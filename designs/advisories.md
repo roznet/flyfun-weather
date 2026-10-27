@@ -4,7 +4,7 @@
 
 ## Intent
 
-Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 22 hazard evaluators (plus 2 retired ones kept for old packs) (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
+Provide actionable, severity-graded (GREEN/AMBER/RED) advisories from 23 hazard evaluators (plus 2 retired ones kept for old packs) (grouped into icing, cloud, precipitation, turbulence, convective, wind, model, airport, feasibility, fronts, and sun categories) along the route. Evaluators analyze existing route analysis data — no additional data fetch. User-tunable parameters allow recalculation without re-running the pipeline. This is a **route-level** system (advisory per route), complementing the per-waypoint `AltitudeAdvisories` in the sounding subpackage.
 
 ## Architecture
 
@@ -43,6 +43,7 @@ Registry → evaluate_all(ctx, enabled_ids?, user_params?, aggregation?)
   ├── @register AirportWindEvaluator
   ├── @register DensityAltitudeEvaluator
   ├── @register LLWSEvaluator
+  ├── @register FrostEvaluator           # airport, informational: affects_grade=False (#949)
   ├── @register VFRFeasibilityEvaluator    # composite go/no-go
   ├── @register IFRFeasibilityEvaluator     # convective axis = ConvectiveEvaluator's grade (§22), icing axis = AircraftIcingEvaluator's (§56)
   ├── @register ApproachFeasibilityEvaluator  # arrival: approach vs wind vs ceiling
@@ -184,6 +185,7 @@ under the rule with no edit to the invariants.
 | `AirportWindEvaluator` | airport | Crosswind on best runway + gust severity at departure + arrival. Worst of dep/arr becomes the status | `xwind_green_kt`, `xwind_red_kt`, `gust_green_kt`, `gust_red_kt` |
 | `DensityAltitudeEvaluator` | airport | Density altitude at departure + arrival from forecast T/QNH at the expected times + field elevation (terrain profile). Triggers on absolute DA OR DA-above-field (hot-day performance loss). UNAVAILABLE without temperature/terrain — never green-by-absence | `da_amber_ft` (5000), `da_red_ft` (8000), `delta_amber_ft` (3000), `delta_red_ft` (5000) |
 | `LLWSEvaluator` | airport | Low-level wind shear at departure + arrival: 0–1km bulk shear from the airport-point sounding (catches the nocturnal LLJ AirportWind can't see) OR gust factor (gust − sustained). Surface-based inversion reported alongside significant shear. Worst of dep/arr | `shear_amber_kt` (20), `shear_red_kt` (30), `gust_factor_amber_kt` (15) |
+| `FrostEvaluator` | airport | **Informational, `affects_grade=False`: never moves the overall assessment** (#949, meteorology-decisions §69). Frost on an aircraft parked outside overnight at the departure. Reads `ctx.departure_frost` (`analysis/frost.py`), derived on demand from the departure point's hourly forecasts in `cross_sections`, so recalc / alt departure / timing scan need no artifact. Departures after sunrise + `clear_after_sunrise_min` and before sunset → GREEN, empty text. Per model: AMBER with ≥ `min_radiative_hours` clear+calm+cold+moist hours; GREEN "possible" / "unlikely" / "none" otherwise; never RED. UNAVAILABLE when the model has < 3 real (non-None) hours in the window or none within 1 h of departure: GRIB-primary ECMWF/ICON/GFS decode only the flight window, so today they are UNAVAILABLE | `t_max_c` (3), `cloud_max_pct` (30), `wind_max_kt` (5), `spread_max_c` (5), `td_max_c` (1), `min_radiative_hours` (2), `clear_after_sunrise_min` (90) |
 
 ### Feasibility (Composite)
 
@@ -1052,6 +1054,8 @@ digest email and the MCP/ChatGPT responses. It has **four** states, not three.
 | `GREEN`/`AMBER`/`RED` | worst aggregate status across the advisories that graded |
 | `UNAVAILABLE` | we briefed the flight and **nothing graded** — absent data, not a clear sky |
 | `NULL` | no pack / not briefed yet. A *different* state; don't collapse the two |
+
+**Informational advisories are skipped** (#949): an entry with `affects_grade=False` (today only `frost`; `registry.grade_neutral_ids()`) is left out of the worst-of, the reason string, `per_model_reasons_from_manifest` and `advisories_ungradeable`, so a frost-only manifest is still UNAVAILABLE. The LLM digest's own assessment is kept off it by labelling the context line "(informational, not part of the grade)" plus a briefer rule. Sun predates the flag and still counts.
 
 Before #392 the empty case short-circuited to `GREEN` ("No advisory data
 available") — the reason string was honest, the colour was not. That is the

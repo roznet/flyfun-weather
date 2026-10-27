@@ -7239,3 +7239,62 @@ run of the EU init on the same cycle and prints both category lines against
 `icon_seamless`, the D2 run each used and the GRIB bytes downloaded. Target
 ~90 % inside D2 ≤ 48 h; elsewhere (92.1 %) and GFS (91.9 %) unchanged; no new
 Open-Meteo calls; D2 bytes per cycle (cold §64 cycle: ~1.9 GB of ~9.4 GB).
+
+## 69. Frost at departure: a v1 heuristic, informational, never in the grade (#949)
+
+**Date:** 2026-10-27. Code: `analysis/frost.py` (collects the night),
+`analysis/advisories/frost.py` (grades it). Advisory table row:
+`advisories.md` "Frost at Departure".
+
+**Physics.** Hoar frost forms when a surface is at or below 0 °C *and* at or
+below the frost point of the air, so vapour deposits as ice. On a clear, calm
+night a thin aircraft skin radiates and cools about 2-5 °C below the 2 m air
+temperature, which is why frost appears with the screen temperature still at
++2/+3 °C and why de-icing guidance uses about +3 °C. The ingredients are cold,
+radiative cooling (little cloud, light wind: wind mixes and keeps the skin near
+air temperature) and moisture (small T - Td; very dry air deposits little,
+and a dewpoint well above 0 °C gives dew rather than frost). It persists until
+the sun has been on the wing for a while.
+
+**Decisions.**
+
+- **Hourly 2 m fields, no minimum-temperature formula.** Craddock & Pritchard
+  (Met Office, 1951: Tmin = 0.316·T + 0.548·Td - 1.24 + K) predicts the night
+  minimum from evening values; we have each model's hourly T2m, so it is
+  rejected as obsolete here.
+- **Departure airport only, the night before.** Window: from the previous
+  sunset, or departure - 12 h if later, to the departure. Only departures
+  between sunset and sunrise + `clear_after_sunrise_min` (90 min) are
+  assessed; any other departure is GREEN with no text. Arrival overnight is out
+  of scope for v1.
+- **Radiative hour** = T2m ≤ `t_max_c` (+3 °C), total cloud < `cloud_max_pct`
+  (30 %), 10 m wind < `wind_max_kt` (5 kt), T - Td ≤ `spread_max_c` (5 °C) and
+  Td ≤ `td_max_c` (+1 °C). Total cloud, not low/mid separately, in v1: every
+  model carries it.
+- **Grades per model, standard MAJORITY/WORST aggregation (model-dependent,
+  unlike sun's `"all"`).** AMBER "frost likely" with ≥ `min_radiative_hours`
+  (2) radiative hours. GREEN "frost possible" with one radiative hour, or T2m
+  ≤ 0 °C with T - Td within the spread limit (ground frost without the
+  radiative boost). Otherwise GREEN, naming the night minimum and, when it was
+  cold enough, the missing ingredient (cloudy / windy / dry air / dew). Never
+  RED.
+- **Never graded off a clamped hour.** An hour counts only when the model
+  carries a T2m for it. A model needs ≥ 3 valued hours in the window, the last
+  within 1 h of departure, else UNAVAILABLE. Today ECMWF, ICON and GFS are
+  GRIB-primary and decode only the flight window (`compute_flight_window_hours`
+  from `floor(departure)`), so they are UNAVAILABLE on frost; UKMO and
+  Météo-France come from Open-Meteo from 00Z of the departure date and are
+  graded on the part of the night they have (the detail says "night seen from
+  00Z only"). The pre-dawn minimum is inside that span; the evening is not.
+  Extending the GRIB decode back to the previous sunset at the departure point
+  was not done here: it adds per-hour ICON and GFS downloads, and a same-morning
+  briefing's previous evening predates the latest run's init.
+- **Not in the grade.** The catalog entry carries `affects_grade=False`; the
+  assessment, its reason, the per-model reasons and the "anything graded?"
+  test skip it, and the digest context labels the line "(informational, not
+  part of the grade)" with a briefer rule to keep it out of the assessment.
+  Sun's AMBER still counts (it predates the flag); only frost is excluded.
+  The flights-list RED/AMBER chips still show it, like sun.
+
+**v2 (not done):** model skin temperature (ECMWF `skt` from the a1 surface
+stream, ICON `T_G`) and a proper frost-point test instead of the T2m offset.

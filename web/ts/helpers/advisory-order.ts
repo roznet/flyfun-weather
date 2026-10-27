@@ -49,6 +49,7 @@ export const ADVISORY_PRIORITY: string[] = [
   'density_altitude',
   'headwind',            // Winds Aloft / trip impact
   'sun',
+  'frost',               // Frost at Departure (informational, #949)
   'model_agreement',     // Forecast Confidence
   'dd_nwp_agreement',
 ];

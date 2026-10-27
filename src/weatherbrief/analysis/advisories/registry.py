@@ -52,7 +52,9 @@ _DIAGNOSTICS_CATEGORIES: frozenset[str] = frozenset({"model"})
 # from this map keeps registration order entirely. Ordering lives in the
 # registry, not the client.
 ENTRY_ORDER: dict[str, list[str]] = {
-    "airport": ["flight_category", "airport_wind", "density_altitude", "llws"],
+    "airport": [
+        "flight_category", "airport_wind", "density_altitude", "llws", "frost",
+    ],
     "flight_rules": [
         "vfr_feasibility", "ifr_feasibility", "approach_feasibility", "departure_feasibility",
     ],
@@ -141,6 +143,18 @@ def get_altitude_dependent_ids() -> set[str]:
     """Return IDs of evaluators that depend on cruise altitude."""
     _ensure_loaded()
     return {e.id for e in get_catalog() if e.altitude_dependent}
+
+
+def grade_neutral_ids() -> set[str]:
+    """IDs of informational advisories (``affects_grade=False``, e.g. frost #949).
+
+    Read by the overall assessment (``derive_assessment_from_advisories`` and
+    friends), which skips them: their card can be AMBER without the briefing's
+    grade moving. Keyed on the live registry rather than a pack's stored
+    catalog, so the rule is the same for every pack, old or new.
+    """
+    _ensure_loaded()
+    return {e.id for e in get_catalog(include_retired=True) if not e.affects_grade}
 
 
 def get_scan_class_ids() -> set[str]:
