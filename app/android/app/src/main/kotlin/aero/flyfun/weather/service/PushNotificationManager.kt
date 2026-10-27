@@ -282,6 +282,8 @@ object PushNotificationManager {
         val token = runCatching { FirebaseMessaging.getInstance().token.await() }
             .onFailure { Log.w("PushNotifications", "FCM token fetch failed: $it") }
             .getOrNull() ?: return false
+        // For a Firebase console test send: `adb logcat -s PushNotifications`.
+        if (aero.flyfun.weather.BuildConfig.DEBUG) Log.d("PushNotifications", "FCM token: $token")
         return registerDeviceToken(context, apiClient, token)
     }
 
