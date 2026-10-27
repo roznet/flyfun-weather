@@ -893,6 +893,8 @@ def test_apns_payload_to_fcm_message_channels_and_ttl():
     assert msg["data"]["badge"] == "2"
     assert msg["android"]["priority"] == "HIGH"
     assert msg["android"]["notification"]["channel_id"] == "flyfun_briefing_updates"
+    # The app's tap action, so a tap on a running app reaches it with the flight.
+    assert msg["android"]["notification"]["click_action"] == "aero.flyfun.weather.OPEN_NOTIFICATION"
     assert "ttl" not in msg["android"]
 
     # 2. Live alert with time-sensitive interruption & expiry -> flyfun_live_alerts + ttl
