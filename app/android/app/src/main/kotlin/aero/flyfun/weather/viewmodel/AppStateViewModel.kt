@@ -243,6 +243,10 @@ class AppStateViewModel(
                 runCatching {
                     aero.flyfun.weather.service.FlightTrackingService.uploadPersistedFixes(ctx, apiClient)
                 }
+                // This device's FCM token, so the server can push to it.
+                runCatching {
+                    aero.flyfun.weather.service.PushNotificationManager.registerCurrentToken(ctx, apiClient)
+                }
             }
         }
     }
@@ -462,6 +466,12 @@ class AppStateViewModel(
         }
     }
 
+    /** Open [target] once the UI is up (a notification tap); same path as a link. */
+    fun navigateTo(target: NavigationTarget) {
+        PendingNavigation.post(target)
+        _pendingNavTarget.value = target
+    }
+
     fun consumePendingNavigation(): NavigationTarget? {
         val target = PendingNavigation.consume() ?: _pendingNavTarget.value
         _pendingNavTarget.value = null
@@ -531,6 +541,7 @@ class AppStateViewModel(
         context?.let { ctx ->
             runCatching { aero.flyfun.weather.service.FlightTrackingService.stopTracking(ctx) }
             scope.launch { aero.flyfun.weather.service.FlightTrackingService.discardPersistedFixes(ctx) }
+            scope.launch { aero.flyfun.weather.service.PushNotificationManager.forgetDeviceToken(ctx) }
         }
         tokenStore.clearToken()
         rebuildUserScopedRepositories(null)
