@@ -1,0 +1,4 @@
+- Notifications: get a notification when a flight's briefing is updated, and tap it to open that flight. Turn them on in Settings on weather.flyfun.aero.
+- Frost check: for night and early-morning departures, the briefing shows whether frost is likely at your departure airfield.
+- Cross-section: air-mass boundaries are now drawn under Stability, with a highlight you can switch on or off.
+- Refreshing a flight you've already flown now explains why it can't be rebuilt.
