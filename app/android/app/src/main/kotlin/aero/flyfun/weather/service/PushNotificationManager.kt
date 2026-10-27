@@ -16,7 +16,6 @@ import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.model.BadgeStatus
 import aero.flyfun.weather.model.DeviceRegistrationRequest
 import aero.flyfun.weather.model.NavigationTarget
-import aero.flyfun.weather.model.PendingNavigation
 import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
@@ -24,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -43,7 +44,7 @@ data class PushAlertPayload(
  * Manages Android notification channels (`briefing_alerts`, `live_weather_alerts`),
  * device token registration/unregistration (`POST /api/devices`, `DELETE /api/devices`),
  * unread badge polling/clearing (`GET /api/flights/badge`, `POST /api/flights/{id}/seen`),
- * and notification tap routing to [PendingNavigation].
+ * and the [NavigationTarget] a notification tap opens.
  *
  * Mirrors iOS `PushNotifications.swift`.
  */
@@ -134,15 +135,22 @@ object PushNotificationManager {
     }
 
     /**
-     * `true` once per install, on Android 13+ without the permission: the caller asks then.
-     * After that the pilot grants it in system settings (the Observed tab's Start also asks).
+     * `true` on Android 13+ without the permission until the pilot has answered the prompt
+     * once ([markNotificationPermissionAsked]); after that they grant it in system settings
+     * (the Observed tab's Start also asks).
      */
     fun shouldRequestNotificationPermission(context: Context): Boolean {
         if (hasNotificationPermission(context)) return false
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(KEY_PERMISSION_ASKED, false)) return false
-        prefs.edit().putBoolean(KEY_PERMISSION_ASKED, true).apply()
-        return true
+        return !context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PERMISSION_ASKED, false)
+    }
+
+    /** Record the answer to the prompt, so a process death before it doesn't use up the ask. */
+    fun markNotificationPermissionAsked(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PERMISSION_ASKED, true)
+            .apply()
     }
 
     /**
@@ -256,8 +264,8 @@ object PushNotificationManager {
     }
 
     /**
-     * Route a notification tap (`Intent`) into [PendingNavigation] if it carries `flight_id`.
-     * Returns the posted [NavigationTarget.Briefing] if matched, or `null`.
+     * The briefing a notification tap (`Intent`) should open, or `null` when it carries no
+     * `flight_id` (a launcher start, a trip push). The caller navigates.
      */
     fun handleNotificationIntent(intent: Intent?): NavigationTarget.Briefing? {
         val extras = intent?.extras ?: return null
@@ -268,8 +276,16 @@ object PushNotificationManager {
             extras.get(key)?.let { key to it.toString() }
         }.toMap()
         val payload = parsePayload(data) ?: return null
-        return routeAlertTap(payload)
+        return NavigationTarget.Briefing(
+            flightId = payload.flightId,
+            packTimestamp = payload.packTimestamp,
+            openObserved = payload.openObserved,
+        )
     }
+
+    // Serializes token registration and sign-out's delete: a sign-in right after a sign-out
+    // must not register the old token and then lose it to the late delete.
+    private val tokenMutex = Mutex()
 
     /**
      * Fetch this device's FCM token and register it with the server. Called on every
@@ -279,12 +295,14 @@ object PushNotificationManager {
      */
     suspend fun registerCurrentToken(context: Context, apiClient: ApiClient): Boolean {
         if (!isFirebaseConfigured(context)) return false
-        val token = runCatching { FirebaseMessaging.getInstance().token.await() }
-            .onFailure { Log.w("PushNotifications", "FCM token fetch failed: $it") }
-            .getOrNull() ?: return false
-        // For a Firebase console test send: `adb logcat -s PushNotifications`.
-        if (aero.flyfun.weather.BuildConfig.DEBUG) Log.d("PushNotifications", "FCM token: $token")
-        return registerDeviceToken(context, apiClient, token)
+        return tokenMutex.withLock {
+            val token = runCatching { FirebaseMessaging.getInstance().token.await() }
+                .onFailure { Log.w("PushNotifications", "FCM token fetch failed: $it") }
+                .getOrNull() ?: return@withLock false
+            // For a Firebase console test send: `adb logcat -s PushNotifications`.
+            if (aero.flyfun.weather.BuildConfig.DEBUG) Log.d("PushNotifications", "FCM token: $token")
+            registerDeviceToken(context, apiClient, token)
+        }
     }
 
     /**
@@ -299,8 +317,10 @@ object PushNotificationManager {
             .apply()
         _registeredToken.value = null
         if (!isFirebaseConfigured(context)) return
-        runCatching { FirebaseMessaging.getInstance().deleteToken().await() }
-            .onFailure { Log.w("PushNotifications", "FCM token delete failed: $it") }
+        tokenMutex.withLock {
+            runCatching { FirebaseMessaging.getInstance().deleteToken().await() }
+                .onFailure { Log.w("PushNotifications", "FCM token delete failed: $it") }
+        }
     }
 
     private fun isFirebaseConfigured(context: Context): Boolean =
@@ -314,19 +334,6 @@ object PushNotificationManager {
                 cont.resumeWithException(task.exception ?: IllegalStateException("FCM task failed"))
             }
         }
-    }
-
-    /**
-     * Route a parsed [PushAlertPayload] directly into [PendingNavigation].
-     */
-    fun routeAlertTap(payload: PushAlertPayload): NavigationTarget.Briefing {
-        val target = NavigationTarget.Briefing(
-            flightId = payload.flightId,
-            packTimestamp = payload.packTimestamp,
-            openObserved = payload.openObserved,
-        )
-        PendingNavigation.post(target)
-        return target
     }
 
     /**

@@ -62,6 +62,11 @@ class PushPayloadTest {
         )!!
         assertTrue(payload.openObserved)
         assertEquals("t", payload.packTimestamp)
+        // The Boolean extra arrives stringified by handleNotificationIntent.
+        val briefing = PushNotificationManager.parsePayload(
+            mapOf("flight_id" to "f1", "open_observed" to false.toString()),
+        )!!
+        assertFalse(briefing.openObserved)
     }
 
     @Test

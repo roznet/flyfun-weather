@@ -41,6 +41,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.NavigationTarget
+import aero.flyfun.weather.service.PushNotificationManager
 import aero.flyfun.weather.ui.aircraft.AircraftListScreen
 import aero.flyfun.weather.ui.auth.LoginScreen
 import aero.flyfun.weather.ui.briefing.BriefingContainerScreen
@@ -56,7 +57,6 @@ import aero.flyfun.weather.ui.theme.FlyFunWeatherTheme
 import aero.flyfun.weather.ui.trips.TripDetailScreen
 import aero.flyfun.weather.viewmodel.AddFlightViewModel
 import aero.flyfun.weather.viewmodel.AircraftListViewModel
-import aero.flyfun.weather.service.PushNotificationManager
 import aero.flyfun.weather.viewmodel.AppStateViewModel
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import aero.flyfun.weather.viewmodel.FlightListViewModel
@@ -88,7 +88,11 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG && savedInstanceState == null) {
             UiTestLaunch.from { intent?.getStringExtra(it) }?.let(appState::startUiTestSession)
         }
-        handleIntent(intent)
+        // Only on a fresh start: a rotation or process restore re-delivers the intent that
+        // was already handled, and would re-open its briefing or replay its link.
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        }
 
         setContent {
             FlyFunWeatherTheme {
@@ -168,16 +172,16 @@ fun FlyFunWeatherRoot(
     val sessionKey = "$cacheScope:$isMockMode:$isGuestBrowsing"
     val sessionOwner = viewModelScopes.owner(ViewModelScopes.sessionKey(sessionKey))
 
-    // Android 13+ shows no push without POST_NOTIFICATIONS: ask once, on the first signed-in start.
-    if (!isMockMode && !isGuestBrowsing) {
-        val context = LocalContext.current
-        val notificationPermissionLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission(),
-        ) { }
-        LaunchedEffect(Unit) {
-            if (PushNotificationManager.shouldRequestNotificationPermission(context)) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
+    // Android 13+ shows no push without POST_NOTIFICATIONS: ask once, signed in (not demo).
+    val permissionContext = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { PushNotificationManager.markNotificationPermissionAsked(permissionContext) }
+    LaunchedEffect(isMockMode, isGuestBrowsing) {
+        if (!isMockMode && !isGuestBrowsing &&
+            PushNotificationManager.shouldRequestNotificationPermission(permissionContext)
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
