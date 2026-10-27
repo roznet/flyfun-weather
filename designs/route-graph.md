@@ -64,6 +64,7 @@ interface RouteGraphMetric {
 | `headwind` | Head/Tailwind | kt | line | `#2563eb` (blue) | `VizPoint.headwindKt` |
 | `crosswind` | Crosswind | kt | line | `#7c3aed` (purple) | `VizPoint.crosswindKt` |
 | `temperature` | Temperature (2m) | °C | line | `#dc2626` (red) | `model_divergence["temperature_c"]` |
+| `dewpoint` | Dewpoint (2m) | °C | line | `#16a34a` (green) | `sounding[model].dewpoint_2m_c` |
 | `isa-dev` | ISA Deviation (cruise) | °C | line | `#ea580c` (orange) | `VizPoint.isaDevC` (cruise temp − ISA std) |
 | `precipitation` | Precipitation | mm | bar | `#0ea5e9` (sky) | `model_divergence["precipitation_mm"]` |
 | `cloud-cover` | Cloud Cover | % | bar | `#6b7280` (gray) | `VizPoint.cloudCoverTotalPct` |
@@ -77,6 +78,10 @@ interface RouteGraphMetric {
 **ISA deviation** plots cruise-level temperature minus the ISA standard at that level — the zero line is "on-ISA", above = warmer (degraded density altitude / climb / TAS). It is derived in `data-extract.ts` from a separate `VizPoint.temperatureCruiseC` (cruise-level temperature, kept distinct from the surface `temperatureC`), so the surface and cruise temperatures stay independent. That one does *not* come from `model_divergence` — it reads `RoutePointAnalysis.cruise_temperature_c[selectedModel]`, a per-model `model_key → °C` map filled in `tasks/analyze.py` (model in `models/analysis.py`). `model_divergence` is the per-model store for *surface* values only.
 
 **Ceiling metrics** display height above ground level (AGL), not MSL. Both use terrain elevation from `ElevationProfile` for the AGL conversion (the served profile: terrain voids — stored as `null` since #807 — arrive display-filled by interpolation with `elevation_known: false`, so the AGL there is approximate; the client does not yet read the flag), and both pin their axis to 0–5000 ft AGL — a ceiling higher than that renders as **above-scale** (see below), not as a missing value.
+
+**Dewpoint** (#948) is read off the selected model's sounding (`SoundingAnalysis.dewpoint_2m_c`, which every pack already carries), **not** `model_divergence`. Every `model_divergence` row is scored for agreement, and that scoring feeds the model-agreement advisory (counts of POOR variables), the digest prompt and the cross-section's worst-agreement tint. Adding dewpoint there would have changed those for a display-only feature. A point whose sounding failed has no dewpoint (unavailable, a gap).
+
+**Shared axis (`axisGroup`).** The graph normally gives each side its own scale. Metrics that declare the same `axisGroup` (today only `temperature` and `dewpoint`, group `surface-temp`) get **one** scale fitted to both series when they are plotted left and right together, so the temperature/dewpoint spread is the visible gap between the lines. `computeYScales` in `axes.ts` decides it (iOS `RouteGraphScale.scales`, Android `RouteGraphMetrics.computeYScales`). It is opt-in rather than "same unit shares": `isa-dev` is also °C but a different quantity, and sharing would squash it against surface temperature.
 
 **CIN** is convention-negative (it inhibits convection), so its bars hang *below* the zero line as the "cap" beside CAPE's upward bars; it sets `showZeroLine` so the reference line is drawn at the top of the `[-300, 0]` range.
 
@@ -102,7 +107,7 @@ Only line metrics support it today. A bar metric declaring `aboveScale` would ne
 
 ### Future Metrics (no code changes to renderer needed)
 
-- Wind speed at cruise, visibility, precipitable water, K-index, lifted index, dewpoint depression, snowfall, rain probability — each is one registry entry.
+- Wind speed at cruise, visibility, precipitable water, K-index, lifted index, snowfall, rain probability — each is one registry entry.
 
 ## Data Flow
 
@@ -272,7 +277,7 @@ Backend per-model surface plumbing: `tasks/analyze.py` collects the divergence v
 - **Registry pattern** — Same philosophy as cross-section layers. One array of metric definitions. Zero renderer changes for new metrics.
 - **Compact height (150px)** — The cross-section is the primary visualization. The route graph is supplementary and shouldn't dominate vertical space.
 - **No X-axis labels** — Avoids duplicate labels. The cross-section's distance axis serves both.
-- **Dual Y-axis** — Allows comparing metrics with different units/scales (wind in kt vs temperature in °C).
+- **Dual Y-axis** — Allows comparing metrics with different units/scales (wind in kt vs temperature in °C). Metrics in the same `axisGroup` (temperature + dewpoint) share one scale instead.
 - **model_divergence for surface values** — Temperature, precipitation, and QNH (`pressure_msl_hpa`) are carried per-model in model_divergence. Adding QNH there meant one collector line in `analyze.py` rather than a new per-point store, at the cost of it also appearing in the comparison table (parked at advanced tier).
 - **Canonical units on VizPoint, convert at the edge** — `qnhHpa` stays in hPa; region conversion happens in `getValue`/`unit`/`getMetricLabel` via `units.ts`, so a units-preference change needs no data re-extraction and the comparison table can keep showing canonical hPa.
 

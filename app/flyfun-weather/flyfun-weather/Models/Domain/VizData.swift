@@ -181,6 +181,10 @@ nonisolated struct VizPoint {
     /// hover can report everything measured here without re-deriving the match.
     /// nil when no observed station fell within `observedMatchToleranceNm`.
     var observed: VizObservedPoint? = nil
+    /// 2 m dewpoint (°C) off the selected model's sounding, not
+    /// `model_divergence`, so it stays out of model-agreement scoring (#948).
+    /// nil when the pack or the point has none.
+    var dewpointC: Double? = nil
 
     // MARK: Observed convenience accessors
     //

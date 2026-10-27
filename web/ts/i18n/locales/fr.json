@@ -749,6 +749,7 @@
   "graph.headwind": "Vent de face/arrière",
   "graph.crosswind": "Vent traversier",
   "graph.temperature": "Température (2m)",
+  "graph.dewpoint": "Point de rosée (2m)",
   "graph.isa-dev": "Écart ISA (croisière)",
   "graph.precipitation": "Précipitations",
   "graph.cloud-cover": "Couverture nuageuse",

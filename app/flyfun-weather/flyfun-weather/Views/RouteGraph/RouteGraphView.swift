@@ -77,6 +77,23 @@ struct RouteGraphScale {
         upper = hi
     }
 
+    /// Scales for the left and right metrics. Two metrics in the same
+    /// `axisGroup` get one scale fitted to both series (so the right one maps
+    /// into the left unchanged and the two share an axis); otherwise each is
+    /// fitted to its own samples. Port of web `computeYScales`.
+    static func scales(points: [VizPoint], left: RouteGraphMetric,
+                       right: RouteGraphMetric?) -> (left: RouteGraphScale, right: RouteGraphScale?) {
+        let leftSamples = points.map { left.sample(at: $0) }
+        guard let right else { return (RouteGraphScale(samples: leftSamples, metric: left), nil) }
+        let rightSamples = points.map { right.sample(at: $0) }
+        if let group = left.axisGroup, group == right.axisGroup {
+            let shared = RouteGraphScale(samples: leftSamples + rightSamples, metric: left)
+            return (shared, shared)
+        }
+        return (RouteGraphScale(samples: leftSamples, metric: left),
+                RouteGraphScale(samples: rightSamples, metric: right))
+    }
+
     /// Map a value from this scale into `target`'s domain, preserving position.
     func mapped(_ v: Double, into target: RouteGraphScale) -> Double {
         target.lower + (v - lower) / span * target.span
@@ -203,18 +220,16 @@ struct RouteGraphView: View {
 
     @ViewBuilder
     private func chartView(vizData: VizRouteData, leftMetric: RouteGraphMetric) -> some View {
-        let leftSamples = vizData.points.map { leftMetric.sample(at: $0) }
-        let leftScale = RouteGraphScale(samples: leftSamples, metric: leftMetric)
+        let rightMetric = self.rightMetric
+        // The right metric's own domain (or the shared one, for an axis group),
+        // then its points mapped into the left one — Charts has a single Y scale,
+        // so everything is drawn in the left domain and the trailing axis labels
+        // invert the mapping.
+        let (leftScale, rightScale) = RouteGraphScale.scales(
+            points: vizData.points, left: leftMetric, right: rightMetric)
         let left = RouteGraphSeries(points: vizData.points, metric: leftMetric,
                                     scale: leftScale, into: leftScale)
 
-        let rightMetric = self.rightMetric
-        // The right metric's own domain, then its points mapped into the left one —
-        // Charts has a single Y scale, so everything is drawn in the left domain and
-        // the trailing axis labels invert the mapping.
-        let rightScale = rightMetric.map { m in
-            RouteGraphScale(samples: vizData.points.map { m.sample(at: $0) }, metric: m)
-        }
         let right: RouteGraphSeries? = {
             guard let m = rightMetric, let rs = rightScale else { return nil }
             return RouteGraphSeries(points: vizData.points, metric: m, scale: rs, into: leftScale)

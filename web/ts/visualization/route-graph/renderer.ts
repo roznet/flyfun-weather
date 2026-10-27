@@ -3,7 +3,7 @@
 import type { PlotArea, VizRouteData, VizPoint } from '../types';
 import { sampleMetric, type RouteGraphMetric } from './metrics';
 import type { YAxisScale } from './axes';
-import { computeYScale, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
+import { computeYScales, drawLeftYAxis, drawRightYAxis, drawXGrid, drawZeroLine, drawBorder } from './axes';
 import { monotoneCubicTangents } from '../cross-section/layers/base';
 import { MARGIN } from './constants';
 import { cssVar, isDarkTheme } from '../interaction-utils';
@@ -110,12 +110,9 @@ export class RouteGraphRenderer {
     drawXGrid(ctx, this.data, plotArea, distanceToX);
 
     // Compute scales and render metrics
-    const leftScale = this.leftMetric
-      ? computeYScale(this.data.points.map((p) => sampleMetric(this.leftMetric!, p)), this.leftMetric, plotArea)
-      : null;
-    const rightScale = this.rightMetric
-      ? computeYScale(this.data.points.map((p) => sampleMetric(this.rightMetric!, p)), this.rightMetric, plotArea)
-      : null;
+    const { left: leftScale, right: rightScale } = computeYScales(
+      this.data.points, this.leftMetric, this.rightMetric, plotArea,
+    );
 
     // Clip to plot area for data rendering
     ctx.save();

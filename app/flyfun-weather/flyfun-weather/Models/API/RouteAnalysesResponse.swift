@@ -48,6 +48,8 @@ nonisolated struct SoundingAnalysis: Codable, Sendable {
     let cloudCoverLowPct: Double?
     let cloudCoverMidPct: Double?
     let cloudCoverHighPct: Double?
+    /// 2 m dewpoint (°C) for the route graph's dewpoint line (#948).
+    let dewpoint2mC: Double?
     let nwpCloudDiagnostics: NWPCloudDiagnostics?
 }
 

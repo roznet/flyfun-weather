@@ -113,6 +113,9 @@ def snap_to_dict(
         "cape_jkg": snap.get("cape_jkg"),
         "convective_risk": snap.get("sounding_convective_risk") or "none",
         "temperature_c": snap.get("temperature_2m_c"),
+        # 2 m dewpoint (#948). None on rows/archives that predate it, so
+        # clients treat it as optional.
+        "dewpoint_c": snap.get("dewpoint_2m_c"),
         # Lowest 0 °C crossing of the model sounding, ft MSL (#841). None when
         # the model has no pressure levels or the column never crosses 0 °C.
         "freezing_level_ft": snap.get("freezing_level_ft"),

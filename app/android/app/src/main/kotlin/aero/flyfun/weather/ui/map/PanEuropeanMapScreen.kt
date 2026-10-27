@@ -103,7 +103,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.hypot
 import kotlin.math.ln
-import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.first
 
 enum class PanEuropeanMapMode(val label: String) {
@@ -411,13 +410,16 @@ private fun ForecastAirportCard(
                 )
             }
         }
-        // Temp: plain per-model values, not a colour metric
-        if (presentModels.any { airport.models[it]?.temperatureC != null }) {
+        // Temp / Dew: plain per-model values, not a colour metric. One row so the
+        // spread reads at a glance (#948).
+        val tempDew = presentModels.map { AirportMapCatalog.tempDewCell(airport.models[it]) }
+        if (tempDew.any { it != "—" }) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                Text("Temp", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                presentModels.forEach { m ->
+                Text("Temp / Dew", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                tempDew.forEach { cell ->
                     Text(
-                        airport.models[m]?.temperatureC?.let { "${it.roundToInt()}°" } ?: "—",
+                        // Wide pairs (e.g. "-12° / -15°") wrap rather than clip.
+                        cell,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.width(MATRIX_CELL_WIDTH),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,

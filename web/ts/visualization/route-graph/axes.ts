@@ -1,7 +1,7 @@
 /** Draw Y-axes and X grid lines for the route graph. */
 
-import type { PlotArea, VizRouteData } from '../types';
-import type { MetricSample, RouteGraphMetric } from './metrics';
+import type { PlotArea, VizPoint, VizRouteData } from '../types';
+import { sampleMetric, type MetricSample, type RouteGraphMetric } from './metrics';
 import { MARGIN } from './constants';
 import { chooseDistanceTickInterval, isDarkTheme } from '../interaction-utils';
 
@@ -16,6 +16,29 @@ export interface YAxisScale {
   min: number;
   max: number;
   valueToY: (v: number) => number;
+}
+
+/**
+ * Scales for the left and right metrics. Two metrics in the same `axisGroup`
+ * get one scale fitted to both series, so they are drawn against a common
+ * axis; otherwise each is fitted to its own samples.
+ */
+export function computeYScales(
+  points: readonly VizPoint[],
+  left: RouteGraphMetric | null,
+  right: RouteGraphMetric | null,
+  plotArea: PlotArea,
+): { left: YAxisScale | null; right: YAxisScale | null } {
+  const leftSamples = left ? points.map((p) => sampleMetric(left, p)) : [];
+  const rightSamples = right ? points.map((p) => sampleMetric(right, p)) : [];
+  if (left && right && left.axisGroup && left.axisGroup === right.axisGroup) {
+    const shared = computeYScale([...leftSamples, ...rightSamples], left, plotArea);
+    return { left: shared, right: shared };
+  }
+  return {
+    left: left ? computeYScale(leftSamples, left, plotArea) : null,
+    right: right ? computeYScale(rightSamples, right, plotArea) : null,
+  };
 }
 
 /** Compute a nice Y-axis scale for a metric's sampled values. */

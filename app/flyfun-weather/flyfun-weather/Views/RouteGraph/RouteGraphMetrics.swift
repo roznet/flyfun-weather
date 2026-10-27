@@ -66,6 +66,11 @@ struct RouteGraphMetric: Identifiable {
     /// (#574). Only observed metrics implement it; forecast metrics have no such
     /// state and leave it nil.
     let isNoCoverage: ((VizPoint) -> Bool)?
+    /// Metrics with the same axis group share one Y scale when plotted left and
+    /// right together, so their gap reads directly off the graph (temperature vs
+    /// dewpoint: the spread, #948). nil keeps an independent scale. Port of web
+    /// `axisGroup`.
+    let axisGroup: String?
     /// Extract the numeric value. Returns nil — and *only* nil — when the value
     /// is genuinely unavailable. A known value that happens to sit off the top of
     /// the axis is not nil; see `aboveScale`.
@@ -88,6 +93,7 @@ struct RouteGraphMetric: Identifiable {
         suggestedRange: ClosedRange<Double>? = nil,
         aboveScale: Bool = false,
         isNoCoverage: ((VizPoint) -> Bool)? = nil,
+        axisGroup: String? = nil,
         getValue: @escaping (VizPoint) -> Double?,
         formatValue: @escaping (Double) -> String
     ) {
@@ -101,6 +107,7 @@ struct RouteGraphMetric: Identifiable {
         self.suggestedRange = suggestedRange
         self.aboveScale = aboveScale
         self.isNoCoverage = isNoCoverage
+        self.axisGroup = axisGroup
         self.getValue = getValue
         self.formatValue = formatValue
     }
@@ -203,7 +210,21 @@ enum RouteGraphMetrics {
             color: .red,
             renderType: .line,
             showZeroLine: true,
+            axisGroup: "surface-temp",
             getValue: { $0.temperatureC },
+            formatValue: { String(format: "%.1f°C", $0) }
+        ),
+        RouteGraphMetric(
+            // 2 m dewpoint (#948). Green against temperature's red, as on a
+            // Skew-T; shares temperature's axis so the spread is the gap.
+            id: "dewpoint",
+            label: "Dewpoint (2m)",
+            unit: "°C",
+            color: Color(.sRGB, red: 0.09, green: 0.64, blue: 0.29),  // #16a34a
+            renderType: .line,
+            showZeroLine: true,
+            axisGroup: "surface-temp",
+            getValue: { $0.dewpointC },
             formatValue: { String(format: "%.1f°C", $0) }
         ),
         RouteGraphMetric(

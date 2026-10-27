@@ -60,3 +60,18 @@ def test_snap_to_dict_and_map_row_adapter_carry_freezing_level():
 
     row = SimpleNamespace(model="gfs", freezing_level_ft=4321.0)
     assert snap_to_dict(_row_to_snapshot_dict(row))["freezing_level_ft"] == 4321.0
+
+
+def test_snap_to_dict_carries_dewpoint_and_tolerates_its_absence():
+    # #948: the forecast-map card shows Temp / Dew. Rows that predate the
+    # column (or archives without it) give None, never a KeyError.
+    from types import SimpleNamespace
+
+    from weatherbrief.analysis.airport_consensus import snap_to_dict
+    from weatherbrief.tasks.map_queries import _row_to_snapshot_dict
+
+    row = SimpleNamespace(model="gfs", temperature_2m_c=4.0, dewpoint_2m_c=1.5)
+    d = snap_to_dict(_row_to_snapshot_dict(row))
+    assert d["temperature_c"] == 4.0
+    assert d["dewpoint_c"] == 1.5
+    assert snap_to_dict({"model": "gfs"})["dewpoint_c"] is None

@@ -749,6 +749,7 @@
   "graph.headwind": "Gegen-/Rückenwind",
   "graph.crosswind": "Seitenwind",
   "graph.temperature": "Temperatur (2m)",
+  "graph.dewpoint": "Taupunkt (2m)",
   "graph.isa-dev": "ISA-Abweichung (Reiseflug)",
   "graph.precipitation": "Niederschlag",
   "graph.cloud-cover": "Bewölkung",

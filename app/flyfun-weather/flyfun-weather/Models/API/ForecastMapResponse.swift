@@ -145,6 +145,8 @@ nonisolated struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
     /// Never null server-side ("none" fallback).
     let convectiveRisk: String?
     let temperatureC: Double?
+    /// 2 m dewpoint (#948). Absent from responses cached before it was added.
+    let dewpointC: Double?
     let flightCategory: String?
     let crosswindKt: Double?
     let headwindKt: Double?
@@ -163,6 +165,7 @@ nonisolated struct ForecastModelEntry: Decodable, Sendable, ForecastCellData {
         case capeJkg = "cape_jkg"
         case convectiveRisk = "convective_risk"
         case temperatureC = "temperature_c"
+        case dewpointC = "dewpoint_c"
         case flightCategory = "flight_category"
         case crosswindKt = "crosswind_kt"
         case headwindKt = "headwind_kt"

@@ -15,6 +15,8 @@ class RouteGraphMetricsTest {
     private fun makePoint(
         headwindKt: Double? = 15.0,
         ceilingFt: Double? = null,
+        temperatureC: Double? = 14.0,
+        dewpointC: Double? = null,
         nwpCeilingFt: Double? = 20000.0,
     ): VizPoint = VizPoint(
         pointIndex = 0,
@@ -30,7 +32,8 @@ class RouteGraphMetricsTest {
         ),
         headwindKt = headwindKt,
         crosswindKt = -6.0,
-        temperatureC = 14.0,
+        temperatureC = temperatureC,
+        dewpointC = dewpointC,
         isaDevC = 1.5,
         precipitationMm = 0.8,
         cloudCoverTotalPct = 65.0,
@@ -44,8 +47,9 @@ class RouteGraphMetricsTest {
     )
 
     @Test
-    fun `all 14 metrics are registered and lookup byId works`() {
-        assertEquals(14, RouteGraphMetrics.ALL.size)
+    fun `all 15 metrics are registered and lookup byId works`() {
+        assertEquals(15, RouteGraphMetrics.ALL.size)
+        assertNotNull(RouteGraphMetrics.byId("dewpoint"))
         assertNotNull(RouteGraphMetrics.byId("headwind"))
         assertNotNull(RouteGraphMetrics.byId("ceiling-nwp"))
         assertNotNull(RouteGraphMetrics.byId("obs-radar"))
@@ -89,5 +93,34 @@ class RouteGraphMetricsTest {
         val (minCeil, maxCeil) = RouteGraphMetrics.computeYScale(RouteGraphMetrics.CEILING_NWP, ceilingSamples)
         assertEquals(0.0, minCeil, 0.01)
         assertEquals(15000.0, maxCeil, 0.01)
+    }
+
+    @Test
+    fun `temperature and dewpoint share one scale, other pairs keep their own`() {
+        // #948: one °C axis so the spread is the gap between the lines.
+        val points = listOf(
+            makePoint(headwindKt = 60.0, temperatureC = 35.0, dewpointC = -20.0),
+            makePoint(headwindKt = 10.0, temperatureC = 8.0, dewpointC = 2.0),
+        )
+        val (l, r) = RouteGraphMetrics.computeYScales(
+            RouteGraphMetrics.TEMPERATURE, RouteGraphMetrics.DEWPOINT, points,
+        )
+        assertEquals(l, r)
+        assertTrue(l!!.first <= -20.0 && l.second >= 35.0)
+
+        val (t, h) = RouteGraphMetrics.computeYScales(
+            RouteGraphMetrics.TEMPERATURE, RouteGraphMetrics.HEADWIND, points,
+        )
+        assertTrue(t!!.second < 60.0)
+        assertTrue(h!!.second >= 60.0)
+    }
+
+    @Test
+    fun `dewpoint missing on an old pack is unavailable`() {
+        assertEquals(
+            MetricSample.Unavailable,
+            RouteGraphMetrics.sampleMetric(RouteGraphMetrics.DEWPOINT, makePoint(dewpointC = null)),
+        )
+        assertEquals(-5.0, RouteGraphMetrics.DEWPOINT.getValue(makePoint(dewpointC = -5.0))!!, 0.0)
     }
 }

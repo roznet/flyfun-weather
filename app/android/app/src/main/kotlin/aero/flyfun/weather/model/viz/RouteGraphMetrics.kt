@@ -29,6 +29,13 @@ data class RouteGraphMetric(
     val aboveScale: Boolean = false,
     val showZeroLine: Boolean = false,
     val zeroLineLabels: Pair<String, String>? = null,
+    /**
+     * Metrics with the same axis group share one Y scale when plotted left and
+     * right together, so their gap reads directly off the graph (temperature vs
+     * dewpoint: the spread, #948). null keeps an independent scale. Mirrors web
+     * `axisGroup`.
+     */
+    val axisGroup: String? = null,
     val getValue: (VizPoint) -> Double?,
     val formatValue: (Double) -> String = { String.format(Locale.US, "%.0f", it) },
 )
@@ -76,7 +83,23 @@ object RouteGraphMetrics {
         colorHex = 0xFFDC2626L,
         suggestedRange = -10.0 to 30.0,
         showZeroLine = true,
+        axisGroup = "surface-temp",
         getValue = { it.temperatureC },
+        formatValue = { v -> String.format(Locale.US, "%.1f °C", v) },
+    )
+
+    /** 2 m dewpoint (#948): green against temperature's red, as on a Skew-T,
+     *  on temperature's axis so the spread is the gap between the lines. */
+    val DEWPOINT = RouteGraphMetric(
+        id = "dewpoint",
+        label = "Dewpoint (2m)",
+        unit = "°C",
+        renderType = RouteGraphRenderType.LINE,
+        colorHex = 0xFF16A34AL,
+        suggestedRange = -10.0 to 30.0,
+        showZeroLine = true,
+        axisGroup = "surface-temp",
+        getValue = { it.dewpointC },
         formatValue = { v -> String.format(Locale.US, "%.1f °C", v) },
     )
 
@@ -214,6 +237,7 @@ object RouteGraphMetrics {
         HEADWIND,
         CROSSWIND,
         TEMPERATURE,
+        DEWPOINT,
         ISA_DEV,
         PRECIPITATION,
         CLOUD_COVER,
@@ -244,6 +268,25 @@ object RouteGraphMetrics {
             return MetricSample.AboveScale(metric.suggestedRange.second)
         }
         return MetricSample.Value(raw)
+    }
+
+    /**
+     * Scales for the left and right metrics. Two metrics in the same [RouteGraphMetric.axisGroup]
+     * get one scale fitted to both series; otherwise each is fitted to its own samples.
+     * Mirrors web `computeYScales`.
+     */
+    fun computeYScales(
+        left: RouteGraphMetric?,
+        right: RouteGraphMetric?,
+        points: List<VizPoint>,
+    ): Pair<Pair<Double, Double>?, Pair<Double, Double>?> {
+        val leftSamples = left?.let { m -> points.map { sampleMetric(m, it) } }.orEmpty()
+        val rightSamples = right?.let { m -> points.map { sampleMetric(m, it) } }.orEmpty()
+        if (left != null && right != null && left.axisGroup != null && left.axisGroup == right.axisGroup) {
+            val shared = computeYScale(left, leftSamples + rightSamples)
+            return shared to shared
+        }
+        return left?.let { computeYScale(it, leftSamples) } to right?.let { computeYScale(it, rightSamples) }
     }
 
     fun computeYScale(

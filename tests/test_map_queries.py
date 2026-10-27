@@ -191,6 +191,7 @@ class TestGetForecastMapData:
         # Should use latest init data
         apt = result["airports"][0]
         assert apt["models"]["gfs"]["temperature_c"] == pytest.approx(15.0)
+        assert apt["models"]["gfs"]["dewpoint_c"] == pytest.approx(7.0)  # #948
 
     @patch("weatherbrief.tasks.map_queries._get_coords", return_value=FAKE_COORDS)
     def test_icon_cycle_keeps_d2_and_eu_runs(self, _mock_coords, _mock_rwy, db_session):

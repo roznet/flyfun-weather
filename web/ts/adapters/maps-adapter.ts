@@ -48,6 +48,8 @@ export interface ModelForecast {
   cape_jkg: number | null;
   convective_risk: string;
   temperature_c: number | null;
+  /** 2 m dewpoint (°C, #948). Absent from responses cached before it was added. */
+  dewpoint_c?: number | null;
   flight_category: string;
 }
 
