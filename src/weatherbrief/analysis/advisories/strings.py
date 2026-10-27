@@ -1177,6 +1177,58 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Abflug {icao} nahe oder vor Sonnenaufgang — mit wenig Licht rechnen",
         "es": "Salida de {icao} cerca o antes del amanecer — prever poca luz",
     },
+    # --- frost (informational, #949) ---
+    "frost.no_data": {
+        "en": "No departure forecast to assess frost",
+        "fr": "Pas de prévision au départ pour évaluer le givre",
+        "de": "Keine Abflugprognose zur Reifbewertung",
+        "es": "Sin previsión de salida para evaluar la escarcha",
+    },
+    "frost.no_night": {
+        "en": "No overnight forecast hours at {icao} for this model",
+        "fr": "Pas d'heures de prévision nocturnes à {icao} pour ce modèle",
+        "de": "Keine nächtlichen Prognosestunden in {icao} für dieses Modell",
+        "es": "Sin horas de previsión nocturnas en {icao} para este modelo",
+    },
+    "frost.likely": {
+        "en": "Frost likely on the aircraft at departure if parked outside: clear and calm from {start} to {end}Z, min {tmin} °C, dewpoint {td} °C. Allow time to clear it",
+        "fr": "Givre probable sur l'avion au départ s'il est stationné dehors : ciel clair et vent calme de {start} à {end}Z, min {tmin} °C, point de rosée {td} °C. Prévoir le temps de le retirer",
+        "de": "Reif am Flugzeug beim Abflug wahrscheinlich, wenn es draußen steht: klar und windstill von {start} bis {end}Z, min {tmin} °C, Taupunkt {td} °C. Zeit zum Entfernen einplanen",
+        "es": "Escarcha probable en el avión a la salida si pernocta fuera: despejado y en calma de {start} a {end}Z, mín {tmin} °C, punto de rocío {td} °C. Prever tiempo para retirarla",
+    },
+    "frost.possible": {
+        "en": "Frost possible on the aircraft at {icao} if parked outside: min {tmin} °C. Check the wings before flight",
+        "fr": "Givre possible sur l'avion à {icao} s'il est stationné dehors : min {tmin} °C. Vérifier les ailes avant le vol",
+        "de": "Reif am Flugzeug in {icao} möglich, wenn es draußen steht: min {tmin} °C. Tragflächen vor dem Flug prüfen",
+        "es": "Escarcha posible en el avión en {icao} si pernocta fuera: mín {tmin} °C. Revisar las alas antes del vuelo",
+    },
+    "frost.unlikely_cold": {
+        "en": "Frost unlikely at {icao}: min {tmin} °C but {why}",
+        "fr": "Givre peu probable à {icao} : min {tmin} °C mais {why}",
+        "de": "Reif in {icao} unwahrscheinlich: min {tmin} °C, aber {why}",
+        "es": "Escarcha poco probable en {icao}: mín {tmin} °C pero {why}",
+    },
+    "frost.none": {
+        "en": "No frost expected at {icao}: overnight min {tmin} °C",
+        "fr": "Pas de givre attendu à {icao} : min nocturne {tmin} °C",
+        "de": "Kein Reif in {icao} erwartet: nächtliches Minimum {tmin} °C",
+        "es": "No se espera escarcha en {icao}: mín nocturna {tmin} °C",
+    },
+    "frost.partial": {
+        "en": "(night seen from {start}Z only)",
+        "fr": "(nuit vue à partir de {start}Z seulement)",
+        "de": "(Nacht erst ab {start}Z erfasst)",
+        "es": "(noche vista solo desde las {start}Z)",
+    },
+    "frost.why_cloudy": {"en": "cloudy", "fr": "nuageux", "de": "bewölkt", "es": "nublado"},
+    "frost.why_windy": {"en": "windy", "fr": "venté", "de": "windig", "es": "con viento"},
+    "frost.why_dry": {"en": "dry air", "fr": "air sec", "de": "trockene Luft", "es": "aire seco"},
+    "frost.why_dew": {
+        "en": "dewpoint above freezing (dew rather than frost)",
+        "fr": "point de rosée au-dessus de 0 (rosée plutôt que givre)",
+        "de": "Taupunkt über 0 (Tau statt Reif)",
+        "es": "punto de rocío sobre 0 (rocío en vez de escarcha)",
+    },
 }
 # fmt: on
 

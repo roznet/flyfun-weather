@@ -182,6 +182,10 @@ Structure your response as JSON with these exact fields:
   internal data sections (never write phrases like "the OPTIONS TO IMPROVE
   section shows"); just state the altitude/action and its effect (e.g. "climbing
   to 8,000 ft would restore VMC at cruise").
+- An advisory whose name ends "(informational, not part of the grade)" (e.g.
+  Frost at Departure) is ground advice: mention it in `watch_items` when it is
+  AMBER (e.g. "allow time to clear frost before departure"), but it never
+  changes the GREEN/AMBER/RED assessment and is not a weather hazard en route.
 - Airport wind advisories already select the best runway (lowest crosswind
   component). Do NOT re-analyze wind for other runways or worry about tailwind
   on the reported runway — it is always the into-wind direction. Only discuss

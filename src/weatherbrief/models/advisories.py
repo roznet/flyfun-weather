@@ -336,6 +336,11 @@ class AdvisoryCatalogEntry(BaseModel):
     # the served catalog (settings, help, a new pack's manifest). Old packs keep
     # rendering their stored cards from the catalog saved in their own manifest.
     retired: bool = False
+    # Informational advisories (frost, #949) are shown and digested like any
+    # other card but never move the briefing's overall assessment: the
+    # assessment, its reason and the "anything graded?" test skip them
+    # (``registry.grade_neutral_ids``). Sun predates this flag and still counts.
+    affects_grade: bool = True
     parameters: list[AdvisoryParameterDef] = Field(default_factory=list)
 
 

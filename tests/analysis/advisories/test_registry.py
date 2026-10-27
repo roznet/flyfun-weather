@@ -231,6 +231,7 @@ def test_within_category_entry_order_honored():
         "airport_wind",
         "density_altitude",
         "llws",
+        "frost",
     ]
 
 
