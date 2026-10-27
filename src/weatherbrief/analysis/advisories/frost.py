@@ -27,6 +27,8 @@ Per model (meteorology-decisions §69):
 
 from __future__ import annotations
 
+from collections import Counter
+
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
@@ -77,15 +79,32 @@ def _is_radiative(h: FrostHour, params: dict[str, float]) -> bool:
     )
 
 
-def _missing_ingredient(h: FrostHour, params: dict[str, float], loc: str | None) -> str:
-    """Why the coldest hour was not a frost hour, in a few words."""
+def _failed_ingredient(h: FrostHour, params: dict[str, float]) -> str:
+    """The first ingredient a cold hour lacks: cloudy, windy, dew or dry."""
     if h.cloud_cover_pct is None or h.cloud_cover_pct >= _p(params, "cloud_max_pct"):
-        return adv_t("frost.why_cloudy", loc)
+        return "cloudy"
     if h.wind_speed_kt is None or h.wind_speed_kt >= _p(params, "wind_max_kt"):
-        return adv_t("frost.why_windy", loc)
+        return "windy"
     if h.dewpoint_c is not None and h.dewpoint_c > _p(params, "td_max_c"):
-        return adv_t("frost.why_dew", loc)
-    return adv_t("frost.why_dry", loc)
+        return "dew"
+    return "dry"
+
+
+def _missing_ingredient(
+    hours: list[FrostHour], params: dict[str, float], loc: str | None,
+) -> str:
+    """Why the cold hours were not frost hours, in a few words.
+
+    The ingredient most of the cold hours (T2m ≤ ``t_max_c``) lacked, not just
+    the coldest hour's: a night that was clear and calm but dry should not read
+    "but cloudy" because one hour clouded over. Ties go to the order cloud,
+    wind, dew, dry.
+    """
+    cold = [h for h in hours if h.temperature_c <= _p(params, "t_max_c")]
+    counts = Counter(_failed_ingredient(h, params) for h in cold)
+    order = ["cloudy", "windy", "dew", "dry"]
+    why = max(order, key=lambda k: (counts.get(k, 0), -order.index(k)))
+    return adv_t(f"frost.why_{why}", loc)
 
 
 def grade_model_night(
@@ -131,7 +150,7 @@ def grade_model_night(
     if coldest.temperature_c <= _p(params, "t_max_c"):
         return AdvisoryStatus.GREEN, adv_t(
             "frost.unlikely_cold", loc, icao=icao, tmin=_fmt_c(coldest.temperature_c),
-            why=_missing_ingredient(coldest, params, loc),
+            why=_missing_ingredient(hours, params, loc),
         ) + partial
     return AdvisoryStatus.GREEN, adv_t(
         "frost.none", loc, icao=icao, tmin=_fmt_c(coldest.temperature_c),

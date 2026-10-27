@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EVALUATORS: dict[str, type[AdvisoryEvaluator]] = {}
+# IDs registered with ``affects_grade=False`` (#949), kept as registration
+# happens so the per-flight assessment path never rebuilds the catalog.
+_GRADE_NEUTRAL: set[str] = set()
 
 # Category display order for the settings page (#387). Ordered by pilot-input
 # density, NOT meteorological family — airport/flight-rules/wind first (the
@@ -74,6 +77,10 @@ def register(cls: type[AdvisoryEvaluator]) -> type[AdvisoryEvaluator]:
     """Class decorator that registers an advisory evaluator."""
     entry = cls.catalog_entry()
     _EVALUATORS[entry.id] = cls
+    if entry.affects_grade:
+        _GRADE_NEUTRAL.discard(entry.id)
+    else:
+        _GRADE_NEUTRAL.add(entry.id)
     return cls
 
 
@@ -145,7 +152,7 @@ def get_altitude_dependent_ids() -> set[str]:
     return {e.id for e in get_catalog() if e.altitude_dependent}
 
 
-def grade_neutral_ids() -> set[str]:
+def grade_neutral_ids() -> frozenset[str]:
     """IDs of informational advisories (``affects_grade=False``, e.g. frost #949).
 
     Read by the overall assessment (``derive_assessment_from_advisories`` and
@@ -154,7 +161,7 @@ def grade_neutral_ids() -> set[str]:
     catalog, so the rule is the same for every pack, old or new.
     """
     _ensure_loaded()
-    return {e.id for e in get_catalog(include_retired=True) if not e.affects_grade}
+    return frozenset(_GRADE_NEUTRAL)
 
 
 def get_scan_class_ids() -> set[str]:

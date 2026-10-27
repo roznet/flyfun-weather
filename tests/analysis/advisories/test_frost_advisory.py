@@ -104,12 +104,30 @@ def _eval(ctx: RouteContext, **overrides) -> RouteAdvisoryResult:
 
 
 class TestNightBounds:
-    def test_morning_departure_uses_previous_sunset_and_todays_sunrise(self):
+    def test_predawn_departure_night_still_running(self):
         start, sunrise = night_bounds(LAT, LON, DEP_0700)
-        assert start is not None and sunrise is not None
+        assert start is not None and sunrise is None
         assert start.date() == (DAY - timedelta(days=1)).date()
         assert 15 <= start.hour <= 17
-        assert sunrise.date() == DAY.date() and 7 <= sunrise.hour <= 8
+
+    def test_after_sunrise_departure_names_todays_sunrise(self):
+        start, sunrise = night_bounds(LAT, LON, DAY + timedelta(hours=9))
+        assert start is not None and start.date() == (DAY - timedelta(days=1)).date()
+        assert sunrise is not None and sunrise.date() == DAY.date() and 7 <= sunrise.hour <= 8
+
+    def test_western_us_summer_evening_sunset_after_midnight_utc(self):
+        # Seattle in June: sunset ~04:10Z the next UTC date, sunrise ~12:10Z.
+        lat, lon = 47.45, -122.3
+        june = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        # 11:00 local (18Z): daylight, after sunrise, the night is over.
+        start, sunrise = night_bounds(lat, lon, june + timedelta(hours=18))
+        assert sunrise is not None and sunrise < june + timedelta(hours=18)
+        assert start is not None and start < sunrise
+        assert (sunrise - start) < timedelta(hours=10)  # a summer night, not 33 h
+        # 21:30 local (04:30Z next UTC date): after sunset, in the night.
+        start, sunrise = night_bounds(lat, lon, june + timedelta(hours=28, minutes=30))
+        assert sunrise is None and start is not None
+        assert (june + timedelta(hours=28, minutes=30)) - start < timedelta(hours=2)
 
     def test_evening_departure_has_no_sunrise(self):
         start, sunrise = night_bounds(LAT, LON, DAY + timedelta(hours=20))
@@ -134,6 +152,13 @@ class TestFrostHeuristic:
         r = _eval(_ctx(DEP_0700, {"ukmo": _span(*NIGHT, cloud=90.0)}))
         assert r.aggregate_status == AdvisoryStatus.GREEN
         assert "cloudy" in r.aggregate_detail
+
+    def test_missing_ingredient_is_the_nights_not_the_coldest_hours(self):
+        # Clear and calm all night but dry; only the coldest hour clouds over.
+        hours = _span(*NIGHT, temp=2.0, td=-8.0)
+        hours[10] = _hour(hours[10].time, temp=1.0, td=-7.0, cloud=90.0)
+        r = _eval(_ctx(DEP_0700, {"ukmo": hours}))
+        assert "dry air" in r.aggregate_detail and "cloudy" not in r.aggregate_detail
 
     def test_dry_air_is_not_amber(self):
         r = _eval(_ctx(DEP_0700, {"ukmo": _span(*NIGHT, temp=2.0, td=-8.0)}))
