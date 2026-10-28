@@ -277,6 +277,23 @@ def test_gfs_frozen_fraction(raw, expected):
     assert gfs_frozen_fraction(raw) == (None if expected is None else pytest.approx(expected))
 
 
+def test_gfs_frozen_fraction_falls_back_to_window_start():
+    """A snow shower that ended before the step: the step has CPOFP's fill and
+    a dry CSNOW, the window's start still says frozen."""
+    from weatherbrief.fetch.grib.decode import gfs_frozen_fraction, gfs_surface_rates
+
+    step = {"APCP": 3.0, "ACPCP": 1.0, "CPOFP": -50.0, "CSNOW": 0.0}
+    start = {"APCP": 1.0, "ACPCP": 0.4, "CPOFP": 100.0}
+    assert gfs_frozen_fraction(step, start) == pytest.approx(1.0)
+    out = gfs_surface_rates(step, start, 3.0)
+    assert out["snowfall_cm"] == pytest.approx(2.0 / 3.0 * 0.7)
+    assert out["rain_mm"] == 0.0
+    # The step's own CPOFP wins when it has one.
+    assert gfs_frozen_fraction({"CPOFP": 0.0}, start) == 0.0
+    # Both fills: the step's CSNOW, as before.
+    assert gfs_frozen_fraction(step, {"CPOFP": -50.0}) == 0.0
+
+
 def test_gfs_surface_rates():
     from weatherbrief.fetch.grib.decode import gfs_surface_rates
 

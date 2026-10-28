@@ -6920,8 +6920,11 @@ Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
   which would remove convective snow twice. The share is the step's
   instantaneous CPOFP applied to the whole window ending there, so past f120
   (3-hourly) a rain/snow transition inside the window is split by its end
-  state. CPOFP's −50 fill falls back to
-  the CSNOW category; no precipitation means 0 snow and 0 rain. The step
+  state. CPOFP's −50 fill (nothing falling *at the step*) falls back to the
+  previous step's CPOFP, the window's start, then to the step's CSNOW
+  category: a snow shower that ended before the step still fell in the
+  window, and the step's dry CSNOW = 0 classed it as all rain (2026-10-28,
+  GRIB-primary audit §1.4). No precipitation means 0 snow and 0 rain. The step
   before the first window hour is read too, so that hour has its amount.
 - **None on a GRIB-primary GFS slot:** `precipitation_probability_pct` (as
   §61). `lifted_index_raw` is set (LFTX), unlike ECMWF / ICON.

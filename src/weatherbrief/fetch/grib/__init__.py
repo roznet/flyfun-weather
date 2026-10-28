@@ -3983,10 +3983,14 @@ def _apply_gfs_surface_to_sections(
                 k: v for k, v in build_gfs_surface_snapshot(raw).items() if v is not None
             })
             rate_snaps.append(gfs_surface_rates(raw, prev_raw[i], window_h))
+            # CPOFP rides along: the next window's frozen share falls back to
+            # it when that step has the no-precipitation fill.
             prev_raw[i] = (
                 {k: raw[k] for k in GFS_SURFACE_ACCUMULATED if k in raw}
                 or None
             )
+            if prev_raw[i] is not None and "CPOFP" in raw:
+                prev_raw[i]["CPOFP"] = raw["CPOFP"]
 
         def _write(wf: WaypointForecast, i: int) -> None:
             _write_surface_step(

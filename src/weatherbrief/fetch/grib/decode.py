@@ -3379,17 +3379,23 @@ def build_gfs_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]
     return out
 
 
-def gfs_frozen_fraction(raw: dict[str, float]) -> float | None:
+def gfs_frozen_fraction(
+    raw: dict[str, float], prev: dict[str, float] | None = None,
+) -> float | None:
     """Frozen share of the precipitation at this GFS step, 0–1, or None.
 
     ``CPOFP`` is the percent of frozen precipitation; NCEP writes a negative
     fill (−50) where nothing falls, and packs a real 0 a hair below zero
-    (−6e-6 seen on gfs.20261024/00z f012). Without it the categorical
-    ``CSNOW`` (0/1) is used.
+    (−6e-6 seen on gfs.20261024/00z f012). Where the step has the fill, the
+    previous step's ``CPOFP`` (*prev*, the start of the window) is used: a
+    shower that stopped before the step still fell in the window, and its
+    phase is the one at the start, not the step's dry 0 ``CSNOW``. Without
+    either, the categorical ``CSNOW`` (0/1) at the step.
     """
-    cpofp = raw.get("CPOFP")
-    if cpofp is not None and cpofp > -1.0:
-        return min(100.0, max(0.0, cpofp)) / 100.0
+    for source in (raw, prev or {}):
+        cpofp = source.get("CPOFP")
+        if cpofp is not None and cpofp > -1.0:
+            return min(100.0, max(0.0, cpofp)) / 100.0
     csnow = raw.get("CSNOW")
     if csnow is not None and csnow >= 0:
         return 1.0 if csnow >= 0.5 else 0.0
@@ -3417,7 +3423,8 @@ def gfs_surface_rates(
       field of its own) would take convective snow off twice.
 
     The frozen share is the step's instantaneous ``CPOFP`` applied to the
-    window ending there. A missing component makes its field absent (unknown),
+    window ending there, else the previous step's (:func:`gfs_frozen_fraction`;
+    *prev* must then carry ``CPOFP``). A missing component makes its field absent (unknown),
     never a smaller number; no precipitation means 0 snow and 0 rain whatever
     the share.
     """
@@ -3441,7 +3448,7 @@ def gfs_surface_rates(
         out["showers_mm"] = conv
     if tot is None:
         return out
-    frozen = 0.0 if tot == 0.0 else gfs_frozen_fraction(raw)
+    frozen = 0.0 if tot == 0.0 else gfs_frozen_fraction(raw, prev)
     if frozen is None:
         return out
     snow_water = tot * frozen
