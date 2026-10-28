@@ -25,7 +25,7 @@ These are deployment facts, not thresholds. A fork will have its own.
 |---|---|
 | Droplet | 4 vCPU / 7.8 GB, 8 GiB swap |
 | `weatherbrief` cgroup limit | 6 GiB |
-| Data volume | 199 GB |
+| Data volume | 248 GB (DO volume 250 GB) |
 | App internal port | 8020 (HTTP, behind Caddy) |
 | Containers we own | `weatherbrief`, `weatherbrief-mcp` (others on the box are siblings) |
 
@@ -39,7 +39,7 @@ These are deployment facts, not thresholds. A fork will have its own.
 | Standalone cycle `peak_rss` | <3.5 GiB | >4.5 GiB | >5.5 GiB |
 | Pipeline total | 30–90 s | >180 s | >300 s |
 | p95 queue wait | <30 s | >30 s | — |
-| Data volume used | 62–78 % | >85 % | >90 % |
+| Data volume used | 60–80 % | >85 % | >90 % |
 | Filesystem `/` | <85 % | >85 % | — |
 | GRIB pool resets | few/day | >5 in an hour | — |
 
@@ -166,11 +166,12 @@ retention, or nothing):
 
 | Component | Path (under `<DATA_VOLUME>`) | Type | Expected band | Notes |
 |---|---|---|---|---|
-| **ICON-D2 GRIB cache** | `weather/data/.cache/grib/icon-d2/` | rotating | **30–45 GB** | 6 h TTL, 8 runs/day. Hard cap **45 GiB** (`_DEFAULT_CACHE_CAP_GIB`), oldest-init-first eviction with a 2-run floor. Override via `WB_GRIB_CACHE_CAP_GB_ICON_D2`. Cap is binary GiB, `du` reports decimal GB. Largest single component — check it first when disk moves. |
-| ICON-EU GRIB cache | `weather/data/.cache/grib/icon-eu/` | rotating | **30–50 GB** | 12 h TTL × ~4 runs/window × ~10 GB/run. Uncapped. Logs `Purged N old icon-eu GRIB cache dirs` only when N>0. |
-| GFS GRIB cache | `weather/data/.cache/grib/gfs/` | rotating | **1–5 GB** | 24 h TTL × ~5 runs. Uncapped (cheap). |
+| **ICON-D2 GRIB cache** | `weather/data/.cache/grib/icon-d2/` | rotating | **20–45 GB** | 6 h TTL, 8 runs/day; a flight-warmed run is ~18–21 GB, so one run reads ~20 GB and the current+prior pair ~40 GB. Hard cap **45 GiB** (`_DEFAULT_CACHE_CAP_GIB`), oldest-init-first eviction with a 2-run floor. Override via `WB_GRIB_CACHE_CAP_GB_ICON_D2`. Caps are binary GiB, `du` reports decimal GB. |
+| **ICON-EU GRIB cache** | `weather/data/.cache/grib/icon-eu/` | rotating | **25–43 GB** | Mostly zarr since #705 (~400 MB per forecast hour, ~10× the remaining GRIB); a warmed main run (00/06/12/18z) is ~24–26 GB. 12 h TTL. Cap **40 GiB** from prod `.env` `WB_GRIB_CACHE_CAP_GB_ICON_EU` (no code default: uncapped without it), so in practice one main run plus the short 3-hourly runs. |
+| GFS GRIB cache | `weather/data/.cache/grib/gfs/` | rotating | **5–15 GB** | GRIB-primary sounding + surface since #913 (~177 MB per forecast hour), ~8 GB per warmed run. 12 h TTL, cap **20 GiB** (code default). |
+| HRRR GRIB cache | `weather/data/.cache/grib/hrrr/` | rotating | **<3 GB** | US routes only; 9 h TTL, cap 8 GiB. AROME (cap 6 GiB) is usually empty. |
 | ECMWF deliveries | `ecmwf/data` | rotating | **13–25 GB** | 36 h TTL via `purge_old_ecmwf_deliveries`. |
-| SRTM terrain | `weather/data/.cache/srtm/` | constant | **~4.4 GB** | Never aged. |
+| SRTM terrain | `weather/data/.cache/srtm/` | constant | **~4.7 GB** | Never aged. |
 | Pack store | `weather/data/packs/` | growing | see headroom math below | Monotonic until T1 strip (30 d) and T2 delete (90/180 d). |
 | MySQL data | `mysql/<db>/*.ibd` | growing | **4–6 GB** (app DB) | Dominated by `verification_scores` (~2.7 GB); grows with verification output. |
 | MySQL binlogs | `mysql/binlog.0000XX` | rotating | **~10 GB** (~10 × 1.1 GB, ~30 d span) | Auto-purged at `binlog_expire_logs_seconds`. |
@@ -181,22 +182,27 @@ warn if every component is in its band — it's just healthy rotating caches plu
 growing pack store. The total only becomes a warn when a component breaks out (binlogs
 spanning >40 d, or `packs/` over the headroom budget).
 
-**The two GRIB caches are the swing factor.** ICON-D2 (≤45 GiB capped) + ICON-EU (uncapped,
-up to ~50 GB) jointly range from ~60 GB to ~98 GB. That ~38 GB swing is larger than the entire
-pack store, so a total-usage jump is far more likely to be cache phase than real growth.
-Always break the total down before concluding anything.
+**The two ICON caches are the swing factor.** ICON-D2 (one run ~20 GB, pair ≤48 GB) + ICON-EU
+(~25–43 GB) jointly range from ~45 GB to ~91 GB. That ~45 GB swing is about the size of the
+entire pack store, so a total-usage jump is far more likely to be cache phase than real growth.
+Always break the total down before concluding anything. Every cap eviction logs `GRIB cache cap:
+evicted <model> run …`; `GRIB cache cap NOT met` means the 2-run floor or pinned readers beat
+the cap and disk is unbounded for that model.
 
 **Headroom math** — subtract fixed components from the volume to get the pack/mysql budget:
 
-- Caches (ICON-D2 33 + ICON-EU 30 + GFS 4.8 + ECMWF 13 + SRTM 4.4): **~85 GB** steady-state
-- MySQL (data + binlogs): ~12 GB
+- Caches (ICON-D2 30 + ICON-EU 28 + GFS 9 + HRRR 1 + ECMWF 14 + SRTM 4.7): **~87 GB** typical
+- MySQL (whole shared `mysql/` dir: every app's data + binlogs): ~23 GB
 - Other (sandboxes, forms, logs): ~1 GB
-- → **Pack budget before the 85 % warn: ~71 GB**; before the 90 % issue: ~81 GB
+- → **Pack budget before the 85 % warn (211 GB): ~100 GB**; before the 90 % issue (223 GB): ~112 GB
 
-**Worst-case caveat:** that assumes caches at their *observed* 85 GB. Their *ceiling* is much
-higher — ICON-D2 capped at ~48 GB and ICON-EU reaching ~50 GB would put caches near 130 GB and
-shrink the pack budget to ~25 GB. If both sit high at once, disk gets tight far faster than the
-steady-state number suggests. Check the per-cache lines before trusting the headroom figure.
+**Worst-case caveat:** that assumes caches at their *typical* ~87 GB. A realistic peak (ICON-D2
+pair ~40, ICON-EU at its 43 GB cap, GFS ~16, ECMWF ~20) is ~125 GB and shrinks the pack budget
+to ~60 GB. Every cap full at once (~157 GB with HRRR 8.6 + AROME 6.4 + ECMWF 25) leaves only
+~30 GB, less than today's ~46 GB of packs, so the sum of caps does not fit beside the pack store.
+That combination needs busy US and AROME traffic on top of both ICON caches peaking, so treat it
+as the ceiling, not a forecast. Check the per-cache lines before trusting the headroom figure.
+The flight warm refuses to download below `WB_FLIGHT_WARM_MIN_FREE_GB` (default 20 GB free).
 
 ### §L10 — MySQL RSS is not proof of configuration
 
@@ -340,7 +346,10 @@ Kept short and dated deliberately — these are the observations the bands above
 Add a line when a band is re-baselined; don't narrate inside the bands themselves.
 
 - **Volume resize** — data volume grew 149 GB → 199 GB; the ICON-D2 cache arrived at the same
-  time. Bands in §L9 are post-resize.
+  time.
+- **Volume resize, 2026-10-25** — 199 GB → 248 GB after GRIB-primary (#910) and ICON-EU zarr
+  (#705) filled the volume to 87 %. ICON-EU cap raised 30 → 40 GiB on 2026-10-26 (zarr main run
+  ~25 GB). Bands in §L9 are from 2026-10-26.
 - **MySQL buffer pool** — `innodb_buffer_pool_size` raised 128 MB → 1 GiB, so `<mysql-container>`
   sits at ~1.2–1.6 GiB instead of the old ~330 MiB. A reading back near ~330 MiB means the
   container restarted *without* the compose-file setting: re-run `docker compose up -d` in
