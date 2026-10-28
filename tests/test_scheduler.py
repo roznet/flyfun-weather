@@ -1296,7 +1296,7 @@ class TestForecastSlotResume:
         calls = self._drive_loop(monkeypatch, slot=slot, done=False)
         # No sleep to the next fetch hour before ingesting.
         assert 12345 not in calls["sleeps"]
-        # Deadline kept at HH:50: ~30 of the 50 min remain.
+        # Deadline kept: the full window minus the 20 min already elapsed.
         remaining = sched._ARTIFACT_WAIT_MAX_SECONDS - 20 * 60
         assert remaining - 5 <= calls["wait_seconds"] <= remaining
 

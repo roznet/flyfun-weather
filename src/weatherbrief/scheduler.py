@@ -117,11 +117,12 @@ _FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
 # straight to computing locally (no wait, so non-offload deploys are unaffected).
 _SNAPSHOT_INBOX_DIR_DEFAULT = "/app/snapshot_inbox"
 # Wait this long past the fetch hour before giving up and computing locally. The
-# EU node starts at HH:15 and takes 10-13 min, so its artifact lands ~HH:27 —
-# generous on purpose. A needless fallback costs a ~70 min local cycle, while
-# waiting longer costs only slightly staler map data, so the asymmetry favours
-# patience.
-_ARTIFACT_WAIT_MAX_SECONDS = 3000  # 50 min past the hour
+# EU node starts at HH:15; since its map rows come from GRIB (#914) it takes
+# ~37 min and lands ~HH:52, which the old HH:50 deadline missed by minutes
+# (2026-10-26/27). Generous on purpose: a needless fallback costs a ~25 min local
+# cycle and throws the node's work away, while waiting longer costs only slightly
+# staler map data, so the asymmetry favours patience.
+_ARTIFACT_WAIT_MAX_SECONDS = 4800  # 80 min: deadline HH+1:20
 _ARTIFACT_POLL_INTERVAL_SECONDS = 60
 # Hewson precompute fires once per init cycle. 08Z and 20Z pick up the 00Z /
 # 12Z inits of all 3 models. The hours were set for Open-Meteo's lag (ICON
@@ -1518,7 +1519,7 @@ async def run_forecast_fetch_loop(app_state) -> None:
                 # Sleep only the REMAINDER of the offset. Waiting for an artifact
                 # has usually already consumed it, and the offset exists solely to
                 # let the publishers land by HH:15 — sleeping a further 15 min at
-                # HH:50 would just delay the fallback for nothing.
+                # the deadline would just delay the fallback for nothing.
                 remaining = _FORECAST_FETCH_HOUR_OFFSET_SECONDS - (
                     time.monotonic() - hour_start
                 )
@@ -1663,7 +1664,7 @@ async def _try_ingest_snapshot_artifact(
     cycle), False to fall back to computing locally. Returns False *immediately*
     when no inbox is configured, so deployments without compute offload keep
     their existing timing. ``wait_seconds`` is shorter than the full window when
-    resuming a slot a restart interrupted, so the deadline stays at HH:50.
+    resuming a slot a restart interrupted, so the deadline stays at HH+1:20.
     """
     from weatherbrief.tasks.snapshot_artifact import (
         ArtifactValidationError,
