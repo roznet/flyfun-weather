@@ -3278,7 +3278,7 @@ def build_arome_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
     - Covers already in % (the decode scales fractions).
 
     AROME publishes no visibility, freezing level, CIN, lifted index or
-    precipitation probability: those stay None (§72).
+    precipitation probability: those stay None (§73).
     """
     out: dict[str, float | None] = {
         "temperature_2m_c": None,

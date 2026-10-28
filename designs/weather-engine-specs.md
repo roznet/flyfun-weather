@@ -13,7 +13,7 @@ The enrichment strategy differs by model:
 - **GFS:** Open-Meteo is primary (28 levels); GRIB **patches** cloud microphysics + diagnostics onto existing levels
 - **GFS slot on CONUS routes (#457):** when the whole route fits the HRRR domain and the window is within the run's horizon, the slot is sourced from **HRRR** as a **full sounding replacement** (ICON/ECMWF pattern) — badged `GFS (HRRR)`
 - **ECMWF/ICON:** GRIB **replaces the entire pressure-level sounding** with higher-resolution data; Open-Meteo provides surface fields only
-- **Météo-France slot (#940, was a #529 patch):** AROME GRIB **builds the whole slot** (24-level column from IP1 + IP2, surface from SP1 + SP2) through the GRIB-primary skeleton, with **no Open-Meteo at all**: outside AROME's domain or ~48 h horizon, or on any GRIB failure, the slot is absent (meteorology-decisions §72)
+- **Météo-France slot (#940, was a #529 patch):** AROME GRIB **builds the whole slot** (24-level column from IP1 + IP2, surface from SP1 + SP2) through the GRIB-primary skeleton, with **no Open-Meteo at all**: outside AROME's domain or ~48 h horizon, or on any GRIB failure, the slot is absent (meteorology-decisions §73)
 
 ## Field Attribution Matrix
 

@@ -412,7 +412,7 @@ def run_fetch(
             models_skipped_region.append(model.value)
             continue
         if model == ModelSource.METEOFRANCE:
-            # Météo-France is AROME only, from GRIB (§72, #940): its switch
+            # Météo-France is AROME only, from GRIB (§73, #940): its switch
             # off or GRIB-primary unavailable means no slot, never Open-Meteo.
             from weatherbrief.fetch.grib.arome_domain import route_in_arome_domain
             from weatherbrief.fetch.grib.arome_fetch import (
