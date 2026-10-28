@@ -1709,7 +1709,8 @@ def _fetch_icon_fields(init_date, init_hour, steps, airports, variant, priority)
 
 
 def _fetch_icon_d2_lookup(init_time, airports, steps, priority) -> "_GribDiagLookup | None":
-    """ICON-D2's own cloud diagnostics (cover, ceiling, CAPE) at *airports*."""
+    """ICON-D2's own cloud diagnostics (cover, ceiling, CAPE) at *airports*,
+    with its explicit-convection payload on every point (#953)."""
     from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
     from weatherbrief.tasks.standalone_grib import (
@@ -1751,7 +1752,7 @@ def _icon_rows(
     attached before the sounding pass; a point-hour without them is not
     covered (cloud cover is required) and is left to the next source.
     """
-    from weatherbrief.fetch.grib import _icon_diag_surface_fields
+    from weatherbrief.fetch.grib import _icon_diag_surface_fields, attach_icon_d2_explicit
 
     for valid, fhour in step_of.items():
         step = fields.get(fhour)
@@ -1773,6 +1774,12 @@ def _icon_rows(
                 for key, value in _icon_diag_surface_fields(cd.diagnostics).items():
                     setattr(hourly, key, value)
                 hourly.attach_nwp_diagnostics(cd.diagnostics)
+            if cd is not None and cd.explicit_convective is not None:
+                # ICON-D2 (#953): graded through the explicit storm fields,
+                # as the briefing grades a D2 hour.
+                attach_icon_d2_explicit(
+                    hourly, cd.explicit_convective, cd.explicit_echo_top_pa,
+                )
             if not _grib_hour_covered(hourly, analysis_step=fhour == 0):
                 continue
             # Per-hour rates over the step window, recorded as a 1 h period:

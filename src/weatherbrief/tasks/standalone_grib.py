@@ -37,7 +37,10 @@ from weatherbrief.fetch.grib.cache import (
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
     from weatherbrief.fetch.grib.icon_eu_fetch import IconVariant
-    from weatherbrief.models.analysis import NWPCloudDiagnostics
+    from weatherbrief.models.analysis import (
+        NWPCloudDiagnostics,
+        NWPExplicitConvectiveDiagnostics,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,12 @@ class AirportGribDiagnostics:
     ml_cape_jkg: float | None = None
     ml_cin_jkg: float | None = None
     diagnostics: "NWPCloudDiagnostics | None" = None
+    # ICON-D2 only (#953): the explicit-convection payload the briefing
+    # attaches to a D2 hour, built by the same helper, and the hourly echo-top
+    # pressure (feet need the hour's column: ``attach_icon_d2_explicit``).
+    # Not persisted itself: it drives the sounding pass's native grade.
+    explicit_convective: "NWPExplicitConvectiveDiagnostics | None" = None
+    explicit_echo_top_pa: float | None = None
 
 
 def _diagnostics_from(diag) -> AirportGribDiagnostics:
@@ -218,6 +227,15 @@ def fetch_icon_cloud_diag(
     grid samples ~24 h apart, so the predecessor is almost never itself a
     sampled hour; it is fetched as a ``rain_con``-only blob (one file, not the
     twelve of the full cloud-diag set) unless a full blob is already cached.
+
+    A variant with explicit-convection fields (ICON-D2, #953) also gets them
+    for each step, decoded as corridor extrema around each airport and built
+    into the briefing's payload (``build_icon_d2_explicit_step``), carried on
+    every point as ``explicit_convective``. D2 has no convection scheme, so
+    without it the native grade reads a quiet scheme and says NONE. The
+    previous step's echo-top file comes too: three of the hour's four
+    quarter-hour echo-top windows live in it, and the echo top feeds the
+    bright-band gate.
     """
     from weatherbrief.fetch.grib import _dispatch_decode_parallel, _grib_session
     from weatherbrief.fetch.grib.decode import build_icon_cloud_diagnostics
@@ -240,7 +258,7 @@ def fetch_icon_cloud_diag(
 
     # Phase 1: ensure each hour is cached (sequential network I/O), then fan
     # the decodes out — see fetch_gfs_cloud_diag for the rationale (#459).
-    job_fhours, predecessor_of, preds = _ensure_icon_cloud_diag_cached(
+    job_fhours, predecessor_of, preds, explicit_paths = _ensure_icon_cloud_diag_cached(
         run_dir, init_date, init_hour, forecast_hours, variant, session,
     )
     decode_jobs: list[tuple[str, tuple]] = [
@@ -251,6 +269,11 @@ def fetch_icon_cloud_diag(
         ("decode_icon_cloud_diag", (str(run_dir / ck), lats, lons)) for _, ck in preds
     ]
     pred_fhours: list[int] = [fhour for fhour, _ in preds]
+    expl_fhours: list[int] = [f for f in sorted(explicit_paths) if explicit_paths[f]]
+    expl_jobs: list[tuple[str, tuple]] = [
+        ("decode_icon_d2_explicit_conv", (explicit_paths[f], lats, lons))
+        for f in expl_fhours
+    ]
 
     if not decode_jobs:
         return result
@@ -260,6 +283,16 @@ def fetch_icon_cloud_diag(
     decoded_all = _dispatch_decode_parallel(
         decode_jobs + pred_jobs, priority=priority, return_exceptions=True,
     )
+    # A batch of its own: the legacy dispatch path fails a whole batch on one
+    # job's error, and a storm-field failure must never cost the cloud cover.
+    expl_decoded: list = []
+    if expl_jobs:
+        try:
+            expl_decoded = _dispatch_decode_parallel(
+                expl_jobs, priority=priority, return_exceptions=True,
+            )
+        except Exception:
+            logger.warning("ICON-D2 explicit-conv decode failed", exc_info=True)
 
     # Decoded raw dicts by step, sampled and predecessor alike, so a sampled
     # hour whose predecessor is itself sampled reuses that decode.
@@ -315,7 +348,50 @@ def fetch_icon_cloud_diag(
             airport_data.append(_diagnostics_from(diag))
         result[fhour] = airport_data
 
+    if variant.explicit_conv_variables:
+        _attach_explicit_conv(result, expl_fhours, expl_decoded, len(lats))
+
     return result
+
+
+def _attach_explicit_conv(
+    result: dict[int, list[AirportGribDiagnostics]],
+    expl_fhours: list[int],
+    expl_decoded: list,
+    n_points: int,
+) -> None:
+    """Put the explicit-convection payload on every point of every step (#953).
+
+    Every step of *result* gets one, a step whose files or decode failed
+    included: an all-unavailable payload grades "explicit assessment
+    unavailable", where none would grade a false NONE. *expl_fhours* holds the
+    steps of *result* and their predecessors (echo-top only), whose quarter
+    windows complete the step's hourly echo top as the briefing's lead step
+    does; without it the hour reads ``echo_top_complete=False``.
+    """
+    from weatherbrief.fetch.grib import build_icon_d2_explicit_step
+
+    by_fhour: dict[int, list[dict]] = {}
+    for fhour, decoded in zip(expl_fhours, expl_decoded):
+        if isinstance(decoded, Exception):
+            logger.warning(
+                "ICON-D2 explicit-conv decode failed f%03d", fhour, exc_info=decoded,
+            )
+            continue
+        if decoded:
+            by_fhour[fhour] = decoded
+    for fhour in sorted(result):
+        prev_decoded = by_fhour.get(fhour - 1)
+        prev = (
+            build_icon_d2_explicit_step(fhour - 1, prev_decoded, n_points)
+            if prev_decoded else None
+        )
+        step = build_icon_d2_explicit_step(fhour, by_fhour.get(fhour), n_points, prev)
+        for i, data in enumerate(result[fhour]):
+            if i >= len(step.payloads):
+                break
+            data.explicit_convective = step.payloads[i]
+            data.explicit_echo_top_pa = step.echo_pa[i]
 
 
 def _ensure_icon_cloud_diag_cached(
@@ -325,14 +401,19 @@ def _ensure_icon_cloud_diag_cached(
     forecast_hours: list[int],
     variant: "IconVariant",
     session: requests.Session,
-) -> tuple[list[int], dict[int, int], list[tuple[int, str]]]:
+) -> tuple[list[int], dict[int, int], list[tuple[int, str]], dict[int, dict[str, str]]]:
     """Download half of :func:`fetch_icon_cloud_diag`: cache what *run_dir* lacks.
 
     Returns the steps whose cloud-diag blob is cached, ``predecessor_of``
-    (cached step -> its rain_con predecessor) and the ``(step, cache filename)``
-    of each predecessor blob that is cached. Never raises for a step: a failed
-    download is logged and leaves that step out.
+    (cached step -> its rain_con predecessor), the ``(step, cache filename)``
+    of each predecessor blob that is cached, and, for a variant with
+    explicit-convection fields (ICON-D2, #953), ``{step: {variable: cached
+    path}}`` of those (the briefing's files and keys) for each cached step,
+    and the echo top alone for its predecessor step.
+    Never raises for a step: a failed download is logged and leaves that step
+    (or that explicit variable) out.
     """
+    from weatherbrief.fetch.grib import icon_d2_explicit_conv_var_paths
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_RAIN_CON_CACHE_KEY,
         fetch_icon_eu_single_level,
@@ -395,7 +476,32 @@ def _ensure_icon_cloud_diag_cached(
                 )
                 continue
         preds.append((fhour, ck))
-    return job_fhours, predecessor_of, preds
+
+    explicit_paths: dict[int, dict[str, str]] = {}
+    for fhour in job_fhours if variant.explicit_conv_variables else ():
+        explicit_paths[fhour] = icon_d2_explicit_conv_var_paths(
+            run_dir, init_date, init_hour, fhour, session, variant=variant,
+        )
+    for fhour in _explicit_echo_top_preds(job_fhours, variant):
+        explicit_paths[fhour] = icon_d2_explicit_conv_var_paths(
+            run_dir, init_date, init_hour, fhour, session, variant=variant,
+            variables=(_ECHO_TOP_VAR,),
+        )
+    return job_fhours, predecessor_of, preds, explicit_paths
+
+
+# The explicit-conv variable whose previous-step file completes an hour's echo
+# top (three of its four quarter-hour windows end inside the previous hour).
+_ECHO_TOP_VAR = "echotop"
+
+
+def _explicit_echo_top_preds(steps: list[int], variant: "IconVariant") -> list[int]:
+    """The predecessor steps of *steps* whose echo-top file a snapshot reads
+    (#953): hourly predecessors only (the windows are 15 min), and not one of
+    *steps* itself (that step's full set is fetched anyway)."""
+    if _ECHO_TOP_VAR not in variant.explicit_conv_variables:
+        return []
+    return sorted({f - 1 for f in steps if f >= 1} - set(steps))
 
 
 def icon_cloud_diag_cold_steps(
@@ -403,19 +509,27 @@ def icon_cloud_diag_cold_steps(
 ) -> list[int]:
     """The *steps* whose cloud-diag read would download: the step's blob, or
     (where the variant has rain_con) its predecessor as a full or
-    rain_con-only blob, is not in *run_dir*. The cache-side mirror of
-    :func:`_ensure_icon_cloud_diag_cached`."""
+    rain_con-only blob, or one of its explicit-convection blobs or its
+    predecessor's echo top (ICON-D2, #953), is not in *run_dir*. The
+    cache-side mirror of :func:`_ensure_icon_cloud_diag_cached`."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_RAIN_CON_CACHE_KEY,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
+        icon_explicit_conv_cache_key,
     )
 
     diag_key = icon_cloud_diag_cache_key(variant)
     has_rain_con = "rain_con" in variant.cloud_diag_variables
     cold = []
     for fhour in steps:
-        if not is_cached(run_dir, cache_key(fhour, diag_key)):
+        if not is_cached(run_dir, cache_key(fhour, diag_key)) or not all(
+            is_cached(run_dir, cache_key(f, icon_explicit_conv_cache_key(var, variant)))
+            for f, var in (
+                [(fhour, v) for v in variant.explicit_conv_variables]
+                + [(p, _ECHO_TOP_VAR) for p in _explicit_echo_top_preds([fhour], variant)]
+            )
+        ):
             cold.append(fhour)
             continue
         prev = icon_eu_previous_step(fhour, variant) if has_rain_con else None
@@ -451,8 +565,9 @@ def ensure_icon_cloud_diag_files(
     """Download-only half of :func:`fetch_icon_cloud_diag`; the steps now cached.
 
     Same files under the same cache keys (the cloud-diag blob per step, the
-    rain_con predecessor where the variant has it), no decode, so a pre-warm
-    (#929) leaves exactly what the alternates' cloud diagnostics read.
+    rain_con predecessor where the variant has it, ICON-D2's explicit-convection
+    blobs and previous-step echo top), no decode, so a pre-warm (#929) leaves
+    exactly what the alternates' cloud diagnostics read.
     """
     from weatherbrief.fetch.grib import _grib_session
     from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
@@ -471,7 +586,7 @@ def ensure_icon_cloud_diag_files(
             )
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
-    cached, _, _ = _ensure_icon_cloud_diag_cached(
+    cached, _, _, _ = _ensure_icon_cloud_diag_cached(
         run_dir, init_date, init_hour, steps, variant, session,
     )
     return cached

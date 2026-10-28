@@ -544,6 +544,7 @@ class TestWarmIconAlternates:
             ICON_EU_RAIN_CON_CACHE_KEY,
             icon_cloud_diag_cache_key,
             icon_eu_previous_step,
+            icon_explicit_conv_cache_key,
         )
         from weatherbrief.tasks.standalone_grib import _icon_snapshot_plan
 
@@ -565,6 +566,16 @@ class TestWarmIconAlternates:
                 prev = icon_eu_previous_step(f, variant)
                 if prev is not None and "rain_con" in variant.cloud_diag_variables:
                     put_cached(run_dir, cache_key(prev, ICON_EU_RAIN_CON_CACHE_KEY), b"x")
+                for var in variant.explicit_conv_variables:  # ICON-D2 (#953)
+                    put_cached(
+                        run_dir, cache_key(f, icon_explicit_conv_cache_key(var, variant)), b"x",
+                    )
+                    if var == "echotop" and f >= 1:
+                        put_cached(
+                            run_dir,
+                            cache_key(f - 1, icon_explicit_conv_cache_key(var, variant)),
+                            b"x",
+                        )
             return steps if land else []
 
         with patch("weatherbrief.tasks.alternates.alternates_fetch_airports",

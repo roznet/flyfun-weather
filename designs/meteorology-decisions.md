@@ -7343,3 +7343,51 @@ GFS that evening).
 **To measure:** the 19Z artifact's GFS `model_init_time` is 12z; the node's
 18:15Z prefetch log shows `Prefetch: warming gfs (init … 12:00…)` and the
 19:15Z cycle downloads no GFS.
+
+## 71. ICON-D2 map and alternates rows grade convection on D2's explicit storm fields (#953)
+
+**Date:** 2026-10-28. Applies §19 to the snapshot rows of §64/§68.
+Mechanics: `metar-taf-accuracy.md` "GRIB-primary ICON and GFS snapshots".
+
+Since #928 the D2 snapshot rows fetched only D2's cloud diagnostics. With no
+explicit payload on the hour, the sounding pass took the parameterized
+`assess_convective_nwp`, which reads D2's structurally absent scheme fields as
+a quiet scheme: every D2 row stored `nwp_conv_method="nwp"`,
+`nwp_conv_risk="none"`, the exact failure §19 rule 5 guards against in
+briefings. (The GRIB-primary audit's §1.6 described this as a CAPE fallback;
+it was a false NONE.) Effect: ICON's NWP-track convective verification
+(`risk_source="nwp"`) scored those rows as forecasting no convection. Map
+display, briefings and the thermo track were not affected.
+
+**Decisions.**
+
+- **Same fields, files and payload as a D2 briefing hour.** The D2 cloud-diag
+  fetch (`fetch_icon_cloud_diag(variant=ICON_D2)`, its download half and its
+  cold-step check, so the flight warm and the node prefetch cover them too)
+  also caches the five storm-field blobs under the briefing's keys
+  (`icon_d2_explicit_conv_var_paths`) and decodes them as corridor extrema
+  with the default 10 NM radius around each airport: "a storm near the
+  airport" means what it means along a route. The payload is built by the
+  briefing's own builder (`build_icon_d2_explicit_step`), so completeness
+  flags and the always-attach rule cannot drift.
+- **Always attached on a D2 point**, a failed download or decode included:
+  then `detection_complete=False`, the row's native grade is NULL
+  (`nwp_conv_method` NULL) and verification's `graded` source falls back to
+  thermo, never a false NONE.
+- **The echo top is built, from the previous step's echo-top file** (the
+  issue's first option, over leaving `echo_top_complete=False`). Three of an
+  hour's four quarter-hour windows live in f(H−1), and map sample hours are
+  not contiguous, so each sampled step also fetches f(H−1)'s `echotop` file
+  alone (not the other four). The issue's premise that the echo top never
+  changes the grade is wrong: it feeds the §19 bright-band gate, which drops
+  an uncorroborated ≥ 45 dBZ fire to NONE when the echo top sits under 10,000
+  ft above the freezing level, and an unevaluable gate never fires. Without
+  it, D2 rows would grade melting-layer bright bands MODERATE where the same
+  hour in a briefing reads NONE. `top_ft` stays None as in briefings.
+- **Cost:** six more D2 files per sampled D2 step (the five storm fields and
+  the previous step's echo top), the briefing's own blobs, shared through the
+  cache with D2 briefings and the flight warm.
+- **Rows written before this** keep their false `nwp_conv_risk="none"`: not
+  rewritten here. D2 and EU rows are both `model="icon"`; from now on a D2 row
+  with a native grade is told apart by `nwp_conv_method="nwp_explicit"`.
+
