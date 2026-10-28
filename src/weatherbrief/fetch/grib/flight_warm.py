@@ -461,9 +461,13 @@ def _warm_arome(
     """AROME package groups of a meteofrance flight's window (#940)."""
     from weatherbrief.fetch.grib import _prefetch_arome_data, _prepare_arome
     from weatherbrief.fetch.grib.cache import pin_run_dir
-    from weatherbrief.fetch.grib.primary import grib_primary_skip_reason
+    from weatherbrief.fetch.grib.primary import grib_primary_models, grib_primary_skip_reason
     from weatherbrief.models import ModelSource, RouteCrossSection
 
+    if ModelSource.METEOFRANCE not in grib_primary_models():
+        # WB_GRIB_PRIMARY excludes it: the briefing makes no slot, so nothing
+        # would read these groups.
+        return _Outcome("skipped", reason="meteofrance_not_grib_primary")
     reason = grib_primary_skip_reason(
         ModelSource.METEOFRANCE, flight.route_points, flight.departure_time,
         flight.duration_hours,

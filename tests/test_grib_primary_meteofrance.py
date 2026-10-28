@@ -385,13 +385,16 @@ def _surface_message(*, short=None, param=None, level_type, level, step, value, 
         eccodes.codes_release(gid)
 
 
-def test_surface_decode_maps_fields_and_scales_fraction_covers(tmp_path):
+def test_surface_decode_maps_fields_and_takes_cover_units_from_the_message(tmp_path):
     from weatherbrief.fetch.grib.decode import decode_arome_surface_per_point
 
     msgs = [
         _surface_message(short="2t", level_type=103, level=2, step=7, value=290.0),
-        # Total cloud as MF's 0/6/1 in 0–1: stored as %.
+        # MF's local 0/6/1 (units "unknown") is % as in the WMO table: a
+        # nearly clear 0.6 stays 0.6, never inflated ×100.
         _surface_message(param=(0, 6, 1), level_type=1, level=None, step=7, value=0.6),
+        # A cover declaring % is taken as is.
+        _surface_message(short="lcc", level_type=1, level=None, step=7, value=40.0),
         _surface_message(short="tp", level_type=1, level=None, step=7, value=4.0, stat=1),
         _surface_message(short="tp", level_type=1, level=None, step=6, value=1.5, stat=1),
         _surface_message(short="2t", level_type=103, level=2, step=8, value=291.0),
@@ -402,7 +405,8 @@ def test_surface_decode_maps_fields_and_scales_fraction_covers(tmp_path):
     assert set(out["points"]) == {6, 7}
     p7 = out["points"][7][0]
     assert p7["t2m_k"] == pytest.approx(290.0, abs=0.01)
-    assert p7["tcc"] == pytest.approx(60.0, abs=0.1)
+    assert p7["tcc"] == pytest.approx(0.6, abs=0.01)
+    assert p7["lcc"] == pytest.approx(40.0, abs=0.1)
     assert p7["tp_kg_m2"] == pytest.approx(4.0, abs=0.01)
     assert out["points"][6][0] == {"tp_kg_m2": pytest.approx(1.5, abs=0.01)}
 
@@ -544,13 +548,34 @@ def test_warm_skips_flights_without_a_meteofrance_slot(monkeypatch, tmp_path):
     assert (out.status, out.reason) == ("skipped", "no_meteofrance_slot")
 
 
+@pytest.mark.parametrize("switch", ["0", "ecmwf,icon,gfs"])
+def test_warm_skips_when_grib_primary_excludes_meteofrance(monkeypatch, tmp_path, switch):
+    """The briefing makes no slot then, so the warm downloads nothing."""
+    from weatherbrief.fetch.grib import flight_warm
+
+    monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
+    monkeypatch.setenv("WB_GRIB_PRIMARY", switch)
+    monkeypatch.setattr(flight_warm, "_wants_meteofrance", lambda flight: True)
+    monkeypatch.setattr(af, "download_arome_group", lambda *a, **kw: pytest.fail("downloaded"))
+    dep = datetime.now(UTC) + timedelta(hours=20)
+    out = flight_warm._warm_arome(_flight(_pts(LONDON, PARIS), dep=dep), tmp_path, lambda: False)
+    assert (out.status, out.reason) == ("skipped", "meteofrance_not_grib_primary")
+
+
+def _recent_run() -> tuple[str, int]:
+    """The 3-hourly AROME run 6 h before now: a flight 20 h out is inside it,
+    whatever day the suite runs."""
+    t = datetime.now(UTC) - timedelta(hours=6)
+    return t.strftime("%Y%m%d"), t.hour - t.hour % 3
+
+
 def test_warm_downloads_every_package_group_then_hits_the_cache(monkeypatch, tmp_path):
     import weatherbrief.fetch.grib as grib_mod
     from weatherbrief.fetch.grib import flight_warm
 
     monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
     monkeypatch.setattr(flight_warm, "_wants_meteofrance", lambda flight: True)
-    monkeypatch.setattr(af, "find_latest_arome_run", lambda *a, **kw: ("20261025", 12))
+    monkeypatch.setattr(af, "find_latest_arome_run", lambda *a, **kw: _recent_run())
     monkeypatch.setattr(grib_mod, "_grib_session", lambda: None)
     got: list[tuple[str, str]] = []
 
@@ -580,7 +605,7 @@ def test_warm_stops_at_the_limit(monkeypatch, tmp_path):
 
     monkeypatch.delenv(af.AROME_ENABLED_ENV, raising=False)
     monkeypatch.setattr(flight_warm, "_wants_meteofrance", lambda flight: True)
-    monkeypatch.setattr(af, "find_latest_arome_run", lambda *a, **kw: ("20261025", 12))
+    monkeypatch.setattr(af, "find_latest_arome_run", lambda *a, **kw: _recent_run())
     monkeypatch.setattr(grib_mod, "_grib_session", lambda: None)
     monkeypatch.setattr(af, "download_arome_group", lambda *a, **kw: pytest.fail("downloaded"))
     dep = datetime.now(UTC) + timedelta(hours=20)
