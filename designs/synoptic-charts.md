@@ -127,7 +127,7 @@ catch standalone than after the renderer exists.
 
 - `GET /api/synoptic-charts/manifest` → `{ sources: [ { slug, label,
   attribution_html, run_cycle, issued_at, charts: [ { id, offset_h, chart_type,
-  native_size, valid_time, init_time } ] } ] }` (built by
+  native_size, valid_time, init_time, small_width } ] } ] }` (built by
   `build_source_manifest`; see *DWD forecast chart times* for where the times
   come from). DWD
   always included; Met Office only if `source_allowed`. A source with no cached
@@ -139,6 +139,12 @@ catch standalone than after the renderer exists.
   `Cache-Control`; gate Met Office (404 not 403 so non-admins can't probe).
   Status codes as built: 404 unknown/gated source, 400 bad chart id or
   run-cycle, **410** when the bytes are evicted or the run skipped that offset.
+- `?w=1600` on the DWD analysis serves its downscaled copy
+  (`serve_small_dwd_analysis`, shared with the `packs.py` endpoint; 400 for any
+  other chart, width or source). The manifest flags it with `small_width`; the
+  map shows that copy first and swaps to the full 4.8 MB chart (`zoomUrl`) only
+  once zoomed past it, i.e. when `nativeW · 2^zoom > small_width` in
+  `SynopticMap.chartImageUrl`.
 - Refactor the existing flight-scoped chart endpoints in `packs.py` to call the
   same shared serve helper (behavior unchanged). Both `synoptic_charts.py` and
   `packs.py` import `serve_chart_bytes` + `SOURCES` from `_chart_serving.py`.

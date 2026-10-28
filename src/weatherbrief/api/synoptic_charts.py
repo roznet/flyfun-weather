@@ -11,8 +11,9 @@ the Hewson gridded overlay + front polylines.
         with its latest cycle, issuance, attribution, and per-chart metadata
         (offset, chart_type, native size, valid time).
 
-  GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}
-      → the chart bytes (immutable cache).
+  GET /api/synoptic-charts/{source}/{run_cycle}/{chart_id}[?w=1600]
+      → the chart bytes (immutable cache). ``?w=`` serves the downscaled copy
+        of a chart whose manifest entry carries ``small_width`` (DWD analysis).
 
 Auth mirrors the Hewson map endpoints: any authenticated user. The Synoptic
 Forecast tab is hidden client-side unless the user enables it; Met Office is
@@ -24,7 +25,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -33,6 +34,7 @@ from weatherbrief.api._chart_serving import (
     build_source_manifest,
     get_source_or_404,
     serve_chart_bytes,
+    serve_small_dwd_analysis,
     source_allowed,
 )
 
@@ -72,6 +74,7 @@ def get_chart(
     run_cycle: str,
     chart_id: str,
     request: Request,
+    w: int | None = Query(None, description="Downscaled width; only the DWD analysis at 1600"),
     _user_id: str = Depends(current_user_id),
     db: Session = Depends(get_db, scope="function"),
 ):
@@ -80,4 +83,8 @@ def get_chart(
     if not source_allowed(spec, request, db):
         # 404 (not 403) so a non-admin can't probe which sources exist.
         raise HTTPException(status_code=404, detail="Unknown chart source")
+    if w is not None:
+        if spec.slug != "dwd":
+            raise HTTPException(status_code=400, detail="Only the analysis has a downscaled copy")
+        return serve_small_dwd_analysis(_data_dir(), run_cycle, chart_id, w)
     return serve_chart_bytes(_data_dir(), spec, run_cycle, chart_id)

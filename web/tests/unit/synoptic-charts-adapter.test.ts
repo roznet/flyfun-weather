@@ -85,4 +85,10 @@ describe('projectionKeyFor / synopticChartUrl', () => {
       '/api/synoptic-charts/dwd/2026-05-19T06Z/ana',
     );
   });
+
+  it('asks for the downscaled copy when given a width', () => {
+    expect(synopticChartUrl('dwd', RUN, 'ana', 1600)).toBe(
+      '/api/synoptic-charts/dwd/2026-05-19T06Z/ana?w=1600',
+    );
+  });
 });

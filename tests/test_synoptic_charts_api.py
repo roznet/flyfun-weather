@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +107,9 @@ def test_manifest_lists_dwd_only_for_non_admin(client, data_dir):
     assert ana["chart_type"] == "analysis"
     assert ana["native_size"] == [4389, 3114]
     assert ana["valid_time"] == "2026-05-08T06:00:00Z"
+    # Only the analysis has a downscaled copy to show before zooming in.
+    assert ana["small_width"] == dwd_charts.ANALYSIS_SMALL_WIDTH
+    assert next(c for c in dwd["charts"] if c["id"] == "048")["small_width"] is None
 
 
 def test_manifest_includes_metoffice_when_public(client, data_dir, monkeypatch):
@@ -142,6 +146,35 @@ def test_serve_dwd_png(client, data_dir):
     assert resp.headers["content-type"] == "image/png"
     assert resp.content == _PNG
     assert "immutable" in resp.headers["cache-control"]
+
+
+def test_serve_downscaled_dwd_analysis(client, data_dir):
+    from PIL import Image
+
+    cdir = dwd_charts.cycle_dir(data_dir, _DWD_CYCLE)
+    cdir.mkdir(parents=True, exist_ok=True)
+    Image.new("P", dwd_charts.CHART_NATIVE_SIZE["analysis"], color=3).save(cdir / "ana.png")
+
+    resp = client.get(f"/api/synoptic-charts/dwd/{_DWD_CYCLE}/ana?w={dwd_charts.ANALYSIS_SMALL_WIDTH}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    with Image.open(io.BytesIO(resp.content)) as im:
+        assert im.size[0] == dwd_charts.ANALYSIS_SMALL_WIDTH
+
+
+def test_serve_downscaled_400_outside_dwd_analysis(client, data_dir, monkeypatch):
+    monkeypatch.setenv("METOFFICE_CHARTS_PUBLIC", "1")
+    _write(dwd_charts, data_dir, _DWD_CYCLE, "048", _PNG)
+    _write(metoffice_charts, data_dir, _MO_CYCLE, "ana", _GIF)
+    w = dwd_charts.ANALYSIS_SMALL_WIDTH
+    assert client.get(f"/api/synoptic-charts/dwd/{_DWD_CYCLE}/048?w={w}").status_code == 400
+    assert client.get(f"/api/synoptic-charts/dwd/{_DWD_CYCLE}/ana?w=800").status_code == 400
+    assert client.get(f"/api/synoptic-charts/metoffice/{_MO_CYCLE}/ana?w={w}").status_code == 400
+
+
+def test_serve_downscaled_410_when_analysis_missing(client):
+    resp = client.get(f"/api/synoptic-charts/dwd/{_DWD_CYCLE}/ana?w={dwd_charts.ANALYSIS_SMALL_WIDTH}")
+    assert resp.status_code == 410
 
 
 def test_serve_410_when_missing(client):

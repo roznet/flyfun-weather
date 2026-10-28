@@ -45,10 +45,19 @@ function isDark(): boolean {
 
 export type BasemapMode = 'osm' | 'chart';
 
-/** Everything SynopticMap needs to render a chart basemap. */
-export interface ChartBasemapSpec {
-  /** Chart image URL (PNG / GIF). */
+/** The chart image to show, with an optional full-resolution swap on zoom. */
+export interface ChartImage {
+  /** Chart image URL (PNG / GIF) shown first. */
   url: string;
+  /** Full-resolution image, loaded once the map is zoomed past `previewWidth`
+   * (so a 4.8 MB chart is only downloaded when it's actually needed). */
+  zoomUrl?: string;
+  /** Pixel width of the `url` image, when it is a downscaled copy. */
+  previewWidth?: number;
+}
+
+/** Everything SynopticMap needs to render a chart basemap. */
+export interface ChartBasemapSpec extends ChartImage {
   /** Forward/inverse projection + native pixel size for this chart type. */
   projection: ChartProjection;
   /** Attribution HTML for the chart source. */
@@ -151,11 +160,31 @@ export class SynopticMap {
 
   /** Swap the chart image without rebuilding the map (e.g. on hour change
    * within the same source). No-op outside chart mode. */
-  updateChartImage(url: string): void {
+  updateChartImage(image: ChartImage): void {
     if (this.mode !== 'chart' || !this.chartSpec || !this.imageOverlay) return;
-    this.chartSpec = { ...this.chartSpec, url };
-    this.imageOverlay.setUrl(url);
+    this.chartSpec = {
+      ...this.chartSpec, url: image.url, zoomUrl: image.zoomUrl, previewWidth: image.previewWidth,
+    };
+    this.imageOverlay.setUrl(this.chartImageUrl());
   }
+
+  /** The chart image URL for the current zoom: the full-resolution one once
+   * the preview would be drawn wider than its own pixels. Under CRS.Simple a
+   * native chart pixel is 2^zoom screen pixels. */
+  private chartImageUrl(): string {
+    const spec = this.chartSpec!;
+    if (!spec.zoomUrl || !spec.previewWidth || !this.map) return spec.url;
+    const drawnWidth = spec.projection.nativeSize[0] * Math.pow(2, this.map.getZoom());
+    return drawnWidth > spec.previewWidth ? spec.zoomUrl : spec.url;
+  }
+
+  private handleChartZoom = (): void => {
+    if (!this.imageOverlay || !this.chartSpec?.zoomUrl) return;
+    // Both images are browser-cached once loaded, so crossing the threshold
+    // again is cheap.
+    const url = this.chartImageUrl();
+    if (this.imageOverlay.getElement()?.getAttribute('src') !== url) this.imageOverlay.setUrl(url);
+  };
 
   /** Tear down and rebuild the Leaflet map for the current mode, re-applying
    * the slice / fronts / opacity and fitting to `geo` (if given). */
@@ -243,7 +272,6 @@ export class SynopticMap {
       const p = this.map.createPane('chartBasemapPane');
       p.style.zIndex = '250';
     }
-    this.imageOverlay = L.imageOverlay(spec.url, bounds, { pane: 'chartBasemapPane' }).addTo(this.map);
     this.map.setMaxBounds(bounds.pad(0.5));
 
     this.chartAttr = spec.attributionHtml;
@@ -251,6 +279,9 @@ export class SynopticMap {
 
     if (geo) this.fitGeoBounds(geo);
     else this.map.fitBounds(bounds);
+    // Created after the fit so the first image is the right one for that zoom.
+    this.imageOverlay = L.imageOverlay(this.chartImageUrl(), bounds, { pane: 'chartBasemapPane' }).addTo(this.map);
+    this.map.on('zoomend', this.handleChartZoom);
   }
 
   // -------------------------------------------------------------------------

@@ -16,7 +16,7 @@ import {
   AirportProfilePanel,
   type AirportSummaryInput, type ViewMode as ApViewMode,
 } from './visualization/airport-profile-panel';
-import { SynopticMap } from './visualization/synoptic-map';
+import { SynopticMap, type ChartImage } from './visualization/synoptic-map';
 import {
   fetchSynopticChartsManifest, synopticChartUrl, projectionKeyFor,
   pickChartForValidTime,
@@ -1043,12 +1043,14 @@ function applyChartBasemap(forceRebuild: boolean): void {
     return;
   }
   const key = projectionKeyFor(source.slug, pick.chart.chart_type);
-  const url = synopticChartUrl(source.slug, source.run_cycle, pick.chart.id);
+  // A chart with a downscaled copy (the 4.8 MB DWD analysis) shows it first;
+  // the map swaps in the full chart once zoomed past the copy's resolution.
+  const image = chartImageFor(source, pick.chart);
   if (!forceRebuild && key === synChartKey) {
-    if (pick.chart.id !== synChartId) synopticMap.updateChartImage(url);
+    if (pick.chart.id !== synChartId) synopticMap.updateChartImage(image);
   } else {
     synopticMap.setBasemap('chart', {
-      url,
+      ...image,
       projection: makeChartProjection(key),
       attributionHtml: source.attribution_html,
     });
@@ -1056,6 +1058,16 @@ function applyChartBasemap(forceRebuild: boolean): void {
   synChartKey = key;
   synChartId = pick.chart.id;
   updateBasemapInfo({ source, chart: pick.chart, gapHours: pick.gapHours });
+}
+
+function chartImageFor(source: SynopticChartSource, chart: SynopticChartEntry): ChartImage {
+  const full = synopticChartUrl(source.slug, source.run_cycle, chart.id);
+  if (!chart.small_width) return { url: full };
+  return {
+    url: synopticChartUrl(source.slug, source.run_cycle, chart.id, chart.small_width),
+    zoomUrl: full,
+    previewWidth: chart.small_width,
+  };
 }
 
 function updateBasemapInfo(

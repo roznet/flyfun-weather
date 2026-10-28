@@ -11,6 +11,7 @@ export interface SynopticChartEntry {
   native_size: [number, number] | null;
   valid_time: string | null; // ISO 8601 Z
   init_time?: string | null; // ISO 8601 Z — the chart's own model run, when recorded
+  small_width?: number | null; // width of a downscaled copy served at ?w= (DWD analysis)
 }
 
 export interface SynopticChartSource {
@@ -32,9 +33,11 @@ export async function fetchSynopticChartsManifest(): Promise<SynopticChartsManif
   return resp.json();
 }
 
-/** Bytes URL for a specific (source, run_cycle, chart_id). */
-export function synopticChartUrl(slug: string, runCycle: string, chartId: string): string {
-  return `/api/synoptic-charts/${encodeURIComponent(slug)}/${encodeURIComponent(runCycle)}/${encodeURIComponent(chartId)}`;
+/** Bytes URL for a specific (source, run_cycle, chart_id); `width` asks for
+ * the downscaled copy (only valid with the entry's `small_width`). */
+export function synopticChartUrl(slug: string, runCycle: string, chartId: string, width?: number): string {
+  const base = `/api/synoptic-charts/${encodeURIComponent(slug)}/${encodeURIComponent(runCycle)}/${encodeURIComponent(chartId)}`;
+  return width ? `${base}?w=${width}` : base;
 }
 
 /** The ChartProjectionKey for a source+chart pair, matching the generated

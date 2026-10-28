@@ -166,6 +166,24 @@ def serve_chart_bytes(
     )
 
 
+def serve_small_dwd_analysis(data_dir: Path, run_cycle: str, chart_id: str, width: int) -> Response:
+    """The downscaled DWD analysis (#799); same status codes as ``serve_chart_bytes``.
+
+    Only the analysis at ``ANALYSIS_SMALL_WIDTH`` has one — any other chart or
+    width is a 400.
+    """
+    if chart_id != "ana" or width != dwd_charts.ANALYSIS_SMALL_WIDTH:
+        raise HTTPException(status_code=400, detail="Only the analysis has a downscaled copy")
+    if not RUN_CYCLE_RE.match(run_cycle):
+        raise HTTPException(status_code=400, detail="Invalid run cycle")
+    path = dwd_charts.resolve_small_analysis_path(data_dir, run_cycle)
+    if path is None:
+        raise HTTPException(status_code=410, detail="Chart not available")
+    return FileResponse(
+        path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, Any] | None:
     """Manifest for one source's latest cached cycle, or None if nothing cached.
 
@@ -205,6 +223,12 @@ def build_source_manifest(data_dir: Path, spec: ChartSourceSpec) -> dict[str, An
             "native_size": list(native) if native else None,
             "valid_time": valid_time,
             "init_time": chart_meta.get("init_time"),
+            # Width of a downscaled copy served at ``?w=``, when there is one:
+            # the client shows it first and the full chart once zoomed past it.
+            "small_width": (
+                dwd_charts.ANALYSIS_SMALL_WIDTH
+                if spec.slug == "dwd" and chart_id == "ana" else None
+            ),
         })
 
     if not charts:

@@ -4850,7 +4850,7 @@ def get_dwd_chart(
 
     Auth: any authenticated user can view (matches dwd-overview).
     """
-    from weatherbrief.api._chart_serving import SOURCES, serve_chart_bytes
+    from weatherbrief.api._chart_serving import SOURCES, serve_chart_bytes, serve_small_dwd_analysis
 
     # Auth + flight/pack existence check. We don't need the pack_dir
     # itself — chart bytes live in the shared cache, not the pack — so
@@ -4865,26 +4865,9 @@ def get_dwd_chart(
 
     data_dir = Path(os.environ.get("DATA_DIR", "data"))
     if w is not None:
-        return _serve_small_dwd_analysis(data_dir, meta.dwd_charts_run_cycle, chart_id, w)
+        return serve_small_dwd_analysis(data_dir, meta.dwd_charts_run_cycle, chart_id, w)
     return serve_chart_bytes(
         data_dir, SOURCES["dwd"], meta.dwd_charts_run_cycle, chart_id, immutable=False,
-    )
-
-
-def _serve_small_dwd_analysis(data_dir: Path, run_cycle: str, chart_id: str, width: int) -> Response:
-    """The downscaled DWD analysis; same status codes as ``serve_chart_bytes``."""
-    from weatherbrief.api._chart_serving import RUN_CYCLE_RE
-    from weatherbrief.fetch.dwd_charts import ANALYSIS_SMALL_WIDTH, resolve_small_analysis_path
-
-    if chart_id != "ana" or width != ANALYSIS_SMALL_WIDTH:
-        raise HTTPException(status_code=400, detail="Only the analysis has a downscaled copy")
-    if not RUN_CYCLE_RE.match(run_cycle):
-        raise HTTPException(status_code=400, detail="Invalid run cycle")
-    path = resolve_small_analysis_path(data_dir, run_cycle)
-    if path is None:
-        raise HTTPException(status_code=410, detail="Chart not available")
-    return FileResponse(
-        path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"},
     )
 
 
