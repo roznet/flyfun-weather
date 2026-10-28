@@ -549,12 +549,14 @@ def run_fetch(
                 _record_success(model, point_forecasts)
 
     if grib_primary_models:
-        from weatherbrief.fetch.grib.primary import build_skeleton
+        from weatherbrief.fetch.grib.primary import build_skeleton, skeleton_end_date
 
+        # Past end_date when a coarse step's upper bracket lands on the next day.
+        skeleton_end = skeleton_end_date(departure_time, route.flight_duration_hours or 0)
         for model in grib_primary_models:
             logger.info("GRIB-primary %s: built from GRIB, no up-front Open-Meteo fetch", model.value)
             _record_success(model, build_skeleton(
-                route_points, model, start_date=target_date, end_date=end_date,
+                route_points, model, start_date=target_date, end_date=skeleton_end,
             ))
 
     # --- GRIB2 enrichment (optional) ---

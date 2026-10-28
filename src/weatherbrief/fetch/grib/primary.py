@@ -396,6 +396,29 @@ def fetch_end_date(
     return window_end_hour(departure_time, flight_duration_hours).strftime("%Y-%m-%d")
 
 
+# Coarsest native step a GRIB-primary model publishes inside a briefing's
+# horizon: ECMWF past +144 h (ICON-EU past +78 h and GFS past +120 h are 3 h).
+_MAX_NATIVE_STEP_H = 6
+
+
+def skeleton_end_date(
+    departure_time: datetime, flight_duration_hours: float,
+) -> str:
+    """``end_date`` of a GRIB-primary skeleton: :func:`fetch_end_date` plus room
+    for the upper bracket.
+
+    In a model's coarse region the step at or after the window end
+    (``contiguous_window_forecast_hours``) can fall on the next day: a window
+    ending 22Z on a 3-hourly grid is bracketed by 21Z and 00Z. Without a slot
+    for that 00Z its values are dropped, 22Z–23Z stay empty and every point
+    falls back to Open-Meteo. The extra hours are only slots; coverage and the
+    Open-Meteo fallback still read :func:`required_hours` and the
+    Open-Meteo span.
+    """
+    end = window_end_hour(departure_time, flight_duration_hours)
+    return (end + timedelta(hours=_MAX_NATIVE_STEP_H)).strftime("%Y-%m-%d")
+
+
 def _hour_covered(h: HourlyForecast | None) -> bool:
     if h is None or not h.pressure_levels:
         return False

@@ -182,6 +182,35 @@ def test_fetch_end_date_reaches_the_hour_after_arrival(dep, duration, end_date, 
     assert last_hour <= span_end
 
 
+def test_skeleton_holds_the_coarse_upper_bracket_past_midnight():
+    """A 20Z 2 h flight on a 3-hourly grid is bracketed by 21Z and 00Z next day.
+
+    The skeleton must hold that 00Z so the time fill reaches 22Z–23Z; with the
+    Open-Meteo span (ending 23Z) the anchor had no slot and every point fell
+    back to Open-Meteo.
+    """
+    from weatherbrief.fetch.grib.fill import _interp_surface_hourly
+    from weatherbrief.fetch.grib.primary import skeleton_end_date
+    from weatherbrief.models import NWPCloudDiagnostics
+
+    dep = datetime(2026, 5, 4, 20, 0, tzinfo=UTC)
+    assert fetch_end_date(dep, 2.0) == "2026-05-04"
+    assert skeleton_end_date(dep, 2.0) == "2026-05-05"
+    # Daytime windows keep the single-day span.
+    assert skeleton_end_date(DEP, 2.0) == "2026-05-04"
+
+    (wf,) = build_skeleton(_points(1), ModelSource.ICON, start_date="2026-05-04",
+                           end_date=skeleton_end_date(dep, 2.0))
+    by_time = {h.time: h for h in wf.hourly}
+    for t, temp in ((datetime(2026, 5, 4, 21, tzinfo=UTC), 9.0),
+                    (datetime(2026, 5, 5, 0, tzinfo=UTC), 6.0)):
+        _fill_hour(by_time[t], temp=temp)
+        by_time[t].attach_nwp_diagnostics(NWPCloudDiagnostics())
+    _interp_surface_hourly(wf.hourly)
+    assert by_time[datetime(2026, 5, 4, 22, tzinfo=UTC)].temperature_2m_c == pytest.approx(8.0)
+    assert by_time[datetime(2026, 5, 4, 23, tzinfo=UTC)].temperature_2m_c == pytest.approx(7.0)
+
+
 # ---------------------------------------------------------------------------
 # Coverage and splice
 # ---------------------------------------------------------------------------
