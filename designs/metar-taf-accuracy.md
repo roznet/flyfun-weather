@@ -418,7 +418,11 @@ hourly (#415).
   and historical map pick the newest cycle with `snapshot_runs`. D2 isobaric files
   (`ICON_D2_SNAPSHOT_PRESSURE_LEVELS`, 11 levels), D2 surface files and D2's
   own cloud diagnostics (`fetch_icon_cloud_diag(variant=ICON_D2)`), which
-  also give those rows their ceiling columns (the EU diagnostics skip them).
+  also give those rows their ceiling columns (the EU diagnostics skip them),
+  plus D2's explicit storm fields (#953: the briefing's per-variable blobs and
+  payload builder, corridor extrema 10 NM around each airport), so a D2 row's
+  native convective grade is `nwp_explicit`, or NULL when the storm fields are
+  unavailable, never the scheme path's false NONE. Meteorology: §71.
   A D2 hour short falls to ICON-EU, then Open-Meteo. D2 and EU download side
   by side, EU up front only for steps past 48 h or when some airport is
   outside D2 (EU files are whole-grid: bytes per step, not per airport); a

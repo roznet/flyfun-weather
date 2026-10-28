@@ -56,7 +56,8 @@ def _put(run_dir, fhour: int, label: str, value: float) -> None:
 
 
 def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS,
-                   variant=None, t2m_k=288.15, cover_pct=40.0, init_hour=0):
+                   variant=None, t2m_k=288.15, cover_pct=40.0, init_hour=0,
+                   explicit_conv=True):
     """Cache everything the ICON snapshot builder and the cloud diag read.
 
     ICON-EU by default; ``variant=ICON_D2`` seeds the D2 run (#928), whose
@@ -66,6 +67,7 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS
         ICON_EU,
         ICON_EU_RAIN_CON_CACHE_KEY,
         icon_cloud_diag_cache_key,
+        icon_explicit_conv_cache_key,
         icon_pressure_cache_key,
         icon_snapshot_pressure_levels,
         icon_surface_cache_key,
@@ -112,6 +114,18 @@ def _seed_icon_run(data_dir, *, skip_pressure_steps=(), levels=None, steps=STEPS
                 _grib_message(centre=78, category=1, number=76, value=0.0,
                               step_h=fhour - 1, accumulated=True),
             )
+        # ICON-D2's explicit storm fields (#953), one blob per variable under
+        # the briefing's keys. Their decode is the ``env`` fixture's fake.
+        # The previous step's echo top completes the hour's echo top.
+        for h, var in (
+            [(fhour, v) for v in variant.explicit_conv_variables]
+            + ([(fhour - 1, "echotop")] if fhour >= 1 else [])
+            if explicit_conv and variant.explicit_conv_variables else []
+        ):
+            put_cached(
+                run_dir, cache_key(h, icon_explicit_conv_cache_key(var, variant)),
+                b"explicit",
+            )
     return run_dir
 
 
@@ -157,6 +171,24 @@ class _OpenMeteoFake:
         return out
 
 
+def _explicit_decode(point=None, *, fail=False, calls=None):
+    """Stand-in for the ICON-D2 explicit-conv decode worker: *point* (default
+    a quiet, complete hour) at every airport, or an exception with *fail*."""
+    quiet = {
+        "dbz_ctmax": (None, True), "lpi_max": (0.0, True),
+        "w_ctmax": (0.5, True), "uh_max": (0.0, True), "echotop_quarters": {},
+    }
+
+    def decode(var_paths, lats, lons):
+        if calls is not None:
+            calls.append(sorted(var_paths))
+        if fail:
+            raise RuntimeError("decode failed")
+        return [dict(point or quiet) for _ in lats]
+
+    return decode
+
+
 def _no_network(*args, **kwargs):
     raise AssertionError("everything is cached; nothing should be downloaded")
 
@@ -200,6 +232,12 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "weatherbrief.fetch.grib.icon_eu_fetch.fetch_icon_eu_single_level",
         _no_network,
+    )
+    # ICON-D2 explicit-convection decode (#953): quiet and complete unless a
+    # test says otherwise (real D2 sub-hourly messages are #462's tests).
+    monkeypatch.setattr(
+        "weatherbrief.fetch.grib.decode_worker.decode_icon_d2_explicit_conv",
+        _explicit_decode(),
     )
     fake = _OpenMeteoFake()
 
@@ -635,6 +673,167 @@ class TestIconD2:
         assert eu["nwp_ceiling_ft"] == 1200.0
 
 
+class TestIconD2ExplicitConvection:
+    """#953: D2 rows grade convection through D2's explicit storm fields, as
+    the briefing grades a D2 hour, never through the empty scheme fields."""
+
+    CELL = {
+        "dbz_ctmax": (52.0, True), "lpi_max": (40.0, True),
+        "w_ctmax": (15.0, True), "uh_max": (60.0, True), "echotop_quarters": {},
+    }
+
+    def _snaps(self, env, monkeypatch, decode=None, **seed):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        _seed_d2(data_dir, **seed)
+        if decode is not None:
+            monkeypatch.setattr(
+                "weatherbrief.fetch.grib.decode_worker.decode_icon_d2_explicit_conv",
+                decode,
+            )
+        snaps, api_calls = _run()
+        assert api_calls == 0
+        return _by(snaps)
+
+    def test_a_storm_cell_grades_through_the_explicit_path(self, env, monkeypatch):
+        by = self._snaps(env, monkeypatch, _explicit_decode(self.CELL))
+        for icao in IN_D2:
+            for h in STEPS:
+                assert by[(icao, h)]["nwp_conv_method"] == "nwp_explicit"
+                assert by[(icao, h)]["nwp_conv_risk"] not in (None, "none")
+
+    def test_a_quiet_complete_hour_is_a_real_none(self, env, monkeypatch):
+        by = self._snaps(env, monkeypatch)
+        for icao in IN_D2:
+            assert by[(icao, 6)]["nwp_conv_method"] == "nwp_explicit"
+            assert by[(icao, 6)]["nwp_conv_risk"] == "none"
+
+    def test_a_failed_channel_is_unavailable_not_none(self, env, monkeypatch):
+        by = self._snaps(env, monkeypatch, _explicit_decode(fail=True))
+        for icao in IN_D2:
+            for h in STEPS:
+                # No native verdict: verification falls back to thermo.
+                assert by[(icao, h)].get("nwp_conv_method") is None
+                assert by[(icao, h)].get("nwp_conv_risk") is None
+                assert by[(icao, h)]["temperature_2m_c"] == pytest.approx(23.0, abs=0.01)
+
+    def test_missing_files_are_unavailable_not_none(self, env, monkeypatch):
+        # Not cached, and DWD refuses (the fixture's no-network fetch).
+        by = self._snaps(env, monkeypatch, explicit_conv=False)
+        for icao in IN_D2:
+            assert by[(icao, 6)].get("nwp_conv_risk") is None
+
+    def test_icon_eu_rows_unchanged(self, env, monkeypatch):
+        calls: list = []
+        by = self._snaps(env, monkeypatch, _explicit_decode(self.CELL, calls=calls))
+        assert calls  # the D2 decode ran ...
+        for h in STEPS:
+            # ... and never reached an EU row.
+            assert by[("LIRF", h)].get("nwp_conv_method") != "nwp_explicit"
+
+    def test_every_d2_point_carries_the_payload(self, env, monkeypatch):
+        """Mirror of the briefing invariant: every D2 point of every step gets
+        a payload, a step whose explicit decode failed included."""
+        import weatherbrief.fetch.grib as grib
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_D2,
+            icon_explicit_conv_cache_key,
+        )
+        from weatherbrief.tasks.standalone_grib import fetch_icon_cloud_diag
+
+        data_dir, _ = env
+        run_dir = _seed_d2(data_dir)
+        # f012's storm fields are not on disk, and DWD refuses them.
+        for var in ICON_D2.explicit_conv_variables:
+            (run_dir / cache_key(12, icon_explicit_conv_cache_key(var, ICON_D2))).unlink()
+        built: list[int] = []
+        real = grib.build_icon_d2_explicit_step
+        monkeypatch.setattr(
+            grib, "build_icon_d2_explicit_step",
+            lambda fhour, *a, **kw: built.append(fhour) or real(fhour, *a, **kw),
+        )
+
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.decode_worker.decode_icon_d2_explicit_conv",
+            _explicit_decode(self.CELL),
+        )
+        lats = [a.lat for a in AIRPORTS]
+        lons = [a.lon for a in AIRPORTS]
+        by_fhour = fetch_icon_cloud_diag(
+            INIT_DATE, 0, STEPS, lats, lons, data_dir=data_dir, variant=ICON_D2,
+        )
+        assert sorted(by_fhour) == STEPS
+        # The briefing's payload builder, for every step (and for each
+        # predecessor's echo-top quarters).
+        assert set(STEPS) <= set(built)
+        for fhour, points in by_fhour.items():
+            assert len(points) == len(AIRPORTS)
+            for p in points:
+                assert p.explicit_convective is not None
+                assert p.explicit_convective.source == "icon_d2"
+                assert p.explicit_convective.detection_complete is (fhour != 12)
+                # The fake decodes no echo-top quarters.
+                assert p.explicit_convective.echo_top_complete is False
+
+    def test_echo_top_from_the_previous_step_file(self, env, monkeypatch):
+        """Three of the hour's four echo-top quarters are in f(H-1)'s file,
+        fetched for the echo top alone: the hour's echo top is complete, as
+        on a briefing hour, so the bright-band gate can run."""
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2
+        from weatherbrief.tasks.standalone_grib import fetch_icon_cloud_diag
+
+        data_dir, _ = env
+        _seed_d2(data_dir, steps=[6])
+        seen: list = []
+
+        def decode(var_paths, lats, lons):
+            seen.append(sorted(var_paths))
+            fhour = int(next(iter(var_paths.values())).split("/f")[-1][:3])
+            end = 6 * 60  # the four windows ending in (05:00, 06:00]
+            quarters = (
+                {end - 45: (60000.0, True), end - 30: (55000.0, True),
+                 end - 15: (None, True)}
+                if fhour == 5 else {end: (58000.0, True)}
+            )
+            return [{**self.CELL, "echotop_quarters": quarters} for _ in lats]
+
+        monkeypatch.setattr(
+            "weatherbrief.fetch.grib.decode_worker.decode_icon_d2_explicit_conv", decode,
+        )
+        by_fhour = fetch_icon_cloud_diag(
+            INIT_DATE, 0, [6], [51.47], [0.46], data_dir=data_dir, variant=ICON_D2,
+        )
+        assert ["echotop"] in seen  # f005: the echo top only
+        p = by_fhour[6][0]
+        assert p.explicit_convective.echo_top_complete is True
+        assert p.explicit_echo_top_pa == pytest.approx(55000.0)
+
+    def test_icon_eu_diag_has_no_payload(self, env):
+        from weatherbrief.tasks.standalone_grib import fetch_icon_cloud_diag
+
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+        by_fhour = fetch_icon_cloud_diag(
+            INIT_DATE, 0, [6], [51.47], [0.46], data_dir=data_dir,
+        )
+        assert by_fhour[6][0].explicit_convective is None
+
+    def test_cold_steps_include_a_missing_explicit_file(self, tmp_path):
+        from weatherbrief.fetch.grib.icon_eu_fetch import (
+            ICON_D2,
+            icon_explicit_conv_cache_key,
+        )
+        from weatherbrief.tasks.standalone_grib import icon_cloud_diag_cold_steps
+
+        run_dir = _seed_d2(tmp_path, steps=[6, 12])
+        assert icon_cloud_diag_cold_steps(run_dir, [6, 12], ICON_D2) == []
+        (run_dir / cache_key(12, icon_explicit_conv_cache_key("lpi_max", ICON_D2))).unlink()
+        assert icon_cloud_diag_cold_steps(run_dir, [6, 12], ICON_D2) == [12]
+        # The previous step's echo top counts too.
+        (run_dir / cache_key(5, icon_explicit_conv_cache_key("echotop", ICON_D2))).unlink()
+        assert icon_cloud_diag_cold_steps(run_dir, [6, 12], ICON_D2) == [6, 12]
+
+
 class TestIconD2LatestRun:
     """#936: D2 rows from the newest published D2 run, with its own init."""
 
@@ -890,7 +1089,11 @@ class TestDownloads:
         sg.ensure_icon_cloud_diag_files(
             INIT_DATE, 0, [6], variant=ICON_D2, session=MagicMock(), data_dir=tmp_path,
         )
-        assert [c[:2] for c in calls] == [([6], None)]
+        # ... but its explicit-convection fields, one file each, and the
+        # previous step's echo top (#953).
+        assert [c[:2] for c in calls] == [([6], None)] + [
+            ([6], [var]) for var in ICON_D2.explicit_conv_variables
+        ] + [([5], ["echotop"])]
 
 
 class TestFallbackAlert:

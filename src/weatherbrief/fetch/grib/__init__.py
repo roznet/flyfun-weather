@@ -5969,6 +5969,176 @@ def _echo_top_pa_to_ft(pa: float, hourly: HourlyForecast) -> float:
     return round(pressure_pa_to_altitude_ft(pa))
 
 
+def icon_d2_explicit_conv_var_paths(
+    run_dir: Path,
+    init_date: str,
+    init_hour: int,
+    fhour: int,
+    session: requests.Session,
+    *,
+    variant,
+    variables: tuple[str, ...] | None = None,
+) -> dict[str, str]:
+    """Cache step *fhour*'s ICON-D2 explicit-conv files; ``{var: cached path}``.
+
+    One blob per variable under ``icon_explicit_conv_cache_key`` (#462), so the
+    briefing prefetch, the briefing enrichment and the snapshot path (#953)
+    read and write the same files. *variables* narrows the set (default: all
+    of the variant's). A variable whose download fails is logged and left
+    out: the payload then reads that channel as unavailable.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        fetch_icon_eu_single_level,
+        icon_explicit_conv_cache_key,
+    )
+
+    var_paths: dict[str, str] = {}
+    for var in variant.explicit_conv_variables if variables is None else variables:
+        ck = cache_key(fhour, icon_explicit_conv_cache_key(var, variant))
+        if not is_cached(run_dir, ck):
+            try:
+                fetched = fetch_icon_eu_single_level(
+                    init_date, init_hour, [fhour], variables=[var],
+                    session=session, variant=variant,
+                )
+                grib_bytes = fetched.get(fhour)
+                if grib_bytes:
+                    put_cached(run_dir, ck, grib_bytes)
+            except Exception:
+                logger.warning(
+                    "Failed to fetch ICON-D2 explicit-conv %s f%03d",
+                    var, fhour, exc_info=True,
+                )
+        if is_cached(run_dir, ck):
+            var_paths[var] = str(run_dir / ck)
+    return var_paths
+
+
+@dataclass
+class IconD2ExplicitStep:
+    """One step's explicit-convection payloads, one per point (#462, #953).
+
+    ``echo_pa`` is the hourly echo-top pressure per point (None when
+    incomplete or no echo): its conversion to feet needs the hour's own
+    column, so :func:`attach_icon_d2_explicit` does it on attach.
+    ``quarters`` is the per-point quarter-window state to seed the next step.
+    """
+
+    fhour: int
+    payloads: list
+    echo_pa: list[float | None]
+    quarters: list[dict[int, tuple[float | None, bool]]]
+
+
+def build_icon_d2_explicit_step(
+    fhour: int,
+    decoded_points: list[dict] | None,
+    n_points: int,
+    prev: IconD2ExplicitStep | None = None,
+) -> IconD2ExplicitStep:
+    """Assemble one step's per-point explicit payloads from its corridor decode.
+
+    The one place the payload is built, for the briefing enrichment and the
+    snapshot rows alike (#953):
+
+    - constructs the HOURLY echo top for valid hour H as the minimum pressure
+      across the four 15-min windows ending at H−45, H−30, H−15 and H minutes
+      — three from file f(H−1) (*prev*, used only when it is step H−1), one
+      from f(H). A missing/invalid quarter degrades ``echo_top_complete`` and
+      yields no echo top (never a partial min presented as the hourly value);
+    - ALWAYS yields a payload per point, even when every channel failed (all
+      None, all completeness flags False): payload presence is the
+      explicit-convection mode signal (see below).
+
+    *decoded_points* None or empty (no file cached, decode failed) reads as
+    every channel unavailable.
+    """
+    from weatherbrief.models import NWPExplicitConvectiveDiagnostics
+
+    if not decoded_points:
+        decoded_points = [{"echotop_quarters": {}} for _ in range(n_points)]
+    contiguous = prev is not None and fhour - prev.fhour == 1
+
+    # The four quarter windows covering (H−1, H], as end-minutes since init.
+    hour_end_m = fhour * 60
+    prev_file_quarter_minutes = (hour_end_m - 45, hour_end_m - 30, hour_end_m - 15)
+
+    payloads: list[NWPExplicitConvectiveDiagnostics] = []
+    echo_pa_per_point: list[float | None] = []
+    quarters_per_point: list[dict[int, tuple[float | None, bool]]] = []
+    for i in range(n_points):
+        point = decoded_points[i] if i < len(decoded_points) else {}
+        dbz_val, dbz_valid = point.get("dbz_ctmax", (None, False))
+        lpi_val, lpi_valid = point.get("lpi_max", (None, False))
+        w_val, w_valid = point.get("w_ctmax", (None, False))
+        uh_val, uh_valid = point.get("uh_max", (None, False))
+
+        # Hourly echo top: min over exactly the four quarters ending in
+        # (H−1, H]. Quarters must all be present AND corridor-valid;
+        # value None with valid=True is a real "no echo" quarter.
+        quarters: list[tuple[float | None, bool]] = []
+        if contiguous and i < len(prev.quarters):
+            quarters.extend(
+                prev.quarters[i].get(m, (None, False))
+                for m in prev_file_quarter_minutes
+            )
+        else:
+            quarters.extend((None, False) for _ in prev_file_quarter_minutes)
+        quarters.append(
+            point.get("echotop_quarters", {}).get(hour_end_m, (None, False))
+        )
+        echo_complete = all(valid for _v, valid in quarters)
+        echo_pa: float | None = None
+        if echo_complete:
+            echoes = [v for v, _valid in quarters if v is not None]
+            if echoes:
+                echo_pa = min(echoes)
+
+        lpi = lpi_val if lpi_valid else None
+        w = w_val if w_valid else None
+        uh = uh_val if uh_valid else None
+        # ALWAYS attach a payload — even when every channel failed. Payload
+        # presence is the explicit-convection mode signal: with no payload
+        # the analysis layer would silently fall back to the parameterized
+        # assess_convective_nwp path, which on D2 (no scheme fields fetched,
+        # #461) structurally reads as a QUIET scheme — turning a one-hour
+        # fetch hiccup into a fake-quiet convective read instead of
+        # "explicit assessment unavailable" (#463 review, Critical 1; the
+        # snapshot rows did exactly that until #953).
+        payloads.append(NWPExplicitConvectiveDiagnostics(
+            source="icon_d2",
+            reflectivity_hour_max_dbz=dbz_val if dbz_valid else None,
+            lightning_potential_hour_max_jkg=lpi,
+            updraft_hour_max_ms=w,
+            updraft_helicity_2_8km_hour_max_m2s2=uh,
+            detection_complete=dbz_valid,
+            strength_complete=(lpi is not None and w is not None),
+            echo_top_complete=echo_complete,
+        ))
+        echo_pa_per_point.append(echo_pa)
+        quarters_per_point.append(dict(point.get("echotop_quarters", {})))
+
+    return IconD2ExplicitStep(
+        fhour=fhour, payloads=payloads, echo_pa=echo_pa_per_point,
+        quarters=quarters_per_point,
+    )
+
+
+def attach_icon_d2_explicit(
+    hourly: HourlyForecast, payload, echo_pa: float | None,
+) -> bool:
+    """Set *hourly*'s explicit payload, with the echo top in feet from its own
+    column. False (and no change) when the hour already carries one."""
+    if payload is None or hourly.explicit_convective_diagnostics is not None:
+        return False
+    if echo_pa is not None:
+        payload = payload.model_copy(update={
+            "echo_top_18dbz_ft": _echo_top_pa_to_ft(echo_pa, hourly),
+        })
+    hourly.explicit_convective_diagnostics = payload
+    return True
+
+
 def _enrich_icon_d2_explicit_convective(
     icon_sections: list[RouteCrossSection],
     all_forecasts: list[WaypointForecast],
@@ -5988,14 +6158,10 @@ def _enrich_icon_d2_explicit_convective(
     Walks forecast hours in order with one leading step prepended (the
     predecessor file provides the three quarter-hour echo-top windows of the
     hour before the window's first hour), decoding each hour's per-variable
-    explicit-conv blobs via the corridor-extremum decoder, then:
-
-    - constructs the HOURLY echo top for valid hour H as the minimum pressure
-      across the four 15-min windows ending at H−45, H−30, H−15 and H minutes
-      — three from file f(H−1), one from f(H). A missing/invalid quarter
-      degrades ``echo_top_complete`` and yields ``echo_top_18dbz_ft=None``
-      (never a partial min presented as the hourly value);
-    - converts the echo-top pressure to feet against the hour's own column.
+    explicit-conv blobs via the corridor-extremum decoder, then builds the
+    per-point payloads with :func:`build_icon_d2_explicit_step` (shared with
+    the snapshot rows, #953) and converts the echo-top pressure to feet
+    against the hour's own column.
 
     Interval-max semantics: every value attached at hour H describes the
     ``(H−1, H]`` window. Per-hour channel failures produce ``None`` +
@@ -6005,12 +6171,7 @@ def _enrich_icon_d2_explicit_convective(
     gap), and corridor extrema are already spatial reductions, so generic
     per-point interpolation must not touch them.
     """
-    from weatherbrief.fetch.grib.icon_eu_fetch import (
-        fetch_icon_eu_single_level,
-        icon_eu_previous_step,
-        icon_explicit_conv_cache_key,
-    )
-    from weatherbrief.models import NWPExplicitConvectiveDiagnostics
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_eu_previous_step
 
     steps = sorted(set(forecast_hours))
     if not steps:
@@ -6020,38 +6181,18 @@ def _enrich_icon_d2_explicit_convective(
         steps.insert(0, lead)
 
     n_points = len(point_lats)
-    # Per-point quarter-window state from the previous step. ``{}`` = no usable
-    # predecessor (missing-data-safe: the first hour then reads echo_top
-    # incomplete rather than a fabricated value).
-    prev_quarters: list[dict[int, tuple[float | None, bool]]] = [
-        {} for _ in range(n_points)
-    ]
-    prev_fhour: int | None = None
+    # The previous step's state. None = no usable predecessor (missing-data
+    # safe: the first hour then reads echo_top incomplete rather than a
+    # fabricated value).
+    prev: IconD2ExplicitStep | None = None
 
     total_enriched = 0
     for fhour in steps:
-        var_paths: dict[str, str] = {}
-        for var in variant.explicit_conv_variables:
-            ck = cache_key(fhour, icon_explicit_conv_cache_key(var, variant))
-            if not is_cached(run_dir, ck):
-                # Prefetch normally covers this; fetch on demand as a fallback
-                # (mirrors the cloud-diag loop).
-                try:
-                    fetched = fetch_icon_eu_single_level(
-                        init_date, init_hour, [fhour], variables=[var],
-                        session=session, variant=variant,
-                    )
-                    grib_bytes = fetched.get(fhour)
-                    if grib_bytes:
-                        put_cached(run_dir, ck, grib_bytes)
-                except Exception:
-                    logger.warning(
-                        "Failed to fetch ICON-D2 explicit-conv %s f%03d",
-                        var, fhour, exc_info=True,
-                    )
-            if is_cached(run_dir, ck):
-                var_paths[var] = str(run_dir / ck)
-
+        # Prefetch normally covers the files; fetched on demand as a fallback
+        # (mirrors the cloud-diag loop).
+        var_paths = icon_d2_explicit_conv_var_paths(
+            run_dir, init_date, init_hour, fhour, session, variant=variant,
+        )
         if var_paths:
             with _grib_time("icon_d2_explicit_conv_decode"):
                 decoded_points = _dispatch_decode(
@@ -6060,94 +6201,25 @@ def _enrich_icon_d2_explicit_convective(
                 )
         else:
             decoded_points = None
-        if not decoded_points:
-            decoded_points = [{"echotop_quarters": {}} for _ in range(n_points)]
 
         valid_utc = _forecast_hour_to_utc(init_date, init_hour, fhour)
-        contiguous = prev_fhour is not None and fhour - prev_fhour == 1
-
-        # The four quarter windows covering (H−1, H], as end-minutes since init.
-        hour_end_m = fhour * 60
-        prev_file_quarter_minutes = (hour_end_m - 45, hour_end_m - 30, hour_end_m - 15)
-
-        payloads: list[NWPExplicitConvectiveDiagnostics | None] = []
-        echo_pa_per_point: list[float | None] = []
-        for i in range(n_points):
-            point = decoded_points[i] if i < len(decoded_points) else {}
-            dbz_val, dbz_valid = point.get("dbz_ctmax", (None, False))
-            lpi_val, lpi_valid = point.get("lpi_max", (None, False))
-            w_val, w_valid = point.get("w_ctmax", (None, False))
-            uh_val, uh_valid = point.get("uh_max", (None, False))
-
-            # Hourly echo top: min over exactly the four quarters ending in
-            # (H−1, H]. Quarters must all be present AND corridor-valid;
-            # value None with valid=True is a real "no echo" quarter.
-            quarters: list[tuple[float | None, bool]] = []
-            if contiguous:
-                quarters.extend(
-                    prev_quarters[i].get(m, (None, False))
-                    for m in prev_file_quarter_minutes
-                )
-            else:
-                quarters.extend((None, False) for _ in prev_file_quarter_minutes)
-            quarters.append(
-                point.get("echotop_quarters", {}).get(hour_end_m, (None, False))
-            )
-            echo_complete = all(valid for _v, valid in quarters)
-            echo_pa: float | None = None
-            if echo_complete:
-                echoes = [v for v, _valid in quarters if v is not None]
-                if echoes:
-                    echo_pa = min(echoes)
-
-            lpi = lpi_val if lpi_valid else None
-            w = w_val if w_valid else None
-            uh = uh_val if uh_valid else None
-            # ALWAYS attach a payload — even when every channel failed (all
-            # None, all completeness flags False). Payload presence is the
-            # explicit-convection mode signal: with no payload the analysis
-            # layer would silently fall back to the parameterized
-            # assess_convective_nwp path, which on D2 (no scheme fields
-            # fetched, #461) structurally reads as a QUIET scheme — turning a
-            # one-hour fetch hiccup into a fake-quiet convective read instead
-            # of "explicit assessment unavailable" (#463 review, Critical 1).
-            payloads.append(NWPExplicitConvectiveDiagnostics(
-                source="icon_d2",
-                reflectivity_hour_max_dbz=dbz_val if dbz_valid else None,
-                lightning_potential_hour_max_jkg=lpi,
-                updraft_hour_max_ms=w,
-                updraft_helicity_2_8km_hour_max_m2s2=uh,
-                detection_complete=dbz_valid,
-                strength_complete=(lpi is not None and w is not None),
-                echo_top_complete=echo_complete,
-            ))
-            echo_pa_per_point.append(echo_pa)
-
+        step = build_icon_d2_explicit_step(fhour, decoded_points, n_points, prev)
         # Carry state forward BEFORE the attach filter so the lead step (and
         # any out-of-window step) still seeds the quarter windows.
-        for i in range(n_points):
-            point = decoded_points[i] if i < len(decoded_points) else {}
-            prev_quarters[i] = dict(point.get("echotop_quarters", {}))
-        prev_fhour = fhour
+        prev = step
+        del decoded_points
 
         if fhour not in forecast_hours:
             continue  # lead step: state seeding only, never attached
 
         def _attach(hourly: HourlyForecast, idx: int) -> bool:
-            payload = payloads[idx]
-            if payload is None or hourly.explicit_convective_diagnostics is not None:
-                return False
-            echo_pa = echo_pa_per_point[idx]
-            if echo_pa is not None:
-                payload = payload.model_copy(update={
-                    "echo_top_18dbz_ft": _echo_top_pa_to_ft(echo_pa, hourly),
-                })
-            hourly.explicit_convective_diagnostics = payload
-            return True
+            return attach_icon_d2_explicit(
+                hourly, step.payloads[idx], step.echo_pa[idx],
+            )
 
         for cs in icon_sections:
             for point_idx, wf in enumerate(cs.point_forecasts):
-                if point_idx >= len(payloads):
+                if point_idx >= len(step.payloads):
                     break
                 for hourly in wf.hourly:
                     if _matches_valid_time(hourly.time, valid_utc):
@@ -6169,7 +6241,6 @@ def _enrich_icon_d2_explicit_convective(
                 if _matches_valid_time(hourly.time, valid_utc):
                     _attach(hourly, idx)
 
-        del decoded_points
         _grib_gc("icon_d2_conv")
 
     if total_enriched:
