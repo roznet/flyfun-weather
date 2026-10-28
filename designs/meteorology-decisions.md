@@ -7298,3 +7298,45 @@ the sun has been on the wing for a while.
 
 **v2 (not done):** model skin temperature (ECMWF `skt` from the a1 surface
 stream, ICON `T_G`) and a proper frost-point test instead of the T2m offset.
+
+## 70. The map cycle's GFS and ICON-EU runs come from their GRIB source, not Open-Meteo's metadata
+
+**Date:** 2026-10-28. **Part of** #910 (away from Open-Meteo). Code:
+`select_grib_snapshot_init` / `_snapshot_init_time` in
+`src/weatherbrief/tasks/standalone_verification.py`, `probe_gfs_run` in
+`fetch/grib/grib_fetch.py`.
+
+Since §63/§65 the GFS and ICON snapshot **values** come from GRIB, but the
+**run** was still Open-Meteo's `last_init_time`. Open-Meteo republishes GFS
+late: at 18:43Z on 2026-10-28 it still showed 06z, while NOAA had the 12z run
+on AWS from ~16:40Z. So the 19Z map carried GFS 06z (already known: "the 19Z
+artifact has ecmwf/icon at 12Z but gfs still at 06Z"), and the compute node's
+06/18Z prefetch could not know which run the cycle would ask for (it skipped
+GFS that evening).
+
+**Decisions.**
+
+- **The newest run published on its GRIB source** through the map's last
+  valid time (`_planned_valid_times`): past the model's publication delay (GFS
+  5 h, ICON-EU 3 h), a horizon that reaches that time (rules out ICON-EU's
+  short 03/09/15/21z runs for the 4-day map), and both f000 and that last step
+  answering a HEAD (NOAA and DWD upload a run step by step). GFS gained the
+  last-step probe `probe_gfs_run` (ICON's `probe_icon_run` already had it).
+  In practice: 07Z cycle → GFS 00z, ICON-EU 00z; 19Z → GFS 12z (was 06z),
+  ICON-EU 12z (unchanged).
+- **ICON-D2** keeps §68 (newest D2 run within 12 h of the ICON-EU run), now
+  anchored on the GRIB-chosen EU run.
+- **Fallback:** no qualifying run (source down) → Open-Meteo's init, logged
+  as `GRIB run selection <model>: … using Open-Meteo's init`. `WB_GRIB_SNAPSHOTS=0`
+  keeps Open-Meteo's init too (the Open-Meteo snapshot path).
+- **Known edge:** the airports GRIB cannot cover (ICON-EU's ~11 out-of-domain
+  airports) still take Open-Meteo values, stamped with the GRIB run's init;
+  when Open-Meteo lags, those rows are its older run under the newer label.
+  Accepted: ~2 % of ICON rows, and §66 already treats them as the fringe.
+- **Not changed:** ECMWF (`_select_ecmwf_grib_run`, local GRIB but still
+  required to be no older than Open-Meteo's init), the briefing run finders
+  (their f000-only GFS check stays: a briefing window rarely reaches f144).
+
+**To measure:** the 19Z artifact's GFS `model_init_time` is 12z; the node's
+18:15Z prefetch log shows `Prefetch: warming gfs (init … 12:00…)` and the
+19:15Z cycle downloads no GFS.

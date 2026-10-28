@@ -111,17 +111,51 @@ def find_latest_run_with_response(
             if hours_since_init < GFS_PUBLISH_DELAY_HOURS:
                 continue
 
-            # Check if .idx file exists (lightweight HEAD request)
-            idx_url = gfs_idx_url(date_str, cycle, 0)
-            try:
-                resp = sess.head(idx_url, timeout=10)
-                if resp.status_code == 200:
-                    logger.info("Found GFS run: %s %02dz", date_str, cycle)
-                    return date_str, cycle, resp
-            except requests.RequestException:
-                continue
+            resp = probe_gfs_run(date_str, cycle, sess)
+            if resp is not None:
+                logger.info("Found GFS run: %s %02dz", date_str, cycle)
+                return date_str, cycle, resp
 
     return None
+
+
+def gfs_published_step(fhour: int) -> int:
+    """The first published GFS step at or after *fhour* (hourly to f120, 3-hourly to f384)."""
+    if fhour <= 120:
+        return max(0, fhour)
+    return min(GFS_HORIZON_H, -(-fhour // 3) * 3)
+
+
+def probe_gfs_run(
+    init_date: str,
+    init_hour: int,
+    session: requests.Session,
+    last_hour: int = 0,
+) -> requests.Response | None:
+    """The f000 ``.idx`` HEAD response when the run is on NOAA's bucket, else None.
+
+    NOAA uploads a run step by step over ~1.5 h, so f000 alone says nothing about
+    the far steps: with *last_hour* > 0 that step's ``.idx`` must answer too (the
+    ICON finder's rule, :func:`probe_icon_run`). The f000 response is the one
+    returned, so freshness keeps reading its ``Last-Modified``.
+    """
+    try:
+        resp = session.head(gfs_idx_url(init_date, init_hour, 0), timeout=10)
+        if resp.status_code != 200:
+            return None
+        if last_hour > 0:
+            step = gfs_published_step(last_hour)
+            if session.head(
+                gfs_idx_url(init_date, init_hour, step), timeout=10,
+            ).status_code != 200:
+                logger.info(
+                    "gfs %s %02dz not yet published through f%03d, "
+                    "trying an older run", init_date, init_hour, step,
+                )
+                return None
+    except requests.RequestException:
+        return None
+    return resp
 
 
 GFS_HORIZON_H = 384

@@ -550,3 +550,41 @@ def test_read_gfs_grib_points_reads_the_lead_step_and_skips_failures(tmp_path):
             "20260504", 0, [8, 9], [50.0], [1.0], run_dir=tmp_path, session=None,
         )
     assert sorted(snd) == [9] and sorted(sfc) == [8]
+
+
+class TestProbeGfsRun:
+    """The GFS run probe checks the last needed step, not just f000 (§70)."""
+
+    class _Session:
+        def __init__(self, ok_urls):
+            self.ok_urls = set(ok_urls)
+
+        def head(self, url, timeout=None):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(status_code=200 if url in self.ok_urls else 404)
+
+    def test_published_step_grid(self):
+        from weatherbrief.fetch.grib.grib_fetch import gfs_published_step
+
+        assert gfs_published_step(0) == 0
+        assert gfs_published_step(120) == 120
+        assert gfs_published_step(121) == 123
+        assert gfs_published_step(150) == 150
+        assert gfs_published_step(400) == 384
+
+    def test_f000_alone_unless_last_hour_given(self):
+        from weatherbrief.fetch.grib.grib_fetch import gfs_idx_url, probe_gfs_run
+
+        session = self._Session([gfs_idx_url("20261028", 12, 0)])
+        assert probe_gfs_run("20261028", 12, session) is not None
+        assert probe_gfs_run("20261028", 12, session, last_hour=145) is None
+
+    def test_last_step_snapped_to_the_published_grid(self):
+        from weatherbrief.fetch.grib.grib_fetch import gfs_idx_url, probe_gfs_run
+
+        session = self._Session([
+            gfs_idx_url("20261028", 12, 0), gfs_idx_url("20261028", 12, 147),
+        ])
+        resp = probe_gfs_run("20261028", 12, session, last_hour=145)
+        assert resp is not None and resp.status_code == 200

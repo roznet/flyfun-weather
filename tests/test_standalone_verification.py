@@ -867,7 +867,7 @@ class TestRunStandalonePrefetch:
 
     AIRPORTS = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
 
-    def _run(self, monkeypatch, *, grib_snapshots=None, existing=None, init=None):
+    def _run(self, monkeypatch, *, grib_snapshots=None, existing=None, init=GFS_INIT):
         from weatherbrief.tasks import standalone_verification as sv
 
         if grib_snapshots is None:
@@ -876,36 +876,24 @@ class TestRunStandalonePrefetch:
             monkeypatch.setenv("WB_GRIB_SNAPSHOTS", grib_snapshots)
         mock_db = MagicMock()
         mock_db.execute.return_value.scalar_one_or_none.return_value = existing
-        init = init or GFS_INIT
-        meta = {
-            m: SimpleNamespace(last_init_time=int(init.timestamp()))
-            for m in STANDALONE_MODELS
-        }
-        # The cycle's 00/12Z boundary is "now"; pin it just after GFS_INIT.
-        frozen = GFS_INIT + timedelta(hours=1, minutes=15)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return frozen
-
-        with patch.object(sv, "datetime", _FrozenDatetime), \
-             patch("flyfun_common.db.SessionLocal", return_value=mock_db), \
-             patch("weatherbrief.fetch.model_status.fetch_model_metadata",
-                   return_value=meta) as mock_meta, \
+        with patch("flyfun_common.db.SessionLocal", return_value=mock_db), \
+             patch.object(sv, "select_grib_snapshot_init",
+                          return_value=init) as mock_select, \
              patch.object(sv, "fetch_model_snapshots",
                           return_value=([{"dummy": True}], 0)) as mock_fetch, \
              patch.object(sv, "_store_snapshots") as mock_store:
             result = sv.run_standalone_prefetch(self.AIRPORTS, pool_soundings=True)
-        return result, mock_db, mock_meta, mock_fetch, mock_store
+        return result, mock_db, mock_select, mock_fetch, mock_store
 
     def test_warms_grib_models_with_the_cycles_arguments(self, monkeypatch):
         from weatherbrief.fetch.grib import DecodePriority
         from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS
 
-        result, mock_db, _, mock_fetch, mock_store = self._run(monkeypatch)
+        result, mock_db, mock_select, mock_fetch, mock_store = self._run(monkeypatch)
 
-        # ECMWF arrives by rsync: only the GRIB snapshot models are warmed.
+        # ECMWF arrives by rsync: only the GRIB snapshot models are warmed,
+        # each on the run the cycle's own selection picks.
+        assert [c.args[0] for c in mock_select.call_args_list] == ["gfs", "icon"]
         assert [c.args[0] for c in mock_fetch.call_args_list] == ["gfs", "icon"]
         for call in mock_fetch.call_args_list:
             model, init_time, airports, _session = call.args
@@ -921,9 +909,9 @@ class TestRunStandalonePrefetch:
         assert set(result["models"]) == {"gfs", "icon"}
 
     def test_respects_grib_snapshot_kill_switch(self, monkeypatch):
-        _, _, mock_meta, mock_fetch, _ = self._run(monkeypatch, grib_snapshots="0")
+        _, _, mock_select, mock_fetch, _ = self._run(monkeypatch, grib_snapshots="0")
         mock_fetch.assert_not_called()
-        mock_meta.assert_not_called()
+        mock_select.assert_not_called()
 
     def test_only_listed_models(self, monkeypatch):
         _, _, _, mock_fetch, _ = self._run(monkeypatch, grib_snapshots="gfs")
@@ -934,18 +922,115 @@ class TestRunStandalonePrefetch:
         mock_fetch.assert_not_called()
         assert result["models"] == {"gfs": "already stored", "icon": "already stored"}
 
-    def test_skips_a_model_whose_metadata_lags_the_boundary(self, monkeypatch):
-        result, _, _, mock_fetch, _ = self._run(
-            monkeypatch, init=GFS_INIT - timedelta(hours=12),
-        )
+    def test_skips_a_model_with_no_grib_run_published(self, monkeypatch):
+        result, _, _, mock_fetch, _ = self._run(monkeypatch, init=None)
         mock_fetch.assert_not_called()
-        assert all("not yet" in v for v in result["models"].values())
+        assert result["models"] == {
+            "gfs": "no GRIB run published", "icon": "no GRIB run published",
+        }
 
     def test_rejects_unonboarded_region(self):
         from weatherbrief.tasks.standalone_verification import run_standalone_prefetch
 
         with pytest.raises(ValueError, match="not onboarded"):
             run_standalone_prefetch([], region="us")
+
+
+class _HeadSession:
+    """A requests-like session whose HEAD answers 200 only for listed URLs."""
+
+    def __init__(self, ok_urls):
+        self.ok_urls = set(ok_urls)
+        self.heads: list[str] = []
+
+    def head(self, url, timeout=None):
+        self.heads.append(url)
+        return SimpleNamespace(status_code=200 if url in self.ok_urls else 404)
+
+
+class TestSelectGribSnapshotInit:
+    """Map-cycle runs come from the GRIB source, not Open-Meteo's metadata (§70)."""
+
+    NOW = _utc(2026, 10, 28, 18, 43)
+
+    @staticmethod
+    def _gfs_urls(init, days):
+        from weatherbrief.fetch.grib.grib_fetch import gfs_idx_url, gfs_published_step
+        from weatherbrief.tasks.standalone_verification import _planned_valid_times
+
+        last = _planned_valid_times(init, days, None)[-1]
+        step = gfs_published_step(int((last - init).total_seconds() // 3600))
+        d, h = init.strftime("%Y%m%d"), init.hour
+        return [gfs_idx_url(d, h, 0), gfs_idx_url(d, h, step)]
+
+    def test_gfs_newest_run_published_through_the_horizon(self):
+        from weatherbrief.tasks.standalone_verification import select_grib_snapshot_init
+
+        run_12z = _utc(2026, 10, 28, 12)
+        session = _HeadSession(self._gfs_urls(run_12z, 6))
+        # 18z is inside the publication delay: never probed.
+        assert select_grib_snapshot_init("gfs", 6, now=self.NOW, session=session) == run_12z
+        assert not any("t18z" in u for u in session.heads)
+
+    def test_gfs_steps_back_when_the_last_step_is_not_up(self):
+        from weatherbrief.tasks.standalone_verification import select_grib_snapshot_init
+
+        run_12z, run_06z = _utc(2026, 10, 28, 12), _utc(2026, 10, 28, 6)
+        ok = self._gfs_urls(run_12z, 6)[:1] + self._gfs_urls(run_06z, 6)
+        session = _HeadSession(ok)
+        assert select_grib_snapshot_init("gfs", 6, now=self.NOW, session=session) == run_06z
+
+    def test_icon_skips_short_runs_and_takes_the_newest_main_run(self):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+        from weatherbrief.tasks import standalone_verification as sv
+
+        probed: list[tuple[str, int, int]] = []
+
+        def fake_probe(init_date, init_hour, session, variant, last_hour=0):
+            assert variant is ICON_EU
+            probed.append((init_date, init_hour, last_hour))
+            return object()
+
+        with patch("weatherbrief.fetch.grib.icon_eu_fetch.probe_icon_run", fake_probe):
+            got = sv.select_grib_snapshot_init(
+                "icon", 4, now=self.NOW, session=_HeadSession([]),
+            )
+        # 15z is past its delay but a short run (no 4-day horizon); 12z is main.
+        assert got == _utc(2026, 10, 28, 12)
+        assert [(d, h) for d, h, _ in probed] == [("20261028", 12)]
+        assert probed[0][2] > 78  # the last bracket step of the map horizon
+
+    def test_none_when_nothing_is_published(self):
+        from weatherbrief.tasks.standalone_verification import select_grib_snapshot_init
+
+        assert select_grib_snapshot_init(
+            "gfs", 6, now=self.NOW, session=_HeadSession([]),
+        ) is None
+
+
+class TestSnapshotInitTime:
+
+    def test_grib_run_wins_over_open_meteo(self, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.delenv("WB_GRIB_SNAPSHOTS", raising=False)
+        with patch.object(sv, "select_grib_snapshot_init", return_value=GFS_INIT):
+            assert sv._snapshot_init_time("gfs", GFS_INIT - timedelta(hours=6), 6) == GFS_INIT
+
+    def test_open_meteo_when_no_grib_run(self, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.delenv("WB_GRIB_SNAPSHOTS", raising=False)
+        with patch.object(sv, "select_grib_snapshot_init", return_value=None):
+            assert sv._snapshot_init_time("icon", GFS_INIT, 4) == GFS_INIT
+
+    def test_kill_switch_keeps_open_meteo(self, monkeypatch):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.setenv("WB_GRIB_SNAPSHOTS", "0")
+        with patch.object(sv, "select_grib_snapshot_init") as mock_select:
+            assert sv._snapshot_init_time("gfs", GFS_INIT, 6) == GFS_INIT
+        mock_select.assert_not_called()
 
 
 class TestRunMetarIngestCycle:

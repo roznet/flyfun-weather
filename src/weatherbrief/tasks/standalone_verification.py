@@ -1875,6 +1875,109 @@ def _grib_hour_covered(hourly, analysis_step: bool = False) -> bool:
 # Phase A (ECMWF GRIB-first): decode local a1+a2 files into snapshot dicts
 # ---------------------------------------------------------------------------
 
+def select_grib_snapshot_init(
+    model: str,
+    days: int,
+    now: datetime | None = None,
+    session: requests.Session | None = None,
+) -> datetime | None:
+    """The newest GFS or ICON-EU run published on its GRIB source for the map.
+
+    The map cycle's run for a GRIB-primary snapshot model, chosen from the
+    source it reads (NOAA's bucket, DWD Open Data) rather than Open-Meteo's
+    metadata, which lags it: GFS 12z still showed 06z at 18:43Z on 2026-10-28,
+    so the evening map read a run 6 h older than needed and a node prefetch
+    could not know which run the cycle would ask for (meteorology-decisions
+    §70). Newest first over two days, a run counts once it is past the
+    model's publication delay, its horizon reaches the map's last valid time
+    (``_planned_valid_times``), and both f000 and that last step answer a HEAD
+    (each source uploads a run step by step). None when no run qualifies or
+    the source is unreachable; the caller then falls back to Open-Meteo's
+    init.
+    """
+    from weatherbrief.fetch.grib import _grib_session
+    from weatherbrief.fetch.grib.grib_fetch import (
+        GFS_HORIZON_H,
+        GFS_PUBLISH_DELAY_HOURS,
+        probe_gfs_run,
+    )
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU,
+        bracket_icon_eu_forecast_hours,
+        icon_eu_model_level_max_hour,
+        probe_icon_run,
+    )
+    from weatherbrief.tasks.standalone_grib import datetime_to_init_parts
+
+    if model not in ("gfs", "icon"):
+        raise ValueError(f"no GRIB run selection for {model!r}")
+    if session is None:
+        with _grib_session() as own_session:
+            return select_grib_snapshot_init(model, days, now, own_session)
+
+    now = now or datetime.now(timezone.utc)
+    if model == "gfs":
+        cycles, delay_h = (18, 12, 6, 0), GFS_PUBLISH_DELAY_HOURS
+    else:
+        cycles, delay_h = ICON_EU.cycles, ICON_EU.publish_delay_hours
+    for days_back in range(2):
+        day = (now - timedelta(days=days_back)).replace(
+            minute=0, second=0, microsecond=0,
+        )
+        for cycle in cycles:
+            init = day.replace(hour=cycle)
+            if init > now or now - init < timedelta(hours=delay_h):
+                continue
+            planned = _planned_valid_times(init, days, None)
+            if not planned:
+                continue
+            last_hour = int((planned[-1] - init).total_seconds() // 3600)
+            init_date, init_hour = datetime_to_init_parts(init)
+            if model == "gfs":
+                if last_hour > GFS_HORIZON_H:
+                    continue
+                found = probe_gfs_run(init_date, init_hour, session, last_hour=last_hour)
+            else:
+                if last_hour > icon_eu_model_level_max_hour(cycle, ICON_EU):
+                    continue
+                last_step = bracket_icon_eu_forecast_hours(
+                    init_date, init_hour, planned[-1], ICON_EU,
+                )[1]
+                found = probe_icon_run(
+                    init_date, init_hour, session, ICON_EU, last_hour=last_step,
+                )
+            if found is not None:
+                return init
+    return None
+
+
+def _snapshot_init_time(model: str, om_init_time: datetime, days: int) -> datetime:
+    """The run a GFS/ICON map cycle (and the node's prefetch) reads.
+
+    For a model on GRIB-primary snapshots, the newest run on its GRIB source
+    (:func:`select_grib_snapshot_init`); Open-Meteo's init only when none
+    qualifies. Other models, and the kill switch ``WB_GRIB_SNAPSHOTS=0``, keep
+    Open-Meteo's init.
+    """
+    from weatherbrief.fetch.grib.primary import grib_snapshot_models
+
+    if model not in grib_snapshot_models():
+        return om_init_time
+    grib_init = select_grib_snapshot_init(model, days)
+    if grib_init is None:
+        logger.warning(
+            "GRIB run selection %s: no run published through the map horizon, "
+            "using Open-Meteo's init %s", model, om_init_time,
+        )
+        return om_init_time
+    if grib_init != om_init_time:
+        logger.info(
+            "GRIB run selection %s: %s (Open-Meteo at %s)",
+            model, grib_init, om_init_time,
+        )
+    return grib_init
+
+
 def _select_ecmwf_grib_run(om_init_time: datetime, days: int):
     """Pick the freshest ready ECMWF GRIB run that is not older than Open-Meteo's.
 
@@ -2884,7 +2987,7 @@ def run_standalone_cycle(
                     if init_time.tzinfo is None:
                         init_time = init_time.replace(tzinfo=timezone.utc)
                 else:
-                    init_time = om_init_time
+                    init_time = _snapshot_init_time(model, om_init_time, map_days)
 
                 existing = db.execute(
                     select(AirportForecastSnapshotRow.id)
@@ -3073,15 +3176,15 @@ def run_standalone_prefetch(
     earlier and the cycle itself reads a warm cache.
 
     Runs the cycle's own GFS/ICON legs (:func:`fetch_model_snapshots`, same
-    init from Open-Meteo's metadata, same arguments) and discards the rows, so
+    run from :func:`select_grib_snapshot_init`, same arguments) and discards the rows, so
     every download, cloud-diag file, reduced GFS column and ICON zarr lands
     under exactly the keys the cycle looks up. Only models in
     ``WB_GRIB_SNAPSHOTS``: for the others there is nothing to warm, only
     Open-Meteo calls to repeat. ECMWF arrives by rsync, outside this. A model
-    whose init is already stored is skipped, as the cycle would skip it, and so
-    is one whose Open-Meteo metadata still shows an init before the last 00/12Z
-    boundary: warming that run would cost its GBs and leave the cycle (which
-    will see the new init) cold anyway.
+    whose run is already stored is skipped, as the cycle would skip it, and so
+    is one with no GRIB run published through the map horizon: the cycle would
+    then fall back to Open-Meteo's init, and guessing that run here could cost
+    its GBs for nothing.
 
     Writes no snapshot and no cycle row. Returns a per-model summary.
     """
@@ -3091,13 +3194,8 @@ def run_standalone_prefetch(
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.grib import DecodePriority, _grib_session
     from weatherbrief.fetch.grib.primary import grib_snapshot_models
-    from weatherbrief.fetch.model_status import fetch_model_metadata
 
     t_start = time.monotonic()
-    now = datetime.now(timezone.utc)
-    expected_init = now.replace(
-        hour=0 if now.hour < 12 else 12, minute=0, second=0, microsecond=0,
-    )
     enabled = grib_snapshot_models()
     models = [m for m in STANDALONE_MODELS_BY_REGION[region] if m in enabled]
     summary: dict[str, str] = {}
@@ -3105,21 +3203,16 @@ def run_standalone_prefetch(
         logger.info("Prefetch: no GRIB snapshot model enabled, nothing to warm")
         return {"models": summary, "duration_ms": 0}
 
-    metadata = fetch_model_metadata(models)
     db = SessionLocal()
     session = _grib_session()
     try:
         for model in models:
-            meta = metadata.get(model)
-            if meta is None:
-                logger.warning("Prefetch: no metadata for model %s, skipping", model)
-                summary[model] = "no metadata"
-                continue
-            init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
-            if init_time < expected_init:
-                logger.info("Prefetch: %s metadata still at init %s (< %s), skipping",
-                            model, init_time, expected_init)
-                summary[model] = f"init {init_time:%d %H}z not yet {expected_init:%H}z"
+            days = MAP_FORECAST_DAYS.get(model, 4)
+            init_time = select_grib_snapshot_init(model, days, session=session)
+            if init_time is None:
+                logger.warning("Prefetch: no %s GRIB run published through the "
+                               "map horizon, skipping", model)
+                summary[model] = "no GRIB run published"
                 continue
             existing = db.execute(
                 select(AirportForecastSnapshotRow.id)
@@ -3136,7 +3229,7 @@ def run_standalone_prefetch(
                         model, init_time, len(airports))
             snapshots, _ = fetch_model_snapshots(
                 model, init_time, airports, session,
-                days=MAP_FORECAST_DAYS.get(model, 4),
+                days=days,
                 pool_soundings=pool_soundings,
                 priority=DecodePriority.BACKGROUND,
             )
