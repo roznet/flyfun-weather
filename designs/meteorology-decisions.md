@@ -7391,7 +7391,7 @@ display, briefings and the thermo track were not affected.
   rewritten here. D2 and EU rows are both `model="icon"`; from now on a D2 row
   with a native grade is told apart by `nwp_conv_method="nwp_explicit"`.
 
-## 72. Météo-France slot from AROME GRIB only: no slot, and no Open-Meteo, outside AROME (#940)
+## 73. Météo-France slot from AROME GRIB only: no slot, and no Open-Meteo, outside AROME (#940)
 
 **Date:** 2026-10-25. **Part of** #910. Mechanics: `weather-engine-specs.md`
 § "Météo-France AROME" and section E.
