@@ -6,6 +6,7 @@ Usage:
     python -m weatherbrief.verify stats [--model MODEL] [--icao ICAO] [--source SOURCE]
     python -m weatherbrief.verify discover [--prefixes LF,ED,...]
     python -m weatherbrief.verify standalone [--once]
+    python -m weatherbrief.verify standalone --prefetch
     python -m weatherbrief.verify digest [--period 24h|7d] [--send] [--json]
     python -m weatherbrief.verify archive run|backfill|list|verify [--table T]
     python -m weatherbrief.verify prune-raw [--retain-days N] [--apply]
@@ -636,6 +637,7 @@ def cmd_standalone(args):
     from weatherbrief.tasks.standalone_verification import (
         run_post_cycle_tasks,
         run_standalone_cycle,
+        run_standalone_prefetch,
     )
 
     from weatherbrief.fetch.grib import shutdown_decode_pool
@@ -654,6 +656,17 @@ def cmd_standalone(args):
                 file=sys.stderr,
             )
             sys.exit(1)
+        if getattr(args, "prefetch", False):
+            if args.emit_artifact or args.with_rollup:
+                print("ERROR: --prefetch stores nothing, so --emit-artifact and "
+                      "--with-rollup have nothing to work on", file=sys.stderr)
+                sys.exit(1)
+            prefetch = run_standalone_prefetch(watchlist, pool_soundings=True, region="eu")
+            print("\nStandalone prefetch complete:")
+            for model, outcome in prefetch["models"].items():
+                print(f"  {model}: {outcome}")
+            print(f"  Duration: {prefetch['duration_ms']}ms")
+            return
         result = run_standalone_cycle(
             watchlist, airports_db,
             fetch_forecasts=not args.light,
@@ -1375,6 +1388,12 @@ def main():
         "--forecast-only", action="store_true",
         help="Forecast cycle: fetch + store snapshots only, skip scoring "
              "(what the scheduler's 07/19 UTC fetch loop runs)",
+    )
+    standalone_mode.add_argument(
+        "--prefetch", action="store_true",
+        help="Download and cache the next forecast cycle's GRIB-primary GFS/ICON "
+             "inputs without storing anything (a compute node runs it an hour "
+             "before --forecast-only so that cycle reads a warm cache)",
     )
     p_standalone.add_argument(
         "--with-rollup", action="store_true",

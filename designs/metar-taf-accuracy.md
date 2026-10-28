@@ -464,7 +464,7 @@ The standalone subsystem now runs as **three independent loops** (disable indivi
 
 **Both hour-keyed loops fire at the hour + 15 min, not on the hour** (`_VERIFICATION_HOUR_OFFSET_SECONDS` / `_FORECAST_FETCH_HOUR_OFFSET_SECONDS` = 900). The offset is load-bearing on each side: verification waits so the HH:00 METAR ingest has fully landed, forecast fetch waits so the model deliveries have. So the real wall-clock schedule is 06:15/09:15/… and 07:15/19:15 — don't reason about cycle timing from the bare hour lists.
 
-The forecast loop has one more step ahead of the cycle: it first calls `_try_ingest_snapshot_artifact()`, and if a home-compute node has delivered this cycle's SQLite artifact, **ingesting it replaces the local cycle entirely** and no fetch runs. Only on a miss does it sleep out the remainder of the offset, wait on marker freshness, and run the fallback cycle locally. That is why some production days have snapshots with no corresponding local forecast cycle row.
+The forecast loop has one more step ahead of the cycle: it first calls `_try_ingest_snapshot_artifact()`, and if a home-compute node has delivered this cycle's SQLite artifact, **ingesting it replaces the local cycle entirely** and no fetch runs. Only on a miss does it sleep out the remainder of the offset, wait on marker freshness, and run the fallback cycle locally. That is why some production days have snapshots with no corresponding local forecast cycle row. The wait runs from HH:00 to HH+1:20 (`_ARTIFACT_WAIT_MAX_SECONDS`, 80 min; 50 before 2026-10-28, when the node's GRIB-primary cycle started landing at ~HH:52). The node runs a `standalone --prefetch` pass an hour earlier (06:15/18:15Z) that downloads the cycle's GFS/ICON GRIB into its cache and pulls the ECMWF run as it lands, so the cycle itself is mostly decode.
 
 The hour-keyed loops compute the next fire hour and sleep until then (no polling), retry after 15 min on failure, use a 240 s startup delay, and trigger `cache_builder.rebuild_all` (after `rollup_today_and_pending`) on each successful verification cycle. The legacy combined cycle (`fetch_forecasts=True, score_observations=True`, cycle source `standalone_full`) is still callable from CLI/tests but is no longer scheduled.
 
@@ -829,6 +829,8 @@ python -m weatherbrief.verify standalone --light --with-rollup --background
 
 # Home-compute offload: emit the cycle's fresh snapshots as a portable SQLite
 # artifact, then import it on the serving replica (checksum-verified).
+# an hour earlier on the node: warm the GRIB cache, store nothing
+python -m weatherbrief.verify standalone --prefetch
 python -m weatherbrief.verify standalone --forecast-only --emit-artifact eu-YYYYMMDD.sqlite
 python -m weatherbrief.verify ingest-artifact <path>
 

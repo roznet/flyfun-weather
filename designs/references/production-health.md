@@ -151,7 +151,7 @@ slower briefings *during* those windows are expected — a briefing taking 2× n
 09:20 UTC is not the same problem as one taking 2× at 02:00 UTC.
 
 The heavy forecast cycle (07:15 / 19:15 UTC) runs **off-box on a compute node**, so those two
-hours are no longer a load excuse on the droplet — it only *imports* the artifact (~72 s).
+hours are no longer a load excuse on the droplet — it only *imports* the artifact (~72 s). The node prefetches its GRIB at 06:15 / 18:15 and the droplet waits until HH+1:20; a `No artifact with init >= … — running the local forecast cycle as fallback` line means it missed, and the droplet then runs the ~25 min cycle itself (load spike, `standalone_forecast` memory anomaly).
 Load above the vCPU line outside a light-cycle hour is most often concurrent user briefings;
 check pipeline timings before assuming a cycle.
 

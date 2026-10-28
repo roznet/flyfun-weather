@@ -862,6 +862,92 @@ class TestRunStandaloneCycle:
         assert result["cycle_type"] == "full"
 
 
+class TestRunStandalonePrefetch:
+    """The compute node's pre-cycle warm: the cycle's own GFS/ICON legs, nothing stored."""
+
+    AIRPORTS = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
+
+    def _run(self, monkeypatch, *, grib_snapshots=None, existing=None, init=None):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        if grib_snapshots is None:
+            monkeypatch.delenv("WB_GRIB_SNAPSHOTS", raising=False)
+        else:
+            monkeypatch.setenv("WB_GRIB_SNAPSHOTS", grib_snapshots)
+        mock_db = MagicMock()
+        mock_db.execute.return_value.scalar_one_or_none.return_value = existing
+        init = init or GFS_INIT
+        meta = {
+            m: SimpleNamespace(last_init_time=int(init.timestamp()))
+            for m in STANDALONE_MODELS
+        }
+        # The cycle's 00/12Z boundary is "now"; pin it just after GFS_INIT.
+        frozen = GFS_INIT + timedelta(hours=1, minutes=15)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen
+
+        with patch.object(sv, "datetime", _FrozenDatetime), \
+             patch("flyfun_common.db.SessionLocal", return_value=mock_db), \
+             patch("weatherbrief.fetch.model_status.fetch_model_metadata",
+                   return_value=meta) as mock_meta, \
+             patch.object(sv, "fetch_model_snapshots",
+                          return_value=([{"dummy": True}], 0)) as mock_fetch, \
+             patch.object(sv, "_store_snapshots") as mock_store:
+            result = sv.run_standalone_prefetch(self.AIRPORTS, pool_soundings=True)
+        return result, mock_db, mock_meta, mock_fetch, mock_store
+
+    def test_warms_grib_models_with_the_cycles_arguments(self, monkeypatch):
+        from weatherbrief.fetch.grib import DecodePriority
+        from weatherbrief.tasks.forecast_grid import MAP_FORECAST_DAYS
+
+        result, mock_db, _, mock_fetch, mock_store = self._run(monkeypatch)
+
+        # ECMWF arrives by rsync: only the GRIB snapshot models are warmed.
+        assert [c.args[0] for c in mock_fetch.call_args_list] == ["gfs", "icon"]
+        for call in mock_fetch.call_args_list:
+            model, init_time, airports, _session = call.args
+            assert init_time == GFS_INIT
+            assert airports == self.AIRPORTS
+            assert call.kwargs == {
+                "days": MAP_FORECAST_DAYS.get(model, 4),
+                "pool_soundings": True,
+                "priority": DecodePriority.BACKGROUND,
+            }
+        mock_store.assert_not_called()
+        mock_db.commit.assert_not_called()
+        assert set(result["models"]) == {"gfs", "icon"}
+
+    def test_respects_grib_snapshot_kill_switch(self, monkeypatch):
+        _, _, mock_meta, mock_fetch, _ = self._run(monkeypatch, grib_snapshots="0")
+        mock_fetch.assert_not_called()
+        mock_meta.assert_not_called()
+
+    def test_only_listed_models(self, monkeypatch):
+        _, _, _, mock_fetch, _ = self._run(monkeypatch, grib_snapshots="gfs")
+        assert [c.args[0] for c in mock_fetch.call_args_list] == ["gfs"]
+
+    def test_skips_an_init_already_stored(self, monkeypatch):
+        result, _, _, mock_fetch, _ = self._run(monkeypatch, existing=1)
+        mock_fetch.assert_not_called()
+        assert result["models"] == {"gfs": "already stored", "icon": "already stored"}
+
+    def test_skips_a_model_whose_metadata_lags_the_boundary(self, monkeypatch):
+        result, _, _, mock_fetch, _ = self._run(
+            monkeypatch, init=GFS_INIT - timedelta(hours=12),
+        )
+        mock_fetch.assert_not_called()
+        assert all("not yet" in v for v in result["models"].values())
+
+    def test_rejects_unonboarded_region(self):
+        from weatherbrief.tasks.standalone_verification import run_standalone_prefetch
+
+        with pytest.raises(ValueError, match="not onboarded"):
+            run_standalone_prefetch([], region="us")
+
+
 class TestRunMetarIngestCycle:
 
     @patch("weatherbrief.tasks.standalone_verification._fetch_and_store_observations", return_value=7)

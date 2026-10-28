@@ -3058,6 +3058,100 @@ def run_standalone_cycle(
 # ---------------------------------------------------------------------------
 
 
+def run_standalone_prefetch(
+    airports: list[WatchlistAirport],
+    *,
+    pool_soundings: bool = False,
+    region: str = "eu",
+) -> dict:
+    """Warm the GRIB caches the next forecast cycle reads; store nothing.
+
+    A compute node's forecast cycle is bound by its download link: since the
+    map rows come from GRIB (#914) it pulls ~9 GB of GFS and ICON before it can
+    push, which made it land past the droplet's ingest deadline. Those runs are
+    published hours before the 07/19Z cycle, so the node runs this an hour
+    earlier and the cycle itself reads a warm cache.
+
+    Runs the cycle's own GFS/ICON legs (:func:`fetch_model_snapshots`, same
+    init from Open-Meteo's metadata, same arguments) and discards the rows, so
+    every download, cloud-diag file, reduced GFS column and ICON zarr lands
+    under exactly the keys the cycle looks up. Only models in
+    ``WB_GRIB_SNAPSHOTS``: for the others there is nothing to warm, only
+    Open-Meteo calls to repeat. ECMWF arrives by rsync, outside this. A model
+    whose init is already stored is skipped, as the cycle would skip it, and so
+    is one whose Open-Meteo metadata still shows an init before the last 00/12Z
+    boundary: warming that run would cost its GBs and leave the cycle (which
+    will see the new init) cold anyway.
+
+    Writes no snapshot and no cycle row. Returns a per-model summary.
+    """
+    if region not in STANDALONE_MODELS_BY_REGION:
+        raise ValueError(f"region {region!r} is not onboarded")
+
+    from flyfun_common.db import SessionLocal
+    from weatherbrief.fetch.grib import DecodePriority, _grib_session
+    from weatherbrief.fetch.grib.primary import grib_snapshot_models
+    from weatherbrief.fetch.model_status import fetch_model_metadata
+
+    t_start = time.monotonic()
+    now = datetime.now(timezone.utc)
+    expected_init = now.replace(
+        hour=0 if now.hour < 12 else 12, minute=0, second=0, microsecond=0,
+    )
+    enabled = grib_snapshot_models()
+    models = [m for m in STANDALONE_MODELS_BY_REGION[region] if m in enabled]
+    summary: dict[str, str] = {}
+    if not models:
+        logger.info("Prefetch: no GRIB snapshot model enabled, nothing to warm")
+        return {"models": summary, "duration_ms": 0}
+
+    metadata = fetch_model_metadata(models)
+    db = SessionLocal()
+    session = _grib_session()
+    try:
+        for model in models:
+            meta = metadata.get(model)
+            if meta is None:
+                logger.warning("Prefetch: no metadata for model %s, skipping", model)
+                summary[model] = "no metadata"
+                continue
+            init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
+            if init_time < expected_init:
+                logger.info("Prefetch: %s metadata still at init %s (< %s), skipping",
+                            model, init_time, expected_init)
+                summary[model] = f"init {init_time:%d %H}z not yet {expected_init:%H}z"
+                continue
+            existing = db.execute(
+                select(AirportForecastSnapshotRow.id)
+                .where(AirportForecastSnapshotRow.model == model)
+                .where(AirportForecastSnapshotRow.model_init_time == init_time)
+                .limit(1)
+            ).scalar_one_or_none()
+            if existing is not None:
+                logger.info("Prefetch: %s init %s already stored, skipping", model, init_time)
+                summary[model] = "already stored"
+                continue
+            t_model = time.monotonic()
+            logger.info("Prefetch: warming %s (init %s) for %d airports",
+                        model, init_time, len(airports))
+            snapshots, _ = fetch_model_snapshots(
+                model, init_time, airports, session,
+                days=MAP_FORECAST_DAYS.get(model, 4),
+                pool_soundings=pool_soundings,
+                priority=DecodePriority.BACKGROUND,
+            )
+            elapsed = time.monotonic() - t_model
+            logger.info("Prefetch: %s init %s warm in %.0fs (%d rows discarded)",
+                        model, init_time, elapsed, len(snapshots))
+            summary[model] = f"warm in {elapsed:.0f}s"
+            del snapshots
+    finally:
+        session.close()
+        db.close()
+
+    return {"models": summary, "duration_ms": int((time.monotonic() - t_start) * 1000)}
+
+
 def run_metar_ingest_cycle(
     airports: list[WatchlistAirport],
     airports_db_path: str,
