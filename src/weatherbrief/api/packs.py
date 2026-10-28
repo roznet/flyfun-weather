@@ -1171,8 +1171,9 @@ def resolve_flight_advisory_models(flight: Flight) -> list[str] | None:
         models = settings.get("advisory_models")
         return list(models) if models else None
     except Exception:
-        logger.debug("advisory_models lookup failed for %s", getattr(flight, "id", "?"),
-                     exc_info=True)
+        # Warning, not debug: None widens the refresh gate to every model.
+        logger.warning("advisory_models lookup failed for %s; counting every model",
+                       getattr(flight, "id", "?"), exc_info=True)
         return None
     finally:
         if db is not None:

@@ -424,8 +424,16 @@ def run_fetch(
                 window_end_hour,
             )
 
-            if not (enrich_grib and arome_enabled() and model in _gp_models()):
-                logger.info("Skipping meteofrance: AROME slot switched off")
+            off = (
+                "WB_AROME_ENABLED=0" if not arome_enabled()
+                else "GRIB enrichment off" if not enrich_grib
+                else "WB_GRIB_PRIMARY excludes meteofrance"
+                if model not in _gp_models() else None
+            )
+            if off is not None:
+                # The pilot's notice says "switched off on this server"; the
+                # log names which switch, for the operator.
+                logger.info("Skipping meteofrance: AROME slot off (%s)", off)
                 models_disabled.append(model.value)
                 continue
             if not route_in_arome_domain(route_points):

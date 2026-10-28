@@ -3120,6 +3120,34 @@ def _arome_surface_key(gid) -> str | None:
     return _AROME_SURFACE_PARAM_MAP.get(param)
 
 
+def _arome_cover_scale(gid) -> float | None:
+    """Factor that puts an AROME cover message in %, from its GRIB ``units``.
+
+    One unit per parameter, never guessed from the values (a nearly clear %
+    field and a fraction field look alike). A declared unit wins: ``%`` as
+    is, ``(0 - 1)`` ×100. Under MF's local tables eccodes reports total
+    cloud (0/6/1) as ``unknown``; such a cover takes the WMO table's unit
+    for its number, ``%`` for 0/6/1 and 0/6/3-5. Not yet checked on a real
+    SP1/SP2 file: the decode logs each cover's unit and domain maximum once
+    so the first real run shows it (a max ≤ 1 under ``%`` would mean a
+    fraction). Any other unit returns None and the message is dropped:
+    missing, not wrong.
+    """
+    import eccodes
+
+    try:
+        units = str(eccodes.codes_get(gid, "units")).strip().lower()
+    except Exception:
+        units = "unknown"
+    if units == "%" or "percent" in units:
+        return 1.0
+    if units in ("(0 - 1)", "0-1", "1", "proportion", "fraction"):
+        return 100.0
+    if units in ("unknown", "", "~"):
+        return 1.0  # WMO 0/6/1, 0/6/3-5: %
+    return None
+
+
 def decode_arome_surface_per_point(
     file_path: Path,
     fhours: list[int],
@@ -3130,10 +3158,11 @@ def decode_arome_surface_per_point(
 
     Message by message with eccodes, like the pressure packages; isobaric
     messages are skipped. Values stay in GRIB units (K, %, m/s, Pa,
-    kg/m², J/kg) except the covers: a cover message whose domain maximum is
-    at most 1.5 is a 0–1 fraction and is stored ×100, so every cover leaves
-    here in %. The first message of an unmapped parameter is logged once, so
-    a run on real files lists what the package holds.
+    kg/m², J/kg) except the covers, which leave here in %: the factor comes
+    from each message's declared unit (:func:`_arome_cover_scale`), and a
+    cover in an unknown unit is dropped and logged. The first message of an
+    unmapped parameter is logged once, so a run on real files lists what the
+    package holds.
 
     Returns ``{"points": {fhour: [{key: value}, ...]}, "unmapped": [str]}``.
     """
@@ -3145,6 +3174,7 @@ def decode_arome_surface_per_point(
         h: [{} for _ in range(n_points)] for h in wanted_hours
     }
     unmapped: set[str] = set()
+    cover_units_logged: set[str] = set()
     weights_cache: dict[tuple, object] = {}
     targets_lat = np.asarray(latitudes, dtype=np.float64)
     targets_lon = np.asarray(longitudes, dtype=np.float64)
@@ -3193,11 +3223,21 @@ def decode_arome_surface_per_point(
                     continue
                 scale = 1.0
                 if key in _AROME_COVER_KEYS:
-                    vmax = (
-                        float(np.nanmax(values)) if np.isfinite(values).any() else 0.0
-                    )
-                    if vmax <= 1.5:
-                        scale = 100.0
+                    cover_scale = _arome_cover_scale(gid)
+                    if key not in cover_units_logged:
+                        cover_units_logged.add(key)
+                        vmax = (
+                            float(np.nanmax(values)) if np.isfinite(values).any() else None
+                        )
+                        logger.info(
+                            "AROME %s: cover %s units=%s domain max=%s -> scale %s",
+                            Path(file_path).name, key,
+                            eccodes.codes_get(gid, "units"), vmax, cover_scale,
+                        )
+                    if cover_scale is None:
+                        unmapped.add(f"{key}(unknown cover units)")
+                        continue
+                    scale = cover_scale
                 interp = (
                     bw.w00 * values[bw.i0, bw.j0]
                     + bw.w01 * values[bw.i0, bw.j1]
@@ -3269,7 +3309,8 @@ def build_arome_surface_snapshot(raw: dict[str, float]) -> dict[str, float | Non
         )
     if td_k is not None:
         out["dewpoint_2m_c"] = td_k - 273.15
-    elif t_k is not None and out["relative_humidity_2m_pct"]:
+    elif t_k is not None and (out["relative_humidity_2m_pct"] or 0.0) > 0.0:
+        # RH 0 has no dewpoint (log 0): left None rather than invented.
         out["dewpoint_2m_c"] = magnus_dewpoint_c(
             t_k - 273.15, out["relative_humidity_2m_pct"],
         )
