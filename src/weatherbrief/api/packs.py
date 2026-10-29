@@ -873,14 +873,23 @@ def _backfill_sources(pack: BriefingPackMeta) -> dict[str, str]:
     pack-recording in :func:`_finalize_refresh`.
     """
     if pack.model_sources:
-        return dict(pack.model_sources)
+        # A source retired from the registry (``ukmo:openmeteo``, #937) is
+        # left out: unknown freshness for that model, rather than a KeyError
+        # on every registry lookup below. Rebuilding the pack records the
+        # current source.
+        return {
+            m: src for m, src in pack.model_sources.items()
+            if src in freshness_registry.SOURCE_REGISTRY
+        }
     out: dict[str, str] = {}
     all_models = set(pack.model_init_times) | set(pack.grib_init_times)
     for model in all_models:
         if model in pack.grib_init_times and model in _DIRECT_SOURCE_KEYS:
             out[model] = _DIRECT_SOURCE_KEYS[model]
         else:
-            out[model] = f"{model}:openmeteo"
+            src = f"{model}:openmeteo"
+            if src in freshness_registry.SOURCE_REGISTRY:
+                out[model] = src
     return out
 
 

@@ -219,17 +219,12 @@ class TestCountryGating:
         route = _route("EGLL", "LSGS")
         assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
 
-    def test_skip_ukmo_on_non_uk_route(self):
-        """UKMO skipped for France-Germany route."""
+    def test_ukmo_has_no_country_gate(self):
+        """UKMO is gated on the UKV box instead of GB (#937): a France-Germany
+        route passes the endpoint check (tests/test_ukv.py has the box)."""
         ep = MODEL_ENDPOINTS["ukmo"]
-        route = _route("LFPB", "EDDK")
-        assert _should_skip_for_region(ep, ModelRegion.EUROPE, route)
-
-    def test_keep_ukmo_on_uk_route(self):
-        """UKMO kept when route touches UK."""
-        ep = MODEL_ENDPOINTS["ukmo"]
-        route = _route("EGLL", "LFPB")
-        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, route)
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, _route("LFPB", "EDDK"))
+        assert not _should_skip_for_region(ep, ModelRegion.EUROPE, _route("EGLL", "LFPB"))
 
     def test_no_country_requirement_never_skips(self):
         """Models without required_country are unaffected by the country gate."""
@@ -312,7 +307,8 @@ class TestModelEndpointRegions:
 
     def test_country_gated_models(self):
         assert MODEL_ENDPOINTS["meteofrance"].required_country == "FR"
-        assert MODEL_ENDPOINTS["ukmo"].required_country == "GB"
         # Prefix fallback still declared alongside the country gate.
         assert MODEL_ENDPOINTS["meteofrance"].required_icao_prefixes == ["LF"]
-        assert MODEL_ENDPOINTS["ukmo"].required_icao_prefixes == ["EG"]
+        # UKMO: the UKV domain replaced the GB gate (#937).
+        assert MODEL_ENDPOINTS["ukmo"].required_country is None
+        assert MODEL_ENDPOINTS["ukmo"].required_icao_prefixes is None

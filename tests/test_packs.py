@@ -492,6 +492,38 @@ class TestBuildDataStatusFromScratch:
         assert decide_refresh(status, 0).mode == "full"
 
 
+def test_pack_with_a_retired_freshness_source_still_builds_status():
+    """Packs built before #937 recorded ``ukmo: ukmo:openmeteo``, a source no
+    longer in SOURCE_REGISTRY. The freshness check must skip it (unknown), not
+    raise on the registry lookup; the other models are evaluated as usual."""
+    from weatherbrief.api.packs import _build_data_status, model_for_source
+    from weatherbrief.fetch.freshness.markers import Marker, MarkerStore
+    from weatherbrief.models import BriefingPackMeta, Flight
+
+    init = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    store = MarkerStore()
+    store._markers[("gfs:noaa", model_for_source("gfs:noaa"))] = Marker(
+        source="gfs:noaa", model="gfs", init=init,
+        next_expected=init + timedelta(hours=6),
+        last_check=datetime.now(timezone.utc),
+    )
+    pack = BriefingPackMeta(
+        flight_id="f", fetch_timestamp=datetime.now(timezone.utc), days_out=1,
+        model_init_times={"ukmo": int(init.timestamp())},
+        grib_init_times={"gfs": int(init.timestamp())},
+        model_sources={"gfs": "gfs:noaa", "ukmo": "ukmo:openmeteo"},
+    )
+    flight = Flight(
+        id="f", user_id="u", route_name="r",
+        departure_time=datetime.now(timezone.utc) + timedelta(days=1),
+        cruise_altitude_ft=8000, flight_duration_hours=2.0,
+        created_at=datetime.now(timezone.utc),
+    )
+    with patch("weatherbrief.fetch.freshness.markers.get_store", return_value=store):
+        status = _build_data_status(pack, flight)
+    assert set(status.models) == {"gfs"}
+
+
 # --- every realtime-refresh call site must grade on the profile's source ---
 
 

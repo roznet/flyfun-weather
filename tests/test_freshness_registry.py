@@ -138,12 +138,20 @@ class TestInitialMarker:
         assert nxt == _utc(2026, 5, 3, 0) + timedelta(hours=6, minutes=40)
 
     def test_bootstrap_steps_back_past_undue_prior_cycle(self):
-        # #815: UKMO via Open-Meteo lands ~8h30 after init. At 07:00Z the 06Z
-        # cycle is not due (14:30Z) and neither is 00Z (08:30Z), so the
-        # bootstrap must go back to yesterday's 18Z (due 02:30Z).
-        init, nxt = initial_marker_for("ukmo:openmeteo", now=_utc(2026, 5, 3, 7))
+        # #815 (was UKMO via Open-Meteo, retired by #937): GEM via Open-Meteo
+        # lands ~8h after init. At 07:00Z the 06Z cycle is not due (14:00Z)
+        # and neither is 00Z (08:00Z), so the bootstrap must go back to
+        # yesterday's 18Z (due 02:00Z).
+        init, nxt = initial_marker_for("gem:openmeteo", now=_utc(2026, 5, 3, 7))
         assert init == _utc(2026, 5, 2, 18)
-        assert nxt == _utc(2026, 5, 3, 8, 30)
+        assert nxt == _utc(2026, 5, 3, 8)
+
+    def test_bootstrap_ukv_hourly(self):
+        # UKV (#937): hourly runs, complete ~6h30 after init. At 07:00Z the
+        # newest due run is 00Z (06:30Z); 01Z is due at 07:30Z.
+        init, nxt = initial_marker_for("ukmo:ukv", now=_utc(2026, 5, 3, 7))
+        assert init == _utc(2026, 5, 3, 0)
+        assert nxt == _utc(2026, 5, 3, 7, 30)
 
     def test_bootstrap_ecmwf_direct_offset_above_cycle_spacing(self):
         # ECMWF direct (+6h40): at 06:20Z neither 06Z nor 00Z (06:40Z) is due.
@@ -187,7 +195,7 @@ def test_all_expected_sources_registered():
         "ecmwf:openmeteo",
         "icon:openmeteo",
         "meteofrance:openmeteo",
-        "ukmo:openmeteo",
+        "ukmo:ukv",
         "gem:openmeteo",
     }
     # Observed streams (#574) are interval-scheduled measurements, not NWP
@@ -293,7 +301,8 @@ def test_each_source_has_sane_offsets(key):
         off = cfg.offset_for(cycle)
         assert timedelta(minutes=30) <= off <= timedelta(hours=12)
         h = cfg.horizon_for(cycle)
-        assert h >= timedelta(hours=24)
+        # UKV's hourly in-between runs reach only 12 h (#937).
+        assert h >= timedelta(hours=12)
 
 
 # ---------------------------------------------------------------------------

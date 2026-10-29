@@ -99,7 +99,10 @@ class _FakeClient:
 # ---------------------------------------------------------------------------
 
 
-_ALL = (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOFRANCE)
+_ALL = (
+    ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOFRANCE,
+    ModelSource.UKMO,
+)
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -110,7 +113,8 @@ _ALL = (ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOF
     ("ecmwf", (ModelSource.ECMWF,)),
     ("icon, gfs", (ModelSource.ICON, ModelSource.GFS)),
     ("ecmwf,icon", (ModelSource.ECMWF, ModelSource.ICON)),
-    ("ukmo", ()),
+    ("ukmo", (ModelSource.UKMO,)),
+    ("meteofrance", (ModelSource.METEOFRANCE,)),
 ])
 def test_switch(monkeypatch, value, expected):
     if value is None:
@@ -138,7 +142,7 @@ def test_gate_disabled_and_icon_rules(monkeypatch):
     ) is None
     # Models without a GRIB source never are.
     assert primary.grib_primary_skip_reason(
-        ModelSource.UKMO, _points(), DEP, 2.0,
+        ModelSource.GEM, _points(), DEP, 2.0,
     ) == "disabled"
 
 

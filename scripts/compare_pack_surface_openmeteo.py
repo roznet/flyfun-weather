@@ -89,8 +89,8 @@ LEVEL_VARS: dict[str, str] = {
     "geopotential_height_m": "geopotential_height",
 }
 # Sources whose sounding is compared too: the slots whose column came from
-# Open-Meteo before GRIB-primary.
-SOUNDING_SOURCES = ("gfs", "gfs:noaa", "arome:mf", "meteofrance")
+# Open-Meteo before GRIB-primary: GFS (#913), Météo-France (#940), UKMO (#937).
+SOUNDING_SOURCES = ("gfs", "gfs:noaa", "arome:mf", "meteofrance", "ukmo", "ukmo:ukv")
 DEFAULT_LEVELS = (850, 700, 500)
 
 # |Δ| above which one sample is listed as suspect.

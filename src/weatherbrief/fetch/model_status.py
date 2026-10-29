@@ -35,7 +35,8 @@ META_URLS: dict[str, str] = {
     "gfs": "https://api.open-meteo.com/data/ncep_gfs025/static/meta.json",
     "ecmwf": "https://api.open-meteo.com/data/ecmwf_ifs025/static/meta.json",
     "icon": "https://api.open-meteo.com/data/dwd_icon/static/meta.json",
-    "ukmo": "https://api.open-meteo.com/data/ukmo_global_deterministic_10km/static/meta.json",
+    # No "ukmo": live UKMO is Met Office UKV from AWS (#937), tracked by the
+    # ukmo:ukv freshness source, not Open-Meteo's meta.json.
     "meteofrance": "https://api.open-meteo.com/data/meteofrance_arpege_world025/static/meta.json",
 }
 

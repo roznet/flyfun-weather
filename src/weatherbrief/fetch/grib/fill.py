@@ -1160,7 +1160,9 @@ _GRIB_PRIMARY_FILL_FIELDS: tuple[str, ...] = (
 # cloud diagnostics, which is what the anchor detector below relies on.
 # ICON's and GFS's GRIB surface is fill-only end to end, so there every field
 # — the ECMWF overwrite set included — is interpolated into empty hours only.
-_GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon", "gfs"})
+# UKMO (#937) writes its UKV surface the same way, hourly to +54 h and
+# 3-hourly after.
+_GRIB_SURFACE_MODELS: frozenset[str] = frozenset({"ecmwf", "icon", "gfs", "ukmo"})
 
 
 def _linear_interp_grib_surface(

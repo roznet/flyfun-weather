@@ -20,8 +20,8 @@ Key exports: `ForecastSnapshot`, `RouteConfig`, `RoutePoint`, `RouteCrossSection
 → Full doc: data-models.md
 
 ### fetch
-Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD US / DWD Europe), SRTM elevation, model freshness, and GRIB2 enrichment (GFS/HRRR + ICON-EU/D2 + ECMWF IFS) with two-phase sequential decode for memory safety. ECMWF and ICON slots are GRIB-primary (no Open-Meteo request) when the GRIB gate passes, with a per-point Open-Meteo fallback.
-Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `get_elevation_profile`, `enrich_forecasts`, `grib_primary_skip_reason`, `fill_grib_primary_gaps`
+Weather data retrieval: Open-Meteo multi-point client, route interpolation, route-aware text forecasts (NWS AFD US / DWD Europe), SRTM elevation, model freshness, and GRIB2 enrichment (GFS/HRRR + ICON-EU/D2 + ECMWF IFS) with two-phase sequential decode for memory safety. ECMWF, ICON and GFS slots are GRIB-primary (no Open-Meteo request) when the GRIB gate passes, with a per-point Open-Meteo fallback; the Météo-France slot is AROME GRIB only and the UKMO slot Met Office UKV from AWS NetCDF, both with no fallback, UKMO skipped outside UKV's box or horizon.
+Key exports: `OpenMeteoClient`, `interpolate_route`, `fetch_text_forecasts`, `get_elevation_profile`, `enrich_forecasts`, `grib_primary_skip_reason`, `fill_grib_primary_gaps`, `route_in_ukv_domain`, `nc_range.read_chunks`
 → Full doc: fetch.md
 
 ### weather-engine-specs
