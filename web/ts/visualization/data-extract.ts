@@ -610,6 +610,9 @@ function extractPoint(
   const temperatureC = divergenceValue(rpa, 'temperature_c', model);
   // Dewpoint comes off the selected model's sounding instead (#948): adding it
   // to model_divergence would also make it count in model-agreement scoring.
+  // Both come from the same model's hourly row at this point (analyze.py feeds
+  // temperature_2m_c to model_divergence and dewpoint_2m_c to the sounding), so
+  // the spread is real; a point whose sounding failed just shows a dewpoint gap.
   const dewpointC = sounding?.dewpoint_2m_c ?? null;
   const precipitationMm = divergenceValue(rpa, 'precipitation_mm', model);
   const qnhHpa = divergenceValue(rpa, 'pressure_msl_hpa', model);
