@@ -50,10 +50,6 @@ const MATRIX_ROWS: MatrixRow[] = [
   { metric: 'cloud_cover_pct' },
 ];
 
-/** Compact per-cell value for the narrow matrix: units live in the row
- *  label (see MATRIX_ROWS) and the best-runway id in the row label too, so
- *  cells carry only the number (+ gust in parens). Falls back to the shared
- *  formatter for region-aware fields (visibility). */
 /** The plain "Temp / Dew" cell for one model: `4° / 2°`. A missing half reads
  *  "—" (`4° / —` on a response without dewpoint); both missing is just "—". */
 export function tempDewCell(m: Pick<ModelForecast, 'temperature_c' | 'dewpoint_c'> | undefined): string {
@@ -64,6 +60,10 @@ export function tempDewCell(m: Pick<ModelForecast, 'temperature_c' | 'dewpoint_c
   return `${deg(t)} / ${deg(d)}`;
 }
 
+/** Compact per-cell value for the narrow matrix: units live in the row
+ *  label (see MATRIX_ROWS) and the best-runway id in the row label too, so
+ *  cells carry only the number (+ gust in parens). Falls back to the shared
+ *  formatter for region-aware fields (visibility). */
 function compactCell(data: { [k: string]: any }, metric: ForecastMetric): string {
   switch (metric) {
     case 'flight_category':
@@ -250,7 +250,7 @@ export function renderAirportSummaryCard(host: HTMLElement, opts: SummaryCardOpt
   // (#948). Dewpoint is optional: older cached responses don't carry it.
   const tempDew = present.map((m) => tempDewCell(airport.models[m]));
   if (tempDew.some((c) => c !== '—')) {
-    html += '<tr class="ap-card-row ap-card-row-plain"><td class="ap-card-metric-col">Temp / Dew</td>';
+    html += '<tr class="ap-card-row ap-card-row-plain"><td class="ap-card-metric-col">Temp / Dew <span class="ap-card-unit">°C</span></td>';
     for (const cell of tempDew) html += `<td>${esc(cell)}</td>`;
     html += '<td class="ap-card-consensus-col">—</td></tr>';
   }
