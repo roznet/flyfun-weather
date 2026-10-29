@@ -360,10 +360,13 @@ Comprehensive listing of DWD ICON-EU opendata variables. Organized by level type
 ### E.2 Météo-France ARPEGE — METADATA TRACKED, NOT INGESTED (deliberately)
 - Served only through Open-Meteo's `meteofrance_seamless` (ARPEGE outside AROME's footprint, unmarked seam). Excluded from direct GRIB (#529): least independent model to add beside ECMWF.
 
-### F. UKMO (UK Met Office Global Deterministic) — METADATA TRACKED
-- **Open-Meteo metadata:** `https://api.open-meteo.com/data/ukmo_global_deterministic_10km/static/meta.json`
-- **Resolution:** ~10km
-- **Status:** Freshness metadata tracked via Open-Meteo; no direct GRIB2 fetch
+### F. UKMO: Met Office UKV 2 km from AWS, INGESTED (#937)
+- **Source:** `https://met-office-atmospheric-model-data.s3.eu-west-2.amazonaws.com/uk-deterministic-2km/<run YYYYMMDDTHHMMZ>/<valid>-PT<hhhh>H00M-<param>.nc` (AWS Open Data, public, listable with `?list-type=2&prefix=`). NetCDF4 (HDF5, chunks 1×128×128, gzip). The MO global model (`global-deterministic-10km/`, 0.094°×0.141° lat/lon) supplies `upward_air_velocity` only.
+- **Grid:** LAEA (lat_0 54.9, lon_0 −2.5, GRS80), 1042×970 at 2 km, x from −1158 km, y from −1036 km.
+- **Runs:** hourly; 03/15Z to +120 h, 00/06/09/12/18/21Z to +54 h, others +12 h; hourly steps to +54 h then 3-hourly; ~6 h 30 min to the last step.
+- **Levels:** 33 pressure levels (Pa; the slot keeps Open-Meteo's 20, 1000-150 hPa); cloud fraction on 33 height levels 5-6000 m AGL (other height-level files carry other levels). Level coordinates are checked against the constants on every network read (`check_level_coords`).
+- **Units:** RH fraction, accumulations m (water equivalent), wind as speed + `wind_from_direction` (true north), heights AGL except geopotential.
+- **Status:** primary source for the UKMO slot, no Open-Meteo fallback (meteorology-decisions §72). Freshness: `ukmo:ukv`. Code: `fetch/grib/ukv.py`, `fetch/grib/nc_range.py`.
 
 ### G. GFS WAFS Turbulence Products (G-GTG) — RESEARCHED, NOT FEASIBLE
 

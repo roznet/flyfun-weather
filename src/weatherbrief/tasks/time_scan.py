@@ -467,18 +467,18 @@ def extend_openmeteo_adjacent_day(
     """
     from weatherbrief.fetch.open_meteo import EmptyForecastError, OpenMeteoClient
 
-    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
-
     client = OpenMeteoClient(historical=historical)
     s = start_date.strftime("%Y-%m-%d")
     e = end_date.strftime("%Y-%m-%d")
     extended = 0
+    from weatherbrief.fetch.grib.primary import NO_FALLBACK_MODELS
+
     for cs in cross_sections:
-        if cs.model in NO_OPEN_METEO_MODELS and cs.model in grib_only:
-            # Built from GRIB only (meteofrance = AROME, #940): the confirm's
-            # enrichment fills its candidate window or the slot is left out.
-            # A pack from before #940 has an Open-Meteo meteofrance slot and
-            # is extended as before.
+        if cs.model in NO_FALLBACK_MODELS and cs.model in grib_only:
+            # Built from GRIB only (meteofrance = AROME, #940; ukmo = UKV,
+            # #937): the confirm's enrichment fills its candidate window or
+            # the slot is left out. A slot built from Open-Meteo (a pack from
+            # before those, a UKMO replay) is extended as before.
             continue
         try:
             new_pfs = client.fetch_multi_point(

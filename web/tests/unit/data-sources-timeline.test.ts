@@ -148,7 +148,7 @@ describe('planRows', () => {
       ['ecmwf:openmeteo', 'ecmwf', 'surface-base'],
       ['icon:openmeteo', 'icon', 'primary'],
       ['meteofrance:openmeteo', 'meteofrance', 'primary'],
-      ['ukmo:openmeteo', 'ukmo', 'primary'],
+      ['ukmo:ukv', 'ukmo', 'primary-sounding'],
       ['gem:openmeteo', 'gem', 'primary'],
     ];
     return spec.map(([key, model, role]) => entry({ key, model, role }));

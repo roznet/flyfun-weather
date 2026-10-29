@@ -286,6 +286,15 @@ _ICON_D2_HORIZON = timedelta(hours=48)
 _AROME_OFFSET = timedelta(hours=3, minutes=15)
 _AROME_HORIZON = timedelta(hours=51)
 
+# Met Office UKV on AWS (#937): first file ~5h15m after init, the run
+# complete 30-60 min later (measured 2026-10-24). Matches
+# fetch.grib.ukv.UKV_PUBLISH_DELAY, which the briefing gate uses.
+_UKV_OFFSET = timedelta(hours=6, minutes=30)
+_UKV_HORIZON = {
+    h: timedelta(hours=120 if h in (3, 15) else 54 if h in (0, 6, 9, 12, 18, 21) else 12)
+    for h in range(24)
+}
+
 # Open-Meteo offsets — calibrated against meta.json observation 2026-05-03.
 # Open-Meteo republishes other providers' models with notable lag; the figures
 # in issue #108's table (sourced from OM docs) underestimate real delivery.
@@ -296,7 +305,6 @@ _OM_GFS_OFFSET = timedelta(hours=6, minutes=45)      # observed 6h37m
 _OM_ECMWF_OFFSET = timedelta(hours=8)                # observed 7h30m
 _OM_ICON_OFFSET = timedelta(hours=4, minutes=30)     # observed 4h17m
 _OM_ARPEGE_OFFSET = timedelta(hours=4, minutes=30)   # observed 4h00m
-_OM_UKMO_OFFSET = timedelta(hours=8, minutes=30)     # observed 8h19m
 # GEM (Canadian ECCC global) is the slowest OM-republished model we track;
 # margin lets us avoid slip storms.  Recalibrate from /admin/freshness/markers
 # once we have a few days of observations.
@@ -534,22 +542,28 @@ SOURCE_REGISTRY: dict[str, SourceConfig] = {
             "Only fetched for routes containing a French (LF…) ICAO."
         ),
     ),
-    "ukmo:openmeteo": SourceConfig(
-        key="ukmo:openmeteo",
-        cycles=(0, 6, 12, 18),
-        delivery_offset=_OM_UKMO_OFFSET,
-        horizon=timedelta(days=7),
-        readiness_check="om_meta",
-        model_label="UK Met Office",
-        provider_label="Open-Meteo",
-        provider_url="https://open-meteo.com/en/docs/ukmo-api",
-        role="primary",
-        resolution="~10 km global, ~2 km over UK (seamless)",
-        coverage="Global (best over UK/Europe)",
+    # UKMO is Met Office UKV 2 km from AWS since #937 (the Open-Meteo
+    # ``ukmo:openmeteo`` entry is retired). Hourly runs, horizon by cycle.
+    "ukmo:ukv": SourceConfig(
+        key="ukmo:ukv",
+        cycles=tuple(range(24)),
+        delivery_offset=_UKV_OFFSET,
+        horizon=_UKV_HORIZON,
+        readiness_check="ukv_aws",
+        model_label="UKV",
+        provider_label="Met Office",
+        provider_url="https://registry.opendata.aws/met-office-uk-deterministic/",
+        role="primary-sounding",
+        resolution="2 km",
+        coverage="UK, Ireland, Benelux, northern France (~45.5–62°N, 17°W–15°E)",
         pressure_levels=20,
         description=(
-            "Open-Meteo's UK Met Office seamless feed (20 pressure levels). "
-            "Only fetched for routes containing a UK (EG…) ICAO."
+            "Met Office UKV 2 km read by range from the AWS open-data bucket: "
+            "sounding, per-level cloud fraction (to 6 km above ground), cloud "
+            "base, freezing level, CAPE and surface fields. Only for routes "
+            "wholly inside the UKV domain and windows inside a published run "
+            "(03/15Z to 120 h, 00/06/09/12/18/21Z to 54 h, others 12 h). "
+            "Vertical velocity from the MO global 10 km model."
         ),
     ),
     "gem:openmeteo": SourceConfig(

@@ -7391,6 +7391,108 @@ display, briefings and the thermo track were not affected.
   rewritten here. D2 and EU rows are both `model="icon"`; from now on a D2 row
   with a native grade is told apart by `nwp_conv_method="nwp_explicit"`.
 
+## 72. UKMO slot is Met Office UKV 2 km from AWS, skipped outside UKV (#937)
+
+**Date:** 2026-10-25. **Part of** #910. Mechanics: `fetch.md` "UKV slot";
+code `fetch/grib/ukv.py` (schedule, sampling, conversions) and
+`fetch/grib/nc_range.py` (remote NetCDF chunk reader).
+
+Until now the UKMO slot came from Open-Meteo's `ukmo_seamless`: UKV inside
+its box, the 10 km global model outside and past UKV's horizon, with no
+marker of the seam. The slot was gated on the route touching GB.
+
+**Decisions.**
+
+- **UKMO means UKV.** Source: the Met Office bucket on AWS Open Data,
+  `uk-deterministic-2km/` (NetCDF, one file per run, step and parameter).
+  Gate (`_ukmo_skip_reason`): the whole route inside the UKV box with a
+  10 km inset (`route_in_ukv_domain`, all-or-nothing, as §66 for ICON-EU),
+  a published run reaching the window end, not historical. Outside the box
+  the slot is skipped as a region skip (`MODEL_SKIPPED_REGION`, in every
+  mode); past the horizon as a horizon skip (`ukv_horizon_end`). The GB
+  overflight gate is gone: LFPG-EDDF now gets UKMO, EGLL-LEMD does not.
+- **No Open-Meteo fallback** (`NO_FALLBACK_MODELS`). A point UKV leaves
+  short drops the whole slot (`GribOnlyIncomplete`, reported as `no_data`)
+  rather than splicing in `ukmo_seamless`, which would mix the global model
+  back in. The time scan does not extend UKMO by an Open-Meteo adjacent day
+  either. Historical briefings stay on Open-Meteo until the replay rule is
+  decided for every GRIB-primary model, but the domain skip applies to them
+  too: **a replay whose route leaves the UKV box now has no UKMO**, where
+  before any route touching GB got `ukmo_seamless`. Kept on purpose, so a
+  replay shows the same model set a live briefing of that route would.
+- **Run choice.** Runs are hourly: 03/15Z reach +120 h, 00/06/09/12/18/21Z
+  +54 h, the others +12 h; hourly steps to +54 h, then 3-hourly. The newest
+  published run (6 h 30 min delay, measured 2026-10-24) that starts before
+  the first window hour and reaches the last one, so a near flight reads a
+  +12 h run and a 3-day flight the 03/15Z one. A run is used only when the
+  listing shows every required file for every step; up to three runs are
+  tried. All-or-nothing per slot on the required fields (sounding, height
+  cloud, orography, screen T, MSLP, 10 m wind, precipitation, total cloud);
+  an optional field that fails to read is lost on its own.
+- **Sounding**, 20 pressure levels (1000-150 hPa, Open-Meteo's set): T, RH,
+  geopotential height, wind from speed and direction. Winds are true-north
+  (checked against GFS at 500 hPa: UKV minus GFS +1° at 10-11°E, -1° at
+  14°W, where grid-relative winds would show about ±10°). Bilinear from the
+  four 2 km cells. Speed and direction are blended as a vector (u, v per
+  corner, `_blend_wind`), never as scalars, so corners at 350° and 010° give
+  000°, not 180° (PR #943 review).
+- **Omega from the Met Office global model.** UKV publishes no vertical
+  velocity; `upward_air_velocity` comes from `global-deterministic-10km/`
+  (newest global run not newer than the UKV run, time-interpolated) and is
+  converted with the shared dry-air `w_to_omega_pa_s` (ρ from T only).
+  The owner's comment asked for ρ from T and RH; the moisture term changes
+  ρ by at most ~0.7 % (saturated at 1000 hPa, 15 °C), and the shared
+  converter keeps UKMO comparable with ICON and Open-Meteo w.
+  A missing global step leaves omega empty for that hour, not the slot.
+- **Per-level cloud from UKV's own cloud fraction on height levels**
+  (33 levels, 5-6000 m **above ground**; AGL checked on real data: height-level
+  temperature matches the pressure-level profile to 0.07 K over the Alps read
+  as AGL, 15 K read as MSL). Each pressure level gets the fraction at its
+  height above the UKV orography. Above 6000 m AGL there is no value, so
+  `cloud_area_fraction_pct` is empty there and the layer logic falls back to
+  RH as for any level without it.
+- **Ceiling** = the lowest height where cloud fraction reaches 50 % (the
+  app's BKN threshold), linearly between levels. UKV's own
+  "cloud base where cover ≥ 2.5 oktas" is a SCT threshold, so it goes to
+  `low.base_ft`, not the ceiling.
+- **Surface:** screen T/Td/RH, MSLP, surface pressure, 10 m wind, hourly max
+  gust, visibility, total/low/mid/high cover, freezing level (AGL + UKV
+  orography → MSL, §21), CAPE = most-unstable below 500 hPa
+  (`NWP_CAPE_TYPE["ukmo"] = "mu"`). Precipitation, rain and snowfall are the
+  period accumulations (1 h, 3 h past +54 h) as per-hour rates, snow ×0.7
+  cm/mm water. `convective_scheme_absent` is set (UKV is convection
+  permitting).
+- **Not carried:** CIN (UKV publishes none; Open-Meteo served one),
+  `lifted_index_raw` and precipitation probability (Open-Meteo had neither
+  for UKMO), condensate, cloud above 6 km AGL. UKV's lightning and hail
+  files (to +54 h) are left for a follow-up.
+- **Transfer.** Files are read by HTTP range: header and tail, the chunk
+  index walked directly, then only the 128×128 tiles under the route. A
+  3-step EGTK-LFPG read is ~2300 requests and ~33 MB (99 s from the cloud
+  sandbox at ~250 ms per request; the droplet is much closer to eu-west-2).
+  Tiles are cached under `.cache/grib/ukv/` (12 h TTL, 2 GiB cap, daily
+  purge), with each file's level coordinate beside them so the level check
+  also runs on a cache hit. All briefings share one pair of pools, so at
+  most 32 UKV requests are in flight from a process. AWS Open Data egress
+  is free.
+- **Freshness:** `ukmo:ukv` replaces `ukmo:openmeteo` (hourly cycles,
+  readiness from the bucket listing's LastModified of each run's last
+  step). Hourly markers may make more packs eligible for a refresh than the
+  old 4-cycle Open-Meteo marker did.
+- **Switch.** The single switch is `WB_GRIB_PRIMARY`. A rollback value that
+  leaves out `ukmo` (e.g. `=ecmwf,icon,gfs`) sends UKMO back to
+  `ukmo_seamless` on Open-Meteo, inside the UKV box and horizon only (the
+  new skips apply either way).
+
+**Measured.** Sandbox, live bucket, run 2026-10-25 09Z, EGTK-LFPG at
+2026-10-26 09Z: gate passed, every point covered, analysis and advisories run
+on the UKV slot alone (LLWS red on a 38-43 kt jet at 600-900 m over a 7 kt
+surface wind ahead of moderate rain, ceiling 773 ft at EGTK; values checked
+against the raw files). The before/after advisory replay diff needs
+Open-Meteo, so it is **pending on the Mac**: `scripts/compare_grib_primary.py
+<id> --off ecmwf,icon,gfs --on 1` on a few UK, Channel and N-France flights;
+the UKMO slot should differ only where `ukmo_seamless` was not UKV, plus
+ceiling/cloud from the new rule.
 ## 73. Météo-France slot from AROME GRIB only: no slot, and no Open-Meteo, outside AROME (#940)
 
 **Date:** 2026-10-25. **Part of** #910. Mechanics: `weather-engine-specs.md`

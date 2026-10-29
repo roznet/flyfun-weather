@@ -80,11 +80,13 @@ SURFACE_VARIABLES = [
 ]
 
 # What type of CAPE each model's surface "cape" variable represents.
-# GFS: surface-based, ECMWF: most-unstable, ICON: mixed-layer.
+# GFS: surface-based, ECMWF: most-unstable, ICON: mixed-layer, UKMO: UKV's
+# most-unstable below 500 hPa (#937).
 NWP_CAPE_TYPE: dict[str, str] = {
     "gfs": "sb",
     "ecmwf": "mu",
     "icon": "ml",
+    "ukmo": "mu",
 }
 
 PRESSURE_LEVEL_VARIABLES = [
@@ -162,16 +164,18 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         default=True,
         region=ModelRegion.EUROPE,
     ),
+    # Live UKMO is Met Office UKV 2 km from AWS (#937), gated on the UKV box
+    # (fetch/grib/ukv.py route_in_ukv_domain) instead of a GB country test,
+    # and limited to UKV's 5 days. This Open-Meteo endpoint now serves only
+    # historical briefings and the WB_GRIB_PRIMARY rollback.
     "ukmo": ModelEndpoint(
         name="UK Met Office",
         base_url="https://api.open-meteo.com/v1/forecast",
-        max_days=7,
+        max_days=5,
         model_param="ukmo_seamless",
         unavailable_surface=["precipitation_probability", "lifted_index"],
         pressure_levels=list(UKMO_PRESSURE_LEVELS),
         region=ModelRegion.EUROPE,
-        required_icao_prefixes=["EG"],
-        required_country="GB",
     ),
     "meteofrance": ModelEndpoint(
         name="Météo-France",

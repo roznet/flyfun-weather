@@ -174,6 +174,10 @@ _DEFAULT_CACHE_CAP_GIB: dict[str, float] = {
     # pulling a different hourly run. Enforced after each HRRR flight warm
     # (#929) and from the daily retention pass.
     "hrrr": 8.0,
+    # UKV (#937): 128x128 point tiles, ~11 MB per forecast hour of a typical
+    # UK route. Hourly runs mean many small run dirs inside the 12 h TTL;
+    # the cap is the backstop.
+    "ukv": 2.0,
     # GFS (#913): the GRIB-primary sounding + surface is ~177 MB per forecast
     # hour, on top of the airport-profile precache's cloud water and
     # diagnostics. Each briefed window adds its hours to the run, so the TTL

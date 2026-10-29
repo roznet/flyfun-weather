@@ -242,6 +242,36 @@ def _check_arome_mf(model: str) -> Observation | None:
     )
 
 
+def _check_ukv_aws(model: str) -> Observation | None:
+    """Return the newest UKV run whose final step is fully listed on AWS (#937).
+
+    A run lands step by step over 30-60 min, so the last step of its own
+    horizon is the completeness signal, the same test the briefing's run
+    discovery applies to the last step it needs.
+    """
+    from weatherbrief.fetch.grib import ukv
+
+    session = ukv.ukv_session()
+    # The newest few runs by the clock, including ones still inside the
+    # nominal delay, so an early run is reported when it is complete.
+    now = datetime.now(timezone.utc)
+    for run in ukv.published_ukv_runs(now + ukv.UKV_PUBLISH_DELAY, hours_back=8):
+        if run > now:
+            continue
+        try:
+            published = ukv.step_published_at(
+                session, run, ukv.ukv_run_horizon_h(run.hour),
+            )
+        except Exception:
+            logger.warning("UKV readiness check failed for %s", run, exc_info=True)
+            return None
+        if published is not None:
+            return Observation(
+                init=run, published_at=published, observed_via=VIA_HTTP_LAST_MODIFIED,
+            )
+    return None
+
+
 def _parse_last_modified(header: str | None) -> datetime | None:
     """Parse a ``Last-Modified`` HTTP header into an aware UTC datetime.
 
@@ -337,6 +367,7 @@ _DISPATCH = {
     "icon_eu_dwd": _check_icon_eu_dwd,
     "icon_d2_dwd": _check_icon_d2_dwd,
     "arome_mf": _check_arome_mf,
+    "ukv_aws": _check_ukv_aws,
     "om_meta": _check_om_meta,
     "observed_frames": _check_observed_frames,
 }

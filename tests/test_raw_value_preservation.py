@@ -83,7 +83,7 @@ class TestNWPCapeTypePerModel:
         ("gfs", "sb"),
         ("ecmwf", "mu"),
         ("icon", "ml"),
-        ("ukmo", "unknown"),
+        ("ukmo", "mu"),  # UKV most-unstable below 500 hPa (#937)
         ("meteofrance", "unknown"),
         ("gem", "unknown"),
     ])

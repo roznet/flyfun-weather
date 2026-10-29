@@ -2225,9 +2225,10 @@ def enrich_forecasts(
             the context via ``_submit_with_context``) dispatch at the right
             level.
         grib_primary: Slots the fetch gate built as GRIB-primary skeletons
-            (#912, #913, #940). A GRIB-primary GFS slot gets its whole column
-            and surface from GRIB and never tries HRRR; only a GRIB-primary
-            meteofrance slot is built from AROME.
+            (#912, #913, #937, #940). A GRIB-primary GFS slot gets its whole
+            column and surface from GRIB and never tries HRRR; only a
+            GRIB-primary meteofrance slot is built from AROME, and only a
+            GRIB-primary ukmo slot from UKV.
 
     Returns:
         Tuple of (grib_init_times, grib_skip_reasons, grib_sources):
@@ -2370,6 +2371,10 @@ def _enrich_forecasts_phases(
             pending_labels.append(icon_ctx.variant.slug.upper())
         if arome_ctx is not None:
             pending_labels.append("AROME")
+        if ModelSource.UKMO in grib_primary and any(
+            cs.model == ModelSource.UKMO for cs in cross_sections
+        ):
+            pending_labels.append("UKMO")
         if pending_labels:
             progress_callback("grib_enrichment", ", ".join(pending_labels))
 
@@ -2433,9 +2438,27 @@ def _enrich_forecasts_phases(
                 arome_dl_future.add_done_callback(_phase1_model_done("AROME"))
             else:
                 arome_dl_future = None
+            # UKV (#937): range reads over HTTP plus light numpy, so it runs
+            # here beside the downloads; only a GRIB-primary ukmo skeleton is
+            # filled (an Open-Meteo ukmo slot is never mixed with UKV).
+            if ModelSource.UKMO in grib_primary and any(
+                cs.model == ModelSource.UKMO for cs in cross_sections
+            ):
+                ukmo_future = _submit_with_context(
+                    pool, _enrich_ukmo,
+                    cross_sections, all_forecasts, route_points, departure_time,
+                    data_dir=data_dir, flight_duration_hours=flight_duration_hours,
+                    as_of_time=as_of_time,
+                )
+                ukmo_future.add_done_callback(_phase1_model_done("UKMO"))
+            else:
+                ukmo_future = None
 
             gfs_ts, gfs_source = gfs_future.result()
             ecmwf_grib_ts = ecmwf_future.result()
+            ukmo_ts, ukmo_skip = (
+                ukmo_future.result() if ukmo_future is not None else (None, None)
+            )
             if icon_dl_future is not None:
                 icon_dl_future.result()  # ensure downloads are cached
             if arome_dl_future is not None:
@@ -2450,6 +2473,13 @@ def _enrich_forecasts_phases(
     if ecmwf_grib_ts is not None:
         grib_init_times["ecmwf"] = ecmwf_grib_ts
         grib_sources["ecmwf"] = "ecmwf:direct"
+    if ukmo_ts is not None:
+        from weatherbrief.fetch.grib.ukv import UKV_SOURCE_KEY
+
+        grib_init_times[ModelSource.UKMO.value] = ukmo_ts
+        grib_sources[ModelSource.UKMO.value] = UKV_SOURCE_KEY
+    elif ukmo_skip is not None:
+        grib_skip_reasons[ModelSource.UKMO.value] = ukmo_skip
 
     # Phase 2: Decode ICON sequentially (memory-heavy, GFS is done).
     active_icon_variant = icon_ctx.variant if icon_ctx is not None else None
@@ -6775,3 +6805,153 @@ def _apply_arome_surface_to_sections(
             i = wp_idx.get(wf.waypoint.icao)
             if i is not None:
                 _write(wf, i)
+
+
+# ---------------------------------------------------------------------------
+# UKMO from Met Office UKV 2 km on AWS (#937)
+# ---------------------------------------------------------------------------
+
+# Hourly fields a UKV step writes at its valid hour, and the ones it spreads
+# as a per-hour amount over the step's period (1 h, or 3 h past +54 h).
+_UKV_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
+    "temperature_2m_c", "dewpoint_2m_c", "relative_humidity_2m_pct",
+    "pressure_msl_hpa", "surface_pressure_hpa", "wind_speed_10m_kt",
+    "wind_direction_10m_deg", "wind_gusts_10m_kt", "visibility_m",
+    "cloud_cover_pct", "cloud_cover_low_pct", "cloud_cover_mid_pct",
+    "cloud_cover_high_pct", "cape_jkg",
+)
+_UKV_HOURLY_RATE_FIELDS: tuple[str, ...] = ("precipitation_mm", "rain_mm", "snowfall_cm")
+
+
+def _enrich_ukmo(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float = 0.0,
+    as_of_time: datetime | None = None,
+) -> tuple[int | None, str | None]:
+    """Fill the GRIB-primary ``ukmo`` skeleton from UKV (#937).
+
+    All or nothing: every flight-window step must read completely at every
+    route point, or nothing is written and the slot stays empty, which the
+    fetch stage turns into a failed ``ukmo`` (there is no Open-Meteo
+    fallback for this slot). Returns ``(run_timestamp, None)`` on success,
+    else ``(None, reason)``.
+    """
+    with _grib_time("ukmo_total"):
+        try:
+            return _enrich_ukmo_inner(
+                cross_sections, all_forecasts, route_points, departure_time,
+                data_dir=data_dir, flight_duration_hours=flight_duration_hours,
+                as_of_time=as_of_time,
+            )
+        except Exception:
+            logger.warning("UKV enrichment failed", exc_info=True)
+            return None, "no_data"
+
+
+def _enrich_ukmo_inner(
+    cross_sections: list[RouteCrossSection],
+    all_forecasts: list[WaypointForecast],
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    *,
+    data_dir: Path,
+    flight_duration_hours: float,
+    as_of_time: datetime | None,
+) -> tuple[int | None, str | None]:
+    from weatherbrief.fetch.grib import ukv
+    from weatherbrief.fetch.grib.primary import required_hours
+
+    sections = [cs for cs in cross_sections if cs.model == ModelSource.UKMO]
+    if not sections:
+        return None, None
+    if not ukv.route_in_ukv_domain(route_points):
+        return None, "out_of_domain"
+    hours = required_hours(departure_time, flight_duration_hours)
+    runs = ukv.candidate_runs(hours, as_of_time)
+    if not runs:
+        return None, "out_of_range"
+
+    session = ukv.ukv_session()
+    stats = ukv.TransferStats()
+    run = None
+    for candidate in runs[:3]:
+        if ukv.run_has_steps(session, candidate, ukv.native_steps(candidate, hours), stats):
+            run = candidate
+            break
+    if run is None:
+        logger.warning("UKV: no complete run covers the window (tried %d)", min(3, len(runs)))
+        return None, "no_data"
+    steps = ukv.native_steps(run, hours)
+
+    purge_old_runs(data_dir, model=ukv.CACHE_MODEL)
+    run_dir = cache_dir_for_run(
+        data_dir, run.strftime("%Y%m%d"), run.hour, model=ukv.CACHE_MODEL,
+    )
+    fetch = ukv.UkvFetch(
+        run=run, lats=[rp.lat for rp in route_points], lons=[rp.lon for rp in route_points],
+        session=session, run_dir=run_dir, as_of_time=as_of_time, stats=stats,
+    )
+    with pin_run_dir(run_dir):
+        results = ukv.fetch_steps(fetch, steps)
+    bad = next((s for s in results if not s.complete), None)
+    if bad is not None or len(results) != len(steps):
+        logger.warning(
+            "UKV run %s: step %s unusable (%s); ukmo slot left empty",
+            run.isoformat(), bad.valid_utc.isoformat() if bad else "?",
+            bad.problem if bad else "missing",
+        )
+        if bad is not None and bad.problem and any(
+            name in bad.problem for name in ("UkvLayoutChanged", "UnsupportedLayout")
+        ):
+            # The files changed shape upstream: needs a code fix, not a retry.
+            return None, "layout_changed"
+        return None, "incomplete"
+
+    targets = [wf for cs in sections for wf in cs.point_forecasts]
+    seen = {id(wf) for wf in targets}
+    wp_idx = {rp.waypoint_icao: i for i, rp in enumerate(route_points) if rp.waypoint_icao}
+    extra = [
+        (wf, wp_idx[wf.waypoint.icao]) for wf in all_forecasts
+        if wf.model == ModelSource.UKMO and id(wf) not in seen
+        and wf.waypoint.icao in wp_idx
+    ]
+    for step in results:
+        _replace_pressure_levels_from_grib(
+            sections, [wf for wf, _ in extra], route_points, step.levels,
+            valid_utc=step.valid_utc, model_source=ModelSource.UKMO,
+        )
+        prev_valid = step.valid_utc - timedelta(hours=step.period_h)
+        snaps = [ukv.surface_snapshot(raw, step.period_h) for raw in step.surface]
+        diags = [ukv.cloud_diagnostics(raw) for raw in step.surface]
+
+        def _write(wf: WaypointForecast, i: int) -> None:
+            inst = {k: v for k, v in snaps[i].items() if v is not None}
+            _write_surface_step(
+                wf.hourly, inst, inst,
+                inst_fields=_UKV_HOURLY_INSTANT_FIELDS,
+                rate_fields=_UKV_HOURLY_RATE_FIELDS,
+                valid_utc=step.valid_utc, prev_valid_utc=prev_valid,
+            )
+            for h in wf.hourly:
+                if _matches_valid_time(h.time, step.valid_utc):
+                    _apply_cloud_diagnostics(h, diags[i])
+
+        for cs in sections:
+            for i, wf in enumerate(cs.point_forecasts[: len(route_points)]):
+                _write(wf, i)
+        for wf, i in extra:
+            _write(wf, i)
+
+    logger.info(
+        "UKV enrichment: run %s, %d steps, %d points, %d requests, %.1f MB "
+        "(MO global w from %s, %d/%d steps without w)",
+        run.isoformat(), len(results), len(route_points), stats.requests,
+        stats.bytes / 1e6, fetch.global_run.isoformat() if fetch.global_run else "none",
+        fetch.omega_missing_steps, fetch.omega_steps,
+    )
+    return int(run.timestamp()), None

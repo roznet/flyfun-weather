@@ -1,4 +1,4 @@
-"""GRIB-primary briefing slots: ECMWF, ICON (#912), GFS (#913) and Météo-France (#940).
+"""GRIB-primary briefing slots: ECMWF, ICON (#912), GFS (#913), Météo-France (#940) and UKMO (#937).
 
 The briefing fetch used to pull every model from Open-Meteo with the full
 variable set and then let GRIB enrichment overwrite the ECMWF and ICON
@@ -14,6 +14,11 @@ should cover it:
 * ICON: the whole route inside the ICON-EU domain, the window inside a
   publishable run's horizon (``icon_eu_window_out_of_range``), and not a
   historical briefing (DWD keeps current runs only).
+* UKMO (#937): the whole route inside the Met Office UKV box and the window
+  inside a published UKV run's horizon, not historical. It has no Open-Meteo
+  fallback (:data:`NO_FALLBACK_MODELS`): a point UKV left short drops the
+  slot. Unlike Météo-France, a slot the gate refuses (historical replay, the
+  ``WB_GRIB_PRIMARY`` rollback) is still fetched from Open-Meteo.
 * GFS (#913): the window inside the newest publishable run's 384 h horizon
   (``gfs_window_out_of_range``), not a historical briefing, and not a route
   the HRRR upgrade takes (whole route in the CONUS domain, window inside an
@@ -66,11 +71,20 @@ logger = logging.getLogger(__name__)
 
 GRIB_PRIMARY_MODELS: tuple[ModelSource, ...] = (
     ModelSource.ECMWF, ModelSource.ICON, ModelSource.GFS, ModelSource.METEOFRANCE,
+    ModelSource.UKMO,
 )
 
 # Slots that never call Open-Meteo (#940): built from GRIB or not at all. A
 # point GRIB leaves short drops the slot instead of falling back.
 NO_OPEN_METEO_MODELS: frozenset[ModelSource] = frozenset({ModelSource.METEOFRANCE})
+
+# Slots with no Open-Meteo *fallback* once built GRIB-primary: every
+# NO_OPEN_METEO_MODELS slot, plus UKMO (#937). UKMO is UKV only where UKV
+# covers the flight (a short point drops the slot rather than mix in
+# ukmo_seamless, mostly the global model), but a slot the gate refuses
+# (historical replay, WB_GRIB_PRIMARY rollback) still comes from Open-Meteo.
+# meteorology-decisions §72.
+NO_FALLBACK_MODELS: frozenset[ModelSource] = NO_OPEN_METEO_MODELS | frozenset({ModelSource.UKMO})
 
 # Fields every flight-window hour must carry for a point to count as covered.
 # The sounding plus the surface fields the advisories lean on hardest; a hole
@@ -204,6 +218,11 @@ def grib_primary_skip_reason(
         return _meteofrance_skip_reason(
             route_points, departure_time, flight_duration_hours, as_of_time,
         )
+    if model == ModelSource.UKMO:
+        return _ukmo_skip_reason(
+            route_points, departure_time, flight_duration_hours,
+            as_of_time, historical_mode,
+        )
     return "not_grib_primary"
 
 
@@ -318,6 +337,26 @@ def _meteofrance_skip_reason(
         return "out_of_domain"
     end = window_end_hour(departure_time, flight_duration_hours)
     if arome_window_out_of_range(end, 0.0, as_of_time):
+        return "out_of_range"
+    return None
+
+
+def _ukmo_skip_reason(
+    route_points: list[RoutePoint],
+    departure_time: datetime,
+    flight_duration_hours: float,
+    as_of_time: datetime | None,
+    historical_mode: bool,
+) -> str | None:
+    from weatherbrief.fetch.grib.ukv import route_in_ukv_domain, ukv_window_out_of_range
+
+    if historical_mode:
+        # The bucket keeps two years of UKV, but replays stay on Open-Meteo
+        # until that rule is decided for every GRIB-primary model (#937 v1).
+        return "historical"
+    if not route_in_ukv_domain(route_points):
+        return "out_of_domain"
+    if ukv_window_out_of_range(departure_time, flight_duration_hours, as_of_time):
         return "out_of_range"
     return None
 
@@ -569,7 +608,7 @@ class GribPrimaryOutcome:
     # or empty Open-Meteo fetch is handled today.
     error: BaseException | None = None
     empty: bool = False
-    # A NO_OPEN_METEO_MODELS slot GRIB left short (#940): no fallback, the
+    # A NO_FALLBACK_MODELS slot GRIB left short (#940, #937): no fallback, the
     # caller drops it. The value is the reason recorded in models_failed and
     # fetch_facts.grib_primary_dropped.
     no_fallback: str | None = None
@@ -626,8 +665,9 @@ def fill_grib_primary_gaps(
                 model.value, len(pfs),
             )
             continue
-        if model in NO_OPEN_METEO_MODELS:
-            # No Open-Meteo for this slot (#940): one short point drops it.
+        if model in NO_FALLBACK_MODELS:
+            # No Open-Meteo fallback for this slot (meteofrance #940, ukmo
+            # #937): one short point drops it.
             outcome.no_fallback = "grib_incomplete"
             logger.warning(
                 "GRIB-primary %s: %d/%d points short after GRIB, slot dropped "

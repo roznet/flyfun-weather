@@ -1,4 +1,4 @@
-"""Advisory replay diff for GRIB-primary ECMWF / ICON / GFS / Météo-France slots.
+"""Advisory replay diff for GRIB-primary ECMWF / ICON / GFS / Météo-France / UKMO slots.
 
 Runs the same flight twice through the production refresh path, once with
 ``WB_GRIB_PRIMARY=0`` (Open-Meteo first, today's behaviour) and once with
@@ -10,12 +10,12 @@ the GRIB-primary gate on, then prints:
 - the surface fields of each GRIB-built slot against the same slot from
   Open-Meteo (bias, mean/max |Δ|, total ratio of the accumulated fields,
   suspects with their distance along the route, for domain-edge jumps),
-  plus the sounding fields at 850/700/500 hPa for GFS slots (#913 builds
-  the whole GFS column from NOAA GRIB).
+  plus the sounding fields at 850/700/500 hPa for GFS and UKMO slots (#913
+  builds the whole GFS column from NOAA GRIB, #937 the UKMO one from UKV).
 
 ``--off`` / ``--on`` set the two switch values. To isolate one model against
 what prod runs today, keep the others GRIB-primary on both sides, e.g. for
-GFS: ``--off ecmwf,icon --on 1``.
+GFS: ``--off ecmwf,icon --on 1``; for UKMO: ``--off ecmwf,icon,gfs --on 1``.
 
 Météo-France (#940) has no Open-Meteo side any more: with the switch off the
 slot is simply absent, so the 'off' run shows what the advisories do without
@@ -162,7 +162,7 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
     Every route point and every hour the GRIB pack has a value for. Watch the
     total ratio on the accumulated fields (an accumulation or unit slip), and
     the suspects for jumps at a domain edge (their distance along the route).
-    GFS slots also diff the sounding at ``SOUNDING_LEVELS``. Slots that were
+    GFS and UKMO slots also diff the sounding at ``SOUNDING_LEVELS``. Slots that were
     GRIB-primary on both sides are skipped (nothing to compare against).
     """
     sys.path.insert(0, str(ROOT))
@@ -200,7 +200,7 @@ def _surface_diff(off_dir: Path, on_dir: Path) -> None:
                 per_model, b.hourly, hourly_as_open_meteo(a.hourly), f"pt{i} ({nm:.0f} nm)",
                 levels=levels,
             )
-    print("Surface (and GFS sounding), GRIB pack minus Open-Meteo pack:")
+    print("Surface (and GFS / UKMO sounding), GRIB pack minus Open-Meteo pack:")
     print_stats(stats)
 
 

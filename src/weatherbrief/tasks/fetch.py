@@ -53,7 +53,7 @@ _OM_REGISTRY_KEYS: dict[str, str] = {
     "ecmwf": "ecmwf:openmeteo",
     "gfs": "gfs:openmeteo",
     "icon": "icon:openmeteo",
-    "ukmo": "ukmo:openmeteo",
+    # No "ukmo": live UKMO is UKV (#937), its horizon from the UKV schedule.
     "gem": "gem:openmeteo",
 }
 
@@ -461,6 +461,16 @@ def run_fetch(
                 logger.info("Skipping icon: route leaves the ICON-EU domain")
                 models_skipped_region.append(model.value)
                 continue
+        if model == ModelSource.UKMO:
+            # UKMO is Met Office UKV only, inside the UKV box (#937,
+            # meteorology-decisions §72). This replaces the old route-touches-GB
+            # gate: LFPG-EDDF gets UKMO, EGLL-LEMD does not.
+            from weatherbrief.fetch.grib.ukv import route_in_ukv_domain
+
+            if not route_in_ukv_domain(route_points):
+                logger.info("Skipping ukmo: route leaves the UKV domain")
+                models_skipped_region.append(model.value)
+                continue
         # Live horizon check: Open-Meteo's data_end_time can fall short of
         # the static config horizon for a given run. Skip rather than fetch
         # a structurally-valid response of all-null values. Compared against
@@ -477,6 +487,29 @@ def run_fetch(
             eu_end = icon_eu_horizon_end(as_of_time)
             if eu_end is not None and (live_end is None or eu_end < live_end):
                 live_end = eu_end
+        if model == ModelSource.UKMO and not historical_mode:
+            # No published UKV run covering the window → no UKMO (#937): the
+            # Open-Meteo blend would be the global model. Same test as the
+            # GRIB-primary gate (ukv_window_out_of_range), so a window this
+            # lets through is never refused there as out_of_range and sent
+            # to Open-Meteo (PR #943 review).
+            from weatherbrief.fetch.grib.ukv import (
+                ukv_horizon_end,
+                ukv_window_out_of_range,
+            )
+
+            if ukv_window_out_of_range(
+                departure_time, route.flight_duration_hours or 0.0, as_of_time,
+            ):
+                ukv_end = ukv_horizon_end(as_of_time)
+                logger.info(
+                    "Skipping ukmo: no published UKV run covers the window "
+                    "ending %s (furthest run reaches %s)",
+                    window_end_dt.isoformat(), ukv_end.isoformat(),
+                )
+                models_skipped_horizon.append((model.value, ukv_end))
+                continue
+            live_end = None  # UKV covers it; Open-Meteo's horizon is moot
         if live_end is not None and window_end_dt > live_end:
             logger.info(
                 "Skipping %s: flight window ends %s, but current run only "
@@ -697,12 +730,14 @@ def run_fetch(
             all_forecasts[:] = [wf for wf in all_forecasts if id(wf) not in dropped_ids]
             models_fetched_names[:] = [m for m in models_fetched_names if m != outcome.model]
             if outcome.no_fallback is not None:
-                # No Open-Meteo fallback (meteofrance, #940): the GRIB skip
-                # reason when enrichment gave one, else "grib_incomplete".
+                # No Open-Meteo fallback (meteofrance #940, ukmo #937): the
+                # GRIB skip reason when enrichment gave one, else
+                # "grib_incomplete".
                 why = grib_skip_reasons.get(outcome.model) or outcome.no_fallback
                 if grib_enrichment_failed:
                     why = "grib_enrichment_failed"
-                models_failed[outcome.model] = f"AROME GRIB {why}"
+                label = "UKV" if outcome.model == ModelSource.UKMO.value else "AROME GRIB"
+                models_failed[outcome.model] = f"{label} {why}"
                 grib_primary_dropped[outcome.model] = why
             elif outcome.empty:
                 models_returned_empty.append(outcome.model)
