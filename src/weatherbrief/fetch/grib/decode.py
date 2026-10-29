@@ -3234,6 +3234,14 @@ def decode_arome_surface_per_point(
                             Path(file_path).name, key,
                             eccodes.codes_get(gid, "units"), vmax, cover_scale,
                         )
+                        if cover_scale == 1.0 and vmax is not None and 0.0 < vmax <= 1.0:
+                            # Read as % yet the whole domain is ≤ 1 %: more
+                            # likely a 0–1 fraction under a wrong unit.
+                            logger.warning(
+                                "AROME %s: cover %s read as %% but the domain max is "
+                                "%.3f; check whether it is a 0-1 fraction",
+                                Path(file_path).name, key, vmax,
+                            )
                     if cover_scale is None:
                         unmapped.add(f"{key}(unknown cover units)")
                         continue

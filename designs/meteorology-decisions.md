@@ -7422,6 +7422,16 @@ slot still billed on Open-Meteo.
 - **Not used:** `blh` from SP2 (left for a follow-up; nothing on the
   `meteofrance` slot read it before) and vertical velocity (IP3, deferred by
   the owner).
+- **CAPE is `CAPE_INS`, most-unstable CAPE** (max over parcels from the
+  lowest 3000 m), written to `cape_jkg` like every model's own CAPE. That
+  field is not one parcel definition across models (`NWP_CAPE_TYPE`: GFS
+  `sb`, ECMWF `mu`, ICON `ml`). `meteofrance` stays `unknown` there because
+  the same key also tags the Open-Meteo Météo-France map snapshots, whose
+  parcel isn't documented. Expect AROME's to read at or above a surface-based value on a
+  stable-surface day. The convective grade uses the sounding's own parcel
+  CAPE (§43, `effective_cape`), the same way for every model; the NWP value
+  is only the fallback when the sounding gives none, and the raw-vs-computed
+  divergence flag.
 - **Fields AROME does not publish on these packages are None** (missing-data
   semantics, never zero): visibility, the surface freezing-level field (the
   sounding's own 0 °C crossing still comes from the column), CIN, lifted

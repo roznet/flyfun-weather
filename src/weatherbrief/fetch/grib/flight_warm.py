@@ -450,8 +450,8 @@ def _wants_meteofrance(flight: _Flight) -> bool:
             endpoint, detect_model_region(flight.route), flight.route,
         )
     except Exception:
-        logger.debug("Flight warm arome: profile check failed for %s", flight.id,
-                     exc_info=True)
+        logger.warning("Flight warm arome: profile check failed for %s; warming anyway",
+                       flight.id, exc_info=True)
         return True
 
 
