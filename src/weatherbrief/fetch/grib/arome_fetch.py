@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -384,19 +385,66 @@ def _iter_group_chunks(url: str, session: requests.Session):
 
     Raising inside the iterator makes ``put_cached_from_chunks`` discard the
     tempfile, so a truncated download is never cached as a valid group.
+
+    A network error, a body cut short or a 429/5xx is retried with the
+    attempts and backoff of ``http_retry`` (which the other GRIB downloaders
+    use, but which reads the whole body into memory). A retry resumes with a
+    Range header from the bytes already yielded, and gives up if the server
+    answers it with anything but 206. The slot has no Open-Meteo fallback
+    (#940), so one stalled read on the ~430 MB IP1 file used to drop it.
     """
-    with session.get(url, stream=True, timeout=REQUEST_TIMEOUT) as resp:
-        resp.raise_for_status()
-        expected = resp.headers.get("Content-Length")
-        total = 0
-        for chunk in resp.iter_content(chunk_size=_CHUNK_BYTES):
-            if chunk:
-                total += len(chunk)
-                yield chunk
-        if expected is not None and expected.isdigit() and total != int(expected):
-            raise AromeDownloadError(
-                f"AROME download truncated: {total} of {expected} bytes from {url}"
+    from weatherbrief.fetch.grib import http_retry
+
+    attempts = len(http_retry.BACKOFF_S) + 1
+    total = 0
+    expected: int | None = None
+    for attempt in range(attempts):
+        last = attempt == attempts - 1
+        headers = {"Range": f"bytes={total}-"} if total else None
+        try:
+            with session.get(
+                url, stream=True, timeout=REQUEST_TIMEOUT, headers=headers,
+            ) as resp:
+                if resp.status_code in http_retry.RETRYABLE_STATUS and not last:
+                    raise requests.HTTPError(f"HTTP {resp.status_code}", response=resp)
+                resp.raise_for_status()
+                if total and resp.status_code != 206:
+                    raise AromeDownloadError(
+                        f"AROME resume ignored (HTTP {resp.status_code}) at "
+                        f"{total} bytes from {url}"
+                    )
+                if expected is None:
+                    length = resp.headers.get("Content-Length")
+                    expected = int(length) if length and length.isdigit() else None
+                for chunk in resp.iter_content(chunk_size=_CHUNK_BYTES):
+                    if chunk:
+                        total += len(chunk)
+                        yield chunk
+        except requests.RequestException as exc:
+            status = getattr(exc.response, "status_code", None)
+            if last or (status is not None and status not in http_retry.RETRYABLE_STATUS):
+                raise
+            logger.info(
+                "AROME GET %s at %d bytes, retry %d/%d: %s",
+                type(exc).__name__, total, attempt + 1, attempts - 1,
+                url.rsplit("/", 1)[-1],
             )
+        else:
+            if expected is None or total >= expected:
+                break
+            if last:
+                raise AromeDownloadError(
+                    f"AROME download truncated: {total} of {expected} bytes from {url}"
+                )
+            logger.info(
+                "AROME body cut short at %d of %d bytes, retry %d/%d: %s",
+                total, expected, attempt + 1, attempts - 1, url.rsplit("/", 1)[-1],
+            )
+        time.sleep(http_retry.BACKOFF_S[attempt])
+    if expected is not None and total != expected:
+        raise AromeDownloadError(
+            f"AROME download truncated: {total} of {expected} bytes from {url}"
+        )
 
 
 def download_arome_group(

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import requests
 
 from weatherbrief.fetch.grib import arome_domain as dom
 from weatherbrief.fetch.grib import arome_fetch as af
@@ -208,10 +209,11 @@ class TestFetchHelpers:
 
 
 class _Resp:
-    def __init__(self, status=200, headers=None, chunks=()):
+    def __init__(self, status=200, headers=None, chunks=(), fail_after=False):
         self.status_code = status
         self.headers = headers or {}
         self._chunks = chunks
+        self._fail_after = fail_after
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -219,6 +221,8 @@ class _Resp:
 
     def iter_content(self, chunk_size):
         yield from self._chunks
+        if self._fail_after:
+            raise requests.ConnectionError("Read timed out.")
 
     def __enter__(self):
         return self
@@ -233,14 +237,18 @@ class _Session:
         self.body = body or {}
         self.heads: list[str] = []
         self.gets: list[str] = []
+        self.ranges: list[str | None] = []
 
     def head(self, url, timeout=None):
         self.heads.append(url)
         return _Resp(200 if url in self.published else 404)
 
-    def get(self, url, stream=False, timeout=None):
+    def get(self, url, stream=False, timeout=None, headers=None):
         self.gets.append(url)
-        return self.body[url]
+        self.ranges.append((headers or {}).get("Range"))
+        body = self.body[url]
+        # A list is the server's answers in order, one per GET.
+        return body.pop(0) if isinstance(body, list) else body
 
 
 class TestRunFinder:
@@ -272,6 +280,11 @@ class TestRunFinder:
 
 
 class TestDownload:
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch):
+        from weatherbrief.fetch.grib import http_retry
+
+        monkeypatch.setattr(http_retry, "BACKOFF_S", (0.0, 0.0))
     def test_streams_into_cache(self, tmp_path):
         url = af.arome_package_url("20260730", 12, "00H06H")
         sess = _Session(body={url: _Resp(headers={"Content-Length": "6"},
@@ -293,6 +306,36 @@ class TestDownload:
         url = af.arome_package_url("20260730", 12, "00H06H")
         sess = _Session(body={url: _Resp(status=404)})
         assert af.download_arome_group("20260730", 12, "00H06H", tmp_path, sess) is None
+        assert sess.gets == [url]  # a 404 is an answer, not retried
+
+    def test_read_timeout_resumes_from_bytes_written(self, tmp_path):
+        url = af.arome_package_url("20260730", 12, "00H06H")
+        sess = _Session(body={url: [
+            _Resp(headers={"Content-Length": "6"}, chunks=[b"GRI"], fail_after=True),
+            _Resp(status=206, headers={"Content-Length": "3"}, chunks=[b"B2!"]),
+        ]})
+        path = af.download_arome_group("20260730", 12, "00H06H", tmp_path, sess)
+        assert path is not None and path.read_bytes() == b"GRIB2!"
+        assert sess.ranges == [None, "bytes=3-"]
+
+    def test_resume_answered_with_whole_file_is_not_cached(self, tmp_path):
+        url = af.arome_package_url("20260730", 12, "00H06H")
+        sess = _Session(body={url: [
+            _Resp(headers={"Content-Length": "6"}, chunks=[b"GRI"], fail_after=True),
+            _Resp(status=200, headers={"Content-Length": "6"}, chunks=[b"GRIB2!"]),
+        ]})
+        assert af.download_arome_group("20260730", 12, "00H06H", tmp_path, sess) is None
+        assert not list(tmp_path.glob("*.grib2"))
+
+    def test_server_error_is_retried(self, tmp_path):
+        url = af.arome_package_url("20260730", 12, "00H06H")
+        sess = _Session(body={url: [
+            _Resp(status=503),
+            _Resp(headers={"Content-Length": "6"}, chunks=[b"GRIB2!"]),
+        ]})
+        path = af.download_arome_group("20260730", 12, "00H06H", tmp_path, sess)
+        assert path is not None and path.read_bytes() == b"GRIB2!"
+        assert len(sess.gets) == 2
 
 
 # ---------------------------------------------------------------------------
