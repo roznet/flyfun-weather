@@ -14,6 +14,7 @@ from datetime import datetime
 import pytest
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories.aircraft_icing import AircraftIcingEvaluator
 from weatherbrief.analysis.advisories.fiki_icing import FIKIIcingEvaluator
 from weatherbrief.analysis.advisories.icing_escape import IcingEscapeEvaluator
 from weatherbrief.analysis.advisories.ifr_feasibility import IFRFeasibilityEvaluator
@@ -92,6 +93,26 @@ def test_ogimet_nwp_with_envelope_still_grades():
     ctx = _ctx([clear for _ in range(10)], icing_method="ogimet_nwp")
     assert ctx.analyses[0].sounding["gfs"].active_icing_available is True
     result = IcingEscapeEvaluator.evaluate(ctx, _defaults(IcingEscapeEvaluator))
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+
+
+def _clear_envelope_sounding() -> SoundingAnalysis:
+    """A model whose native cloud envelope ran and found no cloud."""
+    return SoundingAnalysis(
+        indices=ThermodynamicIndices(freezing_level_ft=5000),
+        nwp_cloud_layers=[],
+        icing_ogimet_nwp_zones=[],
+    )
+
+
+@pytest.mark.parametrize(
+    "evaluator", [IcingEscapeEvaluator, FIKIIcingEvaluator, AircraftIcingEvaluator],
+)
+def test_ogimet_nwp_clear_envelope_grades_green(evaluator):
+    """An empty envelope is clear sky, not "no envelope": GREEN, not UNAVAILABLE."""
+    ctx = _ctx([_clear_envelope_sounding() for _ in range(10)], icing_method="ogimet_nwp")
+    assert ctx.analyses[0].sounding["gfs"].active_icing_available is True
+    result = evaluator.evaluate(ctx, _defaults(evaluator))
     assert result.aggregate_status == AdvisoryStatus.GREEN
 
 

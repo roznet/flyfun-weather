@@ -212,7 +212,9 @@ def _resolve_analyses(
                     # — there is no honest method to badge (#408). Set on every
                     # branch (like cloud/convective) so a stale value can never
                     # survive ``model_copy(update=updates)``.
-                    if not sounding.nwp_cloud_layers:
+                    # ``None`` is "no envelope"; ``[]`` is an envelope that
+                    # reports clear sky, so no cloud and no icing: assessed.
+                    if sounding.nwp_cloud_layers is None:
                         updates["active_icing_available"] = False
                         updates["icing_method_effective"] = None
                     else:
