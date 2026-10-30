@@ -97,7 +97,7 @@ enum FlightResolver {
     ) async -> [FlightResponse] {
         await IntentSupport.ensureAirportDatabase()
         let calendar = Calendar.current
-        let query = raw.lowercased()
+        let query = joinSpelledICAO(raw.lowercased())
 
         // Resolution is scoped to today-and-future flights — the design's "closed
         // set of *upcoming* flights". Both tiers match over this set, so a
@@ -112,11 +112,11 @@ enum FlightResolver {
         let both = candidates.filter {
             matchesPlace($0, query: query) && matchesRelativeDate($0, query: query, now: now, calendar: calendar)
         }
-        if !both.isEmpty { return both }
+        if !both.isEmpty { return preferDestinations(both, query: query) }
         let either = candidates.filter {
             matchesPlace($0, query: query) || matchesRelativeDate($0, query: query, now: now, calendar: calendar)
         }
-        if !either.isEmpty { return either }
+        if !either.isEmpty { return preferDestinations(either, query: query) }
 
         // Tier 2 — grounded on-device selection over the same upcoming set. The
         // model sees the real candidates (route + airport names + date) and picks
@@ -186,15 +186,88 @@ enum FlightResolver {
 
     // MARK: - Place matching (needs AirportDatabase, so MainActor)
 
-    /// True when the query references either endpoint of the flight — by ICAO
-    /// token or by (a significant word of) the airport name.
+    /// True when the query references the flight's endpoints — by ICAO token or
+    /// by (a significant word of) the airport name. "from X" must be the
+    /// departure and "to X" the destination; with neither, either end matches
+    /// (and `resolve` then prefers destinations, see `preferDestinations`).
     @MainActor
     static func matchesPlace(_ flight: FlightResponse, query: String) -> Bool {
-        for icao in [flight.waypoints.first, flight.waypoints.last].compactMap({ $0 }) {
-            if icaoMatchesQuery(icao.uppercased(), query: query) { return true }
+        guard let origin = flight.waypoints.first?.uppercased(),
+              let destination = flight.waypoints.last?.uppercased() else { return false }
+        let clauses = directionClauses(query)
+        if clauses.from != nil || clauses.to != nil {
+            if let from = clauses.from, !icaoMatchesQuery(origin, query: from) { return false }
+            if let to = clauses.to, !icaoMatchesQuery(destination, query: to) { return false }
+            return true
         }
-        return false
+        return icaoMatchesQuery(origin, query: query) || icaoMatchesQuery(destination, query: query)
     }
+
+    /// With a bare place ("Le Touquet") matching an out-and-back, keep the
+    /// flight going *there*: that is what "my Le Touquet flight" means. Lists
+    /// with no destination match, or a query with "to" / "from", pass through.
+    @MainActor
+    static func preferDestinations(_ flights: [FlightResponse], query: String) -> [FlightResponse] {
+        let clauses = directionClauses(query)
+        guard clauses.from == nil, clauses.to == nil else { return flights }
+        let going = flights.filter { flight in
+            guard let destination = flight.waypoints.last?.uppercased() else { return false }
+            return icaoMatchesQuery(destination, query: query)
+        }
+        return going.isEmpty ? flights : going
+    }
+
+    /// The words after "from" and after "to" (each up to the other keyword),
+    /// or nil when the keyword is absent. "from fairoaks to le touquet" →
+    /// ("fairoaks", "le touquet").
+    nonisolated static func directionClauses(_ query: String) -> (from: String?, to: String?) {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        func clause(after keyword: String, until other: String) -> String? {
+            guard let start = words.firstIndex(of: keyword) else { return nil }
+            let rest = words[(start + 1)...]
+            let end = rest.firstIndex(of: other) ?? rest.endIndex
+            let text = rest[..<end].joined(separator: " ")
+            return text.isEmpty ? nil : text
+        }
+        return (clause(after: "from", until: "to"), clause(after: "to", until: "from"))
+    }
+
+    /// Joins an ICAO code read letter by letter, as Siri may transcribe it
+    /// ("e g t f", "echo golf tango foxtrot") into "egtf". Only a run of
+    /// exactly four spelled letters is joined, so a lone "lima" or "victor" in
+    /// a phrase is left alone.
+    nonisolated static func joinSpelledICAO(_ query: String) -> String {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        let letters = words.map { word -> String? in
+            if word.count == 1, word.first?.isLetter == true { return word }
+            return natoLetters[word]
+        }
+        var output: [String] = []
+        var i = 0
+        while i < words.count {
+            var j = i
+            while j < words.count, letters[j] != nil { j += 1 }
+            if j - i == 4 {
+                output.append(letters[i..<j].compactMap { $0 }.joined())
+                i = j
+            } else if j > i {
+                output += words[i..<j]
+                i = j
+            } else {
+                output.append(words[i])
+                i += 1
+            }
+        }
+        return output.joined(separator: " ")
+    }
+
+    nonisolated private static let natoLetters: [String: String] = [
+        "alpha": "a", "alfa": "a", "bravo": "b", "charlie": "c", "delta": "d", "echo": "e",
+        "foxtrot": "f", "golf": "g", "hotel": "h", "india": "i", "juliet": "j", "juliett": "j",
+        "kilo": "k", "lima": "l", "mike": "m", "november": "n", "oscar": "o", "papa": "p",
+        "quebec": "q", "romeo": "r", "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
+        "whiskey": "w", "whisky": "w", "x-ray": "x", "xray": "x", "yankee": "y", "zulu": "z",
+    ]
 
     @MainActor
     private static func icaoMatchesQuery(_ icao: String, query: String) -> Bool {

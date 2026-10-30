@@ -25,6 +25,11 @@ struct FlightEntity: AppEntity, IndexedEntity {
     /// GREEN / AMBER / RED (uppercased), or nil when only a long-range outlook
     /// exists / never briefed.
     let assessment: String?
+    /// What a pilot may say for this flight inside a Siri phrase ("Le
+    /// Touquet", "from Le Touquet", "Fairoaks to Le Touquet"), set by
+    /// `FlightEntityQuery.suggestedEntities` from `FlightSpokenNames` for
+    /// upcoming flights only. Empty elsewhere.
+    var synonyms: [String] = []
 
     static var typeDisplayRepresentation: TypeDisplayRepresentation {
         TypeDisplayRepresentation(name: "Flight")
@@ -34,7 +39,8 @@ struct FlightEntity: AppEntity, IndexedEntity {
         DisplayRepresentation(
             title: "\(title)",
             subtitle: "\(subtitle)",
-            image: .init(systemName: "airplane")
+            image: .init(systemName: "airplane"),
+            synonyms: synonyms.map { "\($0)" }
         )
     }
 

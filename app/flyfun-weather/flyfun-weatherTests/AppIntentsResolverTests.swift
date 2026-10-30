@@ -336,7 +336,10 @@ struct RefreshOutcomeTests {
 struct DialogTests {
     private let now = iso("2026-07-08T10:00:00Z")
 
-    @Test("check summary: assessment + top concerns")
+    /// The day before `makeFlight`'s default 2026-06-24T12:00Z departure.
+    private let dayBefore = iso("2026-06-23T10:00:00Z")
+
+    @Test("check summary: no reason → assessment + top concerns, with when it departs")
     func check() {
         let briefing = makeBriefingStatus(
             assessment: "AMBER", hasAdvisories: true,
@@ -345,14 +348,41 @@ struct DialogTests {
                 AdvisoryChip(status: "AMBER", name: "icing"),
             ]))
         let flight = makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: briefing)
-        #expect(IntentDialogs.checkSummary(flight)
-            == "Your LFMD → LFML flight is graded amber. Top concerns: convective and icing.")
+        #expect(IntentDialogs.checkSummary(flight, now: dayBefore)
+            == "Your LFMD → LFML flight, tomorrow at 12:00Z, is graded amber. Top concerns: convective and icing.")
+    }
+
+    @Test("check summary: the briefing's reason replaces the concern list")
+    func checkWithReason() {
+        let briefing = makeBriefingStatus(
+            assessment: "RED",
+            assessmentReason: "Departure at EGTF is graded IFR, with a low overcast at about 850-1,000 ft",
+            advisorySummary: AdvisorySummary(red: 2, amber: 0, top: [AdvisoryChip(status: "RED", name: "VFR Feasibility")]))
+        let flight = makeFlight(waypoints: ["EGTF", "LFAT"], latestBriefing: briefing)
+        #expect(IntentDialogs.checkSummary(flight, now: dayBefore)
+            == "Your EGTF → LFAT flight, tomorrow at 12:00Z, is graded red. "
+            + "Departure at EGTF is graded IFR, with a low overcast at about 850-1,000 ft.")
+        #expect(IntentDialogs.spokenCheck(flight, now: dayBefore, names: ["EGTF": "Fairoaks", "LFAT": "Le Touquet"])
+            == "Your Fairoaks to Le Touquet flight, tomorrow at 12:00 zulu, is graded red. "
+            + "Departure at Fairoaks is graded IFR, with a low overcast at about 850 to 1,000 feet.")
+        #expect(IntentDialogs.spokenSupporting(flight, now: dayBefore, names: ["EGTF": "Fairoaks", "LFAT": "Le Touquet"])
+            == "Your Fairoaks to Le Touquet flight, tomorrow at 12:00 zulu, is graded red.")
     }
 
     @Test("check summary: never briefed")
     func checkUnbriefed() {
         let flight = makeFlight(waypoints: ["LFMD", "LFML"], latestBriefing: nil)
-        #expect(IntentDialogs.checkSummary(flight) == "Your LFMD → LFML flight hasn't been briefed yet.")
+        #expect(IntentDialogs.checkSummary(flight, now: dayBefore)
+            == "Your LFMD → LFML flight, tomorrow at 12:00Z, hasn't been briefed yet.")
+    }
+
+    @Test("when phrase: today, tomorrow, weekday within the week, date beyond")
+    func whenPhrase() {
+        let departure = iso("2026-06-24T12:00:00Z")   // a Wednesday
+        #expect(IntentDialogs.whenPhrase(departure, now: iso("2026-06-24T06:00:00Z")) == "today at 12:00Z")
+        #expect(IntentDialogs.whenPhrase(departure, now: dayBefore) == "tomorrow at 12:00Z")
+        #expect(IntentDialogs.whenPhrase(departure, now: iso("2026-06-20T10:00:00Z")) == "on Wednesday at 12:00Z")
+        #expect(IntentDialogs.whenPhrase(departure, now: iso("2026-06-10T10:00:00Z")) == "on 24 Jun at 12:00Z")
     }
 
     @Test("overview: one upcoming flight")
@@ -459,6 +489,9 @@ private func makeLiveLayer(
 
 @Suite("Check briefing — live layer first (#365)")
 struct LiveCheckDialogTests {
+    /// The day before `makeFlight`'s default 2026-06-24T12:00Z departure.
+    private let now = iso("2026-06-23T10:00:00Z")
+
     private func flight(assessment: String = "AMBER") -> FlightResponse {
         let briefing = makeBriefingStatus(
             assessment: assessment, hasAdvisories: true,
@@ -470,16 +503,18 @@ struct LiveCheckDialogTests {
     @Test("alert lines first, then the highlight with its time, then the briefing's grade")
     func alertAndHighlight() throws {
         let live = try makeLiveLayer()
-        #expect(IntentDialogs.checkSummary(flight(), live: live)
-            == "New SIGMET at LFML. As of 14:29Z: Route as briefed, storms building near LFML. "
+        #expect(IntentDialogs.checkSummary(flight(), live: live, now: now)
+            == "Live update for your LFMD → LFML flight, tomorrow at 12:00Z. "
+            + "New SIGMET at LFML. As of 14:29Z: Route as briefed, storms building near LFML. "
             + "The 07:12Z briefing graded it amber; top concern: convective.")
     }
 
     @Test("no highlight: the headline stands in, without an extra time")
     func headlineFallback() throws {
         let live = try makeLiveLayer(highlight: nil)
-        #expect(IntentDialogs.checkSummary(flight(), live: live)
-            == "New SIGMET at LFML. Observed 14:30Z · as briefed. "
+        #expect(IntentDialogs.checkSummary(flight(), live: live, now: now)
+            == "Live update for your LFMD → LFML flight, tomorrow at 12:00Z. "
+            + "New SIGMET at LFML. Observed 14:30Z · as briefed. "
             + "The 07:12Z briefing graded it amber; top concern: convective.")
     }
 
@@ -487,16 +522,16 @@ struct LiveCheckDialogTests {
     func noData() throws {
         let live = try makeLiveLayer(liveUpdatedAt: nil)
         #expect(IntentDialogs.liveCheckLines(live) == nil)
-        #expect(IntentDialogs.checkSummary(flight(), live: live) == IntentDialogs.checkSummary(flight()))
-        #expect(IntentDialogs.checkSummary(flight(), live: live)
-            == "Your LFMD → LFML flight is graded amber. Top concern: convective.")
+        #expect(IntentDialogs.checkSummary(flight(), live: live, now: now) == IntentDialogs.checkSummary(flight(), now: now))
+        #expect(IntentDialogs.checkSummary(flight(), live: live, now: now)
+            == "Your LFMD → LFML flight, tomorrow at 12:00Z, is graded amber. Top concern: convective.")
     }
 
     @Test("UNAVAILABLE grade with live data: the live lines lead, the briefing is not a verdict")
     func unavailableWithLive() throws {
         let live = try makeLiveLayer(alert: nil)
-        #expect(IntentDialogs.checkSummary(flight(assessment: "UNAVAILABLE"), live: live)
-            == "As of 14:29Z: Route as briefed, storms building near LFML. "
+        #expect(IntentDialogs.checkSummary(flight(assessment: "UNAVAILABLE"), live: live, now: now)
+            == "Live update for your LFMD → LFML flight, tomorrow at 12:00Z. As of 14:29Z: Route as briefed, storms building near LFML. "
             + "The 07:12Z briefing couldn't assess it: there was no usable model data for that route.")
     }
 
@@ -512,7 +547,7 @@ struct LiveCheckDialogTests {
     func noGlance() throws {
         let live = try makeLiveLayer(withGlance: false)
         #expect(IntentDialogs.liveCheckLines(live) == nil)
-        #expect(IntentDialogs.checkSummary(flight(), live: live) == IntentDialogs.checkSummary(flight()))
+        #expect(IntentDialogs.checkSummary(flight(), live: live, now: now) == IntentDialogs.checkSummary(flight(), now: now))
     }
 
     @Test("blank alert text is dropped; nothing left to say means no live lead")
@@ -523,7 +558,7 @@ struct LiveCheckDialogTests {
 
         let empty = try makeLiveLayer(alert: " ", highlight: nil, headline: "")
         #expect(IntentDialogs.liveCheckLines(empty) == nil)
-        #expect(IntentDialogs.checkSummary(flight(), live: empty) == IntentDialogs.checkSummary(flight()))
+        #expect(IntentDialogs.checkSummary(flight(), live: empty, now: now) == IntentDialogs.checkSummary(flight(), now: now))
     }
 
     @Test("briefing grade line: two concerns, outlook, no assessment, not briefed")
@@ -540,23 +575,164 @@ struct LiveCheckDialogTests {
         let outlook = makeFlight(waypoints: ["LFMD", "LFML"],
                                  latestBriefing: makeBriefingStatus(outlook: "LIKELY_FLYABLE"))
         #expect(IntentDialogs.briefingGradeLine(outlook) == "The briefing gave a long-range outlook of likely flyable.")
-        #expect(IntentDialogs.checkSummary(outlook) == "Your LFMD → LFML flight has a long-range outlook of likely flyable.")
+        #expect(IntentDialogs.checkSummary(outlook, now: now)
+            == "Your LFMD → LFML flight, tomorrow at 12:00Z, has a long-range outlook of likely flyable.")
 
         let none = makeFlight(waypoints: ["LFMD", "LFML"],
                               latestBriefing: makeBriefingStatus(fetchTimestamp: "2026-07-08T07:12:00Z"))
         #expect(IntentDialogs.briefingGradeLine(none) == "The 07:12Z briefing has no assessment yet.")
-        #expect(IntentDialogs.checkSummary(none) == "Your LFMD → LFML flight has no assessment yet.")
+        #expect(IntentDialogs.checkSummary(none, now: now) == "Your LFMD → LFML flight, tomorrow at 12:00Z, has no assessment yet.")
 
-        #expect(IntentDialogs.briefingGradeLine(makeFlight(waypoints: ["LFMD", "LFML"]))
-            == "Your LFMD → LFML flight hasn't been briefed yet.")
+        #expect(IntentDialogs.briefingGradeLine(makeFlight(waypoints: ["LFMD", "LFML"])) == "It hasn't been briefed yet.")
     }
 
     @Test("card note: nil for a traffic-light grade, the dialog's words otherwise")
     func briefingNote() {
-        #expect(IntentDialogs.briefingNote(flight()) == nil)
-        #expect(IntentDialogs.briefingNote(flight(assessment: "UNAVAILABLE"))
-            == "I couldn't assess your LFMD → LFML flight — there's no usable model data for that route yet.")
-        #expect(IntentDialogs.briefingNote(makeFlight(waypoints: ["LFMD", "LFML"]))
-            == "Your LFMD → LFML flight hasn't been briefed yet.")
+        #expect(IntentDialogs.briefingNote(flight(), now: now) == nil)
+        #expect(IntentDialogs.briefingNote(flight(assessment: "UNAVAILABLE"), now: now)
+            == "I couldn't assess your LFMD → LFML flight, tomorrow at 12:00Z: there's no usable model data for that route yet.")
+        #expect(IntentDialogs.briefingNote(makeFlight(waypoints: ["LFMD", "LFML"]), now: now)
+            == "Your LFMD → LFML flight, tomorrow at 12:00Z, hasn't been briefed yet.")
+    }
+}
+
+// MARK: - Speaking for the car
+
+private let londonNames: [String: String] = [
+    "EGTF": "Fairoaks", "EGLL": "London Heathrow", "EGLF": "Farnborough", "EGWU": "RAF Northolt",
+    "EGKK": "London Gatwick", "EGLC": "London City", "EGMC": "London Southend",
+    "LFAC": "Calais Marck", "LFAT": "Le Touquet",
+]
+
+@Suite("Spoken text — written briefing text made speakable")
+struct SpokenTextTests {
+    @Test("a real live highlight: names for codes, source notes dropped, nothing summarised away")
+    func liveHighlight() {
+        let written = "Departure EGTF is LIFR now (EGLL 8 NM NE used for METAR and TAF; EGTF has no METAR or TAF), "
+            + "and several route airports are LIFR with fog: EGLF, EGWU, EGKK (LIFR at 07:21Z TAF), EGLC, "
+            + "with EGMC IFR; LFAC is LIFR, 7 NM before LFAT. Destination LFAT is VFR now with no TAF at ETA. "
+            + "No SIGMETs, cells or rain on the track ahead; conditions have improved since briefing."
+        #expect(SpokenText.speakable(written, names: londonNames)
+            == "Departure Fairoaks is low IFR now, and several route airports are low IFR with fog: "
+            + "Farnborough, RAF Northolt, London Gatwick, London City, with London Southend IFR; "
+            + "Calais Marck is low IFR, 7 nautical miles before Le Touquet. "
+            + "Destination Le Touquet is VFR now with no TAF at ETA. "
+            + "No SIGMETs, cells or rain on the track ahead; conditions have improved since briefing.")
+    }
+
+    @Test("a parenthetical naming a hazard is kept")
+    func hazardParentheticalKept() {
+        #expect(SpokenText.speakable("LFAT is IFR (EMBD TS reported at 14:20Z)", names: londonNames)
+            == "Le Touquet is IFR (EMBD TS reported at 14:20 zulu)")
+        #expect(SpokenText.speakable("Route clear (moderate icing above FL080)")
+            == "Route clear (moderate icing above flight level 80)")
+    }
+
+    @Test("units, ranges, categories and unknown codes")
+    func units() {
+        #expect(SpokenText.speakable("Overcast 850-1,000 ft, MVFR within 1 NM of XXXX")
+            == "Overcast 850 to 1,000 feet, marginal VFR within 1 nautical mile of XXXX")
+        #expect(SpokenText.speakable("EGTF → LFAT · as briefed", names: londonNames)
+            == "Fairoaks to Le Touquet, as briefed")
+    }
+
+    @Test("airport names trimmed for speech")
+    func names() {
+        #expect(SpokenText.speakableName("Fairoaks Airport") == "Fairoaks")
+        #expect(SpokenText.speakableName("Le Touquet-Côte d'Opale Airport") == "Le Touquet")
+        #expect(SpokenText.speakableName("Charles de Gaulle International Airport") == "Charles de Gaulle")
+        #expect(SpokenText.speakableName("Midden-Zeeland Airfield") == "Midden-Zeeland")
+        #expect(SpokenText.speakableName("RAF Northolt") == "RAF Northolt")
+    }
+}
+
+@Suite("Flight spoken names — what Siri listens for")
+struct FlightSpokenNamesTests {
+    private let now = iso("2026-10-30T20:00:00Z")
+    private var flights: [FlightResponse] {
+        [
+            makeFlight(id: "week", waypoints: ["EGTF", "LFAT"], departureTime: "2026-11-07T11:00:00Z"),
+            makeFlight(id: "back", waypoints: ["LFAT", "EGTF"], departureTime: "2026-10-31T14:00:00Z"),
+            makeFlight(id: "out", waypoints: ["EGTF", "LFAT"], departureTime: "2026-10-31T11:00:00Z"),
+        ]
+    }
+
+    @Test("a bare place, 'to' and the code belong to the soonest flight going there")
+    func outbound() throws {
+        let synonyms = FlightSpokenNames.synonyms(for: flights, names: londonNames, now: now)
+        let out = try #require(synonyms["out"])
+        for phrase in ["Le Touquet", "to Le Touquet", "LFAT", "L F A T", "Fairoaks to Le Touquet", "from Fairoaks",
+                       "Fairoaks to Le Touquet tomorrow"] {
+            #expect(out.contains(phrase), "\(phrase)")
+        }
+    }
+
+    @Test("the return answers to 'from Le Touquet' and its own destination, not 'Le Touquet'")
+    func inbound() throws {
+        let back = try #require(FlightSpokenNames.synonyms(for: flights, names: londonNames, now: now)["back"])
+        #expect(back.contains("from Le Touquet"))
+        #expect(back.contains("Fairoaks"))
+        #expect(back.contains("Le Touquet to Fairoaks"))
+        #expect(!back.contains("Le Touquet"))
+    }
+
+    @Test("a later same-route flight only answers to its dated form")
+    func laterSameRoute() throws {
+        let week = try #require(FlightSpokenNames.synonyms(for: flights, names: londonNames, now: now)["week"])
+        #expect(week.contains("Fairoaks to Le Touquet on 7 Nov"))
+        #expect(!week.contains("Le Touquet"))
+        #expect(!week.contains("Fairoaks to Le Touquet"))
+    }
+}
+
+@MainActor
+@Suite("Resolver — direction and spelled codes")
+struct DirectionResolverTests {
+    private let out = makeFlight(id: "out", waypoints: ["EGTF", "LFAT"], departureTime: "2026-10-31T11:00:00Z")
+    private let back = makeFlight(id: "back", waypoints: ["LFAT", "EGTF"], departureTime: "2026-10-31T14:00:00Z")
+
+    @Test("from / to clauses")
+    func clauses() {
+        #expect(FlightResolver.directionClauses("from fairoaks to le touquet") == ("fairoaks", "le touquet"))
+        #expect(FlightResolver.directionClauses("to le touquet") == (nil, "le touquet"))
+        #expect(FlightResolver.directionClauses("le touquet tomorrow") == (nil, nil))
+    }
+
+    @Test("'from' must be the departure, 'to' the destination")
+    func direction() {
+        #expect(FlightResolver.matchesPlace(back, query: "from lfat"))
+        #expect(!FlightResolver.matchesPlace(out, query: "from lfat"))
+        #expect(FlightResolver.matchesPlace(out, query: "to lfat"))
+        #expect(!FlightResolver.matchesPlace(back, query: "to lfat"))
+    }
+
+    @Test("a bare place prefers the flight going there")
+    func barePlace() {
+        #expect(FlightResolver.preferDestinations([out, back], query: "lfat").map(\.id) == ["out"])
+        #expect(FlightResolver.preferDestinations([out, back], query: "from lfat").map(\.id) == ["out", "back"])
+    }
+
+    @Test("a code read letter by letter is joined; lone letters and words are left alone")
+    func spelled() {
+        #expect(FlightResolver.joinSpelledICAO("e g t f") == "egtf")
+        #expect(FlightResolver.joinSpelledICAO("echo golf tango foxtrot tomorrow") == "egtf tomorrow")
+        #expect(FlightResolver.joinSpelledICAO("to lima on friday") == "to lima on friday")
+        #expect(FlightResolver.joinSpelledICAO("a b c") == "a b c")
+    }
+}
+
+@Suite("Refresh — spoken lines")
+struct RefreshSpokenLineTests {
+    @Test("started tells the pilot when to ask again, with names")
+    func started() {
+        let line = RefreshBriefingIntent.spokenLine(.started, route: "EGTF → LFAT")
+        #expect(SpokenText.speakable(line, names: londonNames)
+            == "Refreshing your Fairoaks to Le Touquet briefing. It takes about two minutes; ask me to read it again then.")
+    }
+
+    @Test("server reason for an already-fresh briefing is used verbatim")
+    func alreadyFresh() {
+        #expect(RefreshBriefingIntent.spokenLine(.alreadyFresh(reason: "No newer model run yet."), route: "EGTF → LFAT")
+            == "No newer model run yet.")
     }
 }

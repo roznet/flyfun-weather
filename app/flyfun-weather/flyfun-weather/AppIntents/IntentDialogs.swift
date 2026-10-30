@@ -3,38 +3,128 @@ import Foundation
 /// Spoken-line builders shared by the background (voice) intents. Kept pure and
 /// `FlightResponse`-driven so the phrasing is one place and unit-testable.
 enum IntentDialogs {
-    /// One flight's assessment + top concerns, e.g.
-    /// "Your LFMD → LFML flight is graded amber. Top concerns: convective and icing."
+    /// One flight's assessment, e.g. "Your LFMD → LFML flight tomorrow at
+    /// 11:00Z is graded amber. Convective cells are likely near LFML in the
+    /// afternoon." — the briefing's own one-line reason when it has one, else
+    /// "Top concerns: convective and icing."
     ///
     /// With a `live` layer that carries data (#365), the live lines lead and the
     /// grade follows, labelled as the briefing's: see `liveCheckSummary`.
     /// Without one (outside the window, fetch failed, no data yet) the line is
     /// exactly the briefing-only one.
-    static func checkSummary(_ flight: FlightResponse, live: LiveLayerResponse? = nil) -> String {
+    ///
+    /// This is the written form (ICAO codes, "Z" times); Siri speaks
+    /// `spokenCheck`, the same words through `SpokenText`.
+    static func checkSummary(_ flight: FlightResponse, live: LiveLayerResponse? = nil, now: Date = Date()) -> String {
+        let noun = flightNoun(flight, now: now)
+        let subject = flightSubject(flight, now: now)
         if let lines = liveCheckLines(live) {
-            return liveCheckSummary(flight, lines: lines)
+            return "Live update for your \(noun). " + liveCheckSummary(flight, lines: lines)
         }
-        let route = flight.shortTitle
         switch briefingState(flight.latestBriefing) {
         case .notBriefed:
             if let coverage = flight.coverage, let day = coverage.availableDay {
-                return "Your \(route) flight isn't in forecast range yet — a briefing is expected \(IntentSupport.mediumDate(day))."
+                return "Your \(subject) isn't in forecast range yet — a briefing is expected \(IntentSupport.mediumDate(day))."
             }
-            return "Your \(route) flight hasn't been briefed yet."
+            return "Your \(subject) hasn't been briefed yet."
         case .unavailable:
             // #392: "graded unavailable" reads as a verdict. It is the absence of
             // one — say so, in the same register as the web/iOS copy.
-            return "I couldn't assess your \(route) flight — there's no usable model data for that route yet."
+            return "I couldn't assess your \(noun): there's no usable model data for that route yet."
         case .graded(let grade, let top):
-            var line = "Your \(route) flight is graded \(grade)."
-            if !top.isEmpty {
+            var line = "Your \(subject) is graded \(grade)."
+            if let reason = nonEmpty(flight.latestBriefing?.assessmentReason) {
+                // The reason already names the driving advisories; reading the
+                // concern list after it would say them twice.
+                line += " " + sentence(reason)
+            } else if !top.isEmpty {
                 line += " Top \(concerns(top))."
             }
             return line
         case .outlook(let outlook):
-            return "Your \(route) flight has a long-range outlook of \(outlook)."
+            return "Your \(subject) has a long-range outlook of \(outlook)."
         case .noAssessment:
-            return "Your \(route) flight has no assessment yet."
+            return "Your \(subject) has no assessment yet."
+        }
+    }
+
+    // MARK: - Spoken (Siri voice)
+
+    /// What Siri says for a check with no screen to look at (CarPlay, AirPods,
+    /// screen off): `checkSummary` through `SpokenText`, so airports are names
+    /// and the server's source notes are dropped. `names` comes from
+    /// `SpokenText.airportNames(in:)` on device.
+    static func spokenCheck(
+        _ flight: FlightResponse, live: LiveLayerResponse? = nil, now: Date = Date(), names: [String: String] = [:]
+    ) -> String {
+        SpokenText.speakable(checkSummary(flight, live: live, now: now), names: names)
+    }
+
+    /// What Siri says when the result card is on screen: one short line, the
+    /// card carries the rest. Falls back to the full line when there is no
+    /// traffic-light grade (the card then shows that same note).
+    static func spokenSupporting(
+        _ flight: FlightResponse, live: LiveLayerResponse? = nil, now: Date = Date(), names: [String: String] = [:]
+    ) -> String {
+        let line: String
+        if liveCheckLines(live) != nil {
+            line = "Live update for your \(flightNoun(flight, now: now))."
+        } else if case .graded(let grade, _) = briefingState(flight.latestBriefing) {
+            line = "Your \(flightSubject(flight, now: now)) is graded \(grade)."
+        } else {
+            return spokenCheck(flight, live: live, now: now, names: names)
+        }
+        return SpokenText.speakable(line, names: names)
+    }
+
+    /// Every text a check may speak, for looking up airport names in one go.
+    static func spokenSources(_ flight: FlightResponse, live: LiveLayerResponse?) -> [String] {
+        var texts = flight.waypoints.map { $0.uppercased() }
+        if let reason = flight.latestBriefing?.assessmentReason { texts.append(reason) }
+        if let lines = liveCheckLines(live) {
+            texts += lines.alerts
+            if let summary = lines.summary { texts.append(summary) }
+        }
+        return texts
+    }
+
+    /// "LFMD → LFML flight, tomorrow at 11:00Z": the route plus when it
+    /// departs (`whenPhrase`). Without a departure time, "LFMD → LFML flight".
+    nonisolated static func flightNoun(_ flight: FlightResponse, now: Date) -> String {
+        guard let departure = flight.departureDate else { return "\(flight.shortTitle) flight" }
+        return "\(flight.shortTitle) flight, \(whenPhrase(departure, now: now))"
+    }
+
+    /// `flightNoun` as the subject of a sentence: the time clause closed with
+    /// a comma ("Your LFMD → LFML flight, tomorrow at 11:00Z, is graded red").
+    nonisolated static func flightSubject(_ flight: FlightResponse, now: Date) -> String {
+        flight.departureDate == nil ? flightNoun(flight, now: now) : flightNoun(flight, now: now) + ","
+    }
+
+    /// When a flight departs, for speaking: "today at 11:00Z", "tomorrow at
+    /// 11:00Z", "on Saturday at 11:00Z", "on 9 Jul at 11:00Z". Days are UTC
+    /// days, matching the zulu time.
+    nonisolated static func whenPhrase(_ departure: Date, now: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let days = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: departure)
+        ).day ?? 0
+        let time = LiveTime.zulu(departure)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = calendar.timeZone
+        switch days {
+        case 0:
+            return "today at \(time)"
+        case 1:
+            return "tomorrow at \(time)"
+        case 2...6:
+            formatter.dateFormat = "EEEE"
+            return "on \(formatter.string(from: departure)) at \(time)"
+        default:
+            formatter.dateFormat = "d MMM"
+            return "on \(formatter.string(from: departure)) at \(time)"
         }
     }
 
@@ -66,10 +156,10 @@ enum IntentDialogs {
     /// briefed, out of range, `UNAVAILABLE`, outlook only): the same words the
     /// dialog speaks. nil when there is a GREEN / AMBER / RED grade, which the
     /// card draws as a badge instead.
-    static func briefingNote(_ flight: FlightResponse) -> String? {
+    static func briefingNote(_ flight: FlightResponse, now: Date = Date()) -> String? {
         switch flight.latestBriefing?.assessment?.uppercased() {
         case "GREEN", "AMBER", "RED": return nil
-        default: return checkSummary(flight)
+        default: return checkSummary(flight, now: now)
         }
     }
 
@@ -130,8 +220,9 @@ enum IntentDialogs {
     /// The briefing's grade as the closing line of a live check, labelled with
     /// when the briefing was built ("The 07:12Z briefing graded it amber").
     static func briefingGradeLine(_ flight: FlightResponse) -> String {
+        // The live check has already named the flight ("Live update for your …").
         guard let briefing = flight.latestBriefing else {
-            return "Your \(flight.shortTitle) flight hasn't been briefed yet."
+            return "It hasn't been briefed yet."
         }
         let label = briefingTime(briefing).map { "The \($0) briefing" } ?? "The briefing"
         switch briefingState(briefing) {
