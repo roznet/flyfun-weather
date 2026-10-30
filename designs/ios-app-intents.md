@@ -78,7 +78,7 @@ Target utterances (all require the "FlyFun" token in the phrase):
 |---|---|---|---|
 | `OpenFlightListIntent` | opens app | `list_flights` | Navigate to the flight list page. No parameter. |
 | `OpenBriefingIntent` | opens app | `get_briefing` | `@Parameter var flight: FlightEntity?`. If nil → compute the **next** upcoming flight and open its briefing. |
-| `CheckBriefingIntent` | background (spoken + card) | `get_briefing` (+ its `live` block) | `@Parameter var flight: FlightEntity`. Speaks assessment (GREEN/AMBER/RED) + the top one or two advisories, led on flight day by the live layer (#365). Also returns a `ShowsSnippetView` card. Reads from cache when offline. |
+| `CheckBriefingIntent` | background (spoken + card) | `get_briefing` (+ its `live` block) | `@Parameter var flight: FlightEntity?`. If nil → the **next** upcoming flight ("Brief me on my next FlyFun flight"). Speaks assessment (GREEN/AMBER/RED) + the top one or two advisories, led on flight day by the live layer (#365). Also returns a `ShowsSnippetView` card. Reads from cache when offline. |
 | `FlightsOverviewIntent` | background (spoken) | `list_flights` | No parameter. Speaks a one-line-per-flight traffic-light summary of upcoming flights. |
 | `RefreshBriefingIntent` | background | `refresh_briefing` | `@Parameter var flight: FlightEntity`. `RefreshDriver` returns on the **first** SSE signal, speaking one of `alreadyFresh` / `started` / `completed` / `alreadyInProgress` / `rateLimited` / `failed`; a detached drain keeps the server run alive past our early return. See loop-closure note. |
 | `AirportWeatherIntent` | background (spoken) | `get_airport_weather` | `@Parameter var airport: AirportEntity`, `@Parameter var day: AirportWeatherDay` (`@AppEnum` today/tomorrow/in-2/in-3 → the server's 0…3; hour pinned to 12). Spoken consensus category + wind, plus the latest observation and a "snapped to nearest monitored airport" note. |
@@ -97,9 +97,13 @@ Notes:
 ### App Shortcuts (zero-setup Siri phrases)
 
 `FlyFunShortcuts` (an `AppShortcutsProvider`) registers **all six** intents, two phrases
-each, every one carrying `\(.applicationName)` — e.g. `"Refresh my \(.applicationName)
+each (six for Check Briefing), every one carrying `\(.applicationName)` — e.g. `"Refresh my \(.applicationName)
 briefing for \(\.$flight)"`. English v1 (Decision 7); ~10-shortcut soft limit, so adding a
 seventh intent means budgeting phrases, not just appending.
+One verb per action: "Open …" foregrounds, "Brief me / Read / Check …" speaks. Tested on
+device: Siri fuzzy-matched "Check my next flight in FlyFun" to the then-phrase "Show my next
+flight in FlyFun" (opened the app), and question phrases ("What does my next flight in FlyFun
+look like") went to web search even though registered.
 
 ### Display ordering vs. "my next flight" (#536)
 

@@ -3,6 +3,11 @@ import AppIntents
 /// Zero-setup Siri phrases for the Tier-1 intents. Every phrase must contain the
 /// app name (there's no weather App Schema, so these are custom intents — see the
 /// design's "one hard constraint"). English v1; localization is a fast-follow.
+///
+/// One verb per action so Siri can't fuzzy-match across them: "Open …" opens
+/// the app, "Brief me / Read / Check …" speaks. A spoken phrase that ended like
+/// an open one ("Check my next flight in …" vs "Show my next flight in …") ran
+/// the open intent, and "What does … look like" questions went to web search.
 struct FlyFunShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -17,8 +22,8 @@ struct FlyFunShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: OpenBriefingIntent(),
             phrases: [
+                "Open my next \(.applicationName) flight",
                 "Open my next \(.applicationName) briefing",
-                "Show my next flight in \(.applicationName)",
             ],
             shortTitle: "Next Briefing",
             systemImageName: "airplane"
@@ -26,6 +31,10 @@ struct FlyFunShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: CheckBriefingIntent(),
             phrases: [
+                "Brief me on my next \(.applicationName) flight",
+                "Read my \(.applicationName) briefing",
+                "Read my next flight in \(.applicationName)",
+                "Read my next \(.applicationName) flight",
                 "Check my \(.applicationName) briefing",
                 "What's my \(.applicationName) assessment for \(\.$flight)",
             ],
