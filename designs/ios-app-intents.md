@@ -136,10 +136,13 @@ and the live lines; **supporting** above the card — one line, the card carries
 
 Server text is written for reading ("Departure EGTF is LIFR now (EGLL 8 NM NE used for METAR
 and TAF; …)"), so everything spoken goes through `SpokenText.speakable`: ICAO → speakable
-airport name (`speakableName` trims "Airport", "International", "-Côte d'Opale"), source-note
-parentheticals dropped **unless they carry a hazard word** (TS, CB, SIGMET, icing, …),
+airport name (`speakableName` trims "Airport", "International", "-Côte d'Opale"),
+parentheticals **kept by default** and dropped only when they read as a source note ("used
+for", METAR/TAF, a model name) *and* name no weather (category, visibility, fog, cloud incl.
+`BKN002`-style codes, precipitation, hazards) — review of #955 caught that a hazard-only
+allow-list dropped "(fog)" and "(visibility 800 m)",
 LIFR → "low IFR", MVFR, NM, ft and ranges, FL, "07:21Z" → "07:21 zulu", arrows → "to". It is
-deterministic and never summarises, so it can't drop or invent a hazard — which also means
+deterministic and never summarises, so it can't invent anything — which also means
 long lists stay long. The planned upgrade is a server-written spoken variant beside the
 highlight and the digest reason (generated when the text is written, checked against the
 original for every category / hazard / airport, with this cleanup as its fallback); an
