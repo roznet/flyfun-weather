@@ -83,3 +83,10 @@ def test_manifest_lists_the_whole_set_after_a_partial_rerun(tmp_path, monkeypatc
     entry = json.loads((tmp_path / "manifest.json").read_text())["captures"]["phone"]["light"]
     assert missing == []
     assert entry["files"] == ["phone/light/02-briefing.png", "phone/light/06-skewt.png"]
+
+
+def test_flight_argument_is_normalised_by_argparse():
+    ap = argparse.ArgumentParser()
+    common.add_common_args(ap)
+    args = ap.parse_args(["--flight", "https://weather.flyfun.aero/briefing.html?flight=f1-2026&tab=map"])
+    assert args.flight == "f1-2026"

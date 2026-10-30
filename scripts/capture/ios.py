@@ -1,7 +1,7 @@
 """Capture any flight's screens from the real iOS app, against the devserver.
 
 Runs `FlightCaptureUITests` (the live app, `-serverEnvironment dev`, signed in
-as the dev user with a one-hour token) on each simulator and appearance, with
+as the dev user with a short-lived token) on each simulator and appearance, with
 the status bar pinned to 9:41, and exports
 
     build/captures/<flight>/ios/<device>/<light|dark>/NN-<screen>.png
@@ -65,7 +65,6 @@ def main() -> int:
     ap.add_argument("--wait", action="store_true",
                     help="queue behind another running `xcodebuild test` instead of exiting 3")
     args = ap.parse_args()
-    args.flight = common.flight_id(args.flight)
     devices = args.device or DEFAULT_DEVICES
     appearances = args.appearance or ["light"]
     out = common.out_dir(args, "ios")

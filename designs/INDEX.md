@@ -218,7 +218,7 @@ Key exports: `scripts/play.py`, `.claude/skills/release-android/SKILL.md`
 → Full doc: android-play-release.md
 
 ### flight-captures
-Screenshots of any flight on iOS, Android and web for docs, talks and videos: one script per platform (`scripts/capture/{ios,android,web}.py --flight ID`) drives the real app against `/devserver --https`, signed in as the dev user with a one-hour token, and writes the same numbered screens (flights, briefing, advisories, discussion, cross-section, skewt, map, observed) to `build/captures/<flight>/<platform>/…` with a manifest. Prerequisites (devserver, `import_flight.py`), per-platform mechanics, real-data caveat. Store screenshot sets are separate (fixture-based).
+Screenshots of any flight on iOS, Android and web for docs, talks and videos: one script per platform (`scripts/capture/{ios,android,web}.py --flight ID`) drives the real app against `/devserver --https`, signed in as the dev user with a short-lived token, and writes the same numbered screens (flights, briefing, advisories, discussion, cross-section, skewt, map, observed) to `build/captures/<flight>/<platform>/…` with a manifest. Prerequisites (devserver, `import_flight.py`), per-platform mechanics, real-data caveat. Store screenshot sets are separate (fixture-based).
 Key exports: `scripts/capture/common.py` (`SCREENS`, `preflight`, `mint_token`, `write_manifest`), iOS `FlightCaptureUITests`, Android `FlightCaptureJourney`, `web/scripts/capture-flight.mjs`
 → Full doc: flight-captures.md
 

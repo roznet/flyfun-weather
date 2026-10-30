@@ -2,7 +2,7 @@
 
 Drives headless Chromium (`web/scripts/capture-flight.mjs`, Playwright from
 `web/node_modules`) on `https://localhost.ro-z.me:8443`, signed in as the dev
-user with a one-hour token in the `flyfun_auth` cookie, and writes
+user with a short-lived token in the `flyfun_auth` cookie, and writes
 
     build/captures/<flight>/web/<width>x<height>/<light|dark>/NN-<screen>.png
 
@@ -40,7 +40,6 @@ def main() -> int:
     ap.add_argument("--size", action="append", help="viewport WxH (repeatable; default 1440x900)")
     ap.add_argument("--scale", type=float, default=2, help="device scale factor (default 2)")
     args = ap.parse_args()
-    args.flight = common.flight_id(args.flight)
     sizes = args.size or ["1440x900"]
     appearances = args.appearance or ["light"]
     out = common.out_dir(args, "web")

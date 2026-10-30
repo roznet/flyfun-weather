@@ -39,7 +39,9 @@ OUT_ROOT = ROOT / "build/captures"
 SCREENS = ["flights", "briefing", "advisories", "discussion", "cross-section", "skewt", "map", "observed"]
 # Screens a flight may legitimately not have: missing them is not a failure.
 OPTIONAL = {"observed"}
-TOKEN_MINUTES = 60
+# Covers a cold iOS build between minting and the sign-in deep link; the
+# token is signed with the production secret, so no longer than that.
+TOKEN_MINUTES = 20
 
 
 def file_name(screen: str) -> str:
@@ -57,7 +59,7 @@ def parse_screens(value: str | None) -> list[str]:
 
 
 def add_common_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--flight", required=True, help="flight id (or briefing.html?flight=ID URL) in the dev DB")
+    ap.add_argument("--flight", required=True, type=flight_id, help="flight id (or briefing.html?flight=ID URL) in the dev DB")
     ap.add_argument("--screens", type=parse_screens, default=list(SCREENS),
                     help=f"comma-separated subset of {','.join(SCREENS)} (default all)")
     ap.add_argument("--appearance", action="append", choices=["light", "dark"], help="repeatable; default light")

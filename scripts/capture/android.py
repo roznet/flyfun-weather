@@ -2,7 +2,7 @@
 
 Builds and installs the debug app and its test APK, then runs
 `FlightCaptureJourney` (the live app: a debug build on an emulator talks to
-`https://localhost.ro-z.me:8443`, signed in as the dev user with a one-hour
+`https://localhost.ro-z.me:8443`, signed in as the dev user with a short-lived
 token) with the status bar in System UI demo mode (12:00 → 09:41, full
 battery and signal), and pulls
 
@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import shutil
 import subprocess
@@ -41,7 +42,9 @@ JOURNEY = f"{PACKAGE}.journeys.FlightCaptureJourney"
 DEFAULT_AVD = "flyfun_pixel10_api37"
 
 
+@functools.cache
 def sdk() -> Path:
+    """Resolved on first use, not at import: a missing SDK fails the run, not an import."""
     for candidate in (os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"),
                       str(Path.home() / "Library/Android/sdk")):
         if candidate and (Path(candidate) / "platform-tools/adb").exists():
@@ -49,12 +52,12 @@ def sdk() -> Path:
     sys.exit("error: Android SDK not found (set ANDROID_HOME)")
 
 
-SDK = sdk()
-ADB = str(SDK / "platform-tools/adb")
+def adb_path() -> str:
+    return str(sdk() / "platform-tools/adb")
 
 
 def adb(*args: str, check: bool = True, timeout: float = 120) -> str:
-    r = subprocess.run([ADB, *args], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run([adb_path(), *args], capture_output=True, text=True, timeout=timeout)
     if check and r.returncode != 0:
         raise RuntimeError(f"adb {' '.join(args[:3])}… failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
@@ -70,7 +73,7 @@ def running_emulator() -> str | None:
 
 def boot(avd: str) -> subprocess.Popen:
     print(f"booting {avd} headless…", flush=True)
-    proc = subprocess.Popen([str(SDK / "emulator/emulator"), "-avd", avd, "-no-window", "-no-audio",
+    proc = subprocess.Popen([str(sdk() / "emulator/emulator"), "-avd", avd, "-no-window", "-no-audio",
                              "-no-snapshot-save"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     adb("wait-for-device", timeout=300)
     deadline = time.time() + 300
@@ -83,7 +86,7 @@ def boot(avd: str) -> subprocess.Popen:
 
 def build_and_install() -> None:
     """Debug app + test APK. A Play- or release-signed copy blocks the install: remove it once."""
-    env = {**os.environ, "ANDROID_HOME": str(SDK)}
+    env = {**os.environ, "ANDROID_HOME": str(sdk())}
     cmd = ["./gradlew", "-q", ":app:installDebug", ":app:installDebugAndroidTest"]
     for attempt in range(2):
         r = subprocess.run(cmd, cwd=ANDROID, env=env, capture_output=True, text=True)
@@ -120,8 +123,8 @@ def demo_status_bar(on: bool) -> None:
 
 def run_journey(flight: str, token: str, screens: list[str]) -> tuple[int, str]:
     # The token rides in an instrumentation argument: visible to `ps` on the
-    # host and device while the run lasts, which is why it lives one hour.
-    r = subprocess.run([ADB, "shell", "am", "instrument", "-w", "-r", "-e", "class", JOURNEY,
+    # host and device while the run lasts, which is why it is short-lived.
+    r = subprocess.run([adb_path(), "shell", "am", "instrument", "-w", "-r", "-e", "class", JOURNEY,
                         "-e", "flyfunCaptureFlight", flight, "-e", "flyfunCaptureToken", token,
                         "-e", "flyfunCaptureScreens", ",".join(screens), RUNNER],
                        capture_output=True, text=True, timeout=900)
@@ -136,7 +139,7 @@ def pull(dest: Path, screens: list[str]) -> list[Path]:
     with tempfile.TemporaryDirectory() as tmp:
         archive = Path(tmp) / "captures.tar"
         with open(archive, "wb") as f:
-            subprocess.run([ADB, "exec-out", "run-as", PACKAGE, "tar", "cf", "-", "-C", "files", "captures"],
+            subprocess.run([adb_path(), "exec-out", "run-as", PACKAGE, "tar", "cf", "-", "-C", "files", "captures"],
                            stdout=f, check=True)
         try:
             with tarfile.open(archive) as tar:
@@ -159,7 +162,6 @@ def main() -> int:
     ap.add_argument("--avd", default=DEFAULT_AVD, help=f"AVD to boot when no emulator is running (default {DEFAULT_AVD})")
     ap.add_argument("--no-build", action="store_true", help="skip the gradle build + install")
     args = ap.parse_args()
-    args.flight = common.flight_id(args.flight)
     appearances = args.appearance or ["light"]
     out = common.out_dir(args, "android")
     common.preflight(args.flight)

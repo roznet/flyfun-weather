@@ -53,7 +53,7 @@ written. Section shots on the web are the section alone, at the page width; `fli
 
 ## How each one works
 
-All three sign in as the dev user (`flyfun_common.db.DEV_USER_ID`) with a **one-hour** JWT
+All three sign in as the dev user (`flyfun_common.db.DEV_USER_ID`) with a **20-minute** JWT
 minted by `common.mint_token`, a fresh one per device/appearance. The dev `.env` `JWT_SECRET`
 is the production secret, so the token is never printed or written to disk; it carries
 `scope: review`, which is what lets the apps take it from a bare deep link.
