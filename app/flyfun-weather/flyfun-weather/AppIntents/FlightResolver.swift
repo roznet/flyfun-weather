@@ -97,7 +97,8 @@ enum FlightResolver {
     ) async -> [FlightResponse] {
         await IntentSupport.ensureAirportDatabase()
         let calendar = Calendar.current
-        let query = joinSpelledICAO(raw.lowercased())
+        let candidateCodes = Set(flights.flatMap(\.waypoints).map { $0.lowercased() })
+        let query = joinSpelledICAO(raw.lowercased(), known: candidateCodes)
 
         // Resolution is scoped to today-and-future flights — the design's "closed
         // set of *upcoming* flights". Both tiers match over this set, so a
@@ -234,9 +235,10 @@ enum FlightResolver {
 
     /// Joins an ICAO code read letter by letter, as Siri may transcribe it
     /// ("e g t f", "echo golf tango foxtrot") into "egtf". Only a run of
-    /// exactly four spelled letters is joined, so a lone "lima" or "victor" in
-    /// a phrase is left alone.
-    nonisolated static func joinSpelledICAO(_ query: String) -> String {
+    /// exactly four spelled letters is joined, and only into a code in `known`
+    /// (the flights' airports, lowercased; nil = any), so a lone "lima", or
+    /// "a delta echo mike", is left alone.
+    nonisolated static func joinSpelledICAO(_ query: String, known: Set<String>? = nil) -> String {
         let words = query.lowercased().split(separator: " ").map(String.init)
         let letters = words.map { word -> String? in
             if word.count == 1, word.first?.isLetter == true { return word }
@@ -247,8 +249,9 @@ enum FlightResolver {
         while i < words.count {
             var j = i
             while j < words.count, letters[j] != nil { j += 1 }
-            if j - i == 4 {
-                output.append(letters[i..<j].compactMap { $0 }.joined())
+            let joined = letters[i..<j].compactMap { $0 }.joined()
+            if j - i == 4, known?.contains(joined) ?? true {
+                output.append(joined)
                 i = j
             } else if j > i {
                 output += words[i..<j]

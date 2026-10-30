@@ -648,6 +648,13 @@ struct SpokenTextTests {
             == "Fairoaks to Le Touquet, as briefed")
     }
 
+    @Test("weather words are never read as airports, even if the database had the code")
+    func categoriesNeverRenamed() {
+        #expect(SpokenText.speakable("EGTF LIFR, LFAT MVFR", names: ["EGTF": "Fairoaks", "LIFR": "Bogus", "MVFR": "Bogus"])
+            == "Fairoaks low IFR, LFAT marginal VFR")
+        #expect(!SpokenText.icaoTokens(in: ["EGTF LIFR WIND"]).contains("LIFR"))
+    }
+
     @Test("airport names trimmed for speech")
     func names() {
         #expect(SpokenText.speakableName("Fairoaks Airport") == "Fairoaks")
@@ -674,9 +681,11 @@ struct FlightSpokenNamesTests {
         let synonyms = FlightSpokenNames.synonyms(for: flights, names: londonNames, now: now)
         let out = try #require(synonyms["out"])
         for phrase in ["Le Touquet", "to Le Touquet", "LFAT", "L F A T", "Fairoaks to Le Touquet", "from Fairoaks",
-                       "Fairoaks to Le Touquet tomorrow"] {
+                       "Fairoaks to Le Touquet on Saturday", "to Le Touquet on 31 Oct"] {
             #expect(out.contains(phrase), "\(phrase)")
         }
+        // Never a relative day: iOS keeps these until the next list load.
+        #expect(!out.contains { $0.contains("tomorrow") || $0.contains("today") })
     }
 
     @Test("the return answers to 'from Le Touquet' and its own destination, not 'Le Touquet'")
@@ -692,6 +701,8 @@ struct FlightSpokenNamesTests {
     func laterSameRoute() throws {
         let week = try #require(FlightSpokenNames.synonyms(for: flights, names: londonNames, now: now)["week"])
         #expect(week.contains("Fairoaks to Le Touquet on 7 Nov"))
+        // More than six days out: no weekday form, which would repeat this week's.
+        #expect(!week.contains { $0.hasSuffix("on Saturday") })
         #expect(!week.contains("Le Touquet"))
         #expect(!week.contains("Fairoaks to Le Touquet"))
     }
@@ -734,6 +745,9 @@ struct DirectionResolverTests {
         #expect(FlightResolver.joinSpelledICAO("echo golf tango foxtrot tomorrow") == "egtf tomorrow")
         #expect(FlightResolver.joinSpelledICAO("to lima on friday") == "to lima on friday")
         #expect(FlightResolver.joinSpelledICAO("a b c") == "a b c")
+        // Only joined into one of the flights' airports.
+        #expect(FlightResolver.joinSpelledICAO("e g t f", known: ["egtf"]) == "egtf")
+        #expect(FlightResolver.joinSpelledICAO("a delta echo mike", known: ["egtf"]) == "a delta echo mike")
     }
 }
 

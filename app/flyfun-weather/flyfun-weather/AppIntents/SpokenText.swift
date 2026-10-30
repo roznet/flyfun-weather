@@ -22,7 +22,9 @@ nonisolated enum SpokenText {
     /// expanded, arrows read as "to".
     static func speakable(_ text: String, names: [String: String] = [:]) -> String {
         var s = dropSourceNotes(text)
-        s = replace(Rx.icao, in: s) { match in names[match[0]] ?? match[0] }
+        s = replace(Rx.icao, in: s) { match in
+            notAirports.contains(match[0]) ? match[0] : names[match[0]] ?? match[0]
+        }
         s = s.replacingOccurrences(of: " → ", with: " to ")
             .replacingOccurrences(of: "→", with: " to ")
             .replacingOccurrences(of: " · ", with: ", ")
@@ -58,12 +60,19 @@ nonisolated enum SpokenText {
     static func icaoTokens(in texts: [String]) -> Set<String> {
         var found = Set<String>()
         for text in texts {
-            for match in matches(Rx.icao, in: text) { found.insert(match[0]) }
+            for match in matches(Rx.icao, in: text) where !notAirports.contains(match[0]) { found.insert(match[0]) }
         }
         return found
     }
 
     // MARK: - Rules
+
+    /// Four-letter capitals in briefing text that are weather, never an
+    /// airport, even if a code like Italy's LI** ever matched one: a flight
+    /// category must not be read out as a place name.
+    static let notAirports: Set<String> = [
+        "LIFR", "MVFR", "PROB", "AUTO", "CALM", "WIND", "SNOW", "RAIN", "MIST", "HAZE", "SQAL", "NSIG",
+    ]
 
     /// Compiled once; `try!` so a typo fails the first test that runs, rather
     /// than silently leaving text unspoken-friendly.

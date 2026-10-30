@@ -48,11 +48,17 @@ nonisolated enum FlightSpokenNames {
             claim("from \(origin)")
             claim("from \(spelled(originIcao))")
             if let departure = flight.departureDate {
-                // "Fairoaks to Le Touquet tomorrow" / "… on Friday": the
-                // date-qualified form is what a later same-route flight answers to.
-                let when = IntentDialogs.whenPhrase(departure, now: now)
-                    .components(separatedBy: " at ").first ?? ""
-                if !when.isEmpty {
+                // "… on Saturday" / "… on 31 Oct": the date-qualified forms are
+                // what a later same-route flight answers to. Never "today" /
+                // "tomorrow": iOS keeps these phrases until the next flight-list
+                // load, and a relative day would point at the wrong flight once
+                // the date rolls over; a weekday or date stays true while the
+                // flight is upcoming (the weekday only within the week).
+                var forms = ["on \(dateLabel(departure))"]
+                if departure.timeIntervalSince(now) < 6 * 86_400 {
+                    forms.insert("on \(weekdayLabel(departure))", at: 0)
+                }
+                for when in forms {
                     claim("\(origin) to \(destination) \(when)")
                     claim("to \(destination) \(when)")
                 }
@@ -60,6 +66,18 @@ nonisolated enum FlightSpokenNames {
             result[flight.id] = words
         }
         return result
+    }
+
+    /// "Saturday" / "31 Oct", on the UTC day (departures are zulu).
+    static func weekdayLabel(_ date: Date) -> String { utcFormat("EEEE", date) }
+    static func dateLabel(_ date: Date) -> String { utcFormat("d MMM", date) }
+
+    private static func utcFormat(_ format: String, _ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = format
+        return formatter.string(from: date)
     }
 
     /// "LFAT" → "L F A T", how Siri transcribes a code read letter by letter.

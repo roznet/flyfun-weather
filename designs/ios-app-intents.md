@@ -121,7 +121,11 @@ load. `FlightSpokenNames` gives **upcoming flights only** speakable synonyms (pa
 keep just their title, or years of Le Touquet trips would make every place ambiguous). A
 bare place / ICAO / "to X" / "from X" belongs to the **soonest** flight it describes, so an
 out-and-back splits cleanly ("Le Touquet" = outbound, "from Le Touquet" or "Fairoaks" =
-return) and a later same-route flight answers only to its dated form ("… on 7 Nov").
+return) and a later same-route flight answers only to its dated form ("… on 7 Nov"). Dated
+forms are a weekday (within six days) or a date, never "today"/"tomorrow": iOS keeps the
+registered values until the next flight-list load, so a relative day would point at the wrong
+flight after the UTC date rolls over. Weather words (LIFR, MVFR, …) are never renamed as
+airports, and a spelled code is joined only into one of the flights' airports.
 When Siri instead asks "which flight?", the answer goes through the resolver, which now
 honours "from X" (departure) / "to X" (destination), prefers the flight *going* to a bare
 place, and joins a code read letter by letter ("e g t f", "echo golf tango foxtrot").
