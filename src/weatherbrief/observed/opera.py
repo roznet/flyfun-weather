@@ -32,6 +32,7 @@ import numpy as np
 
 from weatherbrief.models.observed import ObservedAttribution
 
+from . import dpc
 from .frames import GridFrame
 from .grid import GridSpec, GridWindow
 
@@ -254,6 +255,7 @@ def iter_row_blocks(path: Path | str, quantity: str, *, block_rows: int = 760):
         offset = float(_attr(what, "offset") if _attr(what, "offset") is not None else 0.0)
         nodata_raw = _attr(what, "nodata")
         undetect_raw = _attr(what, "undetect")
+        fill = dpc.load_fill(path)
         for row0 in range(0, grid.ny, block_rows):
             raw = np.asarray(data["data"][row0 : min(grid.ny, row0 + block_rows), :])
             nodata = (
@@ -267,6 +269,8 @@ def iter_row_blocks(path: Path | str, quantity: str, *, block_rows: int = 760):
             undetect &= ~nodata
             values = offset + gain * raw.astype(np.float32)
             values[nodata | undetect] = np.nan
+            if fill is not None:
+                dpc.fill_block(fill, quantity, grid, row0, 0, values, nodata, undetect)
             yield row0, values, nodata, undetect
 
 
@@ -406,11 +410,23 @@ def read_window(
     values = offset + gain * raw.astype(np.float32)
     values[nodata_mask | undetect_mask] = np.nan
 
+    # Radar-DPC fills OPERA's Italy gap, nodata pixels only (#923).
+    filled = 0
+    fill = dpc.load_fill(path)
+    if fill is not None:
+        filled = dpc.fill_block(
+            fill, quantity, grid, row0, col0, values, nodata_mask, undetect_mask
+        )
+        if filled:
+            attribution = dpc.with_attribution(attribution)
+
     window_minutes = 0.0
     if start_time and valid_time:
         window_minutes = max(0.0, (valid_time - start_time).total_seconds() / 60.0)
 
     aux: dict = {}
+    if filled:
+        aux["dpc_filled"] = filled
     if quality is not None:
         aux["quality"] = quality
         if quality_task:

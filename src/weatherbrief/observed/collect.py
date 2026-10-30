@@ -210,6 +210,7 @@ def collect_opera(
             result.errors.append(f"{valid_time:%H:%M} unreadable: {exc}")
             continue
         meta["url"] = url
+        _pair_dpc_fill(meta, path, spec, valid_time, sess)
         store.write_sidecar(source, valid_time, meta)
         _build_map_canvas(store, source, valid_time)
         result.fetched += 1
@@ -235,6 +236,26 @@ def collect_opera(
 
     result.purged = store.purge(source, now=now)
     return result
+
+
+def _pair_dpc_fill(meta: dict, path, spec, valid_time: datetime, session) -> None:
+    """Store the Radar-DPC frame that fills this OPERA frame's Italy gap (#923).
+
+    Before the sidecar, so a published frame's fill never changes afterwards
+    (tile URLs are immutable).  Fails soft inside ``dpc.collect_fill``: the
+    OPERA frame is published either way.
+    """
+    from . import dpc
+
+    if not dpc.dpc_enabled():
+        return
+    fill = dpc.collect_fill(path, spec.quantity, valid_time, spec.window_minutes, session)
+    if fill is None:
+        return
+    meta["fill"] = fill
+    attribution = dict(meta.get("attribution") or {})
+    attribution["text"] = dpc.attribution_text(attribution.get("text") or "")
+    meta["attribution"] = attribution
 
 
 def _build_map_canvas(store: FrameStore, source: str, valid_time: datetime) -> None:

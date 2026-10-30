@@ -7625,3 +7625,44 @@ Mac** (prod GRIB caches are not reachable from a cloud session):
 flights with precipitation near 0 °C. Expect differences only in rain_mm /
 surface phase on ECMWF hours with both convective precipitation and snow, and
 in the ICON gust on an init hour.
+
+## 75. Radar-DPC fills OPERA's Italy gap: VMI as the DBZH stand-in, thresholds unchanged (#923)
+
+**Date:** 2026-10-30. Mechanics: `current-conditions.md` § "Italy gap fill".
+
+OPERA carries no Italian radars; 14 of the 619 watchlist airports in Italy
+have no OPERA data at the field and read `no_coverage` everywhere (cells,
+storms, route bands, live alerts, the map). The Italian civil protection
+mosaic (Radar-DPC) fills 12 of them on the one frame measured (LICT and LICG
+stay dark in DPC too).
+
+**Decisions.**
+
+- **Fill, never overlay.** DPC values go only into OPERA `nodata` pixels.
+  Where OPERA has a value or an `undetect`, OPERA stays authoritative. DPC
+  `-9999` stays `nodata`, `-9998` becomes `undetect`; a DPC rain rate of 0 is
+  `undetect`. "We cannot see there" is never turned into "clear".
+- **VMI (column maximum) stands in for DBZH, with the thresholds unchanged.**
+  On the measured frame VMI had about 1.8x OPERA's >= 25 dBZ pixels over the
+  Adriatic overlap: it reads hot. No offset is applied to VMI and none to
+  `RADAR_SIGNIFICANT_DBZ` or the cell / alert gates, because the error is on
+  the side of showing more weather in an area that today reads as dry, and
+  one frame is not enough to calibrate an offset. `WB_OBSERVED_DPC_DBZH_PRODUCT`
+  swaps the product (e.g. `CAPPI2`) without a code change; a low CAPPI is
+  closer to OPERA's DBZH but has holes behind the Apennines. Revisit with the
+  verification archive once a few weeks of filled frames exist.
+- **SRI fills RATE** the same way (nearest neighbour onto the 2 km grid).
+- **Pairing in time: the newest DPC slot inside the OPERA product's own
+  window**, normally the slot 5 min before the OPERA frame (DPC lands ~7 min
+  after nominal time, OPERA ~4). DBZH is already a 10-min rolling maximum, so
+  a DPC frame 5 min older describes weather inside the window OPERA's own
+  pixels cover. Rejected: waiting for the same slot (holds the radar frame
+  back ~3 min) and amending the frame later (tile URLs are immutable, and an
+  amended frame breaks replay determinism).
+- **Off by default (`WB_OBSERVED_DPC`)** until the owner settles the CC BY-SA
+  licence question for the rendered tiles.
+
+**Not settled:** a 2-4 km registration offset against OPERA measured on one
+frame. The GeoTIFF's tie point and pixel-is-area convention are read and
+checked against the published grid; the residual may be the projection
+parameters (assumed `k=1`, WGS84) and is not corrected.

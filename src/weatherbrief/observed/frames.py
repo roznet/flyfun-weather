@@ -207,6 +207,10 @@ _STAMP_FORMAT = "%Y%m%dT%H%M"
 #: and purged with it, so retention bounds the canvases as well.
 CANVAS_SUFFIX = ".canvas.npz"
 
+#: Radar-DPC frame paired with an OPERA frame (``observed.dpc``, #923): read
+#: into the frame's nodata pixels, stored beside it, purged and archived with it.
+DPC_SUFFIX = ".dpc.tif"
+
 #: Age past which a ``.tmp-*`` file in a source directory is a dead writer's.
 _TMP_GRACE = timedelta(minutes=15)
 
@@ -277,6 +281,10 @@ class FrameStore:
 
     def sidecar_path(self, source: str, valid_time: datetime) -> Path:
         return self.source_dir(source) / f"{frame_stamp(valid_time)}.json"
+
+    def fill_path(self, source: str, valid_time: datetime) -> Path:
+        """The frame's paired Radar-DPC fill (may not exist)."""
+        return self.source_dir(source) / f"{frame_stamp(valid_time)}{DPC_SUFFIX}"
 
     def canvas_path(self, source: str, valid_time: datetime) -> Path:
         """The frame's derived map canvas (may not exist)."""
@@ -416,6 +424,7 @@ class FrameStore:
                 frame.path,
                 self.sidecar_path(source, frame.valid_time),
                 self.canvas_path(source, frame.valid_time),
+                self.fill_path(source, frame.valid_time),
             ):
                 try:
                     path.unlink()
@@ -442,18 +451,20 @@ class FrameStore:
                     removed += 1
                 except OSError:
                     pass
-            # Canvases whose frame is gone (purged above, or never completed).
-            for canvas in directory.glob(f"*{CANVAS_SUFFIX}"):
-                try:
-                    valid_time = parse_frame_stamp(canvas.name[: -len(CANVAS_SUFFIX)])
-                except ValueError:
-                    continue
-                if valid_time >= cutoff and self.payload_path(source, valid_time).exists():
-                    continue
-                try:
-                    canvas.unlink()
-                except OSError:
-                    pass
+            # Canvases and DPC fills whose frame is gone (purged above, or
+            # never completed).
+            for suffix in (CANVAS_SUFFIX, DPC_SUFFIX):
+                for derived in directory.glob(f"*{suffix}"):
+                    try:
+                        valid_time = parse_frame_stamp(derived.name[: -len(suffix)])
+                    except ValueError:
+                        continue
+                    if valid_time >= cutoff and self.payload_path(source, valid_time).exists():
+                        continue
+                    try:
+                        derived.unlink()
+                    except OSError:
+                        pass
             # Temp files a killed writer left behind (`_atomic_write`, the
             # canvas writer): their names carry no stamp, so nothing above
             # reclaims them. Old enough that no live writer still owns one.
