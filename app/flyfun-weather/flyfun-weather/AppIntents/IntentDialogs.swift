@@ -103,7 +103,8 @@ enum IntentDialogs {
 
     /// When a flight departs, for speaking: "today at 11:00Z", "tomorrow at
     /// 11:00Z", "on Saturday at 11:00Z", "on 9 Jul at 11:00Z". Days are UTC
-    /// days, matching the zulu time.
+    /// days, deliberately: the time is spoken in zulu, and a local "tomorrow"
+    /// next to a zulu time would disagree with it around midnight UTC.
     nonisolated static func whenPhrase(_ departure: Date, now: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

@@ -606,7 +606,7 @@ private let londonNames: [String: String] = [
 
 @Suite("Spoken text — written briefing text made speakable")
 struct SpokenTextTests {
-    @Test("a real live highlight: names for codes, source notes dropped, nothing summarised away")
+    @Test("a real live highlight: names for codes, the source note dropped, nothing summarised away")
     func liveHighlight() {
         let written = "Departure EGTF is LIFR now (EGLL 8 NM NE used for METAR and TAF; EGTF has no METAR or TAF), "
             + "and several route airports are LIFR with fog: EGLF, EGWU, EGKK (LIFR at 07:21Z TAF), EGLC, "
@@ -614,10 +614,22 @@ struct SpokenTextTests {
             + "No SIGMETs, cells or rain on the track ahead; conditions have improved since briefing."
         #expect(SpokenText.speakable(written, names: londonNames)
             == "Departure Fairoaks is low IFR now, and several route airports are low IFR with fog: "
-            + "Farnborough, RAF Northolt, London Gatwick, London City, with London Southend IFR; "
+            + "Farnborough, RAF Northolt, London Gatwick (low IFR at 07:21 zulu TAF), London City, with London Southend IFR; "
             + "Calais Marck is low IFR, 7 nautical miles before Le Touquet. "
             + "Destination Le Touquet is VFR now with no TAF at ETA. "
             + "No SIGMETs, cells or rain on the track ahead; conditions have improved since briefing.")
+    }
+
+    @Test("a parenthetical is kept unless it is a source note naming no weather")
+    func parentheticals() {
+        // Weather in brackets always stays, source wording or not.
+        #expect(SpokenText.speakable("Destination IFR (fog)") == "Destination IFR (fog)")
+        #expect(SpokenText.speakable("LFAT IFR (visibility 800 m)") == "LFAT IFR (visibility 800 m)")
+        #expect(SpokenText.speakable("Ceiling low (BKN002 in the TAF)") == "Ceiling low (BKN002 in the TAF)")
+        // Not a source note: kept by default.
+        #expect(SpokenText.speakable("Route as briefed (unchanged)") == "Route as briefed (unchanged)")
+        // A pure source note goes.
+        #expect(SpokenText.speakable("Departure VFR (nearest METAR used for EGTF)") == "Departure VFR")
     }
 
     @Test("a parenthetical naming a hazard is kept")
@@ -696,6 +708,7 @@ struct DirectionResolverTests {
         #expect(FlightResolver.directionClauses("from fairoaks to le touquet") == ("fairoaks", "le touquet"))
         #expect(FlightResolver.directionClauses("to le touquet") == (nil, "le touquet"))
         #expect(FlightResolver.directionClauses("le touquet tomorrow") == (nil, nil))
+        #expect(FlightResolver.directionClauses("fairoaks to le touquet") == (nil, "le touquet"))
     }
 
     @Test("'from' must be the departure, 'to' the destination")
@@ -704,6 +717,9 @@ struct DirectionResolverTests {
         #expect(!FlightResolver.matchesPlace(out, query: "from lfat"))
         #expect(FlightResolver.matchesPlace(out, query: "to lfat"))
         #expect(!FlightResolver.matchesPlace(back, query: "to lfat"))
+        // "Origin to destination" without "from": the destination still decides.
+        #expect(FlightResolver.matchesPlace(out, query: "egtf to lfat"))
+        #expect(!FlightResolver.matchesPlace(back, query: "egtf to lfat"))
     }
 
     @Test("a bare place prefers the flight going there")

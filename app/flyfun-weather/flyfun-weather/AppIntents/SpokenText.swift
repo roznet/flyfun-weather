@@ -4,12 +4,14 @@ import RZFlight
 /// Turns briefing / live text written for reading into text Siri can say
 /// (CarPlay, AirPods, screen off).
 ///
-/// Deterministic and conservative: it renames, expands and drops source
-/// notes, but never summarises, so it cannot lose or invent a hazard. A
-/// parenthetical goes only when it carries no hazard word ("(EGLL 8 NM NE
-/// used for METAR and TAF)"); one naming a thunderstorm, SIGMET, icing, etc.
-/// is kept. A server-written spoken variant is the planned upgrade; this stays
-/// as its fallback.
+/// Deterministic and conservative: it renames and expands, and never
+/// summarises. A parenthetical is **kept by default**; it is dropped only when
+/// it reads as a source note ("used for", METAR / TAF / a model name) *and*
+/// names no weather at all — no flight category, visibility, fog, cloud,
+/// precipitation or hazard. So "(EGLL 8 NM NE used for METAR and TAF)" goes,
+/// "(LIFR at 07:21Z TAF)", "(fog)" and "(visibility 800 m)" stay. A
+/// server-written spoken variant is the planned upgrade; this stays as its
+/// fallback.
 ///
 /// Pure (`nonisolated`, names injected as a dictionary) so it is unit-tested
 /// without the `@MainActor` airport database; `airportNames(in:)` builds that
@@ -20,17 +22,17 @@ nonisolated enum SpokenText {
     /// expanded, arrows read as "to".
     static func speakable(_ text: String, names: [String: String] = [:]) -> String {
         var s = dropSourceNotes(text)
-        s = replace(#"\b[A-Z]{4}\b"#, in: s) { match in names[match[0]] ?? match[0] }
+        s = replace(Rx.icao, in: s) { match in names[match[0]] ?? match[0] }
         s = s.replacingOccurrences(of: " → ", with: " to ")
             .replacingOccurrences(of: "→", with: " to ")
             .replacingOccurrences(of: " · ", with: ", ")
-        s = replace(#"\bLIFR\b"#, in: s) { _ in "low IFR" }
-        s = replace(#"\bMVFR\b"#, in: s) { _ in "marginal VFR" }
-        s = replace(#"\b(\d[\d,]*)\s?[-–]\s?(\d[\d,]*)\s?ft\b"#, in: s) { "\($0[1]) to \($0[2]) feet" }
-        s = replace(#"\b(\d[\d,]*)\s?ft\b"#, in: s) { "\($0[1]) feet" }
-        s = replace(#"\bFL\s?(\d{2,3})\b"#, in: s) { "flight level \(Int($0[1]) ?? 0)" }
-        s = replace(#"\b(\d+(?:\.\d+)?)\s?NM\b"#, in: s) { "\($0[1]) nautical mile\($0[1] == "1" ? "" : "s")" }
-        s = replace(#"\b(\d{2}):?(\d{2})Z\b"#, in: s) { "\($0[1]):\($0[2]) zulu" }
+        s = replace(Rx.lifr, in: s) { _ in "low IFR" }
+        s = replace(Rx.mvfr, in: s) { _ in "marginal VFR" }
+        s = replace(Rx.feetRange, in: s) { "\($0[1]) to \($0[2]) feet" }
+        s = replace(Rx.feet, in: s) { "\($0[1]) feet" }
+        s = replace(Rx.flightLevel, in: s) { "flight level \(Int($0[1]) ?? 0)" }
+        s = replace(Rx.nauticalMiles, in: s) { "\($0[1]) nautical mile\($0[1] == "1" ? "" : "s")" }
+        s = replace(Rx.zulu, in: s) { "\($0[1]):\($0[2]) zulu" }
         return tidy(s)
     }
 
@@ -56,26 +58,55 @@ nonisolated enum SpokenText {
     static func icaoTokens(in texts: [String]) -> Set<String> {
         var found = Set<String>()
         for text in texts {
-            for match in matches(#"\b[A-Z]{4}\b"#, in: text) { found.insert(match[0]) }
+            for match in matches(Rx.icao, in: text) { found.insert(match[0]) }
         }
         return found
     }
 
     // MARK: - Rules
 
-    /// Words that keep a parenthetical: anything a pilot must still hear.
-    private static let hazardPattern =
-        #"(?i)\b(TS|CB|TCU|thunder\w*|SIGMET|ic(e|ing)|freezing|FZ\w*|convect\w*|cells?|hail|severe|SEV|turb\w*|EMBD|embedded|squall\w*|volcanic|ash|wind ?shear|gust\w*)\b"#
+    /// Compiled once; `try!` so a typo fails the first test that runs, rather
+    /// than silently leaving text unspoken-friendly.
+    private enum Rx {
+        static let icao = make(#"\b[A-Z]{4}\b"#)
+        static let lifr = make(#"\bLIFR\b"#)
+        static let mvfr = make(#"\bMVFR\b"#)
+        static let feetRange = make(#"\b(\d[\d,]*)\s?[-–]\s?(\d[\d,]*)\s?ft\b"#)
+        static let feet = make(#"\b(\d[\d,]*)\s?ft\b"#)
+        static let flightLevel = make(#"\bFL\s?(\d{2,3})\b"#)
+        static let nauticalMiles = make(#"\b(\d+(?:\.\d+)?)\s?NM\b"#)
+        static let zulu = make(#"\b(\d{2}):?(\d{2})Z\b"#)
+        static let parenthetical = make(#"\s*\(([^()]*)\)"#)
+        static let whitespace = make(#"\s+"#)
+        static let spaceBeforePunctuation = make(#"\s+([,.;:])"#)
+        /// What makes a parenthetical a source note.
+        static let sourceNote = make(
+            #"(?i)\b(used for|METARs?|TAFs?|source|sourced|nearest|model|GFS|ICON|ECMWF|AROME|ARPEGE|UKV|UKMO|HRRR)\b"#)
+        /// Any weather a pilot must still hear: categories, visibility,
+        /// obscuration, cloud, precipitation, hazards.
+        static let weather = make(
+            #"(?i)\b(L?IFR|M?VFR|vis\w*|RVR|fog\w*|FG|BR|mist\w*|ha[zs]e\w*|HZ|smoke|dust|cloud\w*|ceiling\w*|(BKN|OVC|SCT|FEW|VV)\d{0,3}|overcast|"#
+            + #"rain\w*|RA|DZ|drizzle|showers?|SH\w*|snow\w*|SN|sleet|precip\w*|"#
+            + #"TS\w*|CB|TCU|thunder\w*|lightning|SIGMET\w*|ic(e|ing)|freezing|FZ\w*|convect\w*|cells?|storms?|hail|"#
+            + #"severe|SEV|turb\w*|EMBD|embedded|squall\w*|volcanic|ash|wind\w*|gust\w*|shear)\b"#)
+
+        private static func make(_ pattern: String) -> NSRegularExpression {
+            try! NSRegularExpression(pattern: pattern)
+        }
+    }
 
     private static func dropSourceNotes(_ text: String) -> String {
-        replace(#"\s*\(([^()]*)\)"#, in: text) { match in
-            matches(hazardPattern, in: match[1]).isEmpty ? "" : match[0]
+        replace(Rx.parenthetical, in: text) { match in
+            let inside = match[1]
+            let isSourceNote = !matches(Rx.sourceNote, in: inside).isEmpty
+            let namesWeather = !matches(Rx.weather, in: inside).isEmpty
+            return isSourceNote && !namesWeather ? "" : match[0]
         }
     }
 
     private static func tidy(_ text: String) -> String {
-        var s = replace(#"\s+"#, in: text) { _ in " " }
-        s = replace(#"\s+([,.;:])"#, in: s) { $0[1] }
+        var s = replace(Rx.whitespace, in: text) { _ in " " }
+        s = replace(Rx.spaceBeforePunctuation, in: s) { $0[1] }
         return s.trimmingCharacters(in: .whitespaces)
     }
 
@@ -83,33 +114,31 @@ nonisolated enum SpokenText {
 
     /// Capture groups of every match (index 0 = whole match; a group that did
     /// not participate is "").
-    private static func matches(_ pattern: String, in text: String) -> [[String]] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    private static func matches(_ regex: NSRegularExpression, in text: String) -> [[String]] {
         let ns = text as NSString
-        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { result in
-            (0..<result.numberOfRanges).map { i in
-                let range = result.range(at: i)
-                return range.location == NSNotFound ? "" : ns.substring(with: range)
-            }
-        }
+        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { groups(of: $0, in: ns) }
     }
 
-    private static func replace(_ pattern: String, in text: String, with transform: ([String]) -> String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+    private static func replace(
+        _ regex: NSRegularExpression, in text: String, with transform: ([String]) -> String
+    ) -> String {
         let ns = text as NSString
         var output = ""
         var cursor = 0
         for result in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             output += ns.substring(with: NSRange(location: cursor, length: result.range.location - cursor))
-            let groups = (0..<result.numberOfRanges).map { i -> String in
-                let range = result.range(at: i)
-                return range.location == NSNotFound ? "" : ns.substring(with: range)
-            }
-            output += transform(groups)
+            output += transform(groups(of: result, in: ns))
             cursor = result.range.location + result.range.length
         }
         output += ns.substring(from: cursor)
         return output
+    }
+
+    private static func groups(of result: NSTextCheckingResult, in text: NSString) -> [String] {
+        (0..<result.numberOfRanges).map { i in
+            let range = result.range(at: i)
+            return range.location == NSNotFound ? "" : text.substring(with: range)
+        }
     }
 }
 
