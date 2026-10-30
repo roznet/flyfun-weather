@@ -48,8 +48,16 @@ struct CheckBriefingIntent: AppIntent {
             }
             let live = await Self.liveLayer(for: match, repository: repo)
             let content = CheckBriefingSnippetView.Content(flight: match, live: IntentDialogs.liveCheckLines(live))
+            // Two forms: `full` is what Siri says with no screen (CarPlay,
+            // AirPods, screen off), so it carries the whole briefing line;
+            // `supporting` goes above the card, which shows the rest.
+            await IntentSupport.ensureAirportDatabase()
+            let names = SpokenText.airportNames(in: IntentDialogs.spokenSources(match, live: live))
             return .result(
-                dialog: "\(IntentDialogs.checkSummary(match, live: live))",
+                dialog: IntentDialog(
+                    full: "\(IntentDialogs.spokenCheck(match, live: live, names: names))",
+                    supporting: "\(IntentDialogs.spokenSupporting(match, live: live, names: names))"
+                ),
                 view: CheckBriefingSnippetView(content: content)
             )
         } catch APIError.unauthorized {

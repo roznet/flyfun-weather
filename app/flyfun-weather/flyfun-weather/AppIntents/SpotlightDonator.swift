@@ -49,5 +49,9 @@ enum SpotlightDonator {
             // Non-fatal — Spotlight is a nicety, never block the list on it.
             logger.debug("Spotlight reindex skipped: \(error.localizedDescription)")
         }
+        // Same moment, same reason: Siri's in-phrase flight names ("…for Le
+        // Touquet") come from `FlightEntityQuery.suggestedEntities`, which iOS
+        // only re-reads when asked.
+        FlyFunShortcuts.updateAppShortcutParameters()
     }
 }

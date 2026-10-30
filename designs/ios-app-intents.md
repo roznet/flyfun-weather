@@ -7,8 +7,8 @@
 **Status: PHASE 1 IMPLEMENTED (#364, resolver #367).** The Tier-1 App Intents
 surface ships in `app/flyfun-weather/flyfun-weather/AppIntents/` (18 files):
 `FlightEntity` (`AppEntity` + `IndexedEntity`) + `AirportEntity`, the six intents
-(open-list / open-briefing / check / overview / refresh / airport-weather), all
-six registered in `FlyFunShortcuts`, the full tiered resolver (deterministic +
+(open-list / open-briefing / check / overview / refresh / airport-weather), four
+of them with Siri phrases in `FlyFunShortcuts` (2026-10-30 car rework), the full tiered resolver (deterministic +
 Foundation Models grounded selection over the candidate flights), the spoken-line
 builders in `IntentDialogs`, the typed `PendingNavigation` seam, and Spotlight
 reconciliation on flight-list load. Unit coverage:
@@ -78,9 +78,9 @@ Target utterances (all require the "FlyFun" token in the phrase):
 |---|---|---|---|
 | `OpenFlightListIntent` | opens app | `list_flights` | Navigate to the flight list page. No parameter. |
 | `OpenBriefingIntent` | opens app | `get_briefing` | `@Parameter var flight: FlightEntity?`. If nil → compute the **next** upcoming flight and open its briefing. |
-| `CheckBriefingIntent` | background (spoken + card) | `get_briefing` (+ its `live` block) | `@Parameter var flight: FlightEntity?`. If nil → the **next** upcoming flight ("Brief me on my next FlyFun flight"). Speaks assessment (GREEN/AMBER/RED) + the top one or two advisories, led on flight day by the live layer (#365). Also returns a `ShowsSnippetView` card. Reads from cache when offline. |
+| `CheckBriefingIntent` | background (spoken + card) | `get_briefing` (+ its `live` block) | `@Parameter var flight: FlightEntity?`. If nil → the **next** upcoming flight ("Read my next flight in FlyFun"). Speaks route + when + grade + the briefing's `assessmentReason` (else the top concerns), led on flight day by the live layer (#365); see "Speaking for the car". Returns `IntentDialog(full:supporting:)` + a `ShowsSnippetView` card. Reads from cache when offline. |
 | `FlightsOverviewIntent` | background (spoken) | `list_flights` | No parameter. Speaks a one-line-per-flight traffic-light summary of upcoming flights. |
-| `RefreshBriefingIntent` | background | `refresh_briefing` | `@Parameter var flight: FlightEntity`. `RefreshDriver` returns on the **first** SSE signal, speaking one of `alreadyFresh` / `started` / `completed` / `alreadyInProgress` / `rateLimited` / `failed`; a detached drain keeps the server run alive past our early return. See loop-closure note. |
+| `RefreshBriefingIntent` | background | `refresh_briefing` | `@Parameter var flight: FlightEntity?`; nil → the next upcoming flight, so Siri never asks "which flight?" in the car. `RefreshDriver` returns on the **first** SSE signal, speaking one of `alreadyFresh` / `started` / `completed` / `alreadyInProgress` / `rateLimited` / `failed`; a detached drain keeps the server run alive past our early return. See loop-closure note. |
 | `AirportWeatherIntent` | background (spoken) | `get_airport_weather` | `@Parameter var airport: AirportEntity`, `@Parameter var day: AirportWeatherDay` (`@AppEnum` today/tomorrow/in-2/in-3 → the server's 0…3; hour pinned to 12). Spoken consensus category + wind, plus the latest observation and a "snapped to nearest monitored airport" note. |
 
 Notes:
@@ -91,19 +91,60 @@ Notes:
 - **`RefreshBriefingIntent` closes its loop via** [Briefing Refresh Notifications](./ios-app-briefing-notifications.md):
   a refresh is ~2 min server-side and a background intent can't wait, so `RefreshDriver`
   reports the early gate outcome and returns. It refreshes with `source: .siri`, which the
-  server treats as non-present → push/email on completion. The spoken line is still the
-  interim "open FlyFun shortly"; upgrading it to promise the notification is a copy change.
+  server treats as non-present → push/email on completion. The spoken line says "It takes
+  about two minutes; ask me to read it again then" — true whether or not push is on, so it
+  doesn't promise the notification. iOS 27's `LongRunningIntent` (keep app-side work alive
+  past ~30 s, with a progress Live Activity) was considered and skipped: the work is
+  server-side and the push already closes the loop.
 
 ### App Shortcuts (zero-setup Siri phrases)
 
-`FlyFunShortcuts` (an `AppShortcutsProvider`) registers **all six** intents, two phrases
-each (six for Check Briefing), every one carrying `\(.applicationName)` — e.g. `"Refresh my \(.applicationName)
-briefing for \(\.$flight)"`. English v1 (Decision 7); ~10-shortcut soft limit, so adding a
-seventh intent means budgeting phrases, not just appending.
-One verb per action: "Open …" foregrounds, "Brief me / Read / Check …" speaks. Tested on
-device: Siri fuzzy-matched "Check my next flight in FlyFun" to the then-phrase "Show my next
-flight in FlyFun" (opened the app), and question phrases ("What does my next flight in FlyFun
-look like") went to web search even though registered.
+`FlyFunShortcuts` (an `AppShortcutsProvider`) registers **four** intents, built around the
+car: Read (Check Briefing), Refresh, Open, Airport Weather. Every phrase carries
+`\(.applicationName)`, which matches "FlyFun Weather" and the `INAlternativeAppNames`
+"FlyFun". Flights Overview and the flight list have no phrases (they add little by voice and
+their phrases sat close to the briefing ones); both remain Shortcuts actions. English v1
+(Decision 7).
+
+**One verb per action**: "Open …" foregrounds, "Brief me / Read / Check …" speaks,
+"Refresh …" refreshes. Tested on device (2026-10-30): Siri fuzzy-matches an unregistered
+wording to the nearest phrase of *any* intent ("Check my next flight in FlyFun" ran the
+then-phrase "Show my next flight in FlyFun" and opened the app), and question phrases ("What
+does my next flight in FlyFun look like") went to web search even though registered.
+Reinstalling a dev build did not refresh Siri's phrase index; restarting the phone did.
+
+**Naming a flight in the phrase** ("Read my FlyFun briefing for Le Touquet", "Brief me on my
+FlyFun flight from Le Touquet"): `\(\.$flight)` matches the `DisplayRepresentation.synonyms`
+of the entities `FlightEntityQuery.suggestedEntities()` returns, re-read when
+`SpotlightDonator` calls `FlyFunShortcuts.updateAppShortcutParameters()` after each flight
+load. `FlightSpokenNames` gives **upcoming flights only** speakable synonyms (past flights
+keep just their title, or years of Le Touquet trips would make every place ambiguous). A
+bare place / ICAO / "to X" / "from X" belongs to the **soonest** flight it describes, so an
+out-and-back splits cleanly ("Le Touquet" = outbound, "from Le Touquet" or "Fairoaks" =
+return) and a later same-route flight answers only to its dated form ("… on 7 Nov").
+When Siri instead asks "which flight?", the answer goes through the resolver, which now
+honours "from X" (departure) / "to X" (destination), prefers the flight *going* to a bare
+place, and joins a code read letter by letter ("e g t f", "echo golf tango foxtrot").
+
+### Speaking for the car
+
+A check is spoken in two forms (`IntentDialog(full:supporting:)`): **full** when there is
+no screen (CarPlay, AirPods, screen off) — route + when it departs + grade + the briefing's
+one-line `assessmentReason` (already in the flight list, no extra request; it replaces the
+concern list, which it names anyway), led on flight day by "Live update for your … flight"
+and the live lines; **supporting** above the card — one line, the card carries the rest.
+
+Server text is written for reading ("Departure EGTF is LIFR now (EGLL 8 NM NE used for METAR
+and TAF; …)"), so everything spoken goes through `SpokenText.speakable`: ICAO → speakable
+airport name (`speakableName` trims "Airport", "International", "-Côte d'Opale"), source-note
+parentheticals dropped **unless they carry a hazard word** (TS, CB, SIGMET, icing, …),
+LIFR → "low IFR", MVFR, NM, ft and ranges, FL, "07:21Z" → "07:21 zulu", arrows → "to". It is
+deterministic and never summarises, so it can't drop or invent a hazard — which also means
+long lists stay long. The planned upgrade is a server-written spoken variant beside the
+highlight and the digest reason (generated when the text is written, checked against the
+original for every category / hazard / airport, with this cleanup as its fallback); an
+on-device model was rejected for that job (device- and region-gated, untestable against the
+corpus, hallucination risk on safety text).
 
 ### Display ordering vs. "my next flight" (#536)
 
@@ -321,8 +362,16 @@ to the flight-day live lead + result card above, and the rest dropped:
 - **On-device narration** of advisory detail: duplicates the server digest, with
   hallucination risk on safety text.
 
-Not in #365 either, still open: the refresh spoken line promising the push, and
-live awareness in `FlightsOverviewIntent`.
+Not in #365 either, still open: live awareness in `FlightsOverviewIntent` (no longer a
+Siri phrase, so low priority).
+
+**iOS 27 re-check (2026-10-30).** Siri AI *is* available in the UK (only EU iPhones are
+blocked), so the "not on EU devices" premise above covers only part of the user base. It
+changes nothing to build: the new natural-language Siri features are tied to App Schemas,
+and there is no weather/aviation schema, so custom intents benefit only passively (better
+matching through the `IndexedEntity` index). Interactive snippets (`SnippetIntent`,
+iOS 26) would let the card's Refresh button redraw the card in place — the natural next
+step for the on-phone case.
 
 ## MCP ⇆ App Intents parity
 
@@ -422,9 +471,6 @@ Still open:
 
 - **Phrase discoverability** — how much to lean on App Shortcuts phrases (need "FlyFun")
   vs. teaching users to build their own Shortcuts (free phrasing). Onboarding tip?
-- **Refresh spoken line** — now that the push exists, "I'll let you know when it's ready"
-  is honest; the intent still says "open FlyFun shortly". Worth gating on whether push is
-  actually enabled for that user/device before promising it.
 - **iPhone vs iPad** — intents are universal; confirm navigation targets exist on both size classes.
 - **Resolver tier-1 recall** — place matching needs a ≥4-char non-stopword token overlap,
   so short/awkward names ("Nice", "Ronaldsway") fall through to the model tier. Fine, but

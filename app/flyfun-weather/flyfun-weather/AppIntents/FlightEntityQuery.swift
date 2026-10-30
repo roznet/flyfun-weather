@@ -38,10 +38,25 @@ struct FlightEntityQuery: EntityStringQuery {
     /// accessor rather than the `@MainActor` store, so this stays off the main
     /// actor. Shortcuts caches suggested entities, so a preference flip may not
     /// reorder its picker until iOS refreshes them; in-app order is immediate.
+    ///
+    /// These are also the values Siri listens for inside a phrase ("Read my
+    /// FlyFun briefing for Le Touquet"), so upcoming flights carry their spoken
+    /// synonyms (`FlightSpokenNames`). Past flights keep only their title: with
+    /// years of Le Touquet trips, giving history spoken names would make every
+    /// place ambiguous.
     func suggestedEntities() async throws -> [FlightEntity] {
         guard let flights = try? await Self.loadFlights() else { return [] }
         let order = UserPreferencesStore.cachedFlightOrder()
-        return FlightResolver.orderedForSuggestions(flights, order: order).map(FlightEntity.init)
+        let now = Date()
+        let upcoming = flights.filter { FlightResolver.isUpcoming($0, now: now) }
+        await IntentSupport.ensureAirportDatabase()
+        let names = await SpokenText.airportNames(in: upcoming.flatMap(\.waypoints).map { $0.uppercased() })
+        let synonyms = FlightSpokenNames.synonyms(for: upcoming, names: names, now: now)
+        return FlightResolver.orderedForSuggestions(flights, order: order, now: now).map { flight in
+            var entity = FlightEntity(flight)
+            entity.synonyms = synonyms[flight.id] ?? []
+            return entity
+        }
     }
 
     /// Cache-first flight load, shared by every query path. Does *not* gate on
