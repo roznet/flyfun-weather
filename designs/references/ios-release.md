@@ -270,3 +270,7 @@ Alps; the ECMWF cross-section shows the terrain). Choices baked into it:
 
 `FixtureShowcaseTests` (unit target, so CI) fails when the fixture stops decoding against the
 DTOs — re-run the `trim` step then. The journey itself runs only on demand.
+
+Screenshots of *any* flight, for docs and talks rather than the store, come from the live app
+against the devserver instead: `scripts/capture/ios.py --flight ID`, see
+[flight-captures.md](../flight-captures.md).

@@ -40,6 +40,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // The flight-capture journey drives the live app against the devserver: run only by
+        // scripts/capture/android.py (`am instrument -e class …`), never with the journeys.
+        testInstrumentationRunnerArguments["notClass"] = "aero.flyfun.weather.journeys.FlightCaptureJourney"
     }
 
     signingConfigs {

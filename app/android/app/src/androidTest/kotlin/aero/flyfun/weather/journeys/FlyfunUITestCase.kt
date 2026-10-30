@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import aero.flyfun.weather.FlyFunWeatherApp
 import aero.flyfun.weather.MainActivity
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.ui.briefing.briefingTabTestTag
@@ -58,6 +59,30 @@ abstract class FlyfunUITestCase {
             extras.forEach { (key, value) -> putExtra(key, value) }
         }
         scenario = ActivityScenario.launch<MainActivity>(intent)
+    }
+
+    /**
+     * Launch the real app (live-dev mode: `FLYFUN_UITEST` without `FLYFUN_MOCK`, so the normal
+     * auth gate against the debug build's server) on [uri], e.g. a `flyfunweather://auth?token=`
+     * sign-in link. `FlightCaptureJourney` uses it against the devserver.
+     */
+    fun launchLiveApp(uri: String) {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri), context, MainActivity::class.java).apply {
+            putExtra(UiTestLaunch.EXTRA_UITEST, "1")
+        }
+        scenario = ActivityScenario.launch<MainActivity>(intent)
+    }
+
+    /**
+     * Deliver [uri] to the running app as a tapped link would: `onNewIntent` hands it to
+     * `handleIncomingUri`, called here directly. Starting a second `ACTION_VIEW` activity
+     * instead leaves the scenario's activity paused behind it, and `close()` then times out.
+     */
+    fun openLink(uri: String) {
+        scenario?.onActivity { activity ->
+            (activity.application as FlyFunWeatherApp).appState.handleIncomingUri(uri)
+        }
     }
 
     /**
