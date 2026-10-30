@@ -551,6 +551,51 @@ back in through the digest.
 | `EUMETSAT_CONSUMER_KEY` / `_SECRET` | Data Store OAuth credentials. |
 | `WB_OBSERVED_ARCHIVE_ENABLED` | Verification collection (#575): archive the watchlist samples on every METAR ingest tick. Needs `WB_OBSERVED_ENABLED` as well. |
 | `WB_CELLS_INGEST_ENABLED` | Cell overlay pushed by the home node (#656) — its own gate, independent of this one; see `cells-overlay.md`. |
+| `WB_OBSERVED_DPC` | Radar-DPC fill of OPERA's Italy gap (#923). Off by default. Gates the collector fetch **and** the read-time fill, so `=0` unfills every stored frame at once. |
+| `WB_OBSERVED_DPC_DBZH_PRODUCT` | DPC product standing in for DBZH. Default `VMI`; e.g. `CAPPI2` (meteorology-decisions §75). |
+
+### Italy gap fill (#923)
+
+OPERA has no Italian radars, so the gap is filled from the Italian civil
+protection mosaic (Radar-DPC, `observed/dpc.py`): VMI for DBZH, SRI for RATE,
+values written **only into OPERA `nodata` pixels** (meteorology-decisions §75).
+
+- **Collected with its OPERA frame, before the sidecar.** `collect_opera`
+  calls `dpc.collect_fill` between the payload and the sidecar:
+  `findLastProductByType` → newest 5-min slot inside the OPERA product's own
+  window (normally 5 min earlier) → `downloadProduct` (signed S3 URL, 900 s) →
+  GeoTIFF stored as `<stamp>.dpc.tif` in the same source directory. The
+  sidecar gets a `fill` block (product, DPC time, offset) and the Radar-DPC
+  credit in its attribution text. Any failure logs and publishes the frame
+  unfilled; nothing ever amends a published frame. Timeouts are 10 s per
+  call, so a dead API costs one tick at most ~30 s.
+- **Filled at read time.** `opera.read_window` and `opera.iter_row_blocks`
+  call `dpc.load_fill(path)` + `dpc.fill_block`, so the `.h5` is never
+  rewritten and every consumer (sampler, tiles, cells, verification archive)
+  sees the same merged field. A window that touched filled pixels carries
+  `aux["dpc_filled"]` and the credit in its attribution.
+- **Reprojection:** a nearest-neighbour index from OPERA pixels to DPC pixels,
+  both grids static, built once per process per OPERA grid (`fill_index`,
+  lru-cached): ~0.8 s and 7 MB held for the 1 km DBZH grid, ~0.2 s / 2 MB for
+  RATE. Decoded GeoTIFFs are cached (6, keyed on mtime) because the sampler
+  reads every frame many times.
+- **Geometry is checked, not trusted.** The tie point, pixel scale and
+  raster-type key (`PixelIsArea` puts the tie point on the corner) are read
+  from the file and must match the published grid (TM `lat_0=42 lon_0=12.5`,
+  1200 x 1400 at 1 km, corner (-600 000, 650 000)) within 1 m, else the file
+  is refused. GeoTIFF is decoded with Pillow (already a dependency), still no
+  GDAL.
+- **Retention and archive:** `.dpc.tif` is purged with its frame (and swept
+  as an orphan like canvases), packed into the cells day tars with the frame
+  (same stamp prefix), and counted in `disk_usage`. One DPC frame is ~1-7 MB
+  depending on compression; 36 retained DBZH frames + 12 RATE frames add at
+  most ~0.35 GB on the droplet (uncompressed worst case, not measured). On
+  the cells node (`retain_all`) they are kept with the frames: up to ~2.7 GB a
+  day before the day tar's compression, if `WB_OBSERVED_DPC` is set there.
+- **Licence:** CC BY-SA 4.0, credit "Radar-DPC". Share-alike reaches the
+  rendered tiles; see the PR for the open question.
+- **Known gap:** LICT and LICG are dark in DPC too; Greece, the Balkans and
+  Austria stay uncovered.
 
 ## Testing
 

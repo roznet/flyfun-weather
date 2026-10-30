@@ -186,3 +186,41 @@ def test_frame_delivery_lag_matches_the_registry(store):
         f"newest OPERA frame is {age}; either delivery has slowed a long way "
         f"or the collector's lag/lookback needs recalibrating"
     )
+
+
+# A few of the Italian fields OPERA leaves dark (#923).  Radar-DPC filled 12
+# of the 14 on 2026-10-24; LICT and LICG stayed dark in DPC too, so they are
+# not here.
+ITALY_DARK_IN_OPERA = (
+    SampleStation("LIRA", 41.952, 12.499),
+    SampleStation("LIRN", 40.886, 14.291),
+    SampleStation("LIBR", 40.658, 17.947),
+    SampleStation("LICA", 38.905, 16.242),
+    SampleStation("LICJ", 38.176, 13.091),
+    SampleStation("LIEE", 39.251, 9.054),
+)
+
+
+@pytest.mark.slow
+def test_radar_dpc_fills_the_italian_fields(store, monkeypatch):
+    """The DPC API still answers, its GeoTIFF still decodes onto the published
+    grid, and the fill reaches the Italian fields OPERA cannot see."""
+    from weatherbrief.observed import opera
+
+    monkeypatch.setenv("WB_OBSERVED_DPC", "1")
+    result = collect.collect_opera(SOURCE_OPERA_DBZH, store, max_fetch=1)
+    if result.fetched == 0:
+        pytest.skip(f"no OPERA frame available right now: {result.errors or 'not published'}")
+    stored = store.list_frames(SOURCE_OPERA_DBZH)[0]
+    assert "fill" in stored.meta, "Radar-DPC fill missing: see the collector log"
+
+    grid = opera.read_grid(stored.path)
+    lats = [s.lat for s in ITALY_DARK_IN_OPERA]
+    lons = [s.lon for s in ITALY_DARK_IN_OPERA]
+    window = compute_window(grid, lats, lons, radius_km=10)
+    frame = opera.read_window(stored.path, "DBZH", window, source=SOURCE_OPERA_DBZH, units="dBZ")
+    assert frame.aux.get("dpc_filled", 0) > 0
+    for station in ITALY_DARK_IN_OPERA:
+        col, row = grid.lonlat_to_colrow(station.lon, station.lat)
+        r, c = int(round(row)) - frame.window.row0, int(round(col)) - frame.window.col0
+        assert not frame.nodata[r, c], f"{station.id} still has no radar coverage"
