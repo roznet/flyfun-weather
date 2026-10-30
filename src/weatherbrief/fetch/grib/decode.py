@@ -3768,8 +3768,8 @@ def gfs_surface_rates(
     - ``rain_mm`` = (ΔAPCP − ΔACPCP) × (1 − frozen share), floored at 0: the
       large-scale liquid part. GRIB gives one frozen share for the whole
       column, so it is applied to the large-scale part alone; subtracting the
-      whole snow amount (the ECMWF ``tp − cp − sf`` rule, where ``sf`` is a
-      field of its own) would take convective snow off twice.
+      whole snow amount would take convective snow off twice. ECMWF uses the
+      same rule with its own ``sf / tp`` share (#958).
 
     The frozen share is the step's instantaneous ``CPOFP`` applied to the
     window ending there, else the previous step's (:func:`gfs_frozen_fraction`;

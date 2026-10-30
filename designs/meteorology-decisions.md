@@ -6778,12 +6778,15 @@ values go into gaps only. Mechanics: `fetch.md` "GRIB-primary slots".
   interpolation fill empty fields only. A slot the gate refuses, or a point
   that fell back, carries today's values. The pre-#912 ECMWF overwrites (T, Td,
   wind, gust, vis, CAPE, sp, precip, snow, deg0l) are kept as they were.
-- **Rain / showers.** ECMWF: `showers_mm` = Δcp, `rain_mm` = Δ(tp − cp − sf)
-  (large-scale liquid), per hour over the step window. ICON: `showers_mm` =
-  Δ(rain_con + snow_con) (the convection scheme's precipitation, as
-  Open-Meteo defines showers), `rain_mm` = Δrain_gsp, `snowfall_cm` =
-  Δ(snow_gsp + snow_con) × 0.7. A missing component makes the field None, never
-  a smaller number.
+- **Rain / showers.** ECMWF: `showers_mm` = Δcp, `rain_mm` = the
+  large-scale liquid part, (Δtp − Δcp) × (1 − Δsf/Δtp) since #958 (was
+  Δ(tp − cp − sf), which took convective snow off twice; §74), per hour over
+  the step window. ICON: `showers_mm` = Δ(rain_con + snow_con) (the
+  convection scheme's precipitation in both phases, as ECMWF `cp` and GFS
+  `ACPCP`), `rain_mm` = Δrain_gsp, `snowfall_cm` = Δ(snow_gsp + snow_con) ×
+  0.7. This is **not** Open-Meteo's ICON split (corrected 2026-10-30, §74):
+  there showers = rain_con only and all ICON snow becomes rain above 1.5 °C
+  T2m. A missing component makes the field None, never a smaller number.
 - **Covers on a GRIB-primary slot come from GRIB.** ECMWF tcc/lcc/mcc/hcc, ICON
   clct/clcl/clcm/clch, at native steps, linearly interpolated between them. The
   "Cloud cover field separation" rule (Open-Meteo keeps the bulk fields) still
@@ -6914,10 +6917,10 @@ Mechanics: `fetch.md` "GRIB-primary slots" and "GFS enrichment".
   lists both the bucket and the 0-N total; the 0-N total is read). Per hour
   over the step window: `precipitation_mm` = ΔAPCP, `showers_mm` = ΔACPCP,
   `snowfall_cm` = ΔAPCP × CPOFP/100 × 0.7, `rain_mm` = (ΔAPCP − ΔACPCP) ×
-  (1 − CPOFP/100), floored at 0. Unlike ECMWF (§61, `tp − cp − sf` with its
-  own `sf` field), GFS has one frozen share for the column, so it is applied
-  to the large-scale part rather than subtracting the whole snow amount,
-  which would remove convective snow twice. The share is the step's
+  (1 − CPOFP/100), floored at 0. GFS has one frozen share for the column,
+  so it is applied to the large-scale part rather than subtracting the whole
+  snow amount, which would remove convective snow twice. ECMWF uses the same
+  rule with its own Δsf/Δtp share since #958 (§74). The share is the step's
   instantaneous CPOFP applied to the whole window ending there, so past f120
   (3-hourly) a rain/snow transition inside the window is split by its end
   state. CPOFP's −50 fill (nothing falling *at the step*) falls back to the
@@ -7575,3 +7578,50 @@ from main and from this branch (main's side has the Open-Meteo slot, this
 branch's the AROME one), plus `scripts/compare_pack_surface_openmeteo.py` on
 the new packs against `meteofrance_arome_france`. Check the decode log for
 "unmapped AROME surface param" lines.
+
+## 74. Precipitation split and step-0 gust on GRIB slots: audit leftovers (#958)
+
+**Date:** 2026-10-30. GRIB-primary audit §1.2, §1.3, §1.4a, §1.4b. Totals
+(`precipitation_mm`, `snowfall_cm`) are unchanged; only the split moves.
+
+- **ECMWF rain.** `rain_mm` was Δ(tp − cp − sf). `cp` and `sf` both contain
+  convective snow, so large-scale rain under a snow shower read as 0 and the
+  surface phase (`_determine_surface_phase`: rain + snow = MIXED, snow alone
+  = SNOW) said SNOW. The exact large-scale rain is tp − cp − lsf, but the a1
+  feed has no `lsf` (it has `lsp`, which is tp − cp and adds nothing). Now
+  (Δtp − Δcp) × (1 − Δsf/Δtp): the window's frozen share applied to the
+  large-scale part, the GFS rule (§62). Exact when the window is one phase,
+  all large-scale or all convective, or both parts freeze alike; between
+  the old value and all the liquid otherwise. Moves toward RAIN / MIXED only
+  in mixed-phase windows with convective precipitation. Easy to flip.
+- **ICON showers keep convective snow.** §61 said rain_con + snow_con is
+  Open-Meteo's definition; it is not (Open-Meteo ICON showers = rain_con, and
+  above 1.5 °C T2m it moves all snow to rain). Open-Meteo's own ECMWF showers
+  are `cp`, both phases, so Open-Meteo is not consistent across models. We
+  keep both phases on every model (ECMWF cp, GFS ACPCP, ICON rain_con +
+  snow_con): `showers_mm` feeds the convective-character showers signal, and
+  dropping snow_con would make ICON alone miss winter snow showers there.
+  The 1.5 °C snow-to-rain move is not ported: ICON GRIB can say SNOW at 0 to
+  1.5 °C where an Open-Meteo slot said RAIN. Only §61's wording changed.
+- **ICON gust at step 0.** `vmax_10m` is the maximum since the previous
+  output step, so DWD publishes 0 at f000 and a briefing hour on the run's
+  init hour showed a 0 kt gust that the Open-Meteo splice never replaced
+  (it fills None only). The briefing write now leaves it None, as the
+  map and alternates rows already did (`_icon_rows`). Gust is not a
+  required field, so the hour still counts as covered. Precipitation at f000 stays None and still sends
+  that point to the Open-Meteo fallback for the hour; not changed (reachable
+  only when the window starts at the run's init: an airborne refresh or a
+  past-departure flight).
+- **GFS cloud docs.** NCEP lists LCDC/MCDC/HCDC at every step both
+  instantaneous and averaged; the bulk `cloud_cover_*` fields read the
+  instantaneous ones (§62), the cloud-diagnostic layers the averages, to
+  match their averaged-only band geometry (§3). Docstrings, the
+  time-alignment doc and a test fixture said "averaged only". No code
+  change.
+
+**Measured.** Unit tests only. The advisory replay diff is **pending on the
+Mac** (prod GRIB caches are not reachable from a cloud session):
+`scripts/compare_grib_primary.py <id>` on main and on this branch for a few
+flights with precipitation near 0 °C. Expect differences only in rain_mm /
+surface phase on ECMWF hours with both convective precipitation and snow, and
+in the ICON gust on an init hour.

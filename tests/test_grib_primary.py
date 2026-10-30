@@ -469,13 +469,31 @@ def test_ecmwf_rain_showers_split_and_new_instant_fields():
         h = by_t[t0 + timedelta(hours=k)]
         assert h.precipitation_mm == pytest.approx(2.0)
         assert h.showers_mm == pytest.approx(0.5)
-        assert h.rain_mm == pytest.approx(1.3)  # (6 − 1.5 − 0.6) / 3
+        # Large-scale part × (1 − frozen share): (6 − 1.5) × (1 − 0.6/6) / 3.
+        assert h.rain_mm == pytest.approx(1.35)
     assert by_t[t0].precipitation_mm is None  # outside (prev, valid]
     h1 = by_t[t1]
     assert h1.pressure_msl_hpa == pytest.approx(1015.0)
     assert h1.relative_humidity_2m_pct == pytest.approx(76.0, abs=1.0)
     assert h1.cloud_cover_pct == pytest.approx(50.0)
     assert h1.cloud_cover_low_pct == pytest.approx(25.0)
+
+
+def test_ecmwf_rain_keeps_large_scale_rain_under_a_snow_shower():
+    """#958: tp − cp − sf took convective snow off twice (cp and sf both hold it)."""
+    from weatherbrief.fetch.grib import _ecmwf_large_scale_rain_m
+
+    # 1 mm large-scale rain + 1 mm convective snow: tp 2, cp 1, sf 1.
+    # The old rule gave 2 − 1 − 1 = 0, so the hour read as snow only.
+    assert _ecmwf_large_scale_rain_m(2.0, 1.0, 1.0) == pytest.approx(0.5)
+    # Exact cases: all large-scale, all snow, all convective, no precip.
+    assert _ecmwf_large_scale_rain_m(3.0, 0.0, 1.0) == pytest.approx(2.0)
+    assert _ecmwf_large_scale_rain_m(2.0, 1.0, 2.0) == pytest.approx(0.0)
+    assert _ecmwf_large_scale_rain_m(2.0, 2.0, 0.0) == pytest.approx(0.0)
+    assert _ecmwf_large_scale_rain_m(0.0, 0.0, 0.0) == 0.0
+    # Never above all the liquid, never negative (packing noise: sf > tp).
+    assert _ecmwf_large_scale_rain_m(1.0, 0.2, 1.1) == 0.0
+    assert _ecmwf_large_scale_rain_m(2.0, 0.5, 0.5) <= 2.0 - 0.5
 
 
 def test_mslp_datum_for_grib_primary_column():
@@ -562,6 +580,24 @@ def test_icon_surface_written_onto_skeleton():
     # Point 1: no tot_prec at 09 → unknown at 09 AND at 10 (no 2-step total).
     assert p1[9].precipitation_mm is None and p1[10].precipitation_mm is None
     assert p1[10].pressure_msl_hpa == pytest.approx(1013.0)
+
+
+def test_icon_surface_drops_the_step_zero_gust():
+    """#958: vmax_10m is a max since the previous step, 0 at f000 (no 0 kt calm)."""
+    from weatherbrief.fetch.grib import _apply_icon_surface_to_sections
+
+    pts = _points(1)
+    skel = build_skeleton(pts, ModelSource.ICON, start_date="2026-05-04", end_date="2026-05-04")
+    cs = RouteCrossSection(model=ModelSource.ICON, route_points=pts,
+                           fetched_at=DEP, point_forecasts=skel)
+    base = {"t_2m": 283.15, "td_2m": 279.15, "u_10m": 1.0, "v_10m": 1.0,
+            "pmsl": 101300.0, "ps": 99000.0}
+    surface = {0: [dict(base, vmax_10m=0.0)], 1: [dict(base, vmax_10m=10.0)]}
+    _apply_icon_surface_to_sections([cs], [], pts, "20260504", 6, surface, {})
+    by_h = {h.time.hour: h for h in skel[0].hourly}
+    assert by_h[6].wind_gusts_10m_kt is None
+    assert by_h[6].temperature_2m_c == pytest.approx(10.0)  # rest of f000 kept
+    assert by_h[7].wind_gusts_10m_kt == pytest.approx(19.44, abs=0.01)
 
 
 def test_icon_surface_decode_from_grib(tmp_path):

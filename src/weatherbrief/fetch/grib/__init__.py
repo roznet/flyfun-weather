@@ -4301,12 +4301,29 @@ _ECMWF_HOURLY_RATE_FIELDS: tuple[str, ...] = (
 )
 
 # rain_mm / showers_mm (#912) split the same window: showers = convective
-# precip ``cp``, rain = the large-scale LIQUID part, tp − cp − sf. Fill-only,
-# like the instant fields above.
+# precip ``cp``, rain = the large-scale LIQUID part (see
+# _ecmwf_large_scale_rain_m). Fill-only, like the instant fields above.
 _ECMWF_HOURLY_FILL_RATE_FIELDS: tuple[str, ...] = (
     "rain_mm",
     "showers_mm",
 )
+
+
+def _ecmwf_large_scale_rain_m(d_tp: float, d_cp: float, d_sf: float) -> float:
+    """Large-scale liquid precipitation over one window, m water (#958).
+
+    ``tp − cp − sf`` removed convective snow twice (``cp`` and ``sf`` both hold
+    it), so large-scale rain under a snow shower read as 0. The exact
+    ``tp − cp − lsf`` needs ``lsf``, which the a1 feed does not deliver. As for
+    GFS (§62), the window's frozen share ``sf / tp`` is applied to the
+    large-scale part instead: exact when the window is all rain, all snow,
+    all large-scale, or both parts share the frozen share; floored at 0 and
+    never above ``tp − sf`` (all liquid).
+    """
+    if d_tp <= 0:
+        return 0.0
+    frozen = min(1.0, max(0.0, d_sf / d_tp))
+    return max(0.0, d_tp - d_cp) * (1.0 - frozen)
 
 
 def _copy_fields(hourly: HourlyForecast, snap: dict, fields: tuple[str, ...]) -> None:
@@ -4411,7 +4428,8 @@ def _apply_ecmwf_surface_to_hourly(
                 rate_extra["showers_mm"] = max(0.0, d_cp / window_hours) * 1000.0
                 if d_tp is not None and d_sf is not None:
                     rate_extra["rain_mm"] = (
-                        max(0.0, (d_tp - d_cp - d_sf) / window_hours) * 1000.0
+                        _ecmwf_large_scale_rain_m(d_tp, d_cp, d_sf)
+                        / window_hours * 1000.0
                     )
         snap = build_ecmwf_surface_snapshot(rate_raw) if rate_raw else {}
         if rate_extra:
@@ -5911,6 +5929,12 @@ def _apply_icon_surface_to_sections(
                 if v is not None
             }
             inst.update(_icon_diag_surface_fields(diags[i] if i < len(diags) else None))
+            if fhour == 0:
+                # vmax_10m is the maximum since the previous output step, so
+                # step 0 has no gust (DWD publishes 0): leave it empty rather
+                # than write a calm the run never forecast, as _icon_rows does
+                # for snapshots (#958).
+                inst.pop("wind_gusts_10m_kt", None)
             inst_snaps.append(inst)
             rate_snaps.append(_icon_surface_rates(raw, prev_raw[i], window_h))
             prev_raw[i] = (

@@ -86,7 +86,7 @@ All models share the same computation pipeline; inputs vary by what the raw data
 |-----|-------|--------|
 | `z` on pressure levels | ECMWF | **Closed by the 2026-04-22 amendment**: `gh` is now delivered on all 25 levels and decoded directly. `z` itself is still 1 hPa only (catalogue limitation), and the `z`/g + hypsometric fills survive only as fallbacks for pre-amendment archives. |
 | `geopotential_height_m` | ICON | Not on model levels → derived via hypsometric equation from T+P (the same fallback path). |
-| Remaining a1 surface vars | ECMWF | The vars in `build_ecmwf_surface_snapshot` are live on the user-facing forecast too (see B); #912 added `msl`, RH (from t2m/d2m), CIN (`mlcin100`) and the rain/showers split from `cp`. Still undecoded: capes, degm10l, fzra, lsp (rain is tp − cp − sf instead), ptype. |
+| Remaining a1 surface vars | ECMWF | The vars in `build_ecmwf_surface_snapshot` are live on the user-facing forecast too (see B); #912 added `msl`, RH (from t2m/d2m), CIN (`mlcin100`) and the rain/showers split from `cp`. Still undecoded: capes, degm10l, fzra, lsp (rain is (tp − cp) × (1 − sf/tp) instead, #958; no `lsf` is delivered), ptype. |
 | `precipitation_probability_pct`, `lifted_index_raw` | ECMWF, ICON (GRIB-primary) | No deterministic GRIB field. None on a GRIB-primary slot (#912); LI is only a fallback behind the sounding's own LI. |
 
 ## What's Implemented
@@ -128,7 +128,7 @@ Surface field sources on a GRIB-primary slot:
 | RH 2 m | from 2t/2d (Magnus) | relhum_2m, else from T/Td | RH 2 m, else from T/Td |
 | wind 10 m, gust | 10u/10v (U/V interp), 10fg (window max) | u_10m/v_10m, vmax_10m (max since last output) | UGRD/VGRD 10 m, GUST surface |
 | MSLP, surface pressure | msl, sp | pmsl, ps | PRMSL, PRES |
-| precipitation / rain / showers / snowfall | tp, tp − cp − sf, cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) | APCP, (APCP − ACPCP) × (1 − CPOFP), ACPCP, APCP × CPOFP × 0.7 (0-N totals differenced) |
+| precipitation / rain / showers / snowfall | tp, (tp − cp) × (1 − sf/tp), cp, sf (step-differenced) | tot_prec, rain_gsp, rain_con + snow_con, (snow_gsp + snow_con) × 0.7 (step-differenced) | APCP, (APCP − ACPCP) × (1 − CPOFP), ACPCP, APCP × CPOFP × 0.7 (0-N totals differenced) |
 | cloud cover total/low/mid/high | tcc/lcc/mcc/hcc | clct/clcl/clcm/clch (cloud-diag blob) | instantaneous TCDC/LCDC/MCDC/HCDC |
 | CAPE / CIN | mucape / mlcin100 | cape_ml / None | surface CAPE / CIN |
 | visibility | vis | vis | VIS |

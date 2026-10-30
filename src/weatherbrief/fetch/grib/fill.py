@@ -18,8 +18,11 @@ Interpolation policy:
     derived quantities consistent with primitives.
   - **GFS cloud diagnostics** (when ``gfs_init`` provided): low/mid/high
     cover_pct interpolated linearly between **window midpoints** rather than
-    step times — NCEP publishes the averaged form (LCDC/MCDC/HCDC) past f0,
-    so the value at native step f is centred on the midpoint of its averaging
+    step times — the cloud-diagnostic layers read the averaged form of
+    LCDC/MCDC/HCDC past f0 (NCEP publishes an instantaneous twin too, which
+    only the bulk ``cloud_cover_*`` fields use; the band geometry is
+    averaged-only, so the layers keep cover and geometry from the same
+    window), so the value at native step f is centred on the midpoint of its averaging
     window (1-6 h — see ``_gfs_window_length_hours``). This applies at
     **every** hour, native steps included: a native step's own published
     value describes its window midpoint, not its label hour (#481). Layer
@@ -222,9 +225,12 @@ def _interp_gfs_diag_hourly(
 ) -> int:
     """Window-midpoint resampling of GFS cloud diagnostics onto the hour grid.
 
-    NCEP publishes only the time-averaged form of LCDC/MCDC/HCDC (and the
-    matching PRES bottoms/tops) for forecast hours > 0. Each native step f
-    carries values averaged over the window ending at f. NCEP resets that
+    The cloud-diagnostic layers carry the time-averaged form of LCDC/MCDC/HCDC
+    for forecast hours > 0, to match their PRES bottoms/tops, which NCEP
+    publishes only averaged. (NCEP also publishes instantaneous
+    LCDC/MCDC/HCDC at every step; the bulk ``cloud_cover_*`` hourly fields
+    read those, not this path.) Each native step f carries values averaged
+    over the window ending at f. NCEP resets that
     window at every multiple of 6 and lets it grow to the next reset, so its
     length is 1-6 h depending on f's position — see
     ``_gfs_window_length_hours``, which owns the arithmetic and the live-index

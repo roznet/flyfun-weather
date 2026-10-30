@@ -96,6 +96,9 @@ def test_gfs_window_out_of_range():
 # .idx plans
 # ---------------------------------------------------------------------------
 
+# Shaped like the real NOAA gfs.t00z.pgrb2.0p25.f001 index: the layer covers
+# (LCDC/MCDC/HCDC) are listed twice, instantaneous and as a 0-1 h average.
+# Only the band geometry (PRES/TMP at the layer bottom/top) is averaged-only.
 _IDX_F001 = """\
 1:0:d=2026102400:PRMSL:mean sea level:1 hour fcst:
 2:1000:d=2026102400:TMP:2 m above ground:1 hour fcst:
@@ -107,8 +110,15 @@ _IDX_F001 = """\
 8:7000:d=2026102400:ACPCP:surface:0-1 hour acc fcst:
 9:8000:d=2026102400:TCDC:entire atmosphere:1 hour fcst:
 10:9000:d=2026102400:TCDC:entire atmosphere:0-1 hour ave fcst:
-11:10000:d=2026102400:LCDC:low cloud layer:0-1 hour ave fcst:
-12:11000:d=2026102400:CPOFP:surface:1 hour fcst:
+11:10000:d=2026102400:LCDC:low cloud layer:1 hour fcst:
+12:11000:d=2026102400:LCDC:low cloud layer:0-1 hour ave fcst:
+13:12000:d=2026102400:PRES:low cloud bottom level:0-1 hour ave fcst:
+14:13000:d=2026102400:CPOFP:surface:1 hour fcst:
+"""
+
+# Synthetic: a cover offered only as an average (not what NOAA publishes).
+_IDX_F001_AVERAGE_ONLY = """\
+1:0:d=2026102400:LCDC:low cloud layer:0-1 hour ave fcst:
 """
 
 _IDX_F012 = """\
@@ -152,8 +162,10 @@ def test_surface_plan_first_of_duplicates_and_no_averages():
     assert plan["APCP"] == 4000
     assert plan["ACPCP"] == 6000
     assert plan["TCDC"] == 8000
-    assert "LCDC" not in plan               # only an average offered: absent
-    assert plan["CPOFP"] == 11000
+    assert plan["LCDC"] == 10000            # instantaneous, not the 0-1 average
+    assert plan["CPOFP"] == 13000
+    # Defensive: a cover with no instantaneous form is left out, never averaged.
+    assert "LCDC" not in _plan(_IDX_F001_AVERAGE_ONLY, 1)
 
 
 def test_surface_plan_reads_the_analysis_at_f000():
