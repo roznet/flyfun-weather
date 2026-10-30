@@ -10,12 +10,15 @@ import SwiftUI
 /// alert lines, then the highlight or headline, then the grade labelled as the
 /// briefing's. Outside the live window, or with no live data, the output is
 /// the briefing-only line.
+///
+/// With no flight given ("What does my next flight in FlyFun look like?") it
+/// checks the **next** upcoming flight, like `OpenBriefingIntent`.
 struct CheckBriefingIntent: AppIntent {
     static var title: LocalizedStringResource = "Check Briefing"
-    static var description = IntentDescription("Hear the assessment and top concerns for a flight.")
+    static var description = IntentDescription("Hear the assessment and top concerns for a flight, or your next flight.")
 
     @Parameter(title: "Flight")
-    var flight: FlightEntity
+    var flight: FlightEntity?
 
     static var parameterSummary: some ParameterSummary {
         Summary("Check the briefing for \(\.$flight)")
@@ -31,8 +34,17 @@ struct CheckBriefingIntent: AppIntent {
         let repo = IntentSupport.makeRepository()
         do {
             let flights = try await repo.flights()
-            guard let match = flights.first(where: { $0.id == flight.id }) else {
-                return .result(dialog: "I couldn't find that flight.", view: CheckBriefingSnippetView(content: nil))
+            let match: FlightResponse
+            if let flight {
+                guard let found = flights.first(where: { $0.id == flight.id }) else {
+                    return .result(dialog: "I couldn't find that flight.", view: CheckBriefingSnippetView(content: nil))
+                }
+                match = found
+            } else {
+                guard let next = FlightResolver.nextFlight(in: flights) else {
+                    return .result(dialog: "You have no upcoming flights.", view: CheckBriefingSnippetView(content: nil))
+                }
+                match = next
             }
             let live = await Self.liveLayer(for: match, repository: repo)
             let content = CheckBriefingSnippetView.Content(flight: match, live: IntentDialogs.liveCheckLines(live))
