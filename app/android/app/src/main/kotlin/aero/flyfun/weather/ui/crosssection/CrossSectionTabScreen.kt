@@ -134,8 +134,11 @@ fun CrossSectionTabScreen(
         ((currentVizData?.points?.size ?: 1) - 1).coerceAtLeast(0),
     )
 
-    // 4. Load SoundingProfileResponse for the selected route point and model(s)
-    LaunchedEffect(selectedPack, pointIndex, activeModel, availableModels) {
+    // 4. Load SoundingProfileResponse for the selected route point and model(s). Keyed on the viz
+    // data too: on a live server it arrives after the first composition, and an effect that ran
+    // before it returned early and was never re-run, leaving the Skew-T empty until a point or
+    // model change.
+    LaunchedEffect(selectedPack, pointIndex, activeModel, availableModels, currentVizData) {
         if (activeModel.isBlank() || currentVizData == null || currentVizData.points.isEmpty()) {
             soundingProfile = null
             compareProfiles = emptyMap()
