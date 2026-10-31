@@ -21,6 +21,15 @@ import type { SoundingProfileLevel } from './types';
 import { isDarkTheme } from '../interaction-utils';
 
 export const SIDE_PANEL_WIDTH = 110;
+/** Narrow containers (phone-width pages) — leaves the Skew-T room (#962). */
+export const NARROW_SIDE_PANEL_WIDTH = 72;
+/** Container width (CSS px) below which the narrow side panel is used. */
+export const NARROW_CONTAINER_WIDTH = 520;
+
+/** Side-panel width for a container of `cssW` CSS px. */
+export function sidePanelWidthFor(cssW: number): number {
+  return cssW < NARROW_CONTAINER_WIDTH ? NARROW_SIDE_PANEL_WIDTH : SIDE_PANEL_WIDTH;
+}
 
 export interface VariableDef {
   id: string;

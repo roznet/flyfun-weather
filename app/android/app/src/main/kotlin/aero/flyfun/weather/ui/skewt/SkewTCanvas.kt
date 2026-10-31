@@ -7,7 +7,10 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,11 +32,14 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aero.flyfun.rzskewt.SkewTConfig
 import aero.flyfun.rzskewt.SkewTTransform
 import aero.flyfun.rzskewt.Thermodynamics
+import aero.flyfun.rzskewt.fitSkewT
+import aero.flyfun.rzskewt.skewedExtent
 import aero.flyfun.weather.model.EnhancedCloudLayer
 import aero.flyfun.weather.model.IcingZone
 import aero.flyfun.weather.model.InversionLayer
@@ -90,6 +96,10 @@ fun SkewTCanvas(
     cruiseAltitudeFt: Int? = null,
     externalHoverAltitudeFt: Double? = null,
     onHoverAltitudeChanged: ((Double?) -> Unit)? = null,
+    /** Show the HW/XW-style side panel (the user's toggle); hidden = full-width Skew-T. */
+    sidePanelVisible: Boolean = true,
+    /** Height ceiling; the canvas takes the fitted height up to this (#962). */
+    maxHeight: Dp = 390.dp,
     modifier: Modifier = Modifier,
 ) {
     val isDark = isSystemInDarkTheme()
@@ -100,6 +110,22 @@ fun SkewTCanvas(
     }
 
     val config = remember { SkewTConfig(pBottom = 1050.0, pTop = 250.0, tMin = -60.0, tMax = 40.0) }
+
+    // Skewed extent of everything drawn (T, Td, parcel; every model in compare mode) — the
+    // fitted window is centred on it (#962).
+    val soundingExtent = remember(profile, compareProfiles, isCompareMode) {
+        val soundings = if (isCompareMode && compareProfiles.isNotEmpty()) compareProfiles.values else listOf(profile)
+        val points = buildList {
+            for (s in soundings) {
+                for (l in s.levels) {
+                    add(l.temperatureC to l.pressureHpa)
+                    add(l.dewpointC to l.pressureHpa)
+                }
+                s.parcelPath?.forEach { add(it.temperatureC to it.pressureHpa) }
+            }
+        }
+        skewedExtent(points, config)
+    }
 
     // Precompute background thermodynamic curves once per config
     val dryAdiabats = remember(config) {
@@ -155,7 +181,31 @@ fun SkewTCanvas(
     val effectiveHoverPressureHpa = localHoverPressureHpa
         ?: externalHoverAltitudeFt?.let { Thermodynamics.altitudeToPressureHpa(it) }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+    // Fit the plot box + temperature window (45° isotherms, fixed skew shift — rzskewt
+    // fitSkewT): a narrow phone shows a window centred on the sounding and may shrink the
+    // height; a wide (landscape/tablet) box shows the full range, narrowed and centred.
+    val canvasW = constraints.maxWidth.toFloat()
+    val maxCanvasH = with(density) { maxHeight.toPx() }
+    val totalAvailableW = (canvasW - leftMarginPx - rightMarginPx).coerceAtLeast(120f)
+    val showSidePanel = sidePanelVisible && totalAvailableW >= flColumnWidthPx + sidePanelWidthPx + 130f
+    val availPlotW = if (showSidePanel) {
+        totalAvailableW - flColumnWidthPx - sidePanelWidthPx
+    } else {
+        totalAvailableW - flColumnWidthPx
+    }.coerceAtLeast(80f)
+    val fit = fitSkewT(
+        availW = availPlotW,
+        availH = (maxCanvasH - topMarginPx - bottomMarginPx).coerceAtLeast(60f),
+        extent = soundingExtent,
+        config = config,
+        minHeight = with(density) { 200.dp.toPx() },
+    )
+    val plotConfig = config.copy(tMin = fit.tMin, tMax = fit.tMax)
+    val plotLeft = leftMarginPx + (availPlotW - fit.width) / 2f
+    val canvasHeightDp = with(density) { (fit.height + topMarginPx + bottomMarginPx).toDp() }
+
+    Box(modifier = Modifier.fillMaxWidth().height(canvasHeightDp)) {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -194,23 +244,12 @@ fun SkewTCanvas(
                     )
                 },
         ) {
-            val canvasW = size.width
-            val canvasH = size.height
-            val plotHeight = (canvasH - topMarginPx - bottomMarginPx).coerceAtLeast(60f)
-            val totalAvailableW = (canvasW - leftMarginPx - rightMarginPx).coerceAtLeast(120f)
-            val showSidePanel = totalAvailableW >= flColumnWidthPx + sidePanelWidthPx + 130f
-            val plotWidth = if (showSidePanel) {
-                totalAvailableW - flColumnWidthPx - sidePanelWidthPx
-            } else {
-                totalAvailableW - flColumnWidthPx
-            }.coerceAtLeast(80f)
-
             val transform = SkewTTransform(
-                left = leftMarginPx,
+                left = plotLeft,
                 top = topMarginPx,
-                width = plotWidth,
-                height = plotHeight,
-                config = config,
+                width = fit.width,
+                height = fit.height,
+                config = plotConfig,
             )
 
             val sidePanelLeft = transform.right + flColumnWidthPx
@@ -309,6 +348,7 @@ fun SkewTCanvas(
             }
         }
     }
+    }
 }
 
 // ============================================================================
@@ -342,7 +382,8 @@ private fun DrawScope.drawBackgroundGrid(
     }
 
     // Skewed Isotherms every 10°C
-    for (t in -80..40 step 10) {
+    // From one full skew colder than the window so the top-left corner keeps its grid.
+    for (t in (-200..40 step 10).filter { it >= transform.config.tMin - 120 && it <= transform.config.tMax }) {
         val xBottom = transform.tempPressureToX(t.toDouble(), transform.config.pBottom)
         val xTop = transform.tempPressureToX(t.toDouble(), transform.config.pTop)
         val color = when (t) {
@@ -864,7 +905,7 @@ private fun DrawScope.drawSkewTAxesAndMarkers(
 
     // Bottom Temperature Labels
     textPaint.textAlign = Paint.Align.CENTER
-    for (t in -50..40 step 10) {
+    for (t in -60..40 step 10) {
         val x = transform.tempPressureToX(t.toDouble(), transform.config.pBottom)
         if (x in (transform.left + 8f)..(transform.right - 8f)) {
             textPaint.color = if (t == 0) Color(0xFF00B0DC).toArgb() else textColor.toArgb()

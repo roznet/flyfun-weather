@@ -2236,7 +2236,8 @@ html {
 }
 
 #skewt-canvas-container {
-  min-height: 350px;
+  /* Height follows the fitted plot (#962, layout.ts) up to the inline 450px. */
+  min-height: 200px;
   max-height: 550px;
   border-radius: 6px;
   overflow: hidden;
@@ -2292,6 +2293,22 @@ html {
   align-items: center;
   gap: 0.35rem;
   font-size: 0.78rem;
+}
+
+.skewt-panel-visibility {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-muted);
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.skewt-panel-visibility.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
 }
 
 .skewt-tooltip {

@@ -191,9 +191,11 @@ export function renderIndicesPanel(
 
   if (lines.length === 0) return;
 
-  const lineHeight = 14;
-  const padding = 6;
-  const panelWidth = 120;
+  // Compact on a narrow plot (phone-width page, #962) so it hides less of it.
+  const compact = plot.width < 300;
+  const lineHeight = compact ? 11 : 14;
+  const padding = compact ? 3 : 6;
+  const panelWidth = compact ? 84 : 120;
   const panelHeight = lines.length * lineHeight + padding * 2;
   const x = plot.right - panelWidth - 4;
   const y = plot.top + 4;
@@ -206,7 +208,7 @@ export function renderIndicesPanel(
   ctx.strokeRect(x, y, panelWidth, panelHeight);
 
   // Text
-  ctx.font = '11px monospace';
+  ctx.font = compact ? '9px monospace' : '11px monospace';
   ctx.fillStyle = dark ? '#ddd' : '#333';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
