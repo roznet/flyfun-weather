@@ -98,7 +98,7 @@ def _fetch_eta_snapshots(
 
     Returns ``{icao: {model: snapshot_dict}}`` keeping only the snapshot whose
     ``forecast_hour`` matches ``eta_dt``. Per-model split mirrors the forecast
-    map, run choice included (#957): GFS and ICON GRIB-primary with a
+    map, run-choice rule included (#957): GFS and ICON GRIB-primary with a
     per-airport Open-Meteo fallback (#914), ECMWF via local GRIB (the only
     source of ECMWF visibility), with an Open-Meteo fallback when no local GRIB
     run is available (degraded — ECMWF visibility absent — but consensus still
@@ -134,9 +134,11 @@ def _fetch_eta_snapshots(
         ContextVar (propagated via ``copy_context`` at submit time) — the
         interactive briefing path resolves to INTERACTIVE.
 
-        The run is the forecast map's choice (:func:`resolve_snapshot_run`):
-        GRIB's newest usable run, Open-Meteo's init only when GRIB has none or
-        for a model off GRIB snapshots (#957).
+        The run comes from the map's rule (:func:`resolve_snapshot_run`),
+        applied to alternates' own 4-day window (``MODEL_FORECAST_DAYS``) rather
+        than the map's longer horizon, so it can be newer than the map's (e.g.
+        GFS, whose map runs 6 days): GRIB's newest usable run, Open-Meteo's
+        init only when GRIB has none or for a model off GRIB snapshots (#957).
         """
         from weatherbrief.fetch.grib import _grib_session
 

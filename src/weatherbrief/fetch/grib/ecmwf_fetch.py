@@ -412,7 +412,7 @@ def find_best_ecmwf_run(
     best_max_step = max(f.step_hours for f in runs[best_bt])
     best_target = _target(best_bt)
     logger.info(
-        "ECMWF: no run covers flight end %s, falling back to %s (observed horizon %dh, reaches %s)",
+        "ECMWF: no run reaches %s, falling back to %s (observed horizon %dh, reaches %s)",
         best_target.isoformat() if best_target else None, best_bt.isoformat(), best_max_step,
         _horizon(best_bt).isoformat(),
     )
