@@ -66,10 +66,38 @@ skewFactor = tan(45°) × height / width
 
 Default ranges: pBottom=1050, pTop=250, T=-60..+40°C, skew=45° (`DEFAULT_CONFIG` in `types.ts`).
 
-Because `skewFactor` depends on the plot box's width/height, a freely-resizing box would
-change the isotherm tilt and visually distort the sounding. Both renderers therefore clamp
-the plot box to `PLOT_ASPECT = 1.8` (width/height) and centre it — the classic 960px layout's
-max aspect, so that layout is pixel-identical to before the clamp.
+### One geometry on every platform (#962)
+
+Because `skewFactor` depends on the plot box's width/height, a freely-resizing box changes the
+isotherm tilt and distorts the sounding. Every platform therefore keeps **two invariants**:
+isotherms at **45°** and a fixed **skew shift `SKEW_SHIFT_DEG = 100/1.8 ≈ 55.6°`** across
+1050→250 hPa (the classic web layout: −60…+40 at plot aspect 1.8). The visible temperature
+window then follows from the box — `window = shift · w / h` — and `fitSkewT` picks box and window:
+
+- **Wide box** (desktop, phone/tablet landscape): window would exceed −60…+40 → show the full
+  range, narrow the box to `100·h/shift` and centre it. The 1440px web layout is unchanged.
+- **Narrow box** (phone portrait): a window centred on the sounding's **skewed extent**
+  (`X = T + shift·logFrac` over T, Td and the parcel path; every model in compare mode) plus 5°
+  padding, kept inside −60…+40. If the sounding is wider than the window, the **height shrinks**
+  to `shift·w/need` (floor ~200–220 px; below that the edges clip). No horizontal scroll — drag
+  already scrubs the cursor; rotate the phone to see the full range.
+
+Bottom-axis labels are the multiples of 10 inside the window; isotherms are generated from well
+below the window so the upper-left corner keeps its grid.
+
+| Platform | Fit | Layout |
+|---|---|---|
+| Web | `fitSkewT` / `skewedExtent` in `skewt-transform.ts` | `layout.ts` `layoutSkewT` (both renderers); the container's inline 450px is the height ceiling (recorded once on the element — single + compare share it); narrow containers (<520px) use a 72px side panel and a compact indices box |
+| Android | `fitSkewT` / `skewedExtent` in `rzskewt` `SkewTTransform.kt` | `SkewTCanvas` `BoxWithConstraints`, `maxHeight` 390dp ceiling |
+| iOS | `SkewTTransform.fit` / `.skewedExtent` in RZSkewT (separate repo, remote pin) | `SkewTDetailView` `GeometryReader` |
+
+The old app-side fixes (a skew-factor clamp at 1.0 in RZSkewT/rzskewt, iOS's −40…+50 range)
+are gone: the clamp steepened isotherms and squeezed the temperature axis on tall plots.
+
+**Side panel show/hide:** web (`Shown`/`Hidden` button in the side-panel row, localStorage
+`wb_skewtSidePanelVisible`, shared by single + compare), Android (chip, SharedPreferences
+`skewt_prefs`), iPhone (icon button, `@AppStorage("skewtSidePanelVisible")`; iPad always shows
+it). Hidden = full-width Skew-T = wider window.
 
 ## Overlay Bands
 
@@ -89,7 +117,7 @@ Layers without pressure bounds fall back to standard-atmosphere altitude→press
 
 ## Side Panel
 
-Single fixed-width panel (110px) with dual-axis support:
+Single fixed-width panel (110px; 72px in a container narrower than 520px; hideable — see above) with dual-axis support:
 - **Primary variable**: line + bottom X-axis labels (default: HW/XW)
 - **Secondary variable**: line + top X-axis labels (default: none)
 

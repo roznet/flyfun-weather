@@ -33,6 +33,8 @@ interface SidePanelVarHost {
   getSecondaryVar(): string | null;
   setPrimaryVar(id: string): void;
   setSecondaryVar(id: string | null): void;
+  getSidePanelVisible(): boolean;
+  setSidePanelVisible(visible: boolean): void;
 }
 
 /** Render <option> entries grouped by VariableDef.group as <optgroup> blocks. */
@@ -52,9 +54,11 @@ function renderGroupedOptions(selectedId: string | null): string {
 }
 
 /** Generate HTML for primary + secondary side panel dropdowns with info buttons. */
-function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | null): string {
+function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | null, visible: boolean): string {
   let html = '<div class="skewt-panel-selector">';
   html += '<span class="skewt-overlay-group-label">Side panel</span>';
+  // Show/hide (#962): hiding gives the Skew-T the full width — mostly for phones.
+  html += `<button type="button" class="btn-toggle skewt-panel-visibility${visible ? ' active' : ''}" aria-pressed="${visible}" title="${visible ? 'Hide the side panel to widen the Skew-T' : 'Show the side panel'}">${visible ? 'Shown' : 'Hidden'}</button>`;
 
   // Primary dropdown + info button
   html += '<select class="skewt-panel-dropdown" data-axis="primary" title="Primary variable (bottom axis)">';
@@ -79,6 +83,15 @@ function renderSidePanelSelectorHtml(primaryId: string, secondaryId: string | nu
 
 /** Wire change listeners on side panel dropdowns, updating renderer and info buttons. */
 function wireSidePanelDropdowns(container: HTMLElement, renderer: SidePanelVarHost, onUserEdit?: () => void): void {
+  const visBtn = container.querySelector<HTMLButtonElement>('.skewt-panel-visibility');
+  visBtn?.addEventListener('click', () => {
+    const visible = !renderer.getSidePanelVisible();
+    renderer.setSidePanelVisible(visible);
+    visBtn.classList.toggle('active', visible);
+    visBtn.setAttribute('aria-pressed', String(visible));
+    visBtn.textContent = visible ? 'Shown' : 'Hidden';
+    visBtn.title = visible ? 'Hide the side panel to widen the Skew-T' : 'Show the side panel';
+  });
   container.querySelectorAll<HTMLSelectElement>('.skewt-panel-dropdown').forEach(select => {
     select.addEventListener('change', () => {
       const axis = select.dataset.axis;
@@ -148,7 +161,7 @@ export function renderSkewtOverlayControls(
   html += '</div>';
 
   // Side panel variable dropdowns with dynamic info buttons
-  html += renderSidePanelSelectorHtml(primaryId, secondaryId);
+  html += renderSidePanelSelectorHtml(primaryId, secondaryId, renderer.getSidePanelVisible());
 
   // Indices info buttons row
   html += '<div class="skewt-indices-info">';
@@ -232,7 +245,7 @@ export function renderSkewtCompareControls(
   html += '</div>';
 
   // Side panel variable dropdowns
-  html += renderSidePanelSelectorHtml(primaryId, secondaryId);
+  html += renderSidePanelSelectorHtml(primaryId, secondaryId, renderer.getSidePanelVisible());
   html += '</div>';
 
   container.innerHTML = html;

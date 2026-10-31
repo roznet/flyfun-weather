@@ -113,6 +113,12 @@ struct SkewTDetailView: View {
     @State private var showClouds = true
     @State private var showIcing = true
     @State private var showInversions = true
+    /// Skewed extent of T / Td / parcel (#962) — the fitted window is centred
+    /// on it. Built once per sounding in `loadProfile` (overlay toggles don't
+    /// change it).
+    @State private var soundingExtent: ClosedRange<Double>?
+    /// iPhone side-panel show/hide (#962): hidden gives the Skew-T the full width.
+    @AppStorage("skewtSidePanelVisible") private var sidePanelVisible = true
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(AppState.self) private var appState
 
@@ -124,14 +130,17 @@ struct SkewTDetailView: View {
               : .init(left: 32, right: 36, top: 16, bottom: 22)
     }
 
-    /// Skew-T config (1050–250 hPa range, shared identically by the plot and the
-    /// side panel so their pressure rows line up). Uses the default 45° skew:
-    /// RZSkewT clamps its internal skew factor at the classic square-aspect
-    /// value, so a tall/narrow iPhone plot (h≫w) keeps the cold upper-air data
-    /// on the chart with no app-side angle correction. Wide plots
-    /// (iPad/landscape) get the full visual 45°. (RZSkewT owns the #7 fix.)
+    /// Base Skew-T config: 1050–250 hPa and the web's −60…+40, the widest
+    /// window ever shown. The plot uses `fittedConfig` (#962).
     private var skewConfig: SkewTConfiguration {
-        SkewTConfiguration(pTop: 250, tMin: -40, tMax: 50,
+        SkewTConfiguration(pTop: 250, tMin: -60, tMax: 40,
+                           margins: margins, showWindBarbs: false)
+    }
+
+    /// The base config with the fitted temperature window — shared identically
+    /// by the plot and the side panel so their pressure rows line up.
+    private func fittedConfig(_ fit: SkewTFit) -> SkewTConfiguration {
+        SkewTConfiguration(pTop: 250, tMin: fit.tMin, tMax: fit.tMax,
                            margins: margins, showWindBarbs: false)
     }
     private var isPad: Bool { hSizeClass == .regular }
@@ -180,17 +189,31 @@ struct SkewTDetailView: View {
             if !availableVars.isEmpty {
                 variablePicker(availableVars)
             }
-            // Side panel is a fixed-width strip; the plot takes the rest.
-            let panelW: CGFloat = shown.isEmpty ? 0 : (isPad ? 220 : 100)
-            let cfg = skewConfig
-            HStack(spacing: 0) {
-                SkewTView(profile: profile, config: cfg, selectedPressureHPa: $selectedPressureHPa)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if !shown.isEmpty {
-                    SkewTVariablePanel(profile: profile, variables: shown, config: cfg,
-                                       selectedPressureHPa: selectedPressureHPa)
-                        .frame(width: panelW)
+            // Side panel is a fixed-width strip (hideable on iPhone); the plot
+            // box + temperature window are fitted to the rest (#962, RZSkewT
+            // `SkewTTransform.fit`): 45° isotherms and the web's skew on any
+            // screen — a window centred on the sounding on a narrow phone (height
+            // shrunk when needed), the full −60…+40 when wide (box narrowed).
+            let panelShown = !shown.isEmpty && (isPad || sidePanelVisible)
+            let panelW: CGFloat = panelShown ? (isPad ? 220 : 100) : 0
+            GeometryReader { geo in
+                let m = margins
+                let fit = SkewTTransform.fit(
+                    availableSize: CGSize(width: max(1, geo.size.width - panelW - m.left - m.right),
+                                          height: max(1, geo.size.height - m.top - m.bottom)),
+                    extent: soundingExtent, config: skewConfig)
+                let cfg = fittedConfig(fit)
+                HStack(spacing: 0) {
+                    SkewTView(profile: profile, config: cfg, selectedPressureHPa: $selectedPressureHPa)
+                        .frame(width: fit.plotSize.width + m.left + m.right)
+                    if panelShown {
+                        SkewTVariablePanel(profile: profile, variables: shown, config: cfg,
+                                           selectedPressureHPa: selectedPressureHPa)
+                            .frame(width: panelW)
+                    }
                 }
+                .frame(height: fit.plotSize.height + m.top + m.bottom)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -307,6 +330,19 @@ struct SkewTDetailView: View {
                 varMenu(fallback: "2nd", selection: $secondaryVarId, available: available)
             }
             Spacer()
+            if !isPad {
+                // #962: hide the side panel to give the Skew-T the full width.
+                Button {
+                    sidePanelVisible.toggle()
+                } label: {
+                    Image(systemName: sidePanelVisible ? "sidebar.right" : "rectangle")
+                        .font(.body)
+                        .foregroundStyle(sidePanelVisible ? Theme.text : Theme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(sidePanelVisible ? "Hide side panel" : "Show side panel")
+                .accessibilityIdentifier("skewtSidePanelToggle")
+            }
         }
         .padding(.horizontal, Theme.cardPadding)
     }
@@ -343,6 +379,19 @@ struct SkewTDetailView: View {
         .buttonStyle(.plain)
     }
 
+    /// Skewed extent of everything the plot draws: T, Td and RZSkewT's parcel path.
+    static func skewedExtent(_ profile: SoundingProfile, config: SkewTConfiguration) -> ClosedRange<Double>? {
+        var points: [(tempC: Double?, pressureHPa: Double)] = []
+        for l in profile.levels {
+            points.append((l.temperatureC, l.pressureHPa))
+            points.append((l.dewpointC, l.pressureHPa))
+        }
+        for p in SkewTRenderer(profile: profile, config: config).parcelPath {
+            points.append((p.tempC, p.pressureHPa))
+        }
+        return SkewTTransform.skewedExtent(points, config: config)
+    }
+
     private func loadProfile() async {
         guard viewModel.pack != nil else { return }
         profileState = .loading
@@ -358,6 +407,7 @@ struct SkewTDetailView: View {
                                                      includeInversions: showInversions)
             loadedResponse = response
             cachedProfile = profile
+            soundingExtent = Self.skewedExtent(profile, config: skewConfig)
             availableGroups = SkewTVariableCatalog.grouped(for: response, levels: profile.levels, trackDeg: trackDeg)
             ensureDefaults(availableVars)
             profileState = .loaded(response)

@@ -2,6 +2,7 @@ package aero.flyfun.rzskewt
 
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.tan
 
@@ -13,8 +14,9 @@ import kotlin.math.tan
  * @property tMin Minimum surface temperature in °C (default -60).
  * @property tMax Maximum surface temperature in °C (default +40).
  * @property skewAngleDeg Isotherm tilt angle in degrees (default 45).
- * @property maxSkewFactor Upper bound on the aspect-adjusted skew factor (default 1.0)
- *   so narrow portrait phone screens do not over-skew upper-air temperatures off-chart.
+ *
+ * The visible window (`tMin..tMax`) of a narrow plot comes from [fitSkewT], which keeps the
+ * isotherm angle and skew shift fixed instead of clamping the skew factor (#962).
  */
 data class SkewTConfig(
     val pBottom: Double = 1050.0,
@@ -22,7 +24,6 @@ data class SkewTConfig(
     val tMin: Double = -60.0,
     val tMax: Double = 40.0,
     val skewAngleDeg: Double = 45.0,
-    val maxSkewFactor: Double = 1.0,
 )
 
 /**
@@ -50,13 +51,12 @@ class SkewTTransform(
     private val tRange: Double = config.tMax - config.tMin
 
     /**
-     * Aspect-adjusted skew factor, clamped by [SkewTConfig.maxSkewFactor] so tall/narrow mobile plots
-     * keep upper-air soundings legible.
+     * Aspect-adjusted skew factor so isotherms tilt at [SkewTConfig.skewAngleDeg] on screen.
+     * Use [fitSkewT] to pick a box + window that keeps the diagram's proportions.
      */
     val skewFactor: Double = run {
         val aspect = if (width > 0f) height.toDouble() / width.toDouble() else 1.0
-        val raw = tan(Math.toRadians(config.skewAngleDeg)) * aspect
-        min(config.maxSkewFactor, raw)
+        tan(Math.toRadians(config.skewAngleDeg)) * aspect
     }
 
     /**
@@ -116,4 +116,80 @@ class SkewTTransform(
     fun isPressureVisible(pHpa: Double): Boolean {
         return pHpa in config.pTop..config.pBottom
     }
+}
+
+// ── Fitted layout (#962) ─────────────────────────────────────────────────────
+//
+// Same rule as the web (`web/ts/visualization/skewt/skewt-transform.ts`) and iOS (RZSkewT):
+// isotherms at 45° and a fixed skew shift of [SKEW_SHIFT_DEG] across pBottom→pTop. The visible
+// window then follows from the box, window = shift · w / h: a wide box shows the full config
+// range (box narrowed, centred), a narrow one a window centred on the sounding, with the height
+// shrunk when the sounding is wider than the window. See designs/skewt-canvas.md.
+
+/** Skew shift (°C) across pBottom→pTop: the web's classic −60…+40 at plot aspect 1.8. */
+const val SKEW_SHIFT_DEG: Double = 100.0 / 1.8
+
+/** A fitted plot box (px, ≤ the available size) and its temperature window (°C at pBottom). */
+data class SkewTFit(val width: Float, val height: Float, val tMin: Double, val tMax: Double)
+
+private fun logFraction(pHpa: Double, config: SkewTConfig): Double {
+    val lb = ln(config.pBottom)
+    return (lb - ln(pHpa)) / (lb - ln(config.pTop))
+}
+
+/**
+ * Horizontal extent of `(T °C, p hPa)` points in skewed coordinates — the temperature each
+ * lands on when read at the bottom axis (X = T + shift · logFrac). Points with a null T or
+ * outside `[pTop, pBottom]` are ignored; null when none are left.
+ */
+fun skewedExtent(
+    points: Iterable<Pair<Double?, Double>>,
+    config: SkewTConfig = SkewTConfig(),
+    shiftDeg: Double = SKEW_SHIFT_DEG,
+): ClosedFloatingPointRange<Double>? {
+    var lo = Double.POSITIVE_INFINITY
+    var hi = Double.NEGATIVE_INFINITY
+    for ((t, p) in points) {
+        if (t == null || !t.isFinite() || p < config.pTop || p > config.pBottom) continue
+        val x = t + shiftDeg * logFraction(p, config)
+        lo = min(lo, x)
+        hi = max(hi, x)
+    }
+    return if (lo <= hi) lo..hi else null
+}
+
+/**
+ * Fit the plot box and temperature window to the available space and the sounding's skewed
+ * [extent], keeping 45° isotherms and a fixed skew shift. `config.tMin..tMax` is the widest
+ * window ever shown.
+ */
+fun fitSkewT(
+    availW: Float,
+    availH: Float,
+    extent: ClosedFloatingPointRange<Double>?,
+    config: SkewTConfig = SkewTConfig(),
+    shiftDeg: Double = SKEW_SHIFT_DEG,
+    paddingDeg: Double = 5.0,
+    minHeight: Float = 220f,
+): SkewTFit {
+    val full = config.tMax - config.tMin
+    if (availW <= 0f || availH <= 0f) {
+        return SkewTFit(max(0f, availW), max(0f, availH), config.tMin, config.tMax)
+    }
+    val minH = min(minHeight, availH).toDouble()
+    val w = availW.toDouble()
+
+    var h = availH.toDouble()
+    val need = extent?.let { min(full, it.endInclusive - it.start + 2 * paddingDeg) } ?: 0.0
+    if (shiftDeg * w / h < need) {
+        h = max(minH, shiftDeg * w / need)
+    }
+
+    val window = shiftDeg * w / h
+    if (window >= full - 1e-9) {
+        return SkewTFit((full * h / shiftDeg).toFloat(), h.toFloat(), config.tMin, config.tMax)
+    }
+    val centre = extent?.let { (it.start + it.endInclusive) / 2 } ?: ((config.tMin + config.tMax) / 2)
+    val tMin = min(max(centre - window / 2, config.tMin), config.tMax - window)
+    return SkewTFit(availW, h.toFloat(), tMin, tMin + window)
 }

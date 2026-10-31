@@ -68,15 +68,62 @@ class SkewTTransformTest {
     }
 
     @Test
-    fun `maxSkewFactor clamps skew on narrow portrait phone screens`() {
-        val config = SkewTConfig(skewAngleDeg = 45.0, maxSkewFactor = 1.0)
-        // Narrow phone plot: width = 220, height = 440 -> raw tan(45)*h/w = 2.0, clamped to 1.0
-        val narrowTransform = SkewTTransform(left = 0f, top = 0f, width = 220f, height = 440f, config = config)
-        assertEquals(1.0, narrowTransform.skewFactor, 1e-6)
+    fun `skew factor keeps the visual angle on tall plots`() {
+        val t = SkewTTransform(left = 0f, top = 0f, width = 220f, height = 440f)
+        assertEquals(2.0, t.skewFactor, 1e-6)
+    }
 
-        // Wide tablet plot: width = 600, height = 400 -> raw tan(45)*h/w = 0.667 <= 1.0
-        val wideTransform = SkewTTransform(left = 0f, top = 0f, width = 600f, height = 400f, config = config)
-        assertEquals(400.0 / 600.0, wideTransform.skewFactor, 1e-4)
+    private fun isothermAngle(fit: SkewTFit): Double {
+        val cfg = SkewTConfig(tMin = fit.tMin, tMax = fit.tMax)
+        val t = SkewTTransform(0f, 0f, fit.width, fit.height, cfg)
+        val dx = (t.tempPressureToX(0.0, cfg.pTop) - t.tempPressureToX(0.0, cfg.pBottom)).toDouble()
+        val dy = (t.pressureToY(cfg.pBottom) - t.pressureToY(cfg.pTop)).toDouble()
+        return Math.toDegrees(kotlin.math.atan2(dy, dx))
+    }
+
+    @Test
+    fun `fit keeps the classic wide layout`() {
+        val fit = fitSkewT(1300f, 382f, -20.0..20.0)
+        assertEquals(-60.0, fit.tMin, 1e-9)
+        assertEquals(40.0, fit.tMax, 1e-9)
+        assertEquals(382f, fit.height, 1e-3f)
+        assertEquals(382f * 1.8f, fit.width, 1e-2f)
+    }
+
+    @Test
+    fun `fit narrow box centres the window on the sounding at 45 degrees`() {
+        val fit = fitSkewT(300f, 360f, -12.0..18.0)
+        assertEquals(300f, fit.width, 1e-3f)
+        assertEquals(360f, fit.height, 1e-3f)
+        assertEquals(SKEW_SHIFT_DEG * 300 / 360, fit.tMax - fit.tMin, 1e-4)
+        assertEquals(3.0, (fit.tMin + fit.tMax) / 2, 1e-4)
+        assertEquals(45.0, isothermAngle(fit), 1e-3)
+    }
+
+    @Test
+    fun `fit shrinks a tall narrow box so the sounding fits`() {
+        val fit = fitSkewT(220f, 765f, -18.0..18.0)
+        assertEquals((SKEW_SHIFT_DEG * 220 / 46).toFloat(), fit.height, 1e-2f)
+        assertEquals(46.0, fit.tMax - fit.tMin, 1e-3)
+        assertEquals(45.0, isothermAngle(fit), 1e-3)
+    }
+
+    @Test
+    fun `fit stops at the minimum height and stays inside the config range`() {
+        assertEquals(220f, fitSkewT(140f, 380f, -50.0..20.0).height, 1e-3f)
+        assertEquals(40.0, fitSkewT(300f, 360f, 30.0..45.0).tMax, 1e-6)
+        assertEquals(-60.0, fitSkewT(300f, 360f, -80.0..-70.0).tMin, 1e-6)
+        val wide = fitSkewT(500f, 600f, -70.0..50.0)
+        assertEquals(-60.0, wide.tMin, 1e-9)
+        assertEquals(45.0, isothermAngle(wide), 1e-3)
+    }
+
+    @Test
+    fun `skewedExtent reads points at the bottom axis`() {
+        val ext = skewedExtent(listOf(12.0 to 1050.0, -45.0 to 250.0, null to 500.0, -60.0 to 200.0))!!
+        assertEquals(-45.0 + SKEW_SHIFT_DEG, ext.start, 1e-6)
+        assertEquals(12.0, ext.endInclusive, 1e-6)
+        assertEquals(null, skewedExtent(emptyList()))
     }
 
     @Test

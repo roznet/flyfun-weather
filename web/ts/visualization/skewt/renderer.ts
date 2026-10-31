@@ -9,11 +9,12 @@
  */
 
 import { SkewTTransform } from './skewt-transform';
+import { containerMaxHeight, layoutSkewT, soundingsExtent, loadSidePanelVisible, saveSidePanelVisible } from './layout';
 import { BackgroundLinesRenderer } from './background-lines';
 import { renderProfileCurves } from './profile-curves';
 import { renderAxes, renderLevelMarkers, renderIndicesPanel } from './axes';
 import { renderOverlayBands, getDefaultOverlayState } from './overlay-bands';
-import { renderSidePanel, getVariableById, SIDE_PANEL_WIDTH, type VariableDef } from './variable-panel';
+import { renderSidePanel, getVariableById, sidePanelWidthFor, type VariableDef } from './variable-panel';
 import { SoundingProfileData, DEFAULT_CONFIG, SkewTConfig, PlotArea } from './types';
 
 // Layout constants
@@ -21,16 +22,9 @@ const MARGIN_LEFT = 40;
 const MARGIN_RIGHT = 6;
 const MARGIN_TOP = 24;
 const MARGIN_BOTTOM = 44;
+const MARGINS = { left: MARGIN_LEFT, right: MARGIN_RIGHT, top: MARGIN_TOP, bottom: MARGIN_BOTTOM };
 const PANEL_GAP = 8;
 const FL_LABEL_WIDTH = 40; // space between plot right edge and side panel for FL labels
-// Frozen plot-box aspect (width / height). The skew transform ties both the
-// 45° isotherm density and the temperature scale to the plot width, so an
-// unconstrained container width stretches the sounding horizontally. Clamping
-// the box to a fixed ratio keeps the diagram's proportions identical across
-// layouts; a wider container adds centred whitespace instead of distortion.
-// 1.8 matches the classic 960px layout's max aspect, so that layout is
-// unchanged while the wider sidebar layout is brought back to the same look.
-const PLOT_ASPECT = 1.8;
 
 export class SkewTRenderer {
   private container: HTMLElement;
@@ -43,6 +37,7 @@ export class SkewTRenderer {
   private overlayState: Record<string, boolean>;
   private primaryVarId: string;
   private secondaryVarId: string | null;
+  private sidePanelVisible = loadSidePanelVisible();
   private lastTransform: SkewTTransform | null = null;
   private resizeObserver: ResizeObserver;
   private themeListener: (() => void) | null = null;
@@ -102,9 +97,23 @@ export class SkewTRenderer {
     const rect = this.container.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    // Layout (#962): plot box + temperature window fitted to the container and
+    // the sounding (45° isotherms, fixed skew shift — see layout.ts). Wide
+    // containers keep the classic −60…+40 box; narrow ones centre the window on
+    // the sounding and may shrink the container height (up to its original).
+    const hasSidePanel = !!this.primaryVarId && this.sidePanelVisible;
     const cssW = rect.width;
-    const cssH = rect.height;
+    const sidePanelW = sidePanelWidthFor(cssW);
+    const sidePanelTotalW = hasSidePanel ? FL_LABEL_WIDTH + sidePanelW + PANEL_GAP : FL_LABEL_WIDTH;
+    const maxCssH = containerMaxHeight(this.container);
+    const layout = !this.data
+      ? null
+      : layoutSkewT(cssW, maxCssH, MARGINS, sidePanelTotalW,
+          soundingsExtent([this.data], this.config), this.config);
+    const cssH = layout ? layout.cssH : maxCssH;
+    if (Math.abs(rect.height - cssH) > 0.5) this.container.style.height = `${cssH}px`;
+
+    const dpr = window.devicePixelRatio || 1;
     this.canvas.width = cssW * dpr;
     this.canvas.height = cssH * dpr;
 
@@ -113,36 +122,17 @@ export class SkewTRenderer {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssH);
 
-    if (!this.data) {
+    if (!layout || !this.data) {
       this.renderPlaceholder(ctx, cssW, cssH);
       return;
     }
 
-    // Compute layout: Skew-T plot area + FL labels gap + side panel.
-    // The plot box is clamped to PLOT_ASPECT so the sounding keeps its
-    // proportions regardless of container width; the [plot + side panel] block
-    // is centred, so excess width becomes whitespace rather than stretch.
-    const hasSidePanel = !!this.primaryVarId;
-    const sidePanelTotalW = hasSidePanel ? FL_LABEL_WIDTH + SIDE_PANEL_WIDTH + PANEL_GAP : FL_LABEL_WIDTH;
+    const plotArea = layout.plotArea;
+    const skewtRight = plotArea.right;
+    const config = layout.config;
+    if (plotArea.width < 60 || plotArea.height < 100) return;
 
-    const plotHeight = cssH - MARGIN_TOP - MARGIN_BOTTOM;
-    const availW = cssW - MARGIN_LEFT - MARGIN_RIGHT - sidePanelTotalW;
-    const plotWidth = Math.min(availW, plotHeight * PLOT_ASPECT);
-    const left = MARGIN_LEFT + Math.max(0, (availW - plotWidth) / 2);
-    const skewtRight = left + plotWidth;
-
-    const plotArea: PlotArea = {
-      left,
-      top: MARGIN_TOP,
-      width: plotWidth,
-      height: plotHeight,
-      right: skewtRight,
-      bottom: cssH - MARGIN_BOTTOM,
-    };
-
-    if (plotArea.width < 100 || plotArea.height < 100) return;
-
-    const transform = new SkewTTransform(plotArea, this.config);
+    const transform = new SkewTTransform(plotArea, config);
     this.lastTransform = transform;
 
     // Sky background
@@ -153,7 +143,7 @@ export class SkewTRenderer {
     // 1. Background lines (cached at full DPR resolution — blit at 1:1 pixels)
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.backgroundLines.render(ctx, transform, this.config, this.canvas.width, this.canvas.height, dpr);
+    this.backgroundLines.render(ctx, transform, config, this.canvas.width, this.canvas.height, dpr);
     ctx.restore();
 
     // 2. Overlay bands (clouds, icing, inversions, convective)
@@ -180,7 +170,7 @@ export class SkewTRenderer {
       if (primaryVar) {
         renderSidePanel(ctx, transform, this.data.levels, primaryVar, secondaryVar ?? null, {
           left: skewtRight + FL_LABEL_WIDTH + PANEL_GAP,
-          width: SIDE_PANEL_WIDTH,
+          width: sidePanelW,
           top: plotArea.top,
           height: plotArea.height,
           bottom: plotArea.bottom,
@@ -267,6 +257,17 @@ export class SkewTRenderer {
   setSecondaryVar(id: string | null): void {
     this.secondaryVarId = id;
     saveSidePanels({ primary: this.primaryVarId, secondary: id });
+    this.backgroundLines.invalidate();
+    this.render();
+  }
+
+  /** Whether the side panel is shown (hiding it widens the Skew-T). */
+  getSidePanelVisible(): boolean { return this.sidePanelVisible; }
+
+  /** Show or hide the side panel and re-render. */
+  setSidePanelVisible(visible: boolean): void {
+    this.sidePanelVisible = visible;
+    saveSidePanelVisible(visible);
     this.backgroundLines.invalidate();
     this.render();
   }

@@ -1,5 +1,6 @@
 package aero.flyfun.weather.ui.skewt
 
+import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -45,6 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -87,6 +89,10 @@ fun SkewTDetailSection(
         mutableStateOf(SkewTOverlayBand.defaultEnabledIds())
     }
     var primaryVariableId by rememberSaveable { mutableStateOf("hw_xw") }
+    // Side panel shown/hidden (#962) — hiding gives the Skew-T the full width. Kept per device.
+    val context = LocalContext.current
+    val skewtPrefs = remember(context) { context.getSharedPreferences(SKEWT_PREFS_NAME, Context.MODE_PRIVATE) }
+    var sidePanelVisible by remember { mutableStateOf(skewtPrefs.getBoolean(SIDE_PANEL_VISIBLE_KEY, true)) }
     var secondaryVariableId by rememberSaveable { mutableStateOf<String?>(null) }
     var showHelpDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -273,6 +279,11 @@ fun SkewTDetailSection(
                     secondaryVariableId = secondaryVariableId,
                     onSelectPrimary = { primaryVariableId = it },
                     onSelectSecondary = { secondaryVariableId = it },
+                    sidePanelVisible = sidePanelVisible,
+                    onToggleSidePanel = {
+                        sidePanelVisible = !sidePanelVisible
+                        skewtPrefs.edit().putBoolean(SIDE_PANEL_VISIBLE_KEY, sidePanelVisible).apply()
+                    },
                 )
 
                 // 5. Skew-T Canvas
@@ -290,9 +301,10 @@ fun SkewTDetailSection(
                     cruiseAltitudeFt = cruiseAltitudeFt ?: profile.cruiseAltitudeFt,
                     externalHoverAltitudeFt = externalHoverAltitudeFt,
                     onHoverAltitudeChanged = onHoverAltitudeChanged,
+                    sidePanelVisible = sidePanelVisible,
+                    maxHeight = 390.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(390.dp)
                         .testTag("skewTCanvas"),
                 )
             }
@@ -412,6 +424,8 @@ private fun SidePanelVariableSelectorRow(
     secondaryVariableId: String?,
     onSelectPrimary: (String) -> Unit,
     onSelectSecondary: (String?) -> Unit,
+    sidePanelVisible: Boolean,
+    onToggleSidePanel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val primaryDef = SkewTVariableCatalog.findById(primaryVariableId) ?: SkewTVariableCatalog.ALL_VARIABLES.first()
@@ -428,6 +442,13 @@ private fun SidePanelVariableSelectorRow(
             text = "Side panel:",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        FilterChip(
+            selected = sidePanelVisible,
+            onClick = onToggleSidePanel,
+            label = { Text(if (sidePanelVisible) "Shown" else "Hidden", style = MaterialTheme.typography.labelSmall) },
+            modifier = Modifier.testTag("skewTSidePanelToggle"),
         )
 
         VariableDropdownMenuButton(
@@ -637,3 +658,6 @@ private fun formatAltitudeOrFl(altFt: Double): String {
         "${(altFt / 100.0).roundToInt() * 100} ft"
     }
 }
+
+private const val SKEWT_PREFS_NAME = "skewt_prefs"
+private const val SIDE_PANEL_VISIBLE_KEY = "side_panel_visible"
