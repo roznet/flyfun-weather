@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-10-31",
+    "title": "iOS 1.19 — Clearer Skew-T and dewpoint on airport cards",
+    "category": "app_release",
+    "highlight": false,
+    "body": "- The Skew-T keeps its proper shape on the phone. Isotherms stay at 45° and the chart centres on the sounding; rotate to landscape for the full temperature range.\n- Airport cards and the route graph now show the dewpoint next to the temperature.\n- Cross-section: your chosen cloud style now stays put when you switch views. There's also a new experimental air-mass boundary layer under Stability, off by default.\n- Refreshing a flight that has already flown now explains why it can't be rebuilt, instead of showing \"Access denied\"."
+  }
+]
