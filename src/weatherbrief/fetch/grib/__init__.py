@@ -6627,13 +6627,19 @@ def _arome_hour_problem(
 
 
 def _arome_decode_files(
-    ctx: _AromeContext, packages: tuple[str, ...], worker: str, *args,
-) -> dict[int, list[dict]] | None:
-    """Decode *packages* for their groups and merge the per-point dicts.
+    ctx: _AromeContext,
+    specs: list[tuple[tuple[str, ...], str, tuple]],
+) -> list[dict[int, list[dict]]] | None:
+    """Decode every group file of every spec in one parallel batch.
 
-    Returns ``{fhour: [point dict, ...]}`` (pressure: level → fields;
-    surface: key → value), or None when a file is missing or a decode
-    raised (the slot is dropped).
+    Each spec is ``(packages, worker, extra_args)``. All files go to the
+    decode pool together (like GFS and ICON), so the pool size bounds how
+    many run at once instead of one file at a time; each worker reads its
+    file one message at a time, so the per-worker peak stays small.
+
+    Returns one ``{fhour: [point dict, ...]}`` per spec, in spec order
+    (pressure: level → fields; surface: key → value), or None when a file
+    is missing or any decode raised (the slot is dropped).
     """
     from weatherbrief.fetch.grib.arome_domain import (
         AROME_EXPECTED_FINITE_FRACTION,
@@ -6641,42 +6647,52 @@ def _arome_decode_files(
     )
     from weatherbrief.fetch.grib.arome_fetch import arome_group_cache_key
 
-    merged: dict[int, list[dict]] = {}
-    for package in packages:
-        for label, hours in ctx.packages.get(package, {}).items():
-            path = ctx.run_dir / arome_group_cache_key(label, package=package)
-            if not path.exists():
-                logger.warning(
-                    "AROME %s %s missing after download; meteofrance slot dropped",
-                    package, label,
-                )
-                return None
-            try:
-                result = _dispatch_decode(
-                    worker, str(path), hours, ctx.point_lats, ctx.point_lons, *args,
-                )
-            except Exception:
-                logger.warning("AROME %s %s decode failed", package, label, exc_info=True)
-                return None
-            frac = result.get("finite_fraction")
-            if frac is not None and abs(frac - AROME_EXPECTED_FINITE_FRACTION) > \
-                    AROME_FINITE_FRACTION_TOLERANCE:
-                logger.warning(
-                    "AROME finite-cell fraction %.3f differs from the expected "
-                    "%.3f — the domain may have changed; rerun "
-                    "scripts/regen_arome_domain.py",
-                    frac, AROME_EXPECTED_FINITE_FRACTION,
-                )
-            for fhour, pts in (result.get("points") or {}).items():
-                into = merged.setdefault(int(fhour), [{} for _ in pts])
-                for dst, src in zip(into, pts):
-                    for k, v in src.items():
-                        if isinstance(v, dict):
-                            dst.setdefault(k, {}).update(v)
-                        else:
-                            dst[k] = v
-            del result
-            _grib_gc("arome")
+    jobs: list[tuple[str, tuple]] = []
+    owners: list[tuple[int, str, str]] = []  # (spec index, package, label) per job
+    for i, (packages, worker, extra) in enumerate(specs):
+        for package in packages:
+            for label, hours in ctx.packages.get(package, {}).items():
+                path = ctx.run_dir / arome_group_cache_key(label, package=package)
+                if not path.exists():
+                    logger.warning(
+                        "AROME %s %s missing after download; meteofrance slot dropped",
+                        package, label,
+                    )
+                    return None
+                jobs.append((
+                    worker,
+                    (str(path), hours, ctx.point_lats, ctx.point_lons, *extra),
+                ))
+                owners.append((i, package, label))
+
+    results = _dispatch_decode_parallel(jobs, return_exceptions=True)
+
+    merged: list[dict[int, list[dict]]] = [{} for _ in specs]
+    for (i, package, label), result in zip(owners, results):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "AROME %s %s decode failed", package, label, exc_info=result,
+            )
+            return None
+        frac = result.get("finite_fraction")
+        if frac is not None and abs(frac - AROME_EXPECTED_FINITE_FRACTION) > \
+                AROME_FINITE_FRACTION_TOLERANCE:
+            logger.warning(
+                "AROME finite-cell fraction %.3f differs from the expected "
+                "%.3f — the domain may have changed; rerun "
+                "scripts/regen_arome_domain.py",
+                frac, AROME_EXPECTED_FINITE_FRACTION,
+            )
+        for fhour, pts in (result.get("points") or {}).items():
+            into = merged[i].setdefault(int(fhour), [{} for _ in pts])
+            for dst, src in zip(into, pts):
+                for k, v in src.items():
+                    if isinstance(v, dict):
+                        dst.setdefault(k, {}).update(v)
+                    else:
+                        dst[k] = v
+    del results
+    _grib_gc("arome")
     return merged
 
 
@@ -6707,11 +6723,16 @@ def _decode_and_merge_arome(
     n_points = len(route_points)
 
     with _grib_time("arome_decode"):
-        columns = _arome_decode_files(
-            ctx, AROME_PRESSURE_PACKAGES, "decode_arome_pressure", ctx.levels,
-        )
-        if columns is None:
+        # One batch for pressure and surface: the surface files are small,
+        # so decoding them alongside costs little even when a pressure hour
+        # then fails validation below.
+        decoded = _arome_decode_files(ctx, [
+            (AROME_PRESSURE_PACKAGES, "decode_arome_pressure", (ctx.levels,)),
+            (AROME_SURFACE_PACKAGES, "decode_arome_surface", ()),
+        ])
+        if decoded is None:
             return None, "no_data"
+        columns, surface = decoded
         for fhour in ctx.fhours:
             problem = _arome_hour_problem(columns.get(fhour), ctx.levels, n_points)
             if problem is not None:
@@ -6719,11 +6740,6 @@ def _decode_and_merge_arome(
                     "AROME f%03d unusable (%s); meteofrance slot dropped", fhour, problem,
                 )
                 return None, problem
-        surface = _arome_decode_files(
-            ctx, AROME_SURFACE_PACKAGES, "decode_arome_surface",
-        )
-        if surface is None:
-            return None, "no_data"
 
     # Commit. Every window hour validated; the merge only builds levels.
     replaced = 0

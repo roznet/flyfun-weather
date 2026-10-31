@@ -614,6 +614,13 @@ class TestPrepare:
         assert ctx.fhours == [6, 7, 8, 9]
 
 
+def _batch(fake_dispatch):
+    """A ``_dispatch_decode_parallel`` stand-in that runs *fake_dispatch* per job."""
+    def run(jobs, **kw):
+        return [fake_dispatch(worker, *args) for worker, args in jobs]
+    return run
+
+
 class TestDecodeAndMerge:
     INIT = ("20260730", 12)
 
@@ -649,7 +656,9 @@ class TestDecodeAndMerge:
             assert worker == "decode_arome_surface"
             return {"points": {h: surface[h] for h in hours if h in surface}}
 
-        monkeypatch.setattr(grib_mod, "_dispatch_decode", fake_dispatch)
+        monkeypatch.setattr(
+            grib_mod, "_dispatch_decode_parallel", _batch(fake_dispatch),
+        )
         cs = _mf_section(self._times(*fhours))
         result = grib_mod._decode_and_merge_arome(
             self._ctx(tmp_path, fhours), [cs], [], [_rp()],
@@ -702,9 +711,55 @@ class TestDecodeAndMerge:
         (ctx.run_dir / af.arome_group_cache_key("00H06H", package="SP2")).unlink()
         cs = _mf_section(self._times(6))
         monkeypatch.setattr(
-            grib_mod, "_dispatch_decode",
-            lambda worker, path, hours, *a: {"points": {h: [_col()] for h in hours}},
+            grib_mod, "_dispatch_decode_parallel",
+            _batch(lambda worker, path, hours, *a: {"points": {h: [_col()] for h in hours}}),
         )
+        assert grib_mod._decode_and_merge_arome(ctx, [cs], [], [_rp()]) == (None, "no_data")
+
+    def test_all_group_files_go_to_the_pool_in_one_batch(self, monkeypatch, tmp_path):
+        """Pressure and surface files are submitted together, not one at a time."""
+        import weatherbrief.fetch.grib as grib_mod
+        fhours = [5, 6, 7]  # straddles the 00H06H / 07H12H groups
+        ctx = self._ctx(tmp_path, fhours)
+        batches: list[list[str]] = []
+        surface = {h: [_sfc(tp=0.5 * h)] for h in range(4, 8)}
+
+        def fake_dispatch(worker, path, hours, lats, lons, *args):
+            if worker == "decode_arome_pressure":
+                pts = {} if "_IP2_" in path else {h: [_col()] for h in hours}
+                return {"points": pts, "finite_fraction": 0.828, "dropped": []}
+            return {"points": {h: surface[h] for h in hours if h in surface}}
+
+        def fake_parallel(jobs, **kw):
+            assert kw.get("return_exceptions") is True
+            batches.append([Path(args[0]).name for _, args in jobs])
+            return [fake_dispatch(w, *args) for w, args in jobs]
+
+        monkeypatch.setattr(grib_mod, "_dispatch_decode_parallel", fake_parallel)
+        cs = _mf_section(self._times(*fhours))
+        ts, skip = grib_mod._decode_and_merge_arome(ctx, [cs], [], [_rp()])
+        assert skip is None and ts is not None
+        assert len(batches) == 1
+        expected = sorted(
+            af.arome_group_cache_key(label, package=pkg)
+            for pkg, groups in ctx.packages.items() for label in groups
+        )
+        assert sorted(batches[0]) == expected
+        assert any("_IP1_" in n for n in batches[0]) and any("_SP1_" in n for n in batches[0])
+
+    def test_one_failed_file_drops_the_slot(self, monkeypatch, tmp_path):
+        import weatherbrief.fetch.grib as grib_mod
+        ctx = self._ctx(tmp_path, [6])
+
+        def fake_parallel(jobs, **kw):
+            return [
+                RuntimeError("boom") if "_SP2_" in args[0]
+                else {"points": {h: [_col()] for h in args[1]}}
+                for _, args in jobs
+            ]
+
+        monkeypatch.setattr(grib_mod, "_dispatch_decode_parallel", fake_parallel)
+        cs = _mf_section(self._times(6))
         assert grib_mod._decode_and_merge_arome(ctx, [cs], [], [_rp()]) == (None, "no_data")
 
 
