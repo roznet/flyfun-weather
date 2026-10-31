@@ -98,8 +98,8 @@ def _fetch_eta_snapshots(
 
     Returns ``{icao: {model: snapshot_dict}}`` keeping only the snapshot whose
     ``forecast_hour`` matches ``eta_dt``. Per-model split mirrors the forecast
-    map: GFS via Open-Meteo + GRIB ceiling, ICON GRIB-primary with a per-airport
-    Open-Meteo fallback (#914), ECMWF via local GRIB (the only
+    map, run choice included (#957): GFS and ICON GRIB-primary with a
+    per-airport Open-Meteo fallback (#914), ECMWF via local GRIB (the only
     source of ECMWF visibility), with an Open-Meteo fallback when no local GRIB
     run is available (degraded — ECMWF visibility absent — but consensus still
     works). Each model's failure is non-fatal.
@@ -115,18 +115,15 @@ def _fetch_eta_snapshots(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from contextvars import copy_context
 
-    from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.tasks.standalone_verification import (
         MODEL_FORECAST_DAYS,
-        _select_ecmwf_grib_run,
         fetch_ecmwf_grib_snapshots,
         fetch_model_snapshots,
+        resolve_snapshot_run,
     )
 
     sample_hours = [eta_dt.hour]
     by_icao: dict[str, dict[str, dict]] = {}
-    # Single up-front metadata call — kept OUTSIDE the parallel region.
-    metadata = fetch_model_metadata(_MODELS)
 
     def _fetch_one_model(model: str) -> dict[str, dict]:
         """Fetch one model's ETA-hour snapshots → ``{icao: snap}``.
@@ -136,39 +133,33 @@ def _fetch_eta_snapshots(
         across model passes). Decode priority is inherited from the caller's
         ContextVar (propagated via ``copy_context`` at submit time) — the
         interactive briefing path resolves to INTERACTIVE.
+
+        The run is the forecast map's choice (:func:`resolve_snapshot_run`):
+        GRIB's newest usable run, Open-Meteo's init only when GRIB has none or
+        for a model off GRIB snapshots (#957).
         """
         from weatherbrief.fetch.grib import _grib_session
 
-        meta = metadata.get(model)
-        if meta is None:
-            logger.warning("Alternates: no model metadata for %s, skipping", model)
-            return {}
-        om_init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
         days = MODEL_FORECAST_DAYS.get(model, 4)
         session = _grib_session()
+        init_time, run_files = resolve_snapshot_run(model, days, session=session)
+        if init_time is None:
+            logger.warning("Alternates: no run found for %s, skipping", model)
+            return {}
 
         snaps: list[dict] = []
-        if model == "ecmwf":
-            run_files = _select_ecmwf_grib_run(om_init_time, days)
-            if run_files is not None:
-                snaps = fetch_ecmwf_grib_snapshots(
-                    run_files, airports, sample_hours, days,
-                )
-            else:
-                logger.info(
-                    "Alternates: no local ECMWF GRIB run; falling back to "
-                    "Open-Meteo (no ECMWF visibility)"
-                )
-                snaps, _ = fetch_model_snapshots(
-                    model, om_init_time, airports, session, sample_hours,
-                    only_valid_time=eta_dt,
-                )
+        if run_files is not None:
+            snaps = fetch_ecmwf_grib_snapshots(
+                run_files, airports, sample_hours, days,
+            )
         else:
             # GFS/ICON: GRIB diagnostics fetched alongside and attached before
-            # the sounding pass (#635); ICON's sounding and surface come from
+            # the sounding pass (#635); their sounding and surface come from
             # GRIB too, Open-Meteo only for airports GRIB left short (#914).
+            # ECMWF lands here only with no local GRIB run: Open-Meteo,
+            # degraded (no ECMWF visibility) but consensus still works.
             snaps, _ = fetch_model_snapshots(
-                model, om_init_time, airports, session, sample_hours,
+                model, init_time, airports, session, sample_hours,
                 only_valid_time=eta_dt,
             )
 

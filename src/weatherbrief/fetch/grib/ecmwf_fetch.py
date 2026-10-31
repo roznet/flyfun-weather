@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -336,7 +337,7 @@ def filter_ready_runs(
 
 def find_best_ecmwf_run(
     all_files: list[ECMWFFileInfo],
-    cover_until: datetime,
+    cover_until: datetime | Callable[[datetime], datetime | None],
     *,
     require_ready: bool = True,
     data_dir: Path | None = None,
@@ -356,7 +357,11 @@ def find_best_ecmwf_run(
     Args:
         all_files: Pre-scanned file list (all runs, already filtered for
             operational_only / as_of_time by the caller).
-        cover_until: The latest valid-time the run must cover.
+        cover_until: The latest valid-time the run must cover, or a function
+            of the run's base time returning it, for a target that moves with
+            the run (the forecast map's last valid time is counted from its
+            init day). The function may return None for a run with nothing to
+            cover; such a run never counts as covering.
 
     Returns:
         Files for the selected run (may be empty if all_files is empty).
@@ -375,12 +380,16 @@ def find_best_ecmwf_run(
     for f in all_files:
         runs.setdefault(f.base_time, []).append(f)
 
+    def _target(bt: datetime) -> datetime | None:
+        return cover_until(bt) if callable(cover_until) else cover_until
+
     # Try runs newest-first
     for base_time in sorted(runs, reverse=True):
         run_files = runs[base_time]
         max_step = max(f.step_hours for f in run_files)
         horizon = base_time + timedelta(hours=max_step)
-        if horizon >= cover_until:
+        target = _target(base_time)
+        if target is not None and horizon >= target:
             logger.info(
                 "ECMWF run selection: %s %s (observed horizon %dh covers flight end)",
                 base_time.isoformat(), run_files[0].stream, max_step,
@@ -401,9 +410,10 @@ def find_best_ecmwf_run(
 
     best_bt = max(runs, key=lambda bt: (_horizon(bt), bt))
     best_max_step = max(f.step_hours for f in runs[best_bt])
+    best_target = _target(best_bt)
     logger.info(
         "ECMWF: no run covers flight end %s, falling back to %s (observed horizon %dh, reaches %s)",
-        cover_until.isoformat(), best_bt.isoformat(), best_max_step,
+        best_target.isoformat() if best_target else None, best_bt.isoformat(), best_max_step,
         _horizon(best_bt).isoformat(),
     )
     return runs[best_bt]

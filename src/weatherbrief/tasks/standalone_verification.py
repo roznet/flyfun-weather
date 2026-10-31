@@ -1958,44 +1958,68 @@ def select_grib_snapshot_init(
     return None
 
 
-def _snapshot_init_time(model: str, om_init_time: datetime, days: int) -> datetime:
-    """The run a GFS/ICON map cycle (and the node's prefetch) reads.
+def _open_meteo_init(model: str) -> datetime | None:
+    """Open-Meteo's current init for *model* (its ``meta.json``), or None.
+
+    Only for a map or alternates pass that will actually read Open-Meteo: a
+    model off GRIB snapshots (``WB_GRIB_SNAPSHOTS``), or the fallback when its
+    GRIB source has no usable run (#957). The GRIB legs never ask.
+    """
+    from weatherbrief.fetch.model_status import fetch_model_metadata
+
+    meta = fetch_model_metadata([model]).get(model)
+    if meta is None:
+        logger.warning("No Open-Meteo metadata for model %s", model)
+        return None
+    return datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
+
+
+def _snapshot_init_time(
+    model: str,
+    days: int,
+    session: requests.Session | None = None,
+) -> datetime | None:
+    """The run a GFS/ICON map cycle (and alternates) reads.
 
     For a model on GRIB-primary snapshots, the newest run on its GRIB source
     (:func:`select_grib_snapshot_init`); Open-Meteo's init only when none
     qualifies. Other models, and the kill switch ``WB_GRIB_SNAPSHOTS=0``, keep
-    Open-Meteo's init.
+    Open-Meteo's init. None when neither source answers: the caller skips the
+    model.
     """
     from weatherbrief.fetch.grib.primary import grib_snapshot_models
 
     if model not in grib_snapshot_models():
-        return om_init_time
-    grib_init = select_grib_snapshot_init(model, days)
+        return _open_meteo_init(model)
+    grib_init = select_grib_snapshot_init(model, days, session=session)
     if grib_init is None:
+        om_init = _open_meteo_init(model)
         logger.warning(
             "GRIB run selection %s: no run published through the map horizon, "
-            "using Open-Meteo's init %s", model, om_init_time,
+            "using Open-Meteo's init %s", model, om_init,
         )
-        return om_init_time
-    if grib_init != om_init_time:
-        logger.info(
-            "GRIB run selection %s: %s (Open-Meteo at %s)",
-            model, grib_init, om_init_time,
-        )
+        return om_init
+    logger.info("GRIB run selection %s: %s", model, grib_init)
     return grib_init
 
 
-def _select_ecmwf_grib_run(om_init_time: datetime, days: int):
-    """Pick the freshest ready ECMWF GRIB run that is not older than Open-Meteo's.
+def _select_ecmwf_grib_run(days: int):
+    """The ECMWF run on local disk a map cycle (or alternates) reads.
 
-    Returns the file list for the chosen run, or None if no GRIB run is
-    available locally with init >= ``om_init_time``. The caller falls back
-    to Open-Meteo when None is returned.
+    The newest ready run whose observed horizon reaches the last valid time
+    the map plans for that run (``_planned_valid_times``), the rule briefings
+    use (:func:`find_best_ecmwf_run`); when no ready run reaches it, the one
+    reaching furthest. Open-Meteo's init plays no part (#957): before, a ready
+    run older than Open-Meteo's was refused, so a lagging or unreachable
+    ``meta.json`` cost the map its ECMWF rows.
+
+    Returns the chosen run's files, or None when no ready run is on disk; the
+    caller then falls back to Open-Meteo.
     """
     from weatherbrief.fetch.grib.ecmwf_fetch import (
-        filter_ready_runs,
-        scan_ecmwf_files,
         ecmwf_grib_dir,
+        find_best_ecmwf_run,
+        scan_ecmwf_files,
     )
 
     grib_dir = ecmwf_grib_dir()
@@ -2003,20 +2027,40 @@ def _select_ecmwf_grib_run(om_init_time: datetime, days: int):
     if not all_files:
         return None
 
-    ready_files = filter_ready_runs(all_files, grib_dir)
-    if not ready_files:
-        return None
+    def _last_planned(base_time: datetime) -> datetime | None:
+        planned = _planned_valid_times(base_time, days, None)
+        return planned[-1] if planned else None
 
-    runs: dict[datetime, list] = {}
-    for f in ready_files:
-        runs.setdefault(f.base_time, []).append(f)
+    run_files = find_best_ecmwf_run(all_files, _last_planned, data_dir=grib_dir)
+    return run_files or None
 
-    # Newest ready run wins, provided it isn't older than Open-Meteo's view.
-    best_bt = max(runs)
-    if best_bt < om_init_time:
-        return None
 
-    return runs[best_bt]
+def resolve_snapshot_run(
+    model: str,
+    days: int,
+    session: requests.Session | None = None,
+) -> tuple[datetime | None, list | None]:
+    """The run a map cycle or alternates pass reads for *model*, chosen from GRIB.
+
+    ECMWF: the local GRIB run (:func:`_select_ecmwf_grib_run`), returned with
+    its files. GFS/ICON: :func:`_snapshot_init_time`. Open-Meteo's ``meta.json``
+    is asked only when the GRIB choice finds nothing, or for a model off GRIB
+    snapshots (#957).
+
+    Returns ``(init_time, ecmwf_run_files)``; the files are None except for an
+    ECMWF run on disk. ``init_time`` None means no source answered and the
+    caller skips the model.
+    """
+    if model == "ecmwf":
+        run_files = _select_ecmwf_grib_run(days)
+        if run_files is not None:
+            init_time = run_files[0].base_time
+            if init_time.tzinfo is None:
+                init_time = init_time.replace(tzinfo=timezone.utc)
+            return init_time, run_files
+        logger.info("ECMWF: no ready GRIB run on disk, using Open-Meteo")
+        return _open_meteo_init(model), None
+    return _snapshot_init_time(model, days, session=session), None
 
 
 def fetch_ecmwf_grib_snapshots(
@@ -2919,7 +2963,6 @@ def run_standalone_cycle(
 
     from flyfun_common.db import SessionLocal
     from weatherbrief.fetch.grib import DecodePriority
-    from weatherbrief.fetch.model_status import fetch_model_metadata
     from weatherbrief.fetch.open_meteo import open_meteo_meter
 
     if fetch_forecasts and score_observations:
@@ -2970,31 +3013,19 @@ def run_standalone_cycle(
             # time to bound memory — each model's snapshots are stored and
             # freed before the next fetch.
             models = STANDALONE_MODELS_BY_REGION.get(region, STANDALONE_MODELS)
-            metadata = fetch_model_metadata(models)
             for model in models:
-                meta = metadata.get(model)
-                if meta is None:
-                    logger.warning("No metadata for model %s, skipping", model)
-                    continue
-
-                om_init_time = datetime.fromtimestamp(meta.last_init_time, tz=timezone.utc)
-
-                # ECMWF: prefer direct GRIB delivery when its init is at least as
-                # fresh as Open-Meteo's. Open-Meteo republishes ECMWF IFS-HRES
-                # with a 7–9h lag, so the 07/19Z fetch consistently saw the
-                # prior 18Z bc-run; direct GRIB lands ~6h after init.
+                # The run comes from the model's GRIB source: ECMWF's ready run
+                # on disk, GFS/ICON the newest published through the map
+                # horizon. Open-Meteo's meta.json is asked only when GRIB has
+                # no run, or for a model off GRIB snapshots (#957), so its lag
+                # or an outage no longer costs the map rows GRIB can build.
                 map_days = MAP_FORECAST_DAYS.get(model, 4)
-
-                grib_run_files = None
-                if model == "ecmwf":
-                    grib_run_files = _select_ecmwf_grib_run(om_init_time, map_days)
-
-                if grib_run_files is not None:
-                    init_time = grib_run_files[0].base_time
-                    if init_time.tzinfo is None:
-                        init_time = init_time.replace(tzinfo=timezone.utc)
-                else:
-                    init_time = _snapshot_init_time(model, om_init_time, map_days)
+                init_time, grib_run_files = resolve_snapshot_run(
+                    model, map_days, session=session,
+                )
+                if init_time is None:
+                    logger.warning("No run found for model %s, skipping", model)
+                    continue
 
                 existing = db.execute(
                     select(AirportForecastSnapshotRow.id)

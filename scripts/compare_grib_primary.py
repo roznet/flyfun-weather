@@ -78,7 +78,7 @@ def _run(flight_id: str, user_id: str, force_live: bool, switch: str, label: str
     try:
         flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
         db_path = os.environ.get("AIRPORTS_DB", "") or str(ROOT / "data" / "nav.db")
-        route, _ts, _pack, options, _meta, _as_of = _prepare_refresh(
+        route, _ts, _pack, options, _as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db, is_privileged=True,
         )
     finally:

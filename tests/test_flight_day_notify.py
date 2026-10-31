@@ -221,7 +221,7 @@ def test_auto_refresh_one_notify_flag(
         departure_time=datetime.now(timezone.utc) + timedelta(hours=2),
     )
     mock_prepare.return_value = (
-        MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+        MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), None,
     )
     ran = scheduler_mod._auto_refresh_one(
         _row(), SimpleNamespace(db_path="/x"), "u1", notify=notify,

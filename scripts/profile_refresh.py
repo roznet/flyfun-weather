@@ -116,7 +116,7 @@ def main() -> int:
         db_path = os.environ.get("AIRPORTS_DB", "") or str(ROOT / "data" / "nav.db")
 
         # Mirror _prepare_refresh, but route the pack into profiles/_packs/...
-        route, fetch_ts, pack_path, options, _meta = _prepare_refresh(
+        route, fetch_ts, pack_path, options, _as_of = _prepare_refresh(
             flight, db_path, args.user_id, args.flight_id, db=db,
             is_privileged=True,
         )

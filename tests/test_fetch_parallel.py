@@ -20,6 +20,13 @@ from weatherbrief.models import (
 from weatherbrief.tasks import fetch as fetch_module
 
 
+@pytest.fixture(autouse=True)
+def _no_open_meteo_meta(monkeypatch):
+    """These tests count dispatch threads and sleeps of the Open-Meteo fetch;
+    the meta.json read for the slots' inits (#957) is not what they measure."""
+    monkeypatch.setattr(fetch_module, "_open_meteo_inits", lambda models: {})
+
+
 @pytest.fixture
 def paid_api_key(monkeypatch):
     """Force the paid (parallel) path by setting OPENMETEO_API_KEY."""

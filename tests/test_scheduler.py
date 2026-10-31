@@ -567,7 +567,7 @@ class TestAutoRefreshGate:
             mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,
         )
         mock_prepare.return_value = (
-            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), None,
         )
         mock_exec.return_value = MagicMock()
 
@@ -615,7 +615,7 @@ class TestAutoRefreshGate:
             mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=0,
         )
         mock_prepare.return_value = (
-            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), None,
         )
         mock_exec.return_value = MagicMock()
 
@@ -661,7 +661,7 @@ class TestAutoRefreshGate:
             n_updated=0, days_out=2,
         )
         mock_prepare.return_value = (
-            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), None,
         )
         mock_exec.return_value = MagicMock()
 
@@ -769,7 +769,7 @@ class TestAutoRefreshGate:
             mode="full", reason="all updated", needed=3, n_eligible=3, n_updated=3, days_out=2,
         )
         mock_prepare.return_value = (
-            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), {}, None,
+            MagicMock(), datetime.now(timezone.utc), "/tmp/pack", MagicMock(), None,
         )
         mock_exec.return_value = MagicMock()
 

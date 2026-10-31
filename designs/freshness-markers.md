@@ -47,7 +47,16 @@ Horizon-awareness matters for ICON-EU: a new 15Z intermediate run (78h) won't re
 
 **A pack-model slot can be served by a substitute source.** `hrrr:noaa` serves the `gfs` slot when the whole route fits CONUS and the window is inside the run's horizon; `icon_d2:dwd` serves the `icon` slot on short central-European routes (#456/#457). So `pack.model_sources["gfs"]` may read `"hrrr:noaa"` — the marker is then keyed `("hrrr:noaa", "hrrr")` via `model_for_source`, and the pack init comes from `grib_init_times["gfs"]`. Freshness therefore compares the *substitute's* schedule/horizon against the slot's recorded run, which is what you want: a new HRRR extended cycle should invalidate an HRRR-enriched pack, not a GFS one.
 
-**From-scratch packs.** A pack built when every model was out of horizon (pending-coverage future flights) records no model data at all, so `_backfill_sources` returns `{}` and there is nothing to gate against. `_build_data_status` then falls back to `_SCRATCH_CANDIDATES` — the longest-horizon source per model (`gfs:noaa` 16d, `ecmwf:openmeteo` 10d, `icon:openmeteo` 7d) — and marks a model `stale` as soon as a *covering* run exists, so the gate runs a full from-scratch refresh once the flight comes into range while still returning `none` (nothing eligible) before that.
+**From-scratch packs.** A pack built when every model was out of horizon (pending-coverage future flights) records no model data at all, so `_backfill_sources` returns `{}` and there is nothing to gate against. `_build_data_status` then falls back to `_SCRATCH_CANDIDATES` — the GRIB source each slot is built from (`gfs:noaa` 16d, `ecmwf:direct` 168 h, `icon_eu:dwd` 120 h; #957, previously the Open-Meteo markers `ecmwf:openmeteo` 10d / `icon:openmeteo` 7d). ECMWF direct stops at 168 h, so a far-out flight becomes eligible from GFS first and from ECMWF at ~D-7 — and marks a model `stale` as soon as a *covering* run exists, so the gate runs a full from-scratch refresh once the flight comes into range while still returning `none` (nothing eligible) before that.
+
+## Open-Meteo markers only for Open-Meteo slots (#957)
+
+Since the briefing, map and alternates slots come from GRIB, Open-Meteo's `meta.json` and its `*:openmeteo` markers decide nothing about a GRIB run:
+
+- **Map cycle wait** (`scheduler._forecast_fetch_freshness_sources`): waits on `gfs:noaa`, `icon_eu:dwd` and `ecmwf:direct`, the sources the cycle's runs are chosen from; `gfs:openmeteo` / `icon:openmeteo` only for a model off `WB_GRIB_SNAPSHOTS`.
+- **From-scratch packs**: `_SCRATCH_CANDIDATES` above.
+- **Briefing horizon skip** (`tasks/fetch.py`): Open-Meteo's `data_end` no longer drops a slot the GRIB-primary gate passes; that gate checks the GRIB run's horizon.
+- **Pack init record**: `meta.json` is read only for the slots Open-Meteo served, inside the fetch (see [fetch.md](./fetch.md)); a GRIB-only slot records its GRIB run in `model_init_times` and gets no Open-Meteo base row in the popover.
 
 ## Usage Examples
 
@@ -239,7 +248,7 @@ When tuning registry offsets:
 
 - Issue #108 (design + acceptance criteria); issue #167 (tiered refresh gate); issue #192 (model-update-aware auto-refresh email timing — `scheduler._defer_regular_for_model_update` consumes the store + `registry.next_full_horizon_run`/`max_horizon`)
 - Existing helpers wrapped: `fetch/model_status.py`, `fetch/grib/{grib_fetch,icon_eu_fetch,ecmwf_watcher}.py`
-- Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_SCRATCH_CANDIDATES`/`_DIRECT_SOURCE_KEYS`, `_pack_init_for_source`, `_finalize_refresh` (records `model_sources` from `result.grib_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
+- Pack-side: `api/packs.py:_build_data_status`, `_backfill_sources`, `_SCRATCH_CANDIDATES`/`_DIRECT_SOURCE_KEYS`, `_pack_init_for_source`, `_no_open_meteo_part`, `_finalize_refresh` (records `model_sources` from `result.grib_sources`), `_provider_label` (reads `registry.SOURCE_REGISTRY.provider_label`)
 - Tiered gate: `api/packs.py:decide_refresh` + `_refresh_threshold`/`_days_out_now`/`RefreshDecision`, `ModelStatus.covers_horizon`; wired into `refresh_briefing`, `refresh_briefing_stream`, `scheduler._auto_refresh_one`; realtime seam `tasks/route_weather.run_realtime_refresh` (see [metar-taf-route-weather.md](metar-taf-route-weather.md))
 - Parameter-change override (#552): `api/packs.py:apply_params_change_override`, `storage/flights.py:compute_flight_params_hash`, `BriefingPackMeta.flight_params_hash`, migration `088`
 - Single entry point (#558): `api/packs.py:gated_data_status` — the only thing production code should call; guard test `tests/test_refresh_gate_boundary.py`

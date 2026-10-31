@@ -119,7 +119,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"])
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", "test-user", "test-flight",
         )
 
@@ -137,7 +137,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"])
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", dev_user, "test-flight", db=db_session,
         )
 
@@ -154,7 +154,7 @@ class TestPrepareRefresh:
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
         flight = self._make_flight(["EGTK", "LSGS"], departure_offset_days=-3)
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, "/fake/db", "test-user", "test-flight",
         )
 
@@ -451,25 +451,48 @@ class TestBuildDataStatusFromScratch:
     def _status(self, days_out):
         from weatherbrief.api.packs import _build_data_status
 
-        init = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        # A 00z run: ECMWF direct and ICON-EU main runs reach their full
+        # horizon (168 h / 120 h) from it, whatever the hour the test runs.
+        init = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
         store = self._store(init)
         with patch(
             "weatherbrief.fetch.freshness.markers.get_store", return_value=store
         ):
             return _build_data_status(self._empty_pack(), self._flight(days_out))
 
+    def test_candidates_are_the_grib_sources(self):
+        """#957: a from-scratch pack waits on the sources the slots are built
+        from, not Open-Meteo's markers."""
+        from weatherbrief.api.packs import _SCRATCH_CANDIDATES
+
+        assert _SCRATCH_CANDIDATES == {
+            "gfs": "gfs:noaa", "ecmwf": "ecmwf:direct", "icon": "icon_eu:dwd",
+        }
+        assert not any(s.endswith(":openmeteo") for s in _SCRATCH_CANDIDATES.values())
+
     def test_in_horizon_empty_pack_is_actionable_full(self):
-        """D-8: GFS (16d) + ECMWF-OM (10d) cover -> covering models marked
-        stale -> the gate runs a full from-scratch refresh."""
+        """D-5: GFS (16 d) + ECMWF direct (168 h) cover -> covering models
+        marked stale -> the gate runs a full from-scratch refresh."""
         from weatherbrief.api.packs import decide_refresh
 
-        status = self._status(days_out=8)
-        # gfs + ecmwf cover at D-8; icon (7d) does not.
+        status = self._status(days_out=5)
+        # gfs + ecmwf cover at D-5; icon (ICON-EU, 120 h) does not.
         eligible = {m for m, ms in status.models.items() if ms.covers_horizon}
         assert eligible == {"gfs", "ecmwf"}
         assert not status.fresh  # covering-but-unfetched models are actionable
         assert set(status.stale_models) == {"gfs", "ecmwf"}
-        assert decide_refresh(status, 8).mode == "full"
+        assert decide_refresh(status, 5).mode == "full"
+
+    def test_far_out_empty_pack_is_eligible_from_gfs_first(self):
+        """D-8: only GFS reaches it. ECMWF direct stops at 168 h, short of
+        Open-Meteo's 10 d that this used to watch (#957), so ECMWF joins at
+        ~D-7."""
+        status = self._status(days_out=8)
+        eligible = {m for m, ms in status.models.items() if ms.covers_horizon}
+        assert eligible == {"gfs"}
+        assert status.stale_models == ["gfs"]
 
     def test_out_of_horizon_empty_pack_stays_none(self):
         """D-20: no candidate covers -> nothing eligible -> no wasteful refresh

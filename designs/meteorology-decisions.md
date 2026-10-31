@@ -7340,7 +7340,7 @@ GFS that evening).
   when Open-Meteo lags, those rows are its older run under the newer label.
   Accepted: ~2 % of ICON rows, and §66 already treats them as the fringe.
 - **Not changed:** ECMWF (`_select_ecmwf_grib_run`, local GRIB but still
-  required to be no older than Open-Meteo's init), the briefing run finders
+  required to be no older than Open-Meteo's init; lifted by §76), the briefing run finders
   (their f000-only GFS check stays: a briefing window rarely reaches f144).
 
 **To measure:** the 19Z artifact's GFS `model_init_time` is 12z; the node's
@@ -7680,3 +7680,43 @@ against 29 from OPERA alone; LICT and LICG stay dark. OPERA's prod licence
 string is CC BY 4.0, so the BY-SA combination holds. DPC GeoTIFFs are
 ~0.5 MB, not the 1-7 MB estimated. The seam check (Adriatic, Corsica) waits
 for a rainy day: Italy was dry.
+
+## 76. Open-Meteo no longer picks or vetoes a GRIB run (#957)
+
+**Date:** 2026-10-31. **Part of** #910; finishes what §70 began. Mechanics:
+`freshness-markers.md` "Open-Meteo markers only for Open-Meteo slots", code
+`resolve_snapshot_run` / `_select_ecmwf_grib_run` in
+`tasks/standalone_verification.py`, `tasks/fetch.py`.
+
+No value or threshold changes. What changes is which run a GRIB-built row
+reads, and whether Open-Meteo's `meta.json` can stop it being built.
+
+**Decisions.**
+
+- **Map ECMWF: the newest ready run on disk whose observed horizon reaches
+  the map's last planned valid time**, the briefings' rule
+  (`find_best_ecmwf_run`), with the target counted per run
+  (`_planned_valid_times`). When no ready run reaches it, the one reaching
+  furthest. Open-Meteo is read only when no ready run exists. Before, a ready
+  run older than Open-Meteo's init was refused, and a model missing from
+  `meta.json` was skipped outright. Consequence for the 6-day map: a 06z run
+  (144 h) stops 12 h short of day 6's last hour, so it is never chosen while
+  the 00z run is on disk; the 18z run (144 h) reaches it exactly. If the 12z
+  run is late for the 19:15Z cycle the map keeps 00z (already stored, so no
+  new ECMWF rows) instead of taking 06z with a short last day.
+- **Alternates use the map's choice** for all three models (they read
+  Open-Meteo's init for GFS/ICON before, though the rows came from GRIB).
+- **Map GFS/ICON: §70 unchanged**, but `meta.json` is now asked only for the
+  fallback, not first.
+- **Briefings:** a slot the GRIB-primary gate passes is no longer skipped on
+  Open-Meteo's `data_end`; the gate has checked the GRIB run's horizon. A
+  per-point Open-Meteo fallback past that `data_end` can still come back
+  short, as any fallback can.
+- **Pack init record:** `model_init_times` holds Open-Meteo's init only for a
+  slot Open-Meteo served (up front, or for some points as a fallback), read
+  in the fetch alongside that request; otherwise the slot's GRIB run. So
+  verification scoring reads the run the values came from.
+
+**To measure:** with Open-Meteo's `meta.json` unreachable, the 07/19Z map
+still stores ECMWF, GFS and ICON rows, and the cycle log shows no
+`No metadata for model` line.
