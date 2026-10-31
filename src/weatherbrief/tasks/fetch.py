@@ -42,6 +42,8 @@ from weatherbrief.models import (
 # safely. Free tier therefore keeps the sequential path with a small delay
 # between models; paid tier dispatches to a thread pool.
 _INTER_MODEL_DELAY_FREE = 1.0  # seconds between models on free tier
+# Cap on waiting for the side thread reading Open-Meteo's meta.json (#957).
+_META_JOIN_TIMEOUT_S = 60
 _BRIEFING_FETCH_CONCURRENCY = int(os.environ.get("BRIEFING_FETCH_CONCURRENCY", "4"))
 
 logger = logging.getLogger(__name__)
@@ -809,7 +811,13 @@ def run_fetch(
 
     # --- Open-Meteo inits of the slots it served (#957) ---
     if meta_thread is not None:
-        meta_thread.join()
+        # fetch_model_metadata is bounded (3 tries x 5 s + 15 s backoff);
+        # the cap only guards against a hang beyond that. A late answer is
+        # then simply not recorded.
+        meta_thread.join(timeout=_META_JOIN_TIMEOUT_S)
+        if meta_thread.is_alive():
+            logger.warning("Open-Meteo metadata still pending after %ds, not recorded",
+                           _META_JOIN_TIMEOUT_S)
     open_meteo_init_times: dict[str, int] = dict(meta_result)
     if not historical_mode:
         fell_back = [

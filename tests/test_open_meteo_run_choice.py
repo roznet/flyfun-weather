@@ -143,6 +143,35 @@ class TestSelectEcmwfGribRun:
         monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
         assert sv._select_ecmwf_grib_run(6) is None
 
+    def test_old_run_is_used_but_logged(self, tmp_path, monkeypatch, caplog):
+        """No Open-Meteo floor: a stuck ECMWF sync must at least be loud."""
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
+        _write_run(tmp_path, self.DAY, 168)  # DAY is in the past
+        with caplog.at_level("WARNING"):
+            assert sv._select_ecmwf_grib_run(6) is not None
+        assert "ECMWF sync stuck?" in caplog.text
+
+    def test_fresh_run_is_not_logged(self, tmp_path, monkeypatch, caplog):
+        from weatherbrief.tasks import standalone_verification as sv
+
+        monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
+        fresh = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        fresh = fresh.replace(hour=fresh.hour - fresh.hour % 6) - timedelta(hours=6)
+        _write_run(tmp_path, fresh, 168)
+        with caplog.at_level("WARNING"):
+            assert sv._select_ecmwf_grib_run(6) is not None
+        assert "ECMWF sync stuck?" not in caplog.text
+
+
+def test_open_meteo_init_failure_skips_only_that_model():
+    """A raising meta.json read returns None (the cycle skips one model)."""
+    from weatherbrief.tasks import standalone_verification as sv
+
+    with patch(META, side_effect=RuntimeError("down")):
+        assert sv._open_meteo_init("gfs") is None
+
 
 class TestResolveSnapshotRun:
     GRIB_INIT = datetime(2026, 10, 30, 12, tzinfo=UTC)

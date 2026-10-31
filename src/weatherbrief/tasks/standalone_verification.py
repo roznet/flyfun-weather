@@ -1967,7 +1967,12 @@ def _open_meteo_init(model: str) -> datetime | None:
     """
     from weatherbrief.fetch.model_status import fetch_model_metadata
 
-    meta = fetch_model_metadata([model]).get(model)
+    try:
+        meta = fetch_model_metadata([model]).get(model)
+    except Exception:
+        # One model's fallback must not abort the cycle's other models.
+        logger.warning("Open-Meteo metadata for %s failed", model, exc_info=True)
+        return None
     if meta is None:
         logger.warning("No Open-Meteo metadata for model %s", model)
         return None
@@ -2003,6 +2008,11 @@ def _snapshot_init_time(
     return grib_init
 
 
+# A map ECMWF run older than this is logged as a warning: the 00/06/12/18z
+# runs land ~7 h after init, so the newest usable one is normally < 14 h old.
+_ECMWF_STALE_RUN_AGE = timedelta(hours=24)
+
+
 def _select_ecmwf_grib_run(days: int):
     """The ECMWF run on local disk a map cycle (or alternates) reads.
 
@@ -2032,7 +2042,20 @@ def _select_ecmwf_grib_run(days: int):
         return planned[-1] if planned else None
 
     run_files = find_best_ecmwf_run(all_files, _last_planned, data_dir=grib_dir)
-    return run_files or None
+    if not run_files:
+        return None
+    base_time = run_files[0].base_time
+    if base_time.tzinfo is None:
+        base_time = base_time.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - base_time
+    if age > _ECMWF_STALE_RUN_AGE:
+        # With no Open-Meteo floor any more, a stuck ECMWF sync would leave
+        # the map on an old run silently: make it loud.
+        logger.warning(
+            "ECMWF run selection: newest usable run on disk is %s, %.0f h old "
+            "(ECMWF sync stuck?)", base_time.isoformat(), age.total_seconds() / 3600,
+        )
+    return run_files
 
 
 def resolve_snapshot_run(

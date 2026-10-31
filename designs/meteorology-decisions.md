@@ -7704,7 +7704,8 @@ reads, and whether Open-Meteo's `meta.json` can stop it being built.
   the 00z run is on disk; the 18z run (144 h) reaches it exactly. If the 12z
   run is late for the 19:15Z cycle the map keeps 00z (already stored, so no
   new ECMWF rows) instead of taking 06z with a short last day.
-- **Alternates use the map's choice** for all three models (they read
+- **Alternates use the map's rule** for all three models, over their own
+  4-day window, so their run can be newer than the map's (they read
   Open-Meteo's init for GFS/ICON before, though the rows came from GRIB).
 - **Map GFS/ICON: §70 unchanged**, but `meta.json` is now asked only for the
   fallback, not first.

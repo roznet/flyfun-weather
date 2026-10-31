@@ -137,9 +137,11 @@ Per-model split reuses `tasks/standalone_verification.py`:
 GFS and ICON pass `only_valid_time=eta`, so their GRIB is fetched for the ETA
 hour alone, not that hour on every day of the horizon.
 
-The run is the map's choice, `resolve_snapshot_run` (#957): ECMWF's newest
-ready run on disk reaching the planned horizon, GFS/ICON the newest published
-on NOAA/DWD (`select_grib_snapshot_init`). Open-Meteo's `meta.json` is asked
+The run follows the map's rule, `resolve_snapshot_run` (#957), applied to
+alternates' own 4-day window (`MODEL_FORECAST_DAYS`, not the map's 6 days for
+GFS/ECMWF), so it can be newer than the map's run: ECMWF's newest ready run on
+disk reaching that horizon, GFS/ICON the newest published on NOAA/DWD
+(`select_grib_snapshot_init`). Open-Meteo's `meta.json` is asked
 only when that finds no run (or a model is off `WB_GRIB_SNAPSHOTS`); before,
 a model missing from it was dropped from alternates altogether.
 
