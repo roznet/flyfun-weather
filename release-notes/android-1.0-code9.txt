@@ -1,0 +1,4 @@
+- Skew-T: on a phone the diagram keeps its proper shape, centred on the sounding, and you can hide the side panel to give it the full width.
+- Skew-T now loads reliably when you open the tab before the data arrives.
+- Dewpoint is shown beside temperature on airport cards and the route graph.
+- Better data: Italian radar now fills the gap on the radar map, and the UK and French models come straight from the Met Office and Météo-France.
