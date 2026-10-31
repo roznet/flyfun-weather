@@ -38,7 +38,7 @@ screen a run didn't capture is left out and listed under `skipped` in the manife
 | # | screen | iOS / Android (the app) | web (`briefing.html`) |
 |---|---|---|---|
 | 01 | flights | the dev user's flight list | `index.html` viewport |
-| 02 | briefing | the briefing as opened (Advisory tab, summary) | viewport at the top |
+| 02 | briefing | the Advisory tab's summary (iOS switches off Observed, where flight day opens) | viewport at the top |
 | 03 | advisories | the Advisories pill of the Advisory tab | the advisories section |
 | 04 | discussion | Discussion tab | the Synopsis section |
 | 05 | cross-section | Cross-Section tab | viz section, X-Section layout |

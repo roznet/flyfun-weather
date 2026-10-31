@@ -52,8 +52,13 @@ final class FlightCaptureUITests: FlyfunUITestCase {
             return
         }
         // On flight day the briefing opens on the Observed tab; the summary and
-        // its Advisories pill are on the Advisory tab.
-        if app.buttons["Observed"].firstMatch.waitForExistence(timeout: Self.probeTimeout) {
+        // its Advisories pill are on the Advisory tab. Both the pill and the
+        // Observed tab wait on the snapshot, so poll them together — off flight
+        // day the pill answers as soon as it loads instead of a full probe
+        // spent waiting for an Observed tab that never comes.
+        let observedTab = app.buttons["Observed"].firstMatch
+        _ = firstToAppear([app.buttons["Advisories"].firstMatch, observedTab])
+        if observedTab.exists {
             switchToBriefingTab(app, "Advisory")
         }
         if want("briefing") { capture(app, "briefing") }
