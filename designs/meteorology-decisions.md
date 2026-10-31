@@ -7594,6 +7594,10 @@ the new packs against `meteofrance_arome_france`. Check the decode log for
   all large-scale or all convective, or both parts freeze alike; between
   the old value and all the liquid otherwise. Moves toward RAIN / MIXED only
   in mixed-phase windows with convective precipitation. Easy to flip.
+  `rain_mm` and `showers_mm` are now independent estimates, so with a
+  partial frozen share and a large `cp`, rain + showers + snow need not
+  add up to `tp`: read the digest's "Rain x mm" as large-scale rain, not
+  as tp minus the rest.
 - **ICON showers keep convective snow.** §61 said rain_con + snow_con is
   Open-Meteo's definition; it is not (Open-Meteo ICON showers = rain_con, and
   above 1.5 °C T2m it moves all snow to rain). Open-Meteo's own ECMWF showers

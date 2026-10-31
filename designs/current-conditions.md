@@ -551,7 +551,7 @@ back in through the digest.
 | `EUMETSAT_CONSUMER_KEY` / `_SECRET` | Data Store OAuth credentials. |
 | `WB_OBSERVED_ARCHIVE_ENABLED` | Verification collection (#575): archive the watchlist samples on every METAR ingest tick. Needs `WB_OBSERVED_ENABLED` as well. |
 | `WB_CELLS_INGEST_ENABLED` | Cell overlay pushed by the home node (#656) — its own gate, independent of this one; see `cells-overlay.md`. |
-| `WB_OBSERVED_DPC` | Radar-DPC fill of OPERA's Italy gap (#923). Off by default. Gates the collector fetch **and** the read-time fill, so `=0` unfills every stored frame at once. |
+| `WB_OBSERVED_DPC` | Radar-DPC fill of OPERA's Italy gap (#923). Off by default. Gates the collector fetch **and** the read-time fill, so `=0` unfills every stored frame for the sampler and cells at once; map canvases (and tiles) already built from a filled frame keep the fill until it is purged. |
 | `WB_OBSERVED_DPC_DBZH_PRODUCT` | DPC product standing in for DBZH. Default `VMI`; e.g. `CAPPI2` (meteorology-decisions §75). |
 
 ### Italy gap fill (#923)
@@ -568,12 +568,21 @@ values written **only into OPERA `nodata` pixels** (meteorology-decisions §75).
   sidecar gets a `fill` block (product, DPC time, offset) and the Radar-DPC
   credit in its attribution text. Any failure logs and publishes the frame
   unfilled; nothing ever amends a published frame. Timeouts are 10 s per
-  call, so a dead API costs one tick at most ~30 s.
+  call; the newest product time is asked once per tick (`DpcTick`) and the
+  first outage-like failure skips DPC for the rest of the tick, so a dead
+  API costs a tick at most ~30 s whatever the backlog. A failed backlog slot
+  (older than the newest DPC by more than the window) logs at info and does
+  not trip it. An unreadable stored fill warns once per file version. A
+  failed (or tripped) fill leaves `fill_error` in the sidecar instead of a
+  `fill` block, so an outage reads apart from "flag off" / "no slot".
 - **Filled at read time.** `opera.read_window` and `opera.iter_row_blocks`
   call `dpc.load_fill(path)` + `dpc.fill_block`, so the `.h5` is never
   rewritten and every consumer (sampler, tiles, cells, verification archive)
   sees the same merged field. A window that touched filled pixels carries
-  `aux["dpc_filled"]` and the credit in its attribution.
+  `aux["dpc_filled"]` and the credit in its attribution. The OPERA quality
+  layer is **not** filled: filled pixels read as quality-missing. That is
+  harmless because the quality index is clutter *evidence* only, weighted at
+  zero (meteorology-decisions §42), and nothing gates or paints on it.
 - **Reprojection:** a nearest-neighbour index from OPERA pixels to DPC pixels,
   both grids static, built once per process per OPERA grid (`fill_index`,
   lru-cached): ~0.8 s and 7 MB held for the 1 km DBZH grid, ~0.2 s / 2 MB for

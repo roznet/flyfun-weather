@@ -211,6 +211,12 @@ CANVAS_SUFFIX = ".canvas.npz"
 #: into the frame's nodata pixels, stored beside it, purged and archived with it.
 DPC_SUFFIX = ".dpc.tif"
 
+
+def fill_path_for(payload_path: Path | str) -> Path:
+    """Where the Radar-DPC frame paired with a stored OPERA payload lives (#923)."""
+    payload_path = Path(payload_path)
+    return payload_path.with_name(payload_path.stem + DPC_SUFFIX)
+
 #: Age past which a ``.tmp-*`` file in a source directory is a dead writer's.
 _TMP_GRACE = timedelta(minutes=15)
 
@@ -284,7 +290,7 @@ class FrameStore:
 
     def fill_path(self, source: str, valid_time: datetime) -> Path:
         """The frame's paired Radar-DPC fill (may not exist)."""
-        return self.source_dir(source) / f"{frame_stamp(valid_time)}{DPC_SUFFIX}"
+        return fill_path_for(self.payload_path(source, valid_time))
 
     def canvas_path(self, source: str, valid_time: datetime) -> Path:
         """The frame's derived map canvas (may not exist)."""

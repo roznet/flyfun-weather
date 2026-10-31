@@ -350,6 +350,7 @@ def test_dpc_down_publishes_the_opera_frame_unfilled(tmp_path, opera_bytes, dpc_
     assert frame is not None
     assert "fill" not in frame.meta
     assert not store.fill_path(SOURCE_OPERA_DBZH, VALID).exists()
+    assert "503" in frame.meta["fill_error"]
 
 
 def test_collector_leaves_dpc_alone_when_gated_off(tmp_path, opera_bytes, dpc_tiff, monkeypatch):
@@ -357,7 +358,7 @@ def test_collector_leaves_dpc_alone_when_gated_off(tmp_path, opera_bytes, dpc_ti
     monkeypatch.setattr("weatherbrief.observed.tiles.tiles_enabled", lambda: False)
     session = _Session(opera_bytes, dpc_tiff, dpc_latest=VALID)
     store = _collect(tmp_path, session)
-    assert store.latest(SOURCE_OPERA_DBZH) is not None
+    assert store.latest(SOURCE_OPERA_DBZH).meta.get("fill_error") is None
     assert session.posted == []
 
 
@@ -369,3 +370,76 @@ def test_purge_takes_the_fill_with_its_frame(tmp_path, frame_path):
     store.purge(SOURCE_OPERA_DBZH, now=VALID + SOURCE_SPECS[SOURCE_OPERA_DBZH].retention + timedelta(minutes=5))
     assert not fill.exists()
     assert not frame_path.exists()
+
+
+class _CountingSession:
+    """DPC API only: counts calls; ``fail`` makes every call a 503."""
+
+    def __init__(self, dpc_bytes, latest, *, fail=False, download_fail=False):
+        self.dpc_bytes = dpc_bytes
+        self.latest_ms = int(latest.timestamp() * 1000)
+        self.fail = fail
+        self.download_fail = download_fail
+        self.gets = 0
+        self.posts = 0
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.gets += 1
+        if self.fail:
+            return _Resp(status=503)
+        if "findLastProductByType" in url:
+            return _Resp(payload={"lastProducts": [{"time": self.latest_ms}]})
+        return _Resp(content=self.dpc_bytes)
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.posts += 1
+        if self.download_fail:
+            return _Resp(status=404)
+        return _Resp(payload={"url": "https://signed.example/x.tif"})
+
+
+def test_a_tick_asks_the_newest_product_once(tmp_path, dpc_tiff):
+    session = _CountingSession(dpc_tiff, VALID)
+    tick = dpc.DpcTick()
+    for k in range(3):
+        t = VALID - timedelta(minutes=5 * k)
+        assert dpc.collect_fill(tmp_path / f"f{k}.h5", "DBZH", t, 5.0, session, tick)
+    assert session.posts == 3
+    assert session.gets == 1 + 3  # one findLastProductByType, three S3 fetches
+
+
+def test_a_dead_api_trips_the_breaker_for_the_rest_of_the_tick(tmp_path, dpc_tiff, caplog):
+    session = _CountingSession(dpc_tiff, VALID, fail=True)
+    tick = dpc.DpcTick()
+    with caplog.at_level("WARNING", logger="weatherbrief.observed.dpc"):
+        for k in range(4):
+            assert dpc.collect_fill(tmp_path / f"f{k}.h5", "DBZH", VALID, 5.0, session, tick) is None
+    assert tick.down
+    assert session.gets == 1 and session.posts == 0
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+def test_a_failed_backlog_slot_is_info_and_does_not_trip(tmp_path, dpc_tiff, caplog):
+    session = _CountingSession(dpc_tiff, VALID, download_fail=True)
+    tick = dpc.DpcTick()
+    old = VALID - timedelta(hours=2)
+    with caplog.at_level("INFO", logger="weatherbrief.observed.dpc"):
+        assert dpc.collect_fill(tmp_path / "old.h5", "DBZH", old, 5.0, session, tick) is None
+    assert not tick.down
+    assert [r.levelname for r in caplog.records] == ["INFO"]
+
+
+def test_a_corrupt_fill_warns_once(frame_path, caplog):
+    dpc.fill_path(frame_path).write_bytes(b"not a tiff")
+    dpc._UNREADABLE_LOGGED.clear()
+    with caplog.at_level("WARNING", logger="weatherbrief.observed.dpc"):
+        for _ in range(3):
+            assert dpc.load_fill(frame_path) is None
+    assert len(caplog.records) == 1
+
+
+def test_store_and_module_agree_on_the_fill_path(tmp_path):
+    store = FrameStore(tmp_path)
+    assert store.fill_path(SOURCE_OPERA_DBZH, VALID) == dpc.fill_path(
+        store.payload_path(SOURCE_OPERA_DBZH, VALID)
+    )

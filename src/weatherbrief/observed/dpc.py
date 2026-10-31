@@ -46,7 +46,7 @@ from __future__ import annotations
 import io
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -55,7 +55,7 @@ import numpy as np
 
 from weatherbrief.models.observed import ObservedAttribution
 
-from .frames import DPC_SUFFIX, _atomic_write
+from .frames import _atomic_write, fill_path_for
 from .grid import GridSpec, GridWindow
 
 logger = logging.getLogger(__name__)
@@ -121,10 +121,8 @@ def product_for(quantity: str) -> str | None:
     return DEFAULT_PRODUCTS.get(quantity)
 
 
-def fill_path(opera_path: Path | str) -> Path:
-    """Where the DPC frame paired with an OPERA frame is stored."""
-    opera_path = Path(opera_path)
-    return opera_path.with_name(opera_path.stem + DPC_SUFFIX)
+#: Where the DPC frame paired with an OPERA frame is stored.
+fill_path = fill_path_for
 
 
 def attribution_text(base: str) -> str:
@@ -216,6 +214,11 @@ def decode_tiff(payload: bytes) -> DpcFrame:
     return DpcFrame(values=values, grid=grid)
 
 
+#: Unreadable fills already logged, so a corrupt file read by every sampler
+#: pass warns once rather than on every read (``lru_cache`` keeps no failures).
+_UNREADABLE_LOGGED: set[tuple[str, int, int]] = set()
+
+
 @lru_cache(maxsize=6)
 def _load_cached(path: str, mtime_ns: int, size: int) -> DpcFrame:
     return decode_tiff(Path(path).read_bytes())
@@ -235,9 +238,15 @@ def load_fill(opera_path: Path | str) -> DpcFrame | None:
         stat = path.stat()
     except OSError:
         return None
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if key in _UNREADABLE_LOGGED:
+        return None
     try:
-        return _load_cached(str(path), stat.st_mtime_ns, stat.st_size)
+        return _load_cached(*key)
     except Exception:
+        if len(_UNREADABLE_LOGGED) > 256:
+            _UNREADABLE_LOGGED.clear()
+        _UNREADABLE_LOGGED.add(key)
         logger.warning("Unreadable DPC fill %s", path, exc_info=True)
         return None
 
@@ -329,8 +338,9 @@ def fill_block(
     if not target.any():
         return 0
     dpc = fill.values.ravel()[sub_index[target]]
-    covered = np.isfinite(dpc) & ~np.isclose(dpc, DPC_NODATA)
-    empty = covered & np.isclose(dpc, DPC_UNDETECT)
+    # The markers are exact in float32: compare, don't tolerance-match.
+    covered = np.isfinite(dpc) & (dpc != DPC_NODATA)
+    empty = covered & (dpc == DPC_UNDETECT)
     if quantity.upper() == "RATE":
         # A zero rain rate is the radar having looked and found nothing.
         empty |= covered & (dpc <= 0.0)
@@ -412,12 +422,31 @@ def pick_slot(opera_time: datetime, latest: datetime, window: timedelta) -> date
     return candidate
 
 
+@dataclass
+class DpcTick:
+    """DPC state shared by the frames of one collector tick.
+
+    The newest product time is asked once per tick, not once per OPERA frame,
+    and the first failure that looks like an outage skips DPC for the rest of
+    the tick: three 10 s calls per frame against a dead API would otherwise
+    hold back every later OPERA frame (the cells loop's tight radar poll,
+    #666, shares this path).
+    """
+
+    latest: dict[str, datetime | None] = field(default_factory=dict)
+    down: bool = False
+    #: Why the last ``collect_fill`` call stored nothing because something
+    #: failed (``None`` when it filled, or when there was simply no slot).
+    last_error: str | None = None
+
+
 def collect_fill(
     opera_path: Path,
     quantity: str,
     opera_time: datetime,
     window_minutes: float,
     session,
+    tick: DpcTick | None = None,
 ) -> dict | None:
     """Fetch and store the DPC frame for one OPERA frame; sidecar metadata or ``None``.
 
@@ -428,12 +457,23 @@ def collect_fill(
     product = product_for(quantity)
     if product is None:
         return None
+    tick = tick if tick is not None else DpcTick()
+    tick.last_error = None
+    if tick.down:
+        tick.last_error = "skipped: Radar-DPC failed earlier in this tick"
+        return None
+    window = timedelta(minutes=max(window_minutes, 5.0))
+    latest = slot = None
     try:
-        latest = latest_product_time(product, session)
+        first_ask = product not in tick.latest
+        if first_ask:
+            tick.latest[product] = latest_product_time(product, session)
+        latest = tick.latest[product]
         if latest is None:
-            logger.warning("Radar-DPC %s: no product listed", product)
+            if first_ask:
+                logger.warning("Radar-DPC %s: no product listed", product)
             return None
-        slot = pick_slot(opera_time, latest, timedelta(minutes=max(window_minutes, 5.0)))
+        slot = pick_slot(opera_time, latest, window)
         if slot is None:
             logger.info(
                 "Radar-DPC %s: newest %s is outside OPERA %s's window",
@@ -443,7 +483,21 @@ def collect_fill(
         payload = download_product(product, slot, session)
         decode_tiff(payload)  # refuse a file we could not use before storing it
     except Exception as exc:
-        logger.warning("Radar-DPC %s fill for %s failed: %s", product, opera_time, exc)
+        if slot is not None and latest is not None and latest - slot > window:
+            # A backlog catch-up asks the API's history, which may simply not
+            # serve old slots: not an outage, so neither a warning nor a trip.
+            logger.info(
+                "Radar-DPC %s: backlog slot %s (OPERA %s) not fetched: %s",
+                product, slot.isoformat(), opera_time.isoformat(), exc,
+            )
+            tick.last_error = f"backlog slot not served: {exc}"[:200]
+        else:
+            tick.down = True
+            tick.last_error = f"{type(exc).__name__}: {exc}"[:200]
+            logger.warning(
+                "Radar-DPC %s fill for %s failed, skipping DPC for the rest of this tick: %s",
+                product, opera_time, exc,
+            )
         return None
     _atomic_write(fill_path(opera_path), payload)
     return {

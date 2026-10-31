@@ -22,8 +22,8 @@ Interpolation policy:
     LCDC/MCDC/HCDC past f0 (NCEP publishes an instantaneous twin too, which
     only the bulk ``cloud_cover_*`` fields use; the band geometry is
     averaged-only, so the layers keep cover and geometry from the same
-    window), so the value at native step f is centred on the midpoint of its averaging
-    window (1-6 h — see ``_gfs_window_length_hours``). This applies at
+    window), so the value at native step f is centred on the midpoint of
+    its averaging window (1-6 h — see ``_gfs_window_length_hours``). This applies at
     **every** hour, native steps included: a native step's own published
     value describes its window midpoint, not its label hour (#481). Layer
     geometry (base/top/temp) is held over from the higher-cover

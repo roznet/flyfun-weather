@@ -169,12 +169,13 @@ def collect_opera(
     warning for a caller that probes one not-yet-published slot on purpose
     (the cells loop's tight radar poll, #666).
     """
-    from . import opera
+    from . import dpc, opera
 
     spec = SOURCE_SPECS[source]
     now = now or datetime.now(timezone.utc)
     result = CollectResult(source=source)
     sess = session or requests.Session()
+    dpc_tick = dpc.DpcTick()
 
     for valid_time in expected_frame_times(source, now, lookback=lookback):
         if result.fetched >= max_fetch:
@@ -210,7 +211,7 @@ def collect_opera(
             result.errors.append(f"{valid_time:%H:%M} unreadable: {exc}")
             continue
         meta["url"] = url
-        _pair_dpc_fill(meta, path, spec, valid_time, sess)
+        _pair_dpc_fill(meta, path, spec, valid_time, sess, dpc_tick)
         store.write_sidecar(source, valid_time, meta)
         _build_map_canvas(store, source, valid_time)
         result.fetched += 1
@@ -238,19 +239,25 @@ def collect_opera(
     return result
 
 
-def _pair_dpc_fill(meta: dict, path, spec, valid_time: datetime, session) -> None:
+def _pair_dpc_fill(meta: dict, path, spec, valid_time: datetime, session, tick=None) -> None:
     """Store the Radar-DPC frame that fills this OPERA frame's Italy gap (#923).
 
     Before the sidecar, so a published frame's fill never changes afterwards
     (tile URLs are immutable).  Fails soft inside ``dpc.collect_fill``: the
-    OPERA frame is published either way.
+    OPERA frame is published either way; a failure leaves ``fill_error`` in
+    the sidecar instead of a ``fill`` block.
     """
     from . import dpc
 
     if not dpc.dpc_enabled():
         return
-    fill = dpc.collect_fill(path, spec.quantity, valid_time, spec.window_minutes, session)
+    tick = tick if tick is not None else dpc.DpcTick()
+    fill = dpc.collect_fill(path, spec.quantity, valid_time, spec.window_minutes, session, tick)
     if fill is None:
+        # A failure is marked so an outage reads apart from "flag off" or "no
+        # slot in the window"; the frame itself stays unfilled for good.
+        if tick.last_error:
+            meta["fill_error"] = tick.last_error
         return
     meta["fill"] = fill
     attribution = dict(meta.get("attribution") or {})
