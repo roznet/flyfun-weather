@@ -802,24 +802,26 @@ class TestEcmwfSurfaceFromSample:
 
 
 class TestSelectEcmwfGribRun:
-    """Unit tests for _select_ecmwf_grib_run (source-selection helper)."""
+    """Unit tests for _select_ecmwf_grib_run (source-selection helper).
+
+    Run choice against the map horizon is covered in
+    ``tests/test_open_meteo_run_choice.py``.
+    """
 
     def test_returns_none_when_no_files(self, tmp_path, monkeypatch):
-        from datetime import datetime, timezone
-
         monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
         from weatherbrief.tasks.standalone_verification import _select_ecmwf_grib_run
 
-        om_init = datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc)
-        assert _select_ecmwf_grib_run(om_init, days=4) is None
+        assert _select_ecmwf_grib_run(days=4) is None
 
-    def test_returns_none_when_grib_older_than_om(self, tmp_path, monkeypatch):
-        """If the freshest ready GRIB run is older than OM init, fall back."""
-        from datetime import datetime, timezone
+    def test_ready_run_is_used_whatever_its_age(self, tmp_path, monkeypatch):
+        """No Open-Meteo floor any more (#957): the only ready run on disk is
+        the map's run even when Open-Meteo would show a newer one."""
+        from datetime import datetime
 
         monkeypatch.setenv("ECMWF_GRIB_DIR", str(tmp_path))
 
-        # Create a sentinel-ready run dated 2026-04-24 12Z (older than OM = 25 00Z)
+        # A sentinel-ready run dated 2026-04-24 12Z.
         bt_str = "20260424T120000Z"
         run_dir = tmp_path
         for step in (0, 6, 12):
@@ -834,8 +836,10 @@ class TestSelectEcmwfGribRun:
 
         from weatherbrief.tasks.standalone_verification import _select_ecmwf_grib_run
 
-        om_init = datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc)
-        assert _select_ecmwf_grib_run(om_init, days=4) is None
+        files = _select_ecmwf_grib_run(days=4)
+        assert files is not None
+        assert {(f.base_time.day, f.base_time.hour) for f in files} == {(24, 12)}
+        assert isinstance(files[0].base_time, datetime)
 
 
 @slow_grib

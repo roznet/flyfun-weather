@@ -177,6 +177,9 @@ class BriefingResult:
     # model → freshness source key used for the direct-GRIB run (icon slot may
     # be icon_eu:dwd or icon_d2:dwd, #456). Consumed by pack building.
     grib_sources: dict[str, str] = field(default_factory=dict)
+    # model → Open-Meteo init for the slots Open-Meteo served (#957); pack
+    # building records these as the pack's Open-Meteo base.
+    open_meteo_init_times: dict[str, int] = field(default_factory=dict)
     models_fetched: list[str] = field(default_factory=list)
     models_skipped_region: list[str] = field(default_factory=list)
     # model → reason for requested models whose fetch failed (#835).
@@ -746,6 +749,7 @@ def _execute_briefing_stages(
     result.llm_digest_requested = options.generate_llm_digest
     result.grib_init_times = fetch_result.grib_init_times
     result.grib_sources = fetch_result.grib_sources
+    result.open_meteo_init_times = fetch_result.open_meteo_init_times
     result.models_fetched = fetch_result.models_fetched
     result.models_skipped_region = fetch_result.models_skipped_region
     result.models_failed = fetch_result.models_failed

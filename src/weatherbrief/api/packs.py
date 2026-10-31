@@ -53,7 +53,6 @@ from weatherbrief.api.flights import _load_flight_or_404, _load_owned_flight
 from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.digest.llm_digest import LongRangeDigest, ecmwf_grib_horizon_days
 from weatherbrief.fetch.freshness import registry as freshness_registry
-from weatherbrief.fetch.model_status import fetch_model_metadata
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
 from weatherbrief.storage.sounding_profiles import (
     build_sounding_sidecar,
@@ -819,13 +818,16 @@ _DIRECT_SOURCE_KEYS: dict[str, str] = {
 # it was first built (e.g. a flight set up weeks ahead).  Such a pack has no
 # recorded model set to gate against, so the refresh gate would otherwise be
 # permanently stuck at "no model covers" even after a model comes into range.
-# We use the longest-horizon source per model so coverage isn't under-reported
-# (gfs:noaa 16d, ecmwf:openmeteo 10d, icon:openmeteo 7d).  See
-# ``_build_data_status``' from-scratch branch.
+# Each model's candidate is the GRIB source its slot is built from (#957), not
+# Open-Meteo's, which only a fallback reads now: gfs:noaa (16 d), ecmwf:direct
+# (168 h at 00/12z), icon_eu:dwd (120 h at 00/12z).  ECMWF's direct horizon is
+# shorter than Open-Meteo's 10 d, so a far-out flight becomes eligible from
+# GFS first and from ECMWF only at ~7 d.  See ``_build_data_status``'
+# from-scratch branch.
 _SCRATCH_CANDIDATES: dict[str, str] = {
     "gfs": "gfs:noaa",
-    "ecmwf": "ecmwf:openmeteo",
-    "icon": "icon:openmeteo",
+    "ecmwf": "ecmwf:direct",
+    "icon": "icon_eu:dwd",
 }
 
 
@@ -850,16 +852,14 @@ def _pack_init_for_source(pack: BriefingPackMeta, model: str, source: str) -> in
 
 
 def _no_open_meteo_part(pack: BriefingPackMeta, model: str) -> bool:
-    """True when *model*'s slot in *pack* had no Open-Meteo base (#940).
+    """True when *model*'s slot in *pack* had no Open-Meteo base (#940, #957).
 
-    The meteofrance slot is AROME only: its ``model_init_times`` entry is the
-    AROME run, so there is no Open-Meteo "base" row to show. A pack from
-    before #940 (Open-Meteo slot, maybe AROME-patched) keeps its base row.
+    A slot built wholly from GRIB (AROME's meteofrance, UKV's ukmo, a
+    GRIB-primary ECMWF/ICON/GFS slot with no fallback point) records its GRIB
+    run as its ``model_init_times`` entry, so there is no Open-Meteo "base"
+    row to show. Open-Meteo's init on the same run as GRIB reads the same way:
+    the basis line collapses that case to the primary anyway.
     """
-    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
-
-    if model not in {m.value for m in NO_OPEN_METEO_MODELS}:
-        return False
     grib = pack.grib_init_times.get(model)
     return grib is not None and pack.model_init_times.get(model) == grib
 
@@ -1023,14 +1023,18 @@ def _build_data_status(pack: BriefingPackMeta, flight: Flight) -> DataStatus:
             state=state,
         ))
 
-        # When the primary is direct GRIB, OM also contributed (it's always
-        # fetched first — see fetch.py:244-247) and supplied the surface base
-        # layer.  Surface that as a "base" row so the popover honestly shows
-        # both contributing sources.
+        # When the primary is direct GRIB, Open-Meteo may also have
+        # contributed: the surface base of an Open-Meteo-first slot, or the
+        # fallback points of a GRIB-primary one.  Surface that as a "base" row
+        # so the popover honestly shows both sources, and only then (#957):
+        # a slot built wholly from GRIB has none (``_no_open_meteo_part``).
         if not source.endswith(":openmeteo"):
             om_source = f"{model}:openmeteo"
             om_pack_init = pack.model_init_times.get(model)
-            if _no_open_meteo_part(pack, model):
+            if (
+                _no_open_meteo_part(pack, model)
+                or om_source not in freshness_registry.SOURCE_REGISTRY
+            ):
                 om_pack_init = None
             if om_pack_init is not None:
                 om_resolved = _resolve_marker(om_source, model)
@@ -1764,14 +1768,11 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     if digest_guidance:
         options.guidance_key = digest_guidance
 
-    # Fetch current model metadata to record in the pack (skip for historical)
-    model_metadata = None if is_historical else fetch_model_metadata()
-
     # Return the *resolved* as_of_time (may have been set to the in-progress GRIB
     # pin above) so callers finalize the pack with the same value the pipeline
     # used — otherwise _build_pack_meta recomputes days_out from "today" and a
     # cross-midnight in-progress pack gets a negative/stale lead time.
-    return route, fetch_ts, pack_path, options, model_metadata, as_of_time
+    return route, fetch_ts, pack_path, options, as_of_time
 
 
 def _measure_pack_size(pack_path: Path) -> int:
@@ -1828,7 +1829,6 @@ def _build_pack_meta(
     pack_path: Path,
     result: "BriefingResult",
     *,
-    model_metadata: dict | None = None,
     as_of_time: datetime | None = None,
     provisional: bool = False,
 ) -> BriefingPackMeta:
@@ -1850,35 +1850,27 @@ def _build_pack_meta(
     else:
         days_out = (flight.departure_time.date() - datetime.now(timezone.utc).date()).days
 
-    # Only carry init times for models actually fetched. Open-Meteo metadata
-    # is queried for every known model up-front (used by the freshness check
-    # for staleness comparison), but the basis line should only show models
-    # that contributed data — otherwise a model skipped at fetch (e.g.
-    # range-skipped Météo-France) appears twice: once with its init time
-    # and once tagged "skipped".
-    init_times = {}
-    if model_metadata:
-        fetched = set(result.models_fetched)
-        init_times = {
-            m: meta.last_init_time
-            for m, meta in model_metadata.items()
-            if m in fetched
-        }
+    # model_init_times: the run each fetched slot carries (#957). A slot
+    # Open-Meteo served (up front, or as a GRIB-primary fallback for some
+    # points) records Open-Meteo's init, read by the fetch alongside that
+    # request; a slot built wholly from GRIB records its GRIB run, which is
+    # also how ``_no_open_meteo_part`` tells the freshness popover there is
+    # no Open-Meteo base to show. Only fetched slots: a skipped model must not
+    # appear once with an init and once tagged "skipped".
+    om_init_times = result.open_meteo_init_times or {}
+    init_times: dict[str, int] = {}
+    for m in result.models_fetched:
+        if m in om_init_times:
+            init_times[m] = om_init_times[m]
+        elif m in result.grib_init_times:
+            # Built from GRIB, or Open-Meteo's meta.json unreadable: the GRIB
+            # run is the best record of what the slot shows.
+            init_times[m] = result.grib_init_times[m]
 
     # model_sources records which freshness source produced each model's data.
     # Default = Open-Meteo for every fetched model; overridden to the matching
     # direct-GRIB source where GRIB enrichment succeeded.  Used by the
     # marker-based freshness check (issue #108).
-    # A slot with no Open-Meteo part (meteofrance = AROME, #940) carries its
-    # GRIB run, not the Open-Meteo meta's (which is ARPEGE's for meteofrance).
-    from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
-
-    for m in NO_OPEN_METEO_MODELS:
-        if m.value in result.grib_init_times and m.value in result.models_fetched:
-            init_times[m.value] = result.grib_init_times[m.value]
-        else:
-            init_times.pop(m.value, None)
-
     model_sources: dict[str, str] = {m: f"{m}:openmeteo" for m in init_times}
     grib_sources = result.grib_sources or {}
     for m in result.grib_init_times:
@@ -2096,7 +2088,6 @@ def _persist_pack_provisional(
     result: "BriefingResult",
     db: Session,
     *,
-    model_metadata: dict | None = None,
     as_of_time: datetime | None = None,
 ) -> BriefingPackMeta:
     """Insert a provisional pack row at the briefing_ready milestone.
@@ -2111,7 +2102,6 @@ def _persist_pack_provisional(
     """
     meta = _build_pack_meta(
         flight_id, flight, fetch_ts, pack_path, result,
-        model_metadata=model_metadata,
         as_of_time=as_of_time,
         provisional=True,
     )
@@ -2129,7 +2119,6 @@ def _persist_pack_finalize(
     db: Session,
     *,
     user_id: str | None = None,
-    model_metadata: dict | None = None,
     as_of_time: datetime | None = None,
 ) -> BriefingPackMeta:
     """Finalize the pack row after phase 7 — update if a provisional row
@@ -2137,7 +2126,6 @@ def _persist_pack_finalize(
     """
     meta = _build_pack_meta(
         flight_id, flight, fetch_ts, pack_path, result,
-        model_metadata=model_metadata,
         as_of_time=as_of_time,
         provisional=False,
     )
@@ -2213,7 +2201,6 @@ def _finalize_refresh(
     result: "BriefingResult",
     db: Session,
     user_id: str | None = None,
-    model_metadata: dict | None = None,
     as_of_time: datetime | None = None,
 ) -> BriefingPackMeta:
     """Backwards-compatible single-shot persist (no provisional row).
@@ -2225,7 +2212,6 @@ def _finalize_refresh(
     return _persist_pack_finalize(
         flight_id, flight, fetch_ts, pack_path, result, db,
         user_id=user_id,
-        model_metadata=model_metadata,
         as_of_time=as_of_time,
     )
 
@@ -2572,7 +2558,7 @@ async def refresh_briefing(
     # Prepare pipeline inputs while we still have the request-scoped DB
     is_privileged = _can_force_refresh(request, db)
     try:
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=is_privileged,
             as_of_time=as_of_time,
@@ -2615,7 +2601,7 @@ async def refresh_briefing(
             try:
                 meta = _finalize_refresh(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                    user_id=user_id, model_metadata=model_metadata,
+                    user_id=user_id,
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()
@@ -2880,7 +2866,7 @@ async def refresh_briefing_stream(
             )
         registered = True
 
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_id, db=db,
             is_privileged=_can_force_refresh(request, db),
             as_of_time=as_of_time,
@@ -2930,7 +2916,6 @@ async def refresh_briefing_stream(
             try:
                 meta = _persist_pack_provisional(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                    model_metadata=model_metadata,
                     # Use the resolved as_of (incl. the in-progress GRIB pin), same as
                     # _persist_pack_finalize below — otherwise the provisional pack
                     # persists a stale/negative days_out for a cross-midnight
@@ -2985,7 +2970,7 @@ async def refresh_briefing_stream(
             try:
                 meta = _persist_pack_finalize(
                     flight_id, flight, fetch_ts, pack_path, result, thread_db,
-                    user_id=user_id, model_metadata=model_metadata,
+                    user_id=user_id,
                     as_of_time=resolved_as_of,
                 )
                 thread_db.commit()

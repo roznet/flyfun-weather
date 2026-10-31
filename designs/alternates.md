@@ -137,8 +137,14 @@ Per-model split reuses `tasks/standalone_verification.py`:
 GFS and ICON pass `only_valid_time=eta`, so their GRIB is fetched for the ETA
 hour alone, not that hour on every day of the horizon.
 
-ECMWF visibility is GRIB-only (Open-Meteo doesn't republish it); when no local
-ECMWF run covers the ETA, `_fetch_eta_snapshots` degrades to the Open-Meteo path
+The run is the map's choice, `resolve_snapshot_run` (#957): ECMWF's newest
+ready run on disk reaching the planned horizon, GFS/ICON the newest published
+on NOAA/DWD (`select_grib_snapshot_init`). Open-Meteo's `meta.json` is asked
+only when that finds no run (or a model is off `WB_GRIB_SNAPSHOTS`); before,
+a model missing from it was dropped from alternates altogether.
+
+ECMWF visibility is GRIB-only (Open-Meteo doesn't republish it); when no ready
+local ECMWF run exists, `_fetch_eta_snapshots` degrades to the Open-Meteo path
 for ECMWF too (no ECMWF visibility, but consensus still runs) rather than
 dropping the model. GRIB decode is point-count-insensitive, so a few dozen
 alternates is effectively free on decode; the real cost is N×3 lite soundings.

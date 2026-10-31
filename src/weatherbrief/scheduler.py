@@ -107,10 +107,32 @@ _FORECAST_FETCH_HOUR_OFFSET_SECONDS = 900  # 15 min
 # offset, wait for it (capped) — saves a stale-init fetch when delivery is
 # running a few minutes late.
 _FORECAST_FETCH_FRESHNESS_WAIT_MAX_SECONDS = 900  # 15 min
-_FORECAST_FETCH_FRESHNESS_SOURCES: list[tuple[str, str]] = [
-    ("gfs:openmeteo", "gfs"),
-    ("icon:openmeteo", "icon"),
-]
+# The markers waited on are those of the source each map model's run is
+# chosen from (#957): GFS on NOAA and ICON-EU on DWD while they are GRIB
+# snapshot models, their Open-Meteo markers only under WB_GRIB_SNAPSHOTS=0
+# (or a list leaving them out); ECMWF always from direct GRIB on disk.
+_FORECAST_FETCH_GRIB_SOURCES: dict[str, tuple[str, str]] = {
+    "gfs": ("gfs:noaa", "gfs"),
+    "icon": ("icon_eu:dwd", "icon_eu"),
+}
+_FORECAST_FETCH_OPEN_METEO_SOURCES: dict[str, tuple[str, str]] = {
+    "gfs": ("gfs:openmeteo", "gfs"),
+    "icon": ("icon:openmeteo", "icon"),
+}
+
+
+def _forecast_fetch_freshness_sources() -> list[tuple[str, str]]:
+    """(source, marker model) pairs the map cycle's freshness wait watches."""
+    from weatherbrief.fetch.grib.primary import grib_snapshot_models
+
+    grib = set(grib_snapshot_models())
+    out = [
+        _FORECAST_FETCH_GRIB_SOURCES[m] if m in grib
+        else _FORECAST_FETCH_OPEN_METEO_SOURCES[m]
+        for m in ("gfs", "icon")
+    ]
+    out.append(("ecmwf:direct", "ecmwf"))
+    return out
 # Compute offload: if a node has delivered this cycle's snapshots, ingest those
 # and skip the local cycle entirely. Directory is where the node's artifacts are
 # mounted; absent or empty means offload is not in use and the loop goes
@@ -700,7 +722,7 @@ def _auto_refresh_one(
             logger.warning("Auto-refresh: AIRPORTS_DB not configured, skipping %s", flight_row.id)
             return False
 
-        route, fetch_ts, pack_path, options, model_metadata, resolved_as_of = _prepare_refresh(
+        route, fetch_ts, pack_path, options, resolved_as_of = _prepare_refresh(
             flight, db_path, user_id, flight_row.id, db=db, is_privileged=True,
         )
 
@@ -735,7 +757,7 @@ def _auto_refresh_one(
 
         meta = _finalize_refresh(
             flight_row.id, flight, fetch_ts, pack_path, result, db,
-            user_id=user_id, model_metadata=model_metadata,
+            user_id=user_id,
             as_of_time=resolved_as_of,
         )
         db.commit()
@@ -1742,7 +1764,7 @@ async def _try_ingest_snapshot_artifact(
 async def _wait_for_marker_freshness(max_wait_seconds: float) -> None:
     """Sleep up to ``max_wait_seconds`` if a tracked marker is about to publish.
 
-    For each (source, model) in :data:`_FORECAST_FETCH_FRESHNESS_SOURCES`, if
+    For each (source, model) in :func:`_forecast_fetch_freshness_sources`, if
     its ``next_expected`` falls between *now* and *now+max_wait_seconds*, hold
     off until the latest such time so the fetch picks up the fresh init rather
     than the previous one. Capped at ``max_wait_seconds`` so a long-slipping
@@ -1755,7 +1777,7 @@ async def _wait_for_marker_freshness(max_wait_seconds: float) -> None:
     deadline = now + timedelta(seconds=max_wait_seconds)
     target = now
     waited_for: list[str] = []
-    for source, model in _FORECAST_FETCH_FRESHNESS_SOURCES:
+    for source, model in _forecast_fetch_freshness_sources():
         marker = store.get_sync(source, model)
         if marker is None:
             continue

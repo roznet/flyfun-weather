@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -77,6 +78,24 @@ def _open_meteo_live_horizons() -> dict[str, datetime]:
         if marker is not None and marker.data_end is not None:
             out[model_value] = marker.data_end
     return out
+
+
+def _open_meteo_inits(models: list[str]) -> dict[str, int]:
+    """Open-Meteo's current init (Unix s) for *models*, from ``meta.json``.
+
+    The one place a briefing asks Open-Meteo which run it serves, and only for
+    the slots it serves (#957): a slot built wholly from GRIB records its GRIB
+    run instead. A model whose metadata cannot be read is left out, never
+    raised: the pack then simply has no Open-Meteo init for it.
+    """
+    from weatherbrief.fetch.model_status import fetch_model_metadata
+
+    try:
+        metadata = fetch_model_metadata(models)
+    except Exception:
+        logger.warning("Open-Meteo metadata for %s failed", models, exc_info=True)
+        return {}
+    return {m: meta.last_init_time for m, meta in metadata.items()}
 
 
 def model_failure_reason(exc: BaseException) -> str:
@@ -165,6 +184,10 @@ class FetchResult:
     # Models built from GRIB without an up-front Open-Meteo fetch (#912),
     # with the number of points that needed the Open-Meteo fallback.
     grib_primary: dict[str, int] = field(default_factory=dict)
+    # model → Open-Meteo's init (Unix s) for each fetched slot Open-Meteo
+    # actually served, up front or as a GRIB-primary fallback (#957). A slot
+    # built wholly from GRIB is absent: no meta.json was asked for it.
+    open_meteo_init_times: dict[str, int] = field(default_factory=dict)
 
 
 def _model_label(model: str) -> str:
@@ -392,6 +415,26 @@ def run_fetch(
 
     # Filter models up-front so we don't waste worker threads on skipped models.
     live_horizons = _open_meteo_live_horizons() if not historical_mode else {}
+
+    # GRIB-primary eligibility, asked once per model: by the Open-Meteo horizon
+    # skip below (a slot GRIB will build is not held to Open-Meteo's data_end,
+    # #957) and by the GRIB-primary gate after it.
+    from weatherbrief.fetch.grib.primary import (
+        GRIB_PRIMARY_MODELS,
+        grib_primary_skip_reason,
+    )
+
+    _gp_reasons: dict[ModelSource, str | None] = {}
+
+    def _grib_primary_reason(model: ModelSource) -> str | None:
+        if model not in _gp_reasons:
+            _gp_reasons[model] = grib_primary_skip_reason(
+                model, route_points, departure_time,
+                route.flight_duration_hours or 0.0,
+                as_of_time=as_of_time, historical_mode=historical_mode,
+            )
+        return _gp_reasons[model]
+
     models_to_fetch: list[ModelSource] = []
     for model in models:
         endpoint = MODEL_ENDPOINTS[model.value]
@@ -478,6 +521,16 @@ def run_fetch(
         # the arrival day: that was up to ~24 h early, so a model ending
         # mid-window shipped null tails with no MODEL_SKIPPED_HORIZON (#807).
         live_end = live_horizons.get(model.value)
+        if (
+            live_end is not None
+            and enrich_grib
+            and model in GRIB_PRIMARY_MODELS
+            and _grib_primary_reason(model) is None
+        ):
+            # GRIB will build this slot and its gate has already checked the
+            # GRIB run's horizon: Open-Meteo's data_end (lagging, or its
+            # meta.json down) must not drop a slot it does not serve (#957).
+            live_end = None
         if model == ModelSource.ICON and not historical_mode:
             # ICON is ICON-EU only: past its 120h GRIB horizon Open-Meteo's
             # dwd-icon serves ICON global, a different and coarser model with
@@ -527,20 +580,12 @@ def run_fetch(
     # GRIB left short. Needs enrichment on; everything else is unchanged.
     grib_primary_models: list[ModelSource] = []
     if enrich_grib:
-        from weatherbrief.fetch.grib.primary import (
-            GRIB_PRIMARY_MODELS,
-            NO_OPEN_METEO_MODELS,
-            grib_primary_skip_reason,
-        )
+        from weatherbrief.fetch.grib.primary import NO_OPEN_METEO_MODELS
 
         for model in list(models_to_fetch):
             if model not in GRIB_PRIMARY_MODELS:
                 continue
-            reason = grib_primary_skip_reason(
-                model, route_points, departure_time,
-                route.flight_duration_hours or 0.0,
-                as_of_time=as_of_time, historical_mode=historical_mode,
-            )
+            reason = _grib_primary_reason(model)
             if reason is not None:
                 if model in NO_OPEN_METEO_MODELS:
                     # Refused after the filter above passed it (a gate the two
@@ -572,6 +617,20 @@ def run_fetch(
         ))
         logger.info("Fetched %s: %d points", model.value, len(point_forecasts))
         models_fetched_names.append(model.value)
+
+    # Open-Meteo's init for the slots it serves, read alongside their fetch so
+    # a slow or unreachable meta.json costs no wall time (#957). Only these
+    # models are asked; the GRIB-primary slots that fell back are asked after
+    # the fallback. Replays read the archive: no live init to record.
+    meta_result: dict[str, int] = {}
+    meta_thread: threading.Thread | None = None
+    if models_to_fetch and not historical_mode:
+        meta_models = [m.value for m in models_to_fetch]
+        meta_thread = threading.Thread(
+            target=lambda: meta_result.update(_open_meteo_inits(meta_models)),
+            name="open-meteo-meta", daemon=True,
+        )
+        meta_thread.start()
 
     if models_to_fetch:
         # Single notify before dispatch — per-model detail would flicker
@@ -748,6 +807,24 @@ def run_fetch(
             grib_init_times.pop(outcome.model, None)
             grib_sources.pop(outcome.model, None)
 
+    # --- Open-Meteo inits of the slots it served (#957) ---
+    if meta_thread is not None:
+        meta_thread.join()
+    open_meteo_init_times: dict[str, int] = dict(meta_result)
+    if not historical_mode:
+        fell_back = [
+            m for m, n in grib_primary.items()
+            if n > 0 and m not in open_meteo_init_times
+        ]
+        if fell_back:
+            open_meteo_init_times.update(_open_meteo_inits(fell_back))
+    served = set(models_fetched_names) - {
+        m for m, n in grib_primary.items() if n == 0
+    }
+    open_meteo_init_times = {
+        m: t for m, t in open_meteo_init_times.items() if m in served
+    }
+
     # --- Build diagnostics ---
     diagnostics = _build_fetch_diagnostics(
         requested_models=[m.value for m in models],
@@ -785,6 +862,9 @@ def run_fetch(
                 "open_meteo_weighted_calls": round(client.call_weight, 2),
                 "grib_init_times": grib_init_times,
                 "grib_sources": grib_sources,
+                # Open-Meteo's init for the slots it served (#957); a slot
+                # missing here asked no meta.json.
+                "open_meteo_init_times": open_meteo_init_times,
             },
         )
 
@@ -813,4 +893,5 @@ def run_fetch(
         open_meteo_api_calls=client.call_count,
         open_meteo_weighted_calls=client.call_weight,
         grib_primary=grib_primary,
+        open_meteo_init_times=open_meteo_init_times,
     )

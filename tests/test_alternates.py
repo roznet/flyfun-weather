@@ -449,7 +449,8 @@ def test_fetch_eta_snapshots_runs_models_concurrently_and_inherits_priority():
          patch(f"{sv}._fetch_forecasts_for_model", fake_fetch_forecasts), \
          patch(f"{sv}._fetch_grib_diagnostics", fake_grib), \
          patch(f"{sv}._build_grib_snapshots", return_value=([], set())), \
-         patch(f"{sv}._select_ecmwf_grib_run", return_value=None):
+         patch(f"{sv}._select_ecmwf_grib_run", return_value=None), \
+         patch(f"{sv}.select_grib_snapshot_init", return_value=None):
         # Run inside a copied context so set_decode_priority can't leak out.
         # (No GRIB-primary rows, #914: every model reaches the Open-Meteo leg.)
         ctx = copy_context()

@@ -1010,26 +1010,37 @@ class TestSelectGribSnapshotInit:
 
 class TestSnapshotInitTime:
 
-    def test_grib_run_wins_over_open_meteo(self, monkeypatch):
+    @staticmethod
+    def _om(init):
+        return {m: SimpleNamespace(last_init_time=int(init.timestamp()))
+                for m in ("gfs", "icon")}
+
+    def test_grib_run_wins_without_asking_open_meteo(self, monkeypatch):
         from weatherbrief.tasks import standalone_verification as sv
 
         monkeypatch.delenv("WB_GRIB_SNAPSHOTS", raising=False)
-        with patch.object(sv, "select_grib_snapshot_init", return_value=GFS_INIT):
-            assert sv._snapshot_init_time("gfs", GFS_INIT - timedelta(hours=6), 6) == GFS_INIT
+        with patch.object(sv, "select_grib_snapshot_init", return_value=GFS_INIT), \
+             patch("weatherbrief.fetch.model_status.fetch_model_metadata") as meta:
+            assert sv._snapshot_init_time("gfs", 6) == GFS_INIT
+        meta.assert_not_called()
 
     def test_open_meteo_when_no_grib_run(self, monkeypatch):
         from weatherbrief.tasks import standalone_verification as sv
 
         monkeypatch.delenv("WB_GRIB_SNAPSHOTS", raising=False)
-        with patch.object(sv, "select_grib_snapshot_init", return_value=None):
-            assert sv._snapshot_init_time("icon", GFS_INIT, 4) == GFS_INIT
+        with patch.object(sv, "select_grib_snapshot_init", return_value=None), \
+             patch("weatherbrief.fetch.model_status.fetch_model_metadata",
+                   return_value=self._om(GFS_INIT)):
+            assert sv._snapshot_init_time("icon", 4) == GFS_INIT
 
     def test_kill_switch_keeps_open_meteo(self, monkeypatch):
         from weatherbrief.tasks import standalone_verification as sv
 
         monkeypatch.setenv("WB_GRIB_SNAPSHOTS", "0")
-        with patch.object(sv, "select_grib_snapshot_init") as mock_select:
-            assert sv._snapshot_init_time("gfs", GFS_INIT, 6) == GFS_INIT
+        with patch.object(sv, "select_grib_snapshot_init") as mock_select, \
+             patch("weatherbrief.fetch.model_status.fetch_model_metadata",
+                   return_value=self._om(GFS_INIT)):
+            assert sv._snapshot_init_time("gfs", 6) == GFS_INIT
         mock_select.assert_not_called()
 
 
