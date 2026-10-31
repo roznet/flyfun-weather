@@ -7607,6 +7607,7 @@ the new packs against `meteofrance_arome_france`. Check the decode log for
   dropping snow_con would make ICON alone miss winter snow showers there.
   The 1.5 °C snow-to-rain move is not ported: ICON GRIB can say SNOW at 0 to
   1.5 °C where an Open-Meteo slot said RAIN. Only §61's wording changed.
+  Owner confirmed 2026-10-31: keep snow, consistent with ECMWF and GFS.
 - **ICON gust at step 0.** `vmax_10m` is the maximum since the previous
   output step, so DWD publishes 0 at f000 and a briefing hour on the run's
   init hour showed a 0 kt gust that the Open-Meteo splice never replaced

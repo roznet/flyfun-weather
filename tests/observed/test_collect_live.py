@@ -32,10 +32,14 @@ from weatherbrief.observed.frames import (
 from weatherbrief.observed.grid import compute_window
 from weatherbrief.observed.sampler import SampleStation, sample
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("WB_OBSERVED_LIVE_TESTS", "") not in ("1", "true", "yes"),
-    reason="live-provider tests: set WB_OBSERVED_LIVE_TESTS=1 to run",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("WB_OBSERVED_LIVE_TESTS", "") not in ("1", "true", "yes"),
+        reason="live-provider tests: set WB_OBSERVED_LIVE_TESTS=1 to run",
+    ),
+    # Exempt from the conftest network block: these exist to reach the providers.
+    pytest.mark.network,
+]
 
 # Le Touquet — inside the OPERA footprint and well within the MTG disc.
 STATION = SampleStation("LFAT", 50.517, 1.627)
