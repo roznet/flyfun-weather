@@ -360,18 +360,31 @@ def _parse_weather(value: Any) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
+# A report with no ceiling layer (CAVOK, NSC, SKC, FEW/SCT only) is "no
+# ceiling", not "no data": the ceiling metric's catalog ``null_color`` greys a
+# null out, so observed sources carry the value every client already labels
+# "CAVOK" and colours green (>= 10,000 ft). Flight category is classified from
+# the real (None) ceiling before this is substituted.
+NO_CEILING_FT = 10000
+
+
+def _observed_ceiling(ceiling_ft: float | None) -> float:
+    return NO_CEILING_FT if ceiling_ft is None else ceiling_ft
+
+
 def metar_to_dict(row: dict[str, Any], at: datetime) -> dict[str, Any]:
     """A METAR row as a map source dict (same value keys as a model).
 
     The category is re-derived with the same ``classify_flight_category`` the
-    models go through, so METAR and model colours share thresholds.
+    models go through, so METAR and model colours share thresholds. No ceiling
+    layer → ``NO_CEILING_FT``.
     """
     vis_m = row.get("visibility_m")
     ceiling = row.get("ceiling_ft")
     obs_time = row["observation_time"]
     return {
         "flight_category": classify_flight_category(ceiling, visibility_m=vis_m).value,
-        "ceiling_ft": ceiling,
+        "ceiling_ft": _observed_ceiling(ceiling),
         "visibility_m": vis_m,
         "wind_speed_kt": row.get("wind_speed_kt"),
         "wind_dir_deg": row.get("wind_dir"),
@@ -416,7 +429,7 @@ def taf_to_dict(row: dict[str, Any], at: datetime) -> dict[str, Any] | None:
         "temporary_category": reading.temporary_category,
         "temporary_type": reading.temporary_type,
         "trend_type": reading.trend_type,
-        "ceiling_ft": reading.ceiling_ft,
+        "ceiling_ft": _observed_ceiling(reading.ceiling_ft),
         "visibility_m": reading.visibility_m,
         "wind_speed_kt": reading.wind_speed_kt,
         "wind_dir_deg": reading.wind_dir,

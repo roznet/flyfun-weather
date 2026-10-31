@@ -135,6 +135,15 @@ class TestObserved:
         assert metar["age_min"] == 10
         assert metar["weather"] == ["-RA"]
 
+    def test_metar_without_ceiling_is_no_ceiling_not_missing(self, db_session):
+        # CAVOK / NSC / FEW-SCT only: the map must colour it green (>3000 ft),
+        # not grey "no data" — so it carries the >= 10,000 ft "CAVOK" value.
+        _obs(db_session, time=T - timedelta(minutes=10), raw="EGKB 041150Z CAVOK",
+             ceiling=None)
+        metar = _airport(_get(db_session))["observed"]["metar"]
+        assert metar["ceiling_ft"] == hm.NO_CEILING_FT
+        assert metar["flight_category"] == "VFR"
+
     def test_speci_counts_as_latest(self, db_session):
         _obs(db_session, time=T - timedelta(minutes=30))
         _obs(db_session, time=T - timedelta(minutes=5), raw="SPECI", report_type="SPECI")
