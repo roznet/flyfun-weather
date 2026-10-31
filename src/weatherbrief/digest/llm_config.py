@@ -47,8 +47,11 @@ class LLMConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     # ``None`` omits the parameter: the 5.x Claude models reject any
-    # non-default sampling value with a 400, ``temperature=0.0`` included.
-    temperature: float | None = 0.0
+    # non-default sampling value with a 400, ``temperature=0.0`` included, and
+    # since the anthropic SDK 2.x the API answers "temperature: Extra inputs
+    # are not permitted" for Haiku 4.5 too. Set it only for a provider that
+    # still takes it (``openai.json``).
+    temperature: float | None = None
     # Anthropic ``thinking`` block, sent as-is when set (e.g. ``{"type":
     # "adaptive"}`` or ``{"type": "between_tools"}``, Sonnet 5.5's thinking-off
     # mode). Unset, the model's own default applies — which on the 5.x models
@@ -89,10 +92,12 @@ class DigestConfig(BaseModel):
     # Beyond the ECMWF GRIB horizon (~7 days) only two global models remain and
     # confidence is low, so the long-range outlook runs a cheaper model on a
     # trimmed prompt.  Haiku by default; overridable per config like ``llm``.
+    # Stays on Haiku 4.5: the 2026-10-09 A/B found 5.5 systematically more
+    # cautious here (SETTLED -> MIXED on 5/8 routes) — a switch needs a
+    # recalibrated prompt.  No temperature: it 400s every long-range digest.
     longrange: LLMConfig = LLMConfig(
         provider="anthropic",
         model="claude-haiku-4-5-20251001",
-        temperature=0.0,
     )
     # DWD translation / extract. Haiku 5.5 since the 2026-10-14 blind A/B
     # (10 prod DWD inputs, old/new prompt x 4.5/5.5, judged against the

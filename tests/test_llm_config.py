@@ -41,10 +41,35 @@ def test_sonnet46_rollback_config_is_the_pre_717_default():
     config = load_digest_config("sonnet46")
 
     assert config.llm.model == "claude-sonnet-4-6"
-    assert config.llm.temperature == 0.0
+    # No temperature: the anthropic SDK 2.x API rejects it on every model.
+    assert config.llm.temperature is None
     assert config.llm.thinking is None and config.llm.effort is None
     assert config.llm.structured_output == "function_calling"
     assert config.prompts.briefer == "prompts/briefer_v3.md"
+
+
+def _create_kwargs(llm_config: LLMConfig) -> dict:
+    """The kwargs ``create_chat_model`` hands ``init_chat_model``."""
+    from weatherbrief.digest.llm_config import create_chat_model
+    with patch("weatherbrief.digest.llm_config.init_chat_model") as init:
+        create_chat_model(llm_config)
+    return init.call_args.kwargs
+
+
+@pytest.mark.parametrize("name", ["default", "sonnet46"])
+def test_no_anthropic_block_sends_temperature(name):
+    """Every Anthropic block omits ``temperature`` — the API 400s on it
+    ("temperature: Extra inputs are not permitted"), which took out every
+    long-range digest from 2026-10-28 while ``longrange`` still sent 0.0."""
+    config = load_digest_config(name)
+    blocks = {
+        "llm": config.llm, "longrange": config.longrange,
+        "translator": config.translator, "trip": config.trip,
+    }
+    for key, block in blocks.items():
+        if block.provider == "anthropic":
+            assert block.temperature is None, f"{name}.{key}"
+            assert "temperature" not in _create_kwargs(block), f"{name}.{key}"
 
 
 def test_openai_config_loads():
@@ -199,13 +224,16 @@ class TestCreateChatModel:
             create_chat_model(llm_config)
         return init.call_args.kwargs
 
-    def test_a_plain_config_sends_exactly_what_it_always_did(self):
+    def test_a_plain_config_sends_only_model_and_provider(self):
         kwargs = self._kwargs(LLMConfig(model="claude-haiku-4-5-20251001"))
         assert kwargs == {
             "model": "claude-haiku-4-5-20251001",
             "model_provider": "anthropic",
-            "temperature": 0.0,
         }
+
+    def test_an_explicit_temperature_is_still_sent(self):
+        kwargs = self._kwargs(LLMConfig(provider="openai", model="gpt-4o", temperature=0.0))
+        assert kwargs["temperature"] == 0.0
 
     def test_a_null_temperature_is_omitted_not_sent_as_none(self):
         kwargs = self._kwargs(LLMConfig(model="claude-sonnet-5-5", temperature=None))
