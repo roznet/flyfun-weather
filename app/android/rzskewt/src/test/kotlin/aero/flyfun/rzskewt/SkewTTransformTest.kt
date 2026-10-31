@@ -119,6 +119,14 @@ class SkewTTransformTest {
     }
 
     @Test
+    fun `fit with no sounding in range centres the window on the config range`() {
+        val fit = fitSkewT(300f, 360f, null)
+        assertEquals(360f, fit.height, 1e-3f)
+        assertEquals(-10.0, (fit.tMin + fit.tMax) / 2, 1e-6)
+        assertEquals(45.0, isothermAngle(fit), 1e-3)
+    }
+
+    @Test
     fun `skewedExtent reads points at the bottom axis`() {
         val ext = skewedExtent(listOf(12.0 to 1050.0, -45.0 to 250.0, null to 500.0, -60.0 to 200.0))!!
         assertEquals(-45.0 + SKEW_SHIFT_DEG, ext.start, 1e-6)

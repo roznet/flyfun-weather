@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import aero.flyfun.rzskewt.SkewTConfig
 import aero.flyfun.rzskewt.SkewTTransform
 import aero.flyfun.rzskewt.Thermodynamics
+import aero.flyfun.rzskewt.SKEW_SHIFT_DEG
 import aero.flyfun.rzskewt.fitSkewT
 import aero.flyfun.rzskewt.skewedExtent
 import aero.flyfun.weather.model.EnhancedCloudLayer
@@ -49,6 +50,7 @@ import aero.flyfun.weather.model.SoundingProfileLevel
 import aero.flyfun.weather.model.SoundingProfileResponse
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -209,6 +211,10 @@ fun SkewTCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                // The tap/drag handlers below only map y → pressure, which depends on the plot's
+                // top and height alone, not on the fitted width or window — hence the
+                // throwaway transform with a dummy width. Use the fitted `fit`/`plotConfig`
+                // if they ever need x (#962).
                 .pointerInput(profile.pointIndex, profile.model) {
                     detectTapGestures { offset ->
                         val plotHeight = (size.height - topMarginPx - bottomMarginPx).coerceAtLeast(1f)
@@ -382,8 +388,10 @@ private fun DrawScope.drawBackgroundGrid(
     }
 
     // Skewed Isotherms every 10°C
-    // From one full skew colder than the window so the top-left corner keeps its grid.
-    for (t in (-200..40 step 10).filter { it >= transform.config.tMin - 120 && it <= transform.config.tMax }) {
+    // From two skew shifts colder than the window: those isotherms enter from the upper left
+    // (clipped), so the top-left corner keeps its grid.
+    val isoStart = (floor((transform.config.tMin - 2 * SKEW_SHIFT_DEG) / 10) * 10).toInt()
+    for (t in isoStart..transform.config.tMax.toInt() step 10) {
         val xBottom = transform.tempPressureToX(t.toDouble(), transform.config.pBottom)
         val xTop = transform.tempPressureToX(t.toDouble(), transform.config.pTop)
         val color = when (t) {

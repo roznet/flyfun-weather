@@ -49,6 +49,13 @@ describe('fitSkewT', () => {
     expect(cold.tMin).toBeCloseTo(-60, 6);
   });
 
+  it('no sounding in range: window centred on the config range', () => {
+    const fit = fitSkewT(300, 360, null);
+    expect(fit.height).toBe(360);
+    expect((fit.tMin + fit.tMax) / 2).toBeCloseTo(-10, 6);
+    expect(isothermAngle(fit)).toBeCloseTo(45, 6);
+  });
+
   it('a very wide sounding falls back to the full range at the same geometry', () => {
     const fit = fitSkewT(500, 600, [-70, 50]);
     expect(fit.tMin).toBe(-60);

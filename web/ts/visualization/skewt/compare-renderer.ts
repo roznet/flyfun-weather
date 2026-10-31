@@ -51,6 +51,8 @@ export class SkewTCompareRenderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    // Record the height ceiling before any render shrinks the container (#962).
+    containerMaxHeight(container);
     const panels = loadCompareSidePanels();
     this.primaryVarId = panels.primary;
     this.secondaryVarId = panels.secondary;

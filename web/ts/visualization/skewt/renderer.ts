@@ -44,6 +44,8 @@ export class SkewTRenderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    // Record the height ceiling before any render shrinks the container (#962).
+    containerMaxHeight(container);
     this.overlayState = loadOverlayState();
     const panels = loadSidePanels();
     this.primaryVarId = panels.primary;

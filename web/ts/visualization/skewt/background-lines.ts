@@ -6,7 +6,7 @@
  * It's rendered once and blitted on each frame.
  */
 
-import { SkewTTransform } from './skewt-transform';
+import { SkewTTransform, SKEW_SHIFT_DEG } from './skewt-transform';
 import { SkewTConfig } from './types';
 import {
   generateIsotherms,
@@ -128,9 +128,9 @@ export class BackgroundLinesRenderer {
     }
 
     // 2. Isotherms — skewed vertical lines
-    // Start one full skew colder: those isotherms enter from the upper left
+    // Start two skew shifts colder: those isotherms enter from the upper left
     // (clipped to the plot), so the top-left corner keeps its grid.
-    const isotherms = generateIsotherms(pBottom, pTop, tMin - 200, tMax, 10);
+    const isotherms = generateIsotherms(pBottom, pTop, tMin - 2 * SKEW_SHIFT_DEG, tMax, 10);
     for (const iso of isotherms) {
       const t = iso[0].tempC;
       const color = t === 0 ? ZERO_ISOTHERM_COLOR : ISOTHERM_COLOR;
