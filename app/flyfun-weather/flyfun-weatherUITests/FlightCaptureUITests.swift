@@ -51,6 +51,11 @@ final class FlightCaptureUITests: FlyfunUITestCase {
             XCTFail("could not open \(flight)")
             return
         }
+        // On flight day the briefing opens on the Observed tab; the summary and
+        // its Advisories pill are on the Advisory tab.
+        if app.buttons["Observed"].firstMatch.waitForExistence(timeout: Self.probeTimeout) {
+            switchToBriefingTab(app, "Advisory")
+        }
         if want("briefing") { capture(app, "briefing") }
 
         if want("advisories") {
