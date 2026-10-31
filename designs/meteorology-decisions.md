@@ -7624,8 +7624,9 @@ the new packs against `meteofrance_arome_france`. Check the decode log for
   time-alignment doc and a test fixture said "averaged only". No code
   change.
 
-**Measured.** Unit tests only. The advisory replay diff is **pending on the
-Mac** (prod GRIB caches are not reachable from a cloud session):
+**Measured.** Unit tests only. The advisory replay diff is **deferred to
+the first cold spell** (2026-10-31: too warm, no flights with snow near 0 °C
+to replay; the change only moves mixed-phase convective windows):
 `scripts/compare_grib_primary.py <id>` on main and on this branch for a few
 flights with precipitation near 0 °C. Expect differences only in rain_mm /
 surface phase on ECMWF hours with both convective precipitation and snow, and
@@ -7671,3 +7672,11 @@ stay dark in DPC too).
 frame. The GeoTIFF's tie point and pixel-is-area convention are read and
 checked against the published grid; the residual may be the projection
 parameters (assumed `k=1`, WGS84) and is not corrected.
+
+**Measured 2026-10-31 (dev, live API):** the live test passes; on the 08:05Z
+frame DBZH coverage within 5 NM went from 0.00-0.58 to 1.00 at LIRA, LIRN,
+LIBR, LICA, LIEE and 0.85 at LICJ; RATE (SRI 08:10) the same, max 30 mm/h
+against 29 from OPERA alone; LICT and LICG stay dark. OPERA's prod licence
+string is CC BY 4.0, so the BY-SA combination holds. DPC GeoTIFFs are
+~0.5 MB, not the 1-7 MB estimated. The seam check (Adriatic, Corsica) waits
+for a rainy day: Italy was dry.
