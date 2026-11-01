@@ -1588,17 +1588,53 @@ commit.
   layer it committed (its changes still carry `evaluated`, never dumped). A
   refused commit has none; its stored `new_alert` belongs to the other writer.
   A ↻ press never pushes (the pilot is looking; #751 records the poll).
+- **Start-gated (#968).** Only a flight whose pilot pressed Start pushes
+  (`skip_reason`, `started` from `FlightProgress.start_fix`); auto-refresh is no
+  longer consent. Departure rows stop at the known take-off
+  (`left_departure`, #967; `decide(left_departure=)` also drops any that slip
+  through). The issue's replay of 2026-10-31..11-01 (44 flights, Start assumed 30 min
+  before departure): ~35 pushes under the old rule, 3 under this one, 2 after
+  the tops check.
 - **Memory**: `LiveLayer.push_state` (`LivePushState`): `active` (pushed, not
   yet cleared, with a sustain counter), `rearmed` (keys whose clear was
-  pushed), and three counters for shadow review. Written by
+  pushed), `retry`, counters for shadow review, and the category memory
+  (#968): `started_at`, `known_pack`, `known` (ICAO → IFR/LIFR the pilot already
+  knows), `metar_pushed` / `taf_pushed` (the ratchets). Written by
   `live_layer.patch_push_state`, a small write under the commit lock that
   checks only the pack (a ↻ commit in between leaves it valid). Carried by
-  `commit_live_update`'s copy of the prior layer, reset by a new pack.
-- **Decision** (`decide` → `next_state`, pure): alerts = `new_alert` rows,
-  plus rows for a re-armed key (§47), plus rows whose earlier push failed;
-  clears = active keys with no alert-tier row for 2 evaluated ticks. Storms
-  push, never clear. A skipped push (pref off, muted…) tracks nothing but
-  still drops due clears, so unmuting does not release stale ones.
+  `commit_live_update`'s copy of the prior layer. A new pack resets it,
+  **except after Start**: `LivePushState.carried_over()` keeps the category
+  memory and counters and drops `active` / `rearmed` / `retry` (relative to the
+  old pack's rows: a SIGMET now in the briefing would read as cleared).
+- **Category rule** (`metar_category` / `taf_category`, meteorology-decisions
+  §77): pushes only at the departure (until take-off) and destination, only to
+  IFR or LIFR, only when worse than `known` (floor MVFR, max with the row's
+  briefed `from_value`) and than its ratchet (METAR: worst METAR pushed; TAF:
+  worst TAF *or METAR* pushed). Decided on the ratchet, not `new_alert`: §45's
+  on-screen memory can hold an IFR from before Start. `known` is seeded on the
+  first started tick and raised on the first tick of each new pack, from what
+  the layer shows then (every corridor airport's METAR and TAF-at-ETA through
+  its proxy, plus every category row's from/to), so that tick pushes nothing
+  for a category. No category clear, no category re-arm. The ratchet advances
+  whatever the outcome (sent, shadow, skipped, failed), so a mute never
+  releases a burst; a failed one is re-sent through `retry`.
+- **Storm tops** (#968): a route storm row stays silent when every alerting
+  member has known, untruncated `top_fl` at least `STORM_TOPS_CLEARANCE_FT`
+  (5000 ft) under the flight's `cruise_altitude_ft`. Departure / destination
+  storms always push (climb and descent go through them).
+- **Decision** (`decide` → `next_state`, pure): category alerts as above;
+  other alerts = `new_alert` rows, plus rows for a re-armed key (§47), plus
+  rows whose earlier push failed; clears = active non-category keys with no
+  alert-tier row for 2 evaluated ticks. Storms push, never clear. A skipped
+  push (pref off, muted…) tracks nothing but the ratchet, and still drops due
+  clears, so unmuting does not release stale ones. SIGMET, storm, wind, weather
+  and convective paths are unchanged.
+- **Shadow review**: `LIVE_PUSH_WOULD_SEND … rule=['metar:LFAT:known=MVFR
+  ratchet=-']` says why each category alert went; `LIVE_PUSH_SUPPRESSED
+  flight=… started=… rows=['taf:LFAT:ratchet=LIFR', 'storm:x:tops=FL096<FL250',
+  'metar:EGSS:mvfr', 'metar:EGTF:not_started']` lists the rows the screen
+  alerted on this tick that the rule kept silent (`new_alert` only, so a
+  persisting row is not logged every tick); `category_suppressed` counts them.
 - **A failed push is retried.** One that raised or reached no device has
   spent its `new_alert`, so its keys go to `push_state.retry` (first failed
   attempt) and are re-sent on later ticks while still alert-tier rows, until

@@ -873,7 +873,8 @@ class LivePushState(BaseModel):
     """The live-alert push stream's memory for one flight (#754), next to the
     classifier's ``alerted``. Written only by the server tick, after its
     commit (``live_layer.patch_push_state``); reset with the layer by a new
-    pack. In shadow mode it advances as if each decision had been sent."""
+    pack, except the category memory once started (#968, :meth:`carried_over`).
+    In shadow mode it advances as if each decision had been sent."""
 
     # Pushed and still active, by change key.
     active: dict[str, LivePushedAlert] = Field(default_factory=dict)
@@ -889,6 +890,37 @@ class LivePushState(BaseModel):
     alerts_pushed: int = 0
     clears_pushed: int = 0
     rearms_fired: int = 0
+    # --- Category rule (#968): Start-gated, per-airport known level + ratchets.
+    # When the known level was seeded: the first tick after Start. None until
+    # then, and nothing pushes for a category before it.
+    started_at: datetime | None = None
+    # The pack the known level was last raised for. A new pack after Start
+    # keeps this memory (``commit_live_update``) and raises the level once.
+    known_pack: str | None = None
+    # ICAO -> the worst category the pilot already knows of there: MVFR, the
+    # briefed category and what showed at Start (or at a new pack). Only
+    # IFR / LIFR are stored (MVFR is the floor). Never goes down in a flight.
+    known: dict[str, str] = Field(default_factory=dict)
+    # ICAO -> the worst METAR / TAF category pushed. A METAR pushes only when
+    # worse than the known level and ``metar_pushed``; a TAF when worse than
+    # both ``taf_pushed`` and ``metar_pushed`` (a TAF catching up with the
+    # observed weather is silent).
+    metar_pushed: dict[str, str] = Field(default_factory=dict)
+    taf_pushed: dict[str, str] = Field(default_factory=dict)
+    # Category alert rows the rule kept silent (shadow review).
+    category_suppressed: int = 0
+
+    def carried_over(self) -> "LivePushState":
+        """What survives a new pack after Start (#968): the known level, the
+        ratchets and the counters. ``active`` / ``rearmed`` / ``retry`` are
+        relative to the old pack's rows and reset with it, as before."""
+        return LivePushState(
+            alerts_pushed=self.alerts_pushed, clears_pushed=self.clears_pushed,
+            rearms_fired=self.rearms_fired, started_at=self.started_at,
+            known_pack=self.known_pack, known=dict(self.known),
+            metar_pushed=dict(self.metar_pushed), taf_pushed=dict(self.taf_pushed),
+            category_suppressed=self.category_suppressed,
+        )
 
 
 class LiveProgress(BaseModel):

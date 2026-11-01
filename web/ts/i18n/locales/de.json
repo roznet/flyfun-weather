@@ -133,7 +133,7 @@
   "settings.notify.push.hint": "Briefing-Aktualisierungen als Push an Ihre iOS-Geräte senden.",
   "settings.notify.push.hintNoDevice": "Installieren Sie die FlyFun iOS-App, um Push zu aktivieren.",
   "settings.notify.liveAlerts": "Live-Warnungen am Flugtag (iPhone/iPad)",
-  "settings.notify.liveAlerts.hint": "Flüge mit automatischer Aktualisierung, von 3 h vor dem Abflug bis 1 h nach der Ankunft: ein Push, wenn eine Warnung auftritt (Abflug, Ziel, Ausweichplätze, SIGMETs auf der Route, Gewitter voraus) und wenn eine gemeldete Warnung entfällt. Erfordert Push. Nie per E-Mail.",
+  "settings.notify.liveAlerts.hint": "Flüge, bei denen Sie Start gedrückt haben, bis 1 h nach der Ankunft: ein Push nur für das, was in der Luft zählt, etwa wenn Abflug (bis zum Start) oder Ziel auf IFR oder LIFR fällt, ein neues SIGMET auf der Route oder Gewitter, die sich der Strecke voraus nähern. Verbesserungen erscheinen nur in der App. Erfordert Push. Nie per E-Mail.",
   "settings.notify.email.hint": "Briefing-Aktualisierungen per E-Mail erhalten.",
   "settings.notify.email.hintLocked": "Ihr einziger Kanal — setzen Sie Briefing-Updates auf Aus, um zu stoppen.",
   "settings.notify.title": "Benachrichtigungen",

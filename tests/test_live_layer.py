@@ -231,3 +231,38 @@ def test_racing_writers_on_the_new_pack_leave_one_valid_layer(tmp_path):
     assert errors == []
     layer = live_for_pack(pack)
     assert layer is not None and layer.pack_dir_name == "p2"
+
+
+def test_new_pack_after_start_keeps_the_push_category_memory(tmp_path):
+    """#968: a refresh after Start must not reset the push's known level and
+    ratchets (it would re-push an IFR already sent); the row memory resets."""
+    from weatherbrief.models.live import LivePushedAlert, LivePushState
+    from weatherbrief.tasks.live_layer import load_live, patch_push_state
+
+    p1, b1 = _pack(tmp_path, "p1")
+    ts1, ts2 = "2026-10-01T07:00:00+00:00", "2026-10-01T08:00:00+00:00"
+    _commit(p1, b1, _obs("IFR", NOW), ts=ts1)
+    state = LivePushState(
+        started_at=NOW, known_pack=ts1, known={"ZZDS": "IFR"}, metar_pushed={"ZZDS": "IFR"},
+        active={"sigmet:ZZ|1": LivePushedAlert(key="sigmet:ZZ|1", kind="sigmet_issued", role="route",
+                                               message="New SIGMET", pushed_at=NOW)},
+    )
+    assert patch_push_state(p1.parent, state, pack_timestamp=ts1)
+    p2, b2 = _pack(tmp_path, "p2")
+    layer = _commit(p2, b2, _obs("IFR", NOW), ts=ts2, now=NOW + timedelta(minutes=10))
+    assert layer.push_state.metar_pushed == {"ZZDS": "IFR"} and layer.push_state.known == {"ZZDS": "IFR"}
+    assert layer.push_state.active == {}
+    assert load_live(p2.parent).push_state.started_at == NOW
+
+
+def test_new_pack_before_start_resets_the_push_memory(tmp_path):
+    from weatherbrief.models.live import LivePushState
+    from weatherbrief.tasks.live_layer import patch_push_state
+
+    p1, b1 = _pack(tmp_path, "p1")
+    ts1 = "2026-10-01T07:00:00+00:00"
+    _commit(p1, b1, _obs("IFR", NOW), ts=ts1)
+    assert patch_push_state(p1.parent, LivePushState(alerts_pushed=3), pack_timestamp=ts1)
+    p2, b2 = _pack(tmp_path, "p2")
+    layer = _commit(p2, b2, _obs("IFR", NOW), ts="2026-10-01T08:00:00+00:00", now=NOW + timedelta(minutes=10))
+    assert layer.push_state is None
