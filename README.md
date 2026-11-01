@@ -7,74 +7,68 @@
 
 **Medium-range aviation weather assessment for cross-country GA flights in Europe**
 
-🌍 **[weather.flyfun.aero](https://weather.flyfun.aero)** — live web app &nbsp;·&nbsp; 📱 **[iOS / iPadOS app](https://apps.apple.com/app/id6760951972)**
+🌍 **[weather.flyfun.aero](https://weather.flyfun.aero)** — live web app &nbsp;·&nbsp; 📱 **[iOS / iPadOS app](https://apps.apple.com/app/id6760951972)** &nbsp;·&nbsp; 🎬 **[talks.flyfun.aero](https://talks.flyfun.aero)** — see it in action ([PPL/IR Europe video](https://youtu.be/Sa5YkQ71WHs))
 
 > The Python package and module are named `weatherbrief`; the product is **Flyfun Weather**.
 
-Flyfun Weather fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0.
+Flyfun Weather fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0 — and then follows the flight on the day with live observations along the route.
 
-> **Disclaimer** — Flyfun Weather is built to help and support flight planning and decision-making, giving pilots an early, multi-model picture of the weather and surfacing the factors that matter for a route. It relies on automated analysis and AI, which can make mistakes or miss things, and it has not been reviewed by a professional meteorologist. It is **not** a substitute for official weather briefings, MET reports, or professional meteorological advice. Always consult official sources before flying — the pilot in command remains the sole decision-maker. The app is a free hobby project provided as is, and no liability is accepted for its use — see [TERMS.md](TERMS.md).
+> **Responsibility** — Flyfun Weather supports flight planning and decision-making with automated analysis and AI, which can occasionally be wrong or miss something; use it alongside the official material you would normally check. The pilot in command remains responsible for the flight. Provided free and as is — see [TERMS.md](TERMS.md).
 
 ## What it does
 
-- **Multi-model forecasting** — Fetches 6 NWP models via Open-Meteo (GFS, ECMWF IFS, DWD ICON, UKMO, Meteo-France, Best Match) at up to 28 pressure levels along your route, with high-resolution **GRIB2 enrichment** (upper-air soundings, cloud microphysics) direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where coverage allows
+- **Multi-model forecasting** — Up to six NWP models per route, fetched where possible as GRIB direct from the forecast centres (ECMWF IFS, DWD ICON-EU/D2, NOAA GFS with HRRR over the US, Météo-France AROME, Met Office UKV), with [Open-Meteo](https://open-meteo.com/) filling the gaps and providing Best Match
 - **~85 derived metrics** — From raw NWP data, derives thermodynamic indices (CAPE, CIN, Lifted Index, K-Index, etc.), cloud layers, icing zones (multiple methods), CAT turbulence risk, convective potential, wind shear, and more using MetPy
-- **20+ route advisories across 11 categories** — Deterministic hazard evaluators (icing incl. freezing precipitation, cloud, en-route visibility/precipitation, turbulence incl. wave-corroborated mountain wind, convective incl. terminal convective & LLWS, winds-aloft trip impact, airport conditions incl. density altitude, feasibility, model quality, fronts, sun/daylight) with per-model GREEN/AMBER/RED severity grading and worst/majority aggregation
-- **D-0 observations** — METAR/TAF for departure/arrival airports plus route **SIGMETs** (area hazards), with a deterministic banner flagging conditions that have worsened since the last refresh
+- **20+ route advisories across 11 categories** — Deterministic hazard evaluators (airport weather, wind, density altitude, LLWS and frost; VFR/IFR/approach/departure feasibility; winds aloft; icing graded for the aircraft's FIKI equipage, freezing precipitation, icing escape; cloud tops and VMC at cruise; convective activity and character; en-route precipitation; turbulence incl. wave-corroborated mountain wind; sun; fronts; model quality) with per-model GREEN/AMBER/RED grading, majority (default) or worst-model aggregation, an altitude slider/table, and advice-only **options to improve** that never change the grade
+- **Flight-day live layer** — From about three hours before departure, a 10-minute tick follows the newest METAR/TAF, route **SIGMETs**, OPERA radar, MTG lightning and satellite cloud tops along the route: an at-a-glance nutshell with an AI highlight, a route ribbon with ETAs, storm cells placed by side and off-track distance, and a "since this briefing" change list. It annotates the briefing and never re-grades it. The iPhone app's **Start Flight** places the aircraft on the route from GPS; after the flight the view becomes a **recap** of what was seen where you actually were
 - **Weather-based alternates** — When a destination is marginal (D-2 inward), surfaces nearby divert candidates that fix the deficient axis (category/wind/crosswind), classified before/after along the route, plus a regulatory **"is an alternate required?"** estimate (FAA 14 CFR 91.169 + EASA Part-NCO)
 - **Model comparison** — Side-by-side divergence scoring so you can see where models agree and where they don't
 - **Interactive cross-section** — Canvas-rendered visualization with ~25 toggleable layers (terrain, clouds, icing, SFIP, CAT, inversions, convective, temperature lines, stability levels, NWP cloud bands), switchable themes, a compare-across-models mode, and hover/click interaction
 - **Route map & route graph** — Leaflet route map with an altitude slider and metric-colored segments (incl. an "alternate required?" mode), plus a scalar route graph sharing the cross-section's x-axis
 - **Skew-T soundings** — Per-waypoint, per-model diagrams: a dynamic canvas Skew-T with a multi-variable side panel and overlay bands, a multi-model compare mode, and the classic MetPy PNG (CAPE/CIN shading, hodograph, indices panel)
-- **GRAMET cross-section** — From the Autorouter API (requires credentials)
-- **LLM-powered synopsis** — Optional AI-generated weather narrative via Claude or ChatGPT, combining DWD synoptic text with quantitative analysis; beyond the high-resolution horizon it switches to a cheaper, confidence-led **long-range early outlook**
+- **LLM-powered synopsis** — Optional AI-generated weather narrative via Claude (default) or OpenAI, combining DWD synoptic text with quantitative analysis; beyond the high-resolution horizon it switches to a cheaper, confidence-led **long-range early outlook**
 - **Navigation database** — Resolves non-airport waypoints (5-letter fixes, navaids, free-route points) from ~95,900 deduplicated points built from four free public sources, refreshed on the 28-day AIRAC/NASR cycle
 - **PDF/HTML reports & email** — Self-contained briefing reports you can download or email to yourself
 - **Terrain-aware** — SRTM 90m elevation profiles for mountain crossing risk assessment
-- **Pan-European forecast map** — Standalone map of the same derived metrics across Europe, independent of any single route
-- **Native iOS / iPadOS app** — SwiftUI client sharing the same API: flights, briefing, cross-section, map, Skew-T, push notifications when a briefing is ready
+- **Maps** — Pan-European views independent of any single route: forecast overview per airport (per model, worst or majority), Now (latest METARs, radar, satellite IR, lightning), Synoptic forecast (fronts and air-mass boundaries), Historical replay, Climatology, and forecast accuracy stats
+- **Trips & timing** — Group legs into a trip whose viability is that of its remaining legs, and let a per-flight Flexibility setting scan other departure times in the background
+- **Native iOS / iPadOS app** — SwiftUI client sharing the same API: flights, briefing, cross-section, map, Skew-T, offline briefings, the Observed tab and Start Flight on flight day, push notifications, Siri shortcuts
+- **Android app** — Kotlin / Jetpack Compose client in `app/android/` (in testing ahead of its Play Store release)
 - **PIREPs** — File your own pilot reports and read others' (permission-gated per user)
-- **Post-flight debrief** — Rate a briefing after you fly, so assessments can be checked against what actually happened
+- **Post-flight debrief** — Record whether you flew or cancelled and what weather mattered, so assessments can be checked against what actually happened
 - **Forecast verification** — Model forecasts scored against later observations and analyses, feeding a skill view per model and metric (admin-facing while it settles)
-- **MCP server** — Exposes flights, briefings, advisory detail and airport weather as tools for AI assistants (Claude, ChatGPT), with OAuth 2.1
+- **MCP server** — Exposes flights, briefings, advisory detail, airport weather and a multi-day area outlook ("which day this weekend?") as tools for AI assistants, with OAuth 2.1; listed in Claude's connectors directory, plus a ChatGPT custom GPT over the same core
 
 ## Weather Models
 
-| Model | Source | Forecast range |
-|-------|--------|---------------|
-| **Best Match** | Open-Meteo auto-select | 16 days |
-| **ECMWF IFS** | European Centre | 10 days |
-| **GFS** | NOAA (US) | 16 days |
-| **DWD ICON** | German Weather Service | 7 days |
-| **UKMO** | UK Met Office | 7 days |
-| **Meteo-France** | Meteo-France Arpege | 6 days |
+| Slot | Model | Source |
+|------|-------|--------|
+| **ECMWF** | ECMWF IFS | ECMWF GRIB direct, Open-Meteo fallback |
+| **ICON** | DWD ICON-EU / ICON-D2 | DWD GRIB direct, Open-Meteo fallback |
+| **GFS** | NOAA GFS (HRRR over the continental US) | NOAA GRIB direct, Open-Meteo fallback |
+| **Météo-France** | Météo-France AROME | Météo-France GRIB (AROME domain only) |
+| **UKMO** | Met Office UKV | Met Office NetCDF on AWS (UKV domain only) |
+| **Best Match** | Open-Meteo auto-select | Open-Meteo |
 
-Not all variables are available from all models (e.g., omega/vertical velocity is missing from ICON and Meteo-France, visibility from ECMWF). Flyfun Weather derives fallbacks where possible and clearly indicates when data is unavailable.
+Horizons differ by model, from about two days for the high-resolution regional models (AROME, UKV, ICON-D2) to 10+ days for the global ones; the live list of runs, resolutions and horizons is on the [Data Sources tab](https://weather.flyfun.aero/help.html?tab=data-sources) of the help page. Not all variables are available from all models; Flyfun Weather derives fallbacks where possible and clearly indicates when data is unavailable.
 
 ## Route Advisories
 
-Each advisory evaluates a specific weather hazard along your route, per model. The set has grown to 20+ evaluators across 11 categories; a representative selection:
+Each advisory evaluates a specific weather hazard along your route, per model. The summary rating per advisory is the majority of the models by default (ties go to the worse grade), or the worst model for a conservative profile.
 
-| Advisory | What it checks |
-|----------|---------------|
-| Icing Escape | Can you descend below freezing to escape icing? (terrain clearance) |
-| FIKI Icing | Icing layer thickness and severity for FIKI-equipped aircraft |
-| Freezing Level | Freezing level vs terrain (mountain icing risk) |
-| Freezing Precipitation | Freezing rain / ice pellets in the column |
-| Cloud Top | Can you fly above the clouds? (cloud top vs flight ceiling) |
-| VMC Cruise | Cloud coverage at cruise altitude (VFR viability) |
-| En-route Visibility | Visibility and precipitation along the route |
-| VFR / IFR Feasibility | Overall VFR/IFR viability vs ceiling, visibility, and cloud layers |
-| Flight Category | VFR/MVFR/IFR/LIFR classification at departure, en-route, and arrival |
-| Turbulence | Clear Air Turbulence + strong vertical motion at cruise |
-| Mountain Wind | Orographic/rotor wind risk near significant terrain (wave-corroborated) |
-| Winds Aloft | Headwind/tailwind trip impact along the route |
-| Airport Conditions | Surface wind, gusts, crosswind, and density altitude at departure/arrival |
-| Terminal Convective / LLWS | Low-level wind shear and convective risk near the airports |
-| Convective | Thunderstorm development risk from CAPE and instability indices |
-| Fronts | Frontal passages crossing the route |
-| Sun | Daylight / sun position relative to the flight window |
-| Model Agreement | How much do the models agree with each other? |
+| Category | Advisories |
+|----------|-----------|
+| Airport | Airport weather (flight category), surface wind and crosswind, density altitude, low-level wind shear, frost at departure (informational) |
+| Flight rules | VFR feasibility, IFR feasibility, approach feasibility, departure feasibility |
+| Wind | Winds aloft — headwind/tailwind trip impact |
+| Icing | Icing graded for the aircraft's FIKI equipage, freezing precipitation, icing escape (descend below freezing with terrain clearance), FIKI icing (opt-in) |
+| Cloud | Cloud tops vs ceiling, VMC at cruise |
+| Convective | Convective activity, convective character (isolated → organised / embedded) |
+| Precipitation | En-route precipitation and visibility |
+| Turbulence | Turbulence (CAT + vertical motion), mountain wind (wave-corroborated) |
+| Sun | Low-sun glare on the runway, day-VFR arrival near sunset |
+| Fronts | Air-mass boundaries crossing the route (experimental, opt-in) |
+| Model (diagnostics) | Forecast confidence, DD vs NWP agreement (off by default) |
 
 Advisory parameters are user-tunable (terrain margins, percentage thresholds, etc.) and can be recalculated without re-fetching weather data.
 
@@ -86,9 +80,11 @@ Advisory parameters are user-tunable (terrain margins, percentage thresholds, et
 
 **iOS / iPadOS:** Swift / SwiftUI / Xcode
 
-**Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider OAuth (Google, Apple)
+**Infrastructure:** Docker / SQLite (dev) / MySQL (prod) / Multi-provider sign-in (Google, Apple, email link)
 
-**Testing:** pytest (~5,000 tests) / vitest / Playwright / Swift Testing (iOS unit tests) — all gated by CI on every push and PR
+**Android:** Kotlin / Jetpack Compose (Material 3) / Gradle
+
+**Testing:** pytest (~8,000 tests) / vitest / Playwright / Swift Testing (iOS) / JUnit (Android) — gated by CI on every push and PR; the iOS and Android UI journeys run nightly
 
 ## Project Structure
 
@@ -97,7 +93,8 @@ src/weatherbrief/
 ├── models/           # Pydantic v2 data models
 ├── pipeline.py       # Core engine: fetch → analyze → outputs
 ├── tasks/            # Independently runnable pipeline stages (fetch, analyze, advise, …)
-├── fetch/            # Data retrieval (Open-Meteo, GRIB2 enrichment, SRTM, GRAMET, DWD text)
+├── fetch/            # Data retrieval (GRIB2 direct, Open-Meteo, SRTM, DWD/NWS text, front charts)
+├── observed/         # Radar, lightning and satellite ingest sampled along the route
 ├── analysis/
 │   ├── wind.py       # Headwind/crosswind decomposition
 │   ├── comparison.py # Multi-model divergence scoring
@@ -107,7 +104,7 @@ src/weatherbrief/
 ├── hewson/           # Hewson θe diagnostic field precompute (NPZ snapshots)
 ├── era5/             # ERA5 reanalysis loaders for retrospective calibration
 ├── digest/           # Text digest, Skew-T plots, LLM briefing (LangGraph)
-├── api/              # FastAPI app (auth, flights, packs, preferences, admin)
+├── api/              # FastAPI app (auth, flights, packs, live layer, preferences, admin)
 ├── mcp/              # MCP server exposing briefings as AI-assistant tools
 ├── connectors/       # Shared agent-facing response shaping (MCP + GPT/OpenAPI)
 ├── db/               # SQLAlchemy ORM + Alembic migrations
@@ -136,23 +133,26 @@ web/
 ├── index.html          # Flights list
 ├── briefing.html       # Briefing report (collapsible sections)
 ├── flight.html         # Single flight detail / edit
-├── maps.html           # Pan-European forecast map
+├── trip.html           # Trip (several legs) view
+├── maps.html           # Maps: forecast, now, synoptic, historical, climatology, accuracy
 ├── verification.html   # Forecast verification / model skill (admin)
 ├── pireps.html         # Pilot reports
 ├── settings.html       # User preferences + advisory tuning
-├── admin.html          # User approval + usage tracking
+├── admin.html          # Users, usage, costs and performance (admin)
 ├── login.html          # Authentication page
 ├── help.html           # User help / FAQ + What's New
 ├── donate.html         # Optional support / donations (Stripe)
 ├── privacy.html        # Privacy policy
 ├── eval.html           # LLM digest eval workbench (dev/admin)
+├── embed.html          # Frameable cross-section (used by talks.flyfun.aero)
 ├── cost-summary.html   # Service cost transparency (admin)
 └── user-costs.html     # Personal usage & cost tracking
 
 app/flyfun-weather/   # Native iOS / iPadOS app (SwiftUI, Xcode project)
+app/android/          # Native Android app (Kotlin, Jetpack Compose)
 configs/              # LLM digest configuration and prompts
 designs/              # Design documentation (see designs/INDEX.md)
-tests/                # pytest test suite (~5,000 tests)
+tests/                # pytest test suite (~8,000 tests)
 alembic/versions/     # Database migrations
 ```
 
@@ -197,9 +197,6 @@ ENVIRONMENT=development
 ANTHROPIC_API_KEY=sk-...
 OPENAI_API_KEY=sk-...
 
-# Optional — for GRAMET cross-sections (Autorouter account)
-AUTOROUTER_USERNAME=...
-AUTOROUTER_PASSWORD=...
 
 # Required for production multi-user deployment
 GOOGLE_CLIENT_ID=...
@@ -225,6 +222,8 @@ cd web && npm run dev
 
 Then open http://localhost:8000
 
+The repo also wraps this for day-to-day work: `scripts/ops/devserver.py` starts uvicorn and the esbuild watch in a tmux session (port 8000 for `main`, 8001+ for worktrees), and `scripts/ops/worktree_init.py <branch>` creates a sibling worktree with its own venv, npm install and `.env`.
+
 **MCP server (AI-assistant tools):**
 
 ```bash
@@ -240,7 +239,7 @@ Other operational entry points follow the same pattern — `python -m weatherbri
 The full suite runs in CI on every push and PR (see the badge above); to run it locally:
 
 ```bash
-# Python — ~5,000 tests. `-m 'not slow'` is applied by default via pyproject
+# Python — ~8,000 tests. `-m 'not slow'` is applied by default via pyproject
 source venv/bin/activate
 pytest
 
@@ -266,13 +265,16 @@ xcodebuild test \
   -only-testing:flyfun-weatherTests
 ```
 
-CI is split across two workflows, path-filtered so they don't overlap.
+CI is path-filtered so the jobs don't overlap.
 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs three parallel jobs —
-`pytest`, `typecheck + build + vitest`, and `playwright` — and
-[`.github/workflows/ios.yml`](.github/workflows/ios.yml) runs the iOS unit tests on a
-macOS runner. A commit touching `app/` runs the iOS job, anything else runs the
+`pytest`, `typecheck + build + vitest`, and `playwright`;
+[`.github/workflows/ios.yml`](.github/workflows/ios.yml) and
+[`.github/workflows/android.yml`](.github/workflows/android.yml) run the app unit tests;
+[`.github/workflows/alembic-check.yml`](.github/workflows/alembic-check.yml) checks the
+migrations. A commit touching `app/` runs the app jobs, anything else runs the
 server/web jobs, and a commit spanning both runs both. Commits touching only
-`designs/`, `.claude/` or Markdown skip CI entirely.
+`designs/`, `.claude/` or Markdown skip CI entirely. The iOS and Android UI journeys
+are not gated: they run nightly on `main` (`ios-ui-nightly.yml`, `android-ui-nightly.yml`).
 
 ### Docker
 
@@ -285,12 +287,14 @@ The Docker image runs as a non-root user (UID 2000). Data is persisted via volum
 
 ## Data Sources
 
-- **NWP forecasts** — [Open-Meteo](https://open-meteo.com/) (free, open-source weather API), plus high-resolution GRIB2 enrichment direct from ECMWF IFS, DWD ICON-EU, and NOAA GFS where available
+- **NWP forecasts** — GRIB direct from ECMWF, DWD, NOAA, Météo-France and the Met Office (UKV on AWS), with [Open-Meteo](https://open-meteo.com/) as fallback and for Best Match
 - **METAR / TAF & SIGMETs** — [NOAA Aviation Weather Center](https://aviationweather.gov/data/api/) for day-of observations, terminal forecasts, and route SIGMETs
+- **Radar** — [EUMETNET OPERA](https://www.eumetnet.eu/activities/observations-programme/current-activities/opera/) pan-European composite, with the Italian Civil Protection (Radar-DPC) mosaic filling OPERA's Italy gap
+- **Lightning & satellite** — [EUMETSAT](https://www.eumetsat.int/) MTG Lightning Imager, cloud-top height/temperature, and EUMETView infrared imagery
+- **Surface pressure & front charts** — DWD, Met Office, and Météo-France (incl. TEMSI)
 - **Terrain elevation** — [SRTM](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) 90m resolution via srtm.py
 - **Airport database** — [euro-aip](https://github.com/roznet/rzflight) (European AIP data)
 - **Navigation waypoints** — Eurocontrol FRA, OpenNav, OurAirports NAVAIDs, and FAA NASR (free public sources; ~95,900 deduplicated points on the 28-day AIRAC/NASR cycle)
-- **GRAMET cross-sections** — [Autorouter](https://www.autorouter.aero/) (requires free account)
 - **Synoptic text forecasts** — DWD (German Weather Service) open data; NWS Area Forecast Discussions for US routes
 
 ## How the Analysis Works
@@ -308,10 +312,10 @@ These per-point results feed into the 20+ route-level advisory evaluators that p
 
 ## Known Limitations
 
-- **Not a certified weather product** — this is an exploratory tool for understanding NWP data
-- **Vertical resolution varies by model** — GFS resolves 28 pressure levels (~25 hPa spacing in the lower atmosphere), but ECMWF offers only 13 via Open-Meteo, so thin cloud layers can still be missed on the coarser models
+- **Not a certified weather product**
+- **Vertical resolution varies by model** — where a model falls back to Open-Meteo its pressure levels are coarser than the direct GRIB, so thin cloud layers can still be missed
 - **No ensemble data** — currently uses deterministic runs only (except precipitation probability from GFS/ECMWF)
-- **European focus** — airport database and some features (DWD text, Autorouter GRAMET) are Europe-centric
+- **European focus** — airport database and some features (DWD text, observed radar/lightning, regional models) are Europe-centric
 - **NWP cloud vs sounding cloud** — two independent cloud detection methods can disagree (see design docs for details)
 
 ## Design Documentation
@@ -338,7 +342,7 @@ MIT
 
 ## Contributing
 
-This is an early-stage personal project. Issues and discussions are welcome. If you're a meteorologist or aviation weather professional and spot something wrong, please open an issue — corrections are very much appreciated.
+Issues and discussions are welcome. If you're a meteorologist or aviation weather professional and spot something wrong, please open an issue — corrections are very much appreciated.
 
 If you're sending a pull request, the [test suite](#testing) gates every PR — running
 `pytest` and the web checks locally first will save you a round trip. Migrations must
