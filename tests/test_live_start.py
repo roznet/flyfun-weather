@@ -178,9 +178,11 @@ def test_start_is_consent_to_live_alerts(db_session, monkeypatch, tmp_path):
     assert live_alerts.skip_reason(db_session, row, trigger="user", started=True)[0] == "user_trigger"
 
     pack_dir = tmp_path / "flight" / "pack"
-    assert live_alerts._pressed_start(row, pack_dir, tp.DEP) is False
+    # Plan only: the planned departure (DEP) has passed.
+    assert live_alerts._start_and_takeoff(row, pack_dir, tp.DEP) == (False, True)
     record_progress_event(pack_dir.parent, _ground_fix(tp.DEP - timedelta(minutes=20)))
-    assert live_alerts._pressed_start(row, pack_dir, tp.DEP) is True
+    # Started, still on the ground: the departure has not been left (#967).
+    assert live_alerts._start_and_takeoff(row, pack_dir, tp.DEP) == (True, False)
 
 
 # --- TAF-at-ETA at the ribbon's ETA -----------------------------------------------------

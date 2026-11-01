@@ -1105,7 +1105,9 @@ def build_glance(
         lines.append(LiveGlanceLine(
             phase=phase, icao=icao, text=" · ".join(clauses),
             alert=phase in alert_phases,
-            passed=flight.progress.departed if phase == "departure" else flight.progress.arrived,
+            # Known to have left (#967), not the schedule estimate: on the ground
+            # after Start the estimate passes every TAXI_MARGIN.
+            passed=flight.progress.left_departure if phase == "departure" else flight.progress.arrived,
             unavailable=unavailable, sources=sources, focus=_terminal_focus(flight, phase),
             proxy_caption=term.caption if term is not None else None,
         ))

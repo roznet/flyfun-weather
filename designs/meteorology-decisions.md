@@ -7721,3 +7721,55 @@ reads, and whether Open-Meteo's `meta.json` can stop it being built.
 **To measure:** with Open-Meteo's `meta.json` unreachable, the 07/19Z map
 still stores ECMWF, GFS and ICON rows, and the cycle log shows no
 `No metadata for model` line.
+
+## 77. Live push: Start-gated, IFR/LIFR ratchet per airport, no category clears (#968)
+
+**Date:** 2026-11-01 · **Issue:** #968 · **Amends:** §47 (category keys) · **Owner decision** (rule agreed 2026-11-01)
+
+### Context
+
+Shadow replay of prod 2026-10-31..11-01 (44 flights, all treated as eligible)
+through the §47 push: ~35 notifications on 12 flights, one of which deserved to
+interrupt a pilot (a destination going LIFR). The rest: departure rows after
+take-off (fixed by #967), 13 of 39 rows were clears, §47's re-arm turned
+boundary bounces into alert → clear → alert, MVFR churn at destinations that
+stayed VFR-legal, and one shower 4 NM off track under FL096 tops on a FL250
+flight. A push in the air is a distraction.
+
+### Choices
+
+- **Start is the only consent.** Auto-refresh alone no longer is. Start also
+  gives the real timing, so "departed" and the arrival mean something.
+- **Category pushes: departure (until the take-off) and destination only, to
+  IFR or LIFR only, for every pilot** (IFR pilots included: "to get ready").
+  MVFR never pushes. Route and alternate airports never push for a category.
+- **Known level per airport**: the worst of MVFR, the briefed category and what
+  the layer showed at Start (the app is open then). Nothing at or above it
+  pushes. A new pack after Start raises it with the new briefing and what
+  shows at that tick; it never goes down within a flight.
+- **Two ratchets**: a METAR pushes when worse than the worst METAR pushed (an
+  observation confirming a forecast push still pushes: it is happening now); a
+  TAF when worse than the worst TAF or METAR pushed (a TAF catching up with
+  the observed weather is silent). A bounce back to an already-pushed category
+  is silent; only worse pushes.
+- **No category clears and no category re-arm** (§47 kept for wind, weather,
+  convective and SIGMET keys). Improvements show in the app only.
+- **Storms**: §41's new-alert rule, plus no push for a route storm when the
+  cruise level clears its known echo tops by 5000 ft (`STORM_TOPS_CLEARANCE_FT`;
+  the margin is ours, not the issue's: echo tops sit below the cloud tops and
+  the turbulence above). Truncated or unknown tops push.
+
+### Rejected
+
+- **Keeping §47's clear for categories with a longer sustain**: still two
+  pushes per bounce, and an improvement is never urgent.
+- **Gating on `new_alert`**: §45's on-screen memory may hold an IFR alerted
+  before Start, which the pilot never got as a push.
+
+### Real-world validation needed
+
+Shadow review (`LIVE_PUSH_WOULD_SEND … rule=…`, `LIVE_PUSH_SUPPRESSED … rows=…`)
+over the next started flights: whether IFR/LIFR at the ends are all that is
+missed, and whether the 5000 ft tops clearance is enough. Owner's replay in the issue (not re-run here;
+Start assumed 30 min before departure, 2026-10-31..11-01): 3 pushes (KGTU METAR
+MVFR→LIFR, EGAE METAR VFR→IFR, EDDC storm), 2 with the tops check.

@@ -1,24 +1,49 @@
-"""Live-alert push on flight day (#754).
+"""Live-alert push on flight day (#754, rule #968).
 
-While an auto-refresh flight is inside its live window, each server live tick
-(``tasks/live_tick.py``) hands its committed layer here. One push per flight
-per tick carries everything that tick raised:
+While a flight is inside its live window, each server live tick
+(``tasks/live_tick.py``) hands its committed layer here. Only a flight whose
+pilot pressed Start (``FlightProgress.start_fix``) gets a push: a push in the
+air is a distraction, so it goes out only for what the pilot needs to know.
+One push per flight per tick carries everything that tick raised:
 
-- **alerts** — alert-tier rows with ``new_alert`` (the classifier's own
+- **category alerts** (``metar_category`` / ``taf_category``, the rule below);
+- **other alerts** — alert-tier rows with ``new_alert`` (the classifier's own
   alert-once rule), plus rows for a key whose clear we pushed earlier (the
   re-arm, below);
-- **clears** — an alert we pushed that has not been an alert-tier row for
-  :data:`CLEAR_SUSTAIN_TICKS` consecutive ticks on which its source was read.
+- **clears** — a non-category alert we pushed that has not been an alert-tier
+  row for :data:`CLEAR_SUSTAIN_TICKS` consecutive ticks on which its source
+  was read.
+
+**Category rule (#968).** Departure (until the take-off) and destination
+only; route and alternate airports never push for a category. A METAR or
+TAF-at-ETA drop to IFR or LIFR pushes, for every pilot; MVFR never does. Per
+airport, ``LivePushState.known`` is what the pilot already knows: seeded on
+the first tick after Start with the worst of MVFR, the briefed category and
+what showed then (the app is open at Start), raised again by a new pack, never
+lowered. Nothing at or above it pushes. Two ratchets: a METAR pushes only when
+worse than the worst METAR pushed; a TAF only when worse than the worst TAF
+*or METAR* pushed (a TAF catching up with observed weather is silent; a METAR
+confirming an earlier TAF push still pushes, it is happening now). A bounce
+back to an already-pushed category is silent. No category clears, no category
+re-arm: improvements show in the app only. The ratchet advances whatever the
+push's outcome (sent, shadow, skipped or failed) so a mute, an outage or a
+pref toggle never releases a burst later; a failed push is retried as below.
+
+**Storms over the top (#968).** A route storm whose echo tops are known (not
+truncated) and at least :data:`STORM_TOPS_CLEARANCE_FT` below the cruise level
+does not push: the EDDC case, FL096 tops under a FL250 cruise.
 
 Push only, never email. A ↻ press (``trigger="user"``) never pushes: the
 pilot is looking at the screen.
 
-**Re-arm.** Airport alert memory keeps the worst level alerted for the whole
-flight (§45), so after "LFAT no longer IFR" a return to IFR would stay quiet
-and leave the pilot believing it is clear. Once a clear is pushed for a key,
-its next alert-tier row pushes again. This amends §45 for the push path only:
-the classifier, ``new_alert`` and what the screens show are unchanged
-(meteorology-decisions §47).
+**Re-arm** (non-category keys). Airport alert memory keeps the worst level
+alerted for the whole flight (§45). Once a clear is pushed for a key, its next
+alert-tier row pushes again. This amends §45 for the push path only: the
+classifier, ``new_alert`` and what the screens show are unchanged
+(meteorology-decisions §47; category keys left it in §77).
+
+**Departure rows end at the take-off** (``FlightProgress.left_departure``,
+#967), never at the planned time.
 
 Storm rows push their new alerts but never a clear: "the storm passed" has no
 clean definition yet.
@@ -73,6 +98,18 @@ PUSH_TTL = timedelta(minutes=30)
 TYPE_ALERT = "live_alert"
 TYPE_CLEAR = "live_clear"
 
+#: A route storm whose known echo tops are at least this far below the cruise
+#: level does not push (#968). Echo tops sit under the cloud tops, and the
+#: turbulence above a cell reaches higher still: the margin is generous.
+STORM_TOPS_CLEARANCE_FT = 5000
+
+#: Category kinds the #968 rule governs, and the categories that may push.
+CATEGORY_KINDS = ("metar_category", "taf_category")
+PUSH_CATEGORIES = ("IFR", "LIFR")
+#: Below this nothing pushes for a category (the known level's floor).
+KNOWN_FLOOR = "MVFR"
+_RANK = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
+
 #: Airport key prefix -> the word the clear line uses ("LFAT METAR no longer IFR").
 _CLEAR_LABEL = {"metar": "METAR", "taf": "TAF at ETA", "conv": "METAR", "wx": "METAR", "wind": "wind"}
 
@@ -101,6 +138,12 @@ class PushDecision:
     # The memory with this tick's sustain counters advanced and SIGMET keys
     # followed through reissues, before this tick's pushes are applied.
     state: LivePushState = field(default_factory=LivePushState)
+    # Alert-tier rows the rule kept silent this tick, (key, reason): e.g.
+    # "known=IFR", "ratchet=IFR", "mvfr", "role=route", "not_started",
+    # "after_takeoff", "tops=FL096<FL250". For the shadow review (#968).
+    suppressed: list[tuple[str, str]] = field(default_factory=list)
+    # Why each category alert pushes: key -> "known=MVFR ratchet=-".
+    reasons: dict[str, str] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
@@ -196,6 +239,88 @@ def clear_line(pushed: LivePushedAlert, row: LiveChange | None, *, now: datetime
     return f"Cleared: {pushed.message} · as of {_hhmm(now)}"
 
 
+def _worst(*cats: str | None) -> str | None:
+    known = [c for c in cats if c in _RANK]
+    return max(known, key=_RANK.__getitem__) if known else None
+
+
+def _worse(cat: str | None, than: str | None) -> bool:
+    return cat in _RANK and (than not in _RANK or _RANK[cat] > _RANK[than])
+
+
+def _showing(layer: LiveLayer | None, rows: list[LiveChange]) -> dict[str, str]:
+    """ICAO -> the worst category the layer shows there this tick: each
+    corridor airport's METAR and TAF-at-ETA (through its proxy, #767), and
+    every category row's briefed and current values."""
+    out: dict[str, str] = {}
+
+    def add(icao, *cats):
+        w = _worst(out.get(icao), *cats)
+        if icao and w is not None:
+            out[icao.upper()] = w
+
+    obs = layer.route_observations if layer is not None else None
+    for a in (obs.airports if obs is not None else []):
+        term = obs.terminal(a.icao)
+        metar = term.metar_row.metar_flight_category if term and term.metar_row else None
+        taf = term.taf_row.taf_flight_category_at_eta if term and term.taf_row else None
+        add(a.icao, metar, taf)
+    for c in rows:
+        if c.kind in CATEGORY_KINDS:
+            add(c.icao, c.from_value, c.to_value)
+    return out
+
+
+def _raise_known(state: LivePushState, layer: LiveLayer | None, rows: list[LiveChange], now: datetime) -> None:
+    """Seed (first started tick) or raise (a new pack) the known level: the
+    worst of what it was, the briefing's category and what shows now. Only
+    levels above the MVFR floor are stored."""
+    for icao, cat in _showing(layer, rows).items():
+        w = _worst(state.known.get(icao), cat)
+        if _worse(w, KNOWN_FLOOR):
+            state.known[icao] = w
+    if state.started_at is None:
+        state.started_at = now
+    state.known_pack = layer.pack_timestamp if layer is not None else None
+
+
+def _category_verdict(c: LiveChange, state: LivePushState) -> tuple[bool, str]:
+    """(push?, reason) for a category alert-tier row, the state seeded."""
+    if c.role not in ("departure", "destination"):
+        return False, f"role={c.role}"
+    to = c.to_value
+    if to not in PUSH_CATEGORIES:
+        return False, "mvfr" if to == "MVFR" else f"cat={to}"
+    icao = (c.icao or "").upper()
+    known = _worst(KNOWN_FLOOR, state.known.get(icao), c.from_value)
+    if not _worse(to, known):
+        return False, f"known={known}"
+    metar = state.metar_pushed.get(icao)
+    ratchet = metar if c.kind == "metar_category" else _worst(metar, state.taf_pushed.get(icao))
+    if not _worse(to, ratchet):
+        return False, f"ratchet={ratchet}"
+    return True, f"known={known} ratchet={ratchet or '-'}"
+
+
+def _storm_over_the_top(c: LiveChange, layer: LiveLayer | None, cruise_ft: int | None) -> str | None:
+    """The reason a route storm row stays silent because the cruise clears
+    its echo tops (#968), else None. Every alerting member's top must be
+    known and untruncated."""
+    if c.role != "route" or cruise_ft is None or layer is None or layer.storms is None:
+        return None
+    ids = c.alert_storm_ids or c.storm_ids
+    if not ids:
+        return None
+    by_id = {st.id: st for st in layer.storms.storms}
+    members = [by_id.get(i) for i in ids]
+    if any(m is None or m.top_fl is None or m.truncated for m in members):
+        return None
+    top = max(m.top_fl for m in members)
+    if cruise_ft >= top * 100 + STORM_TOPS_CLEARANCE_FT:
+        return f"tops=FL{top:03d}<FL{cruise_ft // 100:03d}"
+    return None
+
+
 def decide(
     changes: LiveChanges,
     state: LivePushState | None,
@@ -204,21 +329,66 @@ def decide(
     layer: LiveLayer | None = None,
     is_pending=None,
     sending: bool = False,
+    started: bool = False,
+    left_departure: bool = False,
+    cruise_ft: int | None = None,
 ) -> PushDecision:
     """This tick's pushes from its committed changes and the push memory.
 
     ``is_pending(key)`` says a SIGMET key is pending (issued, not yet valid)
     and so not cleared by its absence (a failed lookahead query, #683).
     ``sending`` is whether this push will really go out (not shadow mode).
+    ``started``: the pilot pressed Start (no category push without it, and
+    the first started tick seeds the known level). ``left_departure``: a
+    take-off is known (#967), so departure rows no longer push. ``cruise_ft``:
+    the flight's cruise level, for the storm tops check.
     """
     state = state.model_copy(deep=True) if state is not None else LivePushState()
     rows = changes.changes
     alert_rows = [c for c in rows if c.tier == "alert"]
     out = PushDecision(state=state)
 
+    # Category keys no longer clear (#968): drop any left from before.
+    for key in [k for k, p in state.active.items() if p.kind in CATEGORY_KINDS]:
+        del state.active[key]
+    if started and (state.started_at is None or state.known_pack != (layer.pack_timestamp if layer else None)):
+        # First tick after Start, or a new pack since: what shows now is known.
+        _raise_known(state, layer, rows, now)
+
     # A failed push is retried only while it would not have expired yet.
     state.retry = {k: t for k, t in state.retry.items() if now < t + PUSH_TTL}
     for c in alert_rows:
+        if c.role == "departure" and left_departure:
+            out.suppressed.append((c.key, "after_takeoff"))
+            continue
+        if c.kind in CATEGORY_KINDS:
+            if c.key in state.retry:
+                out.alerts.append(c)
+                out.retried.add(c.key)
+                continue
+            if c.direction != "worse":
+                continue
+            # The push is decided on the ratchet, not on ``new_alert`` (§45's
+            # on-screen memory may hold an IFR from before Start); only a row
+            # the screen alerts on this tick counts as suppressed, so a
+            # persisting row is not logged every tick.
+            if not started:
+                if c.new_alert:
+                    out.suppressed.append((c.key, "not_started"))
+                continue
+            push, why = _category_verdict(c, state)
+            if push:
+                out.alerts.append(c)
+                out.reasons[c.key] = why
+            elif c.new_alert:
+                out.suppressed.append((c.key, why))
+                state.category_suppressed += 1
+            continue
+        if c.kind == "storm" and c.new_alert:
+            tops = _storm_over_the_top(c, layer, cruise_ft)
+            if tops is not None:
+                out.suppressed.append((c.key, tops))
+                continue
         if c.new_alert:
             out.alerts.append(c)
         elif c.kind != "storm" and _rearmed_key(c.key, state.rearmed) is not None:
@@ -266,6 +436,14 @@ def next_state(
     armed; its clears still leave ``active`` so unmuting does not release a
     burst of stale clears. A ``failed`` push's alerts are kept for retry."""
     state = decision.state.model_copy(deep=True)
+    # The category ratchets advance whatever the outcome (#968): a skipped
+    # push (muted, pref off) must not release a burst later, and a failed one
+    # is re-sent through ``retry`` below, not by the ratchet.
+    for c in decision.alerts:
+        if c.kind in CATEGORY_KINDS and c.icao and c.to_value in _RANK:
+            ratchet = state.metar_pushed if c.kind == "metar_category" else state.taf_pushed
+            icao = c.icao.upper()
+            ratchet[icao] = _worst(ratchet.get(icao), c.to_value)
     for key in decision.silent_clears:
         state.active.pop(key, None)
     for p, _ in decision.clears:
@@ -280,7 +458,7 @@ def next_state(
         return state
     for c in decision.alerts:
         state.retry.pop(c.key, None)
-        if c.kind != "storm":
+        if c.kind != "storm" and c.kind not in CATEGORY_KINDS:
             state.active[c.key] = LivePushedAlert(
                 key=c.key, kind=c.kind, role=c.role, icao=c.icao,
                 to_value=c.to_value, message=c.message, pushed_at=now,
@@ -361,22 +539,23 @@ def skip_reason(
 ) -> tuple[str | None, list[PushDevice]]:
     """(why this flight's user gets no live push, or None; their ``PushDevice`` list).
 
-    All must hold: a tick (not a ↻ press), the flight's or its trip's
-    auto-refresh on or the flight ``started`` (#812: pressing Start is
-    consent to live alerts for that flight), the bell not muted (the flight's, else its trip's — the
+    All must hold: a tick (not a ↻ press), the flight ``started`` (#968:
+    pressing Start is the only consent to live alerts; auto-refresh alone,
+    the flight's or its trip's, no longer is, though it still drives
+    briefing pushes), the bell not muted (the flight's, else its trip's — the
     same precedence as briefing pushes), ``notify_live_alerts`` on,
     ``notify_push`` on and at least one device. ``notify_scope`` and
     ``notify_change_only`` govern briefing updates and do not apply.
     """
     if trigger == "user":
         return "user_trigger", []
+    if not started:
+        return "no_consent", []
     trip = None
     if getattr(flight_row, "trip_id", None):
         from weatherbrief.db.models import FlightTripRow
 
         trip = db.get(FlightTripRow, flight_row.trip_id)
-    if not (started or flight_row.auto_refresh or (trip is not None and trip.auto_refresh)):
-        return "no_consent", []
     override = flight_row.notify_override or "default"
     if override == "default" and trip is not None:
         override = trip.notify_override or "default"
@@ -397,23 +576,26 @@ def skip_reason(
     return None, devices
 
 
-def _pressed_start(flight_row, pack_dir: Path | str, now: datetime) -> bool:
-    """The app's Start was seen on this flight: a fix on the ground at the
-    departure (#812, ``FlightProgress.start_fix``). Never raises."""
+def _start_and_takeoff(flight_row, pack_dir: Path | str, now: datetime) -> tuple[bool, bool]:
+    """(the app's Start was seen on this flight, a take-off is known): a fix
+    on the ground at the departure (#812, ``FlightProgress.start_fix``) and
+    ``FlightProgress.left_departure`` (#967). (False, False) when unreadable;
+    never raises."""
     try:
         from weatherbrief.analysis.flight_progress import FlightProgress
         from weatherbrief.storage.flights import ensure_utc
         from weatherbrief.tasks.live_layer import flight_dir_for_pack, load_progress_events
 
         if flight_row.departure_time is None:
-            return False
+            return False, False
         events = load_progress_events(flight_dir_for_pack(pack_dir))
-        return FlightProgress.schedule(
+        progress = FlightProgress.schedule(
             ensure_utc(flight_row.departure_time), flight_row.flight_duration_hours, now, events,
-        ).start_fix is not None
+        )
+        return progress.start_fix is not None, progress.left_departure
     except Exception:
         logger.warning("Live push: could not read Start for %s", flight_row.id, exc_info=True)
-        return False
+        return False, False
 
 
 # --- The sink -----------------------------------------------------------------
@@ -458,18 +640,22 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
 
     traces = {t.key: t for t in layer.sigmet_traces}
     sending = send_enabled()
+    started, left_departure = _start_and_takeoff(flight_row, pack_dir, now)
     decision = decide(
         layer.changes, layer.push_state, now=now, layer=layer,
         is_pending=lambda k: pending_sigmet_key(k, traces, now),
-        sending=sending,
+        sending=sending, started=started, left_departure=left_departure,
+        cruise_ft=getattr(flight_row, "cruise_altitude_ft", None),
     )
     outcome = "none"
     pushed = False
+    if decision.suppressed:
+        logger.info("LIVE_PUSH_SUPPRESSED flight=%s started=%s rows=%s", flight_row.id, started,
+                    [f"{k}:{why}" for k, why in decision.suppressed])
     if not decision.empty:
         alert_keys = [c.key for c in decision.alerts]
         cleared_keys = [p.key for p, _ in decision.clears]
-        reason, devices = skip_reason(db, flight_row, trigger=trigger,
-                                      started=_pressed_start(flight_row, pack_dir, now))
+        reason, devices = skip_reason(db, flight_row, trigger=trigger, started=started)
         if reason is not None:
             logger.info(
                 "LIVE_PUSH_SKIPPED flight=%s user=%s reason=%s alerts=%s cleared=%s",
@@ -479,9 +665,11 @@ def _notify(db, flight_row, layer, *, pack_dir, trigger, now) -> str:
         else:
             pushed = True
             logger.info(
-                "LIVE_PUSH_WOULD_SEND flight=%s user=%s alerts=%s cleared=%s rearmed=%s retried=%s devices=%d",
+                "LIVE_PUSH_WOULD_SEND flight=%s user=%s alerts=%s cleared=%s rearmed=%s retried=%s "
+                "rule=%s devices=%d",
                 flight_row.id, flight_row.user_id, alert_keys, cleared_keys,
-                sorted(decision.rearmed), sorted(decision.retried), len(devices),
+                sorted(decision.rearmed), sorted(decision.retried),
+                [f"{k}:{why}" for k, why in decision.reasons.items()], len(devices),
             )
             outcome = "shadow"
             if sending:

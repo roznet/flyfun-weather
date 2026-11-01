@@ -379,21 +379,25 @@ keeping:
 
 ## Live-alert push (#754)
 
-A second push stream, separate from briefing updates: on flight day, the live
-layer's alerts (and their clearing) for auto-refresh or started flights. Push only, never
-email. Server: `notify/live_alerts.py`; the decision and memory are in
-live-observation-layer.md → "Live-alert push", the cleared/re-arm rule in
-meteorology-decisions §47.
+A second push stream, separate from briefing updates: on flight day, what the
+pilot needs to know in the air, for flights whose pilot pressed Start. Push
+only, never email. Server: `notify/live_alerts.py`; the decision and memory are
+in live-observation-layer.md → "Live-alert push", the category rule in
+meteorology-decisions §77 (amending §47's clear/re-arm for category keys).
 
-- **Gate** (`skip_reason`, all must hold): a tick, not a ↻ press; the flight's
-  or its trip's `auto_refresh`, or Start pressed on the flight (#812: a fix on
-  the ground at the departure, `FlightProgress.start_fix`, is consent to live
-  alerts for that flight, within its live window only, like every live push; the
-  app sends no fix before the Start press, so a weather check never grants it); the bell not Mute (the flight's, else its
-  trip's, as for briefing pushes); `notify_live_alerts` (account pref, default
-  **on**, the opt-out); `notify_push` on and ≥1 device. `notify_scope` /
+- **Gate** (`skip_reason`, all must hold): a tick, not a ↻ press; **Start
+  pressed on the flight** (#968; #812: a fix on the ground at the departure,
+  `FlightProgress.start_fix`, within its live window only; the app sends no fix
+  before the Start press, so a weather check never grants it). The flight's or
+  trip's `auto_refresh` alone is **no longer** consent (it still drives briefing
+  pushes); `no_consent` otherwise. Every opt-out still applies: the bell not
+  Mute (the flight's, else its trip's, as for briefing pushes);
+  `notify_live_alerts` (account pref, default **on**, the opt-out; off →
+  `pref_off`); `notify_push` on and ≥1 device. `notify_scope` /
   `notify_change_only` do **not** apply. The pref is a content toggle, not a
-  channel: the channel invariant (#371) ignores it.
+  channel: the channel invariant (#371) ignores it. The web settings hint says
+  so; the iOS Settings footer still reads "on auto-refresh flights … and when one
+  clears" (Swift, follow-up).
 - **One push per flight per tick.** Title "EGTF → LFAT · 2 changes" (or
   "· live alert" / "· alert cleared"); body one line per change, alerts
   first: the row's deterministic message, its role, and its report time

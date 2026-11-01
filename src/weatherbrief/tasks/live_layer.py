@@ -952,6 +952,11 @@ def commit_live_update(
             pack_timestamp=pack_timestamp,
             pack_dir_name=pack_dir.name,
         )
+        if prior is None and stored is not None and stored.push_state is not None \
+                and stored.push_state.started_at is not None:
+            # A new pack after Start (#968): the push's known level and ratchets
+            # carry over, so a refresh cannot re-push an IFR already sent.
+            layer.push_state = stored.push_state.carried_over()
         if observations is not None:
             layer.route_observations = observations
             layer.observations_updated_at = now
