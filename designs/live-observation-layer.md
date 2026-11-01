@@ -1612,10 +1612,14 @@ commit.
   briefed `from_value`) and than its ratchet (METAR: worst METAR pushed; TAF:
   worst TAF *or METAR* pushed). Decided on the ratchet, not `new_alert`: §45's
   on-screen memory can hold an IFR from before Start. `known` is seeded on the
-  first started tick and raised on the first tick of each new pack, from what
-  the layer shows then (every corridor airport's METAR and TAF-at-ETA through
-  its proxy, plus every category row's from/to), so that tick pushes nothing
-  for a category. No category clear, no category re-arm. The ratchet advances
+  first started tick from what the layer shows then (every corridor airport's
+  METAR and TAF-at-ETA through its proxy, plus every category row's from/to),
+  so that tick pushes nothing for a category (`LIVE_PUSH_KNOWN … seeded`). On
+  the first tick of each new pack it is raised with the new briefing's
+  category only (rows' `from_value`), **not** what shows then: a scheduled
+  rebuild mid-flight is not the pilot looking and must not swallow an IFR that
+  arrives on that tick (review on PR 970; the issue said "and what's showing";
+  the carried-over ratchets already stop a refresh re-pushing what was sent). No category clear, no category re-arm. The ratchet advances
   whatever the outcome (sent, shadow, skipped, failed), so a mute never
   releases a burst; a failed one is re-sent through `retry`.
 - **Storm tops** (#968): a route storm row stays silent when every alerting

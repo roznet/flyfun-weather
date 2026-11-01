@@ -7745,8 +7745,11 @@ flight. A push in the air is a distraction.
   MVFR never pushes. Route and alternate airports never push for a category.
 - **Known level per airport**: the worst of MVFR, the briefed category and what
   the layer showed at Start (the app is open then). Nothing at or above it
-  pushes. A new pack after Start raises it with the new briefing and what
-  shows at that tick; it never goes down within a flight.
+  pushes. A new pack after Start raises it with the new briefing's category
+  (not what shows at that tick, a departure from the issue: a scheduled
+  rebuild mid-flight would swallow an IFR arriving then; the ratchets carry
+  over, so a refresh cannot re-push what was sent). It never goes down within
+  a flight.
 - **Two ratchets**: a METAR pushes when worse than the worst METAR pushed (an
   observation confirming a forecast push still pushes: it is happening now); a
   TAF when worse than the worst TAF or METAR pushed (a TAF catching up with

@@ -248,10 +248,12 @@ def _worse(cat: str | None, than: str | None) -> bool:
     return cat in _RANK and (than not in _RANK or _RANK[cat] > _RANK[than])
 
 
-def _showing(layer: LiveLayer | None, rows: list[LiveChange]) -> dict[str, str]:
-    """ICAO -> the worst category the layer shows there this tick: each
-    corridor airport's METAR and TAF-at-ETA (through its proxy, #767), and
-    every category row's briefed and current values."""
+def _showing(layer: LiveLayer | None, rows: list[LiveChange], *, current: bool) -> dict[str, str]:
+    """ICAO -> the worst category the pilot is taken to know there: every
+    category row's briefed value, and with ``current`` (the Start seed, the
+    app open) what the layer shows this tick too: each corridor airport's
+    METAR and TAF-at-ETA (through its proxy, #767) and each row's current
+    value."""
     out: dict[str, str] = {}
 
     def add(icao, *cats):
@@ -259,7 +261,7 @@ def _showing(layer: LiveLayer | None, rows: list[LiveChange]) -> dict[str, str]:
         if icao and w is not None:
             out[icao.upper()] = w
 
-    obs = layer.route_observations if layer is not None else None
+    obs = layer.route_observations if layer is not None and current else None
     for a in (obs.airports if obs is not None else []):
         term = obs.terminal(a.icao)
         metar = term.metar_row.metar_flight_category if term and term.metar_row else None
@@ -267,21 +269,29 @@ def _showing(layer: LiveLayer | None, rows: list[LiveChange]) -> dict[str, str]:
         add(a.icao, metar, taf)
     for c in rows:
         if c.kind in CATEGORY_KINDS:
-            add(c.icao, c.from_value, c.to_value)
+            add(c.icao, c.from_value, c.to_value if current else None)
     return out
 
 
 def _raise_known(state: LivePushState, layer: LiveLayer | None, rows: list[LiveChange], now: datetime) -> None:
-    """Seed (first started tick) or raise (a new pack) the known level: the
-    worst of what it was, the briefing's category and what shows now. Only
-    levels above the MVFR floor are stored."""
-    for icao, cat in _showing(layer, rows).items():
+    """Seed (first started tick) or raise (a new pack) the known level. At
+    Start, the worst of the briefing's category and what shows now (the app
+    is open). On a new pack, only the new briefing's category: a scheduled
+    rebuild mid-flight is not the pilot looking, and must not swallow an IFR
+    that arrived on that very tick (review, #968); the carried-over ratchets
+    already stop a refresh re-pushing what was sent. Only levels above the
+    MVFR floor are stored; the level never goes down."""
+    seeding = state.started_at is None
+    for icao, cat in _showing(layer, rows, current=seeding).items():
         w = _worst(state.known.get(icao), cat)
         if _worse(w, KNOWN_FLOOR):
             state.known[icao] = w
-    if state.started_at is None:
+    if seeding:
         state.started_at = now
     state.known_pack = layer.pack_timestamp if layer is not None else None
+    logger.info("LIVE_PUSH_KNOWN flight=%s %s known=%s",
+                layer.flight_id if layer is not None else None,
+                "seeded" if seeding else "new_pack", state.known)
 
 
 def _category_verdict(c: LiveChange, state: LivePushState) -> tuple[bool, str]:
@@ -305,7 +315,9 @@ def _category_verdict(c: LiveChange, state: LivePushState) -> tuple[bool, str]:
 def _storm_over_the_top(c: LiveChange, layer: LiveLayer | None, cruise_ft: int | None) -> str | None:
     """The reason a route storm row stays silent because the cruise clears
     its echo tops (#968), else None. Every alerting member's top must be
-    known and untruncated."""
+    known and untruncated. ``alert_storm_ids`` is never dumped: the tick
+    decides on the layer it committed, in memory (``CommitTrace``); a layer
+    read back from disk falls back to all the row's members (stricter)."""
     if c.role != "route" or cruise_ft is None or layer is None or layer.storms is None:
         return None
     ids = c.alert_storm_ids or c.storm_ids
@@ -362,11 +374,16 @@ def decide(
             out.suppressed.append((c.key, "after_takeoff"))
             continue
         if c.kind in CATEGORY_KINDS:
-            if c.key in state.retry:
-                out.alerts.append(c)
-                out.retried.add(c.key)
-                continue
             if c.direction != "worse":
+                continue
+            if c.key in state.retry:
+                # Re-send a failed push only while the row is still at least
+                # what was sent (the ratchet already holds it, see next_state).
+                icao = (c.icao or "").upper()
+                sent = (state.metar_pushed if c.kind == "metar_category" else state.taf_pushed).get(icao)
+                if c.to_value in PUSH_CATEGORIES and not _worse(sent, c.to_value):
+                    out.alerts.append(c)
+                    out.retried.add(c.key)
                 continue
             # The push is decided on the ratchet, not on ``new_alert`` (§45's
             # on-screen memory may hold an IFR from before Start); only a row

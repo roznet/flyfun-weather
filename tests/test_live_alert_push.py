@@ -290,12 +290,27 @@ def test_new_pack_after_start_keeps_the_ratchet():
     assert alerted(r.tick(dest="LIFR")) == ["metar:ZZDS"]
 
 
-def test_new_pack_raises_the_known_level_with_what_shows():
+def test_new_pack_raises_the_known_level_with_the_new_briefing():
     r = Replay()
-    r.new_pack(base_obs(dest_taf="IFR"))
-    assert r.tick(dest_taf="IFR").empty
+    r.new_pack(base_obs(dest="IFR", dest_taf="IFR"))
+    assert r.tick(dest="MVFR", dest_taf="IFR").empty
     assert r.state.known == {"ZZDS": "IFR"}
     assert r.tick(dest="IFR", dest_taf="IFR").empty
+
+
+def test_new_pack_does_not_swallow_an_ifr_arriving_on_its_first_tick():
+    """A scheduled rebuild mid-flight is not the pilot looking (review)."""
+    r = Replay()
+    r.new_pack(base_obs())
+    d = r.tick(dest="IFR")
+    assert alerted(d) == ["metar:ZZDS"]
+
+
+def test_stale_retry_is_not_resent_once_improved():
+    r = Replay()
+    assert alerted(r.tick(dest="IFR", pushed=False, failed=True)) == ["metar:ZZDS"]
+    d = r.tick(dest="MVFR")
+    assert d.empty
 
 
 def test_carried_over_resets_the_row_memory():
