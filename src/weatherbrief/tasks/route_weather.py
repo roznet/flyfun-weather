@@ -1132,7 +1132,7 @@ def run_realtime_refresh(
             latest_observed=new_observed,
             roles=airport_roles([wp.icao for wp in route.waypoints]),
             destination=route_destination(route),
-            departure_at=progress.departed_at,
+            departure_at=progress.left_departure_at,
             arrival_at=progress.arrival,
             locator=_route_locator(route, new_obs),
         )
