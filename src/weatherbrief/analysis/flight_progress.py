@@ -90,6 +90,12 @@ and nothing for an hour. A fix never makes things worse than the plan.
   follows a started flight more often, and the first ground fix at the
   departure (:attr:`FlightProgress.start_fix`) is the pilot's consent to
   live alerts (#812).
+- Left the departure (:attr:`FlightProgress.left_departure`, #967): what
+  hides the departure's rows and the route behind the aircraft. Not the
+  clock past :attr:`FlightProgress.departed_at` (an estimate for the ETAs),
+  which made a flight on the ground "depart" every ``TAXI_MARGIN`` after
+  each ground fix and come back with the next one. A started flight leaves
+  at a known take-off; a plan-only one at the planned departure.
 - Landing: the first fix not airborne within ``NEAR_DESTINATION_NM`` of the
   destination, once flying there at the top of ``SPEED_RATIO`` could have
   got there, lands the flight at the earlier of the fix and the expected
@@ -752,6 +758,46 @@ class FlightProgress:
     @property
     def departed(self) -> bool:
         return self.departed_at is not None and self.as_of >= self.departed_at
+
+    @property
+    def left_departure_at(self) -> datetime | None:
+        """When the flight is known to have left the departure, for what is
+        still relevant to it (#967); None while it is not. Unlike
+        :attr:`departed_at` (an estimate the ETAs fly from), this never
+        reads a clock past an estimate as "gone":
+
+        - a take-off known (entered, or inferred from an airborne fix): then;
+        - started (a ground fix at the departure, :attr:`start_fix`) with no
+          take-off: not left, however late, since the newest evidence is the
+          aircraft at the departure; until the estimated arrival passes
+          (Start, then no fix all flight), so the departure does not stay
+          relevant forever;
+        - plan only (no fix at the departure): the planned departure. The
+          clock only moves on, so it drops once; a ground fix arriving later
+          is a genuine reversal and brings the departure back once.
+        """
+        if self.takeoff_at is not None:
+            return self.takeoff_at
+        if self.start_fix is not None:
+            return self.arrival if self.arrived else None
+        return self.planned_departure
+
+    @property
+    def left_departure(self) -> bool:
+        """Known to have left the departure as of ``as_of`` (#967)."""
+        left = self.left_departure_at
+        return left is not None and self.as_of >= left
+
+    @property
+    def passed_nm(self) -> float | None:
+        """Distance known to be behind the aircraft as of ``as_of``, for what
+        is still ahead (#967): :attr:`flown_nm` once :attr:`left_departure`,
+        else 0 (a started flight still on the ground has passed nothing,
+        whatever its estimate says). None when the flight is not timed."""
+        flown = self.flown_nm
+        if flown is None:
+            return None
+        return flown if self.left_departure else 0.0
 
     @property
     def arrival(self) -> datetime | None:

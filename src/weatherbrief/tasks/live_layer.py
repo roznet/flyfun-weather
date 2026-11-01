@@ -1001,10 +1001,11 @@ def commit_live_update(
             latest_observed=layer.observed_conditions,
             roles=airport_roles(route_icaos, _alternate_icaos(briefing_data)),
             destination=route_destination(route),
-            departure_at=progress.departed_at if progress is not None else None,
+            # Relevance from what is known, not the schedule estimate (#967).
+            departure_at=progress.left_departure_at if progress is not None else None,
             arrival_at=progress.arrival if progress is not None else None,
             baseline_at=layer.seeded_at if seeded else _parse_dt(pack_timestamp),
-            flown_nm=progress.flown_nm if progress is not None else None,
+            flown_nm=progress.passed_nm if progress is not None else None,
             memory=memory,
             now=now,
             storms=layer.storms,

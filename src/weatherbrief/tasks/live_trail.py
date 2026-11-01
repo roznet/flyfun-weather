@@ -150,7 +150,7 @@ def _still_relevant(c: LiveChange, at: datetime, ctx: _Context) -> bool:
         departed = ctx.departure is not None and at >= ctx.departure
         return airport_relevant(c.role, c.enroute_distance_nm, departed=departed, flown_nm=None)
     then = ctx.progress.at(at)
-    return airport_relevant(c.role, c.enroute_distance_nm, departed=then.departed, flown_nm=then.flown_nm)
+    return airport_relevant(c.role, c.enroute_distance_nm, departed=then.left_departure, flown_nm=then.passed_nm)
 
 
 def _clear_reason(c: LiveChange, at: datetime, pack_tick: bool, ctx: _Context) -> str:

@@ -537,6 +537,22 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
   at the route's end, so the highlight gate reads "arrived" and generates
   nothing. A shifted ETA can itself make a TAF-at-ETA row appear (the baseline
   was read at the planned ETA): that is the TAF at the actual ETA, intended.
+- **Relevance is not the schedule (#967).** What hides rows (the departure's,
+  and route airports / storms / radar behind the aircraft) reads
+  `left_departure_at` / `left_departure` / `passed_nm`, never `departed_at` /
+  `flown_nm`. `departed_at` is an estimate for ETAs: on the ground after Start
+  it is `fix + TAXI_MARGIN`, so a clock test on it "departed" the flight every
+  10 min after each ground fix and the next fix un-departed it (prod 2026-10-31:
+  every departure and near-departure row cleared and came back three times at
+  the holding point, each cycle a clear + re-armed push). Rules: a take-off
+  known (entered or an airborne fix) leaves then; started (a ground fix at the
+  departure) with no take-off has not left and has passed 0 NM, until the
+  estimated arrival passes (Start, then no fix all flight); plan-only leaves at
+  the planned departure, which only drops once (a later ground fix is a
+  genuine reversal and brings the rows back once). Accepted cost: a plan-only
+  flight whose pilot later presses Start sees its departure rows drop at the
+  planned time and return at Start. Used by the classifier (live tick and ↻
+  path) and `live_trail._still_relevant`.
 - Consumers must not compute schedule arithmetic of their own; add what they
   need to `FlightProgress` (`FlightProgress.schedule` for times without a route).
   Inside the object, every computation (`timed`, `arrival`, `flown_at`, `eta`)
