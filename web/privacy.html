@@ -14,7 +14,7 @@
     </div>
 
     <div class="help-section">
-      <p><em>Last updated: 2026-10-27</em></p>
+      <p><em>Last updated: 2026-11-01</em></p>
       <p>
         This document explains what data the app collects, why, and what I do (and don't do) with it.
         FlyFun Weather is a personal project &mdash; I'm a single developer, not a company.
@@ -64,12 +64,6 @@
         <li>Your aircraft (type and, if you enter it, tail number) and flight profiles</li>
         <li>Post-flight debriefs you write (how the flight went, free-text notes)</li>
       </ul>
-      <h4>Pilot Reports (PIREPs)</h4>
-      <p>
-        If you submit a PIREP, the report is stored with its position, altitude, time, conditions and any
-        remarks, linked to your account. Because PIREPs are shared weather observations, they are
-        <strong>anonymized rather than deleted</strong> when you delete your account.
-      </p>
       <h4>Devices &amp; Connected Apps</h4>
       <ul>
         <li>If you use the iOS or Android app with notifications enabled, the device's push-notification token</li>
@@ -207,7 +201,6 @@
           <tr><td style="padding:0.5em;">Open-Meteo</td><td style="padding:0.5em;">Coordinates, altitudes</td><td style="padding:0.5em;">Weather forecast data</td></tr>
           <tr><td style="padding:0.5em;">Autorouter</td><td style="padding:0.5em;">Access token + route</td><td style="padding:0.5em;">GRAMET cross-section images</td></tr>
           <tr><td style="padding:0.5em;">OpenAI / Anthropic</td><td style="padding:0.5em;">Weather + route context (airports, dates, positions); no account identifiers</td><td style="padding:0.5em;">AI-generated briefing summary</td></tr>
-          <tr><td style="padding:0.5em;">LangSmith (when AI tracing is enabled)</td><td style="padding:0.5em;">The AI run trace (same weather/route context) and your summary 👍/👎 rating and any comment</td><td style="padding:0.5em;">AI summary quality monitoring</td></tr>
           <tr><td style="padding:0.5em;">SMTP / Resend</td><td style="padding:0.5em;">Your email + briefing summary</td><td style="padding:0.5em;">Email delivery</td></tr>
           <tr><td style="padding:0.5em;">Google / Apple</td><td style="padding:0.5em;">Sign-in tokens</td><td style="padding:0.5em;">Authentication (sign-in)</td></tr>
           <tr><td style="padding:0.5em;">Stripe (only if you donate)</td><td style="padding:0.5em;">Your account email (unless you opt out), account id, amount; card details entered directly with Stripe</td><td style="padding:0.5em;">Payment processing</td></tr>
@@ -218,8 +211,7 @@
       </table>
       <p>
         No account identifiers (your name or email) are sent to AI providers. The context that is sent describes
-        the weather along your route &mdash; airports, dates and approximate positions. Where AI-quality tracing is
-        enabled it goes to LangSmith under a data-processing agreement (EU data residency).
+        the weather along your route &mdash; airports, dates and approximate positions.
       </p>
     </div>
 
@@ -228,7 +220,7 @@
       <p>
         You can download a complete, machine-readable (JSON) copy of the personal data held about your
         account &mdash; account details, preferences, flights, briefings, trips, followed flights, debriefs,
-        aircraft, PIREPs, feedback, usage history, devices, API tokens and connected apps, and donations &mdash;
+        aircraft, feedback, usage history, devices, API tokens and connected apps, and donations &mdash;
         at any time:
       </p>
       <ul>
@@ -251,15 +243,14 @@
         <li><strong>Web app:</strong> Settings &gt; Delete Account</li>
       </ul>
       <p>
-        This will permanently remove everything linked to your account and cannot be undone. PIREPs you submitted
-        are kept as anonymous weather observations, with the link to you and your aircraft removed.
+        This will permanently remove everything linked to your account and cannot be undone.
       </p>
     </div>
 
     <div class="help-section">
       <h3>Data Retention &amp; Hosting</h3>
       <ul>
-        <li><strong>Briefings</strong> are trimmed in two stages: 30 days after the flight's departure the heavy files (charts, raw model data) are removed, and after 180 days the briefing is deleted entirely (90 days if you haven't used the app for 30 days). Briefings for flights you debriefed are not deleted (their heavy files are still trimmed), and briefings linked to a PIREP are kept in full.</li>
+        <li><strong>Briefings</strong> are trimmed in two stages: 30 days after the flight's departure the heavy files (charts, raw model data) are removed, and after 180 days the briefing is deleted entirely (90 days if you haven't used the app for 30 days). Briefings for flights you debriefed are not deleted (their heavy files are still trimmed).</li>
         <li><strong>Email sign-in records</strong> (email, IP address) are deleted after 24 hours</li>
         <li><strong>In-app usage events</strong> (raw page events) are deleted after 60 days</li>
         <li><strong>Account data and flight history</strong> are retained as long as your account exists</li>

@@ -13,7 +13,7 @@
 
 Flyfun Weather fetches forecast data from multiple numerical weather prediction (NWP) models, performs aviation-specific analysis (icing, turbulence, convection, clouds), and presents everything side-by-side so pilots can compare models and start forming an early view of what conditions will look like from D-7 through D-0 — and then follows the flight on the day with live observations along the route.
 
-> **Responsibility** — Flyfun Weather supports flight planning and decision-making with automated analysis and AI, which can occasionally be wrong or miss something; use it alongside the official material you would normally check. The pilot in command remains responsible for the flight. Provided free and as is — see [TERMS.md](TERMS.md).
+> **Responsibility** — Flyfun Weather supports flight planning and decision-making with automated analysis and AI, which can occasionally be wrong or miss something; use it alongside the other information you would normally check (METAR, TAF, SIGMET and the rest). The pilot in command remains responsible for the flight.
 
 ## What it does
 
@@ -34,7 +34,6 @@ Flyfun Weather fetches forecast data from multiple numerical weather prediction 
 - **Trips & timing** — Group legs into a trip whose viability is that of its remaining legs, and let a per-flight Flexibility setting scan other departure times in the background
 - **Native iOS / iPadOS app** — SwiftUI client sharing the same API: flights, briefing, cross-section, map, Skew-T, offline briefings, the Observed tab and Start Flight on flight day, push notifications, Siri shortcuts
 - **Android app** — Kotlin / Jetpack Compose client in `app/android/` (in testing ahead of its Play Store release)
-- **PIREPs** — File your own pilot reports and read others' (permission-gated per user)
 - **Post-flight debrief** — Record whether you flew or cancelled and what weather mattered, so assessments can be checked against what actually happened
 - **Forecast verification** — Model forecasts scored against later observations and analyses, feeding a skill view per model and metric (admin-facing while it settles)
 - **MCP server** — Exposes flights, briefings, advisory detail, airport weather and a multi-day area outlook ("which day this weekend?") as tools for AI assistants, with OAuth 2.1; listed in Claude's connectors directory, plus a ChatGPT custom GPT over the same core
@@ -136,7 +135,6 @@ web/
 ├── trip.html           # Trip (several legs) view
 ├── maps.html           # Maps: forecast, now, synoptic, historical, climatology, accuracy
 ├── verification.html   # Forecast verification / model skill (admin)
-├── pireps.html         # Pilot reports
 ├── settings.html       # User preferences + advisory tuning
 ├── admin.html          # Users, usage, costs and performance (admin)
 ├── login.html          # Authentication page
