@@ -28,33 +28,33 @@
     <div class="help-section">
       <h3>About Flyfun Weather</h3>
       <p>
-        Flyfun Weather is an exploratory weather briefing tool for general aviation pilots.
-        Its goal is to help you form an early picture of how weather patterns are coming
-        together by comparing multiple numerical weather prediction (NWP) models. At its core,
-        the briefing translates model data into <strong>aviation-focused advisories</strong>
-        &mdash; icing risk, convective potential, cloud ceilings, turbulence, crosswinds &mdash;
-        rated green/amber/red so you can quickly see what matters for your route. An
-        <strong>altitude advisory</strong> even suggests the best flight level based on the
-        combined conditions.
+        Flyfun Weather is a weather briefing tool for general aviation pilots. It compares
+        several numerical weather prediction (NWP) models along your route and translates
+        them into <strong>aviation-focused advisories</strong> &mdash; icing, convection,
+        cloud, turbulence, winds, airport conditions &mdash; rated green/amber/red so you can
+        quickly see what matters for your flight.
       </p>
       <p>
-        Beyond the advisories, Flyfun Weather lets you see where models agree and where they
-        diverge, so you can gauge forecast confidence days before a planned flight. The
-        briefing offers two display modes: <strong>compact mode</strong> for a quick overview
-        of the essentials, and <strong>full detail mode</strong> that exposes all the raw
-        data &mdash; soundings, cross-sections, thermodynamic indices, per-model values &mdash;
-        with explanations, giving you full transparency into the numbers behind any summary.
+        Because it shows where the models agree and where they diverge, you can gauge how
+        much to trust a forecast days before you fly. The briefing has two display modes:
+        <strong>compact</strong> for the essentials, and <strong>full details</strong>, which
+        exposes the numbers behind every summary &mdash; soundings, cross-sections,
+        thermodynamic indices and per-model values, each with an explanation.
       </p>
       <p>
-        Flyfun Weather is designed primarily for <strong>longer-range planning</strong> &mdash;
-        helping you build a picture of weather trends days before a flight. As the flight date
-        approaches, it adds real-time METAR/TAF observations for a final cross-check, but
-        you should always verify against official sources (SIGMETs, AIRMETs, national
-        aviation authority briefings) before flying.
+        It follows a flight from the first look a week or more out, through the daily
+        refreshes, to flight day &mdash; when it tracks the latest METARs, TAFs, SIGMETs,
+        radar and lightning along your route &mdash; and on to the debrief afterwards.
       </p>
       <p>
         Flyfun Weather is open-source and available on
         <a href="https://github.com/roznet/flyfun-weather" target="_blank" rel="noopener">GitHub</a>.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in action: the talks at
+        <a href="https://talks.flyfun.aero/" target="_blank" rel="noopener">talks.flyfun.aero</a>
+        walk through real flights, live in the app &mdash; or watch the
+        <a href="https://youtu.be/Sa5YkQ71WHs" target="_blank" rel="noopener">PPL/IR Europe video</a>.
       </p>
     </div>
 
@@ -64,7 +64,7 @@
       <p>
         Flyfun Weather has a companion app for iPhone and iPad. It signs in with the same
         account and shows the same briefings &mdash; the flights you create here appear there,
-        and vice versa. It exists for two things the browser does poorly:
+        and vice versa. It is built for three things the browser does poorly:
       </p>
       <ul>
         <li>
@@ -76,23 +76,32 @@
         <li>
           <strong>Taking the briefing with you.</strong> You can download a briefing before
           you leave, and it stays fully readable with no signal &mdash; including the
-          cross-section and every sounding. That is the point of the app on an iPad in the
-          cockpit, where there is no connection to re-fetch anything.
+          cross-section and every sounding.
+        </li>
+        <li>
+          <strong>Flight day.</strong> The <em>Observed</em> tab shows what the weather is
+          actually doing along your route. Press <strong>Start Flight</strong> and the app
+          places you on the route from your phone's GPS, so ETAs, storms ahead and the
+          destination TAF are measured against where you really are.
         </li>
       </ul>
       <p>
-        It also adds a couple of things that only make sense on a phone: an optional
-        notification when a briefing finishes refreshing, and Siri shortcuts
-        (&ldquo;check my briefing&rdquo;).
+        It also adds a few things that only make sense on a phone: a notification when a
+        briefing finishes refreshing, and Siri shortcuts (&ldquo;check my briefing&rdquo;).
       </p>
       <p>
         <a href="https://apps.apple.com/app/id6760951972" target="_blank" rel="noopener"
            class="btn btn-primary">Install the iPhone &amp; iPad app</a>
       </p>
       <div class="help-tip">
-        Requires iOS or iPadOS 26.2 or later. The app is a companion to this site, not a
-        replacement &mdash; planning a flight and tuning your settings is still easiest here.
+        Requires iOS or iPadOS 26.2 or later. Planning a flight and tuning your settings is
+        still easiest here on the web.
       </div>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/review26/apps/" target="_blank" rel="noopener">Web and phone, from desk to cockpit</a>
+        &mdash; one weekend, surface by surface.
+      </p>
     </div>
 
     <!-- Getting Started -->
@@ -105,100 +114,158 @@
         tab to see the latest changes.
       </p>
       <ol>
-        <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (airports, navaids, or fixes), date, time, altitude, and ceiling. Flights can be planned up to about <strong>9 days ahead</strong> &mdash; the limit of the global model horizon.</li>
-        <li><strong>Open the briefing</strong> by clicking the flight card. Flyfun Weather will fetch forecast data from each enabled model, run thermodynamic analysis, compute advisories, and generate a synopsis.</li>
-        <li><strong>Refresh</strong> the briefing at any time to pull the latest available forecasts. Each refresh creates a new snapshot you can compare via the history dropdown.</li>
+        <li><strong>Create a flight</strong> on the Flights page by entering your waypoints (airports, navaids, or fixes), date, time, altitude, and ceiling. Flights can be planned up to about <strong>9 days ahead</strong> &mdash; the limit of the global model horizon. A flight saved further out waits and is briefed as soon as the models reach it.</li>
+        <li><strong>Open the briefing</strong> by clicking the flight card. Flyfun Weather fetches forecast data from each enabled model, runs the thermodynamic analysis, computes the advisories, and writes a synopsis.</li>
+        <li><strong>Refresh</strong> the briefing at any time to pull the latest available forecasts, or let the daily auto-refresh do it. Each refresh creates a new snapshot you can compare via the history dropdown.</li>
+        <li><strong>After the flight</strong>, record a quick debrief from the flight card: whether you flew or cancelled, and what weather mattered.</li>
       </ol>
+      <div class="help-tip">
+        Several legs of one journey can be grouped into a <strong>trip</strong>, so you see
+        whether the whole trip works, not just each leg. Set a <strong>Flexibility</strong>
+        on a flight and the briefing also scans other departure times for you.
+      </div>
       <div class="help-tip">
         You can configure which NWP models to use and tune advisory thresholds in
         <a href="/settings.html">Settings</a>.
       </div>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/review26/journey/" target="_blank" rel="noopener">One flight, eight days</a>
+        &mdash; Fairoaks to Le Touquet, from the first look to the foggy morning.
+      </p>
     </div>
 
     <!-- The Briefing Page -->
     <div class="help-section">
       <h3>The Briefing Page</h3>
-      <p>The briefing is organized into collapsible sections. Here's what each one shows:</p>
+      <p>
+        The briefing has a <strong>left rail</strong> and a scrolling main pane. The rail
+        holds the route, the <strong>Compact / Full Details</strong> toggle (compact is best
+        for a daily glance, full for deep dives), how fresh each model is, the section
+        navigation, and the <strong>history dropdown</strong> to re-open any past snapshot
+        and see how the forecast has evolved. Every section has a focus button (&#x26F6;) to
+        show it on its own.
+      </p>
 
       <h4>Toolbar</h4>
       <p>
-        At the top of every briefing, the toolbar shows the route, gives you access to
-        <strong>Refresh</strong>, <strong>PDF</strong> download, <strong>Email</strong>,
-        <strong>Feedback</strong>, and the <strong>Tour</strong> button (the ?-icon).
-        A <strong>Compact / Full Details</strong> toggle controls how much detail each
-        section shows &mdash; compact is best for a daily glance, full for deep dives.
-        The <strong>history dropdown</strong> lets you re-open any past snapshot to compare
-        how the forecast has evolved. Flight owners can also toggle <strong>privacy</strong>
-        (private flights are owner-only; public flights get a shareable short link via the
-        Share icon) and configure a daily <strong>auto-refresh</strong> with email
-        notification.
+        The toolbar gives you <strong>Refresh</strong>, a <strong>Download</strong> menu (PDF
+        briefing, or a MyGAR / Manifest6 file), <strong>Email</strong>,
+        <strong>Feedback</strong>, the <strong>Tour</strong> (?-icon) and
+        <strong>Share</strong>. Flight owners can also make a flight <strong>public or
+        private</strong> (public flights get a shareable short link; others can subscribe to
+        follow them read-only), set a daily <strong>auto-refresh</strong> hour, and choose
+        when to be <strong>notified</strong> of a new briefing (by email or push) with the
+        bell.
       </p>
 
       <h4>Overall Assessment</h4>
       <p>
-        The banner at the top of the briefing is a colour-coded one-line verdict
-        (<span class="badge badge-green">GREEN</span>,
+        The banner at the top is the headline read on your flight &mdash;
+        <span class="badge badge-green">GREEN</span>,
         <span class="badge badge-amber">AMBER</span>, or
-        <span class="badge badge-red">RED</span>)
-        derived from the worst-rated advisories. It's the headline read on your flight
-        before you dig into the detail below.
+        <span class="badge badge-red">RED</span> &mdash; with a one-line reason. It comes from
+        the AI synopsis, which weighs all the advisories together; without a synopsis it falls
+        back to the worst-rated advisory. It's where to start before you dig into the detail
+        below.
       </p>
       <p>
         For flights more than about a week out &mdash; beyond the high-resolution model
         horizon &mdash; the banner instead shows a dashed <strong>Early outlook</strong>
-        badge (<em>Trending Settled</em>, <em>Mixed Signals</em>, or
-        <em>Trending Unsettled</em>) rather than a green/amber/red verdict. This far ahead
-        the models only agree on the broad pattern, so the briefing gives a confidence-led
-        trend and tells you when more detailed analysis will become available.
+        badge (<em>Trending settled</em>, <em>Mixed signals</em>, or
+        <em>Trending unsettled</em>). This far ahead the models only agree on the broad
+        pattern, so the briefing gives a confidence-led trend and tells you when more
+        detailed analysis will become available.
       </p>
 
       <h4>Route Advisories</h4>
       <p>
         Advisories are the heart of the briefing. They translate raw NWP model data into
-        aviation-relevant assessments that help you make early decisions about flying,
-        cancelling, or adjusting the timing of a flight.
+        aviation-relevant assessments that help you decide early whether to fly, cancel, or
+        adjust the timing of a flight.
       </p>
       <p>
         Each advisory is rated
         <span class="badge badge-green">GREEN</span>,
         <span class="badge badge-amber">AMBER</span>, or
         <span class="badge badge-red">RED</span>
-        based on configurable thresholds. Advisories are evaluated <em>per-model</em>, so you
-        can see whether models agree on a hazard or only one flags it. The summary rating
-        shown for each advisory reflects the worst-case across all models.
+        and is evaluated <em>per model</em>, so you can see whether the models agree on a
+        hazard or only one flags it. By default the summary rating is the
+        <strong>majority</strong> of the models (a tie goes to the worse grade); you can
+        switch to <strong>worst model</strong> in Settings for a more conservative read.
       </p>
       <p>Advisory categories include:</p>
       <ul>
-        <li><strong>Icing</strong> &mdash; freezing level, icing intensity at cruise altitude, temperature/humidity overlap in the icing zone.</li>
-        <li><strong>Convection</strong> &mdash; CAPE, lifted index, convective inhibition, and storm potential along the route.</li>
-        <li><strong>Cloud &amp; Visibility</strong> &mdash; cloud base height relative to your ceiling, coverage, and visibility conditions at departure and arrival.</li>
-        <li><strong>Turbulence &amp; Wind</strong> &mdash; vertical wind shear, crosswind components at departure and arrival airports, headwind/tailwind along the route.</li>
-        <li><strong>Airport Conditions</strong> &mdash; surface wind, gusts, and crosswind at departure and arrival relative to available runways.</li>
-        <li><strong>Altitude Advisory</strong> &mdash; analyses conditions at multiple flight levels and suggests the best altitude considering winds, icing, turbulence, and cloud avoidance. An interactive <strong>altitude lever</strong> lets you probe other flight levels and instantly see how each advisory shifts versus your planned altitude.</li>
+        <li><strong>Airport</strong> &mdash; forecast flight category, surface wind and crosswind against the runways, density altitude, low-level wind shear, and frost at departure.</li>
+        <li><strong>Flight rules</strong> &mdash; VFR and IFR feasibility for the route, approach feasibility at the destination, and departure feasibility.</li>
+        <li><strong>Icing</strong> &mdash; one icing advisory graded for your aircraft (with or without ice protection), plus freezing precipitation and, for aircraft without it, an icing escape check.</li>
+        <li><strong>Cloud</strong> &mdash; cloud tops and whether you stay in VMC at cruise.</li>
+        <li><strong>Convection</strong> &mdash; convective activity along the route and its character, from isolated or scattered showers to widespread, organised or embedded storms.</li>
+        <li><strong>Precipitation, Turbulence &amp; Winds</strong> &mdash; en-route precipitation, turbulence including mountain wind, and headwind/tailwind aloft.</li>
+        <li><strong>Sun</strong> &mdash; low-sun glare down the runway on take-off or landing, and, for day-VFR flights, arriving close to sunset.</li>
+        <li><strong>Fronts</strong> (experimental) &mdash; air-mass boundaries the models place across your route, when <em>Auto Front Detection</em> is on in Settings.</li>
       </ul>
       <p>
+        Use the <strong>altitude slider</strong> above the advisories to probe other levels
+        and see instantly how each advisory shifts versus your planned altitude; the
+        <strong>altitude table</strong> sweeps all levels at once and marks the best one.
+        Where a different choice would improve a specific issue &mdash; a lower level, a later
+        climb &mdash; a &#128161; lightbulb opens <strong>options to improve</strong>. These
+        are advice only and never change the grade.
+      </p>
+      <p>
         You can enable, disable, and tune the thresholds of each advisory in
-        <a href="/settings.html">Settings</a>, as well as choose which analysis methods
-        are used for icing and cloud detection.
+        <a href="/settings.html">Settings</a>, as well as choose the analysis methods used
+        for icing, cloud and convection.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/pplir/#18" target="_blank" rel="noopener">the advisories, layer by layer</a>,
+        <a href="https://talks.flyfun.aero/talks/pplir/#25" target="_blank" rel="noopener">compact mode</a>.
       </p>
 
-      <h4>METAR/TAF Observations &amp; SIGMETs</h4>
+      <h4>Timing Scenarios</h4>
       <p>
-        On the day of the flight, a METAR/TAF section is shown with current observations and
-        TAF forecasts for your departure and arrival airports, fetched from official aviation
-        weather sources. Useful for cross-referencing the NWP model output with real-time
-        and near-term observations.
-      </p>
-      <p>
-        Alongside the airport observations, any <strong>SIGMETs</strong> that intersect your
-        route corridor (turbulence, icing, thunderstorms, mountain wave, etc.) are listed
-        with their hazard type, altitude band, and validity. When you refresh on the day of
-        the flight, a banner highlights any conditions that have <strong>worsened</strong>
-        since your last check &mdash; a degraded flight category, or a new or escalated
-        SIGMET &mdash; so changes don't slip by while the rest of the briefing stays put.
+        If the flight has a <strong>Flexibility</strong> set (alternate time, same day, or
+        &plusmn;a day), the briefing re-grades the route at other departure times in the
+        background and shows what would change if you left earlier or later.
       </p>
 
-      <h4>Weather-Based Alternates</h4>
+      <h4>Flight Day: Observed Conditions</h4>
+      <p>
+        On the day of the flight, the briefing adds an <strong>Observations</strong> group
+        that follows what the weather is actually doing, updated every 10 minutes from about
+        three hours before departure until after arrival:
+      </p>
+      <ul>
+        <li><strong>At a glance</strong> &mdash; one line per phase of the flight, a comparison with what the briefing expected, departure and destination cards with runway and wind dials, and a short highlight of what matters now.</li>
+        <li><strong>Along the route</strong> &mdash; a ribbon of rain, storm cells, SIGMETs and airports along the route, with the time you reach each.</li>
+        <li><strong>Radar &amp; lightning now</strong> &mdash; radar, lightning and satellite cloud tops around the route, with storm cells placed by side and distance off track, and whether they are closing or moving away.</li>
+        <li><strong>Since this briefing</strong> &mdash; a banner of what has changed since the briefing was written, better or worse: a flight category, a new SIGMET, a storm near the route.</li>
+      </ul>
+      <p>
+        The observations annotate the briefing; they never re-grade it. After the flight,
+        <em>Along the route</em> becomes a <strong>recap</strong>: what was seen where you
+        actually were, against the forecast, with any moment of the flight replayable.
+      </p>
+
+      <h4>METAR/TAF, SIGMETs &amp; PIREPs</h4>
+      <p>
+        As the flight approaches, a METAR/TAF section shows current observations and TAFs for
+        your departure and arrival airports, fetched from official aviation weather sources,
+        so you can cross-reference the model output with near-term observations.
+        <strong>SIGMETs</strong> that intersect your route corridor (turbulence, icing,
+        thunderstorms, mountain wave, etc.) are listed with their hazard type, altitude band,
+        and validity, and pilot reports (<strong>PIREPs</strong>) near the route appear when
+        there are any.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/pplir/#43" target="_blank" rel="noopener">When the day dawns</a>
+        &mdash; METARs, TAFs and SIGMETs, against what the models said.
+      </p>
+
+      <h4>Weather Alternates</h4>
       <p>
         As the flight gets close (about two days out), if your destination's forecast looks
         marginal, Flyfun Weather suggests nearby <strong>alternate airports</strong> that
@@ -206,55 +273,60 @@
         kinder crosswind. Each candidate is shown as reachable <strong>before</strong> the
         destination (an early-decision diversion that avoids backtracking) or
         <strong>after</strong> it, with the extra distance each option costs. These are
-        planning-grade divert ideas, not an operational alternate-minima calculation. Turn
-        them on with the <em>Alternates</em> preference in <a href="/settings.html">Settings</a>.
+        divert ideas for planning rather than an alternate-minima calculation. Turn them on
+        with <em>Weather alternates</em> in your profile in
+        <a href="/settings.html">Settings</a>.
       </p>
 
       <h4>Is an Alternate Required?</h4>
       <p>
-        For the destination, the briefing also estimates whether the regulations would
+        With the alternates, the briefing also estimates whether the regulations would
         require you to <strong>file an alternate</strong>, computed two ways:
         <strong>FAA</strong> (14 CFR 91.169 &mdash; a binary Yes/No) and <strong>EASA</strong>
         Part-NCO (a <em>Likely / Marginal / Unlikely</em> confidence band). Because the
         published plate minima aren't known, the unknown value is expressed as a plausible
-        range per approach type, which sets the width of the EASA band. Like the alternates
-        above, this is advisory planning guidance, never a go/no-go verdict.
+        range per approach type, which sets the width of the EASA band. Approaches not in the
+        published data can be declared under <em>Unpublished Approaches</em> in Settings.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/pplir/#26" target="_blank" rel="noopener">What should I file?</a>
       </p>
 
       <h4>Synopsis</h4>
       <p>
-        An LLM-generated plain-language overview of the weather situation along your route.
-        It summarizes the key findings from the numerical analysis in a concise narrative.
-        This section requires the <strong>AI Digest</strong> service to be enabled in
-        <a href="/settings.html">Settings</a>.
+        An AI-written plain-language overview of the weather along your route &mdash; the
+        synoptic situation, specific concerns, the trend, and what to watch. It is written
+        from the numerical analysis and the advisories. It requires the <em>AI weather
+        synopsis</em> option in your profile in <a href="/settings.html">Settings</a>; when it
+        is off you can still generate one on demand from the banner.
+      </p>
+
+      <h4>Surface Pressure &amp; Fronts</h4>
+      <p>
+        Surface analysis and forecast charts &mdash; fronts, pressure centres, isobars across
+        Europe &mdash; from DWD, the Met Office and M&eacute;t&eacute;o-France (TEMSI), with
+        your route drawn on top. Click any chart to enlarge.
       </p>
 
       <h4>DWD Synoptic Overview</h4>
       <p>
-        An optional synoptic weather discussion sourced from DWD (Deutscher Wetterdienst),
-        providing a broader meteorological context for European flights.
+        The synoptic weather discussion from DWD (Deutscher Wetterdienst), giving a broader
+        meteorological context for European flights.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/review26/synoptic/" target="_blank" rel="noopener">The synoptic forecast</a>
+        &mdash; official front charts, and the air-mass boundaries inside each model.
       </p>
 
-      <h4>DWD Surface Analysis &amp; Forecast</h4>
-      <p>
-        Surface analysis and short-range forecast charts published by DWD &mdash; fronts,
-        pressure centres, isobars across Europe. Shown alongside the synoptic text so you
-        can see the broader pattern around the flight day. Click any chart to enlarge.
-      </p>
 
-      <h4>GRAMET Cross-Section</h4>
+      <h4>Cross-Section</h4>
       <p>
-        A vertical cross-section chart from <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
-        showing cloud, wind, temperature, and turbulence along your route. This requires
-        the <strong>GRAMET</strong> service to be enabled and Autorouter credentials configured
-        in <a href="/settings.html">Settings</a>.
-      </p>
-
-      <h4>Cross-Section Visualization</h4>
-      <p>
-        An interactive canvas-based vertical cross-section built from the NWP model data.
-        Layers are organised into groups (clouds, icing, turbulence, convection, temperature
-        lines, terrain) and you can toggle them individually in the control panel.
+        An interactive vertical cross-section built from the NWP model data. Layers are
+        organised into groups (clouds, icing, turbulence, convection, stability, fronts,
+        temperature lines, terrain, day and night) and you can toggle them individually in
+        the control panel; presets show the layers behind each advisory.
       </p>
       <ul>
         <li>Four <strong>layout modes</strong> &mdash; cross-section only, compare, side-by-side
@@ -262,30 +334,35 @@
         <li>The <strong>model selector</strong> switches between forecast models; the
           <strong>compare</strong> layout overlays one layer across all models so you can see
           where they agree and where they diverge.</li>
-        <li>Switch <strong>theme</strong> (standard, high-contrast, GRAMET-style) and
+        <li>Switch <strong>theme</strong> (standard, light, high-contrast, GRAMET-style) and
           <strong>cloud rendering style</strong> (soft, natural puffs, square ForeFlight-like)
           to match your preference.</li>
         <li><strong>Hover</strong> shows values at the cursor; <strong>click</strong> pins a
           point and opens the matching Skew-T sounding below.</li>
-        <li>Multiple <strong>icing methods</strong> (Ogimet-DD, Ogimet-NWP, SFIP-NWP, IENG,
+        <li>Multiple <strong>icing methods</strong> (Ogimet-DD, Ogimet-NWP, SFIP, IENG,
           SLD) and <strong>cloud methods</strong> (DD vs NWP) are available so you can compare
           how different physical assumptions affect the picture.</li>
       </ul>
 
       <h4>Route Graph</h4>
       <p>
-        A scalar graph below the cross-section, sharing the same x-axis (route distance).
-        Pick any two metrics for the left and right Y-axes &mdash; wind speed, ceiling, CAPE,
-        crosswind, temperature, and more. Useful for seeing how a single quantity evolves
-        along the route alongside the vertical layers above.
+        A graph below the cross-section, sharing the same x-axis (route distance). Pick any
+        two metrics for the left and right Y-axes &mdash; wind speed, ceiling, CAPE,
+        crosswind, temperature, and more &mdash; to see how a single quantity evolves along
+        the route alongside the vertical layers above.
       </p>
 
       <h4>Route Map</h4>
       <p>
         An interactive map showing your route with segments colored by a selectable weather
         metric (wind, icing risk, cloud cover, humidity, etc.). Use the altitude slider to
-        see how conditions change at different flight levels. Hover over a segment to see
-        the value at that point.
+        see how conditions change at different flight levels, and add overlays: radar,
+        lightning, satellite, SIGMETs, fronts and airport forecasts.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/pplir/#28" target="_blank" rel="noopener">the cross-section, route graph and map</a>,
+        <a href="https://talks.flyfun.aero/talks/pplir/#34" target="_blank" rel="noopener">comparing methods and models</a>.
       </p>
 
       <h4>Skew-T Soundings</h4>
@@ -294,20 +371,24 @@
         cross-section to load its sounding. Three view modes are available:
       </p>
       <ul>
-        <li><strong>Dynamic</strong> &mdash; an interactive canvas Skew-T with a side panel of
+        <li><strong>Dynamic</strong> &mdash; an interactive Skew-T with a side panel of
           ~14 variables (CAPE, CIN, lifted index, headwind/crosswind, cloud cover, etc.),
           overlay bands for cloud / icing / inversion / convective layers, and a linked cursor
           that highlights the same altitude on the cross-section.</li>
         <li><strong>Compare</strong> &mdash; overlays the sounding from every model on a single
           Skew-T so you can spot where they diverge in temperature, dewpoint, or parcel path.</li>
-        <li><strong>Static</strong> &mdash; the classic MetPy-rendered PNG with CAPE/CIN shading,
+        <li><strong>Static</strong> &mdash; the classic MetPy-rendered image with CAPE/CIN shading,
           a hodograph, and an indices panel.</li>
       </ul>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/pplir/#40" target="_blank" rel="noopener">the Skew-T, the core of the onion</a>.
+      </p>
 
       <h4>Sounding Analysis</h4>
       <p>
         A table of thermodynamic indices derived from each sounding: CAPE, CIN, lifted index,
-        freezing level, cloud layers, icing zones, and more. Values are shown per-model so
+        freezing level, cloud layers, icing zones, and more. Values are shown per model so
         you can spot where models agree or diverge.
       </p>
 
@@ -317,6 +398,23 @@
         waypoint. High agreement gives confidence in the forecast; poor agreement signals
         uncertainty.
       </p>
+    </div>
+
+    <!-- Maps -->
+    <div class="help-section">
+      <h3>Maps</h3>
+      <p>
+        The <a href="/maps.html">Maps</a> page looks beyond a single route, across the
+        airports Flyfun Weather monitors in Europe:
+      </p>
+      <ul>
+        <li><strong>Forecast Overview</strong> &mdash; the forecast at each airport for any day and hour, per model or as the worst / majority across models. Useful to see which direction is flyable before you plan a flight.</li>
+        <li><strong>Now</strong> &mdash; the latest METARs with radar, satellite infrared and lightning, refreshed every few minutes.</li>
+        <li><strong>Synoptic Forecast</strong> (experimental) &mdash; fronts and air-mass boundaries from the models over the coming days.</li>
+        <li><strong>Historical</strong> &mdash; replay the METARs, TAFs and model forecasts at any past moment.</li>
+        <li><strong>Climatology</strong> &mdash; how often each airport has been flyable, by month, with a top-airports list.</li>
+        <li><strong>Accuracy Stats</strong> &mdash; how the forecasts have verified against what was actually observed.</li>
+      </ul>
     </div>
 
     <!-- Info buttons -->
@@ -332,19 +430,22 @@
     <!-- Settings -->
     <div class="help-section">
       <h3>Settings</h3>
-      <h4>Flight Profiles</h4>
+      <h4>Aircraft &amp; Flight Profiles</h4>
       <ul>
-        <li><strong>Flight Defaults</strong> &mdash; set default cruise altitude, ceiling, speed, and flight-rules capability for new flights.</li>
-        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are fetched on each briefing refresh. By default, GFS, ECMWF IFS, and DWD ICON are enabled.</li>
-        <li><strong>Optional Services</strong> &mdash; enable or disable GRAMET cross-section charts and the AI Digest synopsis.</li>
-        <li><strong>Advisories</strong> &mdash; configure summary rating aggregation (worst-case vs majority), analysis methods for icing, cloud, and convective advisories, enable/disable individual advisories, and fine-tune thresholds (e.g. icing temperature band, crosswind limits).</li>
-        <li><strong>Advisory Models</strong> &mdash; select which models are used for advisory evaluation (must be a subset of your enabled forecast models).</li>
+        <li><strong>My Aircraft</strong> &mdash; your aircraft, with speeds and equipment (such as ice protection) that the advisories take into account.</li>
+        <li><strong>Flight Profiles</strong> &mdash; separate settings for different aircraft or kinds of flight (e.g. VFR, IFR), each with its own defaults and advisory settings.</li>
+        <li><strong>Flight Defaults</strong> &mdash; default cruise altitude, ceiling, speed, and flight-rules capability for new flights.</li>
+        <li><strong>Forecast Models</strong> &mdash; choose which NWP models are used for each briefing.</li>
+        <li><strong>Optional Services</strong> &mdash; the AI weather synopsis and weather alternates.</li>
+        <li><strong>Advisories</strong> &mdash; the summary rating (majority or worst model), analysis methods for icing, cloud, and convection, front detection, and enabling or tuning each advisory (e.g. icing temperature band, crosswind limits).</li>
       </ul>
       <h4>Account</h4>
       <ul>
-        <li><strong>Language</strong> &mdash; choose the display language (English, French, German, Spanish).</li>
-        <li><strong>Autorouter Credentials</strong> &mdash; enter your autorouter.aero username and password for GRAMET charts. Credentials are encrypted at rest.</li>
-        <li><strong>Usage</strong> &mdash; view your briefing usage (this week, this month, and total).</li>
+        <li><strong>Language &amp; Units</strong> &mdash; the display language for the app and the AI synopsis (English, French, German, Spanish), units (automatic by flight region, Europe or US), and currency.</li>
+        <li><strong>Notifications</strong> &mdash; how you hear about refreshed briefings (email, push to the app).</li>
+        <li><strong>Unpublished Approaches</strong> &mdash; approaches you can fly that aren't in the published data, used by the alternate checks.</li>
+        <li><strong>MCP Access</strong> &mdash; API tokens for AI assistants (see below).</li>
+        <li><strong>Usage &amp; Your Data</strong> &mdash; your briefing usage, download all your data, or delete your account.</li>
       </ul>
     </div>
 
@@ -354,9 +455,10 @@
       <h4>Forecast Models</h4>
       <p>
         Flyfun Weather pulls each NWP model from <em>multiple</em> sources and blends them.
-        Where available, raw GRIB2 from the originating forecast centre (ECMWF, DWD, NOAA)
-        provides the high-resolution upper-air sounding and cloud microphysics; outside
-        those coverage areas (or beyond the direct horizon) <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
+        Where available, raw GRIB2 from the originating forecast centre (ECMWF, DWD, NOAA,
+        M&eacute;t&eacute;o-France, Met Office) provides the high-resolution upper-air sounding
+        and cloud microphysics; outside those coverage areas (or beyond the direct horizon)
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>
         fills in. The table below is generated live from the server's source registry,
         so what you see is exactly what the briefing engine has available right now &mdash;
         including the most recent run, how far it covers, and when the next update is expected.
@@ -449,14 +551,36 @@
             </td>
           </tr>
           <tr>
-            <td>GRAMET cross-section</td>
+            <td>Radar</td>
             <td>
-              <a href="https://www.autorouter.aero" target="_blank" rel="noopener">autorouter.aero</a>
+              EUMETNET OPERA
+              (<a href="https://www.eumetnet.eu/activities/observations-programme/current-activities/opera/" target="_blank" rel="noopener">eumetnet.eu</a>),
+              Italian Civil Protection (Radar-DPC)
             </td>
             <td>
-              Requires you to connect your personal autorouter account in
-              <a href="/settings.html">Settings</a>. The GRAMET image is fetched on your
-              behalf using your credentials.
+              The pan-European radar composite, with the Italian national mosaic filling the
+              area OPERA doesn't cover. Storm cells along the route are tracked from it.
+            </td>
+          </tr>
+          <tr>
+            <td>Lightning &amp; satellite</td>
+            <td>
+              EUMETSAT
+              (<a href="https://www.eumetsat.int/" target="_blank" rel="noopener">eumetsat.int</a>)
+            </td>
+            <td>
+              MTG Lightning Imager (total lightning), cloud-top height and temperature, and the
+              infrared satellite image on the maps.
+            </td>
+          </tr>
+          <tr>
+            <td>Surface pressure &amp; front charts</td>
+            <td>
+              DWD, Met Office, M&eacute;t&eacute;o-France
+            </td>
+            <td>
+              Published surface analysis and forecast charts, and the
+              M&eacute;t&eacute;o-France TEMSI significant-weather chart.
             </td>
           </tr>
           <tr>
@@ -488,8 +612,9 @@
               <a href="https://www.anthropic.com/claude" target="_blank" rel="noopener">Anthropic Claude</a>
             </td>
             <td>
-              Plain-language briefing summary and DWD German-to-English translation.
-              Optional &mdash; toggle in <a href="/settings.html">Settings</a>.
+              Plain-language briefing summary, the flight-day highlight, and DWD
+              German-to-English translation. The synopsis can be turned off in
+              <a href="/settings.html">Settings</a>.
             </td>
           </tr>
         </tbody>
@@ -512,18 +637,30 @@
           weather the way you'd ask a fellow pilot. <em>&ldquo;Why is the convective advisory red when it
           looks like blue sky?&rdquo;</em>, <em>&ldquo;What's the freezing level along the route?&rdquo;</em>,
           <em>&ldquo;Where do the models disagree?&rdquo;</em> The assistant drills into the per-model split,
-          cross-checks, and AI digest to explain the reasoning, not just the headline colour.
+          cross-checks, and synopsis to explain the reasoning, not just the headline colour.
+        </li>
+        <li>
+          <strong>Find the best day before you plan.</strong> <em>&ldquo;Is Saturday or Sunday better for
+          Le Touquet?&rdquo;</em>, <em>&ldquo;Which direction is flyable from my base this weekend?&rdquo;</em>
+          The assistant grades the airports around your base or along a route over the coming days, with a
+          link to the forecast map for the slot it suggests.
         </li>
         <li>
           <strong>Build it into your flight-planning workflow.</strong> Create a flight from a route, let the
           briefing generate automatically, then pull the weather assessment, advisories, and METAR/TAF &mdash;
-          all in one conversation. <em>&ldquo;Create a flight LFMD to EGTF tomorrow morning and tell me if the
-          weather works.&rdquo;</em> You can also refresh a stale briefing when a newer model run lands.
+          all in one conversation. <em>&ldquo;Create a flight LFMD to EGTF tomorrow morning and tell me how the
+          weather looks.&rdquo;</em> You can also refresh a stale briefing when a newer model run lands, and on
+          flight day ask what has changed since the briefing.
         </li>
       </ul>
       <p class="muted">
         Every answer links back to the full interactive briefing here on the site for cross-sections,
         Skew-T diagrams, and route maps.
+      </p>
+      <p class="help-talk">
+        &#9654; See it in a talk:
+        <a href="https://talks.flyfun.aero/talks/review26/claude/" target="_blank" rel="noopener">Planning with Claude</a>
+        &mdash; two real conversations, from &ldquo;which day this weekend?&rdquo; to the briefing.
       </p>
       <h4>How to connect</h4>
       <p>
@@ -556,23 +693,20 @@
         for tools that don't (such as Claude Code), generate an API token in
         <a href="/settings.html#mcp-section">Settings &rarr; MCP Access</a> and supply it to the same URL.
       </p>
-      <h4>ChatGPT (experimental)</h4>
+      <h4>ChatGPT</h4>
       <p>
-        We also have a <a href="https://chatgpt.com/g/g-6a3848932b908191b41a58b75404182f-flyfun-weather" target="_blank" rel="noopener">FlyFun Weather custom GPT</a>
-        that gets the same information as the MCP server above. It's newer and its behaviour is
-        <strong>less tested</strong> than the Claude integration, so treat it as experimental. As with
-        Claude, you'll sign in with your Flyfun Weather account the first time, so it only ever sees
-        your own flights and briefings.
+        The <a href="https://chatgpt.com/g/g-6a3848932b908191b41a58b75404182f-flyfun-weather" target="_blank" rel="noopener">FlyFun Weather custom GPT</a>
+        gets the same information as the MCP server above. As with Claude, you sign in with your
+        Flyfun Weather account the first time, so it only ever sees your own flights and briefings.
       </p>
     </div>
 
-    <!-- Early Access (hidden when signed in) -->
+    <!-- Getting started for visitors (hidden when signed in) -->
     <div class="help-section" id="getting-access">
       <h3>Getting Access</h3>
       <p>
-        Flyfun Weather is currently in early preview. To request access,
-        <a href="/login.html">sign in</a>
-        and wait for an email confirmation that your account has been enabled.
+        Flyfun Weather is free to use: <a href="/login.html">sign in</a> with Google, Apple or
+        your email address to create your first flight.
       </p>
     </div>
 
@@ -589,21 +723,14 @@
       </p>
     </div>
 
-    <!-- Disclaimer -->
+    <!-- Responsibility -->
     <div class="help-section">
-      <h3>Disclaimer</h3>
+      <h3>Responsibility</h3>
       <p>
-        Flyfun Weather is designed to <strong>help and support your flight planning and
-        decision-making</strong> &mdash; giving you an early, multi-model picture of the
-        weather and surfacing the factors that matter for your route. It relies on automated
-        analysis and AI, which can make mistakes or miss things, so treat its output as one
-        input among many rather than the final word.
-      </p>
-      <p>
-        It is not a substitute for official weather briefings from your national aviation
-        authority. Always cross-check with official sources (METARs, TAFs, SIGMETs, AIRMETs)
-        before flying. The <strong>pilot in command remains the sole decision-maker</strong>
-        and is responsible for the safe conduct of the flight.
+        Flyfun Weather combines automated analysis and AI to support your planning and
+        decisions. Like any source it can occasionally be wrong or miss something, so use it
+        alongside the official material you would normally check. The <strong>pilot in
+        command remains responsible</strong> for the flight.
       </p>
       <p class="muted" style="margin-top: 0.5rem;">
         This application was built with AI assistance (Claude, Anthropic).
