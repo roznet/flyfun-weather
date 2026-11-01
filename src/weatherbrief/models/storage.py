@@ -181,10 +181,9 @@ class BriefingPackMeta(BaseModel):
     # a go/no-go verdict.
     outlook: Optional[str] = None
     outlook_reason: Optional[str] = None
-    # LangSmith root run id of the digest LLM call (issue #244). Set when the
-    # digest is generated with tracing-controlled run_id; NULL for provisional
-    # rows (digest not yet run) and legacy packs created before #244. Used by
-    # the feedback endpoint to attach thumb ratings to the LangSmith run.
+    # Root run id of the digest LLM call (issue #244), from run_digest's
+    # controlled run_id; NULL for provisional rows (digest not yet run) and
+    # legacy packs created before #244. Kept for trace correlation only.
     digest_trace_id: Optional[str] = None
     artifact_path: str = ""  # path to pack directory
     model_init_times: dict[str, int] = Field(default_factory=dict)

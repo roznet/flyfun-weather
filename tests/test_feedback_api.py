@@ -126,62 +126,8 @@ def test_thumb_down_with_comment_and_consent(client, app_db):
     assert row.contact_ok is True
 
 
-def test_digest_rating_pushes_langsmith_feedback(client, app_db, monkeypatch):
-    """A 👍 on a digest attaches feedback to the pack's LangSmith run (#244)."""
-    from datetime import datetime, timezone
-
-    from weatherbrief.models.storage import BriefingPackMeta
-    from weatherbrief.storage.flights import save_pack_meta
-    from weatherbrief.db.models import FlightRow
-
-    flight_id = "egtk_lfat-2026-06-12-trace"
-    pack_ts = datetime(2026, 6, 12, 6, 0, 0, tzinfo=timezone.utc)
-
-    # Seed a flight + pack carrying a digest_trace_id.
-    s = app_db()
-    try:
-        s.add(FlightRow(
-            id=flight_id, user_id=DEV_USER_ID, route_name="EGTK-LFAT",
-            waypoints_json="[]", departure_time=pack_ts,
-            cruise_altitude_ft=8000,
-        ))
-        s.flush()
-        save_pack_meta(s, BriefingPackMeta(
-            flight_id=flight_id, fetch_timestamp=pack_ts, days_out=0,
-            digest_trace_id="11111111-2222-3333-4444-555555555555",
-        ))
-        s.commit()
-    finally:
-        s.close()
-
-    # Capture the LangSmith push instead of hitting the network.
-    pushed = []
-    import weatherbrief.digest.langsmith_feedback as ls
-    monkeypatch.setattr(ls, "push_digest_thumb_feedback",
-                        lambda **kw: pushed.append(kw))
-
-    resp = client.post("/api/feedback", json={
-        "flight_id": flight_id,
-        "pack_timestamp": pack_ts.isoformat(),
-        "category": "digest_rating",
-        "comment": "Spot on.",
-        "sentiment": "up",
-        "target": "digest",
-    })
-    assert resp.status_code == 200, resp.text
-    assert len(pushed) == 1
-    assert pushed[0]["run_id"] == "11111111-2222-3333-4444-555555555555"
-    assert pushed[0]["sentiment"] == "up"
-    assert pushed[0]["comment"] == "Spot on."
-
-
 def test_digest_rating_unknown_pack_does_not_fail(client):
-    """Rating with no matching pack (legacy/missing) still returns 200 (#244).
-
-    ``load_pack_meta`` raises ``KeyError``, which submit_feedback swallows —
-    the feedback row is recorded regardless. No push helper is patched: the
-    point is that the swallowed lookup doesn't surface to the user.
-    """
+    """Rating a flight/pack that doesn't exist (legacy/missing) still returns 200."""
     resp = client.post("/api/feedback", json={
         "flight_id": "does-not-exist",
         "pack_timestamp": "2026-06-12T06:00:00+00:00",
@@ -191,55 +137,6 @@ def test_digest_rating_unknown_pack_does_not_fail(client):
         "target": "digest",
     })
     assert resp.status_code == 200, resp.text
-
-
-def test_digest_rating_pack_without_trace_id_noops(client, app_db, monkeypatch):
-    """A pack with no digest_trace_id (digest never ran) passes run_id=None (#244).
-
-    The pack lookup succeeds, so the push helper IS invoked — but with
-    ``run_id=None``, which it treats as a no-op (no LangSmith call). Submission
-    still succeeds.
-    """
-    from datetime import datetime, timezone
-
-    from weatherbrief.models.storage import BriefingPackMeta
-    from weatherbrief.storage.flights import save_pack_meta
-    from weatherbrief.db.models import FlightRow
-
-    flight_id = "egtk_lfat-2026-06-12-notrace"
-    pack_ts = datetime(2026, 6, 12, 6, 0, 0, tzinfo=timezone.utc)
-
-    s = app_db()
-    try:
-        s.add(FlightRow(
-            id=flight_id, user_id=DEV_USER_ID, route_name="EGTK-LFAT",
-            waypoints_json="[]", departure_time=pack_ts, cruise_altitude_ft=8000,
-        ))
-        s.flush()
-        save_pack_meta(s, BriefingPackMeta(
-            flight_id=flight_id, fetch_timestamp=pack_ts, days_out=0,
-            digest_trace_id=None,
-        ))
-        s.commit()
-    finally:
-        s.close()
-
-    pushed = []
-    import weatherbrief.digest.langsmith_feedback as ls
-    monkeypatch.setattr(ls, "push_digest_thumb_feedback",
-                        lambda **kw: pushed.append(kw))
-
-    resp = client.post("/api/feedback", json={
-        "flight_id": flight_id,
-        "pack_timestamp": pack_ts.isoformat(),
-        "category": "digest_rating",
-        "comment": "",
-        "sentiment": "up",
-        "target": "digest",
-    })
-    assert resp.status_code == 200, resp.text
-    assert len(pushed) == 1
-    assert pushed[0]["run_id"] is None
 
 
 def test_thumb_down_bare_is_recorded(client, app_db):
@@ -501,16 +398,6 @@ def test_highlight_rating_drops_unknown_context_keys(client, app_db):
 ])
 def test_highlight_rating_invalid_context_rejected(client, body):
     assert client.post("/api/feedback", json=body).status_code == 422
-
-
-def test_highlight_rating_skips_langsmith(client, monkeypatch):
-    """No trace id for a highlight: the digest's LangSmith mirror never runs."""
-    from weatherbrief.digest import langsmith_feedback
-    calls = []
-    monkeypatch.setattr(langsmith_feedback, "push_digest_thumb_feedback",
-                        lambda **kw: calls.append(kw))
-    assert client.post("/api/feedback", json=_highlight_rating()).status_code == 200
-    assert calls == []
 
 
 def test_admin_ratings_include_highlight_ratings_with_context(client):

@@ -5,7 +5,7 @@ and regional text forecasts (NWS AFD or DWD) via an LLM briefer.
 
 Heavy data (ForecastSnapshot, text forecasts) is processed outside the
 graph so that only the lightweight context string enters LangGraph state.
-This keeps LangSmith trace payloads small (~100 KB instead of ~30 MB).
+This keeps trace payloads small (~100 KB instead of ~30 MB).
 """
 
 from __future__ import annotations
@@ -389,7 +389,7 @@ def run_digest(
     """Run the full digest pipeline and return final state.
 
     Data preparation (text fetching, translation, context assembly) runs
-    outside the graph so only the context string is traced by LangSmith.
+    outside the graph so only the context string enters the (traceable) graph.
 
     ``longrange`` forces the regime; when ``None`` (default) it is auto-detected
     from the flight's lead time via :func:`is_long_range`. Beyond the ECMWF GRIB
@@ -425,10 +425,10 @@ def run_digest(
     # --- LLM call via graph (traced — lightweight state) ---
     # Pre-generate the root run id so we own it and can persist it with the
     # pack. ``run_id`` in the RunnableConfig sets the id of the trace this
-    # invocation produces in LangSmith, which is what digest thumb feedback
-    # later attaches to (issue #244). Pass a UUID object (not a str) to match
+    # invocation produces (issue #244); kept for trace correlation if LangSmith
+    # tracing is ever re-enabled (off in prod). Pass a UUID object (not a str) to match
     # RunnableConfig.run_id's declared Optional[UUID] type — relying on string
-    # coercion would silently break the trace<->feedback link if a pinned
+    # coercion would silently break the trace<->pack link if a pinned
     # LangChain stopped coercing. Generated unconditionally — harmless when
     # tracing is off locally (no trace is created), persisted regardless.
     trace_id = uuid4()
@@ -457,7 +457,7 @@ def run_digest(
 
     # Carry dwd_translated through to the caller for persistence. It's
     # intentionally kept out of the LangGraph state (commit 2589691d, to keep
-    # LangSmith trace payloads small), so we attach it post-graph instead.
+    # trace payloads small), so we attach it post-graph instead.
     result["dwd_translated"] = dwd_translated
 
     # Carry the exact context string (the user message sent to the LLM) out for

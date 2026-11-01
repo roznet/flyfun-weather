@@ -1960,7 +1960,7 @@ def _build_pack_meta(
         outlook=outlook,
         outlook_reason=outlook_reason,
         # NULL on the provisional pass (digest hasn't run); set on finalize from
-        # the run_digest-controlled run_id so thumb feedback can reach LangSmith.
+        # the run_digest-controlled run_id (trace correlation).
         digest_trace_id=result.digest_trace_id,
         artifact_path=str(pack_path),
         model_init_times=init_times,

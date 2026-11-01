@@ -1060,8 +1060,7 @@ further calibration gate, no What's New entry).
   only those keys as bounded strings, in `feedback.context` (TEXT holding
   JSON, migration 100 — repo convention, not `sa.JSON`). The text is stored
   because the line is regenerated; `facts_hash` keys back into
-  `live_highlights.jsonl`. Digest-rating limiters, no LangSmith mirror (no
-  trace id). Admin `kind=ratings` covers both rating categories and shows the
+  `live_highlights.jsonl`. Digest-rating limiters. Admin `kind=ratings` covers both rating categories and shows the
   rated line; the admin email quotes it. Dedup is session-only, keyed
   `flight|facts_hash` on both clients.
 - **Fixtures:** the suite has no API key, so the replayed ticks serve

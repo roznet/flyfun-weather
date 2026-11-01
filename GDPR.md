@@ -139,6 +139,9 @@ Addendum** to the SCCs; the same path serves EU users under the EU SCCs. See §8
   residency** to keep traces in the EU. Note that the only content the digest would trace
   is the **anonymized weather context** (no PII), so even enabled this path carries no
   personal data. It remains off by default as a data-minimization measure regardless.
+  **Disabled in prod since 2026-11-01** (API key removed, LangSmith dropped from
+  `PRIVACY.md`), and the digest 👍/👎 → LangSmith feedback mirror (#244), which sent
+  the pilot's free-text comment, has been removed from the code.
   - *To enable safely:* (1) turn on **EU data residency** in the LangSmith account and
     point `LANGCHAIN_ENDPOINT` at the EU host first, so traces stay in-region; (2) set
     `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY` (env-only — no code change, default

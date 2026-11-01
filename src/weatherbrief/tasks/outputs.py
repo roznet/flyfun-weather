@@ -55,8 +55,8 @@ class DigestResult:
     # to it — see the note in digest/llm_digest.py:briefer_node.
     llm_cache_read_tokens: int | None = None
     llm_cache_write_tokens: int | None = None
-    # LangSmith root run id for the digest LLM call, persisted with the pack so
-    # later thumb ratings can attach feedback to the run (issue #244).
+    # Root run id of the digest LLM call, persisted with the pack for trace
+    # correlation (issue #244).
     digest_trace_id: str | None = None
     diagnostic: Diagnostic | None = None
 
@@ -259,7 +259,7 @@ def run_llm_digest(
 
         if digest_result.get("diagnostic") is not None:
             # run_digest() sets digest_trace_id even when briefer_node emits a
-            # diagnostic, so a real LangSmith trace exists for this run — keep
+            # diagnostic, so the run has a real root id — keep
             # the id so the pack stays correlatable (issue #244).
             return DigestResult(
                 diagnostic=digest_result["diagnostic"],

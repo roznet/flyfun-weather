@@ -178,7 +178,6 @@ src/weatherbrief/
 │   ├── prompt_builder.py  # Context assembly for LLM
 │   ├── outlook.py      # Long-range outlook haiku digest (see project_longrange_outlook)
 │   ├── guardrails.py   # Digest output guardrail checks
-│   ├── langsmith_feedback.py # LangSmith eval feedback hooks
 │   ├── dwd_translate.py # DE→EN translation for DWD synoptic text
 │   └── format_utils.py / exceptions.py # Shared formatting helpers + digest exceptions
 ├── db/

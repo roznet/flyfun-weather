@@ -97,8 +97,8 @@ Sections 5–9 are shared by both regimes and appended by `_append_shared_sectio
 ### LangGraph Pipeline (`digest/llm_digest.py`)
 
 Single-node graph — the heavy data prep happens *outside* the graph so only a
-lightweight context string enters the traced state (keeps LangSmith payloads
-~100 KB instead of ~30 MB):
+lightweight context string enters the graph state (keeps any LangChain trace
+payload ~100 KB instead of ~30 MB; LangSmith tracing is off in prod):
 
 ```
 START → briefer → END
@@ -106,7 +106,7 @@ START → briefer → END
 
 `run_digest()` orchestrates three stages:
 - **pre-graph (not traced)**: `_fetch_and_translate_text()` calls `fetch_text_forecasts(route)` (dispatches NWS vs DWD by route, None on failure) and, for European routes, translates DWD day-blocks via `translate_dwd_blocks()` (synoptic-extract mode when the route doesn't cross Germany). Then `build_digest_context()` assembles the context string.
-- **graph (traced — lightweight state)**: `briefer_node` calls the LLM with `with_structured_output(schema, include_raw=True)` — `schema`/prompt/model switch by regime (`WeatherDigest` + `briefer` vs `LongRangeDigest` + `briefer_longrange`; see *Long-Range Outlook*) — loading the system prompt via `config.load_prompt(prompt_key, locale=, guidance_key=)`, and captures token usage from the raw `AIMessage`. The invocation runs with a **pre-generated `run_id`** (`config={"run_id": uuid4()}`) so we own the LangSmith trace id rather than letting LangChain auto-generate-and-discard it. The id is returned as `result["digest_trace_id"]` and persisted on the pack (see below).
+- **graph (traced — lightweight state)**: `briefer_node` calls the LLM with `with_structured_output(schema, include_raw=True)` — `schema`/prompt/model switch by regime (`WeatherDigest` + `briefer` vs `LongRangeDigest` + `briefer_longrange`; see *Long-Range Outlook*) — loading the system prompt via `config.load_prompt(prompt_key, locale=, guidance_key=)`, and captures token usage from the raw `AIMessage`. The invocation runs with a **pre-generated `run_id`** (`config={"run_id": uuid4()}`) so we own the root run id rather than letting LangChain auto-generate-and-discard it. The id is returned as `result["digest_trace_id"]` and persisted on the pack (see below).
 - **post-graph (not traced)**: formats markdown; re-attaches `dwd_translated` to the result.
 
 ```python
@@ -120,7 +120,7 @@ result["llm_output_tokens"]
 result["llm_cache_read_tokens"]   # → prompt-cache split, subsets of
 result["llm_cache_write_tokens"]  #   llm_input_tokens — never add them to it
 result["dwd_translated"]    # → translated DWD blocks (attached post-graph)
-result["digest_trace_id"]   # → controlled LangSmith root run id (str UUID)
+result["digest_trace_id"]   # → controlled LangChain root run id (str UUID)
 result["longrange"]         # → which regime actually ran
 result["digest_context"]    # → the exact context string sent to the LLM, so the
                             #   pack can persist a byte-faithful eval fixture (#254)
@@ -129,10 +129,9 @@ result["diagnostic"]        # → typed Diagnostic if the LLM call failed, else 
                             #    weatherbrief.digest.exceptions.classify_llm_exception)
 ```
 
-### Digest run id → thumb feedback (LangSmith, issue #244)
+### Digest run id (`digest_trace_id`, issue #244)
 
-The digest's LangSmith run id is threaded out and persisted so a later pilot
-rating can be attached to the run that produced the digest:
+The digest's root run id is threaded out and persisted on the pack:
 
 `run_digest` (generates `run_id`) → `run_llm_digest` (`DigestResult.digest_trace_id`)
 → `pipeline.BriefingResult.digest_trace_id` → `_build_pack_meta`
@@ -140,14 +139,11 @@ rating can be attached to the run that produced the digest:
 (migration `066`, nullable `String(36)`). NULL on the provisional pack row
 (digest hasn't run yet) and for legacy packs created before #244.
 
-When a 👍/👎 lands at `POST /api/feedback` with `category="digest_rating"`,
-`submit_feedback` looks up the pack by `(flight_id, pack_timestamp)`, reads its
-`digest_trace_id`, and calls `digest/langsmith_feedback.py:push_digest_thumb_feedback`
-→ `langsmith.Client().create_feedback(run_id, key="user_thumb", score=1.0/0.0,
-comment=…)`. **Fire-and-forget**: a no-op when LangSmith isn't configured
-(`LANGCHAIN_API_KEY`/`LANGSMITH_API_KEY` unset — local/dev) or the pack has no
-trace id, and it never raises into the user's POST (the DB `feedback` row is
-written regardless).
+It used to key a 👍/👎 → LangSmith feedback mirror in `POST /api/feedback`.
+That mirror was removed on 2026-11-01 when LangSmith was turned off in prod
+(it sent the pilot's free-text comment off-platform). Digest ratings now live only in the
+DB `feedback` table. The id is kept so a trace can be correlated if tracing is
+ever re-enabled (env-only; needs a `PRIVACY.md` update first).
 
 `briefer_node` gates its failure log level by `diagnostic.level` so retryable
 transients (rate-limited / overloaded) log at warning, not error.
