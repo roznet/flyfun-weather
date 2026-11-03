@@ -235,8 +235,8 @@ served from `deploy/weather.flyfun.aero.caddy` lists `/auth/callback`,
 `/briefing.html`, `/maps.html`, `/s/*`. `AppState` parses the `fc.*` keys into
 `PendingNavigation.forecastMap(MapDeepLink)`, so a map link shared from desktop
 opens the phone on the same day/hour/metric/airport. Caveat: that Caddy config
-lives in the **private deploy repo**, is rolled out manually (`caddy validate` →
-`systemctl reload caddy`), and Apple's CDN caches AASA — propagation is not
+lives in the **private deploy repo**, is rolled out manually (`git pull` →
+`shared-infra/caddy/reload.sh`), and Apple's CDN caches AASA — propagation is not
 instant.
 
 Tests: `flyfun-weatherTests/ForecastMapTests.swift`.
