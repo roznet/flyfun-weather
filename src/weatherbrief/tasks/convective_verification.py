@@ -38,12 +38,15 @@ The per-pair view (:func:`pairs_sql`) also carries the ingredients for
 threshold work: both verdicts and every convective and stability column of
 the snapshot (:data:`PAIR_COLUMNS`), observed max dBZ, flash count and the
 highest cloud top (FL, 10 NM). A column older archive files lack reads NULL.
+
+The native verdict of :data:`ICON_D2_FALSE_NATIVE_RUNS` reads NULL too: those
+runs stored a false NONE (#953), so they count as having no native assessment.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -62,6 +65,20 @@ RISK_SOURCES = {
         "ELSE nwp_conv_risk END"
     ),
 }
+
+#: ICON runs whose stored native verdict is false (#953, meteorology-decisions
+#: §71): before the fix ICON-D2 rows read D2's absent scheme fields as a quiet
+#: scheme and stored ``nwp``/``none`` whatever the model showed. The whole run
+#: is blanked, never only its ``none`` rows, which would keep the run's hits and
+#: false alarms and lose its correct negatives. 10-25 12Z also holds genuine
+#: ICON-EU rows (D2 had no init of its own until #936); they go with it.
+ICON_D2_FALSE_NATIVE_RUNS = tuple(
+    datetime(2026, 10, day, hour, tzinfo=timezone.utc)
+    for day, hour in (
+        (25, 12), (26, 3), (26, 15), (27, 3), (27, 18),
+        (28, 3), (28, 15), (29, 3), (29, 15),
+    )
+)
 
 #: Snapshot columns carried onto every pair, with the DuckDB type a missing
 #: one is read as (archive files written before the column existed).
@@ -151,6 +168,12 @@ def pairs_sql(
     if params.until is not None:
         window.append(f"forecast_hour < TIMESTAMPTZ {_sql_str(params.until.isoformat())}")
     snap_where = " AND ".join([f"({risk}) IS NOT NULL", *window])
+    false_runs = ", ".join(
+        f"TIMESTAMPTZ {_sql_str(run.isoformat())}" for run in ICON_D2_FALSE_NATIVE_RUNS
+    )
+    false_native = (
+        f"model = 'icon' AND CAST(model_init_time AS TIMESTAMPTZ) IN ({false_runs})"
+    )
 
     def hourly(source: str) -> str:
         # Frames in [h - 30 min, h + 30 min) belong to hour h.
@@ -175,6 +198,13 @@ WITH snap_src AS (
     SELECT *{missing}
     FROM read_parquet({_sql_str(_glob(verification_root, 'snapshots'))}, union_by_name=true)
 ),
+snap_valid AS (
+    SELECT * REPLACE (
+        CASE WHEN {false_native} THEN NULL ELSE nwp_conv_risk END AS nwp_conv_risk,
+        CASE WHEN {false_native} THEN NULL ELSE nwp_conv_method END AS nwp_conv_method
+    )
+    FROM snap_src
+),
 snap AS (
     SELECT icao, model,
            CAST(model_init_time AS TIMESTAMPTZ) AS model_init_time,
@@ -182,7 +212,7 @@ snap AS (
            {risk} AS risk,
            ({risk}) IN ({risks}) AS forecast_yes,
            {", ".join(PAIR_COLUMNS)}
-    FROM snap_src
+    FROM snap_valid
     WHERE {snap_where}
 ),
 radar AS (

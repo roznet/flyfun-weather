@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +12,7 @@ pa = pytest.importorskip("pyarrow")
 import pyarrow.parquet as pq  # noqa: E402
 
 from weatherbrief.tasks.convective_verification import (  # noqa: E402
+    ICON_D2_FALSE_NATIVE_RUNS,
     ConvectiveScoreParams,
     score_convective,
     with_skill,
@@ -172,6 +174,59 @@ def test_risk_source_picks_the_verdict(archives, source, expected):
     ], RISK_SCHEMA)
     rows = score_convective(verif, observed, ConvectiveScoreParams(risk_source=source))
     assert _counts(rows) == expected
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("thermo", (1, 1, 0, 2)),
+    ("nwp", (0, 1, 0, 1)),
+    ("graded", (1, 1, 0, 2)),
+])
+def test_false_d2_runs_have_no_native_verdict(archives, tmp_path, source, expected):
+    """#953: an affected ICON run reads as having no native assessment, on
+    every track, without touching other runs or models."""
+    verif, observed = archives
+    for f in (verif / "snapshots").glob("*.parquet"):
+        f.unlink()
+    d2_only = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+    native = {"nwp_conv_method": "nwp", "nwp_conv_risk": "none"}
+    with patch(
+        "weatherbrief.tasks.convective_verification.ICON_D2_FALSE_NATIVE_RUNS",
+        (d2_only,),
+    ):
+        _write(verif / "snapshots" / "2026-07-01.parquet", [
+            # Stormed: its false NONE must not score a miss; thermo still hits.
+            _snap("ZZAA", "moderate", init=d2_only, model="icon") | native,
+            # Quiet, in the run: the whole run goes, not only one verdict.
+            _snap("ZZAC", "none", init=d2_only, model="icon")
+            | {"nwp_conv_method": "nwp", "nwp_conv_risk": "high"},
+            # Same init, another model: kept, and a real miss on every track.
+            _snap("ZZAB", "none", init=d2_only, model="ecmwf") | native,
+            # ICON, another run: kept, a real correct negative.
+            _snap("ZZAD", "none", init=d2_only + timedelta(hours=1), model="icon") | native,
+        ], RISK_SCHEMA)
+        out = tmp_path / "pairs.parquet"
+        rows = score_convective(
+            verif, observed, ConvectiveScoreParams(risk_source=source), pairs_out=out,
+        )
+    assert tuple(
+        sum(r[k] for r in rows)
+        for k in ("hits", "misses", "false_alarms", "correct_negatives")
+    ) == expected
+    by_icao = {p["icao"]: p for p in pq.read_table(out).to_pylist()}
+    assert by_icao["ZZAD"]["nwp_conv_method"] == "nwp"
+    if source != "nwp":
+        assert by_icao["ZZAA"]["nwp_conv_method"] is None
+        assert by_icao["ZZAA"]["nwp_conv_risk"] is None
+
+
+def test_false_d2_run_list_matches_the_affected_runs():
+    """Pinned: these came from prod rows and cycle logs, not from a rule."""
+    runs = {r.strftime("%m-%d %HZ") for r in ICON_D2_FALSE_NATIVE_RUNS}
+    assert runs == {
+        "10-25 12Z", "10-26 03Z", "10-26 15Z", "10-27 03Z", "10-27 18Z",
+        "10-28 03Z", "10-28 15Z", "10-29 03Z", "10-29 15Z",
+    }
+    assert all(r.utcoffset() == timedelta(0) for r in ICON_D2_FALSE_NATIVE_RUNS)
 
 
 def test_columns_an_old_archive_lacks_read_null(archives, tmp_path):

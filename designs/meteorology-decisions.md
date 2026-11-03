@@ -7390,9 +7390,17 @@ display, briefings and the thermo track were not affected.
 - **Cost:** six more D2 files per sampled D2 step (the five storm fields and
   the previous step's echo top), the briefing's own blobs, shared through the
   cache with D2 briefings and the flight warm.
-- **Rows written before this** keep their false `nwp_conv_risk="none"`: not
-  rewritten here. D2 and EU rows are both `model="icon"`; from now on a D2 row
-  with a native grade is told apart by `nwp_conv_method="nwp_explicit"`.
+- **Rows written before this** keep their false `nwp_conv_risk="none"`, about
+  25,000 rows in nine ICON runs: 10-25 12Z, 10-26 03Z and 15Z, 10-27 03Z and
+  18Z, 10-28 03Z and 15Z, 10-29 03Z and 15Z. They are not rewritten; scoring
+  excludes them (`ICON_D2_FALSE_NATIVE_RUNS` in `convective_verification.py`):
+  their native verdict and method read NULL, so `nwp` drops them, `graded`
+  falls back to thermo and `thermo` is unchanged. A run's whole verdict goes,
+  because dropping only its `none` rows would keep its hits and false alarms
+  and lose its correct negatives. The 10-25 12Z run also holds genuine ICON-EU
+  rows: D2 had no init of its own until #936, and they go with it. Later D2
+  runs have their own init, and a D2 row with a native grade reads
+  `nwp_conv_method="nwp_explicit"`.
 
 ## 72. UKMO slot is Met Office UKV 2 km from AWS, skipped outside UKV (#937)
 
