@@ -8,7 +8,8 @@ description: Review what production produced over a day or window — pipeline h
 Three parts, run in order for a window (default: today, UTC):
 
 - **A. Pipeline health** — did briefings get built, how fast, at what cost, with what errors.
-- **B. Live layer** — every alert and highlight on real flights, against the report behind it.
+- **B. Live layer** — every alert and highlight on real flights, against the report behind it,
+  and every push decision (shadow or sent).
 - **C. Digests** — mechanical checks on every digest, then a review of a ranked sample
   against the exact context the model saw, appended to a running record.
 
@@ -129,6 +130,44 @@ grep -E 'Live history write failed|lookahead failed|live tick|LIVE_HIGHLIGHT' $W
 For a new pattern, check whether the deploy touched that code (`git diff --stat <old>..<new> -- <path>`)
 or whether it's an upstream outage. For example, ICON-D2 404s at 11Z on 2026-10-06 were DWD
 not having published yet.
+
+### B3b. Push decisions (shadow or sent)
+
+B2 judges what the screens show. Push is a separate, much stricter decision (a push in the air
+is a distraction), and nothing in `review.py` reads it, so go through the log lines here. Rules:
+`designs/live-observation-layer.md` and `designs/meteorology-decisions.md` §77. `WB_LIVE_PUSH_SEND`
+unset (shadow) only blocks the send: every decision is still logged, so the review is the same.
+
+```bash
+grep -oE 'LIVE_PUSH_[A-Z_]+' $W/app.log | sort | uniq -c
+grep -E 'LIVE_PUSH_(WOULD_SEND|SENT|FAILED)' $W/app.log                 # would push / did push
+grep -E 'LIVE_PUSH_SKIPPED' $W/app.log | grep -oE 'reason=[a-z_]+' | sort | uniq -c
+grep -E 'LIVE_PUSH_KNOWN' $W/app.log                                    # flights with Start, known levels
+grep -E 'LIVE_PUSH_SUPPRESSED' $W/app.log | grep 'started=True'         # kept silent on a started flight
+grep -E 'LIVE_PUSH_SKIPPED' $W/app.log | grep -v 'reason=user_trigger'  # had something to push, not eligible
+```
+
+`app.log` has no timestamps (`-o cat`). When the time matters, run `journalctl CONTAINER_NAME=weatherbrief
+--since ... -o short-iso | grep 'LIVE_PUSH_'` on the server.
+
+Group by flight and judge as a pilot in the air would:
+1. **Each `WOULD_SEND` / `SENT`:** worth interrupting the pilot? Check `rule=` and the raw report
+   behind each key from B2. A push for something the pilot already knew, or for weather that
+   doesn't change a decision, is a false alarm. Note `SENT` vs `WOULD_SEND`, and any `FAILED`.
+2. **`SUPPRESSED` with `started=True`:** anything important kept silent? Above all IFR or LIFR at
+   the destination, or the departure before take-off. Reasons: `known=`, `ratchet=`, `mvfr`,
+   `role=route`, `after_takeoff`, storm tops. A correct silence is success; a missed drop is the
+   worst failure here.
+3. **`SKIPPED`:** `no_consent` = no Start, so the alerts listed are SIGMETs and storms a Start
+   would have pushed: judge those too, they enlarge the sample. (Lines from before the #968 deploy,
+   2026-11-02 21:03Z, also list category rows here and carry no `rule=`.) `push_off` / `no_device` / `muted` /
+   `pref_off` on a started flight are real decisions the pilot never got: judge them like step 1.
+4. **Volume:** pushes per flight. More than a few on one flight is a finding (the #968 replay of 44
+   flights: ~35 pushes under the old rule, 2 under this one).
+
+**The sample is small, and that isn't success.** Only flights with Start exercise the category
+rule: without Start, category rows only log `not_started`, which says nothing about what the rule
+would have done. A window with few or no `LIVE_PUSH_KNOWN` flights goes under **Not exercised**.
 
 ### B4. Optional: replay old vs current classifier
 
@@ -298,11 +337,13 @@ Lead with the verdict: what's broken, what regressed, what improved. Then:
   cost per briefing, new log patterns.
 - **Live layer:** the flights reviewed; each alert, real or not, with the evidence;
   regressions of past fixes.
+- **Push:** shadow or sending; counts by log line; flights with Start; each would-be push, worth
+  it or not; anything important kept silent; pushes per flight.
 - **Digests:** the C1 counts; core/tail sizes; packs with a major, by weakness; the 2–3 worst
   examples with the digest quote and the context line; anything promoted from the tail; the
   tally trend against earlier runs. Advisory conflicts (#9, severity `engine`) go in their
   own list: they are leads for the advisory code, not digest faults.
-- **Not exercised** (e.g. no SIGMET on any route, no 👎 that day), so it isn't counted as verified.
+- **Not exercised** (e.g. no SIGMET on any route, no 👎 that day, no flight with Start), so it isn't counted as verified.
 
 Record live-layer findings in the memory note `project_live_alerts_push_gating`, and the
 digest headline (e.g. "minority-view headlines 6/15") in `project_briefer_sonnet55_eval` or
