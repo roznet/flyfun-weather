@@ -10,7 +10,7 @@ Make WeatherBrief available to a small group of trusted pilots (friends, not pub
 
 ### Existing setup (DigitalOcean droplet — connect.flyfun.aero)
 
-- **Caddy** reverse proxy with auto-TLS (sites-enabled pattern)
+- **Caddy** reverse proxy with auto-TLS (sites-enabled pattern), in Docker with host networking
 - **Shared MySQL 8.0** on `shared-services` Docker network
 - **Docker Compose** per-app, all joining `shared-services` network
 - **DNS** managed via DigitalOcean, Caddy auto-obtains Let's Encrypt certs
@@ -248,10 +248,10 @@ docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.
 # write .env (ENVIRONMENT=production, DATABASE_URL, DATA_DIR, AIRPORTS_DB, HOST_* mounts, API keys)
 # put nav.db (built by euro_aip) where AIRPORTS_DB points — prod: under /mnt/flyfun_data, not the project dir
 docker compose up -d --build && docker exec weatherbrief alembic upgrade head
-# Caddy: see gotcha below, then `caddy validate` + `systemctl reload caddy`
+# Caddy: see gotcha below
 ```
 
-**Caddy gotcha**: the *deployed* site files live in the **private `digitalocean` config repo**, not in this repo's `deploy/`. `deploy/*.caddy` here is the reference copy that `/code-review` checks the CSP against — copying it straight into `sites-enabled` can clobber hand-applied prod edits. Preview with `syncfiles install`, apply with a manual `sudo cp`, validate, then reload.
+**Caddy gotcha**: the *deployed* site files live in the **private `digitalocean` config repo**, not in this repo's `deploy/`. `deploy/*.caddy` here is the reference copy that `/code-review` checks the CSP against — copying it straight over the file in that repo can clobber edits made there, so diff first. Commit and push there, then on the droplet `cd ~/digitalocean && git pull && shared-infra/caddy/reload.sh`, which validates before reloading and needs no sudo.
 
 ### Updating
 
