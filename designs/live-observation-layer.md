@@ -1238,8 +1238,10 @@ its METAR alone; it does not drop the flight's facts.
 
 The issue's offline replay of that corpus estimated **~188 calls (−39 %)** for
 this gate; it is not reproduced in the repo (the corpus lives on prod).
-Remaining known trigger on busy convective flights: rain edges crossing
-25 NM bins (10–18 per flight in the replay) — #706 item 11, not done.
+Rain edges crossing 25 NM bins are a known trigger but not the main one, so
+#706 item 11 was closed without a change (#709). Prod count, 2026-10-17 to
+11-04, 9,243 regenerations: airports 61.6 %, cells 46.6 %, rain 40.8 % (sole
+trigger 7.7 %). The proposed rain gate would save at most about 2.3 % of calls.
 
 ### Grounding check
 
