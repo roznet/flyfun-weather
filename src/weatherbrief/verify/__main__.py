@@ -25,12 +25,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
 
 def _init_db():
     """Initialize database connection."""
-    load_dotenv()
+    load_env()
     from flyfun_common.db import SessionLocal, init_shared_db, get_engine
     import weatherbrief.db.models  # noqa: F401 — register models
 
@@ -561,7 +561,7 @@ def cmd_stats(args):
 
 def cmd_discover(args):
     """Discover METAR-reporting airports for the watchlist."""
-    load_dotenv()
+    load_env()
     from weatherbrief.tasks.airport_watchlist import (
         DEFAULT_PREFIXES,
         discover_airports,
@@ -618,7 +618,7 @@ def cmd_standalone(args):
         _enter_background_mode()
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     airports_db = os.environ.get("AIRPORTS_DB", "")
     if not airports_db:
@@ -748,7 +748,7 @@ def cmd_standalone(args):
 def cmd_ingest_artifact(args):
     """Import a portable snapshot artifact into this DB (P3)."""
     _init_db()
-    load_dotenv()
+    load_env()
 
     from flyfun_common.db import SessionLocal
     from weatherbrief.tasks.snapshot_artifact import (
@@ -779,7 +779,7 @@ def cmd_ingest_artifact(args):
 def cmd_rebuild_cache(args):
     """Rebuild the verification/forecast map cache."""
     _init_db()
-    load_dotenv()
+    load_env()
 
     airports_db = os.environ.get("AIRPORTS_DB", "")
     if not airports_db:
@@ -817,7 +817,7 @@ def cmd_rollup_summary(args):
     )
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     db = SessionLocal()
     try:
@@ -881,7 +881,7 @@ def cmd_rollup_daily_stats(args):
     )
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     db = SessionLocal()
     try:
@@ -931,7 +931,7 @@ def cmd_rollup_monthly_stats(args):
     )
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     db = SessionLocal()
     try:
@@ -981,7 +981,7 @@ def cmd_archive(args):
     )
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     tables = tuple(args.table) if getattr(args, "table", None) else None
     if tables:
@@ -1050,7 +1050,7 @@ def cmd_observed_archive(args):
     """Archive observed conditions at the watchlist airports (#575)."""
     if getattr(args, "background", False):
         _enter_background_mode()
-    load_dotenv()
+    load_env()
 
     from weatherbrief.observed.frames import FrameStore
     from weatherbrief.tasks.observed_archive import (
@@ -1148,7 +1148,7 @@ def cmd_prune_raw(args):
     )
 
     _init_db()
-    load_dotenv()
+    load_env()
 
     retain = args.retain_days if args.retain_days is not None else raw_retention_days()
     db = SessionLocal()

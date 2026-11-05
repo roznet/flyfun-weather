@@ -468,8 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
+        from weatherbrief.envfiles import load_env
+        load_env()
     except ImportError:
         pass
 

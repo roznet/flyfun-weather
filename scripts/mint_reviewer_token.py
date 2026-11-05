@@ -68,7 +68,7 @@ def main() -> None:
     # Load dev .env so the script works from a checkout without exporting vars.
     if load_dotenv is not None:
         load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env.secrets")  # sops-managed secrets, if present
     secret = _require("JWT_SECRET")
     user_id = _require("REVIEWER_USER_ID")
     email = _require("REVIEWER_EMAIL")

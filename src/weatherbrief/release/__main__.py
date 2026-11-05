@@ -41,7 +41,7 @@ from datetime import date as date_t
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
 from flyfun_common.db import SessionLocal, get_engine
 from weatherbrief.db.models import SystemMessageRow
@@ -164,7 +164,7 @@ def _cmd_import(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    load_dotenv()
+    load_env()
     parser = argparse.ArgumentParser(prog="python -m weatherbrief.release")
     sub = parser.add_subparsers(dest="command", required=True)
 

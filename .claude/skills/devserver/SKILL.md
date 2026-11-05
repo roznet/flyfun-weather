@@ -26,8 +26,9 @@ session records its checkout and port in tmux (`WB_ROOT`/`WB_PORT`) — the acti
 is the esbuild pane in `web/`, which is why "same checkout?" can't be read from it.
 
 Exit 0 → relay the URL and `tmux attach -t <session>`. Exit 1 → read the `problem` line:
-- **missing venv / `.env`** in a worktree → `/worktree-init` creates them; in `main/`, the
-  `.env` is backed up in `~/scripts/config/roznet/flyfun-weather`.
+- **missing venv / `.env`** in a worktree → `/worktree-init` creates them; in `main/`, `.env`
+  and the sops-encrypted `.env.secrets` come from `~/scripts/config/roznet/flyfun-weather`
+  (`syncfiles.py install -e` there decrypts the secrets; never print them).
 - **TLS cert unreadable** → hand the user the printed `sudo chmod` (never run sudo).
 - **alembic** → diagnose below, then rerun.
 
@@ -53,8 +54,8 @@ upgrade or stamp there acts on main's DB too.
 
 ## Notes
 
-- `.env` is loaded by the app (python-dotenv). `--reload` catches `.py` changes only — restart
-  (`--stop`, then start) after a `.env` change.
+- `.env` then `.env.secrets` are loaded by the app (`weatherbrief.envfiles.load_env`). `--reload`
+  catches `.py` changes only — restart (`--stop`, then start) after changing either file.
 - Ports: production 8020 (docker behind Caddy); dev 8000 / 8001+; HTTPS 8443. OAuth callbacks
   are configured for `:8000` only — dev runs single-user admin mode without OAuth.
 - **HTTPS binds `--host ::1` (IPv6 loopback), never `::` or `0.0.0.0`.**

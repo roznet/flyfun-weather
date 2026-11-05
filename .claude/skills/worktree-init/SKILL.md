@@ -1,6 +1,6 @@
 ---
 name: worktree-init
-description: Create a new git worktree with its own venv, dependencies, .env, and shared data dir. Invoke with the branch name as the only argument.
+description: Create a new git worktree with its own venv, dependencies, .env + .env.secrets, and shared data dir. Invoke with the branch name as the only argument.
 disable-model-invocation: true
 ---
 
@@ -24,7 +24,9 @@ The script does every step and checks each one (`scripts/ops/worktree_init.py` d
   left out. An existing local branch is checked out as is; an origin-only branch tracks it.
 - **venv** with main's Python, editable install that must resolve to the worktree's `src/`
   (checked with `PYTHONPATH` cleared), `npm install` in `web/`, main's `.env` copied
-  verbatim and scanned for relative paths (reported, never rewritten — the user owns `.env`).
+  verbatim and scanned for relative paths (reported, never rewritten — the user owns `.env`),
+  and main's `.env.secrets` (the secrets split out of `.env`) copied with mode 600 when it
+  exists. Never open or print `.env.secrets`: it holds the API keys and passwords.
 - **Migrations:** flags a branch that adds `alembic/versions/` files vs `origin/main`.
 
 Exit 0 = ready; 1 = a step failed, it stopped and printed how to remove the partial state

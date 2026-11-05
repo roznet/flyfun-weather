@@ -47,10 +47,10 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
 # Load .env from project root (works regardless of cwd)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.costs import compute_call_cost

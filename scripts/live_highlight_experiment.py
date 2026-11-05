@@ -83,9 +83,9 @@ def main() -> None:
     client = None
     if not args.facts_only:
         import anthropic
-        from dotenv import load_dotenv
+        from weatherbrief.envfiles import load_env
 
-        load_dotenv()
+        load_env()
         client = anthropic.Anthropic()
 
     cases = []

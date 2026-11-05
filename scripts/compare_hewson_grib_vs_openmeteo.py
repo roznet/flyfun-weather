@@ -23,9 +23,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-from dotenv import load_dotenv  # noqa: E402
+from weatherbrief.envfiles import load_env  # noqa: E402
 
-load_dotenv(ROOT / ".env")
+load_env(ROOT)
 
 # Silence cfgrib's idx-mismatch warnings (the prod files use checksummed idx
 # names that the local cfgrib build doesn't match against the GRIB header).

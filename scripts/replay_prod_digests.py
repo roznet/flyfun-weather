@@ -23,9 +23,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind  # noqa: E402
 from weatherbrief.costs import DIGEST_CACHE_TTL, compute_call_cost  # noqa: E402

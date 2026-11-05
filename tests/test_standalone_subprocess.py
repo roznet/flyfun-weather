@@ -537,7 +537,7 @@ def _run_cli_standalone(monkeypatch, args):
 
     monkeypatch.setenv("AIRPORTS_DB", "/tmp/airports.db")
     monkeypatch.setattr(vmain, "_init_db", lambda: None)
-    monkeypatch.setattr(vmain, "load_dotenv", lambda: None)
+    monkeypatch.setattr(vmain, "load_env", lambda *a, **k: None)
 
     calls: dict = {}
 

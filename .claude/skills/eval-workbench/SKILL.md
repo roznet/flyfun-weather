@@ -107,6 +107,6 @@ python scripts/pull_eval_corpus.py --manifest eval_candidates.json   # --area st
 
 ## Gotchas
 
-- Restart the dev server after `.env` changes (it `load_dotenv()`s at startup; `--reload` only catches `.py`).
+- Restart the dev server after `.env` changes (it loads `.env` and `.env.secrets` at startup; `--reload` only catches `.py`).
 - Editable-install: the venv imports `weatherbrief` from `main/src` — verify with `python -c "import weatherbrief,inspect; print(inspect.getfile(weatherbrief))"` if a change "isn't taking".
 - Debriefed flights are the high-value ground truth (`outcomes` = per-category forecast-vs-reality). Prod retention is NOT a clean debriefed proxy — use the `flight_debriefs` table.

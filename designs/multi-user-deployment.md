@@ -245,7 +245,8 @@ runbook lives in **[triage-sandbox.md](./triage-sandbox.md)**.
 ```bash
 git clone https://github.com/roznet/flyfun-weather.git && cd flyfun-weather
 docker exec -i shared-mysql mysql -u root -p < deploy/03-create-weatherbrief-db.sql
-# write .env (ENVIRONMENT=production, DATABASE_URL, DATA_DIR, AIRPORTS_DB, HOST_* mounts, API keys)
+# write .env (ENVIRONMENT=production, DATA_DIR, AIRPORTS_DB, HOST_* mounts: plain config)
+# and .env.secrets (DATABASE_URL, API keys, JWT/encryption keys): see .env.sample / .env.secrets.sample
 # put nav.db (built by euro_aip) where AIRPORTS_DB points — prod: under /mnt/flyfun_data, not the project dir
 docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 # Caddy: see gotcha below
@@ -270,6 +271,8 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `alembic.ini` + `alembic/` | Schema migrations (prod only) |
 
 ### Environment variables
+
+Config and secrets are split: plain settings in `.env`, secrets (anything that would hurt if public: API keys, passwords, `JWT_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, `DATABASE_URL` with its password) in `.env.secrets`, each key in exactly one file. `weatherbrief.envfiles.load_env()` is the one loader for app, CLIs and scripts (environment first, then `.env`, then `.env.secrets`; missing files skipped); docker compose passes both files to both services (`.env.secrets` optional until prod is switched). In the owner's setup `.env.secrets` is sops-encrypted in the config repo and decrypted on the host by syncfiles; samples: `.env.sample`, `.env.secrets.sample`.
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|

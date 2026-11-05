@@ -26,9 +26,9 @@ import argparse
 import json
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.eval_workbench.config import eval_corpus_dir  # noqa: E402
 from weatherbrief.eval_workbench.ingest import ingest_pack  # noqa: E402

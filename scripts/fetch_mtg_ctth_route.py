@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 from pyproj import CRS, Transformer
 
 import eumdac
@@ -217,7 +217,7 @@ def main() -> int:
                         help="Optional CSV output path")
     args = parser.parse_args()
 
-    load_dotenv()
+    load_env()
     key = os.environ.get("EUMETSAT_CONSUMER_KEY")
     secret = os.environ.get("EUMETSAT_CONSUMER_SECRET")
     if not key or not secret:

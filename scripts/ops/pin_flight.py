@@ -91,9 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     if a.local:
-        from dotenv import load_dotenv
+        from weatherbrief.envfiles import load_env
 
-        load_dotenv(REPO / ".env")
+        load_env(REPO)
     arg = "list" if a.list or not a.flights else json.dumps({"ids": a.flights, "pin": not a.unpin})
     doc = run(arg, a.local)
     where = "local" if a.local else "prod"

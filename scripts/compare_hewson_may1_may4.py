@@ -16,11 +16,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-load_dotenv(ROOT / ".env")
+load_env(ROOT)
 
 from weatherbrief.airports import resolve_waypoints  # noqa: E402
 from weatherbrief.frontal.route_sampling import bilinear_sample  # noqa: E402
