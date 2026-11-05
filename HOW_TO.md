@@ -184,15 +184,18 @@ By default this registers the server for this project directory only (stored in 
 ### 4. Set up environment variables
 
 ```bash
-cp .env.sample .env
+cp .env.sample .env                   # plain configuration
+cp .env.secrets.sample .env.secrets   # API keys and passwords (gitignored, keep it mode 600)
 ```
 
 Edit `.env` and fill in at least:
 - `WORKING_DIR` — path to a directory where data will be stored (e.g., `./data`)
 
-Optional but useful:
+Optional but useful, in `.env.secrets`:
 - `ANTHROPIC_API_KEY` — for LLM-powered weather digest generation
 - `AUTOROUTER_USERNAME` / `AUTOROUTER_PASSWORD` — for GRAMET cross-sections (free account at [autorouter.aero](https://www.autorouter.aero))
+
+Both files are loaded by `weatherbrief.envfiles.load_env()`; keep each key in one of them only.
 
 In development mode the app uses SQLite and auto-creates a dev user, so no OAuth setup is needed.
 

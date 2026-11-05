@@ -294,9 +294,9 @@ def main(argv: list[str] | None = None) -> int:
     # the env file manually. Without this the CLI runs as an anonymous
     # Open-Meteo caller and gets rate-limited hard.
     try:
-        from dotenv import load_dotenv
+        from weatherbrief.envfiles import load_env
 
-        load_dotenv()
+        load_env()
     except ImportError:
         pass  # dotenv is optional in minimal deployments
 

@@ -6,13 +6,13 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 from sqlalchemy import create_engine
 
 from flyfun_common.db.models import Base
 import weatherbrief.db.models  # noqa: F401 — register app tables on Base
 
-load_dotenv()
+load_env()
 
 config = context.config
 

@@ -9,7 +9,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -402,7 +402,7 @@ class _RevalidatingStaticFiles(StaticFiles):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    load_dotenv()
+    load_env()
 
     # Ensure app-level loggers (scheduler, pipeline, etc.) are visible
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")

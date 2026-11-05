@@ -44,9 +44,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from sqlalchemy import select  # noqa: E402
 

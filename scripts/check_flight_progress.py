@@ -35,7 +35,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
-from dotenv import load_dotenv  # noqa: E402
+from weatherbrief.envfiles import load_env  # noqa: E402
 
 from weatherbrief.analysis.flight_progress import (  # noqa: E402
     EVENT_FIX,
@@ -52,7 +52,7 @@ def flight_dir(arg: str) -> Path:
     p = Path(arg)
     if p.is_dir():
         return p
-    load_dotenv(REPO / ".env", override=True)
+    load_env(REPO, override=True)
     hits = list((Path(os.environ["DATA_DIR"]) / "packs").glob(f"*/{arg}"))
     if not hits:
         sys.exit(f"no flight dir for {arg} under DATA_DIR/packs (import it first)")

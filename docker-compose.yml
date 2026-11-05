@@ -16,6 +16,10 @@ services:
       - "127.0.0.1:8020:8020"
     env_file:
       - .env
+      # secrets split out of .env (sops-managed on the host). Optional until prod
+      # has been switched to the split files; then make it required.
+      - path: .env.secrets
+        required: false
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       DATA_DIR: /app/data
@@ -98,6 +102,10 @@ services:
       - "127.0.0.1:8021:8021"
     env_file:
       - .env
+      # secrets split out of .env (sops-managed on the host). Optional until prod
+      # has been switched to the split files; then make it required.
+      - path: .env.secrets
+        required: false
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       WEATHERBRIEF_API_URL: http://weatherbrief:8020

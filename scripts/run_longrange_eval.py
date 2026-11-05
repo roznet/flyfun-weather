@@ -25,9 +25,9 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from extract_digest_eval import load_snapshot_from_pack  # noqa: E402

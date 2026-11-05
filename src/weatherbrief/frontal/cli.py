@@ -2801,9 +2801,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    from dotenv import load_dotenv
+    from weatherbrief.envfiles import load_env
 
-    load_dotenv()
+    load_env()
 
     parser = build_parser()
     args = parser.parse_args()

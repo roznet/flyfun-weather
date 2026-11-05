@@ -27,9 +27,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.eval_workbench import corpus, rerun  # noqa: E402
 

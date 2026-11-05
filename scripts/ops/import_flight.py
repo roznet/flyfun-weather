@@ -529,9 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     if not ids:
         return 0
 
-    from dotenv import load_dotenv
+    from weatherbrief.envfiles import load_env
 
-    load_dotenv(REPO / ".env")
+    load_env(REPO)
     import flyfun_common.db as fdb
     from flyfun_common.db.engine import ensure_dev_user, is_dev_mode
     from flyfun_common.db.models import UserRow

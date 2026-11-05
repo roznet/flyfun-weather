@@ -43,9 +43,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.debriefs.taxonomy import ADVISORY_TAG_MAP  # noqa: E402
 from weatherbrief.eval_workbench import corpus, rerun  # noqa: E402

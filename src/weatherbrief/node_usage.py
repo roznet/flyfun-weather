@@ -597,9 +597,9 @@ def mint_token(db: Session, origin: str, *, expires_days: int | None = None) -> 
 
 
 def _session():
-    from dotenv import load_dotenv
+    from weatherbrief.envfiles import load_env
 
-    load_dotenv()
+    load_env()
     from flyfun_common.db import SessionLocal, get_engine, init_shared_db
 
     import weatherbrief.db.models  # noqa: F401 — register models

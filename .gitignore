@@ -20,8 +20,11 @@ venv/
 /profiles
 
 .DS_Store
+# dotenv files: .env (config), .env.secrets (sops-managed secrets), .env.triage...
 .env
-.env.triage
+.env.*
+!.env.sample
+!.env.secrets.sample
 
 # Apple private keys (App Store Connect API, APNs). These belong outside the
 # repo entirely — ~/.appstoreconnect/private_keys/ is the conventional home —

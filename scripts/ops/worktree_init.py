@@ -193,6 +193,15 @@ def step_env(rep: Report, main: Path, path: Path) -> None:
                 "-- not rewritten, the user owns .env")
     else:
         rep.add(".env", OK, "copied from main", "no relative paths; DATA_DIR shared with main")
+    # Secrets split out of .env (sops-managed by the owner's config repo). Optional:
+    # an older checkout has everything in .env, CI and the triage sandbox have neither.
+    secrets = main / ".env.secrets"
+    if secrets.is_file():
+        shutil.copy2(secrets, path / ".env.secrets")
+        os.chmod(path / ".env.secrets", 0o600)
+        rep.add(".env.secrets", OK, "copied from main", "mode 600")
+    else:
+        rep.add(".env.secrets", SKIP, str(secrets), "main has none (secrets still in .env?)")
 
 
 def step_migrations(rep: Report, main: Path, branch: str) -> bool:

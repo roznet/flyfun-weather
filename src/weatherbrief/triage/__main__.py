@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 from sqlalchemy import func
 
 from flyfun_common.db import SessionLocal, get_engine
@@ -107,7 +107,7 @@ def _cmd_show(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    load_dotenv()
+    load_env()
 
     parser = argparse.ArgumentParser(
         prog="python -m weatherbrief.triage",

@@ -24,9 +24,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
+from weatherbrief.envfiles import load_env
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_env(Path(__file__).resolve().parent.parent)
 
 from weatherbrief.eval_workbench.candidates import select_candidates  # noqa: E402
 from weatherbrief.eval_workbench.ingest import build_corpus_meta  # noqa: E402
