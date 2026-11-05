@@ -84,7 +84,9 @@ def load_env() -> None:
     except ImportError:  # pragma: no cover - dotenv is a dev dependency
         return
     load_dotenv(ROOT / ".env")
-    load_dotenv(ROOT / ".env.secrets")  # sops-managed secrets, if present
+    load_dotenv(ROOT / ".env.secrets")  # same order as weatherbrief.envfiles.ENV_FILES; keep in sync
+
+
 def mint_token(minutes: int = TOKEN_MINUTES) -> str:
     """A short-lived session JWT for the dev user.
 

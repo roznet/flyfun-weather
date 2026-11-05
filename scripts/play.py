@@ -508,7 +508,7 @@ def main() -> None:
     args = build_parser().parse_args()
     if load_dotenv is not None:
         load_dotenv(REPO / ".env")
-        load_dotenv(REPO / ".env.secrets")  # sops-managed secrets, if present
+        load_dotenv(REPO / ".env.secrets")  # same order as weatherbrief.envfiles.ENV_FILES; keep in sync
     key = Path(os.environ.get("PLAY_SERVICE_ACCOUNT_JSON") or DEFAULT_KEY).expanduser()
     play = Play(os.environ.get("PLAY_PACKAGE_NAME") or DEFAULT_PACKAGE, key, getattr(args, "dry_run", False))
     COMMANDS[args.command](play, args)

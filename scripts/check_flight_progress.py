@@ -52,6 +52,8 @@ def flight_dir(arg: str) -> Path:
     p = Path(arg)
     if p.is_dir():
         return p
+    # override=True on purpose: the checkout's .env and .env.secrets beat stale shell
+    # exports (as .env alone did before the split).
     load_env(REPO, override=True)
     hits = list((Path(os.environ["DATA_DIR"]) / "packs").glob(f"*/{arg}"))
     if not hits:

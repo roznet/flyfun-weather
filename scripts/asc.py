@@ -1057,7 +1057,8 @@ def main() -> None:
 
     if load_dotenv is not None:
         load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-        load_dotenv(Path(__file__).resolve().parent.parent / ".env.secrets")  # sops-managed secrets, if present
+        load_dotenv(Path(__file__).resolve().parent.parent / ".env.secrets")  # same order as weatherbrief.envfiles.ENV_FILES; keep in sync
+
     config = AscConfig.from_env()
     asc = Asc(config, dry_run=getattr(args, "dry_run", False))
 

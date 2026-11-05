@@ -16,10 +16,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from weatherbrief.envfiles import load_env
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+
+from weatherbrief.envfiles import load_env  # noqa: E402
+
 load_env(ROOT)
 
 from weatherbrief.airports import resolve_waypoints  # noqa: E402
