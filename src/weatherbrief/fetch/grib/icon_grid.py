@@ -459,6 +459,48 @@ def get_grid(uuid: str, cache_root: Path | None = None) -> IconNativeGrid | None
     return register_grid(grid)
 
 
+# UUIDs already reported missing in this process: one error per grid, not
+# one warning per message (a missing grid blanks every ICON field).
+_MISSING_REPORTED: set[str] = set()
+
+
+def find_grid(uuid: str, source=None) -> IconNativeGrid | None:
+    """The grid for a decoder: in-process, next to *source*, else under
+    :func:`default_cache_root`.
+
+    The fetch side saves grids under the ``data_dir`` it was given, which can
+    differ from ``$DATA_DIR`` (a CLI ``--data-dir``, tests). A cached GRIB file
+    lives at ``<data_dir>/.cache/grib/<model>/<run>/<file>``, so the grid is
+    looked for in the file's ancestors first. None (one error per UUID per
+    process) when no root has it.
+    """
+    grid = get_grid(uuid)
+    if grid is not None:
+        return grid
+    roots: list[Path] = []
+    if isinstance(source, (str, Path)):
+        path = Path(source)
+        roots.extend(([path] if path.is_dir() else []) + list(path.parents)[:4])
+    roots.append(default_cache_root())
+    for root in roots:
+        try:
+            if not grid_cache_path(root, uuid).exists():
+                continue
+        except ValueError:
+            return None
+        grid = get_grid(uuid, cache_root=root)
+        if grid is not None:
+            return grid
+    if uuid not in _MISSING_REPORTED:
+        _MISSING_REPORTED.add(uuid)
+        logger.error(
+            "ICON native grid %s not found (looked in %s): every field on it "
+            "is skipped until the fetch side saves it",
+            uuid, ", ".join(str(r) for r in roots),
+        )
+    return None
+
+
 def clear_registry() -> None:
     """Forget every in-process grid (tests)."""
     with _LOCK:

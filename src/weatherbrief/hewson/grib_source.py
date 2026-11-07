@@ -423,7 +423,8 @@ def _resolve_icon(
     # Only main runs reach the 117 h we read; a cover requirement past the
     # short runs' horizon (30 h, 51 h on the native feed, #974) makes the run
     # finder skip them.
-    cover_until = now + timedelta(hours=52 if icon_native_feed() else 31)
+    short_h = ICON_EU.native_horizon_short_h if icon_native_feed() else ICON_EU.horizon_short_h
+    cover_until = now + timedelta(hours=short_h + 1)
     as_of = now
     pinned = init
     for _ in range(_MAX_STEP_BACK + 1):
