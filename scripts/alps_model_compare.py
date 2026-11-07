@@ -744,14 +744,19 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
             # Both packages must be published before either is downloaded, so a
             # late SP2 never costs a wasted SP1 download on every retry.
             try:
-                complete = all(
+                codes = [
                     sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
-                    .status_code == 200
+                    .status_code
                     for pkg in AROME_SURFACE_PACKAGES
-                )
+                ]
             except requests.RequestException as exc:
                 logger.warning("arome %s %s: availability probe failed: %s", iso(run), group, exc)
                 continue
+            if any(c not in (200, 404) for c in codes):
+                # A server error is not "not published": skip, never give up on it.
+                logger.warning("arome %s %s: probe HTTP %s; skipped", iso(run), group, codes)
+                continue
+            complete = all(c == 200 for c in codes)
             for pkg in AROME_SURFACE_PACKAGES if complete else ():
                 t0 = time.monotonic()
                 path = download_arome_group(date_str, hour, group, run_dir, sess, AROME, pkg)
@@ -1179,7 +1184,14 @@ def _category(ceiling_ft, vis_m) -> str:
     return classify_flight_category(ceiling_ft, visibility_m=vis_m).value
 
 
-def _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, datum) -> None:
+def _dz(model_m, airport_m) -> float | None:
+    """Model cell height minus field elevation (m), or None if either is unknown."""
+    if model_m is None or airport_m is None:
+        return None
+    return model_m - airport_m
+
+
+def _score_ceiling(s, v, icao, o_ceil, o_vis, elev, datum) -> None:
     """Add the ceiling/category samples of one forecast hour to ``s``."""
     # Ceiling: only where the model has a CEILING value for this hour
     # (AROME has none). ICON CEILING is read as metres MSL, as the product
@@ -1255,6 +1267,13 @@ def cmd_report(args) -> int:
         s = stats.setdefault((model, b), {})
         if "t2m_c" in v and o_t is not None:
             s.setdefault("T", []).append(v["t2m_c"] - o_t)
+            # Terrain: the nearest cell can sit hundreds of metres off the
+            # field. Tcorr moves the model T to the field elevation at the
+            # standard 6.5 K/km (ICON only: AROME has no stored cell height).
+            dz = _dz(model_elev.get((model, icao)), elev.get(icao))
+            if dz is not None:
+                s.setdefault("Tcorr", []).append(v["t2m_c"] + 0.0065 * dz - o_t)
+                s.setdefault("dz", []).append(dz)
         if "td2m_c" in v and o_td is not None:
             s.setdefault("Td", []).append(v["td2m_c"] - o_td)
         if "wspd_kt" in v and o_wind is not None:
@@ -1273,7 +1292,7 @@ def cmd_report(args) -> int:
         ):
             d = abs((v["wdir_deg"] - o_wdir + 180.0) % 360.0 - 180.0)
             s.setdefault("wdir", []).append(d)
-        _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, args.ceiling_datum)
+        _score_ceiling(s, v, icao, o_ceil, o_vis, elev, args.ceiling_datum)
 
     def mae(xs):
         return sum(abs(x) for x in xs) / len(xs) if xs else float("nan")
@@ -1292,9 +1311,10 @@ def cmd_report(args) -> int:
     print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.")
     print("gust = error where the METAR has a gust group; falsegust = share of no-gust METARs")
     print("where the model gust is >= 10 kt above the observed mean; dir mae in degrees, winds >= 5 kt.")
-    print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).\n")
+    print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).")
+    print("Tcorr = T moved to field elevation at 6.5 K/km; |dz| = mean |cell height - field| (m), ICON only.\n")
     print(
-        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  {'falsegust':>9s} {'dir mae':>9s}  "
+        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Tcorr':>11s}  {'|dz|':>5s}  {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  {'falsegust':>9s} {'dir mae':>9s}  "
         f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
     )
     for (model, b) in sorted(stats):
@@ -1302,6 +1322,8 @@ def cmd_report(args) -> int:
         t = s.get("T", [])
         print(
             f"{model:9s} {b:6s} {mae(t):5.1f}/{bias(t):+5.1f} ({len(t):4d})  "
+            f"{mae(s.get('Tcorr', [])):5.1f}/{bias(s.get('Tcorr', [])):+5.1f}  "
+            f"{mae(s.get('dz', [])):5.0f}  "
             f"{mae(s.get('Td', [])):5.1f}/{bias(s.get('Td', [])):+5.1f}  "
             f"{mae(s.get('wind', [])):6.1f}/{bias(s.get('wind', [])):+5.1f}  "
             f"{mae(s.get('gust', [])):6.1f}/{bias(s.get('gust', [])):+5.1f}  "
