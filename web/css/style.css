@@ -10258,3 +10258,22 @@ button.ac-near:hover { color: var(--primary); }
 /* The recap draws no airports and no SIGMET band (the replay has them): the
    shared ribbon key's first two items (METAR now, SIGMET) would mislead. */
 .recap-ribbon .ribbon-key-item:nth-child(-n+2) { display: none; }
+
+/* Service-status banner (ts/service-status.ts): shown when the server is down
+   or in maintenance. Fixed to the bottom so it never fights the sticky header. */
+.service-status-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(640px, calc(100vw - 32px));
+  z-index: 10000;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  background: var(--amber-bg);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}

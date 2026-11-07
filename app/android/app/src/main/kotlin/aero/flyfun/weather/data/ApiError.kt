@@ -18,10 +18,25 @@ sealed class ApiError(
 
     data object NotFound : ApiError("Not found.")
 
+    /**
+     * A gateway code (502/503/504) means the proxy answered for an app that
+     * couldn't: it carries the status page's sentence, or an older proxy's
+     * empty/HTML body — which reads as the generic sentence, never as markup.
+     */
     data class ServerError(
         val statusCode: Int,
         val detail: String? = null,
-    ) : ApiError(detail?.takeIf { it.isNotBlank() } ?: "Server error ($statusCode)")
+    ) : ApiError(serverErrorMessage(statusCode, detail))
+
+    companion object {
+        internal fun serverErrorMessage(statusCode: Int, detail: String?): String {
+            val text = detail?.trim()?.takeIf { it.isNotEmpty() }
+            if (statusCode in ServiceStatus.GATEWAY_STATUS_CODES) {
+                return text?.takeUnless { it.startsWith("<") } ?: ServiceStatus.GENERIC_MESSAGE
+            }
+            return text ?: "Server error ($statusCode)"
+        }
+    }
 
     data class NetworkError(
         override val cause: Throwable,

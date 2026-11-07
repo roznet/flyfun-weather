@@ -96,7 +96,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             FlyFunWeatherTheme {
-                FlyFunWeatherRoot(appState = appState)
+                // Maintenance / outage strip from the server's status page.
+                aero.flyfun.weather.ui.ServiceStatusFrame {
+                    FlyFunWeatherRoot(appState = appState)
+                }
             }
         }
     }

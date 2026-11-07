@@ -258,6 +258,15 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 
 `git pull && docker compose up -d --build`, then `docker exec weatherbrief alembic upgrade head` if there are new migrations. Use the `/deploy` skill — it runs the pre-flight checks and stops for confirmation.
 
+### Maintenance and outage page
+
+When the app can't answer, Caddy answers for it (`handle_errors` in `deploy/weather.flyfun.aero.caddy`): a 502/504 when the backend is down or restarting, a 503 when the maintenance switch is on. API paths (`/api`, `/mcp`, `/oauth`, `/auth`, `/health`) and `Accept: application/json` get `status.json`, browsers get `status.html`, both from `~/www/weather-status` on the droplet. An app that answers with its own 5xx is passed through untouched.
+
+- **Switch:** the file `~/www/weather-status/MAINTENANCE_ON`. Caddy checks it per request, so no reload. While it exists, every request except `/.well-known/*` gets the 503 page, even if the app is up (e.g. mid-migration).
+- **Text:** default is a generic "temporarily unavailable", so a crash or a deploy restart is covered with no action. `scripts/ops/maintenance.py on --until 14:30 [--message …] [--keep-app-up]` writes a maintenance sentence (+ estimate) and flips the switch; `off` removes it and restores the generic text (and is the first-time install); `status` shows what's live. Each write is checked against the public `/health`.
+- **Contract** (`status.json`): `service_status` (`maintenance` | `unavailable`), `detail` (the sentence, under FastAPI's error key so app builds that predate the banner still show it), `until` (ISO UTC or null), `updated_at`.
+- **Clients:** iOS (`ServiceStatusStore`), Android (`ServiceStatusMonitor`) and web (`service-status.ts`, via `apiFetch`) parse it, show one app-wide banner with the sentence and clear it on the next 2xx. The error stays a plain `serverError(code, sentence)` so every existing 5xx retry decision is unchanged; 502/503/504 count as transient on iOS (Android already treated all 5xx so), so caches and offline queues take over.
+
 ### Key files
 
 | File | Purpose |
@@ -265,7 +274,7 @@ docker compose up -d --build && docker exec weatherbrief alembic upgrade head
 | `Dockerfile` | App image (node build stage → python:3.13-slim, non-root UID 2000) |
 | `docker-compose.yml` | `weatherbrief` (8020) + `weatherbrief-mcp` (8021), mounts, 6G limit, journald |
 | `deploy/weather.flyfun.aero.caddy`, `deploy/mcp.flyfun.aero-weather.caddy` | Reference Caddy sites (headers, CSP, `.well-known` responders) |
-| `deploy/maintenance.caddy` | Swap-in site file for maintenance windows |
+| `deploy/weather-status/status.html`, `scripts/ops/maintenance.py` | Status page for outages and maintenance (see below) |
 | `deploy/03-create-weatherbrief-db.sql` | MySQL database + user creation template |
 | `deploy/hosts.json`, `deploy/mysql-baseline.json` | Deployment-private inventories (gitignored; `.example.json` siblings are tracked and document the fields) |
 | `alembic.ini` + `alembic/` | Schema migrations (prod only) |

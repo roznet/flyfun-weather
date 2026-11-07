@@ -62,6 +62,22 @@ weather.flyfun.aero {
         header Content-Type application/json
         respond `{"resource":"https://weather.flyfun.aero/mcp","authorization_servers":["https://weather.flyfun.aero"],"scopes_supported":["mcp"],"bearer_methods_supported":["header"],"resource_name":"FlyFun Weather Briefings"}`
     }
+    # Maintenance switch. While MAINTENANCE_ON exists every request (except the
+    # .well-known association/OAuth files above) is answered by handle_errors
+    # below with the status page — even if the app is up, e.g. mid-migration.
+    # Caddy checks the file per request: no reload to switch. Flip it with
+    # scripts/ops/maintenance.py on/off, never by hand.
+    @maintenance {
+        file {
+            root /home/brice/www/weather-status
+            try_files /MAINTENANCE_ON
+        }
+        not path /.well-known/*
+    }
+    handle @maintenance {
+        error "maintenance" 503
+    }
+
     handle /mcp* {
         reverse_proxy localhost:8021 {
             header_up X-Real-IP {remote_host}
@@ -87,5 +103,36 @@ weather.flyfun.aero {
     reverse_proxy localhost:8020 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Status page when the app can't answer: the backend is down (Caddy's own
+    # 502 on a refused dial, 504 on a timeout) or the maintenance switch above
+    # is on (503). An app that answers with its own 5xx is passed through
+    # untouched — this only covers Caddy-generated errors.
+    #
+    # API clients get status.json, browsers status.html, both written by
+    # scripts/ops/maintenance.py into ~/www/weather-status. The JSON carries a
+    # FastAPI-style "detail" sentence, so app builds that predate the
+    # maintenance banner still show the message instead of an HTML dump.
+    # file_server keeps the error's status code (502/503/504). The status
+    # directory must exist before this is reloaded: `maintenance.py off`
+    # installs it. Checked on Caddy 2.11.7 (the droplet's Docker image) and
+    # 2.6.2, hence the expression matcher rather than `handle_errors 502 503 504`.
+    handle_errors {
+        @unavailable expression `{err.status_code} in [502, 503, 504]`
+        handle @unavailable {
+            root * /home/brice/www/weather-status
+            header Cache-Control "no-store"
+            header Retry-After 120
+            @api_path path /api/* /mcp* /oauth/* /auth/* /health
+            rewrite @api_path /status.json
+            @wants_json header Accept *application/json*
+            rewrite @wants_json /status.json
+            rewrite * /status.html
+            file_server
+        }
+        handle {
+            respond "{err.status_code} {err.status_text}" {err.status_code}
+        }
     }
 }

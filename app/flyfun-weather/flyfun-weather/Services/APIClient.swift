@@ -11,8 +11,16 @@ enum APIError: LocalizedError {
     case networkError(Error)
     case decodingError(Error)
 
+    /// Gateway codes: the proxy answered for an app that couldn't (down,
+    /// restarting, maintenance) — see `ServiceStatus`.
+    static let gatewayStatusCodes: Set<Int> = [502, 503, 504]
+
     /// True for transient network errors that should trigger offline queuing.
+    /// A gateway 5xx counts: the server is back in minutes, same as a dropout.
     var isTransientNetwork: Bool {
+        if case .serverError(let code, _) = self, Self.gatewayStatusCodes.contains(code) {
+            return true
+        }
         guard case .networkError(let inner) = self,
               let urlError = inner as? URLError else { return false }
         return [.notConnectedToInternet, .timedOut, .networkConnectionLost, .cannotConnectToHost]
@@ -33,6 +41,10 @@ enum APIError: LocalizedError {
         case .unauthorized: "Session expired. Please sign in again."
         case .forbidden(let msg): "Access denied: \(msg)"
         case .notFound: "Resource not found."
+        // A gateway code carries either the status page's sentence or nothing
+        // useful (an older proxy's empty/HTML body): show a sentence, no code.
+        case .serverError(let code, let msg) where Self.gatewayStatusCodes.contains(code):
+            msg.flatMap { $0.hasPrefix("<") || $0.isEmpty ? nil : $0 } ?? ServiceStatus.genericMessage
         case .serverError(let code, let msg): "Server error \(code): \(msg ?? "Unknown")"
         case .networkError(let err): "Network error: \(err.localizedDescription)"
         case .decodingError(let err): "Data error: \(err.localizedDescription)"
@@ -325,7 +337,10 @@ actor APIClient {
             throw APIError.networkError(error)
         }
 
-        if (200...299).contains(http.statusCode) { return data }
+        if (200...299).contains(http.statusCode) {
+            ServiceStatusStore.noteReachable()
+            return data
+        }
         throw Self.statusError(http.statusCode, body: data)
     }
 
@@ -334,7 +349,11 @@ actor APIClient {
     /// access") instead of a bare "Forbidden". Shared by plain requests and the
     /// streaming delegates below.
     fileprivate static func statusError(_ code: Int, body: Data) -> APIError {
-        switch code {
+        if let status = ServiceStatus.parse(statusCode: code, body: body) {
+            ServiceStatusStore.noteUnavailable(status)
+            return .serverError(code, status.message)
+        }
+        return switch code {
         case 401: .unauthorized
         case 403: .forbidden(detailMessage(from: body) ?? "Forbidden")
         case 404: .notFound

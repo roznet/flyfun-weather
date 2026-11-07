@@ -3,6 +3,12 @@
 import { logout, type CurrentUser } from './adapters/auth-adapter';
 import { matchedWaypointIndices } from './helpers/flight-search';
 import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
+import {
+  clearServiceStatusBanner,
+  parseServiceStatus,
+  showServiceStatusBanner,
+  type ServiceStatus,
+} from './service-status';
 
 /**
  * App Store listing for the iPhone/iPad companion app.
@@ -600,6 +606,21 @@ export async function apiFetch<T>(
       throw new Error(`API 403: ${detail403 || body403}`);
     }
     const body = await resp.text();
+    // Caddy's status page (backend down / maintenance): a clean sentence and
+    // a site-wide banner instead of "API 502: <html>…" in each widget.
+    const service = parseServiceStatus(resp.status, body);
+    if (service) {
+      showServiceStatusBanner(service);
+      const err = new Error(service.message) as Error & {
+        status?: number;
+        detail?: unknown;
+        serviceStatus?: ServiceStatus;
+      };
+      err.status = resp.status;
+      err.detail = service.message;
+      err.serviceStatus = service;
+      throw err;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(body).detail ?? body;
@@ -623,6 +644,7 @@ export async function apiFetch<T>(
     err.detail = parsed;
     throw err;
   }
+  clearServiceStatusBanner();
   onResponse?.(resp);
   if (resp.status === 204) return undefined as T;
   return resp.json();
