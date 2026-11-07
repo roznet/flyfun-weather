@@ -164,7 +164,8 @@ def default_out() -> Path:
 
 def open_db(out: Path) -> sqlite3.Connection:
     out.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(out / "alps_compare.sqlite")
+    db = sqlite3.connect(out / "alps_compare.sqlite", timeout=60)
+    db.execute("PRAGMA journal_mode=WAL")  # report can read while cron logs
     db.executescript(SCHEMA)
     return db
 
@@ -990,6 +991,7 @@ def _ceiling_summary(name, msg, line) -> None:
         line(name, False, "no message")
         return
     hdr, vals = msg
+    nonfinite = float(np.mean(~np.isfinite(vals))) if vals.size else 0.0
     v = vals[np.isfinite(vals)]
     if v.size == 0:
         line(name, False, "all missing")
@@ -997,7 +999,7 @@ def _ceiling_summary(name, msg, line) -> None:
     q = np.percentile(v, [0, 1, 10, 50, 90, 99, 100])
     line(
         name, True,
-        f"units={hdr.get('units')} level={hdr.get('typeOfLevel')} "
+        f"units={hdr.get('units')} level={hdr.get('typeOfLevel')} missing: {nonfinite:.1%}  "
         f"<=0: {np.mean(v <= 0):.1%}  >=9999: {np.mean(v >= 9999):.1%}  "
         f"pct0/1/10/50/90/99/100 = {' '.join(f'{x:.0f}' for x in q)}",
     )
