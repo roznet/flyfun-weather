@@ -17,6 +17,9 @@ enum APIError: LocalizedError {
 
     /// True for transient network errors that should trigger offline queuing.
     /// A gateway 5xx counts: the server is back in minutes, same as a dropout.
+    /// That includes the app's own 503s (e.g. a pack not ready yet) on purpose:
+    /// every caller's response is "keep what's cached / queue and retry later",
+    /// which is right for those too.
     var isTransientNetwork: Bool {
         if case .serverError(let code, _) = self, Self.gatewayStatusCodes.contains(code) {
             return true
@@ -126,11 +129,14 @@ actor APIClient {
         }
 
         if http.statusCode == 304 {
+            ServiceStatusStore.noteReachable()
             return .notModified
         }
         guard (200...299).contains(http.statusCode) else {
-            throw APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
+            throw Self.serviceStatusError(http.statusCode, body: data)
+                ?? APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
         }
+        ServiceStatusStore.noteReachable()
         return .updated(data: data, etag: http.value(forHTTPHeaderField: "ETag"))
     }
 
@@ -166,11 +172,14 @@ actor APIClient {
         }
 
         if http.statusCode == 304 {
+            ServiceStatusStore.noteReachable()
             return .notModified
         }
         guard (200...299).contains(http.statusCode) else {
-            throw APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
+            throw Self.serviceStatusError(http.statusCode, body: data)
+                ?? APIError.serverError(http.statusCode, String(data: data, encoding: .utf8))
         }
+        ServiceStatusStore.noteReachable()
         return .updated(data: data, etag: http.value(forHTTPHeaderField: "ETag"))
     }
 
@@ -348,11 +357,17 @@ actor APIClient {
     /// a refusal says why (e.g. "Historical flight refresh requires admin
     /// access") instead of a bare "Forbidden". Shared by plain requests and the
     /// streaming delegates below.
+    /// The server's status page (Caddy answering for a down / in-maintenance
+    /// app): reports it for the app-wide banner and returns the error carrying
+    /// its sentence; nil for any other response.
+    fileprivate static func serviceStatusError(_ code: Int, body: Data) -> APIError? {
+        guard let status = ServiceStatus.parse(statusCode: code, body: body) else { return nil }
+        ServiceStatusStore.noteUnavailable(status)
+        return .serverError(code, status.message)
+    }
+
     fileprivate static func statusError(_ code: Int, body: Data) -> APIError {
-        if let status = ServiceStatus.parse(statusCode: code, body: body) {
-            ServiceStatusStore.noteUnavailable(status)
-            return .serverError(code, status.message)
-        }
+        if let error = serviceStatusError(code, body: body) { return error }
         return switch code {
         case 401: .unauthorized
         case 403: .forbidden(detailMessage(from: body) ?? "Forbidden")
@@ -445,6 +460,7 @@ private final class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate,
             return
         }
         if (200...299).contains(http.statusCode) {
+            ServiceStatusStore.noteReachable()
             continuation.resume(returning: buffer)
         } else {
             continuation.resume(throwing: APIClient.statusError(http.statusCode, body: buffer))
@@ -503,6 +519,7 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate, @unchec
             return
         }
         logger.info("SSE connected (HTTP \(code)) for \(self.path, privacy: .public)")
+        ServiceStatusStore.noteReachable()
         completionHandler(.allow)
     }
 

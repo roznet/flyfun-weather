@@ -26,7 +26,9 @@ that did not take effect is reported as a problem, not as ok.
 status.json contract (read by the iOS, Android and web clients):
     service_status   "maintenance" | "unavailable"
     detail           the sentence to show the user (FastAPI's error key, so app
-                     builds that predate the banner still show it)
+                     builds that predate the banner still show it): message
+                     plus the estimate
+    message          the message alone, without the estimate
     until            ISO-8601 UTC estimate, or null
     updated_at       when this file was written
 
@@ -52,7 +54,7 @@ from string import Template
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hosts  # noqa: E402
-from opscheck import OK, PROBLEM, UNKNOWN, Report  # noqa: E402
+from opscheck import OK, PROBLEM, SKIP, UNKNOWN, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO_ROOT / "deploy" / "weather-status" / "status.html"
@@ -99,14 +101,16 @@ def build_status(mode: str, now: datetime, message: str | None = None,
                  until: datetime | None = None) -> dict:
     """The status.json payload. mode is 'maintenance' or 'unavailable'."""
     if mode == "maintenance":
-        detail = (message or DEFAULT_MAINTENANCE).strip()
+        message = (message or DEFAULT_MAINTENANCE).strip()
+        detail = message
         if until:
             detail += f" Expected back around {format_until(until, now)}."
     else:
-        detail = DEFAULT_UNAVAILABLE
+        message = detail = DEFAULT_UNAVAILABLE
     return {
         "service_status": mode,
         "detail": detail,
+        "message": message,
         "until": until.strftime("%Y-%m-%dT%H:%M:%SZ") if until else None,
         "updated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -115,9 +119,8 @@ def build_status(mode: str, now: datetime, message: str | None = None,
 def render_html(status: dict, now: datetime, template: str) -> str:
     maintenance = status["service_status"] == "maintenance"
     title = "Down for maintenance" if maintenance else "Temporarily unavailable"
-    # The page shows the message and the estimate separately, so strip the
-    # estimate sentence that build_status appended for the apps.
-    message = re.sub(r"\s*Expected back around .*$", "", status["detail"])
+    # The page shows the message and the estimate separately.
+    message = status["message"]
     until_block = ""
     if status["until"]:
         until = datetime.fromisoformat(status["until"].replace("Z", "+00:00"))
@@ -166,7 +169,8 @@ def fetch(url: str, accept: str = "application/json") -> tuple[int | None, str]:
         return None, str(exc)
 
 
-def verify(report: Report, base_url: str, expect_maintenance: bool, fetcher=fetch):
+def verify(report: Report, base_url: str, expect_maintenance: bool, fetcher=fetch,
+           keep_app_up: bool = False):
     """Check the public API answers the way the switch says it should."""
     code, body = fetcher(base_url.rstrip("/") + "/health")
     if code is None:
@@ -185,6 +189,10 @@ def verify(report: Report, base_url: str, expect_maintenance: bool, fetcher=fetc
                        "(is the Caddy handle_errors block deployed?)")
     elif code == 200:
         report.add("public check", OK, "200", "/health answers")
+        if keep_app_up:
+            report.add("status page", SKIP, "not checkable while the app is up",
+                       "it shows only when the app fails; `on` without --keep-app-up "
+                       "is what exercises the Caddy block")
     else:
         report.add("public check", PROBLEM, f"{code}", f"/health: {body[:120]!r}")
 
@@ -215,7 +223,8 @@ def apply(mode: str, args, now: datetime) -> int:
         print(report.render())
         return report.exit_code
     report.add("upload", OK, f"{values['SERVER_SSH']}:{REMOTE_DIR}")
-    verify(report, values["SERVER_URL"], expect_maintenance=flag_on)
+    verify(report, values["SERVER_URL"], expect_maintenance=flag_on,
+           keep_app_up=mode == "maintenance" and not flag_on)
     print(report.render())
     return report.exit_code
 

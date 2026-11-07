@@ -51,7 +51,16 @@ def test_maintenance_status_carries_detail_and_until():
 def test_unavailable_status_is_generic():
     s = maintenance.build_status("unavailable", NOW)
     assert s == {"service_status": "unavailable", "detail": maintenance.DEFAULT_UNAVAILABLE,
+                 "message": maintenance.DEFAULT_UNAVAILABLE,
                  "until": None, "updated_at": "2026-11-07T13:05:42Z"}
+
+
+def test_message_with_estimate_wording_is_kept_whole_on_the_page():
+    msg = "Expected back around lunch, says the DB vendor."
+    s = maintenance.build_status("maintenance", NOW, msg, maintenance.parse_until("14:30", NOW))
+    assert s["message"] == msg
+    page = maintenance.render_html(s, NOW, maintenance.TEMPLATE.read_text())
+    assert f"<p>{msg}</p>" in page
 
 
 def test_html_escapes_message_and_splits_estimate():
@@ -100,6 +109,12 @@ def test_verify_maintenance_needs_503_with_status():
     r = Report("t")
     maintenance.verify(r, "https://x", True, _fetcher(None, "timed out"))
     assert r.checks[-1].status == UNKNOWN
+
+
+def test_verify_keep_app_up_says_the_page_is_unchecked():
+    r = Report("t")
+    maintenance.verify(r, "https://x", False, _fetcher(200, '{"status":"ok"}'), keep_app_up=True)
+    assert [c.status for c in r.checks] == [OK, "skip"]
 
 
 def test_verify_off_needs_the_app():

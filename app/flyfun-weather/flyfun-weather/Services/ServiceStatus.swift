@@ -60,24 +60,31 @@ final class ServiceStatusStore {
         if current != nil { current = nil }
     }
 
-    /// Mirrors `current != nil` for callers off the main actor, so the hot
-    /// success path of every request doesn't hop to the main actor just to
-    /// find there is nothing to clear.
-    nonisolated private static let active = OSAllocatedUnfairLock(initialState: false)
+    /// The latest state reported from off the main actor. The hops below don't
+    /// carry a value: each one applies whatever is latest when it runs, so two
+    /// hops that run out of order (a 503 and a 2xx racing) still converge on the
+    /// last report instead of leaving a stale banner up. Also lets the hot
+    /// success path skip the hop when nothing is shown.
+    nonisolated private static let latest = OSAllocatedUnfairLock<ServiceStatus?>(initialState: nil)
 
     /// From `APIClient` / URLSession delegates: a request hit the status page.
     nonisolated static func noteUnavailable(_ status: ServiceStatus) {
-        active.withLock { $0 = true }
-        Task { @MainActor in shared.report(status) }
+        latest.withLock { $0 = status }
+        Task { @MainActor in shared.applyLatest() }
     }
 
-    /// From `APIClient`: a request succeeded. Cheap when nothing is shown.
+    /// From `APIClient` / URLSession delegates: a request succeeded. Cheap
+    /// when nothing is shown.
     nonisolated static func noteReachable() {
-        let wasActive = active.withLock { state -> Bool in
-            defer { state = false }
-            return state
+        let wasShown = latest.withLock { state -> Bool in
+            defer { state = nil }
+            return state != nil
         }
-        guard wasActive else { return }
-        Task { @MainActor in shared.clear() }
+        guard wasShown else { return }
+        Task { @MainActor in shared.applyLatest() }
+    }
+
+    private func applyLatest() {
+        if let status = Self.latest.withLock({ $0 }) { report(status) } else { clear() }
     }
 }

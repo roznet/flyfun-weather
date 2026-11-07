@@ -63,6 +63,26 @@ struct ServiceStatusTests {
         #expect(!APIError.serverError(429, nil).isTransientNetwork)
     }
 
+    /// A 503 and a 2xx racing: their main-actor hops can run in either order,
+    /// and the banner must end on the last report, never stuck up.
+    @MainActor
+    @Test func outOfOrderReportsConvergeOnTheLatest() async {
+        let status = ServiceStatus(kind: .maintenance, message: "race", until: nil)
+        ServiceStatusStore.noteUnavailable(status)
+        ServiceStatusStore.noteReachable()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(ServiceStatusStore.shared.current == nil)
+
+        ServiceStatusStore.noteReachable()  // nothing shown: no hop
+        ServiceStatusStore.noteUnavailable(status)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(ServiceStatusStore.shared.current == status)
+
+        ServiceStatusStore.noteReachable()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(ServiceStatusStore.shared.current == nil)
+    }
+
     @MainActor
     @Test func storeReportsAndClears() {
         let store = ServiceStatusStore()
