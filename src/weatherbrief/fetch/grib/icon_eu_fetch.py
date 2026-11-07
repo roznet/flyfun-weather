@@ -761,6 +761,8 @@ ICON_V1_LEVEL_ECHOTOP = 25    # D2 ECHOTOP, lv1 = reflectivity threshold in dBZ 
 
 def icon_v1_run_label(init_date: str, init_hour: int) -> str:
     """``"20261107", 15`` -> ``"2026-11-07T15:00"`` (the ``r/`` segment)."""
+    if len(init_date) != 8 or not init_date.isdigit():
+        raise ValueError(f"init_date must be YYYYMMDD, got {init_date!r}")
     return f"{init_date[:4]}-{init_date[4:6]}-{init_date[6:8]}T{init_hour:02d}:00"
 
 
