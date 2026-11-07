@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS files (
     at TEXT NOT NULL,
     PRIMARY KEY (model, run, lead_h, var)
 );
+CREATE TABLE IF NOT EXISTS grid_meta (model TEXT PRIMARY KEY, built_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS metars (
     icao TEXT NOT NULL, obs_time TEXT NOT NULL, report_type TEXT, raw TEXT,
     ceiling_ft INTEGER, lowest_base_ft INTEGER, visibility_m INTEGER,
@@ -764,6 +765,10 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
                         "lcc_pct": snap.get("cloud_cover_low_pct"),
                     }
                     per_icao[icao] = {k: v for k, v in vals.items() if v is not None}
+                if not any(per_icao.values()):
+                    logger.error("arome %s +%d: decoder returned no values", iso(run), h)
+                    record_file(db, "arome", run, h, "SURFACE", "bad")
+                    continue
                 store_values(db, "arome", run, h, per_icao)
                 record_file(db, "arome", run, h, "SURFACE", "ok")
                 stats["ok"] += 1
@@ -1033,6 +1038,10 @@ def cmd_grid(args) -> int:
             n = int(clat.size)
             near = nearest_cells(clat, clon, latlon)
             db.execute("DELETE FROM cells WHERE model=?", (model,))
+            db.execute(
+                "INSERT OR REPLACE INTO grid_meta VALUES (?, ?)",
+                (model, iso(datetime.now(timezone.utc))),
+            )
             for icao, (cell, la, lo, km) in near.items():
                 elev = float(hsurf[cell]) if hsurf is not None and hsurf.size == n else None
                 db.execute(
@@ -1048,6 +1057,15 @@ def cmd_grid(args) -> int:
             if far:
                 logger.warning("%s: nearest cell > 5 km for %s (outside domain?)", model, ", ".join(far))
     return 0
+
+
+def _grid_stale(db, model: str) -> bool:
+    """True when a grid-mismatch was recorded after the model's cells were built."""
+    row = db.execute(
+        "SELECT MAX(at) FROM files WHERE model=? AND status='grid-mismatch'", (model,),
+    ).fetchone()
+    built = db.execute("SELECT built_at FROM grid_meta WHERE model=?", (model,)).fetchone()
+    return bool(row and row[0]) and (built is None or row[0] > built[0])
 
 
 @contextlib.contextmanager
@@ -1076,9 +1094,14 @@ def cmd_log(args) -> int:
         now = datetime.now(timezone.utc)
         leads = list(range(args.min_lead, args.max_lead + 1))
         t_all = time.monotonic()
+        failed = False
         with tempfile.TemporaryDirectory(dir=args.tmp) as td:
             tmp = Path(td)
             for model in args.models:
+                if model != "arome" and _grid_stale(db, model):
+                    logger.error("%s: grid changed since `grid` ran; rerun `grid`. Skipped.", model)
+                    failed = True
+                    continue
                 delay = {"icon-ch1": 1.5, "icon-d2": 1.0, "icon-eu": 2.5, "arome": 3.0}[model]
                 for run in cadence_runs(now, args.every, args.lookback_h, delay):
                     t0 = time.monotonic()
@@ -1090,6 +1113,7 @@ def cmd_log(args) -> int:
                             st = log_icon_run(db, sess, model, run, mleads, tmp, now)
                     except Exception:
                         logger.exception("%s %s failed", model, iso(run))
+                        failed = True
                         continue
                     if st and (st.get("ok") or st.get("missing")):
                         logger.info(
@@ -1102,8 +1126,9 @@ def cmd_log(args) -> int:
             logger.info("metars: %d reports seen", n)
         except Exception:
             logger.exception("metar fetch failed")
-        logger.info("log pass done in %.0f s", time.monotonic() - t_all)
-    return 0
+            failed = True
+        logger.info("log pass done in %.0f s%s", time.monotonic() - t_all, " (with errors)" if failed else "")
+    return 1 if failed else 0
 
 
 def cmd_status(args) -> int:
@@ -1131,6 +1156,38 @@ def _category(ceiling_ft, vis_m) -> str:
     from weatherbrief.analysis.airport_conditions import classify_flight_category
 
     return classify_flight_category(ceiling_ft, visibility_m=vis_m).value
+
+
+def _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, datum) -> None:
+    """Add the ceiling/category samples of one forecast hour to ``s``."""
+    # Ceiling: only where the model has a CEILING value for this hour
+    # (AROME has none). ICON CEILING is read as metres MSL, as the product
+    # does (--ceiling-datum agl to test the other reading); >= 9999 m is
+    # the "no ceiling" fill (#847).
+    # A NaN cell (stored as NULL) or a non-positive value is an unknown
+    # ceiling, not a clear sky: skip the sample rather than score it VFR.
+    raw_c = v.get("raw_CEILING")
+    if raw_c is None or raw_c <= 0:
+        return
+    raw = v.get("ceiling_raw_m")
+    ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
+    c_ft = None
+    if raw is not None and raw < 9999.0:
+        c_ft = max(0.0, (raw - (ap if datum == "msl" else 0.0)) * FT_PER_M)
+    # Like for like: ceiling-only category on both sides for every model;
+    # the full ceiling+visibility category only where the model has VIS
+    # (DWD dropped it on the native feed, so CH1 only in practice).
+    variants = [("ceil", _category(c_ft, None), _category(o_ceil, None))]
+    if "vis_m" in v:
+        variants.append(("full", _category(c_ft, v["vis_m"]), _category(o_ceil, o_vis)))
+    for tag, m_cat, o_cat in variants:
+        s.setdefault(f"{tag}_hit", []).append(1.0 if m_cat == o_cat else 0.0)
+        o_low = o_cat in ("IFR", "LIFR")
+        m_low = m_cat in ("IFR", "LIFR")
+        if o_low:
+            s.setdefault(f"{tag}_pod", []).append(1.0 if m_low else 0.0)
+        if m_low:
+            s.setdefault(f"{tag}_far", []).append(0.0 if o_low else 1.0)
 
 
 def cmd_report(args) -> int:
@@ -1168,7 +1225,7 @@ def cmd_report(args) -> int:
         obs = metars.get((icao, valid))
         if obs is None:
             continue
-        _, o_ceil, o_vis, o_wind, _o_gust, o_t, o_td = obs
+        _, o_ceil, o_vis, o_wind, o_gust, o_t, o_td = obs
         b = next((f"{a}-{z}h" for a, z in buckets if a <= lead <= z), None)
         if b is None:
             continue
@@ -1179,34 +1236,9 @@ def cmd_report(args) -> int:
             s.setdefault("Td", []).append(v["td2m_c"] - o_td)
         if "wspd_kt" in v and o_wind is not None:
             s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
-        # Ceiling: only where the model has a CEILING value for this hour
-        # (AROME has none). ICON CEILING is read as metres MSL, as the product
-        # does (--ceiling-datum agl to test the other reading); >= 9999 m is
-        # the "no ceiling" fill (#847).
-        # A NaN cell (stored as NULL) or a non-positive value is an unknown
-        # ceiling, not a clear sky: skip the sample rather than score it VFR.
-        raw_c = v.get("raw_CEILING")
-        if raw_c is None or raw_c <= 0:
-            continue
-        raw = v.get("ceiling_raw_m")
-        ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
-        c_ft = None
-        if raw is not None and raw < 9999.0:
-            c_ft = max(0.0, (raw - (ap if args.ceiling_datum == "msl" else 0.0)) * FT_PER_M)
-        # Like for like: ceiling-only category on both sides for every model;
-        # the full ceiling+visibility category only where the model has VIS
-        # (DWD dropped it on the native feed, so CH1 only in practice).
-        variants = [("ceil", _category(c_ft, None), _category(o_ceil, None))]
-        if "vis_m" in v:
-            variants.append(("full", _category(c_ft, v["vis_m"]), _category(o_ceil, o_vis)))
-        for tag, m_cat, o_cat in variants:
-            s.setdefault(f"{tag}_hit", []).append(1.0 if m_cat == o_cat else 0.0)
-            o_low = o_cat in ("IFR", "LIFR")
-            m_low = m_cat in ("IFR", "LIFR")
-            if o_low:
-                s.setdefault(f"{tag}_pod", []).append(1.0 if m_low else 0.0)
-            if m_low:
-                s.setdefault(f"{tag}_far", []).append(0.0 if o_low else 1.0)
+        if "gust_kt" in v and o_gust is not None:
+            s.setdefault("gust", []).append(v["gust_kt"] - o_gust)
+        _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, args.ceiling_datum)
 
     def mae(xs):
         return sum(abs(x) for x in xs) / len(xs) if xs else float("nan")
@@ -1224,7 +1256,7 @@ def cmd_report(args) -> int:
     print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
     print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.\n")
     print(
-        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  "
+        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  "
         f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
     )
     for (model, b) in sorted(stats):
@@ -1234,6 +1266,7 @@ def cmd_report(args) -> int:
             f"{model:9s} {b:6s} {mae(t):5.1f}/{bias(t):+5.1f} ({len(t):4d})  "
             f"{mae(s.get('Td', [])):5.1f}/{bias(s.get('Td', [])):+5.1f}  "
             f"{mae(s.get('wind', [])):6.1f}/{bias(s.get('wind', [])):+5.1f}  "
+            f"{mae(s.get('gust', [])):6.1f}/{bias(s.get('gust', [])):+5.1f}  "
             f"{ns(s.get('ceil_hit', [])):>9s} {ns(s.get('ceil_pod', [])):>9s} {ns(s.get('ceil_far', [])):>9s}  "
             f"{ns(s.get('full_hit', [])):>9s} {ns(s.get('full_pod', [])):>9s} {ns(s.get('full_far', [])):>9s}"
         )
