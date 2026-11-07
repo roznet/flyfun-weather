@@ -57,8 +57,16 @@ struct ServiceStatusTests {
 
     @Test func gatewayErrorsAreTransient() {
         #expect(APIError.serverError(502, nil).isTransientNetwork)
-        #expect(APIError.serverError(503, "maintenance").isTransientNetwork)
         #expect(APIError.serverError(504, nil).isTransientNetwork)
+        #expect(APIError.serverError(502, "<html>Bad Gateway</html>").isTransientNetwork)
+        #expect(APIError.serverError(503, ServiceStatus.genericMessage).isTransientNetwork)
+        // A status-page sentence is transient once the page has carried it…
+        let sentence = "Down for planned maintenance (transient test)."
+        #expect(!APIError.serverError(503, sentence).isTransientNetwork)
+        ServiceStatus.rememberStatusPageMessage(sentence)
+        #expect(APIError.serverError(503, sentence).isTransientNetwork)
+        // …but the app's own 503s are ordinary errors.
+        #expect(!APIError.serverError(503, "Server busy, too many queued refreshes").isTransientNetwork)
         #expect(!APIError.serverError(500, nil).isTransientNetwork)
         #expect(!APIError.serverError(429, nil).isTransientNetwork)
     }

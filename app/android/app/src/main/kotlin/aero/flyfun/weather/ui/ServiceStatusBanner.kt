@@ -2,7 +2,6 @@ package aero.flyfun.weather.ui
 
 import aero.flyfun.weather.data.ServiceStatus
 import aero.flyfun.weather.data.ServiceStatusMonitor
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -38,9 +37,10 @@ import java.time.format.FormatStyle
 fun ServiceStatusFrame(content: @Composable () -> Unit) {
     val status by ServiceStatusMonitor.current.collectAsState()
     Column(Modifier.fillMaxSize()) {
-        AnimatedVisibility(visible = status != null) {
-            status?.let { ServiceStatusBanner(it) }
-        }
+        // No enter/exit animation on purpose: the inset consumption below is
+        // keyed on `status`, so a banner lingering through an exit animation
+        // would pad the status bar twice for that moment.
+        status?.let { ServiceStatusBanner(it) }
         val inner = if (status != null) {
             Modifier.consumeWindowInsets(WindowInsets.statusBars)
         } else {

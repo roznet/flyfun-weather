@@ -72,3 +72,36 @@ export function clearServiceStatusBanner(): void {
   if (typeof document === 'undefined') return;
   document.getElementById(BANNER_ID)?.remove();
 }
+
+let observingFetch = false;
+
+/**
+ * Watch every same-origin `fetch` for the status page, not only `apiFetch`:
+ * the maps page, observed overlays and auth calls use plain `fetch`, and a
+ * page left open through an outage should still show (and later clear) the
+ * banner. Installed once per page from the shared header setup. It only
+ * observes: the response is returned untouched and the observer can never
+ * fail a request.
+ */
+export function observeFetchForServiceStatus(): void {
+  if (observingFetch || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+  observingFetch = true;
+  const original = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const resp = await original(input, init);
+    try {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (new URL(raw, location.href).origin === location.origin) {
+        if (resp.ok) {
+          clearServiceStatusBanner();
+        } else if (resp.status >= 500) {
+          const status = parseServiceStatus(resp.status, await resp.clone().text());
+          if (status) showServiceStatusBanner(status);
+        }
+      }
+    } catch {
+      // Observing must never break the request.
+    }
+    return resp;
+  };
+}

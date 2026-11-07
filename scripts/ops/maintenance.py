@@ -54,7 +54,7 @@ from string import Template
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hosts  # noqa: E402
-from opscheck import OK, PROBLEM, SKIP, UNKNOWN, Report  # noqa: E402
+from opscheck import OK, PROBLEM, SKIP, UNKNOWN, WARN, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO_ROOT / "deploy" / "weather-status" / "status.html"
@@ -87,6 +87,8 @@ def parse_until(text: str, now: datetime) -> datetime:
         raise ValueError(f"--until wants HH:MM, +45m, +2h or ISO-8601, got {text!r}") from None
     if at.tzinfo is None:
         raise ValueError(f"ISO --until needs an offset (e.g. 14:30Z), got {text!r}")
+    if at <= now:
+        raise ValueError(f"--until {text!r} is in the past")
     return at.astimezone(timezone.utc)
 
 
@@ -193,6 +195,8 @@ def verify(report: Report, base_url: str, expect_maintenance: bool, fetcher=fetc
             report.add("status page", SKIP, "not checkable while the app is up",
                        "it shows only when the app fails; `on` without --keep-app-up "
                        "is what exercises the Caddy block")
+            report.add("reminder", WARN, "run `maintenance.py off` when done",
+                       "until then any later outage shows this maintenance message")
     else:
         report.add("public check", PROBLEM, f"{code}", f"/health: {body[:120]!r}")
 

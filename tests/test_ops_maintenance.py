@@ -29,7 +29,8 @@ def test_until_relative_and_iso():
         2026, 11, 7, 14, 30, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize("bad", ["25:00", "14:61", "soon", "2026-11-07T15:30:00"])
+@pytest.mark.parametrize("bad", ["25:00", "14:61", "soon", "2026-11-07T15:30:00",
+                                 "2026-11-07T12:00:00Z"])
 def test_until_rejects_garbage_and_naive_iso(bad):
     with pytest.raises(ValueError):
         maintenance.parse_until(bad, NOW)
@@ -114,7 +115,7 @@ def test_verify_maintenance_needs_503_with_status():
 def test_verify_keep_app_up_says_the_page_is_unchecked():
     r = Report("t")
     maintenance.verify(r, "https://x", False, _fetcher(200, '{"status":"ok"}'), keep_app_up=True)
-    assert [c.status for c in r.checks] == [OK, "skip"]
+    assert [c.status for c in r.checks] == [OK, "skip", "warn"]
 
 
 def test_verify_off_needs_the_app():

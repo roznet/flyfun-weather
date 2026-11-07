@@ -16,13 +16,14 @@ enum APIError: LocalizedError {
     static let gatewayStatusCodes: Set<Int> = [502, 503, 504]
 
     /// True for transient network errors that should trigger offline queuing.
-    /// A gateway 5xx counts: the server is back in minutes, same as a dropout.
-    /// That includes the app's own 503s (e.g. a pack not ready yet) on purpose:
-    /// every caller's response is "keep what's cached / queue and retry later",
-    /// which is right for those too.
+    /// A gateway 5xx counts when the proxy answered for the app (the status
+    /// page, or an older proxy's empty/HTML body): the server is back in
+    /// minutes, same as a dropout. The app's own 503s carry a JSON `detail`
+    /// ("Server busy, too many queued refreshes") and stay ordinary errors.
     var isTransientNetwork: Bool {
-        if case .serverError(let code, _) = self, Self.gatewayStatusCodes.contains(code) {
-            return true
+        if case .serverError(let code, let detail) = self, Self.gatewayStatusCodes.contains(code) {
+            guard let detail, !detail.isEmpty, !detail.hasPrefix("<") else { return true }
+            return ServiceStatus.isStatusPageMessage(detail)
         }
         guard case .networkError(let inner) = self,
               let urlError = inner as? URLError else { return false }
@@ -353,19 +354,20 @@ actor APIClient {
         throw Self.statusError(http.statusCode, body: data)
     }
 
-    /// The `APIError` for a non-2xx response, carrying the server's `detail` so
-    /// a refusal says why (e.g. "Historical flight refresh requires admin
-    /// access") instead of a bare "Forbidden". Shared by plain requests and the
-    /// streaming delegates below.
     /// The server's status page (Caddy answering for a down / in-maintenance
     /// app): reports it for the app-wide banner and returns the error carrying
     /// its sentence; nil for any other response.
     fileprivate static func serviceStatusError(_ code: Int, body: Data) -> APIError? {
         guard let status = ServiceStatus.parse(statusCode: code, body: body) else { return nil }
+        ServiceStatus.rememberStatusPageMessage(status.message)
         ServiceStatusStore.noteUnavailable(status)
         return .serverError(code, status.message)
     }
 
+    /// The `APIError` for a non-2xx response, carrying the server's `detail` so
+    /// a refusal says why (e.g. "Historical flight refresh requires admin
+    /// access") instead of a bare "Forbidden". Shared by plain requests and the
+    /// streaming delegates below.
     fileprivate static func statusError(_ code: Int, body: Data) -> APIError {
         if let error = serviceStatusError(code, body: body) { return error }
         return switch code {

@@ -5,6 +5,7 @@ import { matchedWaypointIndices } from './helpers/flight-search';
 import { t, getAcceptLanguage, getLocale } from './i18n/i18n';
 import {
   clearServiceStatusBanner,
+  observeFetchForServiceStatus,
   parseServiceStatus,
   showServiceStatusBanner,
   type ServiceStatus,
@@ -93,6 +94,10 @@ export function renderUserInfo(user: CurrentUser, currentPage?: string): void {
 
   // Fire-and-forget: check for unseen messages and show badge
   checkMessagesBadge();
+
+  // Maintenance / outage banner for plain fetch() calls too (apiFetch already
+  // reports its own). Idempotent.
+  observeFetchForServiceStatus();
 
   // The header is sticky; publish its height so sticky side rails can offset.
   trackHeaderHeight();

@@ -29,6 +29,22 @@ nonisolated struct ServiceStatus: Equatable, Sendable {
     static let genericMessage =
         "FlyFun Weather is temporarily unavailable. Please try again in a few minutes."
 
+    /// Sentences the status page has carried this launch, so a later
+    /// `serverError(503, sentence)` can be told apart from the app's own 503
+    /// (see `APIError.isTransientNetwork`). Tiny: the text changes per window.
+    private static let statusPageMessages = OSAllocatedUnfairLock<Set<String>>(initialState: [genericMessage])
+
+    static func rememberStatusPageMessage(_ message: String) {
+        statusPageMessages.withLock { seen in
+            if seen.count > 32 { seen = [genericMessage] }
+            seen.insert(message)
+        }
+    }
+
+    static func isStatusPageMessage(_ message: String) -> Bool {
+        statusPageMessages.withLock { $0.contains(message) }
+    }
+
     /// The Caddy status body on a 5xx, or nil for anything else (an app error).
     static func parse(statusCode: Int, body: Data) -> ServiceStatus? {
         guard statusCode >= 500,
