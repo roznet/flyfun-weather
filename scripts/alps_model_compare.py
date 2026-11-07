@@ -372,12 +372,19 @@ def stac_search(sess, body: dict, max_pages: int = 20) -> list[dict]:
         if nxt.get("method", "GET").upper() == "POST" and nxt.get("body"):
             url = nxt.get("href", url)
             payload = nxt["body"]
-        else:
-            r2 = sess.get(nxt["href"], timeout=TIMEOUT)
+            continue
+        # GET-style pagination: follow the links until there is no ``next``.
+        href = nxt["href"]
+        for _ in range(max_pages):
+            r2 = sess.get(href, timeout=TIMEOUT)
             r2.raise_for_status()
             obj = r2.json()
             feats.extend(obj.get("features", []))
-            break
+            nxt = next((ln for ln in obj.get("links", []) if ln.get("rel") == "next"), None)
+            if not nxt:
+                break
+            href = nxt["href"]
+        break
     return feats
 
 
