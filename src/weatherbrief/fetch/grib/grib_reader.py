@@ -30,7 +30,10 @@ dependency for the GFS/HRRR/cloud-diag paths):
 - **Grid identity** is ``md5GridSection``, the key cfgrib's geometry cache and
   dataset split use, so messages on the same grid share one set of weights.
 
-Grid types other than regular_ll / regular_gg are not handled (cfgrib gave the
+ICON's native triangular grid (template 101, ``unstructured_grid``) is
+read as a 1-D cell array by :meth:`GribMessage.native_values`; its
+coordinates and sampling weights live in ``icon_grid`` (#974). Other grid
+types are not handled (cfgrib gave the
 old decoders no 1-D lat/lon axes for them either, so they were skipped there
 too). Dataset-layout rules (which variables cfgrib dropped) are applied by the
 callers in ``decode.py``, because they differ per decoder.
@@ -66,6 +69,9 @@ _MISSING_VALUE = float(np.finfo(np.float32).max)
 
 _DIMENSION_GRID_TYPES = {"regular_ll", "regular_gg"}
 
+# GRIB2 grid definition template 101: ICON's native triangular grid (#974).
+_NATIVE_GRID_TYPE = "unstructured_grid"
+
 
 @dataclass(frozen=True)
 class GribGrid:
@@ -87,7 +93,7 @@ class GribMessage:
 
     __slots__ = (
         "_gid", "var", "type_of_level", "level", "param_id", "header",
-        "grid_key", "grid_type",
+        "grid_key", "grid_type", "uuid",
     )
 
     def __init__(self, gid) -> None:
@@ -118,6 +124,12 @@ class GribMessage:
             _get_str(gid, "number"),
         )
         self.grid_type = _get_str(gid, "gridType")
+        # Native ICON grids (#974) carry no coordinates, only the grid's UUID;
+        # ``icon_grid`` maps it to cell centres. Empty for every other grid.
+        self.uuid = (
+            _get_str(gid, "uuidOfHGrid")
+            if self.grid_type == _NATIVE_GRID_TYPE else ""
+        )
         # An empty key would put every grid on one set of weights, so fall
         # back to the geometry itself if eccodes cannot hash the section.
         self.grid_key = _get_str(gid, "md5GridSection") or "|".join(
@@ -167,6 +179,23 @@ class GribMessage:
         arr = raw.astype(np.float32).reshape(grid.shape)
         if grid.alternative_row_scanning:
             arr[1::2, :] = arr[1::2, ::-1]
+        arr[arr == _MISSING_VALUE] = np.nan
+        return arr
+
+
+    def native_values(self) -> np.ndarray | None:
+        """Unpack a native-grid field as float32 1-D, bitmap-masked cells NaN.
+
+        None for a message that is not on a native ICON grid. The values are in
+        cell order, matching the grid's CLAT/CLON (see ``icon_grid``).
+        """
+        import eccodes
+
+        if not self.uuid:
+            return None
+        gid = self._gid
+        eccodes.codes_set(gid, "missingValue", _MISSING_VALUE)
+        arr = eccodes.codes_get_values(gid).astype(np.float32)
         arr[arr == _MISSING_VALUE] = np.nan
         return arr
 

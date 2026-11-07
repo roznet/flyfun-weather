@@ -744,6 +744,73 @@ def icon_eu_single_level_url(
     )
 
 
+# DWD's revised ``v1`` layout (#974): the only ICON feed after 2026-11-30.
+# Native triangular grid only, CCSDS-packed GRIB2 (no bz2), ISO-8601 run and
+# step segments, upper-case parameter names, the model slug as the path's
+# model segment ("icon-eu", "icon-d2" — same as ``IconVariant.slug``):
+#   <base>/<model>/p/<PARAM>/r/<run>/s/<step>.grib2
+#   <base>/<model>/p/<PARAM>/lvt1/<typeOfFirstFixedSurface>/lv1/<level>/r/<run>/s/<step>.grib2
+# Verified live 2026-11-07 (listings and GRIB headers, see #974).
+DWD_V1_BASE_URL = "https://opendata.dwd.de/weather/nwp/v1/m"
+
+# typeOfFirstFixedSurface values used as ``lvt1`` segments.
+ICON_V1_LEVEL_MODEL = 150     # generalized-height model level, lv1 = level number
+ICON_V1_LEVEL_PRESSURE = 100  # isobaric, lv1 = pressure in Pa (85000)
+ICON_V1_LEVEL_ECHOTOP = 25    # D2 ECHOTOP, lv1 = reflectivity threshold in dBZ (18)
+
+
+def icon_v1_run_label(init_date: str, init_hour: int) -> str:
+    """``"20261107", 15`` -> ``"2026-11-07T15:00"`` (the ``r/`` segment)."""
+    return f"{init_date[:4]}-{init_date[4:6]}-{init_date[6:8]}T{init_hour:02d}:00"
+
+
+def icon_v1_step_label(forecast_hour: int, minutes: int = 0) -> str:
+    """``3`` -> ``"PT003H00M"``; ``(0, 15)`` -> ``"PT000H15M"`` (the ``s/`` file)."""
+    return f"PT{forecast_hour:03d}H{minutes:02d}M"
+
+
+def icon_v1_url(
+    variant: IconVariant,
+    param: str,
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    *,
+    level_type: int | None = None,
+    level: int | None = None,
+    minutes: int = 0,
+) -> str:
+    """URL of one field in DWD's v1 ICON feed (native grid, #974).
+
+    ``level_type``/``level`` are given together for multi-level parameters
+    (model levels: ``ICON_V1_LEVEL_MODEL, 60``; isobaric:
+    ``ICON_V1_LEVEL_PRESSURE, 85000``) and omitted for single-level ones.
+
+    Examples:
+        .../v1/m/icon-d2/p/CEILING/r/2026-11-07T15:00/s/PT003H00M.grib2
+        .../v1/m/icon-eu/p/T/lvt1/150/lv1/60/r/2026-11-07T15:00/s/PT003H00M.grib2
+    """
+    if (level_type is None) != (level is None):
+        raise ValueError("level_type and level go together")
+    path = f"{DWD_V1_BASE_URL}/{variant.slug}/p/{param.upper()}/"
+    if level_type is not None:
+        path += f"lvt1/{level_type}/lv1/{level}/"
+    return (
+        f"{path}r/{icon_v1_run_label(init_date, init_hour)}/"
+        f"s/{icon_v1_step_label(forecast_hour, minutes)}.grib2"
+    )
+
+
+def icon_v1_grid_urls(
+    variant: IconVariant, init_date: str, init_hour: int,
+) -> tuple[str, str]:
+    """``(CLAT, CLON)`` URLs: the run's cell centres, published at step 0."""
+    return (
+        icon_v1_url(variant, "CLAT", init_date, init_hour, 0),
+        icon_v1_url(variant, "CLON", init_date, init_hour, 0),
+    )
+
+
 def fetch_icon_eu_single_level(
     init_date: str,
     init_hour: int,
