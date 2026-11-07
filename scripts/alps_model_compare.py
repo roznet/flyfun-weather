@@ -1185,7 +1185,9 @@ def _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, datum) ->
     if raw_c is None or raw_c <= 0:
         return
     raw = v.get("ceiling_raw_m")
-    ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
+    ap = elev.get(icao)
+    if ap is None and datum == "msl":
+        return  # no field elevation: an MSL ceiling can't be turned into AGL
     c_ft = None
     if raw is not None and raw < 9999.0:
         c_ft = max(0.0, (raw - (ap if datum == "msl" else 0.0)) * FT_PER_M)
@@ -1211,7 +1213,7 @@ def cmd_report(args) -> int:
     since = iso(datetime.now(timezone.utc) - timedelta(days=args.days))
     metars: dict[tuple[str, str], tuple] = {}
     for row in db.execute(
-        "SELECT icao, obs_time, ceiling_ft, visibility_m, wind_kt, gust_kt, temp_c, dewpoint_c "
+        "SELECT icao, obs_time, ceiling_ft, visibility_m, wind_kt, gust_kt, temp_c, dewpoint_c, wind_dir "
         "FROM metars WHERE obs_time >= ? AND (report_type IS NULL OR report_type='METAR')",
         (since,),
     ):
@@ -1240,7 +1242,7 @@ def cmd_report(args) -> int:
         obs = metars.get((icao, valid))
         if obs is None:
             continue
-        _, o_ceil, o_vis, o_wind, o_gust, o_t, o_td = obs
+        _, o_ceil, o_vis, o_wind, o_gust, o_t, o_td, o_wdir = obs
         b = next((f"{a}-{z}h" for a, z in buckets if a <= lead <= z), None)
         if b is None:
             continue
@@ -1251,11 +1253,20 @@ def cmd_report(args) -> int:
             s.setdefault("Td", []).append(v["td2m_c"] - o_td)
         if "wspd_kt" in v and o_wind is not None:
             s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
-        # No gust group in a METAR means no significant gust: score the model
-        # gust against the sustained wind then, so over-forecast gusts count.
-        o_g = o_gust if o_gust is not None else o_wind
-        if "gust_kt" in v and o_g is not None:
-            s.setdefault("gust", []).append(v["gust_kt"] - o_g)
+        # Gust error only where the METAR reports a gust group. Where it does
+        # not (gusts < 10 kt above the mean), count a "false gust" when the
+        # model gust is >= 10 kt above the observed mean wind.
+        if "gust_kt" in v and o_gust is not None:
+            s.setdefault("gust", []).append(v["gust_kt"] - o_gust)
+        elif "gust_kt" in v and o_wind is not None:
+            s.setdefault("false_gust", []).append(1.0 if v["gust_kt"] - o_wind >= 10 else 0.0)
+        # Direction error (circular), only when both winds are >= 5 kt.
+        if (
+            "wdir_deg" in v and o_wdir is not None and o_wind is not None
+            and o_wind >= 5 and v.get("wspd_kt", 0) >= 5
+        ):
+            d = abs((v["wdir_deg"] - o_wdir + 180.0) % 360.0 - 180.0)
+            s.setdefault("wdir", []).append(d)
         _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, args.ceiling_datum)
 
     def mae(xs):
@@ -1273,10 +1284,11 @@ def cmd_report(args) -> int:
     print("ceil = category from ceiling alone, every model with a CEILING field;")
     print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
     print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.")
-    print("Gust: METAR without a gust group scored against its sustained wind.")
+    print("gust = error where the METAR has a gust group; falsegust = share of no-gust METARs")
+    print("where the model gust is >= 10 kt above the observed mean; dir mae in degrees, winds >= 5 kt.")
     print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).\n")
     print(
-        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  "
+        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  {'falsegust':>9s} {'dir mae':>9s}  "
         f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
     )
     for (model, b) in sorted(stats):
@@ -1287,6 +1299,7 @@ def cmd_report(args) -> int:
             f"{mae(s.get('Td', [])):5.1f}/{bias(s.get('Td', [])):+5.1f}  "
             f"{mae(s.get('wind', [])):6.1f}/{bias(s.get('wind', [])):+5.1f}  "
             f"{mae(s.get('gust', [])):6.1f}/{bias(s.get('gust', [])):+5.1f}  "
+            f"{ns(s.get('false_gust', [])):>9s} {mae(s.get('wdir', [])):5.0f}({len(s.get('wdir', []))})  "
             f"{ns(s.get('ceil_hit', [])):>9s} {ns(s.get('ceil_pod', [])):>9s} {ns(s.get('ceil_far', [])):>9s}  "
             f"{ns(s.get('full_hit', [])):>9s} {ns(s.get('full_pod', [])):>9s} {ns(s.get('full_far', [])):>9s}"
         )
