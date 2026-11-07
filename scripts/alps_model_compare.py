@@ -284,7 +284,9 @@ def nearest_cells(clat, clon, airports: dict[str, tuple[float, float]]):
 
     lat = np.asarray(clat, dtype=np.float64)
     lon = np.asarray(clon, dtype=np.float64)
-    if np.nanmax(np.abs(lat)) <= math.pi + 1e-6:  # radians
+    # Radians vs degrees: every grid here spans > 3 deg of latitude away from
+    # the equator, so a max |lat| <= pi can only be radians.
+    if np.nanmax(np.abs(lat)) <= math.pi + 1e-6:
         lat, lon = np.degrees(lat), np.degrees(lon)
     out = {}
     la, lo = np.radians(lat), np.radians(lon)
@@ -741,11 +743,15 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
             merged: dict[int, list[dict]] = {h: [{} for _ in icaos] for h in hours}
             # Both packages must be published before either is downloaded, so a
             # late SP2 never costs a wasted SP1 download on every retry.
-            complete = all(
-                sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
-                .status_code == 200
-                for pkg in AROME_SURFACE_PACKAGES
-            )
+            try:
+                complete = all(
+                    sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
+                    .status_code == 200
+                    for pkg in AROME_SURFACE_PACKAGES
+                )
+            except requests.RequestException as exc:
+                logger.warning("arome %s %s: availability probe failed: %s", iso(run), group, exc)
+                continue
             for pkg in AROME_SURFACE_PACKAGES if complete else ():
                 t0 = time.monotonic()
                 path = download_arome_group(date_str, hour, group, run_dir, sess, AROME, pkg)
