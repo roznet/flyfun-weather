@@ -27,7 +27,8 @@ airports by the forecast-map verification cycle (``airport_forecast_snapshots``)
 
 Everything goes into one SQLite file (``--out``, default
 ``$DATA_DIR/alps_compare`` or ``~/alps_compare``). Downloads are streamed to a
-temp file, decoded and deleted; only point values are kept.
+temp file, decoded and deleted; only point values are kept, with no pruning
+(roughly 100k rows a day, a few MB: delete the file when the study ends).
 
 Commands::
 
@@ -187,12 +188,14 @@ def session() -> requests.Session:
     return s
 
 
-def download(sess: requests.Session, url: str, dest: Path) -> int | None:
-    """Stream ``url`` to ``dest``. Returns bytes, or None on 404/403/410."""
+def download(sess: requests.Session, url: str, dest: Path) -> int | str | None:
+    """Stream ``url`` to ``dest``. Returns bytes, None on 404/410, "forbidden" on 403."""
     for attempt in range(3):
         try:
             with sess.get(url, stream=True, timeout=TIMEOUT) as r:
-                if r.status_code in (403, 404, 410):
+                if r.status_code == 403:
+                    return "forbidden"
+                if r.status_code in (404, 410):
                     return None
                 r.raise_for_status()
                 n = 0
@@ -377,11 +380,20 @@ def ch1_assets(sess, run: datetime, variable: str) -> dict[int, str]:
         "limit": 100,
     }
     try:
-        feats = stac_search(sess, body)
+        feats = stac_search(sess, body, max_pages=2)
     except requests.HTTPError as exc:
         if exc.response is None or exc.response.status_code != 400:
             raise
         # Fallback: the STAC "query" extension form of the same filter.
+        feats = None
+    # A server that ignores unknown top-level keys answers 200 with unfiltered
+    # items: switch to the STAC "query" extension form of the same filter.
+    if feats is None or any(
+        ft.get("properties", {}).get("forecast:variable") not in (None, variable)
+        for ft in feats
+    ):
+        if feats is not None:
+            logger.info("STAC ignored top-level forecast:* filters; using `query`")
         feats = stac_search(sess, {
             "collections": [CH1_COLLECTION],
             "limit": 100,
@@ -491,7 +503,10 @@ def icon_point_values(raw: dict[str, float]) -> dict[str, float]:
         out["gust_kt"] = raw["VMAX_10M"] * KT_PER_MS
     if ok(raw.get("VIS")):
         out["vis_m"] = raw["VIS"]
-    if ok(raw.get("CEILING")):
+    if ok(raw.get("CEILING")) and raw["CEILING"] > 0:
+        # <= 0 is not a real ceiling height in either datum; leave it unknown
+        # rather than read it as a 0 ft (LIFR) ceiling. >= 9999 m is the
+        # product's "no ceiling" fill (#847), handled in `report`.
         out["ceiling_raw_m"] = raw["CEILING"]
     if ok(raw.get("HBAS_SC")):
         out["hbas_sc_raw_m"] = raw["HBAS_SC"]
@@ -568,9 +583,10 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
     stats = {"ok": 0, "missing": 0, "bytes": 0}
 
     # Per variable: CH1 needs one STAC search for all leads of a variable.
-    raw_by_lead: dict[int, dict[str, dict[str, float]]] = {}
+    touched: set[int] = set()
     for var in ICON_VARS:
-        todo = [ld for ld in leads if done.get((ld, var)) not in ("ok", "absent")]
+        final = ("ok", "absent", "bad") if give_up else ("ok", "absent")
+        todo = [ld for ld in leads if done.get((ld, var)) not in final]
         if not todo:
             continue
         if model == "icon-ch1":
@@ -601,41 +617,53 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
             except requests.RequestException as exc:
                 logger.warning("%s %s %s +%d: %s", model, iso(run), var, ld, exc)
                 continue
+            if isinstance(nbytes, str):  # 403: expired pre-signed URL or a block
+                logger.warning("%s %s %s +%d: HTTP 403", model, iso(run), var, ld)
+                record_file(db, model, run, ld, var, "forbidden")
+                stats["missing"] += 1
+                continue
             if nbytes is None:
                 record_file(db, model, run, ld, var, "absent" if give_up else "missing")
                 stats["missing"] += 1
                 continue
             try:
                 msg = first_message(path)
-                if msg is None:
-                    record_file(db, model, run, ld, var, "bad")
-                    continue
-                hdr, vals = msg
-                if vals.size != n_expected:
-                    logger.error(
-                        "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
-                        model, var, vals.size, n_expected,
-                    )
-                    record_file(db, model, run, ld, var, "grid-mismatch")
-                    continue
-                for icao, (cell, _n) in cells.items():
-                    raw_by_lead.setdefault(ld, {}).setdefault(icao, {})[var] = float(vals[cell])
+            except Exception:  # noqa: BLE001 - one bad file must not lose the run
+                logger.exception("%s %s %s +%d: decode failed", model, iso(run), var, ld)
+                record_file(db, model, run, ld, var, "bad")
+                db.commit()
+                continue
             finally:
                 path.unlink(missing_ok=True)
+            if msg is None:
+                record_file(db, model, run, ld, var, "bad")
+                continue
+            _hdr, vals = msg
+            if vals.size != n_expected:
+                logger.error(
+                    "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
+                    model, var, vals.size, n_expected,
+                )
+                record_file(db, model, run, ld, var, "grid-mismatch")
+                continue
+            # The raw value and the 'ok' record land in the same commit, so a
+            # later failure can never leave a file marked done with no values.
+            store_values(db, model, run, ld, {
+                icao: {f"raw_{var}": float(vals[cell])} for icao, (cell, _n) in cells.items()
+            })
             record_file(db, model, run, ld, var, "ok", nbytes, time.monotonic() - t0)
+            db.commit()
+            touched.add(ld)
             stats["ok"] += 1
             stats["bytes"] += nbytes
-        db.commit()
 
-    # Wind needs U and V from the same lead; read back the raw parts stored so
-    # far so a retry that fetches only V still produces the wind.
-    for ld, per_icao in raw_by_lead.items():
-        merged = {}
-        for icao, raw in per_icao.items():
-            prev = _stored_raw(db, model, run, ld, icao)
-            prev.update(raw)
-            merged[icao] = {**icon_point_values(prev), **{f"raw_{k}": v for k, v in prev.items()}}
-        store_values(db, model, run, ld, merged)
+    # Derived values (wind needs U and V of the same lead) are rebuilt from
+    # everything stored for the lead, so a retry that fetches only V still
+    # produces the wind.
+    for ld in sorted(touched):
+        store_values(db, model, run, ld, {
+            icao: icon_point_values(_stored_raw(db, model, run, ld, icao)) for icao in cells
+        })
     db.commit()
     return stats
 
@@ -780,6 +808,7 @@ def cmd_check(args) -> int:
 
     now = datetime.now(timezone.utc)
     href = None
+    ceil_run = None
     for run in cadence_runs(now, 3, 24, 2.5):
         try:
             hrefs = ch1_assets(sess, run, "T_2M")
@@ -789,6 +818,7 @@ def cmd_check(args) -> int:
         if hrefs:
             line("STAC search", True, f"run {iso(run)}: T_2M ctrl leads {min(hrefs)}..{max(hrefs)} ({len(hrefs)})")
             href = hrefs[min(hrefs, key=lambda h: abs(h - 1))]
+            ceil_run = run
             break
     else:
         line("STAC search", False, "no control T_2M file in the last 24 h (format? see --verbose)")
@@ -813,6 +843,19 @@ def cmd_check(args) -> int:
                          f"short={hdr.get('shortName')} range={float(min(vals)):.1f}..{float(max(vals)):.1f}")
             except Exception as exc:
                 line("CSCS download/decode", False, repr(exc))
+    # CEILING encoding: what "no ceiling" looks like decides how `report` reads it.
+    if href:
+        try:
+            ch = ch1_assets(sess, ceil_run, "CEILING")
+            if ch:
+                with tempfile.TemporaryDirectory() as td:
+                    p = Path(td) / "ceiling.grib2"
+                    download(sess, ch[min(ch)], p)
+                    _ceiling_summary("CH1 CEILING", first_message(p), line)
+            else:
+                line("CH1 CEILING", False, "no CEILING control file listed")
+        except Exception as exc:  # noqa: BLE001
+            line("CH1 CEILING", False, repr(exc))
     try:
         hc = ch1_collection_asset(sess, "horizontal_constants")
         line("CH1 horizontal_constants asset", bool(hc), (hc or "")[:90])
@@ -834,6 +877,13 @@ def cmd_check(args) -> int:
                 break
         if found:
             line(f"DWD {model}", True, f"latest run {iso(found[0])} {found[1]}")
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "ceiling.grib2"
+                url = dwd_url(model, "CEILING", found[0], 1, dwd_prefix(sess, model, "CEILING"))
+                if download(sess, url, p) and p.exists():
+                    _ceiling_summary(f"DWD {model} CEILING", first_message(p), line)
+                else:
+                    line(f"DWD {model} CEILING", False, url)
         else:
             line(f"DWD {model}", False, "no T_2M +1h file in 24 h (URL layout?)")
     for model in ("icon-d2", "icon-eu"):
@@ -871,6 +921,27 @@ def cmd_check(args) -> int:
 
     print("\nall reachable" if ok else "\nsome checks failed: paste this output in the thread")
     return 0 if ok else 1
+
+
+def _ceiling_summary(name, msg, line) -> None:
+    """Print the CEILING value distribution: fill values and datum hints."""
+    import numpy as np
+
+    if msg is None:
+        line(name, False, "no message")
+        return
+    hdr, vals = msg
+    v = vals[np.isfinite(vals)]
+    if v.size == 0:
+        line(name, False, "all missing")
+        return
+    q = np.percentile(v, [0, 1, 10, 50, 90, 99, 100])
+    line(
+        name, True,
+        f"units={hdr.get('units')} level={hdr.get('typeOfLevel')} "
+        f"<=0: {np.mean(v <= 0):.1%}  >=9999: {np.mean(v >= 9999):.1%}  "
+        f"pct0/1/10/50/90/99/100 = {' '.join(f'{x:.0f}' for x in q)}",
+    )
 
 
 def _grid_from_file(path: Path):
@@ -1022,23 +1093,13 @@ def cmd_status(args) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _category(ceiling_ft, vis_m) -> str | None:
-    """VFR/MVFR/IFR/LIFR from ceiling (ft AGL, None = none) and visibility (m).
+def _category(ceiling_ft, vis_m) -> str:
+    """The product's flight category (``classify_flight_category``), so model and
+    METAR are categorised exactly as in the verification tables. Missing ceiling
+    or visibility counts as unrestricted on that axis, as there."""
+    from weatherbrief.analysis.airport_conditions import classify_flight_category
 
-    Metric visibility >= 8000 m is VFR (meteorology-decisions §48). Returns None
-    when both are unknown.
-    """
-    if ceiling_ft is None and vis_m is None:
-        return None
-    c = ceiling_ft if ceiling_ft is not None else 1e9
-    v = vis_m if vis_m is not None else 1e9
-    if c < 500 or v < 1600:
-        return "LIFR"
-    if c < 1000 or v < 5000:
-        return "IFR"
-    if c <= 3000 or v < 8000:
-        return "MVFR"
-    return "VFR"
+    return classify_flight_category(ceiling_ft, visibility_m=vis_m).value
 
 
 def cmd_report(args) -> int:
@@ -1075,7 +1136,7 @@ def cmd_report(args) -> int:
         obs = metars.get((icao, valid))
         if obs is None:
             continue
-        _, o_ceil, o_vis, o_wind, o_gust, o_t, o_td = obs
+        _, o_ceil, o_vis, o_wind, _o_gust, o_t, o_td = obs
         b = next((f"{a}-{z}h" for a, z in buckets if a <= lead <= z), None)
         if b is None:
             continue
@@ -1088,23 +1149,31 @@ def cmd_report(args) -> int:
             s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
         # Ceiling: ICON CEILING treated as metres MSL (as the product does);
         # AGL = raw - airport elevation. No ceiling field => "none" above 9999 m.
-        if "ceiling_raw_m" in v or "vis_m" in v:
-            raw = v.get("ceiling_raw_m")
-            ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
-            c_ft = None
-            if raw is not None and raw < 9999.0:
-                c_ft = max(0.0, (raw - (ap if args.ceiling_datum == "msl" else 0.0)) * FT_PER_M)
-            m_cat = _category(c_ft, v.get("vis_m"))
-            o_cat = _category(o_ceil, o_vis)
-            if m_cat and o_cat:
-                s.setdefault("cat_hit", []).append(1.0 if m_cat == o_cat else 0.0)
-                o_low = o_cat in ("IFR", "LIFR")
-                m_low = m_cat in ("IFR", "LIFR")
-                s.setdefault("ifr_obs", []).append(1.0 if o_low else 0.0)
-                if o_low:
-                    s.setdefault("ifr_pod", []).append(1.0 if m_low else 0.0)
-                if m_low:
-                    s.setdefault("ifr_far", []).append(0.0 if o_low else 1.0)
+        # Ceiling: only where the model has a CEILING value for this hour
+        # (AROME has none). ICON CEILING is read as metres MSL, as the product
+        # does (--ceiling-datum agl to test the other reading); >= 9999 m is
+        # the "no ceiling" fill (#847).
+        if "raw_CEILING" not in v:
+            continue
+        raw = v.get("ceiling_raw_m")
+        ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
+        c_ft = None
+        if raw is not None and raw < 9999.0:
+            c_ft = max(0.0, (raw - (ap if args.ceiling_datum == "msl" else 0.0)) * FT_PER_M)
+        # Like for like: ceiling-only category on both sides for every model;
+        # the full ceiling+visibility category only where the model has VIS
+        # (DWD dropped it on the native feed, so CH1 only in practice).
+        variants = [("ceil", _category(c_ft, None), _category(o_ceil, None))]
+        if "vis_m" in v:
+            variants.append(("full", _category(c_ft, v["vis_m"]), _category(o_ceil, o_vis)))
+        for tag, m_cat, o_cat in variants:
+            s.setdefault(f"{tag}_hit", []).append(1.0 if m_cat == o_cat else 0.0)
+            o_low = o_cat in ("IFR", "LIFR")
+            m_low = m_cat in ("IFR", "LIFR")
+            if o_low:
+                s.setdefault(f"{tag}_pod", []).append(1.0 if m_low else 0.0)
+            if m_low:
+                s.setdefault(f"{tag}_far", []).append(0.0 if o_low else 1.0)
 
     def mae(xs):
         return sum(abs(x) for x in xs) / len(xs) if xs else float("nan")
@@ -1115,20 +1184,26 @@ def cmd_report(args) -> int:
     def mean(xs):
         return sum(xs) / len(xs) if xs else float("nan")
 
-    print(f"Since {since}. MAE / bias against the METAR within 30 min of the valid hour.")
-    print("cat = flight-category hit rate (ceiling+vis models only); IFR POD/FAR = IFR-or-worse detection.\n")
-    hdr = f"{'model':9s} {'lead':6s} {'n':>5s}  {'T mae/bias':>12s}  {'Td mae/bias':>12s}  {'wind mae/bias':>13s}  {'cat':>5s} {'IFR obs':>7s} {'POD':>5s} {'FAR':>5s}"
-    print(hdr)
+    def ns(xs):
+        return f"{mean(xs):4.2f}({len(xs)})" if xs else "   -   "
+
+    print(f"Since {since}. MAE / bias against the METAR within 30 min of the valid hour (n per column).")
+    print("ceil = category from ceiling alone, every model with a CEILING field;")
+    print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
+    print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.\n")
+    print(
+        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  "
+        f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
+    )
     for (model, b) in sorted(stats):
         s = stats[(model, b)]
-        n = len(s.get("T", []))
+        t = s.get("T", [])
         print(
-            f"{model:9s} {b:6s} {n:5d}  "
-            f"{mae(s.get('T', [])):5.1f}/{bias(s.get('T', [])):+5.1f}  "
+            f"{model:9s} {b:6s} {mae(t):5.1f}/{bias(t):+5.1f} ({len(t):4d})  "
             f"{mae(s.get('Td', [])):5.1f}/{bias(s.get('Td', [])):+5.1f}  "
             f"{mae(s.get('wind', [])):6.1f}/{bias(s.get('wind', [])):+5.1f}  "
-            f"{mean(s.get('cat_hit', [])):5.2f} {len([x for x in s.get('ifr_obs', []) if x]):7d} "
-            f"{mean(s.get('ifr_pod', [])):5.2f} {mean(s.get('ifr_far', [])):5.2f}"
+            f"{ns(s.get('ceil_hit', [])):>9s} {ns(s.get('ceil_pod', [])):>9s} {ns(s.get('ceil_far', [])):>9s}  "
+            f"{ns(s.get('full_hit', [])):>9s} {ns(s.get('full_pod', [])):>9s} {ns(s.get('full_far', [])):>9s}"
         )
     return 0
 
