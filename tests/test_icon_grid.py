@@ -254,3 +254,9 @@ def test_save_leaves_no_temp_files(grid, tmp_path):
     grid.save(path)
     grid.save(path)
     assert [p.name for p in tmp_path.iterdir()] == [path.name]
+
+
+def test_grid_cache_path_rejects_non_uuid(tmp_path):
+    with pytest.raises(ValueError):
+        grid_cache_path(tmp_path, "../../etc/passwd")
+    assert get_grid("../x", cache_root=tmp_path) is None

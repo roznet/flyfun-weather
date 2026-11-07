@@ -35,14 +35,16 @@ weight blanks the result, a NaN with zero weight does not.
 
 Grids are cached in-process by UUID (:func:`register_grid` / :func:`get_grid`)
 and on disk as ``icon-grid-<uuid>.npz`` (:meth:`IconNativeGrid.save` /
-:meth:`IconNativeGrid.load`), so the ~1.5 MB of centres is downloaded once per
-grid, not once per run.
+:meth:`IconNativeGrid.load`), so the centres (~1.5 MB of CLAT/CLON GRIB to
+download, ~12 MB as float64 on disk) are fetched once per grid, not once per
+run.
 """
 
 from __future__ import annotations
 
 import itertools
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -330,6 +332,8 @@ def gather_native(values: np.ndarray, nw: NativeWeights) -> np.ndarray:
 
 # -- process-wide registry --------------------------------------------------
 
+_UUID_RE = re.compile(r"[0-9a-fA-F-]{8,64}")
+
 _GRIDS: dict[str, IconNativeGrid] = {}
 _LOCK = threading.Lock()
 
@@ -339,7 +343,11 @@ def grid_cache_path(cache_root: Path, uuid: str) -> Path:
 
     Kept forever, never pruned: one ~12 MB file per grid (ICON-EU, ICON-D2),
     and a grid only changes when DWD changes the model's resolution or domain.
+    The UUID comes from a GRIB header, so it is checked to be hex (dashes
+    allowed) before it becomes part of a path.
     """
+    if not uuid or not _UUID_RE.fullmatch(uuid):
+        raise ValueError(f"not an ICON grid UUID: {uuid!r}")
     return Path(cache_root) / f"icon-grid-{uuid}.npz"
 
 
@@ -354,7 +362,11 @@ def get_grid(uuid: str, cache_root: Path | None = None) -> IconNativeGrid | None
         grid = _GRIDS.get(uuid)
     if grid is not None or cache_root is None:
         return grid
-    path = grid_cache_path(cache_root, uuid)
+    try:
+        path = grid_cache_path(cache_root, uuid)
+    except ValueError:
+        logger.warning("Ignoring malformed ICON grid UUID %r", uuid)
+        return None
     if not path.exists():
         return None
     try:
