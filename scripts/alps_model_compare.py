@@ -1315,6 +1315,7 @@ def cmd_report(args) -> int:
         return f"{mean(xs):4.2f}({len(xs)})" if xs else "   -   "
 
     print(f"Since {since}. MAE / bias against the METAR within 30 min of the valid hour (n per column).")
+    print(f"CEILING read as {args.ceiling_datum.upper()} (--ceiling-datum).")
     print("ceil = category from ceiling alone, every model with a CEILING field;")
     print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
     print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.")
