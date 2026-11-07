@@ -12,7 +12,9 @@ interpolation at all:
   ``.idx`` byte ranges. Global 0–360° grid: target longitudes are aligned to the
   axis first (``decode._align_lons_to_axis``).
 * **ICON-EU** — DWD open-data pressure-level files. The 0.0625° grid starts at
-  29.5°N / 23.5°W, so every 4th point is one of ours: a subsample.
+  29.5°N / 23.5°W, so every 4th point is one of ours: a subsample. On DWD's
+  native-grid feed (``WB_ICON_FEED=v1``, #974) there is no lattice: each point
+  takes its nearest native cell (``icon_grid``), still no interpolation.
 
 The lattice is matched by exact coordinate lookup, never by nearest neighbour:
 a grid that does not hold every target point is skipped, so a domain change
@@ -161,12 +163,27 @@ def read_lattice_fields(
     # grid_key → (grid, (rows, cols)), or None (grid does not hold the lattice)
     index_cache: dict[str, tuple[object, tuple[np.ndarray, np.ndarray]] | None] = {}
 
+    # ICON native grid (#974): uuid -> nearest-cell indices of the lattice,
+    # or None when the grid is unknown or misses a lattice point.
+    native_cache: dict[str, np.ndarray | None] = {}
+
     for source in sources:
         for msg in iter_messages(source):
             if msg.var not in HEWSON_GRIB_VARS or msg.type_of_level != "isobaricInhPa":
                 continue
             level = wanted_levels.get(msg.level)
             if level is None or msg.var in out[level]:
+                continue
+            if msg.uuid:
+                if msg.uuid not in native_cache:
+                    native_cache[msg.uuid] = _native_lattice_cells(msg.uuid, lat, lon)
+                cells = native_cache[msg.uuid]
+                values = msg.native_values() if cells is not None else None
+                if values is None:
+                    continue
+                out[level][msg.var] = (
+                    values[cells].reshape(lat.size, lon.size).astype(np.float64)
+                )
                 continue
             if msg.grid_key not in index_cache:
                 grid = msg.grid()
@@ -184,6 +201,33 @@ def read_lattice_fields(
                 continue
             out[level][msg.var] = values[np.ix_(rows, cols)].astype(np.float64)
     return out
+
+
+def _native_lattice_cells(uuid: str, lat: np.ndarray, lon: np.ndarray) -> np.ndarray | None:
+    """Nearest native cell of every lattice point, row-major, or None.
+
+    ICON on DWD's native grid (#974): there is no lattice to slice, so each
+    point takes its nearest cell, the field value itself and not an
+    interpolation (Brice's call, so the ICON front map stays a model field to
+    compare with DWD's). None when the grid's centres are not on disk or the
+    grid does not hold every lattice point, the same "skip, don't shift" rule
+    as the regular grids.
+    """
+    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+
+    grid = get_grid(uuid, cache_root=default_cache_root())
+    if grid is None:
+        logger.warning("Hewson GRIB icon: native grid %s not on disk", uuid)
+        return None
+    la, lo = np.meshgrid(np.asarray(lat, float), np.asarray(lon, float), indexing="ij")
+    nw = grid.nearest_weights(la.ravel(), lo.ravel())
+    if nw.inb_idx.size != la.size:
+        logger.warning(
+            "Hewson GRIB icon: native grid %s misses %d of %d lattice points",
+            uuid, la.size - nw.inb_idx.size, la.size,
+        )
+        return None
+    return nw.idx[:, 0]
 
 
 def dewpoint_magnus_c(t_c: np.ndarray, rh_pct: np.ndarray) -> np.ndarray:
@@ -366,15 +410,20 @@ def _resolve_icon(
 ) -> GribRun | None:
     """Newest ICON-EU main run (120 h horizon) with its last wanted step up (or ``init``)."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_EU,
         _download_one_file,
+        ensure_icon_native_grid,
         find_latest_icon_eu_run,
         icon_eu_pressure_level_url,
+        icon_native_feed,
     )
+    from weatherbrief.fetch.grib.icon_grid import default_cache_root
 
     last = max(hours)
     # Only main runs reach the 117 h we read; a cover requirement past the
-    # short runs' 30 h horizon makes the run finder skip them.
-    cover_until = now + timedelta(hours=31)
+    # short runs' horizon (30 h, 51 h on the native feed, #974) makes the run
+    # finder skip them.
+    cover_until = now + timedelta(hours=52 if icon_native_feed() else 31)
     as_of = now
     pinned = init
     for _ in range(_MAX_STEP_BACK + 1):
@@ -391,7 +440,12 @@ def _resolve_icon(
             tzinfo=timezone.utc,
         )
         probe = icon_eu_pressure_level_url(date_str, cycle, last, 850, "t")
-        if _head_ok(session, probe):
+        if _head_ok(session, probe) and (
+            not icon_native_feed()
+            or ensure_icon_native_grid(
+                ICON_EU, date_str, cycle, session, default_cache_root(),
+            ) is not None
+        ):
 
             def fetch_step(hour: int, _d=date_str, _c=cycle) -> list[bytes] | None:
                 urls = [

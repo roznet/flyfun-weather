@@ -25,8 +25,10 @@ from weatherbrief.fetch.grib.cache import (
     put_cached,
 )
 from weatherbrief.fetch.grib.icon_eu_fetch import (
-    ICON_EU_CLOUD_DIAG_CACHE_KEY,
+    ICON_EU,
     ICON_EU_VARIABLES as ICON_EU_PRECACHE_VARS,
+    icon_cache_prefix,
+    icon_cloud_diag_cache_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -246,8 +248,10 @@ def precache_icon_eu_run(
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_EU_MODEL_LEVEL_MAX,
         ICON_EU_MODEL_LEVEL_MIN,
+        ensure_icon_native_grid,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
+        icon_native_feed,
     )
     from weatherbrief.fetch.grib.icon_zarr import (
         cache_model_level_blob,
@@ -262,6 +266,19 @@ def precache_icon_eu_run(
     data_dir = _data_dir()
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="icon-eu")
     session = _grib_session()
+
+    # Native feed (#974): the pass must leave the run's grid on disk, or the
+    # files it warms cannot be decoded. Without it, warm nothing this tick
+    # (deferred, so the run is retried).
+    if icon_native_feed() and ensure_icon_native_grid(
+        ICON_EU, init_date, init_hour, session, data_dir / ".cache" / "grib",
+    ) is None:
+        return {
+            "hours_fetched": 0, "vars_fetched": 0, "bytes_downloaded": 0,
+            "forecast_hours_total": len(forecast_hours), "deferred": 1,
+        }
+    prefix = icon_cache_prefix(ICON_EU)
+    diag_key = icon_cloud_diag_cache_key(ICON_EU)
 
     gate = _yield_gate(should_defer)
     deferred = False
@@ -278,12 +295,12 @@ def precache_icon_eu_run(
     # and `last_done` starves (PR #498 review).
     for fhour in forecast_hours:
         # Legacy combined cache (briefings on older code paths) → counts as covered
-        if is_cached(run_dir, cache_key(fhour, "ICON_EU_QC_QI_P")):
+        if is_cached(run_dir, cache_key(fhour, f"{prefix}_QC_QI_P")):
             hours_fetched += 1
             continue
 
         for var in ICON_EU_PRECACHE_VARS:
-            ck = cache_key(fhour, f"ICON_EU_{var.upper()}")
+            ck = cache_key(fhour, f"{prefix}_{var.upper()}")
             if cached_model_level_entry(run_dir, ck) is not None:
                 continue
             # Per-variable, not just per-hour: one hour is 9 downloads, and a
@@ -332,7 +349,7 @@ def precache_icon_eu_run(
         # live in `_enrich_icon_eu_cloud_diagnostics`. The firing gate stays
         # missing-data-safe throughout — this is a warm-path gap, not a
         # correctness one.
-        diag_ck = cache_key(fhour, ICON_EU_CLOUD_DIAG_CACHE_KEY)
+        diag_ck = cache_key(fhour, diag_key)
         if not is_cached(run_dir, diag_ck):
             if gate():
                 deferred = True

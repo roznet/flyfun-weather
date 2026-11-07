@@ -113,6 +113,9 @@ class IconNativeGrid:
     uuid: str
     clat: np.ndarray  # degrees, float64, one per cell
     clon: np.ndarray  # degrees, float64, one per cell
+    # The sampling the model's decoders use when they don't ask for one
+    # (``IconVariant.native_sampling``, set when the grid is fetched, #974).
+    default_method: str = "barycentric"
     _tree: object = field(init=False, repr=False)
     _xyz: np.ndarray = field(init=False, repr=False)
     spacing_rad: float = field(init=False)
@@ -167,7 +170,10 @@ class IconNativeGrid:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{_uuid.uuid4().hex[:8]}.tmp.npz")
         try:
-            np.savez(tmp, uuid=np.array(self.uuid), clat=self.clat, clon=self.clon)
+            np.savez(
+                tmp, uuid=np.array(self.uuid), clat=self.clat, clon=self.clon,
+                default_method=np.array(self.default_method),
+            )
             tmp.replace(path)
         finally:
             tmp.unlink(missing_ok=True)
@@ -175,7 +181,8 @@ class IconNativeGrid:
     @classmethod
     def load(cls, path: Path) -> "IconNativeGrid":
         with np.load(Path(path)) as npz:
-            return cls(str(npz["uuid"]), npz["clat"], npz["clon"])
+            method = str(npz["default_method"]) if "default_method" in npz else "barycentric"
+            return cls(str(npz["uuid"]), npz["clat"], npz["clon"], default_method=method)
 
     @classmethod
     def from_grib(cls, clat_source, clon_source) -> "IconNativeGrid":
@@ -309,7 +316,33 @@ class IconNativeGrid:
             )
         return NativeWeights(out_idx, out_w, inb_idx)
 
-    def weights(self, lats, lons, method: str = "barycentric") -> NativeWeights:
+    def cells_within(self, lat: float, lon: float, radius_km: float) -> np.ndarray:
+        """Indices of the cells whose centre lies within ``radius_km``."""
+        xyz = _unit_vectors(np.array([lat]), np.array([lon]))[0]
+        chord = 2.0 * np.sin(min(np.pi, radius_km / _EARTH_RADIUS_KM) / 2.0)
+        return np.asarray(self._tree.query_ball_point(xyz, chord), dtype=np.intp)
+
+    def buffer_inside(self, lat: float, lon: float, radius_km: float, n: int = 16) -> bool:
+        """True when a circle of ``radius_km`` round the point is inside the grid.
+
+        The native counterpart of the lat-lon corridor window test (#462): a
+        corridor that runs off the grid's edge is unavailable, not a smaller
+        corridor. Checks the centre and ``n`` points on the circle.
+        """
+        ang = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+        d = radius_km / _EARTH_RADIUS_KM
+        lat0, lon0 = np.radians(lat), np.radians(lon)
+        plat = np.arcsin(np.sin(lat0) * np.cos(d) + np.cos(lat0) * np.sin(d) * np.cos(ang))
+        plon = lon0 + np.arctan2(
+            np.sin(ang) * np.sin(d) * np.cos(lat0),
+            np.cos(d) - np.sin(lat0) * np.sin(plat),
+        )
+        lats = np.concatenate([[lat], np.degrees(plat)])
+        lons = np.concatenate([[lon], np.degrees(plon)])
+        return bool(self.contains(lats, lons).all())
+
+    def weights(self, lats, lons, method: str | None = None) -> NativeWeights:
+        method = method or self.default_method
         if method == "barycentric":
             return self.barycentric_weights(lats, lons)
         if method == "nearest":
@@ -341,6 +374,47 @@ _UUID_RE = re.compile(r"[0-9a-fA-F-]{8,64}")
 
 _GRIDS: dict[str, IconNativeGrid] = {}
 _LOCK = threading.Lock()
+
+
+def default_cache_root() -> Path:
+    """Where decoders look for grids: ``$DATA_DIR/.cache/grib``.
+
+    Decode-pool workers get no ``data_dir``; the fetch side writes grids under
+    the same ``data_dir`` the app runs with, which is ``DATA_DIR``.
+    """
+    import os
+
+    return Path(os.environ.get("DATA_DIR", "data")) / ".cache" / "grib"
+
+
+def uuid_from_grib_header(head: bytes) -> str | None:
+    """``uuidOfHGrid`` from the first bytes of a GRIB2 message, or None.
+
+    Walks the sections of a possibly truncated message (a Range request for
+    the first ~2 KB) to section 3 and reads template 101's UUID, so a run's
+    grid can be identified without downloading the whole CLAT file.
+    """
+    if len(head) < 16 or head[:4] != b"GRIB" or head[7] != 2:
+        return None
+    off = 16
+    while off + 5 <= len(head):
+        length = int.from_bytes(head[off:off + 4], "big")
+        number = head[off + 4]
+        if length < 5:
+            return None
+        if number == 3:
+            if off + 35 > len(head):
+                return None
+            template = int.from_bytes(head[off + 12:off + 14], "big")
+            if template != 101:
+                return None
+            # Template 3.101: octet 15 earth shape, 16-18 grid number,
+            # 19 grid-in-reference, 20-35 the UUID (1-based octets).
+            return head[off + 19:off + 35].hex()
+        if number > 3:
+            return None
+        off += length
+    return None
 
 
 def grid_cache_path(cache_root: Path, uuid: str) -> Path:

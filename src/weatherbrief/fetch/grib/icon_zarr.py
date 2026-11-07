@@ -61,12 +61,20 @@ _MODEL_LEVEL_TYPES = {"generalVerticalLayer", "generalVertical", "hybrid"}
 
 
 def zarr_enabled() -> bool:
-    """Convert on write unless ``WB_ICON_ZARR=0`` (the rollback switch).
+    """Convert on write unless ``WB_ICON_ZARR=0`` (the rollback switch) or
+    ICON is read from the native-grid feed (#974).
 
     Also False when the ``zarr`` package is not installed, so an environment
     without it keeps caching GRIB instead of failing every conversion.
     """
     if os.environ.get("WB_ICON_ZARR", "1").strip().lower() in ("0", "false", "no"):
+        return False
+    # Native-grid files (#974) are 1-D cell arrays; the 64 x 64 tiles here are
+    # lat-lon only. They stay GRIB (owner call: no native zarr until timings
+    # ask for it).
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_native_feed
+
+    if icon_native_feed():
         return False
     return _zarr_installed()
 

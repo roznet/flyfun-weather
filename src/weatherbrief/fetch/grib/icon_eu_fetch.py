@@ -44,6 +44,25 @@ logger = logging.getLogger(__name__)
 # the ``base_url`` field on each :class:`IconVariant` below.
 DWD_BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-eu/grib"
 
+# Which DWD feed the ICON paths read (#974). ``legacy``: the regular
+# lat-lon ``weather/nwp/icon-*/grib`` files (bz2), switched off by DWD after
+# 2026-11-30. ``v1``: the native-grid ``weather/nwp/v1/m`` feed. Read at call
+# time, so a test or a restart flips it without reimporting. Every
+# feed-dependent choice (URLs, bz2, cache prefix, horizons, sampling) goes
+# through :func:`icon_native_feed`; nothing else reads the variable.
+ICON_FEED_ENV_VAR = "WB_ICON_FEED"
+
+
+def icon_feed() -> str:
+    """``"v1"`` or ``"legacy"`` (the default, and for any unknown value)."""
+    raw = os.environ.get(ICON_FEED_ENV_VAR, "").strip().lower()
+    return "v1" if raw in ("v1", "native") else "legacy"
+
+
+def icon_native_feed() -> bool:
+    """True when ICON is read from DWD's native-grid v1 feed (#974)."""
+    return icon_feed() == "v1"
+
 @dataclass(frozen=True)
 class IconVariant:
     """Config for one DWD ICON GRIB variant (ICON-EU or ICON-D2).
@@ -131,6 +150,14 @@ class IconVariant:
     model_level_variables: tuple[str, ...]
     explicit_conv_variables: tuple[str, ...] = ()
     per_level_cache: bool = False
+    # Native-grid feed only (#974). ``native_sampling``: how a target point
+    # reads the triangular grid (``icon_grid``): ICON-EU ``barycentric``
+    # matches the bilinear read of DWD's lat-lon product to ~0.02 K; ICON-D2
+    # ``nearest`` reproduces it exactly (DWD's D2 lat-lon product is a
+    # nearest-cell remap), parity run 2026-11-07 12Z. ``native_horizon_short_h``:
+    # the v1 feed runs the short cycles further than the legacy one did.
+    native_sampling: str = "barycentric"
+    native_horizon_short_h: int | None = None
 
     @property
     def needs_predecessor_step(self) -> bool:
@@ -265,6 +292,16 @@ ICON_D2_SNAPSHOT_PRESSURE_LEVELS: tuple[int, ...] = (
 )
 
 
+def icon_cache_prefix(variant: "IconVariant") -> str:
+    """Cache-key prefix for *variant* on the active feed.
+
+    Native-grid files get their own prefix (``ICON_EU_N``), so a run dir
+    holding legacy lat-lon files and native ones (the flag flipped mid-run,
+    or a rollback) can never serve one as the other (#974).
+    """
+    return f"{variant.cache_prefix}_N" if icon_native_feed() else variant.cache_prefix
+
+
 def icon_snapshot_pressure_levels(variant: "IconVariant") -> tuple[int, ...]:
     """The isobaric levels the map/alternates snapshot reads for *variant*."""
     if variant.slug == "icon-d2":
@@ -278,7 +315,7 @@ def icon_pressure_cache_key(variable: str, level_hpa: int, variant: "IconVariant
     ``f012_ICON_EU_PL_T_850_V1.grib2``: one file per (variable, level), so a
     failed download is a missing file, never a short blob cached as complete.
     """
-    return f"{variant.cache_prefix}_PL_{variable.upper()}_{level_hpa}_V1"
+    return f"{icon_cache_prefix(variant)}_PL_{variable.upper()}_{level_hpa}_V1"
 
 
 def icon_surface_cache_key(variable: str, variant: "IconVariant") -> str:
@@ -288,7 +325,7 @@ def icon_surface_cache_key(variable: str, variant: "IconVariant") -> str:
     One file per variable, so a failed download is a missing file, never a
     short blob cached as complete.
     """
-    return f"{variant.cache_prefix}_SFC_{variable.upper()}_V1"
+    return f"{icon_cache_prefix(variant)}_SFC_{variable.upper()}_V1"
 
 
 # Explicit-convection storm diagnostics for ICON-D2 (#462) — the convection-
@@ -398,6 +435,10 @@ ICON_EU = IconVariant(
     coarse_step_h=3,
     cloud_diag_variables=ICON_EU_CLOUD_DIAG_VARIABLES,
     model_level_variables=ICON_EU_VARIABLES,
+    native_sampling="barycentric",
+    # v1 feed: 03/09/15/21Z runs are hourly to +51 h (legacy: hourly to +30 h,
+    # then 6-hourly to +48 h), listed live 2026-11-07.
+    native_horizon_short_h=51,
 )
 
 # ICON-D2: 2.2 km convection-permitting, central-Europe domain, 8 runs/day,
@@ -444,6 +485,7 @@ ICON_D2 = IconVariant(
     # an incomplete fetch is detectable rather than cached as complete (#478).
     # ICON-EU's 40-level column stays on the whole-column blob.
     per_level_cache=True,
+    native_sampling="nearest",
 )
 
 # Back-compat module constants (ICON-EU). The variant above is the single
@@ -467,6 +509,8 @@ def icon_eu_model_level_max_hour(
     """Return the model-level forecast horizon for the given cycle + variant."""
     if init_hour in variant.main_cycles:
         return variant.horizon_main_h
+    if icon_native_feed() and variant.native_horizon_short_h is not None:
+        return variant.native_horizon_short_h
     return variant.horizon_short_h
 
 
@@ -567,6 +611,11 @@ ICON_EU_CLOUD_DIAG_CACHE_KEY = "ICON_EU_CLOUD_DIAG_V3"
 ICON_EU_RAIN_CON_CACHE_KEY = "ICON_EU_RAIN_CON_V1"
 
 
+def icon_rain_con_cache_key(variant: "IconVariant | None" = None) -> str:
+    """:data:`ICON_EU_RAIN_CON_CACHE_KEY` on the active feed (#974)."""
+    return f"{icon_cache_prefix(variant or ICON_EU)}_RAIN_CON_V1"
+
+
 def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     """Cache-key label for a variant's single-level cloud-diagnostic blob.
 
@@ -584,7 +633,7 @@ def icon_cloud_diag_cache_key(variant: IconVariant = ICON_EU) -> str:
     keeps the EU/D2 cloud-diag schema shared and lets the sub-hourly explicit
     files use message-level decode instead of the cfgrib blob path.
     """
-    return f"{variant.cache_prefix}_CLOUD_DIAG_V3"
+    return f"{icon_cache_prefix(variant)}_CLOUD_DIAG_V3"
 
 
 def icon_model_level_var_label(
@@ -597,7 +646,7 @@ def icon_model_level_var_label(
     ``per_level_cache`` variants (ICON-D2); ICON-EU keeps the whole-column
     per-variable blob under :func:`icon_model_level_var_legacy_label`.
     """
-    return f"{variant.cache_prefix}_{variable.upper()}_L{level:02d}"
+    return f"{icon_cache_prefix(variant)}_{variable.upper()}_L{level:02d}"
 
 
 def icon_model_level_var_legacy_label(variant: IconVariant, variable: str) -> str:
@@ -609,7 +658,7 @@ def icon_model_level_var_legacy_label(variant: IconVariant, variable: str) -> st
     is satisfiable from it) — the read path prefers it and skips the per-level
     files when present.
     """
-    return f"{variant.cache_prefix}_{variable.upper()}"
+    return f"{icon_cache_prefix(variant)}_{variable.upper()}"
 
 
 def icon_explicit_conv_cache_key(variable: str, variant: IconVariant) -> str:
@@ -621,7 +670,7 @@ def icon_explicit_conv_cache_key(variable: str, variant: IconVariant) -> str:
     as ``crr``), and several of these files carry multiple sub-hourly messages
     that are selected by ``stepRange`` per field.
     """
-    return f"{variant.cache_prefix}_EXPL_{variable.upper()}_V1"
+    return f"{icon_cache_prefix(variant)}_EXPL_{variable.upper()}_V1"
 
 # Parallel download settings.
 #
@@ -654,7 +703,20 @@ def route_in_icon_eu_domain(
     """Check if all route points fall within *variant*'s domain.
 
     All-or-nothing: returns False if any point is outside.
+
+    On the native-grid feed (#974) the test is the grid's real footprint
+    (``IconNativeGrid.contains``) once a grid has been fetched: D2's domain is
+    not a rectangle, so the bbox both admits points off the grid and refuses
+    some on it. Before any grid is on disk the bbox stands in.
     """
+    if icon_native_feed() and route_points:
+        from weatherbrief.fetch.grib.icon_grid import default_cache_root
+
+        grid = current_icon_native_grid(variant, default_cache_root())
+        if grid is not None:
+            return bool(grid.contains(
+                [rp.lat for rp in route_points], [rp.lon for rp in route_points],
+            ).all())
     for rp in route_points:
         if not (variant.lat_min <= rp.lat <= variant.lat_max):
             return False
@@ -684,6 +746,11 @@ def icon_eu_file_url(
         ICON-D2: .../icon-d2/grib/00/t/
           icon-d2_germany_regular-lat-lon_model-level_2026072000_006_60_t.grib2.bz2
     """
+    if icon_native_feed():
+        return icon_v1_url(
+            variant, variable, init_date, init_hour, forecast_hour,
+            level_type=ICON_V1_LEVEL_MODEL, level=level,
+        )
     return (
         f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
         f"{variant.slug}_{variant.grid_label}_regular-lat-lon_model-level_"
@@ -709,6 +776,11 @@ def icon_eu_pressure_level_url(
         ICON-EU: .../icon-eu/grib/00/relhum/
           icon-eu_europe_regular-lat-lon_pressure-level_2026102400_117_850_RELHUM.grib2.bz2
     """
+    if icon_native_feed():
+        return icon_v1_url(
+            variant, variable, init_date, init_hour, forecast_hour,
+            level_type=ICON_V1_LEVEL_PRESSURE, level=level_hpa * 100,
+        )
     return (
         f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
         f"{variant.slug}_{variant.grid_label}_regular-lat-lon_pressure-level_"
@@ -735,6 +807,10 @@ def icon_eu_single_level_url(
         ICON-D2: .../icon-d2/grib/00/ceiling/
           icon-d2_germany_regular-lat-lon_single-level_2026072000_006_2d_ceiling.grib2.bz2
     """
+    if icon_native_feed():
+        return icon_single_level_urls(
+            init_date, init_hour, forecast_hour, variable, variant,
+        )[0]
     segment = "_2d_" if variant.single_level_2d else "_"
     return (
         f"{variant.base_url}/{init_hour:02d}/{variable.lower()}/"
@@ -815,6 +891,163 @@ def icon_v1_grid_urls(
     )
 
 
+def _grid_pointer_path(variant: IconVariant, cache_root):
+    from pathlib import Path
+
+    return Path(cache_root) / f"icon-grid-{variant.slug}.current"
+
+
+def current_icon_native_grid(variant: IconVariant, cache_root):
+    """The variant's most recently fetched native grid, without network.
+
+    For the domain gates, which run before any run is chosen: the grid a
+    model uses changes only with a DWD resolution or domain change, so the
+    last one fetched is the one to gate on. None until a grid was fetched.
+    """
+    from weatherbrief.fetch.grib.icon_grid import get_grid
+
+    pointer = _grid_pointer_path(variant, cache_root)
+    try:
+        uuid = pointer.read_text().strip()
+    except OSError:
+        return None
+    return get_grid(uuid, cache_root=cache_root) if uuid else None
+
+
+# (slug, init_date, init_hour, cache_root) -> grid UUID, so a run's later
+# callers in this process skip the CLAT Range request (#974).
+_RUN_GRID_UUID: dict[tuple, str] = {}
+
+
+def ensure_icon_native_grid(
+    variant: IconVariant,
+    init_date: str,
+    init_hour: int,
+    session: requests.Session,
+    cache_root,
+):
+    """The run's native grid, fetched once per grid and cached (#974).
+
+    Reads the first 2 KB of the run's CLAT file (a Range request) for the
+    grid UUID; a grid already on disk under ``cache_root`` costs nothing more.
+    Otherwise downloads CLAT and CLON (~1.5 MB), builds the grid and saves it.
+    The grid's ``default_method`` is set from ``variant.native_sampling``,
+    which is what the decoders use. None (logged) when the grid cannot be had;
+    callers then treat ICON as unavailable for the run, like a failed
+    download.
+    """
+    from pathlib import Path
+
+    from weatherbrief.fetch.grib.icon_grid import (
+        IconNativeGrid,
+        get_grid,
+        grid_cache_path,
+        register_grid,
+        uuid_from_grib_header,
+    )
+
+    run_key = (variant.slug, init_date, init_hour, str(cache_root))
+    known = _RUN_GRID_UUID.get(run_key)
+    if known is not None:
+        grid = get_grid(known, cache_root=Path(cache_root))
+        if grid is not None:
+            return grid
+
+    clat_url, clon_url = icon_v1_grid_urls(variant, init_date, init_hour)
+    try:
+        head = session.get(clat_url, headers={"Range": "bytes=0-2047"}, timeout=REQUEST_TIMEOUT)
+        uuid = uuid_from_grib_header(head.content) if head.status_code in (200, 206) else None
+        if uuid is None:
+            logger.warning(
+                "%s %s %02dz: no native grid UUID in CLAT (HTTP %s)",
+                variant.slug, init_date, init_hour, head.status_code,
+            )
+            return None
+        cache_root = Path(cache_root)
+        grid = get_grid(uuid, cache_root=cache_root)
+        if grid is None:
+            clat, st_lat = _download_one_file(clat_url, session)
+            clon, st_lon = _download_one_file(clon_url, session)
+            if clat is None or clon is None:
+                logger.warning(
+                    "%s %s %02dz: CLAT/CLON download failed (%s, %s)",
+                    variant.slug, init_date, init_hour, st_lat, st_lon,
+                )
+                return None
+            grid = IconNativeGrid.from_grib(clat, clon)
+            grid.default_method = variant.native_sampling
+            grid.save(grid_cache_path(cache_root, grid.uuid))
+            grid = register_grid(grid)
+            logger.info(
+                "%s native grid %s: %d cells, %.2f km spacing, %s sampling",
+                variant.slug, grid.uuid, grid.n_cells, grid.spacing_km,
+                grid.default_method,
+            )
+        elif grid.default_method != variant.native_sampling:
+            grid.default_method = variant.native_sampling
+            grid.save(grid_cache_path(cache_root, grid.uuid))
+        pointer = _grid_pointer_path(variant, cache_root)
+        if not pointer.exists() or pointer.read_text().strip() != grid.uuid:
+            tmp = pointer.with_name(pointer.name + f".{os.getpid()}.tmp")
+            tmp.write_text(grid.uuid)
+            tmp.replace(pointer)
+        if len(_RUN_GRID_UUID) > 256:
+            _RUN_GRID_UUID.clear()
+        _RUN_GRID_UUID[run_key] = grid.uuid
+        return grid
+    except Exception:
+        logger.warning(
+            "%s %s %02dz: native grid unavailable", variant.slug, init_date, init_hour,
+            exc_info=True,
+        )
+        return None
+
+
+# Single-level files DWD publishes as one 15-min window per file on the v1
+# feed, where the legacy feed packed a forecast hour's four windows ending at
+# H, H+15, H+30, H+45 min into file fH (#462 layout). Fetching all four for
+# step H and concatenating them rebuilds exactly the legacy blob, so the
+# decoder (which selects windows by their GRIB step) is unchanged (#974).
+_V1_QUARTER_HOUR_VARIABLES = frozenset({"echotop"})
+
+# v1 path segments for single-level parameters stored under a level type.
+_V1_SINGLE_LEVEL_LEVELS: dict[str, tuple[int, int]] = {
+    "echotop": (ICON_V1_LEVEL_ECHOTOP, 18),  # 18 dBZ threshold
+}
+
+# Variables the legacy feed had and the v1 feed does not (#974): VIS is
+# dropped by DWD (unfit for VFR per DWD's aviation service). Skipped on the
+# v1 feed rather than requested and 404'd every hour; the field stays None.
+ICON_V1_UNPUBLISHED = frozenset({"vis"})
+
+
+def icon_single_level_urls(
+    init_date: str,
+    init_hour: int,
+    forecast_hour: int,
+    variable: str,
+    variant: IconVariant = ICON_EU,
+) -> list[str]:
+    """Every file that makes up one single-level variable at one step.
+
+    One URL on the legacy feed. On the v1 feed, also one, except for the
+    quarter-hourly fields (:data:`_V1_QUARTER_HOUR_VARIABLES`): four files,
+    windows ending at H+0, +15, +30, +45 min, in that order.
+    """
+    if not icon_native_feed():
+        return [icon_eu_single_level_url(init_date, init_hour, forecast_hour, variable, variant)]
+    var = variable.lower()
+    level_type, level = _V1_SINGLE_LEVEL_LEVELS.get(var, (None, None))
+    minutes = (0, 15, 30, 45) if var in _V1_QUARTER_HOUR_VARIABLES else (0,)
+    return [
+        icon_v1_url(
+            variant, var, init_date, init_hour, forecast_hour,
+            level_type=level_type, level=level, minutes=m,
+        )
+        for m in minutes
+    ]
+
+
 def fetch_icon_eu_single_level(
     init_date: str,
     init_hour: int,
@@ -852,10 +1085,15 @@ def fetch_icon_eu_single_level(
     result: dict[int, bytes] = {}
 
     for fhour in forecast_hours:
+        native = icon_native_feed()
         urls = [
-            icon_eu_single_level_url(init_date, init_hour, fhour, var, variant)
+            url
             for var in variables
+            if not (native and var.lower() in ICON_V1_UNPUBLISHED)
+            for url in icon_single_level_urls(init_date, init_hour, fhour, var, variant)
         ]
+        if not urls:
+            continue
 
         buf = bytearray()
         downloaded = 0
@@ -1238,7 +1476,7 @@ def _download_one_file(
     url: str,
     session: requests.Session,
 ) -> tuple[bytes | None, int | str]:
-    """Download and decompress a single bz2-compressed GRIB2 file.
+    """Download a single GRIB2 file, decompressing it when it is bz2.
 
     Returns ``(bytes_or_None, status_or_error_label)`` so callers can
     aggregate failure modes (HTTP 404 vs network errors).
@@ -1248,7 +1486,12 @@ def _download_one_file(
         if resp.status_code != 200:
             logger.debug("HTTP %d for %s", resp.status_code, url.split("/")[-1])
             return None, resp.status_code
-        return bz2.decompress(resp.content), 200
+        content = resp.content
+        # Legacy files are bz2; the v1 feed's are plain CCSDS-packed GRIB2
+        # (#974). Sniff the magic rather than trust the URL.
+        if content[:3] == b"BZh":
+            return bz2.decompress(content), 200
+        return content, 200
     except requests.RequestException as e:
         logger.debug("Download failed %s: %s", url.split("/")[-1], e)
         return None, "network"
