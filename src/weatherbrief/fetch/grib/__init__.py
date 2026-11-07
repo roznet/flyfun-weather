@@ -4721,14 +4721,36 @@ def load_d2_validity_mask(
     import numpy as np
 
     from weatherbrief.fetch.grib.decode import build_d2_validity_mask
-    from weatherbrief.fetch.grib.icon_eu_fetch import fetch_icon_eu_single_level
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ensure_icon_native_grid,
+        fetch_icon_eu_single_level,
+        icon_native_feed,
+    )
 
-    mask_path = data_dir / ".cache" / "grib" / f"{variant.slug}-validity-mask-v1.npz"
+    native = icon_native_feed()
+    cache_root = data_dir / ".cache" / "grib"
+    # Native grid (#974): the mask is per cell of the grid it was built on,
+    # so it lives in its own file and is rebuilt when DWD changes the grid.
+    mask_path = cache_root / (
+        f"{variant.slug}-validity-mask-native-v1.npz" if native
+        else f"{variant.slug}-validity-mask-v1.npz"
+    )
     mask: dict | None = None
+    grid = None
+    if native:
+        grid = ensure_icon_native_grid(variant, init_date, init_hour, session, cache_root)
+        if grid is None:
+            logger.info("D2 native grid unavailable; keeping footprint-gate behaviour")
+            return None
     try:
         if mask_path.exists():
             with np.load(mask_path) as npz:
-                mask = {"lats": npz["lats"], "lons": npz["lons"], "valid": npz["valid"]}
+                if native:
+                    mask = {"uuid": str(npz["uuid"]), "valid": npz["valid"]}
+                    if mask["uuid"] != grid.uuid:
+                        mask = None  # DWD changed the grid: rebuild
+                else:
+                    mask = {"lats": npz["lats"], "lons": npz["lons"], "valid": npz["valid"]}
     except Exception:
         logger.warning("Failed to load cached D2 validity mask", exc_info=True)
         mask = None
@@ -4744,10 +4766,15 @@ def load_d2_validity_mask(
                 mask = build_d2_validity_mask(grib_bytes)
             if mask is not None:
                 mask_path.parent.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(
-                    mask_path,
-                    lats=mask["lats"], lons=mask["lons"], valid=mask["valid"],
-                )
+                if "uuid" in mask:
+                    np.savez_compressed(
+                        mask_path, uuid=np.array(mask["uuid"]), valid=mask["valid"],
+                    )
+                else:
+                    np.savez_compressed(
+                        mask_path,
+                        lats=mask["lats"], lons=mask["lons"], valid=mask["valid"],
+                    )
         except Exception:
             logger.warning("Failed to build D2 validity mask", exc_info=True)
             mask = None
@@ -4836,8 +4863,10 @@ def _prepare_icon_eu(
         ICON_D2,
         ICON_EU,
         compute_icon_eu_flight_window_hours,
+        ensure_icon_native_grid,
         find_latest_icon_eu_run,
         icon_eu_window_out_of_range,
+        icon_native_feed,
         route_in_icon_eu_domain,
     )
 
@@ -4908,6 +4937,13 @@ def _prepare_icon_eu(
         return None, None
 
     init_date, init_hour = run_info
+
+    if icon_native_feed() and ensure_icon_native_grid(
+        variant, init_date, init_hour, session, data_dir / ".cache" / "grib",
+    ) is None:
+        # Native feed (#974): without the grid's cell centres nothing decodes.
+        # Same outcome as a failed run probe: the generic warning stands.
+        return None, None
 
     forecast_hours = compute_icon_eu_flight_window_hours(
         init_date, init_hour, departure_time, flight_duration_hours, variant,
@@ -4996,6 +5032,7 @@ def _prefetch_icon_eu_data_inner(
         fetch_icon_eu_per_level,
         fetch_icon_eu_per_variable,
         fetch_icon_eu_single_level,
+        icon_cache_prefix,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
         icon_explicit_conv_cache_key,
@@ -5012,7 +5049,7 @@ def _prefetch_icon_eu_data_inner(
     )
 
     variant = ctx.variant
-    prefix = variant.cache_prefix
+    prefix = icon_cache_prefix(variant)
     diag_key = icon_cloud_diag_cache_key(variant)
     # Per-variant, plus opt-in extras (#530) — NOT the module-level ICON-EU
     # tuple, which would fetch EU's species list for D2 and drop qr/qs/qg.
@@ -5302,13 +5339,14 @@ def _decode_and_merge_icon_eu(
     Called after prefetch has cached all data to disk.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
+        icon_cache_prefix,
         icon_model_level_var_label,
         icon_model_level_var_legacy_label,
     )
     from weatherbrief.fetch.grib.icon_zarr import cached_model_level_entry
 
     variant = ctx.variant
-    prefix = variant.cache_prefix
+    prefix = icon_cache_prefix(variant)
     # The REQUIRED set (#530): opt-in extras such as tke are fetched but not
     # decoded, so a missing extra must not fail the completeness check below.
     model_level_vars = variant.model_level_variables

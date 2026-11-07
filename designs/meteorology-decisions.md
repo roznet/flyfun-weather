@@ -7784,3 +7784,41 @@ over the next started flights: whether IFR/LIFR at the ends are all that is
 missed, and whether the 5000 ft tops clearance is enough. Owner's replay in the issue (not re-run here;
 Start assumed 30 min before departure, 2026-10-31..11-01): 3 pushes (KGTU METAR
 MVFR→LIFR, EGAE METAR VFR→IFR, EDDC storm), 2 with the tops check.
+
+## 78. ICON from DWD's native grid: barycentric EU, nearest D2, no model visibility (#974)
+
+**Date:** 2026-11-07 · **Issue:** #974 · **Owner decisions:** Brice, 2026-11-07.
+Mechanics: `weather-engine-specs.md` "C.0 DWD native-grid feed".
+
+DWD ends the regular lat-lon ICON-EU/D2 open data after 2026-11-30. The
+native-grid feed (`WB_ICON_FEED=v1`) replaces it; values change only by the
+size of one regridding.
+
+**Decisions.**
+
+- **ICON-EU: barycentric** over the three nearest cell centres. The lat-lon
+  product was DWD's interpolation of the native field, and our bilinear on top
+  of it; barycentric on the native field matched it to 0.02 K on T (parity
+  run 2026-11-07 12Z). Rejected: nearest cell (a 6.5 km step in the field
+  where today's values are smooth).
+- **ICON-D2: nearest cell.** DWD's D2 lat-lon product was itself a nearest
+  remap, so nearest on the native grid reproduces today exactly. Rejected:
+  barycentric (it would change D2 values with no evidence it is better).
+- **D2 domain: the real grid**, not the old rectangle. 109-199 rectangle
+  points at the edge that DWD filled from outside the model area are lost;
+  those routes go to ICON-EU by the existing all-or-nothing rule. Accepted.
+- **No ICON visibility.** VIS is not on the v1 feed. ICON rows carry no model
+  visibility and grade flight category on ceiling only; the VIS-driven parts
+  of the ICON grade read missing, not good. A visibility derived from other
+  ICON fields (e.g. Stoelinga-Warner from hydrometeors plus RH) is a separate
+  piece of work, to be adopted only once it beats DWD's own VIS against
+  METARs.
+- **Hewson ICON: nearest cell** on the 0.25° lattice (no interpolation, as
+  §60), so the ICON front map stays the model's own field to compare with
+  DWD's analysis.
+- **ICON-EU short runs: +51 h**, as published on v1 (30 h before).
+
+**To measure:** replay diff legacy vs `WB_ICON_FEED=v1` on the same run
+before the default flips: ICON slot T/wind/cloud within regridding noise,
+category changes only where VIS drove the legacy grade.
+

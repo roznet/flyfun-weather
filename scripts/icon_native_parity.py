@@ -2,7 +2,7 @@
 """Old lat-lon vs new native-grid ICON parity check (#974).
 
     icon_native_parity.py [--model icon-eu|icon-d2] [--run YYYYMMDDHH]
-                          [--steps 0,6,24] [--step-deg 0.5] [--cache DIR]
+                          [--steps 0,6,24] [--step-deg DEG] [--cache DIR]
 
 Until DWD switches off the regular lat-lon feed (after 2026-11-30) both feeds
 carry the same runs. For one run this downloads a handful of fields from both
@@ -166,11 +166,16 @@ def main() -> int:
     ap.add_argument("--model", choices=("icon-eu", "icon-d2"), default="icon-eu")
     ap.add_argument("--run", help="YYYYMMDDHH; default: the 3-hourly run 5 h ago")
     ap.add_argument("--steps", default="0,6,24")
-    ap.add_argument("--step-deg", type=float, default=0.5)
+    ap.add_argument(
+        "--step-deg", type=float, default=None,
+        help="lattice spacing; default 0.5 for icon-eu, 0.1 for icon-d2",
+    )
     ap.add_argument("--cache", type=Path, default=Path("data/.cache/grib"))
     args = ap.parse_args()
 
     variant = ief.ICON_EU if args.model == "icon-eu" else ief.ICON_D2
+    if args.step_deg is None:
+        args.step_deg = 0.5 if args.model == "icon-eu" else 0.1
     if args.run:
         init = datetime.strptime(args.run, "%Y%m%d%H").replace(tzinfo=timezone.utc)
     else:

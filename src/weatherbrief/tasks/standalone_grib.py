@@ -203,6 +203,27 @@ def fetch_gfs_cloud_diag(
     return result
 
 
+def _icon_native_grid_ready(
+    variant: "IconVariant", init_date: str, init_hour: int,
+    session: requests.Session, data_dir: Path,
+) -> bool:
+    """False only on the native feed when the run's grid cannot be had (#974).
+
+    Decoders find native grids under ``$DATA_DIR/.cache/grib``; this puts the
+    run's grid there before anything decodes. Legacy feed: always True.
+    """
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ensure_icon_native_grid,
+        icon_native_feed,
+    )
+
+    if not icon_native_feed():
+        return True
+    return ensure_icon_native_grid(
+        variant, init_date, init_hour, session, data_dir / ".cache" / "grib",
+    ) is not None
+
+
 def fetch_icon_cloud_diag(
     init_date: str,
     init_hour: int,
@@ -255,6 +276,8 @@ def fetch_icon_cloud_diag(
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
     result: dict[int, list[AirportGribDiagnostics]] = {}
+    if not _icon_native_grid_ready(variant, init_date, init_hour, session, data_dir):
+        return result
 
     # Phase 1: ensure each hour is cached (sequential network I/O), then fan
     # the decodes out — see fetch_gfs_cloud_diag for the rationale (#459).
@@ -415,13 +438,14 @@ def _ensure_icon_cloud_diag_cached(
     """
     from weatherbrief.fetch.grib import icon_d2_explicit_conv_var_paths
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_RAIN_CON_CACHE_KEY,
         fetch_icon_eu_single_level,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
+        icon_rain_con_cache_key,
     )
 
     diag_key = icon_cloud_diag_cache_key(variant)
+    rain_con_key = icon_rain_con_cache_key(variant)
     job_fhours: list[int] = []
     for fhour in forecast_hours:
         ck = cache_key(fhour, diag_key)
@@ -456,13 +480,13 @@ def _ensure_icon_cloud_diag_cached(
         full_ck = cache_key(fhour, diag_key)
         ck = (
             full_ck if is_cached(run_dir, full_ck)
-            else cache_key(fhour, ICON_EU_RAIN_CON_CACHE_KEY)
+            else cache_key(fhour, rain_con_key)
         )
         if not is_cached(run_dir, ck):
             try:
                 fetched = fetch_icon_eu_single_level(
                     init_date, init_hour, [fhour],
-                    variables=["rain_con"], session=session,
+                    variables=["rain_con"], session=session, variant=variant,
                 )
                 grib_bytes = fetched.get(fhour)
                 if not grib_bytes:
@@ -513,10 +537,10 @@ def icon_cloud_diag_cold_steps(
     predecessor's echo top (ICON-D2, #953), is not in *run_dir*. The
     cache-side mirror of :func:`_ensure_icon_cloud_diag_cached`."""
     from weatherbrief.fetch.grib.icon_eu_fetch import (
-        ICON_EU_RAIN_CON_CACHE_KEY,
         icon_cloud_diag_cache_key,
         icon_eu_previous_step,
         icon_explicit_conv_cache_key,
+        icon_rain_con_cache_key,
     )
 
     diag_key = icon_cloud_diag_cache_key(variant)
@@ -535,7 +559,7 @@ def icon_cloud_diag_cold_steps(
         prev = icon_eu_previous_step(fhour, variant) if has_rain_con else None
         if prev is not None and not any(
             is_cached(run_dir, cache_key(prev, k))
-            for k in (diag_key, ICON_EU_RAIN_CON_CACHE_KEY)
+            for k in (diag_key, icon_rain_con_cache_key(variant))
         ):
             cold.append(fhour)
     return cold
@@ -586,6 +610,8 @@ def ensure_icon_cloud_diag_files(
             )
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    if not _icon_native_grid_ready(variant, init_date, init_hour, session, data_dir):
+        return []
     cached, _, _, _ = _ensure_icon_cloud_diag_cached(
         run_dir, init_date, init_hour, steps, variant, session,
     )
@@ -655,13 +681,18 @@ def _icon_snapshot_plan(
         ICON_SNAPSHOT_PRESSURE_VARIABLES,
         ICON_SURFACE_ACCUMULATED,
         ICON_SURFACE_VARIABLES,
+        ICON_V1_UNPUBLISHED,
         icon_eu_pressure_level_url,
         icon_eu_previous_step,
         icon_eu_single_level_url,
+        icon_native_feed,
         icon_pressure_cache_key,
         icon_snapshot_pressure_levels,
         icon_surface_cache_key,
     )
+
+    # Native feed (#974): VIS is not published; asking would 404 every time.
+    unpublished = ICON_V1_UNPUBLISHED if icon_native_feed() else frozenset()
 
     predecessor_of = {
         fhour: prev for fhour in steps
@@ -678,6 +709,8 @@ def _icon_snapshot_plan(
                     cache_key(fhour, icon_pressure_cache_key(var, level, variant)),
                 )
         for var in ICON_SURFACE_VARIABLES:
+            if var in unpublished:
+                continue
             wanted[(fhour, "sfc", var)] = (
                 icon_eu_single_level_url(init_date, init_hour, fhour, var, variant),
                 cache_key(fhour, icon_surface_cache_key(var, variant)),
@@ -789,6 +822,8 @@ def ensure_icon_snapshot_files(
             )
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    if not _icon_native_grid_ready(variant, init_date, init_hour, session, data_dir):
+        return 0
     wanted, _ = _icon_snapshot_plan(init_date, init_hour, steps, variant)
     return _download_icon_files(
         run_dir, list(wanted.values()), session,
@@ -848,6 +883,8 @@ def fetch_icon_snapshot_fields(
 
     purge_old_runs(data_dir, model=variant.slug)  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model=variant.slug)
+    if not _icon_native_grid_ready(variant, init_date, init_hour, session, data_dir):
+        return {}
 
     steps = sorted(set(forecast_hours))
     wanted, predecessor_of = _icon_snapshot_plan(init_date, init_hour, steps, variant)
@@ -859,6 +896,8 @@ def fetch_icon_snapshot_fields(
     )
 
     def _path(key: tuple) -> str | None:
+        if key not in wanted:  # not published on this feed (VIS on native)
+            return None
         ck = wanted[key][1]
         return str(run_dir / ck) if is_cached(run_dir, ck) else None
 

@@ -1950,6 +1950,8 @@ def decode_icon_eu_cloud_diag_per_point(
     n_points = len(latitudes)
     if not grib_bytes:
         return [{} for _ in range(n_points)]
+    if _is_native_icon_blob(grib_bytes):
+        return _decode_icon_cloud_diag_native(grib_bytes, latitudes, longitudes)
 
     with tempfile.NamedTemporaryFile(suffix=".grib2", delete=False) as tmp:
         tmp.write(grib_bytes)
@@ -1987,6 +1989,67 @@ def decode_icon_eu_cloud_diag_per_point(
         return [{} for _ in range(n_points)]
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def _is_native_icon_blob(grib_bytes: "bytes | Path") -> bool:
+    """True when the blob's first message is on an ICON native grid (#974)."""
+    from weatherbrief.fetch.grib.grib_reader import iter_messages
+
+    try:
+        for msg in iter_messages(grib_bytes):
+            return bool(msg.uuid)
+    except Exception:
+        return False
+    return False
+
+
+def _decode_icon_cloud_diag_native(
+    grib_bytes: bytes,
+    latitudes: list[float],
+    longitudes: list[float],
+) -> list[dict[str, float]]:
+    """Native-grid body of :func:`decode_icon_eu_cloud_diag_per_point` (#974).
+
+    Same field identification as the cfgrib path: the message's cfgrib name
+    (``cfVarName``, else ``shortName``) through ``_ICON_CLOUD_DIAG_FIELD_MAP``,
+    with the raw ``shortName`` as a second chance. First message per field
+    wins, as cfgrib's first dataset did.
+    """
+    import numpy as np
+
+    from weatherbrief.fetch.grib.grib_reader import iter_messages
+    from weatherbrief.fetch.grib.icon_grid import gather_native
+
+    n_points = len(latitudes)
+    results: list[dict[str, float]] = [{} for _ in range(n_points)]
+    targets_lat = np.asarray(latitudes, dtype=np.float64)
+    targets_lon = np.asarray(longitudes, dtype=np.float64)
+    weights: dict[str, tuple] = {}
+    try:
+        for msg in iter_messages(grib_bytes):
+            if not msg.uuid:
+                continue
+            field_name = _ICON_CLOUD_DIAG_FIELD_MAP.get(msg.var.lower())
+            if field_name is None:
+                field_name = _ICON_CLOUD_DIAG_FIELD_MAP.get(msg.short_name.lower())
+            if field_name is None:
+                continue
+            if msg.uuid not in weights:
+                weights[msg.uuid] = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+            grid, nw = weights[msg.uuid]
+            if grid is None or not nw.inb_idx.size:
+                continue
+            values = msg.native_values()
+            if values is None or values.size != grid.n_cells:
+                continue
+            gathered = gather_native(values, nw)
+            for k, idx in enumerate(nw.inb_idx):
+                val = float(gathered[k])
+                if not math.isnan(val) and field_name not in results[idx]:
+                    results[idx][field_name] = val
+    except Exception:
+        logger.warning("Failed to decode native ICON cloud diag GRIB2", exc_info=True)
+    return results
 
 
 def decode_icon_surface_per_point(
@@ -2032,7 +2095,8 @@ def _gather_first_field(
     targets_lon,
     label: str,
 ) -> dict[int, float]:
-    """Bilinear values of a file's first regular lat/lon message at the targets.
+    """Values of a file's first regular lat/lon (bilinear) or ICON native-grid
+    (``icon_grid`` weights, #974) message at the targets.
 
     ``{target index: value}``; a target outside the grid or on masked cells is
     absent (missing, not 0). Never raises: a decode failure is logged under
@@ -2044,6 +2108,23 @@ def _gather_first_field(
     out: dict[int, float] = {}
     try:
         for msg in iter_messages(source):
+            if msg.uuid:
+                # ICON native grid (#974).
+                from weatherbrief.fetch.grib.icon_grid import gather_native
+
+                ngrid, nw = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+                if ngrid is None or not nw.inb_idx.size:
+                    break
+                values = msg.native_values()
+                if values is None or values.size != ngrid.n_cells:
+                    logger.warning("%s: value count disagrees with native grid", label)
+                    break
+                gathered = gather_native(values, nw)
+                for k, idx in enumerate(nw.inb_idx):
+                    val = float(gathered[k])
+                    if not math.isnan(val):
+                        out[int(idx)] = val
+                break
             grid = msg.grid()
             if grid is None:
                 continue
@@ -2450,6 +2531,69 @@ def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | N
     return lats, lons, grid
 
 
+_KM_PER_NM = 1.852
+
+
+def _d2_read_field(gid):
+    """One D2 message as a corridor-reducible field, or None.
+
+    ``("ll", lats_axis, lons_axis, grid)`` for the legacy regular lat-lon
+    product (:func:`_d2_read_message_grid`), ``("native", IconNativeGrid,
+    values)`` for the v1 feed's native grid (#974), values 1-D with
+    bitmap-masked cells NaN.
+    """
+    import eccodes
+    import numpy as np
+
+    grid_type = str(eccodes.codes_get(gid, "gridType"))
+    if grid_type != "unstructured_grid":
+        parsed = _d2_read_message_grid(gid)
+        return None if parsed is None else ("ll", *parsed)
+    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+
+    uuid = str(eccodes.codes_get(gid, "uuidOfHGrid", str))
+    grid = get_grid(uuid, cache_root=default_cache_root())
+    if grid is None:
+        logger.warning("ICON-D2 native grid %s not available; field skipped", uuid)
+        return None
+    eccodes.codes_set(gid, "missingValue", _D2_MISSING_VALUE)
+    values = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)
+    if values.size != grid.n_cells:
+        return None
+    values[values == _D2_MISSING_VALUE] = np.nan
+    return ("native", grid, values)
+
+
+def _d2_field_cells(field, lat: float, lon: float, radius_nm: float, values=None):
+    """Valid (non-NaN) cell values within ``radius_nm`` of a point, or None.
+
+    Dispatches on :func:`_d2_read_field`'s kind. ``values`` replaces the
+    field's own values (same layout), for the echo-top sentinel pass. None
+    when the buffer is not wholly inside the grid, same as the lat-lon rule
+    (:func:`_d2_corridor_window`): a native corridor running off the grid's
+    edge is unavailable, not smaller.
+    """
+    if field[0] == "ll":
+        _, lats_axis, lons_axis, grid = field
+        return _d2_corridor_cells(
+            lats_axis, lons_axis, grid if values is None else values, lat, lon, radius_nm,
+        )
+    import numpy as np
+
+    _, grid, own = field
+    vals = own if values is None else values
+    radius_km = radius_nm * _KM_PER_NM
+    if not grid.buffer_inside(lat, lon, radius_km):
+        return None
+    cells = vals[grid.cells_within(lat, lon, radius_km)]
+    return cells[~np.isnan(cells)]
+
+
+def _d2_field_values(field):
+    """The field's value array (2-D lat-lon grid or 1-D native cells)."""
+    return field[3] if field[0] == "ll" else field[2]
+
+
 def _d2_corridor_window(
     lats_axis: "np.ndarray",
     lons_axis: "np.ndarray",
@@ -2688,7 +2832,7 @@ def _d2_decode_hour_field(
         start_m, end_m = _d2_message_step_minutes(gid)
         if end_m % 60 != 0:
             continue
-        parsed = _d2_read_message_grid(gid)
+        parsed = _d2_read_field(gid)
         if parsed is None:
             continue
         window = end_m - start_m
@@ -2696,11 +2840,11 @@ def _d2_decode_hour_field(
             best = (window, parsed)
     if best is None:
         return
-    lats_axis, lons_axis, grid = best[1]
+    field = best[1]
 
     mode = _D2_HOUR_MAX_MODES.get(var, "max")
     for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
-        cells = _d2_corridor_cells(lats_axis, lons_axis, grid, lat, lon, radius_nm)
+        cells = _d2_field_cells(field, lat, lon, radius_nm)
         value, valid = _d2_reduce(cells, mode)
         if var == "dbz_ctmax" and value is not None and value <= _D2_DBZ_QUIET_MAX_DBZ:
             value = None  # encoder floor → genuinely quiet, not a number
@@ -2719,23 +2863,18 @@ def _d2_decode_echotop(
 
     for gid in _d2_iter_messages(grib_bytes):
         _start_m, end_m = _d2_message_step_minutes(gid)
-        parsed = _d2_read_message_grid(gid)
-        if parsed is None:
+        field = _d2_read_field(gid)
+        if field is None:
             continue
-        lats_axis, lons_axis, grid = parsed
         # The −999 sentinel means "no echo" — a VALID observation that must
         # not win the min-pressure reduction. NaN it out but remember which
         # cells were genuinely valid so completeness stays honest.
-        echo_grid = grid.copy()
+        echo_grid = _d2_field_values(field).copy()
         echo_grid[echo_grid <= _D2_ECHOTOP_NO_ECHO_PA] = np.nan
         for i, (lat, lon) in enumerate(zip(latitudes, longitudes)):
-            all_cells = _d2_corridor_cells(
-                lats_axis, lons_axis, grid, lat, lon, radius_nm,
-            )
+            all_cells = _d2_field_cells(field, lat, lon, radius_nm)
             _value_any, corridor_valid = _d2_reduce(all_cells, "max")
-            echo_cells = _d2_corridor_cells(
-                lats_axis, lons_axis, echo_grid, lat, lon, radius_nm,
-            )
+            echo_cells = _d2_field_cells(field, lat, lon, radius_nm, values=echo_grid)
             min_pres, has_echo = _d2_reduce(echo_cells, "min")
             results[i]["echotop_quarters"][end_m] = (
                 min_pres if has_echo else None,
@@ -2766,10 +2905,13 @@ def build_d2_validity_mask(grib_bytes: bytes) -> dict | None:
 
     try:
         for gid in _d2_iter_messages(grib_bytes):
-            parsed = _d2_read_message_grid(gid)
-            if parsed is None:
+            field = _d2_read_field(gid)
+            if field is None:
                 continue
-            lats_axis, lons_axis, grid = parsed
+            if field[0] == "native":
+                # Native grid (#974): the bitmap per cell, keyed by the grid.
+                return {"uuid": field[1].uuid, "valid": ~np.isnan(field[2])}
+            _, lats_axis, lons_axis, grid = field
             return {
                 "lats": lats_axis,
                 "lons": lons_axis,
@@ -2801,6 +2943,8 @@ def d2_corridor_fully_valid(
     """
     import numpy as np
 
+    if "uuid" in mask:
+        return _d2_native_corridor_fully_valid(mask, latitudes, longitudes, radius_nm)
     lats_axis = mask["lats"]
     lons_axis = mask["lons"]
     valid = mask["valid"]
@@ -2820,6 +2964,34 @@ def d2_corridor_fully_valid(
             lats_axis, lons_axis, ones, lat, lon, radius_nm,
         )
         if all_cells is None or cells.size != all_cells.size or cells.size == 0:
+            return False
+    return True
+
+
+def _d2_native_corridor_fully_valid(
+    mask: dict,
+    latitudes: list[float],
+    longitudes: list[float],
+    radius_nm: float,
+) -> bool:
+    """Native-grid :func:`d2_corridor_fully_valid` (#974).
+
+    Same two rejections: a buffer running off the grid's edge, and any
+    bitmap-masked cell inside the buffer. False when the mask's grid is not
+    on disk (the mask is unusable without it; the caller re-fetches it).
+    """
+    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+
+    grid = get_grid(str(mask["uuid"]), cache_root=default_cache_root())
+    valid = mask["valid"]
+    if grid is None or valid.size != grid.n_cells:
+        return False
+    radius_km = radius_nm * _KM_PER_NM
+    for lat, lon in zip(latitudes, longitudes):
+        if not grid.buffer_inside(lat, lon, radius_km):
+            return False
+        idx = grid.cells_within(lat, lon, radius_km)
+        if idx.size == 0 or not valid[idx].all():
             return False
     return True
 
@@ -4360,6 +4532,23 @@ def _ecmwf_seam_sentinels() -> dict[str, float]:
     }
 
 
+def _native_grid_weights(uuid: str, targets_lat, targets_lon):
+    """``(IconNativeGrid, NativeWeights)`` for an ICON native-grid message.
+
+    ``(None, None)`` when the grid's centres are not on disk (the fetch side
+    puts them there with ``ensure_icon_native_grid`` before any decode); the
+    message is then skipped, so its field is missing rather than wrong. The
+    sampling is the grid's ``default_method`` (per model, #974).
+    """
+    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+
+    grid = get_grid(uuid, cache_root=default_cache_root())
+    if grid is None:
+        logger.warning("ICON native grid %s not available; field skipped", uuid)
+        return None, None
+    return grid, grid.weights(targets_lat, targets_lon)
+
+
 class _Series:
     """One (variable, typeOfLevel, grid) group of gathered messages."""
 
@@ -4412,6 +4601,7 @@ def _gather_series(
     import numpy as np
 
     from weatherbrief.fetch.grib.grib_reader import gather_bilinear, iter_messages
+    from weatherbrief.fetch.grib.icon_grid import gather_native
 
     targets_lat = np.asarray(latitudes, dtype=np.float64)
     targets_lon = np.asarray(longitudes, dtype=np.float64)
@@ -4428,7 +4618,10 @@ def _gather_series(
             grid = msg.grid()
             bw = None
             near_edge = False
-            if grid is not None:
+            if grid is None and msg.uuid:
+                # ICON native grid (#974): weights from the grid's cell centres.
+                grid, bw = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+            elif grid is not None:
                 bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
                 near_edge = bridge_seams and _near_grid_edge(
                     grid.lats, grid.lons, targets_lat, targets_lon,
@@ -4444,6 +4637,18 @@ def _gather_series(
             s = _Series(msg.var, msg.type_of_level, msg.param_id, rank, bw, grid)
             series[skey] = s
         gathered = None
+        if msg.uuid:
+            if bw.inb_idx.size:
+                values = msg.native_values()
+                if values is None or values.size != grid.n_cells:
+                    logger.warning(
+                        "GRIB message skipped: %s level %s value count != native grid %s",
+                        msg.var, msg.level, grid.uuid,
+                    )
+                    continue
+                gathered = gather_native(values, bw)
+            s.levels.setdefault(msg.level, []).append((msg.header, gathered))
+            continue
         if bw.inb_idx.size or near_edge:
             values = msg.values(grid)
             if values is None:

@@ -96,7 +96,7 @@ class GribMessage:
 
     __slots__ = (
         "_gid", "var", "type_of_level", "level", "param_id", "header",
-        "grid_key", "grid_type", "uuid",
+        "grid_key", "grid_type", "uuid", "short_name",
     )
 
     def __init__(self, gid) -> None:
@@ -104,6 +104,7 @@ class GribMessage:
 
         self._gid = gid
         cf_var = _get_str(gid, "cfVarName")
+        self.short_name = _get_str(gid, "shortName")
         # cfgrib names a variable by cfVarName unless eccodes has none.
         self.var = (
             cf_var if cf_var not in ("", "undef", "unknown")
