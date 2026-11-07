@@ -127,6 +127,9 @@ class IconNativeGrid:
                 f"ICON grid {self.uuid}: need matching CLAT/CLON with >= 3 cells, "
                 f"got {clat.size} and {clon.size}"
             )
+        if not (np.isfinite(clat).all() and np.isfinite(clon).all()):
+            # NaN centres would silently poison the KD-tree (and the unit guess).
+            raise ValueError(f"ICON grid {self.uuid}: non-finite CLAT/CLON")
         clat, clon = _to_degrees(clat, clon)
         self.clat, self.clon = clat, clon
         self._xyz = _unit_vectors(clat, clon)
@@ -185,8 +188,10 @@ class IconNativeGrid:
 
         def _read(source, what: str) -> tuple[str, np.ndarray]:
             for msg in iter_messages(source):
-                if not msg.uuid:
+                if not msg.is_native:
                     raise ValueError(f"{what}: not a native-grid message ({msg.grid_type})")
+                if not msg.uuid:
+                    raise ValueError(f"{what}: native-grid message without uuidOfHGrid")
                 values = msg.native_values()
                 if values is None:
                     raise ValueError(f"{what}: could not unpack values")

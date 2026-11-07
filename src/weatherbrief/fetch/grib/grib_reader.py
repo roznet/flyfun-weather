@@ -88,7 +88,10 @@ class GribMessage:
     """One message's header, with the values unpacked only on request.
 
     Valid only inside the iteration step that yielded it: the eccodes handle
-    is released as soon as the iterator moves on.
+    is released as soon as the iterator moves on (or is dropped, as with
+    ``next(iter_messages(...))``). Header attributes stay readable after that;
+    ``grid``/``values``/``native_values`` raise instead of touching a freed
+    handle, which would crash the interpreter.
     """
 
     __slots__ = (
@@ -128,7 +131,7 @@ class GribMessage:
         # ``icon_grid`` maps it to cell centres. Empty for every other grid.
         self.uuid = (
             _get_str(gid, "uuidOfHGrid")
-            if self.grid_type == _NATIVE_GRID_TYPE else ""
+            if self.is_native else ""
         )
         # An empty key would put every grid on one set of weights, so fall
         # back to the geometry itself if eccodes cannot hash the section.
@@ -140,13 +143,25 @@ class GribMessage:
             )
         )
 
+    @property
+    def is_native(self) -> bool:
+        """True for a message on a native ICON grid (template 101)."""
+        return self.grid_type == _NATIVE_GRID_TYPE
+
+    def _handle(self):
+        if self._gid is None:
+            raise RuntimeError(
+                f"GRIB message {self.var!r} read after its iter_messages step ended"
+            )
+        return self._gid
+
     def grid(self) -> GribGrid | None:
         """The message's grid axes, or None when it has no 1-D lat/lon axes."""
         import eccodes
 
         if self.grid_type not in _DIMENSION_GRID_TYPES:
             return None
-        gid = self._gid
+        gid = self._handle()
         try:
             nx = int(eccodes.codes_get(gid, "Nx"))
             ny = int(eccodes.codes_get(gid, "Ny"))
@@ -171,7 +186,7 @@ class GribMessage:
         """Unpack the field as float32 ``(Ny, Nx)``, bitmap-masked cells NaN."""
         import eccodes
 
-        gid = self._gid
+        gid = self._handle()
         eccodes.codes_set(gid, "missingValue", _MISSING_VALUE)
         raw = eccodes.codes_get_values(gid)
         if raw.size != grid.shape[0] * grid.shape[1]:
@@ -190,9 +205,9 @@ class GribMessage:
         """
         import eccodes
 
-        if not self.uuid:
+        if not self.is_native:
             return None
-        gid = self._gid
+        gid = self._handle()
         eccodes.codes_set(gid, "missingValue", _MISSING_VALUE)
         arr = eccodes.codes_get_values(gid).astype(np.float32)
         arr[arr == _MISSING_VALUE] = np.nan
@@ -226,8 +241,9 @@ def _as_path(source: Path | str | bytes) -> Iterator[Path]:
 def iter_messages(source: Path | str | bytes) -> Iterator[GribMessage]:
     """Yield every message in a GRIB file (or byte blob), in file order.
 
-    Each handle is released when the iterator advances, so at most one
-    message's values are ever held by this function.
+    Each handle is released when the iterator advances (or is closed), so at
+    most one message's values are ever held by this function. Read values
+    inside the loop body; a message kept past its step raises on unpack.
     """
     import eccodes
 
@@ -236,9 +252,11 @@ def iter_messages(source: Path | str | bytes) -> Iterator[GribMessage]:
             gid = eccodes.codes_grib_new_from_file(f)
             if gid is None:
                 break
+            msg = GribMessage(gid)
             try:
-                yield GribMessage(gid)
+                yield msg
             finally:
+                msg._gid = None
                 eccodes.codes_release(gid)
 
 

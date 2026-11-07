@@ -260,3 +260,43 @@ def test_grid_cache_path_rejects_non_uuid(tmp_path):
     with pytest.raises(ValueError):
         grid_cache_path(tmp_path, "../../etc/passwd")
     assert get_grid("../x", cache_root=tmp_path) is None
+
+
+# -- follow-ups to #976 -------------------------------------------------------
+
+def test_message_kept_past_its_step_raises_instead_of_crashing():
+    from weatherbrief.fetch.grib.grib_reader import iter_messages
+
+    vals = np.arange(20, dtype=np.float64) + 250.0
+    msg = next(iter_messages(_native_message(vals)))  # iterator dropped at once
+    assert msg.uuid == UUID                           # header still readable
+    with pytest.raises(RuntimeError):
+        msg.native_values()
+
+
+def test_grid_rejects_non_finite_centres():
+    lat, lon = _jittered_centres()
+    lat[5] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        IconNativeGrid(UUID, lat, lon)
+
+
+def test_from_grib_reports_a_native_message_without_uuid(monkeypatch):
+    # eccodes cannot write an empty uuidOfHGrid (fixed 16 bytes), so stand in.
+    from types import SimpleNamespace
+
+    from weatherbrief.fetch.grib import grib_reader
+
+    fake = SimpleNamespace(is_native=True, uuid="", grid_type="unstructured_grid")
+    monkeypatch.setattr(grib_reader, "iter_messages", lambda source: iter([fake]))
+    with pytest.raises(ValueError, match="without uuidOfHGrid"):
+        IconNativeGrid.from_grib(b"", b"")
+
+
+def test_v1_run_label_rejects_bad_hours():
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_v1_run_label
+
+    assert icon_v1_run_label("20261107", 0) == "2026-11-07T00:00"
+    for hour in (-1, 24):
+        with pytest.raises(ValueError):
+            icon_v1_run_label("20261107", hour)
