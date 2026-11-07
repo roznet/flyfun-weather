@@ -149,12 +149,23 @@ class IconNativeGrid:
     # -- persistence ------------------------------------------------------
 
     def save(self, path: Path) -> None:
-        """Write the centres as ``npz`` (atomically: temp file, then rename)."""
+        """Write the centres as ``npz`` (atomically: temp file, then rename).
+
+        The temp name is unique per writer, so two workers building the same
+        grid at once never write into one file; the last rename wins and both
+        wrote identical content.
+        """
+        import os
+        import uuid as _uuid
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp.npz")
-        np.savez(tmp, uuid=np.array(self.uuid), clat=self.clat, clon=self.clon)
-        tmp.replace(path)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{_uuid.uuid4().hex[:8]}.tmp.npz")
+        try:
+            np.savez(tmp, uuid=np.array(self.uuid), clat=self.clat, clon=self.clon)
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @classmethod
     def load(cls, path: Path) -> "IconNativeGrid":
@@ -324,7 +335,11 @@ _LOCK = threading.Lock()
 
 
 def grid_cache_path(cache_root: Path, uuid: str) -> Path:
-    """Where a grid's centres are kept on disk, beside the GRIB cache."""
+    """Where a grid's centres are kept on disk, beside the GRIB cache.
+
+    Kept forever, never pruned: one ~12 MB file per grid (ICON-EU, ICON-D2),
+    and a grid only changes when DWD changes the model's resolution or domain.
+    """
     return Path(cache_root) / f"icon-grid-{uuid}.npz"
 
 

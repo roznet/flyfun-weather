@@ -182,7 +182,6 @@ class GribMessage:
         arr[arr == _MISSING_VALUE] = np.nan
         return arr
 
-
     def native_values(self) -> np.ndarray | None:
         """Unpack a native-grid field as float32 1-D, bitmap-masked cells NaN.
 

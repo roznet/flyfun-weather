@@ -240,3 +240,17 @@ def test_v1_urls():
     assert clon.endswith("/icon-eu/p/CLON/r/2026-11-07T15:00/s/PT000H00M.grib2")
     with pytest.raises(ValueError):
         icon_v1_url(ICON_EU, "t", "20261107", 15, 3, level=60)
+
+
+def test_v1_run_label_rejects_malformed_dates():
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_v1_run_label
+
+    with pytest.raises(ValueError):
+        icon_v1_run_label("2026-11-07", 15)
+
+
+def test_save_leaves_no_temp_files(grid, tmp_path):
+    path = grid_cache_path(tmp_path, UUID)
+    grid.save(path)
+    grid.save(path)
+    assert [p.name for p in tmp_path.iterdir()] == [path.name]
