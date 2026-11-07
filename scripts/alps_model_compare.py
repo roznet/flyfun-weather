@@ -28,7 +28,7 @@ airports by the forecast-map verification cycle (``airport_forecast_snapshots``)
 Everything goes into one SQLite file (``--out``, default
 ``$DATA_DIR/alps_compare`` or ``~/alps_compare``). Downloads are streamed to a
 temp file, decoded and deleted; only point values are kept, with no pruning
-(roughly 100k rows a day, a few MB: delete the file when the study ends).
+(roughly 150k rows a day, some 10 MB: delete the file when the study ends).
 
 Commands::
 
@@ -384,10 +384,9 @@ def ch1_assets(sess, run: datetime, variable: str) -> dict[int, str]:
     except requests.HTTPError as exc:
         if exc.response is None or exc.response.status_code != 400:
             raise
-        # Fallback: the STAC "query" extension form of the same filter.
         feats = None
-    # A server that ignores unknown top-level keys answers 200 with unfiltered
-    # items: switch to the STAC "query" extension form of the same filter.
+    # On a 400, or when the server ignored the unknown top-level keys and
+    # answered 200 with unfiltered items, use the STAC "query" extension form.
     if feats is None or any(
         ft.get("properties", {}).get("forecast:variable") not in (None, variable)
         for ft in feats
@@ -453,8 +452,16 @@ _HREF = re.compile(r'href="([^"?]+/)"')
 _PREFIX_CACHE: dict[tuple[str, str], str] = {}
 
 
+class ListingError(RuntimeError):
+    """A DWD directory listing could not be read (try again next pass)."""
+
+
 def dwd_prefix(sess, model: str, param: str) -> str:
-    """Cached :func:`dwd_level_prefix` (one listing walk per process)."""
+    """Cached :func:`dwd_level_prefix` (one listing walk per process).
+
+    A failed listing raises :class:`ListingError` and is not cached, so one
+    transient error never pins a wrong URL.
+    """
     key = (model, param)
     if key not in _PREFIX_CACHE:
         _PREFIX_CACHE[key] = dwd_level_prefix(sess, model, param)
@@ -469,7 +476,7 @@ def dwd_level_prefix(sess, model: str, param: str) -> str:
     for _ in range(4):
         r = sess.get(base + prefix, timeout=TIMEOUT)
         if r.status_code != 200:
-            return ""
+            raise ListingError(f"HTTP {r.status_code} listing {base + prefix}")
         subs = [h for h in _HREF.findall(r.text) if not h.startswith(("/", "..", "http"))]
         if any(h.startswith("r/") or h == "r/" for h in subs):
             return prefix
@@ -585,7 +592,7 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
     # Per variable: CH1 needs one STAC search for all leads of a variable.
     touched: set[int] = set()
     for var in ICON_VARS:
-        final = ("ok", "absent", "bad") if give_up else ("ok", "absent")
+        final = ("ok", "absent", "bad", "forbidden") if give_up else ("ok", "absent")
         todo = [ld for ld in leads if done.get((ld, var)) not in final]
         if not todo:
             continue
@@ -601,6 +608,11 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
                 continue
         else:
             hrefs = None
+            try:
+                dwd_prefix(sess, model, var)
+            except (ListingError, requests.RequestException) as exc:
+                logger.warning("%s %s: %s; skipped this pass", model, var, exc)
+                continue
         for ld in todo:
             url = (
                 hrefs.get(ld) if hrefs is not None
@@ -644,8 +656,10 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
                     "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
                     model, var, vals.size, n_expected,
                 )
+                # A grid change is permanent: stop this model until `grid` is rerun.
                 record_file(db, model, run, ld, var, "grid-mismatch")
-                continue
+                db.commit()
+                raise RuntimeError(f"{model}: grid changed, rerun `grid`")
             # The raw value and the 'ok' record land in the same commit, so a
             # later failure can never leave a file marked done with no values.
             store_values(db, model, run, ld, {
@@ -710,12 +724,14 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
         run_dir = Path(tempfile.mkdtemp(dir=tmp))
         try:
             merged: dict[int, list[dict]] = {h: [{} for _ in icaos] for h in hours}
-            complete = True
-            for pkg in AROME_SURFACE_PACKAGES:
-                head = sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
-                if head.status_code != 200:
-                    complete = False
-                    break
+            # Both packages must be published before either is downloaded, so a
+            # late SP2 never costs a wasted SP1 download on every retry.
+            complete = all(
+                sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
+                .status_code == 200
+                for pkg in AROME_SURFACE_PACKAGES
+            )
+            for pkg in AROME_SURFACE_PACKAGES if complete else ():
                 t0 = time.monotonic()
                 path = download_arome_group(date_str, hour, group, run_dir, sess, AROME, pkg)
                 if path is None:
@@ -866,8 +882,8 @@ def cmd_check(args) -> int:
     for model in ("icon-d2", "icon-eu"):
         found = None
         for run in cadence_runs(now, 3, 24, 2.0):
-            url = dwd_url(model, "T_2M", run, 1, dwd_prefix(sess, model, "T_2M"))
             try:
+                url = dwd_url(model, "T_2M", run, 1, dwd_prefix(sess, model, "T_2M"))
                 r = sess.head(url, timeout=20)
             except Exception as exc:
                 line(f"DWD {model}", False, repr(exc))
@@ -880,7 +896,7 @@ def cmd_check(args) -> int:
             with tempfile.TemporaryDirectory() as td:
                 p = Path(td) / "ceiling.grib2"
                 url = dwd_url(model, "CEILING", found[0], 1, dwd_prefix(sess, model, "CEILING"))
-                if download(sess, url, p) and p.exists():
+                if isinstance(download(sess, url, p), int):
                     _ceiling_summary(f"DWD {model} CEILING", first_message(p), line)
                 else:
                     line(f"DWD {model} CEILING", False, url)
@@ -888,8 +904,11 @@ def cmd_check(args) -> int:
             line(f"DWD {model}", False, "no T_2M +1h file in 24 h (URL layout?)")
     for model in ("icon-d2", "icon-eu"):
         for param in ("CLAT", "HSURF", "T_2M", "CEILING", "HBAS_SC"):
-            pre = dwd_prefix(sess, model, param)
-            line(f"DWD {model} {param} listing", True, f"prefix='{pre}'")
+            try:
+                pre = dwd_prefix(sess, model, param)
+                line(f"DWD {model} {param} listing", True, f"prefix='{pre}'")
+            except Exception as exc:  # noqa: BLE001
+                line(f"DWD {model} {param} listing", False, repr(exc))
 
     # 4. AROME mirror
     try:
@@ -983,15 +1002,22 @@ def cmd_grid(args) -> int:
                     logger.error("icon-ch1: no horizontal_constants asset")
                     continue
                 p = tmp / "hc.grib2"
-                download(sess, href, p)
+                got = download(sess, href, p)
+                if not isinstance(got, int):
+                    logger.error("icon-ch1: horizontal_constants download failed (%s)", got)
+                    continue
                 clat, clon, hsurf, uuid = _grid_from_file(p)
             else:
                 for run in cadence_runs(now, 3, 24, 2.0):
                     parts = {}
                     for param in ("CLAT", "CLON", "HSURF"):
-                        pre = dwd_prefix(sess, model, param)
+                        try:
+                            pre = dwd_prefix(sess, model, param)
+                        except (ListingError, requests.RequestException) as exc:
+                            logger.warning("%s %s: %s", model, param, exc)
+                            continue
                         p = tmp / f"{model}-{param}.grib2"
-                        if download(sess, dwd_url(model, param, run, 0, pre), p):
+                        if isinstance(download(sess, dwd_url(model, param, run, 0, pre), p), int):
                             parts[param] = first_message(p)
                     if "CLAT" in parts and "CLON" in parts:
                         clat, uuid = parts["CLAT"][1], parts["CLAT"][0].get("uuidOfHGrid")
@@ -1147,8 +1173,6 @@ def cmd_report(args) -> int:
             s.setdefault("Td", []).append(v["td2m_c"] - o_td)
         if "wspd_kt" in v and o_wind is not None:
             s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
-        # Ceiling: ICON CEILING treated as metres MSL (as the product does);
-        # AGL = raw - airport elevation. No ceiling field => "none" above 9999 m.
         # Ceiling: only where the model has a CEILING value for this hour
         # (AROME has none). ICON CEILING is read as metres MSL, as the product
         # does (--ceiling-datum agl to test the other reading); >= 9999 m is
@@ -1181,8 +1205,7 @@ def cmd_report(args) -> int:
     def bias(xs):
         return sum(xs) / len(xs) if xs else float("nan")
 
-    def mean(xs):
-        return sum(xs) / len(xs) if xs else float("nan")
+    mean = bias
 
     def ns(xs):
         return f"{mean(xs):4.2f}({len(xs)})" if xs else "   -   "
