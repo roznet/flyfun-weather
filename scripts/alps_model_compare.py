@@ -111,13 +111,12 @@ ICON_VARS: tuple[str, ...] = (
 class IconModel:
     name: str
     max_lead_h: int
-    cycle_h: int  # runs every N hours
 
 
 ICON_MODELS = {
-    "icon-ch1": IconModel("icon-ch1", 33, 3),
-    "icon-d2": IconModel("icon-d2", 48, 3),
-    "icon-eu": IconModel("icon-eu", 78, 3),
+    "icon-ch1": IconModel("icon-ch1", 33),
+    "icon-d2": IconModel("icon-d2", 48),
+    "icon-eu": IconModel("icon-eu", 78),
 }
 ALL_MODELS = ("icon-ch1", "icon-d2", "icon-eu", "arome")
 
@@ -627,6 +626,7 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
             try:
                 nbytes = download(sess, url, path)
             except requests.RequestException as exc:
+                path.unlink(missing_ok=True)
                 logger.warning("%s %s %s +%d: %s", model, iso(run), var, ld, exc)
                 continue
             if isinstance(nbytes, str):  # 403: expired pre-signed URL or a block
@@ -851,12 +851,15 @@ def cmd_check(args) -> int:
                 t0 = time.monotonic()
                 n = download(sess, href, p)
                 dt = time.monotonic() - t0
-                line("CSCS download", n is not None, f"{(n or 0) / 1e6:.1f} MB in {dt:.1f} s")
-                if n:
+                got = isinstance(n, int)
+                line("CSCS download", got, f"{n / 1e6:.1f} MB in {dt:.1f} s" if got else f"result={n}")
+                if got:
+                    import numpy as np
+
                     hdr, vals = first_message(p)
                     line("CH1 decode", vals.size > 0,
                          f"{vals.size} values, grid={hdr.get('gridType')} uuid={hdr.get('uuidOfHGrid')} "
-                         f"short={hdr.get('shortName')} range={float(min(vals)):.1f}..{float(max(vals)):.1f}")
+                         f"short={hdr.get('shortName')} range={np.nanmin(vals):.1f}..{np.nanmax(vals):.1f}")
             except Exception as exc:
                 line("CSCS download/decode", False, repr(exc))
     # CEILING encoding: what "no ceiling" looks like decides how `report` reads it.
@@ -1065,6 +1068,8 @@ def lock(out: Path):
 
 def cmd_log(args) -> int:
     load_env()
+    if not os.environ.get("AIRPORTS_DB"):
+        sys.exit("AIRPORTS_DB is not set (it comes from the repo .env); METARs need it")
     with lock(args.out):
         db = open_db(args.out)
         sess = session()
@@ -1151,7 +1156,8 @@ def cmd_report(args) -> int:
 
     fc: dict[tuple, dict[str, float]] = {}
     for model, run, lead, valid, icao, var, val in db.execute(
-        "SELECT model, run, lead_h, valid, icao, var, value FROM forecasts WHERE valid >= ?",
+        "SELECT model, run, lead_h, valid, icao, var, value FROM forecasts WHERE valid >= ? "
+        "AND (var NOT LIKE 'raw_%' OR var = 'raw_CEILING')",
         (since,),
     ):
         fc.setdefault((model, run, lead, valid, icao), {})[var] = val
@@ -1177,7 +1183,10 @@ def cmd_report(args) -> int:
         # (AROME has none). ICON CEILING is read as metres MSL, as the product
         # does (--ceiling-datum agl to test the other reading); >= 9999 m is
         # the "no ceiling" fill (#847).
-        if "raw_CEILING" not in v:
+        # A NaN cell (stored as NULL) or a non-positive value is an unknown
+        # ceiling, not a clear sky: skip the sample rather than score it VFR.
+        raw_c = v.get("raw_CEILING")
+        if raw_c is None or raw_c <= 0:
             continue
         raw = v.get("ceiling_raw_m")
         ap = elev.get(icao) or model_elev.get((model, icao)) or 0.0
