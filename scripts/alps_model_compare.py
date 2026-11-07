@@ -1312,7 +1312,9 @@ def cmd_report(args) -> int:
     print("gust = error where the METAR has a gust group; falsegust = share of no-gust METARs")
     print("where the model gust is >= 10 kt above the observed mean; dir mae in degrees, winds >= 5 kt.")
     print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).")
-    print("Tcorr = T moved to field elevation at 6.5 K/km; |dz| = mean |cell height - field| (m), ICON only.\n")
+    print("Tcorr = T moved to field elevation at 6.5 K/km (diagnostic only: wrong under valley")
+    print("inversions); |dz| = mean |cell height - field| (m), ICON only.")
+    print("Routine METARs only, as the verification tables score (SPECIs bias towards bad weather).\n")
     print(
         f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Tcorr':>11s}  {'|dz|':>5s}  {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  {'falsegust':>9s} {'dir mae':>9s}  "
         f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
