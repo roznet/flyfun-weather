@@ -1199,11 +1199,17 @@ struct FlightListView: View {
 /// rows (#304 "showing cached"). Carries a stable identifier for the XCUITest
 /// offline journey (#318).
 private struct OfflineListBanner: View {
+    /// The cache is also served when the server (not the phone) is down; say
+    /// which, since the app-wide strip already carries the server's message.
+    @State private var serviceStatus = ServiceStatusStore.shared
+
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "wifi.slash")
+            Image(systemName: serviceStatus.current == nil ? "wifi.slash" : "icloud.slash")
                 .foregroundStyle(.secondary)
-            Text("Offline — showing saved flights")
+            Text(serviceStatus.current == nil
+                 ? "Offline — showing saved flights"
+                 : "Server unavailable — showing saved flights")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             Spacer()

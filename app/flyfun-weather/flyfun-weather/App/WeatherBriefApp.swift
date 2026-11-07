@@ -47,6 +47,8 @@ struct WeatherBriefApp: App {
                     LoginView()
                 }
             }
+            // Maintenance / outage strip from the server's status page.
+            .serviceStatusBanner()
             .environment(appState)
             .onOpenURL { url in
                 // Universal Links (Smart App Banner "Open", tapped briefing links)

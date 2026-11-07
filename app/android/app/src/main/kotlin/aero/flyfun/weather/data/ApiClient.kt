@@ -142,8 +142,16 @@ class ApiClient(
     }
 
     fun validateStatus(statusCode: Int, bodyBytes: ByteArray) {
+        if (statusCode in 200..299) {
+            ServiceStatusMonitor.clear()
+            return
+        }
+        // Caddy's status page (backend down / maintenance): banner + clean sentence.
+        ServiceStatus.parse(statusCode, bodyBytes)?.let { status ->
+            ServiceStatusMonitor.report(status)
+            throw ApiError.ServerError(statusCode = statusCode, detail = status.message)
+        }
         when (statusCode) {
-            in 200..299 -> return
             401 -> throw ApiError.Unauthorized
             403 -> throw ApiError.Forbidden(extractErrorDetail(bodyBytes))
             404 -> throw ApiError.NotFound
