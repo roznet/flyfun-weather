@@ -309,8 +309,18 @@ def load_env() -> None:
         _load()
 
 
+_POSITIONS: dict[tuple, dict] = {}
+
+
 def airport_positions(icaos) -> dict[str, tuple[float, float, float | None]]:
-    """``{icao: (lat, lon, elevation_m)}`` from euro_aip."""
+    """``{icao: (lat, lon, elevation_m)}`` from euro_aip (cached per process)."""
+    key = tuple(icaos)
+    if key not in _POSITIONS:
+        _POSITIONS[key] = _airport_positions(icaos)
+    return _POSITIONS[key]
+
+
+def _airport_positions(icaos) -> dict[str, tuple[float, float, float | None]]:
     from weatherbrief.airports import _load_airport_model
 
     db_path = os.environ.get("AIRPORTS_DB")
@@ -591,95 +601,98 @@ def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Pat
 
     # Per variable: CH1 needs one STAC search for all leads of a variable.
     touched: set[int] = set()
-    for var in ICON_VARS:
-        final = ("ok", "absent", "bad", "forbidden") if give_up else ("ok", "absent")
-        todo = [ld for ld in leads if done.get((ld, var)) not in final]
-        if not todo:
-            continue
-        if model == "icon-ch1":
-            try:
-                hrefs = ch1_assets(sess, run, var)
-            except requests.RequestException as exc:
-                logger.warning("%s %s %s: STAC search failed: %s", model, iso(run), var, exc)
+    try:
+        for var in ICON_VARS:
+            final = ("ok", "absent", "bad", "forbidden") if give_up else ("ok", "absent")
+            todo = [ld for ld in leads if done.get((ld, var)) not in final]
+            if not todo:
                 continue
-            if not hrefs and give_up:
-                for ld in todo:
-                    record_file(db, model, run, ld, var, "absent")
-                continue
-        else:
-            hrefs = None
-            try:
-                dwd_prefix(sess, model, var)
-            except (ListingError, requests.RequestException) as exc:
-                logger.warning("%s %s: %s; skipped this pass", model, var, exc)
-                continue
-        for ld in todo:
-            url = (
-                hrefs.get(ld) if hrefs is not None
-                else dwd_url(model, var, run, ld, dwd_prefix(sess, model, var))
-            )
-            if url is None:
-                record_file(db, model, run, ld, var, "absent" if give_up else "missing")
-                stats["missing"] += 1
-                continue
-            path = tmp / f"{model}-{var}-{ld}.grib2"
-            t0 = time.monotonic()
-            try:
-                nbytes = download(sess, url, path)
-            except requests.RequestException as exc:
-                path.unlink(missing_ok=True)
-                logger.warning("%s %s %s +%d: %s", model, iso(run), var, ld, exc)
-                continue
-            if isinstance(nbytes, str):  # 403: expired pre-signed URL or a block
-                logger.warning("%s %s %s +%d: HTTP 403", model, iso(run), var, ld)
-                record_file(db, model, run, ld, var, "forbidden")
-                stats["missing"] += 1
-                continue
-            if nbytes is None:
-                record_file(db, model, run, ld, var, "absent" if give_up else "missing")
-                stats["missing"] += 1
-                continue
-            try:
-                msg = first_message(path)
-            except Exception:  # noqa: BLE001 - one bad file must not lose the run
-                logger.exception("%s %s %s +%d: decode failed", model, iso(run), var, ld)
-                record_file(db, model, run, ld, var, "bad")
-                db.commit()
-                continue
-            finally:
-                path.unlink(missing_ok=True)
-            if msg is None:
-                record_file(db, model, run, ld, var, "bad")
-                continue
-            _hdr, vals = msg
-            if vals.size != n_expected:
-                logger.error(
-                    "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
-                    model, var, vals.size, n_expected,
+            if model == "icon-ch1":
+                try:
+                    hrefs = ch1_assets(sess, run, var)
+                except requests.RequestException as exc:
+                    logger.warning("%s %s %s: STAC search failed: %s", model, iso(run), var, exc)
+                    continue
+                if not hrefs and give_up:
+                    for ld in todo:
+                        record_file(db, model, run, ld, var, "absent")
+                    continue
+            else:
+                hrefs = None
+                try:
+                    dwd_prefix(sess, model, var)
+                except (ListingError, requests.RequestException) as exc:
+                    logger.warning("%s %s: %s; skipped this pass", model, var, exc)
+                    continue
+            for ld in todo:
+                url = (
+                    hrefs.get(ld) if hrefs is not None
+                    else dwd_url(model, var, run, ld, dwd_prefix(sess, model, var))
                 )
-                # A grid change is permanent: stop this model until `grid` is rerun.
-                record_file(db, model, run, ld, var, "grid-mismatch")
+                if url is None:
+                    record_file(db, model, run, ld, var, "absent" if give_up else "missing")
+                    stats["missing"] += 1
+                    continue
+                path = tmp / f"{model}-{var}-{ld}.grib2"
+                t0 = time.monotonic()
+                try:
+                    nbytes = download(sess, url, path)
+                except requests.RequestException as exc:
+                    path.unlink(missing_ok=True)
+                    logger.warning("%s %s %s +%d: %s", model, iso(run), var, ld, exc)
+                    continue
+                if isinstance(nbytes, str):  # 403: expired pre-signed URL or a block
+                    logger.warning("%s %s %s +%d: HTTP 403", model, iso(run), var, ld)
+                    record_file(db, model, run, ld, var, "forbidden")
+                    stats["missing"] += 1
+                    continue
+                if nbytes is None:
+                    record_file(db, model, run, ld, var, "absent" if give_up else "missing")
+                    stats["missing"] += 1
+                    continue
+                try:
+                    msg = first_message(path)
+                except Exception:  # noqa: BLE001 - one bad file must not lose the run
+                    logger.exception("%s %s %s +%d: decode failed", model, iso(run), var, ld)
+                    record_file(db, model, run, ld, var, "bad")
+                    db.commit()
+                    continue
+                finally:
+                    path.unlink(missing_ok=True)
+                if msg is None:
+                    record_file(db, model, run, ld, var, "bad")
+                    continue
+                _hdr, vals = msg
+                if vals.size != n_expected:
+                    logger.error(
+                        "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
+                        model, var, vals.size, n_expected,
+                    )
+                    # A grid change is permanent: stop this model until `grid` is rerun.
+                    record_file(db, model, run, ld, var, "grid-mismatch")
+                    db.commit()
+                    raise RuntimeError(f"{model}: grid changed, rerun `grid`")
+                # The raw value and the 'ok' record land in the same commit, so a
+                # later failure can never leave a file marked done with no values.
+                store_values(db, model, run, ld, {
+                    icao: {f"raw_{var}": float(vals[cell])} for icao, (cell, _n) in cells.items()
+                })
+                record_file(db, model, run, ld, var, "ok", nbytes, time.monotonic() - t0)
                 db.commit()
-                raise RuntimeError(f"{model}: grid changed, rerun `grid`")
-            # The raw value and the 'ok' record land in the same commit, so a
-            # later failure can never leave a file marked done with no values.
+                touched.add(ld)
+                stats["ok"] += 1
+                stats["bytes"] += nbytes
+    finally:
+        # Runs even when a later file raised, so every lead already marked
+        # 'ok' gets its derived values (the next pass would skip it).
+        # Derived values (wind needs U and V of the same lead) are rebuilt from
+        # everything stored for the lead, so a retry that fetches only V still
+        # produces the wind.
+        for ld in sorted(touched):
             store_values(db, model, run, ld, {
-                icao: {f"raw_{var}": float(vals[cell])} for icao, (cell, _n) in cells.items()
+                icao: icon_point_values(_stored_raw(db, model, run, ld, icao)) for icao in cells
             })
-            record_file(db, model, run, ld, var, "ok", nbytes, time.monotonic() - t0)
-            db.commit()
-            touched.add(ld)
-            stats["ok"] += 1
-            stats["bytes"] += nbytes
-
-    # Derived values (wind needs U and V of the same lead) are rebuilt from
-    # everything stored for the lead, so a retry that fetches only V still
-    # produces the wind.
-    for ld in sorted(touched):
-        store_values(db, model, run, ld, {
-            icao: icon_point_values(_stored_raw(db, model, run, ld, icao)) for icao in cells
-        })
-    db.commit()
+        db.commit()
     return stats
 
 
@@ -720,7 +733,8 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
     stats = {"ok": 0, "missing": 0, "bytes": 0}
 
     for group, hours in arome_groups_for_fhours(leads, AROME).items():
-        if all(done.get((h, "SURFACE")) in ("ok", "absent") for h in hours):
+        final = ("ok", "absent", "bad") if give_up else ("ok", "absent")
+        if all(done.get((h, "SURFACE")) in final for h in hours):
             continue
         run_dir = Path(tempfile.mkdtemp(dir=tmp))
         try:
@@ -1134,9 +1148,10 @@ def cmd_log(args) -> int:
 def cmd_status(args) -> int:
     db = open_db(args.out)
     print("cells:", dict(db.execute("SELECT model, COUNT(*) FROM cells GROUP BY model").fetchall()))
-    print("\nruns (files ok / missing / absent, MB):")
+    print("\nruns (files ok / missing / absent / bad / forbidden / grid-mismatch, MB):")
     for row in db.execute(
         "SELECT model, run, SUM(status='ok'), SUM(status='missing'), SUM(status='absent'), "
+        "SUM(status='bad'), SUM(status='forbidden'), SUM(status='grid-mismatch'), "
         "ROUND(SUM(COALESCE(bytes,0))/1e6) FROM files GROUP BY model, run ORDER BY run DESC, model LIMIT 40"
     ):
         print("  ", *row)
@@ -1236,8 +1251,11 @@ def cmd_report(args) -> int:
             s.setdefault("Td", []).append(v["td2m_c"] - o_td)
         if "wspd_kt" in v and o_wind is not None:
             s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
-        if "gust_kt" in v and o_gust is not None:
-            s.setdefault("gust", []).append(v["gust_kt"] - o_gust)
+        # No gust group in a METAR means no significant gust: score the model
+        # gust against the sustained wind then, so over-forecast gusts count.
+        o_g = o_gust if o_gust is not None else o_wind
+        if "gust_kt" in v and o_g is not None:
+            s.setdefault("gust", []).append(v["gust_kt"] - o_g)
         _score_ceiling(s, v, icao, model, o_ceil, o_vis, elev, model_elev, args.ceiling_datum)
 
     def mae(xs):
@@ -1254,7 +1272,9 @@ def cmd_report(args) -> int:
     print(f"Since {since}. MAE / bias against the METAR within 30 min of the valid hour (n per column).")
     print("ceil = category from ceiling alone, every model with a CEILING field;")
     print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
-    print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.\n")
+    print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.")
+    print("Gust: METAR without a gust group scored against its sustained wind.")
+    print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).\n")
     print(
         f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  "
         f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
