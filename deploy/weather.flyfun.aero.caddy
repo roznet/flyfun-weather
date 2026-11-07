@@ -124,6 +124,9 @@ weather.flyfun.aero {
             root * /home/brice/www/weather-status
             header Cache-Control "no-store"
             header Retry-After 120
+            # These three rewrites don't stack: the Caddyfile makes rewrites in
+            # one block mutually exclusive (first match wins, matched ones
+            # before `*`), so API paths get JSON. Checked on 2.11.7 and 2.6.2.
             @api_path path /api/* /mcp* /oauth/* /auth/* /health
             rewrite @api_path /status.json
             @wants_json header Accept *application/json*
