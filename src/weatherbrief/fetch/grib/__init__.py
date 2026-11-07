@@ -4781,6 +4781,8 @@ def load_d2_validity_mask(
 
     if mask is None:
         logger.info("D2 validity mask unavailable; keeping bbox-gate behaviour")
+    elif "uuid" in mask:
+        mask["cache_root"] = str(cache_root)  # where its grid lives (#974)
     return mask
 
 

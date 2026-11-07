@@ -7808,8 +7808,11 @@ size of one regridding.
   points at the edge that DWD filled from outside the model area are lost;
   those routes go to ICON-EU by the existing all-or-nothing rule. Accepted.
 - **No ICON visibility.** VIS is not on the v1 feed. ICON rows carry no model
-  visibility and grade flight category on ceiling only; the VIS-driven parts
-  of the ICON grade read missing, not good. A visibility derived from other
+  visibility (`visibility_m` None) and `classify_flight_category` grades them
+  on ceiling alone, as it already does for any slot without visibility; the
+  map's alternate flags likewise judge on ceiling (`map_queries._alt_required`).
+  Known weakness: fog or haze with no ceiling reads VFR on ICON rows, where
+  the other models still see it. A visibility derived from other
   ICON fields (e.g. Stoelinga-Warner from hydrometeors plus RH) is a separate
   piece of work, to be adopted only once it beats DWD's own VIS against
   METARs.

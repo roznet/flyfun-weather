@@ -806,6 +806,10 @@ def icon_eu_single_level_url(
           icon-eu_europe_regular-lat-lon_single-level_2026022100_006_CEILING.grib2.bz2
         ICON-D2: .../icon-d2/grib/00/ceiling/
           icon-d2_germany_regular-lat-lon_single-level_2026072000_006_2d_ceiling.grib2.bz2
+
+    On the native feed (#974) a quarter-hourly variable (ECHOTOP) has four
+    files per step and this returns only the first (window ending at H+0):
+    a probe URL, not the step's data. Fetch with :func:`icon_single_level_urls`.
     """
     if icon_native_feed():
         return icon_single_level_urls(
@@ -984,6 +988,13 @@ def ensure_icon_native_grid(
                 grid.default_method,
             )
         elif grid.default_method != variant.native_sampling:
+            # The method lives on the grid because decoders only see a UUID.
+            # One UUID is one DWD grid, served by one model (EU grid 62, D2
+            # grid 47); a change here is a config change, said out loud.
+            logger.warning(
+                "%s native grid %s: sampling %s -> %s",
+                variant.slug, grid.uuid, grid.default_method, variant.native_sampling,
+            )
             grid.default_method = variant.native_sampling
             grid.save(grid_cache_path(cache_root, grid.uuid))
         pointer = _grid_pointer_path(variant, cache_root)
@@ -1086,31 +1097,43 @@ def fetch_icon_eu_single_level(
 
     for fhour in forecast_hours:
         native = icon_native_feed()
-        urls = [
-            url
+        # (variable, its files in window order). A variable published as
+        # several files per step (v1 ECHOTOP, four 15-min windows) is kept
+        # only when every file arrived: a partial hour would otherwise be
+        # cached as complete for the whole run (#974).
+        groups = [
+            (var, icon_single_level_urls(init_date, init_hour, fhour, var, variant))
             for var in variables
             if not (native and var.lower() in ICON_V1_UNPUBLISHED)
-            for url in icon_single_level_urls(init_date, init_hour, fhour, var, variant)
         ]
+        urls = [url for _var, var_urls in groups for url in var_urls]
         if not urls:
             continue
 
+        failures: dict[int | str, int] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            fetched = list(pool.map(lambda u: _download_one_file(u, sess), urls))
+        by_url = dict(zip(urls, fetched))
+
         buf = bytearray()
         downloaded = 0
-        failures: dict[int | str, int] = {}
-
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_download_one_file, url, sess): url
-                for url in urls
-            }
-            for future in as_completed(futures):
-                data, status = future.result()
+        for var, var_urls in groups:
+            parts = [by_url[u] for u in var_urls]
+            for data, status in parts:
+                if data is None:
+                    failures[status] = failures.get(status, 0) + 1
+            if len(parts) > 1 and any(data is None for data, _s in parts):
+                logger.warning(
+                    "%s single-level f%03d %s: %d/%d window files missing; "
+                    "variable left out for this step",
+                    variant.slug, fhour, var,
+                    sum(data is None for data, _s in parts), len(parts),
+                )
+                continue
+            for data, _status in parts:
                 if data is not None:
                     buf.extend(data)
                     downloaded += 1
-                else:
-                    failures[status] = failures.get(status, 0) + 1
 
         total_failed = sum(failures.values())
         if buf:

@@ -2035,7 +2035,9 @@ def _decode_icon_cloud_diag_native(
             if field_name is None:
                 continue
             if msg.uuid not in weights:
-                weights[msg.uuid] = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+                weights[msg.uuid] = _native_grid_weights(
+                    msg.uuid, targets_lat, targets_lon, grib_bytes,
+                )
             grid, nw = weights[msg.uuid]
             if grid is None or not nw.inb_idx.size:
                 continue
@@ -2112,7 +2114,7 @@ def _gather_first_field(
                 # ICON native grid (#974).
                 from weatherbrief.fetch.grib.icon_grid import gather_native
 
-                ngrid, nw = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+                ngrid, nw = _native_grid_weights(msg.uuid, targets_lat, targets_lon, source)
                 if ngrid is None or not nw.inb_idx.size:
                     break
                 values = msg.native_values()
@@ -2534,7 +2536,7 @@ def _d2_read_message_grid(gid) -> "tuple[np.ndarray, np.ndarray, np.ndarray] | N
 _KM_PER_NM = 1.852
 
 
-def _d2_read_field(gid):
+def _d2_read_field(gid, source=None):
     """One D2 message as a corridor-reducible field, or None.
 
     ``("ll", lats_axis, lons_axis, grid)`` for the legacy regular lat-lon
@@ -2549,12 +2551,11 @@ def _d2_read_field(gid):
     if grid_type != "unstructured_grid":
         parsed = _d2_read_message_grid(gid)
         return None if parsed is None else ("ll", *parsed)
-    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+    from weatherbrief.fetch.grib.icon_grid import find_grid
 
     uuid = str(eccodes.codes_get(gid, "uuidOfHGrid", str))
-    grid = get_grid(uuid, cache_root=default_cache_root())
+    grid = find_grid(uuid, source)
     if grid is None:
-        logger.warning("ICON-D2 native grid %s not available; field skipped", uuid)
         return None
     eccodes.codes_set(gid, "missingValue", _D2_MISSING_VALUE)
     values = np.asarray(eccodes.codes_get_values(gid), dtype=np.float64)
@@ -2832,7 +2833,7 @@ def _d2_decode_hour_field(
         start_m, end_m = _d2_message_step_minutes(gid)
         if end_m % 60 != 0:
             continue
-        parsed = _d2_read_field(gid)
+        parsed = _d2_read_field(gid, grib_bytes)
         if parsed is None:
             continue
         window = end_m - start_m
@@ -2863,7 +2864,7 @@ def _d2_decode_echotop(
 
     for gid in _d2_iter_messages(grib_bytes):
         _start_m, end_m = _d2_message_step_minutes(gid)
-        field = _d2_read_field(gid)
+        field = _d2_read_field(gid, grib_bytes)
         if field is None:
             continue
         # The −999 sentinel means "no echo" — a VALID observation that must
@@ -2905,7 +2906,7 @@ def build_d2_validity_mask(grib_bytes: bytes) -> dict | None:
 
     try:
         for gid in _d2_iter_messages(grib_bytes):
-            field = _d2_read_field(gid)
+            field = _d2_read_field(gid, grib_bytes)
             if field is None:
                 continue
             if field[0] == "native":
@@ -2980,9 +2981,9 @@ def _d2_native_corridor_fully_valid(
     bitmap-masked cell inside the buffer. False when the mask's grid is not
     on disk (the mask is unusable without it; the caller re-fetches it).
     """
-    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+    from weatherbrief.fetch.grib.icon_grid import find_grid
 
-    grid = get_grid(str(mask["uuid"]), cache_root=default_cache_root())
+    grid = find_grid(str(mask["uuid"]), mask.get("cache_root"))
     valid = mask["valid"]
     if grid is None or valid.size != grid.n_cells:
         return False
@@ -4532,19 +4533,20 @@ def _ecmwf_seam_sentinels() -> dict[str, float]:
     }
 
 
-def _native_grid_weights(uuid: str, targets_lat, targets_lon):
+def _native_grid_weights(uuid: str, targets_lat, targets_lon, source=None):
     """``(IconNativeGrid, NativeWeights)`` for an ICON native-grid message.
 
     ``(None, None)`` when the grid's centres are not on disk (the fetch side
     puts them there with ``ensure_icon_native_grid`` before any decode); the
-    message is then skipped, so its field is missing rather than wrong. The
-    sampling is the grid's ``default_method`` (per model, #974).
+    message is then skipped, so its field is missing rather than wrong, and
+    ``icon_grid.find_grid`` logs one error per grid. *source* (the GRIB file's
+    path) locates the grid next to the run cache. The sampling is the grid's
+    ``default_method`` (per model, #974).
     """
-    from weatherbrief.fetch.grib.icon_grid import default_cache_root, get_grid
+    from weatherbrief.fetch.grib.icon_grid import find_grid
 
-    grid = get_grid(uuid, cache_root=default_cache_root())
+    grid = find_grid(uuid, source)
     if grid is None:
-        logger.warning("ICON native grid %s not available; field skipped", uuid)
         return None, None
     return grid, grid.weights(targets_lat, targets_lon)
 
@@ -4620,7 +4622,7 @@ def _gather_series(
             near_edge = False
             if grid is None and msg.uuid:
                 # ICON native grid (#974): weights from the grid's cell centres.
-                grid, bw = _native_grid_weights(msg.uuid, targets_lat, targets_lon)
+                grid, bw = _native_grid_weights(msg.uuid, targets_lat, targets_lon, source)
             elif grid is not None:
                 bw = _bilinear_grid_weights(grid.lats, grid.lons, targets_lat, targets_lon)
                 near_edge = bridge_seams and _near_grid_edge(
