@@ -1147,6 +1147,21 @@ class TestVisibilityInputs:
         # The briefing's own per-level D2 file: reused, not fetched twice.
         assert ck == "f006_ICON_D2_QR_L65.grib2"
 
+    def test_native_feed_plan_follows_the_v1_layout(self, monkeypatch):
+        """WB_ICON_FEED=v1 (#974): the same files, on the v1 URL and the
+        native cache prefix, through the shared helpers."""
+        import weatherbrief.fetch.grib.icon_eu_fetch as ief
+        import weatherbrief.tasks.standalone_grib as sg
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+
+        monkeypatch.setenv(ief.ICON_FEED_ENV_VAR, "v1")
+        plan, _ = sg._icon_snapshot_plan(INIT_DATE, 0, [6], ICON_EU)
+        url, ck = plan[(6, "ml", "qc")]
+        assert url.endswith("/icon-eu/p/QC/lvt1/150/lv1/74/r/2026-09-30T00:00/s/PT006H00M.grib2")
+        assert ck == "f006_ICON_EU_N_QC_L74.grib2"
+        # VIS is not on the v1 feed; the visibility inputs are.
+        assert (6, "sfc", "vis") not in plan
+
     def test_icon_eu_rows_carry_the_inputs(self, env):
         from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
 
