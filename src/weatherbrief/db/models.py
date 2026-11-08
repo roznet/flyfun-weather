@@ -1108,6 +1108,25 @@ class AirportForecastSnapshotRow(Base):
     nwp_k_index: Mapped[float | None] = mapped_column(Float, nullable=True)
     nwp_total_totals: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Visibility-derivation inputs (migration 116, #979 phase 0): what the
+    # derived-visibility and fog methods read beyond the surface columns
+    # above (``analysis/visibility/inputs.py`` fills them, the same columns
+    # for every model). Recorded only; nothing grades on them yet. NULL where
+    # a model or path does not have the field, never 0.
+    surface_pressure_hpa: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Lowest model level (~10 m AGL on ICON): mixing ratios kg/kg, cover %.
+    # ICON-EU publishes no rain/snow mixing ratio (ICON-D2 does).
+    lowest_level_cloud_water_kg_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_level_cloud_ice_kg_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_level_rain_kg_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_level_snow_kg_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_level_cloud_cover_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 850 hPa, the Fog Stability Index's upper level; NULL where 850 hPa is
+    # not clear above the model's ground (elevated airports).
+    t850_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    td850_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wind_speed_850_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+
 
 def snapshot_natural_key(
     icao: str, model: str, model_init_time: datetime, forecast_hour: datetime,

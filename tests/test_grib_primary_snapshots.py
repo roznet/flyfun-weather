@@ -1047,8 +1047,9 @@ class TestDownloads:
         run_dir = cache_dir_for_run(tmp_path, INIT_DATE, 0, model="icon-d2")
         assert n == 5 * len(wanted)
         assert all((run_dir / ck).exists() for _url, ck in wanted.values())
-        # 11 levels x 5 variables + 15 surface + 5 accumulated at f005.
-        assert len(wanted) == 11 * 5 + 15 + 5
+        # 11 levels x 5 variables + 15 surface + 5 lowest-model-level
+        # visibility inputs (#979) + 5 accumulated at f005.
+        assert len(wanted) == 11 * 5 + 15 + 5 + 5
 
     def test_ensure_cloud_diag_fetches_what_the_diag_fetch_reads(self, tmp_path, monkeypatch):
         """The cloud-diag pre-warm (#929): the blob per step and, on ICON-EU,
@@ -1115,3 +1116,96 @@ class TestFallbackAlert:
         with caplog.at_level("WARNING", logger="weatherbrief"):
             _run()  # 4 airports, all on the fallback: an alternates-sized call
         assert "GRIB_PRIMARY_FALLBACK_HIGH" not in caplog.text
+
+
+class TestVisibilityInputs:
+    """#979 phase 0: lowest-model-level fields and the 850 hPa level logged
+    on every ICON GRIB row, without touching coverage."""
+
+    @staticmethod
+    def _seed_lowest_level(run_dir, variant, values, steps=STEPS):
+        from weatherbrief.fetch.grib.icon_eu_fetch import icon_model_level_var_label
+
+        for fhour in steps:
+            for var, value in values.items():
+                _put(run_dir, fhour,
+                     icon_model_level_var_label(variant, var, variant.level_max), value)
+
+    def test_plan_asks_the_lowest_level_files(self):
+        import weatherbrief.tasks.standalone_grib as sg
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_D2, ICON_EU
+
+        eu, _ = sg._icon_snapshot_plan(INIT_DATE, 0, [6], ICON_EU)
+        d2, _ = sg._icon_snapshot_plan(INIT_DATE, 0, [6], ICON_D2)
+        assert sorted(k[2] for k in eu if k[1] == "ml") == ["clc", "qc", "qi"]
+        assert sorted(k[2] for k in d2 if k[1] == "ml") == ["clc", "qc", "qi", "qr", "qs"]
+        url, ck = eu[(6, "ml", "qc")]
+        assert url.endswith("_006_74_QC.grib2.bz2")
+        assert ck == "f006_ICON_EU_QC_L74.grib2"
+        url, ck = d2[(6, "ml", "qr")]
+        assert url.endswith("_006_65_qr.grib2.bz2")
+        # The briefing's own per-level D2 file: reused, not fetched twice.
+        assert ck == "f006_ICON_D2_QR_L65.grib2"
+
+    def test_icon_eu_rows_carry_the_inputs(self, env):
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+
+        data_dir, _ = env
+        run_dir = _seed_icon_run(data_dir)
+        self._seed_lowest_level(run_dir, ICON_EU, {"qc": 2.0e-4, "qi": 1.0e-6, "clc": 85.0})
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0
+        assert len(snaps) == len(AIRPORTS) * len(STEPS)
+        for s in snaps:
+            assert s["lowest_level_cloud_water_kg_kg"] == pytest.approx(2.0e-4, rel=1e-3)
+            assert s["lowest_level_cloud_ice_kg_kg"] == pytest.approx(1.0e-6, rel=1e-2)
+            assert s["lowest_level_cloud_cover_pct"] == pytest.approx(85.0, abs=0.01)
+            # ICON-EU publishes no rain or snow mixing ratio: absent, not 0.
+            assert s.get("lowest_level_rain_kg_kg") is None
+            assert s.get("lowest_level_snow_kg_kg") is None
+            assert s["surface_pressure_hpa"] == pytest.approx(1010.0)
+            # The seeded ISA column at 850 hPa (~1457 m): 5.53 C, RH 60 %, 10 m/s.
+            assert s["t850_c"] == pytest.approx(5.53, abs=0.05)
+            assert s["td850_c"] < s["t850_c"]
+            assert s["wind_speed_850_kt"] == pytest.approx(19.44, abs=0.05)
+
+    def test_missing_lowest_level_files_keep_the_row(self, env):
+        data_dir, _ = env
+        _seed_icon_run(data_dir)
+
+        snaps, api_calls = _run()
+
+        assert api_calls == 0
+        assert len(snaps) == len(AIRPORTS) * len(STEPS)
+        for s in snaps:
+            assert s.get("lowest_level_cloud_water_kg_kg") is None
+            assert s.get("lowest_level_cloud_cover_pct") is None
+            # The sounding-side inputs do not depend on those files.
+            assert s["t850_c"] is not None
+
+    def test_inputs_reach_the_table(self, env):
+        from sqlalchemy import create_engine, select
+        from sqlalchemy.orm import Session
+
+        from weatherbrief.db.models import AirportForecastSnapshotRow, Base
+        from weatherbrief.fetch.grib.icon_eu_fetch import ICON_EU
+        from weatherbrief.tasks import standalone_verification as sv
+
+        data_dir, _ = env
+        run_dir = _seed_icon_run(data_dir)
+        self._seed_lowest_level(run_dir, ICON_EU, {"qc": 3.0e-4, "qi": 0.0, "clc": 100.0})
+        snaps, _ = _run()
+
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            assert sv._store_snapshots(snaps, db) == len(snaps)
+            db.commit()
+            row = db.execute(select(AirportForecastSnapshotRow).limit(1)).scalar_one()
+        assert row.lowest_level_cloud_water_kg_kg == pytest.approx(3.0e-4, rel=1e-3)
+        assert row.lowest_level_cloud_cover_pct == pytest.approx(100.0)
+        assert row.surface_pressure_hpa == pytest.approx(1010.0)
+        assert row.t850_c is not None and row.wind_speed_850_kt is not None
+        assert row.lowest_level_rain_kg_kg is None

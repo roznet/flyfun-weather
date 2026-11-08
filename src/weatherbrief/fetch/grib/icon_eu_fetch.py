@@ -387,6 +387,24 @@ ICON_EU_VARIABLES = ("qc", "qi", "clc", "p", "t", "qv", "u", "v", "w")
 # meteorology-decisions §24.
 ICON_D2_VARIABLES = ICON_EU_VARIABLES + ("qr", "qs", "qg")
 
+# Lowest-model-level fields for the visibility-derivation inputs (#979 phase
+# 0), read by the forecast-map / alternates snapshots: one model-level file per
+# variable at ``variant.level_max`` (the level nearest the ground, ~10 m AGL),
+# the same URL and cache key as the briefing's per-level files. ICON-EU has
+# cloud water, cloud ice and cover only; ICON-D2 adds rain and snow (see
+# ICON_D2_VARIABLES). Optional: a missing file leaves its column NULL and
+# never makes a snapshot hour uncovered.
+ICON_EU_VISIBILITY_ML_VARIABLES = ("qc", "qi", "clc")
+ICON_D2_VISIBILITY_ML_VARIABLES = ICON_EU_VISIBILITY_ML_VARIABLES + ("qr", "qs")
+
+
+def icon_visibility_ml_variables(variant: "IconVariant") -> tuple[str, ...]:
+    """The lowest-model-level variables the snapshot reads for *variant*."""
+    if variant.slug == "icon-d2":
+        return ICON_D2_VISIBILITY_ML_VARIABLES
+    return ICON_EU_VISIBILITY_ML_VARIABLES
+
+
 # Turbulent kinetic energy (#530) — published on model levels by BOTH variants,
 # fetched by NEITHER unless explicitly configured. There is no TKE consumer in
 # the analysis today, so every byte is speculative, and ICON-EU's tke is the
