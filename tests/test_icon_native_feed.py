@@ -370,3 +370,18 @@ def test_echotop_windows_concatenate_in_order(native, monkeypatch):
     assert out[6] == b"".join(
         b"GRIBPT006H%02dM.grib2" % m for m in (0, 15, 30, 45)
     )
+
+
+def test_ensure_grid_writes_a_registered_grid_to_a_new_root(native, monkeypatch, tmp_path):
+    """Grid already in the process (from another cache root) and a root that
+    does not exist yet: the grid and the pointer still land there (Mac
+    worktree devserver, relative ``data`` vs ``$DATA_DIR``)."""
+    session = _grid_session()
+    monkeypatch.setattr(ief, "get_with_retry", lambda s, u, timeout=None: s.get(u))
+    first = ief.ensure_icon_native_grid(ICON_D2, "20261107", 12, session, tmp_path / "a")
+    assert first is not None
+    other = tmp_path / "b" / ".cache" / "grib"   # not created
+    again = ief.ensure_icon_native_grid(ICON_D2, "20261107", 12, session, other)
+    assert again is first
+    assert icon_grid.grid_cache_path(other, UUID).exists()
+    assert (other / f"icon-grid-{ICON_D2.slug}.current").read_text() == UUID
