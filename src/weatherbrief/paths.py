@@ -12,10 +12,10 @@ The rule:
    loaded ``.env`` only after importing every router, and a module that read
    ``DATA_DIR`` at import time silently got the fallback.
 2. ``DATA_DIR`` when set.
-3. Otherwise ``<checkout>/data`` for a source checkout, never a path relative
-   to whatever directory the process was started from. An installed copy (the
-   docker image) has no checkout and gets ``./data``; compose sets
-   ``DATA_DIR`` there anyway.
+3. Otherwise ``<checkout>/data``, never a path relative to whatever directory
+   the process was started from. The docker image is an editable install at
+   ``/app``, so that is ``/app/data``, which compose also sets as ``DATA_DIR``.
+   A non-editable install has no checkout and gets ``./data``.
 
 The result is always absolute. It is resolved on every call rather than
 cached: reading one variable is free, and tests (and the odd CLI) set
@@ -41,7 +41,10 @@ def _ensure_env_loaded() -> None:
 
 
 def checkout_root() -> Path | None:
-    """The source checkout this package runs from, or None for an installed copy."""
+    """The source checkout this package runs from, or None for a non-editable install.
+
+    The single definition of "the checkout"; ``envfiles.default_root`` uses it too.
+    """
     root = Path(__file__).resolve().parents[2]
     return root if (root / "pyproject.toml").is_file() else None
 

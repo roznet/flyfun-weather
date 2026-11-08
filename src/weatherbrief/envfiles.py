@@ -23,15 +23,17 @@ ENV_FILES = (".env", ".env.secrets")
 
 
 def default_root() -> Path | None:
-    """The nearest directory above this package holding a dotenv file.
+    """The checkout root (`weatherbrief.paths.checkout_root`) when it holds a dotenv file.
 
-    Same answer as `load_dotenv()`'s `find_dotenv()` for an editable install (the
-    checkout root); None for an installed copy (docker image), where compose provides
-    the environment instead.
+    One definition of "the checkout" for both the dotenv files and the data root's
+    fallback. None when there is no checkout or it has neither file: CI, and the
+    docker image, whose compose file provides the environment instead.
     """
-    for d in Path(__file__).resolve().parents:
-        if any((d / name).is_file() for name in ENV_FILES):
-            return d
+    from weatherbrief.paths import checkout_root
+
+    root = checkout_root()
+    if root is not None and any((root / name).is_file() for name in ENV_FILES):
+        return root
     return None
 
 

@@ -31,6 +31,8 @@ def data_dir(request: Request) -> Path:
     """The data root as a FastAPI dependency (``weatherbrief.paths.data_dir``).
 
     Houses the GRIB cache, pack snapshots and other per-deployment artifacts.
+    ``request`` is unused but kept on purpose: it is the signature endpoints
+    already ``Depends`` on, and tests can still swap it via ``dependency_overrides``.
     """
     from weatherbrief import paths
 
