@@ -1,46 +1,35 @@
-"""Log ICON-CH1, AROME, ICON-D2 and ICON-EU surface forecasts at Alpine airports.
+"""Does MeteoSwiss ICON-CH1 beat AROME (and our other models) at Alpine airports?
 
-A throwaway verification logger, not product code: it answers "does MeteoSwiss
-ICON-CH1 beat AROME (and ICON-D2) at Sion and the other Alpine fields?" before
-anyone builds a CH1 pipeline. Nothing here is imported by the app.
+A study logger, not product code: nothing imports it. It records what the
+product does not already record, and joins what it does:
 
-What it records, per model run (00/06/12/18Z by default) and lead hour
-(1..24 by default), at the nearest model cell to each airport:
-
-- **icon-ch1**: MeteoSwiss ICON-CH1-EPS control run (1 km, native triangles),
-  single-level files found through the STAC API at data.geo.admin.ch, downloaded
-  from the pre-signed CSCS URLs it returns. Files only live 24 h.
-- **icon-d2**, **icon-eu**: DWD's new native-grid feed
-  ``opendata.dwd.de/weather/nwp/v1/m/<model>/`` (the lat-lon feed ends
-  30 Nov 2026, issue #974). Same nearest-cell lookup as CH1.
-- **arome**: Météo-France AROME 0.025° SP1/SP2 surface packages through the
-  product's own downloader and decoder (``fetch/grib/arome_fetch.py``,
-  ``decode_arome_surface_per_point``), bilinear as in the product. AROME's
-  surface packages carry no ceiling or visibility.
-- **METARs** for the same airports, through the product's verification fetch
-  (``tasks/verification.fetch_observations_batch``), so ceiling and visibility
-  are parsed exactly as the verification tables parse them.
-
-ECMWF, GFS and ICON as the product sees them are already logged at these
-airports by the forecast-map verification cycle (``airport_forecast_snapshots``);
-``report`` does not read them yet.
-
-Everything goes into one SQLite file (``--out``, default
-``$DATA_DIR/alps_compare`` or ``~/alps_compare``). Downloads are streamed to a
-temp file, decoded and deleted; only point values are kept, with no pruning
-(roughly 150k rows a day, some 10 MB: delete the file when the study ends).
+- **icon-ch1** (logged here): MeteoSwiss ICON-CH1-EPS control run, 1 km native
+  grid. Files are found through the STAC API at data.geo.admin.ch and downloaded
+  from the pre-signed CSCS URLs it returns. They are only kept for 24 h, so
+  missed runs are lost. Sampled at the nearest native cell with the product's
+  ``icon_grid`` sampler.
+- **arome** (logged here): Météo-France AROME 0.025° SP1/SP2 surface packages
+  through the product's downloader and decoder. AROME's surface files have no
+  ceiling or visibility.
+- **METARs** (logged here) through ``tasks/verification.fetch_observations_batch``,
+  parsed exactly as the verification tables parse them.
+- **ecmwf / gfs / icon** (joined, not downloaded): the forecast-map cycle's
+  snapshot rows for the same airports, read from its SQLite artifacts
+  (``eu-*.sqlite``, table ``airport_forecast_snapshots``) and copied into this
+  study's DB on each ``log`` pass so they outlive the artifacts' 7-day pruning.
 
 Commands::
 
-    python scripts/alps_model_compare.py check          # can this machine reach every source?
-    python scripts/alps_model_compare.py grid           # once: nearest cells per model
-    python scripts/alps_model_compare.py log            # every 30 min from cron; idempotent
-    python scripts/alps_model_compare.py status
-    python scripts/alps_model_compare.py report [--days 14]
+    check    reachability and format probe (changes nothing)
+    grid     once: CH1 grid, nearest cell + model height per airport
+    log      every 30 min from cron; idempotent, retries unpublished files
+    status   what has been logged
+    report   errors vs METAR per model and lead bucket
 
-``log`` walks the cadence runs of the last ``--lookback-h`` hours, fetches what
-is published and not yet stored, and retries missing files on the next call, so
-cron can call it as often as it likes (a lock file stops overlapping runs).
+Everything lives in one SQLite file under ``--out`` (default
+``$DATA_DIR/alps_compare``). GRIB files are streamed to a temp file, decoded
+and deleted. Nothing is pruned (a few MB a day): delete the directory when the
+study ends.
 """
 
 from __future__ import annotations
@@ -48,7 +37,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
-import json
+import glob
 import logging
 import math
 import os
@@ -57,109 +46,86 @@ import sqlite3
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote
 
 import requests
 
 logger = logging.getLogger("alps_compare")
 
-# ---------------------------------------------------------------------------
-# Airports
-# ---------------------------------------------------------------------------
-
-#: Alpine fields with METARs inside CH1's usable domain, plus two flat controls
-#: (LSZH, LFSB). LOWK is east of AROME's domain: CH1 vs ICON only there.
+#: Alpine fields with METARs inside CH1's domain, plus two flat controls
+#: (LSZH, LFSB). LOWK is east of AROME's domain.
 AIRPORTS: tuple[str, ...] = (
-    # Switzerland
     "LSGS", "LSGG", "LSZB", "LSZA", "LSZL", "LSZS", "LSZC", "LSZR", "LSGC",
     "LSZG", "LSMP", "LSME", "LSMM",
-    # France
     "LFLS", "LFLB", "LFLP",
-    # Austria
     "LOWI", "LOWS", "LOWK",
-    # Italy
     "LIPB",
-    # Flat controls
     "LSZH", "LFSB",
+)
+
+STAC_API = "https://data.geo.admin.ch/api/stac/v1"
+CH1_COLLECTION = "ch.meteoschweiz.ogd-forecasting-icon-ch1"
+CH1_VARS = ("CEILING", "VIS", "T_2M", "TD_2M", "U_10M", "V_10M", "VMAX_10M", "CLCT", "CLCL")
+CH1_MAX_LEAD = 33
+#: Hours after init before a run is worth asking for, and before a missing file
+#: is given up on (CH1 is complete ~2 h after init; AROME groups land from ~3 h).
+PUBLISH_DELAY_H = {"icon-ch1": 1.5, "arome": 3.0}
+GIVE_UP_H = {"icon-ch1": 6, "arome": 12}
+
+#: Product snapshot columns copied from the forecast-map artifacts.
+PRODUCT_MODELS = ("ecmwf", "gfs", "icon")
+PRODUCT_COLS = (
+    "temperature_2m_c", "dewpoint_2m_c", "visibility_m", "wind_speed_10m_kt",
+    "wind_direction_10m_deg", "wind_gusts_10m_kt", "nwp_ceiling_ft",
 )
 
 FT_PER_M = 3.28084
 KT_PER_MS = 1.0 / 0.514444
-
-# ---------------------------------------------------------------------------
-# Sources
-# ---------------------------------------------------------------------------
-
-STAC_API = "https://data.geo.admin.ch/api/stac/v1"
-CH1_COLLECTION = "ch.meteoschweiz.ogd-forecasting-icon-ch1"
-DWD_V1 = "https://opendata.dwd.de/weather/nwp/v1/m"
-AWC_METAR = "https://aviationweather.gov/api/data/metar"
-
-#: Single-level variables, by the parameter name both MeteoSwiss and DWD use.
-#: Not every model has every one (DWD dropped VIS on the native feed); a
-#: missing file is recorded as missing, never as an error.
-ICON_VARS: tuple[str, ...] = (
-    "CEILING", "VIS", "T_2M", "TD_2M", "U_10M", "V_10M", "VMAX_10M",
-    "CLCT", "CLCL", "HBAS_SC",
-)
-
-
-@dataclass(frozen=True)
-class IconModel:
-    name: str
-    max_lead_h: int
-
-
-ICON_MODELS = {
-    "icon-ch1": IconModel("icon-ch1", 33),
-    "icon-d2": IconModel("icon-d2", 48),
-    "icon-eu": IconModel("icon-eu", 78),
-}
-ALL_MODELS = ("icon-ch1", "icon-d2", "icon-eu", "arome")
-
-USER_AGENT = "flyfun-weather-alps-compare/1"
+NO_CEILING_M = 9999.0  # the product's "no ceiling" floor (#847)
 TIMEOUT = (15, 120)
 
-# ---------------------------------------------------------------------------
-# Storage
-# ---------------------------------------------------------------------------
-
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS cells (
-    model TEXT NOT NULL, icao TEXT NOT NULL, grid_uuid TEXT, n_cells INTEGER,
-    cell INTEGER NOT NULL, cell_lat REAL, cell_lon REAL, dist_km REAL,
-    model_elev_m REAL, airport_lat REAL, airport_lon REAL, airport_elev_m REAL,
-    PRIMARY KEY (model, icao)
-);
-CREATE TABLE IF NOT EXISTS forecasts (
-    model TEXT NOT NULL, run TEXT NOT NULL, lead_h INTEGER NOT NULL,
-    valid TEXT NOT NULL, icao TEXT NOT NULL, var TEXT NOT NULL, value REAL,
-    PRIMARY KEY (model, run, lead_h, icao, var)
-);
-CREATE INDEX IF NOT EXISTS ix_fc_valid ON forecasts (valid, icao);
+CREATE TABLE IF NOT EXISTS grid (
+    model TEXT, icao TEXT, uuid TEXT, n_cells INTEGER, cell INTEGER,
+    dist_km REAL, model_elev_m REAL, field_elev_ft REAL, built_at TEXT,
+    PRIMARY KEY (model, icao));
 CREATE TABLE IF NOT EXISTS files (
-    model TEXT NOT NULL, run TEXT NOT NULL, lead_h INTEGER NOT NULL,
-    var TEXT NOT NULL, status TEXT NOT NULL, bytes INTEGER, seconds REAL,
-    at TEXT NOT NULL,
-    PRIMARY KEY (model, run, lead_h, var)
-);
-CREATE TABLE IF NOT EXISTS grid_meta (model TEXT PRIMARY KEY, built_at TEXT NOT NULL);
+    model TEXT, run TEXT, lead_h INTEGER, var TEXT, status TEXT,
+    bytes INTEGER, at TEXT, PRIMARY KEY (model, run, lead_h, var));
+CREATE TABLE IF NOT EXISTS forecasts (
+    model TEXT, run TEXT, lead_h INTEGER, valid TEXT, icao TEXT, var TEXT, value REAL,
+    PRIMARY KEY (model, run, lead_h, icao, var));
+CREATE TABLE IF NOT EXISTS product (
+    model TEXT, run TEXT, valid TEXT, icao TEXT,
+    temperature_2m_c REAL, dewpoint_2m_c REAL, visibility_m REAL,
+    wind_speed_10m_kt REAL, wind_direction_10m_deg REAL, wind_gusts_10m_kt REAL,
+    nwp_ceiling_ft REAL, PRIMARY KEY (model, run, valid, icao));
 CREATE TABLE IF NOT EXISTS metars (
-    icao TEXT NOT NULL, obs_time TEXT NOT NULL, report_type TEXT, raw TEXT,
-    ceiling_ft INTEGER, lowest_base_ft INTEGER, visibility_m INTEGER,
-    wind_dir INTEGER, wind_kt INTEGER, gust_kt INTEGER,
-    temp_c INTEGER, dewpoint_c INTEGER, category TEXT,
-    PRIMARY KEY (icao, obs_time)
-);
+    icao TEXT, obs_time TEXT, report_type TEXT, raw TEXT, ceiling_ft INTEGER,
+    visibility_m INTEGER, wind_dir INTEGER, wind_kt INTEGER, gust_kt INTEGER,
+    temp_c INTEGER, dewpoint_c INTEGER, PRIMARY KEY (icao, obs_time));
 """
 
 
-def default_out() -> Path:
-    data = os.environ.get("DATA_DIR")
-    return Path(data) / "alps_compare" if data else Path.home() / "alps_compare"
+# ---------------------------------------------------------------------------
+# Plumbing
+# ---------------------------------------------------------------------------
+
+
+def iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def parse_iso(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC)
+
+
+def load_env() -> None:
+    with contextlib.suppress(Exception):
+        from weatherbrief.envfiles import load_env as _load
+
+        _load()
 
 
 def open_db(out: Path) -> sqlite3.Connection:
@@ -170,389 +136,38 @@ def open_db(out: Path) -> sqlite3.Connection:
     return db
 
 
-def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
-
-
-def parse_iso(s: str) -> datetime:
-    return datetime.strptime(s, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
-
-
-# ---------------------------------------------------------------------------
-# HTTP
-# ---------------------------------------------------------------------------
-
-
 def session() -> requests.Session:
     s = requests.Session()
-    s.headers["User-Agent"] = USER_AGENT
+    s.headers["User-Agent"] = "flyfun-weather-alps-compare/2"
     return s
 
 
-def download(sess: requests.Session, url: str, dest: Path) -> int | str | None:
-    """Stream ``url`` to ``dest``. Returns bytes, None on 404/410, "forbidden" on 403."""
-    for attempt in range(3):
-        try:
-            with sess.get(url, stream=True, timeout=TIMEOUT) as r:
-                if r.status_code == 403:
-                    return "forbidden"
-                if r.status_code in (404, 410):
-                    return None
-                r.raise_for_status()
-                n = 0
-                with open(dest, "wb") as f:
-                    for chunk in r.iter_content(1 << 20):
-                        f.write(chunk)
-                        n += len(chunk)
-                return n
-        except requests.RequestException as exc:
-            if attempt == 2:
-                raise
-            logger.info("retry %s: %s", url.split("?")[0], exc)
-            time.sleep(2 * (attempt + 1))
-    return None
+def download(sess: requests.Session, url: str, dest: Path) -> int | None:
+    """Stream ``url`` to ``dest``: bytes written, or None when not published (404/410).
 
-
-# ---------------------------------------------------------------------------
-# GRIB helpers (eccodes, one message at a time)
-# ---------------------------------------------------------------------------
-
-
-def _eccodes():
-    # pyproj before eccodes: see grib_reader.py (#911).
-    with contextlib.suppress(ImportError):
-        import pyproj  # noqa: F401
-    import eccodes
-
-    return eccodes
-
-
-def grib_messages(path: Path):
-    """Yield ``(header dict, values ndarray float64 with NaN for missing)``."""
-    import numpy as np
-
-    ec = _eccodes()
-    with open(path, "rb") as f:
-        while True:
-            gid = ec.codes_grib_new_from_file(f)
-            if gid is None:
-                break
-            try:
-                hdr = {}
-                for key in (
-                    "shortName", "discipline", "parameterCategory", "parameterNumber",
-                    "numberOfValues", "numberOfDataPoints", "uuidOfHGrid", "gridType",
-                    "typeOfLevel", "level", "perturbationNumber", "units",
-                    "dataDate", "dataTime", "stepRange",
-                ):
-                    try:
-                        hdr[key] = ec.codes_get(gid, key, str)
-                    except Exception:
-                        hdr[key] = None
-                ec.codes_set(gid, "missingValue", 9.999e20)
-                vals = np.asarray(ec.codes_get_values(gid), dtype=np.float64)
-                vals[vals == 9.999e20] = np.nan
-                yield hdr, vals
-            finally:
-                ec.codes_release(gid)
-
-
-def first_message(path: Path):
-    """The control member's message (perturbationNumber 0 or absent)."""
-    chosen = None
-    for hdr, vals in grib_messages(path):
-        pert = hdr.get("perturbationNumber")
-        if pert in (None, "0", "MISSING", "not_found"):
-            return hdr, vals
-        if chosen is None:
-            chosen = (hdr, vals)
-    return chosen
-
-
-def _param(hdr) -> tuple[str, str, str]:
-    return (hdr.get("discipline"), hdr.get("parameterCategory"), hdr.get("parameterNumber"))
-
-
-# CLAT / CLON / HSURF, matched by number so missing local tables don't matter.
-_CLAT = {("0", "191", "1")}
-_CLON = {("0", "191", "2")}
-_HSURF = {("0", "3", "6")}
-
-
-def nearest_cells(clat, clon, airports: dict[str, tuple[float, float]]):
-    """Index of the nearest cell centre to each airport, and its distance (km)."""
-    import numpy as np
-
-    lat = np.asarray(clat, dtype=np.float64)
-    lon = np.asarray(clon, dtype=np.float64)
-    # Radians vs degrees: every grid here spans > 3 deg of latitude away from
-    # the equator, so a max |lat| <= pi can only be radians.
-    if np.nanmax(np.abs(lat)) <= math.pi + 1e-6:
-        lat, lon = np.degrees(lat), np.degrees(lon)
-    out = {}
-    la, lo = np.radians(lat), np.radians(lon)
-    for icao, (alat, alon) in airports.items():
-        p, q = math.radians(alat), math.radians(alon)
-        d = np.sin((la - p) / 2) ** 2 + np.cos(la) * math.cos(p) * np.sin((lo - q) / 2) ** 2
-        i = int(np.nanargmin(d))
-        km = 2 * 6371.0 * math.asin(math.sqrt(float(d[i])))
-        out[icao] = (i, float(lat[i]), float(lon[i]), km)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Airports from the euro_aip database (AIRPORTS_DB in .env)
-# ---------------------------------------------------------------------------
-
-
-def load_env() -> None:
-    with contextlib.suppress(Exception):
-        from weatherbrief.envfiles import load_env as _load
-
-        _load()
-
-
-_POSITIONS: dict[tuple, dict] = {}
-
-
-def airport_positions(icaos) -> dict[str, tuple[float, float, float | None]]:
-    """``{icao: (lat, lon, elevation_m)}`` from euro_aip (cached per process)."""
-    key = tuple(icaos)
-    if key not in _POSITIONS:
-        _POSITIONS[key] = _airport_positions(icaos)
-    return _POSITIONS[key]
-
-
-def _airport_positions(icaos) -> dict[str, tuple[float, float, float | None]]:
-    from weatherbrief.airports import _load_airport_model
-
-    db_path = os.environ.get("AIRPORTS_DB")
-    if not db_path:
-        sys.exit("AIRPORTS_DB is not set (it comes from the repo .env)")
-    model = _load_airport_model(db_path)
-    out = {}
-    for icao in icaos:
-        ap = model.find_airport_by_code(icao)
-        if ap is None:
-            logger.warning("%s not in euro_aip, skipped", icao)
-            continue
-        elev = ap.elevation_ft / FT_PER_M if ap.elevation_ft is not None else None
-        out[icao] = (float(ap.latitude_deg), float(ap.longitude_deg), elev)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# MeteoSwiss STAC
-# ---------------------------------------------------------------------------
-
-
-def _iso_duration(hours: int) -> str:
-    return f"P{hours // 24}DT{hours % 24:02d}H00M00S"
-
-
-def _duration_hours(s: str) -> int | None:
-    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:[\d.]+S)?", s or "")
-    if not m:
-        return None
-    return int(m.group(1) or 0) * 24 + int(m.group(2) or 0)
-
-
-def stac_search(sess, body: dict, max_pages: int = 20) -> list[dict]:
-    """POST /search, following ``next`` links. Returns all features."""
-    url = f"{STAC_API}/search"
-    feats: list[dict] = []
-    payload = dict(body)
-    for _ in range(max_pages):
-        r = sess.post(url, json=payload, timeout=TIMEOUT)
-        r.raise_for_status()
-        obj = r.json()
-        feats.extend(obj.get("features", []))
-        nxt = next((ln for ln in obj.get("links", []) if ln.get("rel") == "next"), None)
-        if not nxt:
-            break
-        if nxt.get("method", "GET").upper() == "POST" and nxt.get("body"):
-            url = nxt.get("href", url)
-            payload = nxt["body"]
-            continue
-        # GET-style pagination: follow the links until there is no ``next``.
-        href = nxt["href"]
-        for _ in range(max_pages):
-            r2 = sess.get(href, timeout=TIMEOUT)
-            r2.raise_for_status()
-            obj = r2.json()
-            feats.extend(obj.get("features", []))
-            nxt = next((ln for ln in obj.get("links", []) if ln.get("rel") == "next"), None)
-            if not nxt:
-                break
-            href = nxt["href"]
-        break
-    return feats
-
-
-def ch1_assets(sess, run: datetime, variable: str) -> dict[int, str]:
-    """``{lead_h: href}`` of the control-run files of ``variable`` for ``run``."""
-    ref = run.strftime("%Y-%m-%dT%H:%M:%SZ")
-    body = {
-        "collections": [CH1_COLLECTION],
-        "forecast:reference_datetime": ref,
-        "forecast:variable": variable,
-        "forecast:perturbed": False,
-        "limit": 100,
-    }
-    try:
-        feats = stac_search(sess, body, max_pages=2)
-    except requests.HTTPError as exc:
-        if exc.response is None or exc.response.status_code != 400:
-            raise
-        feats = None
-    # On a 400, or when the server ignored the unknown top-level keys and
-    # answered 200 with unfiltered items, use the STAC "query" extension form.
-    if feats is None or any(
-        ft.get("properties", {}).get("forecast:variable") not in (None, variable)
-        for ft in feats
-    ):
-        if feats is not None:
-            logger.info("STAC ignored top-level forecast:* filters; using `query`")
-        feats = stac_search(sess, {
-            "collections": [CH1_COLLECTION],
-            "limit": 100,
-            "query": {
-                "forecast:reference_datetime": {"eq": ref},
-                "forecast:variable": {"eq": variable},
-                "forecast:perturbed": {"eq": False},
-            },
-        })
-    out: dict[int, str] = {}
-    for ft in feats:
-        props = ft.get("properties", {})
-        if props.get("forecast:perturbed") not in (False, "false", None):
-            continue
-        if props.get("forecast:variable") not in (None, variable):
-            continue
-        ref_p = props.get("forecast:reference_datetime")
-        if ref_p and not ref_p.startswith(ref[:16]):
-            continue
-        lead = _duration_hours(props.get("forecast:horizon", ""))
-        assets = ft.get("assets", {})
-        href = next((a.get("href") for a in assets.values() if a.get("href")), None)
-        if lead is not None and href:
-            out[lead] = href
-    return out
-
-
-def ch1_collection_asset(sess, prefix: str) -> str | None:
-    r = sess.get(f"{STAC_API}/collections/{CH1_COLLECTION}/assets", timeout=TIMEOUT)
-    r.raise_for_status()
-    for a in r.json().get("assets", []):
-        if str(a.get("id", "")).startswith(prefix):
-            return a.get("href")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# DWD native feed
-# ---------------------------------------------------------------------------
-
-
-def dwd_run_token(run: datetime) -> str:
-    return quote(run.strftime("%Y-%m-%dT%H:%M"), safe="")
-
-
-def dwd_step(lead_h: int) -> str:
-    return f"PT{lead_h:03d}H00M"
-
-
-def dwd_url(model: str, param: str, run: datetime, lead_h: int, prefix: str = "") -> str:
-    return f"{DWD_V1}/{model}/p/{param}/{prefix}r/{dwd_run_token(run)}/s/{dwd_step(lead_h)}.grib2"
-
-
-_HREF = re.compile(r'href="([^"?]+/)"')
-
-
-_PREFIX_CACHE: dict[tuple[str, str], str] = {}
-
-
-class ListingError(RuntimeError):
-    """A DWD directory listing could not be read (try again next pass)."""
-
-
-def dwd_prefix(sess, model: str, param: str) -> str:
-    """Cached :func:`dwd_level_prefix` (one listing walk per process).
-
-    A failed listing raises :class:`ListingError` and is not cached, so one
-    transient error never pins a wrong URL.
+    Any other HTTP error raises, so a block or an expired URL is never mistaken
+    for "not published yet".
     """
-    key = (model, param)
-    if key not in _PREFIX_CACHE:
-        _PREFIX_CACHE[key] = dwd_level_prefix(sess, model, param)
-    return _PREFIX_CACHE[key]
-
-
-def dwd_level_prefix(sess, model: str, param: str) -> str:
-    """Path between ``p/<PARAM>/`` and ``r/``: '' for plain single-level files,
-    else ``lvt1/<type>/lv1/<level>/`` (first listed), found from the listings."""
-    base = f"{DWD_V1}/{model}/p/{param}/"
-    prefix = ""
-    for _ in range(4):
-        r = sess.get(base + prefix, timeout=TIMEOUT)
-        if r.status_code != 200:
-            raise ListingError(f"HTTP {r.status_code} listing {base + prefix}")
-        subs = [h for h in _HREF.findall(r.text) if not h.startswith(("/", "..", "http"))]
-        if any(h.startswith("r/") or h == "r/" for h in subs):
-            return prefix
-        if not subs:
-            return prefix
-        prefix += subs[0]
-    return prefix
-
-
-# ---------------------------------------------------------------------------
-# Value conversion (model native units -> comparison columns)
-# ---------------------------------------------------------------------------
-
-
-def icon_point_values(raw: dict[str, float]) -> dict[str, float]:
-    """Native ICON names/units -> stored vars. Keeps raw metres for heights."""
-    out: dict[str, float] = {}
-
-    def ok(v):
-        return v is not None and not (isinstance(v, float) and math.isnan(v))
-
-    if ok(raw.get("T_2M")):
-        out["t2m_c"] = raw["T_2M"] - 273.15
-    if ok(raw.get("TD_2M")):
-        out["td2m_c"] = raw["TD_2M"] - 273.15
-    u, v = raw.get("U_10M"), raw.get("V_10M")
-    if ok(u) and ok(v):
-        out["wspd_kt"] = math.hypot(u, v) * KT_PER_MS
-        out["wdir_deg"] = (math.degrees(math.atan2(-u, -v)) + 360.0) % 360.0
-    if ok(raw.get("VMAX_10M")):
-        out["gust_kt"] = raw["VMAX_10M"] * KT_PER_MS
-    if ok(raw.get("VIS")):
-        out["vis_m"] = raw["VIS"]
-    if ok(raw.get("CEILING")) and raw["CEILING"] > 0:
-        # <= 0 is not a real ceiling height in either datum; leave it unknown
-        # rather than read it as a 0 ft (LIFR) ceiling. >= 9999 m is the
-        # product's "no ceiling" fill (#847), handled in `report`.
-        out["ceiling_raw_m"] = raw["CEILING"]
-    if ok(raw.get("HBAS_SC")):
-        out["hbas_sc_raw_m"] = raw["HBAS_SC"]
-    if ok(raw.get("CLCT")):
-        out["tcc_pct"] = raw["CLCT"]
-    if ok(raw.get("CLCL")):
-        out["lcc_pct"] = raw["CLCL"]
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Runs to fetch
-# ---------------------------------------------------------------------------
+    try:
+        with sess.get(url, stream=True, timeout=TIMEOUT) as r:
+            if r.status_code in (404, 410):
+                return None
+            r.raise_for_status()
+            n = 0
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+                    n += len(chunk)
+            return n
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
 
 
 def cadence_runs(now: datetime, every_h: int, lookback_h: int, delay_h: float) -> list[datetime]:
-    """Runs at multiples of ``every_h`` from ``now - lookback_h`` up to ``now - delay_h``."""
-    newest = now - timedelta(hours=delay_h)
-    t = newest.replace(minute=0, second=0, microsecond=0)
+    """Runs at multiples of ``every_h`` UTC, newest first, from ``now - delay_h``
+    back to ``now - lookback_h``."""
+    t = (now - timedelta(hours=delay_h)).replace(minute=0, second=0, microsecond=0)
     t -= timedelta(hours=t.hour % every_h)
     out = []
     while t >= now - timedelta(hours=lookback_h):
@@ -561,166 +176,249 @@ def cadence_runs(now: datetime, every_h: int, lookback_h: int, delay_h: float) -
     return out
 
 
-def done_files(db, model: str, run: datetime) -> dict[tuple[int, str], str]:
-    rows = db.execute(
-        "SELECT lead_h, var, status FROM files WHERE model=? AND run=?", (model, iso(run)),
-    ).fetchall()
-    return {(lead, var): st for lead, var, st in rows}
+def airport_positions() -> dict[str, tuple[float, float, float | None]]:
+    """``{icao: (lat, lon, elevation_ft)}`` from euro_aip (``AIRPORTS_DB``)."""
+    from weatherbrief.airports import _load_airport_model
+
+    db_path = os.environ.get("AIRPORTS_DB")
+    if not db_path:
+        sys.exit("AIRPORTS_DB is not set (it comes from the repo .env)")
+    model = _load_airport_model(db_path)
+    out = {}
+    for icao in AIRPORTS:
+        ap = model.find_airport_by_code(icao)
+        if ap is None:
+            logger.warning("%s not in euro_aip, skipped", icao)
+            continue
+        elev = float(ap.elevation_ft) if ap.elevation_ft is not None else None
+        out[icao] = (float(ap.latitude_deg), float(ap.longitude_deg), elev)
+    return out
 
 
-def record_file(db, model, run, lead, var, status, nbytes=None, secs=None):
+def record_file(db, model, run, lead, var, status, nbytes=None):
     db.execute(
-        "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?,?)",
-        (model, iso(run), lead, var, status, nbytes, secs, iso(datetime.now(timezone.utc))),
+        "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)",
+        (model, iso(run), lead, var, status, nbytes, iso(datetime.now(UTC))),
     )
 
 
-def store_values(db, model, run, lead, per_icao: dict[str, dict[str, float]]):
+def done_files(db, model, run) -> dict[tuple[int, str], str]:
+    rows = db.execute(
+        "SELECT lead_h, var, status FROM files WHERE model=? AND run=?", (model, iso(run)),
+    )
+    return {(lead, var): st for lead, var, st in rows}
+
+
+def store(db, model, run, lead, per_icao: dict[str, dict[str, float]]) -> None:
     valid = iso(run + timedelta(hours=lead))
-    rows = [
-        (model, iso(run), lead, valid, icao, var, float(v))
-        for icao, vals in per_icao.items() for var, v in vals.items()
-    ]
-    db.executemany("INSERT OR REPLACE INTO forecasts VALUES (?,?,?,?,?,?,?)", rows)
-
-
-def load_cells(db, model) -> dict[str, tuple[int, int]]:
-    rows = db.execute("SELECT icao, cell, n_cells FROM cells WHERE model=?", (model,)).fetchall()
-    return {icao: (cell, n) for icao, cell, n in rows}
+    db.executemany(
+        "INSERT OR REPLACE INTO forecasts VALUES (?,?,?,?,?,?,?)",
+        [
+            (model, iso(run), lead, valid, icao, var, None if math.isnan(v) else float(v))
+            for icao, vals in per_icao.items() for var, v in vals.items()
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
-# ICON (CH1 / D2 / EU) logging
+# MeteoSwiss STAC (ICON-CH1)
 # ---------------------------------------------------------------------------
 
-# A file still missing this long after the run is given up on (recorded as
-# 'missing' and not retried). Before that, 'missing' is retried every call.
-GIVE_UP_AFTER_H = {"icon-ch1": 6, "icon-d2": 5, "icon-eu": 7, "arome": 12}
+
+def _duration_hours(s: str) -> int | None:
+    """``P0DT01H00M00S`` / ``PT3H`` -> hours."""
+    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:[\d.]+S)?", s or "")
+    return None if not m else int(m.group(1) or 0) * 24 + int(m.group(2) or 0)
 
 
-def log_icon_run(db, sess, model: str, run: datetime, leads: list[int], tmp: Path,
-                 now: datetime) -> dict:
-    cells = load_cells(db, model)
+def stac_search(sess, body: dict, max_pages: int = 10) -> list[dict]:
+    """POST ``/search`` and follow ``next`` links (POST or GET style)."""
+    feats: list[dict] = []
+    method, url, payload = "POST", f"{STAC_API}/search", body
+    for _ in range(max_pages):
+        r = (sess.post(url, json=payload, timeout=TIMEOUT) if method == "POST"
+             else sess.get(url, timeout=TIMEOUT))
+        r.raise_for_status()
+        obj = r.json()
+        feats.extend(obj.get("features", []))
+        nxt = next((ln for ln in obj.get("links", []) if ln.get("rel") == "next"), None)
+        if not nxt:
+            break
+        method = nxt.get("method", "GET").upper()
+        url, payload = nxt["href"], nxt.get("body", payload)
+    return feats
+
+
+def ch1_assets(sess, run: datetime, variable: str) -> dict[int, str]:
+    """``{lead_h: href}`` of the control-run files of ``variable`` for ``run``.
+
+    Tries MeteoSwiss's top-level ``forecast:*`` search fields first; if the
+    server rejects them (400) or ignores them (items of other variables come
+    back), retries with the standard STAC ``query`` form.
+    """
+    ref = run.strftime("%Y-%m-%dT%H:%M:%SZ")
+    filters = {
+        "forecast:reference_datetime": ref,
+        "forecast:variable": variable,
+        "forecast:perturbed": False,
+    }
+    feats = None
+    with contextlib.suppress(requests.HTTPError):
+        feats = stac_search(sess, {"collections": [CH1_COLLECTION], "limit": 100, **filters})
+    if feats is None or any(
+        f.get("properties", {}).get("forecast:variable") not in (None, variable) for f in feats
+    ):
+        feats = stac_search(sess, {
+            "collections": [CH1_COLLECTION], "limit": 100,
+            "query": {k: {"eq": v} for k, v in filters.items()},
+        })
+    out: dict[int, str] = {}
+    for f in feats:
+        p = f.get("properties", {})
+        if p.get("forecast:perturbed") not in (False, None) or p.get("forecast:variable") not in (None, variable):
+            continue
+        lead = _duration_hours(p.get("forecast:horizon", ""))
+        href = next((a.get("href") for a in f.get("assets", {}).values() if a.get("href")), None)
+        if lead is not None and href:
+            out[lead] = href
+    return out
+
+
+def ch1_collection_asset(sess, prefix: str) -> str | None:
+    r = sess.get(f"{STAC_API}/collections/{CH1_COLLECTION}/assets", timeout=TIMEOUT)
+    r.raise_for_status()
+    return next((a.get("href") for a in r.json().get("assets", [])
+                 if str(a.get("id", "")).startswith(prefix)), None)
+
+
+def read_native(path: Path):
+    """First (control) native-grid message of a file: ``(uuid, values)``."""
+    from weatherbrief.fetch.grib.grib_reader import iter_messages
+
+    for msg in iter_messages(path):
+        if msg.is_native:
+            return msg.uuid, msg.native_values()
+    raise ValueError(f"{path.name}: no native-grid message")
+
+
+def read_constants(path: Path) -> dict[str, tuple[str, object]]:
+    """CLAT / CLON / HSURF from MeteoSwiss's horizontal-constants file, by shortName."""
+    from weatherbrief.fetch.grib.grib_reader import iter_messages
+
+    names = {"clat": "CLAT", "tlat": "CLAT", "clon": "CLON", "tlon": "CLON", "hsurf": "HSURF", "h": "HSURF"}
+    out: dict[str, tuple[str, object]] = {}
+    seen = []
+    for msg in iter_messages(path):
+        seen.append(msg.short_name)
+        key = names.get((msg.short_name or "").lower())
+        if key and key not in out and msg.is_native:
+            out[key] = (msg.uuid, msg.native_values())
+    if "CLAT" not in out or "CLON" not in out:
+        raise ValueError(f"CLAT/CLON not found; messages: {seen}")
+    return out
+
+
+def ch1_point_values(raw: dict[str, float]) -> dict[str, float]:
+    """CH1 native names/units -> comparison vars (°C, kt, deg, m, %)."""
+    def ok(k):
+        return raw.get(k) is not None and not math.isnan(raw[k])
+
+    out: dict[str, float] = {}
+    if ok("T_2M"):
+        out["t2m_c"] = raw["T_2M"] - 273.15
+    if ok("TD_2M"):
+        out["td2m_c"] = raw["TD_2M"] - 273.15
+    if ok("U_10M") and ok("V_10M"):
+        u, v = raw["U_10M"], raw["V_10M"]
+        out["wspd_kt"] = math.hypot(u, v) * KT_PER_MS
+        out["wdir_deg"] = (math.degrees(math.atan2(-u, -v)) + 360.0) % 360.0
+    if ok("VMAX_10M"):
+        out["gust_kt"] = raw["VMAX_10M"] * KT_PER_MS
+    if ok("VIS"):
+        out["vis_m"] = raw["VIS"]
+    if ok("CLCT"):
+        out["tcc_pct"] = raw["CLCT"]
+    if ok("CLCL"):
+        out["lcc_pct"] = raw["CLCL"]
+    if "CEILING" in raw:
+        # As the product decodes ICON: the "no ceiling" fill, a missing cell or
+        # a non-positive value all mean no ceiling; heights are metres MSL.
+        c = raw["CEILING"]
+        out["ceiling_msl_ft"] = (c * FT_PER_M) if (c is not None and not math.isnan(c)
+                                                   and 0 < c < NO_CEILING_M) else float("nan")
+    return out
+
+
+def log_ch1_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: datetime) -> dict:
+    cells = {icao: (cell, n) for icao, cell, n in db.execute(
+        "SELECT icao, cell, n_cells FROM grid WHERE model='icon-ch1'")}
     if not cells:
-        logger.warning("%s: no cells, run `grid` first", model)
-        return {}
-    n_expected = next(iter(cells.values()))[1]
-    done = done_files(db, model, run)
-    give_up = now - run > timedelta(hours=GIVE_UP_AFTER_H[model])
+        raise RuntimeError("no CH1 grid: run `grid` first")
+    n_cells = next(iter(cells.values()))[1]
+    done = done_files(db, "icon-ch1", run)
+    give_up = now - run > timedelta(hours=GIVE_UP_H["icon-ch1"])
     stats = {"ok": 0, "missing": 0, "bytes": 0}
-
-    # Per variable: CH1 needs one STAC search for all leads of a variable.
     touched: set[int] = set()
     try:
-        for var in ICON_VARS:
-            final = ("ok", "absent", "bad", "forbidden") if give_up else ("ok", "absent")
-            todo = [ld for ld in leads if done.get((ld, var)) not in final]
+        for var in CH1_VARS:
+            todo = [ld for ld in leads if done.get((ld, var)) in (None, "missing")]
             if not todo:
                 continue
-            if model == "icon-ch1":
-                try:
-                    hrefs = ch1_assets(sess, run, var)
-                except requests.RequestException as exc:
-                    logger.warning("%s %s %s: STAC search failed: %s", model, iso(run), var, exc)
-                    continue
-                if not hrefs and give_up:
-                    for ld in todo:
-                        record_file(db, model, run, ld, var, "absent")
-                    continue
-            else:
-                hrefs = None
-                try:
-                    dwd_prefix(sess, model, var)
-                except (ListingError, requests.RequestException) as exc:
-                    logger.warning("%s %s: %s; skipped this pass", model, var, exc)
-                    continue
+            hrefs = ch1_assets(sess, run, var)
             for ld in todo:
-                url = (
-                    hrefs.get(ld) if hrefs is not None
-                    else dwd_url(model, var, run, ld, dwd_prefix(sess, model, var))
-                )
-                if url is None:
-                    record_file(db, model, run, ld, var, "absent" if give_up else "missing")
-                    stats["missing"] += 1
-                    continue
-                path = tmp / f"{model}-{var}-{ld}.grib2"
-                t0 = time.monotonic()
-                try:
-                    nbytes = download(sess, url, path)
-                except requests.RequestException as exc:
-                    path.unlink(missing_ok=True)
-                    logger.warning("%s %s %s +%d: %s", model, iso(run), var, ld, exc)
-                    continue
-                if isinstance(nbytes, str):  # 403: expired pre-signed URL or a block
-                    logger.warning("%s %s %s +%d: HTTP 403", model, iso(run), var, ld)
-                    record_file(db, model, run, ld, var, "forbidden")
-                    stats["missing"] += 1
-                    continue
+                href = hrefs.get(ld)
+                path = tmp / f"ch1-{var}-{ld}.grib2"
+                nbytes = download(sess, href, path) if href else None
                 if nbytes is None:
-                    record_file(db, model, run, ld, var, "absent" if give_up else "missing")
+                    record_file(db, "icon-ch1", run, ld, var, "absent" if give_up else "missing")
                     stats["missing"] += 1
                     continue
                 try:
-                    msg = first_message(path)
-                except Exception:  # noqa: BLE001 - one bad file must not lose the run
-                    logger.exception("%s %s %s +%d: decode failed", model, iso(run), var, ld)
-                    record_file(db, model, run, ld, var, "bad")
+                    _uuid, vals = read_native(path)
+                except Exception:
+                    logger.exception("icon-ch1 %s %s +%d: decode failed", iso(run), var, ld)
+                    record_file(db, "icon-ch1", run, ld, var, "bad")
                     db.commit()
                     continue
                 finally:
                     path.unlink(missing_ok=True)
-                if msg is None:
-                    record_file(db, model, run, ld, var, "bad")
-                    continue
-                _hdr, vals = msg
-                if vals.size != n_expected:
-                    logger.error(
-                        "%s %s: %d values, grid has %d (grid changed? rerun `grid`)",
-                        model, var, vals.size, n_expected,
-                    )
-                    # A grid change is permanent: stop this model until `grid` is rerun.
-                    record_file(db, model, run, ld, var, "grid-mismatch")
+                if vals is None or vals.size != n_cells:
+                    record_file(db, "icon-ch1", run, ld, var, "grid-mismatch")
                     db.commit()
-                    raise RuntimeError(f"{model}: grid changed, rerun `grid`")
-                # The raw value and the 'ok' record land in the same commit, so a
-                # later failure can never leave a file marked done with no values.
-                store_values(db, model, run, ld, {
+                    raise RuntimeError(f"icon-ch1 {var}: grid changed, rerun `grid`")
+                # Raw value and 'ok' in one commit: a later failure never leaves
+                # a file marked done with nothing stored.
+                store(db, "icon-ch1", run, ld, {
                     icao: {f"raw_{var}": float(vals[cell])} for icao, (cell, _n) in cells.items()
                 })
-                record_file(db, model, run, ld, var, "ok", nbytes, time.monotonic() - t0)
+                record_file(db, "icon-ch1", run, ld, var, "ok", nbytes)
                 db.commit()
                 touched.add(ld)
                 stats["ok"] += 1
                 stats["bytes"] += nbytes
     finally:
-        # Runs even when a later file raised, so every lead already marked
-        # 'ok' gets its derived values (the next pass would skip it).
-        # Derived values (wind needs U and V of the same lead) are rebuilt from
-        # everything stored for the lead, so a retry that fetches only V still
-        # produces the wind.
+        # Derived values from everything stored for the lead (wind needs U and
+        # V), even when a later file raised.
         for ld in sorted(touched):
-            store_values(db, model, run, ld, {
-                icao: icon_point_values(_stored_raw(db, model, run, ld, icao)) for icao in cells
-            })
+            per_icao = {}
+            for icao in cells:
+                raw = {var[4:]: val for var, val in db.execute(
+                    "SELECT var, value FROM forecasts WHERE model='icon-ch1' AND run=? "
+                    "AND lead_h=? AND icao=? AND var LIKE 'raw_%'", (iso(run), ld, icao))}
+                raw = {k: (float("nan") if v is None else v) for k, v in raw.items()}
+                per_icao[icao] = ch1_point_values(raw)
+            store(db, "icon-ch1", run, ld, per_icao)
         db.commit()
     return stats
 
 
-def _stored_raw(db, model, run, lead, icao) -> dict[str, float]:
-    rows = db.execute(
-        "SELECT var, value FROM forecasts WHERE model=? AND run=? AND lead_h=? AND icao=? "
-        "AND var LIKE 'raw_%'",
-        (model, iso(run), lead, icao),
-    ).fetchall()
-    return {var[4:]: val for var, val in rows}
-
-
 # ---------------------------------------------------------------------------
-# AROME logging (product downloader + decoder)
+# AROME (product downloader + decoder)
 # ---------------------------------------------------------------------------
 
 
-def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: datetime) -> dict:
+def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: datetime,
+                  positions: dict) -> dict:
     from weatherbrief.fetch.grib.arome_fetch import (
         AROME,
         AROME_SURFACE_PACKAGES,
@@ -733,108 +431,119 @@ def log_arome_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: dat
         decode_arome_surface_per_point,
     )
 
-    positions = {k: (v[0], v[1]) for k, v in airport_positions(AIRPORTS).items()}
     icaos = sorted(positions)
     lats = [positions[i][0] for i in icaos]
     lons = [positions[i][1] for i in icaos]
     date_str, hour = run.strftime("%Y%m%d"), run.hour
     done = done_files(db, "arome", run)
-    give_up = now - run > timedelta(hours=GIVE_UP_AFTER_H["arome"])
+    give_up = now - run > timedelta(hours=GIVE_UP_H["arome"])
     stats = {"ok": 0, "missing": 0, "bytes": 0}
 
     for group, hours in arome_groups_for_fhours(leads, AROME).items():
-        final = ("ok", "absent", "bad") if give_up else ("ok", "absent")
-        if all(done.get((h, "SURFACE")) in final for h in hours):
+        if all(done.get((h, "SURFACE")) not in (None, "missing") for h in hours):
             continue
+        codes = [sess.head(arome_package_url(date_str, hour, group, AROME, p), timeout=20).status_code
+                 for p in AROME_SURFACE_PACKAGES]
+        if any(c not in (200, 404) for c in codes):
+            logger.warning("arome %s %s: HTTP %s, skipped this pass", iso(run), group, codes)
+            continue
+        if any(c == 404 for c in codes):
+            for h in hours:
+                record_file(db, "arome", run, h, "SURFACE", "absent" if give_up else "missing")
+            stats["missing"] += len(hours)
+            db.commit()
+            continue
+        merged = {h: [{} for _ in icaos] for h in hours}
         run_dir = Path(tempfile.mkdtemp(dir=tmp))
         try:
-            merged: dict[int, list[dict]] = {h: [{} for _ in icaos] for h in hours}
-            # Both packages must be published before either is downloaded, so a
-            # late SP2 never costs a wasted SP1 download on every retry.
-            try:
-                codes = [
-                    sess.head(arome_package_url(date_str, hour, group, AROME, pkg), timeout=20)
-                    .status_code
-                    for pkg in AROME_SURFACE_PACKAGES
-                ]
-            except requests.RequestException as exc:
-                logger.warning("arome %s %s: availability probe failed: %s", iso(run), group, exc)
-                continue
-            if any(c not in (200, 404) for c in codes):
-                # A server error is not "not published": skip, never give up on it.
-                logger.warning("arome %s %s: probe HTTP %s; skipped", iso(run), group, codes)
-                continue
-            complete = all(c == 200 for c in codes)
-            for pkg in AROME_SURFACE_PACKAGES if complete else ():
-                t0 = time.monotonic()
+            for pkg in AROME_SURFACE_PACKAGES:
                 path = download_arome_group(date_str, hour, group, run_dir, sess, AROME, pkg)
                 if path is None:
-                    complete = False
-                    break
+                    raise RuntimeError(f"arome {group} {pkg}: download failed")
                 stats["bytes"] += path.stat().st_size
-                dec = decode_arome_surface_per_point(path, hours, lats, lons)
-                for h, pts in dec["points"].items():
+                for h, pts in decode_arome_surface_per_point(path, hours, lats, lons)["points"].items():
                     for i, raw in enumerate(pts):
                         merged[h][i].update(raw)
-                logger.info("arome %s %s %s: %.0f s", iso(run), group, pkg, time.monotonic() - t0)
                 path.unlink(missing_ok=True)
-            if not complete:
-                for h in hours:
-                    record_file(db, "arome", run, h, "SURFACE", "absent" if give_up else "missing")
-                stats["missing"] += len(hours)
-                db.commit()
-                continue
-            for h in hours:
-                per_icao = {}
-                for i, icao in enumerate(icaos):
-                    snap = build_arome_surface_snapshot(merged[h][i])
-                    vals = {
-                        "t2m_c": snap.get("temperature_2m_c"),
-                        "td2m_c": snap.get("dewpoint_2m_c"),
-                        "wspd_kt": snap.get("wind_speed_10m_kt"),
-                        "wdir_deg": snap.get("wind_direction_10m_deg"),
-                        "gust_kt": snap.get("wind_gusts_10m_kt"),
-                        "tcc_pct": snap.get("cloud_cover_pct"),
-                        "lcc_pct": snap.get("cloud_cover_low_pct"),
-                    }
-                    per_icao[icao] = {k: v for k, v in vals.items() if v is not None}
-                if not any(per_icao.values()):
-                    logger.error("arome %s +%d: decoder returned no values", iso(run), h)
-                    record_file(db, "arome", run, h, "SURFACE", "bad")
-                    continue
-                store_values(db, "arome", run, h, per_icao)
-                record_file(db, "arome", run, h, "SURFACE", "ok")
-                stats["ok"] += 1
-            db.commit()
         finally:
             for p in run_dir.glob("*"):
                 p.unlink(missing_ok=True)
             with contextlib.suppress(OSError):
                 run_dir.rmdir()
+        for h in hours:
+            per_icao = {}
+            for i, icao in enumerate(icaos):
+                snap = build_arome_surface_snapshot(merged[h][i])
+                vals = {
+                    "t2m_c": snap.get("temperature_2m_c"), "td2m_c": snap.get("dewpoint_2m_c"),
+                    "wspd_kt": snap.get("wind_speed_10m_kt"), "wdir_deg": snap.get("wind_direction_10m_deg"),
+                    "gust_kt": snap.get("wind_gusts_10m_kt"), "tcc_pct": snap.get("cloud_cover_pct"),
+                    "lcc_pct": snap.get("cloud_cover_low_pct"),
+                }
+                per_icao[icao] = {k: v for k, v in vals.items() if v is not None}
+            if not any(per_icao.values()):
+                logger.error("arome %s +%d: decoder returned no values", iso(run), h)
+                record_file(db, "arome", run, h, "SURFACE", "bad")
+                continue
+            store(db, "arome", run, h, per_icao)
+            record_file(db, "arome", run, h, "SURFACE", "ok")
+            stats["ok"] += 1
+        db.commit()
     return stats
 
 
 # ---------------------------------------------------------------------------
-# METARs
+# METARs and product snapshots
 # ---------------------------------------------------------------------------
 
 
-def log_metars(db, icaos) -> int:
+def log_metars(db) -> int:
     from weatherbrief.tasks.verification import fetch_observations_batch
 
-    obs = fetch_observations_batch(list(icaos), os.environ["AIRPORTS_DB"])
-    rows = [
-        (
-            o.icao, iso(o.observation_time), o.report_type, o.metar_raw,
-            o.ceiling_ft, o.lowest_cloud_base_ft, o.visibility_m,
-            o.wind_dir, o.wind_speed_kt, o.wind_gust_kt,
-            o.temperature_c, o.dewpoint_c, o.flight_category,
-        )
-        for o in obs
-    ]
-    db.executemany("INSERT OR IGNORE INTO metars VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    obs = fetch_observations_batch(list(AIRPORTS), os.environ["AIRPORTS_DB"])
+    db.executemany(
+        "INSERT OR IGNORE INTO metars VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(o.icao, iso(o.observation_time), o.report_type, o.metar_raw, o.ceiling_ft,
+          o.visibility_m, o.wind_dir, o.wind_speed_kt, o.wind_gust_kt,
+          o.temperature_c, o.dewpoint_c) for o in obs],
+    )
     db.commit()
-    return len(rows)
+    return len(obs)
+
+
+def _artifact_iso(value) -> str | None:
+    """An artifact datetime (ISO string, naive = UTC) -> this DB's ISO minutes."""
+    if value is None:
+        return None
+    dt = datetime.fromisoformat(str(value))
+    return iso(dt if dt.tzinfo else dt.replace(tzinfo=UTC))
+
+
+def copy_product_snapshots(db, snapshots_dir: str) -> int:
+    """Copy our airports' ECMWF/GFS/ICON rows from the forecast-map artifacts."""
+    n = 0
+    marks = ",".join("?" * len(AIRPORTS))
+    models = ",".join("?" * len(PRODUCT_MODELS))
+    for path in sorted(glob.glob(os.path.join(snapshots_dir, "eu-*.sqlite"))):
+        try:
+            src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            rows = src.execute(
+                f"SELECT model, model_init_time, forecast_hour, icao, {', '.join(PRODUCT_COLS)} "
+                f"FROM airport_forecast_snapshots WHERE icao IN ({marks}) AND model IN ({models})",
+                (*AIRPORTS, *PRODUCT_MODELS),
+            ).fetchall()
+            src.close()
+        except sqlite3.Error as exc:
+            logger.warning("snapshot artifact %s unreadable: %s", path, exc)
+            continue
+        cur = db.executemany(
+            "INSERT OR IGNORE INTO product VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            [(m, _artifact_iso(run), _artifact_iso(valid), icao, *vals)
+             for m, run, valid, icao, *vals in rows],
+        )
+        n += cur.rowcount
+    db.commit()
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +552,9 @@ def log_metars(db, icaos) -> int:
 
 
 def cmd_check(args) -> int:
-    """Reachability and format probe. Prints what it sees; changes nothing."""
+    """Probe every source; print what it sees. Changes nothing."""
+    import numpy as np
+
     sess = session()
     ok = True
 
@@ -852,330 +563,174 @@ def cmd_check(args) -> int:
         ok &= bool(good)
         print(f"[{'OK ' if good else 'FAIL'}] {name}  {detail}")
 
-    # 1. STAC collection + search
+    now = datetime.now(UTC)
     try:
         r = sess.get(f"{STAC_API}/collections/{CH1_COLLECTION}", timeout=TIMEOUT)
-        ext = r.json().get("extent", {}).get("temporal", {}).get("interval") if r.ok else None
-        line("STAC collection", r.ok, f"HTTP {r.status_code} temporal={ext}")
-    except Exception as exc:
+        line("STAC collection", r.ok, f"HTTP {r.status_code}")
+    except Exception as exc:  # noqa: BLE001
         line("STAC collection", False, repr(exc))
 
-    now = datetime.now(timezone.utc)
-    href = None
-    ceil_run = None
-    for run in cadence_runs(now, 3, 24, 2.5):
+    run = hrefs = None
+    for cand in cadence_runs(now, 3, 24, 2.5):
         try:
-            hrefs = ch1_assets(sess, run, "T_2M")
-        except Exception as exc:
+            hrefs = ch1_assets(sess, cand, "T_2M")
+        except Exception as exc:  # noqa: BLE001
             line("STAC search", False, repr(exc))
             break
         if hrefs:
-            line("STAC search", True, f"run {iso(run)}: T_2M ctrl leads {min(hrefs)}..{max(hrefs)} ({len(hrefs)})")
-            href = hrefs[min(hrefs, key=lambda h: abs(h - 1))]
-            ceil_run = run
+            run = cand
+            line("STAC search", True, f"run {iso(run)}: T_2M control leads {min(hrefs)}..{max(hrefs)}")
             break
     else:
-        line("STAC search", False, "no control T_2M file in the last 24 h (format? see --verbose)")
-        if args.verbose:
-            body = {"collections": [CH1_COLLECTION], "limit": 2}
-            with contextlib.suppress(Exception):
-                print(json.dumps(stac_search(sess, body, max_pages=1)[:2], indent=1)[:3000])
+        line("STAC search", False, "no control T_2M file in the last 24 h")
 
-    # 2. CSCS download (pre-signed URL) + decode
-    if href:
-        with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t2m.grib2"
-            try:
-                t0 = time.monotonic()
-                n = download(sess, href, p)
-                dt = time.monotonic() - t0
-                got = isinstance(n, int)
-                line("CSCS download", got, f"{n / 1e6:.1f} MB in {dt:.1f} s" if got else f"result={n}")
-                if got:
-                    import numpy as np
-
-                    hdr, vals = first_message(p)
-                    line("CH1 decode", vals.size > 0,
-                         f"{vals.size} values, grid={hdr.get('gridType')} uuid={hdr.get('uuidOfHGrid')} "
-                         f"short={hdr.get('shortName')} range={np.nanmin(vals):.1f}..{np.nanmax(vals):.1f}")
-            except Exception as exc:
-                line("CSCS download/decode", False, repr(exc))
-    # CEILING encoding: what "no ceiling" looks like decides how `report` reads it.
-    if href:
+    with tempfile.TemporaryDirectory() as td:
+        if run:
+            for var in ("T_2M", "CEILING", "VIS"):
+                h = hrefs if var == "T_2M" else ch1_assets(sess, run, var)
+                if not h:
+                    line(f"CH1 {var}", False, "not listed")
+                    continue
+                p = Path(td) / f"{var}.grib2"
+                try:
+                    t0 = time.monotonic()
+                    n = download(sess, h[min(h, key=lambda x: abs(x - 1))], p)
+                    uuid, v = read_native(p)
+                    f = v[np.isfinite(v)]
+                    q = np.percentile(f, [0, 10, 50, 90, 100]) if f.size else []
+                    line(f"CH1 {var}", True,
+                         f"{n / 1e6:.1f} MB in {time.monotonic() - t0:.1f} s, {v.size} cells, uuid {uuid}, "
+                         f"missing {np.mean(~np.isfinite(v)):.1%}, <=0 {np.mean(f <= 0):.1%}, "
+                         f">=9999 {np.mean(f >= 9999):.1%}, pct0/10/50/90/100 {' '.join(f'{x:.0f}' for x in q)}")
+                except Exception as exc:  # noqa: BLE001
+                    line(f"CH1 {var}", False, repr(exc))
         try:
-            ch = ch1_assets(sess, ceil_run, "CEILING")
-            if ch:
-                with tempfile.TemporaryDirectory() as td:
-                    p = Path(td) / "ceiling.grib2"
-                    download(sess, ch[min(ch)], p)
-                    _ceiling_summary("CH1 CEILING", first_message(p), line)
-            else:
-                line("CH1 CEILING", False, "no CEILING control file listed")
+            href = ch1_collection_asset(sess, "horizontal_constants")
+            p = Path(td) / "hc.grib2"
+            download(sess, href, p)
+            consts = read_constants(p)
+            line("CH1 horizontal_constants", True, f"{sorted(consts)} uuid {consts['CLAT'][0]}")
         except Exception as exc:  # noqa: BLE001
-            line("CH1 CEILING", False, repr(exc))
-    try:
-        hc = ch1_collection_asset(sess, "horizontal_constants")
-        line("CH1 horizontal_constants asset", bool(hc), (hc or "")[:90])
-    except Exception as exc:
-        line("CH1 horizontal_constants asset", False, repr(exc))
+            line("CH1 horizontal_constants", False, repr(exc))
 
-    # 3. DWD native feed
-    for model in ("icon-d2", "icon-eu"):
-        found = None
-        for run in cadence_runs(now, 3, 24, 2.0):
-            try:
-                url = dwd_url(model, "T_2M", run, 1, dwd_prefix(sess, model, "T_2M"))
-                r = sess.head(url, timeout=20)
-            except Exception as exc:
-                line(f"DWD {model}", False, repr(exc))
-                break
-            if r.status_code == 200:
-                found = (run, url)
-                break
-        if found:
-            line(f"DWD {model}", True, f"latest run {iso(found[0])} {found[1]}")
-            with tempfile.TemporaryDirectory() as td:
-                p = Path(td) / "ceiling.grib2"
-                url = dwd_url(model, "CEILING", found[0], 1, dwd_prefix(sess, model, "CEILING"))
-                if isinstance(download(sess, url, p), int):
-                    _ceiling_summary(f"DWD {model} CEILING", first_message(p), line)
-                else:
-                    line(f"DWD {model} CEILING", False, url)
-        else:
-            line(f"DWD {model}", False, "no T_2M +1h file in 24 h (URL layout?)")
-    for model in ("icon-d2", "icon-eu"):
-        for param in ("CLAT", "HSURF", "T_2M", "CEILING", "HBAS_SC"):
-            try:
-                pre = dwd_prefix(sess, model, param)
-                line(f"DWD {model} {param} listing", True, f"prefix='{pre}'")
-            except Exception as exc:  # noqa: BLE001
-                line(f"DWD {model} {param} listing", False, repr(exc))
-
-    # 4. AROME mirror
     try:
         from weatherbrief.fetch.grib.arome_fetch import AROME, arome_package_url
 
-        good = None
-        for run in cadence_runs(now, 3, 30, 3.0):
-            url = arome_package_url(run.strftime("%Y%m%d"), run.hour, "00H06H", AROME, "SP1")
-            if sess.head(url, timeout=20).status_code == 200:
-                good = (run, url)
-                break
-        line("AROME mirror", bool(good), f"latest {iso(good[0])}" if good else "no SP1 00H06H in 30 h")
-    except Exception as exc:
+        found = next((c for c in cadence_runs(now, 3, 30, 3.0) if sess.head(
+            arome_package_url(c.strftime("%Y%m%d"), c.hour, "00H06H", AROME, "SP1"),
+            timeout=20).status_code == 200), None)
+        line("AROME mirror", found is not None, f"latest {iso(found)}" if found else "nothing in 30 h")
+    except Exception as exc:  # noqa: BLE001
         line("AROME mirror", False, repr(exc))
 
-    # 5. METARs
-    try:
-        r = sess.get(AWC_METAR, params={"ids": "LSGS,LSZH", "format": "raw"}, timeout=20)
-        line("aviationweather.gov", r.ok and "LSGS" in r.text, r.text.strip().splitlines()[0][:80] if r.ok else f"HTTP {r.status_code}")
-    except Exception as exc:
-        line("aviationweather.gov", False, repr(exc))
+    if args.snapshots_dir:
+        files = sorted(glob.glob(os.path.join(args.snapshots_dir, "eu-*.sqlite")))
+        line("product snapshot artifacts", bool(files),
+             f"{len(files)} files, newest {os.path.basename(files[-1]) if files else '-'}")
+    else:
+        line("product snapshot artifacts", False, "--snapshots-dir / ALPS_SNAPSHOTS_DIR not set")
 
-    # 6. eccodes
-    try:
-        ec = _eccodes()
-        line("eccodes", True, ec.codes_get_api_version())
-    except Exception as exc:
-        line("eccodes", False, repr(exc))
-
-    print("\nall reachable" if ok else "\nsome checks failed: paste this output in the thread")
+    line("AIRPORTS_DB", bool(os.environ.get("AIRPORTS_DB")), os.environ.get("AIRPORTS_DB", ""))
+    print("\nall OK" if ok else "\nsome checks failed")
     return 0 if ok else 1
 
 
-def _ceiling_summary(name, msg, line) -> None:
-    """Print the CEILING value distribution: fill values and datum hints."""
-    import numpy as np
-
-    if msg is None:
-        line(name, False, "no message")
-        return
-    hdr, vals = msg
-    nonfinite = float(np.mean(~np.isfinite(vals))) if vals.size else 0.0
-    v = vals[np.isfinite(vals)]
-    if v.size == 0:
-        line(name, False, "all missing")
-        return
-    q = np.percentile(v, [0, 1, 10, 50, 90, 99, 100])
-    line(
-        name, True,
-        f"units={hdr.get('units')} level={hdr.get('typeOfLevel')} missing: {nonfinite:.1%}  "
-        f"<=0: {np.mean(v <= 0):.1%}  >=9999: {np.mean(v >= 9999):.1%}  "
-        f"pct0/1/10/50/90/99/100 = {' '.join(f'{x:.0f}' for x in q)}",
-    )
-
-
-def _grid_from_file(path: Path):
-    """Return (clat, clon, hsurf, uuid, n) from a file holding CLAT/CLON/HSURF."""
-    clat = clon = hsurf = None
-    uuid = None
-    for hdr, vals in grib_messages(path):
-        key = _param(hdr)
-        short = (hdr.get("shortName") or "").lower()
-        if key in _CLAT or short in ("clat", "tlat"):
-            if clat is None:
-                clat, uuid = vals, hdr.get("uuidOfHGrid")
-        elif key in _CLON or short in ("clon", "tlon"):
-            clon = clon if clon is not None else vals
-        elif key in _HSURF or short in ("hsurf", "h"):
-            hsurf = hsurf if hsurf is not None else vals
-    return clat, clon, hsurf, uuid
-
-
 def cmd_grid(args) -> int:
-    """Nearest cell per airport for each ICON model (one-off; rerun if a grid changes)."""
-    load_env()
-    sess = session()
-    db = open_db(args.out)
-    pos = airport_positions(AIRPORTS)
-    latlon = {k: (v[0], v[1]) for k, v in pos.items()}
-    now = datetime.now(timezone.utc)
+    """Nearest CH1 cell, model height and distance for each airport (one-off)."""
+    from weatherbrief.fetch.grib.icon_grid import IconNativeGrid
 
+    db = open_db(args.out)
+    sess = session()
+    positions = airport_positions()
     with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        for model in args.models:
-            if model == "arome":
-                continue
-            clat = clon = hsurf = None
-            uuid = None
-            if model == "icon-ch1":
-                href = ch1_collection_asset(sess, "horizontal_constants")
-                if not href:
-                    logger.error("icon-ch1: no horizontal_constants asset")
-                    continue
-                p = tmp / "hc.grib2"
-                got = download(sess, href, p)
-                if not isinstance(got, int):
-                    logger.error("icon-ch1: horizontal_constants download failed (%s)", got)
-                    continue
-                clat, clon, hsurf, uuid = _grid_from_file(p)
-            else:
-                for run in cadence_runs(now, 3, 24, 2.0):
-                    parts = {}
-                    for param in ("CLAT", "CLON", "HSURF"):
-                        try:
-                            pre = dwd_prefix(sess, model, param)
-                        except (ListingError, requests.RequestException) as exc:
-                            logger.warning("%s %s: %s", model, param, exc)
-                            continue
-                        p = tmp / f"{model}-{param}.grib2"
-                        if isinstance(download(sess, dwd_url(model, param, run, 0, pre), p), int):
-                            parts[param] = first_message(p)
-                    if "CLAT" in parts and "CLON" in parts:
-                        clat, uuid = parts["CLAT"][1], parts["CLAT"][0].get("uuidOfHGrid")
-                        clon = parts["CLON"][1]
-                        hsurf = parts["HSURF"][1] if "HSURF" in parts else None
-                        break
-            if clat is None or clon is None:
-                logger.error("%s: CLAT/CLON not found", model)
-                continue
-            n = int(clat.size)
-            near = nearest_cells(clat, clon, latlon)
-            db.execute("DELETE FROM cells WHERE model=?", (model,))
-            db.execute(
-                "INSERT OR REPLACE INTO grid_meta VALUES (?, ?)",
-                (model, iso(datetime.now(timezone.utc))),
-            )
-            for icao, (cell, la, lo, km) in near.items():
-                elev = float(hsurf[cell]) if hsurf is not None and hsurf.size == n else None
-                db.execute(
-                    "INSERT INTO cells VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (model, icao, uuid, n, cell, la, lo, km, elev, pos[icao][0], pos[icao][1], pos[icao][2]),
-                )
-                print(f"{model:8s} {icao}  cell {cell:8d}  {km:5.2f} km  model {elev if elev is None else round(elev)} m"
-                      f"  airport {pos[icao][2] if pos[icao][2] is None else round(pos[icao][2])} m")
-            db.commit()
-            # D2's native grid has a bitmap: a cell far from the airport means the
-            # airport is outside the domain.
-            far = [i for i, v in near.items() if v[3] > 5.0]
-            if far:
-                logger.warning("%s: nearest cell > 5 km for %s (outside domain?)", model, ", ".join(far))
+        p = Path(td) / "hc.grib2"
+        href = ch1_collection_asset(sess, "horizontal_constants")
+        if not href or download(sess, href, p) is None:
+            sys.exit("CH1 horizontal_constants not available")
+        consts = read_constants(p)
+    uuid, clat = consts["CLAT"]
+    grid = IconNativeGrid(uuid, clat, consts["CLON"][1], default_method="nearest")
+    hsurf = consts.get("HSURF", (None, None))[1]
+    icaos = sorted(positions)
+    nw = grid.nearest_weights([positions[i][0] for i in icaos], [positions[i][1] for i in icaos])
+    built = iso(datetime.now(UTC))
+    db.execute("DELETE FROM grid WHERE model='icon-ch1'")
+    for row, k in enumerate(nw.inb_idx):
+        icao, cell = icaos[int(k)], int(nw.idx[row, 0])
+        lat, lon, elev_ft = positions[icao]
+        dist = 2 * 6371.0 * math.asin(min(1.0, math.sqrt(
+            math.sin(math.radians(grid.clat[cell] - lat) / 2) ** 2
+            + math.cos(math.radians(lat)) * math.cos(math.radians(grid.clat[cell]))
+            * math.sin(math.radians(grid.clon[cell] - lon) / 2) ** 2)))
+        model_m = float(hsurf[cell]) if hsurf is not None else None
+        db.execute("INSERT INTO grid VALUES (?,?,?,?,?,?,?,?,?)",
+                   ("icon-ch1", icao, uuid, grid.n_cells, cell, dist, model_m, elev_ft, built))
+        field_m = elev_ft / FT_PER_M if elev_ft is not None else None
+        print(f"{icao}  cell {cell:8d}  {dist:4.2f} km  model {model_m and round(model_m)} m  "
+              f"field {field_m and round(field_m)} m  dz {round(model_m - field_m) if model_m and field_m else '-'} m")
+    outside = set(icaos) - {icaos[int(k)] for k in nw.inb_idx}
+    if outside:
+        print("outside the CH1 grid:", ", ".join(sorted(outside)))
+    db.commit()
     return 0
 
 
-def _grid_stale(db, model: str) -> bool:
-    """True when a grid-mismatch was recorded after the model's cells were built."""
-    row = db.execute(
-        "SELECT MAX(at) FROM files WHERE model=? AND status='grid-mismatch'", (model,),
-    ).fetchone()
-    built = db.execute("SELECT built_at FROM grid_meta WHERE model=?", (model,)).fetchone()
-    return bool(row and row[0]) and (built is None or row[0] > built[0])
-
-
-@contextlib.contextmanager
-def lock(out: Path):
-    out.mkdir(parents=True, exist_ok=True)
-    fh = open(out / ".lock", "w")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        logger.info("another log run holds the lock; exiting")
-        sys.exit(0)
-    try:
-        yield
-    finally:
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        fh.close()
-
-
 def cmd_log(args) -> int:
-    load_env()
     if not os.environ.get("AIRPORTS_DB"):
-        sys.exit("AIRPORTS_DB is not set (it comes from the repo .env); METARs need it")
-    with lock(args.out):
+        sys.exit("AIRPORTS_DB is not set (it comes from the repo .env)")
+    args.out.mkdir(parents=True, exist_ok=True)
+    with open(args.out / ".lock", "w") as lockf:
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("another log pass is running")
+            return 0
         db = open_db(args.out)
         sess = session()
-        now = datetime.now(timezone.utc)
-        leads = list(range(args.min_lead, args.max_lead + 1))
-        t_all = time.monotonic()
+        now = datetime.now(UTC)
+        leads = list(range(1, args.max_lead + 1))
         failed = False
-        with tempfile.TemporaryDirectory(dir=args.tmp) as td:
-            tmp = Path(td)
+        positions = None
+        with tempfile.TemporaryDirectory() as td:
             for model in args.models:
-                if model != "arome" and _grid_stale(db, model):
-                    logger.error("%s: grid changed since `grid` ran; rerun `grid`. Skipped.", model)
-                    failed = True
-                    continue
-                delay = {"icon-ch1": 1.5, "icon-d2": 1.0, "icon-eu": 2.5, "arome": 3.0}[model]
-                for run in cadence_runs(now, args.every, args.lookback_h, delay):
+                for run in cadence_runs(now, args.every, args.lookback_h, PUBLISH_DELAY_H[model]):
                     t0 = time.monotonic()
                     try:
-                        if model == "arome":
-                            st = log_arome_run(db, sess, run, leads, tmp, now)
+                        if model == "icon-ch1":
+                            st = log_ch1_run(db, sess, run, [ld for ld in leads if ld <= CH1_MAX_LEAD], Path(td), now)
                         else:
-                            mleads = [ld for ld in leads if ld <= ICON_MODELS[model].max_lead_h]
-                            st = log_icon_run(db, sess, model, run, mleads, tmp, now)
+                            positions = positions or {k: v[:2] for k, v in airport_positions().items()}
+                            st = log_arome_run(db, sess, run, leads, Path(td), now, positions)
                     except Exception:
                         logger.exception("%s %s failed", model, iso(run))
                         failed = True
                         continue
-                    if st and (st.get("ok") or st.get("missing")):
-                        logger.info(
-                            "%s %s: %d ok, %d missing, %.0f MB, %.0f s",
-                            model, iso(run), st["ok"], st["missing"], st["bytes"] / 1e6,
-                            time.monotonic() - t0,
-                        )
-        try:
-            n = log_metars(db, AIRPORTS)
-            logger.info("metars: %d reports seen", n)
-        except Exception:
-            logger.exception("metar fetch failed")
-            failed = True
-        logger.info("log pass done in %.0f s%s", time.monotonic() - t_all, " (with errors)" if failed else "")
+                    if st["ok"] or st["missing"]:
+                        logger.info("%s %s: %d ok, %d missing, %.0f MB, %.0f s", model, iso(run),
+                                    st["ok"], st["missing"], st["bytes"] / 1e6, time.monotonic() - t0)
+        for name, step in (("metars", lambda: log_metars(db)),
+                           ("product snapshots", lambda: copy_product_snapshots(db, args.snapshots_dir)
+                            if args.snapshots_dir else 0)):
+            try:
+                logger.info("%s: %d rows", name, step())
+            except Exception:
+                logger.exception("%s failed", name)
+                failed = True
     return 1 if failed else 0
 
 
 def cmd_status(args) -> int:
     db = open_db(args.out)
-    print("cells:", dict(db.execute("SELECT model, COUNT(*) FROM cells GROUP BY model").fetchall()))
-    print("\nruns (files ok / missing / absent / bad / forbidden / grid-mismatch, MB):")
+    print("CH1 grid airports:", db.execute("SELECT COUNT(*) FROM grid").fetchone()[0])
+    print("\nmodel  run  ok missing absent bad grid-mismatch  MB")
     for row in db.execute(
         "SELECT model, run, SUM(status='ok'), SUM(status='missing'), SUM(status='absent'), "
-        "SUM(status='bad'), SUM(status='forbidden'), SUM(status='grid-mismatch'), "
-        "ROUND(SUM(COALESCE(bytes,0))/1e6) FROM files GROUP BY model, run ORDER BY run DESC, model LIMIT 40"
+        "SUM(status='bad'), SUM(status='grid-mismatch'), ROUND(SUM(COALESCE(bytes,0))/1e6) "
+        "FROM files GROUP BY model, run ORDER BY run DESC, model LIMIT 30"
     ):
         print("  ", *row)
-    print("\nmetars:", db.execute("SELECT COUNT(*), MIN(obs_time), MAX(obs_time) FROM metars").fetchone())
+    print("\nproduct rows:", dict(db.execute("SELECT model, COUNT(*) FROM product GROUP BY model").fetchall()))
+    print("metars:", db.execute("SELECT COUNT(*), MIN(obs_time), MAX(obs_time) FROM metars").fetchone())
     return 0
 
 
@@ -1183,204 +738,156 @@ def cmd_status(args) -> int:
 # Report
 # ---------------------------------------------------------------------------
 
-
-def _category(ceiling_ft, vis_m) -> str:
-    """The product's flight category (``classify_flight_category``), so model and
-    METAR are categorised exactly as in the verification tables. Missing ceiling
-    or visibility counts as unrestricted on that axis, as there."""
-    from weatherbrief.analysis.airport_conditions import classify_flight_category
-
-    return classify_flight_category(ceiling_ft, visibility_m=vis_m).value
+BUCKETS = ((1, 6), (7, 12), (13, 24), (25, 48))
 
 
-def _dz(model_m, airport_m) -> float | None:
-    """Model cell height minus field elevation (m), or None if either is unknown."""
-    if model_m is None or airport_m is None:
-        return None
-    return model_m - airport_m
+def _forecast_rows(db, since: str):
+    """Yield ``(model, lead_h, valid, icao, vals)`` for every source, on one schema.
 
+    ``vals`` keys: t2m_c, td2m_c, wspd_kt, wdir_deg, gust_kt, vis_m,
+    ceiling_agl_ft, has_ceiling (the model publishes a ceiling at all).
+    """
+    from weatherbrief.analysis.airport_conditions import to_agl_ceiling
+    from weatherbrief.tasks.scoring import model_cloud_base_agl
 
-def _score_ceiling(s, v, icao, o_ceil, o_vis, elev, datum) -> None:
-    """Add the ceiling/category samples of one forecast hour to ``s``."""
-    # Ceiling: only where the model has a CEILING value for this hour
-    # (AROME has none). ICON CEILING is read as metres MSL, as the product
-    # does (--ceiling-datum agl to test the other reading); >= 9999 m is
-    # the "no ceiling" fill (#847).
-    # A NaN cell (stored as NULL) or a non-positive value is an unknown
-    # ceiling, not a clear sky: skip the sample rather than score it VFR.
-    raw_c = v.get("raw_CEILING")
-    if raw_c is None or raw_c <= 0:
-        return
-    raw = v.get("ceiling_raw_m")
-    ap = elev.get(icao)
-    if ap is None and datum == "msl":
-        return  # no field elevation: an MSL ceiling can't be turned into AGL
-    c_ft = None
-    if raw is not None and raw < 9999.0:
-        c_ft = max(0.0, (raw - (ap if datum == "msl" else 0.0)) * FT_PER_M)
-    # Like for like: ceiling-only category on both sides for every model;
-    # the full ceiling+visibility category only where the model has VIS
-    # (DWD dropped it on the native feed, so CH1 only in practice).
-    variants = [("ceil", _category(c_ft, None), _category(o_ceil, None))]
-    if "vis_m" in v:
-        variants.append(("full", _category(c_ft, v["vis_m"]), _category(o_ceil, o_vis)))
-    for tag, m_cat, o_cat in variants:
-        s.setdefault(f"{tag}_hit", []).append(1.0 if m_cat == o_cat else 0.0)
-        o_low = o_cat in ("IFR", "LIFR")
-        m_low = m_cat in ("IFR", "LIFR")
-        if o_low:
-            s.setdefault(f"{tag}_pod", []).append(1.0 if m_low else 0.0)
-        if m_low:
-            s.setdefault(f"{tag}_far", []).append(0.0 if o_low else 1.0)
+    elev = dict(db.execute("SELECT icao, field_elev_ft FROM grid WHERE model='icon-ch1'"))
+    rows: dict[tuple, dict] = {}
+    for model, run, lead, valid, icao, var, val in db.execute(
+        "SELECT model, run, lead_h, valid, icao, var, value FROM forecasts "
+        "WHERE valid >= ? AND var NOT LIKE 'raw_%'", (since,)):
+        rows.setdefault((model, lead, valid, icao), {})[var] = val
+    for (model, lead, valid, icao), v in rows.items():
+        if "ceiling_msl_ft" in v:
+            c = v.pop("ceiling_msl_ft")
+            v["ceiling_agl_ft"] = to_agl_ceiling(c, elev.get(icao), source_is_agl=False) if c is not None else None
+            v["has_ceiling"] = True
+        yield model, lead, valid, icao, v
+
+    for model, run, valid, icao, t, td, vis, ws, wd, wg, ceil in db.execute(
+            "SELECT * FROM product WHERE valid >= ?", (since,)):
+        lead = round((parse_iso(valid) - parse_iso(run)).total_seconds() / 3600)
+        yield model, lead, valid, icao, {
+            "t2m_c": t, "td2m_c": td, "vis_m": vis, "wspd_kt": ws, "wdir_deg": wd, "gust_kt": wg,
+            "ceiling_agl_ft": model_cloud_base_agl(ceil, model, elev.get(icao)), "has_ceiling": True,
+        }
 
 
 def cmd_report(args) -> int:
-    """Per model, lead bucket and airport: errors against the nearest METAR."""
+    """Errors vs the routine METAR nearest each valid hour, per model and lead bucket."""
+    from weatherbrief.analysis.airport_conditions import classify_flight_category
+
+    def cat(ceiling_ft, vis_m):
+        return classify_flight_category(ceiling_ft, visibility_m=vis_m).value
+
     db = open_db(args.out)
-    since = iso(datetime.now(timezone.utc) - timedelta(days=args.days))
+    since = iso(datetime.now(UTC) - timedelta(days=args.days))
+    # Routine METARs only, as the verification tables score; the one within
+    # 30 min of each hour.
     metars: dict[tuple[str, str], tuple] = {}
-    for row in db.execute(
-        "SELECT icao, obs_time, ceiling_ft, visibility_m, wind_kt, gust_kt, temp_c, dewpoint_c, wind_dir "
-        "FROM metars WHERE obs_time >= ? AND (report_type IS NULL OR report_type='METAR')",
-        (since,),
-    ):
-        t = parse_iso(row[1])
-        # Routine METARs at HH:20/HH:50: take the one within 30 min of the hour.
+    for icao, t_s, *obs in db.execute(
+        "SELECT icao, obs_time, ceiling_ft, visibility_m, wind_kt, gust_kt, wind_dir, temp_c, dewpoint_c "
+        "FROM metars WHERE obs_time >= ? AND (report_type IS NULL OR report_type='METAR')", (since,)):
+        t = parse_iso(t_s)
         hour = (t + timedelta(minutes=30)).replace(minute=0)
-        key = (row[0], iso(hour))
-        if key not in metars or abs((t - hour).total_seconds()) < metars[key][0]:
-            metars[key] = (abs((t - hour).total_seconds()), *row[2:])
+        off = abs((t - hour).total_seconds())
+        key = (icao, iso(hour))
+        if key not in metars or off < metars[key][0]:
+            metars[key] = (off, *obs)
+    dz = {icao: (m - f / FT_PER_M) for icao, m, f in db.execute(
+        "SELECT icao, model_elev_m, field_elev_ft FROM grid WHERE model='icon-ch1'")
+        if m is not None and f is not None}
 
-    elev = {icao: e for icao, e in db.execute(
-        "SELECT DISTINCT icao, airport_elev_m FROM cells")}
-    model_elev = {(m, i): e for m, i, e in db.execute("SELECT model, icao, model_elev_m FROM cells")}
-
-    fc: dict[tuple, dict[str, float]] = {}
-    for model, run, lead, valid, icao, var, val in db.execute(
-        "SELECT model, run, lead_h, valid, icao, var, value FROM forecasts WHERE valid >= ? "
-        "AND (var NOT LIKE 'raw_%' OR var = 'raw_CEILING')",
-        (since,),
-    ):
-        fc.setdefault((model, run, lead, valid, icao), {})[var] = val
-
-    buckets = [(1, 6), (7, 12), (13, 24), (25, 48)]
     stats: dict[tuple, dict[str, list]] = {}
-    for (model, _run, lead, valid, icao), v in fc.items():
+    for model, lead, valid, icao, v in _forecast_rows(db, since):
         obs = metars.get((icao, valid))
-        if obs is None:
+        b = next((f"{a}-{z}h" for a, z in BUCKETS if a <= lead <= z), None)
+        if obs is None or b is None:
             continue
-        _, o_ceil, o_vis, o_wind, o_gust, o_t, o_td, o_wdir = obs
-        b = next((f"{a}-{z}h" for a, z in buckets if a <= lead <= z), None)
-        if b is None:
-            continue
+        _, o_ceil, o_vis, o_wind, o_gust, o_wdir, o_t, o_td = obs
         s = stats.setdefault((model, b), {})
-        if "t2m_c" in v and o_t is not None:
-            s.setdefault("T", []).append(v["t2m_c"] - o_t)
-            # Terrain: the nearest cell can sit hundreds of metres off the
-            # field. Tcorr moves the model T to the field elevation at the
-            # standard 6.5 K/km (ICON only: AROME has no stored cell height).
-            dz = _dz(model_elev.get((model, icao)), elev.get(icao))
-            if dz is not None:
-                s.setdefault("Tcorr", []).append(v["t2m_c"] + 0.0065 * dz - o_t)
-                s.setdefault("dz", []).append(dz)
-        if "td2m_c" in v and o_td is not None:
-            s.setdefault("Td", []).append(v["td2m_c"] - o_td)
-        if "wspd_kt" in v and o_wind is not None:
-            s.setdefault("wind", []).append(v["wspd_kt"] - o_wind)
-        # Gust error only where the METAR reports a gust group. Where it does
-        # not (gusts < 10 kt above the mean), count a "false gust" when the
-        # model gust is >= 10 kt above the observed mean wind.
-        if "gust_kt" in v and o_gust is not None:
-            s.setdefault("gust", []).append(v["gust_kt"] - o_gust)
-        elif "gust_kt" in v and o_wind is not None:
-            s.setdefault("false_gust", []).append(1.0 if v["gust_kt"] - o_wind >= 10 else 0.0)
-        # Direction error (circular), only when both winds are >= 5 kt.
-        if (
-            "wdir_deg" in v and o_wdir is not None and o_wind is not None
-            and o_wind >= 5 and v.get("wspd_kt", 0) >= 5
-        ):
-            d = abs((v["wdir_deg"] - o_wdir + 180.0) % 360.0 - 180.0)
-            s.setdefault("wdir", []).append(d)
-        _score_ceiling(s, v, icao, o_ceil, o_vis, elev, args.ceiling_datum)
+
+        def add(key, value, s=s):
+            s.setdefault(key, []).append(value)
+
+        if v.get("t2m_c") is not None and o_t is not None:
+            add("T", v["t2m_c"] - o_t)
+            if model == "icon-ch1" and icao in dz:
+                add("Tcorr", v["t2m_c"] + 0.0065 * dz[icao] - o_t)
+        if v.get("td2m_c") is not None and o_td is not None:
+            add("Td", v["td2m_c"] - o_td)
+        if v.get("wspd_kt") is not None and o_wind is not None:
+            add("wind", v["wspd_kt"] - o_wind)
+            if (v.get("wdir_deg") is not None and o_wdir is not None
+                    and o_wind >= 5 and v["wspd_kt"] >= 5):
+                add("dir", abs((v["wdir_deg"] - o_wdir + 180) % 360 - 180))
+        if v.get("gust_kt") is not None and o_gust is not None:
+            add("gust", v["gust_kt"] - o_gust)
+        if v.get("has_ceiling"):
+            for tag, mv, ov in (("ceil", None, None), ("full", v.get("vis_m"), o_vis)):
+                if tag == "full" and mv is None:
+                    continue  # no model visibility: no like-for-like full category
+                m_cat, o_cat = cat(v.get("ceiling_agl_ft"), mv), cat(o_ceil, ov)
+                add(f"{tag}_hit", float(m_cat == o_cat))
+                m_low, o_low = m_cat in ("IFR", "LIFR"), o_cat in ("IFR", "LIFR")
+                if o_low:
+                    add(f"{tag}_pod", float(m_low))
+                if m_low:
+                    add(f"{tag}_far", float(not o_low))
 
     def mae(xs):
-        return sum(abs(x) for x in xs) / len(xs) if xs else float("nan")
+        return f"{sum(abs(x) for x in xs) / len(xs):5.1f}" if xs else "    -"
 
     def bias(xs):
-        return sum(xs) / len(xs) if xs else float("nan")
+        return f"{sum(xs) / len(xs):+5.1f}" if xs else "    -"
 
-    mean = bias
+    def rate(xs):
+        return f"{sum(xs) / len(xs):4.2f}({len(xs)})" if xs else "   -"
 
-    def ns(xs):
-        return f"{mean(xs):4.2f}({len(xs)})" if xs else "   -   "
-
-    print(f"Since {since}. MAE / bias against the METAR within 30 min of the valid hour (n per column).")
-    print(f"CEILING read as {args.ceiling_datum.upper()} (--ceiling-datum).")
-    print("ceil = category from ceiling alone, every model with a CEILING field;")
-    print("full = ceiling + visibility, models with VIS only. hit = category hit rate,")
-    print("POD/FAR = IFR-or-worse detection / false alarms, (n) = sample size.")
-    print("gust = error where the METAR has a gust group; falsegust = share of no-gust METARs")
-    print("where the model gust is >= 10 kt above the observed mean; dir mae in degrees, winds >= 5 kt.")
-    print("ICON models: nearest native cell; AROME: bilinear on 0.025 deg (as in the product).")
-    print("Tcorr = T moved to field elevation at 6.5 K/km (diagnostic only: wrong under valley")
-    print("inversions); |dz| = mean |cell height - field| (m), ICON only.")
-    print("Routine METARs only, as the verification tables score (SPECIs bias towards bad weather).\n")
-    print(
-        f"{'model':9s} {'lead':6s} {'T mae/bias (n)':>18s} {'Tcorr':>11s}  {'|dz|':>5s}  {'Td mae/bias':>12s} {'wind mae/bias':>13s}  {'gust mae/bias':>13s}  {'falsegust':>9s} {'dir mae':>9s}  "
-        f"{'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  {'full hit':>9s} {'POD':>9s} {'FAR':>9s}"
-    )
+    print(f"Since {since}; routine METAR within 30 min of the valid hour.")
+    print("T/Td in C, wind/gust in kt (gust only where the METAR has one), dir in deg (both winds >= 5 kt).")
+    print("Tcorr: CH1 T moved to field elevation at 6.5 K/km (diagnostic; wrong under inversions).")
+    print("ceil: category from ceiling alone; full: ceiling + visibility, models with visibility only.")
+    print("Ceilings AGL as the product converts them (ICON-family MSL, ECMWF AGL). (n) = samples.\n")
+    print(f"{'model':9s} {'lead':6s} {'n':>5s} {'T mae/bias':>11s} {'Tcorr':>11s} {'Td mae/bias':>11s} "
+          f"{'wind':>11s} {'gust':>11s} {'dir':>5s}  {'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  "
+          f"{'full hit':>9s} {'POD':>9s} {'FAR':>9s}")
     for (model, b) in sorted(stats):
         s = stats[(model, b)]
-        t = s.get("T", [])
-        print(
-            f"{model:9s} {b:6s} {mae(t):5.1f}/{bias(t):+5.1f} ({len(t):4d})  "
-            f"{mae(s.get('Tcorr', [])):5.1f}/{bias(s.get('Tcorr', [])):+5.1f}  "
-            f"{mae(s.get('dz', [])):5.0f}  "
-            f"{mae(s.get('Td', [])):5.1f}/{bias(s.get('Td', [])):+5.1f}  "
-            f"{mae(s.get('wind', [])):6.1f}/{bias(s.get('wind', [])):+5.1f}  "
-            f"{mae(s.get('gust', [])):6.1f}/{bias(s.get('gust', [])):+5.1f}  "
-            f"{ns(s.get('false_gust', [])):>9s} {mae(s.get('wdir', [])):5.0f}({len(s.get('wdir', []))})  "
-            f"{ns(s.get('ceil_hit', [])):>9s} {ns(s.get('ceil_pod', [])):>9s} {ns(s.get('ceil_far', [])):>9s}  "
-            f"{ns(s.get('full_hit', [])):>9s} {ns(s.get('full_pod', [])):>9s} {ns(s.get('full_far', [])):>9s}"
-        )
+        g = s.get
+        print(f"{model:9s} {b:6s} {len(g('T', [])):5d} {mae(g('T', []))}/{bias(g('T', []))} "
+              f"{mae(g('Tcorr', []))}/{bias(g('Tcorr', []))} {mae(g('Td', []))}/{bias(g('Td', []))} "
+              f"{mae(g('wind', []))}/{bias(g('wind', []))} {mae(g('gust', []))}/{bias(g('gust', []))} "
+              f"{mae(g('dir', []))}  {rate(g('ceil_hit', [])):>9s} {rate(g('ceil_pod', [])):>9s} "
+              f"{rate(g('ceil_far', [])):>9s}  {rate(g('full_hit', [])):>9s} {rate(g('full_pod', [])):>9s} "
+              f"{rate(g('full_far', [])):>9s}")
     return 0
 
 
-# ---------------------------------------------------------------------------
-
-
 def main(argv=None) -> int:
+    load_env()
+    data = os.environ.get("DATA_DIR")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--out", type=Path, default=None, help="data dir (default $DATA_DIR/alps_compare)")
+    ap.add_argument("--out", type=Path,
+                    default=Path(data) / "alps_compare" if data else Path.home() / "alps_compare")
+    ap.add_argument("--snapshots-dir", default=os.environ.get("ALPS_SNAPSHOTS_DIR"),
+                    help="directory of the forecast-map eu-*.sqlite artifacts")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
-    g = sub.add_parser("grid")
-    g.add_argument("--models", nargs="+", default=["icon-ch1", "icon-d2", "icon-eu"])
+    sub.add_parser("grid")
     lg = sub.add_parser("log")
-    lg.add_argument("--models", nargs="+", default=list(ALL_MODELS), choices=ALL_MODELS)
+    lg.add_argument("--models", nargs="+", default=["icon-ch1", "arome"], choices=["icon-ch1", "arome"])
     lg.add_argument("--every", type=int, default=6, help="log runs at multiples of N hours UTC")
-    lg.add_argument("--min-lead", type=int, default=1)
     lg.add_argument("--max-lead", type=int, default=24)
     lg.add_argument("--lookback-h", type=int, default=20, help="CH1 files live 24 h")
-    lg.add_argument("--tmp", default=None, help="temp dir for downloads")
     sub.add_parser("status")
     rp = sub.add_parser("report")
     rp.add_argument("--days", type=int, default=14)
-    rp.add_argument("--ceiling-datum", choices=("msl", "agl"), default="msl")
     args = ap.parse_args(argv)
-    if args.out is None:
-        load_env()
-        args.out = default_out()
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-    return {
-        "check": cmd_check, "grid": cmd_grid, "log": cmd_log,
-        "status": cmd_status, "report": cmd_report,
-    }[args.cmd](args)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    return {"check": cmd_check, "grid": cmd_grid, "log": cmd_log,
+            "status": cmd_status, "report": cmd_report}[args.cmd](args)
 
 
 if __name__ == "__main__":
