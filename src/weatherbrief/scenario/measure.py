@@ -60,6 +60,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import perf_counter
 
+from weatherbrief import paths
+
 logger = logging.getLogger("weatherbrief.scenario.measure")
 
 # --------------------------------------------------------------------------- #
@@ -487,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     # Mirror the safest overnight mode: BACKGROUND priority, serial.
     set_decode_priority(DecodePriority.BACKGROUND)
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     airports_db = os.environ.get("AIRPORTS_DB")
     if not airports_db or not Path(airports_db).exists():
         logger.error("AIRPORTS_DB not set or missing (%s). Set it in .env.", airports_db)

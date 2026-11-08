@@ -60,6 +60,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from weatherbrief import paths
+
 # Pre-#522 sentinel: retention is *disabled* at or above this value. Kept as
 # the default so shipping the code prunes nothing until Phase 3 sets 90.
 RAW_RETENTION_DISABLED_DAYS = 9999
@@ -98,8 +100,8 @@ def archive_enabled() -> bool:
 
 
 def data_dir() -> Path:
-    """The shared artifact root (``DATA_DIR``, default ``data``)."""
-    return Path(os.environ.get("DATA_DIR", "data"))
+    """The shared artifact root (``weatherbrief.paths.data_dir``)."""
+    return paths.data_dir()
 
 
 def archive_root() -> Path:

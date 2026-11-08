@@ -34,7 +34,6 @@ Snapshot schema (per designs/future/hewson-fields-aviation-advisories.md §6.1):
 from __future__ import annotations
 
 import logging
-import os
 import time
 import zipfile
 import zlib
@@ -93,14 +92,13 @@ def resolve_output_dir(output_dir: Path | str | None = None) -> Path:
 
     Resolution order (matches ``storage/snapshots.py``):
       1. explicit ``output_dir`` argument
-      2. ``DATA_DIR`` env var → ``{DATA_DIR}/hewson``
-      3. fallback ``data/hewson`` (dev convenience)
+      2. ``{data root}/hewson`` (``weatherbrief.paths.data_dir``)
     """
     if output_dir is not None:
         return Path(output_dir)
-    env = os.environ.get("DATA_DIR")
-    base = Path(env) if env else Path("data")
-    return base / "hewson"
+    from weatherbrief.paths import data_dir
+
+    return data_dir() / "hewson"
 
 
 def _init_to_iso_z(init_time_unix: int) -> str:

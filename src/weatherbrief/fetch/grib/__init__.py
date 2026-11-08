@@ -551,8 +551,9 @@ def _diag_snapshot_dirs() -> None:
     except Exception:
         pass
     try:
-        data_dir = Path(os.environ.get("DATA_DIR", "/app/data"))
-        cache_root = data_dir / ".cache" / "grib"
+        from weatherbrief.paths import data_dir
+
+        cache_root = data_dir() / ".cache" / "grib"
         if cache_root.exists():
             # Each model has its own subdir tree — walk them all.
             for model_dir in cache_root.iterdir():

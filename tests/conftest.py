@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 import dotenv
 import pytest
@@ -114,7 +113,8 @@ def _reuse_built_app(request, monkeypatch):
     anything create_app might read gets its own build — a new construction-time
     env read can cost an extra build, never a stale app. On hand-out the app is
     reset to how create_app left it: overrides cleared, ``app.state`` restored
-    and DATA_DIR / AIRPORTS_DB applied as create_app does. A test that asks for
+    and AIRPORTS_DB applied as create_app does (DATA_DIR needs nothing: every
+    reader resolves it per call through ``weatherbrief.paths.data_dir``). A test that asks for
     two apps (owner + friend) gets two distinct instances.
 
     Patches the test module's own ``create_app`` binding, so it covers modules
@@ -147,7 +147,6 @@ def _reuse_built_app(request, monkeypatch):
         app.state._state.clear()
         app.state._state.update(built_state)
         app.state.db_path = os.environ.get("AIRPORTS_DB", "")
-        app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
         return app
 
     monkeypatch.setattr(request.module, "create_app", _cached_create_app)

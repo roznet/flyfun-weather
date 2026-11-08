@@ -17,7 +17,6 @@ PR B (``GRIB_DECODE_WORKERS`` = ``STANDALONE_ANALYSIS_WORKERS``, default 2;
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +32,7 @@ from weatherbrief.fetch.grib.cache import (
     purge_old_runs,
     put_cached,
 )
+from weatherbrief import paths
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.grib import DecodePriority
@@ -129,7 +129,7 @@ def fetch_gfs_cloud_diag(
     from weatherbrief.fetch.grib.grib_fetch import fetch_cloud_diag_ranges, fetch_idx
 
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     if session is None:
         session = _grib_session()
 
@@ -269,7 +269,7 @@ def fetch_icon_cloud_diag(
     variant = variant or ICON_EU
     diag_key = icon_cloud_diag_cache_key(variant)
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     if session is None:
         session = _grib_session()
 
@@ -601,7 +601,7 @@ def ensure_icon_cloud_diag_files(
     if not steps:
         return []
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     if session is None:
         with _grib_session() as own_session:
             return ensure_icon_cloud_diag_files(
@@ -813,7 +813,7 @@ def ensure_icon_snapshot_files(
     if not steps:
         return 0
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     if session is None:
         with _grib_session() as own_session:
             return ensure_icon_snapshot_files(
@@ -872,7 +872,7 @@ def fetch_icon_snapshot_fields(
         return {}
     variant = variant or ICON_EU
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     if session is None:
         with _grib_session() as own_session:
             return fetch_icon_snapshot_fields(
@@ -990,7 +990,7 @@ def fetch_gfs_snapshot_fields(
     if not forecast_hours:
         return {}
     if data_dir is None:
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
     purge_old_runs(data_dir, model="gfs")  # see fetch_gfs_cloud_diag
     run_dir = cache_dir_for_run(data_dir, init_date, init_hour, model="gfs")
     steps = sorted(set(forecast_hours))

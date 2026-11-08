@@ -13,6 +13,7 @@ from pathlib import Path
 
 from weatherbrief.digest.llm_config import DigestConfig, create_chat_model
 from weatherbrief.fetch.dwd_text import DWDDayBlock
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -160,8 +161,6 @@ exactly as stated.
 {_GLOSSARY}\
 """
 
-_DEFAULT_CACHE_DIR = Path("data/.cache/dwd_translations")
-
 
 def _cache_key(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
@@ -189,7 +188,7 @@ def translate_dwd_blocks(
     if not blocks:
         return []
 
-    cache_path = cache_dir or _DEFAULT_CACHE_DIR
+    cache_path = cache_dir or paths.data_dir() / ".cache" / "dwd_translations"
     cache_path.mkdir(parents=True, exist_ok=True)
 
     # Combine all blocks into a single translation request (cheaper than N calls)

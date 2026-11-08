@@ -56,6 +56,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from weatherbrief.envfiles import load_env  # noqa: E402
+from weatherbrief.paths import data_dir  # noqa: E402
 
 load_env(ROOT)
 
@@ -306,7 +307,7 @@ def main() -> int:
                     default=datetime.now(timezone.utc).date(),
                     help="UTC fetch date of the packs (default today)")
     ap.add_argument("--packs-root", type=Path,
-                    default=Path(os.environ.get("DATA_DIR", ROOT / "data")) / "packs")
+                    default=data_dir() / "packs")
     ap.add_argument("--points", type=int, default=3, help="route points sampled per slot")
     ap.add_argument("--max-packs", type=int, default=30)
     ap.add_argument("--budget", type=float, default=300.0, help="max billed units")

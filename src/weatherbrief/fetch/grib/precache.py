@@ -13,7 +13,6 @@ See issue #126 for the rationale + expected per-pass cost (~32 GB ICON-EU,
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,6 +29,7 @@ from weatherbrief.fetch.grib.icon_eu_fetch import (
     icon_cache_prefix,
     icon_cloud_diag_cache_key,
 )
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ def icon_eu_profile_forecast_hours(init: datetime) -> list[int]:
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR", "data"))
+    return paths.data_dir()
 
 
 def precache_icon_eu_run(

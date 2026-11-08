@@ -27,7 +27,8 @@ from weatherbrief.models import (
     RouteConfig,
     WaypointAnalysis,
 )
-from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR, save_cross_section, save_snapshot
+from weatherbrief.storage.snapshots import save_cross_section, save_snapshot
+from weatherbrief import paths
 from weatherbrief.tasks.analyze import (  # noqa: F401  — backward compat re-exports
     analyze_all_route_points,
     analyze_waypoint,
@@ -339,7 +340,7 @@ def _execute_briefing_stages(
         ValueError: If target_date is in the past.
     """
     options = options or BriefingOptions()
-    data_dir = options.data_dir or DEFAULT_DATA_DIR
+    data_dir = options.data_dir or paths.data_dir()
     pack_dir = options.output_dir  # None means legacy snapshot mode
 
     def _notify(stage: str, detail: str | None = None) -> None:

@@ -24,6 +24,7 @@ from pathlib import Path
 from threading import Lock
 
 from weatherbrief.models import TimeScanStatus
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -294,8 +295,6 @@ def _run_confirm_job(
     flight_id: str, pack_dir: Path, candidate_time: datetime, db_path: str, key: str,
 ) -> None:
     """Worker: multi-model check of one candidate, cached onto the artifact."""
-    import os
-
     from flyfun_common.db import SessionLocal
 
     try:
@@ -322,7 +321,7 @@ def _run_confirm_job(
                 try:
                     result = confirm_candidate(
                         pack_dir, route, candidate_time,
-                        data_dir=Path(os.environ.get("DATA_DIR", "data")),
+                        data_dir=paths.data_dir(),
                         advisory_models=adv_models,
                         enabled_ids=enabled_ids,
                         advisory_enabled=enabled_map,
