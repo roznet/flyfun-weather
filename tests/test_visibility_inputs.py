@@ -63,6 +63,11 @@ class TestLevel850:
     def test_not_clear_above_the_ground(self, sp):
         assert level_850_columns(self.LEVELS, sp) == {}
 
+    def test_float_or_string_850_level(self):
+        for p in (850.0, 850.0000001, "850"):
+            assert level_850_columns([_lv(p, 4.0, 1.0, 30.0)])["t850_c"] == 4.0
+        assert level_850_columns([_lv(None, 4.0, 1.0, 30.0)]) == {}
+
     def test_no_850_level_or_no_levels(self):
         assert level_850_columns([_lv(1000, 1.0)], 1000.0) == {}
         assert level_850_columns(None) == {}

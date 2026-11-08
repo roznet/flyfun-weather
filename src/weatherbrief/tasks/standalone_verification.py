@@ -24,7 +24,9 @@ from sqlalchemy.orm import Session
 
 from weatherbrief.analysis.visibility import (
     VISIBILITY_INPUT_COLUMNS,
+    icon_lowest_level_columns,
     level_850_columns,
+    snapshot_input_columns,
 )
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
@@ -676,8 +678,6 @@ def _snapshot_row(
         spread = hourly.temperature_2m_c - hourly.dewpoint_2m_c
         if spread >= 0:
             lcl_ft = _LCL_CONSTANT_FT * spread
-
-    from weatherbrief.analysis.visibility import snapshot_input_columns
 
     return {
         **snapshot_input_columns(hourly),
@@ -1764,7 +1764,6 @@ def _icon_rows(
     attached before the sounding pass; a point-hour without them is not
     covered (cloud cover is required) and is left to the next source.
     """
-    from weatherbrief.analysis.visibility import icon_lowest_level_columns
     from weatherbrief.fetch.grib import _icon_diag_surface_fields, attach_icon_d2_explicit
 
     for valid, fhour in step_of.items():

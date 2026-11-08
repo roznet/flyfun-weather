@@ -87,6 +87,14 @@ def icon_lowest_level_columns(raw: dict[str, float] | None) -> dict[str, float]:
     return out
 
 
+def _is_850(level: Any) -> bool:
+    """True for an 850 hPa level, whether stored as int, float or string."""
+    try:
+        return abs(float(getattr(level, "pressure_hpa", None)) - 850.0) < 0.5
+    except (TypeError, ValueError):
+        return False
+
+
 def level_850_columns(
     levels: Iterable[Any] | None,
     surface_pressure_hpa: float | None = None,
@@ -107,9 +115,7 @@ def level_850_columns(
         and surface_pressure_hpa < 850.0 + _MIN_850_CLEARANCE_HPA
     ):
         return {}
-    level = next(
-        (lv for lv in levels if getattr(lv, "pressure_hpa", None) == 850), None,
-    )
+    level = next((lv for lv in levels if _is_850(lv)), None)
     if level is None:
         return {}
     out: dict[str, float] = {}
