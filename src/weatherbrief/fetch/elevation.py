@@ -22,7 +22,6 @@ from weatherbrief.fetch.route_walk import walk_route
 logger = logging.getLogger(__name__)
 
 
-
 def srtm_cache_dir() -> Path:
     """Directory for SRTM tiles: $SRTM_CACHE_DIR, else $DATA_DIR/.cache/srtm.
 
@@ -33,6 +32,7 @@ def srtm_cache_dir() -> Path:
     if explicit:
         return Path(explicit)
     return Path(os.environ.get("DATA_DIR", "data")) / ".cache" / "srtm"
+
 
 _M_TO_FT = 3.28084
 _OPEN_METEO_BATCH_SIZE = 100
