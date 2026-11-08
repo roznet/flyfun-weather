@@ -500,6 +500,124 @@ def cmd_convective_score(args):
         print("(no forecast hour with a known observed outcome)")
 
 
+def _since_arg(value: str | None, days: int):
+    from datetime import datetime, timedelta, timezone
+
+    if value:
+        return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def cmd_visibility_backfill(args):
+    """Fill derived-visibility / fog methods on scores whose snapshot is
+    still in the database (#979 phase 1)."""
+    SessionLocal = _init_db()
+    load_env()
+    from weatherbrief.tasks.visibility_verification import backfill_visibility_methods
+
+    coords: dict[str, tuple[float, float]] = {}
+    airports_db = os.environ.get("AIRPORTS_DB", "")
+    if airports_db:
+        from weatherbrief.tasks.airport_watchlist import (
+            get_configs_dir,
+            load_watchlist_with_coords,
+        )
+
+        coords = {
+            a.icao: (a.lat, a.lon)
+            for a in load_watchlist_with_coords(get_configs_dir(), airports_db)
+        }
+    else:
+        print("WARNING: AIRPORTS_DB not set: no night flag, radiation-fog rule skipped",
+              file=sys.stderr)
+    db = SessionLocal()
+    try:
+        stats = backfill_visibility_methods(
+            db, _since_arg(args.since, args.days), coords, dry_run=args.dry_run,
+        )
+    finally:
+        db.close()
+    print(f"{'(dry run) ' if args.dry_run else ''}scores {stats['scores']:,}, "
+          f"filled {stats['filled']:,}, snapshot pruned {stats['no_snapshot']:,}")
+
+
+def cmd_visibility_report(args):
+    """Every derived-visibility / fog method vs METARs (#979 phase 1)."""
+    SessionLocal = _init_db()
+    from weatherbrief.analysis.visibility.methods import (
+        FOG_RULES,
+        FOG_TIERS,
+        VISIBILITY_METHODS,
+    )
+    from weatherbrief.tasks.visibility_verification import (
+        BANDS_M,
+        load_pairs,
+        promotion_verdict,
+        visibility_report,
+    )
+
+    until = _since_arg(args.until, 0) if args.until else None
+    db = SessionLocal()
+    try:
+        pairs = load_pairs(db, _since_arg(args.since, args.days), until, args.model)
+    finally:
+        db.close()
+    print(f"{len(pairs):,} scored hours")
+    cells = visibility_report(pairs, split_night=not args.no_night_split)
+
+    def pct(v):
+        return "   -" if v is None else f"{100 * v:4.0f}"
+
+    times = ("all",) if args.no_night_split else ("all", "day", "night")
+    print(f"\n{'model':<8}{'method':<11}{'lead':<5}{'time':<6}{'n':>8} "
+          f"{'MAElg':>6}{'bias':>6} "
+          + " ".join(f"CSI<{b / 1000:g}k POD  FAR " for b in BANDS_M)
+          + " fogPOD fogFAR fogCSI")
+    for key in sorted(cells):
+        model, method, lead, t = key
+        if method not in VISIBILITY_METHODS or t not in times:
+            continue
+        st = cells[key]
+        bands = " ".join(
+            f"   {pct(c.csi)} {pct(c.pod)} {pct(c.far)}" for c in st.bands.values()
+        )
+        print(f"{model:<8}{method:<11}{lead:<5}{t:<6}{st.n:>8,} "
+              f"{st.mae_log10:6.2f}{st.bias_log10:6.2f} {bands} "
+              f"  {pct(st.fog.pod)}   {pct(st.fog.far)}   {pct(st.fog.csi)}")
+    print(f"\nFog (< 1 km or FG): rules and tier "
+          f"(tier: n / observed fog rate for {', '.join(FOG_TIERS)})")
+    for key in sorted(cells):
+        model, method, lead, t = key
+        if method not in (*FOG_RULES, "fog_tier") or t not in times:
+            continue
+        st = cells[key]
+        tiers = ""
+        if method == "fog_tier":
+            tiers = "  " + "  ".join(
+                f"{tier} {st.tiers.get(tier, [0, 0])[0]:,}/"
+                f"{pct(_rate(st.tiers.get(tier, [0, 0])))}%"
+                for tier in FOG_TIERS
+            )
+        print(f"{model:<8}{method:<14}{lead:<5}{t:<6}{st.n:>8,}  "
+              f"POD {pct(st.fog.pod)} FAR {pct(st.fog.far)} CSI {pct(st.fog.csi)} "
+              f"events {st.fog.events:,}{tiers}")
+
+    if args.promotion:
+        model = args.promotion
+        print(f"\nPromotion bar for {model} (vs {args.reference}, D0-D2, same hours):")
+        for method in VISIBILITY_METHODS:
+            if method == args.reference:
+                continue
+            v = promotion_verdict(pairs, model, method, args.reference)
+            status = "PASS" if v.passed else ("NOT ENOUGH DATA" if not v.enough_data else "FAIL")
+            print(f"  {method:<10} {status}" + ("" if v.passed else f": {'; '.join(v.reasons)}"))
+
+
+def _rate(counts):
+    n, hit = counts
+    return hit / n if n else None
+
+
 def cmd_stats(args):
     """Show verification statistics."""
     SessionLocal = _init_db()
@@ -1353,6 +1471,34 @@ def main():
         "--pairs-out", help="Also write the per-forecast-hour pairs to this Parquet file",
     )
 
+    p_visb = subparsers.add_parser(
+        "visibility-backfill",
+        help="Run the derived-visibility / fog methods on standalone scores "
+             "whose snapshot is still in the database (#979)",
+    )
+    p_visb.add_argument("--since", help="First observation day, YYYY-MM-DD (UTC)")
+    p_visb.add_argument("--days", type=int, default=11,
+                        help="Without --since: the last N days (default 11, "
+                             "just past the 10-day snapshot window)")
+    p_visb.add_argument("--dry-run", action="store_true", help="Count only, write nothing")
+
+    p_visr = subparsers.add_parser(
+        "visibility-report",
+        help="Score every derived-visibility / fog method against METARs (#979)",
+    )
+    p_visr.add_argument("--since", help="First observation day, YYYY-MM-DD (UTC)")
+    p_visr.add_argument("--until", help="Day after the last, YYYY-MM-DD (UTC)")
+    p_visr.add_argument("--days", type=int, default=14,
+                        help="Without --since: the last N days (default 14)")
+    p_visr.add_argument("--model", help="Only this model (icon, ecmwf, gfs, ...)")
+    p_visr.add_argument("--no-night-split", action="store_true",
+                        help="One row per lead instead of all/day/night")
+    p_visr.add_argument("--promotion", metavar="MODEL",
+                        help="Also check each method against the promotion bar "
+                             "for MODEL (meteorology-decisions §80)")
+    p_visr.add_argument("--reference", default="native",
+                        help="Promotion reference method (default native)")
+
     # stats
     p_stats = subparsers.add_parser("stats", help="Show verification statistics")
     p_stats.add_argument(
@@ -1610,6 +1756,10 @@ def main():
         cmd_backfill_cloud_layers(args)
     elif args.command == "convective-score":
         cmd_convective_score(args)
+    elif args.command == "visibility-backfill":
+        cmd_visibility_backfill(args)
+    elif args.command == "visibility-report":
+        cmd_visibility_report(args)
     elif args.command == "stats":
         cmd_stats(args)
     elif args.command == "discover":

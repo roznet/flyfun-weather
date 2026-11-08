@@ -7867,3 +7867,72 @@ to it before it goes.
 - A JSON blob column of inputs: unindexable in the archive queries, and the
   set is small and known.
 - Deferring until phase 1's methods exist: the reference disappears on 30 Nov.
+
+## 80. Derived visibility, phase 1: every method scored side by side; a method drives a category only after the promotion bar (#979)
+
+**Date:** 2026-11-08 · **Issue:** #979 (phase 1) · **Builds on:** §79 (inputs) · **Related:** §78 (ICON ceiling-only after 2026-11-30), §48 (bands)
+
+### Context
+
+Owner, 8 Nov: compute several approaches, track in the airport verification
+which one tracks METARs best, for every model, and aim to switch ICON's
+visibility on around 24 Nov, when the native-grid feed becomes the default.
+That leaves about two weeks of data alongside DWD's own VIS, with fewer fog
+events than a season would give.
+
+### Choices
+
+- **Methods** (`analysis/visibility/methods.py`, all pure, all on the §79
+  snapshot inputs, absent when an input is missing): `native` (passed through
+  to be scored in the same table), `sw99` (Kunkel 1984 cloud water; Stoelinga
+  and Warner 1999 ice, rain, snow; vis = 3.912/β), `gultepe06` (Nd = 100
+  cm⁻³), `rh_haze` (RUC/RAP 60·exp(−2.5(RH−15)/80) km), `rap_blend`
+  (min of sw99 and rh_haze). Capped at 20 km. Where a model has no rain/snow
+  mixing ratio (ICON-EU, GFS, ECMWF), their contents come from the surface
+  rates: rain W = 0.089·R^0.84 (Marshall-Palmer), snow W = 0.25·S^0.86 (a
+  first guess, to be fitted).
+- **Fog rules**: `fog_model` (lowest-level cover ≥ 90 % or cloud water
+  ≥ 0.02 g m⁻³), `fog_radiation` (sun below the horizon, T−Td ≤ 1 °C,
+  wind < 6 kt, low cloud ≤ 30 %), `fog_fsi` (FSI = 2(T−T850) + (T−Td) +
+  W850 < 31). **Tier** LIKELY / POSSIBLE / NONE as the issue set it; the
+  derived visibility in the tier is the lower of sw99 and gultepe06, never
+  `native`, so a tier means the same on every model.
+- **Stored on the score** (`verification_scores.visibility_methods`, JSON,
+  migration 117), one row per score rather than one per (score, method):
+  ~9 methods × every standalone score would be ~10× the scores table. A JSON
+  column still needs no migration per method, and goes with the scores'
+  prune (90 days) and Parquet archive. Each payload carries
+  `METHODS_VERSION`; the report reads one version only.
+- **Scored where the pairing already happens** (the standalone scoring
+  cycle), plus `verify visibility-backfill` for scores whose snapshot is
+  still in the database. Snapshots prune at 10 days and this month's
+  observations are only archived next month, so this must deploy within ~10
+  days of migration 116 to cover every logged day.
+- **Observed**: METAR prevailing visibility, 9999 = 10 km; both sides capped
+  at 10 km for the log error. Fog = < 1 km, or FG / FZFG reported (BCFG,
+  MIFG, PRFG, VCFG do not count).
+- **Promotion bar** (`verify visibility-report --promotion icon`), candidate
+  vs the model's native visibility on the *same* hours, leads D0-D2:
+  1. at least 40 observed < 5 km and 15 observed < 1.5 km events, else
+     "not enough data";
+  2. CSI within 0.03 (< 5 km) and 0.05 (< 1.5 km) of native, or better;
+  3. FAR < 1.5 km at most 0.10 above native (false IFR is the costly error);
+  4. frequency bias 0.5-2 at both bands.
+  Sized for ~2 weeks: tight enough that a method no better than "never low"
+  fails (its CSI is 0), loose enough that two weeks' noise does not fail an
+  equivalent one.
+- **Fallback**: nothing passes → ICON stays ceiling-only (§78), scoring
+  continues; after 30 Nov there is no DWD VIS to compare against, so the
+  reference becomes ECMWF's native visibility at the same airports
+  (`--reference` on another model's rows is the follow-up).
+- **No grade change in this phase.** Selection (one setting per model) and
+  the briefing wiring are the next PR.
+
+### Rejected
+
+- One row per (score, method): 10× the scores table for the same
+  information.
+- Archive-only offline scoring (as `convective-score`): this month's
+  observations are not archived until December, past the decision date.
+- A fixed 3-week minimum (the issue's first proposal): incompatible with
+  the 24 Nov target; replaced by the event-count gate.

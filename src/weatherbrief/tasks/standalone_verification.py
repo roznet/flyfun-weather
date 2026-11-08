@@ -2710,6 +2710,9 @@ def _score_cycle(
         model_cloud_base_agl,
     )
     from weatherbrief.tasks.verification import routine_observation_filter
+    from weatherbrief.tasks.visibility_verification import score_payload
+
+    coords = {a.icao: (a.lat, a.lon) for a in airports}
 
     # Fetch all snapshots that predict within ±90 min of cycle_time
     window_start = cycle_time - timedelta(minutes=90)
@@ -2851,6 +2854,14 @@ def _score_cycle(
                     score_row.cloud_base_delta_ft = cloud_base_agl - obs_ceiling_ft
                 if snap.lcl_ft is not None:
                     score_row.lcl_delta_ft = snap.lcl_ft - obs_ceiling_ft
+            # Every derived-visibility / fog method on this snapshot (#979).
+            # Never costs the score: a method failure leaves the column NULL.
+            try:
+                lat, lon = coords.get(snap.icao, (None, None))
+                score_row.visibility_methods = score_payload(snap, lat, lon)
+            except Exception:
+                logger.warning("visibility methods failed for %s %s",
+                               snap.icao, snap.model, exc_info=True)
             db.add(score_row)
             existing_score_keys.add(score_key)
             scores_created += 1
