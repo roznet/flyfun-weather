@@ -173,10 +173,10 @@ def build_terrain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """
     import srtm
 
-    from weatherbrief.fetch.elevation import SRTM_CACHE_DIR
+    from weatherbrief.fetch.elevation import srtm_cache_dir
 
     elevation_data = srtm.get_data(
-        local_cache_dir=str(SRTM_CACHE_DIR), srtm3=True,
+        local_cache_dir=str(srtm_cache_dir()), srtm3=True,
     )
     mask = np.ones((len(lat), len(lon)), dtype=bool)
 
@@ -205,10 +205,10 @@ def build_terrain_elevation(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """
     import srtm
 
-    from weatherbrief.fetch.elevation import SRTM_CACHE_DIR
+    from weatherbrief.fetch.elevation import srtm_cache_dir
 
     elevation_data = srtm.get_data(
-        local_cache_dir=str(SRTM_CACHE_DIR), srtm3=True,
+        local_cache_dir=str(srtm_cache_dir()), srtm3=True,
     )
     elev = np.full((len(lat), len(lon)), np.nan, dtype=np.float64)
     for i, la in enumerate(lat):
