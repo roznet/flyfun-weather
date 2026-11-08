@@ -322,7 +322,10 @@ def test_cloud_diag_native(grid_on_disk):
 
 
 def test_d2_mask_and_corridor_native(grid_on_disk):
-    from weatherbrief.fetch.grib.decode import build_d2_validity_mask, d2_corridor_fully_valid
+    from weatherbrief.fetch.grib.decode import (
+        build_d2_validity_mask,
+        d2_corridor_fully_valid,
+    )
 
     grid, root = grid_on_disk
     values = np.ones(grid.n_cells)
@@ -374,6 +377,21 @@ def test_echotop_windows_concatenate_in_order(native, monkeypatch):
     assert out[6] == b"".join(
         b"GRIBPT006H%02dM.grib2" % m for m in (0, 15, 30, 45)
     )
+
+
+def test_ensure_grid_writes_a_registered_grid_to_a_new_root(native, monkeypatch, tmp_path):
+    """Grid already in the process (from another cache root) and a root that
+    does not exist yet: the grid and the pointer still land there (Mac
+    worktree devserver, relative ``data`` vs ``$DATA_DIR``)."""
+    session = _grid_session()
+    monkeypatch.setattr(ief, "get_with_retry", lambda s, u, timeout=None: s.get(u))
+    first = ief.ensure_icon_native_grid(ICON_D2, "20261107", 12, session, tmp_path / "a")
+    assert first is not None
+    other = tmp_path / "b" / ".cache" / "grib"   # not created
+    again = ief.ensure_icon_native_grid(ICON_D2, "20261107", 12, session, other)
+    assert again is first
+    assert icon_grid.grid_cache_path(other, UUID).exists()
+    assert (other / f"icon-grid-{ICON_D2.slug}.current").read_text() == UUID
 
 
 def test_ensure_grid_reads_only_2kb_when_range_ignored(native, monkeypatch, tmp_path):

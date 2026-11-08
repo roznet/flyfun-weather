@@ -1007,11 +1007,15 @@ def ensure_icon_native_grid(
             )
             grid.default_method = variant.native_sampling
             grid.save(grid_cache_path(cache_root, grid.uuid))
+        # A grid already in this process (registered from another cache root,
+        # e.g. a relative ``data`` vs ``$DATA_DIR``) must still be on disk
+        # here: decode-pool workers look for it next to the run's files.
+        grid_path = grid_cache_path(cache_root, grid.uuid)
+        if not grid_path.exists():
+            grid.save(grid_path)
         pointer = _grid_pointer_path(variant, cache_root)
+        pointer.parent.mkdir(parents=True, exist_ok=True)
         if not pointer.exists() or pointer.read_text().strip() != grid.uuid:
-            # The grid may have come from the in-process registry, so nothing
-            # above has necessarily created cache_root on disk yet.
-            pointer.parent.mkdir(parents=True, exist_ok=True)
             tmp = pointer.with_name(pointer.name + f".{os.getpid()}.tmp")
             tmp.write_text(grid.uuid)
             tmp.replace(pointer)
