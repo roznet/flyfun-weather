@@ -7825,3 +7825,45 @@ size of one regridding.
 before the default flips: ICON slot T/wind/cloud within regridding noise,
 category changes only where VIS drove the legacy grade.
 
+## 79. Derived visibility, phase 0: log the inputs before DWD's VIS ends; nothing graded (#979)
+
+**Date:** 2026-11-08 · **Issue:** #979 (phase 0) · **Related:** #974 / §78 (ICON loses VIS after 2026-11-30), §48 (visibility thresholds)
+
+### Context
+
+DWD stops publishing ICON visibility on 2026-11-30. #979 will derive
+visibility and a fog tier from fields every model publishes, with several
+methods side by side scored against METARs, and a method drives a model's
+category only once it beats that model's native visibility. DWD VIS is the
+best reference we will ever have for ICON, so the inputs must be logged next
+to it before it goes.
+
+### Choices
+
+- **The native visibility is already logged.** Every snapshot row carries the
+  model's own `visibility_m` (DWD VIS on ICON GRIB rows, ECMWF `vis`, GFS
+  `VIS`), and snapshots are archived as Parquet forever. Phase 0 adds only
+  what the methods need beyond the existing surface columns.
+- **Inputs as columns on `airport_forecast_snapshots`** (migration 116), not a
+  side table: they are a fixed set, ride the existing prune, Parquet archive
+  and off-box snapshot artifact unchanged, and need no join. Method *outputs*
+  (phase 1) are still one row per (snapshot, method), so a new method needs
+  no migration.
+- **ICON lowest model level** (EU level 74, D2 level 65, ~10 m AGL): cloud
+  water, cloud ice and cover; ICON-D2 also rain and snow mixing ratios
+  (ICON-EU publishes none; its rain/snow come from the surface rates already
+  on the row). One small file per variable per step, the briefing's own
+  per-level URL and cache key, so the native-feed switch (#974) moves them
+  with the rest. Optional: a missing file leaves the column NULL and never
+  makes an hour uncovered.
+- **Surface pressure and the 850 hPa level (T, Td, wind) for every model**,
+  read off the sounding each snapshot path already builds (the Fog Stability
+  Index's inputs). 850 hPa is dropped where it is not 10 hPa clear of the
+  model's ground: below ground it is the producer's extrapolation.
+- **No grade, category, map or briefing change.** Recorded only.
+
+### Rejected
+
+- A JSON blob column of inputs: unindexable in the archive queries, and the
+  set is small and known.
+- Deferring until phase 1's methods exist: the reference disappears on 30 Nov.

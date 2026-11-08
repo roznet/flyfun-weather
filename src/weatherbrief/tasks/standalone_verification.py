@@ -22,6 +22,10 @@ import requests
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
+from weatherbrief.analysis.visibility import (
+    VISIBILITY_INPUT_COLUMNS,
+    level_850_columns,
+)
 from weatherbrief.db.models import (
     AirportForecastSnapshotRow,
     TafVerificationScoreRow,
@@ -673,7 +677,10 @@ def _snapshot_row(
         if spread >= 0:
             lcl_ft = _LCL_CONSTANT_FT * spread
 
+    from weatherbrief.analysis.visibility import snapshot_input_columns
+
     return {
+        **snapshot_input_columns(hourly),
         "icao": icao,
         "model": model,
         "model_init_time": init_time,
@@ -1477,7 +1484,12 @@ def _icon_candidates(model, init_time, airports, valid_times, grib_diag, priorit
     summary = (
         f"{n_d2} ICON-D2 {d2_date}{d2_hour:02d}z from {len(d2_airports)}/{len(airports)} "
         f"airports, {len(built) - n_d2} ICON-EU {init_date}{init_hour:02d}z; "
-        f"{len(d2_fields)} D2 + {len(eu_fields)} EU step(s)"
+        f"{len(d2_fields)} D2 + {len(eu_fields)} EU step(s); "
+        # #979 phase 0: how many rows carry the lowest-level inputs, so a
+        # missing model-level feed shows in the cycle log.
+        f"visibility inputs on "
+        f"{sum(1 for s, _ in built if s.get('lowest_level_cloud_water_kg_kg') is not None)}"
+        f"/{len(built)} rows"
     )
     return built, d2_keys, d2_lookup, summary
 
@@ -1752,6 +1764,7 @@ def _icon_rows(
     attached before the sounding pass; a point-hour without them is not
     covered (cloud cover is required) and is left to the next source.
     """
+    from weatherbrief.analysis.visibility import icon_lowest_level_columns
     from weatherbrief.fetch.grib import _icon_diag_surface_fields, attach_icon_d2_explicit
 
     for valid, fhour in step_of.items():
@@ -1786,7 +1799,12 @@ def _icon_rows(
             # what Open-Meteo gave for ICON and what scoring and the airport
             # profile read (they ignore precip_period_h, #415). A 3 h total
             # past +78 h would read as three times the rain there.
-            yield _snapshot_row(airport.icao, model, init_time, hourly), hourly
+            snap = _snapshot_row(airport.icao, model, init_time, hourly)
+            # Lowest-model-level hydrometeors and cover (#979 phase 0).
+            snap.update(icon_lowest_level_columns(
+                step.surface[i] if i < len(step.surface) else None,
+            ))
+            yield snap, hourly
 
 
 def _gfs_grib_hourly(valid: datetime, step, i: int):
@@ -2413,6 +2431,11 @@ def fetch_ecmwf_grib_snapshots(
                 # mixed-layer pair, which lands in nwp_ml_cape/cin_jkg below.
                 # Filling them from mlcin100 would mix parcel types, the exact
                 # confusion nwp_cape_type exists to prevent.
+                # Visibility-derivation inputs (#979 phase 0): surface
+                # pressure and the 850 hPa level. ECMWF's own ``vis`` is the
+                # visibility_m above.
+                "surface_pressure_hpa": sp_hpa,
+                **level_850_columns(levels, sp_hpa),
             }
 
             # Ingredient columns straight off the diagnostics, so a row whose
@@ -2608,6 +2631,8 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "nwp_lifted_index": snap.get("nwp_lifted_index"),
             "nwp_k_index": snap.get("nwp_k_index"),
             "nwp_total_totals": snap.get("nwp_total_totals"),
+            # Visibility-derivation inputs (#979 phase 0)
+            **{c: snap.get(c) for c in VISIBILITY_INPUT_COLUMNS},
         })
 
     snapshot_insert_ignore(db, rows)

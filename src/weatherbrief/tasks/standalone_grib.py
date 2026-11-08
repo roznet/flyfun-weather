@@ -672,27 +672,32 @@ def _icon_snapshot_plan(
 ) -> tuple[dict[tuple, tuple[str, str]], dict[int, int]]:
     """``(wanted, predecessor_of)`` for an ICON snapshot fetch (#914, #928).
 
-    ``wanted`` maps ``(step, "pl", level, var)`` / ``(step, "sfc", var)`` to
-    ``(url, cache filename)``: per step the variant's isobaric files and the
-    #912 surface files, plus the accumulated surface files of each step's
-    predecessor so precipitation can be de-accumulated.
+    ``wanted`` maps ``(step, "pl", level, var)`` / ``(step, "sfc", var)`` /
+    ``(step, "ml", var)`` to ``(url, cache filename)``: per step the variant's
+    isobaric files, the #912 surface files and the lowest-model-level files of
+    the visibility inputs (#979), plus the accumulated surface files of each
+    step's predecessor so precipitation can be de-accumulated.
     """
     from weatherbrief.fetch.grib.icon_eu_fetch import (
         ICON_SNAPSHOT_PRESSURE_VARIABLES,
         ICON_SURFACE_ACCUMULATED,
         ICON_SURFACE_VARIABLES,
         ICON_V1_UNPUBLISHED,
+        icon_eu_file_url,
         icon_eu_pressure_level_url,
         icon_eu_previous_step,
         icon_eu_single_level_url,
+        icon_model_level_var_label,
         icon_native_feed,
         icon_pressure_cache_key,
         icon_snapshot_pressure_levels,
         icon_surface_cache_key,
+        icon_visibility_ml_variables,
     )
 
     # Native feed (#974): VIS is not published; asking would 404 every time.
     unpublished = ICON_V1_UNPUBLISHED if icon_native_feed() else frozenset()
+    lowest = variant.level_max
 
     predecessor_of = {
         fhour: prev for fhour in steps
@@ -714,6 +719,13 @@ def _icon_snapshot_plan(
             wanted[(fhour, "sfc", var)] = (
                 icon_eu_single_level_url(init_date, init_hour, fhour, var, variant),
                 cache_key(fhour, icon_surface_cache_key(var, variant)),
+            )
+        for var in icon_visibility_ml_variables(variant):
+            # Same URL and cache key as the briefing's per-level file, so a
+            # D2 level the briefing already pulled is reused.
+            wanted[(fhour, "ml", var)] = (
+                icon_eu_file_url(init_date, init_hour, fhour, lowest, var, variant),
+                cache_key(fhour, icon_model_level_var_label(variant, var, lowest)),
             )
     for prev in set(predecessor_of.values()):
         for var in ICON_SURFACE_ACCUMULATED:
@@ -866,7 +878,9 @@ def fetch_icon_snapshot_fields(
         ICON_SURFACE_ACCUMULATED,
         ICON_SURFACE_VARIABLES,
         icon_snapshot_pressure_levels,
+        icon_visibility_ml_variables,
     )
+    from weatherbrief.analysis.visibility.inputs import LOWEST_LEVEL_PREFIX
 
     if not forecast_hours:
         return {}
@@ -922,6 +936,14 @@ def fetch_icon_snapshot_fields(
             var: path for var in var_names
             if (path := _path((fhour, "sfc", var))) is not None
         }
+        if var_paths and fhour in steps:
+            # The lowest-model-level files (#979) are single-field files too:
+            # decoded with the surface ones, under ``ml_<var>`` keys. Only
+            # alongside a surface file, so a step with none stays absent.
+            for var in icon_visibility_ml_variables(variant):
+                path = _path((fhour, "ml", var))
+                if path is not None:
+                    var_paths[LOWEST_LEVEL_PREFIX + var] = path
         if var_paths:
             jobs.append(("decode_icon_surface", (var_paths, lats, lons)))
             job_keys.append(("sfc", fhour))
