@@ -357,18 +357,28 @@ def log_ch1_run(db, sess, run: datetime, leads: list[int], tmp: Path, now: datet
     n_cells = next(iter(cells.values()))[1]
     done = done_files(db, "icon-ch1", run)
     give_up = now - run > timedelta(hours=GIVE_UP_H["icon-ch1"])
-    stats = {"ok": 0, "missing": 0, "bytes": 0}
+    stats = {"ok": 0, "missing": 0, "errors": 0, "bytes": 0}
     touched: set[int] = set()
     try:
+        # 'bad' (a decode failure, e.g. a truncated download) is retried like
+        # 'missing' until the give-up window: CH1 files live only 24 h.
+        retry = (None, "missing") if give_up else (None, "missing", "bad")
         for var in CH1_VARS:
-            todo = [ld for ld in leads if done.get((ld, var)) in (None, "missing")]
+            todo = [ld for ld in leads if done.get((ld, var)) in retry]
             if not todo:
                 continue
             hrefs = ch1_assets(sess, run, var)
             for ld in todo:
                 href = hrefs.get(ld)
                 path = tmp / f"ch1-{var}-{ld}.grib2"
-                nbytes = download(sess, href, path) if href else None
+                try:
+                    nbytes = download(sess, href, path) if href else None
+                except requests.RequestException as exc:
+                    # A 403 / expired pre-signed URL / timeout costs this file
+                    # only; it stays unrecorded and is retried next pass.
+                    logger.warning("icon-ch1 %s %s +%d: download failed: %s", iso(run), var, ld, exc)
+                    stats["errors"] += 1
+                    continue
                 if nbytes is None:
                     record_file(db, "icon-ch1", run, ld, var, "absent" if give_up else "missing")
                     stats["missing"] += 1
@@ -666,8 +676,12 @@ def cmd_grid(args) -> int:
         db.execute("INSERT INTO grid VALUES (?,?,?,?,?,?,?,?,?)",
                    ("icon-ch1", icao, uuid, grid.n_cells, cell, dist, model_m, elev_ft, built))
         field_m = elev_ft / FT_PER_M if elev_ft is not None else None
-        print(f"{icao}  cell {cell:8d}  {dist:4.2f} km  model {model_m and round(model_m)} m  "
-              f"field {field_m and round(field_m)} m  dz {round(model_m - field_m) if model_m and field_m else '-'} m")
+        def m(x):
+            return "-" if x is None else round(x)
+
+        dz = model_m - field_m if model_m is not None and field_m is not None else None
+        print(f"{icao}  cell {cell:8d}  {dist:4.2f} km  model {m(model_m)} m  "
+              f"field {m(field_m)} m  dz {m(dz)} m")
     outside = set(icaos) - {icaos[int(k)] for k in nw.inb_idx}
     if outside:
         print("outside the CH1 grid:", ", ".join(sorted(outside)))
@@ -705,9 +719,12 @@ def cmd_log(args) -> int:
                         logger.exception("%s %s failed", model, iso(run))
                         failed = True
                         continue
-                    if st["ok"] or st["missing"]:
-                        logger.info("%s %s: %d ok, %d missing, %.0f MB, %.0f s", model, iso(run),
-                                    st["ok"], st["missing"], st["bytes"] / 1e6, time.monotonic() - t0)
+                    if st.get("errors"):
+                        failed = True
+                    if st["ok"] or st["missing"] or st.get("errors"):
+                        logger.info("%s %s: %d ok, %d missing, %d errors, %.0f MB, %.0f s", model, iso(run),
+                                    st["ok"], st["missing"], st.get("errors", 0), st["bytes"] / 1e6,
+                                    time.monotonic() - t0)
         for name, step in (("metars", lambda: log_metars(db)),
                            ("product snapshots", lambda: copy_product_snapshots(db, args.snapshots_dir)
                             if args.snapshots_dir else 0)):
@@ -741,7 +758,25 @@ def cmd_status(args) -> int:
 BUCKETS = ((1, 6), (7, 12), (13, 24), (25, 48))
 
 
-def _forecast_rows(db, since: str):
+def field_elevations(db) -> dict[str, float]:
+    """``{icao: field elevation ft}``: euro_aip first, the CH1 ``grid`` table as
+    fallback. Warns for any study airport left without one, since its MSL model
+    ceilings would then be scored unconverted against AGL METAR ceilings."""
+    elev = {icao: e for icao, e in db.execute(
+        "SELECT icao, field_elev_ft FROM grid WHERE model='icon-ch1'") if e is not None}
+    if os.environ.get("AIRPORTS_DB"):
+        try:
+            elev.update({icao: p[2] for icao, p in airport_positions().items() if p[2] is not None})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("euro_aip elevations unavailable (%s); using the grid table", exc)
+    missing = sorted(set(AIRPORTS) - set(elev))
+    if missing:
+        logger.warning("no field elevation for %s: their MSL ceilings are scored unconverted",
+                       ", ".join(missing))
+    return elev
+
+
+def _forecast_rows(db, since: str, elev: dict[str, float]):
     """Yield ``(model, lead_h, valid, icao, vals)`` for every source, on one schema.
 
     ``vals`` keys: t2m_c, td2m_c, wspd_kt, wdir_deg, gust_kt, vis_m,
@@ -750,7 +785,6 @@ def _forecast_rows(db, since: str):
     from weatherbrief.analysis.airport_conditions import to_agl_ceiling
     from weatherbrief.tasks.scoring import model_cloud_base_agl
 
-    elev = dict(db.execute("SELECT icao, field_elev_ft FROM grid WHERE model='icon-ch1'"))
     rows: dict[tuple, dict] = {}
     for model, run, lead, valid, icao, var, val in db.execute(
         "SELECT model, run, lead_h, valid, icao, var, value FROM forecasts "
@@ -763,12 +797,18 @@ def _forecast_rows(db, since: str):
             v["has_ceiling"] = True
         yield model, lead, valid, icao, v
 
+    # The product stores "no ceiling" as NULL, but a model whose artifacts never
+    # carry the column is NULL everywhere too. Only a model with some non-NULL
+    # ceiling in the window is scored on ceiling; for it, NULL means clear.
+    with_ceiling = {m for (m,) in db.execute(
+        "SELECT DISTINCT model FROM product WHERE valid >= ? AND nwp_ceiling_ft IS NOT NULL", (since,))}
     for model, run, valid, icao, t, td, vis, ws, wd, wg, ceil in db.execute(
             "SELECT * FROM product WHERE valid >= ?", (since,)):
         lead = round((parse_iso(valid) - parse_iso(run)).total_seconds() / 3600)
         yield model, lead, valid, icao, {
             "t2m_c": t, "td2m_c": td, "vis_m": vis, "wspd_kt": ws, "wdir_deg": wd, "gust_kt": wg,
-            "ceiling_agl_ft": model_cloud_base_agl(ceil, model, elev.get(icao)), "has_ceiling": True,
+            "ceiling_agl_ft": model_cloud_base_agl(ceil, model, elev.get(icao)),
+            "has_ceiling": model in with_ceiling,
         }
 
 
@@ -793,16 +833,33 @@ def cmd_report(args) -> int:
         key = (icao, iso(hour))
         if key not in metars or off < metars[key][0]:
             metars[key] = (off, *obs)
-    dz = {icao: (m - f / FT_PER_M) for icao, m, f in db.execute(
-        "SELECT icao, model_elev_m, field_elev_ft FROM grid WHERE model='icon-ch1'")
-        if m is not None and f is not None}
+    elev = field_elevations(db)
+    dz = {icao: (m - elev[icao] / FT_PER_M) for icao, m in db.execute(
+        "SELECT icao, model_elev_m FROM grid WHERE model='icon-ch1'")
+        if m is not None and icao in elev}
 
-    stats: dict[tuple, dict[str, list]] = {}
-    for model, lead, valid, icao, v in _forecast_rows(db, since):
+    airports = set(args.airports) if args.airports else None
+    samples = []
+    for model, lead, valid, icao, v in _forecast_rows(db, since, elev):
+        if airports is not None and icao not in airports:
+            continue
         obs = metars.get((icao, valid))
         b = next((f"{a}-{z}h" for a, z in BUCKETS if a <= lead <= z), None)
         if obs is None or b is None:
             continue
+        samples.append((model, lead, valid, icao, b, v, obs))
+    if args.matched:
+        # Common sample: only (airport, valid hour, lead) keys every listed
+        # model has, so the rows compare the same cases.
+        keys: dict[str, set] = {m: set() for m in args.matched}
+        for model, lead, valid, icao, *_ in samples:
+            if model in keys:
+                keys[model].add((icao, valid, lead))
+        common = set.intersection(*keys.values())
+        samples = [s for s in samples if s[0] in keys and (s[3], s[2], s[1]) in common]
+
+    stats: dict[tuple, dict[str, list]] = {}
+    for model, lead, valid, icao, b, v, obs in samples:
         _, o_ceil, o_vis, o_wind, o_gust, o_wdir, o_t, o_td = obs
         s = stats.setdefault((model, b), {})
 
@@ -844,12 +901,18 @@ def cmd_report(args) -> int:
         return f"{sum(xs) / len(xs):4.2f}({len(xs)})" if xs else "   -"
 
     print(f"Since {since}; routine METAR within 30 min of the valid hour.")
-    print("T/Td in C, wind/gust in kt (gust only where the METAR has one), dir in deg (both winds >= 5 kt).")
+    print(f"Airports: {', '.join(sorted(airports)) if airports else 'all ' + str(len(AIRPORTS))}; "
+          + (f"matched sample across {', '.join(args.matched)}." if args.matched
+             else "unmatched: each row has its own runs, leads and hours (use --matched to compare)."))
+    print("T/Td in C, wind in kt, dir in deg (both winds >= 5 kt).")
+    print("gust*: only hours whose METAR has a gust group, so the bias is positive by construction.")
     print("Tcorr: CH1 T moved to field elevation at 6.5 K/km (diagnostic; wrong under inversions).")
     print("ceil: category from ceiling alone; full: ceiling + visibility, models with visibility only.")
-    print("Ceilings AGL as the product converts them (ICON-family MSL, ECMWF AGL). (n) = samples.\n")
+    print("hit = exact category agreement, dominated by VFR hours; POD/FAR (IFR+LIFR) separate the models.")
+    print("Ceilings AGL as the product converts them (ICON-family MSL, ECMWF AGL). (n) = samples.")
+    print(f"25-48h: product models only (CH1/AROME are logged to --max-lead, CH1 stops at {CH1_MAX_LEAD} h).\n")
     print(f"{'model':9s} {'lead':6s} {'n':>5s} {'T mae/bias':>11s} {'Tcorr':>11s} {'Td mae/bias':>11s} "
-          f"{'wind':>11s} {'gust':>11s} {'dir':>5s}  {'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  "
+          f"{'wind':>11s} {'gust*':>11s} {'dir':>5s}  {'ceil hit':>9s} {'POD':>9s} {'FAR':>9s}  "
           f"{'full hit':>9s} {'POD':>9s} {'FAR':>9s}")
     for (model, b) in sorted(stats):
         s = stats[(model, b)]
@@ -883,6 +946,10 @@ def main(argv=None) -> int:
     sub.add_parser("status")
     rp = sub.add_parser("report")
     rp.add_argument("--days", type=int, default=14)
+    rp.add_argument("--airports", nargs="+", metavar="ICAO",
+                    help="score only these airports (e.g. the flat controls LSZH LFSB)")
+    rp.add_argument("--matched", nargs="+", metavar="MODEL",
+                    help="score only (airport, hour, lead) cases all these models have, e.g. icon-ch1 arome")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
