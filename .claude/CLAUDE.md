@@ -28,6 +28,14 @@ Two judgement calls are yours:
 - **Creating an issue:** `--label to-start` if another agent could implement it from the thread alone (root cause, call sites, acceptance criteria); otherwise leave it, the Action gives it `to-plan`.
 - **Posting an agreed plan to an existing issue:** flip it with `stage_labels.py issue N to-start`.
 
+## Workflow skills: open the file before acting
+
+These apply in every session, including cloud threads started without a slash command. If the `Skill` tool is unavailable, read the file and follow it by hand.
+
+- **Handling PR review comments** (including review-bot events from a PR subscription): follow `.claude/commands/process-review.md` in full, including its round cap. The bot re-reviews on every push, so pushing a fix for each new review never converges.
+- **Implementing an issue:** follow `.claude/skills/implement-issue/SKILL.md`.
+- **Merging / landing a PR:** follow `.claude/skills/land-pr/SKILL.md`.
+
 ## Finding the code-review bot's review on a PR
 
 The bot posts an ordinary **comment on the PR's conversation tab** — not a GitHub "Review" (Approve / Request-changes), not inline diff comments. Look in `gh pr view <n> --comments` for a comment by `claude` whose **first line contains "Code Review"**.
