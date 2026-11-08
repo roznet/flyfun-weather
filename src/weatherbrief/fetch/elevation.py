@@ -21,7 +21,18 @@ from weatherbrief.fetch.route_walk import walk_route
 
 logger = logging.getLogger(__name__)
 
-SRTM_CACHE_DIR = Path(os.environ.get("SRTM_CACHE_DIR", "data/.cache/srtm"))
+
+def srtm_cache_dir() -> Path:
+    """Directory for SRTM tiles: $SRTM_CACHE_DIR, else $DATA_DIR/.cache/srtm.
+
+    Resolved at call time so a .env loaded after import still applies. With
+    neither set it falls back to the cwd-relative ``data/.cache/srtm``.
+    """
+    explicit = os.environ.get("SRTM_CACHE_DIR")
+    if explicit:
+        return Path(explicit)
+    return Path(os.environ.get("DATA_DIR", "data")) / ".cache" / "srtm"
+
 
 _M_TO_FT = 3.28084
 _OPEN_METEO_BATCH_SIZE = 100
@@ -82,7 +93,7 @@ def get_elevation_profile(
         ElevationProfile with terrain points along the route.
     """
     elevation_data = srtm.get_data(
-        local_cache_dir=str(SRTM_CACHE_DIR),
+        local_cache_dir=str(srtm_cache_dir()),
         srtm1=False,
         srtm3=True,
     )
