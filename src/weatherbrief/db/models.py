@@ -870,6 +870,15 @@ class VerificationScoreRow(Base):
     obs_has_convection: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     model_has_convection: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
+    # Derived visibility and fog, every method side by side (#979 phase 1,
+    # migration 117). JSON ``{"v": methods version, "night": bool, "m":
+    # {method: value}}`` from ``tasks/visibility_verification.py``; a method
+    # whose inputs the snapshot lacked is absent. Standalone scores only (the
+    # flight path has no snapshot). One JSON column rather than a column per
+    # method so adding a method needs no migration, and it rides the scores'
+    # own Parquet archive and prune.
+    visibility_methods: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     observation: Mapped[VerificationObservationRow] = relationship(
         VerificationObservationRow
     )
