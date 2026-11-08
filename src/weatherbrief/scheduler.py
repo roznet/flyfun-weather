@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from flyfun_common.db import SessionLocal
 from weatherbrief.db.models import FlightRow, FlightTripRow
 from weatherbrief.fetch.variables import is_beyond_forecast_horizon
+from weatherbrief import paths
 
 if TYPE_CHECKING:
     from weatherbrief.fetch.freshness.markers import MarkerStore
@@ -1118,7 +1119,7 @@ def _run_retention_once() -> None:
     try:
         from weatherbrief.fetch.grib.cache import purge_old_runs
 
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
         for model in ("gfs", "icon-eu", "icon-d2", "hrrr", "arome", "ukv"):
             removed = purge_old_runs(data_dir, model=model, enforce_cap=True)
             if removed:
@@ -1133,7 +1134,7 @@ def _run_retention_once() -> None:
     try:
         from weatherbrief.fetch.dwd_charts import evict_cycles_older_than
 
-        data_dir = Path(os.environ.get("DATA_DIR", "data"))
+        data_dir = paths.data_dir()
         evicted = evict_cycles_older_than(data_dir, max_age_hours=14 * 24)
         if evicted:
             logger.info("Age-evicted %d DWD chart cycles", len(evicted))
@@ -2747,7 +2748,7 @@ async def run_grib_precache_loop(app_state) -> None:
     )
     await asyncio.sleep(_GRIB_PRECACHE_STARTUP_DELAY_SECONDS)
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     last_done: dict[str, str] = {}  # source_key -> "YYYYMMDD_HHz"
     # (freshness source key, freshness model key, cache slug, precache fn).
     # The cache slug is the wall-clock warming-window key (issue #475): "icon-eu"

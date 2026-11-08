@@ -18,6 +18,7 @@ from weatherbrief.models import ElevationPoint, ElevationProfile, RouteConfig
 from weatherbrief.models.diagnostic import Diagnostic
 from weatherbrief.models.diagnostic_codes import FetchCode
 from weatherbrief.fetch.route_walk import walk_route
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +26,12 @@ logger = logging.getLogger(__name__)
 def srtm_cache_dir() -> Path:
     """Directory for SRTM tiles: $SRTM_CACHE_DIR, else $DATA_DIR/.cache/srtm.
 
-    Resolved at call time so a .env loaded after import still applies. With
-    neither set it falls back to the cwd-relative ``data/.cache/srtm``.
+    The data root comes from ``weatherbrief.paths.data_dir`` (resolved per call).
     """
     explicit = os.environ.get("SRTM_CACHE_DIR")
     if explicit:
         return Path(explicit)
-    return Path(os.environ.get("DATA_DIR", "data")) / ".cache" / "srtm"
+    return paths.data_dir() / ".cache" / "srtm"
 
 
 _M_TO_FT = 3.28084

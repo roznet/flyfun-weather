@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from weatherbrief.fetch.elevation import srtm_cache_dir
+from weatherbrief.paths import checkout_root
 
 
 def test_defaults_under_data_dir(monkeypatch, tmp_path):
@@ -17,7 +18,7 @@ def test_explicit_override_wins(monkeypatch, tmp_path):
     assert srtm_cache_dir() == tmp_path / "tiles"
 
 
-def test_falls_back_to_relative_data(monkeypatch):
+def test_falls_back_to_checkout_data(monkeypatch):
     monkeypatch.delenv("SRTM_CACHE_DIR", raising=False)
     monkeypatch.delenv("DATA_DIR", raising=False)
-    assert srtm_cache_dir() == Path("data") / ".cache" / "srtm"
+    assert srtm_cache_dir() == checkout_root() / "data" / ".cache" / "srtm"

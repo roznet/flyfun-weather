@@ -1009,6 +1009,9 @@ def ensure_icon_native_grid(
             grid.save(grid_cache_path(cache_root, grid.uuid))
         pointer = _grid_pointer_path(variant, cache_root)
         if not pointer.exists() or pointer.read_text().strip() != grid.uuid:
+            # The grid may have come from the in-process registry, so nothing
+            # above has necessarily created cache_root on disk yet.
+            pointer.parent.mkdir(parents=True, exist_ok=True)
             tmp = pointer.with_name(pointer.name + f".{os.getpid()}.tmp")
             tmp.write_text(grid.uuid)
             tmp.replace(pointer)

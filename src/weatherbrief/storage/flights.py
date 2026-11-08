@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import re
 import secrets
 import shutil
@@ -33,6 +32,7 @@ from weatherbrief.models import (
     Flight,
     FlightProfile,
 )
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def ensure_utc(dt: datetime) -> datetime:
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR", "data"))
+    return paths.data_dir()
 
 
 # --- Conversion helpers ---
