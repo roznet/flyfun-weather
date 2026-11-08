@@ -16,7 +16,6 @@ import threading
 import time
 from datetime import datetime, time as dt_time, timedelta, timezone
 from itertools import batched
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import requests
@@ -41,6 +40,7 @@ from weatherbrief.tasks.forecast_grid import (
     all_sample_hours,
     sample_hours_for_day,
 )
+from weatherbrief import paths
 
 if TYPE_CHECKING:
     from weatherbrief.analysis.sounding.edr import EdrAccumulator
@@ -1593,7 +1593,7 @@ def _icon_d2_airports(
             with requests.Session() as session:
                 mask = load_d2_validity_mask(
                     init_date, init_hour,
-                    data_dir=Path(os.environ.get("DATA_DIR", "data")),
+                    data_dir=paths.data_dir(),
                     session=session, variant=v,
                 )
         except Exception:

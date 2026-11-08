@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from weatherbrief.fetch import meteofrance_charts as mf  # noqa: E402
+from weatherbrief.paths import data_dir  # noqa: E402
 
 GRATICULE_COLOUR = (0, 170, 0)
 ROUTE_COLOUR = (220, 0, 0)
@@ -121,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--route", nargs="+", default=["LFAT", "LFQA", "LFSD", "LFML"])
     ap.add_argument("--data-dir", type=Path,
-                    default=Path(os.environ.get("DATA_DIR", "data")))
+                    default=data_dir())
     ap.add_argument("--out-dir", type=Path, default=Path("tmp/aeroweb"))
     args = ap.parse_args(argv)
 

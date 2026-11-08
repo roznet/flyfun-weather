@@ -28,9 +28,13 @@ def airports_db(request: Request) -> str:
 
 
 def data_dir(request: Request) -> Path:
-    """Shared data directory (DATA_DIR env var). Houses GRIB cache,
-    pack snapshots, and other per-deployment artifacts."""
-    return request.app.state.data_dir
+    """The data root as a FastAPI dependency (``weatherbrief.paths.data_dir``).
+
+    Houses the GRIB cache, pack snapshots and other per-deployment artifacts.
+    """
+    from weatherbrief import paths
+
+    return paths.data_dir()
 
 
 def current_user_id_short(request: Request) -> str:

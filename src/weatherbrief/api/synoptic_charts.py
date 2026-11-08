@@ -22,7 +22,6 @@ additionally admin-gated until ``METOFFICE_CHARTS_PUBLIC=1``.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -37,12 +36,13 @@ from weatherbrief.api._chart_serving import (
     serve_small_dwd_analysis,
     source_allowed,
 )
+from weatherbrief import paths
 
 router = APIRouter(prefix="/synoptic-charts", tags=["synoptic-charts"])
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR", "data"))
+    return paths.data_dir()
 
 
 @router.get("/manifest")

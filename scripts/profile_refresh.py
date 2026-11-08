@@ -143,8 +143,8 @@ def main() -> int:
     if args.clear_grib_cache:
         data_dir = options.data_dir
         if data_dir is None:
-            from weatherbrief.storage.snapshots import DEFAULT_DATA_DIR
-            data_dir = DEFAULT_DATA_DIR
+            from weatherbrief.paths import data_dir as default_data_dir
+            data_dir = default_data_dir()
         for sub in ("gfs", "icon-eu"):
             cache = Path(data_dir) / ".cache" / "grib" / sub
             if cache.exists():

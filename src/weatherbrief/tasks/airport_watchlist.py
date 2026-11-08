@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -205,6 +204,7 @@ def get_configs_dir() -> Path:
     if configs.is_dir():
         return configs
 
-    # Fall back to env var
-    data_dir = os.environ.get("DATA_DIR", "data")
-    return Path(data_dir) / "configs"
+    # Fall back to the data root
+    from weatherbrief.paths import data_dir
+
+    return data_dir() / "configs"

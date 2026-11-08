@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from weatherbrief.models import ForecastSnapshot
-
-DEFAULT_DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+from weatherbrief import paths
 
 
 def _snapshot_dir(
@@ -26,7 +24,7 @@ def save_snapshot(
     Cross-section data is saved separately via :func:`save_cross_section`.
     Returns the path to briefing.json.
     """
-    data_dir = data_dir or DEFAULT_DATA_DIR
+    data_dir = data_dir or paths.data_dir()
     out_dir = _snapshot_dir(
         snapshot.target_date, snapshot.days_out, snapshot.fetch_date, data_dir
     )
@@ -56,7 +54,7 @@ def save_cross_section(
     snapshot: ForecastSnapshot, data_dir: Path | None = None
 ) -> Path:
     """Save cross-section data to a separate JSON file alongside the snapshot."""
-    data_dir = data_dir or DEFAULT_DATA_DIR
+    data_dir = data_dir or paths.data_dir()
     out_dir = _snapshot_dir(
         snapshot.target_date, snapshot.days_out, snapshot.fetch_date, data_dir
     )
@@ -79,7 +77,7 @@ def load_snapshot(
 
     Falls back to legacy snapshot.json if new files don't exist.
     """
-    data_dir = data_dir or DEFAULT_DATA_DIR
+    data_dir = data_dir or paths.data_dir()
     snap_dir = _snapshot_dir(target_date, days_out, fetch_date, data_dir)
 
     briefing_path = snap_dir / "briefing.json"
@@ -104,7 +102,7 @@ def list_snapshots(
 
     Returns list of dicts with 'days_out', 'fetch_date', 'path'.
     """
-    data_dir = data_dir or DEFAULT_DATA_DIR
+    data_dir = data_dir or paths.data_dir()
     target_dir = data_dir / "forecasts" / target_date
 
     if not target_dir.exists():

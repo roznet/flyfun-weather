@@ -15,6 +15,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from weatherbrief.paths import checkout_root
 from weatherbrief.hewson.precompute import (
     DEFAULT_LEVELS,
     SOURCE_OPEN_METEO,
@@ -44,7 +45,7 @@ def test_resolve_output_dir_env(tmp_path, monkeypatch):
 
 def test_resolve_output_dir_fallback(monkeypatch):
     monkeypatch.delenv("DATA_DIR", raising=False)
-    assert resolve_output_dir() == Path("data") / "hewson"
+    assert resolve_output_dir() == checkout_root() / "data" / "hewson"
 
 
 def test_init_to_iso_z_format():

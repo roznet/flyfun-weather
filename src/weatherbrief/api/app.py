@@ -421,7 +421,6 @@ def create_app() -> FastAPI:
     )
 
     app.state.db_path = os.environ.get("AIRPORTS_DB", "")
-    app.state.data_dir = Path(os.environ.get("DATA_DIR", "data"))
 
     # SessionMiddleware required by authlib for OAuth CSRF state
     # Apple OAuth uses response_mode=form_post (cross-origin POST),

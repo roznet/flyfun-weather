@@ -52,6 +52,8 @@ from typing import NamedTuple
 
 import numpy as np
 
+from weatherbrief import paths
+
 logger = logging.getLogger(__name__)
 
 # A target farther than this many typical cell spacings from the nearest cell
@@ -382,9 +384,7 @@ def default_cache_root() -> Path:
     Decode-pool workers get no ``data_dir``; the fetch side writes grids under
     the same ``data_dir`` the app runs with, which is ``DATA_DIR``.
     """
-    import os
-
-    return Path(os.environ.get("DATA_DIR", "data")) / ".cache" / "grib"
+    return paths.data_dir() / ".cache" / "grib"
 
 
 def uuid_from_grib_header(head: bytes) -> str | None:

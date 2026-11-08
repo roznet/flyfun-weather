@@ -110,6 +110,13 @@ class _Resp:
         self.status_code = status
         self.content = content
 
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self.content), chunk_size):
+            yield self.content[i:i + chunk_size]
+
+    def close(self):
+        pass
+
 
 def test_native_single_level_skips_vis_and_keeps_plain_grib(native, monkeypatch):
     asked = []
@@ -385,3 +392,29 @@ def test_ensure_grid_writes_a_registered_grid_to_a_new_root(native, monkeypatch,
     assert again is first
     assert icon_grid.grid_cache_path(other, UUID).exists()
     assert (other / f"icon-grid-{ICON_D2.slug}.current").read_text() == UUID
+
+
+def test_ensure_grid_reads_only_2kb_when_range_ignored(native, monkeypatch, tmp_path):
+    """A 200 with the whole CLAT body still yields the UUID from 2 KB."""
+    session = _grid_session()
+    session_get = session.get
+    reads = []
+
+    def ignore_range(url, headers=None, timeout=None, **kw):
+        resp = session_get(url, timeout=timeout, **kw)   # no Range: full body
+        chunks = resp.iter_content
+
+        def counted(chunk_size=1):
+            for c in chunks(chunk_size):
+                reads.append(len(c))
+                yield c
+        resp.iter_content = counted
+        return resp
+
+    session.get = ignore_range
+    icon_grid.clear_registry()
+    ief._RUN_GRID_UUID.clear()
+    monkeypatch.setattr(ief, "get_with_retry", lambda s, u, timeout=None: session_get(u))
+    grid = ief.ensure_icon_native_grid(ICON_D2, "20261107", 12, session, tmp_path)
+    assert grid is not None and grid.uuid == UUID
+    assert reads == [2048]

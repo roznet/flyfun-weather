@@ -31,6 +31,7 @@ from weatherbrief.connectors.views import (
 from weatherbrief.api.throttle import generation_slot, pdf_limiter, plot_limiter
 
 from weatherbrief.api.validation import WAYPOINT_RE
+from weatherbrief import paths
 
 # Input validation for path-sensitive parameters
 _MODEL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -634,7 +635,7 @@ def _live_meteofrance_options(
 
     from weatherbrief.fetch.meteofrance_charts import resolve_chart_path
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     live = [
         o for o in stored
         if o.get("zone")
@@ -657,7 +658,7 @@ def _dwd_chart_times(meta: BriefingPackMeta) -> dict[str, ChartTimeResponse]:
 
     from weatherbrief.fetch.dwd_charts import forecast_stamps
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     return {
         cid: ChartTimeResponse(**stamp.to_meta())
         for cid, stamp in forecast_stamps(data_dir, meta.dwd_charts_run_cycle).items()
@@ -681,7 +682,7 @@ def _meta_to_response(
     metoffice_public = _metoffice_public()
     charts = build_pack_charts_manifest(
         meta,
-        data_dir=Path(os.environ.get("DATA_DIR", "data")),
+        data_dir=paths.data_dir(),
         meteofrance_options=mf_options,
         meteofrance_default_id=mf_default,
         metoffice_public=metoffice_public,
@@ -4949,7 +4950,7 @@ def get_dwd_chart(
             status_code=404, detail="DWD charts not available for this pack",
         )
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     if w is not None:
         return serve_small_dwd_analysis(data_dir, meta.dwd_charts_run_cycle, chart_id, w)
     return serve_chart_bytes(
@@ -5042,7 +5043,7 @@ def get_metoffice_chart(
             status_code=404, detail="Met Office charts not available for this pack",
         )
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     return serve_chart_bytes(
         data_dir, SOURCES["metoffice"], meta.metoffice_charts_run_cycle, chart_id,
         immutable=False,
@@ -5168,7 +5169,7 @@ def get_meteofrance_chart(
             detail="Météo-France TEMSI not available for this pack",
         )
 
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     return serve_chart_bytes(
         data_dir, SOURCES["meteofrance"], run_cycle, zone, immutable=False,
     )

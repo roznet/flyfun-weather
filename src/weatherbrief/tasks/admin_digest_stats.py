@@ -10,7 +10,6 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -35,6 +34,7 @@ from weatherbrief.models.verification import (
     RatingCount,
     UsersSectionData,
 )
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ def _get_performance_section(
     avg_queue = round(perf_row[3], 2) if perf_row[3] is not None else None
 
     # Disk usage
-    data_dir = Path(os.environ.get("DATA_DIR", "data"))
+    data_dir = paths.data_dir()
     packs_dir = data_dir / "packs"
     total_disk = 0
     if packs_dir.is_dir():

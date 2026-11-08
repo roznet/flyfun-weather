@@ -39,6 +39,7 @@ import numpy as np
 from weatherbrief.models.observed import ObservedAttribution
 
 from .grid import GridSpec, GridWindow
+from weatherbrief import paths
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,7 @@ class StoredFrame:
 
 
 def observed_root(data_dir: Path | str | None = None) -> Path:
-    base = Path(data_dir) if data_dir else Path(os.environ.get("DATA_DIR", "data"))
+    base = Path(data_dir) if data_dir else paths.data_dir()
     return base / "observed"
 
 
