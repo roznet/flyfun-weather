@@ -315,7 +315,10 @@ def test_cloud_diag_native(grid_on_disk):
 
 
 def test_d2_mask_and_corridor_native(grid_on_disk):
-    from weatherbrief.fetch.grib.decode import build_d2_validity_mask, d2_corridor_fully_valid
+    from weatherbrief.fetch.grib.decode import (
+        build_d2_validity_mask,
+        d2_corridor_fully_valid,
+    )
 
     grid, root = grid_on_disk
     values = np.ones(grid.n_cells)
