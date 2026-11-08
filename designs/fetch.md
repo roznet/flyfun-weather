@@ -159,7 +159,7 @@ profile = get_elevation_profile(route)
 # → ElevationProfile with ~800 points at 0.5nm spacing for 400nm route
 ```
 
-- Uses the `srtm.py` library, cached in `data/.cache/srtm/` (Docker volume-mounted); walks the route via `walk_route(route, spacing_nm=0.5)` for terrain-grade resolution
+- Uses the `srtm.py` library, cached in `$DATA_DIR/.cache/srtm/` (`srtm_cache_dir()`; `SRTM_CACHE_DIR` overrides; Docker volume-mounted); walks the route via `walk_route(route, spacing_nm=0.5)` for terrain-grade resolution
 - `ElevationProfile` carries `max_elevation_ft`, `total_distance_nm` and per-point `(distance_nm, elevation_ft, lat, lon)`; saved as `elevation_profile.json` in the pack directory
 - Runs early in the pipeline (before fetch) since it doesn't depend on NWP data
 
