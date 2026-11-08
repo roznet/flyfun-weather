@@ -959,12 +959,22 @@ def ensure_icon_native_grid(
 
     clat_url, clon_url = icon_v1_grid_urls(variant, init_date, init_hour)
     try:
-        head = session.get(clat_url, headers={"Range": "bytes=0-2047"}, timeout=REQUEST_TIMEOUT)
-        uuid = uuid_from_grib_header(head.content) if head.status_code in (200, 206) else None
+        # Streamed and cut at 2 KB, so a server that ignores Range (200 with
+        # the whole body) costs no more than one that honours it.
+        head = session.get(
+            clat_url, headers={"Range": "bytes=0-2047"},
+            timeout=REQUEST_TIMEOUT, stream=True,
+        )
+        try:
+            status = head.status_code
+            first = next(head.iter_content(2048), b"") if status in (200, 206) else b""
+        finally:
+            head.close()
+        uuid = uuid_from_grib_header(first[:2048])
         if uuid is None:
             logger.warning(
                 "%s %s %02dz: no native grid UUID in CLAT (HTTP %s)",
-                variant.slug, init_date, init_hour, head.status_code,
+                variant.slug, init_date, init_hour, status,
             )
             return None
         cache_root = Path(cache_root)
@@ -1099,8 +1109,10 @@ def fetch_icon_eu_single_level(
         native = icon_native_feed()
         # (variable, its files in window order). A variable published as
         # several files per step (v1 ECHOTOP, four 15-min windows) is kept
-        # only when every file arrived: a partial hour would otherwise be
-        # cached as complete for the whole run (#974).
+        # only when every file arrived, so the cached hour holds the variable
+        # whole or not at all, as a single failed file does on the legacy
+        # feed. The hour is still cached with the variables that did arrive;
+        # a short ECHOTOP hour is never mistaken for a complete one (#974).
         groups = [
             (var, icon_single_level_urls(init_date, init_hour, fhour, var, variant))
             for var in variables

@@ -1999,6 +1999,8 @@ def _is_native_icon_blob(grib_bytes: "bytes | Path") -> bool:
         for msg in iter_messages(grib_bytes):
             return bool(msg.uuid)
     except Exception:
+        # Not readable here: let the cfgrib path try, and fail, with its own error.
+        logger.debug("ICON blob header unreadable; treating as lat-lon", exc_info=True)
         return False
     return False
 
