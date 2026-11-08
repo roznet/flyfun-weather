@@ -49,6 +49,7 @@ from weatherbrief.db import init_shared_db  # noqa: E402
 
 
 def _side(flight_id: str, user_id: str, force_live: bool, feed: str):
+    previous = os.environ.get("WB_ICON_FEED")
     if feed == "legacy":
         os.environ.pop("WB_ICON_FEED", None)
     else:
@@ -56,7 +57,10 @@ def _side(flight_id: str, user_id: str, force_live: bool, feed: str):
     try:
         return _run(flight_id, user_id, force_live, "1", f"icon_{feed}")
     finally:
-        os.environ.pop("WB_ICON_FEED", None)
+        if previous is None:
+            os.environ.pop("WB_ICON_FEED", None)
+        else:
+            os.environ["WB_ICON_FEED"] = previous
 
 
 def _icon_slots(pack_dir: Path) -> dict:
@@ -66,6 +70,10 @@ def _icon_slots(pack_dir: Path) -> dict:
         cs.model.value: cs for cs in load_cross_sections(pack_dir)
         if cs.model.value.startswith("icon")
     }
+
+
+def _key(wf) -> tuple[float, float]:
+    return (round(wf.waypoint.lat, 4), round(wf.waypoint.lon, 4))
 
 
 def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
@@ -92,17 +100,30 @@ def _compare(flight_id: str, user_id: str, force_live: bool) -> int:
     if not old_cs or not new_cs:
         print(f"ICON slot missing: legacy={sorted(old_cs)} v1={sorted(new_cs)}\n")
         return changes
-    points = load_route_points(new_dir) or []
+    nm_at = {
+        (round(p.lat, 4), round(p.lon, 4)): p.distance_from_origin_nm
+        for p in load_route_points(new_dir) or []
+    }
     stats: dict = {}
     for model in sorted(set(old_cs) & set(new_cs)):
         per_model = stats.setdefault(model, {})
-        pairs = zip(old_cs[model].point_forecasts, new_cs[model].point_forecasts)
-        for i, (a, b) in enumerate(pairs):
-            nm = points[i].distance_from_origin_nm if i < len(points) else float(i)
+        # Pair on the waypoint position, not the list index: a side that
+        # drops a point (e.g. outside the D2 footprint) must not shift the rest.
+        legacy_at = {_key(wf): wf for wf in old_cs[model].point_forecasts}
+        unmatched = 0
+        for i, b in enumerate(new_cs[model].point_forecasts):
+            a = legacy_at.pop(_key(b), None)
+            if a is None:
+                unmatched += 1
+                continue
+            nm = nm_at.get(_key(b), float(i))
             compare_point(
                 per_model, b.hourly, hourly_as_open_meteo(a.hourly), f"pt{i} ({nm:.0f} nm)",
                 levels=DEFAULT_LEVELS,
             )
+        unmatched += len(legacy_at)
+        if unmatched:
+            print(f"{model}: {unmatched} route point(s) on one side only, not compared")
     if set(old_cs) != set(new_cs):
         print(f"ICON variant differs: legacy={sorted(old_cs)} v1={sorted(new_cs)}")
     print("ICON slot, native (v1) minus legacy:")
