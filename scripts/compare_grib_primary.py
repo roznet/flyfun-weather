@@ -73,7 +73,18 @@ class _GribPrimaryLog(logging.Handler):
 
 
 def _run(flight_id: str, user_id: str, force_live: bool, switch: str, label: str):
+    previous = os.environ.get("WB_GRIB_PRIMARY")
     os.environ["WB_GRIB_PRIMARY"] = switch
+    try:
+        return _run_with_switch(flight_id, user_id, force_live, label)
+    finally:
+        if previous is None:
+            os.environ.pop("WB_GRIB_PRIMARY", None)
+        else:
+            os.environ["WB_GRIB_PRIMARY"] = previous
+
+
+def _run_with_switch(flight_id: str, user_id: str, force_live: bool, label: str):
     db = SessionLocal()
     try:
         flight = _load_flight_or_404(db, flight_id, viewer_id=user_id)
