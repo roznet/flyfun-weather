@@ -357,6 +357,9 @@ def cmd_promote(play: Play, args: argparse.Namespace) -> None:
         # The newest release on the source track is what its testers have.
         latest = max(releases, key=lambda r: max(int(c) for c in r.get("versionCodes", ["0"])))
         release = {key: latest[key] for key in ("name", "versionCodes", "releaseNotes") if key in latest}
+        if args.notes_file:
+            # e.g. a first production release whose notes introduce the app, not the last test build.
+            release["releaseNotes"] = load_notes("", play.details()["defaultLanguage"], args.notes_file)
         release.update(release_status(args, args.rollout))
         play.set_track(target, [release])
         print(f"{TRACK_LABELS[source]} → {TRACK_LABELS[target]}: {describe(release)}")
@@ -478,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("promote", help="put a track's newest release on another track")
     p.add_argument("--from", dest="source", required=True)
     p.add_argument("--to", dest="target", required=True)
+    p.add_argument("--notes-file", help="replace the source release's notes, e.g. release-notes/android-1.0.txt")
     add_release(p)
     add_common(p)
 
