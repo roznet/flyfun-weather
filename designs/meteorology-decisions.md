@@ -7893,7 +7893,7 @@ events than a season would give.
   first guess, to be fitted).
 - **Fog rules**: `fog_model` (lowest-level cover ≥ 90 % or cloud water
   ≥ 0.02 g m⁻³), `fog_radiation` (sun below the horizon, T−Td ≤ 1 °C,
-  wind < 6 kt, low cloud ≤ 30 %), `fog_fsi` (FSI = 2(T−T850) + (T−Td) +
+  wind < 6 kt, low cloud ≤ 30 %), `fog_fsi` (Petterssen FSI = 4T − 2(T850 + Td) +
   W850 < 31). **Tier** LIKELY / POSSIBLE / NONE as the issue set it; the
   derived visibility in the tier is the lower of sw99 and gultepe06, never
   `native`, so a tier means the same on every model.
