@@ -7914,7 +7914,11 @@ events than a season would give.
 - **Promotion bar** (`verify visibility-report --promotion icon`), candidate
   vs the model's native visibility on the *same* hours, leads D0-D2:
   1. at least 40 observed < 5 km and 15 observed < 1.5 km events, else
-     "not enough data";
+     "not enough data". An event is a distinct METAR hour: every run that
+     scored the same METAR counts once. One fog morning at one airport is
+     still several hours, so the gate is "enough observed hours", not
+     "enough independent episodes"; the CSI/FAR/bias figures pool every run
+     (each run is a separate forecast the pilot could have used);
   2. CSI within 0.03 (< 5 km) and 0.05 (< 1.5 km) of native, or better;
   3. FAR < 1.5 km at most 0.10 above native (false IFR is the costly error);
   4. frequency bias 0.5-2 at both bands.
@@ -7925,6 +7929,8 @@ events than a season would give.
   continues; after 30 Nov there is no DWD VIS to compare against, so the
   reference becomes ECMWF's native visibility at the same airports
   (`--reference` on another model's rows is the follow-up).
+- **Reading the bands**: `rh_haze` is about 4.2 km at 100 % RH, so any
+  saturated hour is a "< 5 km" forecast for it and for `rap_blend`.
 - **No grade change in this phase.** Selection (one setting per model) and
   the briefing wiring are the next PR.
 
