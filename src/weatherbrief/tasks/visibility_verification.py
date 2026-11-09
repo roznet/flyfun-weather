@@ -55,6 +55,10 @@ _FOG_WEATHER = ("FG", "FZFG")
 # same rows, leads 0-2.
 PROMOTION_MAX_DAYS_OUT = 2
 PROMOTION_MIN_EVENTS = {5000.0: 40, 1500.0: 15}
+# ...spread over at least this many UTC days: one widespread fog morning
+# gives 100+ observed hours < 1.5 km on its own (2026-11-09), so the hour
+# count alone can pass a method on a single weather situation.
+PROMOTION_MIN_DAYS = {5000.0: 5, 1500.0: 3}
 PROMOTION_CSI_TOLERANCE = {5000.0: 0.03, 1500.0: 0.05}
 PROMOTION_FAR_TOLERANCE_1500 = 0.10
 PROMOTION_BIAS_RANGE = (0.5, 2.0)
@@ -103,7 +107,7 @@ def backfill_visibility_methods(
 
     from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationScoreRow
 
-    stats = {"scores": 0, "filled": 0, "no_snapshot": 0}
+    stats = {"scores": 0, "filled": 0, "no_snapshot": 0, "failed": 0}
     last_id = 0
     while True:
         scores = db.execute(
@@ -144,8 +148,18 @@ def backfill_visibility_methods(
                 stats["no_snapshot"] += 1
                 continue
             lat, lon = coords.get(score.icao, (None, None))
+            try:
+                payload = score_payload(snap, lat, lon)
+            except Exception:
+                # One bad row must not abort a backfill whose snapshots are
+                # pruned at 10 days: the days it would have reached are lost.
+                if not stats["failed"]:
+                    logger.warning("VISIBILITY_METHODS_FAILED in backfill (score %s)",
+                                   score.id, exc_info=True)
+                stats["failed"] += 1
+                continue
             if not dry_run:
-                score.visibility_methods = score_payload(snap, lat, lon)
+                score.visibility_methods = payload
             stats["filled"] += 1
         if not dry_run:
             db.commit()
@@ -261,14 +275,25 @@ class ScoredPair:
     # The METAR this score pairs with. Several model runs score the same
     # METAR, so the promotion gate counts distinct observations, not rows.
     obs_key: Any = None
+    # UTC date of that METAR, for the promotion gate's distinct-days minimum.
+    obs_day: Any = None
 
 
 def pairs_from_rows(
     rows: Iterable[tuple], version: str | None = METHODS_VERSION,
+    stats: dict[str, int] | None = None,
 ) -> list[ScoredPair]:
     """``(model, days_out, visibility_methods, obs visibility_m, obs weather
-    [, observation id])`` tuples → pairs. Only rows written by methods *version* (None: any), so a
-    re-tuned method is never scored together with its old self."""
+    [, observation id[, observation time]])`` tuples → pairs. Only rows
+    written by methods *version* (None: any), so a re-tuned method is never
+    scored together with its old self.
+
+    *stats*, when given, counts the rows dropped (``bad_json``,
+    ``other_version``), so a version bump that empties the report says so.
+    """
+    stats = stats if stats is not None else {}
+    stats.setdefault("bad_json", 0)
+    stats.setdefault("other_version", 0)
     out: list[ScoredPair] = []
     for model, days_out, payload, vis_m, weather, *rest in rows:
         if not payload:
@@ -277,15 +302,19 @@ def pairs_from_rows(
             data = json.loads(payload)
             wx = json.loads(weather) if weather else []
         except (TypeError, ValueError):
+            stats["bad_json"] += 1
             continue
         if version is not None and data.get("v") != version:
+            stats["other_version"] += 1
             continue
+        obs_time = rest[1] if len(rest) > 1 else None
         out.append(ScoredPair(
             model=model, days_out=days_out, night=data.get("night"),
             methods=data.get("m", {}),
             obs_vis_m=observed_visibility_m(float(vis_m) if vis_m is not None else None),
             obs_fog=observed_fog(float(vis_m) if vis_m is not None else None, wx),
             obs_key=rest[0] if rest else None,
+            obs_day=obs_time.date() if hasattr(obs_time, "date") else None,
         ))
     return out
 
@@ -375,11 +404,12 @@ def promotion_verdict(
     have a value and the METAR a visibility, so the two are scored on exactly
     the same hours. Bar:
 
-    1. at least 40 observed < 5 km and 15 observed < 1.5 km events, else
-       "not enough data" (not a failure, not a pass). An event is a distinct
-       METAR: the several runs that forecast the same hour count once, so the
-       gate is about observed hours, not score rows. The skill figures still
-       pool every run;
+    1. at least 40 observed < 5 km and 15 observed < 1.5 km events, on at
+       least 5 and 3 distinct UTC days, else "not enough data" (not a
+       failure, not a pass). An event is a distinct METAR: the several runs
+       that forecast the same hour count once, so the gate is about observed
+       hours, not score rows. The skill figures still pool every run. The
+       days minimum is skipped for pairs without an observation time;
     2. CSI within 0.03 (< 5 km) and 0.05 (< 1.5 km) of the reference's, or
        better;
     3. FAR < 1.5 km at most 0.10 above the reference's (false IFR);
@@ -388,6 +418,8 @@ def promotion_verdict(
     cand = {b: _Contingency() for b in (5000.0, 1500.0)}
     base = {b: _Contingency() for b in (5000.0, 1500.0)}
     distinct: dict[float, set] = {b: set() for b in cand}
+    days: dict[float, set] = {b: set() for b in cand}
+    timed = True
     for p in pairs:
         if p.model != model or p.days_out > PROMOTION_MAX_DAYS_OUT or p.obs_vis_m is None:
             continue
@@ -400,13 +432,22 @@ def promotion_verdict(
             base[band].add(float(ref) < band, observed)
             if observed:
                 distinct[band].add(p.obs_key if p.obs_key is not None else id(p))
+                if p.obs_day is None:
+                    timed = False
+                else:
+                    days[band].add(p.obs_day)
     reasons: list[str] = []
-    enough = all(len(distinct[b]) >= n for b, n in PROMOTION_MIN_EVENTS.items())
+    enough_hours = all(len(distinct[b]) >= n for b, n in PROMOTION_MIN_EVENTS.items())
+    enough_days = not timed or all(
+        len(days[b]) >= n for b, n in PROMOTION_MIN_DAYS.items())
+    enough = enough_hours and enough_days
     if not enough:
-        reasons.append(
-            ", ".join(f"{len(distinct[b])}/{n} observed hours < {b / 1000:g} km"
-                        for b, n in PROMOTION_MIN_EVENTS.items())
-        )
+        parts = [f"{len(distinct[b])}/{n} observed hours < {b / 1000:g} km"
+                 for b, n in PROMOTION_MIN_EVENTS.items()]
+        if timed:
+            parts += [f"{len(days[b])}/{n} days < {b / 1000:g} km"
+                      for b, n in PROMOTION_MIN_DAYS.items()]
+        reasons.append(", ".join(parts))
         return PromotionVerdict(model, method, reference, False, False,
                                 tuple(reasons), cand, base)
     for band, tol in PROMOTION_CSI_TOLERANCE.items():
@@ -429,7 +470,8 @@ def promotion_verdict(
 
 def load_pairs(db, since: datetime, until: datetime | None = None,
                model: str | None = None,
-               version: str | None = METHODS_VERSION) -> list[ScoredPair]:
+               version: str | None = METHODS_VERSION,
+               stats: dict[str, int] | None = None) -> list[ScoredPair]:
     """Standalone scores with ``visibility_methods`` joined to their METAR."""
     from sqlalchemy import select
 
@@ -443,6 +485,7 @@ def load_pairs(db, since: datetime, until: datetime | None = None,
             VerificationObservationRow.visibility_m,
             VerificationObservationRow.weather,
             VerificationScoreRow.observation_id,
+            VerificationScoreRow.observation_time,
         )
         .join(VerificationObservationRow,
               VerificationObservationRow.id == VerificationScoreRow.observation_id)
@@ -456,4 +499,4 @@ def load_pairs(db, since: datetime, until: datetime | None = None,
         q = q.where(VerificationScoreRow.observation_time < until)
     if model is not None:
         q = q.where(VerificationScoreRow.model == model)
-    return pairs_from_rows(db.execute(q).all(), version=version)
+    return pairs_from_rows(db.execute(q).all(), version=version, stats=stats)

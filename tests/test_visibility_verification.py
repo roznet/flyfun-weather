@@ -123,7 +123,7 @@ class TestBackfill:
             own_db, NOW - timedelta(days=1), {"LFPG": (49.01, 2.55)},
         )
 
-        assert stats == {"scores": 1, "filled": 1, "no_snapshot": 0}
+        assert stats == {"scores": 1, "filled": 1, "no_snapshot": 0, "failed": 0}
         assert json.loads(row.visibility_methods)["m"]["sw99"] < 1000
         # Idempotent: nothing left to fill.
         assert backfill_visibility_methods(
@@ -142,7 +142,23 @@ class TestBackfill:
 
         stats = backfill_visibility_methods(own_db, NOW - timedelta(days=1), {})
 
-        assert stats == {"scores": 1, "filled": 0, "no_snapshot": 1}
+        assert stats == {"scores": 1, "filled": 0, "no_snapshot": 1, "failed": 0}
+        assert row.visibility_methods is None
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_a_failing_row_does_not_abort_the_run(self, _rwy, own_db):
+        _insert_snapshot(own_db)
+        _insert_observation(own_db)
+        _score_cycle(NOW, [], "/fake/db", own_db)
+        row = own_db.execute(select(VerificationScoreRow)).scalar_one()
+        row.visibility_methods = None
+        own_db.flush()
+
+        with patch("weatherbrief.tasks.visibility_verification.score_payload",
+                   side_effect=ValueError("bad row")):
+            stats = backfill_visibility_methods(own_db, NOW - timedelta(days=1), {})
+
+        assert stats == {"scores": 1, "filled": 0, "no_snapshot": 0, "failed": 1}
         assert row.visibility_methods is None
 
     @patch("weatherbrief.airports.get_runway_ends", return_value={})
@@ -156,6 +172,7 @@ class TestBackfill:
         assert len(pairs) == 1
         assert pairs[0].obs_vis_m == 200 and pairs[0].obs_fog is True
         assert pairs[0].methods["native"] == 300
+        assert pairs[0].obs_day == pairs[0].obs_day.__class__(NOW.year, NOW.month, NOW.day)
 
 
 def _pair(model="icon", days_out=0, night=False, obs=10000.0, fog=False, **methods):
@@ -192,7 +209,9 @@ class TestReport:
             ("icon", 0, json.dumps({"v": "old", "night": True, "m": {"native": 500}}), 400, "[]"),
             ("icon", 0, None, 400, "[]"),
         ]
-        assert len(pairs_from_rows(rows)) == 1
+        dropped: dict[str, int] = {}
+        assert len(pairs_from_rows(rows, stats=dropped)) == 1
+        assert dropped == {"bad_json": 0, "other_version": 1}
         assert len(pairs_from_rows(rows, version=None)) == 2
 
 
@@ -230,6 +249,18 @@ class TestPromotion:
         v = promotion_verdict(pairs, "icon", "sw99")
         assert not v.enough_data
         assert any("observed hours" in r for r in v.reasons)
+
+    def test_one_day_is_not_enough(self):
+        # Plenty of observed hours, but all on one fog morning.
+        day = datetime(2026, 11, 9).date()
+        one_day = [dataclasses.replace(p, obs_key=i, obs_day=day)
+                   for i, p in enumerate(self._sample(True))]
+        v = promotion_verdict(one_day, "icon", "sw99")
+        assert not v.enough_data
+        assert any("1/3 days < 1.5 km" in r for r in v.reasons)
+        spread = [dataclasses.replace(p, obs_day=day + timedelta(days=p.obs_key % 5))
+                  for p in one_day]
+        assert promotion_verdict(spread, "icon", "sw99").passed
 
     def test_false_ifr_fails(self):
         pairs = self._sample(True)

@@ -113,9 +113,13 @@ class TestFog:
     @pytest.mark.parametrize("rules,vis,expected", [
         ({"fog_model": True, "fog_radiation": False, "fog_fsi": False}, None, "LIKELY"),
         ({"fog_model": False, "fog_radiation": None, "fog_fsi": None}, 800, "LIKELY"),
-        ({"fog_model": None, "fog_radiation": True, "fog_fsi": True}, None, "LIKELY"),
+        ({"fog_model": False, "fog_radiation": True, "fog_fsi": True}, None, "LIKELY"),
         ({"fog_model": False, "fog_radiation": True, "fog_fsi": False}, None, "POSSIBLE"),
-        ({"fog_model": None, "fog_radiation": None, "fog_fsi": True}, None, "POSSIBLE"),
+        ({"fog_model": False, "fog_radiation": None, "fog_fsi": True}, None, "POSSIBLE"),
+        # No model fog and no derived vis (ECMWF / GFS, pre-#980 runs): the
+        # tier cannot see fog, so it is unknown, never NONE or POSSIBLE.
+        ({"fog_model": None, "fog_radiation": True, "fog_fsi": True}, None, None),
+        ({"fog_model": None, "fog_radiation": False, "fog_fsi": False}, None, None),
         ({"fog_model": False, "fog_radiation": False, "fog_fsi": False}, 20000, "NONE"),
         ({"fog_model": None, "fog_radiation": None, "fog_fsi": None}, None, None),
     ])

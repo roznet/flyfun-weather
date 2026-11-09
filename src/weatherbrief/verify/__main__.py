@@ -538,7 +538,8 @@ def cmd_visibility_backfill(args):
     finally:
         db.close()
     print(f"{'(dry run) ' if args.dry_run else ''}scores {stats['scores']:,}, "
-          f"filled {stats['filled']:,}, snapshot pruned {stats['no_snapshot']:,}")
+          f"filled {stats['filled']:,}, snapshot pruned {stats['no_snapshot']:,}, "
+          f"failed {stats['failed']:,}")
 
 
 def cmd_visibility_report(args):
@@ -561,10 +562,14 @@ def cmd_visibility_report(args):
     until = _since_arg(args.until, 0) if args.until else None
     db = SessionLocal()
     try:
-        pairs = load_pairs(db, _since_arg(args.since, args.days), until, args.model)
+        dropped: dict[str, int] = {}
+        pairs = load_pairs(db, _since_arg(args.since, args.days), until, args.model,
+                           stats=dropped)
     finally:
         db.close()
-    print(f"{len(pairs):,} scored hours")
+    print(f"{len(pairs):,} scored hours"
+          + (f" (dropped: {dropped['other_version']:,} from another methods version, "
+             f"{dropped['bad_json']:,} unreadable)" if any(dropped.values()) else ""))
     cells = visibility_report(pairs, split_night=not args.no_night_split)
 
     def pct(v):

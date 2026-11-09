@@ -7896,7 +7896,11 @@ events than a season would give.
   wind < 6 kt, low cloud ≤ 30 %), `fog_fsi` (Petterssen FSI = 4T − 2(T850 + Td) +
   W850 < 31). **Tier** LIKELY / POSSIBLE / NONE as the issue set it; the
   derived visibility in the tier is the lower of sw99 and gultepe06, never
-  `native`, so a tier means the same on every model.
+  `native`, so a tier means the same on every model. The tier is **unknown
+  (absent), not NONE, unless `fog_model` or a derived visibility is known**:
+  on rows without lowest-level inputs (ECMWF, GFS, runs before #980) NONE
+  would only say the radiation / FSI rules did not fire, and the first look
+  showed that scoring every fog morning on those rows as a confident miss.
 - **Stored on the score** (`verification_scores.visibility_methods`, JSON,
   migration 117), one row per score rather than one per (score, method):
   ~9 methods × every standalone score would be ~10× the scores table. A JSON
@@ -7913,8 +7917,11 @@ events than a season would give.
   MIFG, PRFG, VCFG do not count).
 - **Promotion bar** (`verify visibility-report --promotion icon`), candidate
   vs the model's native visibility on the *same* hours, leads D0-D2:
-  1. at least 40 observed < 5 km and 15 observed < 1.5 km events, else
-     "not enough data". An event is a distinct METAR hour: every run that
+  1. at least 40 observed < 5 km and 15 observed < 1.5 km events, on at
+     least 5 and 3 distinct UTC days, else "not enough data" (the days
+     minimum because one widespread fog morning, 2026-11-09, gave 103
+     observed hours < 1.5 km on its own and passed `rap_blend` on a single
+     weather situation). An event is a distinct METAR hour: every run that
      scored the same METAR counts once. One fog morning at one airport is
      still several hours, so the gate is "enough observed hours", not
      "enough independent episodes"; the CSI/FAR/bias figures pool every run
@@ -7931,6 +7938,21 @@ events than a season would give.
   (`--reference` on another model's rows is the follow-up).
 - **Reading the bands**: `rh_haze` is about 4.2 km at 100 % RH, so any
   saturated hour is a "< 5 km" forecast for it and for `rap_blend`.
+- **What the native fields are.** DWD's ICON VIS is per-hydrometeor
+  extinction + Koschmieder plus an RH term (a cubic since Feb 2026: 5 km at
+  100 %, 20 km at 90 %, 40 km at 60 %), i.e. built like `rap_blend` with
+  DWD's coefficients. ECMWF `vis` is lowest-layer extinction from cloud
+  droplets, large-scale precipitation and a CAMS aerosol climatology
+  ("experimental", per ECMWF). GFS `VIS` comes from NCEP UPP's
+  Stoelinga-Warner routine.
+- **First look, 2026-11-09** (one widespread fog morning, D0 ICON with
+  inputs, before the two fixes above): `rap_blend` tied native < 5 km (CSI
+  0.30 vs 0.30), was lower < 1.5 km (0.25 vs 0.29, fewer false alarms) and
+  worse on log error (0.18 vs 0.13); sw99/gultepe06 too few forecasts
+  < 5 km (bias ~0.3); `fog_fsi` fired on about half of all rows (FAR 93 %),
+  so POSSIBLE was no better than the base rate; GFS native VIS had no skill
+  (never correctly < 1.5 km). ICON native and derived both caught only ~4 %
+  of the 06Z fog hours.
 - **No grade change in this phase.** Selection (one setting per model) and
   the briefing wiring are the next PR.
 

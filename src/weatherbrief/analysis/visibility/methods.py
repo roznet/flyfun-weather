@@ -318,7 +318,7 @@ FOG_FUNCS: dict[str, Callable[[VisibilityInputs], bool | None]] = {
 
 def fog_tier(inp: VisibilityInputs, rules: dict[str, bool | None] | None = None,
              derived_vis_m: float | None = None) -> str | None:
-    """LIKELY / POSSIBLE / NONE, or None when no rule can be evaluated.
+    """LIKELY / POSSIBLE / NONE, or None when the tier cannot see fog.
 
     - LIKELY: the model makes fog (``fog_model`` or a derived vis < 1 km), or
       the radiation setup holds and at least one other rule agrees.
@@ -329,10 +329,15 @@ def fog_tier(inp: VisibilityInputs, rules: dict[str, bool | None] | None = None,
     ``derived_vis_m`` is the lowest of the hydrometeor methods (sw99,
     gultepe06); ``native`` is deliberately not used, so the tier means the
     same on a model with and without its own visibility.
+
+    None unless ``fog_model`` or a derived vis is known: without the model's
+    own fog, NONE would only mean "the radiation / FSI rules did not fire",
+    and scoring it as NONE turns every fog morning on such a row into a
+    confident miss (ECMWF and GFS rows, and runs logged before #980).
     """
     rules = rules if rules is not None else {k: f(inp) for k, f in FOG_FUNCS.items()}
     known = {k: v for k, v in rules.items() if v is not None}
-    if not known and derived_vis_m is None:
+    if rules.get("fog_model") is None and derived_vis_m is None:
         return None
     if rules.get("fog_model") or (derived_vis_m is not None and derived_vis_m < FOG_LIKELY_VIS_M):
         return "LIKELY"
