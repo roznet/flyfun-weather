@@ -293,12 +293,15 @@ def fog_radiation(inp: VisibilityInputs) -> bool | None:
 
 
 def fog_stability_index(inp: VisibilityInputs) -> float | None:
-    """FSI = 2 (T2m - T850) + (T2m - Td2m) + wind850 [kt]."""
+    """Petterssen FSI = 4 T2m - 2 (T850 + Td2m) + wind850 [kt].
+
+    Written as 2 (T2m - T850) + 2 (T2m - Td2m) + wind850, the same thing.
+    """
     t, td, t850, w850 = (inp.temperature_2m_c, inp.dewpoint_2m_c,
                          inp.t850_c, inp.wind_speed_850_kt)
     if t is None or td is None or t850 is None or w850 is None:
         return None
-    return 2.0 * (t - t850) + (t - td) + w850
+    return 2.0 * (t - t850) + 2.0 * (t - td) + w850
 
 
 def fog_fsi(inp: VisibilityInputs) -> bool | None:
@@ -319,8 +322,8 @@ def fog_tier(inp: VisibilityInputs, rules: dict[str, bool | None] | None = None,
 
     - LIKELY: the model makes fog (``fog_model`` or a derived vis < 1 km), or
       the radiation setup holds and at least one other rule agrees.
-    - POSSIBLE: exactly one rule fires, or a derived vis of 1-5 km with
-      RH 2 m >= 95 %.
+    - POSSIBLE: any other rule fires (today that is one of fog_radiation /
+      fog_fsi alone), or a derived vis of 1-5 km with RH 2 m >= 95 %.
     - NONE: nothing fires.
 
     ``derived_vis_m`` is the lowest of the hydrometeor methods (sw99,
@@ -336,10 +339,8 @@ def fog_tier(inp: VisibilityInputs, rules: dict[str, bool | None] | None = None,
     fired = [k for k, v in known.items() if v]
     if rules.get("fog_radiation") and len(fired) >= 2:
         return "LIKELY"
-    if len(fired) == 1:
+    if fired:
         return "POSSIBLE"
-    if len(fired) >= 2:
-        return "LIKELY"
     rh = relative_humidity_pct(inp.temperature_2m_c, inp.dewpoint_2m_c)
     if (
         derived_vis_m is not None and derived_vis_m < FOG_POSSIBLE_VIS_M

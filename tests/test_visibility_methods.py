@@ -103,9 +103,9 @@ class TestFog:
         assert m.fog_radiation(_fog_inputs()) is None  # night unknown
 
     def test_fsi(self):
-        # 2*(5-3) + 0.2 + 10 = 14.2 < 31
+        # 2*(5-3) + 2*0.2 + 10 = 14.4 < 31 (= 4*5 - 2*(3+4.8) + 10)
         inp = _fog_inputs(t850_c=3.0, wind_speed_850_kt=10.0)
-        assert m.fog_stability_index(inp) == pytest.approx(14.2)
+        assert m.fog_stability_index(inp) == pytest.approx(14.4)
         assert m.fog_fsi(inp) is True
         assert m.fog_fsi(_fog_inputs(t850_c=-10.0, wind_speed_850_kt=30.0)) is False
         assert m.fog_fsi(_fog_inputs()) is None

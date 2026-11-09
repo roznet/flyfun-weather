@@ -297,6 +297,9 @@ def visibility_report(
 
     ``lead`` is D0, D1, D2 or D3+, plus an ``all`` bucket; ``day/night`` is
     ``day``, ``night``, ``?`` (unknown) and ``all``.
+
+    ``n`` differs by kind: a visibility method counts pairs with an observed
+    visibility, a fog rule or tier counts every pair where it was evaluated.
     """
     cells: dict[tuple[str, str, str, str], MethodStats] = {}
 
