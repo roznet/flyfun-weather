@@ -2802,6 +2802,7 @@ def _score_cycle(
         existing_taf_keys.add((r[0], r[1], r[2]))
 
     scores_created = 0
+    visibility_failures = 0
 
     for snap in matching_snapshots:
         obs = obs_by_icao.get(snap.icao)
@@ -2860,8 +2861,10 @@ def _score_cycle(
                 lat, lon = coords.get(snap.icao, (None, None))
                 score_row.visibility_methods = score_payload(snap, lat, lon)
             except Exception:
-                logger.warning("visibility methods failed for %s %s",
-                               snap.icao, snap.model, exc_info=True)
+                visibility_failures += 1
+                if visibility_failures == 1:
+                    logger.warning("VISIBILITY_METHODS_FAILED %s %s",
+                                   snap.icao, snap.model, exc_info=True)
             db.add(score_row)
             existing_score_keys.add(score_key)
             scores_created += 1
@@ -2885,6 +2888,9 @@ def _score_cycle(
             scores_created += 1
 
     db.flush()
+    if visibility_failures:
+        logger.warning("VISIBILITY_METHODS_FAILED on %d scores this cycle "
+                       "(first traceback above)", visibility_failures)
     return scores_created
 
 

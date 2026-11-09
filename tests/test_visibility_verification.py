@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -219,6 +220,16 @@ class TestPromotion:
     def test_not_enough_data(self):
         v = promotion_verdict(self._sample(True)[:30], "icon", "sw99")
         assert not v.passed and not v.enough_data
+
+    def test_events_count_distinct_observations(self):
+        # The same METARs scored by four runs are still the same events.
+        one_run = self._sample(True)[:30]
+        pairs = []
+        for run in range(4):
+            pairs += [dataclasses.replace(p, obs_key=i) for i, p in enumerate(one_run)]
+        v = promotion_verdict(pairs, "icon", "sw99")
+        assert not v.enough_data
+        assert any("observed hours" in r for r in v.reasons)
 
     def test_false_ifr_fails(self):
         pairs = self._sample(True)

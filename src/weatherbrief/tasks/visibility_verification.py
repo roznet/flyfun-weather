@@ -258,16 +258,19 @@ class ScoredPair:
     methods: dict[str, Any]
     obs_vis_m: float | None
     obs_fog: bool | None
+    # The METAR this score pairs with. Several model runs score the same
+    # METAR, so the promotion gate counts distinct observations, not rows.
+    obs_key: Any = None
 
 
 def pairs_from_rows(
     rows: Iterable[tuple], version: str | None = METHODS_VERSION,
 ) -> list[ScoredPair]:
-    """``(model, days_out, visibility_methods, obs visibility_m, obs weather)``
-    tuples → pairs. Only rows written by methods *version* (None: any), so a
+    """``(model, days_out, visibility_methods, obs visibility_m, obs weather
+    [, observation id])`` tuples → pairs. Only rows written by methods *version* (None: any), so a
     re-tuned method is never scored together with its old self."""
     out: list[ScoredPair] = []
-    for model, days_out, payload, vis_m, weather in rows:
+    for model, days_out, payload, vis_m, weather, *rest in rows:
         if not payload:
             continue
         try:
@@ -282,6 +285,7 @@ def pairs_from_rows(
             methods=data.get("m", {}),
             obs_vis_m=observed_visibility_m(float(vis_m) if vis_m is not None else None),
             obs_fog=observed_fog(float(vis_m) if vis_m is not None else None, wx),
+            obs_key=rest[0] if rest else None,
         ))
     return out
 
@@ -372,7 +376,10 @@ def promotion_verdict(
     the same hours. Bar:
 
     1. at least 40 observed < 5 km and 15 observed < 1.5 km events, else
-       "not enough data" (not a failure, not a pass);
+       "not enough data" (not a failure, not a pass). An event is a distinct
+       METAR: the several runs that forecast the same hour count once, so the
+       gate is about observed hours, not score rows. The skill figures still
+       pool every run;
     2. CSI within 0.03 (< 5 km) and 0.05 (< 1.5 km) of the reference's, or
        better;
     3. FAR < 1.5 km at most 0.10 above the reference's (false IFR);
@@ -380,6 +387,7 @@ def promotion_verdict(
     """
     cand = {b: _Contingency() for b in (5000.0, 1500.0)}
     base = {b: _Contingency() for b in (5000.0, 1500.0)}
+    distinct: dict[float, set] = {b: set() for b in cand}
     for p in pairs:
         if p.model != model or p.days_out > PROMOTION_MAX_DAYS_OUT or p.obs_vis_m is None:
             continue
@@ -390,11 +398,13 @@ def promotion_verdict(
             observed = p.obs_vis_m < band
             cand[band].add(float(fc) < band, observed)
             base[band].add(float(ref) < band, observed)
+            if observed:
+                distinct[band].add(p.obs_key if p.obs_key is not None else id(p))
     reasons: list[str] = []
-    enough = all(cand[b].events >= n for b, n in PROMOTION_MIN_EVENTS.items())
+    enough = all(len(distinct[b]) >= n for b, n in PROMOTION_MIN_EVENTS.items())
     if not enough:
         reasons.append(
-            ", ".join(f"{cand[b].events}/{n} events < {b / 1000:g} km"
+            ", ".join(f"{len(distinct[b])}/{n} observed hours < {b / 1000:g} km"
                         for b, n in PROMOTION_MIN_EVENTS.items())
         )
         return PromotionVerdict(model, method, reference, False, False,
@@ -404,7 +414,9 @@ def promotion_verdict(
         if c < r - tol:
             reasons.append(f"CSI < {band / 1000:g} km {c:.2f} vs {reference} {r:.2f} (tolerance {tol})")
     far_c, far_r = cand[1500.0].far, base[1500.0].far
-    if far_c is not None and far_c > (far_r or 0.0) + PROMOTION_FAR_TOLERANCE_1500:
+    if far_c is None:
+        reasons.append("no forecast < 1.5 km, so no FAR")
+    elif far_c > (far_r or 0.0) + PROMOTION_FAR_TOLERANCE_1500:
         reasons.append(f"FAR < 1.5 km {far_c:.2f} vs {reference} {(far_r or 0.0):.2f}")
     lo, hi = PROMOTION_BIAS_RANGE
     for band in cand:
@@ -430,6 +442,7 @@ def load_pairs(db, since: datetime, until: datetime | None = None,
             VerificationScoreRow.visibility_methods,
             VerificationObservationRow.visibility_m,
             VerificationObservationRow.weather,
+            VerificationScoreRow.observation_id,
         )
         .join(VerificationObservationRow,
               VerificationObservationRow.id == VerificationScoreRow.observation_id)

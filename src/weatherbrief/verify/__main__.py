@@ -556,6 +556,8 @@ def cmd_visibility_report(args):
         visibility_report,
     )
 
+    if args.promotion and args.model and args.model != args.promotion:
+        raise SystemExit(f"--promotion {args.promotion} needs --model {args.promotion} or no --model")
     until = _since_arg(args.until, 0) if args.until else None
     db = SessionLocal()
     try:
