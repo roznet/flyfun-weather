@@ -390,3 +390,29 @@ def test_eumetsat_search_failure_still_purges(store):
     )
     assert result.failed == 1
     assert result.purged == 1
+
+
+def test_eumdac_requests_get_a_default_timeout(monkeypatch):
+    """A stalled EUMETSAT read must not hang the loop forever (2026-11-10)."""
+    import eumdac.request as eumdac_request
+    import requests
+
+    monkeypatch.setattr(eumdac_request, "_request", eumdac_request._request)
+    seen: dict = {}
+
+    def fake_get(self, url, **kwargs):
+        seen.update(kwargs)
+        response = requests.Response()
+        response.status_code = 200
+        return response
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+
+    collect._install_eumdac_timeout()
+    collect._install_eumdac_timeout()  # idempotent: no double wrapping
+    eumdac_request.get("https://api.eumetsat.int/data/search-products")
+    assert seen["timeout"] == collect.EUMETSAT_TIMEOUT
+    assert eumdac_request._request._wb_default_timeout
+
+    eumdac_request.get("https://api.eumetsat.int/x", timeout=5)
+    assert seen["timeout"] == 5

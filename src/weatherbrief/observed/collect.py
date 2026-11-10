@@ -304,9 +304,35 @@ def _collection_id(source: str) -> str:
     return CTTH_COLLECTION if source == SOURCE_EUMETSAT_CTTH else LI_COLLECTION
 
 
+# eumdac (3.1.1) never passes ``timeout`` to requests, so a stalled EUMETSAT
+# response blocks forever.  On 2026-11-10 one SSL read on api.eumetsat.int hung
+# the single-threaded cells loop for 8.5 h — alive, so KeepAlive never restarted
+# it.  Every eumdac call (token, search, download) goes through
+# ``eumdac.request._request``, so a default there bounds all of them.  The read
+# timeout applies per socket read, so a streamed download that keeps making
+# progress is unaffected.
+EUMETSAT_TIMEOUT = (15, 60)  # (connect, read) seconds
+
+
+def _install_eumdac_timeout() -> None:
+    import eumdac.request as eumdac_request
+
+    original = eumdac_request._request
+    if getattr(original, "_wb_default_timeout", False):
+        return
+
+    def _request_with_timeout(method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", EUMETSAT_TIMEOUT)
+        return original(method, url, *args, **kwargs)
+
+    _request_with_timeout._wb_default_timeout = True
+    eumdac_request._request = _request_with_timeout
+
+
 def _open_datastore():
     import eumdac
 
+    _install_eumdac_timeout()
     credentials = eumetsat_credentials()
     if credentials is None:
         raise RuntimeError(
