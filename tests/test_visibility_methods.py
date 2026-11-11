@@ -81,6 +81,50 @@ class TestVisibility:
         assert m.vis_rap_blend(inp) == m.vis_rh_haze(inp) < m.VIS_CAP_M
         assert m.vis_rap_blend(_fog_inputs()) is None  # no sw99
 
+    @staticmethod
+    def _at_rh(rh, t=10.0):
+        a, b = 17.625, 243.04
+        g = math.log(rh / 100.0) + a * t / (b + t)
+        return VI(temperature_2m_c=t, dewpoint_2m_c=b * g / (a - g))
+
+    def test_rh_dwd_anchor_points(self):
+        assert m.vis_rh_dwd(self._at_rh(100)) == pytest.approx(5000, abs=1)
+        assert m.vis_rh_dwd(self._at_rh(90)) == m.VIS_CAP_M  # 20 km, the cap
+        assert m.vis_rh_dwd(self._at_rh(40)) == m.VIS_CAP_M  # flat below 60 %
+        # Never a mist forecast on its own.
+        assert min(m.vis_rh_dwd(self._at_rh(r)) for r in range(60, 101)) >= 5000 - 1
+        assert m.vis_rh_dwd(VI(temperature_2m_c=10)) is None
+
+    def test_rh_dwd_curve_values(self):
+        # x = 100 - RH: v(x) = 5 + 61/36 x - 11/576 x^2 - 1/28800 x^3 km
+        a, b, c = m.RH_DWD_COEFFS
+        assert 5 + 10 * a + 100 * b + 1000 * c == pytest.approx(20)
+        assert 5 + 40 * a + 1600 * b + 64000 * c == pytest.approx(40)
+        assert a + 80 * b + 4800 * c == pytest.approx(0)  # flat at 60 % RH
+
+    def test_rh_icon_follows_the_table(self):
+        assert m.vis_rh_icon(self._at_rh(85)) == m.VIS_CAP_M
+        assert m.vis_rh_icon(self._at_rh(94.5)) == pytest.approx(8000, rel=1e-3)
+        assert m.vis_rh_icon(self._at_rh(98.25)) == pytest.approx(950, rel=1e-3)
+        assert m.vis_rh_icon(self._at_rh(100)) == pytest.approx(400, rel=1e-3)
+        # Log-linear between points: 95 % sits at the geometric mean.
+        assert m.vis_rh_icon(self._at_rh(95.0)) == pytest.approx(math.sqrt(8000 * 4800), rel=1e-3)
+        assert m.vis_rh_icon(VI(temperature_2m_c=10)) is None
+
+    def test_rh_icon_is_monotone(self):
+        values = [m.vis_rh_icon(self._at_rh(r / 10)) for r in range(600, 1001)]
+        assert all(b <= a for a, b in zip(values, values[1:]))
+        curve = m.RH_ICON_CURVE
+        assert all(r1 > r0 and v1 <= v0 for (r0, v0), (r1, v1) in zip(curve, curve[1:]))
+
+    def test_icon_blend_is_the_min(self):
+        dry = _fog_inputs(lowest_level_cloud_water_kg_kg=0.0, precipitation_mm=0.0,
+                          snowfall_cm=0.0)  # RH ~98.6 %: the RH curve wins
+        assert m.vis_icon_blend(dry) == m.vis_rh_icon(dry) < 1000
+        foggy = _fog_inputs(lowest_level_cloud_water_kg_kg=1e-4)  # sw99 ~166 m wins
+        assert m.vis_icon_blend(foggy) == m.vis_sw99(foggy)
+        assert m.vis_icon_blend(_fog_inputs()) is None  # no sw99
+
     def test_native_passthrough(self):
         assert m.vis_native(VI(visibility_m=35000)) == m.VIS_CAP_M
         assert m.vis_native(VI(visibility_m=800)) == 800
@@ -135,7 +179,8 @@ class TestFog:
 
 def test_run_all_skips_missing_methods():
     out = m.run_all(VI(temperature_2m_c=10, dewpoint_2m_c=9, visibility_m=4000))
-    assert set(out) == {"native", "rh_haze"}  # no fog rule evaluable: no tier
+    # no fog rule evaluable: no tier
+    assert set(out) == {"native", "rh_haze", "rh_dwd", "rh_icon"}
     full = m.run_all(_fog_inputs(
         lowest_level_cloud_water_kg_kg=1e-4, lowest_level_cloud_cover_pct=100,
         visibility_m=200, t850_c=3.0, wind_speed_850_kt=10.0, is_night=True,

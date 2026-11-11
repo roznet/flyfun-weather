@@ -19,6 +19,14 @@ Visibility methods (metres, capped at :data:`VIS_CAP_M`):
 - ``rh_haze``: clear-air visibility falling with 2 m RH, the RUC/RAP humidity
   term, vis = 60 · exp(-2.5 (RH - 15) / 80) km.
 - ``rap_blend``: min(sw99, rh_haze), as RAP/HRRR blend the two.
+- ``rh_dwd``: DWD's documented RH cubic (5 km at 100 %, 20 km at 90 %,
+  40 km at 60 %, flat below). Never below 5 km, so it cannot forecast mist on
+  its own; scored to show that.
+- ``rh_icon``: the RH curve ICON's own VIS follows on dry air, fitted to it
+  (:data:`RH_ICON_CURVE`). ICON goes below 1 km at 2 m RH 98-99 % with no
+  cloud water at all, far steeper than either curve above.
+- ``icon_blend``: min(sw99, rh_icon), the candidate to replace ICON's VIS
+  after 2026-11-30.
 
 Fog rules (True / False) and the three-tier fog risk:
 
@@ -40,7 +48,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 #: Stored with every score. Bump on any change to a formula or constant below.
-METHODS_VERSION = "1"
+METHODS_VERSION = "2"
 
 #: Upper bound of every derived visibility (UPP caps at ~24 km; METARs stop
 #: at 9999 m, so anything above 10 km scores the same).
@@ -78,8 +86,37 @@ FOG_LIKELY_VIS_M = 1000.0         # a derived vis below this is model fog
 FOG_POSSIBLE_VIS_M = 5000.0       # 1-5 km with RH >= FOG_POSSIBLE_RH
 FOG_POSSIBLE_RH = 95.0
 
+# rh_dwd: v(x) = 5 + a·x + b·x² + c·x³ km with x = 100 - RH (%), through
+# v(0) = 5, v(10) = 20, v(40) = 40 and flat at x = 40 (RH 60 %).
+RH_DWD_COEFFS = (61 / 36, -11 / 576, -1 / 28800)
+RH_DWD_AT_100_KM = 5.0
+RH_DWD_FLAT_BELOW_RH = 60.0
+
+#: rh_icon: (2 m RH %, visibility m), interpolated linearly in log10(vis).
+#: The 35th percentile of ICON's own VIS per RH bin, on ICON D0-D2 rows with
+#: zero lowest-level cloud water and no precipitation, 2026-11-09..11
+#: (~4,600 rows; meteorology-decisions §80). The 35th percentile, not the
+#: median, keeps the frequency bias near ICON's: the curve is deterministic
+#: where ICON's own VIS spreads within a bin. Thin above 98.5 % RH: floored
+#: at 400 m. Below the first point: the cap.
+RH_ICON_CURVE = (
+    (90.0, 20000.0),
+    (91.0, 17600.0),
+    (92.5, 14800.0),
+    (93.5, 11800.0),
+    (94.5, 8000.0),
+    (95.5, 4800.0),
+    (96.5, 2850.0),
+    (97.25, 1550.0),
+    (97.75, 1200.0),
+    (98.25, 950.0),
+    (98.75, 450.0),
+    (100.0, 400.0),
+)
+
 #: Visibility methods in report order.
-VISIBILITY_METHODS = ("native", "sw99", "gultepe06", "rh_haze", "rap_blend")
+VISIBILITY_METHODS = ("native", "sw99", "gultepe06", "rh_haze", "rap_blend",
+                      "rh_dwd", "rh_icon", "icon_blend")
 #: Fog outputs in report order.
 FOG_RULES = ("fog_model", "fog_radiation", "fog_fsi")
 FOG_TIERS = ("LIKELY", "POSSIBLE", "NONE")
@@ -251,12 +288,47 @@ def vis_rap_blend(inp: VisibilityInputs) -> float | None:
     return min(a, b)
 
 
+def vis_rh_dwd(inp: VisibilityInputs) -> float | None:
+    """DWD's RH cubic; needs T2m and Td2m."""
+    rh = relative_humidity_pct(inp.temperature_2m_c, inp.dewpoint_2m_c)
+    if rh is None:
+        return None
+    x = 100.0 - max(rh, RH_DWD_FLAT_BELOW_RH)
+    a, b, c = RH_DWD_COEFFS
+    return min(VIS_CAP_M, 1000.0 * (RH_DWD_AT_100_KM + a * x + b * x * x + c * x ** 3))
+
+
+def vis_rh_icon(inp: VisibilityInputs) -> float | None:
+    """ICON's own dry-air RH curve (:data:`RH_ICON_CURVE`); needs T2m, Td2m."""
+    rh = relative_humidity_pct(inp.temperature_2m_c, inp.dewpoint_2m_c)
+    if rh is None:
+        return None
+    if rh <= RH_ICON_CURVE[0][0]:
+        return min(VIS_CAP_M, RH_ICON_CURVE[0][1])
+    for (r0, v0), (r1, v1) in zip(RH_ICON_CURVE, RH_ICON_CURVE[1:]):
+        if rh <= r1:
+            f = (rh - r0) / (r1 - r0)
+            return min(VIS_CAP_M, 10.0 ** (math.log10(v0) + f * (math.log10(v1) - math.log10(v0))))
+    return min(VIS_CAP_M, RH_ICON_CURVE[-1][1])
+
+
+def vis_icon_blend(inp: VisibilityInputs) -> float | None:
+    """min(sw99, rh_icon); needs both."""
+    a, b = vis_sw99(inp), vis_rh_icon(inp)
+    if a is None or b is None:
+        return None
+    return min(a, b)
+
+
 VISIBILITY_FUNCS: dict[str, Callable[[VisibilityInputs], float | None]] = {
     "native": vis_native,
     "sw99": vis_sw99,
     "gultepe06": vis_gultepe06,
     "rh_haze": vis_rh_haze,
     "rap_blend": vis_rap_blend,
+    "rh_dwd": vis_rh_dwd,
+    "rh_icon": vis_rh_icon,
+    "icon_blend": vis_icon_blend,
 }
 
 

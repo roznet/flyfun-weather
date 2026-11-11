@@ -131,6 +131,26 @@ class TestBackfill:
         )["scores"] == 0
 
     @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_refill_rescores_an_older_version_only(self, _rwy, own_db):
+        _insert_snapshot(own_db, **{**FOGGY, "model": "gfs"})
+        _insert_observation(own_db, visibility_m=200)
+        _score_cycle(NOW, [], "/fake/db", own_db)
+        row = own_db.execute(select(VerificationScoreRow)).scalar_one()
+        row.visibility_methods = json.dumps({"v": "0", "night": None, "m": {}},
+                                            separators=(",", ":"))
+        own_db.commit()
+        since = NOW - timedelta(days=1)
+
+        # Without refill an old-version row is left alone.
+        assert backfill_visibility_methods(own_db, since, {})["scores"] == 0
+        stats = backfill_visibility_methods(own_db, since, {}, refill=True)
+        assert stats["filled"] == 1
+        payload = json.loads(row.visibility_methods)
+        assert payload["v"] == METHODS_VERSION and "sw99" in payload["m"]
+        # Current-version rows are not touched again.
+        assert backfill_visibility_methods(own_db, since, {}, refill=True)["scores"] == 0
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
     def test_pruned_snapshot_is_counted(self, _rwy, own_db):
         snap = _insert_snapshot(own_db)
         _insert_observation(own_db)

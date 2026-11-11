@@ -534,6 +534,7 @@ def cmd_visibility_backfill(args):
     try:
         stats = backfill_visibility_methods(
             db, _since_arg(args.since, args.days), coords, dry_run=args.dry_run,
+            refill=args.refill,
         )
     finally:
         db.close()
@@ -1488,6 +1489,9 @@ def main():
                         help="Without --since: the last N days (default 11, "
                              "just past the 10-day snapshot window)")
     p_visb.add_argument("--dry-run", action="store_true", help="Count only, write nothing")
+    p_visb.add_argument("--refill", action="store_true",
+                        help="Also recompute scores written by an older METHODS_VERSION "
+                             "(after a method change; snapshots must still be there)")
 
     p_visr = subparsers.add_parser(
         "visibility-report",

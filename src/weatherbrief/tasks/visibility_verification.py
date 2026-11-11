@@ -94,20 +94,31 @@ def backfill_visibility_methods(
     *,
     batch: int = 2000,
     dry_run: bool = False,
+    refill: bool = False,
 ) -> dict[str, int]:
     """Fill ``visibility_methods`` on standalone scores since *since*.
+
+    *refill* also recomputes scores written by another ``METHODS_VERSION``:
+    the report reads one version only, so after a method change the rows
+    whose snapshot is still there are rescored rather than dropped.
 
     Each score names its snapshot by ``(icao, model, model_init_time)`` and
     the observation time; the snapshot is the one of that key whose forecast
     hour is closest to the observation, within the scoring cycle's ±90 min.
-    Scores whose snapshot has been pruned stay NULL (counted as
-    ``no_snapshot``). Idempotent: only NULL rows are touched.
+    Scores whose snapshot has been pruned stay as they were (counted as
+    ``no_snapshot``). Idempotent: only NULL rows (and, with *refill*, rows of
+    another version) are touched.
     """
-    from sqlalchemy import select, tuple_
+    from sqlalchemy import not_, or_, select, tuple_
 
     from weatherbrief.db.models import AirportForecastSnapshotRow, VerificationScoreRow
 
     stats = {"scores": 0, "filled": 0, "no_snapshot": 0, "failed": 0}
+    column = VerificationScoreRow.visibility_methods
+    todo = column.is_(None)
+    if refill:
+        # score_payload writes "v" first, without spaces.
+        todo = or_(todo, not_(column.like(f'{{"v":"{METHODS_VERSION}",%')))
     last_id = 0
     while True:
         scores = db.execute(
@@ -115,7 +126,7 @@ def backfill_visibility_methods(
             .where(
                 VerificationScoreRow.source == "standalone",
                 VerificationScoreRow.observation_time >= since,
-                VerificationScoreRow.visibility_methods.is_(None),
+                todo,
                 VerificationScoreRow.id > last_id,
             )
             .order_by(VerificationScoreRow.id)

@@ -7953,6 +7953,25 @@ events than a season would give.
   so POSSIBLE was no better than the base rate; GFS native VIS had no skill
   (never correctly < 1.5 km). ICON native and derived both caught only ~4 %
   of the 06Z fog hours.
+- **METHODS_VERSION 2 (2026-11-11): `rh_dwd`, `rh_icon`, `icon_blend`.**
+  On 3 days (ICON D0-D2, 24k rows), ICON's VIS goes below 1 km at 2 m RH
+  98-99 % with zero lowest-level cloud water and ~30 % lowest-level cover:
+  its edge over `rap_blend` < 1.5 km is an RH term, not hydrometeors. That
+  term is far steeper near saturation than RAP's (5.8 km already at 90 %,
+  hence `rap_blend` putting ~98 % of hours < 8 km) and than the documented
+  DWD cubic (never below 5 km, so `rh_dwd` scores CSI 0 < 5 km; ICON's
+  operational term must use something other than our 2 m RH, or the
+  documented form is incomplete). `rh_icon` is ICON's own dry-air curve,
+  fitted to ICON's VIS (35th percentile per RH bin, cloud water 0, no
+  precipitation), never to METARs, so the three days of observations
+  are not what it is tuned on. `icon_blend` = min(sw99, rh_icon) matched native
+  offline on the same rows: CSI < 1.5 km 24 vs 23, < 5 km 32 vs 32, < 8 km
+  37 vs 36, fog 22 vs 22, log MAE 0.17 both, frequency bias < 1.5 km 1.31
+  vs 1.41; the same holds without 11-09 and on 11-11 alone. ECMWF native
+  plus `rh_icon` raised its < 5 km CSI (23 → 29) at the cost of a < 1.5 km
+  frequency bias of 1.66: ECMWF's 2 m RH needs its own fit before that is
+  a candidate. `verify visibility-backfill --refill` rescores rows of an
+  older version while their snapshots last (10 days).
 - **No grade change in this phase.** Selection (one setting per model) and
   the briefing wiring are the next PR.
 
