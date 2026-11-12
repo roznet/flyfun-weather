@@ -54,11 +54,11 @@ logger = logging.getLogger(__name__)
 OPERA_S3_ENDPOINT = "https://s3.waw3-1.cloudferro.com"
 OPERA_BASE_URL = f"{OPERA_S3_ENDPOINT}/{OPERA_S3_BUCKET}"
 
-# Override for the whole base (endpoint + bucket).  MeteoGate
-# moves the cache when its primary host is down (Nov 2026: the CloudFerro bucket
-# stopped at 11 Nov 20:10Z and ORD published the same keys under
-# ``https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup``).  Unset
-# returns to the primary, so switching back is removing the variable.
+# Override for the whole base (endpoint + bucket).  MeteoGate moves the cache
+# when its primary host is down: in Nov 2026 the CloudFerro bucket stopped at
+# 11 Nov 20:10Z and ORD published the same keys under
+# ``https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup``.
+# Unset returns to the primary, so switching back is removing the variable.
 OPERA_BASE_URL_ENV = "WB_OPERA_BASE_URL"
 
 
@@ -66,6 +66,7 @@ def opera_base_url() -> str:
     """Base URL the collector fetches OPERA keys from (no trailing slash)."""
     override = os.environ.get(OPERA_BASE_URL_ENV, "").strip().rstrip("/")
     return override or OPERA_BASE_URL
+
 
 # Observed delivery lag from a frame's nominal time to its appearance in the
 # cache.  Fetching before this has elapsed just spends a 404.
@@ -242,11 +243,12 @@ def collect_opera(
         logger.warning(
             "OPERA %s: all %d expected frames missing over the last %s — "
             "nothing stored either. Check the endpoint (%s, override with "
-            "WB_OPERA_BASE_URL) before assuming the provider is quiet.",
+            "%s) before assuming the provider is quiet.",
             source,
             result.missing,
             lookback,
             base_url,
+            OPERA_BASE_URL_ENV,
         )
 
     result.purged = store.purge(source, now=now)
