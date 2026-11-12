@@ -162,6 +162,27 @@ def test_collect_requests_the_deterministic_key_on_that_endpoint(store, dbzh_pat
     assert url.endswith("/2026/08/25/OPERA/COMP/OPERA@20260825T1400@0@DBZH.h5")
 
 
+def test_opera_base_url_defaults_to_the_primary(monkeypatch):
+    monkeypatch.delenv("WB_OPERA_BASE_URL", raising=False)
+    assert collect.opera_base_url() == collect.OPERA_BASE_URL
+    monkeypatch.setenv("WB_OPERA_BASE_URL", "   ")
+    assert collect.opera_base_url() == collect.OPERA_BASE_URL
+
+
+def test_opera_base_url_override_is_used_for_fetches(monkeypatch, store, dbzh_path):
+    """MeteoGate's backup cache keeps the same keys under another base (Nov 2026)."""
+    backup = "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup"
+    monkeypatch.setenv("WB_OPERA_BASE_URL", backup + "/")
+    session = _Session(dbzh_path.read_bytes())
+    collect.collect_opera(
+        SOURCE_OPERA_DBZH, store, now=NOW, max_fetch=1, session=session,
+        lookback=timedelta(minutes=10),
+    )
+    assert session.urls[0] == (
+        backup + "/2026/08/25/OPERA/COMP/OPERA@20260825T1400@0@DBZH.h5"
+    )
+
+
 def test_a_wholly_missing_source_is_logged_not_silent(store, caplog):
     """Every slot 404 with nothing stored is a broken source, not a quiet one."""
     session = _Session(b"", status=404)

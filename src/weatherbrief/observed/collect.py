@@ -54,6 +54,19 @@ logger = logging.getLogger(__name__)
 OPERA_S3_ENDPOINT = "https://s3.waw3-1.cloudferro.com"
 OPERA_BASE_URL = f"{OPERA_S3_ENDPOINT}/{OPERA_S3_BUCKET}"
 
+# Override for the whole base (endpoint + bucket).  MeteoGate
+# moves the cache when its primary host is down (Nov 2026: the CloudFerro bucket
+# stopped at 11 Nov 20:10Z and ORD published the same keys under
+# ``https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup``).  Unset
+# returns to the primary, so switching back is removing the variable.
+OPERA_BASE_URL_ENV = "WB_OPERA_BASE_URL"
+
+
+def opera_base_url() -> str:
+    """Base URL the collector fetches OPERA keys from (no trailing slash)."""
+    override = os.environ.get(OPERA_BASE_URL_ENV, "").strip().rstrip("/")
+    return override or OPERA_BASE_URL
+
 # Observed delivery lag from a frame's nominal time to its appearance in the
 # cache.  Fetching before this has elapsed just spends a 404.
 OPERA_DELIVERY_LAG = timedelta(minutes=4)
@@ -176,6 +189,7 @@ def collect_opera(
     result = CollectResult(source=source)
     sess = session or requests.Session()
     dpc_tick = dpc.DpcTick()
+    base_url = opera_base_url()
 
     for valid_time in expected_frame_times(source, now, lookback=lookback):
         if result.fetched >= max_fetch:
@@ -184,7 +198,7 @@ def collect_opera(
             result.skipped += 1
             result.latest_valid_time = result.latest_valid_time or valid_time
             continue
-        url = f"{OPERA_BASE_URL}/{opera_key(valid_time, spec.quantity)}"
+        url = f"{base_url}/{opera_key(valid_time, spec.quantity)}"
         try:
             response = sess.get(url, timeout=_REQUEST_TIMEOUT)
         except requests.RequestException as exc:
@@ -227,12 +241,12 @@ def collect_opera(
     if warn_if_empty and result.fetched == 0 and result.skipped == 0 and result.missing > 0:
         logger.warning(
             "OPERA %s: all %d expected frames missing over the last %s — "
-            "nothing stored either. Check the endpoint (%s) before assuming "
-            "the provider is quiet.",
+            "nothing stored either. Check the endpoint (%s, override with "
+            "WB_OPERA_BASE_URL) before assuming the provider is quiet.",
             source,
             result.missing,
             lookback,
-            OPERA_BASE_URL,
+            base_url,
         )
 
     result.purged = store.purge(source, now=now)
