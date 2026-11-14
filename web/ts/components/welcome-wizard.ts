@@ -284,9 +284,6 @@ function renderWelcomeStep(): string {
       <p class="wizard-subtitle">
         ${t('wizard.welcomeSubtitle')}
       </p>
-      <p class="wizard-beta-notice">
-        ${t('wizard.betaNotice')}
-      </p>
       <div class="wizard-features">
         <div class="wizard-feature">
           <strong>${t('wizard.featureAiTitle')}</strong>
@@ -308,7 +305,18 @@ function renderWelcomeStep(): string {
           <strong>${t('wizard.featureSoundingTitle')}</strong>
           <span>${t('wizard.featureSoundingDesc')}</span>
         </div>
+        <div class="wizard-feature">
+          <strong>${t('wizard.featureLiveTitle')}</strong>
+          <span>${t('wizard.featureLiveDesc')}</span>
+        </div>
+        <div class="wizard-feature">
+          <strong>${t('wizard.featureAppsTitle')}</strong>
+          <span>${t('wizard.featureAppsDesc')}</span>
+        </div>
       </div>
+      <p class="wizard-feedback-note">
+        ${t('wizard.feedbackNote')}
+      </p>
       <p class="wizard-hint">
         ${t('wizard.setupHint')}
       </p>

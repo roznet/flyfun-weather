@@ -1135,8 +1135,12 @@ function renderSystems(): void {
 
 // --- Admin Messages (What's New) ---
 
-const MSG_CATEGORIES = ['feature', 'change', 'fix'];
-const MSG_CATEGORY_LABELS: Record<string, string> = { feature: 'New Feature', change: 'Change', fix: 'Fix' };
+// Release categories are listed too: an edit form missing them would silently
+// re-file an app release entry as the first option on save.
+const MSG_CATEGORIES = ['feature', 'change', 'fix', 'app_release', 'android_release'];
+const MSG_CATEGORY_LABELS: Record<string, string> = {
+  feature: 'New Feature', change: 'Change', fix: 'Fix', app_release: 'iOS app', android_release: 'Android app',
+};
 
 async function loadAdminMessages(): Promise<void> {
   const { adminListMessages } = await import('./adapters/messages-adapter');

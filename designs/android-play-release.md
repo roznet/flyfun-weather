@@ -21,8 +21,30 @@
   `android/X.Y`, release notes `release-notes/android-X.Y.txt` (≤500 chars, plain
   text — Play's limit), upload to `internal` by default.
 - **The first bundle goes through the API too.** Only creating the app needs the
-  Console. Until the app's first production release, releases must be
-  `--status draft` (Google's rule for an unpublished app).
+  Console. Until an app's first production release, releases must be
+  `--status draft` (Google's rule for an unpublished app); flyfun-weather is past
+  that since 1.0 reached production on 2026-11-12.
+
+## What's New entry (`android_release`)
+
+Every production version gets one `android_release` entry in the site's What's
+New stream (`system_messages`), mirroring iOS's `app_release`
+([references/ios-release.md](./references/ios-release.md) §A6): drafted with the
+notes as `release-notes/android-X.Y.json`, body = the Play notes verbatim, title
+`Android X.Y: <headline>`, published with `python -m weatherbrief.release import -`
+only once the production rollout is live (`/release-android` Step 8b).
+Testing-track builds get no entry.
+
+- **A separate category, not a platform field.** Android got its own category
+  rather than a `platform` column on `app_release`: no migration, and shipped iOS
+  builds and prod rows keep meaning what they mean (`app_release` = App Store).
+  The cost is that the name `app_release` reads platform-neutral but is iOS-only.
+- **Per-client rendering.** The web picks the install button from the category
+  (`installCtaHtml` in `help-main.ts`: App Store for `app_release`, Google Play
+  for `android_release`); iOS `SystemMessage.categoryLabel` and Android
+  `SystemMessageResponse.categoryLabel` show "iOS app" / "Android app" chips and
+  no install button. The stream is not filtered by platform, so iOS users also
+  see Android release entries and vice versa.
 
 ## Credentials (outside the repo — public repo)
 
@@ -69,6 +91,7 @@ before it reaches the server). OAuth sign-in uses the `flyfunweather://` scheme.
    "Package not found".
 3. **Closed test, 12 testers × 14 days** (personal account rule, per app). Reuse
    forms' tester Google Group: `play.py testers --track closed --group …`.
+   Done; production access granted and 1.0 released on 2026-11-12.
 4. App content forms — drafted below.
 5. Store listing: `app/android/play/listing/default/` (title, short and full
    description, `icon.png` 512² from the iOS `AppLogo.png`, `feature-graphic.png`

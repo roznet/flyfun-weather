@@ -63,18 +63,22 @@ struct SetupWizardView: View {
                 }
                 .padding(.vertical, 4)
             }
+            // Same list and order as the web welcome step and Android
+            // SetupWizardScreen (#985). Never "go/no-go": the briefing says what
+            // to expect, the pilot decides.
             Section {
-                feature("AI synopsis & advisories", "An AI-generated overview plus go/no-go factors for your route")
+                feature("AI weather summary", "What to expect en route and what to watch for")
                 feature("Route advisories", "Icing, turbulence, clouds and airport conditions rated GREEN/AMBER/RED")
                 feature("Multi-model comparison", "See where GFS, ECMWF, ICON and others agree or diverge")
                 feature("Interactive cross-section", "Vertical weather layers along your route with terrain profile")
                 feature("Sounding analysis", "Skew-T diagrams, thermodynamic indices and stability at every waypoint")
-            }
-            Section {
-                Text("Flyfun Weather is currently in **beta**. We appreciate your time trying the tool. Please help us improve by sending feedback when a briefing appears suspicious or you encounter any issues.")
-                    .font(.callout)
+                feature("Flight-day live updates", "Latest METARs, radar, lightning and SIGMETs along your route, with alerts when something changes")
+                feature("Web, iPhone, iPad and Android", "Your flights stay in sync wherever you open them")
             } footer: {
-                Text("Let's set up your aircraft defaults. You can always change these later in Settings.")
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Feedback is always welcome, whether something looks off or you have an idea for a feature. Use Send Feedback in the ••• menu of your flight list.")
+                    Text("Let's set up your aircraft defaults. You can always change these later in Settings.")
+                }
             }
         }
     }

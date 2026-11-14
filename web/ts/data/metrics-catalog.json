@@ -545,7 +545,7 @@
     "unit": "",
     "vibe": "The ice magnet rating",
     "primary_goal": "Physically-based calculation of ice buildup risk.",
-    "best_used_for": "The go/no-go decision for flight into clouds in the icing zone.",
+    "best_used_for": "Deciding whether flight into cloud in the icing zone is reasonable for your aircraft.",
     "limitations": "Does not account for droplet size (SLD). Only valid in the 0 to -14°C range (layered) or 0 to -20°C (convective). When GRIB2 cloud liquid water data is available (GFS/ICON), it may come from a different model run than the temperature and humidity profiles — check the freshness bar for init time discrepancies.",
     "theory": "A physics-based icing index combining layered (stratiform) and convective cloud contributions. The layered component uses a parabola peaking at −7°C: 100 × (−t) × (t + 14) / 49 for −14 ≤ t ≤ 0°C. The convective component factors in the moisture difference between cloud base and interior. Both are weighted by estimated cloud type fraction: Combined = (layered% × layered_index + convective% × convective_index) / 200. Peaks at −7°C, matching observed maximum supercooled liquid water content.",
     "wikipedia": "https://en.wikipedia.org/wiki/Atmospheric_icing",

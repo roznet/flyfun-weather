@@ -139,13 +139,13 @@ private fun SystemMessageCard(message: SystemMessageResponse) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                message.category?.let { cat ->
+                message.category.takeIf { it.isNotBlank() }?.let { _ ->
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         color = MaterialTheme.colorScheme.primaryContainer,
                     ) {
                         Text(
-                            text = cat.uppercase(),
+                            text = message.categoryLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),

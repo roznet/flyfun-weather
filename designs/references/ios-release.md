@@ -156,7 +156,9 @@ existing users a wall of dots for work they've already been using.
 app users the moment the server deploys, with no app release involved, so splitting the stream
 by platform would be wrong. `app_release` is a *kind* of entry, not a filter. What is
 per-client is the rendering: the web adds an install call to action under `app_release` entries
-(from a single `APP_STORE_URL`), and the iOS app deliberately omits it.
+(from a single `APP_STORE_URL`), and the iOS app deliberately omits it. Android versions use
+their own `android_release` category with a Google Play button (`PLAY_STORE_URL`); see
+[android-play-release.md](../android-play-release.md).
 
 ## §A7 — App Store Connect staging (`scripts/asc.py`)
 

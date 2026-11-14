@@ -102,3 +102,32 @@ def test_import_rejects_bad_category(cli_db, tmp_path):
     ])
     with pytest.raises(SystemExit):
         cli.main(["import", path])
+
+
+def test_import_accepts_android_release(cli_db, tmp_path):
+    """An Android version is its own category, so the web can point its
+    install button at Google Play rather than the App Store (#985)."""
+    path = _write(tmp_path, [
+        {"date": "2026-11-12", "title": "Android 1.0: Something", "body": "- A bullet",
+         "category": "android_release", "highlight": False},
+    ])
+    cli.main(["import", path])
+    s = cli_db()
+    assert [r.category for r in s.query(SystemMessageRow).all()] == ["android_release"]
+    s.close()
+
+
+def test_drafted_release_notes_are_importable():
+    """Every drafted `release-notes/*.json` passes the CLI's validation, so a
+    publish over SSH can't fail on a category or a missing field."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "release-notes"
+    files = sorted(root.glob("*.json"))
+    assert files, "no release-notes/*.json found"
+    for f in files:
+        entries = json.loads(f.read_text(encoding="utf-8"))
+        assert isinstance(entries, list), f.name
+        for e in entries:
+            cli._validate_entry(e.get("date", ""), e.get("title", ""), e.get("body", ""),
+                                e.get("category", "feature"))

@@ -3,7 +3,7 @@
 import { fetchCurrentUser } from './adapters/auth-adapter';
 import { fetchMessages, markMessagesSeen, type SystemMessage } from './adapters/messages-adapter';
 import { submitFeedback } from './adapters/api-adapter';
-import { renderUserInfo, checkMessagesBadge, escapeHtml, APP_STORE_URL } from './utils';
+import { renderUserInfo, checkMessagesBadge, escapeHtml, APP_STORE_URL, PLAY_STORE_URL } from './utils';
 import { initTheme } from './theme';
 import { initI18n, t } from './i18n/i18n';
 import { mountDataSourcesTable } from './data-sources-table';
@@ -319,6 +319,20 @@ async function loadMessages(): Promise<void> {
   }
 }
 
+function installCtaHtml(category: SystemMessage['category']): string {
+  const store = category === 'app_release'
+    ? { url: APP_STORE_URL, label: t('messages.installApp') }
+    : category === 'android_release'
+      ? { url: PLAY_STORE_URL, label: t('messages.installAndroidApp') }
+      : null;
+  if (!store) return '';
+  return `<p class="message-install-cta">
+         <a href="${store.url}" target="_blank" rel="noopener" class="btn btn-primary">
+           ${escapeHtml(store.label)}
+         </a>
+       </p>`;
+}
+
 function renderMessageCard(msg: SystemMessage): string {
   const categoryLabel = t(`messages.category.${msg.category}`);
   const categoryClass = `message-category message-category-${escapeHtml(msg.category)}`;
@@ -326,17 +340,11 @@ function renderMessageCard(msg: SystemMessage): string {
   const bodyHtml = renderSimpleMarkdown(msg.body);
 
   // An app release is the one entry a reader may not be able to act on yet, so
-  // it carries an install link. Emitted from the category rather than written
-  // into each entry's body: one URL, and no entry can forget it. The iOS app
-  // renders the same stream without this — a reader already inside the app has
-  // nothing to install.
-  const installCta = msg.category === 'app_release'
-    ? `<p class="message-install-cta">
-         <a href="${APP_STORE_URL}" target="_blank" rel="noopener" class="btn btn-primary">
-           ${escapeHtml(t('messages.installApp'))}
-         </a>
-       </p>`
-    : '';
+  // it carries an install link to that platform's store. Emitted from the
+  // category rather than written into each entry's body: one URL per store, and
+  // no entry can forget it. The apps render the same stream without this — a
+  // reader already inside an app has nothing to install.
+  const installCta = installCtaHtml(msg.category);
 
   return `
     <div class="message-card collapsed">

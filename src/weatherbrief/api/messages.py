@@ -24,10 +24,13 @@ router = APIRouter(prefix="/messages", tags=["messages"])
 admin_router = APIRouter(prefix="/admin/messages", tags=["admin"])
 
 # "app_release" marks one entry per shipped iOS/iPadOS app version, whose body is
-# the App Store "What's New" text. It is a kind of entry, not a platform filter:
-# the stream stays unified because most changes here (a new advisory, a threshold
-# change) reach app users the moment they deploy, with no app release involved.
-MessageCategory = Literal["feature", "change", "fix", "app_release"]
+# the App Store "What's New" text; "android_release" is the same for an Android
+# version and its Google Play notes. They are kinds of entry, not platform
+# filters: the stream stays unified because most changes here (a new advisory, a
+# threshold change) reach app users the moment they deploy, with no app release
+# involved. "app_release" keeps its name (rather than becoming "ios_release")
+# because prod rows and shipped iOS builds already carry it.
+MessageCategory = Literal["feature", "change", "fix", "app_release", "android_release"]
 
 
 # --- Pydantic models ---
