@@ -210,6 +210,7 @@ Encrypted credentials (e.g. your Autorouter token), token values and server-inte
 You can delete your account and all associated data (flights, briefings, preferences, credentials) at any time:
 
 - **iOS app:** Settings > Delete Account
+- **Android app:** Settings > Delete Account
 - **Web app:** Settings > Delete Account
 
 This will permanently remove everything linked to your account and cannot be undone.

@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-11-12",
+    "title": "Android 1.0: FlyFun Weather is on Google Play",
+    "category": "android_release",
+    "highlight": false,
+    "body": "- First release on Google Play: multi-model weather briefings for GA flights across Europe, with an AI summary, route advisories and alternates\n- Cross-section, route graph, Skew-T and route map with radar, satellite, SIGMETs and fronts\n- On flight day: live METARs, storms and SIGMETs along your route, and your position on the route as you fly\n- Works offline once a briefing is downloaded"
+  }
+]

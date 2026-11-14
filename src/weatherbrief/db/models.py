@@ -708,7 +708,7 @@ class SystemMessageRow(Base):
     date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(String(20), default="feature")  # feature, change, fix
+    category: Mapped[str] = mapped_column(String(20), default="feature")  # feature, change, fix, app_release (iOS), android_release
     # When true, counts toward the unseen badge / notification dot. When false,
     # the message still appears in the stream but never lights the dot.
     highlight: Mapped[bool] = mapped_column(Boolean, default=False)

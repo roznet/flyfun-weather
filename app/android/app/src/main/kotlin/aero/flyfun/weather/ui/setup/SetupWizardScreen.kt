@@ -160,16 +160,22 @@ private fun WelcomeStep() {
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    TitledLine("AI synopsis & advisories", "An AI-generated overview plus go/no-go factors for your route")
+    // Same list and order as the web welcome step and iOS SetupWizardView (#985).
+    // Never "go/no-go": the briefing says what to expect, the pilot decides.
+    TitledLine("AI weather summary", "What to expect en route and what to watch for")
     TitledLine("Route advisories", "Icing, turbulence, clouds and airport conditions rated GREEN/AMBER/RED")
     TitledLine("Multi-model comparison", "See where GFS, ECMWF, ICON and others agree or diverge")
     TitledLine("Interactive cross-section", "Vertical weather layers along your route with terrain profile")
     TitledLine("Sounding analysis", "Skew-T diagrams, thermodynamic indices and stability at every waypoint")
+    TitledLine(
+        "Flight-day live updates",
+        "Latest METARs, radar, lightning and SIGMETs along your route, with alerts when something changes",
+    )
+    TitledLine("Web, iPhone, iPad and Android", "Your flights stay in sync wherever you open them")
     HorizontalDivider()
-    Text(
-        "Flyfun Weather is currently in beta. We appreciate your time trying the tool. Please help us " +
-            "improve by sending feedback when a briefing appears suspicious or you encounter any issues.",
-        style = MaterialTheme.typography.bodyMedium,
+    Hint(
+        "Feedback is always welcome, whether something looks off or you have an idea for a feature. " +
+            "Use Send Feedback in Settings.",
     )
     Hint("Let's set up your aircraft defaults. You can always change these later in Settings.")
 }

@@ -88,7 +88,28 @@ user-facing notes:
 Show them and **wait for approval**. Save to `release-notes/android-{version}.txt`
 exactly as approved (plain text, unlike the iOS JSON). A translation, if the
 user wants one, goes beside it as `release-notes/android-{version}.{lang}.txt`
-(e.g. `.fr-FR.txt`). Commit:
+(e.g. `.fr-FR.txt`).
+
+For a version going to **production**, also draft the What's New entry now
+(published later, in Step 8b): `release-notes/android-{version}.json`, a JSON
+list of one entry in the shape `python -m weatherbrief.release import` accepts:
+
+```json
+[
+  {
+    "date": "YYYY-MM-DD",
+    "title": "Android {version}: <short headline>",
+    "category": "android_release",
+    "highlight": false,
+    "body": "<the approved .txt, verbatim>"
+  }
+]
+```
+
+Body is the Play notes verbatim, so the store listing and the stream can't
+drift. Highlight (it lights the unseen dot for everyone) only a release with
+real user-facing news; ask the user. Testing-track builds (internal, closed)
+get no entry: nobody outside the testers can install them. Commit:
 ```
 Release notes for android {version}
 ```
@@ -103,7 +124,8 @@ it makes the changes in an edit, has Google validate them and discards it.
 ```bash
 venv/bin/python3 scripts/play.py upload --track {track}
 ```
-Add `--status draft` while the app has never had a production release. The
+Add `--status draft` only for an app that has never had a production release
+(not needed for flyfun-weather any more: 1.0 reached production on 2026-11-12). The
 first bundle of a new app goes through the API too (forms 1.0 did); the app
 itself must exist in Play Console first ("Package not found" otherwise).
 
@@ -121,12 +143,34 @@ venv/bin/python3 scripts/play.py rollout --halt --yes-production           # sto
 `--yes-production` is the user's go-ahead, the counterpart of pressing Submit
 for the App Store; never add it on your own initiative.
 
+## Step 8b — Publish the What's New entry (production only)
+
+Only once the production release is live on Google Play (rollout started, so
+users can install it), never at upload: an entry announcing a version nobody can
+download is wrong. Same split as iOS (`designs/references/ios-release.md` §A6).
+
+1. Set the entry's `date` in `release-notes/android-{version}.json` to **today**,
+   so it interleaves where users could first install it.
+2. Check prod knows the category: `android_release` arrived with #985. If prod
+   predates it, `import` rejects the entry; deploy first.
+3. Publish (`-` reads stdin, because `release-notes/` is not in the container
+   image). `<SERVER_SSH>` comes from `python3 scripts/ops/hosts.py server`:
+
+```bash
+ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release import -" \
+  < release-notes/android-{version}.json
+ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.release list" | head
+```
+
+The web's What's New renders a "Get it on Google Play" button under an
+`android_release` entry; the apps show the entry without it.
+
 ## Step 9 — Report
 
 - Pre-flight results
 - Version and code, the bundle path, its signing certificate check
 - The tag created or moved
-- The release notes and their file
+- The release notes and their file (and the drafted What's New entry, published or not)
 - What `play.py` did (track, release name, status) and the final `play.py status`; or, if Step 8 was skipped, the manual Console route
 - Testers on internal/closed get the update from the Play Store within minutes to hours
 - Remind the user to push the version bump and release-notes commits

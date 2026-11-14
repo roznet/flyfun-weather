@@ -21,6 +21,15 @@ import {
  */
 export const APP_STORE_URL = 'https://apps.apple.com/app/id6760951972';
 
+/**
+ * Google Play listing for the Android app (`aero.flyfun.weather`).
+ *
+ * No `hl=` parameter, for the same reason the App Store link has no country:
+ * Play picks each visitor's own language. Single source for the rendered
+ * install call to action; the static help-page section links to it inline.
+ */
+export const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=aero.flyfun.weather';
+
 // --- HTML escaping ---
 
 export function escapeHtml(text: string): string {

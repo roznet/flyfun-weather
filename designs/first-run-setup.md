@@ -22,7 +22,12 @@ All three make the same server calls; the server is unchanged by the mobile port
 
 ## Steps and server calls
 
-1. **Welcome**: copy only (`wizard.welcome*`, `wizard.feature*`, `wizard.betaNotice`).
+1. **Welcome**: copy only (`wizard.welcome*`, `wizard.feature*`, `wizard.feedbackNote`). The
+   features lead and a small feedback line closes the step, in the same order on all three
+   clients (#985: the old beta notice is gone, the service is out of beta). The copy never
+   says "go/no-go": the briefing tells the pilot what to expect, the pilot decides. Each
+   client's feedback line names where its own Send/Submit Feedback lives (web: Help page,
+   iOS: the flight list's ••• menu, Android: Settings).
 2. **Profile**: cards for the profiles with a `system_template_key`, described by
    `GET /api/user/profiles/system-templates?locale=…`. Next → `PUT /api/user/profiles/{id}`
    `{is_default: true}`.

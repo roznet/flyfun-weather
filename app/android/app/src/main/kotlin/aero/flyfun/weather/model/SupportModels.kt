@@ -308,7 +308,23 @@ data class SystemMessageResponse(
     val title: String = "",
     val body: String = "",
     val category: String = "feature",
-)
+) {
+    /**
+     * Chip label for the category. Hand-copied from the web locale strings
+     * (`messages.category.*` in `web/ts/i18n/locales/en.json`) and iOS
+     * `SystemMessage.categoryLabel`, keep in sync. A category this build
+     * predates falls back to the raw value rather than failing.
+     */
+    val categoryLabel: String
+        get() = when (category) {
+            "feature" -> "New"
+            "change" -> "Change"
+            "fix" -> "Fix"
+            "app_release" -> "iOS app"
+            "android_release" -> "Android app"
+            else -> category.replaceFirstChar { it.uppercase() }
+        }
+}
 
 typealias SystemMessage = SystemMessageResponse
 

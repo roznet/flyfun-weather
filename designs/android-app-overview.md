@@ -12,6 +12,16 @@
 - [Briefing Refresh Notifications](./ios-app-briefing-notifications.md) — APNs + FCM (`FcmPushSender`, migration `110`) push pipeline
 - [Cross-Section Visualization](./visualization.md) · [Route Graph](./route-graph.md) · [Skew-T Canvas](./skewt-canvas.md)
 
+## Release
+
+**1.0 is live on Google Play** (production, 2026-11-12, tag `android/1.0`):
+`https://play.google.com/store/apps/details?id=aero.flyfun.weather`. The web
+links it from one constant, `PLAY_STORE_URL` in `web/ts/utils.ts` (beside the
+App Store's `APP_STORE_URL`), and from the help page's "The Mobile Apps"
+section. Each production version gets an `android_release` entry in the What's
+New stream (the web shows a "Get it on Google Play" button under it); how
+releases are cut and published: [android-play-release.md](./android-play-release.md).
+
 ## Implementation Status
 
 All four core phases are built and verified against both offline fixtures (`FLYFUN_MOCK=1`) and the live local HTTPS backend (`https://localhost.ro-z.me:8443`), with two explicit follow-ups noted below:

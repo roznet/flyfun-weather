@@ -46,7 +46,7 @@ from weatherbrief.envfiles import load_env
 from flyfun_common.db import SessionLocal, get_engine
 from weatherbrief.db.models import SystemMessageRow
 
-VALID_CATEGORIES = ("feature", "change", "fix", "app_release")
+VALID_CATEGORIES = ("feature", "change", "fix", "app_release", "android_release")
 
 
 def _read_body(args: argparse.Namespace) -> str:

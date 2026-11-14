@@ -7,7 +7,7 @@ export interface SystemMessage {
   date: string;
   title: string;
   body: string;
-  category: 'feature' | 'change' | 'fix' | 'app_release';
+  category: 'feature' | 'change' | 'fix' | 'app_release' | 'android_release';
   highlight: boolean;
 }
 

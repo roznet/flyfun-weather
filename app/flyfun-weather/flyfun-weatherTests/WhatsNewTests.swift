@@ -95,6 +95,7 @@ struct WhatsNewStreamTests {
         #expect(label("change") == "Change")
         #expect(label("fix") == "Fix")
         #expect(label("app_release") == "iOS app")
+        #expect(label("android_release") == "Android app")
     }
 
     @Test("Dates render as day/month/year, and a malformed one falls back raw")

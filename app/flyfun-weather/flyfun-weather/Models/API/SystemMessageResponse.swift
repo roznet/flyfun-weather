@@ -5,7 +5,8 @@ import Foundation
 /// The stream is unified across surfaces rather than split by platform: most
 /// entries (a new advisory, a threshold change) reach app users the moment the
 /// server deploys, with no app release involved. `app_release` marks the entries
-/// that *are* an App Store version, whose body is the App Store "What's New" text.
+/// that *are* an App Store version, whose body is the App Store "What's New" text;
+/// `android_release` is the same for a Google Play version.
 nonisolated struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
     let id: Int
     /// Applicable date, `YYYY-MM-DD`. The stream is ordered by this rather than
@@ -14,7 +15,7 @@ nonisolated struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
     let title: String
     /// Markdown-lite: paragraphs, `- ` bullets, inline emphasis and links.
     let body: String
-    /// `feature` | `change` | `fix` | `app_release`. Deliberately a plain String,
+    /// `feature` | `change` | `fix` | `app_release` | `android_release`. Deliberately a plain String,
     /// not an enum: the server owns the valid set, and an entry in a category
     /// this build predates must still render rather than fail the whole decode.
     let category: String
@@ -28,6 +29,7 @@ nonisolated struct SystemMessage: Codable, Identifiable, Equatable, Sendable {
         case "change": "Change"
         case "fix": "Fix"
         case "app_release": "iOS app"
+        case "android_release": "Android app"
         default: category.capitalized
         }
     }
