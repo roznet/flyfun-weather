@@ -1,0 +1,60 @@
+# Experiments and standing checks we look at on demand.
+#
+# Run them with `python3 scripts/ops/experiments.py` (or the /experiments skill).
+# Every command must be READ-ONLY: it reports, it never fixes, deletes or writes.
+#
+# Add an entry when an experiment starts collecting data; remove it once its
+# decision is taken. An entry past `decide_by` is reported as "decide or remove",
+# so this file cannot silently grow.
+#
+# Fields
+#   title       what it is, in words the owner recognises (no issue numbers alone)
+#   issue       GitHub issue number, for reference
+#   host        "server" (the droplet), "node" (a compute node) or "local"
+#   node        node name from deploy/hosts.json (only when several nodes exist)
+#   commands    shell commands run on that host, in order. Placeholders are the
+#               names hosts.py exports: {SERVER_CONTAINER}, {SERVER_PROJECT_DIR},
+#               {NODE_REPO}, {NODE_VENV}, {LOCAL_REPO}, ...
+#   keep        optional regexes: only output lines matching one are shown
+#               (plus the first line), so the summary stays short
+#   max_lines   cap on lines shown per command (default 25)
+#   decide_by   YYYY-MM-DD when the owner wants to decide; omit for a standing check
+#   decision    the question the data answers
+#   good        what a healthy / promising result looks like
+#   thread      the project thread that owns the experiment
+
+[icon-ch1-alps]
+title = "ICON-CH1 vs AROME at Alpine airports (logger on the Mac mini)"
+issue = 975
+host = "node"
+commands = [
+  "cd {NODE_REPO} && {NODE_VENV}/bin/python scripts/alps_model_compare.py status",
+  "cd {NODE_REPO} && {NODE_VENV}/bin/python scripts/alps_model_compare.py report --days 14",
+]
+max_lines = 30
+decide_by = "2026-11-25"
+decision = "Does CH1 or AROME clearly beat ECMWF and ICON at Alpine airports? If yes, build a CH1 layer; if not, delete the logger."
+good = "Every CH1 run at 00/06/12/18Z is ok (no missing/bad rows older than 6 h), METAR count growing, report sample sizes rising."
+thread = "Compare ICON-CH1 with AROME at Alpine airports"
+
+[icon-derived-visibility]
+title = "Derived ICON visibility and fog vs METARs"
+issue = 979
+host = "server"
+commands = [
+  "docker exec {SERVER_CONTAINER} python -m weatherbrief.verify visibility-report --model icon --days 14 --no-night-split --promotion icon",
+]
+keep = ["scored hours", "Promotion bar", "PASS", "FAIL", "NOT ENOUGH DATA", "^icon +native"]
+decide_by = "2026-11-23"
+decision = "Does a derived method pass the promotion bar? Read this BEFORE flipping WB_ICON_FEED=v1 (~24 Nov): ICON's own visibility stops after the flip."
+good = "Scored hours growing every day; at least one method PASS, or NOT ENOUGH DATA shrinking towards the 40 / 15 hour gate."
+thread = "Issue 979: visibility and fog"
+
+[verification-cycles]
+title = "Verification cycles (standalone import from the compute node, light cycles)"
+host = "server"
+commands = [
+  """docker exec {SERVER_CONTAINER} python -c "from weatherbrief.db import get_engine; from sqlalchemy import text; c = get_engine().connect(); [print(*r) for r in c.execute(text('SELECT source, COUNT(*), MAX(started_at), ROUND(AVG(duration_ms)/1000) FROM verification_cycles WHERE started_at > UTC_TIMESTAMP() - INTERVAL 3 DAY GROUP BY source ORDER BY 2 DESC'))]" """,
+]
+good = "standalone_imported about 2 per day at 60-90 s, latest within the last 13 h. Stale means the compute node stopped delivering (see check-health section 6)."
+thread = "(standing check)"

@@ -31,6 +31,12 @@ handed back — so a step whose value did not resolve must stop, not guess.
 Cloud sessions have no `hosts.json` by design; the script says so (exit 2) and host steps are
 simply unavailable there.
 
+Recurring read-only status checks (experiments collecting data, standing checks such as the
+verification cycles) live in `scripts/ops/experiments.toml` and run through
+`scripts/ops/experiments.py`, which resolves each host here and fills `{NAME}` placeholders
+from these exported values. Add a check there instead of writing ssh + SQL into a skill or a
+chat answer; the `experiments` skill reports them.
+
 ## Placeholders
 
 | Placeholder | What it is | From |
