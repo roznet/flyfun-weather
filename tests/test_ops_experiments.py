@@ -161,3 +161,23 @@ def test_main_exit_codes(tmp_path, monkeypatch, capsys):
                         lambda *a, **k: (_ for _ in ()).throw(SystemExit("hosts: down")))
     assert ex.main(["--registry", str(reg)]) == 2
     assert "unreachable" in capsys.readouterr().out
+
+
+def test_ssh_255_is_unreachable_not_failed(monkeypatch):
+    _server(monkeypatch)
+    e = ex.Entry(id="v", title="Vis", host="server", commands=["a", "b"])
+    run = FakeRun("", 255, "ssh: connect to host prod port 22: Operation timed out\n")
+    res = ex.run_entry(e, TODAY, {}, runner=run)
+    assert res.status == "unreachable" and len(run.calls) == 1
+    assert "  ! ssh: connect to host prod port 22: Operation timed out" in res.lines
+
+
+def test_id_key_in_registry_is_a_registry_error(tmp_path):
+    with pytest.raises(ex.RegistryError, match="unknown field"):
+        ex.load_registry(_write(tmp_path, '[a]\nid="x"\ntitle="t"\nhost="server"\ncommands=["x"]\n'))
+
+
+def test_decision_line_hidden_only_for_standing_checks():
+    base = dict(title="t", due="whatever label", status="ok", decision="Q?")
+    assert "decision: Q?" not in ex.format_result(ex.Result(id="a", standing=True, **base))
+    assert "decision: Q?" in ex.format_result(ex.Result(id="a", standing=False, **base))

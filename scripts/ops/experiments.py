@@ -89,7 +89,7 @@ def load_registry(path: Path = REGISTRY) -> list[Entry]:
             raise RegistryError(f"{key}: host must be one of {', '.join(HOSTS)}")
         if not val["commands"] or not all(isinstance(c, str) for c in val["commands"]):
             raise RegistryError(f"{key}: commands must be a non-empty list of strings")
-        unknown = set(val) - set(Entry.__dataclass_fields__) - {"id"}
+        unknown = set(val) - (set(Entry.__dataclass_fields__) - {"id"})  # id is the table name
         if unknown:
             raise RegistryError(f"{key}: unknown field(s) {', '.join(sorted(unknown))}")
         decide = val.get("decide_by")
@@ -139,6 +139,7 @@ class Result:
     lines: list[str] = field(default_factory=list)
     good: str = ""
     decision: str = ""
+    standing: bool = False
 
 
 def resolve_host(entry: Entry, cache: dict, runner=subprocess.run) -> tuple[str | None, dict[str, str]]:
@@ -159,7 +160,7 @@ def resolve_host(entry: Entry, cache: dict, runner=subprocess.run) -> tuple[str 
 def run_entry(entry: Entry, today: dt.date, cache: dict, dry_run: bool = False,
               runner=subprocess.run) -> Result:
     res = Result(entry.id, entry.title, entry.due_label(today), "ok",
-                 good=entry.good, decision=entry.decision)
+                 good=entry.good, decision=entry.decision, standing=entry.decide_by is None)
     try:
         ssh, values = resolve_host(entry, cache, runner)
     except SystemExit as exc:
@@ -185,6 +186,12 @@ def run_entry(entry: Entry, today: dt.date, cache: dict, dry_run: bool = False,
             continue
         res.lines.append(f"$ {command.split('&&')[-1].strip()[:100]}")
         res.lines += ["  " + ln for ln in filter_output(proc.stdout, entry.keep, entry.max_lines)]
+        if ssh and proc.returncode == 255:
+            # ssh's own failure (refused, timeout, host key): could not tell, not broken
+            res.status = "unreachable"
+            err = [ln for ln in proc.stderr.splitlines() if ln.strip()][-1:]
+            res.lines += ["  ssh could not reach the host"] + ["  ! " + ln for ln in err]
+            break
         if proc.returncode != 0:
             res.status = "failed"
             err = [ln for ln in proc.stderr.splitlines() if ln.strip()][-3:]
@@ -197,7 +204,7 @@ def format_result(r: Result) -> str:
     out += ["   " + ln for block in r.lines for ln in block.splitlines()]
     if r.good:
         out.append(f"   good looks like: {r.good}")
-    if r.decision and "standing" not in r.due:
+    if r.decision and not r.standing:
         out.append(f"   decision: {r.decision}")
     return "\n".join(out)
 
