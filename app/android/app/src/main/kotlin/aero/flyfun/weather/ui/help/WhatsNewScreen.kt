@@ -139,7 +139,7 @@ private fun SystemMessageCard(message: SystemMessageResponse) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                message.category.takeIf { it.isNotBlank() }?.let { _ ->
+                if (message.category.isNotBlank()) {
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         color = MaterialTheme.colorScheme.primaryContainer,
