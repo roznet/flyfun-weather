@@ -38,6 +38,36 @@ Show the user: "Current version: X.Y (build N)"
 
 Run these checks and **stop with an error** if any critical ones fail:
 
+### 2-0 — Sync with origin, then pin the commit (do this first)
+
+Every check below — the nightly gate, the test runs, the archive — is evidence only for the
+commit it ran against. Two things have broken that link before:
+
+- **A stale checkout.** The gate diffs the nightly's commit against *local* HEAD, so a `main`
+  that is behind `origin/main` passes the gate and then archives old code.
+- **The checkout moving mid-run.** Another session (e.g. a `/deploy`, or any agent doing
+  `git pull` in `main/`) can fast-forward this checkout while the skill runs. On 2026-11-15
+  a pull landed *during* `xcodebuild archive`: the binary mixed sources from two commits
+  and the bump commit sat on top of code no test had seen.
+
+So, first:
+
+```bash
+git fetch -q origin
+git status -sb | head -1              # must not say [behind N]; [ahead N] = unpushed work, ask
+git rev-parse HEAD origin/main        # should be equal
+PINNED_SHA=$(git rev-parse HEAD); echo "$PINNED_SHA"
+```
+
+- **Behind `origin/main`:** stop, tell the user, and offer `git pull --ff-only` before any
+  check runs. Never archive a commit older than what CI's nightly may have tested.
+- **Ahead of `origin/main`:** unpushed commits will ship. Say so and ask: either push first
+  (so the nightly can cover them), or accept that the full local passes in 2b must run.
+
+Record `PINNED_SHA` and show it to the user. Steps 3, 6 and 7 check that HEAD is still
+`PINNED_SHA` (+ the bump commit); if it moved, every check has to re-run on the new commit.
+Ask the user not to deploy or pull in this checkout until the archive is built.
+
 ### 2a — API base URL check
 
 Verify that the Release/production build will NOT use localhost. Check `app/flyfun-weather/flyfun-weather/App/AppState.swift`:
@@ -57,7 +87,11 @@ python3 scripts/ios_ci.py gate
 ```
 It finds the newest nightly on main whose `UI (iPhone)` **and** `UI (iPad)` jobs both ran
 and passed, and checks nothing under `app/flyfun-weather` changed since that commit except
-version-bump lines.
+version-bump lines. It compares against **local HEAD**, which is why 2-0 syncs first.
+It also lists any **newer nightlies that failed**. When the app code is unchanged since
+the green run, that means a flaky or CI-only journey, not a reason to block. Name it in the
+report, though: when a newer failure is in a suite the release touches, run that suite
+locally on both idioms before trusting `COVERED`.
 
 - **`COVERED` (exit 0)** — skip the two full passes. Run only the unit target plus an iPad
   smoke set, one `ios_test.py` call (~5 min): it proves this machine's toolchain — the one
@@ -169,6 +203,20 @@ Update only the **main target** entries (first 2 of each) in `project.pbxproj` u
 
 Show the user: "Bumped to X.Y (build N)"
 
+Then **commit it immediately, before building**, after checking HEAD is still the pinned
+commit. The build stamps the git commit into the app (`BuildStamp.plist`, via
+`app/flyfun-weather/scripts/stamp-build-info.sh`). An uncommitted bump stamps
+`<sha>-dirty`, which names no real commit and can't be checked in Step 6.
+
+```bash
+[ "$(git rev-parse HEAD)" = "$PINNED_SHA" ] || echo "HEAD MOVED since pre-flight — stop"
+git add app/flyfun-weather/flyfun-weather.xcodeproj/project.pbxproj
+git commit -m "Bump version to X.Y (build N) for App Store release"
+```
+
+If HEAD moved, stop: tell the user what came in (`git log --oneline $PINNED_SHA..HEAD`)
+and re-run the pre-flight on the new commit. Do NOT push unless the user asks.
+
 ## Step 4 — Clean build folder
 
 ```bash
@@ -187,9 +235,16 @@ xcodebuild archive \
   -configuration Release \
   -destination "generic/platform=iOS" \
   -archivePath ~/Library/Developer/Xcode/Archives/$(date +%Y-%m-%d)/flyfun-weather\ $(date +%d-%m-%Y,\ %H.%M).xcarchive \
+  -allowProvisioningUpdates \
   CODE_SIGN_STYLE=Automatic \
   | tail -20
 ```
+
+`-allowProvisioningUpdates` lets Xcode fetch or create the profiles itself. That matters on a
+new Mac, where the first archive otherwise fails for lack of a profile. The upload in Step 10
+re-signs for distribution with the ASC API key (cloud-managed signing), so a local Apple
+Distribution certificate isn't needed. If the export fails on signing anyway, a single
+Organizer → Distribute App run on the archive sets up what's missing.
 
 The archive path under `~/Library/Developer/Xcode/Archives/` makes it appear in Xcode Organizer automatically.
 
@@ -203,14 +258,23 @@ Check that the archive was created and verify the embedded version:
 /usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleVersion" "$ARCHIVE_PATH/Info.plist"
 ```
 
-## Step 7 — Commit version bump
+Then check the binary was built from the bump commit, and only from it:
 
-Stage and commit the version bump to `project.pbxproj`:
-```
-Bump version to X.Y (build N) for App Store release
+```bash
+plutil -extract GitCommit raw "$ARCHIVE_PATH/Products/Applications/flyfun-weather.app/BuildStamp.plist"
+git rev-parse --short HEAD
+[ "$(git rev-parse HEAD~1)" = "$PINNED_SHA" ] && echo "parent is pinned commit"
 ```
 
-Do NOT push unless the user asks.
+The stamp must equal `git rev-parse --short HEAD` exactly, with **no `-dirty`**, and HEAD's
+parent must be `PINNED_SHA`. A mismatch means the checkout changed during or after the
+build. Delete the archive, re-run the pre-flight on the new commit, and rebuild.
+
+## Step 7 — Confirm the pin held
+
+The bump was committed in Step 3. Before tagging, run `git log --oneline -3` and check
+nothing landed on top of the bump commit. If anything did, the tag would point at
+untested code: stop and ask.
 
 ## Step 8 — Tag and release notes
 
@@ -289,7 +353,7 @@ source venv/bin/activate && python3 -m weatherbrief.release import \
   release-notes/ios-{version}.json --dry-run
 ```
 
-Commit the file on its own (the version bump already landed in Step 7):
+Commit the file on its own (the version bump already landed in Step 3):
 
 ```
 Draft the iOS {version} release-stream entry

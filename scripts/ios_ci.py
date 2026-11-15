@@ -22,7 +22,9 @@
         then checks that app/flyfun-weather and the fixtures it serves
         (app/fixtures) have not changed since that commit
         apart from the version-bump lines. Exit 0 = covered (prints the run),
-        1 = not covered (prints why). Needs `gh` (unsandboxed).
+        1 = not covered (prints why). Also notes newer nightlies that failed
+        and warns when local HEAD is behind origin/main, since the diff is
+        against local HEAD. Needs `gh` (unsandboxed).
 
 Stdlib only.
 """
@@ -183,6 +185,20 @@ def gate(repo: str | None) -> int:
         print(f"NOT COVERED: nightly commit {sha[:8]} is not in this checkout (git fetch?).")
         return 1
     print(f"nightly {sha[:8]} ({r['createdAt']}) — both legs green: {r['url']}")
+    # Context the verdict alone hides: nightlies newer than the green one that
+    # failed (flaky or CI-only journeys when the app is unchanged), and a checkout
+    # behind origin/main, which would make the diff below vouch for old code.
+    newer = json.loads(run(
+        "gh", "run", "list", *repo_args, "--workflow", WORKFLOW, "--branch", "main",
+        "--limit", "15", "--json", "headSha,createdAt,conclusion,url",
+    ))
+    failed = [n for n in newer if n["createdAt"] > r["createdAt"] and n["conclusion"] == "failure"]
+    if failed:
+        print(f"note: {len(failed)} newer nightly run(s) failed since then:")
+        print("\n".join(f"  {n['headSha'][:8]} {n['createdAt']} {n['url']}" for n in failed))
+    behind = run("git", "rev-list", "--count", "HEAD..origin/main").strip()
+    if behind not in ("", "0"):
+        print(f"warning: local HEAD is {behind} commit(s) behind origin/main (as of the last fetch).")
     if changes:
         files = run("git", "diff", "--name-only", sha, "HEAD", "--", *UI_INPUTS).split()
         print(f"NOT COVERED: {len(changes)} changed line(s) under {' / '.join(UI_INPUTS)} since then:")
