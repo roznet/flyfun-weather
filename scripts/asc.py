@@ -875,8 +875,13 @@ def upload_archive(config: AscConfig, archive: Path, dry_run: bool = False) -> N
             print(plistlib.dumps(options).decode())
             return
 
+        # System tools first: Xcode's packaging step shells out to `rsync` and
+        # expects Apple's /usr/bin/rsync (openrsync). A Homebrew rsync 3.x earlier
+        # on PATH fails it with "rsync error: syntax or usage error" and the
+        # export reports only "Copy failed" (new Mac, 2026-11-15).
+        env = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:" + os.environ.get("PATH", "")}
         print(f"Uploading {archive.name} …  (this takes several minutes)")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if result.returncode != 0:
             tail = (result.stdout or "")[-3000:] + (result.stderr or "")[-3000:]
             _fail(f"xcodebuild -exportArchive failed:\n{tail}")
