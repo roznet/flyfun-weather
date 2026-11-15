@@ -86,7 +86,7 @@ are now fully controllable on both clients, with the semantics tightened:
   Assessment changes / Every update) folding `notify_scope` + `notify_change_only`,
   an **Email** toggle, and a device-conditional **Push** toggle. Per-flight: a
   **bell** (Default / Always / Mute → `notify_override`) in the freshness bar
-  (web) / briefing toolbar (iOS), whose hint shows what Default resolves to. The
+  (web) / the briefing ⋯ menu's Notifications submenu (iOS, #996), whose hint shows what Default resolves to. The
   old per-refresh "Email me when done" checkbox is **retired** — server-side
   presence subsumes it: a manual refresh you walk away from now notifies (the
   poll/stream contact goes stale), and one you watch finish does not. `force_email`

@@ -76,7 +76,7 @@ Planning/viewer mode — default when not in an active flight session. What the 
 > §4.1 "one narrative scroll" decision — the single scroll stays the iPhone
 > *fallback shape*, but content is regrouped into purpose-built tabs. Settings is
 > still reached from the flight-list ellipsis menu; the PIREP reporting sheet is
-> a toolbar button (shown whenever `pirepCanPublish`, no flight-window gate), not
+> a ⋯ menu item (shown whenever `pirepCanPublish`, no flight-window gate), not
 > a tab — plus a "Report a PIREP" action on the PIREPs tab and an "Add PIREP"
 > flight-list context-menu item (the latter additionally gated on `isEditable`
 > **and** the flight's tracking window, so a list-filed report actually links to
@@ -144,9 +144,17 @@ for the graph and Skew-T. Landscape focus has no scroll view and keeps the
 immediate drag.
 
 **Chrome / space reclaim (#310 item 1).** The old standalone `BriefingHeaderView`
-band is gone: route identity moved to `navigationTitle` + `.navigationSubtitle`
-(iOS 26), and the freshness chip + pack-history (D-N) picker merged into one
-`BriefingPackToolbar` menu in the nav-bar toolbar. Pull-to-refresh on the
+band is gone: route identity moved to `navigationTitle`, and the freshness chip +
+pack-history (D-N) picker merged into one `BriefingPackToolbar` menu in the
+nav-bar toolbar. The trailing side is fixed (#996): Start/Stop (inside the
+tracking window) and ↻ from `BriefingToolbarView`, then one ⋯ menu
+(`briefingMoreMenu`, labelled "Flight actions" so it never matches a "More"
+button query) holding Edit / Duplicate, Share Link and the Notifications
+submenu, Send Feedback and Report PIREP; rows that don't apply are left out, so
+icons no longer come and go. The subtitle is kept only for coverage flights;
+otherwise the Advisory tab opens with `FlightSummaryStrip` (ends and times, date,
+duration, level, aircraft, tappable route; live off/est/landed times once the
+flight is tracked). `FlightSummary` is pure and mirrored by Android. Pull-to-refresh on the
 scrolling tabs is a *seamless pack sync* (`syncLatestPack()`), **not** the ↻
 button's full regeneration — don't wire it to a refresh.
 
@@ -319,7 +327,7 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 
 ## As-built PIREP reporting sheet
 
-`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing toolbar and the PIREPs-tab "Report a PIREP" action (permanent, no flight-window gate), or the flight-list "Add PIREP" context menu (additionally gated on the flight's tracking window **and** `isEditable`). **Linkage caveat:** `submit` sends no `pack_id`, so the server attaches a report to a flight only when its `observed_at` is inside the window **and** the report's `user_id` is the flight owner's; the list entry is gated on both window and ownership for that reason, while an in-briefing report is kept as standalone community data when filed outside the window or by a subscriber on a shared flight. One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
+`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing ⋯ menu and the PIREPs-tab "Report a PIREP" action (permanent, no flight-window gate), or the flight-list "Add PIREP" context menu (additionally gated on the flight's tracking window **and** `isEditable`). **Linkage caveat:** `submit` sends no `pack_id`, so the server attaches a report to a flight only when its `observed_at` is inside the window **and** the report's `user_id` is the flight owner's; the list entry is gated on both window and ownership for that reason, while an in-briefing report is kept as standalone community data when filed outside the window or by a subscriber on a shared flight. One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
 
 - **Altitude** — read-only GPS altitude row + editable "Reported altitude" (ft) text field (pre-filled from GPS on appear)
 - **Icing** — severity picker (none/trace/light/moderate/severe); if non-none, an icing-**type** picker appears (rime/clear/mixed)
