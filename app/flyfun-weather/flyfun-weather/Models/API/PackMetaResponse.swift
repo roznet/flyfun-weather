@@ -6,6 +6,10 @@ nonisolated struct PackMetaResponse: Codable, Sendable {
     let daysOut: Int
     let isHistorical: Bool
     let hasGramet: Bool
+    /// Why there is no GRAMET (#994), worded by `GrametStatus.message`.
+    /// nil when the pack has one, when the reason is unknown, or from an
+    /// older server.
+    var grametStatus: String? = nil
     let hasSkewt: Bool
     let hasDigest: Bool
     let hasAdvisories: Bool

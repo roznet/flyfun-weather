@@ -180,9 +180,9 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = if (autorouterLinked) {
-                            "Connected. Add Flight can import the routes you planned on autorouter.aero."
+                            "Connected. Briefings refreshed from now on include the GRAMET, and Add Flight can import the routes you planned on autorouter.aero."
                         } else {
-                            "Connect your autorouter.aero account to import the routes you've planned there when adding a flight."
+                            "Connect your autorouter.aero account to add the GRAMET to your briefings and import the routes you've planned there when adding a flight."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -324,6 +324,9 @@ class BriefingPackRow(Base):
     fetch_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     days_out: Mapped[int] = mapped_column(Integer)
     has_gramet: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Why a pack has no GRAMET (#994): not_linked / disabled / historical /
+    # daily_limit / failed. NULL when it has one, and on pre-#994 packs.
+    gramet_skip_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     has_skewt: Mapped[bool] = mapped_column(Boolean, default=False)
     has_digest: Mapped[bool] = mapped_column(Boolean, default=False)
     # Profile AI toggle for this pack. server_default="1" so pre-existing rows

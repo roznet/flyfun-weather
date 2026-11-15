@@ -127,6 +127,9 @@ class TestPrepareRefresh:
         assert route.cruise_altitude_ft == 8000
         assert options.enrich_grib is True
         assert pack_path.exists()
+        # No DB, so no Autorouter link: recorded so the apps can say it (#994).
+        assert options.fetch_gramet is False
+        assert options.gramet_skip_reason == "not_linked"
 
     @patch("weatherbrief.airports._load_airport_model")
     def test_with_db_session(self, mock_load, monkeypatch, tmp_path, db_session, dev_user):
@@ -159,6 +162,7 @@ class TestPrepareRefresh:
         )
 
         assert options.fetch_gramet is False
+        assert options.gramet_skip_reason == "historical"  # #994
         assert options.generate_llm_digest is False
 
 

@@ -159,6 +159,9 @@ class BriefingPackMeta(BaseModel):
     fetch_timestamp: datetime  # aware UTC datetime
     days_out: int
     has_gramet: bool = False
+    # Why the pack has no GRAMET (#994), one of GRAMET_SKIP_REASONS in
+    # tasks/outputs.py. None when it has one, and on packs built before #994.
+    gramet_skip_reason: Optional[str] = None
     has_skewt: bool = False
     has_digest: bool = False
     # Whether the LLM digest was requested for this pack (profile toggle).

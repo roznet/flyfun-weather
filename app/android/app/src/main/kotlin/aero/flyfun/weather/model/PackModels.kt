@@ -13,6 +13,9 @@ data class PackMetaResponse(
     val daysOut: Int = 0,
     @SerialName("has_gramet")
     val hasGramet: Boolean = false,
+    /** Why there is no GRAMET (#994); worded by `GrametStatusRules`. */
+    @SerialName("gramet_status")
+    val grametStatus: String? = null,
     @SerialName("has_skewt")
     val hasSkewt: Boolean = false,
     @SerialName("has_digest")
