@@ -78,6 +78,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import aero.flyfun.weather.model.AdvisoriesResponse
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
+import aero.flyfun.weather.model.NavigationTarget
 import aero.flyfun.weather.model.FocusIntent
 import aero.flyfun.weather.model.RefreshGate
 import aero.flyfun.weather.model.SnapshotResponse
@@ -115,6 +116,8 @@ fun BriefingContainerScreen(
     showBackButton: Boolean = true,
     onEditFlight: ((FlightResponse) -> Unit)? = null,
     onDuplicateFlight: ((FlightResponse) -> Unit)? = null,
+    /** The route map's "Forecast map" button (#998): opens the full forecast map at that slot. */
+    onOpenForecastMap: ((NavigationTarget.ForecastMap) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val flight by viewModel.flight.collectAsState()
@@ -461,7 +464,7 @@ fun BriefingContainerScreen(
                 BriefingTab.DISCUSSION -> DiscussionTabScreen(viewModel = viewModel)
                 BriefingTab.OBSERVED -> ObservedTabScreen(viewModel = viewModel)
                 BriefingTab.CROSS_SECTION -> CrossSectionTabScreen(briefingViewModel = viewModel)
-                BriefingTab.MAP -> RouteMapTabScreen(briefingViewModel = viewModel)
+                BriefingTab.MAP -> RouteMapTabScreen(briefingViewModel = viewModel, onOpenForecastMap = onOpenForecastMap)
             }
         }
     }

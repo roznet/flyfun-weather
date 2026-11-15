@@ -47,11 +47,9 @@ VERBS = {
     "deleteWithBody": "DELETE",
 }
 
-# Calls whose path or verb the server does not route. #889 fixed the rest and #907 the observed
-# cells/flashes calls; flexible departure needs design work rather than a path fix.
-# Not catchable here: `GET /api/observed/{layer}/frames` matches the literal
-# `/api/observed/cells/frames`, but the server's radar/satellite frames are
-# `/api/observed/frames/{source}`.
+# Calls whose path or verb the server does not route. #889 fixed the rest, #907 the observed
+# cells/flashes calls and #998 the radar/satellite frames (`/api/observed/frames/{source}`);
+# flexible departure needs design work rather than a path fix.
 KNOWN_BROKEN_CALLS = {
     # Flexible departure: per flight on Android, per pack on the server (a port of the iOS flow).
     ("GET", "/api/flights/{}/time-options"),

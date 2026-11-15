@@ -35,10 +35,10 @@ data-extract.ts  → extractVizData() → VizRouteData
 ┌───────────────────────┬──────────────────────┬──────────────────────┐
 │  CrossSectionRenderer │  RouteGraphRenderer  │  RouteMapRenderer    │
 │  ├── axes.ts          │  ├── axes.ts         │  ├── renderer.ts     │
-│  ├── layer-registry   │  ├── metrics.ts (12) │  ├── metrics.ts (13) │
+│  ├── layer-registry   │  ├── metrics.ts (12) │  ├── metrics.ts (16) │
 │  ├── layers/*.ts (20) │  ├── interaction.ts  │  ├── segment-style   │
 │  ├── nwp-fallback.ts  │  └── constants.ts    │  ├── interaction.ts  │
-│  └── interaction.ts   │                      │  ├── altitude-slider │
+│  └── interaction.ts   │                      │  ├── map-chrome.ts   │
 │                       │                      │  ├── forecast-overlay│
 │                       │                      │  └── legend.ts       │
 └───────────────────────┴──────────────────────┴──────────────────────┘
@@ -655,28 +655,53 @@ A separate canvas-based chart rendered below the cross-section for scalar weathe
 
 ## Route Map
 
-Leaflet-based geographic visualization showing weather metrics as colored route segments on an interactive map. Located in `web/ts/visualization/route-map/`.
+Leaflet-based geographic visualization showing one weather metric as colored, sized route segments on an interactive map. Located in `web/ts/visualization/route-map/`. iOS (`Views/Map/RouteMapView.swift`) and Android (`ui/map/RouteMapTabScreen.kt`) draw the same map from the same catalog with the same chrome (#998).
 
 ### Components
 
 | File | Purpose |
 |------|---------|
-| `renderer.ts` | Leaflet map lifecycle: lazy init, segment polylines, waypoint markers, highlight |
-| `metrics.ts` | 13-metric `MAP_METRICS` registry: `MapMetric` objects with `getValue`, `getColor`, `getWidth`, `formatValue` |
-| `segment-style.ts` | Pure function: `computeSegmentStyles()` → `{color, weight}[]` from metric + points |
+| `renderer.ts` | Leaflet map lifecycle: lazy init, segment polylines, waypoint markers, highlight, `fitRoute()` |
+| `metrics.ts` | Builds `MAP_METRICS` from the served route catalog (below); owns only `ROUTE_VALUE_EXTRACTORS` (how to read a value off a viz point) |
+| `segment-style.ts` | Pure function: `computeSegmentStyles(points, metric, altitudeFt)` → `{color, weight}[]` |
 | `interaction.ts` | Hover (highlight + tooltip + sync), click (select point), event attach/detach |
-| `altitude-slider.ts` | Range input for level-dependent metrics (0 → ceiling, 500ft steps, FL labels) |
-| `forecast-overlay.ts` | Pure helpers for the airport forecast overlay (#424): day/hour snapping, deep-link building. No DOM/Leaflet, so it is unit-testable |
-| `legend.ts` | Legend grid: one row per channel (Color, Width) holding that channel's metric picker and its scale (#731) |
+| `map-chrome.ts` | The #996 chrome as pure HTML + one `renderMapChrome()` wiring: altitude stepper, Hide/Show, Fit route, Open full forecast map, SHOWING / MODEL / LAYERS panel, observed badge |
+| `forecast-overlay.ts` | Pure helpers for the airport forecast overlay (#424): day/hour snapping, deep-link building |
+| `legend.ts` | `routeLegendHtml()` (the metric's scale) and `airportLegendHtml()` (one compact airport line): the map's one legend area |
+
+### Route catalog (#998)
+
+`web/ts/data/route-map-metrics-catalog.json` is the one source for the metric list, labels, groups, colour scales, widths, legends and the default (`cloud-cover-total`). The web imports it; the server serves it as `route_maps` in `/api/help/catalog` (`api/help.py`, ETag-cached); iOS and Android bundle identical copies (`tests/test_help_catalog.py` keeps them byte-identical) and replace them on sync. Each metric names:
+
+- `value`: the extractor every client applies to a viz point (same names in `metrics.ts`, `MapMetrics.swift`, `MapMetrics.kt`). A client that does not know an extractor skips the metric, so the server can add one ahead of an app release.
+- `aggregation`: `max` for hazards (a segment takes its worse endpoint, so one bad end is never averaged away), `average` otherwise.
+- `scale`: a key into `scales.bands`, the same vocabulary as the forecast-map catalog (`threshold_asc`, `threshold_desc` with `convert`, `gray_ramp`) plus `linear` (colour interpolated between `stops[].at`, clamped). `bandScaleColor()` in `weather-map-format.ts` (and its iOS/Android ports) evaluates every kind.
+- `width`: `thin_at` / `thick_at`, either order; the line runs 3 → 18 (px on web, pt on iOS, dp on Android). One metric drives both colour and width: the separate Width metric is gone.
+- `format` (`number` with decimals/prefix/suffix/multiply, or `rank` with labels) and `legend` items whose swatch is the metric's own colour at `value`, so a legend can never disagree with the line.
+
+A missing value draws `no_data_color` at the thinnest width. Flight category is not a route metric: Android derived it on the phone, which the "nothing computed on the phone" rule excludes; a server-side per-point category would bring it back.
+
+| Group | Metrics |
+|-------|---------|
+| At altitude | temp-at-level, icing-risk-at-level (diagnostic `icingZones` on every client), sfip-at-level, cat-risk-at-level, cloud-at-level |
+| Along route | cloud-cover-total, cloud-cover-low, nwp-ceiling, visibility (`model_divergence` `visibility_m`), convective-risk, cape, headwind, tailwind, wind-speed, crosswind, model-agreement |
+
+Altitude metrics read nothing without an altitude; helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAltitude()`) find the value at the stepper's level.
+
+### Chrome (#996 on the route map, #998)
+
+- **Top:** `◀ FL080 ▶` altitude stepper (500 ft steps, 0 → ceiling), shown only for an altitude metric; tapping the level resets to cruise. **Hide** pill: hides the chrome for a map-only view, a **Show** pill brings it back (session state only on every surface; on web it widens the pane via `map-wide`).
+- **Floating:** observed badge bottom-left (each drawn observed layer's age; stays when hidden so an empty map never reads as "no echoes"), **Open full forecast map** (labelled, at the overlay's slot/model/metric) and **Fit route** bottom-right.
+- **Bottom panel:** SHOWING (metric, grouped At altitude / Along route), MODEL (the cross-section's), LAYERS: **Airports** (toggle + airport metric), **Observed** (radar reflectivity / rain rate / none, opacity, satellite IR, lightning, radar cells), **Forecast** (fronts), each section only when the briefing has that source. Then the one legend area: route scale + compact airport line.
+- Wind barbs, SIGMET polygons, alternates and METAR pins are not on the route map (Android had them; they live in the Observed tab and the advisories).
 
 ### Overlays on top of the segments
-
-Two optional overlays live in `renderer.ts` beside the route segments:
 
 - **Hewson fronts (#196)** — `setFrontLines()` draws the gated 2-D front axes
   (`GET /api/hewson-map/fronts`, same `FrontGateConfig` as the advisory) for every
   stored pressure level, styled by `front-style.ts` and faded with altitude, plus a
-  marker per on-track crossing. Toggle: `vizSettings.mapFrontsVisible` (default off).
+  marker per on-track crossing. The apps draw the crossing markers from the
+  briefing's linked `front_chains`. Toggle: `vizSettings.mapFrontsVisible` (default off).
 - **Airport forecast overlay (#424)** — the same per-airport forecast markers the
   full forecast map draws, for the snapshot time nearest departure. The fetched
   `ForecastMapResponse` holds every model, so switching model/metric is a recolour,
@@ -684,38 +709,15 @@ Two optional overlays live in `renderer.ts` beside the route segments:
   `mapForecastMetric` (default `flight_category`). The forecast horizon and the
   sample hours each day offers come from the server grid (`fetchAvailableDays`) and
   are never hardcoded here — see [forecast-page.md](./forecast-page.md).
-
-### Metric Registry (13 metrics)
-
-| Metric (id) | Label | Alt-Dependent | Color Scale |
-|-------------|-------|:---:|-------------|
-| cloud-cover-total | Cloud Cover (Total) | | Gray 0-100% |
-| cloud-cover-low | Cloud Cover (Low) | | Gray 0-100% |
-| convective-risk | Convective Risk | | Green→Yellow→Red discrete |
-| headwind | Headwind | | Green (tailwind) ↔ Red (headwind) |
-| tailwind | Tailwind | | Separate tailwind view |
-| cape | CAPE | | Green→Yellow→Red continuous (0–2000 J/kg) |
-| nwp-ceiling | NWP Ceiling | | Purple (LIFR)→Red (IFR)→Blue (MVFR)→Green (VFR) |
-| temp-at-level | Temperature at FL | Yes | Blue→White→Red diverging |
-| model-agreement | Model Agreement | | Green/Orange/Red discrete |
-| icing-risk-at-level | Icing Risk at FL | Yes | Green→Yellow→Orange→Red |
-| sfip-at-level | SFIP at FL | Yes | Green→Yellow→Orange→Red |
-| cat-risk-at-level | CAT Risk at FL | Yes | Green→Yellow→Orange→Red |
-| cloud-at-level | Cloud at FL | Yes | Gray 0-100% |
-
-**Width variation**: Route map segments now vary in width as well as color. Each metric defines a `getWidth(point)` function. Width communicates a secondary dimension (e.g., nwp-ceiling uses inverted width so low ceilings appear thick/dangerous).
-
-**Legend (#731)**: the Color/Width `<select>`s live in the legend rows, not in `renderMapControls` (which keeps only the overlay controls: fronts, airport forecast, observed). The picker is the row's title, so the metric is named once. Swatches and stop labels share one `repeat(N, 1fr)` column template, so each label is centred under its swatch whatever the label lengths. The Width row draws neutral grey bars whose height is `widthBarPx(getWidth(stop.value))`, i.e. thickness, never colour, since the width channel only changes the line's weight. Bars scale from `ROUTE_WEIGHT_MIN/MAX` (`metrics.ts`), the same bounds every `getWidth` maps into, so changing the route weights can't silently desync the legend. Inverted-width metrics (ceiling, temperature) therefore read thick-first. Width "none" keeps the picker and drops the strip; width equal to the colour metric still shows the strip (a different channel, not a repeat). `mapLegendHtml()` is pure, for unit tests under vitest's node environment.
-
-Altitude-dependent metrics use helpers (`worstRiskAtAlt()`, `sfipAtAlt()`, `cloudAtAlt()`, `tempAtAltitude()`) to find the relevant value at the slider's flight level.
+- **Observed imagery and lightning** — see [live-observation-layer.md](./live-observation-layer.md).
 
 ### Rendering
 
-- **Segments**: One `L.polyline` per adjacent point pair, colored/sized by metric via `computeSegmentStyles()`. Midpoint averaging of endpoint values for stable visuals.
+- **Segments**: One `L.polyline` per adjacent point pair, coloured/sized via `computeSegmentStyles()`, the endpoint values combined per the metric's `aggregation`.
 - **Waypoints**: Circle markers (theme-aware colors) with ICAO tooltip on hover.
 - **Tiles**: OSM standard (light) or Stadia Alidade Smooth Dark (dark) from `map-tiles.ts`, switched via `theme-changed` event (see "Dark / Light / System Theme" → Map tiles).
 - **Highlight**: Temporary weight increase (+3px) on hovered segment.
-- **Auto-fit**: Bounds fit route with 30px padding on data load.
+- **Auto-fit**: Bounds fit route with 30px padding on data load; Fit route re-applies it.
 
 ### Hover Sync
 
@@ -726,13 +728,13 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 
 ### Store State
 
-`VizSettings` (persisted to localStorage) includes:
+`VizSettings` (persisted to localStorage, `VIZ_SETTINGS_VERSION` 2) includes:
 - `layout`: `'cross-section' | 'compare' | 'split' | 'map'`
-- `mapColorMetric`: default `'icing-risk-at-level'`
-- `mapWidthMetric`: default `'cloud-cover-total'`
+- `mapColorMetric`: default `DEFAULT_MAP_METRIC_ID` (the catalog default); an unknown stored id resolves to it
 - `mapAltitudeFt`: for level-dependent metrics (`null` = cruise altitude)
 - `mapFrontsVisible` (off), `mapForecastOverlayVisible` (on), `mapForecastMetric`
   (`flight_category`) — the two overlays above
+- `observedLightning` (on): v1's `eumetsat_li` observed overlay migrates to it; `mapWidthMetric` is dropped
 - `cloudStyle`, `activePreset`, `skewtOverlays`, `skewtPrimaryVar`,
   `activeHighlightAdvisoryId` — cross-section/Skew-T lens state, described above
 
@@ -740,8 +742,8 @@ All three visualizations synchronize through callbacks in `briefing-main.ts`:
 
 - **Leaflet over Canvas** — built-in pan/zoom, waypoint tooltips, basemap tiles; simpler for geographic rendering
 - **Opaque map colors** — better visibility on complex basemap vs. semi-transparent cross-section bands
-- **Metric-driven styling** — no hardcoded thresholds; all defined in `MapMetric` objects
-- **Debounced altitude slider** (50ms) — prevents expensive re-renders during drag
+- **Catalog-driven styling** — no thresholds in client code; one catalog for three clients
+- **One metric, two channels** — colour and width say the same thing, so the line never needs a second legend
 - **Segment recoloring** — segments cleared and recreated on metric change (clean event handler lifecycle)
 
 ### Shared Scales Module (`scales.ts`)

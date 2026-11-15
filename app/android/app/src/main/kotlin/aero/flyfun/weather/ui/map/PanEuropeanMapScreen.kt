@@ -906,20 +906,20 @@ private fun markerRadius(webZoom: Float): Dp = when {
 }
 
 // ============================================================================
-// 4. Shared chrome
+// 4. Shared chrome (#996; also the briefing route map's, #998)
 // ============================================================================
 
-private data class MenuChoice(
+internal data class MenuChoice(
     val label: String,
     val selected: Boolean,
     val enabled: Boolean = true,
     val onClick: () -> Unit,
 )
 
-private data class MenuSection(val title: String?, val items: List<MenuChoice>)
+internal data class MenuSection(val title: String?, val items: List<MenuChoice>)
 
 @Composable
-private fun MenuButton(
+internal fun MenuButton(
     text: String,
     sections: List<MenuSection>,
     testTag: String? = null,
@@ -1085,7 +1085,7 @@ private fun TimeBar(
 
 /** The map's one "what" panel (#996): labelled picks on a row, the legend under them. */
 @Composable
-private fun BottomPanel(legend: @Composable () -> Unit, picks: @Composable RowScope.() -> Unit) {
+internal fun BottomPanel(legend: @Composable () -> Unit, picks: @Composable RowScope.() -> Unit) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -1102,7 +1102,7 @@ private fun BottomPanel(legend: @Composable () -> Unit, picks: @Composable RowSc
 
 /** ‹ label › with an optional menu of every value on the label. */
 @Composable
-private fun StepperCapsule(
+internal fun StepperCapsule(
     label: String,
     canBack: Boolean,
     canForward: Boolean,

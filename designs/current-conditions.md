@@ -379,11 +379,12 @@ Discs are cumulative, not rings: "within 10 NM" is the question a pilot asks.
 |---|---|
 | Cross-section `observed-tops` (group `conditions`, **default ON**) | FL-band histogram ticks + a solid highest-top cap per route point, over the NWP cloud bands. Hatched mark where the retrieval could not answer. Age badge. |
 | Cross-section `observed-surface` (group `conditions`, default off) | Echo colour strip along the terrain + lightning ticks. Hatched strip for no coverage. |
-| Route map | Radar as Europe-wide tiles of the newest frame, satellite IR underneath (default on), cloud tops as a corridor `imageOverlay`; corridor box, lightning as small bolt glyphs age-faded (#665, one canvas `FlashGlyphLayer`, shared with the maps page's "Now" tab), one age badge line per drawn layer, muted basemap while imagery is on. See [Map imagery](#map-imagery-652). |
+| Route map | Radar as Europe-wide tiles of the newest frame, satellite IR underneath (default on), cloud tops as a corridor `imageOverlay`; corridor box, lightning as small bolt glyphs age-faded (#665, one canvas `FlashGlyphLayer`, shared with the maps page's "Now" tab; since #998 a LAYERS › Observed toggle, on by default, no longer a radar-picker option), one age badge line per drawn layer, muted basemap while imagery is on. See [Map imagery](#map-imagery-652). |
 | Route graph | `observed-rain-rate` and `observed-flash-rate` metrics, with the corridor selector. Coverage holes render as a distinct baseline state. |
 | Briefing section / PDF / digest | The deterministic "Observed now" summary, verbatim in all three. |
 | iOS cross-section (group `conditions`) | The same two layers, same defaults, same three-state marks. Corridor picker + per-source ages in the Layers sheet; measured values in the scrub readout, prefixed `Obs` so they never read as forecast. |
 | iOS route map (#654) | Radar tiles (reflectivity or rain rate) over the satellite IR underlay, corridor box, muted basemap, legend + one age badge line per layer, lightning bolts (#665, "Lightning" toggle, on by default). No cloud tops. See [iOS route map](#ios-route-map-654). |
+| Android route map (#907, #998) | Same as iOS: radar tiles (reflectivity / rain rate) over the satellite IR underlay from `/api/observed/frames/{source}` + `/api/observed/tiles/…` (`ObservedImageryRules`), muted basemap, lightning bolts and the experimental radar cells, one age chip per layer. No cloud tops. See `android-app-overview.md` § Map. |
 
 ### The iOS surface needs no endpoint
 

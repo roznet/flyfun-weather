@@ -126,6 +126,8 @@ data class VizPoint(
     val cinSurfaceJkg: Double? = null,
     val qnhHpa: Double? = null,
     val visibilityMeters: Double? = null,
+    /** Worst `model_divergence` agreement at the point: good / moderate / poor (route map, #998). */
+    val worstModelAgreement: String = "good",
     val soundingCeilingFt: Double? = null,
     val nwpCeilingFt: Double? = null,
     val observedRadarDbz: Double? = null,
@@ -549,6 +551,16 @@ object VizDataExtractor {
         val visibilityMeters = divergenceValue(rpa.modelDivergence, "visibility_m", model)
             ?: divergenceValue(rpa.modelDivergence, "visibility_meters", model)
 
+        // Same as web/iOS: the worst agreement across every divergence variable.
+        var worstModelAgreement = "good"
+        for (d in rpa.modelDivergence) {
+            if (d.agreement == "poor") {
+                worstModelAgreement = "poor"
+                break
+            }
+            if (d.agreement == "moderate") worstModelAgreement = "moderate"
+        }
+
         val soundingCeilingFt = indices?.soundingCeilingFt
         val nwpCeilingFt = sounding?.nwpCloudDiagnostics?.ceilingFt ?: indices?.nwpCeilingFt
 
@@ -598,6 +610,7 @@ object VizDataExtractor {
             cinSurfaceJkg = indices?.cinSurfaceJkg ?: conv?.cinJkg,
             qnhHpa = qnhHpa,
             visibilityMeters = visibilityMeters,
+            worstModelAgreement = worstModelAgreement,
             soundingCeilingFt = soundingCeilingFt,
             nwpCeilingFt = nwpCeilingFt,
             observedRadarDbz = observedRadarDbz,

@@ -811,7 +811,8 @@ logs `Live glance failed` and leaves both null for that tick.
     `RouteRibbonInspectorRulesTests.swift`).
   - **Deliberate, not a gap:** like iOS, the web honours only part of the
     focus contract — it ignores `time` and draws no SIGMET polygons. There is
-    no SIGMET polygon layer on the route map and no frame stepper for `time`
+    no SIGMET polygon layer on the route map (Android's was dropped in #998 so
+    the three maps match) and no frame stepper for `time`
     to point at, so both would be new map features, not wiring. `time`
     becomes meaningful with the radar/satellite loop (#653). Don't re-open
     this as a bug against the client.
@@ -847,7 +848,7 @@ logs `Live glance failed` and leaves both null for that tick.
   interactions are covered by `web/tests/observed-ribbon.spec.ts`.
   - The web has **no standalone cells list** (iOS's `ObservedCellsSection`,
     on `/live` storms since #816):
-    cells live on the route map's Cells toggle and the maps page's "Now" tab,
+    cells live on the route map's LAYERS › Observed › Radar cells toggle and the maps page's "Now" tab,
     and the ribbon plus the cell detail now cover the route-relative reading.
     "Since this briefing" also stays a page-level banner on web
     (`refresh-delta-banner`) rather than a section in the group.
