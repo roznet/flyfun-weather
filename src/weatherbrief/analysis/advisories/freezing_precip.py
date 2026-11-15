@@ -12,6 +12,11 @@ Two tiers per route point per model:
   ice-pellet surface phase (warm-nose profile WITH active precipitation).
   Ice pellets are graded the same — they mean the refreeze completed before
   the ground, i.e. freezing rain exists in the layer above.
+- **Model type** (AMBER, #411 step 2, §82): the model's own precipitation
+  type (ECMWF ``ptype``) says freezing rain, freezing drizzle or ice pellets
+  with at least 0.01 mm/h falling. AMBER at any point (no coverage threshold,
+  like the active tier) until the winter experiment supports RED. It is the
+  only signal that sees freezing drizzle, which has no warm nose.
 - **Primed** (AMBER): the profile has the freezing-rain shape (sub-zero
   surface wet-bulb under a warm nose, via ``detect_warm_nose``) but no
   precipitation is falling at that hour — precip onset or a small timing
@@ -20,7 +25,9 @@ Two tiers per route point per model:
 Across models (#411, meteorology-decisions §81): under the default MAJORITY
 aggregation one RED model floors the card at AMBER and two or more make it RED
 (``escalate_on_red`` in ``RouteAdvisoryResult.from_per_model``). It only raises
-the grade, never lowers it, and WORST is unaffected.
+the grade, never lowers it, and WORST is unaffected. A model AMBER on its own
+precipitation type also floors the card at AMBER (``amber_floor_models``):
+otherwise ECMWF, the only model with a type, would always be outvoted.
 """
 
 from __future__ import annotations
@@ -79,7 +86,10 @@ class FreezingPrecipEvaluator:
                 "transit exceeds all icing certification, FIKI included; ice "
                 "pellets prove freezing rain in the layer above). Across models, "
                 "one model red makes the card at least amber and two or more make "
-                "it red, whatever the majority says. Amber when a "
+                "it red, whatever the majority says. Amber when a model's own "
+                "precipitation type (ECMWF) forecasts freezing rain, freezing "
+                "drizzle or ice pellets with precipitation falling, at any "
+                "point; one such model is enough. Amber when a "
                 "freezing-rain-shaped profile exists without active precipitation "
                 "yet (primed — onset or a timing shift turns it active) over "
                 "enough of the route. Unavailable (not green) on packs without "
@@ -112,10 +122,14 @@ class FreezingPrecipEvaluator:
         extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
+        # Models AMBER on their own precipitation type: they floor the card.
+        amber_floor_models: set[str] = set()
 
         for model in ctx.models:
             active_pts = 0
             primed_pts = 0
+            ptype_pts = 0
+            ptype_kinds: list[str] = []
             loc = ctx.locale
 
             # One evidence sample per route point (#393): ribbon red = active
@@ -153,20 +167,37 @@ class FreezingPrecipEvaluator:
                         active_pts += 1
                         active = True
 
+                # The model's own precipitation type, gated on precip (#411).
+                ptype_kind = (
+                    precip.model_freezing_type if precip is not None else None
+                )
+
                 # Warm-nose profile shape (also the cutout's top at active
                 # points). Primed = the shape without active precip.
                 primed = False
                 nose_top: float | None = None
+                nose_base: float | None = None
                 if sounding.derived_levels:
-                    fz_risk, _, nose_top, ice_pellets = detect_warm_nose(
+                    fz_risk, nose_base, nose_top, ice_pellets = detect_warm_nose(
                         sounding.derived_levels
                     )
-                    if not active and (fz_risk or ice_pellets):
+                    if not active and not ptype_kind and (fz_risk or ice_pellets):
                         primed_pts += 1
                         primed = True
 
+                ptype_flag = bool(ptype_kind) and not active
+                if ptype_flag:
+                    ptype_pts += 1
+                    if ptype_kind not in ptype_kinds:
+                        ptype_kinds.append(ptype_kind)
+
+                reason: str | None = None
                 if active:
                     severity = HighlightSeverity.RED
+                elif ptype_flag:
+                    severity = HighlightSeverity.AMBER
+                    reason = "model_ptype"
+                    nose_top = _ptype_zone_top(ptype_kind, nose_base, sounding)
                 elif primed:
                     severity = HighlightSeverity.AMBER
                 else:
@@ -186,6 +217,7 @@ class FreezingPrecipEvaluator:
                         severity=severity,
                         base_ft=None,
                         top_ft=int(nose_top),
+                        reason_code=reason,
                         metric_id="precipitation",
                     )
                 samples.append(EvidenceSample(
@@ -202,8 +234,17 @@ class FreezingPrecipEvaluator:
             active_ext = summary.extent_of(
                 lambda s: s.severity == HighlightSeverity.RED
             )
+            # Model-type and primed points are both AMBER on the ribbon; the
+            # sentences quote each population's own geometry, told apart by
+            # the cell's reason code.
+            def _is_ptype(s) -> bool:
+                return s.region is not None and s.region.reason_code == "model_ptype"
+
+            ptype_ext = summary.extent_of(
+                lambda s: s.severity == HighlightSeverity.AMBER and _is_ptype(s)
+            )
             primed_ext = summary.extent_of(
-                lambda s: s.severity == HighlightSeverity.AMBER
+                lambda s: s.severity == HighlightSeverity.AMBER and not _is_ptype(s)
             )
 
             if total == 0:
@@ -220,11 +261,24 @@ class FreezingPrecipEvaluator:
                     "Freezing precipitation "
                     f"{format_extent(active_ext)}"
                 )
+                if ptype_pts:
+                    detail += "; " + _ptype_sentence(ptype_kinds, ptype_ext, loc)
                 if primed_pts:
                     detail += (
                         f"; primed profile "
                         f"{format_extent(primed_ext)}"
                     )
+            elif ptype_pts > 0:
+                # Graded AMBER at any point, no coverage threshold (#411,
+                # §82): RED only after the winter experiment supports it.
+                status = AdvisoryStatus.AMBER
+                detail = _ptype_sentence(ptype_kinds, ptype_ext, loc)
+                if primed_pts:
+                    detail += (
+                        f"; primed profile "
+                        f"{format_extent(primed_ext)}"
+                    )
+                amber_floor_models.add(model)
             elif primed_pts > 0 and grade_extent(
                 primed_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
@@ -251,7 +305,7 @@ class FreezingPrecipEvaluator:
 
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
-                affected=active_pts + primed_pts, total=total,
+                affected=active_pts + ptype_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
                 highlights=summary.highlights,
@@ -263,4 +317,31 @@ class FreezingPrecipEvaluator:
         return RouteAdvisoryResult.from_per_model(
             "freezing_precip", per_model, params,
             escalate_on_red=True, locale=ctx.locale,
+            amber_floor_models=amber_floor_models,
         )
+
+
+def _ptype_sentence(kinds: list[str], extent, locale: str | None) -> str:
+    """"Model forecasts freezing drizzle 20nm/400nm (5%)" for the type tier."""
+    names = ", ".join(adv_t(f"freezing_precip.ptype.{k}", locale) for k in kinds)
+    return adv_t(
+        "freezing_precip.ptype", locale, kinds=names, extent=format_extent(extent),
+    )
+
+
+def _ptype_zone_top(kind: str | None, nose_base: float | None, sounding) -> float | None:
+    """Top of the cutout for a model-type point (#411 step 2, §82).
+
+    Freezing rain and ice pellets fall through the cold layer under the warm
+    nose: the zone tops out at the nose BASE when the profile resolves one.
+    Freezing drizzle forms in the low deck: the zone tops out at the lowest
+    cloud layer's top. Otherwise None, and the caller's existing shallow
+    fallback (terrain + 3,000 ft) applies, as for any unresolved column.
+    """
+    if kind in ("freezing_rain", "ice_pellets"):
+        return nose_base
+    if kind == "freezing_drizzle":
+        layers = list(sounding.cloud_layers or [])
+        if layers:
+            return min(layers, key=lambda c: c.base_ft).top_ft
+    return None

@@ -271,12 +271,23 @@ _ECMWF_CLOUD_DIAG_FIELD_MAP: dict[str, str] = {
     # Mean sea-level pressure (#912): the QNH the airport card reads. Was
     # delivered in a1 but undecoded while Open-Meteo supplied pressure_msl.
     "msl": "msl_pa",                       # Pa
+    # Precipitation type and freezing rain (#411 step 2, §82): delivered in a1
+    # all along, undecoded until now. ``ptype`` is a WMO code-table 4.201
+    # category (0 none, 1 rain, 3 freezing rain, 5 snow, 6 wet snow, 7 rain
+    # and snow, 8 ice pellets, 12 freezing drizzle) at the step's valid time,
+    # gathered from the NEAREST cell (``_ECMWF_CATEGORICAL_FIELDS``), never
+    # interpolated. ``fzra`` is accumulated since init like ``tp``.
+    "ptype": "precip_type_code",           # code, nearest cell
+    "fzra": "freezing_rain_m",             # m water equiv, accumulated since init
     # NOTE: ``kx``/``totalx`` are mapped once above (k_index_c / total_totals_c).
     # The model-native convective indices feeding the convective character
     # advisory (issue #294, nwp_k_index / nwp_total_totals) derive from those
     # same decoded values in build_ecmwf_surface_snapshot — kx normalized from
     # Kelvin via _k_index_to_c (#283 established the unit), totalx offset-immune.
 }
+
+# ECMWF a1 fields that are categories: nearest cell, no seam blending (#411).
+_ECMWF_CATEGORICAL_FIELDS = frozenset({"ptype"})
 
 # Variables that are 0–1 fractions in ECMWF GRIB and need ×100 to become %.
 _ECMWF_FRAC_TO_PCT = {"cc"}
@@ -4591,6 +4602,7 @@ def _gather_series(
     select,
     *,
     bridge_seams: bool = False,
+    nearest_vars: frozenset[str] = frozenset(),
 ) -> list[_Series]:
     """Read ``source`` once, gathering each selected message at every target.
 
@@ -4601,10 +4613,18 @@ def _gather_series(
     ``bridge_seams``: also unpack a grid a target sits just outside of (see
     ``_near_grid_edge``) and keep its edge rows in ``_Series.edges`` for the
     seam fill (#672, ``_series_seams``).
+
+    ``nearest_vars``: lower-case short names gathered from the nearest cell
+    instead of bilinearly (categorical fields, #411). They keep no edge rows,
+    so a seam point gets no value rather than a blended category.
     """
     import numpy as np
 
-    from weatherbrief.fetch.grib.grib_reader import gather_bilinear, iter_messages
+    from weatherbrief.fetch.grib.grib_reader import (
+        gather_bilinear,
+        gather_nearest,
+        iter_messages,
+    )
     from weatherbrief.fetch.grib.icon_grid import gather_native
 
     targets_lat = np.asarray(latitudes, dtype=np.float64)
@@ -4666,9 +4686,13 @@ def _gather_series(
                     source if isinstance(source, (str, Path)) else "bytes",
                 )
                 continue
+            categorical = msg.var.lower() in nearest_vars
             if bw.inb_idx.size:
-                gathered = gather_bilinear(values, bw)
-            if near_edge and msg.level not in s.levels:
+                gathered = (
+                    gather_nearest(values, bw) if categorical
+                    else gather_bilinear(values, bw)
+                )
+            if near_edge and not categorical and msg.level not in s.levels:
                 top, bot = int(np.argmax(grid.lats)), int(np.argmin(grid.lats))
                 # Copies: a row view would keep the whole field alive.
                 s.edges[msg.level] = {top: values[top].copy(), bot: values[bot].copy()}
@@ -4810,7 +4834,10 @@ def _decode_ecmwf_surface_direct(
     def select(msg) -> bool:
         return msg.var.lower() in _ECMWF_CLOUD_DIAG_FIELD_MAP
 
-    series = _gather_series(file_path, latitudes, longitudes, select, bridge_seams=True)
+    series = _gather_series(
+        file_path, latitudes, longitudes, select, bridge_seams=True,
+        nearest_vars=_ECMWF_CATEGORICAL_FIELDS,
+    )
     # Surface fields: two-sided seam points only (#679). A held value would
     # replace Open-Meteo's correctly placed ECMWF surface value with one from
     # the edge row ~42 km south, so it is not served at all.

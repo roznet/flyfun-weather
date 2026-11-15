@@ -8031,3 +8031,53 @@ Not yet. The spring/summer replay corpus never produced an AMBER or RED
 `freezing_precip` (#411: 265 GREEN, 47 UNAVAILABLE), so `rerun_advisories_diff.py`
 is expected to show no change there; it must be re-run on stored winter flights
 once there are some.
+
+## 82. ECMWF's own precipitation type grades AMBER on freezing precipitation (#411, step 2)
+
+**Date:** 2026-11-15 · **Issue:** #411 (step 2) · **Related:** §81 (the cross-model floor), `designs/weather-engine-specs.md` (ECMWF a1 decode)
+
+### Context
+
+ECMWF's a1 feed delivered `ptype` and `fzra` all along, undecoded. Last
+winter's hindcast: `ptype` gated on a little precipitation caught ~42% of
+freezing rain and ~31% of freezing drizzle reports, with 46% of flags verified
+nearby, against 33% / 8% for the warm-nose rule. It is the only signal that
+sees freezing drizzle, which has no warm nose. Owner decision (2026-11-15):
+`ptype` grades AMBER as soon as it is decoded, RED only after the winter
+experiment supports it.
+
+### Choices
+
+- **Decode:** `ptype` from the nearest cell, never blended or seam-filled, the
+  category at the end of the step held over every hour of that step (the
+  hindcast scored it that way). `fzra` de-accumulated like `tp`.
+- **Freezing codes:** 3 freezing rain, 12 freezing drizzle, 8 ice pellets (ice
+  pellets prove freezing rain above, as on the active tier).
+- **Gate:** the hour's precipitation (the step's mean rate, `tp` difference
+  over the step) ≥ 0.01 mm/h, as measured in the hindcast.
+- **Grade:** a new per-model tier between active (RED) and primed (AMBER):
+  AMBER at any point, no coverage threshold, like the active tier (one transit
+  is the hazard). Never RED on its own. It never changes `surface_phase`, so
+  every other reader of the phase is unchanged.
+- **Cross-model:** a model AMBER on its own type floors the card at AMBER
+  (`amber_floor_models`), extending §81. Without it ECMWF, the only model with
+  a type, would always be outvoted 2 to 1 and the signal would never reach the
+  pilot in the default mode. A primed-profile AMBER does not floor.
+- **Cutout top:** freezing rain / ice pellets at the warm-nose base; freezing
+  drizzle at the top of the lowest cloud layer; when neither resolves, the
+  card's existing shallow fallback (terrain + 3,000 ft). The owner listed the
+  fallbacks as an open question: this is the conservative reuse of what the
+  card already does, display only, never the grade.
+- **`fzra`:** recorded on the hourly and the assessment, not graded: whether
+  it includes freezing drizzle is unchecked.
+
+### Rejected
+
+- Setting `surface_phase` to freezing rain from `ptype`: that is the RED
+  active tier.
+- The primed tier's 5% coverage threshold for `ptype`: it is a precipitation
+  forecast, not a profile shape.
+
+### Measured
+
+Not yet on our pipeline. To be scored in the winter experiment (step 5).

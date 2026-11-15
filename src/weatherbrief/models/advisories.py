@@ -796,26 +796,29 @@ def _representative(
     return max(tied, key=lambda m: (m.affected_pct, m.affected_mod_pct))
 
 
-def _escalate_on_red(agg: AdvisoryStatus, red_count: int) -> AdvisoryStatus:
+def _escalate_on_red(
+    agg: AdvisoryStatus, red_count: int, amber_floor: bool = False,
+) -> AdvisoryStatus:
     """The ``escalate_on_red`` floor (#411): never lowers ``agg``.
 
-    Two or more valid models RED → RED; exactly one → at least AMBER. An
-    UNAVAILABLE aggregate has no valid model, so no RED to act on.
+    Two or more valid models RED → RED; exactly one, or an AMBER from a model
+    the evaluator marked as floor-worthy (``amber_floor``) → at least AMBER.
+    An UNAVAILABLE aggregate has no valid model, so nothing to act on.
     """
     if red_count >= 2:
         return AdvisoryStatus.RED
-    if red_count == 1 and agg == AdvisoryStatus.GREEN:
+    if (red_count == 1 or amber_floor) and agg == AdvisoryStatus.GREEN:
         return AdvisoryStatus.AMBER
     return agg
 
 
 def _escalated_detail(
     detail: str,
-    red_models: list[ModelAdvisoryResult],
+    flagged: list[ModelAdvisoryResult],
     per_model: list[ModelAdvisoryResult],
     locale: str | None,
 ) -> str:
-    """The RED representative's sentence, saying which models hold it.
+    """The flagged representative's sentence, saying which models hold it.
 
     "Freezing precipitation 40nm/400nm (10%) (gfs only, 1 of 3 models)": the
     grade was raised over a calmer majority, so the card names the minority
@@ -828,8 +831,8 @@ def _escalated_detail(
     return adv_t(
         "aggregate.escalated", locale,
         detail=detail,
-        models=", ".join(m.model for m in red_models),
-        n=len(red_models),
+        models=", ".join(m.model for m in flagged),
+        n=len(flagged),
         total=len(valid),
     )
 
@@ -837,6 +840,7 @@ def _escalated_detail(
 def _aggregate_mitigations(
     representative: ModelAdvisoryResult | None,
     agg_status: AdvisoryStatus,
+    escalated: bool = False,
 ) -> list[Mitigation]:
     """Aggregate per-model mitigations (representative-model policy).
 
@@ -848,8 +852,14 @@ def _aggregate_mitigations(
     published grade). Kept as a standalone module-level function so the policy
     can later be swapped for a "conservative, all-or-nothing per kind" merge by
     editing this one place.
+
+    ``escalated`` (#411): the escalation rule chose a representative that may
+    sit above the aggregate (a RED model under a floored AMBER). Its advice is
+    still the advice for the reason the card is flagged, so it is kept.
     """
-    if representative is None or representative.status != agg_status:
+    if representative is None:
+        return []
+    if representative.status != agg_status and not escalated:
         return []
     return list(representative.mitigations)
 
@@ -869,7 +879,9 @@ class RouteAdvisoryResult(BaseModel):
     # The model whose per-model result sources the aggregate view (#393): the
     # ``per_model`` entry holding ``aggregate_status`` with the largest flagged
     # extent (see ``_representative``) — the same representative that sets
-    # ``aggregate_detail`` / ``aggregate_mitigations``.
+    # ``aggregate_detail`` / ``aggregate_mitigations``. When ``escalated_from``
+    # is set (#411) it is instead the flagged model that raised the grade,
+    # which may be RED under an AMBER aggregate.
     # Emitted so the client reads "which model's geometry do we highlight?" from
     # the backend instead of reimplementing the rule (the deleted TS
     # ``representativeModel()`` copy). None only when there are no per-model
@@ -898,6 +910,7 @@ class RouteAdvisoryResult(BaseModel):
         aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
         escalate_on_red: bool = False,
         locale: str | None = None,
+        amber_floor_models: frozenset[str] | set[str] = frozenset(),
     ) -> RouteAdvisoryResult:
         """Build aggregate result from per-model results.
 
@@ -912,6 +925,12 @@ class RouteAdvisoryResult(BaseModel):
         (two valid models with one RED is already RED by the tie rule). WORST
         is unaffected (it is already RED on one model).
 
+        ``amber_floor_models`` (#411 step 2, §82): models whose AMBER also
+        floors the aggregate at AMBER, because the evaluator knows that AMBER
+        comes from a signal that must not be voted away (ECMWF's own
+        precipitation type, the only model that sees freezing drizzle). Only
+        read with ``escalate_on_red``.
+
         ``aggregate_detail`` is the representative's sentence, except that any
         airport clause it prints carries the cross-model consensus category (same
         mode), with dissenting models named (#823). When the escalation raised
@@ -921,25 +940,38 @@ class RouteAdvisoryResult(BaseModel):
         """
         statuses = [m.status for m in per_model]
         escalated_from: AdvisoryStatus | None = None
-        red_models: list[ModelAdvisoryResult] = []
+        flagged: list[ModelAdvisoryResult] = []
         if aggregation == AdvisoryAggregation.MAJORITY:
             agg = AdvisoryStatus.majority(statuses)
             if escalate_on_red:
                 red_models = [m for m in per_model if m.status == AdvisoryStatus.RED]
-                raised = _escalate_on_red(agg, len(red_models))
+                floor_ambers = [
+                    m for m in per_model
+                    if m.status == AdvisoryStatus.AMBER and m.model in amber_floor_models
+                ]
+                raised = _escalate_on_red(agg, len(red_models), bool(floor_ambers))
                 if raised != agg:
                     escalated_from, agg = agg, raised
+                    # The models that caused the raise: every RED, plus the
+                    # floor-worthy AMBERs when the raise stops at AMBER.
+                    flagged = red_models + (
+                        floor_ambers if agg == AdvisoryStatus.AMBER else []
+                    )
         else:
             agg = AdvisoryStatus.worst(statuses)
         if escalated_from is not None:
-            # The models that caused the raise speak for it: the largest RED.
-            representative = _representative(per_model, AdvisoryStatus.RED)
+            # The models that caused the raise speak for it: the largest of
+            # the worst status among them.
+            top = AdvisoryStatus.worst([m.status for m in flagged])
+            representative = _representative(
+                [m for m in flagged if m.status == top], top,
+            )
         else:
             representative = _representative(per_model, agg)
         consensus = _airport_consensus(per_model, aggregation)
         detail = _consensus_detail(representative, consensus) if representative else ""
         if escalated_from is not None and detail:
-            detail = _escalated_detail(detail, red_models, per_model, locale)
+            detail = _escalated_detail(detail, flagged, per_model, locale)
         return cls(
             advisory_id=advisory_id,
             aggregate_status=agg,
@@ -948,7 +980,9 @@ class RouteAdvisoryResult(BaseModel):
             airport_consensus={end: cat for end, (cat, _) in consensus.items()},
             per_model=per_model,
             parameters_used=params,
-            aggregate_mitigations=_aggregate_mitigations(representative, agg),
+            aggregate_mitigations=_aggregate_mitigations(
+                representative, agg, escalated=escalated_from is not None,
+            ),
             representative_model=representative.model if representative else None,
         )
 

@@ -325,5 +325,109 @@ def test_an_escalation_without_a_red_model_is_a_violation():
         escalated_from=AdvisoryStatus.GREEN,
     )
     rules = {v.rule for v in invariants.check_advisory(invented)}
-    assert "escalation_needs_a_red_model" in rules
+    assert "escalation_needs_a_flagged_model" in rules
     assert "aggregate_is_a_model_status" in rules
+
+
+# --- Model precipitation type tier (#411 step 2, §82) -------------------------
+
+
+def _ptype(kind_code: int, precip: float = 0.05) -> SoundingAnalysis:
+    """Benign profile, but the model's own type says freezing (gated)."""
+    from weatherbrief.analysis.sounding.precipitation import MODEL_FREEZING_PTYPES
+
+    return SoundingAnalysis(
+        precipitation=PrecipitationAssessment(
+            surface_phase=PrecipPhase.RAIN, total_mm=precip,
+            model_precip_type_code=kind_code,
+            model_freezing_type=MODEL_FREEZING_PTYPES.get(kind_code),
+        ),
+        derived_levels=_dry().derived_levels,
+    )
+
+
+def test_model_freezing_drizzle_is_amber_at_a_single_point():
+    """No coverage threshold: one point of the model's own FZDZ is AMBER."""
+    ctx = _ctx([_dry()] * 19 + [_ptype(12)])
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    pm = result.per_model[0]
+    assert pm.status == AdvisoryStatus.AMBER
+    assert pm.detail.startswith("Model forecasts freezing drizzle")
+    region = pm.highlights.regions[0]
+    assert region.reason_code == "model_ptype"
+
+
+def test_model_type_never_grades_red_on_its_own():
+    ctx = _ctx([_ptype(3)] * 10)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.per_model[0].status == AdvisoryStatus.AMBER
+    assert "freezing rain" in result.per_model[0].detail
+
+
+def test_active_red_still_wins_and_names_the_model_type():
+    ctx = _ctx([_dry()] * 8 + [_ptype(12), _active_fzra()])
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    pm = result.per_model[0]
+    assert pm.status == AdvisoryStatus.RED
+    assert "Model forecasts freezing drizzle" in pm.detail
+    assert invariants.check_advisory(result) == []
+
+
+def test_ecmwf_type_amber_floors_the_card_against_a_green_majority():
+    """ECMWF is the only model with a type: without the floor it is outvoted."""
+    ctx = _multi_ctx({
+        "ecmwf": [_dry()] * 9 + [_ptype(12)], "gfs": _GREEN, "icon": _GREEN,
+    })
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.escalated_from == AdvisoryStatus.GREEN
+    assert result.representative_model == "ecmwf"
+    assert "(ecmwf only, 1 of 3 models)" in result.aggregate_detail
+    assert invariants.check_advisory(result) == []
+
+
+def test_a_primed_amber_alone_does_not_floor_the_card():
+    """Only the model's own type floors; the primed profile stays plain MAJORITY."""
+    ctx = _multi_ctx({"ecmwf": _AMBER, "gfs": _GREEN, "icon": _GREEN})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+    assert result.escalated_from is None
+
+
+def test_type_zone_tops():
+    from weatherbrief.analysis.advisories.freezing_precip import _ptype_zone_top
+    from weatherbrief.models import EnhancedCloudLayer
+
+    s = SoundingAnalysis(cloud_layers=[
+        EnhancedCloudLayer(base_ft=6000, top_ft=9000),
+        EnhancedCloudLayer(base_ft=800, top_ft=2600),
+    ])
+    assert _ptype_zone_top("freezing_drizzle", None, s) == 2600
+    assert _ptype_zone_top("freezing_rain", 3200.0, s) == 3200.0
+    assert _ptype_zone_top("ice_pellets", None, s) is None
+    assert _ptype_zone_top("freezing_drizzle", None, SoundingAnalysis()) is None
+
+
+def test_escalated_aggregate_keeps_the_representatives_mitigations():
+    """Review on #411 step 1: a floored AMBER kept no advice from its RED model."""
+    from weatherbrief.models import Mitigation, MitigationKind
+
+    def _m(model, status, mitigations=()):
+        return ModelAdvisoryResult.build(
+            model=model, status=status, detail=status.value,
+            affected=1 if status != AdvisoryStatus.GREEN else 0, total=10,
+            total_distance_nm=200.0, mitigations=list(mitigations),
+        )
+    advice = Mitigation(
+        kind=MitigationKind.ALTITUDE, addresses="x", detail="x",
+        mitigated_status=AdvisoryStatus.AMBER,
+    )
+    per_model = [
+        _m("ecmwf", AdvisoryStatus.GREEN), _m("gfs", AdvisoryStatus.RED, [advice]),
+        _m("icon", AdvisoryStatus.GREEN),
+    ]
+    result = RouteAdvisoryResult.from_per_model(
+        "freezing_precip", per_model, {}, escalate_on_red=True,
+    )
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.aggregate_mitigations == [advice]

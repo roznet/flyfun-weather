@@ -1119,6 +1119,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "({entries})",
         "es": "({entries})",
     },
+    # freezing_precip model-type tier (#411 step 2, §82). {kinds} is a list of
+    # the ``freezing_precip.ptype.*`` names, {extent} a formatted extent.
+    "freezing_precip.ptype": {
+        "en": "Model forecasts {kinds} {extent}",
+        "fr": "Le modèle prévoit {kinds} {extent}",
+        "de": "Modell sagt {kinds} vorher {extent}",
+        "es": "El modelo prevé {kinds} {extent}",
+    },
+    "freezing_precip.ptype.freezing_rain": {
+        "en": "freezing rain", "fr": "pluie verglaçante",
+        "de": "gefrierenden Regen", "es": "lluvia engelante",
+    },
+    "freezing_precip.ptype.freezing_drizzle": {
+        "en": "freezing drizzle", "fr": "bruine verglaçante",
+        "de": "gefrierenden Sprühregen", "es": "llovizna engelante",
+    },
+    "freezing_precip.ptype.ice_pellets": {
+        "en": "ice pellets", "fr": "granules de glace",
+        "de": "Eiskörner", "es": "hielo granulado",
+    },
     # The aggregate a RED escalation raised above MAJORITY (#411, §81): the
     # RED representative's sentence, then which models hold it.
     "aggregate.escalated": {
