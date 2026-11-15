@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <title>Flyfun Weather — Sign In</title>
+  <title>FlyFun Weather · Sign in</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" href="/favicon-64.png" sizes="64x64">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -14,8 +14,8 @@
 <body>
   <div class="container">
     <div class="login-panel">
-      <h1>Flyfun Weather</h1>
-      <p class="login-subtitle">Aviation weather briefings for GA pilots</p>
+      <h1>FlyFun Weather</h1>
+      <p class="login-subtitle">The weather for your trip, from a week out to wheels up.</p>
 
       <!-- FLYFUN-ICON-ART: convective-tower scene (banner proportions; grep "FLYFUN-ICON-ART"
            for the square icon SVGs in web/flyfun-weather-icon*.svg that share this motif).
@@ -89,22 +89,22 @@
       <!-- Compact "what you get" bullets -->
       <ul class="login-features">
         <li>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18 L9 8 L14 14 L21 5"/></svg>
-          Route cross-sections, GRAMET &amp; Skew-T along your flight
-        </li>
-        <li>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L3 21 H21 Z"/><path d="M12 9 V14"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>
-          Convective, icing &amp; front advisories for your route
+          Icing, cloud, storms, turbulence and wind along your route and at your level
         </li>
         <li>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 H8 L10 6 L14 18 L16 12 H20"/></svg>
-          Multi-model: ECMWF, GFS &amp; ICON, side by side
+          Where the models agree, and where they don't
+        </li>
+        <li>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5 H13"/></svg>
+          Plan on the web, take it with you on iPhone, iPad and Android
         </li>
       </ul>
 
-      <!-- Help is public (signed-out visitors get a "Sign in" link there) -->
+      <!-- First-time visitors: the product page on flyfun.aero (help stays linked below) -->
       <div class="login-learn-more">
-        <a href="/help.html" class="btn-learn-more">Learn more</a>
+        <a href="https://flyfun.aero/" class="btn-learn-more">See what it does →</a>
       </div>
 
       <div id="pending-message" class="pending-message" style="display: none;">
@@ -171,13 +171,14 @@
 
       <!-- Reassurance — pilots are cautious about OAuth -->
       <p class="login-reassure">
-        We only use your sign-in to identify you — no posting, no spam.
+        We only use your sign-in to identify you. No posting, no spam.
         Email digests are opt-in.
       </p>
 
       <p class="login-reassure login-open-source">
-        Flyfun Weather is free to use and
-        <a href="https://github.com/roznet/flyfun-weather" target="_blank" rel="noopener">open source on GitHub</a>.
+        Free, no premium tier. Built by a European pilot,
+        <a href="https://github.com/roznet/flyfun-weather" target="_blank" rel="noopener">in the open on GitHub</a>.
+        · <a href="/help.html">Help</a>
       </p>
     </div>
   </div>
