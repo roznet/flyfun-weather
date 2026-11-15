@@ -94,14 +94,14 @@ object AirportMapCatalog {
      * ends (web `linearRamp`, iOS `ForecastMapCatalog.bandScaleColor`).
      */
     private fun linearRamp(band: MapBandScale, v: Double): Color {
-        val stops = band.stops.filter { it.at != null }
+        val stops = band.stops.mapNotNull { s -> s.at?.let { it to s.color } }
         if (stops.isEmpty()) return MUTED
-        fun col(i: Int) = parseCatalogColor(stops[i].color) ?: MUTED
-        if (v <= stops.first().at!!) return col(0)
-        if (v >= stops.last().at!!) return col(stops.lastIndex)
+        fun col(i: Int) = parseCatalogColor(stops[i].second) ?: MUTED
+        if (v <= stops.first().first) return col(0)
+        if (v >= stops.last().first) return col(stops.lastIndex)
         for (i in 0 until stops.lastIndex) {
-            val a = stops[i].at!!
-            val b = stops[i + 1].at!!
+            val a = stops[i].first
+            val b = stops[i + 1].first
             if (v in a..b) {
                 val t = if (b == a) 0f else ((v - a) / (b - a)).toFloat()
                 val ca = col(i)

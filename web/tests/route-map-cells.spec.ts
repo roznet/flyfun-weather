@@ -173,7 +173,9 @@ test.describe('Briefing route map — cell overlay', () => {
   test('Cells toggle draws the corridor\'s cells with their own time', async ({ page }) => {
     await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
     await page.locator('button[data-layout="map"]').first().click();
-    const toggle = page.locator('#map-observed-cells');
+    // The overlays live in the LAYERS popover (#998 chrome): open it first.
+    await page.locator('#rm-layers summary').click();
+    const toggle = page.locator('#rm-cells');
     await expect(toggle).toBeVisible();
     await expect(toggle).not.toBeChecked();  // experimental: off by default
     await toggle.check();
@@ -196,6 +198,8 @@ test.describe('Briefing route map — cell overlay', () => {
     expect(cellRequests.length).toBeGreaterThan(0);
     expect(cellRequests[0]).toContain('south=');
 
+    // Clicking the observed panel closed the LAYERS popover: reopen it.
+    await page.locator('#rm-layers summary').click();
     await toggle.uncheck();
     await expect(page.locator('.leaflet-cells-pane path')).toHaveCount(0);
     await expect(badge).not.toContainText('Cells');
