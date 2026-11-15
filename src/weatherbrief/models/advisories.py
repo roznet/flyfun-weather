@@ -499,6 +499,12 @@ class ModelAdvisoryResult(BaseModel):
     # consensus in ``from_per_model``; never affects ``status`` or ``detail``.
     # Empty for advisories that don't read airports, and on old packs.
     airport_clauses: list[AirportClause] = Field(default_factory=list)
+    # This model's AMBER comes from a signal that must not be voted away
+    # (#411, §82: the model's own precipitation type on ``freezing_precip``).
+    # Read only by ``from_per_model(..., escalate_on_red=True)``, where it
+    # floors the aggregate at AMBER like one RED model does. False everywhere
+    # else and on old packs.
+    floors_aggregate: bool = False
 
     @classmethod
     def build(
@@ -820,7 +826,7 @@ def _escalated_detail(
 ) -> str:
     """The flagged representative's sentence, saying which models hold it.
 
-    "Freezing precipitation 40nm/400nm (10%) (gfs only, 1 of 3 models)": the
+    "Freezing precipitation 40nm/400nm (10%) (gfs: 1 of 3 models)": the
     grade was raised over a calmer majority, so the card names the minority
     it speaks for instead of reading as a consensus.
     """
@@ -910,7 +916,6 @@ class RouteAdvisoryResult(BaseModel):
         aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
         escalate_on_red: bool = False,
         locale: str | None = None,
-        amber_floor_models: frozenset[str] | set[str] = frozenset(),
     ) -> RouteAdvisoryResult:
         """Build aggregate result from per-model results.
 
@@ -925,11 +930,15 @@ class RouteAdvisoryResult(BaseModel):
         (two valid models with one RED is already RED by the tie rule). WORST
         is unaffected (it is already RED on one model).
 
-        ``amber_floor_models`` (#411 step 2, §82): models whose AMBER also
-        floors the aggregate at AMBER, because the evaluator knows that AMBER
-        comes from a signal that must not be voted away (ECMWF's own
-        precipitation type, the only model that sees freezing drizzle). Only
-        read with ``escalate_on_red``.
+        A model AMBER with ``floors_aggregate`` set (#411 step 2, §82) floors
+        the aggregate at AMBER too: the evaluator marks an AMBER that comes
+        from a signal that must not be voted away (ECMWF's own precipitation
+        type, the only model that sees freezing drizzle).
+
+        When MAJORITY already gives AMBER (or RED), nothing is escalated: the
+        majority's own representative speaks, and a lone RED model is not
+        named on the card (it stays in its per-model row). The escalation only
+        ever lifts a GREEN, or a non-RED under two or more REDs.
 
         ``aggregate_detail`` is the representative's sentence, except that any
         airport clause it prints carries the cross-model consensus category (same
@@ -947,7 +956,7 @@ class RouteAdvisoryResult(BaseModel):
                 red_models = [m for m in per_model if m.status == AdvisoryStatus.RED]
                 floor_ambers = [
                     m for m in per_model
-                    if m.status == AdvisoryStatus.AMBER and m.model in amber_floor_models
+                    if m.status == AdvisoryStatus.AMBER and m.floors_aggregate
                 ]
                 raised = _escalate_on_red(agg, len(red_models), bool(floor_ambers))
                 if raised != agg:

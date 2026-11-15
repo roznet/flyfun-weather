@@ -197,7 +197,7 @@ def test_one_red_among_greens_floors_at_amber():
     # The model that raised it speaks for it, and the card says it is alone.
     assert result.representative_model == "gfs"
     assert result.aggregate_detail.startswith("Freezing precipitation")
-    assert "(gfs only, 1 of 3 models)" in result.aggregate_detail
+    assert "(gfs: 1 of 3 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
@@ -210,7 +210,7 @@ def test_two_reds_are_red_even_against_a_larger_majority():
     assert result.aggregate_status == AdvisoryStatus.RED
     assert result.escalated_from == AdvisoryStatus.GREEN
     assert result.representative_model in {"ecmwf", "gfs"}
-    assert "(ecmwf, gfs only, 2 of 5 models)" in result.aggregate_detail
+    assert "(ecmwf, gfs: 2 of 5 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
@@ -303,8 +303,8 @@ def test_escalation_is_opt_in():
 
 
 @pytest.mark.parametrize("locale, text", [
-    ("fr", "(gfs uniquement, 1 sur 3 modèles)"),
-    ("de", "(nur gfs, 1 von 3 Modellen)"),
+    ("fr", "(gfs : 1 modèle(s) sur 3)"),
+    ("de", "(gfs: 1 von 3 Modellen)"),
 ])
 def test_escalated_note_is_localised(locale, text):
     ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
@@ -382,7 +382,7 @@ def test_ecmwf_type_amber_floors_the_card_against_a_green_majority():
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert result.escalated_from == AdvisoryStatus.GREEN
     assert result.representative_model == "ecmwf"
-    assert "(ecmwf only, 1 of 3 models)" in result.aggregate_detail
+    assert "(ecmwf: 1 of 3 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
@@ -431,3 +431,39 @@ def test_escalated_aggregate_keeps_the_representatives_mitigations():
     )
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert result.aggregate_mitigations == [advice]
+
+
+def test_floor_exemption_needs_a_green_majority_and_exactly_one_red():
+    """Review on #411 step 2: the exemption must not cover hand-written shapes."""
+    def _m(model, status):
+        return ModelAdvisoryResult.build(
+            model=model, status=status, detail=status.value,
+            affected=1 if status != AdvisoryStatus.GREEN else 0, total=10,
+            total_distance_nm=200.0,
+        )
+    reds = [_m("ecmwf", AdvisoryStatus.RED), _m("gfs", AdvisoryStatus.RED)]
+    bad = RouteAdvisoryResult(
+        advisory_id="freezing_precip", aggregate_status=AdvisoryStatus.AMBER,
+        aggregate_detail="x", per_model=reds + [_m("icon", AdvisoryStatus.GREEN)],
+        representative_model="ecmwf", escalated_from=AdvisoryStatus.GREEN,
+    )
+    assert "aggregate_is_a_model_status" in {
+        v.rule for v in invariants.check_advisory(bad)
+    }
+    wrong_origin = RouteAdvisoryResult(
+        advisory_id="freezing_precip", aggregate_status=AdvisoryStatus.AMBER,
+        aggregate_detail="x",
+        per_model=[reds[0], _m("gfs", AdvisoryStatus.GREEN), _m("icon", AdvisoryStatus.GREEN)],
+        representative_model="ecmwf", escalated_from=AdvisoryStatus.UNAVAILABLE,
+    )
+    assert "aggregate_is_a_model_status" in {
+        v.rule for v in invariants.check_advisory(wrong_origin)
+    }
+
+
+def test_floor_flag_is_on_the_model_result():
+    ctx = _multi_ctx({"ecmwf": [_dry()] * 9 + [_ptype(12)], "gfs": _AMBER})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    by = {m.model: m for m in result.per_model}
+    assert by["ecmwf"].floors_aggregate is True
+    assert by["gfs"].floors_aggregate is False  # primed profile

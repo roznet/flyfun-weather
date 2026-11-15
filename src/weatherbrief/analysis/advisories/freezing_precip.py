@@ -26,7 +26,7 @@ Across models (#411, meteorology-decisions §81): under the default MAJORITY
 aggregation one RED model floors the card at AMBER and two or more make it RED
 (``escalate_on_red`` in ``RouteAdvisoryResult.from_per_model``). It only raises
 the grade, never lowers it, and WORST is unaffected. A model AMBER on its own
-precipitation type also floors the card at AMBER (``amber_floor_models``):
+precipitation type also floors the card at AMBER (``floors_aggregate``):
 otherwise ECMWF, the only model with a type, would always be outvoted.
 """
 
@@ -122,8 +122,6 @@ class FreezingPrecipEvaluator:
         extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
 
         per_model: list[ModelAdvisoryResult] = []
-        # Models AMBER on their own precipitation type: they floor the card.
-        amber_floor_models: set[str] = set()
 
         for model in ctx.models:
             active_pts = 0
@@ -278,7 +276,6 @@ class FreezingPrecipEvaluator:
                         f"; primed profile "
                         f"{format_extent(primed_ext)}"
                     )
-                amber_floor_models.add(model)
             elif primed_pts > 0 and grade_extent(
                 primed_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
@@ -303,13 +300,18 @@ class FreezingPrecipEvaluator:
                 ))
                 continue
 
-            per_model.append(ModelAdvisoryResult.build(
+            result = ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=active_pts + ptype_pts + primed_pts, total=total,
                 total_distance_nm=ctx.total_distance_nm,
                 extent=summary.extent,
                 highlights=summary.highlights,
-            ))
+            )
+            # An AMBER from the model's own type floors the card (§82).
+            result.floors_aggregate = (
+                status == AdvisoryStatus.AMBER and ptype_pts > 0
+            )
+            per_model.append(result)
 
         # One model's freezing rain must not vanish under MAJORITY (#411,
         # meteorology-decisions §81): one RED model floors the card at AMBER,
@@ -317,7 +319,6 @@ class FreezingPrecipEvaluator:
         return RouteAdvisoryResult.from_per_model(
             "freezing_precip", per_model, params,
             escalate_on_red=True, locale=ctx.locale,
-            amber_floor_models=amber_floor_models,
         )
 
 

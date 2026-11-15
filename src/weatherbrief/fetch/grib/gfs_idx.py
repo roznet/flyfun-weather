@@ -374,6 +374,11 @@ def plan_cloud_diag_byte_ranges(
 # lat/lon grid, so no rotation and no projection.
 GFS_SOUNDING_VARIABLES = frozenset({
     "TMP", "RH", "UGRD", "VGRD", "HGT", "VVEL", "CLMR", "ICMR",
+    # Precipitating species (#411 step 3, §83): rain, snow and graupel mixing
+    # ratios, published on the pgrb2 levels (not every pgrb2b level). Optional
+    # like the cloud condensates: never in GFS_SOUNDING_MANDATORY, so a level
+    # without them is still a complete column.
+    "RWMR", "SNMR", "GRLE",
 })
 
 # Variables every sounding level must carry for the column to count as
@@ -419,6 +424,10 @@ GFS_SURFACE_FIELDS: tuple[tuple[str, str], ...] = (
     ("TCDC", "entire atmosphere"),
     ("CPOFP", "surface"),
     ("CSNOW", "surface"),
+    # Categorical freezing rain / ice pellets (0/1) at the step (#411 step 3):
+    # recorded, not graded, until the winter experiment scores them.
+    ("CFRZR", "surface"),
+    ("CICEP", "surface"),
     ("APCP", "surface"),
     ("ACPCP", "surface"),
 )

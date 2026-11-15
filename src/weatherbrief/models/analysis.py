@@ -567,6 +567,10 @@ class HourlyForecast(BaseModel):
     # ECMWF a1 ``fzra`` de-accumulated over the step, mm per hour (#411).
     # Recorded, not graded: whether it includes freezing drizzle is unchecked.
     freezing_rain_mm: Optional[float] = None
+    # GFS categorical freezing rain / ice pellets (CFRZR / CICEP) at the step
+    # (#411 step 3, §83). Recorded, not graded, until the winter experiment.
+    cat_freezing_rain: Optional[bool] = None
+    cat_ice_pellets: Optional[bool] = None
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
@@ -1062,6 +1066,10 @@ class PrecipitationAssessment(BaseModel):
     # ``surface_phase`` against that enum.
     model_freezing_type: Optional[str] = None
     freezing_rain_mm: Optional[float] = None
+    # GFS categorical flags at this hour (#411 step 3), carried for the
+    # winter experiment. Never graded here.
+    cat_freezing_rain: Optional[bool] = None
+    cat_ice_pellets: Optional[bool] = None
 
 
 class ConvectiveAssessment(BaseModel):

@@ -395,8 +395,10 @@ class TestHrrrIdxPlanningRealInventory:
     def test_unwanted_neighbours_and_fractional_level_excluded(self):
         ranges = plan_hrrr_sounding_byte_ranges(_REAL_IDX_EXCERPT)
         vars_planned = {r.variable for r in ranges}
-        for distractor in ("SPFH", "ABSV", "RWMR", "SNMR", "GRLE", "REFC"):
+        for distractor in ("SPFH", "ABSV", "REFC"):
             assert distractor not in vars_planned
+        # Precipitating species are planned since #411 step 3.
+        assert {"RWMR", "SNMR", "GRLE"} <= vars_planned
         assert all(r.level_hpa in (500, 700) for r in ranges)
 
     def test_diag_plan_matches_real_level_strings(self):

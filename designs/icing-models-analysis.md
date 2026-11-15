@@ -133,8 +133,12 @@ don't. Do not use for new gating; it is a removal candidate.
 
 True when non-trivial rain water (`qr ≥ 1e-6 kg/kg`) sits at `T < 0°C` —
 freezing-rain / large-droplet regime, physically distinct from supercooled cloud
-droplets. Requires **both** inputs, so a model publishing no `qr` (ICON-EU, GFS,
+droplets. Requires **both** inputs, so a model publishing no `qr` (ICON-EU,
 ECMWF) yields `False` meaning *not detected*, never *no supercooled rain here*.
+GFS and HRRR **do** publish rain water (`RWMR`, with `SNMR` and `GRLE`) on
+pressure levels; they are fetched since #411 step 3 (an earlier version of
+this doc said GFS had none, which was wrong). ICON-D2 (`qr`) and AROME (`crwc`)
+publish it too.
 Threshold rationale and rejected alternatives: meteorology-decisions §24.
 
 Flows through as `DerivedLevel.supercooled_rain` → `IcingZone.supercooled_rain`

@@ -188,8 +188,12 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
             f"escalated from {a.escalated_from.value} to {agg.value} but no "
             f"model holds it or is red ({', '.join(sorted(s.value for s in statuses))})",
         )
-    floor_amber = escalated and agg == AdvisoryStatus.AMBER and (
-        AdvisoryStatus.RED in statuses
+    # The only shape the floor produces that no model holds: a GREEN majority
+    # lifted to AMBER by exactly one RED model (two REDs give a held RED).
+    floor_amber = (
+        escalated and agg == AdvisoryStatus.AMBER
+        and a.escalated_from == AdvisoryStatus.GREEN
+        and sum(1 for m in a.per_model if m.status == AdvisoryStatus.RED) == 1
     )
     if (
         agg != AdvisoryStatus.UNAVAILABLE and statuses and agg not in statuses

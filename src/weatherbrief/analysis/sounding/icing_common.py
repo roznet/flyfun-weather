@@ -48,8 +48,8 @@ def is_supercooled_rain(
     Freezing rain / large-droplet regime: physically distinct from
     supercooled cloud droplets and a considerably worse airframe icing
     hazard. Requires BOTH inputs — a model that publishes no qr (ICON-EU,
-    GFS, ECMWF) yields False, which means "not detected", never "no
-    supercooled rain here".
+    ECMWF) yields False, which means "not detected", never "no supercooled
+    rain here". GFS/HRRR (RWMR, #411), ICON-D2 (qr) and AROME (crwc) do.
     """
     if rain_water_kg_kg is None or temperature_c is None:
         return False

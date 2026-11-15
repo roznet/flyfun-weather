@@ -8011,7 +8011,7 @@ noise to vote away: one transit exceeds every icing certification.
   `aggregate_is_a_model_status` invariant allows it only when `escalated_from`
   is set and a RED model exists; the representative (sentence, highlights) is
   the largest RED model, because it is the reason for the grade, and the card
-  names the minority: "(gfs only, 1 of 3 models)".
+  names the minority: "(gfs: 1 of 3 models)".
 - **Accepted consequence:** freezing drizzle will be seen by ECMWF alone once
   `ptype` is decoded (step 2), so in the default mode drizzle never exceeds
   AMBER. RED needs a second model, or WORST.
@@ -8060,7 +8060,7 @@ experiment supports it.
   is the hazard). Never RED on its own. It never changes `surface_phase`, so
   every other reader of the phase is unchanged.
 - **Cross-model:** a model AMBER on its own type floors the card at AMBER
-  (`amber_floor_models`), extending §81. Without it ECMWF, the only model with
+  (`ModelAdvisoryResult.floors_aggregate`), extending §81. Without it ECMWF, the only model with
   a type, would always be outvoted 2 to 1 and the signal would never reach the
   pilot in the default mode. A primed-profile AMBER does not floor.
 - **Cutout top:** freezing rain / ice pellets at the warm-nose base; freezing
@@ -8081,3 +8081,47 @@ experiment supports it.
 ### Measured
 
 Not yet on our pipeline. To be scored in the winter experiment (step 5).
+
+## 83. GFS and HRRR rain, snow and graupel water fetched; CFRZR / CICEP recorded, not graded (#411, step 3)
+
+**Date:** 2026-11-15 · **Issue:** #411 (step 3) · **Related:** §24 (supercooled-rain threshold), §62 (GFS GRIB-primary column), §82
+
+### Context
+
+GFS pgrb2 0.25° publishes rain (`RWMR`), snow (`SNMR`) and graupel (`GRLE`)
+mixing ratios on 22 pressure levels, and categorical `CFRZR` / `CICEP` at the
+surface. We fetched none of them, and `icing-models-analysis.md` wrongly said
+GFS had no rain water. The hindcast found `qr ≥ 1e-6 kg/kg at T < 0 °C`
+holds on GFS as it does on ICON-D2. HRRR has the same species.
+
+### Choices
+
+- **Fetch all three species**, not rain water alone, on the GFS GRIB-primary
+  column and HRRR, optional (never in `GFS_SOUNDING_MANDATORY`, like CLMR /
+  ICMR). With only `qr`, the precipitation phase partition
+  `(qs + qg) / (qr + qs + qg)` would read pure rain wherever snow falls.
+  Cost: about +15 MB per GFS hour on gfs.20261114/00z f012 (RWMR 9.1, SNMR
+  3.9, GRLE 1.9 MB over 22 levels), against ~163 MB for the column.
+- **What changes now (no grade):** GFS and HRRR take the precipitation
+  partition instead of the cloud proxy for per-level phase (the cross-section
+  precipitation bands and the digest's phase wording, which no advisory
+  grades), and their levels can carry `supercooled_rain` (display only, §24).
+  Same treatment ICON-D2 and AROME already get.
+- **`CFRZR` / `CICEP`:** read at the step (not the window average), recorded on
+  `HourlyForecast` / `PrecipitationAssessment` as `cat_freezing_rain` /
+  `cat_ice_pellets`. Not graded until the winter experiment (step 5) and
+  step 7.
+- **`qr / (qr + qs)`:** no threshold, no gate. The raw species are on every
+  level, which is what the experiment needs to score it.
+- Cache key `GFS_SOUNDING_V2` so a blob cached without the species never
+  stands in for the full set.
+
+### Rejected
+
+- Grading rain water in this step: that is the aloft SLD band of step 4.
+- Adding the species to the map / alternates snapshot column: no consumer.
+
+### Measured
+
+Sizes above, from the live `.idx`. Phase-band changes not replayed (display
+only).
