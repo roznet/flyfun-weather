@@ -67,6 +67,8 @@ ECMWF_BASE = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
 #: out: different climates, and Alaska is most of the Canadian-border noise.
 CONUS = (24.0, 50.0, -125.0, -66.0)
 MAX_ALT_FT = 25000
+#: Stored report text is capped: a real PIREP is a few hundred characters.
+MAX_REPORT_CHARS = 2000
 #: A report is matched to the nearest 3-hourly model valid time.
 VALID_STEP_H = 3
 MODELS = ("gfs", "ecmwf")
@@ -226,6 +228,9 @@ def parse_pirep_csv(text: str) -> tuple[int, list[Pirep]]:
     """Parse one IEM CSV download. Returns (rows read, reports kept)."""
     rows = 0
     kept: dict[tuple, Pirep] = {}
+    # IEM occasionally carries a garbled report hundreds of KB long (2025-01-14);
+    # the default 128 KB field limit would abort the whole day.
+    csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
     for row in csv.DictReader(io.StringIO(text)):
         rows += 1
         try:
@@ -249,7 +254,7 @@ def parse_pirep_csv(text: str) -> tuple[int, list[Pirep]]:
             continue
         kept[key] = Pirep(valid, lat, lon, alt, aircraft,
                           None if icing in (None, "None") else icing,
-                          row.get("REPORT") or "", truth)
+                          (row.get("REPORT") or "")[:MAX_REPORT_CHARS], truth)
     return rows, list(kept.values())
 
 
