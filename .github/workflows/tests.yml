@@ -87,7 +87,7 @@ jobs:
 
   e2e:
     name: playwright
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest is 26.04; Playwright chromium does not support it yet
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
