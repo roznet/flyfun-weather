@@ -1,90 +1,70 @@
-/** Tests for route-map segment style computation. */
+/** Tests for route-map segment style computation (#998: one metric drives
+ *  colour and width; a segment's value aggregates its endpoints per the
+ *  catalog; no value draws grey at the thinnest width). */
 
 import { describe, it, expect } from 'vitest';
 import { computeSegmentStyles } from '../../ts/visualization/route-map/segment-style';
-import type { MapMetric } from '../../ts/visualization/route-map/metrics';
-import { makeVizPoint } from './fixtures/viz-point';
+import {
+  getMapMetricById, ROUTE_NO_DATA_COLOR, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX,
+} from '../../ts/visualization/route-map/metrics';
+import { makeVizPoint, makeIcingZone } from './fixtures/viz-point';
 
-/** Build a stub MapMetric where getValue/getColor/getWidth are caller-controlled. */
-function stubMetric(
-  getValue: (idx: number) => number | null,
-  getColor: (v: number) => string = (v) => `c-${v}`,
-  getWidth: (v: number) => number = (v) => v,
-): MapMetric {
-  let callIdx = 0;
-  return {
-    id: 'stub',
-    label: 'stub',
-    unit: '',
-    altitudeDependent: false,
-    getValue: () => getValue(callIdx++),
-    getColor,
-    getWidth,
-    formatValue: (v) => String(v),
-    legendStops: [],
-  };
+function metric(id: string) {
+  const m = getMapMetricById(id);
+  if (!m) throw new Error(`no metric ${id}`);
+  return m;
 }
 
 describe('computeSegmentStyles', () => {
   it('returns N-1 segments for N points', () => {
     const points = [makeVizPoint({ distanceNm: 0 }), makeVizPoint({ distanceNm: 10 }), makeVizPoint({ distanceNm: 20 })];
-    const styles = computeSegmentStyles(points, null, null, 5000);
-    expect(styles).toHaveLength(2);
+    expect(computeSegmentStyles(points, metric('cloud-cover-total'), 5000)).toHaveLength(2);
   });
 
   it('returns empty array for single point', () => {
-    const styles = computeSegmentStyles([makeVizPoint()], null, null, 5000);
-    expect(styles).toHaveLength(0);
+    expect(computeSegmentStyles([makeVizPoint()], metric('cloud-cover-total'), 5000)).toHaveLength(0);
   });
 
-  it('uses default color/weight when no metrics provided', () => {
-    const points = [makeVizPoint(), makeVizPoint()];
-    const styles = computeSegmentStyles(points, null, null, 5000);
-    expect(styles[0]).toEqual({ color: '#2563eb', weight: 15 });
+  it('draws no-data grey at the thinnest width without a metric', () => {
+    const styles = computeSegmentStyles([makeVizPoint(), makeVizPoint()], null, 5000);
+    expect(styles[0]).toEqual({ color: ROUTE_NO_DATA_COLOR, weight: ROUTE_WEIGHT_MIN });
   });
 
-  it('averages endpoint values when both available', () => {
-    const points = [makeVizPoint(), makeVizPoint()];
-    let captured: number | null = null;
-    const colorMetric = stubMetric(
-      (i) => [10, 20][i] ?? null,
-      (v) => { captured = v; return '#abc'; },
-    );
-    const styles = computeSegmentStyles(points, colorMetric, null, 0);
-    expect(captured).toBe(15);
-    expect(styles[0].color).toBe('#abc');
+  it('draws no-data grey when both endpoints have no value', () => {
+    // nwp-ceiling reads nwpCloudDiag, absent on the default fixture.
+    const styles = computeSegmentStyles([makeVizPoint(), makeVizPoint()], metric('nwp-ceiling'), 5000);
+    expect(styles[0]).toEqual({ color: ROUTE_NO_DATA_COLOR, weight: ROUTE_WEIGHT_MIN });
   });
 
-  it('uses available endpoint when other is null', () => {
-    const points = [makeVizPoint(), makeVizPoint()];
-    let captured: number | null = null;
-    const colorMetric = stubMetric(
-      (i) => [null, 42][i] ?? null,
-      (v) => { captured = v; return '#fff'; },
-    );
-    computeSegmentStyles(points, colorMetric, null, 0);
-    expect(captured).toBe(42);
+  it('averages endpoints for a non-hazard metric', () => {
+    const m = metric('cloud-cover-total');
+    const styles = computeSegmentStyles(
+      [makeVizPoint({ cloudCoverTotalPct: 20 }), makeVizPoint({ cloudCoverTotalPct: 80 })], m, 0);
+    expect(styles[0].color).toBe(m.getColor(50));
+    expect(styles[0].weight).toBeCloseTo(m.getWidth(50), 5);
   });
 
-  it('falls back to default color when both endpoints null', () => {
-    const points = [makeVizPoint(), makeVizPoint()];
-    const colorMetric = stubMetric(() => null);
-    const styles = computeSegmentStyles(points, colorMetric, null, 0);
-    expect(styles[0].color).toBe('#2563eb');
+  it('takes the worse endpoint for a hazard, so one bad point is never averaged away', () => {
+    const m = metric('icing-risk-at-level');
+    const clear = makeVizPoint();
+    const severe = makeVizPoint({ icingZones: [makeIcingZone({ baseFt: 0, topFt: 10000, risk: 'severe' })] });
+    const styles = computeSegmentStyles([clear, severe], m, 5000);
+    expect(styles[0].color).toBe(m.getColor(3));
   });
 
-  it('color and width metrics evaluated independently', () => {
-    const points = [makeVizPoint(), makeVizPoint()];
-    const colorMetric = stubMetric(
-      (i) => [5, 15][i] ?? null,
-      (v) => `color-${v}`,
-    );
-    const widthMetric = stubMetric(
-      (i) => [100, 200][i] ?? null,
-      undefined,
-      (v) => v / 10,
-    );
-    const styles = computeSegmentStyles(points, colorMetric, widthMetric, 0);
-    expect(styles[0]).toEqual({ color: 'color-10', weight: 15 }); // (100+200)/2/10
+  it('uses the available endpoint when the other has no value', () => {
+    const m = metric('visibility');
+    const styles = computeSegmentStyles(
+      [makeVizPoint({ visibilityM: null }), makeVizPoint({ visibilityM: 2000 })], m, 0);
+    expect(styles[0].color).toBe(m.getColor(2000));
+  });
+
+  it('keeps every weight within the route range', () => {
+    const m = metric('wind-speed');
+    for (const kt of [0, 10, 60, 120]) {
+      const [s] = computeSegmentStyles([makeVizPoint({ windSpeedKt: kt }), makeVizPoint({ windSpeedKt: kt })], m, 0);
+      expect(s.weight).toBeGreaterThanOrEqual(ROUTE_WEIGHT_MIN);
+      expect(s.weight).toBeLessThanOrEqual(ROUTE_WEIGHT_MAX);
+    }
   });
 });

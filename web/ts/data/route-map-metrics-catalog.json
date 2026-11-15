@@ -1,0 +1,418 @@
+{
+  "_comment": "Briefing route-map metric catalog (#998): which metrics colour the route line on the briefing map, how each is coloured and sized, and its legend. Single source of truth imported by the web bundle (web/ts/visualization/route-map/metrics.ts) and served ETag-cacheable to the apps under `route_maps` in /api/help/catalog (api/help.py). Bundled copies for offline: app/flyfun-weather/flyfun-weather/Resources/ and app/android/app/src/main/assets/ (tests/test_help_catalog.py keeps them identical). `value` names the extractor each client applies to a route viz point (a client that does not know an extractor skips the metric, so a new metric never draws empty on an old app); `aggregation` is how a segment combines its two endpoints (`max` for hazards, so one bad endpoint is never averaged away). `scale` points into `scales.bands`, the same vocabulary as map-metrics-catalog.json (`threshold_asc` first stop with value < lt, `threshold_desc` first stop with value >= gte after `convert`, `gray_ramp`), plus `linear`: colour interpolated between `stops[].at`, clamped at the ends. `width` maps the value onto the route line weight: thinnest at `thin_at`, thickest at `thick_at` (either order). Legend items carry a `value` the client colours through the metric's own scale, so a legend swatch can never disagree with the line. A missing value draws `no_data_color` at the thinnest width.",
+  "version": 1,
+  "default_metric": "cloud-cover-total",
+  "no_data_color": "#94a3b8",
+  "groups": [
+    { "key": "at_altitude", "label": "At altitude", "i18n_key": "map.group.at_altitude" },
+    { "key": "along_route", "label": "Along route", "i18n_key": "map.group.along_route" }
+  ],
+  "scales": {
+    "bands": {
+      "risk_rank": {
+        "kind": "threshold_asc",
+        "stops": [
+          { "lt": 1, "color": "#22c55e" },
+          { "lt": 2, "color": "#facc15" },
+          { "lt": 3, "color": "#f97316" },
+          { "lt": 4, "color": "#ef4444" }
+        ],
+        "default": "#991b1b"
+      },
+      "agreement_rank": {
+        "kind": "threshold_asc",
+        "stops": [
+          { "lt": 1, "color": "#22c55e" },
+          { "lt": 2, "color": "#f97316" }
+        ],
+        "default": "#ef4444"
+      },
+      "sfip": {
+        "kind": "threshold_asc",
+        "stops": [
+          { "lt": 15, "color": "#22c55e" },
+          { "lt": 30, "color": "#facc15" },
+          { "lt": 55, "color": "#f97316" }
+        ],
+        "default": "#ef4444"
+      },
+      "cloud_cover_pct": { "kind": "gray_ramp", "base": 220, "span": 160, "blue_boost": 10 },
+      "headwind_kt": {
+        "kind": "linear",
+        "stops": [
+          { "at": 0, "color": "#ffffff" },
+          { "at": 30, "color": "#ff3737" }
+        ]
+      },
+      "tailwind_kt": {
+        "kind": "linear",
+        "stops": [
+          { "at": 0, "color": "#ffffff" },
+          { "at": 30, "color": "#37c337" }
+        ]
+      },
+      "wind_speed_kt": {
+        "kind": "threshold_asc",
+        "stops": [
+          { "lt": 10, "color": "#93c5fd" },
+          { "lt": 20, "color": "#3b82f6" },
+          { "lt": 30, "color": "#f59e0b" },
+          { "lt": 45, "color": "#ef4444" }
+        ],
+        "default": "#991b1b"
+      },
+      "crosswind_kt": {
+        "kind": "linear",
+        "stops": [
+          { "at": 0, "color": "#ffffff" },
+          { "at": 25, "color": "#783aed" }
+        ]
+      },
+      "cape_jkg": {
+        "kind": "linear",
+        "stops": [
+          { "at": 0, "color": "#22c55e" },
+          { "at": 1000, "color": "#ffbb15" },
+          { "at": 2000, "color": "#dc2626" }
+        ]
+      },
+      "ceiling_ft": {
+        "kind": "threshold_asc",
+        "stops": [
+          { "lt": 500, "color": "#8e24aa" },
+          { "lt": 1000, "color": "#dc3545" },
+          { "lt": 3000, "color": "#3b82f6" }
+        ],
+        "default": "#22c55e"
+      },
+      "visibility_m": {
+        "kind": "threshold_desc",
+        "convert": "m_to_sm",
+        "stops": [
+          { "gte": 4.97098, "color": "#22c55e" },
+          { "gte": 3, "color": "#3b82f6" },
+          { "gte": 1, "color": "#ef4444" }
+        ],
+        "default": "#a855f7"
+      },
+      "temperature_c": {
+        "kind": "linear",
+        "stops": [
+          { "at": -20, "color": "#1e50dc" },
+          { "at": 0, "color": "#9bcdff" },
+          { "at": 20, "color": "#ffffd7" },
+          { "at": 40, "color": "#ff4628" }
+        ]
+      }
+    }
+  },
+  "metrics": [
+    {
+      "key": "temp-at-level",
+      "label": "Temperature at FL",
+      "i18n_key": "map.temp-at-level",
+      "unit": "°C",
+      "group": "at_altitude",
+      "uses_altitude": true,
+      "value": "temperature_at_level_c",
+      "aggregation": "average",
+      "scale": "temperature_c",
+      "width": { "thin_at": 5, "thick_at": -20 },
+      "format": { "kind": "number", "decimals": 1, "suffix": "°C" },
+      "legend": [
+        { "value": -20, "label": "-20°C" },
+        { "value": -10, "label": "-10°C" },
+        { "value": 0, "label": "0°C" },
+        { "value": 10, "label": "10°C" }
+      ]
+    },
+    {
+      "key": "icing-risk-at-level",
+      "label": "Icing Risk at FL",
+      "i18n_key": "map.icing-risk-at-level",
+      "unit": "",
+      "group": "at_altitude",
+      "uses_altitude": true,
+      "value": "icing_risk_at_level_rank",
+      "aggregation": "max",
+      "scale": "risk_rank",
+      "width": { "thin_at": 0, "thick_at": 3 },
+      "format": { "kind": "rank", "labels": ["none", "light", "moderate", "severe", "extreme"] },
+      "legend": [
+        { "value": 0, "label": "None", "i18n_key": "map.legend.none" },
+        { "value": 1, "label": "Light", "i18n_key": "map.legend.light" },
+        { "value": 2, "label": "Moderate", "i18n_key": "map.legend.moderate" },
+        { "value": 3, "label": "Severe", "i18n_key": "map.legend.severe" }
+      ]
+    },
+    {
+      "key": "sfip-at-level",
+      "label": "SFIP at FL",
+      "i18n_key": "map.sfip-at-level",
+      "unit": "",
+      "group": "at_altitude",
+      "uses_altitude": true,
+      "value": "sfip_at_level",
+      "aggregation": "max",
+      "scale": "sfip",
+      "width": { "thin_at": 0, "thick_at": 100 },
+      "format": { "kind": "number", "decimals": 0, "prefix": "SFIP " },
+      "legend": [
+        { "value": 0, "label": "None <15", "i18n_key": "map.legend.sfipNone" },
+        { "value": 15, "label": "Light 15-30", "i18n_key": "map.legend.sfipLight" },
+        { "value": 30, "label": "Moderate 30-55", "i18n_key": "map.legend.sfipModerate" },
+        { "value": 55, "label": "Severe 55+", "i18n_key": "map.legend.sfipSevere" }
+      ]
+    },
+    {
+      "key": "cat-risk-at-level",
+      "label": "CAT Risk at FL",
+      "i18n_key": "map.cat-risk-at-level",
+      "unit": "",
+      "group": "at_altitude",
+      "uses_altitude": true,
+      "value": "cat_risk_at_level_rank",
+      "aggregation": "max",
+      "scale": "risk_rank",
+      "width": { "thin_at": 0, "thick_at": 3 },
+      "format": { "kind": "rank", "labels": ["none", "light", "moderate", "severe", "extreme"] },
+      "legend": [
+        { "value": 0, "label": "None", "i18n_key": "map.legend.none" },
+        { "value": 1, "label": "Light", "i18n_key": "map.legend.light" },
+        { "value": 2, "label": "Moderate", "i18n_key": "map.legend.moderate" },
+        { "value": 3, "label": "Severe", "i18n_key": "map.legend.severe" }
+      ]
+    },
+    {
+      "key": "cloud-at-level",
+      "label": "Cloud at FL",
+      "i18n_key": "map.cloud-at-level",
+      "unit": "%",
+      "group": "at_altitude",
+      "uses_altitude": true,
+      "value": "cloud_at_level_pct",
+      "aggregation": "average",
+      "scale": "cloud_cover_pct",
+      "width": { "thin_at": 0, "thick_at": 100 },
+      "format": { "kind": "number", "decimals": 0, "suffix": "%" },
+      "legend": [
+        { "value": 0, "label": "Clear", "i18n_key": "map.clear" },
+        { "value": 30, "label": "SCT" },
+        { "value": 70, "label": "BKN" },
+        { "value": 100, "label": "OVC" }
+      ]
+    },
+    {
+      "key": "cloud-cover-total",
+      "label": "Cloud Cover (Total)",
+      "i18n_key": "map.cloud-cover-total",
+      "unit": "%",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "cloud_cover_total_pct",
+      "aggregation": "average",
+      "scale": "cloud_cover_pct",
+      "width": { "thin_at": 0, "thick_at": 100 },
+      "format": { "kind": "number", "decimals": 0, "suffix": "%" },
+      "legend": [
+        { "value": 0, "label": "Clear", "i18n_key": "map.clear" },
+        { "value": 25, "label": "25%" },
+        { "value": 50, "label": "50%" },
+        { "value": 75, "label": "75%" },
+        { "value": 100, "label": "Overcast", "i18n_key": "map.overcast" }
+      ]
+    },
+    {
+      "key": "cloud-cover-low",
+      "label": "Cloud Cover (Low)",
+      "i18n_key": "map.cloud-cover-low",
+      "unit": "%",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "cloud_cover_low_pct",
+      "aggregation": "average",
+      "scale": "cloud_cover_pct",
+      "width": { "thin_at": 0, "thick_at": 100 },
+      "format": { "kind": "number", "decimals": 0, "suffix": "%" },
+      "legend": [
+        { "value": 0, "label": "Clear", "i18n_key": "map.clear" },
+        { "value": 25, "label": "25%" },
+        { "value": 50, "label": "50%" },
+        { "value": 75, "label": "75%" },
+        { "value": 100, "label": "Overcast", "i18n_key": "map.overcast" }
+      ]
+    },
+    {
+      "key": "nwp-ceiling",
+      "label": "NWP Ceiling",
+      "i18n_key": "map.nwp-ceiling",
+      "unit": "ft",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "nwp_ceiling_ft",
+      "aggregation": "average",
+      "scale": "ceiling_ft",
+      "width": { "thin_at": 5000, "thick_at": 0 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " ft" },
+      "legend": [
+        { "value": 300, "label": "LIFR <500" },
+        { "value": 700, "label": "IFR <1000" },
+        { "value": 2000, "label": "MVFR <3000" },
+        { "value": 5000, "label": "VFR 3000+" }
+      ]
+    },
+    {
+      "key": "visibility",
+      "label": "Visibility",
+      "i18n_key": "map.visibility",
+      "unit": "km",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "visibility_m",
+      "aggregation": "average",
+      "scale": "visibility_m",
+      "width": { "thin_at": 10000, "thick_at": 0 },
+      "format": { "kind": "number", "decimals": 1, "multiply": 0.001, "suffix": " km" },
+      "legend": [
+        { "value": 9000, "label": "VFR 8 km+" },
+        { "value": 6000, "label": "MVFR 3 SM" },
+        { "value": 3000, "label": "IFR 1 SM" },
+        { "value": 1000, "label": "LIFR <1 SM" }
+      ]
+    },
+    {
+      "key": "convective-risk",
+      "label": "Convective Risk",
+      "i18n_key": "map.convective-risk",
+      "unit": "",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "convective_risk_rank",
+      "aggregation": "max",
+      "scale": "risk_rank",
+      "width": { "thin_at": 0, "thick_at": 4 },
+      "format": { "kind": "rank", "labels": ["none", "low", "moderate", "high", "extreme"] },
+      "legend": [
+        { "value": 0, "label": "None", "i18n_key": "map.legend.none" },
+        { "value": 1, "label": "Low", "i18n_key": "map.legend.low" },
+        { "value": 2, "label": "Moderate", "i18n_key": "map.legend.moderate" },
+        { "value": 3, "label": "High", "i18n_key": "map.legend.high" },
+        { "value": 4, "label": "Extreme", "i18n_key": "map.legend.extreme" }
+      ]
+    },
+    {
+      "key": "cape",
+      "label": "CAPE",
+      "i18n_key": "map.cape",
+      "unit": "J/kg",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "cape_surface_jkg",
+      "aggregation": "average",
+      "scale": "cape_jkg",
+      "width": { "thin_at": 0, "thick_at": 2000 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " J/kg" },
+      "legend": [
+        { "value": 0, "label": "0" },
+        { "value": 500, "label": "500" },
+        { "value": 1000, "label": "1000" },
+        { "value": 2000, "label": "2000+" }
+      ]
+    },
+    {
+      "key": "headwind",
+      "label": "Headwind",
+      "i18n_key": "map.headwind",
+      "unit": "kt",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "headwind_kt",
+      "aggregation": "average",
+      "scale": "headwind_kt",
+      "width": { "thin_at": 0, "thick_at": 30 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " kt HW" },
+      "legend": [
+        { "value": 0, "label": "Calm", "i18n_key": "map.calm" },
+        { "value": 10, "label": "10 kt" },
+        { "value": 20, "label": "20 kt" },
+        { "value": 30, "label": "30 kt" }
+      ]
+    },
+    {
+      "key": "tailwind",
+      "label": "Tailwind",
+      "i18n_key": "map.tailwind",
+      "unit": "kt",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "tailwind_kt",
+      "aggregation": "average",
+      "scale": "tailwind_kt",
+      "width": { "thin_at": 0, "thick_at": 30 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " kt TW" },
+      "legend": [
+        { "value": 0, "label": "Calm", "i18n_key": "map.calm" },
+        { "value": 10, "label": "10 kt" },
+        { "value": 20, "label": "20 kt" },
+        { "value": 30, "label": "30 kt" }
+      ]
+    },
+    {
+      "key": "wind-speed",
+      "label": "Wind Speed",
+      "i18n_key": "map.wind-speed",
+      "unit": "kt",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "wind_speed_kt",
+      "aggregation": "average",
+      "scale": "wind_speed_kt",
+      "width": { "thin_at": 0, "thick_at": 60 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " kt" },
+      "legend": [
+        { "value": 5, "label": "<10 kt" },
+        { "value": 15, "label": "10-20" },
+        { "value": 25, "label": "20-30" },
+        { "value": 37, "label": "30-45" },
+        { "value": 50, "label": "45+" }
+      ]
+    },
+    {
+      "key": "crosswind",
+      "label": "Crosswind",
+      "i18n_key": "map.crosswind",
+      "unit": "kt",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "crosswind_kt",
+      "aggregation": "average",
+      "scale": "crosswind_kt",
+      "width": { "thin_at": 0, "thick_at": 25 },
+      "format": { "kind": "number", "decimals": 0, "suffix": " kt XW" },
+      "legend": [
+        { "value": 0, "label": "0 kt" },
+        { "value": 10, "label": "10 kt" },
+        { "value": 20, "label": "20 kt" },
+        { "value": 25, "label": "25+" }
+      ]
+    },
+    {
+      "key": "model-agreement",
+      "label": "Model Agreement",
+      "i18n_key": "map.model-agreement",
+      "unit": "",
+      "group": "along_route",
+      "uses_altitude": false,
+      "value": "model_agreement_rank",
+      "aggregation": "max",
+      "scale": "agreement_rank",
+      "width": { "thin_at": 0, "thick_at": 2 },
+      "format": { "kind": "rank", "labels": ["good", "moderate", "poor"] },
+      "legend": [
+        { "value": 0, "label": "Good", "i18n_key": "map.legend.good" },
+        { "value": 1, "label": "Moderate", "i18n_key": "map.legend.moderate" },
+        { "value": 2, "label": "Poor", "i18n_key": "map.legend.poor" }
+      ]
+    }
+  ]
+}

@@ -55,9 +55,9 @@ import {
   peakPointPosition,
   representativeModel,
 } from './visualization/cross-section/advisory-highlights';
-import { renderVizControls, renderRouteGraphControls, renderMapControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
+import { renderVizControls, renderRouteGraphControls, renderCompareControls, type MapForecastOverlayControls } from './visualization/controls/panel';
 import { corridorBounds, fetchObservedFlashes, fetchObservedFrames, fetchObservedLegends, type ObservedFlashPoint } from './visualization/route-map/observed-overlay';
-import { SATELLITE_SOURCE, isTiledSource, resolveObservedSelection, type ObservedFramesInfo } from './visualization/route-map/observed-overlay-geometry';
+import { SATELLITE_SOURCE, OBSERVED_OVERLAY_OPTIONS, isTiledSource, resolveObservedSelection, type ObservedFramesInfo } from './visualization/route-map/observed-overlay-geometry';
 import { attachInteraction, type InteractionHandle } from './visualization/cross-section/interaction';
 import { CompareSectionRenderer, type CompareModelData } from './visualization/cross-section/compare-renderer';
 import { attachCompareInteraction, type CompareInteractionHandle } from './visualization/cross-section/compare-interaction';
@@ -68,13 +68,13 @@ import { attachRouteGraphInteraction, type RouteGraphInteractionHandle } from '.
 import { RouteMapRenderer, type MapFrontLine } from './visualization/route-map/renderer';
 import { fetchHewsonFronts } from './adapters/hewson-map-adapter';
 import type { RouteFrontsManifest } from './types/fronts';
-import { getMapMetricById, MAP_METRIC_NONE } from './visualization/route-map/metrics';
+import { resolveMapMetric } from './visualization/route-map/metrics';
 import { fetchForecastMap, fetchAvailableDays, type ForecastMapResponse, type DayAvailability } from './adapters/maps-adapter';
 import { FORECAST_METRICS, type ForecastMetric } from './visualization/weather-map-format';
 import { resolveOverlaySlot, formatForecastTime, forecastMapUrl } from './visualization/route-map/forecast-overlay';
 import { attachMapInteraction, type MapInteractionHandle } from './visualization/route-map/interaction';
-import { renderMapLegend } from './visualization/route-map/legend';
-import { renderAltitudeSlider } from './visualization/route-map/altitude-slider';
+import { renderMapChrome, type MapChromeObserved } from './visualization/route-map/map-chrome';
+import { forecastLegend } from './visualization/weather-map';
 import { initTheme } from './theme';
 import { setUnitsPreference, setFlightRegion, regionFromIcaos } from './units';
 import { track, trackOncePerBriefing, setBriefingContext, EVENTS } from './analytics/track';
@@ -118,7 +118,6 @@ function buildXsectionSnapshotProps(
     route_graph_left_metric: v.routeGraphLeftMetric,
     route_graph_right_metric: v.routeGraphRightMetric,
     map_color_metric: v.mapColorMetric,
-    map_width_metric: v.mapWidthMetric,
     layers,
   };
 }
@@ -332,6 +331,41 @@ function refreshObservedFrames(sources: string[], requestRerender: () => void): 
   }
 }
 
+/** Which imagery sources this briefing carries, keyed by source id. */
+function observedAvailability(data: VizRouteData): Record<string, boolean> {
+  const o = data.observed;
+  return {
+    opera_dbzh: !!o?.reflectivity,
+    opera_rate: !!o?.rainRate,
+    eumetsat_ctth: !!o?.cloudTops,
+    eumetsat_ctth_temp: !!o?.cloudTops,
+  };
+}
+
+/** The LAYERS menu's Observed section, or `null` when nothing was collected. */
+function observedChromeState(data: VizRouteData, settings: BriefingState['vizSettings']): MapChromeObserved | null {
+  const o = data.observed;
+  if (!o || !(o.reflectivity || o.rainRate || o.cloudTops || o.lightning)) return null;
+  const available = observedAvailability(data);
+  const needs: Record<string, boolean> = {
+    reflectivity: !!o.reflectivity, rainRate: !!o.rainRate, cloudTops: !!o.cloudTops,
+  };
+  return {
+    options: OBSERVED_OVERLAY_OPTIONS
+      .filter((opt) => !opt.needs || needs[opt.needs])
+      .map((opt) => ({ id: opt.id, label: t(opt.labelKey) })),
+    selected: resolveObservedSelection(settings.observedOverlay, available),
+    satellite: settings.observedSatellite !== false,
+    lightning: o.lightning ? settings.observedLightning !== false : null,
+    cells: settings.observedCells === true,
+    opacity: settings.observedOverlayOpacity ?? 0.75,
+  };
+}
+
+// Hide on the route map (#998): this page view only, not persisted. Hidden
+// also widens the map (the cross-section steps aside), Show restores it.
+let mapChromeHidden = false;
+
 function updateObservedOverlay(
   data: VizRouteData,
   renderer: RouteMapRenderer,
@@ -349,18 +383,11 @@ function updateObservedOverlay(
   // The pilot's pick, falling back only when the chosen source is not in this
   // briefing. Reflectivity is the default elsewhere: highest cadence, and the
   // one that answers "is that cell on my route".
-  const chosen = briefingStore.getState().vizSettings.observedOverlay;
-  const availableFor: Record<string, boolean> = {
-    opera_dbzh: !!observed.reflectivity,
-    opera_rate: !!observed.rainRate,
-    eumetsat_ctth: !!observed.cloudTops,
-    eumetsat_ctth_temp: !!observed.cloudTops,
-    eumetsat_li: !!observed.lightning,
-  };
-  const wanted = resolveObservedSelection(chosen, availableFor);
-  // Lightning is points, not a raster: selecting it draws no imagery at all.
-  const showFlashes = wanted === 'eumetsat_li';
-  const imagery = showFlashes || !wanted ? null : wanted;
+  const settings = briefingStore.getState().vizSettings;
+  const wanted = resolveObservedSelection(settings.observedOverlay, observedAvailability(data));
+  // Lightning is points with its own toggle (#998), drawn with any imagery.
+  const showFlashes = settings.observedLightning !== false && !!observed.lightning;
+  const imagery = wanted || null;
   renderer.setObservedSource(imagery);
   renderer.setObservedOpacity(briefingStore.getState().vizSettings.observedOverlayOpacity ?? 0.75);
 
@@ -398,8 +425,6 @@ function updateObservedOverlay(
 
   const bounds = corridorBounds(data, observed.radiusNm);
   if (!showFlashes || !observed.lightning || !bounds) {
-    // One measurement at a time: with a raster selected, lightning points on
-    // top would leave a colour on the map whose source is ambiguous.
     renderer.setObservedFlashes([]);
     renderer.refreshObserved();
     return;
@@ -1766,9 +1791,7 @@ async function init(): Promise<void> {
     const routeGraphContainer = document.getElementById('route-graph-container');
     const routeGraphControlsContainer = document.getElementById('route-graph-controls');
     const mapContainer = document.getElementById('map-container');
-    const mapControlsContainer = document.getElementById('map-controls');
-    const mapLegendContainer = document.getElementById('map-legend');
-    const mapSliderContainer = document.getElementById('map-altitude-slider');
+    const mapChromeContainer = document.getElementById('map-chrome');
     if (!vizSection || !canvasContainer || !controlsContainer) return;
 
     if (!state.routeAnalyses) {
@@ -2005,19 +2028,15 @@ async function init(): Promise<void> {
 
     // --- Route map ---
     if (showMap && mapContainer) {
-      const colorMetric = getMapMetricById(state.vizSettings.mapColorMetric) ?? null;
-      const widthId = state.vizSettings.mapWidthMetric;
-      const widthMetric = widthId === MAP_METRIC_NONE ? null : (getMapMetricById(widthId) ?? null);
+      const metric = resolveMapMetric(state.vizSettings.mapColorMetric);
       const altFt = state.vizSettings.mapAltitudeFt ?? data.cruiseAltitudeFt;
-      const isAltDependent = (colorMetric?.altitudeDependent || widthMetric?.altitudeDependent) ?? false;
 
       if (!mapRenderer) {
         mapRenderer = new RouteMapRenderer(mapContainer);
       }
 
       mapRenderer.setData(data);
-      mapRenderer.setColorMetric(colorMetric);
-      mapRenderer.setWidthMetric(widthMetric);
+      mapRenderer.setColorMetric(metric);
       mapRenderer.setAltitude(altFt);
       mapRenderer.setShowFronts(state.vizSettings.mapFrontsVisible ?? false);
       mapRenderer.setSelectedPointIndex(state.selectedPointIndex ?? -1);
@@ -2039,10 +2058,10 @@ async function init(): Promise<void> {
 
       // Attach or update map interaction
       if (mapInteraction) {
-        mapInteraction.update(data, colorMetric, widthMetric, altFt);
+        mapInteraction.update(data, metric, altFt);
       } else {
         mapInteraction = attachMapInteraction(
-          mapRenderer, data, colorMetric, widthMetric, altFt, {
+          mapRenderer, data, metric, altFt, {
             onSelectPoint: (idx) => store.getState().setSelectedPoint(idx),
             onHover: (idx) => {
               const liveState = store.getState();
@@ -2065,50 +2084,48 @@ async function init(): Promise<void> {
         );
       }
 
-      // Map controls
-      if (mapControlsContainer) {
-        renderMapControls(mapControlsContainer, state.vizSettings, {
-          onFrontsToggle: (visible) => store.getState().setMapFrontsVisible(visible),
-          onForecastOverlayToggle: (visible) => store.getState().setMapForecastOverlayVisible(visible),
-          onForecastMetricChange: (metricId) => store.getState().setMapForecastMetric(metricId),
-          onObservedOverlayChange: (source) => store.getState().setObservedOverlay(source),
-          onObservedOpacityChange: (o) => store.getState().setObservedOverlayOpacity(o),
-          onObservedSatelliteToggle: (show) => store.getState().setObservedSatellite(show),
-          onObservedCellsToggle: (show) => store.getState().setObservedCells(show),
-        }, data.fronts != null, forecastOverlayControls(state), {
-          // Only offer what this briefing actually carries: an overlay that
-          // renders an empty PNG is worse than an absent menu entry, because
-          // the pilot cannot tell "nothing there" from "not collected".
-          reflectivity: !!data.observed?.reflectivity,
-          rainRate: !!data.observed?.rainRate,
-          cloudTops: !!data.observed?.cloudTops,
-          lightning: !!data.observed?.lightning,
-        });
-      }
-
-      // Legend
-      if (mapLegendContainer) {
-        renderMapLegend(mapLegendContainer, {
-          colorMetricId: state.vizSettings.mapColorMetric,
-          widthMetricId: widthId,
-          colorMetric,
-          widthMetric,
+      // The #996-style chrome over the map (#998): stepper, Hide, SHOWING /
+      // MODEL / LAYERS, legend, Fit route, Open full forecast map.
+      if (mapChromeContainer) {
+        const fo = forecastOverlayControls(state);
+        const renderer = mapRenderer;
+        renderMapChrome(mapChromeContainer, {
+          hidden: mapChromeHidden,
+          metric,
+          altitudeFt: altFt,
+          ceilingFt: data.flightCeilingFt,
+          models: availableModels,
+          selectedModel: state.selectedModel,
+          airports: fo?.available ? {
+            visible: fo.visible,
+            metric: fo.metric,
+            modelSupported: fo.modelSupported,
+            model: fo.model,
+            timeLabel: fo.timeLabel,
+            fullMapUrl: fo.fullMapUrl,
+            legend: forecastLegend(fo.metric as ForecastMetric),
+          } : null,
+          observed: observedChromeState(data, state.vizSettings),
+          fronts: data.fronts != null ? (state.vizSettings.mapFrontsVisible ?? false) : null,
         }, {
-          onColorMetricChange: (id) => store.getState().setMapColorMetric(id),
-          onWidthMetricChange: (id) => store.getState().setMapWidthMetric(id),
+          onMetric: (id) => store.getState().setMapColorMetric(id),
+          onAltitude: (ft) => store.getState().setMapAltitude(ft),
+          onModel: (model) => store.getState().setSelectedModel(model),
+          onHidden: (hidden) => {
+            mapChromeHidden = hidden;
+            document.getElementById('viz-layout-wrapper')?.classList.toggle('map-wide', hidden);
+            renderVisualization(store.getState());
+          },
+          onFitRoute: () => renderer.fitRoute(),
+          onAirports: (visible) => store.getState().setMapForecastOverlayVisible(visible),
+          onAirportMetric: (m) => store.getState().setMapForecastMetric(m),
+          onObservedSource: (source) => store.getState().setObservedOverlay(source),
+          onSatellite: (show) => store.getState().setObservedSatellite(show),
+          onLightning: (show) => store.getState().setObservedLightning(show),
+          onCells: (show) => store.getState().setObservedCells(show),
+          onOpacity: (o) => store.getState().setObservedOverlayOpacity(o),
+          onFronts: (visible) => store.getState().setMapFrontsVisible(visible),
         });
-      }
-
-      // Altitude slider
-      if (mapSliderContainer) {
-        if (isAltDependent) {
-          mapSliderContainer.style.display = '';
-          renderAltitudeSlider(mapSliderContainer, altFt, data.flightCeilingFt, {
-            onChange: (ft) => store.getState().setMapAltitude(ft),
-          });
-        } else {
-          mapSliderContainer.style.display = 'none';
-        }
       }
 
       // Ensure map size is correct after layout change

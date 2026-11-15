@@ -1,37 +1,67 @@
-/** Map metric registry — defines how route data maps to color/width for map segments. */
+/** Route-map metrics (#998) — what colours and sizes the briefing map's route
+ *  line, read from the served catalog `web/ts/data/route-map-metrics-catalog.json`.
+ *
+ *  The catalog is the single source for the metric list, labels, groups,
+ *  colour scales, widths, legends and the default, and is served verbatim to
+ *  the apps under `route_maps` in `/api/help/catalog`. This module only knows
+ *  how to read a value off a viz point (the `value` extractors below); a
+ *  catalog metric whose extractor this bundle does not know is skipped rather
+ *  than drawn empty.
+ *
+ *  SYNC: iOS `Views/Map/MapMetrics.swift`, Android `ui/map/MapMetrics.kt` carry
+ *  the same extractors under the same names. */
 
 import type { VizPoint } from '../types';
-import {
-  riskMapColor, cloudCoverMapColor, headwindMapColor,
-  capeMapColor, freezingLevelMapColor, ceilingMapColor, temperatureMapColor,
-  agreementMapColor, linearWidth,
-} from '../scales';
+import { bandScaleColor, type BandScale } from '../weather-map-format';
 import { t } from '../../i18n/i18n';
+import catalogJson from '../../data/route-map-metrics-catalog.json';
 
-export interface MapMetric {
-  readonly id: string;
-  readonly label: string;
-  readonly unit: string;
-  readonly altitudeDependent: boolean;
-  getValue(point: VizPoint, altitudeFt?: number): number | null;
-  getColor(value: number): string;
-  getWidth(value: number): number;
-  formatValue(value: number): string;
-  legendStops: Array<{ value: number; label: string; color: string }>;
+// --- Catalog shape ---
+
+export type RouteMetricGroup = 'at_altitude' | 'along_route';
+
+interface RouteLegendItem { value: number; label: string; i18n_key?: string }
+type RouteFormat =
+  | { kind: 'number'; decimals: number; prefix?: string; suffix?: string; multiply?: number }
+  | { kind: 'rank'; labels: string[] };
+
+interface RouteMetricSpec {
+  key: string;
+  label: string;
+  i18n_key: string;
+  unit: string;
+  group: RouteMetricGroup;
+  uses_altitude: boolean;
+  value: string;
+  aggregation: 'average' | 'max';
+  scale: string;
+  width: { thin_at: number; thick_at: number };
+  format: RouteFormat;
+  legend: RouteLegendItem[];
 }
 
-// --- Helpers for altitude-dependent zone search ---
+export interface RouteMapCatalog {
+  version: number;
+  default_metric: string;
+  no_data_color: string;
+  groups: Array<{ key: RouteMetricGroup; label: string; i18n_key: string }>;
+  scales: { bands: Record<string, BandScale> };
+  metrics: RouteMetricSpec[];
+}
 
-/** Risk numeric encoding for comparison (shared by icing/CAT/convective). */
+export const ROUTE_MAP_CATALOG = catalogJson as unknown as RouteMapCatalog;
+
+// --- Value extractors (the only per-metric code) ---
+
+/** Risk ordinal shared by icing / CAT / convective. */
 const RISK_ORDER: Record<string, number> = {
   none: 0, marginal: 1, light: 1, low: 1, moderate: 2, high: 3, severe: 3, extreme: 4,
 };
-const RISK_LABELS = ['none', 'light', 'moderate', 'severe', 'extreme'];
 
 function worstRiskAtAlt(
   zones: Array<{ baseFt: number; topFt: number; risk: string }>,
   altFt: number,
-): string {
+): number {
   let worst = 0;
   for (const z of zones) {
     if (altFt >= z.baseFt && altFt <= z.topFt) {
@@ -39,7 +69,7 @@ function worstRiskAtAlt(
       if (r > worst) worst = r;
     }
   }
-  return RISK_LABELS[worst];
+  return worst;
 }
 
 function sfipAtAlt(
@@ -65,37 +95,26 @@ function cloudAtAlt(
   let maxCov = 0;
   for (const l of layers) {
     if (altFt >= l.baseFt && altFt <= l.topFt) {
-      const w = COVERAGE_WEIGHT[l.coverage] ?? 0.5;
+      const w = COVERAGE_WEIGHT[l.coverage.toLowerCase()] ?? 0.5;
       if (w > maxCov) maxCov = w;
     }
   }
   return maxCov * 100;
 }
 
-/**
- * Estimate temperature at a given altitude using known isotherm levels.
- * Interpolates between 0°C, -10°C, -20°C levels; extrapolates with standard lapse rate.
- */
+/** Temperature at an altitude from the isotherm levels (0 / −10 / −20 °C),
+ *  interpolated between them and extrapolated at ~2 °C per 1000 ft. */
 function tempAtAltitude(p: VizPoint, altFt: number): number | null {
   const alt = p.altitudeLines;
   const fz = alt.freezingLevelFt;
   if (fz == null) return null;
-
-  // Build known (altitude, temperature) reference points
   const refs: Array<[number, number]> = [[fz, 0]];
   if (alt.minus10cLevelFt != null) refs.push([alt.minus10cLevelFt, -10]);
   if (alt.minus20cLevelFt != null) refs.push([alt.minus20cLevelFt, -20]);
-  refs.sort((a, b) => a[0] - b[0]); // ascending by altitude
-
-  // Below lowest ref or above highest: extrapolate with ~2°C/1000ft lapse rate
-  if (altFt <= refs[0][0]) {
-    return refs[0][1] + (refs[0][0] - altFt) * 2 / 1000;
-  }
-  if (altFt >= refs[refs.length - 1][0]) {
-    return refs[refs.length - 1][1] - (altFt - refs[refs.length - 1][0]) * 2 / 1000;
-  }
-
-  // Interpolate between bracketing refs
+  refs.sort((a, b) => a[0] - b[0]);
+  if (altFt <= refs[0][0]) return refs[0][1] + (refs[0][0] - altFt) * 2 / 1000;
+  const last = refs[refs.length - 1];
+  if (altFt >= last[0]) return last[1] - (altFt - last[0]) * 2 / 1000;
   for (let i = 0; i < refs.length - 1; i++) {
     if (altFt >= refs[i][0] && altFt <= refs[i + 1][0]) {
       const frac = (altFt - refs[i][0]) / (refs[i + 1][0] - refs[i][0]);
@@ -105,293 +124,163 @@ function tempAtAltitude(p: VizPoint, altFt: number): number | null {
   return null;
 }
 
-/** Route-line weight range (px) every `getWidth` maps into; the legend's
- *  width strip scales from the same bounds. */
-export const ROUTE_WEIGHT_MIN = 3;
-export const ROUTE_WEIGHT_MAX = 25;
-
-// --- Default width (uniform) for metrics without meaningful width variation ---
-const DEFAULT_WIDTH = 15;
-const defaultWidth = () => DEFAULT_WIDTH;
-
-// --- Metric definitions ---
-
-const cloudCoverTotal: MapMetric = {
-  id: 'cloud-cover-total',
-  label: 'Cloud Cover (Total)',
-  unit: '%',
-  altitudeDependent: false,
-  getValue: (p) => p.cloudCoverTotalPct,
-  getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)}%`,
-  legendStops: [
-    { value: 0, label: 'Clear', color: cloudCoverMapColor(0) },
-    { value: 25, label: '25%', color: cloudCoverMapColor(25) },
-    { value: 50, label: '50%', color: cloudCoverMapColor(50) },
-    { value: 75, label: '75%', color: cloudCoverMapColor(75) },
-    { value: 100, label: 'Overcast', color: cloudCoverMapColor(100) },
-  ],
-};
-
-const cloudCoverLow: MapMetric = {
-  id: 'cloud-cover-low',
-  label: 'Cloud Cover (Low)',
-  unit: '%',
-  altitudeDependent: false,
-  getValue: (p) => p.cloudCoverLowPct,
-  getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)}%`,
-  legendStops: cloudCoverTotal.legendStops,
-};
-
-const CONVECTIVE_LABELS = ['none', 'low', 'moderate', 'high', 'extreme'];
-
-const convectiveRisk: MapMetric = {
-  id: 'convective-risk',
-  label: 'Convective Risk',
-  unit: '',
-  altitudeDependent: false,
-  getValue: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
-  getColor: (v) => riskMapColor(CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 4, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => CONVECTIVE_LABELS[Math.min(Math.round(v), 4)] ?? 'none',
-  legendStops: [
-    { value: 0, label: 'None', color: riskMapColor('none') },
-    { value: 1, label: 'Low', color: riskMapColor('low') },
-    { value: 2, label: 'Moderate', color: riskMapColor('moderate') },
-    { value: 3, label: 'High', color: riskMapColor('high') },
-    { value: 4, label: 'Extreme', color: riskMapColor('extreme') },
-  ],
-};
-
-const headwindOnly: MapMetric = {
-  id: 'headwind',
-  label: 'Headwind',
-  unit: 'kt',
-  altitudeDependent: false,
-  getValue: (p) => Math.max(0, p.headwindKt),
-  getColor: (v) => headwindMapColor(v),
-  getWidth: (v) => linearWidth(v, 30, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)} kt HW`,
-  legendStops: [
-    { value: 0, label: 'Calm', color: headwindMapColor(0) },
-    { value: 10, label: '10 kt', color: headwindMapColor(10) },
-    { value: 20, label: '20 kt', color: headwindMapColor(20) },
-    { value: 30, label: '30 kt', color: headwindMapColor(30) },
-  ],
-};
-
-const tailwindOnly: MapMetric = {
-  id: 'tailwind',
-  label: 'Tailwind',
-  unit: 'kt',
-  altitudeDependent: false,
-  getValue: (p) => Math.max(0, -p.headwindKt),
-  getColor: (v) => headwindMapColor(-v),
-  getWidth: (v) => linearWidth(v, 30, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)} kt TW`,
-  legendStops: [
-    { value: 0, label: 'Calm', color: headwindMapColor(0) },
-    { value: 10, label: '10 kt', color: headwindMapColor(-10) },
-    { value: 20, label: '20 kt', color: headwindMapColor(-20) },
-    { value: 30, label: '30 kt', color: headwindMapColor(-30) },
-  ],
-};
-
-const cape: MapMetric = {
-  id: 'cape',
-  label: 'CAPE',
-  unit: 'J/kg',
-  altitudeDependent: false,
-  getValue: (p) => p.capeSurfaceJkg,
-  getColor: (v) => capeMapColor(v),
-  getWidth: (v) => linearWidth(v, 2000, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)} J/kg`,
-  legendStops: [
-    { value: 0, label: '0', color: capeMapColor(0) },
-    { value: 500, label: '500', color: capeMapColor(500) },
-    { value: 1000, label: '1000', color: capeMapColor(1000) },
-    { value: 2000, label: '2000+', color: capeMapColor(2000) },
-  ],
-};
-
-const nwpCeiling: MapMetric = {
-  id: 'nwp-ceiling',
-  label: 'NWP Ceiling',
-  unit: 'ft',
-  altitudeDependent: false,
-  getValue: (p) => p.nwpCloudDiag?.ceilingFt ?? null,
-  getColor: (v) => ceilingMapColor(v),
-  // Inverted: low ceiling = thick (danger), high ceiling = thin
-  getWidth: (v) => {
-    const clamped = Math.max(0, Math.min(5000, v));
-    // ROUTE_WEIGHT_MAX at 0ft → ROUTE_WEIGHT_MIN at 5000ft
-    return ROUTE_WEIGHT_MAX - (clamped / 5000) * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN);
-  },
-  formatValue: (v) => `${Math.round(v).toLocaleString()} ft`,
-  // Stops sit mid-band so a boundary tweak can't flip a swatch.
-  legendStops: [
-    { value: 300, label: 'LIFR <500', color: ceilingMapColor(300) },
-    { value: 700, label: 'IFR <1000', color: ceilingMapColor(700) },
-    { value: 2000, label: 'MVFR <3000', color: ceilingMapColor(2000) },
-    { value: 5000, label: 'VFR 3000+', color: ceilingMapColor(5000) },
-  ],
-};
-
-const tempAtLevel: MapMetric = {
-  id: 'temp-at-level',
-  label: 'Temperature at FL',
-  unit: '°C',
-  altitudeDependent: true,
-  getValue: (p, altFt) => tempAtAltitude(p, altFt ?? 0),
-  getColor: (v) => temperatureMapColor(v),
-  // Thick when cold (icing territory), thin when warm
-  getWidth: (v) => {
-    // 5°C → thinnest, -20°C → thickest
-    const clamped = Math.max(-20, Math.min(5, v));
-    return ROUTE_WEIGHT_MIN + (5 - clamped) / 25 * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN);
-  },
-  formatValue: (v) => `${v.toFixed(1)}°C`,
-  legendStops: [
-    { value: -20, label: '-20°C', color: temperatureMapColor(-20) },
-    { value: -10, label: '-10°C', color: temperatureMapColor(-10) },
-    { value: 0, label: '0°C', color: temperatureMapColor(0) },
-    { value: 10, label: '10°C', color: temperatureMapColor(10) },
-  ],
-};
-
-const modelAgreement: MapMetric = {
-  id: 'model-agreement',
-  label: 'Model Agreement',
-  unit: '',
-  altitudeDependent: false,
-  getValue: (p) => RISK_ORDER[p.worstModelAgreement === 'good' ? 'none' : p.worstModelAgreement] ?? 0,
-  getColor: (v) => {
-    if (v >= 2) return agreementMapColor('poor');
-    if (v >= 1) return agreementMapColor('moderate');
-    return agreementMapColor('good');
-  },
-  getWidth: (v) => linearWidth(v, 2, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => {
-    if (v >= 2) return t('map.formatPoor');
-    if (v >= 1) return t('map.formatModerate');
-    return t('map.formatGood');
-  },
-  legendStops: [
-    { value: 0, label: 'Good', color: agreementMapColor('good') },
-    { value: 1, label: 'Moderate', color: agreementMapColor('moderate') },
-    { value: 2, label: 'Poor', color: agreementMapColor('poor') },
-  ],
-};
-
-// --- Altitude-dependent metrics ---
-
-const icingRiskAtLevel: MapMetric = {
-  id: 'icing-risk-at-level',
-  label: 'Icing Risk at FL',
-  unit: '',
-  altitudeDependent: true,
-  getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.icingZones, altFt ?? 0)] ?? 0,
-  getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 3, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
-  legendStops: [
-    { value: 0, label: 'None', color: riskMapColor('none') },
-    { value: 1, label: 'Light', color: riskMapColor('light') },
-    { value: 2, label: 'Moderate', color: riskMapColor('moderate') },
-    { value: 3, label: 'Severe', color: riskMapColor('severe') },
-  ],
-};
-
-// SFIP 0-100 → icing tier. These MUST track `sfip_to_risk` in
-// analysis/sounding/sfip.py (_SFIP_NONE / _SFIP_LIGHT / _SFIP_MODERATE).
-// The map previously used a private 20/50/80 scale, so a score the backend
-// graded as LIGHT icing rendered green "Low" here.
-const SFIP_LIGHT = 15;
-const SFIP_MODERATE = 30;
-const SFIP_SEVERE = 55;
-
-function sfipRisk(v: number): string {
-  if (v >= SFIP_SEVERE) return 'severe';
-  if (v >= SFIP_MODERATE) return 'moderate';
-  if (v >= SFIP_LIGHT) return 'light';
-  return 'none';
+function agreementRank(s: string): number {
+  if (s === 'poor') return 2;
+  if (s === 'moderate') return 1;
+  return 0;
 }
 
-const sfipAtLevel: MapMetric = {
-  id: 'sfip-at-level',
-  label: 'SFIP at FL',
-  unit: '',
-  altitudeDependent: true,
-  getValue: (p, altFt) => sfipAtAlt(p.sfipZones, altFt ?? 0),
-  getColor: (v) => riskMapColor(sfipRisk(v)),
-  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `SFIP ${Math.round(v)} (${sfipRisk(v)})`,
-  legendStops: [
-    { value: 0, label: `None (<${SFIP_LIGHT})`, color: riskMapColor('none') },
-    { value: SFIP_LIGHT, label: `Light (${SFIP_LIGHT}-${SFIP_MODERATE})`, color: riskMapColor('light') },
-    { value: SFIP_MODERATE, label: `Moderate (${SFIP_MODERATE}-${SFIP_SEVERE})`, color: riskMapColor('moderate') },
-    { value: SFIP_SEVERE, label: `Severe (${SFIP_SEVERE}+)`, color: riskMapColor('severe') },
-  ],
+type Extractor = (p: VizPoint, altFt: number) => number | null;
+
+/** Catalog `value` → how to read it off a viz point. Same names on iOS and
+ *  Android. Add one here (and there) before listing a metric in the catalog. */
+export const ROUTE_VALUE_EXTRACTORS: Readonly<Record<string, Extractor>> = {
+  cloud_cover_total_pct: (p) => p.cloudCoverTotalPct,
+  cloud_cover_low_pct: (p) => p.cloudCoverLowPct,
+  convective_risk_rank: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
+  headwind_kt: (p) => Math.max(0, p.headwindKt),
+  tailwind_kt: (p) => Math.max(0, -p.headwindKt),
+  wind_speed_kt: (p) => p.windSpeedKt ?? null,
+  crosswind_kt: (p) => Math.abs(p.crosswindKt),
+  cape_surface_jkg: (p) => p.capeSurfaceJkg,
+  nwp_ceiling_ft: (p) => p.nwpCloudDiag?.ceilingFt ?? null,
+  visibility_m: (p) => p.visibilityM ?? null,
+  model_agreement_rank: (p) => agreementRank(p.worstModelAgreement),
+  temperature_at_level_c: (p, alt) => tempAtAltitude(p, alt),
+  icing_risk_at_level_rank: (p, alt) => worstRiskAtAlt(p.icingZones, alt),
+  sfip_at_level: (p, alt) => sfipAtAlt(p.sfipZones, alt),
+  cat_risk_at_level_rank: (p, alt) => worstRiskAtAlt(p.catLayers, alt),
+  cloud_at_level_pct: (p, alt) => cloudAtAlt(p.cloudLayers, alt),
 };
 
-const catRiskAtLevel: MapMetric = {
-  id: 'cat-risk-at-level',
-  label: 'CAT Risk at FL',
-  unit: '',
-  altitudeDependent: true,
-  getValue: (p, altFt) => RISK_ORDER[worstRiskAtAlt(p.catLayers, altFt ?? 0)] ?? 0,
-  getColor: (v) => riskMapColor(RISK_LABELS[Math.min(v, 3)] ?? 'none'),
-  getWidth: (v) => linearWidth(v, 3, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => RISK_LABELS[Math.min(Math.round(v), 3)] ?? 'none',
-  legendStops: icingRiskAtLevel.legendStops,
-};
+// --- Metric objects ---
 
-const cloudAtLevel: MapMetric = {
-  id: 'cloud-at-level',
-  label: 'Cloud at FL',
-  unit: '%',
-  altitudeDependent: true,
-  getValue: (p, altFt) => cloudAtAlt(p.cloudLayers, altFt ?? 0),
-  getColor: (v) => cloudCoverMapColor(v),
-  getWidth: (v) => linearWidth(v, 100, ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX),
-  formatValue: (v) => `${Math.round(v)}%`,
-  legendStops: cloudCoverTotal.legendStops,
-};
+/** Route-line weight range (px); `getWidth` maps a value into it. */
+export const ROUTE_WEIGHT_MIN = 3;
+export const ROUTE_WEIGHT_MAX = 18;
 
-// --- Registry ---
+export interface LegendStop { value: number; label: string; color: string }
 
-export const MAP_METRICS: readonly MapMetric[] = [
-  cloudCoverTotal,
-  cloudCoverLow,
-  convectiveRisk,
-  headwindOnly,
-  tailwindOnly,
-  cape,
-  nwpCeiling,
-  tempAtLevel,
-  modelAgreement,
-  icingRiskAtLevel,
-  sfipAtLevel,
-  catRiskAtLevel,
-  cloudAtLevel,
-];
+export interface MapMetric {
+  readonly id: string;
+  /** Translated label (read at call time, so a language switch applies). */
+  readonly label: string;
+  readonly unit: string;
+  readonly group: RouteMetricGroup;
+  readonly altitudeDependent: boolean;
+  getValue(point: VizPoint, altitudeFt?: number): number | null;
+  /** The segment's value from its two endpoints (`max` for hazards). */
+  segmentValue(a: VizPoint, b: VizPoint, altitudeFt?: number): number | null;
+  getColor(value: number): string;
+  getWidth(value: number): number;
+  formatValue(value: number): string;
+  readonly legendStops: LegendStop[];
+}
+
+function translated(key: string | undefined, fallback: string): string {
+  if (!key) return fallback;
+  const s = t(key);
+  return s && s !== key ? s : fallback;
+}
+
+/** Fraction 0 (thinnest) … 1 (thickest) for a value on a metric's width spec. */
+export function widthFraction(spec: { thin_at: number; thick_at: number }, v: number): number {
+  const span = spec.thick_at - spec.thin_at;
+  if (span === 0) return 0;
+  return Math.min(1, Math.max(0, (v - spec.thin_at) / span));
+}
+
+function formatWith(fmt: RouteFormat, v: number): string {
+  if (fmt.kind === 'rank') {
+    const i = Math.max(0, Math.min(fmt.labels.length - 1, Math.round(v)));
+    return fmt.labels[i] ?? String(v);
+  }
+  const n = v * (fmt.multiply ?? 1);
+  return `${fmt.prefix ?? ''}${n.toFixed(fmt.decimals)}${fmt.suffix ?? ''}`;
+}
+
+function buildMetric(spec: RouteMetricSpec, cat: RouteMapCatalog): MapMetric | null {
+  const extract = ROUTE_VALUE_EXTRACTORS[spec.value];
+  const scale = cat.scales.bands[spec.scale];
+  if (!extract || !scale) return null;
+  const color = (v: number) => bandScaleColor(scale, v);
+  const getValue = (p: VizPoint, alt?: number) => extract(p, alt ?? 0);
+  return {
+    id: spec.key,
+    get label() { return translated(spec.i18n_key, spec.label); },
+    unit: spec.unit,
+    group: spec.group,
+    altitudeDependent: spec.uses_altitude,
+    getValue,
+    segmentValue(a, b, alt) {
+      const va = getValue(a, alt);
+      const vb = getValue(b, alt);
+      if (va === null) return vb;
+      if (vb === null) return va;
+      return spec.aggregation === 'max' ? Math.max(va, vb) : (va + vb) / 2;
+    },
+    getColor: color,
+    getWidth: (v) => ROUTE_WEIGHT_MIN + widthFraction(spec.width, v) * (ROUTE_WEIGHT_MAX - ROUTE_WEIGHT_MIN),
+    formatValue: (v) => formatWith(spec.format, v),
+    get legendStops() {
+      return spec.legend.map((item) => ({
+        value: item.value,
+        label: translated(item.i18n_key, item.label),
+        color: color(item.value),
+      }));
+    },
+  };
+}
+
+/** Problems with a catalog, for the unit test and the module-load backstop. */
+export function validateRouteMapCatalog(cat: RouteMapCatalog): string[] {
+  const problems: string[] = [];
+  const keys = new Set<string>();
+  for (const m of cat.metrics ?? []) {
+    if (keys.has(m.key)) problems.push(`duplicate metric '${m.key}'`);
+    keys.add(m.key);
+    if (!cat.scales?.bands?.[m.scale]) problems.push(`metric '${m.key}' → unknown scale '${m.scale}'`);
+    if (!ROUTE_VALUE_EXTRACTORS[m.value]) problems.push(`metric '${m.key}' → unknown value '${m.value}'`);
+    if (!m.legend?.length) problems.push(`metric '${m.key}' has no legend`);
+  }
+  if (!keys.has(cat.default_metric)) problems.push(`default '${cat.default_metric}' is not a metric`);
+  return problems;
+}
+
+const PROBLEMS = validateRouteMapCatalog(ROUTE_MAP_CATALOG);
+if (PROBLEMS.length) {
+  throw new Error(`route-map-metrics-catalog.json is malformed:\n  ${PROBLEMS.join('\n  ')}`);
+}
+
+export const MAP_METRICS: readonly MapMetric[] = ROUTE_MAP_CATALOG.metrics
+  .map((m) => buildMetric(m, ROUTE_MAP_CATALOG))
+  .filter((m): m is MapMetric => m !== null);
+
+/** The catalog's default metric — one place to change it for every client. */
+export const DEFAULT_MAP_METRIC_ID = ROUTE_MAP_CATALOG.default_metric;
+
+/** Colour of a segment whose value is missing. */
+export const ROUTE_NO_DATA_COLOR = ROUTE_MAP_CATALOG.no_data_color;
 
 export function getMapMetricById(id: string): MapMetric | undefined {
   return MAP_METRICS.find((m) => m.id === id);
 }
 
-export const MAP_METRIC_NONE = 'none';
+/** A stored id resolved to a metric: an unknown (renamed, dropped) id falls
+ *  back to the catalog default rather than drawing nothing. */
+export function resolveMapMetric(id: string | null | undefined): MapMetric {
+  return (id ? getMapMetricById(id) : undefined)
+    ?? getMapMetricById(DEFAULT_MAP_METRIC_ID)
+    ?? MAP_METRICS[0];
+}
 
-export function getMapMetricOptions(includeNone: boolean): Array<{ id: string; label: string }> {
-  const options: Array<{ id: string; label: string }> = [];
-  if (includeNone) {
-    options.push({ id: MAP_METRIC_NONE, label: t('map.none') });
-  }
-  for (const m of MAP_METRICS) {
-    options.push({ id: m.id, label: t('map.' + m.id) });
-  }
-  return options;
+/** The SHOWING menu: groups in catalog order, each with its metrics. */
+export function mapMetricGroups(): Array<{ key: RouteMetricGroup; label: string; metrics: MapMetric[] }> {
+  return ROUTE_MAP_CATALOG.groups
+    .map((g) => ({
+      key: g.key,
+      label: translated(g.i18n_key, g.label),
+      metrics: MAP_METRICS.filter((m) => m.group === g.key),
+    }))
+    .filter((g) => g.metrics.length > 0);
 }

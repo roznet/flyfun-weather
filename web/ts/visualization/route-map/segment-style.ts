@@ -1,56 +1,31 @@
-/** Pure computation: given points + metrics + altitude, return per-segment {color, weight}. */
+/** Pure computation: given points + the route metric + altitude, return per-segment {color, weight}.
+ *
+ *  One metric drives both colour and width (#998: the separate Width metric is
+ *  gone). A segment takes its value from its two endpoints per the metric's
+ *  catalog `aggregation` (`max` for hazards, so one bad endpoint is never
+ *  averaged away). A segment with no value draws the catalog's no-data grey at
+ *  the thinnest width, so a gap never reads as a colour. */
 
 import type { VizPoint } from '../types';
-import type { MapMetric } from './metrics';
+import { ROUTE_NO_DATA_COLOR, ROUTE_WEIGHT_MIN, type MapMetric } from './metrics';
 
 export interface SegmentStyle {
   color: string;
   weight: number;
 }
 
-/**
- * Compute the visual style for each segment between consecutive route points.
- * Returns an array of length `points.length - 1`.
- */
+/** Returns an array of length `points.length - 1`. */
 export function computeSegmentStyles(
   points: readonly VizPoint[],
-  colorMetric: MapMetric | null,
-  widthMetric: MapMetric | null,
+  metric: MapMetric | null,
   altitudeFt: number,
 ): SegmentStyle[] {
   const styles: SegmentStyle[] = [];
-
   for (let i = 0; i < points.length - 1; i++) {
-    // Use the midpoint (average of two endpoints) for metric evaluation
-    const p1 = points[i];
-    const p2 = points[i + 1];
-
-    let color = '#2563eb'; // default blue
-    let weight = 15;
-
-    if (colorMetric) {
-      const v1 = colorMetric.getValue(p1, altitudeFt);
-      const v2 = colorMetric.getValue(p2, altitudeFt);
-      // Use average of endpoints if both available, otherwise whichever is available
-      const v = v1 !== null && v2 !== null ? (v1 + v2) / 2
-        : v1 ?? v2;
-      if (v !== null) {
-        color = colorMetric.getColor(v);
-      }
-    }
-
-    if (widthMetric) {
-      const v1 = widthMetric.getValue(p1, altitudeFt);
-      const v2 = widthMetric.getValue(p2, altitudeFt);
-      const v = v1 !== null && v2 !== null ? (v1 + v2) / 2
-        : v1 ?? v2;
-      if (v !== null) {
-        weight = widthMetric.getWidth(v);
-      }
-    }
-
-    styles.push({ color, weight });
+    const v = metric ? metric.segmentValue(points[i], points[i + 1], altitudeFt) : null;
+    styles.push(metric && v !== null
+      ? { color: metric.getColor(v), weight: metric.getWidth(v) }
+      : { color: ROUTE_NO_DATA_COLOR, weight: ROUTE_WEIGHT_MIN });
   }
-
   return styles;
 }

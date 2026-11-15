@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { migrateVizSettings } from '../../ts/store/briefing-store';
+import { migrateVizSettings, VIZ_SETTINGS_VERSION } from '../../ts/store/briefing-store';
 import type { VizSettings } from '../../ts/visualization/types';
 
 function settings(over: Partial<VizSettings> = {}): VizSettings {
@@ -29,7 +29,7 @@ describe('migrateVizSettings', () => {
   });
 
   it('is a no-op for current settings that never had a preset', () => {
-    const input = settings({ activePreset: null, settingsVersion: 1 });
+    const input = settings({ activePreset: null, settingsVersion: VIZ_SETTINGS_VERSION });
     expect(migrateVizSettings(input)).toBe(input);
   });
 
@@ -57,7 +57,7 @@ describe('migrateVizSettings', () => {
     // After #597 "Light theme + Windy (light)" is a real choice; a state that
     // has already been migrated must keep it across reloads.
     const once = migrateVizSettings(settings({ activeEmulation: 'gramet', vizTheme: 'gramet' }));
-    expect(once.settingsVersion).toBe(1);
+    expect(once.settingsVersion).toBe(VIZ_SETTINGS_VERSION);
     const reload = migrateVizSettings({ ...once, activeEmulation: 'windy', vizTheme: 'light' });
     expect(reload.vizTheme).toBe('light');
   });
@@ -66,5 +66,23 @@ describe('migrateVizSettings', () => {
     // Indistinguishable from a deliberate pick, so it stays.
     const out = migrateVizSettings(settings({ activeEmulation: null, vizTheme: 'gramet' }));
     expect(out.vizTheme).toBe('gramet');
+  });
+
+  // #998: lightning left the one-at-a-time imagery list for its own toggle.
+  it('turns a saved lightning pick into lightning on with no imagery', () => {
+    const out = migrateVizSettings(settings({ observedOverlay: 'eumetsat_li', settingsVersion: 1 }));
+    expect(out.observedOverlay).toBe('');
+    expect(out.observedLightning).toBe(true);
+  });
+
+  it('leaves a radar pick alone', () => {
+    const out = migrateVizSettings(settings({ observedOverlay: 'opera_dbzh', settingsVersion: 1 }));
+    expect(out.observedOverlay).toBe('opera_dbzh');
+    expect(out.observedLightning).toBeUndefined();
+  });
+
+  it('drops the retired Width metric', () => {
+    const out = migrateVizSettings({ ...settings({ settingsVersion: 1 }), mapWidthMetric: 'cape' } as VizSettings);
+    expect('mapWidthMetric' in out).toBe(false);
   });
 });

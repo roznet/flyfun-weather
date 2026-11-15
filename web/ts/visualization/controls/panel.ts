@@ -20,8 +20,6 @@ import { renderFrontsInfo } from '../../helpers/fronts-info';
 import { modelLabel, escapeHtml } from '../../utils';
 import { getMetricOptions } from '../route-graph/metrics';
 import { getMetric } from '../../helpers/metrics-helper';
-import { OBSERVED_OVERLAY_OPTIONS } from '../route-map/observed-overlay-geometry';
-import { FORECAST_METRICS, METRIC_LABEL } from '../weather-map-format';
 import { THEMES, getActiveThemeId, type ThemeId } from '../cross-section/theme';
 import { showThemePreview } from '../cross-section/theme-preview';
 import { t } from '../../i18n/i18n';
@@ -809,37 +807,8 @@ export interface RouteGraphControlCallbacks {
   onObservedRadiusChange?: (radiusNm: number) => void;
 }
 
-export interface MapControlCallbacks {
-  /** Toggle the experimental Hewson front overlay (#196). */
-  onFrontsToggle?: (visible: boolean) => void;
-  /** Toggle the airport forecast overlay (#424). */
-  onForecastOverlayToggle?: (visible: boolean) => void;
-  /** Change the metric the airport forecast overlay colours by (#424). */
-  onForecastMetricChange?: (metricId: string) => void;
-  /** Pick which observed layer the map draws (#574), '' for none. */
-  onObservedOverlayChange?: (source: string) => void;
-  /** Set the observed imagery opacity, 0–1. */
-  onObservedOpacityChange?: (opacity: number) => void;
-  /** Satellite infrared underlay on/off (#652). */
-  onObservedSatelliteToggle?: (show: boolean) => void;
-  /** Radar cell overlay on/off (#656). */
-  onObservedCellsToggle?: (show: boolean) => void;
-}
-
-/** Which observed sources the current briefing actually carries. Options for
- *  anything absent are not offered: an overlay that renders an empty PNG is
- *  worse than a missing menu entry, because the pilot cannot tell "nothing
- *  there" from "not collected". */
-export interface ObservedAvailability {
-  reflectivity: boolean;
-  rainRate: boolean;
-  cloudTops: boolean;
-  lightning: boolean;
-}
-
-/** Airport forecast overlay control state (#424). Present (and the cluster
- *  rendered) only when the flight is within the forecast horizon; absent when
- *  it is more than a week out. */
+/** Airport forecast overlay state (#424) for the route map's LAYERS menu.
+ *  Present only when the flight is within the forecast horizon. */
 export interface MapForecastOverlayControls {
   /** Flight is within D-0..D-6 and has a snapshot to show. */
   available: boolean;
@@ -851,10 +820,9 @@ export interface MapForecastOverlayControls {
   timeLabel?: string;
   /** Deep-link to the full forecast map seeded with day/hour/model/metric. */
   fullMapUrl?: string;
-  /** The briefing's selected model has airport data for this day. When false the
-   *  map is empty because of the model, not the weather — the cluster shows an
-   *  explanatory note instead of the metric/time so a blank map never reads as
-   *  "all clear" (designs/forecast-page.md). */
+  /** The briefing's selected model has airport data for this day. When false
+   *  the map is empty because of the model, not the weather, and the menu
+   *  says so, so a blank map never reads as "all clear" (forecast-page.md). */
   modelSupported: boolean;
   /** Selected model id, for the "no data" note. */
   model: string;
@@ -1166,175 +1134,6 @@ export function renderRouteGraphControls(
   if (radiusSelect && callbacks.onObservedRadiusChange) {
     radiusSelect.addEventListener('change', () => {
       callbacks.onObservedRadiusChange!(Number(radiusSelect.value));
-    });
-  }
-}
-
-/** Render the map's overlay controls (fronts, airport forecast, observed layer) into the map controls container. */
-export function renderMapControls(
-  container: HTMLElement,
-  settings: VizSettings,
-  callbacks: MapControlCallbacks,
-  frontsAvailable = false,
-  forecastOverlay?: MapForecastOverlayControls,
-  observed?: ObservedAvailability,
-): void {
-  // The Color/Width metric pickers live in the legend rows (route-map/legend.ts,
-  // #731), beside the scale they choose, not here.
-  let html = '<div class="map-controls">';
-
-  // Experimental Hewson front overlay — only surfaced when front data exists
-  // for this briefing (i.e. the "Auto Front Detection" pref was on).
-  if (frontsAvailable) {
-    const checked = settings.mapFrontsVisible ? ' checked' : '';
-    html += '<label class="map-control-label viz-toggle">';
-    html += `<input type="checkbox" id="map-fronts-toggle"${checked}>`;
-    html += `<span class="viz-toggle-label">${t('viz.fronts')}</span>`;
-    html += '</label>';
-  }
-
-  // Airport forecast overlay (#424), right-aligned. Rendered only when the
-  // flight is within the forecast horizon (otherwise nothing to show).
-  if (forecastOverlay?.available) {
-    const fo = forecastOverlay;
-    const checked = fo.visible ? ' checked' : '';
-    html += '<div class="map-forecast-controls">';
-    html += '<label class="map-control-label viz-toggle">';
-    html += `<input type="checkbox" id="map-forecast-toggle"${checked}>`;
-    html += `<span class="viz-toggle-label">${t('viz.airports')}</span>`;
-    html += '</label>';
-    if (fo.modelSupported) {
-      const timeLabel = fo.timeLabel ?? '…';
-      html += `<span class="map-forecast-time" id="map-forecast-time" title="${escapeHtml(t('viz.airports.timeHint'))}">${escapeHtml(timeLabel)}</span>`;
-      html += '<label class="map-control-label">';
-      html += `<span class="viz-toggle-label">${t('viz.airports.show')}</span>`;
-      html += '<select id="map-forecast-metric" class="map-control-select">';
-      for (const m of FORECAST_METRICS) {
-        const selected = m === fo.metric ? ' selected' : '';
-        html += `<option value="${m}"${selected}>${escapeHtml(METRIC_LABEL[m])}</option>`;
-      }
-      html += '</select>';
-      html += '</label>';
-    } else {
-      // Empty because the selected model has no airport data for this day, not
-      // because the weather is clear — say so (forecast-page.md).
-      html += `<span class="map-forecast-note">${escapeHtml(t('viz.airports.noModelData', { model: modelLabel(fo.model) }))}</span>`;
-    }
-    if (fo.fullMapUrl) {
-      const openLabel = escapeHtml(t('viz.airports.openMap'));
-      html += `<a class="map-forecast-open" id="map-forecast-open" href="${escapeHtml(fo.fullMapUrl)}" target="_blank" rel="noopener" title="${openLabel}" aria-label="${openLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></a>`;
-    }
-    html += '</div>';
-  }
-
-  // Observed layer sits apart from Color/Width, and to the right: those two
-  // style the FORECAST route line, this picks a MEASUREMENT of the real sky.
-  // Grouped together they read as three knobs on one thing, which they are not.
-  //
-  // Outside the forecast-overlay block on purpose — nesting it there made the
-  // selector appear only while the airport overlay happened to be on.
-  //
-  // One at a time: these are different measurements of the same sky, and
-  // stacking them leaves a colour on the map whose source is ambiguous.
-  if (observed && (observed.reflectivity || observed.rainRate || observed.cloudTops || observed.lightning)) {
-    html += '<div class="map-controls-observed">';
-    html += '<label class="map-control-label">';
-    html += `<span class="viz-toggle-label">${t('viz.observed.label')}</span>`;
-    html += '<select id="map-observed-overlay" class="map-control-select">';
-    for (const opt of OBSERVED_OVERLAY_OPTIONS) {
-      if (opt.needs && !observed[opt.needs]) continue;
-      const selected = opt.id === settings.observedOverlay ? ' selected' : '';
-      html += `<option value="${opt.id}"${selected}>${escapeHtml(t(opt.labelKey))}</option>`;
-    }
-    html += '</select>';
-    html += '</label>';
-    // Satellite infrared under the selected layer (#652). Not one of the
-    // "one at a time" measurements above: it is the picture of the sky the
-    // radar sits on, drawn underneath and greyscale, so a colour on the map
-    // still has exactly one source.
-    {
-      const checked = settings.observedSatellite !== false ? ' checked' : '';
-      html += '<label class="map-control-label map-observed-satellite">';
-      html += `<input type="checkbox" id="map-observed-satellite"${checked}>`;
-      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.satellite'))}</span>`;
-      html += '</label>';
-    }
-    // Radar cells (#656): outlines, trend markers and 30-min motion arrows
-    // from the home node's analysis. Offered whenever observed layers are;
-    // when the feed is off or stale the map's badge says so.
-    {
-      const checked = settings.observedCells ? ' checked' : '';
-      html += `<label class="map-control-label map-observed-cells" title="${escapeHtml(t('viz.observed.cellsHint'))}">`;
-      html += `<input type="checkbox" id="map-observed-cells"${checked}>`;
-      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.cells'))}</span>`;
-      html += '</label>';
-    }
-    // Opacity, like the synoptic grid layer's. These rasters cover the whole
-    // corridor, so a fixed value either buries the basemap or washes the data
-    // out depending on the product — and the pilot needs to read place names
-    // through it.
-    if (settings.observedOverlay && settings.observedOverlay !== 'eumetsat_li') {
-      const pct = Math.round((settings.observedOverlayOpacity ?? 0.75) * 100);
-      html += '<label class="map-control-label map-observed-opacity">';
-      html += `<span class="viz-toggle-label">${escapeHtml(t('viz.observed.opacity'))}</span>`;
-      html += `<input type="range" id="map-observed-opacity" min="10" max="100" step="5" value="${pct}">`;
-      html += `<span class="map-observed-opacity-value" id="map-observed-opacity-value">${pct}%</span>`;
-      html += '</label>';
-    }
-    html += '</div>';
-  }
-
-  html += '</div>';
-
-  container.innerHTML = html;
-
-  const forecastToggle = container.querySelector('#map-forecast-toggle') as HTMLInputElement | null;
-  if (forecastToggle) {
-    forecastToggle.addEventListener('change', () => {
-      callbacks.onForecastOverlayToggle?.(forecastToggle.checked);
-    });
-  }
-  const forecastMetricSelect = container.querySelector('#map-forecast-metric') as HTMLSelectElement | null;
-  if (forecastMetricSelect) {
-    forecastMetricSelect.addEventListener('change', () => {
-      callbacks.onForecastMetricChange?.(forecastMetricSelect.value);
-    });
-  }
-
-  const frontsToggle = container.querySelector('#map-fronts-toggle') as HTMLInputElement | null;
-  if (frontsToggle) {
-    frontsToggle.addEventListener('change', () => {
-      callbacks.onFrontsToggle?.(frontsToggle.checked);
-    });
-  }
-
-  const observedOpacity = container.querySelector('#map-observed-opacity') as HTMLInputElement | null;
-  if (observedOpacity && callbacks.onObservedOpacityChange) {
-    const readout = container.querySelector('#map-observed-opacity-value') as HTMLElement | null;
-    observedOpacity.addEventListener('input', () => {
-      const pct = Number(observedOpacity.value);
-      if (readout) readout.textContent = `${pct}%`;
-      callbacks.onObservedOpacityChange!(pct / 100);
-    });
-  }
-
-  const observedSatellite = container.querySelector('#map-observed-satellite') as HTMLInputElement | null;
-  if (observedSatellite && callbacks.onObservedSatelliteToggle) {
-    observedSatellite.addEventListener('change', () => {
-      callbacks.onObservedSatelliteToggle!(observedSatellite.checked);
-    });
-  }
-
-  const observedCells = container.querySelector('#map-observed-cells') as HTMLInputElement | null;
-  if (observedCells && callbacks.onObservedCellsToggle) {
-    observedCells.addEventListener('change', () => {
-      callbacks.onObservedCellsToggle!(observedCells.checked);
-    });
-  }
-  const observedSelect = container.querySelector('#map-observed-overlay') as HTMLSelectElement | null;
-  if (observedSelect && callbacks.onObservedOverlayChange) {
-    observedSelect.addEventListener('change', () => {
-      callbacks.onObservedOverlayChange!(observedSelect.value);
     });
   }
 }

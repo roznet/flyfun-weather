@@ -406,6 +406,8 @@ function synthesizeVizPoint(
     cloudCoverMidPct: mid,
     headwindKt: 0,
     crosswindKt: 0,
+    windSpeedKt: null,
+    visibilityM: null,
     capeSurfaceJkg: indices?.cape_surface_jkg ?? surface?.cape_jkg ?? 0,
     worstModelAgreement: 'good',
     nwpCloudDiag: null,

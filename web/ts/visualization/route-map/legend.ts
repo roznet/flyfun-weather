@@ -1,106 +1,42 @@
-/** Map legend — one grid row per styling channel (Color, Width): the metric
- *  picker, then a scale strip with each stop label centred under its swatch.
+/** Route-map legend (#998): one legend area in the map's bottom panel.
  *
- *  The picker IS the row's title (#731): naming the metric in text as well
- *  as in a dropdown below it said everything twice. And the Width row draws
- *  thickness, not colour — width only changes the route line's weight, so a
- *  colour ramp there matched nothing on the map. */
+ *  Line 1 is the route metric's scale from the served catalog, each label
+ *  centred under its swatch. Line 2, only while the airport overlay is on, is a
+ *  compact strip of the airport metric's legend; it replaces the floating
+ *  top-right box the overlay used to draw, so the map has one legend. No width
+ *  row: line width follows the colour metric. */
 
 import type { MapMetric } from './metrics';
-import { getMapMetricOptions, ROUTE_WEIGHT_MAX } from './metrics';
-import { t } from '../../i18n/i18n';
+import type { MapLegend } from '../weather-map-format';
 import { escapeHtml } from '../../utils';
 
-export interface MapLegendCallbacks {
-  onColorMetricChange: (metricId: string) => void;
-  onWidthMetricChange: (metricId: string) => void;
-}
-
-export interface MapLegendSelection {
-  /** Selected ids, as stored in `vizSettings` (width may be `MAP_METRIC_NONE`). */
-  colorMetricId: string;
-  widthMetricId: string;
-  /** Resolved metrics; null when the id is none/unknown. */
-  colorMetric: MapMetric | null;
-  widthMetric: MapMetric | null;
-}
-
-/** Thickest bar (px), for the thickest route line; fits the 16px CSS row. */
-const WIDTH_BAR_MAX_PX = 15;
-const WIDTH_BAR_SCALE = WIDTH_BAR_MAX_PX / ROUTE_WEIGHT_MAX;
-const WIDTH_BAR_MIN_PX = 2;
-
-/** Bar height (px) for a route-line weight, as drawn in the width strip. */
-export function widthBarPx(weight: number): number {
-  return Math.max(WIDTH_BAR_MIN_PX, Math.round(weight * WIDTH_BAR_SCALE * 10) / 10);
-}
-
-/** Pure HTML for the legend grid — no DOM, so it is unit-testable. */
-export function mapLegendHtml(sel: MapLegendSelection): string {
-  let html = '<div class="map-legend-grid">';
-  html += legendRow('color', t('viz.color'), getMapMetricOptions(false), sel.colorMetricId,
-    sel.colorMetric ? colorScaleHtml(sel.colorMetric) : '');
-  html += legendRow('width', t('viz.width'), getMapMetricOptions(true), sel.widthMetricId,
-    sel.widthMetric ? widthScaleHtml(sel.widthMetric) : '');
-  html += '</div>';
-  return html;
-}
-
-export function renderMapLegend(
-  container: HTMLElement,
-  sel: MapLegendSelection,
-  callbacks: MapLegendCallbacks,
-): void {
-  container.innerHTML = mapLegendHtml(sel);
-
-  const colorSelect = container.querySelector('#map-color-metric') as HTMLSelectElement | null;
-  colorSelect?.addEventListener('change', () => callbacks.onColorMetricChange(colorSelect.value));
-  const widthSelect = container.querySelector('#map-width-metric') as HTMLSelectElement | null;
-  widthSelect?.addEventListener('change', () => callbacks.onWidthMetricChange(widthSelect.value));
-}
-
-function legendRow(
-  channel: 'color' | 'width',
-  label: string,
-  options: Array<{ id: string; label: string }>,
-  selectedId: string,
-  scaleHtml: string,
-): string {
-  let html = `<label class="viz-toggle-label map-legend-channel" for="map-${channel}-metric">${escapeHtml(label)}</label>`;
-  html += `<select id="map-${channel}-metric" class="map-control-select">`;
-  for (const opt of options) {
-    const selected = opt.id === selectedId ? ' selected' : '';
-    html += `<option value="${escapeHtml(opt.id)}"${selected}>${escapeHtml(opt.label)}</option>`;
-  }
-  html += '</select>';
-  // Always emit the cell so the grid keeps its shape when a row has no scale.
-  html += `<div class="map-legend-scale map-legend-scale-${channel}">${scaleHtml}</div>`;
-  return html;
-}
-
-/** Swatches and labels share one column template, so stop i's label sits
- *  under stop i's swatch whatever the label lengths. */
-function scaleHtml(metric: MapMetric, swatch: (stop: MapMetric['legendStops'][number]) => string): string {
+/** Pure HTML for the route metric's scale. */
+export function routeLegendHtml(metric: MapMetric | null): string {
+  if (!metric) return '';
   const stops = metric.legendStops;
-  if (stops.length === 0) return '';
+  if (!stops.length) return '';
   const cols = `grid-template-columns:repeat(${stops.length},1fr)`;
-  let html = `<div class="map-legend-swatches" style="${cols}">`;
-  for (const stop of stops) html += swatch(stop);
+  let html = '<div class="rm-legend-route">';
+  html += `<div class="map-legend-swatches" style="${cols}">`;
+  for (const stop of stops) {
+    html += `<div class="map-legend-stop" style="background:${stop.color}" title="${escapeHtml(stop.label)}"></div>`;
+  }
   html += '</div>';
   html += `<div class="map-legend-labels" style="${cols}">`;
   for (const stop of stops) html += `<span>${escapeHtml(stop.label)}</span>`;
   html += '</div>';
+  html += metric.unit ? `<span class="rm-legend-unit">${escapeHtml(metric.unit)}</span>` : '';
+  html += '</div>';
   return html;
 }
 
-function colorScaleHtml(metric: MapMetric): string {
-  return scaleHtml(metric, (stop) =>
-    `<div class="map-legend-stop" style="background:${stop.color}" title="${escapeHtml(stop.label)}"></div>`);
-}
-
-function widthScaleHtml(metric: MapMetric): string {
-  return scaleHtml(metric, (stop) => {
-    const h = widthBarPx(metric.getWidth(stop.value));
-    return `<div class="map-legend-width-cell" title="${escapeHtml(stop.label)}"><div class="map-legend-width-bar" style="height:${h}px"></div></div>`;
-  });
+/** Pure HTML for the airport overlay's compact legend line. */
+export function airportLegendHtml(legend: MapLegend | null): string {
+  if (!legend || !legend.items.length) return '';
+  let html = `<div class="rm-legend-airports"><span class="rm-legend-airports-title">${escapeHtml(legend.title)}</span>`;
+  for (const item of legend.items) {
+    html += `<span class="rm-legend-airport-item"><span class="rm-legend-dot" style="background:${item.color}"></span>${escapeHtml(item.label)}</span>`;
+  }
+  html += '</div>';
+  return html;
 }

@@ -7,8 +7,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getMapMetricById, MAP_METRICS } from '../../ts/visualization/route-map/metrics';
-import { riskMapColor } from '../../ts/visualization/scales';
+import {
+  getMapMetricById, MAP_METRICS, ROUTE_MAP_CATALOG, DEFAULT_MAP_METRIC_ID,
+  ROUTE_WEIGHT_MIN, ROUTE_WEIGHT_MAX, resolveMapMetric, mapMetricGroups,
+  validateRouteMapCatalog, widthFraction,
+} from '../../ts/visualization/route-map/metrics';
 import {
   makeVizPoint, makeAltitudeLines, makeIcingZone, makeCloudLayer,
   makeCatLayer, makeSfipZone,
@@ -107,15 +110,15 @@ describe('sfip-at-level', () => {
     expect(m().getValue(point, 6000)).toBe(25);
   });
 
-  it('color thresholds map SFIP to the shared icing-risk colors', () => {
+  it('color thresholds map SFIP to the icing-risk colors', () => {
     // Boundaries track the backend's sfip_to_risk() (15/30/55), and the colors
-    // come from the shared risk scale rather than a private palette — so the
-    // map speaks the same vocabulary as the icing-risk metric beside it.
-    expect(m().getColor(10)).toBe(riskMapColor('none'));
-    expect(m().getColor(20)).toBe(riskMapColor('light'));
-    expect(m().getColor(35)).toBe(riskMapColor('moderate'));
-    expect(m().getColor(70)).toBe(riskMapColor('severe'));
-    expect(m().getColor(90)).toBe(riskMapColor('severe'));
+    // are the icing-risk metric's, so the two speak one vocabulary.
+    const icing = getMetric('icing-risk-at-level');
+    expect(m().getColor(10)).toBe(icing.getColor(0));
+    expect(m().getColor(20)).toBe(icing.getColor(1));
+    expect(m().getColor(35)).toBe(icing.getColor(2));
+    expect(m().getColor(70)).toBe(icing.getColor(3));
+    expect(m().getColor(90)).toBe(icing.getColor(3));
   });
 });
 
@@ -209,8 +212,8 @@ describe('nwp-ceiling', () => {
     const wLow = m().getWidth(0);
     const wHigh = m().getWidth(5000);
     expect(wLow).toBeGreaterThan(wHigh);
-    expect(wLow).toBeCloseTo(25, 1);
-    expect(wHigh).toBeCloseTo(3, 1);
+    expect(wLow).toBeCloseTo(ROUTE_WEIGHT_MAX, 1);
+    expect(wHigh).toBeCloseTo(ROUTE_WEIGHT_MIN, 1);
   });
 
   it('legend shows one distinct colour per category (#735)', () => {
@@ -246,22 +249,12 @@ describe('sfip-at-level honours the backend icing tiers', () => {
   // backend's sfip_to_risk() used 15/30/55, so a score the backend graded as
   // LIGHT icing rendered as green "Low" on the map. These boundaries MUST
   // track _SFIP_NONE / _SFIP_LIGHT / _SFIP_MODERATE in analysis/sounding/sfip.py.
-  const tierAt = (score: number) => {
-    const m = getMetric('sfip-at-level');
-    return m.formatValue!(score);
-  };
+  const icing = () => getMetric('icing-risk-at-level');
 
   it.each([
-    [0, 'none'],
-    [14.9, 'none'],
-    [15, 'light'],
-    [29.9, 'light'],
-    [30, 'moderate'],
-    [54.9, 'moderate'],
-    [55, 'severe'],
-    [100, 'severe'],
-  ])('SFIP %s is %s', (score, tier) => {
-    expect(tierAt(score as number)).toContain(tier as string);
+    [0, 0], [14.9, 0], [15, 1], [29.9, 1], [30, 2], [54.9, 2], [55, 3], [100, 3],
+  ])('SFIP %s draws icing tier %s', (score, tier) => {
+    expect(getMetric('sfip-at-level').getColor(score as number)).toBe(icing().getColor(tier as number));
   });
 
   it('a score the backend calls LIGHT is not coloured as none', () => {
@@ -272,5 +265,58 @@ describe('sfip-at-level honours the backend icing tiers', () => {
   it('legend boundaries match the backend thresholds', () => {
     const m = getMetric('sfip-at-level');
     expect(m.legendStops!.map((s) => s.value)).toEqual([0, 15, 30, 55]);
+  });
+});
+
+describe('served catalog (#998)', () => {
+  it('validates clean', () => {
+    expect(validateRouteMapCatalog(ROUTE_MAP_CATALOG)).toEqual([]);
+  });
+
+  it('every catalog metric is drawable on the web (no unknown extractor)', () => {
+    expect(MAP_METRICS.map((m) => m.id)).toEqual(ROUTE_MAP_CATALOG.metrics.map((m) => m.key));
+  });
+
+  it('defaults to cloud cover, not a phone-side flight category', () => {
+    expect(DEFAULT_MAP_METRIC_ID).toBe('cloud-cover-total');
+    expect(getMapMetricById('flight-category')).toBeUndefined();
+  });
+
+  it('has no Width metric', () => {
+    expect(MAP_METRICS.some((m) => /width/i.test(m.id))).toBe(false);
+  });
+
+  it('an unknown stored id falls back to the default', () => {
+    expect(resolveMapMetric('flight-category').id).toBe(DEFAULT_MAP_METRIC_ID);
+    expect(resolveMapMetric(null).id).toBe(DEFAULT_MAP_METRIC_ID);
+    expect(resolveMapMetric('cape').id).toBe('cape');
+  });
+
+  it('groups: At altitude holds exactly the altitude metrics', () => {
+    const groups = mapMetricGroups();
+    expect(groups.map((g) => g.key)).toEqual(['at_altitude', 'along_route']);
+    for (const m of groups[0].metrics) expect(m.altitudeDependent).toBe(true);
+    for (const m of groups[1].metrics) expect(m.altitudeDependent).toBe(false);
+  });
+
+  it('flags a malformed catalog', () => {
+    const bad = { ...ROUTE_MAP_CATALOG, default_metric: 'nope',
+      metrics: [{ ...ROUTE_MAP_CATALOG.metrics[0], scale: 'missing', value: 'nothing' }] };
+    const problems = validateRouteMapCatalog(bad);
+    expect(problems.join('|')).toMatch(/unknown scale/);
+    expect(problems.join('|')).toMatch(/unknown value/);
+    expect(problems.join('|')).toMatch(/default/);
+  });
+
+  it('widthFraction clamps and handles inverted specs', () => {
+    expect(widthFraction({ thin_at: 0, thick_at: 10 }, 5)).toBe(0.5);
+    expect(widthFraction({ thin_at: 0, thick_at: 10 }, 20)).toBe(1);
+    expect(widthFraction({ thin_at: 10, thick_at: 0 }, 0)).toBe(1);
+    expect(widthFraction({ thin_at: 5, thick_at: 5 }, 5)).toBe(0);
+  });
+
+  it('wind speed reads the point speed; headwind colours white at calm', () => {
+    expect(getMetric('wind-speed').getValue(makeVizPoint({ windSpeedKt: 25 }))).toBe(25);
+    expect(getMetric('headwind').getColor(0).toLowerCase()).toMatch(/^(#ffffff|rgb\(255, 255, 255\))$/);
   });
 });

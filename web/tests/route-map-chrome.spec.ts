@@ -2,9 +2,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-// Briefing route map legend (#731): the Color/Width pickers sit in the legend
-// rows, each stop label sits under its own swatch, and the Width row draws
-// thickness. Reuses the egtf_eglf fixture.
+// Briefing route map chrome (#998): one grouped metric picker in the bottom
+// panel, the altitude stepper only for altitude metrics, each legend label
+// under its own swatch, and Hide down to a pill. Reuses the egtf_eglf fixture.
 
 const FIXTURES = join(__dirname, 'fixtures', 'egtf_eglf');
 const FUTURE_DATE = new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10);
@@ -47,60 +47,57 @@ async function centres(page: Page, selector: string): Promise<number[]> {
     els.map(e => { const b = e.getBoundingClientRect(); return b.left + b.width / 2; }));
 }
 
-async function openMapWithLegend(page: Page) {
+async function openMap(page: Page, metric = 'icing-risk-at-level') {
   await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
   await page.locator('button[data-layout="map"]').first().click();
-  await page.locator('#map-color-metric').selectOption('icing-risk-at-level');
-  await page.locator('#map-width-metric').selectOption('convective-risk');
+  await page.locator('#rm-metric').selectOption(metric);
 }
 
 async function expectAligned(page: Page) {
-  for (const channel of ['color', 'width']) {
-    const scope = `#map-legend .map-legend-scale-${channel}`;
-    const swatch = channel === 'color' ? '.map-legend-stop' : '.map-legend-width-cell';
-    const s = await centres(page, `${scope} ${swatch}`);
-    const l = await centres(page, `${scope} .map-legend-labels span`);
-    expect(s.length).toBeGreaterThan(0);
-    expect(l.length).toBe(s.length);
-    s.forEach((x, i) => expect(Math.abs(x - l[i])).toBeLessThanOrEqual(1));
-  }
+  const s = await centres(page, '.rm-legend-route .map-legend-stop');
+  const l = await centres(page, '.rm-legend-route .map-legend-labels span');
+  expect(s.length).toBeGreaterThan(0);
+  expect(l.length).toBe(s.length);
+  s.forEach((x, i) => expect(Math.abs(x - l[i])).toBeLessThanOrEqual(1));
 }
 
-test.describe('Briefing route map — legend (#731)', () => {
+test.describe('Briefing route map — #996-style chrome (#998)', () => {
   test.beforeEach(async ({ page }) => { await mockBriefingApi(page); });
 
-  test('pickers live in the legend; labels align; width draws thickness', async ({ page }) => {
-    await openMapWithLegend(page);
-
-    // One picker per channel, inside the legend — not repeated in the controls row.
-    await expect(page.locator('#map-legend #map-color-metric')).toHaveValue('icing-risk-at-level');
-    await expect(page.locator('#map-legend #map-width-metric')).toHaveValue('convective-risk');
-    await expect(page.locator('#map-controls select#map-color-metric')).toHaveCount(0);
-    // The metric is named once, by its picker: the row's own text is the channel.
-    await expect(page.locator('#map-legend .map-legend-channel')).toHaveText(['Color:', 'Width:']);
-
+  test('one metric picker, grouped; stepper only at altitude; legend aligned', async ({ page }) => {
+    await openMap(page);
+    await expect(page.locator('#rm-metric optgroup')).toHaveCount(2);
+    // No Width metric any more.
+    await expect(page.locator('#map-width-metric')).toHaveCount(0);
+    await expect(page.locator('#rm-alt-reset')).toBeVisible();
+    const before = await page.locator('#rm-alt-reset').textContent();
+    await page.locator('#rm-alt-up').click();
+    await expect(page.locator('#rm-alt-reset')).not.toHaveText(before ?? '');
+    await page.locator('#rm-alt-reset').click();
+    await expect(page.locator('#rm-alt-reset')).toHaveText(before ?? '');
     await expectAligned(page);
+    await page.locator('#viz-map-pane').screenshot({ path: 'test-results/route-map-chrome-desktop.png' });
 
-    // Width bars thicken with convective risk.
-    const heights = await page.locator('#map-legend .map-legend-width-bar').evaluateAll(els =>
-      els.map(e => e.getBoundingClientRect().height));
-    expect(heights).toHaveLength(5);
-    for (let i = 1; i < heights.length; i++) expect(heights[i]).toBeGreaterThan(heights[i - 1]);
-    await page.locator('#viz-map-pane').screenshot({ path: 'test-results/route-map-legend-desktop.png' });
+    // A surface metric drops the stepper.
+    await page.locator('#rm-metric').selectOption('cloud-cover-total');
+    await expect(page.locator('#rm-alt-reset')).toHaveCount(0);
+  });
 
-    // Width "none": the picker stays, the strip goes.
-    await page.locator('#map-width-metric').selectOption('none');
-    await expect(page.locator('#map-legend .map-legend-width-bar')).toHaveCount(0);
-    await expect(page.locator('#map-legend #map-width-metric')).toHaveValue('none');
+  test('Hide leaves a pill and widens the map; Show restores', async ({ page }) => {
+    await openMap(page);
+    await page.locator('#rm-hide').click();
+    await expect(page.locator('#rm-show')).toContainText('FL');
+    await expect(page.locator('.rm-panel')).toHaveCount(0);
+    await page.locator('#rm-show').click();
+    await expect(page.locator('.rm-panel')).toBeVisible();
   });
 
   test('phone width: no horizontal overflow, labels still aligned', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
-    await openMapWithLegend(page);
-    await page.locator('#map-color-metric').selectOption('nwp-ceiling');  // longest stop labels
+    await openMap(page, 'nwp-ceiling');  // longest stop labels
     await expectAligned(page);
-    const overflow = await page.locator('#map-legend').evaluate(e => e.scrollWidth - e.clientWidth);
+    const overflow = await page.locator('.rm-panel').evaluate(e => e.scrollWidth - e.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
-    await page.locator('#viz-map-pane').screenshot({ path: 'test-results/route-map-legend-phone.png' });
+    await page.locator('#viz-map-pane').screenshot({ path: 'test-results/route-map-chrome-phone.png' });
   });
 });

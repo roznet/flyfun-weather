@@ -12,7 +12,7 @@ export interface MapInteractionCallbacks {
 }
 
 export interface MapInteractionHandle {
-  update(data: VizRouteData, color: MapMetric | null, width: MapMetric | null, altFt?: number): void;
+  update(data: VizRouteData, metric: MapMetric | null, altFt?: number): void;
   destroy(): void;
 }
 
@@ -20,13 +20,11 @@ export function attachMapInteraction(
   renderer: RouteMapRenderer,
   data: VizRouteData,
   colorMetric: MapMetric | null,
-  widthMetric: MapMetric | null,
   altitudeFt: number,
   callbacks: MapInteractionCallbacks,
 ): MapInteractionHandle {
   let currentData = data;
   let currentColor = colorMetric;
-  let currentWidth = widthMetric;
   let currentAltFt = altitudeFt;
 
   const segmentGroup = renderer.getSegmentGroup();
@@ -58,12 +56,6 @@ export function attachMapInteraction(
       const v = currentColor.getValue(p1, currentAltFt);
       if (v !== null) {
         lines.push(`${currentColor.label}: ${currentColor.formatValue(v)}`);
-      }
-    }
-    if (currentWidth && currentWidth.id !== currentColor?.id) {
-      const v = currentWidth.getValue(p1, currentAltFt);
-      if (v !== null) {
-        lines.push(`${currentWidth.label}: ${currentWidth.formatValue(v)}`);
       }
     }
 
@@ -134,11 +126,10 @@ export function attachMapInteraction(
   attachListeners();
 
   return {
-    update(newData, newColor, newWidth, altFt) {
+    update(newData, newColor, altFt) {
       detachListeners();
       currentData = newData;
       currentColor = newColor;
-      currentWidth = newWidth;
       if (altFt !== undefined) currentAltFt = altFt;
       attachListeners();
     },

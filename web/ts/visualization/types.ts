@@ -11,14 +11,19 @@ export type CompareBandMode = 'overlay' | 'overlay-soft' | 'consensus' | 'consen
 export interface VizSettings {
   layout: VizLayout;
   enabledLayers: Record<string, boolean>;
+  /** The route-map metric (#998): colours AND sizes the route line (the
+   *  separate Width metric is gone). An id from the served route catalog. */
   mapColorMetric: string;
-  mapWidthMetric: string;
   mapAltitudeFt: number | null;  // altitude for level-dependent map metrics (null = cruise)
   /** Which observed layer the map draws (#574). One at a time: these are
    *  different measurements of the same sky and stacking them would make it
    *  impossible to say which one a colour came from. `''` draws none.
-   *  `eumetsat_li` is points rather than a raster; everything else is imagery. */
+   *  Lightning is not one of these any more (#998): it is points, drawn with
+   *  any of them, under `observedLightning`. */
   observedOverlay: string;
+  /** Draw observed lightning flashes (#998: a toggle, as on the apps, so radar
+   *  and lightning can show together). */
+  observedLightning?: boolean;
   /** Opacity of the observed imagery, 0–1. User-controlled, like the synoptic
    *  grid layer: these rasters cover the whole corridor and a fixed opacity
    *  either buries the basemap or washes the data out, depending on the
@@ -462,6 +467,13 @@ export interface VizPoint {
   cloudCoverMidPct: number;
   headwindKt: number;
   crosswindKt: number;
+  /** Wind speed (kt) at the point for the selected model (`wind_components`),
+   *  for the route map's Wind Speed metric (#998). `null` when absent. */
+  windSpeedKt: number | null;
+  /** Model visibility (m) for the selected model (`model_divergence`
+   *  `visibility_m`), for the route map's Visibility metric (#998). `null`
+   *  when the model has none (ICON after the native-grid switch). */
+  visibilityM: number | null;
   capeSurfaceJkg: number;
   worstModelAgreement: string;
   /**

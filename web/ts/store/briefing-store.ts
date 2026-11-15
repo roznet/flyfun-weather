@@ -11,6 +11,7 @@ import { getTierDefaults } from '../helpers/metrics-helper';
 import { getDefaultEnabled, getPreset } from '../visualization/cross-section/layer-registry';
 import type { ResolvedView } from '../visualization/cross-section/advisory-presets';
 import { HIGHLIGHT_LAYER_ID } from '../visualization/cross-section/advisory-highlights';
+import { DEFAULT_MAP_METRIC_ID } from '../visualization/route-map/metrics';
 import { setActiveTheme, type ThemeId, THEMES } from '../visualization/cross-section/theme';
 import { RefreshStreamError } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
@@ -71,8 +72,8 @@ function loadTierVisibility(): Record<Tier, boolean> {
  *  `settingsVersion`. Exported for test: it is invisible when it fails.
  */
 /** Bump when a migration below must run exactly once per saved state.
- *  1 = #597 theme ownership. */
-export const VIZ_SETTINGS_VERSION = 1;
+ *  1 = #597 theme ownership. 2 = #998 lightning becomes its own toggle. */
+export const VIZ_SETTINGS_VERSION = 2;
 
 export function migrateVizSettings(settings: VizSettings): VizSettings {
   let out = settings;
@@ -91,6 +92,17 @@ export function migrateVizSettings(settings: VizSettings): VizSettings {
     if (emulation && out.vizTheme === emulation.themeId) {
       out = { ...out, vizTheme: undefined };
     }
+  }
+  // #998: lightning was one of the "one at a time" imagery choices; it is now
+  // a toggle drawn with the radar. A saved lightning pick becomes no imagery
+  // with lightning on, which is what the pilot was looking at.
+  if ((out.settingsVersion ?? 0) < 2 && (out as { observedOverlay?: string }).observedOverlay === 'eumetsat_li') {
+    out = { ...out, observedOverlay: '', observedLightning: true };
+  }
+  // The Width metric is gone (#998): line width follows the colour metric.
+  if ('mapWidthMetric' in out) {
+    const { mapWidthMetric: _drop, ...rest } = out as VizSettings & { mapWidthMetric?: string };
+    out = rest as VizSettings;
   }
   if (out.settingsVersion !== VIZ_SETTINGS_VERSION) {
     out = { ...out, settingsVersion: VIZ_SETTINGS_VERSION };
@@ -116,7 +128,8 @@ function loadVizSettings(): VizSettings {
   const defaults: VizSettings = {
     layout: 'cross-section',
     enabledLayers: getDefaultEnabled(),
-    mapColorMetric: 'icing-risk-at-level',
+    // The served catalog's default (#998), one place for every client.
+    mapColorMetric: DEFAULT_MAP_METRIC_ID,
     // Radar reflectivity by default: highest cadence, and the one that answers
     // "is that cell on my route". Falls back at render time to whatever was
     // actually collected.
@@ -127,7 +140,8 @@ function loadVizSettings(): VizSettings {
     observedSatellite: true,
     // Off by default: the cell overlay is experimental (#656).
     observedCells: false,
-    mapWidthMetric: 'cloud-cover-total',
+    // On by default, drawn with the radar (#998), as on the apps.
+    observedLightning: true,
     mapAltitudeFt: null,
     routeGraphVisible: true,
     routeGraphLeftMetric: 'headwind',
@@ -325,7 +339,7 @@ export interface BriefingState {
   setObservedOverlayOpacity: (opacity: number) => void;
   setObservedSatellite: (show: boolean) => void;
   setObservedCells: (show: boolean) => void;
-  setMapWidthMetric: (metricId: string) => void;
+  setObservedLightning: (show: boolean) => void;
   setMapAltitude: (altitudeFt: number | null) => void;
   setMapFrontsVisible: (visible: boolean) => void;
   setMapForecastOverlayVisible: (visible: boolean) => void;
@@ -1434,8 +1448,8 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     saveVizSettings(updated);
   },
 
-  setMapWidthMetric: (metricId: string) => {
-    const updated = { ...get().vizSettings, mapWidthMetric: metricId };
+  setObservedLightning: (show: boolean) => {
+    const updated = { ...get().vizSettings, observedLightning: show };
     set({ vizSettings: updated });
     saveVizSettings(updated);
   },
