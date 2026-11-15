@@ -8183,7 +8183,10 @@ step, mostly showers just above the freezing level.
 Not yet. The amber-volume replay needs stored winter flights, which the cloud
 sessions cannot reach. Run it on the Mac with
 `WB_SLD_ICING=live python scripts/rerun_advisories_diff.py --area corpus`
-(sweep the two thresholds through the env variables), and read
+(sweep the two thresholds through the env variables, **per model**: the
+depth is measured between level centres, so 1,000 ft spans a different number
+of levels on GFS (25 hPa) than on AROME or ICON-D2, and a single level never
+makes a band), and read
 `per_model[].shadow` on production briefings once this is deployed. GFS rain
 water only exists on briefings made after §83 is deployed, so a replay of
 older packs measures ICON-D2, AROME and HRRR only.

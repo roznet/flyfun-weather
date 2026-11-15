@@ -63,6 +63,7 @@ card; ``live`` grades it; ``off`` skips it.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -100,6 +101,8 @@ from weatherbrief.models import (
     SoundingAnalysis,
 )
 
+logger = logging.getLogger(__name__)
+
 ADVISORY_ID = "aircraft_icing"
 # ``Mitigation.addresses`` of the escape level. Keeps the retired card's id so
 # clients keyed on it still find it; the digest matches on this constant.
@@ -134,7 +137,11 @@ SLD_SHADOW_RULE = "sld_icing"
 def sld_icing_mode() -> str:
     """``live``, ``off`` or ``shadow`` (the default, and any other value)."""
     mode = os.environ.get(SLD_MODE_ENV, "").strip().lower()
-    return mode if mode in ("live", "off") else "shadow"
+    if mode in ("live", "off", "shadow"):
+        return mode
+    if mode:
+        logger.warning("%s=%r is not live, shadow or off: running in shadow", SLD_MODE_ENV, mode)
+    return "shadow"
 
 
 def point_sld_zones(sounding: SoundingAnalysis) -> list[SldZone]:
@@ -279,7 +286,12 @@ def icing_picture(
         sld_cruise = tuple(
             z for z in sld if z.base_ft <= cruise + band and z.top_ft >= cruise - band
         )
-        sld_column = tuple(z for z in sld if z.base_ft < cruise and z.top_ft > ground)
+        # Clipped to the column like ``column_zones``: the climb or descent
+        # crosses only the part between the ground and cruise.
+        sld_column = tuple(
+            z.model_copy(update={"base_ft": max(z.base_ft, ground), "top_ft": min(z.top_ft, cruise)})
+            for z in sld if z.base_ft < cruise and z.top_ft > ground
+        )
         fz = sounding.indices.freezing_level_ft if sounding.indices else None
         warm = not cruise_zones and fz is not None and cruise < fz
         down_ft = down_block = up_ft = floor_ft = None
@@ -303,7 +315,10 @@ def icing_picture(
     return points
 
 
-def icing_cell_cost(sounding: SoundingAnalysis, alt_ft: float, fiki: bool) -> float:
+def icing_cell_cost(
+    sounding: SoundingAnalysis, alt_ft: float, fiki: bool,
+    sld_cache: dict[int, list[SldZone]] | None = None,
+) -> float:
     """Solver occupancy cost of one altitude at one point, by the card's own rules.
 
     Membership of a hazardous zone decides, with no freezing-level shortcut:
@@ -313,13 +328,21 @@ def icing_cell_cost(sounding: SoundingAnalysis, alt_ft: float, fiki: bool) -> fl
 
     With ``WB_SLD_ICING=live``, a confirmed SLD zone (§84) is a wall too, and
     an unconfirmed band aloft is priced like moderate icing: never a wall, but
-    never offered as an icing-free level either.
+    never offered as an icing-free level either. ``sld_cache`` (keyed by
+    ``id(sounding)``, valid for one solve) keeps the solver from re-detecting
+    the zones at every altitude cell.
     """
     if not sounding.active_icing_available:
         return INF
     worst = 0.0
     if sld_icing_mode() == "live":
-        for sz in point_sld_zones(sounding):
+        if sld_cache is None:
+            zones = point_sld_zones(sounding)
+        else:
+            zones = sld_cache.get(id(sounding))
+            if zones is None:
+                zones = sld_cache[id(sounding)] = point_sld_zones(sounding)
+        for sz in zones:
             if sz.base_ft <= alt_ft <= sz.top_ft:
                 if sz.confirmed:
                     return INF
@@ -789,8 +812,10 @@ def _mitigations(
             mitigated_status=AdvisoryStatus.AMBER, altitude_ft=alt,
         ))
 
+    # One solve: the soundings outlive it, so id() keys stay valid.
+    sld_cache: dict[int, list[SldZone]] = {}
     cm = build_cost_model(
-        ctx, model, lambda s, a: icing_cell_cost(s, a, fiki),
+        ctx, model, lambda s, a: icing_cell_cost(s, a, fiki, sld_cache),
         params.get("terrain_margin_ft", 1000),
     )
     if cm is not None:
