@@ -8,14 +8,18 @@ import SwiftUI
 /// before it (lead Latest / D-1…D-6), coloured by the forecast map's catalog on
 /// the same marker layer.
 ///
-/// Laid out like `ForecastMapView`: "when" (date, time, lead) on top, "what"
-/// (source, metric, legend) bottom-right, the airport card in an iPad inspector
-/// or an iPhone bottom sheet. Container-agnostic in the same way.
+/// Shown to the pilot as **Past**, the other side of the map's Forecast | Past
+/// switch (#996). Laid out like `ForecastMapView` with the shared `MapChrome`:
+/// "when" (date, time) in the time bar on top, "what" (metric, source, and for
+/// model sources the run age) in one bottom panel with the legend, the airport
+/// card in an iPad inspector or an iPhone bottom sheet.
 struct HistoricalMapView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: HistoricalMapViewModel
     @State private var locator = OneShotLocator()
+    /// Map-only view (#996), shared with the forecast map through `MapChrome`.
+    @State private var controlsHidden = MapChrome.controlsHidden
     private let onClose: (() -> Void)?
     private let onToggleSidebar: (() -> Void)?
     /// Swap back to the forecast map.
@@ -39,12 +43,15 @@ struct HistoricalMapView: View {
         ZStack(alignment: .top) {
             mapLayer
             topControls
-            bottomControls
+            if !controlsHidden {
+                bottomControls
+            }
             if !viewModel.didLoadOnce {
                 loadingOverlay
             }
         }
         .task { viewModel.start() }
+        .onChange(of: controlsHidden) { MapChrome.controlsHidden = controlsHidden }
         .onChange(of: locator.located) {
             guard let c = locator.located else { return }
             viewModel.focusRequest = ForecastMapViewModel.FocusRequest(
@@ -97,7 +104,7 @@ struct HistoricalMapView: View {
 
     private var topControls: some View {
         VStack(spacing: Theme.spacingS) {
-            HStack(alignment: .top) {
+            HStack(alignment: .center) {
                 // Keyed on the container's callback, not size class — see
                 // ForecastMapView's leading slot.
                 if let onClose {
@@ -108,49 +115,69 @@ struct HistoricalMapView: View {
                     MapChrome.circleButton(systemImage: "sidebar.leading", action: onToggleSidebar)
                         .accessibilityLabel("Toggle Sidebar")
                         .accessibilityIdentifier("mapSidebarToggle")
+                } else {
+                    Color.clear.frame(width: 36, height: 36)
                 }
-                Spacer()
-                VStack(spacing: 2) {
-                    Text(navTitle).font(.headline).monospacedDigit()
-                    Text(navSubtitle).font(.caption).foregroundStyle(Theme.textMuted)
+                Spacer(minLength: Theme.spacingS)
+                if !controlsHidden, let onShowForecast {
+                    MapChrome.modeSwitch(current: .past) { _ in onShowForecast() }
                 }
-                Spacer()
-                if let onShowForecast {
-                    MapChrome.circleButton(systemImage: "map", action: onShowForecast)
-                        .accessibilityLabel("Forecast map")
-                        .accessibilityIdentifier("mapForecastButton")
+                Spacer(minLength: Theme.spacingS)
+                if controlsHidden {
+                    MapChrome.showControlsPill(time: compactTimeLabel) { controlsHidden = false }
+                } else {
+                    MapChrome.circleButton(systemImage: "arrow.up.left.and.arrow.down.right") { controlsHidden = true }
+                        .accessibilityLabel("Hide map controls")
+                        .accessibilityIdentifier("mapHideControlsButton")
                 }
             }
-            HStack(spacing: Theme.spacingS) {
-                datePicker
-                timeStepper
-                leadMenu
-                if viewModel.isLoading, viewModel.didLoadOnce {
-                    ProgressView().controlSize(.small)
-                }
-                Spacer(minLength: 0)
-            }
-            if let status = viewModel.statusLine {
-                HStack(spacing: Theme.spacingS) {
-                    Text(status)
-                        .font(.caption2)
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(2)
-                    // A failed reload keeps the pickers; this re-fetches the same instant.
-                    if viewModel.loadError != nil, viewModel.didLoadOnce, !viewModel.isLoading {
-                        Spacer(minLength: 0)
-                        Button("Retry") { viewModel.retryReload() }
-                            .font(.caption2.weight(.semibold))
-                            .accessibilityIdentifier("historicalRetryButton")
+            if !controlsHidden {
+                timeBar
+                if let status = viewModel.statusLine {
+                    HStack(spacing: Theme.spacingS) {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(2)
+                        // A failed reload keeps the pickers; this re-fetches the same instant.
+                        if viewModel.loadError != nil, viewModel.didLoadOnce, !viewModel.isLoading {
+                            Spacer(minLength: 0)
+                            Button("Retry") { viewModel.retryReload() }
+                                .font(.caption2.weight(.semibold))
+                                .accessibilityIdentifier("historicalRetryButton")
+                        }
                     }
-                }
                     .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .background(MapChrome.surface(RoundedRectangle(cornerRadius: 8)))
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
+        .frame(maxWidth: 560)
         .padding(.horizontal, Theme.spacingM)
         .padding(.top, isCompact ? Theme.spacingM : Theme.spacingS)
+    }
+
+    /// ◀ date · time ▶: the arrows step 30 minutes; the date opens the system
+    /// calendar (a long history stays browsable) and the time the slot list.
+    private var timeBar: some View {
+        HStack(spacing: 4) {
+            MapChrome.stepButton("chevron.left", label: "Earlier", enabled: viewModel.canStepBack) {
+                viewModel.step(-1)
+            }
+            Spacer(minLength: 0)
+            datePicker
+            timeMenu
+            if viewModel.isLoading, viewModel.didLoadOnce {
+                ProgressView().controlSize(.small)
+            }
+            Spacer(minLength: 0)
+            MapChrome.stepButton("chevron.right", label: "Later", enabled: viewModel.canStepForward) {
+                viewModel.step(1)
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(MapChrome.surface(RoundedRectangle(cornerRadius: 12)))
     }
 
     /// UTC calendar date. The system compact picker keeps a long history
@@ -173,30 +200,24 @@ struct HistoricalMapView: View {
         .accessibilityIdentifier("historicalDatePicker")
     }
 
-    private var timeStepper: some View {
-        HStack(spacing: 6) {
-            Button { viewModel.step(-1) } label: { Image(systemName: "chevron.left") }
-                .disabled(!viewModel.canStepBack)
-                .accessibilityLabel("Earlier")
-            Menu {
-                ForEach(viewModel.timeSlots, id: \.self) { slot in
-                    Button {
-                        viewModel.selectInstant(slot)
-                    } label: {
-                        MapChrome.menuRow(HistoricalTime.timeLabel(slot), selected: slot == viewModel.selectedInstant)
-                    }
-                    .disabled(!viewModel.isSelectable(slot))
+    private var timeMenu: some View {
+        Menu {
+            ForEach(viewModel.timeSlots, id: \.self) { slot in
+                Button {
+                    viewModel.selectInstant(slot)
+                } label: {
+                    MapChrome.menuRow(HistoricalTime.timeLabel(slot), selected: slot == viewModel.selectedInstant)
                 }
-            } label: {
-                Text(viewModel.selectedInstant.map { HistoricalTime.timeLabel($0) } ?? "--:--Z")
-                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                .disabled(!viewModel.isSelectable(slot))
             }
-            Button { viewModel.step(1) } label: { Image(systemName: "chevron.right") }
-                .disabled(!viewModel.canStepForward)
-                .accessibilityLabel("Later")
+        } label: {
+            Text(viewModel.selectedInstant.map { HistoricalTime.timeLabel($0) } ?? "--:--Z")
+                .font(.subheadline.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Theme.bg, in: Capsule())
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: Capsule())
+        .accessibilityIdentifier("historicalTimeMenu")
     }
 
     private var leadMenu: some View {
@@ -211,7 +232,7 @@ struct HistoricalMapView: View {
                 }
             }
         } label: {
-            MapChrome.capsuleLabel(text: Self.leadShortLabel(viewModel.lead), systemImage: "clock.arrow.circlepath")
+            MapChrome.pickLabel(caption: "Runs", value: Self.leadShortLabel(viewModel.lead))
         }
     }
 
@@ -225,22 +246,22 @@ struct HistoricalMapView: View {
 
     static func leadShortLabel(_ n: Int) -> String { n == 0 ? "Latest" : "D-\(n)" }
 
-    // MARK: - Bottom-right controls ("what")
+    // MARK: - Bottom panel ("what")
 
     private var bottomControls: some View {
-        VStack {
+        VStack(alignment: .trailing, spacing: Theme.spacingS) {
             Spacer()
-            HStack(alignment: .bottom) {
-                if let cat = catalog, let legend = cat.legend(metric: viewModel.metric) {
-                    MapChrome.legendCapsule(legend)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: Theme.spacingS) {
-                    sourceMenu
-                    metricMenu
-                    locateButton
+            locateButton
+            MapChrome.bottomPanel(legend: catalog?.legend(metric: viewModel.metric)) {
+                metricMenu
+                sourceMenu
+                // Run age only means something for a model source (was a
+                // clock-icon capsule on top, the same icon as the old switch).
+                if !viewModel.source.isObserved {
+                    leadMenu
                 }
             }
+            .frame(maxWidth: .infinity)
         }
         .padding(Theme.spacingM)
     }
@@ -256,7 +277,7 @@ struct HistoricalMapView: View {
                 ForEach(HistoricalSource.nwpModels, id: \.self) { sourceButton($0, title: $0.label) }
             }
         } label: {
-            MapChrome.capsuleLabel(text: viewModel.source.label, systemImage: "square.stack.3d.up")
+            MapChrome.pickLabel(caption: "Source", value: viewModel.source.label)
         }
         .accessibilityIdentifier("historicalSourceMenu")
     }
@@ -287,31 +308,24 @@ struct HistoricalMapView: View {
                 }
             }
         } label: {
-            MapChrome.capsuleLabel(text: catalog?.label(metric: viewModel.metric) ?? "Metric", systemImage: "paintpalette")
+            MapChrome.pickLabel(caption: "Showing", value: catalog?.label(metric: viewModel.metric) ?? "Metric")
         }
     }
 
     private var locateButton: some View {
-        Button {
-            locator.request()
-        } label: {
-            Image(systemName: "location")
-                .font(.subheadline.weight(.medium))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .accessibilityLabel("Centre on my location")
+        MapChrome.circleButton(systemImage: "location") { locator.request() }
+            .accessibilityLabel("Centre on my location")
     }
 
     private var loadingOverlay: some View {
         VStack(spacing: Theme.spacingM) {
             if let err = viewModel.loadError {
-                ContentUnavailableView("Historical Map Unavailable", systemImage: "clock.arrow.circlepath",
+                ContentUnavailableView("Past Map Unavailable", systemImage: "clock.arrow.circlepath",
                                        description: Text(err))
                 Button("Retry") { viewModel.retry() }
                     .buttonStyle(.bordered)
             } else {
-                ProgressView("Loading historical map…")
+                ProgressView("Loading past map…")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -320,19 +334,9 @@ struct HistoricalMapView: View {
 
     // MARK: - Labels
 
-    private var navTitle: String {
-        guard let at = viewModel.selectedInstant else { return "Historical" }
+    /// "28 Sep · 14:30Z" for the hidden state's pill.
+    private var compactTimeLabel: String {
+        guard let at = viewModel.selectedInstant else { return "Past" }
         return "\(HistoricalTime.shortDateLabel(at)) · \(HistoricalTime.timeLabel(at))"
-    }
-
-    private var navSubtitle: String {
-        var parts = ["Historical", viewModel.source.label]
-        if !viewModel.source.isObserved {
-            parts.append(viewModel.lead == 0 ? "latest runs" : "runs from D-\(viewModel.lead)")
-        }
-        if let at = viewModel.selectedInstant, viewModel.isObservationOnly(at) {
-            parts.append("METAR/TAF only")
-        }
-        return parts.joined(separator: " · ")
     }
 }
