@@ -58,6 +58,12 @@ class BriefingViewModel(
     private val _selectedTab = MutableStateFlow(BriefingTab.ADVISORY)
     val selectedTab: StateFlow<BriefingTab> = _selectedTab.asStateFlow()
 
+    /**
+     * Demo mode's simulated tracking (fixture repository only): one flag for the toolbar's Start
+     * and the Observed tab's tracking bar, which both read it (#996).
+     */
+    val demoTrackingActive = MutableStateFlow(false)
+
     private val _availableTabs = MutableStateFlow(BriefingTab.tabs(showsObserved = false))
     val availableTabs: StateFlow<List<BriefingTab>> = _availableTabs.asStateFlow()
 

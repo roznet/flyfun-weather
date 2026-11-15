@@ -1,9 +1,5 @@
 package aero.flyfun.weather.ui.observed
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.platform.LocalContext
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FeedbackRequest
@@ -97,7 +93,6 @@ fun ObservedTabScreen(
     onOpenMapTab: () -> Unit = { viewModel.selectTab(BriefingTab.MAP) },
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val flight by viewModel.flight.collectAsState()
     val selectedPack by viewModel.selectedPack.collectAsState()
     val advisories by viewModel.advisories.collectAsState()
@@ -119,8 +114,6 @@ fun ObservedTabScreen(
         }
     }
 
-    val serviceTracking by FlightTrackingService.isTracking.collectAsState()
-    val serviceFlightId by FlightTrackingService.activeFlightId.collectAsState()
     val serviceProjectedPos by FlightTrackingService.currentPosition.collectAsState()
 
     val isDemoMode = viewModel.repository is FixtureBriefingRepository
@@ -145,75 +138,13 @@ fun ObservedTabScreen(
         }
     }
 
-    val routeCoordinates = remember(snapshot, elevation) {
-        val wpCoords = snapshot?.route?.waypoints
-            ?.filter { it.lat != 0.0 || it.lon != 0.0 }
-            ?.map { it.lat to it.lon }
-            .orEmpty()
-        if (wpCoords.size >= 2) {
-            wpCoords
-        } else {
-            elevation?.points
-                ?.filter { it.lat != 0.0 || it.lon != 0.0 }
-                ?.map { it.lat to it.lon }
-                .orEmpty()
-        }
-    }
-
-    // Demo-mode simulation state (used only when repository is FixtureBriefingRepository)
-    var demoTrackingActive by rememberSaveable { mutableStateOf(false) }
+    // Demo mode's simulated position along the route (fixture repository only).
     var demoTrackedFraction by rememberSaveable { mutableFloatStateOf(0.28f) }
 
-    val isTrackingThisFlight = if (isDemoMode) {
-        demoTrackingActive
-    } else {
-        serviceTracking && serviceFlightId == currentFlightId
-    }
-
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
-            FlightTrackingService.hasLocationPermission(context)
-        if (granted && currentFlightId.isNotBlank()) {
-            FlightTrackingService.startTracking(
-                context = context,
-                flightId = currentFlightId,
-                waypoints = routeCoordinates,
-                apiClient = viewModel.apiClient,
-                endEpochMs = flight?.trackingWindowEndEpochMs(started = true),
-            )
-        }
-    }
-
-    val toggleTracking: () -> Unit = {
-        if (isDemoMode) {
-            demoTrackingActive = !demoTrackingActive
-        } else if (isTrackingThisFlight) {
-            FlightTrackingService.stopTracking(context)
-        } else if (currentFlightId.isNotBlank()) {
-            if (FlightTrackingService.hasLocationPermission(context)) {
-                FlightTrackingService.startTracking(
-                    context = context,
-                    flightId = currentFlightId,
-                    waypoints = routeCoordinates,
-                    apiClient = viewModel.apiClient,
-                    // Until the landing, or the latest a late take-off could still be flying (#874).
-                    endEpochMs = flight?.trackingWindowEndEpochMs(started = true),
-                )
-            } else {
-                val permissions = buildList {
-                    add(Manifest.permission.ACCESS_FINE_LOCATION)
-                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                        add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }.toTypedArray()
-                locationPermissionLauncher.launch(permissions)
-            }
-        }
-    }
+    // Shared with the toolbar's Start button (#996).
+    val trackingToggle = rememberFlightTrackingToggle(viewModel)
+    val isTrackingThisFlight = trackingToggle.isTracking
+    val toggleTracking = trackingToggle.toggle
 
     val flightProgress = remember(
         isDemoMode,
