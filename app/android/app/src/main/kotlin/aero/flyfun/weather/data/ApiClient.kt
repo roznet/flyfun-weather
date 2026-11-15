@@ -581,10 +581,9 @@ class ApiClient(
     suspend fun getObservedStatus(): ObservedImageryStatusResponse =
         get("/api/observed/status")
 
-    suspend fun getObservedFrames(layer: String, bbox: String? = null): ObservedFramesResponse {
-        val query = if (bbox != null) listOf("bbox" to bbox) else emptyList()
-        return get("/api/observed/${encodePathSegment(layer)}/frames", query)
-    }
+    /** Frames of one tiled layer (`opera_dbzh` / `opera_rate` / `satellite_ir`); the server takes no box. */
+    suspend fun getObservedFrames(source: String): ObservedFramesResponse =
+        get("/api/observed/frames/${encodePathSegment(source)}")
 
     /** Lightning in [box], last [ObservedLightningRules.TRAIL_MINUTES] (`observed.py::observed_flashes`). */
     suspend fun getObservedFlashes(box: LatLonBox): ObservedFlashesResponse =

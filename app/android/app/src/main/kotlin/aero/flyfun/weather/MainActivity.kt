@@ -235,6 +235,8 @@ fun FlyFunWeatherRoot(
 
     // Persist navigation state across configuration changes (rotation, foldable transitions, dark mode)
     var currentRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
+    /** Where the full forecast map's Back returns: the briefing when opened from its route map (#998). */
+    var mapReturnRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
     var activeFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeTripId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activePackTimestamp by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
@@ -337,6 +339,13 @@ fun FlyFunWeatherRoot(
 
     val sharedPreview by flightListViewModel.sharedPreview.collectAsState()
 
+    /** The briefing route map's "Forecast map" (#998): the full map at its slot; Back returns here. */
+    val openForecastMapFromBriefing: (NavigationTarget.ForecastMap) -> Unit = { target ->
+        forecastMapViewModel.applyDeepLinkTarget(target)
+        mapReturnRoute = currentRoute
+        currentRoute = RootRoute.MAP_FORECAST
+    }
+
     fun openBriefing(
         flightId: String,
         flight: FlightResponse? = null,
@@ -390,6 +399,7 @@ fun FlyFunWeatherRoot(
             }
             is NavigationTarget.ForecastMap -> {
                 forecastMapViewModel.applyDeepLinkTarget(target)
+                mapReturnRoute = RootRoute.FLIGHTS
                 currentRoute = RootRoute.MAP_FORECAST
             }
             is NavigationTarget.HistoricalMap -> {
@@ -417,6 +427,10 @@ fun FlyFunWeatherRoot(
             is RootScreen.Briefing -> {
                 closeBriefingToFlights()
             }
+            is RootScreen.PanEuropeanMap -> {
+                currentRoute = mapReturnRoute
+                mapReturnRoute = RootRoute.FLIGHTS
+            }
             else -> {
                 currentRoute = RootRoute.FLIGHTS
             }
@@ -430,7 +444,10 @@ fun FlyFunWeatherRoot(
                 historicalViewModel = historicalMapViewModel,
                 initialMode = screen.initialMode,
                 mapCatalog = mapCatalog,
-                onBack = { currentRoute = RootRoute.FLIGHTS },
+                onBack = {
+                    currentRoute = mapReturnRoute
+                    mapReturnRoute = RootRoute.FLIGHTS
+                },
             )
         }
         RootScreen.AircraftList -> {
@@ -515,6 +532,7 @@ fun FlyFunWeatherRoot(
                                 showBackButton = false,
                                 onEditFlight = { flight -> openFlightSheet(editing = flight) },
                                 onDuplicateFlight = { flight -> openFlightSheet(duplicateOf = flight) },
+                                onOpenForecastMap = openForecastMapFromBriefing,
                             )
                         } else {
                             Surface(
@@ -544,6 +562,7 @@ fun FlyFunWeatherRoot(
                         showBackButton = true,
                         onEditFlight = { flight -> openFlightSheet(editing = flight) },
                         onDuplicateFlight = { flight -> openFlightSheet(duplicateOf = flight) },
+                        onOpenForecastMap = openForecastMapFromBriefing,
                     )
                 } else {
                     FlightListScreen(
@@ -636,6 +655,7 @@ private fun BriefingPane(
     showBackButton: Boolean,
     onEditFlight: (FlightResponse) -> Unit,
     onDuplicateFlight: (FlightResponse) -> Unit,
+    onOpenForecastMap: (NavigationTarget.ForecastMap) -> Unit,
 ) {
     CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
         BriefingContainerScreen(
@@ -644,6 +664,7 @@ private fun BriefingPane(
             showBackButton = showBackButton,
             onEditFlight = onEditFlight,
             onDuplicateFlight = onDuplicateFlight,
+            onOpenForecastMap = onOpenForecastMap,
         )
     }
 }

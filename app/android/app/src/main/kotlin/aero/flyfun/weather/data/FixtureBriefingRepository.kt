@@ -300,7 +300,7 @@ open class FixtureBriefingRepository(
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         ObservedImageryStatusResponse()
 
-    override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
+    override suspend fun observedFrames(source: String): ObservedFramesResponse =
         ObservedFramesResponse()
 
     // The fixtures carry no observed imagery: no lightning frame, and a cell analysis this

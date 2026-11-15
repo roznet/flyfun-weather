@@ -381,8 +381,8 @@ class CachingBriefingRepository(
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         online.observedStatus()
 
-    override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
-        online.observedFrames(layer, bbox)
+    override suspend fun observedFrames(source: String): ObservedFramesResponse =
+        online.observedFrames(source)
 
     override suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse =
         online.observedFlashes(box)

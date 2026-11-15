@@ -306,11 +306,11 @@ web/
 │   │   │   └── constants.ts     # Shared layout constants
 │   │   ├── route-map/           # Leaflet geographic route visualization
 │   │   │   ├── renderer.ts      # Leaflet map lifecycle, segment polylines, waypoints
-│   │   │   ├── metrics.ts       # MapMetric registry (13 metrics: cloud, convective, wind, CAPE, ceiling, temp, agreement, icing/SFIP/CAT/cloud-at-level)
+│   │   │   ├── metrics.ts       # MapMetric list built from the served route catalog (route-map-metrics-catalog.json, 16 metrics, #998)
 │   │   │   ├── segment-style.ts # Pure: computeSegmentStyles() → {color, weight}[]
 │   │   │   ├── interaction.ts   # Hover, click, tooltip, sync callbacks
-│   │   │   ├── altitude-slider.ts # Range input for level-dependent metrics
-│   │   │   └── legend.ts        # DOM gradient bar with color stops
+│   │   │   ├── map-chrome.ts    # #996 chrome: altitude stepper, Hide, Fit route, SHOWING / MODEL / LAYERS
+│   │   │   └── legend.ts        # Route scale + compact airport legend line
 │   │   ├── interaction-utils.ts # Shared: tooltip, nearest point, axis ticks
 │   │   ├── controls/panel.ts    # Layer toggles, model selector, layout mode, map metric selectors
 │   │   ├── data-extract.ts      # Transform API data → VizRouteData

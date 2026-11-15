@@ -1042,16 +1042,39 @@ data class ObservedConditions(
     val hasAnyField: Boolean? = null,
 )
 
+/** One frame of `GET /api/observed/frames/{source}` (`observed.py::_frame_entry`). */
 @Serializable
 data class ObservedImageryFrame(
-    val timestamp: String = "",
+    /** Path key of the frame's tiles (`{stamp}` in [ObservedFramesResponse.tileUrlTemplate]). */
+    val stamp: String = "",
     @SerialName("valid_time")
     val validTime: String = "",
+    @SerialName("age_minutes")
+    val ageMinutes: Double? = null,
 )
 
+/**
+ * `GET /api/observed/frames/{source}` for a tiled layer (`opera_dbzh`, `opera_rate`, `satellite_ir`),
+ * newest frame first. SYNC: iOS `Models/API/ObservedImagery.swift` (`ObservedFramesResponse`).
+ */
 @Serializable
 data class ObservedFramesResponse(
+    val source: String = "",
+    val label: String = "",
     val frames: List<ObservedImageryFrame> = emptyList(),
+    /** No frame, or the newest is too old to draw as the present sky. */
+    val stale: Boolean = true,
+    @SerialName("tile_url_template")
+    val tileUrlTemplate: String = "",
+    @SerialName("min_zoom")
+    val minZoom: Int = 0,
+    @SerialName("max_zoom")
+    val maxZoom: Int = 0,
+    /** Rolling-maximum window of a radar frame (0 for a snapshot such as the satellite). */
+    @SerialName("window_minutes")
+    val windowMinutes: Double? = null,
+    /** `{}` before any frame; only `text` is read. */
+    val attribution: ObservedAttribution? = null,
 )
 
 @Serializable

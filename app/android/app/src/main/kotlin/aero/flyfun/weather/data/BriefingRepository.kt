@@ -76,7 +76,7 @@ interface BriefingRepository {
 
     // Observed imagery (radar / cloud tops / lightning / storm cells)
     suspend fun observedStatus(): ObservedImageryStatusResponse
-    suspend fun observedFrames(layer: String, bbox: String? = null): ObservedFramesResponse
+    suspend fun observedFrames(source: String): ObservedFramesResponse
     suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse
     suspend fun cellFrames(): CellFramesResponse
     suspend fun observedCellDisplay(key: String, box: LatLonBox?): CellDisplay
@@ -259,8 +259,8 @@ open class OnlineBriefingRepository(
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         api.getObservedStatus()
 
-    override suspend fun observedFrames(layer: String, bbox: String?): ObservedFramesResponse =
-        api.getObservedFrames(layer, bbox)
+    override suspend fun observedFrames(source: String): ObservedFramesResponse =
+        api.getObservedFrames(source)
 
     override suspend fun observedFlashes(box: LatLonBox): ObservedFlashesResponse =
         api.getObservedFlashes(box)

@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import aero.flyfun.weather.data.ApiClient
+import aero.flyfun.weather.model.rules.ObservedImageryRules
 import java.util.Collections
 import java.util.Locale
 import kotlin.math.PI
@@ -93,15 +94,6 @@ data class GeoBounds(
     val centerLat: Double get() = (minLat + maxLat) / 2.0
     val centerLon: Double get() = (minLon + maxLon) / 2.0
 }
-
-/**
- * Optional observed raster tile overlay specification (`/api/observed/tiles/{layer}/{stamp}/{z}/{x}/{y}.png`).
- */
-data class ObservedRasterLayerSpec(
-    val layer: String, // "radar" or "sat-ir"
-    val stamp: String, // e.g. "202604181200"
-    val alpha: Float = 0.65f,
-)
 
 /**
  * Immutable Web Mercator projection snapshot for a single render frame.
@@ -342,14 +334,17 @@ fun SlippyMapCanvas(
     cameraState: SlippyMapCameraState,
     modifier: Modifier = Modifier,
     apiClient: ApiClient? = null,
-    observedRasterLayer: ObservedRasterLayerSpec? = null,
+    /** Observed imagery tiles, drawn in order (satellite underlay first, radar on top). */
+    observedTileLayers: List<ObservedImageryRules.TileLayer> = emptyList(),
     defaultBounds: GeoBounds? = null,
+    /** The floating fit icon; off where the screen has its own labelled Fit route (#998). */
+    showFitButton: Boolean = true,
     onTap: ((Offset, LatLon, SlippyMapProjection) -> Unit)? = null,
     overlayDraw: DrawScope.(SlippyMapProjection) -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isDark = isSystemInDarkTheme()
-    val isMuted = observedRasterLayer != null && observedRasterLayer.stamp.isNotBlank()
+    val isMuted = observedTileLayers.isNotEmpty()
     val scope = rememberCoroutineScope()
     var tileTick by remember { mutableIntStateOf(0) }
     var hasFittedInitialBounds by remember { mutableIntStateOf(0) }
@@ -479,20 +474,21 @@ fun SlippyMapCanvas(
                         }
                     }
 
-                    // 3. Draw Observed Weather Imagery Tile overlay (radar / sat-ir) if active
-                    val obsSpec = observedRasterLayer
-                    if (obsSpec != null && obsSpec.stamp.isNotBlank() && tileZoom <= 8) {
-                        val obsKey = "obs:${obsSpec.layer}:${obsSpec.stamp}:$tileZoom:$tx:$ty"
+                    // 3. Observed imagery tiles (satellite underlay, then radar), only at zooms the
+                    //    server renders: outside them the tile endpoint answers 404.
+                    for (layer in observedTileLayers) {
+                        if (tileZoom < layer.minZoom || tileZoom > layer.maxZoom) continue
+                        val obsKey = "obs:${layer.key}:$tileZoom:$tx:$ty"
                         val obsBmp = MapTileCache.get(obsKey)
                         if (obsBmp != null) {
                             drawImage(
                                 image = obsBmp,
                                 dstOffset = dstOffset,
                                 dstSize = dstSize,
-                                alpha = obsSpec.alpha,
+                                alpha = layer.opacity,
                             )
                         } else if (apiClient != null && MapTileCache.markInFlight(obsKey)) {
-                            val path = "/api/observed/tiles/${obsSpec.layer}/${obsSpec.stamp}/$tileZoom/$tx/$ty.png"
+                            val path = ObservedImageryRules.tilePath(layer.template, layer.stamp, tileZoom, tx, ty)
                             scope.launch(Dispatchers.IO) {
                                 try {
                                     val bytes = runCatching { apiClient.requestRaw(path) }.getOrNull()
@@ -562,7 +558,7 @@ fun SlippyMapCanvas(
                         modifier = Modifier.size(18.dp),
                     )
                 }
-                if (defaultBounds != null) {
+                if (defaultBounds != null && showFitButton) {
                     Box(
                         modifier = Modifier
                             .size(34.dp)

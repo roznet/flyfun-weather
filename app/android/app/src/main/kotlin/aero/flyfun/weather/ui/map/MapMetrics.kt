@@ -1,8 +1,15 @@
 package aero.flyfun.weather.ui.map
 
 import androidx.compose.ui.graphics.Color
-import aero.flyfun.weather.model.viz.ColorScales
+import aero.flyfun.weather.data.RouteMapCatalog
+import aero.flyfun.weather.data.RouteMapFormat
+import aero.flyfun.weather.data.RouteMapMetricSpec
+import aero.flyfun.weather.data.RouteMapWidth
+import aero.flyfun.weather.model.viz.VizCatLayer
+import aero.flyfun.weather.model.viz.VizCloudLayer
+import aero.flyfun.weather.model.viz.VizIcingZone
 import aero.flyfun.weather.model.viz.VizPoint
+import aero.flyfun.weather.model.viz.VizSfipZone
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -18,534 +25,215 @@ data class MapLegendSwatch(
 )
 
 // ============================================================================
-// 1. Briefing Route Map Segment Metrics (13 metrics + web/iOS ID aliases)
+// Briefing route-map metrics (#998)
 // ============================================================================
+//
+// What colours and sizes the briefing map's route line, read from the **served** route catalog
+// (`route_maps` in `/api/help/catalog`, source `web/ts/data/route-map-metrics-catalog.json`,
+// bundled asset `route-map-metrics-catalog.json`). The catalog is the one source for the metric
+// list, labels, groups, colour scales, widths, legends and the default. This file only knows how to
+// read a value off a viz point ([RouteMapMetrics.extractors], same names on web and iOS); a catalog
+// metric whose extractor this build does not know is skipped rather than drawn empty, so the server
+// can add one ahead of an app release.
+//
+// SYNC: web `web/ts/visualization/route-map/metrics.ts`, iOS `Views/Map/MapMetrics.swift`.
 
-enum class RouteMetricGroup(val label: String) {
-    HAZARDS("Hazards & Flight Cat"),
-    WIND("Wind"),
-    CLOUDS_SURFACE("Clouds & Surface"),
-    LEVEL("At Altitude"),
-}
-
-/**
- * All 13 Briefing Route Map segment metrics:
- * `flight_category`, `wind_speed`, `headwind`, `crosswind`, `icing`, `turbulence`,
- * `convective`, `cloud_cover`, `ceiling`, `visibility`, `temperature`, `precipitation`, `agreement`
- * plus level-dependent variants (`sfip_at_level`, `cloud_at_level`, `cape`).
- */
-enum class RouteMapMetric(
+/** One route metric built from a catalog entry: one metric drives both colour and width. */
+class RouteMapMetric(
     val id: String,
     val label: String,
-    val shortLabel: String,
     val unit: String,
-    val group: RouteMetricGroup,
-    val usesAltitude: Boolean = false,
-    val aliases: List<String> = emptyList(),
+    val group: String,
+    val usesAltitude: Boolean,
+    /** Hazards take the worst endpoint so one bad endpoint is never averaged away. */
+    val aggregatesWorst: Boolean,
+    private val extract: RouteMapExtractor,
+    private val colorOf: (Double) -> Color,
+    private val widthSpec: RouteMapWidth,
+    private val formatSpec: RouteMapFormat,
+    val legend: List<MapLegendSwatch>,
 ) {
-    FLIGHT_CATEGORY(
-        id = "flight_category",
-        label = "Flight Category (VFR/IFR)",
-        shortLabel = "Flight Cat",
-        unit = "",
-        group = RouteMetricGroup.HAZARDS,
-        aliases = listOf("flight-category", "category"),
-    ),
-    ICING(
-        id = "icing",
-        label = "Icing Risk",
-        shortLabel = "Icing",
-        unit = "risk",
-        group = RouteMetricGroup.HAZARDS,
-        usesAltitude = true,
-        aliases = listOf("icing-risk-at-level", "icing_risk", "sfip-at-level"),
-    ),
-    TURBULENCE(
-        id = "turbulence",
-        label = "Turbulence / CAT",
-        shortLabel = "Turbulence",
-        unit = "risk",
-        group = RouteMetricGroup.HAZARDS,
-        usesAltitude = true,
-        aliases = listOf("cat-risk-at-level", "cat_risk", "cat"),
-    ),
-    CONVECTIVE(
-        id = "convective",
-        label = "Convective Risk",
-        shortLabel = "Convective",
-        unit = "risk",
-        group = RouteMetricGroup.HAZARDS,
-        aliases = listOf("convective-risk", "convective_risk"),
-    ),
-    WIND_SPEED(
-        id = "wind_speed",
-        label = "Wind Speed",
-        shortLabel = "Wind Spd",
-        unit = "kt",
-        group = RouteMetricGroup.WIND,
-        aliases = listOf("wind-speed", "wind_speed_kt"),
-    ),
-    HEADWIND(
-        id = "headwind",
-        label = "Headwind / Tailwind",
-        shortLabel = "Headwind",
-        unit = "kt",
-        group = RouteMetricGroup.WIND,
-        aliases = listOf("tailwind", "headwind_kt"),
-    ),
-    CROSSWIND(
-        id = "crosswind",
-        label = "Crosswind",
-        shortLabel = "Crosswind",
-        unit = "kt",
-        group = RouteMetricGroup.WIND,
-        aliases = listOf("crosswind-kt", "crosswind_kt"),
-    ),
-    CLOUD_COVER(
-        id = "cloud_cover",
-        label = "Cloud Cover",
-        shortLabel = "Clouds",
-        unit = "%",
-        group = RouteMetricGroup.CLOUDS_SURFACE,
-        usesAltitude = true,
-        aliases = listOf("cloud-cover-total", "cloud-cover-low", "cloud-at-level", "cloud_cover_pct"),
-    ),
-    CEILING(
-        id = "ceiling",
-        label = "Ceiling (AGL)",
-        shortLabel = "Ceiling",
-        unit = "ft",
-        group = RouteMetricGroup.CLOUDS_SURFACE,
-        aliases = listOf("nwp-ceiling", "ceiling_ft"),
-    ),
-    VISIBILITY(
-        id = "visibility",
-        label = "Visibility",
-        shortLabel = "Visibility",
-        unit = "km",
-        group = RouteMetricGroup.CLOUDS_SURFACE,
-        aliases = listOf("visibility_m", "vis"),
-    ),
-    TEMPERATURE(
-        id = "temperature",
-        label = "Temperature",
-        shortLabel = "Temp",
-        unit = "°C",
-        group = RouteMetricGroup.LEVEL,
-        usesAltitude = true,
-        aliases = listOf("temp-at-level", "temp"),
-    ),
-    PRECIPITATION(
-        id = "precipitation",
-        label = "Precipitation / CAPE",
-        shortLabel = "Precip",
-        unit = "mm",
-        group = RouteMetricGroup.CLOUDS_SURFACE,
-        aliases = listOf("precip", "cape"),
-    ),
-    AGREEMENT(
-        id = "agreement",
-        label = "Model Agreement",
-        shortLabel = "Agreement",
-        unit = "",
-        group = RouteMetricGroup.HAZARDS,
-        aliases = listOf("model-agreement", "consensus"),
-    );
+    /** The value at a point, or null when the point has none (or an altitude metric has no altitude). */
+    fun value(point: VizPoint, altitudeFt: Double?): Double? = extract(point, altitudeFt)
 
-    /**
-     * Extract numeric value at a [VizPoint] for the given [altitudeFt].
-     */
-    fun extractValue(point: VizPoint, altitudeFt: Double): Double {
-        return when (this) {
-            FLIGHT_CATEGORY -> derivePointFlightCategoryIndex(point, altitudeFt)
-            WIND_SPEED -> point.windSpeedKt ?: 0.0
-            HEADWIND -> point.headwindKt ?: 0.0 // Positive = headwind, negative = tailwind
-            CROSSWIND -> abs(point.crosswindKt ?: 0.0)
-            ICING -> {
-                val allIcing = point.icingZones + point.icingOgimetNwpZones + point.iengIcingZones
-                val zoneAtAlt = allIcing
-                    .filter { altitudeFt in (it.baseFt - 1500.0)..(it.topFt + 1500.0) }
-                    .maxOfOrNull { riskIndex(it.risk) } ?: 0.0
-                val sfipAtAlt = point.sfipZones
-                    .filter { altitudeFt in (it.baseFt - 1500.0)..(it.topFt + 1500.0) }
-                    .maxOfOrNull { riskIndex(it.risk) } ?: 0.0
-                max(zoneAtAlt, sfipAtAlt)
-            }
-            TURBULENCE -> {
-                val allCat = point.catLayers + point.eShearLayers
-                allCat
-                    .filter { altitudeFt in (it.baseFt - 1500.0)..(it.topFt + 1500.0) }
-                    .maxOfOrNull { riskIndex(it.risk) } ?: 0.0
-            }
-            CONVECTIVE -> {
-                val zoneRisk = max(
-                    riskIndex(point.thermoConvective.riskLevel),
-                    riskIndex(point.nwpConvective?.riskLevel ?: "none"),
-                )
-                if (zoneRisk > 0.0) zoneRisk else capeToRiskIndex(point.capeSurfaceJkg ?: 0.0)
-            }
-            CLOUD_COVER -> {
-                val allClouds = point.nwpCloudLayers.ifEmpty { point.cloudLayers }
-                val atLevel = allClouds
-                    .filter { altitudeFt in (it.baseFt - 1000.0)..(it.topFt + 1000.0) }
-                    .maxOfOrNull { it.coveragePct ?: ColorScales.coverageToPct(it.coverage) } ?: 0.0
-                if (atLevel > 0.0) {
-                    atLevel
-                } else {
-                    max(point.cloudCoverTotalPct ?: 0.0, point.cloudCoverLowPct ?: 0.0)
-                }
-            }
-            CEILING -> {
-                val candidates = listOfNotNull(
-                    point.nwpCeilingFt,
-                    point.soundingCeilingFt,
-                    point.cloudLayers
-                        .filter {
-                            val cov = it.coverage.lowercase(Locale.US)
-                            cov == "bkn" || cov == "broken" || cov == "ovc" || cov == "overcast" || (it.coveragePct ?: 0.0) >= 50.0
-                        }
-                        .minOfOrNull { max(0.0, it.baseFt - point.terrainElevationFt) },
-                ).filter { it > 0.0 }
-                candidates.minOrNull() ?: 99999.0
-            }
-            VISIBILITY -> {
-                val visKm = point.visibilityMeters?.let { it / 1000.0 }
-                if (visKm != null && visKm > 0.0) {
-                    visKm.coerceAtMost(10.0)
-                } else {
-                    val ceilingFt = CEILING.extractValue(point, altitudeFt)
-                    val precip = point.precipitationMm ?: 0.0
-                    when {
-                        ceilingFt < 500.0 || precip > 6.0 -> 1.2
-                        ceilingFt < 1000.0 || precip > 3.0 -> 3.5
-                        ceilingFt < 2500.0 || precip > 1.0 -> 6.5
-                        (point.cloudCoverLowPct ?: 0.0) > 75.0 -> 8.5
-                        else -> 10.0
-                    }
-                }
-            }
-            TEMPERATURE -> {
-                val fzl = point.altitudeLines.freezingLevelFt
-                if (fzl != null) {
-                    (fzl - altitudeFt) / 1000.0 * 2.0
-                } else {
-                    point.temperatureCruiseC ?: point.temperatureC ?: 0.0
-                }
-            }
-            PRECIPITATION -> {
-                val precip = point.precipitationMm ?: 0.0
-                if (precip > 0.0) {
-                    precip
-                } else {
-                    ((point.capeSurfaceJkg ?: 0.0) / 250.0).coerceAtMost(10.0)
-                }
-            }
-            AGREEMENT -> 1.0
-        }
+    /** A segment's value from its two endpoints, per the catalog `aggregation`. */
+    fun segmentValue(a: VizPoint, b: VizPoint, altitudeFt: Double?): Double? {
+        val va = value(a, altitudeFt)
+        val vb = value(b, altitudeFt)
+        if (va == null) return vb
+        if (vb == null) return va
+        return if (aggregatesWorst) max(va, vb) else (va + vb) / 2.0
     }
 
-    /**
-     * Map extracted numeric value to segment stroke [Color].
-     */
-    fun color(value: Double): Color {
-        return when (this) {
-            FLIGHT_CATEGORY -> when (value.roundToInt()) {
-                0 -> Color(0xFF22C55E) // VFR
-                1 -> Color(0xFF3B82F6) // MVFR
-                2 -> Color(0xFFEF4444) // IFR
-                else -> Color(0xFFA855F7) // LIFR
-            }
-            WIND_SPEED -> when {
-                value < 10.0 -> Color(0xFF93C5FD)
-                value < 20.0 -> Color(0xFF3B82F6)
-                value < 30.0 -> Color(0xFFF59E0B)
-                value < 45.0 -> Color(0xFFEF4444)
-                else -> Color(0xFF991B1B)
-            }
-            HEADWIND -> when {
-                // Positive = headwind (warm/amber/red), Negative = tailwind (green)
-                value <= -15.0 -> Color(0xFF15803D)
-                value <= -5.0 -> Color(0xFF22C55E)
-                value < 5.0 -> Color(0xFF94A3B8)
-                value < 15.0 -> Color(0xFFFBBF24)
-                value < 25.0 -> Color(0xFFF97316)
-                else -> Color(0xFFDC2626)
-            }
-            CROSSWIND -> when {
-                value < 8.0 -> Color(0xFF22C55E)
-                value < 15.0 -> Color(0xFFFBBF24)
-                value < 22.0 -> Color(0xFFF97316)
-                else -> Color(0xFFDC2626)
-            }
-            ICING -> when (value.roundToInt()) {
-                0 -> Color(0xFF22C55E)
-                1 -> Color(0xFF93C5FD)
-                2 -> Color(0xFFF59E0B)
-                else -> Color(0xFFEF4444)
-            }
-            TURBULENCE -> when (value.roundToInt()) {
-                0 -> Color(0xFF22C55E)
-                1 -> Color(0xFFFBBF24)
-                2 -> Color(0xFFF97316)
-                else -> Color(0xFFDC2626)
-            }
-            CONVECTIVE -> when (value.roundToInt()) {
-                0 -> Color(0xFF22C55E)
-                1 -> Color(0xFFFDE047)
-                2 -> Color(0xFFF59E0B)
-                3 -> Color(0xFFEF4444)
-                else -> Color(0xFF9333EA)
-            }
-            CLOUD_COVER -> when {
-                value < 15.0 -> Color(0xFF22C55E)
-                value < 45.0 -> Color(0xFF93C5FD)
-                value < 75.0 -> Color(0xFF60A5FA)
-                else -> Color(0xFF475569)
-            }
-            CEILING -> when {
-                value >= 10000.0 -> Color(0xFF22C55E)
-                value >= 3000.0 -> Color(0xFF4ADE80)
-                value >= 1000.0 -> Color(0xFF3B82F6)
-                value >= 500.0 -> Color(0xFFEF4444)
-                else -> Color(0xFFA855F7)
-            }
-            VISIBILITY -> when {
-                value >= 8.0 -> Color(0xFF22C55E)
-                value >= 5.0 -> Color(0xFF3B82F6)
-                value >= 1.5 -> Color(0xFFEF4444)
-                else -> Color(0xFFA855F7)
-            }
-            TEMPERATURE -> when {
-                value <= -20.0 -> Color(0xFF2563EB)
-                value <= -10.0 -> Color(0xFF38BDF8)
-                value <= 0.0 -> Color(0xFF93C5FD)
-                value <= 15.0 -> Color(0xFFFBBF24)
-                else -> Color(0xFFDC2626)
-            }
-            PRECIPITATION -> when {
-                value < 0.2 -> Color(0xFF22C55E)
-                value < 1.5 -> Color(0xFF38BDF8)
-                value < 4.0 -> Color(0xFF2563EB)
-                else -> Color(0xFF7C3AED)
-            }
-            AGREEMENT -> when (value.roundToInt()) {
-                1 -> Color(0xFF22C55E) // Good
-                2 -> Color(0xFFF59E0B) // Moderate
-                else -> Color(0xFFEF4444) // Poor
-            }
-        }
-    }
+    fun color(value: Double): Color = colorOf(value)
 
-    /**
-     * Map extracted numeric value to segment width in dp.
-     */
-    fun strokeWidthDp(value: Double): Float {
-        val base = 5.5f
-        val maxW = 13.0f
-        return when (this) {
-            FLIGHT_CATEGORY -> base + (value.toFloat().coerceIn(0f, 3f) / 3f) * (maxW - base)
-            WIND_SPEED -> base + (value.toFloat().coerceIn(0f, 50f) / 50f) * (maxW - base)
-            HEADWIND -> base + (abs(value).toFloat().coerceIn(0f, 35f) / 35f) * (maxW - base)
-            CROSSWIND -> base + (value.toFloat().coerceIn(0f, 25f) / 25f) * (maxW - base)
-            ICING, TURBULENCE -> base + (value.toFloat().coerceIn(0f, 3f) / 3f) * (maxW - base)
-            CONVECTIVE -> base + (value.toFloat().coerceIn(0f, 4f) / 4f) * (maxW - base)
-            CLOUD_COVER -> base + (value.toFloat().coerceIn(0f, 100f) / 100f) * (maxW - base)
-            CEILING -> {
-                if (value >= 10000.0) base
-                else {
-                    val t = 1f - (value.toFloat().coerceIn(0f, 5000f) / 5000f)
-                    base + t * (maxW - base)
-                }
-            }
-            VISIBILITY -> {
-                val t = 1f - (value.toFloat().coerceIn(0f, 10f) / 10f)
-                base + t * (maxW - base)
-            }
-            TEMPERATURE -> base + 2f
-            PRECIPITATION -> base + (value.toFloat().coerceIn(0f, 8f) / 8f) * (maxW - base)
-            AGREEMENT -> base + ((value.toFloat().coerceIn(1f, 3f) - 1f) / 2f) * (maxW - base)
-        }
-    }
+    /** Route-line width (dp) for a value, on the catalog's thin…thick span. */
+    fun widthDp(value: Double): Float =
+        (RouteMapMetrics.MIN_WIDTH_DP +
+            RouteMapMetrics.widthFraction(widthSpec, value) * (RouteMapMetrics.MAX_WIDTH_DP - RouteMapMetrics.MIN_WIDTH_DP)).toFloat()
 
-    /**
-     * Human-readable formatted value for waypoint callouts.
-     */
-    fun formatValue(value: Double): String {
-        return when (this) {
-            FLIGHT_CATEGORY -> when (value.roundToInt()) {
-                0 -> "VFR"
-                1 -> "MVFR"
-                2 -> "IFR"
-                else -> "LIFR"
-            }
-            WIND_SPEED -> "${value.roundToInt()} kt"
-            HEADWIND -> {
-                val kt = value.roundToInt()
-                when {
-                    kt > 0 -> "+${kt} kt HW"
-                    kt < 0 -> "${abs(kt)} kt TW"
-                    else -> "0 kt"
-                }
-            }
-            CROSSWIND -> "${value.roundToInt()} kt XW"
-            ICING, TURBULENCE -> when (value.roundToInt()) {
-                0 -> "None"
-                1 -> "Light"
-                2 -> "Moderate"
-                else -> "Severe"
-            }
-            CONVECTIVE -> when (value.roundToInt()) {
-                0 -> "None"
-                1 -> "Marginal"
-                2 -> "Low"
-                3 -> "Moderate"
-                else -> "High"
-            }
-            CLOUD_COVER -> "${value.roundToInt()}%"
-            CEILING -> if (value >= 10000.0) "Unlimited" else "${(value / 100.0).roundToInt() * 100} ft"
-            VISIBILITY -> if (value >= 9.9) "10+ km" else String.format(Locale.US, "%.1f km", value)
-            TEMPERATURE -> String.format(Locale.US, "%+.0f°C", value)
-            PRECIPITATION -> String.format(Locale.US, "%.1f mm", value)
-            AGREEMENT -> when (value.roundToInt()) {
-                1 -> "Good"
-                2 -> "Moderate"
-                else -> "Poor"
-            }
-        }
-    }
+    fun format(value: Double): String = RouteMapMetrics.format(formatSpec, value)
+}
 
-    /**
-     * Legend swatches displayed in the Route Map bottom legend bar.
-     */
-    fun legendSwatches(): List<MapLegendSwatch> {
-        return when (this) {
-            FLIGHT_CATEGORY -> listOf(
-                MapLegendSwatch("VFR", Color(0xFF22C55E)),
-                MapLegendSwatch("MVFR", Color(0xFF3B82F6)),
-                MapLegendSwatch("IFR", Color(0xFFEF4444)),
-                MapLegendSwatch("LIFR", Color(0xFFA855F7)),
-            )
-            WIND_SPEED -> listOf(
-                MapLegendSwatch("<10 kt", Color(0xFF93C5FD)),
-                MapLegendSwatch("10–20 kt", Color(0xFF3B82F6)),
-                MapLegendSwatch("20–30 kt", Color(0xFFF59E0B)),
-                MapLegendSwatch("30–45 kt", Color(0xFFEF4444)),
-                MapLegendSwatch(">45 kt", Color(0xFF991B1B)),
-            )
-            HEADWIND -> listOf(
-                MapLegendSwatch(">15 TW", Color(0xFF15803D)),
-                MapLegendSwatch("5–15 TW", Color(0xFF22C55E)),
-                MapLegendSwatch("±5 kt", Color(0xFF94A3B8)),
-                MapLegendSwatch("5–15 HW", Color(0xFFFBBF24)),
-                MapLegendSwatch("15–25 HW", Color(0xFFF97316)),
-                MapLegendSwatch(">25 HW", Color(0xFFDC2626)),
-            )
-            CROSSWIND -> listOf(
-                MapLegendSwatch("<8 kt", Color(0xFF22C55E)),
-                MapLegendSwatch("8–15 kt", Color(0xFFFBBF24)),
-                MapLegendSwatch("15–22 kt", Color(0xFFF97316)),
-                MapLegendSwatch(">22 kt", Color(0xFFDC2626)),
-            )
-            ICING -> listOf(
-                MapLegendSwatch("None", Color(0xFF22C55E)),
-                MapLegendSwatch("Light", Color(0xFF93C5FD)),
-                MapLegendSwatch("Mod", Color(0xFFF59E0B)),
-                MapLegendSwatch("Sev", Color(0xFFEF4444)),
-            )
-            TURBULENCE -> listOf(
-                MapLegendSwatch("None", Color(0xFF22C55E)),
-                MapLegendSwatch("Light", Color(0xFFFBBF24)),
-                MapLegendSwatch("Mod", Color(0xFFF97316)),
-                MapLegendSwatch("Sev", Color(0xFFDC2626)),
-            )
-            CONVECTIVE -> listOf(
-                MapLegendSwatch("None", Color(0xFF22C55E)),
-                MapLegendSwatch("Marginal", Color(0xFFFDE047)),
-                MapLegendSwatch("Low", Color(0xFFF59E0B)),
-                MapLegendSwatch("Mod", Color(0xFFEF4444)),
-                MapLegendSwatch("High", Color(0xFF9333EA)),
-            )
-            CLOUD_COVER -> listOf(
-                MapLegendSwatch("Clear", Color(0xFF22C55E)),
-                MapLegendSwatch("SCT", Color(0xFF93C5FD)),
-                MapLegendSwatch("BKN", Color(0xFF60A5FA)),
-                MapLegendSwatch("OVC", Color(0xFF475569)),
-            )
-            CEILING -> listOf(
-                MapLegendSwatch(">3000 ft", Color(0xFF22C55E)),
-                MapLegendSwatch("1000–3000", Color(0xFF3B82F6)),
-                MapLegendSwatch("500–1000", Color(0xFFEF4444)),
-                MapLegendSwatch("<500 ft", Color(0xFFA855F7)),
-            )
-            VISIBILITY -> listOf(
-                MapLegendSwatch(">8 km", Color(0xFF22C55E)),
-                MapLegendSwatch("5–8 km", Color(0xFF3B82F6)),
-                MapLegendSwatch("1.5–5 km", Color(0xFFEF4444)),
-                MapLegendSwatch("<1.5 km", Color(0xFFA855F7)),
-            )
-            TEMPERATURE -> listOf(
-                MapLegendSwatch("-20°C", Color(0xFF2563EB)),
-                MapLegendSwatch("-10°C", Color(0xFF38BDF8)),
-                MapLegendSwatch("0°C", Color(0xFFE0F2FE)),
-                MapLegendSwatch("+10°C", Color(0xFFFBBF24)),
-                MapLegendSwatch("+25°C", Color(0xFFDC2626)),
-            )
-            PRECIPITATION -> listOf(
-                MapLegendSwatch("Dry", Color(0xFF22C55E)),
-                MapLegendSwatch("Light", Color(0xFF38BDF8)),
-                MapLegendSwatch("Mod", Color(0xFF2563EB)),
-                MapLegendSwatch("Heavy", Color(0xFF7C3AED)),
-            )
-            AGREEMENT -> listOf(
-                MapLegendSwatch("Good", Color(0xFF22C55E)),
-                MapLegendSwatch("Moderate", Color(0xFFF59E0B)),
-                MapLegendSwatch("Poor", Color(0xFFEF4444)),
-            )
-        }
+/** A SHOWING menu section: At altitude / Along route. */
+data class RouteMapMetricGroup(val key: String, val label: String, val metrics: List<RouteMapMetric>)
+
+typealias RouteMapExtractor = (VizPoint, Double?) -> Double?
+
+/** The metrics of one catalog, plus its groups, default and no-data colour. */
+class RouteMapMetrics(catalog: RouteMapCatalog) {
+    val all: List<RouteMapMetric> = catalog.metrics.mapNotNull { build(it, catalog) }
+    val groups: List<RouteMapMetricGroup> = catalog.groups.mapNotNull { g ->
+        val ms = all.filter { it.group == g.key }
+        if (ms.isEmpty()) null else RouteMapMetricGroup(g.key, g.label, ms)
     }
+    val defaultId: String = catalog.defaultMetric
+    val noDataColor: Color = parseCatalogColor(catalog.noDataColor) ?: AirportMapCatalog.MUTED
+
+    fun metric(id: String): RouteMapMetric? = all.firstOrNull { it.id == id }
+
+    /** A stored id resolved to a metric: an unknown (renamed, dropped) id falls back to the default. */
+    fun resolve(id: String?): RouteMapMetric? = id?.let(::metric) ?: metric(defaultId) ?: all.firstOrNull()
 
     companion object {
-        fun fromId(rawId: String?): RouteMapMetric {
-            if (rawId.isNullOrBlank()) return FLIGHT_CATEGORY
-            val normalized = rawId.trim().lowercase(Locale.US)
-            return entries.firstOrNull { metric ->
-                metric.id == normalized || metric.aliases.any { it == normalized }
-            } ?: FLIGHT_CATEGORY
+        /** Route-line width range (dp), the same 3…18 as the web's px and iOS's pt. */
+        const val MIN_WIDTH_DP = 3.0
+        const val MAX_WIDTH_DP = 18.0
+
+        /** Fraction 0 (thinnest) … 1 (thickest) on a metric's width spec (either order). */
+        fun widthFraction(w: RouteMapWidth, v: Double): Double {
+            val span = w.thickAt - w.thinAt
+            if (span == 0.0) return 0.0
+            return ((v - w.thinAt) / span).coerceIn(0.0, 1.0)
         }
+
+        fun format(f: RouteMapFormat, v: Double): String {
+            val labels = f.labels
+            if (f.kind == "rank" && !labels.isNullOrEmpty()) {
+                return labels[v.roundToInt().coerceIn(0, labels.lastIndex)]
+            }
+            val n = v * (f.multiply ?: 1.0)
+            return (f.prefix ?: "") + String.format(Locale.US, "%.${f.decimals ?: 0}f", n) + (f.suffix ?: "")
+        }
+
+        private fun build(spec: RouteMapMetricSpec, cat: RouteMapCatalog): RouteMapMetric? {
+            val extract = extractors[spec.value] ?: return null
+            val band = cat.scales.bands[spec.scale] ?: return null
+            val colorOf: (Double) -> Color = { AirportMapCatalog.bandColor(band, it, null) }
+            return RouteMapMetric(
+                id = spec.key,
+                label = spec.label,
+                unit = spec.unit,
+                group = spec.group,
+                usesAltitude = spec.usesAltitude,
+                aggregatesWorst = spec.aggregation == "max",
+                extract = extract,
+                colorOf = colorOf,
+                widthSpec = spec.width,
+                formatSpec = spec.format,
+                legend = spec.legend.map { MapLegendSwatch(it.label, colorOf(it.value)) },
+            )
+        }
+
+        // MARK: Extractors (the only per-metric code; same names on web and iOS)
+
+        private val riskRank = mapOf(
+            "none" to 0.0, "marginal" to 1.0, "low" to 1.0, "light" to 1.0,
+            "moderate" to 2.0, "high" to 3.0, "severe" to 3.0, "extreme" to 4.0,
+        )
+
+        private fun rank(risk: String?): Double = riskRank[risk?.lowercase(Locale.US)] ?: 0.0
+
+        private fun agreementRank(s: String): Double = when (s.lowercase(Locale.US)) {
+            "poor" -> 2.0
+            "moderate" -> 1.0
+            else -> 0.0
+        }
+
+        private fun worstIcingAt(zones: List<VizIcingZone>, altFt: Double): Double =
+            zones.filter { altFt >= it.baseFt && altFt <= it.topFt }.maxOfOrNull { rank(it.risk) } ?: 0.0
+
+        private fun worstCatAt(layers: List<VizCatLayer>, altFt: Double): Double =
+            layers.filter { altFt >= it.baseFt && altFt <= it.topFt }.maxOfOrNull { rank(it.risk) } ?: 0.0
+
+        private fun sfipAt(zones: List<VizSfipZone>, altFt: Double): Double? =
+            zones.filter { altFt >= it.baseFt && altFt <= it.topFt }.mapNotNull { it.meanSfip }.maxOrNull()
+
+        private val coverageWeight = mapOf("sct" to 0.3, "bkn" to 0.7, "ovc" to 1.0)
+
+        private fun cloudAt(layers: List<VizCloudLayer>, altFt: Double): Double {
+            var maxCov = 0.0
+            for (l in layers) {
+                if (altFt >= l.baseFt && altFt <= l.topFt) {
+                    maxCov = max(maxCov, coverageWeight[l.coverage.lowercase(Locale.US)] ?: 0.5)
+                }
+            }
+            return maxCov * 100.0
+        }
+
+        /**
+         * Temperature (°C) at an altitude from the isotherm levels (0 / −10 / −20 °C), interpolated
+         * between them, extrapolated at ~2 °C per 1000 ft.
+         */
+        internal fun tempAtAltitude(p: VizPoint, altFt: Double): Double? {
+            val fz = p.altitudeLines.freezingLevelFt ?: return null
+            val refs = mutableListOf(fz to 0.0)
+            p.altitudeLines.minus10cLevelFt?.let { refs.add(it to -10.0) }
+            p.altitudeLines.minus20cLevelFt?.let { refs.add(it to -20.0) }
+            refs.sortBy { it.first }
+            val first = refs.first()
+            if (altFt <= first.first) return first.second + (first.first - altFt) * 2.0 / 1000.0
+            val last = refs.last()
+            if (altFt >= last.first) return last.second - (altFt - last.first) * 2.0 / 1000.0
+            for (i in 0 until refs.lastIndex) {
+                val (a0, t0) = refs[i]
+                val (a1, t1) = refs[i + 1]
+                if (altFt >= a0 && altFt <= a1) {
+                    val frac = if (a1 == a0) 0.0 else (altFt - a0) / (a1 - a0)
+                    return t0 + frac * (t1 - t0)
+                }
+            }
+            return null
+        }
+
+        /** Gives a lambda its extractor type, so `"name" to ex { p, alt -> … }` infers its parameters. */
+        private fun ex(f: RouteMapExtractor): RouteMapExtractor = f
+
+        /** Catalog `value` → how to read it off a viz point. Altitude extractors return null without one. */
+        val extractors: Map<String, RouteMapExtractor> = mapOf(
+            "cloud_cover_total_pct" to ex { p, _ -> p.cloudCoverTotalPct },
+            "cloud_cover_low_pct" to ex { p, _ -> p.cloudCoverLowPct },
+            "convective_risk_rank" to ex { p, _ -> rank(p.thermoConvective.riskLevel) },
+            "headwind_kt" to ex { p, _ -> p.headwindKt?.let { max(0.0, it) } },
+            "tailwind_kt" to ex { p, _ -> p.headwindKt?.let { max(0.0, -it) } },
+            "wind_speed_kt" to ex { p, _ -> p.windSpeedKt },
+            "crosswind_kt" to ex { p, _ -> p.crosswindKt?.let { abs(it) } },
+            "cape_surface_jkg" to ex { p, _ -> p.capeSurfaceJkg },
+            "nwp_ceiling_ft" to ex { p, _ -> p.nwpCeilingFt },
+            "visibility_m" to ex { p, _ -> p.visibilityMeters },
+            "model_agreement_rank" to ex { p, _ -> agreementRank(p.worstModelAgreement) },
+            "temperature_at_level_c" to ex { p, alt -> alt?.let { tempAtAltitude(p, it) } },
+            // The diagnostic icing zones, as web and iOS.
+            "icing_risk_at_level_rank" to ex { p, alt -> alt?.let { worstIcingAt(p.icingZones, it) } },
+            "sfip_at_level" to ex { p, alt -> alt?.let { sfipAt(p.sfipZones, it) } },
+            "cat_risk_at_level_rank" to ex { p, alt -> alt?.let { worstCatAt(p.catLayers, it) } },
+            "cloud_at_level_pct" to ex { p, alt -> alt?.let { cloudAt(p.cloudLayers, it) } },
+        )
+
+        // MARK: Altitude stepper (web `stepAltitude` / `formatFlightLevel`, iOS `stepAltitude`)
+
+        const val ALTITUDE_STEP_FT = 500.0
+
+        /** One stepper press: snapped to the 500 ft grid, clamped to 0 … [ceilingFt]. */
+        fun stepAltitude(ft: Double, direction: Int, ceilingFt: Double): Double {
+            val snapped = Math.round(ft / ALTITUDE_STEP_FT) * ALTITUDE_STEP_FT
+            return max(0.0, min(ceilingFt, snapped + direction * ALTITUDE_STEP_FT))
+        }
+
+        /** "FL080" for 8000 ft, "SFC" below 100 ft. */
+        fun formatFlightLevel(ft: Double): String =
+            if (ft < 100.0) "SFC" else "FL" + (ft / 100.0).roundToInt().toString().padStart(3, '0')
     }
-}
-
-private fun derivePointFlightCategoryIndex(point: VizPoint, altitudeFt: Double): Double {
-    val ceilingFt = RouteMapMetric.CEILING.extractValue(point, altitudeFt)
-    val precip = point.precipitationMm ?: 0.0
-    return when {
-        ceilingFt < 500.0 || precip > 7.0 -> 3.0 // LIFR
-        ceilingFt < 1000.0 || precip > 3.5 -> 2.0 // IFR
-        ceilingFt < 3000.0 || (point.cloudCoverLowPct ?: 0.0) > 75.0 -> 1.0 // MVFR
-        else -> 0.0 // VFR
-    }
-}
-
-private fun closestAltitudeValue(dict: Map<Int, Double>, altitudeFt: Double): Double {
-    if (dict.isEmpty()) return 0.0
-    val target = altitudeFt.roundToInt()
-    val closest = dict.entries.minByOrNull { abs(it.key - target) } ?: return 0.0
-    return if (abs(closest.key - target) <= 2500) closest.value else 0.0
-}
-
-private fun riskIndex(risk: String): Double = when (risk.lowercase(Locale.US)) {
-    "light", "marginal" -> 1.0
-    "moderate", "low" -> 2.0
-    "severe", "high", "extreme" -> 3.0
-    else -> 0.0
-}
-
-private fun capeToRiskIndex(cape: Double): Double = when {
-    cape >= 2000.0 -> 4.0
-    cape >= 1000.0 -> 3.0
-    cape >= 300.0 -> 2.0
-    cape >= 50.0 -> 1.0
-    else -> 0.0
 }
 
 fun flightCategoryColor(cat: String?): Color = when (cat?.uppercase(Locale.US)) {

@@ -53,6 +53,8 @@ data class MapBandScale(
 data class MapBandStop(
     val lt: Double? = null,
     val gte: Double? = null,
+    /** `linear` scales: the value this colour sits at (#998). */
+    val at: Double? = null,
     val color: String = "",
 )
 
@@ -101,6 +103,76 @@ data class MapLegendRow(
 )
 
 /**
+ * The briefing route-map metric catalog (#998): `route_maps` in `/api/help/catalog`, source
+ * `web/ts/data/route-map-metrics-catalog.json`, bundled as the asset of the same name. Decoded
+ * into metrics by `ui/map/MapMetrics.kt`. SYNC: iOS `Views/Map/MapMetrics.swift` (`RouteMapCatalog`).
+ */
+@Serializable
+data class RouteMapCatalog(
+    val version: Int = 1,
+    @SerialName("default_metric")
+    val defaultMetric: String = "",
+    @SerialName("no_data_color")
+    val noDataColor: String = "#94a3b8",
+    val groups: List<RouteMapGroup> = emptyList(),
+    val scales: RouteMapScales = RouteMapScales(),
+    val metrics: List<RouteMapMetricSpec> = emptyList(),
+)
+
+@Serializable
+data class RouteMapGroup(
+    val key: String = "",
+    val label: String = "",
+)
+
+@Serializable
+data class RouteMapScales(
+    val bands: Map<String, MapBandScale> = emptyMap(),
+)
+
+@Serializable
+data class RouteMapMetricSpec(
+    val key: String = "",
+    val label: String = "",
+    val unit: String = "",
+    val group: String = "",
+    @SerialName("uses_altitude")
+    val usesAltitude: Boolean = false,
+    /** The extractor name every client applies to a route viz point. */
+    val value: String = "",
+    /** `max` (hazards: worst endpoint) or `average`. */
+    val aggregation: String = "average",
+    val scale: String = "",
+    val width: RouteMapWidth = RouteMapWidth(),
+    val format: RouteMapFormat = RouteMapFormat(),
+    val legend: List<RouteMapLegendItem> = emptyList(),
+)
+
+@Serializable
+data class RouteMapWidth(
+    @SerialName("thin_at")
+    val thinAt: Double = 0.0,
+    @SerialName("thick_at")
+    val thickAt: Double = 1.0,
+)
+
+@Serializable
+data class RouteMapFormat(
+    val kind: String = "number",
+    val decimals: Int? = null,
+    val prefix: String? = null,
+    val suffix: String? = null,
+    val multiply: Double? = null,
+    val labels: List<String>? = null,
+)
+
+@Serializable
+data class RouteMapLegendItem(
+    val value: Double = 0.0,
+    val label: String = "",
+)
+
+/**
  * Loads `metrics-catalog.json` and `map-metrics-catalog.json` from Android assets
  * (with optional ETag-conditional refresh from `/api/help/catalog`), indexing [MetricHelp] by metric key.
  * Mirrors `HelpCatalogStore` on iOS.
@@ -115,6 +187,10 @@ class HelpCatalogStore(
 
     private val _mapCatalog = MutableStateFlow<MapMetricsCatalog?>(null)
     val mapCatalog: StateFlow<MapMetricsCatalog?> = _mapCatalog.asStateFlow()
+
+    /** The briefing route-map metrics (#998): bundled until the first `/api/help/catalog` sync. */
+    private val _routeMapCatalog = MutableStateFlow<RouteMapCatalog?>(null)
+    val routeMapCatalog: StateFlow<RouteMapCatalog?> = _routeMapCatalog.asStateFlow()
 
     private var currentEtag: String? = null
 
@@ -131,6 +207,10 @@ class HelpCatalogStore(
      * Loads `metrics-catalog.json` and `map-metrics-catalog.json` from disk cache or bundled Android assets.
      */
     fun loadBundledOrCached() {
+        // 0. The bundled route catalog first: a cached payload from before #998 has no
+        //    `route_maps`, and the route map must never start without metrics.
+        readAssetText(ROUTE_MAP_ASSET_NAME)?.let { loadRouteMapCatalogFromJson(it) }
+
         // 1. Try disk-cached server payload first
         val cachedHelp = cacheDir?.let { File(it, CACHED_HELP_FILE) }
         val cachedEtagFile = cacheDir?.let { File(it, CACHED_ETAG_FILE) }
@@ -169,6 +249,14 @@ class HelpCatalogStore(
             json.decodeFromString(MapMetricsCatalog.serializer(), jsonText)
         }.onSuccess {
             _mapCatalog.value = it
+        }
+    }
+
+    fun loadRouteMapCatalogFromJson(jsonText: String) {
+        runCatching {
+            json.decodeFromString(RouteMapCatalog.serializer(), jsonText)
+        }.onSuccess {
+            if (it.metrics.isNotEmpty()) _routeMapCatalog.value = it
         }
     }
 
@@ -229,6 +317,18 @@ class HelpCatalogStore(
                 updated = true
             }
         }
+        // An undecodable `route_maps` keeps the catalog already held: never a map without metrics.
+        val routeElem = root["route_maps"]
+        if (routeElem is JsonObject) {
+            runCatching {
+                json.decodeFromJsonElement(RouteMapCatalog.serializer(), routeElem)
+            }.onSuccess {
+                if (it.metrics.isNotEmpty()) {
+                    _routeMapCatalog.value = it
+                    updated = true
+                }
+            }
+        }
         return updated
     }
 
@@ -255,6 +355,7 @@ class HelpCatalogStore(
     companion object {
         const val METRICS_ASSET_NAME = "metrics-catalog.json"
         const val MAP_METRICS_ASSET_NAME = "map-metrics-catalog.json"
+        const val ROUTE_MAP_ASSET_NAME = "route-map-metrics-catalog.json"
         private const val CACHED_HELP_FILE = "help-catalog-cache.json"
         private const val CACHED_ETAG_FILE = "help-catalog-etag.txt"
     }

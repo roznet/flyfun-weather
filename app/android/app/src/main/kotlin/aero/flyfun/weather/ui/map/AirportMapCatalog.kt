@@ -76,6 +76,7 @@ object AirportMapCatalog {
             fallbackNumber ?: return MUTED
         }
         if (band.kind == "gray_ramp") return grayRamp(band, value)
+        if (band.kind == "linear") return linearRamp(band, value)
         val v = if (band.convert == "m_to_sm") value / 1609.34 else value
         if (band.kind == "threshold_desc") {
             band.stops.firstOrNull { stop -> stop.gte?.let { v >= it } == true }
@@ -86,6 +87,31 @@ object AirportMapCatalog {
         band.stops.firstOrNull { stop -> stop.lt?.let { v < it } == true }
             ?.let { return parseCatalogColor(it.color) ?: MUTED }
         return band.default?.let(::parseCatalogColor) ?: MUTED
+    }
+
+    /**
+     * `linear` (#998, route-map catalog): colour interpolated between `stops[].at`, clamped at the
+     * ends (web `linearRamp`, iOS `ForecastMapCatalog.bandScaleColor`).
+     */
+    private fun linearRamp(band: MapBandScale, v: Double): Color {
+        val stops = band.stops.filter { it.at != null }
+        if (stops.isEmpty()) return MUTED
+        fun col(i: Int) = parseCatalogColor(stops[i].color) ?: MUTED
+        if (v <= stops.first().at!!) return col(0)
+        if (v >= stops.last().at!!) return col(stops.lastIndex)
+        for (i in 0 until stops.lastIndex) {
+            val a = stops[i].at!!
+            val b = stops[i + 1].at!!
+            if (v in a..b) {
+                val t = if (b == a) 0f else ((v - a) / (b - a)).toFloat()
+                val ca = col(i)
+                val cb = col(i + 1)
+                // Round each channel to 0..255 as the web does, so the same value is the same colour.
+                fun mix(x: Float, y: Float) = Math.round((x + (y - x) * t) * 255f) / 255f
+                return Color(mix(ca.red, cb.red), mix(ca.green, cb.green), mix(ca.blue, cb.blue))
+            }
+        }
+        return col(stops.lastIndex)
     }
 
     private fun grayRamp(band: MapBandScale, pct: Double): Color {

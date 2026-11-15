@@ -92,7 +92,7 @@ Key exports: `compute_frontal_zones_dual`, `classify_front_type`, `build_zone_ti
 ## Visualization & briefing UI
 
 ### visualization
-Four synchronized client visualizations: canvas cross-section (28 registered layers incl. advisory highlight + night shading), canvas route graph (14 scalar metrics), Leaflet route map (13 metrics, altitude slider, front + airport-forecast overlays), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); model-availability NWP fallback, shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
+Four synchronized client visualizations: canvas cross-section (28 registered layers incl. advisory highlight + night shading), canvas route graph (14 scalar metrics), Leaflet route map (16 metrics from the served route catalog shared with iOS/Android, #996 chrome with altitude stepper, front + airport-forecast + observed overlays), and dynamic canvas Skew-T (see skewt-canvas.md). Switchable themes with theme-aware legends; four layout modes (cross-section, compare, split, map); model-availability NWP fallback, shared color scales and hover sync. Compare mode renders one layer across all models with four band modes.
 Key exports: `CrossSectionRenderer`, `CompareSectionRenderer`, `RouteGraphRenderer`, `RouteMapRenderer`, `SkewTRenderer`, `extractVizData`, `getAllLayers`, `getLayerLegend`, `getActiveTheme`, `setActiveTheme`
 → Full doc: visualization.md
 

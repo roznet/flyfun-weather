@@ -1,8 +1,14 @@
 package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.weather.data.BriefingRepository
+import aero.flyfun.weather.data.MapsApi
+import aero.flyfun.weather.model.ForecastDayEntry
+import aero.flyfun.weather.model.ForecastMapResponse
+import aero.flyfun.weather.model.IsoTime
 import aero.flyfun.weather.model.CellDisplay
 import aero.flyfun.weather.model.CellFramesResponse
+import aero.flyfun.weather.model.ObservedFramesResponse
+import aero.flyfun.weather.model.rules.ObservedImageryRules
 import aero.flyfun.weather.model.rules.CellsOverlayRules
 import aero.flyfun.weather.model.rules.LatLonBox
 import aero.flyfun.weather.model.rules.ObservedLightningRules
@@ -12,6 +18,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
+import kotlin.math.abs
 
 /**
  * The route map's experimental radar-cell overlay (#907), port of iOS `RouteCellsModel`.
@@ -148,5 +158,128 @@ class RouteLightningModel(
     /** Back to the not-yet-loaded state, so a layer toggled back on shows no stale bolts. */
     fun reset() {
         _state.value = State()
+    }
+}
+
+/**
+ * Frame listings for the route map's tiled observed imagery (#998: radar over satellite IR), port
+ * of iOS `RouteObservedImageryModel`. The map polls only the sources it draws, only while composed;
+ * a failed refresh keeps the listing already held, and a source with none is reported as failed so
+ * the map can say "unavailable" instead of drawing nothing silently. Online only.
+ */
+class RouteObservedImageryModel(
+    private val repository: BriefingRepository,
+) {
+    data class State(
+        val frames: Map<String, ObservedFramesResponse> = emptyMap(),
+        val failed: Set<String> = emptySet(),
+    )
+
+    private val _state = MutableStateFlow(State())
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    /** Keep [sources] fresh until the calling coroutine is cancelled. */
+    suspend fun poll(sources: Set<String>): Nothing {
+        while (true) { // delay() ends the loop on cancellation
+            refresh(sources)
+            delay(ObservedImageryRules.POLL_INTERVAL_MS)
+        }
+    }
+
+    suspend fun refresh(sources: Set<String>) {
+        for (source in sources) {
+            val listing = try {
+                repository.observedFrames(source)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            val current = _state.value
+            _state.value = if (listing != null) {
+                current.copy(frames = current.frames + (source to listing), failed = current.failed - source)
+            } else if (source !in current.frames) {
+                current.copy(failed = current.failed + source)
+            } else {
+                current
+            }
+        }
+    }
+}
+
+/**
+ * The briefing route map's airport-forecast overlay (#428 → Android #998): the same per-airport
+ * markers the full forecast map draws, for the grid slot nearest the flight's departure. Port of
+ * iOS `RouteForecastOverlayModel` / `RouteForecastOverlay`. The day grid loads once; a slot's
+ * payload holds every model, so a model or metric change is a recolour, never a refetch.
+ */
+class RouteAirportOverlayModel(
+    private val api: MapsApi?,
+    private val clock: () -> Instant = { Instant.now() },
+) {
+    /** The grid slot for this flight, plus the models that carry airport data for it. */
+    data class Slot(val day: Int, val hour: Int, val models: List<String>) {
+        val key: String get() = "$day:$hour"
+    }
+
+    data class State(
+        val days: List<ForecastDayEntry>? = null,
+        val payloads: Map<String, ForecastMapResponse> = emptyMap(),
+    )
+
+    private val _state = MutableStateFlow(State())
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    fun slot(departureIso: String?): Slot? =
+        _state.value.days?.let { resolveSlot(departureIso, it, clock()) }
+
+    /** Load the grid (once) and the payload for [departureIso]'s slot (once per slot). */
+    suspend fun load(departureIso: String?) {
+        val client = api ?: return
+        if (_state.value.days == null) {
+            val days = try {
+                client.getForecastDays().days
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return
+            }
+            _state.value = _state.value.copy(days = days)
+        }
+        val slot = slot(departureIso) ?: return
+        if (slot.key in _state.value.payloads) return
+        val payload = try {
+            client.getForecastMap(slot.day, slot.hour)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        _state.value = _state.value.copy(payloads = _state.value.payloads + (slot.key to payload))
+    }
+
+    companion object {
+        /** The individual models the full map's `fc.model` accepts (web `FORECAST_INDIVIDUAL_MODELS`). */
+        val INDIVIDUAL_MODELS = setOf("gfs", "icon", "ecmwf")
+
+        /** Relative (day, hour) in UTC for a departure, as the forecast endpoint labels days. */
+        fun relativeDayHour(departureIso: String?, now: Instant): Pair<Int, Int>? {
+            val ms = IsoTime.parseEpochMs(departureIso) ?: return null
+            val dep = Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC)
+            val today = now.atZone(ZoneOffset.UTC).toLocalDate()
+            val day = ChronoUnit.DAYS.between(today, dep.toLocalDate()).toInt()
+            return day to dep.hour
+        }
+
+        /** Nearest hour in [hours]; ties go to the earlier one. */
+        fun nearestHour(hours: List<Int>, h: Int): Int? = hours.minByOrNull { abs(it - h) }
+
+        /** Null outside the advertised horizon or on a day without data: the overlay is not offered. */
+        fun resolveSlot(departureIso: String?, days: List<ForecastDayEntry>, now: Instant): Slot? {
+            val (day, hour) = relativeDayHour(departureIso, now) ?: return null
+            val entry = days.firstOrNull { it.day == day && it.available && it.hours.isNotEmpty() } ?: return null
+            val h = nearestHour(entry.hours.sorted(), hour) ?: return null
+            return Slot(day, h, entry.models)
+        }
     }
 }
