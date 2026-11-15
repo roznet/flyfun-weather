@@ -138,10 +138,12 @@ export const ROUTE_VALUE_EXTRACTORS: Readonly<Record<string, Extractor>> = {
   cloud_cover_total_pct: (p) => p.cloudCoverTotalPct,
   cloud_cover_low_pct: (p) => p.cloudCoverLowPct,
   convective_risk_rank: (p) => RISK_ORDER[p.convectiveRisk] ?? 0,
-  headwind_kt: (p) => Math.max(0, p.headwindKt),
-  tailwind_kt: (p) => Math.max(0, -p.headwindKt),
+  // A point without wind has windSpeedKt null while headwindKt/crosswindKt
+  // read 0 (data-extract): show "no data", not calm (as Android).
+  headwind_kt: (p) => (p.windSpeedKt == null ? null : Math.max(0, p.headwindKt)),
+  tailwind_kt: (p) => (p.windSpeedKt == null ? null : Math.max(0, -p.headwindKt)),
   wind_speed_kt: (p) => p.windSpeedKt ?? null,
-  crosswind_kt: (p) => Math.abs(p.crosswindKt),
+  crosswind_kt: (p) => (p.windSpeedKt == null ? null : Math.abs(p.crosswindKt)),
   cape_surface_jkg: (p) => p.capeSurfaceJkg,
   nwp_ceiling_ft: (p) => p.nwpCloudDiag?.ceilingFt ?? null,
   visibility_m: (p) => p.visibilityM ?? null,

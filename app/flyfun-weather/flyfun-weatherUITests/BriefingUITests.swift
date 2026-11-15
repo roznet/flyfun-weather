@@ -106,8 +106,16 @@ final class BriefingUITests: FlyfunUITestCase {
         open.name = "RouteMap-Observed-Menu-Mock"
         open.lifetime = .keepAlways
         add(open)
-        // Close the menu, then Hide leaves only the pill.
-        app.tap()
+        // Close the menu, then Hide leaves only the pill. Tap the upper map,
+        // not the screen centre: on iPhone the menu covers the centre, and a
+        // centre tap opened its "Radar opacity" submenu, which then ate the
+        // Hide tap.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.22)).tap()
+        let menuGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.buttons["Satellite infrared"].firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [menuGone], timeout: Self.uiTimeout), .completed,
+                       "tapping the map should close the Layers menu")
         let hide = app.buttons["map.hideControls"].firstMatch
         XCTAssertTrue(hide.waitForExistence(timeout: Self.uiTimeout), "the map should offer Hide")
         hide.tap()

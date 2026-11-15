@@ -233,14 +233,20 @@ describe('nwp-ceiling', () => {
 describe('headwind-only / tailwind-only', () => {
   it('headwind clamps negative to 0', () => {
     const m = getMetric('headwind');
-    expect(m.getValue(makeVizPoint({ headwindKt: -10 }))).toBe(0);
-    expect(m.getValue(makeVizPoint({ headwindKt: 15 }))).toBe(15);
+    expect(m.getValue(makeVizPoint({ headwindKt: -10, windSpeedKt: 10 }))).toBe(0);
+    expect(m.getValue(makeVizPoint({ headwindKt: 15, windSpeedKt: 15 }))).toBe(15);
   });
 
   it('tailwind reads positive when headwind is negative', () => {
     const m = getMetric('tailwind');
-    expect(m.getValue(makeVizPoint({ headwindKt: -20 }))).toBe(20);
-    expect(m.getValue(makeVizPoint({ headwindKt: 15 }))).toBe(0);
+    expect(m.getValue(makeVizPoint({ headwindKt: -20, windSpeedKt: 20 }))).toBe(20);
+    expect(m.getValue(makeVizPoint({ headwindKt: 15, windSpeedKt: 15 }))).toBe(0);
+  });
+
+  it('a point without wind is no data, not calm', () => {
+    for (const id of ['headwind', 'tailwind', 'crosswind']) {
+      expect(getMetric(id).getValue(makeVizPoint({ windSpeedKt: null }))).toBeNull();
+    }
   });
 });
 
