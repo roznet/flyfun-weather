@@ -31,6 +31,16 @@ struct RouteMapKitView: UIViewRepresentable {
         let width: CGFloat
     }
 
+    /// An air-mass boundary crossing the route (#998, Forecast layer): where
+    /// the server's linked front chain meets the track at its lowest level.
+    struct FrontMarker: Equatable {
+        let latitude: Double
+        let longitude: Double
+        /// `cold` / `warm` / `quasi-stationary`.
+        let kind: String?
+        let intensity: String?
+    }
+
     /// Live aircraft state during in-flight tracking (nil when not tracking).
     struct AircraftState: Equatable {
         let coordinate: CLLocationCoordinate2D
@@ -116,6 +126,11 @@ struct RouteMapKitView: UIViewRepresentable {
     /// the overlay is replaced only then, not on every re-render.
     var lightningRevision = -1
 
+    // MARK: Fronts (#998)
+
+    /// Front crossings to draw (empty ⇒ none).
+    var frontMarkers: [FrontMarker] = []
+
     // MARK: Tap-to-map (#690)
 
     /// A region to frame once, e.g. a storm tapped on the Observed tab. Applied
@@ -145,6 +160,8 @@ struct RouteMapKitView: UIViewRepresentable {
                      forAnnotationViewWithReuseIdentifier: AirportMarkerView.reuseID)
         map.register(CellMarkerView.self,
                      forAnnotationViewWithReuseIdentifier: CellMarkerView.reuseID)
+        map.register(RouteFrontMarkerView.self,
+                     forAnnotationViewWithReuseIdentifier: RouteFrontMarkerView.reuseID)
         map.setRegion(initialRegion, animated: false)
         context.coordinator.map = map
         return map
@@ -163,6 +180,7 @@ struct RouteMapKitView: UIViewRepresentable {
 
         private var renderedRouteSignature: String?
         private var renderedWaypointSignature: String?
+        private var renderedFronts: [FrontMarker]?
         private var activeAnnotation: RouteActiveAnnotation?
         private var aircraftAnnotation: RouteAircraftAnnotation?
 
@@ -213,6 +231,7 @@ struct RouteMapKitView: UIViewRepresentable {
             updateCells(on: map)
             updateLightning(on: map)
             updateForecastOverlay(on: map)
+            updateFronts(on: map)
             updateWaypoints(on: map)
             updateActivePoint(on: map)
             updateAircraft(on: map)
@@ -401,6 +420,15 @@ struct RouteMapKitView: UIViewRepresentable {
             lightningOverlay = overlay
             // Top of `.aboveLabels`: over the radar, the route and the cells.
             map.addOverlay(overlay, level: .aboveLabels)
+        }
+
+        // MARK: Fronts (#998)
+
+        private func updateFronts(on map: MKMapView) {
+            guard renderedFronts != parent.frontMarkers else { return }
+            renderedFronts = parent.frontMarkers
+            map.removeAnnotations(map.annotations.compactMap { $0 as? RouteFrontAnnotation })
+            map.addAnnotations(parent.frontMarkers.map(RouteFrontAnnotation.init))
         }
 
         // MARK: Waypoint annotations
@@ -595,6 +623,11 @@ extension RouteMapKitView.Coordinator: MKMapViewDelegate {
                 withIdentifier: RouteAircraftMarkerView.reuseID, for: aircraft)
             (view as? RouteAircraftMarkerView)?.apply(headingDeg: aircraft.headingDeg, opacity: aircraft.opacity)
             return view
+        case let front as RouteFrontAnnotation:
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: RouteFrontMarkerView.reuseID, for: front)
+            (view as? RouteFrontMarkerView)?.configure(front.marker)
+            return view
         case let cell as CellAnnotation:
             let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: CellMarkerView.reuseID, for: cell)
@@ -667,7 +700,66 @@ final class RouteAircraftAnnotation: NSObject, MKAnnotation {
     }
 }
 
+/// A front crossing the route (#998).
+final class RouteFrontAnnotation: NSObject, MKAnnotation {
+    let marker: RouteMapKitView.FrontMarker
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    var title: String? { RouteFrontMarkerView.title(marker.kind) }
+    init(_ marker: RouteMapKitView.FrontMarker) {
+        self.marker = marker
+        self.coordinate = CLLocationCoordinate2D(latitude: marker.latitude, longitude: marker.longitude)
+    }
+}
+
 // MARK: - Annotation views
+
+/// A front crossing: a dot in the surface-analysis colour (web
+/// `FRONT_KIND_COLOR`), larger for a sharper front, with its kind initial.
+final class RouteFrontMarkerView: MKAnnotationView {
+    static let reuseID = "routeFront"
+    private let label = UILabel()
+
+    static func title(_ kind: String?) -> String {
+        switch kind {
+        case "cold": return "Cold front"
+        case "warm": return "Warm front"
+        default: return "Quasi-stationary front"
+        }
+    }
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        canShowCallout = true
+        displayPriority = .required
+        label.font = .systemFont(ofSize: 10, weight: .bold)
+        label.textColor = .white
+        label.textAlignment = .center
+        addSubview(label)
+        layer.borderColor = UIColor.white.cgColor
+        layer.borderWidth = 1.5
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(_ marker: RouteMapKitView.FrontMarker) {
+        let size: CGFloat
+        switch marker.intensity {
+        case "sharp": size = 22
+        case "classical": size = 19
+        default: size = 16
+        }
+        frame = CGRect(x: 0, y: 0, width: size, height: size)
+        layer.cornerRadius = size / 2
+        backgroundColor = UIColor(FrontsMarkersLayer.color(marker.kind))
+        label.frame = bounds
+        switch marker.kind {
+        case "cold": label.text = "C"
+        case "warm": label.text = "W"
+        default: label.text = "Q"
+        }
+        accessibilityLabel = Self.title(marker.kind)
+    }
+}
 
 /// A small ICAO capsule marking a waypoint. `displayPriority = .required` so
 /// MapKit never declutters it (parity with the SwiftUI `Annotation` it replaces).

@@ -69,7 +69,7 @@ final class ObservedUITests: FlyfunUITestCase {
         let detail = app.descendants(matching: .any)["stormDetail"].firstMatch
         XCTAssertTrue(detail.waitForExistence(timeout: Self.uiTimeout), "tapping a cell should open its card")
         XCTAssertTrue(app.staticTexts["Heavy cell"].firstMatch.exists, "the card should name the cell")
-        XCTAssertFalse(app.buttons["map.observedMenu"].firstMatch.exists, "a mark must not navigate on its own")
+        XCTAssertFalse(app.buttons["map.layersMenu"].firstMatch.exists, "a mark must not navigate on its own")
         let more = app.descendants(matching: .any)["stormMore"].firstMatch
         let moreButton = more.exists ? more : app.buttons["More"].firstMatch
         tapAfterScrolling(app, moreButton)
@@ -84,7 +84,7 @@ final class ObservedUITests: FlyfunUITestCase {
         attachScreenshot(app, "Observed-StormCard")
         let showOnMap = app.buttons["stormShowOnMap"].firstMatch
         tapAfterScrolling(app, showOnMap)
-        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+        XCTAssertTrue(app.buttons["map.layersMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "Show on map should land on the Map tab with the observed controls")
         attachScreenshot(app, "Observed-StormOnMap")
 
@@ -102,7 +102,7 @@ final class ObservedUITests: FlyfunUITestCase {
         attachScreenshot(app, "Observed-AirportCard")
         let airportMap = app.buttons["ribbonInspectorShowOnMap"].firstMatch
         tapAfterScrolling(app, airportMap)
-        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+        XCTAssertTrue(app.buttons["map.layersMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "the airport card's Show on map should open the map")
 
         // A nutshell line opens the map too (#882: under Details, below the
@@ -112,7 +112,7 @@ final class ObservedUITests: FlyfunUITestCase {
         let line = app.descendants(matching: .any)["observedNutshellLine-enroute"].firstMatch
         XCTAssertTrue(line.waitForExistence(timeout: Self.uiTimeout), "the en-route line should render")
         tapAfterScrolling(app, line)
-        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+        XCTAssertTrue(app.buttons["map.layersMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "a nutshell line should open the map")
     }
 
@@ -140,7 +140,7 @@ final class ObservedUITests: FlyfunUITestCase {
         let showOnMap = app.buttons["observedShowOnMap"].firstMatch
         XCTAssertTrue(showOnMap.waitForExistence(timeout: Self.uiTimeout), "Show on map should be offered")
         showOnMap.tap()
-        XCTAssertTrue(app.buttons["map.observedMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+        XCTAssertTrue(app.buttons["map.layersMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
                       "Show on map should land on the Map tab's observed controls")
         let badge = app.descendants(matching: .any)["map.observedBadge"].firstMatch
         XCTAssertTrue(badge.waitForExistence(timeout: Self.uiTimeout), "the observed badge should render")

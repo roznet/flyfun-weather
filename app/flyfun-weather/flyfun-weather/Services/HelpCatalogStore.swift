@@ -36,6 +36,10 @@ final class HelpCatalogStore {
     /// else the bundled baseline so the map renders on a cold first launch.
     var mapsCatalog: ForecastMapCatalog? { catalog?.maps ?? ForecastMapCatalog.bundledBaseline }
 
+    /// The briefing route-map catalog (#998): the served `route_maps` section if
+    /// synced, else the bundled copy.
+    var routeMapsCatalog: RouteMapCatalog? { catalog?.routeMaps ?? RouteMapCatalog.bundledBaseline }
+
     /// The debrief taxonomy: the served `debrief` section if synced, else the
     /// hand-maintained baseline so the debrief form works on a cold first launch.
     var debriefTaxonomy: DebriefTaxonomy { catalog?.debrief ?? DebriefTaxonomy.bundledBaseline }

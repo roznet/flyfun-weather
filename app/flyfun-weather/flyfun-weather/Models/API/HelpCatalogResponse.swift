@@ -27,6 +27,10 @@ nonisolated struct HelpCatalogResponse: Sendable {
     /// the `maps` section (#419, B2). nil on the bundled baseline before first
     /// sync — the forecast map falls back to `ForecastMapCatalog.bundledBaseline`.
     let maps: ForecastMapCatalog?
+    /// Briefing route-map catalog (#998): the route metrics, their scales,
+    /// legends and the default, served under `route_maps`. nil before the first
+    /// sync; `HelpCatalogStore.routeMapsCatalog` falls back to the bundled copy.
+    let routeMaps: RouteMapCatalog?
     /// Advisory help (same shape as `AdvisoriesResponse.catalog`).
     let advisories: [AdvisoryCatalogEntry]
     /// O(1) advisory lookup by id, built once at construction — mirrors the
@@ -40,10 +44,12 @@ nonisolated struct HelpCatalogResponse: Sendable {
     let debrief: DebriefTaxonomy?
 
     init(version: String, metrics: [String: MetricHelp], maps: ForecastMapCatalog?,
+         routeMaps: RouteMapCatalog? = nil,
          advisories: [AdvisoryCatalogEntry], debrief: DebriefTaxonomy?) {
         self.version = version
         self.metrics = metrics
         self.maps = maps
+        self.routeMaps = routeMaps
         self.advisories = advisories
         self.advisoriesById = Dictionary(advisories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.debrief = debrief
@@ -60,6 +66,7 @@ nonisolated struct HelpCatalogResponse: Sendable {
             version: envelope.version,
             metrics: envelope.metrics,
             maps: envelope.maps,
+            routeMaps: envelope.routeMaps,
             advisories: adv.advisories,
             // The debrief section carries snake_case keys (`outcome_category`,
             // `advisory_tag_map`, …); it's decoded with the plain decoder and
@@ -81,8 +88,26 @@ nonisolated struct HelpCatalogResponse: Sendable {
         let metrics: [String: MetricHelp]
         /// The `maps` section (#419); optional so an old server without it decodes.
         let maps: ForecastMapCatalog?
+        /// The `route_maps` section (#998); optional so an old server decodes.
+        /// `try?` so a catalog this build cannot read costs the served copy
+        /// (the bundled one draws instead), never the whole help catalog.
+        let routeMaps: RouteMapCatalog?
         /// The `debrief` section; optional so an old server without it decodes.
         let debrief: DebriefTaxonomy?
+
+        enum CodingKeys: String, CodingKey {
+            case version, metrics, maps, debrief
+            case routeMaps = "route_maps"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            version = try c.decode(String.self, forKey: .version)
+            metrics = try c.decode([String: MetricHelp].self, forKey: .metrics)
+            maps = try c.decodeIfPresent(ForecastMapCatalog.self, forKey: .maps)
+            routeMaps = (try? c.decodeIfPresent(RouteMapCatalog.self, forKey: .routeMaps)) ?? nil
+            debrief = try c.decodeIfPresent(DebriefTaxonomy.self, forKey: .debrief)
+        }
     }
 
     private struct AdvisoriesEnvelope: Decodable {

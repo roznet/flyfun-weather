@@ -782,7 +782,9 @@ final class CrossSectionViewModel {
             terrainElevationFt: terrainElevationFt,
             isaDevC: isaDevC,
             qnhHpa: qnhHpa,
-            dewpointC: sounding?.dewpoint2mC
+            dewpointC: sounding?.dewpoint2mC,
+            windSpeedKt: wind?.windSpeedKt,
+            visibilityM: divergenceValue(rpa.modelDivergence, variable: "visibility_m", model: model)
         )
     }
 

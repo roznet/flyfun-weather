@@ -119,20 +119,9 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
     }
 }
 
-// MARK: - MapColors (segment colour scales — threshold buckets)
+// MARK: - MapColors (flight-category palette, still used by the cross-section)
 
 @Suite struct MapColorsTests {
-    @Test func ceilingMatchesFlightCategoryBoundaries() {
-        #expect(sameColor(MapColors.ceiling(200), MapColors.flightCategory("LIFR")))
-        #expect(sameColor(MapColors.ceiling(700), MapColors.flightCategory("IFR")))
-        #expect(sameColor(MapColors.ceiling(2000), MapColors.flightCategory("MVFR")))
-        #expect(sameColor(MapColors.ceiling(5000), MapColors.flightCategory("VFR")))
-        // Boundaries flip the category exactly at 500 / 1000 / 3000.
-        #expect(!sameColor(MapColors.ceiling(499), MapColors.ceiling(500)))
-        #expect(!sameColor(MapColors.ceiling(999), MapColors.ceiling(1000)))
-        #expect(!sameColor(MapColors.ceiling(2999), MapColors.ceiling(3000)))
-    }
-
     @Test func flightCategoryPalette() {
         #expect(sameColor(MapColors.flightCategory("VFR"), .green))
         #expect(sameColor(MapColors.flightCategory("MVFR"), .blue))
@@ -140,85 +129,123 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
         #expect(sameColor(MapColors.flightCategory("LIFR"), .purple))
         #expect(sameColor(MapColors.flightCategory("???"), .gray))
     }
+}
 
-    @Test func sfipBucketBoundariesAt20_50_80() {
-        // Within a bucket → same colour; across the 20/50/80 lines → different.
-        #expect(sameColor(MapColors.sfip(0), MapColors.sfip(20)))
-        #expect(!sameColor(MapColors.sfip(20), MapColors.sfip(20.1)))
-        #expect(sameColor(MapColors.sfip(21), MapColors.sfip(50)))
-        #expect(!sameColor(MapColors.sfip(50), MapColors.sfip(50.1)))
-        #expect(sameColor(MapColors.sfip(51), MapColors.sfip(80)))
-        #expect(!sameColor(MapColors.sfip(80), MapColors.sfip(80.1)))
+// MARK: - Route-map catalog (#998: served `route_maps`, bundled copy)
+
+@Suite struct RouteMapCatalogTests {
+    private var catalog: RouteMapCatalog { RouteMapCatalog.bundledBaseline! }
+    private var metrics: MapMetrics { MapMetrics(catalog: catalog) }
+
+    @Test func bundledCatalogDecodes() {
+        #expect(RouteMapCatalog.bundledBaseline != nil, "route-map-metrics-catalog.json must be in the app bundle")
+        #expect(catalog.defaultMetric == "cloud-cover-total")
+        #expect(catalog.scales.bands["headwind_kt"]?.stops?.first?.at == 0)
     }
 
-    @Test func riskRanksAreFiveDistinctColours() {
-        let colours = [MapColors.risk(0), MapColors.risk(1), MapColors.risk(2), MapColors.risk(3), MapColors.risk(4)]
-        for i in colours.indices {
-            for j in colours.indices where j > i {
-                #expect(!sameColor(colours[i], colours[j]))
-            }
+    @Test func everyCatalogMetricHasAnExtractor() {
+        // A metric this build cannot read is skipped; the bundled copy must have none.
+        #expect(metrics.all.map(\.id) == catalog.metrics.map(\.key))
+        for spec in catalog.metrics { #expect(MapMetrics.extractors[spec.value] != nil, "\(spec.value)") }
+    }
+
+    @Test func groupsSplitAltitudeFromRoute() {
+        #expect(metrics.groups.map(\.id) == ["at_altitude", "along_route"])
+        #expect(metrics.groups[0].metrics.allSatisfy(\.altitudeDependent))
+        #expect(!metrics.groups[1].metrics.contains(where: \.altitudeDependent))
+    }
+
+    @Test func unknownIdFallsBackToDefault() {
+        #expect(metrics.resolve("flight-category")?.id == "cloud-cover-total")
+        #expect(metrics.resolve(nil)?.id == "cloud-cover-total")
+        #expect(metrics.resolve("cape")?.id == "cape")
+        #expect(metrics.metric(byId: "flight-category") == nil)
+    }
+
+    @Test func ceilingBandsFlipAtCategoryBoundaries() {
+        let m = metrics.metric(byId: "nwp-ceiling")!
+        #expect(!sameColor(m.color(499), m.color(500)))
+        #expect(!sameColor(m.color(999), m.color(1000)))
+        #expect(!sameColor(m.color(2999), m.color(3000)))
+        #expect(sameColor(m.color(3000), m.color(9000)))
+        // Every colour the line can draw is in the legend (#735).
+        let legend = m.legend.map(\.color)
+        for ft in stride(from: 0.0, through: 10000, by: 250) {
+            #expect(legend.contains { sameColor($0, m.color(ft)) })
         }
-        // Rank is rounded: 0.4 → 0 (none), 0.6 → 1 (light).
-        #expect(sameColor(MapColors.risk(0.4), MapColors.risk(0)))
-        #expect(sameColor(MapColors.risk(0.6), MapColors.risk(1)))
     }
 
-    @Test func headwindSignSplitsTailwindFromHeadwind() {
-        // All tailwind/calm (kt ≤ 0) is one constant green; headwind scales away from it.
-        #expect(sameColor(MapColors.headwind(0), MapColors.headwind(-30)))
-        #expect(!sameColor(MapColors.headwind(0), MapColors.headwind(15)))
+    @Test func sfipUsesTheBackendTiers() {
+        // 15 / 30 / 55, the backend sfip_to_risk() tiers, in the icing colours.
+        let sfip = metrics.metric(byId: "sfip-at-level")!
+        let icing = metrics.metric(byId: "icing-risk-at-level")!
+        #expect(sameColor(sfip.color(14.9), icing.color(0)))
+        #expect(sameColor(sfip.color(15), icing.color(1)))
+        #expect(sameColor(sfip.color(30), icing.color(2)))
+        #expect(sameColor(sfip.color(55), icing.color(3)))
     }
 
-    @Test func continuousScalesClampAtEnds() {
-        // CAPE / temperature / cloud-cover saturate outside their domain.
-        #expect(sameColor(MapColors.cape(-100), MapColors.cape(0)))
-        #expect(sameColor(MapColors.cape(3000), MapColors.cape(2000)))
-        #expect(sameColor(MapColors.temperature(-30), MapColors.temperature(-20)))
-        #expect(sameColor(MapColors.temperature(50), MapColors.temperature(40)))
-        #expect(sameColor(MapColors.cloudCover(-10), MapColors.cloudCover(0)))
-        #expect(sameColor(MapColors.cloudCover(150), MapColors.cloudCover(100)))
-        // …but the endpoints themselves are visibly different.
-        #expect(!sameColor(MapColors.cape(0), MapColors.cape(2000)))
-        #expect(!sameColor(MapColors.temperature(-20), MapColors.temperature(40)))
-        #expect(!sameColor(MapColors.cloudCover(0), MapColors.cloudCover(100)))
+    @Test func linearScalesInterpolateAndClamp() {
+        let head = metrics.metric(byId: "headwind")!
+        #expect(sameColor(head.color(0), Color(.sRGB, red: 1, green: 1, blue: 1)))
+        #expect(sameColor(head.color(-10), head.color(0)))
+        #expect(sameColor(head.color(60), head.color(30)))
+        #expect(!sameColor(head.color(15), head.color(0)))
+        #expect(!sameColor(head.color(15), head.color(30)))
+    }
+
+    @Test func widthRunsThinToThickWithinRange() {
+        let ceiling = metrics.metric(byId: "nwp-ceiling")!   // inverted: low ceiling thick
+        #expect(abs(ceiling.width(0) - MapMetrics.maxWidth) < 1e-6)
+        #expect(abs(ceiling.width(5000) - MapMetrics.minWidth) < 1e-6)
+        #expect(abs(ceiling.width(20000) - MapMetrics.minWidth) < 1e-6)
+        let cloud = metrics.metric(byId: "cloud-cover-total")!
+        #expect(abs(cloud.width(50) - (MapMetrics.minWidth + MapMetrics.maxWidth) / 2) < 1e-6)
+    }
+
+    @Test func helpCatalogCarriesRouteMaps() throws {
+        // Served under `route_maps`, decoded with the plain decoder (keys verbatim).
+        let bundled = try Data(contentsOf: try #require(
+            Bundle.main.url(forResource: "route-map-metrics-catalog", withExtension: "json")))
+        let route = try #require(String(data: bundled, encoding: .utf8))
+        let json = #"{"version": "v", "metrics": {}, "advisories": [], "route_maps": "# + route + "}"
+        let decoded = try HelpCatalogResponse.decode(from: Data(json.utf8))
+        #expect(decoded.routeMaps?.metrics.count == catalog.metrics.count)
+        // A route catalog this build cannot read costs that section only.
+        let broken = #"{"version": "v", "metrics": {}, "advisories": [], "route_maps": {"version": 1}}"#
+        #expect(try HelpCatalogResponse.decode(from: Data(broken.utf8)).routeMaps == nil)
+    }
+
+    @Test func formatsFollowTheCatalog() {
+        #expect(metrics.metric(byId: "icing-risk-at-level")!.format(2) == "moderate")
+        #expect(metrics.metric(byId: "visibility")!.format(2500) == "2.5 km")
+        #expect(metrics.metric(byId: "nwp-ceiling")!.format(800) == "800 ft")
     }
 }
 
-// MARK: - MapMetrics registry (exercises the private altitude helpers + linearWidth)
+// MARK: - MapMetrics extractors (the altitude helpers, segment aggregation)
 
 @Suite struct MapMetricsTests {
 
     private func metric(_ id: String) -> MapMetric {
-        MapMetrics.metric(byId: id)!
-    }
-
-    @Test func linearWidthClampsAndScales() {
-        // cloud-cover width = linearWidth(value, 100, 3, 18).
-        let w = metric("cloud-cover-total").width
-        #expect(abs(w(0) - 3) < 1e-6)       // min width
-        #expect(abs(w(50) - 10.5) < 1e-6)   // midpoint
-        #expect(abs(w(100) - 18) < 1e-6)    // max width
-        #expect(abs(w(200) - 18) < 1e-6)    // clamped above max
-        #expect(abs(w(-50) - 10.5) < 1e-6)  // uses |value|
+        MapMetrics(catalog: RouteMapCatalog.bundledBaseline!).metric(byId: id)!
     }
 
     @Test func segmentValueAveragesContinuousFields() {
-        let m = metric("cloud-cover-total")  // aggregation .average
+        let m = metric("cloud-cover-total")  // aggregation average
         let a = makeVizPoint(cloudCoverTotalPct: 20)
         let b = makeVizPoint(cloudCoverTotalPct: 60)
         #expect(m.segmentValue(a, b, altitudeFt: nil) == 40)
     }
 
     @Test func segmentValueTakesWorstForOrdinalRisk() {
-        let m = metric("convective-risk")  // aggregation .worst, riskRank lookup
+        let m = metric("convective-risk")  // aggregation max, riskRank lookup
         let calm = makeVizPoint(convectiveRisk: "none")    // 0
         let bad = makeVizPoint(convectiveRisk: "severe")   // 3
         #expect(m.segmentValue(calm, bad, altitudeFt: nil) == 3)
     }
 
     @Test func segmentValueFallsBackWhenOneEndpointNil() {
-        // temp-at-level returns nil without a freezing level; the segment should
-        // then report the other endpoint's value, not nil.
         let m = metric("temp-at-level")
         let known = makeVizPoint(freezingLevelFt: 10000)   // 0°C at 10000 ft
         let unknown = makeVizPoint()                        // no freezing level → nil
@@ -230,24 +257,22 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
     @Test func tempAtAltitudeInterpolatesAndExtrapolates() {
         let m = metric("temp-at-level")
         let p = makeVizPoint(freezingLevelFt: 10000, minus10cLevelFt: 20000, minus20cLevelFt: 30000)
-        #expect(abs((m.getValue(p, 10000) ?? .nan) - 0) < 1e-6)     // at freezing level
-        #expect(abs((m.getValue(p, 15000) ?? .nan) - -5) < 1e-6)    // half-way 0 → -10
-        #expect(abs((m.getValue(p, 5000) ?? .nan) - 10) < 1e-6)     // below: +2°C/1000ft warmer
-        #expect(abs((m.getValue(p, 35000) ?? .nan) - -30) < 1e-6)   // above: extrapolated colder
-        #expect(m.getValue(makeVizPoint(), 10000) == nil)           // no freezing level → nil
+        #expect(abs((m.getValue(p, 10000) ?? .nan) - 0) < 1e-6)
+        #expect(abs((m.getValue(p, 15000) ?? .nan) - -5) < 1e-6)
+        #expect(abs((m.getValue(p, 5000) ?? .nan) - 10) < 1e-6)
+        #expect(abs((m.getValue(p, 35000) ?? .nan) - -30) < 1e-6)
+        #expect(m.getValue(makeVizPoint(), 10000) == nil)
     }
 
-    @Test func icingRiskPrefersOgimetEnvelopeAndRespectsAltitudeSpan() {
+    @Test func icingRiskReadsTheDiagnosticZonesLikeTheWeb() {
+        // #998: one rule on every client, the web's (the OGIMET-NWP preference
+        // was iOS-only).
         let m = metric("icing-risk-at-level")
         let diag = VizIcingZone(baseFt: 5000, topFt: 15000, risk: "moderate", type: "diag")  // rank 2
         let ogimet = VizIcingZone(baseFt: 0, topFt: 40000, risk: "severe", type: "nwp")       // rank 3
-        // When OGIMET-NWP zones are present they win over the diagnostic zones.
         let p = makeVizPoint(icingZones: [diag], icingOgimetNwpZones: [ogimet])
-        #expect((m.getValue(p, 10000) ?? -1) == 3)
-        // Fall back to diagnostic zones when no OGIMET envelope.
-        let pDiag = makeVizPoint(icingZones: [diag])
-        #expect((m.getValue(pDiag, 10000) ?? -1) == 2)
-        #expect((m.getValue(pDiag, 20000) ?? -1) == 0)   // above the zone → no risk
+        #expect((m.getValue(p, 10000) ?? -1) == 2)
+        #expect((m.getValue(p, 20000) ?? -1) == 0)   // above the zone → no risk
     }
 
     @Test func sfipPeaksWithinSpanAndIsNilOutside() {
@@ -261,13 +286,43 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
 
     @Test func cloudAtAltitudeUsesCoverageWeight() {
         let m = metric("cloud-at-level")
-        let ovc = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "ovc")])  // weight 1.0 → 100
+        let ovc = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "ovc")])
         #expect(m.getValue(ovc, 5000) == 100)
-        let sct = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "sct")])  // weight 0.3 → 30
-        #expect(abs((sct.cloudLayers.isEmpty ? .nan : (m.getValue(sct, 5000) ?? .nan)) - 30) < 1e-6)
-        let unknown = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "xyz")])  // default 0.5 → 50
+        let sct = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "sct")])
+        #expect(abs((m.getValue(sct, 5000) ?? .nan) - 30) < 1e-6)
+        let unknown = makeVizPoint(cloudLayers: [makeCloud(3000, 8000, "xyz")])
         #expect((m.getValue(unknown, 5000) ?? -1) == 50)
-        #expect((m.getValue(ovc, 12000) ?? -1) == 0)   // above the layer → clear
+        #expect((m.getValue(ovc, 12000) ?? -1) == 0)
+    }
+
+    @Test func windSpeedAndVisibilityReadThePoint() {
+        var p = makeVizPoint()
+        p.windSpeedKt = 25
+        p.visibilityM = 3000
+        #expect(metric("wind-speed").getValue(p, nil) == 25)
+        #expect(metric("visibility").getValue(p, nil) == 3000)
+        // No model visibility (ICON) → no value, not a guess.
+        #expect(metric("visibility").getValue(makeVizPoint(), nil) == nil)
+    }
+}
+
+// MARK: - Route-map chrome helpers (#998)
+
+@Suite struct RouteMapChromeTests {
+    @Test func altitudeStepsSnapAndClamp() {
+        #expect(RouteMapView.stepAltitude(8000, by: 1, ceilingFt: 12000) == 8500)
+        #expect(RouteMapView.stepAltitude(8000, by: -1, ceilingFt: 12000) == 7500)
+        #expect(RouteMapView.stepAltitude(0, by: -1, ceilingFt: 12000) == 0)
+        #expect(RouteMapView.stepAltitude(12000, by: 1, ceilingFt: 12000) == 12000)
+        #expect(RouteMapView.stepAltitude(8240, by: 1, ceilingFt: 12000) == 8500)
+    }
+
+    @Test func frontsArePlacedAlongTheRoute() {
+        let points = [makeVizPoint(distanceNm: 0, lat: 50, lon: 0), makeVizPoint(distanceNm: 100, lat: 52, lon: 2)]
+        let c = RouteFrontPlacement.coordinate(atDistanceNm: 50, along: points)
+        #expect(abs((c?.lat ?? 0) - 51) < 1e-9)
+        #expect(abs((c?.lon ?? 0) - 1) < 1e-9)
+        #expect(RouteFrontPlacement.coordinate(atDistanceNm: 150, along: points) == nil)
     }
 }
 
@@ -279,6 +334,8 @@ private func makeCloud(_ baseFt: Double, _ topFt: Double, _ coverage: String) ->
 
 private func makeVizPoint(
     distanceNm: Double = 0,
+    lat: Double = 0,
+    lon: Double = 0,
     freezingLevelFt: Double? = nil,
     minus10cLevelFt: Double? = nil,
     minus20cLevelFt: Double? = nil,
@@ -296,7 +353,7 @@ private func makeVizPoint(
 ) -> VizPoint {
     VizPoint(
         distanceNm: distanceNm,
-        lat: 0, lon: 0,
+        lat: lat, lon: lon,
         time: "2026-06-24T12:00:00Z",
         altitudeLines: AltitudeLines(
             freezingLevelFt: freezingLevelFt,
