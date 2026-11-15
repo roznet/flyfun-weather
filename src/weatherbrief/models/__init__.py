@@ -98,6 +98,7 @@ from weatherbrief.models.advisories import (  # noqa: F401
     InterviewOption,
     InterviewQuestion,
     Mitigation,
+    ShadowGrade,
     MitigationKind,
     MitigationProfile,
     MitigationSegment,

@@ -369,6 +369,7 @@
   "advisories.reason.tight_margin": "Descenso libre de hielo ajustado",
   "advisories.reason.warm_escape": "Aire sobre cero por debajo — tiene una salida",
   "advisories.reason.sld": "SLD — gotas grandes subfundidas",
+  "advisories.reason.sld_aloft": "Posible SLD en altura (agua de lluvia bajo cero), no confirmado por observaciones en superficie",
   "advisories.reason.severe_icing": "Engelamiento severo — más allá de la capacidad del avión",
   "advisories.reason.thick_transit": "Capa gruesa — larga exposición en tránsito",
   "advisories.reason.icing_at_cruise": "Hielo en crucero — estaría merodeando en él",

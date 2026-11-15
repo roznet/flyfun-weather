@@ -45,10 +45,25 @@ iced point of the stretch:
 
 Freezing rain itself is graded by ``freezing_precip``; here it only removes the
 downward escape, so it is not counted twice.
+
+**SLD (#411 step 4, §84)** has two levels, read from ``SldZone`` rather than
+the dormant ``IcingZone.sld_risk`` flag:
+
+* *confirmed* (a freezing-rain zone that reaches the surface): RED when the
+  climb, the cruise or the descent crosses it, and a wall for the altitude
+  solver. Here the climb and descent are counted, which ``freezing_precip``
+  does not do.
+* *unconfirmed aloft* (the model's rain water colder than about -2 °C, no
+  surface signal): AMBER at most, priced but never a wall.
+
+``WB_SLD_ICING`` sets how far this goes: ``shadow`` (the default) computes the
+SLD grade and records it on ``ModelAdvisoryResult.shadow`` without touching the
+card; ``live`` grades it; ``off`` skips it.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from weatherbrief.analysis.advisories import RouteContext
@@ -66,6 +81,7 @@ from weatherbrief.analysis.advisories._helpers import (
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import INF, Blockage, solve
+from weatherbrief.analysis.sounding.sld import assess_sld_aloft_zones, sld_aloft_thresholds
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
     AdvisoryParameterDef,
@@ -79,6 +95,8 @@ from weatherbrief.models import (
     MitigationKind,
     ModelAdvisoryResult,
     RouteAdvisoryResult,
+    ShadowGrade,
+    SldZone,
     SoundingAnalysis,
 )
 
@@ -106,6 +124,24 @@ _RISK_ORDER = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SE
 # routed through anything a non-FIKI one could not also be offered.
 _LIGHT_COST = 1.0
 _MODERATE_COST = 3.0
+
+# §84: how far the two-level SLD grade goes. Shadow until the amber-volume
+# replay on stored winter flights has run (decision 1 of 2026-11-15).
+SLD_MODE_ENV = "WB_SLD_ICING"
+SLD_SHADOW_RULE = "sld_icing"
+
+
+def sld_icing_mode() -> str:
+    """``live``, ``off`` or ``shadow`` (the default, and any other value)."""
+    mode = os.environ.get(SLD_MODE_ENV, "").strip().lower()
+    return mode if mode in ("live", "off") else "shadow"
+
+
+def point_sld_zones(sounding: SoundingAnalysis) -> list[SldZone]:
+    """Every SLD zone at one point: the stored ones plus the bands aloft."""
+    stored = list(sounding.sld_zones)
+    confirmed = [z for z in stored if z.confirmed]
+    return stored + assess_sld_aloft_zones(sounding.derived_levels, confirmed)
 
 
 def equipage_of(ctx: RouteContext) -> AircraftEquipage:
@@ -142,6 +178,10 @@ class IcingPoint:
     down_block: str | None = None  # freezing_rain | warm_nose | terrain | terrain_unknown | no_level
     escape_up_ft: float | None = None
     method_id: str | None = None
+    # SLD zones (§84) within the cruise band, and in the ground-to-cruise
+    # column. Empty when ``WB_SLD_ICING=off``.
+    sld_cruise: tuple[SldZone, ...] = ()
+    sld_column: tuple[SldZone, ...] = ()
 
     @property
     def iced_at_cruise(self) -> bool:
@@ -216,6 +256,7 @@ def icing_picture(
     terrain_margin = params.get("terrain_margin_ft", 1000)
     equipage = equipage_of(ctx)
     ceiling = equipage.ceiling_ft or ctx.flight_ceiling_ft
+    with_sld = sld_icing_mode() != "off"
     points: list[IcingPoint] = []
     for idx, rpa in enumerate(ctx.analyses):
         dist = rpa.distance_from_origin_nm or 0.0
@@ -234,6 +275,11 @@ def icing_picture(
             z.model_copy(update={"base_ft": max(z.base_ft, ground), "top_ft": min(z.top_ft, cruise)})
             for z in zones if z.base_ft < cruise and z.top_ft > ground
         )
+        sld = point_sld_zones(sounding) if with_sld else []
+        sld_cruise = tuple(
+            z for z in sld if z.base_ft <= cruise + band and z.top_ft >= cruise - band
+        )
+        sld_column = tuple(z for z in sld if z.base_ft < cruise and z.top_ft > ground)
         fz = sounding.indices.freezing_level_ft if sounding.indices else None
         warm = not cruise_zones and fz is not None and cruise < fz
         down_ft = down_block = up_ft = floor_ft = None
@@ -252,6 +298,7 @@ def icing_picture(
             warm_at_cruise=warm, escape_down_ft=down_ft, escape_floor_ft=floor_ft,
             down_block=down_block,
             escape_up_ft=up_ft, method_id=sounding.icing_method_effective,
+            sld_cruise=sld_cruise, sld_column=sld_column,
         ))
     return points
 
@@ -263,10 +310,20 @@ def icing_cell_cost(sounding: SoundingAnalysis, alt_ft: float, fiki: bool) -> fl
     the old ``icing_escape`` cost read 0 below the freezing level even under a
     warm nose. SEVERE and SLD are walls for every aircraft; non-FIKI may only be
     priced through light rime (design decision 8 of the solver).
+
+    With ``WB_SLD_ICING=live``, a confirmed SLD zone (§84) is a wall too, and
+    an unconfirmed band aloft is priced like moderate icing: never a wall, but
+    never offered as an icing-free level either.
     """
     if not sounding.active_icing_available:
         return INF
     worst = 0.0
+    if sld_icing_mode() == "live":
+        for sz in point_sld_zones(sounding):
+            if sz.base_ft <= alt_ft <= sz.top_ft:
+                if sz.confirmed:
+                    return INF
+                worst = max(worst, _MODERATE_COST)
     for z in hazardous_icing_zones(sounding.icing_zones):
         if not (z.base_ft <= alt_ft <= z.top_ft):
             continue
@@ -410,6 +467,78 @@ def grade_stretch(
     return AdvisoryStatus.RED, "short_no_escape"
 
 
+# --- SLD (§84) ---------------------------------------------------------------
+
+
+@dataclass
+class _SldHit:
+    """Where the planned profile crosses SLD at one point, and its grade."""
+
+    point: IcingPoint
+    zones: list[SldZone] = field(default_factory=list)
+    phases: list[str] = field(default_factory=list)
+
+    @property
+    def confirmed(self) -> bool:
+        return any(z.confirmed for z in self.zones)
+
+    @property
+    def grade(self) -> tuple[AdvisoryStatus, str]:
+        # Decision 2 of 2026-11-15: only confirmed SLD is RED; aloft is AMBER at most.
+        if self.confirmed:
+            return AdvisoryStatus.RED, "sld"
+        return AdvisoryStatus.AMBER, "sld_aloft"
+
+
+def sld_hits(picture: list[IcingPoint]) -> list[_SldHit]:
+    """The points where the climb, cruise or descent crosses an SLD zone.
+
+    The climb is flown at the first assessed point and the descent at the
+    last, as in :func:`build_stretches`; cruise everywhere.
+    """
+    assessed = [p for p in sorted(picture, key=lambda p: p.distance_nm) if p.assessed]
+    if not assessed:
+        return []
+    first, last = assessed[0], assessed[-1]
+    hits: list[_SldHit] = []
+    for p in assessed:
+        hit = _SldHit(point=p)
+
+        def take(zones, phase: str) -> None:
+            if not zones:
+                return
+            hit.zones.extend(z for z in zones if z not in hit.zones)
+            if phase not in hit.phases:
+                hit.phases.append(phase)
+
+        if p is first:
+            take(p.sld_column, "climb")
+        take(p.sld_cruise, "cruise")
+        if p is last:
+            take(p.sld_column, "descent")
+        if hit.zones:
+            hits.append(hit)
+    return hits
+
+
+def _sld_sentence(hits: list[_SldHit], loc: str | None) -> tuple[AdvisoryStatus, str, str]:
+    """(status, reason_code, sentence) of the worst SLD hits."""
+    confirmed = [h for h in hits if h.confirmed]
+    lead = confirmed or hits
+    status, reason = lead[0].grade
+    phases: list[str] = []
+    for h in lead:
+        phases.extend(ph for ph in h.phases if ph not in phases)
+    order = ["climb", "cruise", "descent"]
+    names = ", ".join(adv_t(f"aircraft_icing.phase.{ph}", loc) for ph in sorted(phases, key=order.index))
+    if reason == "sld":
+        return status, reason, adv_t("aircraft_icing.sld", loc, phases=names)
+    temp = sld_aloft_thresholds()[0]
+    return status, reason, adv_t(
+        "aircraft_icing.sld_aloft", loc, phases=names, temp=f"{temp:g}",
+    )
+
+
 # --- per-model grade -------------------------------------------------------
 
 
@@ -429,6 +558,8 @@ class IcingModelGrade:
     stretches: list[_Stretch]
     worst: _Stretch | None
     worst_reason: str | None
+    # §84 shadow record: what the SLD grade would be, when it runs in shadow.
+    shadow: list[ShadowGrade] = field(default_factory=list)
 
 
 def profile_declares_fiki(settings: dict, template_key: str | None) -> bool:
@@ -517,12 +648,33 @@ def grade_aircraft_icing_model(
     )
 
     graded = [(s, *grade_stretch(s, fiki, params)) for s in stretches]
-    point_grade: dict[int, tuple[AdvisoryStatus, str, _Stretch]] = {}
+    # Per point: (status, reason, the zones that span its highlight cell).
+    point_grade: dict[int, tuple[AdvisoryStatus, str, list]] = {}
+
+    def mark(p: IcingPoint, status: AdvisoryStatus, reason: str, zones: list) -> None:
+        prev = point_grade.get(p.index)
+        if prev is None or AdvisoryStatus.worst([prev[0], status]) != prev[0]:
+            point_grade[p.index] = (status, reason, zones)
+
     for s, status, reason in graded:
         for p in s.points:
-            prev = point_grade.get(p.index)
-            if prev is None or AdvisoryStatus.worst([prev[0], status]) != prev[0]:
-                point_grade[p.index] = (status, reason, s)
+            mark(p, status, reason, list(p.cruise_zones or p.column_zones))
+
+    mode = sld_icing_mode()
+    hits = sld_hits(picture) if mode != "off" else []
+    sld_lead: tuple[AdvisoryStatus, str, str] | None = None
+    shadow: list[ShadowGrade] = []
+    if hits:
+        sld_lead = _sld_sentence(hits, loc)
+        if mode == "live":
+            for h in hits:
+                mark(h.point, *h.grade, list(h.zones))
+        else:
+            shadow.append(ShadowGrade(
+                rule=SLD_SHADOW_RULE, status=sld_lead[0], reason_code=sld_lead[1],
+                points=len(hits), detail=sld_lead[2],
+            ))
+            sld_lead = None
 
     samples: list[EvidenceSample] = []
     cells: list[tuple[float, FlaggedCell | None]] = []
@@ -541,9 +693,8 @@ def grade_aircraft_icing_model(
             ))
             cells.append((p.distance_nm, None))
             continue
-        status, reason, s = hit
+        status, reason, zones = hit
         severity = HighlightSeverity.RED if status == AdvisoryStatus.RED else HighlightSeverity.AMBER
-        zones = list(p.cruise_zones or p.column_zones)
         cell = FlaggedCell(
             kind="icing_band", severity=severity,
             base_ft=int(min(z.base_ft for z in zones)),
@@ -561,10 +712,13 @@ def grade_aircraft_icing_model(
         status, detail, worst, worst_reason = (
             AdvisoryStatus.UNAVAILABLE, adv_t("no_data", loc), None, None,
         )
-    elif not graded:
+    elif not graded and sld_lead is None:
         status, detail, worst, worst_reason = (
             AdvisoryStatus.GREEN, f"{label}: {adv_t('aircraft_icing.no_icing', loc)}", None, None,
         )
+    elif not graded:
+        status, worst_reason, sentence = sld_lead
+        detail, worst = f"{label}: {sentence}", None
     else:
         status = AdvisoryStatus.worst([g[1] for g in graded])
         # The worst stretch, longest first among equals: the one the pilot
@@ -577,10 +731,21 @@ def grade_aircraft_icing_model(
             ),
         )
         detail = f"{label}: {_stretch_sentence(worst, worst_reason, fiki, len(graded), loc)}"
+        if sld_lead is not None:
+            # SLD leads the sentence when it is at least as bad as the worst
+            # stretch: it is the more specific hazard. Otherwise it follows.
+            sld_status, sld_reason, sentence = sld_lead
+            if AdvisoryStatus.worst([status, sld_status]) == sld_status:
+                rest = detail[len(label) + 2:]
+                detail = f"{label}: {sentence}. {rest[:1].upper()}{rest[1:]}"
+                status, worst_reason = sld_status, sld_reason
+            else:
+                detail = f"{detail}. {sentence[:1].upper()}{sentence[1:]}"
 
     return IcingModelGrade(
         status=status, detail=detail, samples=samples, region_cells=cells,
         assessed=assessed, stretches=stretches, worst=worst, worst_reason=worst_reason,
+        shadow=shadow,
     )
 
 
@@ -721,7 +886,7 @@ class AircraftIcingEvaluator:
             if status == AdvisoryStatus.GREEN and summary.below_coverage:
                 status, detail = AdvisoryStatus.UNAVAILABLE, adv_t("no_data", ctx.locale)
             highlights = summary.highlights if summary.assessed > 0 else None
-            per_model.append(ModelAdvisoryResult.build(
+            result = ModelAdvisoryResult.build(
                 model=model, status=status, detail=detail,
                 affected=summary.affected, total=summary.assessed,
                 total_distance_nm=ctx.total_distance_nm,
@@ -729,5 +894,7 @@ class AircraftIcingEvaluator:
                 mitigations=_mitigations(ctx, model, grade, params),
                 highlights=highlights,
                 primary_method_id=driving_method_id(highlights, status),
-            ))
+            )
+            result.shadow = grade.shadow
+            per_model.append(result)
         return RouteAdvisoryResult.from_per_model(ADVISORY_ID, per_model, params)

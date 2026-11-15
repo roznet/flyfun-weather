@@ -369,6 +369,7 @@
   "advisories.reason.tight_margin": "Descente hors givre marginale",
   "advisories.reason.warm_escape": "Air positif en dessous — une échappatoire existe",
   "advisories.reason.sld": "SLD — grosses gouttes surfondues",
+  "advisories.reason.sld_aloft": "SLD possible en altitude (pluie sous le zéro), non confirmé par les observations au sol",
   "advisories.reason.severe_icing": "Givrage sévère — au-delà des capacités de l'avion",
   "advisories.reason.thick_transit": "Couche épaisse — longue exposition en transit",
   "advisories.reason.icing_at_cruise": "Givre au niveau de croisière — vous y stationneriez",
