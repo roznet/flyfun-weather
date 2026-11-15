@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
@@ -10,7 +11,8 @@ export default defineConfig({
   // Locally the default (half the cores, 9 on an 18-core Mac) is past the knee:
   // from Playwright 1.65 (Chromium 159) 9 workers time out across the suite
   // while 6 run clean in the same wall time. On CI's 4 vCPUs the default would be 2.
-  workers: process.env.CI ? 4 : 6,
+  // Locally, never above the default either, so smaller machines keep half their cores.
+  workers: process.env.CI ? 4 : Math.min(6, Math.max(1, Math.floor(availableParallelism() / 2))),
   timeout: 30_000,
   retries: 0,
   use: {
