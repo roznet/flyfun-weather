@@ -770,12 +770,17 @@ def _load_columns(conn, model: str, valid: str) -> tuple[Grid | None, dict]:
 
 
 def score(conn, models: list[str], start: date | None, end: date | None,
-          subzero: bool, with_product: bool) -> dict:
-    """{model: {signal: {truth: [flagged, n]}}} plus the n of reports scored."""
+          subzero: bool, with_product: bool, step_h: int = VALID_STEP_H) -> dict:
+    """{model: {signal: {truth: [flagged, n]}}} plus the n of reports scored.
+
+    ``step_h`` is the spacing of the stored valid times (3 here; 1 for the
+    hourly #1003 collector, which shares this schema). Reports whose truth is
+    not an icing class (the collector's turbulence-only reports) are skipped.
+    """
     results: dict = {m: defaultdict(lambda: defaultdict(lambda: [0, 0])) for m in models}
     scored = {m: 0 for m in models}
     skipped = {m: defaultdict(int) for m in models}
-    half = timedelta(hours=VALID_STEP_H / 2)
+    half = timedelta(hours=step_h / 2)
     for model in models:
         valids = [v for (v,) in conn.execute(
             "SELECT valid FROM fetches WHERE model=? AND status='ok' ORDER BY valid", (model,))]
@@ -790,6 +795,8 @@ def score(conn, models: list[str], start: date | None, end: date | None,
             for lat, lon, alt, truth in conn.execute(
                     "SELECT lat, lon, alt_ft, truth FROM pireps WHERE valid >= ? AND valid < ?",
                     (_iso(valid - half), _iso(valid + half))):
+                if truth not in TRUTH_CLASSES:
+                    continue
                 centre = grid.index(lat, lon)
                 if centre not in cols:
                     skipped[model]["no_column"] += 1
