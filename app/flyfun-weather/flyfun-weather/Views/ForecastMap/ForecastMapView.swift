@@ -9,8 +9,8 @@ import SwiftUI
 /// differs (inspector vs bottom sheet), keyed off size class.
 ///
 /// "When" lives on top (the bottom belongs to the airport sheet, which would
-/// otherwise cover the hour stepper); "what" (metric/legend/locate) sits
-/// bottom-right, above the sheet.
+/// otherwise cover the hour stepper); "what" (metric, models, legend) is one
+/// panel at the bottom, above the sheet. Shared chrome: `MapChrome` (#996).
 struct ForecastMapView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -19,6 +19,8 @@ struct ForecastMapView: View {
     /// Set when the user taps a model that can't reach the selected day, to show
     /// the "why" instead of switching to an unreachable model.
     @State private var unavailableModel: String?
+    /// Map-only view (#996): everything but close and the time pill hidden.
+    @State private var controlsHidden = MapChrome.controlsHidden
     /// nil on the iPad detail pane; set on the iPhone cover so it can dismiss.
     private let onClose: (() -> Void)?
     /// Set on the iPad detail pane so the map can show/hide the split view's
@@ -28,7 +30,8 @@ struct ForecastMapView: View {
     /// collapse the sidebar over the map and be stranded there with no way back to
     /// the flight list.
     private let onToggleSidebar: (() -> Void)?
-    /// Swap this screen for the historical map (#629), the web's Historical tab.
+    /// Swap this screen for the past (historical, #629) map: the Past side of
+    /// the Forecast | Past switch.
     private let onShowHistorical: (() -> Void)?
     /// The pilot's one flight in its live window, if any: the locate button's
     /// fix goes to it as a GPS position (#761).
@@ -50,22 +53,19 @@ struct ForecastMapView: View {
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var catalog: ForecastMapCatalog? { appState.helpCatalog.mapsCatalog }
 
-    /// Whether the top bar's leading slot is occupied — drives the trailing
-    /// spacer that keeps the title optically centred.
-    private var hasLeadingControl: Bool {
-        onClose != nil || onToggleSidebar != nil
-    }
-
     var body: some View {
         ZStack(alignment: .top) {
             mapLayer
             topControls
-            bottomControls
+            if !controlsHidden {
+                bottomControls
+            }
             if !viewModel.didLoadOnce, viewModel.payload == nil {
                 loadingOverlay
             }
         }
         .task { viewModel.start() }
+        .onChange(of: controlsHidden) { MapChrome.controlsHidden = controlsHidden }
         .onChange(of: locator.located) {
             guard let c = locator.located else { return }
             // Sent only once Start was pressed for the flight (#812): the
@@ -115,127 +115,116 @@ struct ForecastMapView: View {
 
     private var topControls: some View {
         VStack(spacing: Theme.spacingS) {
-            HStack(alignment: .top) {
-                // Leading slot: dismiss on the iPhone cover, sidebar toggle on the
-                // iPad detail pane — the map's only route back to the flight list.
-                // Keyed on which callback the container passed, never on size
-                // class: the cover goes regular-width on a Plus/Pro Max iPhone in
-                // landscape (or an iPad window resized under it), and gating on
-                // `isCompact` hid the only exit there.
-                if let onClose {
-                    Button { onClose() } label: {
-                        Image(systemName: "xmark")
-                            .font(.headline)
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .accessibilityLabel("Close map")
-                    .accessibilityIdentifier("mapCloseButton")
-                } else if let onToggleSidebar {
-                    Button { onToggleSidebar() } label: {
-                        Image(systemName: "sidebar.leading")
-                            .font(.headline)
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .accessibilityLabel("Toggle Sidebar")
-                    .accessibilityIdentifier("mapSidebarToggle")
+            HStack(alignment: .center) {
+                leadingControl
+                Spacer(minLength: Theme.spacingS)
+                if !controlsHidden, let onShowHistorical {
+                    MapChrome.modeSwitch(current: .forecast) { _ in onShowHistorical() }
                 }
-                Spacer()
-                VStack(spacing: 2) {
-                    Text(navTitle).font(.headline)
-                    Text(navSubtitle).font(.caption).foregroundStyle(Theme.textMuted)
-                }
-                Spacer()
-                if let onShowHistorical {
-                    MapChrome.circleButton(systemImage: "clock.arrow.circlepath", action: onShowHistorical)
-                        .accessibilityLabel("Historical map")
-                        .accessibilityIdentifier("mapHistoricalButton")
-                } else if hasLeadingControl {
-                    // Balance the leading control so the title stays centred.
-                    Color.clear.frame(width: 36, height: 36)
+                Spacer(minLength: Theme.spacingS)
+                if controlsHidden {
+                    MapChrome.showControlsPill(time: compactTimeLabel) { controlsHidden = false }
+                } else {
+                    MapChrome.circleButton(systemImage: "arrow.up.left.and.arrow.down.right") { controlsHidden = true }
+                        .accessibilityLabel("Hide map controls")
+                        .accessibilityIdentifier("mapHideControlsButton")
                 }
             }
-            HStack(spacing: Theme.spacingS) {
-                dayCapsule
-                hourStepper
-                // A slot switch that misses the LRU shows a subtle in-flight spinner
-                // (the full-screen overlay only covers the very first load).
-                if viewModel.isLoading, viewModel.didLoadOnce {
-                    ProgressView().controlSize(.small)
+            if !controlsHidden {
+                timeBar
+                // A linked date the grid can't show (#840): say which day is shown instead.
+                if let notice = viewModel.linkedDateNotice {
+                    Label(notice, systemImage: "calendar.badge.exclamationmark")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(2)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(MapChrome.surface(RoundedRectangle(cornerRadius: 8)))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("mapLinkedDateNotice")
                 }
-                Spacer()
-            }
-            // A linked date the grid can't show (#840): say which day is shown instead.
-            if let notice = viewModel.linkedDateNotice {
-                Label(notice, systemImage: "calendar.badge.exclamationmark")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(2)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("mapLinkedDateNotice")
             }
         }
+        .frame(maxWidth: 560)
         .padding(.horizontal, Theme.spacingM)
         .padding(.top, isCompact ? Theme.spacingM : Theme.spacingS)
     }
 
-    private var dayCapsule: some View {
-        Menu {
-            ForEach(viewModel.days) { day in
-                Button {
-                    viewModel.selectDay(day.day)
-                } label: {
-                    MapChrome.menuRow(Self.dayMenuLabel(day), selected: day.day == viewModel.selectedDay)
-                }
-                .disabled(!day.available)
-            }
-        } label: {
-            MapChrome.capsuleLabel(text: shortDayLabel, systemImage: "calendar")
+    /// Dismiss on the iPhone cover, sidebar toggle on the iPad detail pane —
+    /// the map's only route back to the flight list. Keyed on which callback
+    /// the container passed, never on size class: the cover goes regular-width
+    /// on a Plus/Pro Max iPhone in landscape (or an iPad window resized under
+    /// it), and gating on `isCompact` hid the only exit there.
+    @ViewBuilder private var leadingControl: some View {
+        if let onClose {
+            MapChrome.circleButton(systemImage: "xmark", action: onClose)
+                .accessibilityLabel("Close map")
+                .accessibilityIdentifier("mapCloseButton")
+        } else if let onToggleSidebar {
+            MapChrome.circleButton(systemImage: "sidebar.leading", action: onToggleSidebar)
+                .accessibilityLabel("Toggle Sidebar")
+                .accessibilityIdentifier("mapSidebarToggle")
+        } else {
+            Color.clear.frame(width: 36, height: 36)
         }
     }
 
-    private var hourStepper: some View {
-        HStack(spacing: 6) {
-            Button { viewModel.stepHour(-1) } label: { Image(systemName: "chevron.left") }
-                .disabled(!viewModel.canStepHourBack)
+    /// ◀ day · hour ▶: the arrows step the hour, the middle opens the day and
+    /// hour lists. Replaces the title, day capsule and hour stepper (#996),
+    /// which showed the date twice.
+    private var timeBar: some View {
+        HStack(spacing: 4) {
+            MapChrome.stepButton("chevron.left", label: "Earlier", enabled: viewModel.canStepHourBack) {
+                viewModel.stepHour(-1)
+            }
             Menu {
-                ForEach(viewModel.hours(forDay: viewModel.selectedDay), id: \.self) { hr in
-                    Button {
-                        viewModel.selectHour(hr)
-                    } label: {
-                        MapChrome.menuRow(String(format: "%02dZ", hr), selected: hr == viewModel.selectedHour)
+                Section("Day") {
+                    ForEach(viewModel.days) { day in
+                        Button {
+                            viewModel.selectDay(day.day)
+                        } label: {
+                            MapChrome.menuRow(Self.dayMenuLabel(day), selected: day.day == viewModel.selectedDay)
+                        }
+                        .disabled(!day.available)
+                    }
+                }
+                Section("Hour (UTC)") {
+                    ForEach(viewModel.hours(forDay: viewModel.selectedDay), id: \.self) { hr in
+                        Button {
+                            viewModel.selectHour(hr)
+                        } label: {
+                            MapChrome.menuRow(String(format: "%02dZ", hr), selected: hr == viewModel.selectedHour)
+                        }
                     }
                 }
             } label: {
-                Text(String(format: "%02dZ", viewModel.selectedHour))
-                    .font(.subheadline.weight(.medium)).monospacedDigit()
+                MapChrome.timeLabel(title: timeTitle, hint: "Tap to pick day and hour")
             }
-            Button { viewModel.stepHour(1) } label: { Image(systemName: "chevron.right") }
-                .disabled(!viewModel.canStepHourForward)
+            .accessibilityIdentifier("mapTimeMenu")
+            // A slot switch that misses the LRU shows a subtle in-flight spinner
+            // (the full-screen overlay only covers the very first load).
+            if viewModel.isLoading, viewModel.didLoadOnce {
+                ProgressView().controlSize(.small)
+            }
+            MapChrome.stepButton("chevron.right", label: "Later", enabled: viewModel.canStepHourForward) {
+                viewModel.stepHour(1)
+            }
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(MapChrome.surface(RoundedRectangle(cornerRadius: 12)))
     }
 
-    // MARK: - Bottom-right controls ("what")
+    // MARK: - Bottom panel ("what")
 
     private var bottomControls: some View {
-        VStack {
+        VStack(alignment: .trailing, spacing: Theme.spacingS) {
             Spacer()
-            HStack(alignment: .bottom) {
-                if let cat = catalog, let legend = cat.legend(metric: viewModel.metric) {
-                    MapChrome.legendCapsule(legend)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: Theme.spacingS) {
-                    modelMenu
-                    metricMenu
-                    locateButton
-                }
+            locateButton
+            MapChrome.bottomPanel(legend: catalog?.legend(metric: viewModel.metric)) {
+                metricMenu
+                modelMenu
             }
+            .frame(maxWidth: .infinity)
         }
         .padding(Theme.spacingM)
     }
@@ -256,7 +245,7 @@ struct ForecastMapView: View {
                 }
             }
         } label: {
-            MapChrome.capsuleLabel(text: catalog?.label(metric: viewModel.metric) ?? "Metric", systemImage: "paintpalette")
+            MapChrome.pickLabel(caption: "Showing", value: catalog?.label(metric: viewModel.metric) ?? "Metric")
         }
     }
 
@@ -273,7 +262,7 @@ struct ForecastMapView: View {
                     let available = viewModel.modelAvailable(m, day: viewModel.selectedDay)
                     // Greyed-but-still-tappable: an unreachable model must explain
                     // itself on tap, not sit inert (design Gotchas). Only fully
-                    // disable a day that has no data at all (dayCapsule does that).
+                    // disable a day that has no data at all (the time bar's day list does that).
                     Button {
                         if available {
                             viewModel.mode = .model(m)
@@ -287,20 +276,13 @@ struct ForecastMapView: View {
                 }
             }
         } label: {
-            MapChrome.capsuleLabel(text: modeShortLabel, systemImage: "square.stack.3d.up")
+            MapChrome.pickLabel(caption: "Models", value: modeShortLabel)
         }
     }
 
     private var locateButton: some View {
-        Button {
-            locator.request()
-        } label: {
-            Image(systemName: "location")
-                .font(.subheadline.weight(.medium))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .accessibilityLabel("Centre on my location")
+        MapChrome.circleButton(systemImage: "location") { locator.request() }
+            .accessibilityLabel("Centre on my location")
     }
 
     private var loadingOverlay: some View {
@@ -317,31 +299,28 @@ struct ForecastMapView: View {
 
     // MARK: - Labels
 
-    private var navTitle: String {
-        Self.fullDayLabel(day: viewModel.selectedDay, days: viewModel.days)
+    /// "Today · Sun 15 Nov · 12Z" for the time bar (no year: it fits a phone).
+    private var timeTitle: String {
+        let day = viewModel.days.first { $0.day == viewModel.selectedDay }
+            .map(Self.dayMenuLabel) ?? shortDayLabel
+        return String(format: "%@ · %02dZ", day, viewModel.selectedHour)
     }
 
-    private var navSubtitle: String {
-        let n = viewModel.models(forDay: viewModel.selectedDay).count
-        return String(format: "%02dZ · %@", viewModel.selectedHour, modeLongLabel(modelCount: n))
+    /// "Sun 15 · 12Z" for the hidden state's pill.
+    private var compactTimeLabel: String {
+        String(format: "%@ · %02dZ", shortDayLabel, viewModel.selectedHour)
     }
 
     private var shortDayLabel: String {
         Self.shortDayLabel(day: viewModel.selectedDay, days: viewModel.days)
     }
 
+    /// "Worst of 3", "Majority of 2", "ECMWF": the count says worst of what.
     private var modeShortLabel: String {
+        let n = viewModel.models(forDay: viewModel.selectedDay).count
         switch viewModel.mode {
-        case .worst: return "Worst"
-        case .majority: return "Majority"
-        case .model(let m): return m.uppercased()
-        }
-    }
-
-    private func modeLongLabel(modelCount: Int) -> String {
-        switch viewModel.mode {
-        case .worst: return "Worst of \(modelCount) model\(modelCount == 1 ? "" : "s")"
-        case .majority: return "Majority of \(modelCount) model\(modelCount == 1 ? "" : "s")"
+        case .worst: return "Worst of \(n)"
+        case .majority: return "Majority of \(n)"
         case .model(let m): return m.uppercased()
         }
     }
