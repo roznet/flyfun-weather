@@ -7,9 +7,10 @@ export default defineConfig({
   // its own page and route mocks), and one long file on one worker otherwise
   // sets the wall time while the other workers sit idle.
   fullyParallel: true,
-  // Locally the default (half the cores) is past the knee; on CI's 4 vCPUs it
-  // would be 2.
-  workers: process.env.CI ? 4 : undefined,
+  // Locally the default (half the cores, 9 on an 18-core Mac) is past the knee:
+  // from Playwright 1.65 (Chromium 159) 9 workers time out across the suite
+  // while 6 run clean in the same wall time. On CI's 4 vCPUs the default would be 2.
+  workers: process.env.CI ? 4 : 6,
   timeout: 30_000,
   retries: 0,
   use: {

@@ -49,13 +49,21 @@ async function advanceTo(page: import('@playwright/test').Page, title: string) {
   const heading = page.locator('.driver-popover-title');
   for (let i = 0; i < 12; i++) {
     const current = await heading.textContent();
-    if (current === title) return;
+    if (current === title) return settleOverlay(page);
     await expect(async () => {
       await page.locator('.driver-popover-next-btn').click();
       await expect(heading).not.toHaveText(current ?? '', { timeout: 500 });
     }).toPass({ intervals: [0], timeout: 5000 });
   }
   throw new Error(`tour never reached step "${title}"`);
+}
+
+/** Let two frames pass after driver.js moves its cutout. On Chromium 159 (Playwright
+ *  1.65) a click in the same frame as the redraw is hit-tested against the overlay's
+ *  previous path, so it lands on the dimmed overlay and closes the tour (no
+ *  person clicks that fast; Playwright does). */
+function settleOverlay(page: import('@playwright/test').Page) {
+  return page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }
 
 /** The tour's re-highlight after a re-render lands a frame or two later. */
@@ -195,6 +203,7 @@ test.describe('Briefing tour — cross-section steps', () => {
       // The toggle rebuilds the bar: mark the current node so the check below
       // only passes once the highlight sits on its replacement.
       await page.locator('.viz-layer-toggles').evaluate(el => { el.dataset.stale = '1'; });
+      await settleOverlay(page);
       await pills.nth(j).click({ force: true });
       await expect(page.locator('.viz-layer-toggles:not([data-stale])')).toHaveClass(/driver-active-element/);
     }
