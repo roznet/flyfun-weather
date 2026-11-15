@@ -1119,6 +1119,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "({entries})",
         "es": "({entries})",
     },
+    # The aggregate a RED escalation raised above MAJORITY (#411, §81): the
+    # RED representative's sentence, then which models hold it.
+    "aggregate.escalated": {
+        "en": "{detail} ({models} only, {n} of {total} models)",
+        "fr": "{detail} ({models} uniquement, {n} sur {total} modèles)",
+        "de": "{detail} (nur {models}, {n} von {total} Modellen)",
+        "es": "{detail} (solo {models}, {n} de {total} modelos)",
+    },
 
     # --- sun ---
     "sun.no_data": {

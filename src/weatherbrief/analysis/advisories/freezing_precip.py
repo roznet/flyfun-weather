@@ -16,6 +16,11 @@ Two tiers per route point per model:
   surface wet-bulb under a warm nose, via ``detect_warm_nose``) but no
   precipitation is falling at that hour — precip onset or a small timing
   shift turns it active.
+
+Across models (#411, meteorology-decisions §81): under the default MAJORITY
+aggregation one RED model floors the card at AMBER and two or more make it RED
+(``escalate_on_red`` in ``RouteAdvisoryResult.from_per_model``). It only raises
+the grade, never lowers it, and WORST is unaffected.
 """
 
 from __future__ import annotations
@@ -69,10 +74,12 @@ class FreezingPrecipEvaluator:
                 "that freeze on the airframe as clear ice. This happens BELOW "
                 "cloud — where the in-cloud icing methods and cloud bands show "
                 "nothing — and it is the one icing scenario where descending does "
-                "NOT escape. Red when any model shows active freezing rain or ice "
-                "pellets at any point (deliberately no coverage threshold: one "
+                "NOT escape. A model is red when it shows active freezing rain or "
+                "ice pellets at any point (deliberately no coverage threshold: one "
                 "transit exceeds all icing certification, FIKI included; ice "
-                "pellets prove freezing rain in the layer above). Amber when a "
+                "pellets prove freezing rain in the layer above). Across models, "
+                "one model red makes the card at least amber and two or more make "
+                "it red, whatever the majority says. Amber when a "
                 "freezing-rain-shaped profile exists without active precipitation "
                 "yet (primed — onset or a timing shift turns it active) over "
                 "enough of the route. Unavailable (not green) on packs without "
@@ -250,4 +257,10 @@ class FreezingPrecipEvaluator:
                 highlights=summary.highlights,
             ))
 
-        return RouteAdvisoryResult.from_per_model("freezing_precip", per_model, params)
+        # One model's freezing rain must not vanish under MAJORITY (#411,
+        # meteorology-decisions §81): one RED model floors the card at AMBER,
+        # two or more make it RED. Never lowers; WORST is unaffected.
+        return RouteAdvisoryResult.from_per_model(
+            "freezing_precip", per_model, params,
+            escalate_on_red=True, locale=ctx.locale,
+        )

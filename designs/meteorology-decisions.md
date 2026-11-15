@@ -7983,3 +7983,51 @@ events than a season would give.
   observations are not archived until December, past the decision date.
 - A fixed 3-week minimum (the issue's first proposal): incompatible with
   the 24 Nov target; replaced by the event-count gate.
+
+## 81. Freezing precipitation across models: one RED floors the card at AMBER, two make it RED (#411, step 1)
+
+**Date:** 2026-11-15 · **Issue:** #411 (step 1 of the agreed plan) · **Related:** `designs/advisories.md` "Aggregation" (#578 pinned MAJORITY's GREEN-over-RED as a choice)
+
+### Context
+
+`freezing_precip` grades each model, then aggregates under the user's mode,
+MAJORITY by default. So one model RED among two GREEN read GREEN: the catalog's
+"red when any model" only held across route points within one model. Last
+winter's hindcast (2.6M European METARs vs GFS and ECMWF) showed each model sees
+a different slice of freezing precipitation, and from step 2 on only ECMWF
+`ptype` will see freezing drizzle at all. A lone model's freezing rain is not
+noise to vote away: one transit exceeds every icing certification.
+
+### Choices
+
+- **A floor on top of MAJORITY, not a new mode.** One valid model RED → at
+  least AMBER; two or more → RED. It only raises: two valid models with one RED
+  is already RED by MAJORITY's tie-to-worst and stays RED. WORST is untouched.
+  UNAVAILABLE models do not count.
+- **Scoped to `freezing_precip`** through an opt-in (`escalate_on_red` on
+  `RouteAdvisoryResult.from_per_model`). Every other advisory keeps plain
+  MAJORITY and the #578 pinned behaviour.
+- **The aggregate may be an AMBER no model holds.** The
+  `aggregate_is_a_model_status` invariant allows it only when `escalated_from`
+  is set and a RED model exists; the representative (sentence, highlights) is
+  the largest RED model, because it is the reason for the grade, and the card
+  names the minority: "(gfs only, 1 of 3 models)".
+- **Accepted consequence:** freezing drizzle will be seen by ECMWF alone once
+  `ptype` is decoded (step 2), so in the default mode drizzle never exceeds
+  AMBER. RED needs a second model, or WORST.
+
+### Rejected
+
+- Flooring every advisory at AMBER on any RED: moves grades across the whole
+  briefing for hazards where MAJORITY's outlier filtering is wanted (#578).
+- One RED → RED (WORST for this card only): the reason MAJORITY became the
+  default was single-model noise; AMBER says "one model shows it, look".
+- Representative = an AMBER model when one exists: its sentence ("primed
+  profile") is not why the card is AMBER.
+
+### Measured
+
+Not yet. The spring/summer replay corpus never produced an AMBER or RED
+`freezing_precip` (#411: 265 GREEN, 47 UNAVAILABLE), so `rerun_advisories_diff.py`
+is expected to show no change there; it must be re-run on stored winter flights
+once there are some.

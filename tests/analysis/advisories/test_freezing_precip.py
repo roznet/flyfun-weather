@@ -148,3 +148,182 @@ def test_unassessable_points_do_not_dilute_primed_percentage():
     result = FreezingPrecipEvaluator.evaluate(ctx, {})
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert result.per_model[0].total_points == 1
+
+
+# --- Multi-model rule (#411, meteorology-decisions §81) -----------------------
+#
+# Under the default MAJORITY aggregation one model's freezing rain used to
+# vanish: 1 RED among 2 GREEN read GREEN. The rule is a floor on top of
+# MAJORITY: one valid model RED → at least AMBER, two or more → RED, never
+# lower than MAJORITY gives.
+
+import dataclasses
+
+import pytest
+
+from weatherbrief.analysis.advisories import invariants
+from weatherbrief.models import (
+    AdvisoryAggregation,
+    ModelAdvisoryResult,
+    RouteAdvisoryResult,
+)
+
+
+def _multi_ctx(per_model: dict[str, list[SoundingAnalysis]]) -> RouteContext:
+    models = list(per_model)
+    n = len(next(iter(per_model.values())))
+    analyses = []
+    for i in range(n):
+        rpa = _rpa(i, per_model[models[0]][i])
+        rpa.sounding = {m: per_model[m][i] for m in models}
+        analyses.append(rpa)
+    return RouteContext(
+        analyses=analyses, cross_sections=[], elevation=None, models=models,
+        cruise_altitude_ft=8000, flight_ceiling_ft=18000,
+        total_distance_nm=20.0 * max(n - 1, 1),
+    )
+
+
+_RED = [_dry()] * 9 + [_active_fzra()]
+_GREEN = [_dry()] * 10
+_AMBER = [_dry()] * 5 + [_primed()] * 5
+
+
+def test_one_red_among_greens_floors_at_amber():
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.escalated_from == AdvisoryStatus.GREEN
+    # The model that raised it speaks for it, and the card says it is alone.
+    assert result.representative_model == "gfs"
+    assert result.aggregate_detail.startswith("Freezing precipitation")
+    assert "(gfs only, 1 of 3 models)" in result.aggregate_detail
+    assert invariants.check_advisory(result) == []
+
+
+def test_two_reds_are_red_even_against_a_larger_majority():
+    ctx = _multi_ctx({
+        "ecmwf": _RED, "gfs": _RED, "icon": _GREEN,
+        "arome": _GREEN, "ukmo": _GREEN,
+    })
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert result.escalated_from == AdvisoryStatus.GREEN
+    assert result.representative_model in {"ecmwf", "gfs"}
+    assert "(ecmwf, gfs only, 2 of 5 models)" in result.aggregate_detail
+    assert invariants.check_advisory(result) == []
+
+
+def test_two_valid_models_one_red_stays_red_untouched():
+    """MAJORITY's tie-to-worst already gives RED; the rule never lowers it."""
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert result.escalated_from is None
+    assert "only" not in result.aggregate_detail
+
+
+def test_one_red_with_amber_majority_is_unchanged():
+    ctx = _multi_ctx({"ecmwf": _AMBER, "gfs": _RED, "icon": _AMBER})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.escalated_from is None
+    assert result.representative_model in {"ecmwf", "icon"}
+
+
+def test_one_red_with_green_majority_and_an_amber_speaks_for_the_red():
+    """2 GREEN, 1 AMBER (primed), 1 RED: MAJORITY says GREEN, the floor AMBER.
+
+    The AMBER model holds the grade, but the reason the card is AMBER is the RED
+    model's freezing rain, so that is the sentence the card prints.
+    """
+    ctx = _multi_ctx({
+        "ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN, "arome": _AMBER,
+    })
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert result.escalated_from == AdvisoryStatus.GREEN
+    assert result.representative_model == "gfs"
+    assert invariants.check_advisory(result) == []
+
+
+def test_unavailable_models_do_not_count_in_the_total():
+    no_data = [SoundingAnalysis()] * 10
+    ctx = _multi_ctx({
+        "ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN, "ukmo": no_data,
+    })
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+    assert "1 of 3 models" in result.aggregate_detail
+
+
+def test_all_green_is_untouched():
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _GREEN, "icon": _GREEN})
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert result.aggregate_status == AdvisoryStatus.GREEN
+    assert result.escalated_from is None
+
+
+def test_worst_mode_is_unaffected():
+    """WORST is already RED on one model; the registry re-aggregation keeps it."""
+    from weatherbrief.analysis.advisories.registry import evaluate_all
+
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
+    [result] = evaluate_all(
+        ctx, enabled_ids={"freezing_precip"},
+        aggregation=AdvisoryAggregation.WORST,
+    )
+    assert result.aggregate_status == AdvisoryStatus.RED
+    assert result.escalated_from is None
+
+
+def test_majority_through_the_registry_keeps_the_floor():
+    from weatherbrief.analysis.advisories.registry import evaluate_all
+
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
+    [result] = evaluate_all(ctx, enabled_ids={"freezing_precip"})
+    assert result.aggregate_status == AdvisoryStatus.AMBER
+
+
+def test_escalation_is_opt_in():
+    """Every other advisory keeps plain MAJORITY (a GREEN over one RED, #578)."""
+    def _m(model, status):
+        return ModelAdvisoryResult.build(
+            model=model, status=status, detail=status.value,
+            affected=1 if status != AdvisoryStatus.GREEN else 0, total=10,
+            total_distance_nm=200.0,
+        )
+    per_model = [
+        _m("ecmwf", AdvisoryStatus.GREEN), _m("gfs", AdvisoryStatus.RED),
+        _m("icon", AdvisoryStatus.GREEN),
+    ]
+    plain = RouteAdvisoryResult.from_per_model("x", per_model, {})
+    assert plain.aggregate_status == AdvisoryStatus.GREEN
+    assert plain.escalated_from is None
+
+
+@pytest.mark.parametrize("locale, text", [
+    ("fr", "(gfs uniquement, 1 sur 3 modèles)"),
+    ("de", "(nur gfs, 1 von 3 Modellen)"),
+])
+def test_escalated_note_is_localised(locale, text):
+    ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
+    ctx = dataclasses.replace(ctx, locale=locale)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    assert text in result.aggregate_detail
+
+
+def test_an_escalation_without_a_red_model_is_a_violation():
+    """Guards the relaxed invariant: the AMBER floor needs a RED behind it."""
+    calm = ModelAdvisoryResult.build(
+        model="gfs", status=AdvisoryStatus.GREEN, detail="clear",
+        affected=0, total=10, total_distance_nm=300.0,
+    )
+    invented = RouteAdvisoryResult(
+        advisory_id="freezing_precip", aggregate_status=AdvisoryStatus.AMBER,
+        aggregate_detail="invented", per_model=[calm], representative_model="gfs",
+        escalated_from=AdvisoryStatus.GREEN,
+    )
+    rules = {v.rule for v in invariants.check_advisory(invented)}
+    assert "escalation_needs_a_red_model" in rules
+    assert "aggregate_is_a_model_status" in rules
