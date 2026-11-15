@@ -479,6 +479,56 @@ def test_ecmwf_rain_showers_split_and_new_instant_fields():
     assert h1.cloud_cover_low_pct == pytest.approx(25.0)
 
 
+def test_ecmwf_ptype_held_over_the_step_and_fzra_rate():
+    """#411 step 2: ptype is the end-of-step category, written to every hour of
+    the step it closes; fzra is de-accumulated like tp."""
+    from weatherbrief.fetch.grib import _apply_ecmwf_surface_to_hourly
+
+    pts = _points(1)
+    t0 = datetime(2026, 5, 4, 9, tzinfo=UTC)
+    t1 = t0 + timedelta(hours=3)
+    skel = build_skeleton(pts, ModelSource.ECMWF, start_date="2026-05-04", end_date="2026-05-04")
+    cs = RouteCrossSection(model=ModelSource.ECMWF, route_points=pts,
+                           fetched_at=t0, point_forecasts=skel)
+    raw = {
+        "total_cover_frac": 0.5, "total_precip_m": 0.0013,
+        "precip_type_code": 12.0, "freezing_rain_m": 0.0016,
+    }
+    _apply_ecmwf_surface_to_hourly(
+        [cs], [], pts, [raw], [True],
+        valid_utc=t1, prev_valid_utc=t0,
+        prev_tp_per_point=[0.001], prev_sf_per_point=[None],
+        prev_cp_per_point=[None], prev_fzra_per_point=[0.001],
+    )
+    by_t = {h.time: h for h in skel[0].hourly}
+    for k in (1, 2, 3):
+        h = by_t[t0 + timedelta(hours=k)]
+        assert h.precip_type_code == 12
+        assert h.precipitation_mm == pytest.approx(0.1)
+        assert h.freezing_rain_mm == pytest.approx(0.2)
+    assert by_t[t0].precip_type_code is None  # outside (prev, valid]
+
+
+def test_ecmwf_ptype_blended_value_is_dropped():
+    """A non-integer code can only be a blend: no category is guessed."""
+    from weatherbrief.fetch.grib import _apply_ecmwf_surface_to_hourly
+
+    pts = _points(1)
+    t0 = datetime(2026, 5, 4, 9, tzinfo=UTC)
+    t1 = t0 + timedelta(hours=1)
+    skel = build_skeleton(pts, ModelSource.ECMWF, start_date="2026-05-04", end_date="2026-05-04")
+    cs = RouteCrossSection(model=ModelSource.ECMWF, route_points=pts,
+                           fetched_at=t0, point_forecasts=skel)
+    _apply_ecmwf_surface_to_hourly(
+        [cs], [], pts, [{"total_precip_m": 0.002, "precip_type_code": 3.4}], [True],
+        valid_utc=t1, prev_valid_utc=t0,
+        prev_tp_per_point=[0.001], prev_sf_per_point=[None], prev_cp_per_point=[None],
+    )
+    h = {h.time: h for h in skel[0].hourly}[t1]
+    assert h.precip_type_code is None
+    assert h.freezing_rain_mm is None  # no predecessor → no rate
+
+
 def test_ecmwf_rain_keeps_large_scale_rain_under_a_snow_shower():
     """#958: tp − cp − sf took convective snow off twice (cp and sf both hold it)."""
     from weatherbrief.fetch.grib import _ecmwf_large_scale_rain_m

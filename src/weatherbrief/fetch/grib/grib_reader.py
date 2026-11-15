@@ -288,6 +288,28 @@ def gather_bilinear(values: np.ndarray, bw) -> np.ndarray:
     )
 
 
+def gather_nearest(values: np.ndarray, bw) -> np.ndarray:
+    """Nearest-cell gather of ``values[..., lat, lon]`` for categorical fields.
+
+    A category code must never be blended: ECMWF ``ptype`` halfway between
+    rain (1) and snow (5) would read 3, freezing rain (#411). The nearest cell
+    is the bilinear corner with the largest weight (ties to the first of
+    w00, w01, w10, w11), so it uses the same weights as :func:`gather_bilinear`
+    and needs no second grid lookup. Same shape and dtype as that function.
+    """
+    weights = np.stack((bw.w00, bw.w01, bw.w10, bw.w11))
+    pick = np.argmax(weights, axis=0)
+    corners = np.stack((
+        values[..., bw.i0, bw.j0],
+        values[..., bw.i0, bw.j1],
+        values[..., bw.i1, bw.j0],
+        values[..., bw.i1, bw.j1],
+    )).astype(np.float64)
+    return np.take_along_axis(
+        corners, pick.reshape((1,) * (corners.ndim - 1) + pick.shape), axis=0,
+    )[0]
+
+
 def combine_bilinear(corners, bw) -> np.ndarray:
     """Weight and sum the four corner values ``(v00, v01, v10, v11)``.
 

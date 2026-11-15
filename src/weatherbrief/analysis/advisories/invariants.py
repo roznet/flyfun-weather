@@ -182,11 +182,11 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
     # is RED, and records it in ``escalated_from``. That AMBER is legitimate
     # only with a RED model behind it.
     escalated = a.escalated_from is not None
-    if escalated and AdvisoryStatus.RED not in statuses:
+    if escalated and AdvisoryStatus.RED not in statuses and agg not in statuses:
         fail(
-            "escalation_needs_a_red_model",
+            "escalation_needs_a_flagged_model",
             f"escalated from {a.escalated_from.value} to {agg.value} but no "
-            f"model is red ({', '.join(sorted(s.value for s in statuses))})",
+            f"model holds it or is red ({', '.join(sorted(s.value for s in statuses))})",
         )
     floor_amber = escalated and agg == AdvisoryStatus.AMBER and (
         AdvisoryStatus.RED in statuses

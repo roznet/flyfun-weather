@@ -962,8 +962,9 @@ def _advance_ecmwf_accumulators(
     prev_tp_per_point: list[float | None],
     prev_sf_per_point: list[float | None],
     prev_cp_per_point: list[float | None],
+    prev_fzra_per_point: list[float | None] | None = None,
 ) -> None:
-    """Carry one a1 step's cumulative ``tp``/``sf``/``cp`` forward, in place.
+    """Carry one a1 step's cumulative ``tp``/``sf``/``cp``/``fzra`` forward, in place.
 
     Assigns UNCONDITIONALLY, including ``None``. A point whose value is absent
     at this step — uncovered, or a partially decoded a1 — has its predecessor
@@ -989,6 +990,8 @@ def _advance_ecmwf_accumulators(
         prev_tp_per_point[i] = raw.get("total_precip_m") if usable else None
         prev_sf_per_point[i] = raw.get("snowfall_m_we") if usable else None
         prev_cp_per_point[i] = raw.get("conv_precip_m") if usable else None
+        if prev_fzra_per_point is not None:
+            prev_fzra_per_point[i] = raw.get("freezing_rain_m") if usable else None
 
 
 # ---------------------------------------------------------------------------
@@ -2692,6 +2695,7 @@ def _enrich_ecmwf_inner(
     # precip cp) across consecutive a1 files. None = no prior step for that point.
     n_points = len(route_points)
     prev_tp_per_point: list[float | None] = [None] * n_points
+    prev_fzra_per_point: list[float | None] = [None] * n_points
     prev_sf_per_point: list[float | None] = [None] * n_points
     prev_cp_per_point: list[float | None] = [None] * n_points  # conv precip (#283)
     prev_a1_valid_utc: datetime | None = None
@@ -2845,6 +2849,7 @@ def _enrich_ecmwf_inner(
                     prev_tp_per_point=prev_tp_per_point,
                     prev_sf_per_point=prev_sf_per_point,
                     prev_cp_per_point=prev_cp_per_point,
+                    prev_fzra_per_point=prev_fzra_per_point,
                 )
                 # Carry this step's cumulative values forward as the next
                 # step's predecessors.
@@ -2853,6 +2858,7 @@ def _enrich_ecmwf_inner(
                     prev_tp_per_point=prev_tp_per_point,
                     prev_sf_per_point=prev_sf_per_point,
                     prev_cp_per_point=prev_cp_per_point,
+                    prev_fzra_per_point=prev_fzra_per_point,
                 )
                 prev_a1_valid_utc = valid_time
                 del sfc_data, sfc_covered, diagnostics
@@ -4299,6 +4305,12 @@ _ECMWF_HOURLY_FILL_INSTANT_FIELDS: tuple[str, ...] = (
 _ECMWF_HOURLY_RATE_FIELDS: tuple[str, ...] = (
     "precipitation_mm",
     "snowfall_cm",
+    # #411 step 2 (§82): ECMWF-only, so overwriting is safe. ``ptype`` is the
+    # category at the step's END, held over every hour of the step it closes
+    # (the hindcast scored it against that step's mean precip rate), and
+    # never interpolated. ``fzra`` is de-accumulated like ``tp``.
+    "precip_type_code",
+    "freezing_rain_mm",
 )
 
 # rain_mm / showers_mm (#912) split the same window: showers = convective
@@ -4354,6 +4366,7 @@ def _apply_ecmwf_surface_to_hourly(
     prev_tp_per_point: list[float | None],
     prev_sf_per_point: list[float | None],
     prev_cp_per_point: list[float | None] | None = None,
+    prev_fzra_per_point: list[float | None] | None = None,
 ) -> None:
     """Write decoded ECMWF a1 surface fields onto matching ``HourlyForecast``s.
 
@@ -4432,6 +4445,22 @@ def _apply_ecmwf_surface_to_hourly(
                         _ecmwf_large_scale_rain_m(d_tp, d_cp, d_sf)
                         / window_hours * 1000.0
                     )
+            # Precipitation type (#411): the end-of-step category, held over
+            # the step. A non-integer means a blended value slipped through;
+            # drop it rather than guess a category.
+            ptype = raw.get("precip_type_code")
+            if ptype is not None and float(ptype).is_integer():
+                rate_extra["precip_type_code"] = int(ptype)
+            fz = raw.get("freezing_rain_m")
+            pfz = (
+                prev_fzra_per_point[i]
+                if prev_fzra_per_point is not None and i < len(prev_fzra_per_point)
+                else None
+            )
+            if fz is not None and pfz is not None:
+                rate_extra["freezing_rain_mm"] = (
+                    max(0.0, (fz - pfz) / window_hours) * 1000.0
+                )
         snap = build_ecmwf_surface_snapshot(rate_raw) if rate_raw else {}
         if rate_extra:
             snap = {**snap, **rate_extra}

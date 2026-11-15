@@ -558,6 +558,15 @@ class HourlyForecast(BaseModel):
     nwp_k_index: Optional[float] = None
     nwp_total_totals: Optional[float] = None
     visibility_m: Optional[float] = None
+    # The model's own precipitation type (#411 step 2, §82): WMO code table
+    # 4.201 (0 none, 1 rain, 3 freezing rain, 5 snow, 6 wet snow, 7 rain and
+    # snow, 8 ice pellets, 12 freezing drizzle). ECMWF a1 ``ptype`` only,
+    # nearest cell, the category at the end of the step this hour belongs to.
+    # None for every other model and on old packs.
+    precip_type_code: Optional[int] = None
+    # ECMWF a1 ``fzra`` de-accumulated over the step, mm per hour (#411).
+    # Recorded, not graded: whether it includes freezing drizzle is unchecked.
+    freezing_rain_mm: Optional[float] = None
 
     # GFS cloud layer diagnostics from GRIB2 enrichment
     nwp_cloud_diagnostics: Optional[NWPCloudDiagnostics] = None
@@ -1041,6 +1050,18 @@ class PrecipitationAssessment(BaseModel):
     rain_mm: Optional[float] = None
     snow_cm: Optional[float] = None
     total_mm: Optional[float] = None
+    # The model's own precipitation type (#411 step 2, §82), from
+    # ``HourlyForecast.precip_type_code`` (ECMWF only). ``model_freezing_type``
+    # is set only when that type is freezing (freezing rain, freezing drizzle
+    # or ice pellets) AND the step's mean precipitation rate passes the
+    # 0.01 mm/h gate; it grades AMBER on ``freezing_precip``. Never changes
+    # ``surface_phase``, which stays the profile's own reading.
+    model_precip_type_code: Optional[int] = None
+    # "freezing_rain" | "freezing_drizzle" | "ice_pellets". A plain string,
+    # not a ``PrecipPhase``: there is no drizzle phase, and clients decode
+    # ``surface_phase`` against that enum.
+    model_freezing_type: Optional[str] = None
+    freezing_rain_mm: Optional[float] = None
 
 
 class ConvectiveAssessment(BaseModel):

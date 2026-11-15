@@ -56,7 +56,7 @@ Per-level NWP data. Core fields: `pressure_hpa`, `temperature_c`, `dewpoint_c`, 
 
 ### HourlyForecast
 
-Single timestep with ~24 optional surface fields (incl. `nwp_k_index` / `nwp_total_totals` — model-native index values from ECMWF GRIB, #294) + optional `nwp_cloud_diagnostics: NWPCloudDiagnostics` (GFS GRIB2 cloud layers) + optional `explicit_convective_diagnostics: NWPExplicitConvectiveDiagnostics` (ICON-D2 explicit-convection storm fields, #462 — sibling of the parameterized diagnostics, never merged into them; its presence is the explicit-convection mode signal) + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
+Single timestep with ~24 optional surface fields (incl. `nwp_k_index` / `nwp_total_totals` — model-native index values from ECMWF GRIB, #294; `precip_type_code` / `freezing_rain_mm` — ECMWF `ptype` / `fzra`, #411) + optional `nwp_cloud_diagnostics: NWPCloudDiagnostics` (GFS GRIB2 cloud layers) + optional `explicit_convective_diagnostics: NWPExplicitConvectiveDiagnostics` (ICON-D2 explicit-convection storm fields, #462 — sibling of the parameterized diagnostics, never merged into them; its presence is the explicit-convection mode signal) + `pressure_levels: list[PressureLevelData]`. Use `level_at(pressure_hpa)` for quick lookup.
 
 ### RoutePoint
 
@@ -120,7 +120,7 @@ Full MetPy-based atmospheric analysis, computed per model per waypoint.
 | `ConvectiveAssessment` | Convective risk from indices | risk_level (NONE→EXTREME), CAPE/CIN, LCL/LFC/EL, bulk shear, k_index, total_totals, severe_modifiers, regime (`ConvectiveRegime`), drivers/suppressors lists, elevated_convection, base_ft/top_ft (unified bounds), cover_pct (NWP only), convective_precip_mm_h (NWP native firing signal, #283), method ("thermo"/"nwp"/"nwp_hybrid"/"nwp_lcl_top"/"nwp_precip"/"nwp_cape_fallback"/"nwp_explicit"). Explicit-only extras (#462, `method="nwp_explicit"`): explicit_source, reflectivity_hour_max_dbz, echo_top_18dbz_ft — the echo top is deliberately NOT `top_ft` (which is always None for that method) so the overfly-clearance filter structurally cannot consume it as a cloud top |
 | `ConvectiveRegime` | Enum: dominant convective regime | THERMAL, WEAK_INSTABILITY, LOADED_GUN, ACTIVE (`.label` → title-case) |
 | `ParcelPathPoint` | Lifted parcel temp profile point | pressure_hpa, temperature_c |
-| `PrecipitationAssessment` | Precip type + intensity for a sounding | surface_phase, surface_intensity, precipitation_zones, freezing_rain_risk, warm_nose_base/top_ft, rain_mm, snow_cm, total_mm |
+| `PrecipitationAssessment` | Precip type + intensity for a sounding | surface_phase, surface_intensity, precipitation_zones, freezing_rain_risk, warm_nose_base/top_ft, rain_mm, snow_cm, total_mm, model_precip_type_code / model_freezing_type (the model's own type, gated ≥ 0.01 mm/h, plain string incl. `freezing_drizzle`) / freezing_rain_mm (#411) |
 | `PrecipitationZone` | Vertical zone of uniform precip phase | base/top (ft + hPa), phase (`PrecipPhase`), mean_wet_bulb_c, ice_fraction |
 | `VerticalMotionClass` | Enum: vertical motion profile type | QUIESCENT, SYNOPTIC_ASCENT, SYNOPTIC_SUBSIDENCE, CONVECTIVE, OSCILLATING, UNAVAILABLE |
 | `CATRiskLevel` | Enum: clear-air turbulence risk | NONE, LIGHT, MODERATE, SEVERE |

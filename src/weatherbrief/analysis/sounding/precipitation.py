@@ -18,6 +18,34 @@ from weatherbrief.models import (
 )
 
 
+# ECMWF ``ptype`` codes (WMO code table 4.201) that mean freezing at the
+# surface (#411, §82). Ice pellets prove freezing rain in the layer above.
+MODEL_FREEZING_PTYPES: dict[int, str] = {
+    3: "freezing_rain",
+    8: "ice_pellets",
+    12: "freezing_drizzle",
+}
+
+# Precipitation gate for the model's own type (#411, §82): the step's mean
+# rate, as the hindcast measured it (``tp`` difference over the step).
+MODEL_PTYPE_MIN_PRECIP_MM_H = 0.01
+
+
+def model_freezing_type(hourly: HourlyForecast | None) -> str | None:
+    """The model's own freezing precipitation type at this hour, gated.
+
+    None unless ``precip_type_code`` is a freezing code AND the hour's
+    precipitation (the step's mean rate, mm/h) reaches the gate.
+    """
+    if hourly is None or hourly.precip_type_code is None:
+        return None
+    kind = MODEL_FREEZING_PTYPES.get(int(hourly.precip_type_code))
+    precip = hourly.precipitation_mm
+    if kind is None or precip is None or precip < MODEL_PTYPE_MIN_PRECIP_MM_H:
+        return None
+    return kind
+
+
 def assess_precipitation(
     levels: list[DerivedLevel],
     raw_levels: list[PressureLevelData],
@@ -45,11 +73,19 @@ def assess_precipitation(
         (precip_mm is not None and precip_mm > 0)
         or (snowfall_cm is not None and snowfall_cm > 0)
     )
+    # The model's own precipitation type (#411): carried whatever the profile
+    # says, graded on its own by ``freezing_precip``.
+    model_fields = {
+        "model_precip_type_code": hourly.precip_type_code if hourly else None,
+        "model_freezing_type": model_freezing_type(hourly),
+        "freezing_rain_mm": hourly.freezing_rain_mm if hourly else None,
+    }
     if not has_precip:
         return PrecipitationAssessment(
             rain_mm=rain_mm,
             snow_cm=snowfall_cm,
             total_mm=precip_mm,
+            **model_fields,
         )
 
     # Classify surface intensity from total precipitation rate
@@ -92,6 +128,7 @@ def assess_precipitation(
         ),
         snow_cm=snowfall_cm,
         total_mm=precip_mm,
+        **model_fields,
     )
 
 
