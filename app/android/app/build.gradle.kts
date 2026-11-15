@@ -36,8 +36,8 @@ android {
         applicationId = "aero.flyfun.weather"
         minSdk = 31
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0"
+        versionCode = 10
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The flight-capture journey drives the live app against the devserver: run only by
