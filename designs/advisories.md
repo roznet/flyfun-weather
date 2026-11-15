@@ -102,7 +102,7 @@ Choices: the representative is *not* forced across advisories (VFR Feasibility's
 - **WORST**: If ANY model shows RED, the aggregate is RED. Conservative — pilots see the worst-case scenario.
 - **MAJORITY** (default, changed from WORST): The most common status across models wins. Ties broken by worst status among the tied group. Example: 2 AMBER, 2 GREEN, 1 RED → tie between AMBER and GREEN → worst of tied = AMBER. Changed to default because WORST mode was too noisy — a single outlier model could make the whole route RED.
 
-`AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. The registry re-aggregates after each evaluator returns if mode isn't WORST, so evaluator code is unchanged.
+`AdvisoryStatus.majority(statuses)` implements the majority logic: count each status (ignoring UNAVAILABLE), find max count, return worst among tied leaders. Evaluators build their aggregate under MAJORITY; the registry re-aggregates only when the requested mode is not MAJORITY (`registry.py`, `evaluate_all`), so evaluator code does not know the mode.
 
 **A GREEN aggregate may sit above a RED model — deliberately (#578).** That is
 what MAJORITY *means*: a lone dissenting model does not move the aggregate. The
@@ -120,6 +120,22 @@ violation) so `rerun_advisories_diff.py --check-invariants` can count it across
 real packs. Flooring the aggregate at AMBER whenever any model is RED is the
 alternative; it moves grades on live briefings, so it needs its own diff run and
 its own decision — not an edited assertion.
+
+**The one advisory that does floor: `freezing_precip` (#411, meteorology-decisions
+§81).** It calls `from_per_model(..., escalate_on_red=True)`: under MAJORITY one
+valid model RED gives at least AMBER, two or more give RED, and the rule never
+lowers what MAJORITY gives (two valid models with one RED is already RED by the
+tie rule). WORST is untouched. When the rule raises the grade the result records
+`escalated_from` (the MAJORITY status it replaced), the representative is the
+largest **RED** model (the reason for the raise, even when an AMBER model holds
+the grade), and `aggregate_detail` is that model's sentence plus
+`aggregate.escalated` ("(gfs only, 1 of 3 models)", UNAVAILABLE models not
+counted). The invariants accept exactly this shape: an AMBER no model holds only
+with `escalated_from` set and a RED model behind it
+(`escalation_needs_a_red_model` otherwise), and an escalated representative may
+be RED. The opt-in is per evaluator; every other advisory keeps plain MAJORITY.
+The registry's non-MAJORITY re-aggregation drops it harmlessly (WORST is already
+RED on one model).
 
 **Invariants over the published result** (`analysis/advisories/invariants.py`):
 one set of predicates — the #571 extent rules, "flagged ⇒ non-zero coverage", and
@@ -143,7 +159,7 @@ under the rule with no edit to the invariants.
 |-----------|----------|-------|----------------|
 | `AircraftIcingEvaluator` (`aircraft_icing`) | icing | **One icing card graded for the aircraft flown (#827, meteorology-decisions §56).** `RouteContext.equipage` picks the column; unknown aircraft (none, placeholder) grades non-FIKI and the detail opens "Graded as non-FIKI (mark your aircraft as FIKI if it is)", otherwise "Graded for FIKI / non-FIKI"; a known non-FIKI aircraft flown with a profile that still says FIKI (IFR FIKI template, or the retired `fiki_icing` on) reads "Graded for non-FIKI (your profile is FIKI: mark the aircraft as FIKI if it is)" — `AircraftEquipage.profile_fiki`, set by `_resolve_equipage`, a hint that never changes the grade (#850). Per model, `icing_picture` builds one `IcingPoint` per route point (hazardous zones within `cruise_band_ft` of cruise, the ground-to-cruise column, escape down/up); `build_stretches` walks the planned profile (climb column at the first assessed point, cruise cells, descent column at the last) with an exposure clock in minutes (cells at `ctx.cruise_groundspeed_kt`, columns at 500 fpm) reset only by an above-freezing cruise point; `grade_stretch` applies the table: FIKI RED only for long with no escape, non-FIKI AMBER only for short with escape, SEVERE/SLD RED for both. Escape down: `max(fz, lowest icing cloud base) - 500` (§8a), clamped below the iced zone, ≥ terrain + `terrain_margin_ft`, none under freezing rain / warm nose, unknown terrain blocks. Escape up (FIKI only): highest top + 500 ≤ aircraft ceiling (else flight ceiling) - 1000. Mitigations (advice only): `icing_escape` (the escape level) and `icing_cruise` (a cost-0 profile from the solver with `icing_cell_cost`, zone membership only, no freezing-level shortcut). `grade_aircraft_icing_model` is shared with `ifr_feasibility` | `short_light_rime_min` (15), `short_other_min` (5), `terrain_margin_ft` (1000), `cruise_band_ft` (1000) |
 | `IcingEscapeEvaluator`, `FIKIIcingEvaluator` | icing | **Retired (#827)**: `retired=True` on the catalog entry, so `evaluate_all` never runs them and `get_catalog()` leaves them out (pass `include_retired=True` to see them). Old packs render their stored cards from their own manifest catalog. Modules kept for that history and their tests | (unchanged, inert) |
-| `FreezingPrecipEvaluator` | icing | Freezing rain / ice pellets: active FZRA/PL surface phase anywhere → RED (exceeds all icing certification, incl. FIKI; below-cloud hazard invisible to in-cloud icing methods). Freezing-rain-shaped profile without active precip (warm nose over sub-zero surface, via `detect_warm_nose`) → AMBER above coverage threshold | `extent_pct_amber` (5%), `extent_min_nm` (30nm) |
+| `FreezingPrecipEvaluator` | icing | Freezing rain / ice pellets: active FZRA/PL surface phase anywhere → RED (exceeds all icing certification, incl. FIKI; below-cloud hazard invisible to in-cloud icing methods). Freezing-rain-shaped profile without active precip (warm nose over sub-zero surface, via `detect_warm_nose`) → AMBER above coverage threshold. Across models: one RED model floors the card at AMBER, two or more make it RED, never below MAJORITY (`escalate_on_red`, #411, §81) | `extent_pct_amber` (5%), `extent_min_nm` (30nm) |
 
 ### Cloud
 

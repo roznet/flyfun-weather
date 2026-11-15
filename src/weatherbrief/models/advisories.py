@@ -796,6 +796,44 @@ def _representative(
     return max(tied, key=lambda m: (m.affected_pct, m.affected_mod_pct))
 
 
+def _escalate_on_red(agg: AdvisoryStatus, red_count: int) -> AdvisoryStatus:
+    """The ``escalate_on_red`` floor (#411): never lowers ``agg``.
+
+    Two or more valid models RED → RED; exactly one → at least AMBER. An
+    UNAVAILABLE aggregate has no valid model, so no RED to act on.
+    """
+    if red_count >= 2:
+        return AdvisoryStatus.RED
+    if red_count == 1 and agg == AdvisoryStatus.GREEN:
+        return AdvisoryStatus.AMBER
+    return agg
+
+
+def _escalated_detail(
+    detail: str,
+    red_models: list[ModelAdvisoryResult],
+    per_model: list[ModelAdvisoryResult],
+    locale: str | None,
+) -> str:
+    """The RED representative's sentence, saying which models hold it.
+
+    "Freezing precipitation 40nm/400nm (10%) (gfs only, 1 of 3 models)": the
+    grade was raised over a calmer majority, so the card names the minority
+    it speaks for instead of reading as a consensus.
+    """
+    # Lazy: the strings catalog lives in the analysis layer, which imports models.
+    from weatherbrief.analysis.advisories.strings import adv_t
+
+    valid = [m for m in per_model if m.status != AdvisoryStatus.UNAVAILABLE]
+    return adv_t(
+        "aggregate.escalated", locale,
+        detail=detail,
+        models=", ".join(m.model for m in red_models),
+        n=len(red_models),
+        total=len(valid),
+    )
+
+
 def _aggregate_mitigations(
     representative: ModelAdvisoryResult | None,
     agg_status: AdvisoryStatus,
@@ -843,6 +881,13 @@ class RouteAdvisoryResult(BaseModel):
     # ``aggregate_detail`` prints this, not the representative's own category.
     # Empty for advisories that don't read airports, and on old packs.
     airport_consensus: dict[AirportEnd, FlightCategory] = Field(default_factory=dict)
+    # Set only when the RED escalation rule (``escalate_on_red``, #411) raised
+    # the aggregate above what MAJORITY alone gave: the MAJORITY status it was
+    # raised from. The representative is then a RED model (the one that caused
+    # the raise), which may not hold the aggregate status, and the aggregate
+    # may be an AMBER no model holds; the invariants allow exactly that shape.
+    # None on every other result and on old packs.
+    escalated_from: AdvisoryStatus | None = None
 
     @classmethod
     def from_per_model(
@@ -851,6 +896,8 @@ class RouteAdvisoryResult(BaseModel):
         per_model: list[ModelAdvisoryResult],
         params: dict[str, float],
         aggregation: AdvisoryAggregation = AdvisoryAggregation.MAJORITY,
+        escalate_on_red: bool = False,
+        locale: str | None = None,
     ) -> RouteAdvisoryResult:
         """Build aggregate result from per-model results.
 
@@ -858,23 +905,46 @@ class RouteAdvisoryResult(BaseModel):
         - MAJORITY: most common status; ties broken by worst among tied (default)
         - WORST: most severe status wins
 
+        ``escalate_on_red`` (#411, meteorology-decisions §81) adds a floor on
+        top of MAJORITY for advisories where one model's RED must not vanish
+        (``freezing_precip``): one valid model RED gives at least AMBER, two or
+        more give RED. It only ever raises: it never lowers what MAJORITY gives
+        (two valid models with one RED is already RED by the tie rule). WORST
+        is unaffected (it is already RED on one model).
+
         ``aggregate_detail`` is the representative's sentence, except that any
         airport clause it prints carries the cross-model consensus category (same
-        mode), with dissenting models named (#823).
+        mode), with dissenting models named (#823). When the escalation raised
+        the grade, the sentence is the largest RED model's, followed by which
+        models say so (``aggregate.escalated``), so the card never reads as if
+        every model agreed.
         """
         statuses = [m.status for m in per_model]
+        escalated_from: AdvisoryStatus | None = None
+        red_models: list[ModelAdvisoryResult] = []
         if aggregation == AdvisoryAggregation.MAJORITY:
             agg = AdvisoryStatus.majority(statuses)
+            if escalate_on_red:
+                red_models = [m for m in per_model if m.status == AdvisoryStatus.RED]
+                raised = _escalate_on_red(agg, len(red_models))
+                if raised != agg:
+                    escalated_from, agg = agg, raised
         else:
             agg = AdvisoryStatus.worst(statuses)
-        representative = _representative(per_model, agg)
+        if escalated_from is not None:
+            # The models that caused the raise speak for it: the largest RED.
+            representative = _representative(per_model, AdvisoryStatus.RED)
+        else:
+            representative = _representative(per_model, agg)
         consensus = _airport_consensus(per_model, aggregation)
+        detail = _consensus_detail(representative, consensus) if representative else ""
+        if escalated_from is not None and detail:
+            detail = _escalated_detail(detail, red_models, per_model, locale)
         return cls(
             advisory_id=advisory_id,
             aggregate_status=agg,
-            aggregate_detail=(
-                _consensus_detail(representative, consensus) if representative else ""
-            ),
+            aggregate_detail=detail,
+            escalated_from=escalated_from,
             airport_consensus={end: cat for end, (cat, _) in consensus.items()},
             per_model=per_model,
             parameters_used=params,

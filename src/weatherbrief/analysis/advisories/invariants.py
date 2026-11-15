@@ -177,8 +177,24 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
 
     # The aggregate never invents a grade no model holds. True of both MAJORITY
     # (most common, ties to worst) and WORST; an aggregate outside the set means
-    # something wrote it by hand.
-    if agg != AdvisoryStatus.UNAVAILABLE and statuses and agg not in statuses:
+    # something wrote it by hand. One sanctioned exception (#411, §81): the
+    # RED escalation floors a calmer majority at AMBER when exactly one model
+    # is RED, and records it in ``escalated_from``. That AMBER is legitimate
+    # only with a RED model behind it.
+    escalated = a.escalated_from is not None
+    if escalated and AdvisoryStatus.RED not in statuses:
+        fail(
+            "escalation_needs_a_red_model",
+            f"escalated from {a.escalated_from.value} to {agg.value} but no "
+            f"model is red ({', '.join(sorted(s.value for s in statuses))})",
+        )
+    floor_amber = escalated and agg == AdvisoryStatus.AMBER and (
+        AdvisoryStatus.RED in statuses
+    )
+    if (
+        agg != AdvisoryStatus.UNAVAILABLE and statuses and agg not in statuses
+        and not floor_amber
+    ):
         fail(
             "aggregate_is_a_model_status",
             f"aggregate {agg.value} held by no model ("
@@ -198,13 +214,16 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
             f"representative_model={a.representative_model!r} is not in per_model "
             f"({', '.join(sorted(by_model))})",
         )
-    elif rep is not None and rep.status != agg:
+    elif rep is not None and rep.status != agg and not (
+        # An escalated aggregate speaks for the RED model that raised it.
+        escalated and rep.status == AdvisoryStatus.RED
+    ):
         fail(
             "representative_carries_the_aggregate_status",
             f"representative {rep.model} is {rep.status.value} but the aggregate "
             f"reads {agg.value}",
         )
-    elif a.representative_model is None and agg in statuses:
+    elif a.representative_model is None and (agg in statuses or escalated):
         # The client reads "whose geometry do we highlight?" off this field; a
         # None with a matching model means it silently falls back.
         fail(
@@ -215,15 +234,17 @@ def check_advisory(a: RouteAdvisoryResult) -> list[Violation]:
     match = _PRINTED_EXTENT.search(a.aggregate_detail)
     if match:
         printed = int(match.group(2))
+        # An escalated aggregate prints its RED representative's extent.
+        printed_status = rep.status if escalated and rep is not None else agg
         domains = {
             round(m.domain_nm) for m in a.per_model
-            if m.status == agg and m.domain_nm > 0
+            if m.status == printed_status and m.domain_nm > 0
         }
         if domains and printed not in domains:
             fail(
                 "aggregate_prints_a_published_denominator",
                 f"aggregate_detail prints /{printed}nm, which is no "
-                f"{agg.value} model's domain ({sorted(domains)}) — "
+                f"{printed_status.value} model's domain ({sorted(domains)}) — "
                 f"{a.aggregate_detail!r}",
             )
 
