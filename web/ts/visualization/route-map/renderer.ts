@@ -21,7 +21,7 @@ import type { HewsonFront } from '../../adapters/hewson-map-adapter';
 import type { FrontKind } from '../../types/fronts';
 import type { ForecastMapResponse } from '../../adapters/maps-adapter';
 import { getForecastColor, type ForecastMetric } from '../weather-map-format';
-import { getForecastTooltip, forecastLegend } from '../weather-map';
+import { getForecastTooltip } from '../weather-map';
 
 /** A front-axis polyline tagged with the pressure level it was extracted at, so
  *  the map can draw a model's boundaries across all stored levels (a low warm
@@ -71,19 +71,17 @@ export class RouteMapRenderer {
   private observedLegends: Map<string, ObservedSourceStatus> | null = null;
   private observedFlashes: ObservedFlashPoint[] = [];
   private observedFrames: Map<string, ObservedFramesInfo> = new Map();
-  private observedSatellite = false;
+  private observedSatellite = true;
   // Radar cell overlay (#656): the shared renderer, fetched for the corridor
   // box plus a margin. Off by default (experimental).
   private cellsLayer: CellsLayer | null = null;
   private observedCells = false;
   private observedBaseLabel: { badge: string; chips: SummaryChip[] } = { badge: '', chips: [] };
   private highlightMarker: L.CircleMarker | null = null;
-  private forecastLegendEl: HTMLElement | null = null;
   private forecastZoomHandler: (() => void) | null = null;
 
   private data: VizRouteData | null = null;
   private colorMetric: MapMetric | null = null;
-  private widthMetric: MapMetric | null = null;
   private altitudeFt = 0;
   private showFronts = false;
   private frontLines: MapFrontLine[] | null = null;
@@ -119,10 +117,6 @@ export class RouteMapRenderer {
     this.colorMetric = metric;
   }
 
-  setWidthMetric(metric: MapMetric | null): void {
-    this.widthMetric = metric;
-  }
-
   setAltitude(altitudeFt: number): void {
     this.altitudeFt = altitudeFt;
   }
@@ -146,7 +140,7 @@ export class RouteMapRenderer {
   }
 
   /** Which observed source to draw as imagery (#574), or `null` for none.
-   *  Lightning is drawn as points regardless — it is not a raster. */
+   *  Lightning is separate (points, its own toggle via `setObservedFlashes`). */
   setObservedSource(source: string | null): void {
     this.observedSource = source;
   }
@@ -217,7 +211,8 @@ export class RouteMapRenderer {
     this.forecastModel = model;
   }
 
-  /** Redraw just the airport overlay layer + its legend, without a full render. */
+  /** Redraw just the airport overlay layer, without a full render. Its legend
+   *  is a line in the bottom panel (#998), drawn by the chrome. */
   refreshForecastOverlay(): void {
     this.renderForecastOverlay();
   }
@@ -276,6 +271,23 @@ export class RouteMapRenderer {
     );
   }
 
+  /** Frame the whole route (the Fit route button, #998). */
+  fitRoute(): void {
+    if (!this.map || !this.data || !this.data.points.length) return;
+    this.map.fitBounds(this.routeBounds(), { padding: [30, 30] });
+  }
+
+  private routeBounds(): L.LatLngBounds {
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    for (const p of this.data!.points) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lon < minLon) minLon = p.lon;
+      if (p.lon > maxLon) maxLon = p.lon;
+    }
+    return L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
+  }
+
   /** Highlight a segment by point index (for hover sync from other panels). */
   highlightSegment(index: number): void {
     if (!this.map || !this.data) return;
@@ -314,7 +326,6 @@ export class RouteMapRenderer {
   }
 
   destroy(): void {
-    if (this.forecastLegendEl) { this.forecastLegendEl.remove(); this.forecastLegendEl = null; }
     if (this.map) {
       this.map.remove();
       this.map = null;
@@ -365,15 +376,7 @@ export class RouteMapRenderer {
 
     // Fit to route bounds
     if (this.data && this.data.points.length > 0) {
-      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-      for (const p of this.data.points) {
-        if (p.lat < minLat) minLat = p.lat;
-        if (p.lat > maxLat) maxLat = p.lat;
-        if (p.lon < minLon) minLon = p.lon;
-        if (p.lon > maxLon) maxLon = p.lon;
-      }
-      const bounds = L.latLngBounds([minLat, minLon], [maxLat, maxLon]);
-      this.map.fitBounds(bounds, { padding: [30, 30] });
+      this.map.fitBounds(this.routeBounds(), { padding: [30, 30] });
     }
 
     this.initialized = true;
@@ -395,7 +398,6 @@ export class RouteMapRenderer {
     const styles = computeSegmentStyles(
       this.data.points,
       this.colorMetric,
-      this.widthMetric,
       this.altitudeFt,
     );
 
@@ -423,9 +425,9 @@ export class RouteMapRenderer {
     }
   }
 
-  /** Experimental Hewson front overlay (#196): a marker per on-track crossing
-   *  (colored by kind, sized by intensity) plus an off-track marker for the
-   *  nearest closing front. Advisory-only, free-atmosphere boundaries. */
+  /** Observed conditions (#574, #652): the imagery source (radar or cloud
+   *  tops), the optional satellite IR underlay and the lightning points, plus
+   *  the badge that labels them and the cells overlay. */
   private renderObserved(): void {
     if (!this.observedGroup || !this.map || !this.data) return;
     const label = renderObservedOverlay(
@@ -537,6 +539,9 @@ export class RouteMapRenderer {
     applyBaseTileTheme(this.map, this.tileLayer, this.currentTileTheme === 'dark', muted);
   }
 
+  /** Experimental Hewson front overlay (#196): the gated axes near the route,
+   *  a marker per on-track crossing (coloured by kind, sized by intensity) and
+   *  an off-track marker for the nearest closing front. */
   private renderFronts(): void {
     if (!this.frontsGroup || !this.map) return;
     this.frontsGroup.clearLayers();
@@ -631,7 +636,6 @@ export class RouteMapRenderer {
     this.airportForecastGroup.clearLayers();
 
     if (!this.showForecastOverlay || !this.forecastData) {
-      this.removeForecastLegend();
       this.attachForecastZoomHandler();
       return;
     }
@@ -654,7 +658,6 @@ export class RouteMapRenderer {
     }
 
     this.attachForecastZoomHandler();
-    this.renderForecastLegend();
   }
 
   /** Marker radius scaled to zoom for legibility — one step smaller than the
@@ -683,34 +686,6 @@ export class RouteMapRenderer {
       });
     };
     this.map.on('zoomend', this.forecastZoomHandler);
-  }
-
-  private removeForecastLegend(): void {
-    if (this.forecastLegendEl) { this.forecastLegendEl.remove(); this.forecastLegendEl = null; }
-  }
-
-  /** Small floating legend inside the map (top-right) — distinct from the
-   *  route-segment gradient legend that sits below the map, so the two don't
-   *  collide. Reuses the served catalog rows via `forecastLegend`. */
-  private renderForecastLegend(): void {
-    this.removeForecastLegend();
-    const legend = forecastLegend(this.forecastMetric);
-    const el = document.createElement('div');
-    el.className = 'wx-forecast-legend';
-    el.innerHTML = `
-      <div class="wx-forecast-legend-title">${legend.title}</div>
-      ${legend.items.map((i) => `
-        <div class="wx-forecast-legend-item">
-          <span class="wx-forecast-legend-dot" style="background:${i.color}"></span>
-          <span>${i.label}</span>
-        </div>
-      `).join('')}
-    `;
-    // Appended into the Leaflet container so it floats over the tiles; stop the
-    // map from panning when the user interacts with the box.
-    this.container.appendChild(el);
-    L.DomEvent.disableClickPropagation(el);
-    this.forecastLegendEl = el;
   }
 
   /** True if any vertex of the axis is within FRONT_CORRIDOR_KM of any route

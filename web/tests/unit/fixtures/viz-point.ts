@@ -53,6 +53,8 @@ export function makeVizPoint(overrides: Partial<VizPoint> = {}): VizPoint {
     cloudCoverMidPct: 0,
     headwindKt: 0,
     crosswindKt: 0,
+    windSpeedKt: null,
+    visibilityM: null,
     capeSurfaceJkg: 0,
     worstModelAgreement: 'good',
     nwpCloudLayers: null,

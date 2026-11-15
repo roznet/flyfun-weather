@@ -1,100 +1,57 @@
-/** Tests for the route-map legend grid (#731): pickers in the legend rows,
- *  stop labels aligned to swatches, and a Width row that draws thickness. */
+/** Route-map legend (#998): the route metric's scale, one label centred under
+ *  each swatch, plus the compact airport line. */
 
 import { describe, it, expect } from 'vitest';
-import { mapLegendHtml, widthBarPx } from '../../ts/visualization/route-map/legend';
-import { getMapMetricById, MAP_METRICS, MAP_METRIC_NONE } from '../../ts/visualization/route-map/metrics';
-import { t } from '../../ts/i18n/i18n';
+import { routeLegendHtml, airportLegendHtml } from '../../ts/visualization/route-map/legend';
+import { getMapMetricById, MAP_METRICS } from '../../ts/visualization/route-map/metrics';
 
-function metric(id: string) {
-  const m = getMapMetricById(id);
-  if (!m) throw new Error(`map metric ${id} not found`);
-  return m;
-}
-
-function legend(colorId: string, widthId: string) {
-  return mapLegendHtml({
-    colorMetricId: colorId,
-    widthMetricId: widthId,
-    colorMetric: getMapMetricById(colorId) ?? null,
-    widthMetric: widthId === MAP_METRIC_NONE ? null : (getMapMetricById(widthId) ?? null),
-  });
-}
-
-/** The inner HTML of the scale cell for one channel. */
-function scale(html: string, channel: 'color' | 'width'): string {
-  const m = html.match(new RegExp(`<div class="map-legend-scale map-legend-scale-${channel}">(.*?)</div>(?=<label|</div>$)`));
-  if (!m) throw new Error(`no ${channel} scale in ${html}`);
-  return m[1];
-}
-
-const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
-
-describe('mapLegendHtml', () => {
-  it('renders both pickers with the stored selection, in the legend', () => {
-    const html = legend('icing-risk-at-level', 'convective-risk');
-    expect(html).toContain('id="map-color-metric"');
-    expect(html).toContain('id="map-width-metric"');
-    expect(html).toMatch(/id="map-color-metric"[^]*?<option value="icing-risk-at-level" selected>/);
-    expect(html).toMatch(/id="map-width-metric"[^]*?<option value="convective-risk" selected>/);
+describe('routeLegendHtml', () => {
+  it('is empty without a metric', () => {
+    expect(routeLegendHtml(null)).toBe('');
   });
 
-  it('names each metric only in its picker — no "Color: X" text label', () => {
-    const html = legend('icing-risk-at-level', 'convective-risk');
-    const outsidePickers = html.replace(/<select[^]*?<\/select>/g, '');
-    for (const id of ['icing-risk-at-level', 'convective-risk']) {
-      expect(outsidePickers).not.toContain(metric(id).label);
-      expect(outsidePickers).not.toContain(t(`map.${id}`));
+  for (const m of MAP_METRICS) {
+    it(`${m.id}: one label per swatch, on one column template`, () => {
+      const html = routeLegendHtml(m);
+      const n = m.legendStops.length;
+      expect(n).toBeGreaterThan(1);
+      expect((html.match(/class="map-legend-stop"/g) ?? []).length).toBe(n);
+      const labels = html.match(/<div class="map-legend-labels"[^>]*>(.*?)<\/div>/)?.[1] ?? '';
+      expect((labels.match(/<span>/g) ?? []).length).toBe(n);
+      expect((html.match(new RegExp(`repeat\\(${n},1fr\\)`, 'g')) ?? []).length).toBe(2);
+    });
+  }
+
+  it('colours each swatch through the metric scale', () => {
+    const m = getMapMetricById('nwp-ceiling')!;
+    for (const stop of m.legendStops) {
+      expect(stop.color).toBe(m.getColor(stop.value));
+      expect(routeLegendHtml(m)).toContain(`background:${stop.color}`);
     }
-  });
-
-  it.each(MAP_METRICS.map((m) => m.id))('%s: one label per swatch, on one column template', (id) => {
-    const stops = metric(id).legendStops.length;
-    const html = legend(id, id);
-    for (const channel of ['color', 'width'] as const) {
-      const s = scale(html, channel);
-      const swatchClass = channel === 'color' ? 'map-legend-stop' : 'map-legend-width-cell';
-      expect(count(s, new RegExp(`class="${swatchClass}"`, 'g'))).toBe(stops);
-      expect(count(s, /<span>/g)).toBe(stops);
-      expect(count(s, new RegExp(`grid-template-columns:repeat\\(${stops},1fr\\)`, 'g'))).toBe(2);
-    }
-  });
-
-  it('width row draws thickness from getWidth, not colour', () => {
-    const m = metric('convective-risk');
-    const s = scale(legend('icing-risk-at-level', 'convective-risk'), 'width');
-    expect(s).not.toContain('background:');
-    const heights = [...s.matchAll(/height:([\d.]+)px/g)].map((x) => Number(x[1]));
-    expect(heights).toEqual(m.legendStops.map((st) => widthBarPx(m.getWidth(st.value))));
-    // Convective width grows with risk: thin → thick.
-    for (let i = 1; i < heights.length; i++) expect(heights[i]).toBeGreaterThan(heights[i - 1]);
-  });
-
-  it('inverted-width metrics read thick-first (low ceiling = thick)', () => {
-    const s = scale(legend('icing-risk-at-level', 'nwp-ceiling'), 'width');
-    const heights = [...s.matchAll(/height:([\d.]+)px/g)].map((x) => Number(x[1]));
-    expect(heights[0]).toBeGreaterThan(heights[heights.length - 1]);
   });
 
   it('escapes stop labels (the ceiling legend carries "<")', () => {
-    const s = scale(legend('nwp-ceiling', MAP_METRIC_NONE), 'color');
-    expect(s).toContain('<span>LIFR &lt;500</span>');
-    expect(s).not.toContain('LIFR <500');
+    const html = routeLegendHtml(getMapMetricById('nwp-ceiling')!);
+    expect(html).not.toMatch(/<span><\d/);
+    expect(html).toContain('&lt;');
   });
 
-  it('width "none" keeps the picker but draws no scale', () => {
-    const html = legend('cape', MAP_METRIC_NONE);
-    expect(html).toMatch(/<option value="none" selected>/);
-    expect(scale(html, 'width')).toBe('');
+  it('every colour the ceiling metric draws is in its legend (#735)', () => {
+    const m = getMapMetricById('nwp-ceiling')!;
+    const legend = new Set(m.legendStops.map((s) => s.color));
+    for (let ft = 0; ft <= 10000; ft += 50) expect(legend).toContain(m.getColor(ft));
+  });
+});
+
+describe('airportLegendHtml', () => {
+  it('is empty without items', () => {
+    expect(airportLegendHtml(null)).toBe('');
+    expect(airportLegendHtml({ title: 'X', items: [] })).toBe('');
   });
 
-  it('width bars fit the 16px row for every metric', () => {
-    for (const m of MAP_METRICS) {
-      for (const st of m.legendStops) {
-        const h = widthBarPx(m.getWidth(st.value));
-        expect(h).toBeGreaterThanOrEqual(2);
-        expect(h).toBeLessThanOrEqual(16);
-      }
-    }
+  it('draws a title and one dot per item, escaped', () => {
+    const html = airportLegendHtml({ title: 'Cat <x>', items: [{ color: '#111', label: 'A' }, { color: '#222', label: 'B' }] });
+    expect(html).toContain('Cat &lt;x&gt;');
+    expect((html.match(/rm-legend-dot/g) ?? []).length).toBe(2);
   });
 });

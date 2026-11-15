@@ -6811,44 +6811,7 @@ html {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   z-index: 0;
-  /* Positioning context for the floating airport-forecast legend (#424). */
   position: relative;
-}
-
-/* Airport forecast overlay legend (#424): a small box floating over the map,
-   top-right (clear of the zoom control top-left and attribution bottom-right).
-   Distinct from `.map-legend`, which is the route-segment gradient below the map. */
-.wx-forecast-legend {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 1000;
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.7rem;
-  color: var(--text);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-  max-width: 44%;
-  pointer-events: auto;
-}
-
-.wx-forecast-legend-title { font-weight: 600; margin-bottom: 0.25rem; }
-
-.wx-forecast-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  line-height: 1.35;
-}
-
-.wx-forecast-legend-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: 0 0 auto;
 }
 
 /* Multi-line tooltip for the airport forecast markers on the briefing map.
@@ -6891,20 +6854,6 @@ html {
   background: var(--bg);
 }
 
-/* Map controls (metric selectors) */
-.map-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 0.4rem;
-  font-size: 0.78rem;
-  flex-wrap: wrap;
-}
-
-/* Observed layer selector: pushed to the right and set off by a rule, because
-   it is a different kind of setting from Color/Width. Those two style the
-   FORECAST route line; this chooses a MEASUREMENT of the real sky. Sitting them
-   together read as three knobs on one thing. */
 /* Colour scale for the observed layer, inside the observed panel's body. */
 .mol-title { font-weight: 600; margin-bottom: 3px; }
 
@@ -6920,194 +6869,249 @@ html {
   margin-top: 2px;
 }
 
-.map-observed-opacity input[type="range"] { width: 72px; }
-
-.map-observed-opacity-value {
+/* Briefing route-map chrome (#998): the #996 map style. One overlay over the
+ * map (`#map-chrome`): top bar (altitude stepper, Hide), floating Fit route and
+ * Open forecast map, and one bottom panel (SHOWING / MODEL / LAYERS, legend,
+ * airport valid time). Every control sits on an opaque surface. The panel's
+ * height is published as --rm-bottom-inset so the observed badge and the
+ * Leaflet attribution sit above it. */
+.rm-stage {
+  position: relative;
+}
+.rm-stage .map-container { height: 520px; }
+.rm-stage .leaflet-bottom { bottom: var(--rm-bottom-inset, 0px); }
+.rm-chrome {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 800;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 8px;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.rm-chrome > * { pointer-events: none; }
+.rm-chrome button,
+.rm-chrome a,
+.rm-chrome select,
+.rm-chrome input,
+.rm-chrome summary,
+.rm-panel,
+.rm-layers-pop,
+.rm-pill { pointer-events: auto; }
+.rm-surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+.rm-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Clear of Leaflet's zoom control, top-left. */
+  padding-left: 44px;
+}
+.rm-spacer { flex: 1; }
+.rm-stepper {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 18px;
+  height: 34px;
+  overflow: hidden;
+}
+.rm-stepper button {
+  border: none;
+  background: none;
+  color: var(--text);
+  height: 100%;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.rm-stepper button:disabled { opacity: 0.35; cursor: default; }
+.rm-stepper .rm-alt-label {
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted, #6b7280);
-  min-width: 2.4em;
+  font-size: 0.9rem;
+  color: var(--primary);
+  padding: 0 4px;
 }
-
-.map-controls-observed {
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
-  padding-left: 0.75rem;
-  border-left: 1px solid var(--border);
-}
-
-.map-control-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-/* Airport forecast overlay controls (#424), pushed to the right of the row. */
-.map-forecast-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-left: auto;
-  flex-wrap: wrap;
-}
-
-.map-forecast-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-/* Shown in place of the time/metric when the selected model has no airport
-   data, so an empty overlay never reads as "all clear" (#424). */
-.map-forecast-note {
-  color: var(--text-muted);
-  font-style: italic;
-  white-space: nowrap;
-}
-
-/* Stroked map glyph (mirrors the iOS SF Symbol "map" in a soft circle) that
-   deep-links into the full forecast map — replaced the ambiguous 🗺️ emoji. */
-.map-forecast-open {
+.rm-circle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  color: var(--text-muted);
-  text-decoration: none;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.map-forecast-open svg {
-  width: 0.95rem;
-  height: 0.95rem;
-  display: block;
-}
-
-.map-forecast-open:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-}
-
-.map-control-select {
-  padding: 0.15rem 0.4rem;
-  font-size: 0.78rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--surface);
   color: var(--text);
+  cursor: pointer;
+  padding: 0;
 }
-
-/* Map legend (#731): one grid row per channel — label, metric picker, scale.
-   Swatches and labels share one column template (set inline per metric) so
-   each label sits under its own swatch. */
-.map-legend {
-  margin-top: 0.4rem;
+.rm-circle svg, .rm-open-map svg { width: 18px; height: 18px; display: block; }
+.rm-pill {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
 }
-
-.map-legend-grid {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 260px);
-  /* Don't stretch the auto tracks across the pane: label, picker and scale
-     read as one unit, not three columns spread edge to edge. */
-  justify-content: start;
+.rm-bottom {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  column-gap: 0.5rem;
-  row-gap: 0.35rem;
-  font-size: 0.78rem;
+  gap: 8px;
 }
-
-.map-legend-scale {
+.rm-floating {
+  align-self: flex-end;
+  /* Clear of the Leaflet attribution, which sits on the panel's top edge. */
+  margin-bottom: 18px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.rm-open-map {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 17px;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+}
+.rm-open-map:hover, .rm-circle:hover { color: var(--primary); }
+.rm-panel {
+  width: 100%;
+  max-width: 560px;
+  border-radius: 14px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rm-picks {
+  display: flex;
+  gap: 6px;
+}
+.rm-pick {
+  flex: 1 1 0;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 4px 8px;
 }
-
-.map-legend-swatches,
-.map-legend-labels {
-  display: grid;
+.rm-pick-caption {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
-
-.map-legend-swatches {
-  height: 16px;
-  align-items: center;
+.rm-select {
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.map-legend-scale-color .map-legend-swatches {
-  height: 12px;
+.rm-layers { position: relative; }
+.rm-layers > summary { list-style: none; }
+.rm-layers > summary::-webkit-details-marker { display: none; }
+.rm-layers > summary::after { content: ' ▾'; color: var(--text-muted); }
+.rm-layers-pop {
+  position: absolute;
+  right: -8px;
+  bottom: calc(100% + 10px);
+  width: 250px;
+  max-height: 60vh;
+  overflow-y: auto;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2;
+}
+.rm-layer-section { display: flex; flex-direction: column; gap: 4px; }
+.rm-layer-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rm-layers-pop .rm-select {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-weight: 500;
+}
+.rm-check, .rm-field { display: flex; align-items: center; gap: 6px; }
+.rm-field > span:first-child { flex: 0 0 auto; }
+.rm-field input[type="range"] { flex: 1; min-width: 0; }
+.rm-opacity-value { font-variant-numeric: tabular-nums; color: var(--text-muted); min-width: 2.6em; }
+.rm-note { color: var(--text-muted); font-style: italic; }
+.rm-legend { display: flex; flex-direction: column; gap: 4px; }
+.rm-legend-route { display: flex; flex-direction: column; position: relative; }
+.rm-legend .map-legend-swatches,
+.rm-legend .map-legend-labels { display: grid; }
+.rm-legend .map-legend-swatches {
+  height: 10px;
   border: 1px solid var(--border);
   border-radius: 2px;
   overflow: hidden;
 }
-
-.map-legend-stop {
-  height: 100%;
-  min-width: 0;
-}
-
-/* Width row: a neutral bar per stop whose thickness tracks the route line's
-   weight for that value. Grey on purpose — the colour channel owns hue. */
-.map-legend-width-cell {
-  display: flex;
-  align-items: center;
-  height: 100%;
-}
-
-.map-legend-width-bar {
-  width: 100%;
-  background: var(--text-muted);
-  opacity: 0.7;
-}
-
-.map-legend-labels {
+.rm-legend .map-legend-stop { height: 100%; min-width: 0; }
+.rm-legend .map-legend-labels {
   margin-top: 1px;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   line-height: 1.2;
   color: var(--text-muted);
 }
-
-.map-legend-labels span {
-  text-align: center;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* Phone width: the scale drops under its picker, full width. */
-@media (max-width: 700px) {
-  .map-legend-grid {
-    grid-template-columns: auto 1fr;
-    justify-content: stretch;
-  }
-  .map-legend-scale {
-    grid-column: 1 / -1;
-  }
-  .map-legend-grid .map-control-select {
-    min-width: 0;
-    max-width: 100%;
-  }
-}
-
-/* Altitude slider */
-.map-altitude-slider {
+.rm-legend .map-legend-labels span { text-align: center; min-width: 0; overflow-wrap: anywhere; }
+.rm-legend-unit { align-self: flex-end; font-size: 0.62rem; color: var(--text-muted); }
+.rm-legend-airports {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
-  font-size: 0.78rem;
+  gap: 2px 8px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
 }
+.rm-legend-airports-title { font-weight: 600; color: var(--text); }
+.rm-legend-airport-item { display: inline-flex; align-items: center; gap: 3px; }
+.rm-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.rm-valid-time { font-size: 0.66rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-.map-altitude-slider input[type="range"] {
-  flex: 1;
-  max-width: 200px;
-  cursor: pointer;
-}
+/* Hidden controls widen the map (#998): the cross-section steps aside in split
+ * view and the map grows; Show restores the layout. */
+.viz-layout-wrapper.layout-split.map-wide .viz-pane-cross-section { display: none; }
+.viz-layout-wrapper.map-wide .rm-stage .map-container { height: 70vh; }
 
-.map-altitude-slider .altitude-label {
-  font-weight: 600;
-  font-family: monospace;
-  min-width: 60px;
-  color: var(--primary);
+@media (max-width: 700px) {
+  .rm-picks { flex-wrap: wrap; }
+  .rm-pick { flex: 1 1 40%; }
+  .rm-open-map span { display: none; }
+  .rm-open-map { width: 34px; padding: 0; justify-content: center; }
+  .rm-stage .map-container { height: 480px; }
 }
 
 /* Observed-conditions panel (#574) — the label on the map itself, because it
@@ -7119,7 +7123,8 @@ html {
 .map-observed-badge {
   position: absolute;
   left: 8px;
-  bottom: 8px;
+  /* Above the route map's bottom panel (#998). */
+  bottom: calc(var(--rm-bottom-inset, 0px) + 8px);
   z-index: 500;
   max-width: min(360px, calc(100% - 80px));
   border-radius: 12px;
@@ -7299,10 +7304,6 @@ html {
   /* Layer-toggle panel grows very tall when every group wraps — cap + scroll. */
   .viz-layer-toggles { max-height: 45vh; overflow-y: auto; }
 
-  /* Altitude slider: wrap rather than compress label + range onto one line. */
-  .map-altitude-slider { flex-wrap: wrap; }
-  .map-altitude-slider input[type="range"] { max-width: none; }
-
   /* Debrief accuracy rows: tighter fixed columns so the bar keeps room. */
   .debrief-acc-row { grid-template-columns: 90px 1fr 64px; gap: 6px; }
 }
@@ -7311,9 +7312,10 @@ html {
   .viz-layout-wrapper.layout-split {
     flex-direction: column;
   }
+  /* Tall enough for the chrome over it (#998). */
   .viz-layout-wrapper.layout-split .viz-pane-map .map-container {
-    height: 350px;
-    min-height: 250px;
+    height: 480px;
+    min-height: 360px;
   }
 }
 

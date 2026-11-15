@@ -12,6 +12,10 @@ text. Two sections in one versioned, ETag-cacheable payload:
   it here and caches it, so a threshold change is one JSON edit both clients
   pick up (issue #419, B2). Language-independent (colours/numbers), but still
   folded into the version hash so any edit re-validates the ETag.
+- ``route_maps`` — parsed verbatim from ``web/ts/data/route-map-metrics-catalog.json``
+  (#998): the briefing route map's metrics (labels, groups, colour scales,
+  widths, legends, default). Same pattern as ``maps``; the apps bundle a copy for
+  offline use.
 - ``advisories`` — the existing advisory catalog (``get_catalog()``), the same
   data already served at ``/user/preferences/advisories/catalog``.
 - ``debrief`` — the debrief taxonomy (decision buttons, cancel-reason chips,
@@ -63,11 +67,15 @@ _METRICS_CATALOG_PATH = (
 _MAP_METRICS_CATALOG_PATH = (
     Path(__file__).resolve().parents[3] / "web" / "ts" / "data" / "map-metrics-catalog.json"
 )
+_ROUTE_MAP_METRICS_CATALOG_PATH = (
+    Path(__file__).resolve().parents[3] / "web" / "ts" / "data" / "route-map-metrics-catalog.json"
+)
 
 # Per-language memoized (body bytes, version) — the catalog is static per process.
 _payload_cache: dict[str, tuple[bytes, str]] = {}
 _metrics_cache: dict[str, Any] | None = None
 _map_metrics_cache: dict[str, Any] | None = None
+_route_map_metrics_cache: dict[str, Any] | None = None
 
 
 def _load_metrics_catalog() -> dict[str, Any]:
@@ -98,6 +106,20 @@ def _load_map_metrics_catalog() -> dict[str, Any]:
     return _map_metrics_cache
 
 
+def _load_route_map_metrics_catalog() -> dict[str, Any]:
+    """Load and memoize the briefing route-map metrics catalog JSON (#998, served as-is)."""
+    global _route_map_metrics_cache
+    if _route_map_metrics_cache is None:
+        if not _ROUTE_MAP_METRICS_CATALOG_PATH.exists():
+            raise RuntimeError(
+                f"route map metrics catalog not found at {_ROUTE_MAP_METRICS_CATALOG_PATH} — "
+                "expected web/ts/data/route-map-metrics-catalog.json to be present"
+            )
+        with _ROUTE_MAP_METRICS_CATALOG_PATH.open("r", encoding="utf-8") as fh:
+            _route_map_metrics_cache = json.load(fh)
+    return _route_map_metrics_cache
+
+
 def _localize_advisories(
     entries: list[AdvisoryCatalogEntry], lang: str
 ) -> list[dict[str, Any]]:
@@ -125,6 +147,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
         "lang": lang,
         "metrics": _load_metrics_catalog(),
         "maps": _load_map_metrics_catalog(),
+        "route_maps": _load_route_map_metrics_catalog(),
         "advisories": _localize_advisories(get_catalog(), lang),
         "debrief": build_taxonomy_catalog(),
     }
@@ -135,6 +158,7 @@ def _build_payload(lang: str) -> tuple[bytes, str]:
         "version": version,
         "metrics": core["metrics"],
         "maps": core["maps"],
+        "route_maps": core["route_maps"],
         "advisories": core["advisories"],
         "debrief": core["debrief"],
     }

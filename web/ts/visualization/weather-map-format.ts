@@ -24,7 +24,7 @@ import catalog from '../data/map-metrics-catalog.json';
 // in two different colours on two devices. This module is now the JSON's
 // interpreter: it evaluates the band/categorical scales the catalog describes.
 
-interface BandStop { lt?: number; gte?: number; color: string; }
+interface BandStop { lt?: number; gte?: number; at?: number; color: string; }
 interface ThresholdScale {
   kind: 'threshold_asc' | 'threshold_desc';
   stops: BandStop[];
@@ -33,7 +33,10 @@ interface ThresholdScale {
   convert?: 'm_to_sm';
 }
 interface GrayRampScale { kind: 'gray_ramp'; base: number; span: number; blue_boost: number; }
-type BandScale = ThresholdScale | GrayRampScale;
+/** Colour interpolated between `stops[].at` (hex colours), clamped at the ends.
+ *  Used by the briefing route-map catalog (#998) for its continuous ramps. */
+interface LinearScale { kind: 'linear'; stops: Array<{ at: number; color: string }>; }
+export type BandScale = ThresholdScale | GrayRampScale | LinearScale;
 
 interface MetricColorSpec {
   kind: 'categorical' | 'band' | 'alternate_needed';
@@ -132,6 +135,49 @@ function grayRamp(scale: GrayRampScale, pct: number): string {
   return `rgb(${g},${g},${g + scale.blue_boost})`;
 }
 
+function hexRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function linearRamp(scale: LinearScale, v: number): string {
+  const stops = scale.stops;
+  if (!stops.length) return MUTED;
+  if (v <= stops[0].at) return stops[0].color;
+  const last = stops[stops.length - 1];
+  if (v >= last.at) return last.color;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    if (v >= a.at && v <= b.at) {
+      const t = b.at === a.at ? 0 : (v - a.at) / (b.at - a.at);
+      const ca = hexRgb(a.color);
+      const cb = hexRgb(b.color);
+      const mix = (k: number) => Math.round(ca[k] + (cb[k] - ca[k]) * t);
+      return `rgb(${mix(0)},${mix(1)},${mix(2)})`;
+    }
+  }
+  return last.color;
+}
+
+/** Colour of a present value on a catalog band scale — the one evaluator for
+ *  every scale kind, shared by the forecast map and the briefing route map
+ *  (#998), so the two catalogs speak the same vocabulary. Missing values are
+ *  the caller's business (each catalog has its own null rule). */
+export function bandScaleColor(scale: BandScale, v: number): string {
+  if (scale.kind === 'gray_ramp') return grayRamp(scale, v);
+  if (scale.kind === 'linear') return linearRamp(scale, v);
+  let val = v;
+  if (scale.convert === 'm_to_sm') val = val / 1609.34;
+  if (scale.kind === 'threshold_desc') {
+    for (const s of scale.stops) if (val >= (s.gte as number)) return s.color;
+    return scale.default;
+  }
+  for (const s of scale.stops) if (val < (s.lt as number)) return s.color;
+  return scale.default;
+}
+
 export function cloudCoverColor(pct: number): string {
   return grayRamp(BANDS.cloud_cover_pct as GrayRampScale, pct);
 }
@@ -153,15 +199,7 @@ function bandColor(scaleKey: string, raw: number | null | undefined, fallback: s
     if (typeof fallback !== 'number') return MUTED;
     v = fallback;
   }
-  if (scale.kind === 'gray_ramp') return grayRamp(scale, v);
-  let val = v;
-  if (scale.convert === 'm_to_sm') val = val / 1609.34;
-  if (scale.kind === 'threshold_desc') {
-    for (const s of scale.stops) if (val >= (s.gte as number)) return s.color;
-    return scale.default;
-  }
-  for (const s of scale.stops) if (val < (s.lt as number)) return s.color;
-  return scale.default;
+  return bandScaleColor(scale, v);
 }
 
 // --- Forecast metric extraction ---

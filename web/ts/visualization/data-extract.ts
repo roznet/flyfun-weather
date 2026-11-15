@@ -678,6 +678,10 @@ function extractPoint(
     cloudCoverMidPct: sounding?.cloud_cover_mid_pct ?? 0,
     headwindKt: wind?.headwind_kt ?? 0,
     crosswindKt: wind?.crosswind_kt ?? 0,
+    // |wind| from its own two components, so the cruise-override overlay
+    // (which carries only those) gives the speed at the overridden level too.
+    windSpeedKt: wind ? Math.hypot(wind.headwind_kt, wind.crosswind_kt) : null,
+    visibilityM: divergenceValue(rpa, 'visibility_m', model),
     capeSurfaceJkg: indices?.cape_surface_jkg ?? 0,
     worstModelAgreement,
     nwpCloudDiag,

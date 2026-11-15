@@ -8,6 +8,7 @@ payload that the iOS app caches and renders (i) popups from offline.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,10 +23,12 @@ def _clear_caches():
     help_module._payload_cache.clear()
     help_module._metrics_cache = None
     help_module._map_metrics_cache = None
+    help_module._route_map_metrics_cache = None
     yield
     help_module._payload_cache.clear()
     help_module._metrics_cache = None
     help_module._map_metrics_cache = None
+    help_module._route_map_metrics_cache = None
 
 
 @pytest.fixture
@@ -70,6 +73,17 @@ class TestPayloadBuilding:
         assert maps["scales"]["categorical"]["flight_category"]["VFR"] == "#22c55e"
         assert "wind_speed_kt" in maps["scales"]["bands"]
         assert maps["metrics"]["flight_category"]["label"] == "Category"
+
+    def test_payload_carries_the_route_map_catalog(self):
+        # The briefing route-map metrics (#998) are served under `route_maps`
+        # so the apps list the same metrics, groups, legends and default.
+        payload = json.loads(help_module._build_payload("en")[0])
+        route = payload["route_maps"]
+        keys = [m["key"] for m in route["metrics"]]
+        assert route["default_metric"] in keys
+        assert "icing-risk-at-level" in keys and "wind-speed" in keys
+        # Width is gone (#998): line width follows the colour metric.
+        assert all("width" in m for m in route["metrics"])
 
     def test_payload_carries_the_debrief_taxonomy(self):
         # The debrief taxonomy is served here so iOS renders the debrief form
@@ -188,3 +202,91 @@ class TestEndpoint:
         assert bogus.status_code == 200
         # Unknown lang normalizes to en → same version/ETag.
         assert bogus.headers["ETag"] == en.headers["ETag"]
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ROUTE_CATALOG = ROOT / "web/ts/data/route-map-metrics-catalog.json"
+BUNDLED_COPIES = {
+    "map-metrics-catalog.json": [
+        ROOT / "app/flyfun-weather/flyfun-weather/Resources/map-metrics-catalog.json",
+        ROOT / "app/android/app/src/main/assets/map-metrics-catalog.json",
+    ],
+    "route-map-metrics-catalog.json": [
+        ROOT / "app/flyfun-weather/flyfun-weather/Resources/route-map-metrics-catalog.json",
+        ROOT / "app/android/app/src/main/assets/route-map-metrics-catalog.json",
+    ],
+}
+
+
+class TestRouteMapCatalog:
+    """The briefing route-map catalog (#998) is well formed and bundled verbatim."""
+
+    @pytest.fixture
+    def catalog(self) -> dict:
+        return json.loads(ROUTE_CATALOG.read_text(encoding="utf-8"))
+
+    @pytest.mark.parametrize("name", sorted(BUNDLED_COPIES))
+    def test_bundled_copies_match_the_web_source(self, name):
+        source = (ROOT / "web/ts/data" / name).read_bytes()
+        for copy in BUNDLED_COPIES[name]:
+            assert copy.read_bytes() == source, f"{copy} is stale: copy web/ts/data/{name} over it"
+
+    def test_keys_unique_and_default_listed(self, catalog):
+        keys = [m["key"] for m in catalog["metrics"]]
+        assert len(keys) == len(set(keys))
+        assert catalog["default_metric"] in keys
+
+    def test_every_metric_is_complete(self, catalog):
+        groups = {g["key"] for g in catalog["groups"]}
+        bands = catalog["scales"]["bands"]
+        for m in catalog["metrics"]:
+            key = m["key"]
+            assert m["group"] in groups, key
+            assert m["scale"] in bands, f"{key} -> unknown scale {m['scale']}"
+            assert m["aggregation"] in {"average", "max"}, key
+            assert isinstance(m["uses_altitude"], bool), key
+            assert m["value"], key
+            assert m["label"] and m["i18n_key"], key
+            assert m["width"]["thin_at"] != m["width"]["thick_at"], key
+            assert m["legend"], key
+            assert m["format"]["kind"] in {"number", "rank"}, key
+            # Altitude metrics live in the "At altitude" group, the rest along the route.
+            assert (m["group"] == "at_altitude") == m["uses_altitude"], key
+
+    def test_scales_use_the_shared_vocabulary(self, catalog):
+        for name, scale in catalog["scales"]["bands"].items():
+            kind = scale["kind"]
+            assert kind in {"threshold_asc", "threshold_desc", "gray_ramp", "linear"}, name
+            if kind == "linear":
+                ats = [s["at"] for s in scale["stops"]]
+                assert ats == sorted(ats) and len(ats) >= 2, name
+                assert all(s["color"].startswith("#") and len(s["color"]) == 7 for s in scale["stops"]), name
+            elif kind.startswith("threshold"):
+                assert scale["stops"] and scale["default"], name
+
+    def test_i18n_keys_exist_in_every_web_locale(self, catalog):
+        keys = {catalog_key for catalog_key in _catalog_i18n_keys(catalog)}
+        for lang in ("en", "fr", "de", "es"):
+            flat = _flatten(json.loads((ROOT / f"web/ts/i18n/locales/{lang}.json").read_text(encoding="utf-8")))
+            missing = sorted(k for k in keys if k not in flat)
+            assert not missing, f"{lang}.json lacks {missing}"
+
+
+def _catalog_i18n_keys(catalog: dict):
+    for g in catalog["groups"]:
+        yield g["i18n_key"]
+    for m in catalog["metrics"]:
+        yield m["i18n_key"]
+        for item in m["legend"]:
+            if "i18n_key" in item:
+                yield item["i18n_key"]
+
+
+def _flatten(obj: dict, prefix: str = "") -> dict:
+    out: dict = {}
+    for k, v in obj.items():
+        if isinstance(v, dict):
+            out.update(_flatten(v, f"{prefix}{k}."))
+        else:
+            out[f"{prefix}{k}"] = v
+    return out

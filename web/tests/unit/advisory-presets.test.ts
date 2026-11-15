@@ -12,7 +12,7 @@ import {
   getAllLayers, getCompactLayerOverrides, METHOD_GROUPS,
 } from '../../ts/visualization/cross-section/layer-registry';
 import { ROUTE_GRAPH_METRICS, METRIC_NONE } from '../../ts/visualization/route-graph/metrics';
-import { MAP_METRICS, MAP_METRIC_NONE } from '../../ts/visualization/route-map/metrics';
+import { MAP_METRICS } from '../../ts/visualization/route-map/metrics';
 import { SKEWT_OVERLAYS } from '../../ts/visualization/skewt/overlay-bands';
 import { VARIABLE_REGISTRY } from '../../ts/visualization/skewt/variable-panel';
 
@@ -20,7 +20,7 @@ const ALL_IDS = new Set(getAllLayers().map((l) => l.id));
 const SKEWT_OVERLAY_IDS = new Set(SKEWT_OVERLAYS.map((o) => o.id));
 const SKEWT_VAR_IDS = new Set(VARIABLE_REGISTRY.map((v) => v.id));
 const ROUTE_GRAPH_IDS = new Set<string>([METRIC_NONE, ...ROUTE_GRAPH_METRICS.map((m) => m.id)]);
-const MAP_METRIC_IDS = new Set<string>([MAP_METRIC_NONE, ...MAP_METRICS.map((m) => m.id)]);
+const MAP_METRIC_IDS = new Set<string>(MAP_METRICS.map((m) => m.id));
 
 describe('config integrity', () => {
   it('has the Phase-1 presets plus the Basic/Learn view (#308)', () => {
