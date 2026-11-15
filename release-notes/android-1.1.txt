@@ -1,0 +1,6 @@
+- Simpler briefing toolbar: Start/Stop, Refresh and one menu for Share, Edit, Duplicate and feedback.
+- A one-line flight summary tops the Advisory tab; "Verdict" is now "Summary".
+- Redrawn route map: one metric colours the route, altitude stepper, airport forecasts, fronts and observed radar.
+- Forecast | Past switch and a hide toggle on the map.
+- A briefing without GRAMET says why, and fetches it on refresh once Autorouter is linked.
+- Clear message during maintenance, not a raw error.
