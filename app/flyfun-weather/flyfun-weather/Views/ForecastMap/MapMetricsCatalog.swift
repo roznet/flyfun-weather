@@ -49,6 +49,8 @@ nonisolated struct ForecastMapCatalog: Decodable, Sendable {
     struct BandStop: Decodable, Sendable {
         let lt: Double?
         let gte: Double?
+        /// Anchor of a `linear` scale stop (#998, route-map catalog).
+        let at: Double?
         let color: String
     }
 
@@ -175,7 +177,15 @@ nonisolated extension ForecastMapCatalog {
             v = fb
         }
         guard let value = v else { return Self.muted }
+        return Self.bandScaleColor(band, value)
+    }
+
+    /// Colour of a present value on any band scale kind — the one evaluator
+    /// shared by the forecast map and the briefing route map (#998), a port of
+    /// web `bandScaleColor`. Missing values are the caller's business.
+    static func bandScaleColor(_ band: BandScale, _ value: Double) -> UIColor {
         if band.kind == "gray_ramp" { return grayRamp(band, value) }
+        if band.kind == "linear" { return linearRamp(band.stops ?? [], value) }
         let val = band.convert == "m_to_sm" ? value / 1609.34 : value
         if band.kind == "threshold_desc" {
             for s in band.stops ?? [] where s.gte.map({ val >= $0 }) == true {
@@ -190,7 +200,29 @@ nonisolated extension ForecastMapCatalog {
         return band.defaultColor.flatMap(UIColor.parse) ?? Self.muted
     }
 
-    private func grayRamp(_ band: BandScale, _ pct: Double) -> UIColor {
+    /// Linear interpolation between `at` anchors, clamped at the ends.
+    private static func linearRamp(_ stops: [BandStop], _ v: Double) -> UIColor {
+        let anchored = stops.filter { $0.at != nil }
+        guard let first = anchored.first, let last = anchored.last else { return Self.muted }
+        if v <= first.at! { return UIColor.parse(first.color) ?? Self.muted }
+        if v >= last.at! { return UIColor.parse(last.color) ?? Self.muted }
+        for (a, b) in zip(anchored, anchored.dropFirst()) where v >= a.at! && v <= b.at! {
+            let span = b.at! - a.at!
+            let t = span == 0 ? 0 : (v - a.at!) / span
+            guard let ca = UIColor.parse(a.color), let cb = UIColor.parse(b.color) else { return Self.muted }
+            var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+            var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+            ca.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+            cb.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+            // Round to whole 0-255 channels, as the web does, so both clients
+            // draw the same rgb().
+            let mix: (CGFloat, CGFloat) -> CGFloat = { x, y in ((x + (y - x) * CGFloat(t)) * 255).rounded() / 255 }
+            return UIColor(red: mix(r1, r2), green: mix(g1, g2), blue: mix(b1, b2), alpha: 1)
+        }
+        return UIColor.parse(last.color) ?? Self.muted
+    }
+
+    private static func grayRamp(_ band: BandScale, _ pct: Double) -> UIColor {
         let base = band.base ?? 220
         let span = band.span ?? 160
         let boost = band.blueBoost ?? 10

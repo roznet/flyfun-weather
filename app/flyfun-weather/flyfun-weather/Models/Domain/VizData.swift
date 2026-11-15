@@ -185,6 +185,13 @@ nonisolated struct VizPoint {
     /// `model_divergence`, so it stays out of model-agreement scoring (#948).
     /// nil when the pack or the point has none.
     var dewpointC: Double? = nil
+    /// Wind speed (kt) at cruise for the selected model, from its wind
+    /// components (#998, route map Wind Speed). nil without wind data.
+    var windSpeedKt: Double? = nil
+    /// Model visibility (m) from `model_divergence.visibility_m` (#998, route
+    /// map Visibility). nil when the model has none (ICON after the
+    /// native-grid switch, so the map shows no data rather than a guess).
+    var visibilityM: Double? = nil
 
     // MARK: Observed convenience accessors
     //

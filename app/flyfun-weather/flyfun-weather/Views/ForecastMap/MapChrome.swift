@@ -151,13 +151,38 @@ enum MapChrome {
     /// The bottom panel: picks on one row, the legend under them.
     static func bottomPanel<Picks: View>(legend: ForecastMapCatalog.Legend?,
                                          @ViewBuilder picks: () -> Picks) -> some View {
+        bottomPanel(picks: picks) {
+            if let legend { MapChrome.legend(legend) }
+        }
+    }
+
+    /// The bottom panel with any legend area under the picks (the briefing
+    /// route map's route scale plus airport line, #998).
+    static func bottomPanel<Picks: View, Legend: View>(@ViewBuilder picks: () -> Picks,
+                                                       @ViewBuilder legend: () -> Legend) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) { picks() }
-            if let legend { MapChrome.legend(legend) }
+            legend()
         }
         .padding(10)
         .frame(maxWidth: 520)
         .background(surface(RoundedRectangle(cornerRadius: 14)))
+    }
+
+    /// A labelled floating button (Open full forecast map, #998): an icon
+    /// alone was not understood.
+    static func labelledButton(_ title: String, systemImage: String,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                Text(title)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 12).frame(height: 36)
+            .background(surface(Capsule()))
+        }
     }
 }
 

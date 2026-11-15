@@ -65,15 +65,22 @@ final class BriefingUITests: FlyfunUITestCase {
          "observed_conditions": {"radii_nm": [5, 10, 20],
            "reflectivity": {"source": "opera_dbzh", "quantity": "DBZH", "units": "dBZ",
              "valid_time": "2099-06-30T08:05:00Z", "age_minutes": 5, "window_minutes": 10,
+             "stations": []},
+           "lightning": {"source": "eumetsat_li", "quantity": "flashes", "units": null,
+             "valid_time": "2099-06-30T08:05:00Z", "age_minutes": 5, "window_minutes": 10,
              "stations": []}}}
         """
         let app = launchMockApp(environment: ["FLYFUN_MOCK_LIVE_JSON": live])
         openFixture1Briefing(app)
         switchToBriefingTab(app, "Map")
 
-        let menu = app.buttons["map.observedMenu"].firstMatch
+        // #998: the observed layers live in the bottom panel's LAYERS menu,
+        // beside SHOWING (one metric list) and MODEL.
+        let menu = app.buttons["map.layersMenu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: Self.uiTimeout),
-                      "the route map should offer the Observed menu for a briefing with observed data")
+                      "the route map should offer the Layers menu for a briefing with observed data")
+        XCTAssertTrue(app.buttons["map.metricMenu"].firstMatch.exists, "the Showing pick should be in the panel")
+        XCTAssertTrue(app.buttons["map.fitRoute"].firstMatch.exists, "the Fit route button should be on the map")
         let badge = app.descendants(matching: .any)["map.observedBadge"].firstMatch
         XCTAssertTrue(badge.waitForExistence(timeout: Self.uiTimeout),
                       "a failed frame listing should be named on the map, not left blank")
@@ -99,6 +106,17 @@ final class BriefingUITests: FlyfunUITestCase {
         open.name = "RouteMap-Observed-Menu-Mock"
         open.lifetime = .keepAlways
         add(open)
+        // Close the menu, then Hide leaves only the pill.
+        app.tap()
+        let hide = app.buttons["map.hideControls"].firstMatch
+        XCTAssertTrue(hide.waitForExistence(timeout: Self.uiTimeout), "the map should offer Hide")
+        hide.tap()
+        XCTAssertTrue(app.buttons["mapShowControlsButton"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "hidden controls leave the Show pill")
+        XCTAssertFalse(app.buttons["map.layersMenu"].firstMatch.exists, "hidden controls hide the panel")
+        app.buttons["mapShowControlsButton"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["map.layersMenu"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
+                      "Show brings the panel back")
     }
 
     /// Journey (#605) — the cross-section layer bar in each layout mode, and the
