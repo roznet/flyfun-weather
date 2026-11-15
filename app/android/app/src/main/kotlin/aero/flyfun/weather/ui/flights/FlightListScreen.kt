@@ -4,8 +4,8 @@ import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AirplanemodeActive
 import androidx.compose.material.icons.filled.CheckCircle
@@ -32,7 +33,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewReleases
@@ -53,6 +56,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,17 +77,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.model.Assessment
 import aero.flyfun.weather.model.FlightDuration
 import aero.flyfun.weather.model.FlightGroup
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FlightRole
 import aero.flyfun.weather.model.FlightSection
+import aero.flyfun.weather.ui.help.FeedbackSheet
 import aero.flyfun.weather.ui.theme.color
 import aero.flyfun.weather.viewmodel.FlightListViewModel
 import java.time.Instant
@@ -116,9 +123,12 @@ fun FlightListScreen(
     onAddNextLegClick: (FlightResponse) -> Unit = {},
     onOpenTripClick: (String) -> Unit = {},
     onOpenMapsClick: () -> Unit = {},
-    onOpenAircraftClick: () -> Unit = {},
     onOpenWhatsNewClick: () -> Unit = {},
     onOpenSettingsClick: () -> Unit = {},
+    /** Site the "Open website" / "Help" rows open (#996). */
+    websiteUrl: String = ApiClient.DEFAULT_BASE_URL,
+    /** Client for the "Send feedback" sheet; null (mock / guest) hides the row. */
+    feedbackApiClient: ApiClient? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -133,9 +143,15 @@ fun FlightListScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
 
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    var showFeedbackSheet by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
     var showMoveTripDialog by remember { mutableStateOf(false) }
     var showCreateTripDialog by remember { mutableStateOf(false) }
     var newTripNameInput by remember { mutableStateOf("") }
+
+    if (showFeedbackSheet && feedbackApiClient != null) {
+        FeedbackSheet(apiClient = feedbackApiClient, onDismiss = { showFeedbackSheet = false })
+    }
 
     Scaffold(
         modifier = modifier,
@@ -191,26 +207,29 @@ fun FlightListScreen(
                                 expanded = showOverflowMenu,
                                 onDismissRequest = { showOverflowMenu = false },
                             ) {
+                                // Grouped as on iOS (#996): go somewhere, find out
+                                // about the app, then the list's own sort. My
+                                // Aircraft lives in Settings.
                                 DropdownMenuItem(
-                                    text = { Text("Sort (${order.title})") },
+                                    text = { Text("Open website") },
+                                    leadingIcon = { Icon(Icons.Default.Language, contentDescription = null) },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        uriHandler.openUri(websiteUrl)
+                                    },
+                                    modifier = Modifier.testTag("openWebsiteMenuItem"),
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Settings") },
                                     leadingIcon = {
-                                        Icon(Icons.Default.SwapVert, contentDescription = null)
+                                        Icon(Icons.Default.Settings, contentDescription = null)
                                     },
                                     onClick = {
                                         showOverflowMenu = false
-                                        viewModel.toggleOrder()
+                                        onOpenSettingsClick()
                                     },
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("My Aircraft") },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.AirplanemodeActive, contentDescription = null)
-                                    },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onOpenAircraftClick()
-                                    },
-                                )
+                                HorizontalDivider()
                                 DropdownMenuItem(
                                     text = {
                                         Row(
@@ -231,14 +250,38 @@ fun FlightListScreen(
                                         onOpenWhatsNewClick()
                                     },
                                 )
+                                // No native help screen on Android: the website's help page.
                                 DropdownMenuItem(
-                                    text = { Text("Settings") },
+                                    text = { Text("Help") },
                                     leadingIcon = {
-                                        Icon(Icons.Default.Settings, contentDescription = null)
+                                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null)
                                     },
                                     onClick = {
                                         showOverflowMenu = false
-                                        onOpenSettingsClick()
+                                        uriHandler.openUri(websiteUrl.trimEnd('/') + "/help.html")
+                                    },
+                                )
+                                if (feedbackApiClient != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Send feedback") },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Feedback, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            showFeedbackSheet = true
+                                        },
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Sort (${order.title})") },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.SwapVert, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.toggleOrder()
                                     },
                                 )
                             }
