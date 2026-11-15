@@ -4,18 +4,19 @@ import UIKit
 final class FlightsUITests: FlyfunUITestCase {
 
     /// #616: feedback sent from a briefing is the linked form, reached from the
-    /// pack menu, and submits (the fixture repository accepts it).
+    /// toolbar's ⋯ menu (#996, was the pack menu), and submits (the fixture
+    /// repository accepts it).
     @MainActor
-    func testBriefingFeedbackFromPackMenu() throws {
+    func testBriefingFeedbackFromMoreMenu() throws {
         let app = launchMockApp()
         openFixture1Briefing(app)
 
-        let packMenu = app.buttons["packToolbarMenu"].firstMatch
-        XCTAssertTrue(packMenu.waitForExistence(timeout: Self.uiTimeout), "the pack menu should be in the toolbar")
-        packMenu.tap()
+        let moreMenu = app.buttons["briefingMoreMenu"].firstMatch
+        XCTAssertTrue(moreMenu.waitForExistence(timeout: Self.uiTimeout), "the ⋯ menu should be in the toolbar")
+        moreMenu.tap()
 
         let feedback = menuItem(app, "briefingFeedbackButton", label: "Send Feedback on This Briefing")
-        XCTAssertTrue(feedback.waitForExistence(timeout: Self.uiTimeout), "the pack menu should offer briefing feedback")
+        XCTAssertTrue(feedback.waitForExistence(timeout: Self.uiTimeout), "the ⋯ menu should offer briefing feedback")
         feedback.tap()
 
         // A menu item tapped while the menu is still animating open can be
@@ -321,7 +322,7 @@ final class FlightsUITests: FlyfunUITestCase {
                       "fixture-1 should be listed before the delete")
 
         app.buttons["More"].firstMatch.tap()
-        let menuItem = app.buttons["bulkSelectMenuItem"].firstMatch
+        let menuItem = self.menuItem(app, "bulkSelectMenuItem", label: "Select & Delete Flights\u{2026}")
         XCTAssertTrue(menuItem.waitForExistence(timeout: Self.uiTimeout),
                       "the More menu should offer Select & Delete Flights")
         menuItem.tap()

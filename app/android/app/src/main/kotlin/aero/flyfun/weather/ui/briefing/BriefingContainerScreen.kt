@@ -1,5 +1,6 @@
 package aero.flyfun.weather.ui.briefing
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -12,8 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,20 +25,22 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -49,6 +52,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -79,8 +84,12 @@ import aero.flyfun.weather.model.SnapshotResponse
 import aero.flyfun.weather.model.WaypointAnalysis
 import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.crosssection.CrossSectionTabScreen
+import aero.flyfun.weather.ui.help.FeedbackSheet
 import aero.flyfun.weather.ui.map.RouteMapTabScreen
+import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.ui.observed.ObservedTabScreen
+import aero.flyfun.weather.ui.observed.rememberIsOnline
+import aero.flyfun.weather.ui.observed.rememberFlightTrackingToggle
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import java.util.Locale
 import kotlin.math.abs
@@ -121,6 +130,26 @@ fun BriefingContainerScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val isTracking by FlightTrackingService.isTracking.collectAsState()
     val trackedFlightId by FlightTrackingService.activeFlightId.collectAsState()
+
+    val trackingToggle = rememberFlightTrackingToggle(viewModel)
+    val showStartButton = flight?.let { f ->
+        f.isEditable && (trackingToggle.isTracking || f.isInTrackingWindow(started = trackingToggle.isTracking))
+    } == true
+    val selectedPack by viewModel.selectedPack.collectAsState()
+    var feedbackPack by remember { mutableStateOf<String?>(null) }
+    val feedbackApi = viewModel.apiClient
+    // Feedback about the pack on screen (#616), from ⋮ (#996). Online accounts only.
+    val feedbackTarget: (() -> Unit)? = selectedPack?.fetchTimestamp
+        ?.takeIf { it.isNotBlank() && feedbackApi != null }
+        ?.let { ts -> { feedbackPack = ts } }
+    if (feedbackApi != null && feedbackPack != null) {
+        FeedbackSheet(
+            apiClient = feedbackApi,
+            flightId = flight?.id ?: viewModel.flightId,
+            packTimestamp = feedbackPack,
+            onDismiss = { feedbackPack = null },
+        )
+    }
 
     // A tracked flight keeps its Observed tab past the planned window (#874): re-check on change.
     LaunchedEffect(viewModel, isTracking, trackedFlightId) {
@@ -196,16 +225,6 @@ fun BriefingContainerScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            val subtitle = remember(flight) { buildFlightSubtitle(flight) }
-                            if (subtitle.isNotBlank()) {
-                                Text(
-                                    text = subtitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
                         }
                     },
                     navigationIcon = {
@@ -238,6 +257,24 @@ fun BriefingContainerScreen(
                             viewModel = viewModel,
                             modifier = Modifier.padding(end = 4.dp),
                         )
+                        // Start / Stop joins the bar only in the flight-day window (#996), as
+                        // on iOS: on the apron the pilot shouldn't have to find a tab for it.
+                        if (showStartButton) {
+                            TextButton(
+                                onClick = trackingToggle.toggle,
+                                modifier = Modifier.testTag("toolbarTrackingButton"),
+                            ) {
+                                Text(
+                                    text = if (trackingToggle.isTracking) "Stop" else "Start",
+                                    color = if (trackingToggle.isTracking) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
                         // Refresh stays present when gated so the control never disappears;
                         // tapping it explains why instead of earning a 403 (mirrors iOS).
                         val refreshGate = flight?.refreshGate()
@@ -261,13 +298,13 @@ fun BriefingContainerScreen(
                                 }
                             }
                         }
-                        val ownFlight = flight?.takeIf { it.isEditable }
-                        if (ownFlight != null && (onEditFlight != null || onDuplicateFlight != null)) {
-                            FlightActionsMenu(
-                                onEdit = onEditFlight?.let { { it(ownFlight) } },
-                                onDuplicate = onDuplicateFlight?.let { { it(ownFlight) } },
-                            )
-                        }
+                        // One ⋮ for every other action, in every state (#996), as on iOS.
+                        BriefingMoreMenu(
+                            flight = flight,
+                            onEdit = onEditFlight,
+                            onDuplicate = onDuplicateFlight,
+                            onSendFeedback = feedbackTarget,
+                        )
                     },
                 )
 
@@ -436,21 +473,6 @@ private fun BriefingTab.icon(): ImageVector = when (this) {
     BriefingTab.DISCUSSION -> Icons.Default.Description
     BriefingTab.CROSS_SECTION -> Icons.Default.ShowChart
     BriefingTab.MAP -> Icons.Default.Map
-}
-
-private fun buildFlightSubtitle(flight: FlightResponse?): String {
-    if (flight == null) return ""
-    val parts = mutableListOf<String>()
-    if (flight.departureTime.isNotBlank()) {
-        parts.add(formatUtcTimestamp(flight.departureTime))
-    }
-    if (flight.cruiseAltitudeFt > 0) {
-        parts.add(String.format(Locale.US, "FL%03d", flight.cruiseAltitudeFt / 100))
-    }
-    if (flight.flightDurationHours > 0) {
-        parts.add(flight.durationLabel)
-    }
-    return parts.joinToString(" · ")
 }
 
 // ============================================================================
@@ -820,36 +842,84 @@ private fun RefreshGatedButton(gate: RefreshGate) {
     }
 }
 
-/** Top-bar overflow for the owner's flight actions. */
+/**
+ * Top-bar ⋮ (#996): the owner's Edit / Duplicate (disabled offline, like iOS), Share link
+ * for a non-private flight, and feedback on the pack on screen. Hidden only when it would
+ * be empty.
+ */
 @Composable
-private fun FlightActionsMenu(
-    onEdit: (() -> Unit)?,
-    onDuplicate: (() -> Unit)?,
+private fun BriefingMoreMenu(
+    flight: FlightResponse?,
+    onEdit: ((FlightResponse) -> Unit)?,
+    onDuplicate: ((FlightResponse) -> Unit)?,
+    onSendFeedback: (() -> Unit)?,
 ) {
+    val context = LocalContext.current
+    val ownFlight = flight?.takeIf { it.isEditable }
+    val shareCode = ownFlight?.takeIf { !it.private }?.shareCode
+    val canEdit = ownFlight != null && (onEdit != null || onDuplicate != null)
+    if (!canEdit && shareCode == null && onSendFeedback == null) return
+    val isOnline by rememberIsOnline()
     var expanded by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { expanded = true }) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("briefingMoreMenu")) {
             Icon(Icons.Default.MoreVert, contentDescription = "Flight actions")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (onEdit != null) {
+            if (ownFlight != null && onEdit != null) {
                 DropdownMenuItem(
                     text = { Text("Edit flight") },
+                    enabled = isOnline,
                     leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                     onClick = {
                         expanded = false
-                        onEdit()
+                        onEdit(ownFlight)
                     },
                 )
             }
-            if (onDuplicate != null) {
+            if (ownFlight != null && onDuplicate != null) {
                 DropdownMenuItem(
                     text = { Text("Duplicate\u2026") },
+                    enabled = isOnline,
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
                         expanded = false
-                        onDuplicate()
+                        onDuplicate(ownFlight)
                     },
+                )
+            }
+            if (canEdit && !isOnline) {
+                Text(
+                    text = "Editing needs a connection",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            if (canEdit && (shareCode != null || onSendFeedback != null)) HorizontalDivider()
+            if (shareCode != null) {
+                DropdownMenuItem(
+                    text = { Text("Share link\u2026") },
+                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, "${ApiClient.DEFAULT_BASE_URL.trimEnd('/')}/s/$shareCode")
+                        }
+                        context.startActivity(Intent.createChooser(send, "Share flight"))
+                    },
+                )
+            }
+            if (onSendFeedback != null) {
+                DropdownMenuItem(
+                    text = { Text("Send feedback on this briefing") },
+                    leadingIcon = { Icon(Icons.Default.Feedback, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onSendFeedback()
+                    },
+                    modifier = Modifier.testTag("briefingFeedbackButton"),
                 )
             }
         }

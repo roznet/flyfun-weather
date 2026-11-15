@@ -53,12 +53,6 @@ extension ForecastMapView {
         return shortFormatter.string(from: date(for: days.first { $0.day == day }, dayOffset: day))
     }
 
-    /// Nav-title label: "Sat 18 Jul 2026" (D+0 prefixed "Today · ").
-    static func fullDayLabel(day: Int, days: [ForecastDay]) -> String {
-        let full = fullFormatter.string(from: date(for: days.first { $0.day == day }, dayOffset: day))
-        return day == 0 ? "Today · \(full)" : full
-    }
-
     /// Menu-row label: "Today · Sat 18" / "Sat 18 Jul".
     static func dayMenuLabel(_ day: ForecastDay) -> String {
         let d = date(for: day, dayOffset: day.day)
@@ -73,7 +67,6 @@ extension ForecastMapView {
     }()
     private static let shortFormatter = makeFormatter("EEE d")
     private static let menuFormatter = makeFormatter("EEE d MMM")
-    private static let fullFormatter = makeFormatter("EEE d MMM yyyy")
 
     private static func makeFormatter(_ format: String) -> DateFormatter {
         let f = DateFormatter(); f.calendar = Calendar.utc; f.timeZone = .utc

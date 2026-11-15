@@ -244,6 +244,7 @@ def _apply_meta_to_row(row: BriefingPackRow, meta: BriefingPackMeta) -> None:
     row.fetch_timestamp = meta.fetch_timestamp
     row.days_out = meta.days_out
     row.has_gramet = meta.has_gramet
+    row.gramet_skip_reason = meta.gramet_skip_reason
     row.has_skewt = meta.has_skewt
     row.has_digest = meta.has_digest
     row.llm_digest_requested = meta.llm_digest_requested
@@ -391,6 +392,7 @@ def _row_to_meta(row: BriefingPackRow) -> BriefingPackMeta:
         fetch_timestamp=ensure_utc(row.fetch_timestamp),
         days_out=row.days_out,
         has_gramet=row.has_gramet,
+        gramet_skip_reason=row.gramet_skip_reason,
         has_skewt=row.has_skewt,
         has_digest=row.has_digest,
         llm_digest_requested=row.llm_digest_requested,

@@ -150,3 +150,50 @@ struct PDFDocumentView: UIViewRepresentable {
         view.isUserInteractionEnabled = interactive
     }
 }
+
+/// Wording for a pack without a GRAMET (#994). The server says why in
+/// `PackMetaResponse.grametStatus` (`api/packs.py` `_gramet_status`). nil keeps
+/// the section hidden, as before #994: for unknown codes, and on purpose for
+/// `not_linked`, `disabled` and `historical` (the pilot's own setup), since most accounts never link Autorouter and
+/// a note on every briefing would be noise. Settings says whether it's linked.
+///
+/// SYNC: Android `GrametStatusRules.kt`.
+enum GrametStatus {
+    static func message(_ status: String?) -> String? {
+        switch status {
+        case "refresh_to_fetch":
+            return "The GRAMET is available now. Refresh the briefing to fetch it."
+        case "daily_limit":
+            return "Daily GRAMET limit reached. A refresh tomorrow fetches it."
+        case "failed":
+            return "Autorouter didn't return a GRAMET for this briefing. The next full refresh tries again."
+        case "expired":
+            return "The GRAMET of this older briefing is no longer kept."
+        default:
+            return nil
+        }
+    }
+}
+
+/// The GRAMET section for a pack without one (#994): the server's reason in
+/// place of the image.
+struct GrametUnavailableView: View {
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.spacingS) {
+            Text("GRAMET")
+                .font(.headline)
+                .foregroundStyle(Theme.text)
+            Label(message, systemImage: "info.circle")
+                .font(.callout)
+                .foregroundStyle(Theme.textMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.spacingS)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("grametUnavailableNote")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Theme.cardPadding)
+    }
+}

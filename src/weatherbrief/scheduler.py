@@ -709,7 +709,9 @@ def _auto_refresh_one(
             # already followed by a client-driven refresh, so forcing a full run
             # per edited flight would just buy a second one.
             decision = gated_data_status(
-                latest, flight, params_override=(triggered_by == "resume"),
+                latest, flight,
+                params_override=(triggered_by == "resume"),
+                gramet_override=(triggered_by == "resume"),
             ).refresh_decision
             if decision.mode != "full":
                 logger.info(

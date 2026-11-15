@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -172,8 +171,6 @@ fun BriefingPackToolbar(
     val isDownloadingPack by viewModel.isDownloadingPack.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val refreshProgressText by viewModel.refreshProgressText.collectAsState()
-    val flight by viewModel.flight.collectAsState()
-    val refreshGate = flight?.refreshGate()
 
     val currentPack = selectedPack ?: packs.firstOrNull()
     var menuExpanded by remember { mutableStateOf(false) }
@@ -394,48 +391,6 @@ fun BriefingPackToolbar(
                 onClick = {
                     menuExpanded = false
                     viewModel.downloadCurrentPack()
-                },
-            )
-
-            // Refresh Briefing
-            DropdownMenuItem(
-                text = {
-                    Column {
-                        Text(
-                            text = if (isRefreshing) {
-                                refreshProgressText ?: "Refreshing Briefing…"
-                            } else {
-                                "Refresh Briefing"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (refreshGate != null) {
-                            Text(
-                                text = refreshGate.reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.widthIn(max = 260.dp),
-                            )
-                        }
-                    }
-                },
-                leadingIcon = {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = null,
-                        )
-                    }
-                },
-                enabled = !isRefreshing && refreshGate == null,
-                onClick = {
-                    menuExpanded = false
-                    viewModel.refreshBriefing()
                 },
             )
         }

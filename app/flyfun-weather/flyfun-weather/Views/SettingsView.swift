@@ -164,7 +164,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Services")
                 } footer: {
-                    Text("Connect your autorouter.aero account to import the routes you've planned there when adding a flight.")
+                    Text("Connect your autorouter.aero account to add the GRAMET to your briefings and import the routes you've planned there when adding a flight.")
                 }
 
                 Section {

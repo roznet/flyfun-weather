@@ -304,6 +304,8 @@ def _purge_heavy_artifacts(pack: BriefingPackRow, pack_dir: Path | None, dry_run
 
     if not dry_run:
         pack.has_skewt = False
+        if pack.has_gramet:
+            pack.gramet_skip_reason = "expired"  # #994: the apps say why it's gone
         pack.has_gramet = False
 
     return freed

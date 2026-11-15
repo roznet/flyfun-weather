@@ -160,6 +160,20 @@ class TestBriefingPacks:
         assert reloaded.has_digest is True
         assert reloaded.llm_digest_requested is False
 
+    def test_gramet_skip_reason_round_trips(self, db_session, dev_user, sample_flight):
+        """Why a pack has no GRAMET persists (#994)."""
+        save_flight(db_session, sample_flight, dev_user)
+        meta = BriefingPackMeta(
+            flight_id=sample_flight.id,
+            fetch_timestamp=datetime(2026, 2, 20, 9, 0, 0, tzinfo=timezone.utc),
+            days_out=1,
+            has_gramet=False,
+            gramet_skip_reason="not_linked",
+        )
+        save_pack_meta(db_session, meta)
+        loaded = load_pack_meta(db_session, meta.flight_id, meta.fetch_timestamp)
+        assert loaded.gramet_skip_reason == "not_linked"
+
     def test_list_packs_empty(self, db_session, dev_user, sample_flight):
         save_flight(db_session, sample_flight, dev_user)
         assert list_packs(db_session, sample_flight.id) == []

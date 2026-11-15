@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,9 +35,12 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -107,7 +112,8 @@ import kotlinx.coroutines.flow.first
 
 enum class PanEuropeanMapMode(val label: String) {
     FORECAST("Forecast"),
-    HISTORICAL("Historical"),
+    /** The historical map (#629), shown as "Past" (#996) on every client. */
+    HISTORICAL("Past"),
 }
 
 /**
@@ -130,6 +136,8 @@ fun PanEuropeanMapScreen(
     modifier: Modifier = Modifier,
 ) {
     var activeMode by remember(initialMode) { mutableStateOf(initialMode) }
+    // Map-only view (#996): hides the time row and the bottom panel on both tabs.
+    var controlsHidden by rememberSaveable { mutableStateOf(false) }
 
     val europeBounds = remember { GeoBounds(minLat = 37.0, maxLat = 59.0, minLon = -3.0, maxLon = 23.0) }
     val cameraState = rememberSlippyMapCameraState(initialCenterLat = 48.0, initialCenterLon = 10.0, initialZoom = 4.6f)
@@ -156,6 +164,17 @@ fun PanEuropeanMapScreen(
                         Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = {
+                    IconButton(
+                        onClick = { controlsHidden = !controlsHidden },
+                        modifier = Modifier.testTag(if (controlsHidden) "mapShowControlsButton" else "mapHideControlsButton"),
+                    ) {
+                        Icon(
+                            imageVector = if (controlsHidden) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            contentDescription = if (controlsHidden) "Show map controls" else "Hide map controls",
+                        )
+                    }
+                },
             )
         },
     ) { innerPadding ->
@@ -163,8 +182,10 @@ fun PanEuropeanMapScreen(
             .fillMaxSize()
             .padding(innerPadding)
         when (activeMode) {
-            PanEuropeanMapMode.FORECAST -> ForecastMapBody(forecastViewModel, cameraState, europeBounds, mapCatalog, bodyModifier)
-            PanEuropeanMapMode.HISTORICAL -> HistoricalMapBody(historicalViewModel, cameraState, europeBounds, mapCatalog, bodyModifier)
+            PanEuropeanMapMode.FORECAST ->
+                ForecastMapBody(forecastViewModel, cameraState, europeBounds, mapCatalog, controlsHidden, bodyModifier)
+            PanEuropeanMapMode.HISTORICAL ->
+                HistoricalMapBody(historicalViewModel, cameraState, europeBounds, mapCatalog, controlsHidden, bodyModifier)
         }
     }
 }
@@ -179,6 +200,7 @@ private fun ForecastMapBody(
     cameraState: SlippyMapCameraState,
     defaultBounds: GeoBounds,
     catalog: MapMetricsCatalog?,
+    controlsHidden: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val days by viewModel.days.collectAsState()
@@ -205,28 +227,32 @@ private fun ForecastMapBody(
         modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // "When": title, day menu, hour stepper
-        MapTitle(
-            title = fullDayLabel(selectedDay, days),
-            subtitle = String.format(Locale.US, "%02dZ · %s", selectedHour, modeLongLabel(mode, modelCount)),
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            DayMenu(days = days, selectedDay = selectedDay, onSelect = viewModel::selectDay)
-            StepperCapsule(
-                label = String.format(Locale.US, "%02dZ", selectedHour),
+        // "When" (#996): one bar, ‹ day · hour ›, the middle opens the day and hour lists.
+        // Replaces the title, day menu and hour stepper, which showed the date twice.
+        if (!controlsHidden) {
+            TimeBar(
+                label = String.format(Locale.US, "%s · %02dZ", dayTitle(selectedDay, days), selectedHour),
                 canBack = viewModel.canStepHour(-1),
                 canForward = viewModel.canStepHour(1),
                 onBack = { viewModel.stepHour(-1) },
                 onForward = { viewModel.stepHour(1) },
-                menuItems = hours.map { hr -> MenuChoice(String.format(Locale.US, "%02dZ", hr), hr == selectedHour) { viewModel.selectHour(hr) } },
+                sections = listOf(
+                    MenuSection(
+                        "Day",
+                        days.map { d ->
+                            MenuChoice(dayMenuLabel(d, days), d.day == selectedDay, enabled = d.available) { viewModel.selectDay(d.day) }
+                        },
+                    ),
+                    MenuSection(
+                        "Hour (UTC)",
+                        hours.map { hr -> MenuChoice(String.format(Locale.US, "%02dZ", hr), hr == selectedHour) { viewModel.selectHour(hr) } },
+                    ),
+                ),
+                isLoading = isLoading && didLoadOnce,
             )
-            if (isLoading && didLoadOnce) InlineSpinner()
         }
         // A linked `fc.date` the grid can't show (#840), until the pilot picks a day
-        linkedDateNotice?.let { NoticeLine(it) }
+        if (!controlsHidden) linkedDateNotice?.let { NoticeLine(it) }
 
         AirportMarkerMap(
             payload = payload,
@@ -255,10 +281,13 @@ private fun ForecastMapBody(
             }
         }
 
-        // "What": model, metric, legend
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // "What" (#996): metric, models and the legend in one labelled panel
+        if (!controlsHidden) BottomPanel(legend = { CatalogLegend(catalog, metric) }) {
+            MetricMenu(catalog = catalog, metric = metric, onSelect = viewModel::selectMetric, modifier = Modifier.weight(1f))
             MenuButton(
-                text = modeShortLabel(mode),
+                text = modeShortLabel(mode, modelCount),
+                caption = "Models",
+                modifier = Modifier.weight(1f),
                 testTag = "forecastModelMenu",
                 sections = listOf(
                     MenuSection(
@@ -283,9 +312,7 @@ private fun ForecastMapBody(
                     ),
                 ),
             )
-            MetricMenu(catalog = catalog, metric = metric, onSelect = viewModel::selectMetric)
         }
-        CatalogLegend(catalog, metric)
 
         selectedAirport?.let { airport ->
             ForecastAirportCard(
@@ -445,9 +472,9 @@ private fun HistoricalMapBody(
     cameraState: SlippyMapCameraState,
     defaultBounds: GeoBounds,
     catalog: MapMetricsCatalog?,
+    controlsHidden: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val range by viewModel.range.collectAsState()
     val selectedInstant by viewModel.selectedInstant.collectAsState()
     val lead by viewModel.lead.collectAsState()
     val source by viewModel.source.collectAsState()
@@ -471,61 +498,38 @@ private fun HistoricalMapBody(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         val at = selectedInstant
-        val subtitle = buildList {
-            add("Historical")
-            add(source.label)
-            if (!source.isObserved) add(if (lead == 0) "latest runs" else "runs from D-$lead")
-            if (at != null && range != null && viewModel.isObservationOnly(at)) add("METAR/TAF only")
-        }.joinToString(" · ")
-        MapTitle(
-            title = at?.let { "${HistoricalTime.shortDateLabel(it)} · ${HistoricalTime.timeLabel(it)}" } ?: "Historical",
-            subtitle = subtitle,
-        )
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = { showDatePicker = true },
-                enabled = at != null,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.testTag("historicalDatePicker"),
-            ) {
-                Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(at?.let(HistoricalTime::shortDateLabel) ?: "Date", style = MaterialTheme.typography.labelMedium)
-            }
-            StepperCapsule(
-                label = at?.let(HistoricalTime::timeLabel) ?: "--:--Z",
+        // "When" (#996): ‹ date · time ›, the arrows step 30 min, the middle lists the slots and
+        // the calendar button opens the date picker. Run age moved to the bottom panel.
+        if (!controlsHidden) {
+            TimeBar(
+                label = at?.let { "${HistoricalTime.shortDateLabel(it)} · ${HistoricalTime.timeLabel(it)}" } ?: "--:--Z",
                 canBack = viewModel.canStep(-1),
                 canForward = viewModel.canStep(1),
                 onBack = { viewModel.step(-1) },
                 onForward = { viewModel.step(1) },
-                menuItems = viewModel.timeSlots().map { slot ->
-                    MenuChoice(HistoricalTime.timeLabel(slot), slot == at, enabled = viewModel.isSelectable(slot)) {
-                        viewModel.selectInstant(slot)
-                    }
-                },
-            )
-            MenuButton(
-                text = if (lead == 0) "Latest" else "D-$lead",
                 sections = listOf(
                     MenuSection(
-                        "Model runs",
-                        HistoricalMapViewModel.LEADS.map { n ->
-                            val base = if (n == 0) "Latest run before this time" else "Run from $n day${if (n == 1) "" else "s"} before"
-                            val models = viewModel.models(n)
-                            // Say which models a long lead still carries (ICON stops early)
-                            val label = if (models.size < 3) base + " · " + models.joinToString(", ") { it.uppercase(Locale.US) } else base
-                            MenuChoice(label, n == lead) { viewModel.selectLead(n) }
+                        "Time (UTC)",
+                        viewModel.timeSlots().map { slot ->
+                            MenuChoice(HistoricalTime.timeLabel(slot), slot == at, enabled = viewModel.isSelectable(slot)) {
+                                viewModel.selectInstant(slot)
+                            }
                         },
                     ),
                 ),
-            )
-            if (isLoading && didLoadOnce) InlineSpinner()
+                isLoading = isLoading && didLoadOnce,
+                testTag = "historicalTimeMenu",
+            ) {
+                IconButton(
+                    onClick = { showDatePicker = true },
+                    enabled = at != null,
+                    modifier = Modifier.size(32.dp).testTag("historicalDatePicker"),
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = "Pick a date")
+                }
+            }
         }
-        if (didLoadOnce) {
+        if (didLoadOnce && !controlsHidden) {
             statusLine?.let { line ->
                 NoticeLine(
                     text = line,
@@ -553,15 +557,17 @@ private fun HistoricalMapBody(
         ) {
             if (!didLoadOnce) {
                 MapPlaceholder(
-                    loadingText = "Loading historical map…",
-                    error = loadError?.let { "Historical map unavailable: $it" },
+                    loadingText = "Loading past map…",
+                    error = loadError?.let { "Past map unavailable: $it" },
                     isLoading = isLoading,
                     onRetry = viewModel::retry,
                 )
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // "What" (#996): metric, source and (models only) run age, with the legend
+        if (!controlsHidden) BottomPanel(legend = { CatalogLegend(catalog, metric) }) {
+            MetricMenu(catalog = catalog, metric = metric, onSelect = viewModel::selectMetric, modifier = Modifier.weight(1f))
             // Unavailable sources stay tappable so they can explain themselves
             fun choice(s: HistoricalSource, title: String) = MenuChoice(
                 title + if (viewModel.sourceAvailable(s)) "" else " (none at this time)",
@@ -569,7 +575,9 @@ private fun HistoricalMapBody(
             ) { viewModel.selectSource(s) }
             MenuButton(
                 text = source.label,
+                caption = "Source",
                 testTag = "historicalSourceMenu",
+                modifier = Modifier.weight(1f),
                 sections = listOf(
                     MenuSection("Observed", HistoricalSource.observed.map { choice(it, it.label) }),
                     MenuSection(
@@ -579,9 +587,26 @@ private fun HistoricalMapBody(
                     ),
                 ),
             )
-            MetricMenu(catalog = catalog, metric = metric, onSelect = viewModel::selectMetric)
+            if (!source.isObserved) {
+                MenuButton(
+                    text = if (lead == 0) "Latest" else "D-$lead",
+                    caption = "Runs",
+                    modifier = Modifier.weight(1f),
+                    sections = listOf(
+                        MenuSection(
+                            "Model runs",
+                            HistoricalMapViewModel.LEADS.map { n ->
+                                val base = if (n == 0) "Latest run before this time" else "Run from $n day${if (n == 1) "" else "s"} before"
+                                val models = viewModel.models(n)
+                                // Say which models a long lead still carries (ICON stops early)
+                                val label = if (models.size < 3) base + " · " + models.joinToString(", ") { it.uppercase(Locale.US) } else base
+                                MenuChoice(label, n == lead) { viewModel.selectLead(n) }
+                            },
+                        ),
+                    ),
+                )
+            }
         }
-        CatalogLegend(catalog, metric)
 
         selectedAirport?.let { airport ->
             HistoricalAirportCard(
@@ -894,46 +919,46 @@ private data class MenuChoice(
 private data class MenuSection(val title: String?, val items: List<MenuChoice>)
 
 @Composable
-private fun MapTitle(title: String, subtitle: String) {
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun DayMenu(days: List<ForecastDayEntry>, selectedDay: Int, onSelect: (Int) -> Unit) {
-    MenuButton(
-        text = shortDayLabel(selectedDay, days),
-        leadingIcon = { Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(16.dp)) },
-        sections = listOf(
-            MenuSection(
-                null,
-                days.map { d -> MenuChoice(dayMenuLabel(d, days), d.day == selectedDay, enabled = d.available) { onSelect(d.day) } },
-            ),
-        ),
-    )
-}
-
-@Composable
 private fun MenuButton(
     text: String,
     sections: List<MenuSection>,
     testTag: String? = null,
     leadingIcon: (@Composable () -> Unit)? = null,
+    /** A small label over the value (#996): what this pick chooses ("Models", "Source"). */
+    caption: String? = null,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier = modifier) {
         OutlinedButton(
             onClick = { expanded = true },
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-            modifier = if (testTag != null) Modifier.testTag(testTag) else Modifier,
+            shape = if (caption != null) RoundedCornerShape(8.dp) else ButtonDefaults.outlinedShape,
+            modifier = Modifier
+                .then(if (caption != null) Modifier.fillMaxWidth() else Modifier)
+                .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
         ) {
             leadingIcon?.let {
                 it()
                 Spacer(Modifier.width(4.dp))
             }
-            Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Column(modifier = if (caption != null) Modifier.weight(1f) else Modifier) {
+                caption?.let {
+                    Text(
+                        it.uppercase(Locale.US),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -965,11 +990,17 @@ private fun MenuButton(
 
 /** The metric menu: pilot questions, only the metrics the catalog defines. */
 @Composable
-private fun MetricMenu(catalog: MapMetricsCatalog?, metric: String, onSelect: (String) -> Unit) {
+private fun MetricMenu(
+    catalog: MapMetricsCatalog?,
+    metric: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     MenuButton(
         text = AirportMapCatalog.label(catalog, metric),
         testTag = "mapMetricMenu",
-        leadingIcon = { Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp)) },
+        caption = "Showing",
+        modifier = modifier,
         sections = AirportMapCatalog.metricSections.mapNotNull { section ->
             val items = section.items
                 .filter { catalog?.metrics?.containsKey(it.metric) == true }
@@ -977,6 +1008,96 @@ private fun MetricMenu(catalog: MapMetricsCatalog?, metric: String, onSelect: (S
             if (items.isEmpty()) null else MenuSection(section.title, items)
         },
     )
+}
+
+/**
+ * The map's one "when" control (#996): ‹ label › across the width, the label opening [sections];
+ * [extra] sits before the forward arrow (the past map's date button).
+ */
+@Composable
+private fun TimeBar(
+    label: String,
+    canBack: Boolean,
+    canForward: Boolean,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    sections: List<MenuSection>,
+    isLoading: Boolean,
+    testTag: String = "mapTimeMenu",
+    extra: (@Composable () -> Unit)? = null,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+            IconButton(onClick = onBack, enabled = canBack) {
+                Icon(Icons.Default.ChevronLeft, contentDescription = "Earlier")
+            }
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clickable { expanded = true }
+                        .testTag(testTag)
+                        .padding(vertical = 4.dp, horizontal = 8.dp),
+                ) {
+                    Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text("Tap to change", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 420.dp)) {
+                    sections.forEachIndexed { idx, section ->
+                        if (idx > 0) HorizontalDivider()
+                        section.title?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                        section.items.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item.label, fontWeight = if (item.selected) FontWeight.Bold else FontWeight.Normal) },
+                                leadingIcon = if (item.selected) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
+                                enabled = item.enabled,
+                                onClick = {
+                                    expanded = false
+                                    item.onClick()
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            if (isLoading) InlineSpinner()
+            extra?.invoke()
+            IconButton(onClick = onForward, enabled = canForward) {
+                Icon(Icons.Default.ChevronRight, contentDescription = "Later")
+            }
+        }
+    }
+}
+
+/** The map's one "what" panel (#996): labelled picks on a row, the legend under them. */
+@Composable
+private fun BottomPanel(legend: @Composable () -> Unit, picks: @Composable RowScope.() -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, content = picks)
+            legend()
+        }
+    }
 }
 
 /** ‹ label › with an optional menu of every value on the label. */
@@ -1263,19 +1384,11 @@ private fun agreementChip(bucket: String?): Pair<String, String>? = when (bucket
     else -> null
 }
 
-private fun modeShortLabel(mode: ForecastModelMode): String = when (mode) {
-    ForecastModelMode.Worst -> "Worst"
-    ForecastModelMode.Majority -> "Majority"
+/** "Worst of 3", "Majority of 2", "ECMWF": the count says worst of what (#996). */
+private fun modeShortLabel(mode: ForecastModelMode, modelCount: Int): String = when (mode) {
+    ForecastModelMode.Worst -> "Worst of $modelCount"
+    ForecastModelMode.Majority -> "Majority of $modelCount"
     is ForecastModelMode.Model -> mode.name.uppercase(Locale.US)
-}
-
-private fun modeLongLabel(mode: ForecastModelMode, modelCount: Int): String {
-    val models = "$modelCount model${if (modelCount == 1) "" else "s"}"
-    return when (mode) {
-        ForecastModelMode.Worst -> "Worst of $models"
-        ForecastModelMode.Majority -> "Majority of $models"
-        is ForecastModelMode.Model -> mode.name.uppercase(Locale.US)
-    }
 }
 
 private val utcFormatterCache = HashMap<String, DateTimeFormatter>()
@@ -1292,10 +1405,10 @@ private fun dateFor(day: Int, days: List<ForecastDayEntry>): LocalDate =
 private fun shortDayLabel(day: Int, days: List<ForecastDayEntry>): String =
     if (day == 0) "Today" else utcFormat("EEE d", dateFor(day, days))
 
-/** "Sat 18 Jul 2026", D+0 prefixed "Today · ". */
-private fun fullDayLabel(day: Int, days: List<ForecastDayEntry>): String {
-    val full = utcFormat("EEE d MMM yyyy", dateFor(day, days))
-    return if (day == 0) "Today · $full" else full
+/** The time bar's day: "Today · Sun 15 Nov" / "Sat 21 Nov" (no year, so it fits a phone). */
+private fun dayTitle(day: Int, days: List<ForecastDayEntry>): String {
+    val short = utcFormat("EEE d MMM", dateFor(day, days))
+    return if (day == 0) "Today · $short" else short
 }
 
 /** "Today · Sat 18" / "Sat 18 Jul" (unavailable days stay listed, disabled). */

@@ -10,8 +10,29 @@ Discussion tab order: **Synoptic Overview → Charts → rest of the digest
 (Specific Concerns, Trend, Watch Items) → GRAMET**. The charts illustrate the
 synoptic narrative, so they sit right under it; the GRAMET is a reference
 image and closes the tab (owner's call after testing on device). The GRAMET
-section and its pill appear only when the pack's `has_gramet` is true — no
-"not available" placeholder, since most profiles never have one. Charts and GRAMET come from the pack, not the digest, so they render
+section and its pill appear when the pack's `has_gramet` is true, or as a
+one-line note when the server's `gramet_status` gives a reason the pilot can
+act on (#994): `refresh_to_fetch`, `failed`, `daily_limit`, `expired`. Still
+no placeholder for `not_linked`, `disabled` or `historical` (the pilot's own
+setup), since most accounts never link Autorouter. Same rule on Android
+(`GrametStatusRules.kt`); web keeps its own prefs-based "connect Autorouter"
+text.
+
+**Why a pack has no GRAMET (#994).** `_prepare_refresh` / `run_gramet` record
+`briefing_packs.gramet_skip_reason` (`not_linked`, `disabled`, `historical`,
+`daily_limit`, `failed`; retention sets `expired`). `packs._gramet_status`
+turns a `not_linked`/`disabled` pack into `refresh_to_fetch` for the owner
+once they have linked Autorouter with GRAMET on (`_gramet_owner_can_fetch`),
+on the latest pack only (older history entries keep their stored reason),
+and `apply_gramet_override` in `gated_data_status` makes that Refresh a full
+run instead of "already fresh". One shot: the new pack has a GRAMET or a
+`failed`/`daily_limit` reason, which the gate never re-runs for, so a failing
+Autorouter can't loop paid refreshes. A link that yields no token is recorded
+as `failed`, not `not_linked` (`_no_token_gramet_reason`), for the same reason. Pre-#994 packs (NULL) stay silent and
+are never forced. The routine scheduler cycle opts out (`gramet_override`),
+like the params override. GRAMET is per FlyFun account: signing in with a
+different email on another device is a different account with its own
+Autorouter link. Charts and GRAMET come from the pack, not the digest, so they render
 while the digest is generating, failed, or was never requested
 (`DiscussionTabView`; the digest state is an inline row, not a full-page
 placeholder).

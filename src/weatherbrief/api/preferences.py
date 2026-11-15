@@ -364,11 +364,7 @@ def _build_response(row: UserPreferencesRow, db: Session, user_id: str) -> Prefe
     except json.JSONDecodeError:
         prefs_data = {}
 
-    if is_dev_mode():
-        creds = load_encrypted_creds(db, user_id)
-        has_ar = bool(creds and "username" in creds and "password" in creds)
-    else:
-        has_ar = get_autorouter_token(db, user_id) is not None
+    has_ar = has_autorouter_link(db, user_id)
 
     return PreferencesResponse(
         defaults=_parse_defaults(row.app_prefs_json),
@@ -534,6 +530,17 @@ def clear_autorouter_credentials(
 ):
     """Clear the user's stored autorouter credentials."""
     clear_encrypted_creds(db, user_id)
+
+
+def has_autorouter_link(db: Session, user_id: str) -> bool:
+    """Whether the user has Autorouter linked, without contacting Autorouter.
+
+    Prod: an OAuth token is stored. Dev: username + password are stored.
+    """
+    if is_dev_mode():
+        creds = load_encrypted_creds(db, user_id)
+        return bool(creds and "username" in creds and "password" in creds)
+    return get_autorouter_token(db, user_id) is not None
 
 
 def load_autorouter_token(db: Session, user_id: str) -> str | None:

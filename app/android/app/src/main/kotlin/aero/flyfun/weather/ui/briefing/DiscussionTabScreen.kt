@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import aero.flyfun.weather.model.rules.GrametStatusRules
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 
 /**
@@ -72,7 +73,14 @@ fun DiscussionTabScreen(
             null
         }
     }
-    val hasGramet = selectedPack?.hasGramet == true
+    // The section also shows, as a one-line note, when the server says why
+    // the pack has no GRAMET (#994); otherwise it's hidden as before.
+    val grametNote = if (selectedPack?.hasGramet == true) {
+        null
+    } else {
+        GrametStatusRules.message(selectedPack?.grametStatus)
+    }
+    val hasGramet = selectedPack?.hasGramet == true || grametNote != null
 
     val hasAnyNarrative = synopticText != null || concernsText != null || trendText != null || watchMarkdown != null
     val packAlt = advisories?.cruiseAltitudeFt
@@ -230,7 +238,11 @@ fun DiscussionTabScreen(
             // 6. GRAMET (last)
             if (hasGramet) {
                 item(key = "gramet") {
-                    GrametSection(viewModel = viewModel)
+                    if (grametNote != null) {
+                        GrametUnavailableSection(message = grametNote)
+                    } else {
+                        GrametSection(viewModel = viewModel)
+                    }
                 }
             }
         }
