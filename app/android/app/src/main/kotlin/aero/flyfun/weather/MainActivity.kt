@@ -492,15 +492,14 @@ fun FlyFunWeatherRoot(
                         onOpenMapsClick = {
                             currentRoute = RootRoute.MAP_FORECAST
                         },
-                        onOpenAircraftClick = {
-                            currentRoute = RootRoute.AIRCRAFT
-                        },
                         onOpenWhatsNewClick = {
                             currentRoute = RootRoute.WHATS_NEW
                         },
                         onOpenSettingsClick = {
                             currentRoute = RootRoute.SETTINGS
                         },
+                        websiteUrl = appState.baseUrl,
+                        feedbackApiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
                         modifier = Modifier
                             .width(380.dp)
                             .fillMaxHeight(),
@@ -565,15 +564,14 @@ fun FlyFunWeatherRoot(
                         onOpenMapsClick = {
                             currentRoute = RootRoute.MAP_FORECAST
                         },
-                        onOpenAircraftClick = {
-                            currentRoute = RootRoute.AIRCRAFT
-                        },
                         onOpenWhatsNewClick = {
                             currentRoute = RootRoute.WHATS_NEW
                         },
                         onOpenSettingsClick = {
                             currentRoute = RootRoute.SETTINGS
                         },
+                        websiteUrl = appState.baseUrl,
+                        feedbackApiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
                     )
                 }
             }

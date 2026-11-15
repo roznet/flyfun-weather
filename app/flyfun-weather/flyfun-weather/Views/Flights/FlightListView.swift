@@ -39,7 +39,6 @@ struct FlightListView: View {
     /// Release stream ("What's New") — native, not the web page, so it reads
     /// offline from the cached stream (#550).
     @State private var showWhatsNew = false
-    @State private var showSignOutWarning = false
     /// Multi-select + bulk delete sheet (#553). A sheet, not an edit mode on this
     /// list — see `FlightSelectionView` for why.
     @State private var showBulkSelect = false
@@ -228,50 +227,52 @@ struct FlightListView: View {
                         .accessibilityIdentifier("forecastMapButton")
                         .popoverTip(forecastMapTip)
                         Menu {
-                            Button {
-                                showSettings = true
-                            } label: {
-                                Label("Settings", systemImage: "gearshape")
+                            // Grouped (#996): go somewhere, find out about the
+                            // app, act on flights. The historical map is reached
+                            // from the map's Forecast | Past switch, and Sign Out
+                            // lives in Settings only (a red row here was one
+                            // stray tap away).
+                            Section {
+                                Button {
+                                    openURL(AppState.defaultBaseURL)
+                                } label: {
+                                    Label("Open Website", systemImage: "safari")
+                                }
+
+                                Button {
+                                    showSettings = true
+                                } label: {
+                                    Label("Settings", systemImage: "gearshape")
+                                }
                             }
 
-                            Button {
-                                openURL(AppState.defaultBaseURL)
-                            } label: {
-                                Label("Open Website", systemImage: "safari")
-                            }
+                            Section {
+                                Button {
+                                    showWhatsNew = true
+                                } label: {
+                                    // A menu row can't carry a dot, so the unseen
+                                    // count rides in the title (the ellipsis itself
+                                    // shows the dot — see the Menu label below).
+                                    Label(
+                                        appState.whatsNew.unseenCount > 0
+                                            ? "What's New (\(appState.whatsNew.unseenCount))"
+                                            : "What's New",
+                                        systemImage: "sparkles"
+                                    )
+                                }
+                                .accessibilityIdentifier("whatsNewButton")
 
-                            Button {
-                                openHistoricalMap(deepLink: nil)
-                            } label: {
-                                Label("Historical Map", systemImage: "clock.arrow.circlepath")
-                            }
-                            .accessibilityIdentifier("historicalMapMenuItem")
+                                Button {
+                                    showHelp = true
+                                } label: {
+                                    Label("Help", systemImage: "questionmark.circle")
+                                }
 
-                            Button {
-                                showHelp = true
-                            } label: {
-                                Label("Help", systemImage: "questionmark.circle")
-                            }
-
-                            Button {
-                                showWhatsNew = true
-                            } label: {
-                                // A menu row can't carry a dot, so the unseen
-                                // count rides in the title (the ellipsis itself
-                                // shows the dot — see the Menu label below).
-                                Label(
-                                    appState.whatsNew.unseenCount > 0
-                                        ? "What's New (\(appState.whatsNew.unseenCount))"
-                                        : "What's New",
-                                    systemImage: "sparkles"
-                                )
-                            }
-                            .accessibilityIdentifier("whatsNewButton")
-
-                            Button {
-                                showFeedback = true
-                            } label: {
-                                Label("Send Feedback", systemImage: "exclamationmark.bubble")
+                                Button {
+                                    showFeedback = true
+                                } label: {
+                                    Label("Send Feedback", systemImage: "exclamationmark.bubble")
+                                }
                             }
 
                             // Bulk delete lives behind the overflow menu, with the
@@ -280,27 +281,14 @@ struct FlightListView: View {
                             // the per-row Delete swipe (the endpoint is a server
                             // write and there's no offline queue for it).
                             if let viewModel, !viewModel.isOffline, viewModel.state.hasData {
-                                Button {
-                                    showBulkSelect = true
-                                } label: {
-                                    Label("Select & Delete Flights…", systemImage: "checkmark.circle")
-                                }
-                                .accessibilityIdentifier("bulkSelectMenuItem")
-                            }
-
-                            Divider()
-
-                            Button(role: .destructive) {
-                                Task {
-                                    if let caching = appState.cachingRepository,
-                                       !(await caching.cachedPacks()).isEmpty {
-                                        showSignOutWarning = true
-                                    } else {
-                                        appState.logout()
+                                Section {
+                                    Button {
+                                        showBulkSelect = true
+                                    } label: {
+                                        Label("Select & Delete Flights…", systemImage: "checkmark.circle")
                                     }
+                                    .accessibilityIdentifier("bulkSelectMenuItem")
                                 }
-                            } label: {
-                                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                             }
                         } label: {
                             // Red dot for unseen highlighted release entries —
@@ -400,12 +388,6 @@ struct FlightListView: View {
                         trackingService: pirepTrackingService
                     )
                 }
-            }
-            .alert("Sign Out?", isPresented: $showSignOutWarning) {
-                Button("Sign Out", role: .destructive) { appState.logout() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("You have downloaded packs. They won't be accessible until you sign in again.")
             }
         } detail: {
             switch selection {
