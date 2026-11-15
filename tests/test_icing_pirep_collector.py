@@ -353,3 +353,37 @@ def test_later_reports_stay_on_the_run_already_used(tmp_path):
         f.unlink()  # the run is pruned before the late report is sampled
     assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=30)) == {"pruned": 1}
     assert conn.execute("SELECT status, run FROM samples WHERE pirep_id=?", (late,)).fetchone() == ("pruned", ic._iso(T0))
+
+
+def test_unreadable_icing_group_is_not_turbulence_only():
+    r = ic.parse_awc_report(_awc(icgInt1="XYZ", tbInt1="LGT"))
+    assert r.truth == ic.ICING_UNCLASSIFIED
+    assert ic.parse_awc_report(_awc(icgInt1="XYZ")) is None
+
+
+def test_decode_errors_are_retried_next_pass(tmp_path):
+    grib = tmp_path / "grib"
+    grib.mkdir()
+    valid = T0 + timedelta(hours=9)
+    _make_run(grib, T0, valid)
+    a2 = grib / _name("a2", T0, valid)
+    good = a2.read_bytes()
+    a2.write_bytes(b"GRIB" + b"\0" * 64)  # caught mid-sync
+    old = time.time() - 3600
+    os.utime(a2, (old, old))
+    conn = ic.open_db(tmp_path / "out")
+    pid = _add_report(conn, valid, 40.0, -100.0)
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"error": 1}
+    a2.write_bytes(good)
+    os.utime(a2, (old, old))
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=11)) == {"ok": 1}
+    assert conn.execute("SELECT status FROM samples WHERE pirep_id=?", (pid,)).fetchone()[0] == "ok"
+
+
+def test_lock_skips_second_run_and_status_reports_it(tmp_path):
+    with ic._lock(tmp_path) as first:
+        assert first
+        with ic._lock(tmp_path) as second:
+            assert not second
+        assert ic.lock_state(tmp_path).startswith("lock: HELD")
+    assert ic.lock_state(tmp_path) == "lock: free"

@@ -38,7 +38,7 @@ good = "Every CH1 run at 00/06/12/18Z is ok (no missing/bad rows older than 6 h)
 thread = "Compare ICON-CH1 with AROME at Alpine airports"
 
 [us-pirep-icing-ecmwf]
-title = "Icing calibration: our ECMWF feed at every US PIREP (collector on the Mac mini)"
+title = "Icing calibration: our ECMWF feed at every US PIREP (collector on the compute node, the Mac mini)"
 issue = 1003
 host = "node"
 commands = [
