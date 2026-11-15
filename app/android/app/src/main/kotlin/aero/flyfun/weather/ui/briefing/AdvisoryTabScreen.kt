@@ -183,6 +183,8 @@ fun AdvisoryTabScreen(
             // 1. Summary section (Hero + Observed Teaser + Altitude Warning + Feedback + Debrief)
             item(key = "summary") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // The flight's basics (#996): the top bar only names the ends.
+                    flight?.let { FlightSummaryStrip(flight = it) }
                     SummaryHeroCard(
                         pack = selectedPack,
                         digest = digest,

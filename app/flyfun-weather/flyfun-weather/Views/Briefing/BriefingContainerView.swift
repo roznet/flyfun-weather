@@ -56,7 +56,7 @@ struct BriefingContainerView: View {
     @State private var notifyOverride: FlightNotifyOverride = .default
     @State private var notifyOverrideBusy = false
     @State private var showingShareSheet = false
-    /// Free-text feedback opened from the pack menu, pinned to the flight and
+    /// Free-text feedback opened from the ⋯ menu, pinned to the flight and
     /// the pack on screen at the moment it was opened (#616).
     @State private var feedbackTarget: BriefingFeedbackTarget?
 
@@ -137,72 +137,32 @@ struct BriefingContainerView: View {
             }
         }
         .navigationTitle(flight.shortTitle)
-        .navigationSubtitle(identitySubtitle)
+        // The flight's basics moved to the Advisory tab's summary strip (#996);
+        // a flight beyond the horizon has no tabs, so it keeps them here.
+        .navigationSubtitle(flight.coverage != nil ? identitySubtitle : "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // Edit / Duplicate (#885): the briefing is where a pilot notices the
-            // date or route is wrong, and the list's swipe and long-press were the
-            // only ways in. Owner-only and online-only, like the list. Outside the
-            // pending-coverage gate below: a flight beyond the horizon can still be
-            // edited, and often is (its date).
-            if onFlightSaved != nil, flight.isEditable, appState.networkMonitor.isConnected {
-                ToolbarItem(placement: .topBarTrailing) {
-                    flightActionsMenu
-                }
-            }
-            // A pending-coverage flight has no pack: hide the pack picker and the
-            // refresh/download/track actions — none apply until it's in range.
+            // One bar in every state (#996): back + pack chip on the left;
+            // Start/Stop (flight-day window only), Refresh and one ⋯ menu on the
+            // right. The icons used to come and go with ownership, connection
+            // and date (up to five); everything else now lives in ⋯.
+            //
+            // A pending-coverage flight has no pack: no pack chip and no
+            // refresh/track actions, none apply until it's in range.
             if let viewModel, flight.coverage == nil {
                 ToolbarItem(placement: .topBarLeading) {
-                    BriefingPackToolbar(viewModel: viewModel) {
-                        if let timestamp = viewModel.pack?.fetchTimestamp {
-                            feedbackTarget = BriefingFeedbackTarget(
-                                flightId: viewModel.flight.id, packTimestamp: timestamp
-                            )
-                        }
-                    }
+                    BriefingPackToolbar(viewModel: viewModel)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        // Owner sharing (#446): a ShareLink to the short /s/{code}
-                        // URL. Only the owner sees it, and only for a non-private
-                        // flight with a minted code (isShareable) — a private link
-                        // would 404 for the recipient, matching the web gate.
-                        // UIActivityViewController instead of `ShareLink` so the
-                        // sheet can carry the custom "Open in Safari" activity
-                        // (iOS offers Chrome via its share extension but never
-                        // Safari — see ShareActivitySheet).
-                        if flight.isShareable, flight.shareCode != nil {
-                            Button {
-                                showingShareSheet = true
-                            } label: {
-                                Label("Share", systemImage: "square.and.arrow.up")
-                                    .font(.caption)
-                            }
-                        }
-                        // No in-flight-window gate: a PIREP is a position report,
-                        // and the reporting form grabs its own GPS fix. Show it
-                        // whenever publishing is enabled; being in the window just
-                        // means the fix pre-fills a cruise altitude rather than a
-                        // ground one.
-                        if PirepFeature.isEnabled, appState.userPreferences.preferences.pirepCanPublish {
-                            Button {
-                                showingPirepSheet = true
-                            } label: {
-                                Label("Report PIREP", systemImage: "square.and.pencil")
-                                    .font(.caption)
-                            }
-                            .accessibilityIdentifier("reportPirepButton")
-                        }
-                        // Hide the notify bell for flown flights (matches web's
-                        // renderNotifyOverrideBar isPast guard) — an override on a
-                        // past flight is a no-op.
-                        if flight.isEditable && !flight.isPast {
-                            notifyBellMenu
-                        }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 12) {
+                    if let viewModel, flight.coverage == nil {
                         BriefingToolbarView(viewModel: viewModel, trackingService: trackingService,
                                             isInFlightWindow: isInFlightWindow, startTracking: startTracking,
                                             refreshGate: refreshGate)
+                    }
+                    if hasMoreActions {
+                        briefingMoreMenu
                     }
                 }
             }
@@ -356,33 +316,112 @@ struct BriefingContainerView: View {
         }
     }
 
-    /// The owner's flight actions: Edit (PATCH, or Move / Duplicate for a new date
-    /// or route endpoint, all in `AddFlightView`) and a standalone Duplicate.
-    private var flightActionsMenu: some View {
-        Menu {
-            Button {
-                editingFlight = flight
-            } label: {
-                Label("Edit Flight", systemImage: "pencil")
-            }
-            .accessibilityIdentifier("briefingEditFlightButton")
-            Button {
-                duplicatingFlight = flight
-            } label: {
-                Label("Duplicate\u{2026}", systemImage: "plus.square.on.square")
-            }
-            .accessibilityIdentifier("briefingDuplicateFlightButton")
-        } label: {
-            Label("Flight actions", systemImage: "ellipsis.circle")
-                .font(.caption)
-        }
-        .accessibilityIdentifier("briefingFlightActionsMenu")
+    /// Whether ⋯ has anything to offer. Only false for a read-only shared flight
+    /// with no pack yet, where there is nothing to edit, share or report on.
+    private var hasMoreActions: Bool {
+        canEditFlight || canShare || canSetNotifications || feedbackPackTimestamp != nil || canReportPirep
     }
 
-    /// Per-flight notification bell — Default / Always / Mute. Delivery still
-    /// uses the account channels; this controls "whether", not "how". The footer
-    /// shows what Default currently resolves to (and adapts when account = Off).
-    private var notifyBellMenu: some View {
+    /// Edit / Duplicate (#885): the briefing is where a pilot notices the date
+    /// or route is wrong. Owner-only; shown offline too, but disabled there
+    /// (the save is a server write) with the reason under it.
+    private var canEditFlight: Bool { onFlightSaved != nil && flight.isEditable }
+    /// Owner sharing (#446): only for a non-private flight with a minted code —
+    /// a private link would 404 for the recipient, matching the web gate.
+    private var canShare: Bool { flight.isShareable && flight.shareCode != nil }
+    /// Hidden for flown flights (matches web's renderNotifyOverrideBar isPast
+    /// guard): an override on a past flight is a no-op.
+    private var canSetNotifications: Bool { flight.isEditable && !flight.isPast }
+    /// No in-flight-window gate: a PIREP is a position report, and the
+    /// reporting form grabs its own GPS fix.
+    private var canReportPirep: Bool {
+        viewModel != nil && flight.coverage == nil
+            && PirepFeature.isEnabled && appState.userPreferences.preferences.pirepCanPublish
+    }
+    /// Feedback about the pack on screen (#616).
+    private var feedbackPackTimestamp: String? {
+        guard flight.coverage == nil else { return nil }
+        return viewModel?.pack?.fetchTimestamp
+    }
+
+    /// Every flight action that isn't Start or Refresh, in one menu (#996):
+    /// flight, then sharing and notifications, then reporting.
+    private var briefingMoreMenu: some View {
+        Menu {
+            if canEditFlight {
+                let online = appState.networkMonitor.isConnected
+                Section {
+                    Button {
+                        editingFlight = flight
+                    } label: {
+                        Label("Edit Flight", systemImage: "pencil")
+                    }
+                    .disabled(!online)
+                    .accessibilityIdentifier("briefingEditFlightButton")
+                    Button {
+                        duplicatingFlight = flight
+                    } label: {
+                        Label("Duplicate\u{2026}", systemImage: "plus.square.on.square")
+                    }
+                    .disabled(!online)
+                    .accessibilityIdentifier("briefingDuplicateFlightButton")
+                    if !online {
+                        Text("Editing needs a connection")
+                    }
+                }
+            }
+            if canShare || canSetNotifications {
+                Section {
+                    if canShare {
+                        // UIActivityViewController instead of `ShareLink` so the
+                        // sheet can carry the custom "Open in Safari" activity
+                        // (iOS offers Chrome via its share extension but never
+                        // Safari — see ShareActivitySheet).
+                        Button {
+                            showingShareSheet = true
+                        } label: {
+                            Label("Share Link\u{2026}", systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityIdentifier("briefingShareButton")
+                    }
+                    if canSetNotifications {
+                        notifyMenu
+                    }
+                }
+            }
+            if feedbackPackTimestamp != nil || canReportPirep {
+                Section {
+                    if let timestamp = feedbackPackTimestamp {
+                        Button {
+                            feedbackTarget = BriefingFeedbackTarget(flightId: flight.id, packTimestamp: timestamp)
+                        } label: {
+                            Label("Send Feedback on This Briefing", systemImage: "exclamationmark.bubble")
+                        }
+                        .accessibilityIdentifier("briefingFeedbackButton")
+                    }
+                    if canReportPirep {
+                        Button {
+                            showingPirepSheet = true
+                        } label: {
+                            Label("Report PIREP", systemImage: "square.and.pencil")
+                        }
+                        .accessibilityIdentifier("reportPirepButton")
+                    }
+                }
+            }
+        } label: {
+            // Not "More": the Observed storm card's own "More" button is
+            // found by that label in a UI test.
+            Label("Flight actions", systemImage: "ellipsis.circle")
+        }
+        .accessibilityIdentifier("briefingMoreMenu")
+    }
+
+    /// Per-flight notifications — Default / Always / Mute, as a submenu of ⋯
+    /// whose title carries the current choice (the bell no longer sits in the
+    /// bar). Delivery still uses the account channels; this controls "whether",
+    /// not "how". The footer shows what Default currently resolves to.
+    private var notifyMenu: some View {
         Menu {
             Picker("Notifications for this flight", selection: Binding(
                 get: { notifyOverride },
@@ -394,10 +433,10 @@ struct BriefingContainerView: View {
             }
             Section { Text(notifyOverrideHint) }
         } label: {
-            Label("Notifications", systemImage: notifyOverride.systemImage)
-                .font(.caption)
+            Label("Notifications: \(notifyOverride.label)", systemImage: notifyOverride.systemImage)
         }
         .disabled(notifyOverrideBusy || appState.apiClient == nil)
+        .accessibilityIdentifier("briefingNotifyMenu")
     }
 
     /// Adaptive hint describing the current override / what Default resolves to.
@@ -882,8 +921,6 @@ private struct BriefingFeedbackTarget: Identifiable {
 /// detailed freshness line as a non-interactive header.
 private struct BriefingPackToolbar: View {
     @Bindable var viewModel: BriefingViewModel
-    /// Opens free-text feedback about the pack on screen (#616).
-    var onSendFeedback: () -> Void
 
     // Anchors here now (was the trailing download button, which is gone).
     // Auto-download means this chip is almost always already `.downloaded`, and
@@ -922,17 +959,6 @@ private struct BriefingPackToolbar: View {
                     Section { Text(freshnessText) }
                 }
                 offlineSection
-                // Feedback about *this* pack (#616): the menu that names the pack
-                // is where "report something about it" belongs, and it keeps the
-                // already-crowded trailing toolbar unchanged on iPhone.
-                Section {
-                    Button {
-                        onSendFeedback()
-                    } label: {
-                        Label("Send Feedback on This Briefing", systemImage: "exclamationmark.bubble")
-                    }
-                    .accessibilityIdentifier("briefingFeedbackButton")
-                }
             } label: {
                 label
             }

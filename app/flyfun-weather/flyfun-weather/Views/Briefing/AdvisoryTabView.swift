@@ -23,8 +23,12 @@ struct AdvisoryTabView: View {
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
-                heroSection
-                    .spyAnchor("hero")
+                // The flight's basics (#996): the nav bar only names the ends.
+                VStack(alignment: .leading, spacing: Theme.spacingS) {
+                    FlightSummaryStrip(flight: viewModel.flight, progress: viewModel.liveLayer?.progress)
+                    heroSection
+                }
+                .spyAnchor("hero")
                 // Flight day (#661): what moved since the briefing, as one row
                 // that opens the Observed tab, then the digest caveat — the
                 // hero above was written before those observations.
