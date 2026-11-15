@@ -23,10 +23,12 @@ text.
 `daily_limit`, `failed`; retention sets `expired`). `packs._gramet_status`
 turns a `not_linked`/`disabled` pack into `refresh_to_fetch` for the owner
 once they have linked Autorouter with GRAMET on (`_gramet_owner_can_fetch`),
+on the latest pack only (older history entries keep their stored reason),
 and `apply_gramet_override` in `gated_data_status` makes that Refresh a full
 run instead of "already fresh". One shot: the new pack has a GRAMET or a
 `failed`/`daily_limit` reason, which the gate never re-runs for, so a failing
-Autorouter can't loop paid refreshes. Pre-#994 packs (NULL) stay silent and
+Autorouter can't loop paid refreshes. A link that yields no token is recorded
+as `failed`, not `not_linked` (`_no_token_gramet_reason`), for the same reason. Pre-#994 packs (NULL) stay silent and
 are never forced. The routine scheduler cycle opts out (`gramet_override`),
 like the params override. GRAMET is per FlyFun account: signing in with a
 different email on another device is a different account with its own

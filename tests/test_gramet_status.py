@@ -156,3 +156,46 @@ class TestRunGrametReason:
         result = run_gramet(route=None, departure_time=datetime.now(timezone.utc))
         assert result.path is None
         assert result.skip_reason == GRAMET_NOT_LINKED
+
+
+class TestNoTokenReason:
+    """A link that yields no token is a failure, so the gate never loops (#994 review)."""
+
+    def test_linked_but_no_token_is_failed(self):
+        from weatherbrief.api.packs import _no_token_gramet_reason
+
+        with patch("weatherbrief.api.preferences.has_autorouter_link", return_value=True):
+            assert _no_token_gramet_reason(object(), "owner") == "failed"
+
+    def test_not_linked(self):
+        from weatherbrief.api.packs import _no_token_gramet_reason
+
+        with patch("weatherbrief.api.preferences.has_autorouter_link", return_value=False):
+            assert _no_token_gramet_reason(object(), "owner") == "not_linked"
+
+    def test_no_db_is_not_linked(self):
+        from weatherbrief.api.packs import _no_token_gramet_reason
+
+        assert _no_token_gramet_reason(None, "owner") == "not_linked"
+
+
+class TestHistoryRefreshToFetch:
+    """Only the latest pack can say "refresh to fetch" (#994 review)."""
+
+    def test_older_packs_keep_their_stored_reason(self):
+        from weatherbrief.api import packs as packs_api
+
+        history = [_pack(reason="not_linked"), _pack(reason="not_linked")]
+        seen = []
+
+        def fake_meta(p, **kw):
+            seen.append(kw["gramet_owner_can_fetch"])
+            return packs_api._gramet_status(p, kw["gramet_owner_can_fetch"])
+
+        with patch.object(packs_api, "_load_flight_or_404", return_value=_flight()), \
+             patch.object(packs_api, "list_packs", return_value=history), \
+             patch.object(packs_api, "_owner_can_fetch_for_viewer", return_value=True), \
+             patch.object(packs_api, "_meta_to_response", side_effect=fake_meta):
+            out = packs_api.list_flight_packs("f-gramet", user_id="owner", db=None)
+        assert seen == [True, None]
+        assert out == ["refresh_to_fetch", "not_linked"]

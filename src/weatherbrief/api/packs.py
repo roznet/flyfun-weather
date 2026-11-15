@@ -58,6 +58,7 @@ from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
 from weatherbrief.tasks.outputs import (
     GRAMET_DAILY_LIMIT,
     GRAMET_DISABLED,
+    GRAMET_FAILED,
     GRAMET_HISTORICAL,
     GRAMET_NOT_LINKED,
 )
@@ -702,6 +703,21 @@ def _gramet_owner_can_fetch(db: Session, flight) -> bool:
     return bool(settings.get("gramet_enabled", True))
 
 
+def _no_token_gramet_reason(db: Session | None, user_id: str) -> str:
+    """Why a refresh that got no Autorouter token has no GRAMET (#994).
+
+    A link that exists but yields no token (dev creds that no longer
+    exchange) is ``failed``, not ``not_linked``: the refresh gate's override
+    trusts ``has_autorouter_link``, so recording ``not_linked`` there would
+    force a full run on every Refresh.
+    """
+    from weatherbrief.api.preferences import has_autorouter_link
+
+    if db is not None and has_autorouter_link(db, user_id):
+        return GRAMET_FAILED
+    return GRAMET_NOT_LINKED
+
+
 def _gramet_status(meta: BriefingPackMeta, owner_can_fetch: bool | None = None) -> str | None:
     """The ``gramet_status`` the apps show in place of a missing GRAMET (#994).
 
@@ -824,14 +840,17 @@ def list_flight_packs(
     # Every pack carries its charts manifest (iOS switches to a history entry
     # as is); packs of one run cycle share its disk reads.
     chart_cycle_memo: dict = {}
+    # Only the latest pack can say "refresh to fetch": a refresh adds a new
+    # pack, it never changes an older one, which keeps its stored reason.
     can_fetch = (
         _owner_can_fetch_for_viewer(db, flight, user_id)
-        if any(not p.has_gramet for p in packs) else None
+        if packs and not packs[0].has_gramet else None
     )
     return [_meta_to_response(
         p, flexibility=flight.flexibility, departure_time=flight.departure_time,
-        chart_cycle_memo=chart_cycle_memo, gramet_owner_can_fetch=can_fetch,
-    ) for p in packs]
+        chart_cycle_memo=chart_cycle_memo,
+        gramet_owner_can_fetch=can_fetch if i == 0 else None,
+    ) for i, p in enumerate(packs)]
 
 
 @router.get("/latest", response_model=PackMetaResponse)
@@ -1843,7 +1862,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     elif do_gramet and not autorouter_creds:
         # run_gramet would skip anyway; record why so the apps can say it.
         do_gramet = False
-        gramet_skip_reason = GRAMET_NOT_LINKED
+        gramet_skip_reason = _no_token_gramet_reason(db, user_id)
     # Pin GRIB run-selection to departure for an in-progress flight so the run
     # covers the window instead of clamping pre-init hours to f000. An explicit
     # admin as_of_date (already in `as_of_time`) takes precedence.
