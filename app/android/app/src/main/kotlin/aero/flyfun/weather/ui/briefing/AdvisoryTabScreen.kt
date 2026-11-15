@@ -100,8 +100,8 @@ import kotlin.math.roundToInt
 
 /**
  * The **Advisory** tab screen:
- * - Sticky [SectionSpyBar] jumping between `Verdict`, `Advisories`, `Airports`, `Alternates`, `Timing`, `Watch`.
- * - Accented Verdict Hero card (`GREEN` / `AMBER` / `RED` / `UNAVAILABLE` + `assessmentReason`),
+ * - Sticky [SectionSpyBar] jumping between `Summary`, `Advisories`, `Airports`, `Alternates`, `Timing`, `Watch`.
+ * - Accented Summary Hero card (`GREEN` / `AMBER` / `RED` / `UNAVAILABLE` + `assessmentReason`),
  *   flight-day `ObservedTeaserRow`, digest altitude warning, digest 👍/👎 feedback row, and `DebriefCard`.
  * - Responsive Advisory Grid: `AMBER`/`RED` as expandable [AdvisoryCard]s and `GREEN` collapsed into [GreenAdvisoryStrip].
  * - [AirportConditionsSection], [AlternatesSection], [TimingScenariosSection], and [WatchSection].
@@ -142,8 +142,8 @@ fun AdvisoryTabScreen(
         val indices = mutableMapOf<String, Int>()
         var nextIdx = 0
 
-        sections.add(SpySection("verdict", "Verdict"))
-        indices["verdict"] = nextIdx++
+        sections.add(SpySection("summary", "Summary"))
+        indices["summary"] = nextIdx++
 
         sections.add(SpySection("advisories", "Advisories"))
         indices["advisories"] = nextIdx++
@@ -180,10 +180,10 @@ fun AdvisoryTabScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // 1. Verdict section (Hero + Observed Teaser + Altitude Warning + Feedback + Debrief)
-            item(key = "verdict") {
+            // 1. Summary section (Hero + Observed Teaser + Altitude Warning + Feedback + Debrief)
+            item(key = "summary") {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    VerdictHeroCard(
+                    SummaryHeroCard(
                         pack = selectedPack,
                         digest = digest,
                         flight = flight,
@@ -282,11 +282,11 @@ fun AdvisoryTabScreen(
 }
 
 // ============================================================================
-// Verdict Hero, Observed Teaser, Altitude Warning, Feedback & Debrief
+// Summary Hero, Observed Teaser, Altitude Warning, Feedback & Debrief
 // ============================================================================
 
 @Composable
-private fun VerdictHeroCard(
+private fun SummaryHeroCard(
     pack: PackMetaResponse?,
     digest: DigestResponse?,
     flight: FlightResponse?,
@@ -346,7 +346,7 @@ private fun VerdictHeroCard(
         assessment == Assessment.UNAVAILABLE && rawReason.isNullOrBlank() ->
             "We have no usable model data for this route. Treat this as missing information, not as clear weather."
         !rawReason.isNullOrBlank() -> rawReason
-        else -> "Briefing verdict for ${flight?.shortTitle ?: "this route"}."
+        else -> "Briefing summary for ${flight?.shortTitle ?: "this route"}."
     }
 
     Surface(
@@ -379,7 +379,7 @@ private fun VerdictHeroCard(
                     AssessmentPillBadge(assessment = assessment)
                     if (pack != null) {
                         Text(
-                            text = "D-${pack.daysOut} Forecast Verdict",
+                            text = "D-${pack.daysOut} Forecast Summary",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
