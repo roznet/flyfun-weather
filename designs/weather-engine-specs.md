@@ -184,7 +184,7 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Index files:** `.idx` companion files list byte offset of every GRIB2 message
 - **Key detail:** GFS uses `CLMR` (not `CLWMR`) as the variable name in `.idx` files
 - **Availability:** ~4.5h after init time
-- **Currently fetching:** CLMR, ICMR at all pressure levels; cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
+- **Currently fetching:** CLMR, ICMR at all pressure levels (GRIB-primary full column also RWMR/SNMR/GRLE and the CFRZR/CICEP surface flags since #411 step 3, meteorology-decisions §83); cloud diagnostics (LCC/MCC/HCC/TCC covers, PRES bases/tops, TMP cloud-top temps, GH ceiling)
 - **Available but not yet used:** TMP, HGT, UGRD, VGRD, VVEL, RH (could replace Open-Meteo entirely)
 
 ### A.2 NOAA HRRR (High-Resolution Rapid Refresh) — IMPLEMENTED (#457)
@@ -193,7 +193,8 @@ See [fetch.md](./fetch.md) for implementation details.
 - **Resolution:** 3 km, **Lambert conformal grid** (1799×1059, tangent 38.5°N, LoV 262.5°E, first point 21.138123°N/237.280472°E, sphere R=6371229 m) — NOT a regular lat/lon grid. Decode interpolates on the projected (y, x) axes via pyproj (grid is regular in projected space, so bilinear stays exact and vectorized); the domain gate uses the same projection.
 - **Horizon:** 48h on 00/06/12/18z, 18h on all other hourly cycles. Full file set published ~45–60 min after init.
 - **Currently fetching:** full sounding (TMP, DPT, RH, UGRD, VGRD, VVEL, HGT, CLMR, CIMIXR — note **CIMIXR**, HRRR's name for ice mixing ratio, not ICMR; eccodes has no shortName for it and decodes it as `unknown`) at 150–1000 hPa; LCDC/MCDC/HCDC/TCDC, HGT@cloud-ceiling/cloud-base, CAPE/CIN@90-0 mb.
-- **Available but not fetched:** RWMR/SNMR/GRLE species, HGT/PRES@cloud-top (no `NWPCloudDiagnostics` home), surface/180-0/255-0 mb CAPE (would collide with the 90-0 pair in cfgrib's `pressureFromGroundLayer` key), VIS, GUST, REFC, LTNG (candidate convective corroborators; would need new surface-field plumbing — future work).
+- **Precipitating species (#411 step 3):** RWMR/SNMR/GRLE fetched, optional (never part of the mandatory-variable check) → `rain/snow/graupel_water_kg_kg`.
+- **Available but not fetched:** HGT/PRES@cloud-top (no `NWPCloudDiagnostics` home), surface/180-0/255-0 mb CAPE (would collide with the 90-0 pair in cfgrib's `pressureFromGroundLayer` key), VIS, GUST, REFC, LTNG (candidate convective corroborators; would need new surface-field plumbing — future work).
 - **Winds are grid-relative** (`uvRelativeToGrid=1`) — rotated to earth-relative at decode (up to ~±15–20° across CONUS).
 
 ### B. ECMWF IFS (Commercial via ECPDS) — IMPLEMENTED (full sounding)

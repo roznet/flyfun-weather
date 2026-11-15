@@ -79,6 +79,8 @@ def assess_precipitation(
         "model_precip_type_code": hourly.precip_type_code if hourly else None,
         "model_freezing_type": model_freezing_type(hourly),
         "freezing_rain_mm": hourly.freezing_rain_mm if hourly else None,
+        "cat_freezing_rain": hourly.cat_freezing_rain if hourly else None,
+        "cat_ice_pellets": hourly.cat_ice_pellets if hourly else None,
     }
     if not has_precip:
         return PrecipitationAssessment(

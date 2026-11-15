@@ -75,8 +75,10 @@ HRRR_HORIZON_SHORT_H = 18
 # Sounding variables in the .idx (wgrib2 names). DPT and HGT are direct — no
 # Magnus derivation, no hypsometric fallback needed. VVEL is already Pa/s (no
 # omega conversion). CIMIXR is HRRR's name for ice mixing ratio (the CLMR/CLWMR
-# style naming quirk the decode map also handles). Bonus species (RWMR, SNMR,
-# GRLE) are deliberately not fetched — no consumer yet.
+# style naming quirk the decode map also handles). The precipitating species
+# (RWMR, SNMR, GRLE) are fetched since #411 step 3, optional like CLMR: they
+# feed the precipitation phase partition and supercooled-rain flag, as for
+# GFS, ICON-D2 and AROME.
 #
 # Cloud liquid water: the live bucket's .idx uses ``CLMR`` (verified
 # 2026-07-26 12z: 40 CLMR entries, zero CLWMR — see the committed
@@ -86,7 +88,8 @@ HRRR_HORIZON_SHORT_H = 18
 # fetched, a rename upstream cannot silently drop the condensate field
 # (PR #508 review).
 HRRR_SOUNDING_VARIABLES = frozenset(
-    {"TMP", "DPT", "RH", "UGRD", "VGRD", "VVEL", "HGT", "CLMR", "CLWMR", "CIMIXR"}
+    {"TMP", "DPT", "RH", "UGRD", "VGRD", "VVEL", "HGT", "CLMR", "CLWMR", "CIMIXR",
+     "RWMR", "SNMR", "GRLE"}
 )
 
 # Skip 50–125 hPa: above the GA envelope and above the 150 hPa top the

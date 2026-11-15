@@ -3550,7 +3550,9 @@ def _hrrr_decode_reason(
 # ---------------------------------------------------------------------------
 
 # One file per forecast hour each, route-independent like every GFS key.
-GFS_SOUNDING_CACHE_KEY = "GFS_SOUNDING_V1"
+# V2 (#411 step 3): the blob gained RWMR/SNMR/GRLE, so a V1 blob cached
+# before the deploy must not stand in for the full set.
+GFS_SOUNDING_CACHE_KEY = "GFS_SOUNDING_V2"
 GFS_SURFACE_CACHE_KEY = "GFS_SURFACE_V1"
 
 # The surface fields a GRIB-primary GFS step writes, into empty fields only.
@@ -3572,6 +3574,9 @@ _GFS_HOURLY_INSTANT_FIELDS: tuple[str, ...] = (
     "cloud_cover_low_pct",
     "cloud_cover_mid_pct",
     "cloud_cover_high_pct",
+    # Categorical CFRZR / CICEP at the step (#411 step 3): recorded only.
+    "cat_freezing_rain",
+    "cat_ice_pellets",
 )
 
 # De-accumulated, spread as a per-hour rate over (prev, valid].

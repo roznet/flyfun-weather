@@ -96,6 +96,10 @@ _ICON_FULL_VAR_MAP = {
 _HRRR_FULL_VAR_MAP = {
     "clmr": "cloud_liquid_water_kg_kg",
     "clwmr": "cloud_liquid_water_kg_kg",
+    # Precipitating species (#411 step 3), optional like the condensates.
+    "rwmr": "rain_water_kg_kg",
+    "snmr": "snow_water_kg_kg",
+    "grle": "graupel_water_kg_kg",
     "unknown": "ice_mixing_ratio_kg_kg",  # CIMIXR — see note above
     "icmr": "ice_mixing_ratio_kg_kg",
     "cimixr": "ice_mixing_ratio_kg_kg",
@@ -3705,6 +3709,12 @@ _GFS_FULL_VAR_MAP = {
     "clwmr": "cloud_liquid_water_kg_kg",
     "clmr": "cloud_liquid_water_kg_kg",
     "icmr": "ice_mixing_ratio_kg_kg",
+    # Precipitating species (#411 step 3): the same fields ICON-D2 qr/qs/qg
+    # and AROME crwc fill, so every reader (phase partition, supercooled
+    # rain) treats GFS like them.
+    "rwmr": "rain_water_kg_kg",
+    "snmr": "snow_water_kg_kg",
+    "grle": "graupel_water_kg_kg",
 }
 
 # GRIB-primary GFS surface (#913): (cfVarName, typeOfLevel) → the .idx
@@ -3731,6 +3741,8 @@ _GFS_SURFACE_MSG_MAP: dict[tuple[str, str], str] = {
     ("tcc", "atmosphere"): "TCDC",
     ("cpofp", "surface"): "CPOFP",
     ("csnow", "surface"): "CSNOW",
+    ("cfrzr", "surface"): "CFRZR",
+    ("cicep", "surface"): "CICEP",
     ("tp", "surface"): "APCP",
     ("acpcp", "surface"): "ACPCP",
 }
@@ -3857,9 +3869,17 @@ def build_gfs_surface_snapshot(raw: dict[str, float]) -> dict[str, float | None]
         "cloud_cover_low_pct": None,
         "cloud_cover_mid_pct": None,
         "cloud_cover_high_pct": None,
+        "cat_freezing_rain": None,
+        "cat_ice_pellets": None,
     }
     if not raw:
         return out
+
+    # Categorical flags (#411 step 3): 0/1 at the step, recorded only.
+    for key, field in (("CFRZR", "cat_freezing_rain"), ("CICEP", "cat_ice_pellets")):
+        val = raw.get(key)
+        if val is not None and val >= 0:
+            out[field] = val >= 0.5
 
     t_k, td_k = raw.get("TMP"), raw.get("DPT")
     if t_k is not None:

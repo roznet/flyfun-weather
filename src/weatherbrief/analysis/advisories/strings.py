@@ -1124,7 +1124,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "freezing_precip.ptype": {
         "en": "Model forecasts {kinds} {extent}",
         "fr": "Le modèle prévoit {kinds} {extent}",
-        "de": "Modell sagt {kinds} vorher {extent}",
+        "de": "Modell erwartet {kinds} {extent}",
         "es": "El modelo prevé {kinds} {extent}",
     },
     "freezing_precip.ptype.freezing_rain": {
@@ -1142,10 +1142,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     # The aggregate a RED escalation raised above MAJORITY (#411, §81): the
     # RED representative's sentence, then which models hold it.
     "aggregate.escalated": {
-        "en": "{detail} ({models} only, {n} of {total} models)",
-        "fr": "{detail} ({models} uniquement, {n} sur {total} modèles)",
-        "de": "{detail} (nur {models}, {n} von {total} Modellen)",
-        "es": "{detail} (solo {models}, {n} de {total} modelos)",
+        "en": "{detail} ({models}: {n} of {total} models)",
+        "fr": "{detail} ({models} : {n} modèle(s) sur {total})",
+        "de": "{detail} ({models}: {n} von {total} Modellen)",
+        "es": "{detail} ({models}: {n} de {total} modelos)",
     },
 
     # --- sun ---

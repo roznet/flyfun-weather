@@ -617,3 +617,82 @@ class TestProbeGfsRun:
         ])
         resp = probe_gfs_run("20261028", 12, session, last_hour=145)
         assert resp is not None and resp.status_code == 200
+
+
+# --- #411 step 3: GFS precipitating species + categorical freezing flags ------
+
+_IDX_FZ = """\
+1:0:d=2026102400:CFRZR:surface:6-12 hour ave fcst:
+2:1000:d=2026102400:CFRZR:surface:12 hour fcst:
+3:2000:d=2026102400:CICEP:surface:12 hour fcst:
+4:3000:d=2026102400:TMP:2 m above ground:12 hour fcst:
+"""
+
+
+def test_surface_plan_reads_the_categorical_freezing_flags_at_the_step():
+    plan = _plan(_IDX_FZ, 12)
+    assert plan["CFRZR"] == 1000   # the step, not the 6-12 average
+    assert plan["CICEP"] == 2000
+
+
+@pytest.mark.parametrize("raw, fzra, pl", [
+    ({"CFRZR": 1.0, "CICEP": 0.0}, True, False),
+    ({"CFRZR": 0.0}, False, None),
+    ({}, None, None),
+])
+def test_gfs_surface_snapshot_carries_the_categorical_flags(raw, fzra, pl):
+    from weatherbrief.fetch.grib.decode import build_gfs_surface_snapshot
+
+    snap = build_gfs_surface_snapshot(raw)
+    assert snap["cat_freezing_rain"] is fzra
+    assert snap["cat_ice_pellets"] is pl
+
+
+def test_precipitating_species_are_optional_sounding_variables():
+    from weatherbrief.fetch.grib.gfs_idx import (
+        GFS_SOUNDING_MANDATORY,
+        GFS_SOUNDING_VARIABLES,
+    )
+    from weatherbrief.fetch.grib.hrrr_fetch import HRRR_SOUNDING_VARIABLES
+
+    assert {"RWMR", "SNMR", "GRLE"} <= GFS_SOUNDING_VARIABLES
+    assert {"RWMR", "SNMR", "GRLE"} <= HRRR_SOUNDING_VARIABLES
+    assert not {"RWMR", "SNMR", "GRLE"} & set(GFS_SOUNDING_MANDATORY)
+
+
+def test_gfs_sounding_decodes_rain_snow_graupel(tmp_path):
+    pytest.importorskip("eccodes")
+    from grib_synth import EUROPE_G2, write
+
+    from weatherbrief.fetch.grib.decode import (
+        build_pressure_levels_from_grib,
+        decode_gfs_sounding_per_point,
+    )
+
+    path = tmp_path / "gfs.grib"
+    with open(path, "wb") as f:
+        for short, base in (("t", 268.0), ("r", 90.0), ("u", 5.0), ("v", 2.0),
+                            ("gh", 3000.0), ("rwmr", 2e-4), ("snmr", 1e-4),
+                            ("grle", 1e-5)):
+            write(f, sample="regular_ll_pl_grib2", short=short,
+                  type_of_level="isobaricInhPa", level=700, area=EUROPE_G2,
+                  base=base, amp=0.0)
+    (pt,) = decode_gfs_sounding_per_point(path, [48.0], [11.5])
+    (level,) = build_pressure_levels_from_grib(pt)
+    assert level.rain_water_kg_kg == pytest.approx(2e-4, rel=1e-3)
+    assert level.snow_water_kg_kg == pytest.approx(1e-4, rel=1e-3)
+    assert level.graupel_water_kg_kg == pytest.approx(1e-5, rel=1e-2)
+
+
+def test_assessment_carries_the_gfs_flags():
+    from weatherbrief.analysis.sounding.precipitation import assess_precipitation
+    from weatherbrief.models import HourlyForecast
+
+    h = HourlyForecast(
+        time=datetime(2026, 1, 10, tzinfo=timezone.utc), precipitation_mm=0.3,
+        cat_freezing_rain=True, cat_ice_pellets=False,
+    )
+    a = assess_precipitation([], [], hourly=h)
+    assert a.cat_freezing_rain is True and a.cat_ice_pellets is False
+    # Recorded only: the flag never sets the phase.
+    assert a.surface_phase.value != "freezing_rain"
