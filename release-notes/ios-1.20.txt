@@ -1,0 +1,6 @@
+- The briefing toolbar is simpler: Start/Stop on flight day, Refresh, and one ⋯ menu for Share, Notifications, Edit/Duplicate and feedback. Edit and Duplicate stay visible, greyed out, when you're offline instead of disappearing.
+- The forecast map has a labelled Forecast | Past switch, solid controls that stay readable over any map, and a single time bar for day and hour. A hide toggle clears the controls when you want more map.
+- The briefing's route map gets the same layout. Metrics are grouped into "At altitude" and "Along route", and there's a Fit route button and a direct link to the forecast map. Route segments with no data now show grey instead of vanishing.
+- When a briefing has no GRAMET, the app now says why. After linking Autorouter, a refresh fetches it.
+- During server maintenance or an outage, the app shows a clear banner instead of a raw server error.
+- The More menu on the flight list is reorganised: Website and Settings first, then What's New, Help and Send Feedback.

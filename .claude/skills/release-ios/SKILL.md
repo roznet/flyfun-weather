@@ -1,12 +1,13 @@
 ---
-name: archive
-description: Build a signed Xcode archive of the iOS app ready for App Store upload — bumps the version, runs the iPhone + iPad test suites and release pre-flight checks, archives, tags, and drafts release notes. Invoke with an optional bump type (build / patch / minor / major).
+name: release-ios
+description: Build a signed Xcode archive of the iOS app ready for App Store upload — bumps the version, runs the iPhone + iPad test suites and release pre-flight checks, archives, tags, writes the App Store notes and stages the version on App Store Connect. Invoke with an optional bump type (build / patch / minor / major).
 disable-model-invocation: true
 ---
 
-# Archive for App Store
+# Release iOS to the App Store
 
-Build an Xcode archive ready for App Store upload (iOS only).
+Build an Xcode archive and stage it on App Store Connect (iOS only). The Android
+counterpart is `/release-android`.
 
 Background for every gate below — why both idioms run, the privacy-declaration rationale, the
 tagging convention, release-note style, how reviewer sign-in works, and how App Store Connect
@@ -15,7 +16,7 @@ points you at.
 
 ## Arguments
 
-The user may specify a **version bump** (e.g. `/archive build`, `/archive patch`):
+The user may specify a **version bump** (e.g. `/release-ios build`, `/release-ios patch`):
 
 **Version bump** (default: ask the user):
 - **build** — only increment `CURRENT_PROJECT_VERSION` (build number), keep `MARKETING_VERSION` unchanged. Use for TestFlight builds or minor fixes.
@@ -270,6 +271,12 @@ The stamp must equal `git rev-parse --short HEAD` exactly, with **no `-dirty`**,
 parent must be `PINNED_SHA`. A mismatch means the checkout changed during or after the
 build. Delete the archive, re-run the pre-flight on the new commit, and rebuild.
 
+One exception: `-dirty` with HEAD unmoved and `git status --porcelain -- app/flyfun-weather`
+clean. The bump commit and the `project.pbxproj` write landed in the same second, git's index
+marks that entry "racily clean", and the sandboxed stamp script cannot re-read the file to
+confirm (seen 2026-11-15, build 28). Run `git status` once to refresh the index, delete the
+archive and rebuild; the stamp comes out clean.
+
 ## Step 7 — Confirm the pin held
 
 The bump was committed in Step 3. Before tagging, run `git log --oneline -3` and check
@@ -298,7 +305,8 @@ git push origin ios/{version}
 
 ### Generate release notes
 
-Find the **previous version** tag:
+Find the **previous version** tag — for a build-only bump that is the tag *before* the
+current marketing version, since the current one's notes cover the whole version:
 ```bash
 git tag -l "ios/*" --sort=-version:refname
 ```
@@ -311,55 +319,15 @@ git log {previous_tag}..HEAD --oneline
 Write concise, user-facing release notes — grouped bullets, plain language, no internal
 changes, 5–8 bullets max. Full style guide: §A4.
 
-Show the release notes to the user for review before pushing tags.
+Show the notes and **wait for approval** before pushing tags. Save them to
+`release-notes/ios-{version}.txt` exactly as approved (plain text, `- ` bullets). Step 10
+passes that file to `asc.py`, so what is committed is what the store shows.
 
-### Draft the release-stream entry (only with explicit confirmation)
-
-The same notes also belong in the site's What's New stream, as an `app_release` entry. Draft
-the file now — the commit range is freshest at archive time — but **do not publish it here**:
-Apple review sits between this archive and users being able to install, so publishing happens
-at approval (Step 12). Why the split, and how to pick the title / highlight flag: **§A6**.
-
-Draft `release-notes/ios-{version}.json` in the shape `python -m weatherbrief.release import`
-accepts — a JSON **list** of one entry:
-
-```json
-[
-  {
-    "date": "YYYY-MM-DD",
-    "title": "iOS {version} — <short headline>",
-    "category": "app_release",
-    "highlight": false,
-    "body": "- First App Store bullet\n- Second App Store bullet"
-  }
-]
-```
-
-- `date` — leave as the archive date for now; **reset it to the approval date in Step 12**, so
-  the entry interleaves chronologically at the point users could actually install it.
-- `title` — `iOS {version} — <short headline>` (e.g. `iOS 1.5 — Route SIGMETs and observations`).
-- `body` — the App Store bullets **verbatim**, so the two surfaces can't drift.
-- `highlight` — a per-release judgement, not automatic. Propose `true` only for a release
-  carrying real user-facing news; leave a bug-fix-only build unhighlighted.
-
-**Confirm (HARD STOP):** show the proposed title, highlight yes/no, and full body — then **end
-the turn.** Only a readable "yes" counts. Apply any edits the user makes and re-show if they're
-substantial. **Write nothing unless the user says yes.**
-
-Validate the written file against a dev database before moving on (never against prod):
-
-```bash
-source venv/bin/activate && python3 -m weatherbrief.release import \
-  release-notes/ios-{version}.json --dry-run
-```
-
-Commit the file on its own (the version bump already landed in Step 3):
+The notes go to the **App Store only**: no `app_release` entry in the site's What's New
+stream (owner's call, 2026-11-15, same as `/release-android`; see §A6). Commit:
 
 ```
-Draft the iOS {version} release-stream entry
-
-Published at App Store approval, not here — Apple review sits between this
-archive and users being able to install.
+Release notes for iOS {version}
 ```
 
 ## Step 9 — App Store reviewer sign-in token (ask first)
@@ -418,8 +386,7 @@ python3 scripts/ios_screenshots.py --if-changed --wait
 ```
 
 If it captured, show the user a few of the new PNGs before staging. Then stage everything in
-one call. `--notes-file` reads the entry drafted in Step 8, so the App Store text and the
-site's release-stream entry cannot drift. Pass `--screenshots` **only if the user said yes**
+one call. `--notes-file` reads the notes saved in Step 8. Pass `--screenshots` **only if the user said yes**
 — it uploads the sets that differ from the store, so a stale local capture left over from
 an earlier release would otherwise be pushed anyway:
 
@@ -428,7 +395,7 @@ source venv/bin/activate && python3 scripts/asc.py stage \
   --version {marketing_version} \
   --build {build_number} \
   --archive "{archive_path}" \
-  --notes-file release-notes/ios-{version}.json \
+  --notes-file release-notes/ios-{version}.txt \
   --screenshots build/appstore-screenshots \
   --review-notes "flyfunweather://auth?token=…"
 ```
@@ -467,48 +434,3 @@ Tell the user:
   → Organizer**, and from there **Distribute App** → **App Store Connect** uploads it; the
   What's New text and reviewer link then have to be pasted in by hand.
 - Remind them to push the version bump commit when ready
-- If a release-stream entry was drafted: its path, and that it is **not published yet** —
-  publish it when Apple approves the build (Step 12)
-
-## Step 12 — Publish the release-stream entry (at App Store approval)
-
-**Not part of the archive run.** This step happens later, when Apple approves the build and
-users can actually install it — invoke the skill again (or just follow this step) then. Why the
-split: **§A6**.
-
-Pre-flight:
-
-1. **Confirm the build is live** on the App Store — approved *and* released, not merely
-   "Pending Developer Release". If it isn't, stop: the entry would announce a version nobody
-   can download.
-2. Set the entry's `date` to **today** (the release date), not the archive date, so it
-   interleaves chronologically where users could first install it.
-3. Check the category is deployed: `app_release` reached prod in `44284321`. If prod predates
-   that commit, `import` rejects the unknown category — deploy first.
-
-Publish (`-` reads stdin, because `release-notes/` is not in the container image).
-`<SERVER_SSH>` comes from `python3 scripts/ops/hosts.py server`:
-
-```bash
-ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release import -" \
-  < release-notes/ios-{version}.json
-```
-
-Confirm it landed, and that the iOS app sees it:
-
-```bash
-ssh <SERVER_SSH> "docker exec weatherbrief python -m weatherbrief.release list" | head
-curl -s https://weather.flyfun.aero/api/messages | head -c 400
-```
-
-The entry now appears in the web help page's What's New tab **and** the app's What's New view
-(More → What's New). The web renders an install call to action under it; the app deliberately
-does not — a reader already inside the app has nothing to install.
-
-If this is the first `app_release` entry on prod, also import the historical backfill so the
-stream reads as a complete app history rather than starting mid-way:
-
-```bash
-ssh <SERVER_SSH> "docker exec -i weatherbrief python -m weatherbrief.release import - \
-  --force-no-highlight" < release-notes/ios-backfill.json
-```

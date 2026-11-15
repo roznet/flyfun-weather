@@ -7,7 +7,7 @@ disable-model-invocation: true
 # Release Android to Google Play
 
 Build a signed app bundle and put it on Google Play, the Android counterpart of
-`/archive`. Ported from flyfun-forms' `/release-android`; keep the two in step.
+`/release-ios`. Ported from flyfun-forms' `/release-android`; keep the two in step.
 
 ## Arguments
 

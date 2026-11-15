@@ -54,14 +54,14 @@ shape is the honest one.
     # What does App Store Connect think right now?
     python3 scripts/asc.py status
 
-    # Do the whole staging chain in one go (the /archive skill calls this):
+    # Do the whole staging chain in one go (the /release-ios skill calls this):
     python3 scripts/asc.py stage --version 1.5 --build 11 \\
         --archive "~/Library/Developer/Xcode/Archives/.../flyfun-weather.xcarchive" \\
-        --notes-file release-notes/ios-1.5.json
+        --notes-file release-notes/ios-1.21.txt
 
     # Or step by step:
     python3 scripts/asc.py ensure-version --version 1.5
-    python3 scripts/asc.py set-notes --notes-file release-notes/ios-1.5.json
+    python3 scripts/asc.py set-notes --notes-file release-notes/ios-1.21.txt
     python3 scripts/asc.py upload --archive <path>
     python3 scripts/asc.py wait-build --version 1.5 --build 11
     python3 scripts/asc.py attach-build --version 1.5 --build 11
@@ -356,7 +356,7 @@ class Asc:
     ) -> dict[str, Any]:
         """Get-or-create the editable App Store version for `version_string`.
 
-        Three cases, all of which the /archive skill can hit legitimately:
+        Three cases, all of which the /release-ios skill can hit legitimately:
         an editable version already exists with this number (reuse it), exists
         with a different number because the bump changed (rename it), or does
         not exist (create it).
@@ -894,9 +894,9 @@ def upload_archive(config: AscConfig, archive: Path, dry_run: bool = False) -> N
 def load_notes(args: argparse.Namespace) -> str:
     """Resolve the What's New text from --text, --notes-file, or stdin.
 
-    `--notes-file` reads the same `release-notes/ios-<version>.json` the
-    /archive skill already drafts, so the App Store text and the site's
-    release-stream entry cannot drift apart.
+    `--notes-file` takes the plain-text `release-notes/ios-<version>.txt` the
+    /release-ios skill saves, or the older `.json` release-stream entries
+    (1.6-1.19), whose first entry's `body` is the App Store text.
     """
     if args.text:
         return args.text
@@ -999,7 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p)
 
     p = sub.add_parser("set-notes", help="write the What's New text")
-    p.add_argument("--notes-file", default="-", help="release-notes/ios-X.Y.json, or - for stdin")
+    p.add_argument("--notes-file", default="-", help="release-notes/ios-X.Y.txt (or a legacy .json entry), or - for stdin")
     p.add_argument("--text", help="literal text (overrides --notes-file)")
     p.add_argument("--locale", action="append", help="restrict to locale(s), repeatable")
     add_common(p)

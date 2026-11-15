@@ -16,7 +16,7 @@
   `submit`), and a new production release must say `--rollout <fraction>` or
   `--full`. The file is the forms script with a different default package —
   fix a bug in one, port it to the other.
-- **`/release-android`** (`.claude/skills/release-android/`) is the `/archive`
+- **`/release-android`** (`.claude/skills/release-android/`) is the `/release-ios`
   counterpart: pre-flight, bump, `bundleRelease`, certificate check, tag
   `android/X.Y`, release notes `release-notes/android-X.Y.txt` (≤500 chars, plain
   text — Play's limit), upload to `internal` by default.

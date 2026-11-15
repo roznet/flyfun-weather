@@ -90,7 +90,7 @@ Two rules keep it useful:
 
 ### 8. Skills turn repeated explanations into one command
 
-If you've explained a procedure to Claude twice, make it a skill (`.claude/skills/<name>/SKILL.md`). Examples here: `/devserver`, `/investigateflight` (load a briefing's data and reproduce its analysis), `/sync-ecmwf`, `/check-health` (production health check), `/sync-ios-web` (find drift between hand-copied web and iOS surfaces), `/archive` (App Store build). A skill is also where lessons go: when one fails, fix the skill rather than adding a note to a prompt.
+If you've explained a procedure to Claude twice, make it a skill (`.claude/skills/<name>/SKILL.md`). Examples here: `/devserver`, `/investigateflight` (load a briefing's data and reproduce its analysis), `/sync-ecmwf`, `/check-health` (production health check), `/sync-ios-web` (find drift between hand-copied web and iOS surfaces), `/release-ios` (App Store build and staging). A skill is also where lessons go: when one fails, fix the skill rather than adding a note to a prompt.
 
 ### 9. Multi-agent and background work
 

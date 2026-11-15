@@ -1,12 +1,12 @@
 # iOS release reference
 
-Background for the `archive` skill (`.claude/skills/archive/SKILL.md`). The skill holds the
-release procedure; this doc holds the *why* — the reasoning behind each pre-flight gate, the
-tagging convention, how reviewer sign-in works, and why the release-stream entry is drafted at
-archive but published only at App Store approval.
+Background for the `release-ios` skill (`.claude/skills/release-ios/SKILL.md`, formerly
+`archive`). The skill holds the release procedure; this doc holds the *why* — the reasoning
+behind each pre-flight gate, the tagging convention, how reviewer sign-in works, and why app
+release notes go to the App Store only.
 
 Read the section the skill points you at. The skill is complete on its own for a normal
-archive.
+release.
 
 ## §A1 — Why both iPhone and iPad must run
 
@@ -124,41 +124,24 @@ re-add them to `.env`; they are absent from the repo by design.
 > local minting work, and it also means a compromised dev checkout can forge production
 > tokens. Worth knowing when deciding where that file lives.
 
-## §A6 — The release-stream entry: drafted at archive, published at approval
+## §A6 — Release notes: App Store only, no release-stream entry
 
-Every shipped app version gets one `app_release` entry in the site's What's New stream
-(`system_messages`), whose body is the App Store "What's New" text. Before #550 the archive
-skill wrote App Store notes and stopped there, so app news lived only in App Store Connect and
-five versions shipped without appearing in the stream at all.
+The App Store "What's New" text is the only place app release notes go. The skill saves them as
+`release-notes/ios-{version}.txt` and `asc.py stage --notes-file` pushes that file, so the
+committed text is what the store shows.
 
-**Why the two steps are split.** Archiving happens *before* upload, and Apple review sits
-between that and users being able to install. An entry announcing a version nobody can download
-is wrong — but the commit range that the notes are derived from is freshest at archive time, and
-reconstructing it days later is worse. So: draft at archive (Step 8), publish at approval
-(Step 12). Reset the `date` when publishing; the stream is ordered by that field rather than by
-insert order, so a stale date would file the entry in the past.
-
-**Title convention:** `iOS {version} — <short headline>`, e.g. `iOS 1.4 — Route SIGMETs,
-observations and approach feasibility`. The version is in the title rather than in a separate
-field because the stream is unified: an entry sits among server-side features and changes, and
-the reader needs to see at a glance that this one is an app version.
-
-**Body is the App Store bullets verbatim.** Two hand-maintained copies of the same notes drift;
-copying them keeps the App Store listing and the stream identical by construction.
-
-**Highlighting is a judgement, not a rule.** `highlight` is what lights the unseen dot (the
-`/api/messages/status` count includes highlighted rows only). Highlight a release carrying real
-user-facing news; leave a bug-fix-only build unhighlighted. Historical backfill
-(`release-notes/ios-backfill.json`, 1.0–1.4) is all unhighlighted — importing it must not hand
-existing users a wall of dots for work they've already been using.
+**History.** #550 (2026-08) added an `app_release` entry in the site's What's New stream for
+every shipped version: drafted at archive as `release-notes/ios-{version}.json`, published at
+App Store approval, body = the App Store bullets. 1.6–1.19 have those files. On 2026-11-15 the
+owner dropped it for both apps (iOS 1.20, Android 1.1): app notes belong in the store, and the
+web stream stays for server-side news. The `app_release` / `android_release` categories, the
+web install call to action and `release-notes/ios-backfill.json` are still in place, so the
+practice can come back without code changes.
 
 **The stream is not platform-filtered.** Most entries (a new advisory, a threshold change) reach
-app users the moment the server deploys, with no app release involved, so splitting the stream
-by platform would be wrong. `app_release` is a *kind* of entry, not a filter. What is
-per-client is the rendering: the web adds an install call to action under `app_release` entries
-(from a single `APP_STORE_URL`), and the iOS app deliberately omits it. Android versions use
-their own `android_release` category with a Google Play button (`PLAY_STORE_URL`); see
-[android-play-release.md](../android-play-release.md).
+app users the moment the server deploys, with no app release involved. If a release ever does
+deserve a web announcement, write it as an ordinary feature entry at deploy time, not as a copy
+of the store notes.
 
 ## §A7 — App Store Connect staging (`scripts/asc.py`)
 
