@@ -464,8 +464,9 @@ def hazardous_icing_zones(zones: list[IcingZone]) -> list[IcingZone]:
     (the only builder behind the Ogimet-DD/NWP and IENG zones) never passes it,
     and the SFIP→IcingZone conversion in ``tasks/advise._resolve_analyses`` has
     nothing to pass — :class:`SfipZone` has no such field. The real SLD detector
-    output lives in a separate ``sounding.sld_zones`` list that no advisory
-    evaluator reads. So the clause is a *forward contract*, not an observed path,
+    output lives in a separate ``sounding.sld_zones`` list, which
+    ``aircraft_icing`` reads directly with its own two-level grade
+    (meteorology-decisions §84) rather than through this flag. So the clause is a *forward contract*, not an observed path,
     and this helper is behaviourally ``risk != NONE`` on real data.
 
     It is kept deliberately rather than simplified away. Supercooled large

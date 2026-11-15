@@ -509,6 +509,33 @@ def test_ecmwf_ptype_held_over_the_step_and_fzra_rate():
     assert by_t[t0].precip_type_code is None  # outside (prev, valid]
 
 
+@pytest.mark.parametrize("step_precip_mm,expected", [
+    (0.02, None),               # 3 h mean 0.0067 mm/h: under the 0.01 gate
+    (0.04, "freezing_drizzle"),  # 3 h mean 0.013 mm/h: every hour passes
+])
+def test_ecmwf_ptype_gate_reads_the_step_mean_rate(step_precip_mm, expected):
+    """#411 review: the 0.01 mm/h gate sees the step's mean rate, so a 3 h step
+    is gated as a whole. Every hour of the step gets the same answer."""
+    from weatherbrief.analysis.sounding.precipitation import model_freezing_type
+    from weatherbrief.fetch.grib import _apply_ecmwf_surface_to_hourly
+
+    pts = _points(1)
+    t0 = datetime(2026, 5, 4, 9, tzinfo=UTC)
+    t1 = t0 + timedelta(hours=3)
+    skel = build_skeleton(pts, ModelSource.ECMWF, start_date="2026-05-04", end_date="2026-05-04")
+    cs = RouteCrossSection(model=ModelSource.ECMWF, route_points=pts,
+                           fetched_at=t0, point_forecasts=skel)
+    raw = {"total_precip_m": 0.001 + step_precip_mm / 1000.0, "precip_type_code": 12.0}
+    _apply_ecmwf_surface_to_hourly(
+        [cs], [], pts, [raw], [True],
+        valid_utc=t1, prev_valid_utc=t0,
+        prev_tp_per_point=[0.001], prev_sf_per_point=[None], prev_cp_per_point=[None],
+    )
+    by_t = {h.time: h for h in skel[0].hourly}
+    got = {model_freezing_type(by_t[t0 + timedelta(hours=k)]) for k in (1, 2, 3)}
+    assert got == {expected}
+
+
 def test_ecmwf_ptype_blended_value_is_dropped():
     """A non-integer code can only be a blend: no category is guessed."""
     from weatherbrief.fetch.grib import _apply_ecmwf_surface_to_hourly

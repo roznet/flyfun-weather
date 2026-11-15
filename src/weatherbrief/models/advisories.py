@@ -121,6 +121,21 @@ class MitigationProfile(BaseModel):
     transitions: list[MitigationTransition] = Field(default_factory=list)
 
 
+class ShadowGrade(BaseModel):
+    """What a rule in shadow would have graded on one model (#411 step 4).
+
+    ``status`` is the rule's own grade for the hits it found (not the card's
+    grade with the rule merged in); ``reason_code`` names the hit kind and
+    ``points`` the route points it covers.
+    """
+
+    rule: str
+    status: AdvisoryStatus
+    reason_code: str
+    points: int = 0
+    detail: str = ""
+
+
 class Mitigation(BaseModel):
     """A decision that could improve a flagged sub-issue — advice only.
 
@@ -505,6 +520,11 @@ class ModelAdvisoryResult(BaseModel):
     # floors the aggregate at AMBER like one RED model does. False everywhere
     # else and on old packs.
     floors_aggregate: bool = False
+    # Rules running in shadow on this model (#411 step 4, §84): what each would
+    # have graded, recorded so a replay over stored briefings can measure them
+    # before they go live. Never affects ``status``, ``detail`` or the
+    # aggregate; clients ignore it. Empty when no shadow rule fired.
+    shadow: list[ShadowGrade] = Field(default_factory=list)
 
     @classmethod
     def build(

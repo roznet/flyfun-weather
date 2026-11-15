@@ -8125,3 +8125,65 @@ holds on GFS as it does on ICON-D2. HRRR has the same species.
 
 Sizes above, from the live `.idx`. Phase-band changes not replayed (display
 only).
+
+## 84. Two levels of SLD on the aircraft icing card, in shadow until replayed (#411, step 4)
+
+**Date:** 2026-11-15 · **Issue:** #411 (step 4) · **Related:** §24 (supercooled-rain threshold), §56 (aircraft icing grade table), §83
+
+### Context
+
+`SoundingAnalysis.sld_zones` held the warm-nose freezing-rain zone (surface to
+warm-nose base) but nothing graded it, and `IcingZone.sld_risk` was never set.
+Owner decisions of 2026-11-15 on #411: SLD has two levels, only confirmed SLD
+is RED or a solver wall, a climb or descent through a surface-reaching
+freezing-rain zone is RED, and the aloft band is tightened and replayed on
+stored winter flights before it goes live. On 12 Nov, a quiet day, GFS rain
+water at or below 0 °C aloft covered 8 to 12% of the European grid at every
+step, mostly showers just above the freezing level.
+
+### Choices
+
+- **Confirmed** = `SldZone.mechanism == "warm_nose"` (`SldZone.confirmed`):
+  the zone reaches the surface, where a METAR can report it. RED when the
+  climb (first assessed point), the cruise band or the descent (last point)
+  crosses it; a wall in `icing_cell_cost`.
+- **Unconfirmed aloft** = `assess_sld_aloft_zones` (`analysis/sounding/sld.py`):
+  consecutive levels with rain water ≥ 1e-6 kg/kg (§24) at or below
+  **-2 °C**, spanning at least **1,000 ft**, not overlapping a confirmed zone.
+  AMBER at most, whatever else the stretch has; priced like moderate icing in
+  the solver (never a wall, never offered as icing-free). The sentence says
+  surface reports cannot confirm it. Only models with rain water see it
+  (GFS and HRRR since §83, ICON-D2, AROME); ECMWF and ICON-EU never do, which
+  is "not detected", not "no SLD".
+- The card reads `SldZone`, not `IcingZone.sld_risk`, which stays dormant: the
+  retired `icing_escape` / `fiki_icing` cards and the digest read that flag as
+  a wall for every aircraft. `ifr_feasibility` inherits the grade through
+  `grade_aircraft_icing_model`.
+- Aloft zones are computed on demand by the card and never stored in
+  `sld_zones`, so the cross-section SLD layer (drawn red) does not show an
+  AMBER-at-most band before it is graded.
+- **Shadow by default.** `WB_SLD_ICING` = `shadow` (default) records what the
+  SLD grade would be on `ModelAdvisoryResult.shadow`
+  (`rule="sld_icing"`, status, `reason_code` `sld` / `sld_aloft`, points)
+  without changing the card; `live` grades it; `off` skips it. The -2 °C and
+  1,000 ft values are provisional: `WB_SLD_ALOFT_MAX_TEMP_C` and
+  `WB_SLD_ALOFT_MIN_DEPTH_FT` let the replay sweep them, and the chosen values
+  replace these here before `live`.
+
+### Rejected
+
+- Setting `IcingZone.sld_risk` from the new zones: it is a wall everywhere it
+  is read, which contradicts "AMBER at most".
+- Excluding convective columns from the aloft band: left for the replay to
+  show whether the depth and temperature cut already removes them.
+- Gating on `qr / (qr + qs)`: no threshold tested (§83).
+
+### Measured
+
+Not yet. The amber-volume replay needs stored winter flights, which the cloud
+sessions cannot reach. Run it on the Mac with
+`WB_SLD_ICING=live python scripts/rerun_advisories_diff.py --area corpus`
+(sweep the two thresholds through the env variables), and read
+`per_model[].shadow` on production briefings once this is deployed. GFS rain
+water only exists on briefings made after §83 is deployed, so a replay of
+older packs measures ICON-D2, AROME and HRRR only.

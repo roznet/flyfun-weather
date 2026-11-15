@@ -1019,6 +1019,15 @@ class SldZone(BaseModel):
     - ``coalescence``: Collision-coalescence in a deep cloud with a warm top
       (> −12 °C).  Insufficient ice nuclei allow droplets to grow large via
       the warm-rain process within the supercooled portion of the cloud.
+    - ``rain_aloft`` (#411 step 4, §84): the model's own rain water colder
+      than about -2 °C, with no surface freezing-rain signal under it.
+      Computed on demand by the aircraft icing card, never stored in
+      ``SoundingAnalysis.sld_zones``.
+
+    Two levels (decision 2 of 2026-11-15): a ``warm_nose`` zone reaches the
+    surface, where METARs can report it, so it is **confirmed** and may make
+    the aircraft icing card RED or wall a level in the altitude solver. Every
+    other mechanism is **unconfirmed** and grades AMBER at most.
     """
 
     base_ft: float
@@ -1026,8 +1035,13 @@ class SldZone(BaseModel):
     base_pressure_hpa: Optional[int] = None
     top_pressure_hpa: Optional[int] = None
     risk: IcingRisk = IcingRisk.NONE
-    mechanism: str = "unknown"  # "warm_nose" or "coalescence"
+    mechanism: str = "unknown"  # "warm_nose", "coalescence" or "rain_aloft"
     mean_temperature_c: Optional[float] = None
+
+    @property
+    def confirmed(self) -> bool:
+        """A surface-reaching zone, the only kind that grades RED (§84)."""
+        return self.mechanism == "warm_nose"
 
 
 class PrecipitationZone(BaseModel):

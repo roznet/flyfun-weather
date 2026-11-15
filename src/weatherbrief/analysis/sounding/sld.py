@@ -16,11 +16,22 @@ Two physically-grounded formation mechanisms:
 
 Both mechanisms are model-agnostic: they rely on the temperature/wet-bulb
 profile and cloud layer geometry, not on CLMR/ICMR fields.
+
+A third detector, :func:`assess_sld_aloft_zones` (#411 step 4, §84), reads the
+model's own rain water instead: a band of rain water colder than about -2 °C
+with no surface freezing-rain signal under it. Those zones are **unconfirmed**
+(no surface report can check them) and are not part of ``sld_zones``: the
+aircraft icing card computes them on demand, graded AMBER at most.
 """
 
 from __future__ import annotations
 
-from weatherbrief.analysis.sounding.icing_common import MIN_ZONE_HALF_THICKNESS_FT
+import os
+
+from weatherbrief.analysis.sounding.icing_common import (
+    MIN_ZONE_HALF_THICKNESS_FT,
+    SUPERCOOLED_RAIN_MIN_QR_KG_KG,
+)
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
@@ -237,6 +248,109 @@ def _coalescence_sld_zones(
             )
         )
 
+    return zones
+
+
+# ── Mechanism 3: rain water aloft (unconfirmed) ─────────────────────
+
+# §84 (#411 step 4). Rain water at or below 0 °C covers 8 to 12% of the GFS
+# European grid on a quiet day, mostly showers just above the freezing level,
+# so the band is tightened before it is graded: colder than this ...
+SLD_ALOFT_MAX_TEMP_C = -2.0
+# ... and at least this deep (bottom level to top level of the run). One
+# pressure level on its own has no depth and never makes a band.
+SLD_ALOFT_MIN_DEPTH_FT = 1000.0
+# Provisional values: the owner picks the final ones from the amber-volume
+# replay (decision 1 of 2026-11-15). The replay sweeps them through these
+# variables without a code change; production leaves them unset.
+_ALOFT_TEMP_ENV = "WB_SLD_ALOFT_MAX_TEMP_C"
+_ALOFT_DEPTH_ENV = "WB_SLD_ALOFT_MIN_DEPTH_FT"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def sld_aloft_thresholds() -> tuple[float, float]:
+    """(max temperature °C, min depth ft) of an unconfirmed SLD band aloft."""
+    return (
+        _env_float(_ALOFT_TEMP_ENV, SLD_ALOFT_MAX_TEMP_C),
+        _env_float(_ALOFT_DEPTH_ENV, SLD_ALOFT_MIN_DEPTH_FT),
+    )
+
+
+def _is_aloft_rain_level(lv: DerivedLevel, max_temp_c: float) -> bool:
+    return (
+        lv.altitude_ft is not None
+        and lv.temperature_c is not None
+        and lv.rain_water_g_kg is not None
+        and lv.rain_water_g_kg >= SUPERCOOLED_RAIN_MIN_QR_KG_KG * 1000.0
+        and lv.temperature_c <= max_temp_c
+    )
+
+
+def assess_sld_aloft_zones(
+    levels: list[DerivedLevel],
+    confirmed: list[SldZone] | None = None,
+    max_temp_c: float | None = None,
+    min_depth_ft: float | None = None,
+) -> list[SldZone]:
+    """Unconfirmed SLD bands aloft: rain water colder than ``max_temp_c``.
+
+    A band is a run of consecutive levels (in altitude order) that each carry
+    rain water at or above the supercooled-rain floor (§24) at or below
+    ``max_temp_c``, spanning at least ``min_depth_ft``. A band that overlaps a
+    confirmed (surface-reaching) zone is dropped: that air is already graded
+    as confirmed SLD. Models without rain water (ECMWF, ICON-EU) yield none,
+    which means "not detected", never "no SLD".
+
+    Risk is MODERATE: the icing card grades these AMBER at most whatever the
+    risk says, and the cross-section layer shows them like the other zones.
+    """
+    if max_temp_c is None or min_depth_ft is None:
+        env_temp, env_depth = sld_aloft_thresholds()
+        max_temp_c = env_temp if max_temp_c is None else max_temp_c
+        min_depth_ft = env_depth if min_depth_ft is None else min_depth_ft
+
+    ordered = sorted(
+        (lv for lv in levels if lv.altitude_ft is not None),
+        key=lambda lv: lv.altitude_ft,
+    )
+    runs: list[list[DerivedLevel]] = []
+    current: list[DerivedLevel] = []
+    for lv in ordered:
+        if _is_aloft_rain_level(lv, max_temp_c):
+            current.append(lv)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+
+    zones: list[SldZone] = []
+    for run in runs:
+        base_ft = run[0].altitude_ft
+        top_ft = run[-1].altitude_ft
+        if top_ft - base_ft < min_depth_ft:
+            continue
+        if any(c.base_ft < top_ft and c.top_ft > base_ft for c in confirmed or []):
+            continue
+        temps = [lv.temperature_c for lv in run]
+        zones.append(SldZone(
+            base_ft=base_ft,
+            top_ft=top_ft,
+            base_pressure_hpa=run[0].pressure_hpa,
+            top_pressure_hpa=run[-1].pressure_hpa,
+            risk=IcingRisk.MODERATE,
+            mechanism="rain_aloft",
+            mean_temperature_c=round(sum(temps) / len(temps), 1),
+        ))
     return zones
 
 

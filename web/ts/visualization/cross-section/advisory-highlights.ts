@@ -266,8 +266,9 @@ const RIBBON_REASON_CODES = new Set<string>([
   'no_escape', 'no_escape_unknown', 'tight_margin', 'warm_escape',
   // fiki_icing
   'sld', 'severe_icing', 'thick_transit', 'icing_at_cruise', 'transit_exposure',
-  // aircraft_icing (#827; also emits `sld` / `severe_icing` above)
-  'long_no_escape', 'long_escape', 'short_no_escape', 'short_escape',
+  // aircraft_icing (#827; also emits `sld` / `severe_icing` above, and
+  // `sld_aloft` for unconfirmed SLD aloft, #411 §84)
+  'long_no_escape', 'long_escape', 'short_no_escape', 'short_escape', 'sld_aloft',
   // convective — `dd_trigger` was renamed from `thermo_floor` in #442 and this
   // set was never updated, so the tooltip has shown no reason on a DD-raised
   // point since. `dd_fallback` is the #568 sibling: no native track at all.

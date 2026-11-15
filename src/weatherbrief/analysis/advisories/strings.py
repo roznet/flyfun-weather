@@ -514,6 +514,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "SLD-Risiko ({phases}), außerhalb der Zulassung",
         "es": "riesgo SLD ({phases}), fuera de certificación",
     },
+    "aircraft_icing.sld_aloft": {
+        "en": "possible SLD aloft ({phases}): rain water below {temp}°C that surface reports cannot confirm",
+        "fr": "SLD possible en altitude ({phases}) : pluie sous {temp} °C que les observations au sol ne peuvent pas confirmer",
+        "de": "mögliches SLD in der Höhe ({phases}): Regenwasser unter {temp} °C, das Bodenmeldungen nicht bestätigen können",
+        "es": "posible SLD en altura ({phases}): agua de lluvia por debajo de {temp} °C que las observaciones en superficie no pueden confirmar",
+    },
     "aircraft_icing.escape_down": {
         "en": "; escape below {alt} ft",
         "fr": " ; échappée sous {alt} ft",
