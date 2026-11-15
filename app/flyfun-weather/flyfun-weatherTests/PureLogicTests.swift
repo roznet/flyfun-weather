@@ -151,8 +151,8 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
 
     @Test func groupsSplitAltitudeFromRoute() {
         #expect(metrics.groups.map(\.id) == ["at_altitude", "along_route"])
-        #expect(metrics.groups[0].metrics.allSatisfy(\.altitudeDependent))
-        #expect(!metrics.groups[1].metrics.contains(where: \.altitudeDependent))
+        #expect(metrics.groups[0].metrics.allSatisfy { $0.altitudeDependent })
+        #expect(!metrics.groups[1].metrics.contains { $0.altitudeDependent })
     }
 
     @Test func unknownIdFallsBackToDefault() {

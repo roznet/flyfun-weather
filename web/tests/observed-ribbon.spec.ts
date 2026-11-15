@@ -314,7 +314,7 @@ test.describe('Observed nutshell + route ribbon', () => {
     await segHits.nth(1).focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('.leaflet-container')).toBeVisible();
-    await expect(page.locator('#map-observed-cells')).toBeChecked();
+    await expect(page.locator('#rm-cells')).toBeChecked();
   });
 
   test('labels the drawing for a screen reader without shouting the decoration', async ({ page }) => {
@@ -417,7 +417,7 @@ test.describe('Observed nutshell + route ribbon', () => {
     await expect(page.locator('.leaflet-container')).toHaveCount(0);
     await page.locator('[data-testid="glance-line-enroute"]').click();
     await expect(page.locator('.leaflet-container')).toBeVisible();
-    await expect(page.locator('#map-observed-cells')).toBeChecked();
+    await expect(page.locator('#rm-cells')).toBeChecked();
   });
 
   test('the alert line sits above the highlight, with its caption and a 👍/👎 that posts the rated line', async ({ page }) => {
@@ -562,7 +562,7 @@ test.describe('Observed airport cards (#881)', () => {
     await expect(page.locator('.leaflet-container')).toHaveCount(0);
     await page.locator('[data-card-cell="arr:0"]').click();
     await expect(page.locator('.leaflet-container')).toBeVisible();
-    await expect(page.locator('#map-observed-cells')).toBeChecked();
+    await expect(page.locator('#rm-cells')).toBeChecked();
   });
 
   test('Details opens on the rest and stays open across a reload', async ({ page }) => {
