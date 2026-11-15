@@ -29,12 +29,27 @@ logger = logging.getLogger(__name__)
 # Result dataclasses
 # ---------------------------------------------------------------------------
 
+# Why a pack has no GRAMET (#994), stored as ``briefing_packs.gramet_skip_reason``.
+GRAMET_NOT_LINKED = "not_linked"    # the pack owner had no Autorouter link
+GRAMET_DISABLED = "disabled"        # the flight's profile has GRAMET off
+GRAMET_HISTORICAL = "historical"    # past flight: archive path, no GRAMET
+GRAMET_DAILY_LIMIT = "daily_limit"  # the owner hit DAILY_LIMITS["gramet"]
+GRAMET_FAILED = "failed"            # Autorouter (or the server) failed
+GRAMET_EXPIRED = "expired"          # retention deleted it from an old pack
+GRAMET_SKIP_REASONS = frozenset({
+    GRAMET_NOT_LINKED, GRAMET_DISABLED, GRAMET_HISTORICAL,
+    GRAMET_DAILY_LIMIT, GRAMET_FAILED, GRAMET_EXPIRED,
+})
+
+
 @dataclass
 class GrametResult:
     path: Path | None = None
     fetched: bool = False
     failed: bool = False
     diagnostic: Diagnostic | None = None
+    # Set whenever ``path`` is None: one of GRAMET_SKIP_REASONS.
+    skip_reason: str | None = None
 
 
 @dataclass
@@ -81,7 +96,7 @@ def run_gramet(
         # don't emit a diagnostic. The frontend GRAMET tab is the right
         # place to prompt the user to connect Autorouter.
         logger.debug("Skipping GRAMET: no autorouter token available")
-        return GrametResult()
+        return GrametResult(skip_reason=GRAMET_NOT_LINKED)
 
     try:
         from euro_aip.briefing.sources.autorouter_gramet import AutorouterGrametSource
@@ -117,7 +132,7 @@ def run_gramet(
             # Internal bug — no actionable user message; persist as info
             # so it lands in fetch_meta.json for debugging without
             # triggering a banner.
-            return GrametResult(diagnostic=Diagnostic.create(
+            return GrametResult(skip_reason=GRAMET_FAILED, diagnostic=Diagnostic.create(
                 level="info",
                 stage="gramet",
                 code=GrametCode.GRAMET_NO_OUTPUT_DIR,
@@ -134,7 +149,7 @@ def run_gramet(
         # info-level so it doesn't generate banner noise on every refresh
         # if euro_aip ever drops out of the deploy.
         logger.warning("GRAMET fetch requires euro_aip package")
-        return GrametResult(diagnostic=Diagnostic.create(
+        return GrametResult(skip_reason=GRAMET_FAILED, diagnostic=Diagnostic.create(
             level="info",
             stage="gramet",
             code=GrametCode.GRAMET_NOT_AVAILABLE,
@@ -143,7 +158,7 @@ def run_gramet(
         ))
     except Exception as exc:
         logger.warning("GRAMET fetch failed: %s", exc, exc_info=True)
-        return GrametResult(failed=True, diagnostic=Diagnostic.create(
+        return GrametResult(failed=True, skip_reason=GRAMET_FAILED, diagnostic=Diagnostic.create(
             level="warn",
             stage="gramet",
             code=GrametCode.GRAMET_FETCH_FAILED,

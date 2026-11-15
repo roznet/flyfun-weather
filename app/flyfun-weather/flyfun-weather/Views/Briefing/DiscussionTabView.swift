@@ -46,11 +46,17 @@ struct DiscussionTabView: View {
         return manifest
     }
 
-    /// Only packs that actually carry a GRAMET get the section and its pill —
-    /// none when the profile has GRAMET off, Autorouter isn't connected, the
-    /// pack is historical, or retention has since dropped it (`has_gramet`
-    /// goes false then too).
-    private var hasGramet: Bool { viewModel.pack?.hasGramet == true }
+    /// Why the pack has no GRAMET, worded (#994), for the reasons a pilot can
+    /// act on (refresh now, failed, limit, expired). nil hides the section, as
+    /// before, incl. for Autorouter not linked or GRAMET off in the profile.
+    private var grametNote: String? {
+        guard let pack = viewModel.pack, !pack.hasGramet else { return nil }
+        return GrametStatus.message(pack.grametStatus)
+    }
+
+    /// The section and its pill: the GRAMET itself, or the note saying why
+    /// there is none.
+    private var hasGramet: Bool { viewModel.pack?.hasGramet == true || grametNote != nil }
 
     private static let chartsId = "charts"
     private static let grametId = "gramet"
@@ -93,7 +99,10 @@ struct DiscussionTabView: View {
 
         ForEach(Array(rest), id: \.id) { narrativeBlock($0) }
 
-        if hasGramet {
+        if let grametNote {
+            GrametUnavailableView(message: grametNote)
+                .spyAnchor(Self.grametId)
+        } else if hasGramet {
             GrametSectionView(viewModel: viewModel)
                 .spyAnchor(Self.grametId)
         }

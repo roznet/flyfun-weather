@@ -55,6 +55,12 @@ from flyfun_common.db import current_user_id, get_db, SessionLocal
 from weatherbrief.digest.llm_digest import LongRangeDigest, ecmwf_grib_horizon_days
 from weatherbrief.fetch.freshness import registry as freshness_registry
 from weatherbrief.tasks.artifacts import parse_target_time as _parse_target_time
+from weatherbrief.tasks.outputs import (
+    GRAMET_DAILY_LIMIT,
+    GRAMET_DISABLED,
+    GRAMET_HISTORICAL,
+    GRAMET_NOT_LINKED,
+)
 from weatherbrief.storage.sounding_profiles import (
     build_sounding_sidecar,
     load_or_build_sounding_profile,
@@ -538,6 +544,12 @@ class PackMetaResponse(BaseModel):
     days_out: int
     is_historical: bool = False
     has_gramet: bool
+    # Why there is no GRAMET (#994), so the apps can say it instead of hiding
+    # the section: not_linked / disabled / historical / daily_limit / failed /
+    # expired, or refresh_to_fetch (built before the owner linked Autorouter or
+    # turned GRAMET on; a refresh now fetches it). None when the pack has a
+    # GRAMET, and when the reason is unknown (pre-#994 pack, mid-refresh).
+    gramet_status: str | None = None
     has_skewt: bool
     has_digest: bool
     # True when the LLM digest was requested for this pack. False = the profile
@@ -665,12 +677,68 @@ def _dwd_chart_times(meta: BriefingPackMeta) -> dict[str, ChartTimeResponse]:
     }
 
 
+# Reasons a refresh can now fix once the owner links Autorouter / turns
+# GRAMET on (#994). The others (failed, daily_limit, ...) are not re-tried by
+# the refresh gate, so a failing Autorouter never loops paid refreshes.
+_GRAMET_FIXABLE_REASONS = frozenset({GRAMET_NOT_LINKED, GRAMET_DISABLED})
+
+
+def _gramet_owner_can_fetch(db: Session, flight) -> bool:
+    """Would a refresh of ``flight`` now fetch a GRAMET for its owner?
+
+    Linked Autorouter, GRAMET on in the flight's profile, not historical.
+    The daily limit is left out: it resets daily and the next refresh
+    records it as the reason if it still applies.
+    """
+    from weatherbrief.api.preferences import has_autorouter_link
+    from weatherbrief.api.profiles import load_profile_context
+
+    owner = flight.user_id
+    if not owner or _classify_refresh_time(flight)[0]:
+        return False
+    if not has_autorouter_link(db, owner):
+        return False
+    settings = load_profile_context(db, flight.profile_id, owner).settings
+    return bool(settings.get("gramet_enabled", True))
+
+
+def _gramet_status(meta: BriefingPackMeta, owner_can_fetch: bool | None = None) -> str | None:
+    """The ``gramet_status`` the apps show in place of a missing GRAMET (#994).
+
+    ``owner_can_fetch`` is ``_gramet_owner_can_fetch`` for the flight, when the
+    caller computed it (the read endpoints, for the flight's owner); None
+    means "not known here" and the stored reason is reported as is.
+    """
+    if meta.has_gramet:
+        return None
+    reason = meta.gramet_skip_reason
+    if reason in _GRAMET_FIXABLE_REASONS and owner_can_fetch:
+        return "refresh_to_fetch"
+    return reason
+
+
+def _owner_can_fetch_for_viewer(db: Session, flight, viewer_id: str) -> bool | None:
+    """``_gramet_owner_can_fetch`` for the owner viewing their flight, else None.
+
+    A viewer of someone else's flight can't link the owner's Autorouter or
+    refresh their flight, so they get the stored reason only.
+    """
+    if not flight.user_id or flight.user_id != viewer_id:
+        return None
+    try:
+        return _gramet_owner_can_fetch(db, flight)
+    except Exception:
+        logger.warning("GRAMET status lookup failed for %s", flight.id, exc_info=True)
+        return None
+
+
 def _meta_to_response(
     meta: BriefingPackMeta,
     data_status: DataStatus | None = None,
     flexibility: FlexibilityMode | None = None,
     departure_time: datetime | None = None,
     chart_cycle_memo: dict | None = None,
+    gramet_owner_can_fetch: bool | None = None,
 ) -> PackMetaResponse:
     """``departure_time`` (the flight's current ETD) only shapes the charts
     manifest: TEMSI captions name their gap to departure, and the offline
@@ -696,6 +764,7 @@ def _meta_to_response(
         days_out=meta.days_out,
         is_historical=meta.is_historical,
         has_gramet=meta.has_gramet,
+        gramet_status=_gramet_status(meta, gramet_owner_can_fetch),
         has_skewt=meta.has_skewt,
         has_digest=meta.has_digest,
         llm_digest_requested=meta.llm_digest_requested,
@@ -755,9 +824,13 @@ def list_flight_packs(
     # Every pack carries its charts manifest (iOS switches to a history entry
     # as is); packs of one run cycle share its disk reads.
     chart_cycle_memo: dict = {}
+    can_fetch = (
+        _owner_can_fetch_for_viewer(db, flight, user_id)
+        if any(not p.has_gramet for p in packs) else None
+    )
     return [_meta_to_response(
         p, flexibility=flight.flexibility, departure_time=flight.departure_time,
-        chart_cycle_memo=chart_cycle_memo,
+        chart_cycle_memo=chart_cycle_memo, gramet_owner_can_fetch=can_fetch,
     ) for p in packs]
 
 
@@ -772,8 +845,12 @@ def get_latest_pack(
     packs = list_packs(db, flight_id)
     if not packs:
         raise HTTPException(status_code=404, detail="No packs yet for this flight")
+    latest = packs[0]
     return _meta_to_response(
-        packs[0], flexibility=flight.flexibility, departure_time=flight.departure_time,
+        latest, flexibility=flight.flexibility, departure_time=flight.departure_time,
+        gramet_owner_can_fetch=(
+            None if latest.has_gramet else _owner_can_fetch_for_viewer(db, flight, user_id)
+        ),
     )
 
 
@@ -1364,12 +1441,60 @@ def apply_params_change_override(
 _RESOLVE = object()
 
 
+def apply_gramet_override(
+    decision: RefreshDecision,
+    latest: BriefingPackMeta,
+    flight: Flight,
+) -> RefreshDecision:
+    """Force a full refresh when the newest pack has no GRAMET only because the
+    owner had not linked Autorouter, or had GRAMET off, and now could (#994).
+
+    Without it, a Refresh right after linking answers "already fresh" until a
+    model updates, and the pilot never sees the GRAMET they just enabled. It is
+    one shot: the new pack has a GRAMET or a reason outside
+    ``_GRAMET_FIXABLE_REASONS`` (failed, daily_limit), so a failing Autorouter
+    never loops paid refreshes. Packs from before #994 (no reason) are left
+    alone, like legacy packs in :func:`apply_params_change_override`.
+    """
+    reason = getattr(latest, "gramet_skip_reason", None)  # tests pass stand-ins
+    if (
+        decision.mode == "full"
+        or getattr(latest, "has_gramet", False)
+        or reason not in _GRAMET_FIXABLE_REASONS
+    ):
+        return decision
+    db = None
+    try:
+        db = SessionLocal()
+        can_fetch = _gramet_owner_can_fetch(db, flight)
+    except Exception:
+        logger.warning("GRAMET refresh-gate check failed for %s", getattr(flight, "id", "?"),
+                       exc_info=True)
+        can_fetch = False
+    finally:
+        if db is not None:
+            db.close()
+    if not can_fetch:
+        return decision
+    logger.info(
+        "Refresh gate for %s: forcing full — pack has no GRAMET (%s), now fetchable",
+        flight.id, reason,
+    )
+    return decision.model_copy(update={
+        "mode": "full",
+        "reason": "GRAMET can now be fetched for this flight — running full refresh",
+        "pending_models": [],
+        "eta_useful": None,
+    })
+
+
 def gated_data_status(
     latest: BriefingPackMeta,
     flight: Flight,
     *,
     now: datetime | None = None,
     params_override: bool = True,
+    gramet_override: bool = True,
     advisory_models: "list[str] | None | object" = _RESOLVE,
 ) -> DataStatus:
     """Single entry point for "what would a refresh do for this flight right now?".
@@ -1394,6 +1519,11 @@ def gated_data_status(
     single site that wants it rather than an invisible omission at the five
     that don't.
 
+    ``gramet_override`` (:func:`apply_gramet_override`, #994) is left off by
+    the routine scheduler cycle for the same reason: the owner's own Refresh
+    after linking Autorouter fetches the GRAMET, and the cycle would otherwise
+    look up Autorouter links for every never-linked user's flights each pass.
+
     ``now`` pins the reference instant for the lead-time computation, so a
     caller with its own clock (the resume path) stays deterministic under test.
 
@@ -1413,6 +1543,8 @@ def gated_data_status(
     )
     if params_override:
         decision = apply_params_change_override(decision, latest, flight)
+    if gramet_override:
+        decision = apply_gramet_override(decision, latest, flight)
     status.refresh_decision = decision
     return status
 
@@ -1631,6 +1763,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     flight_rules = None
     adv_config: dict = {}
     do_gramet = True
+    gramet_skip_reason: str | None = None  # why do_gramet is False (#994)
     do_llm_digest = True
     do_icing_enhance = True
     auto_front_detection = False  # experimental front-detection artifact (#195)
@@ -1670,6 +1803,8 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
 
         # Service toggles from profile
         do_gramet = profile_settings.get("gramet_enabled", True)
+        if not do_gramet:
+            gramet_skip_reason = GRAMET_DISABLED
         do_llm_digest = profile_settings.get("llm_digest_enabled", True)
         do_icing_enhance = profile_settings.get("icing_severity_enhance", False)
         auto_front_detection = profile_settings.get("auto_front_detection", False)
@@ -1689,9 +1824,10 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
 
         # Gracefully skip optional services that have hit their daily limit
         limits = check_service_limits(db, user_id)
-        if not limits["gramet"]:
+        if do_gramet and not limits["gramet"]:
             logger.info("GRAMET daily limit reached for %s — skipping", user_id)
             do_gramet = False
+            gramet_skip_reason = GRAMET_DAILY_LIMIT
         if not limits["llm_digest"]:
             logger.info("LLM digest daily limit reached for %s — skipping", user_id)
             do_llm_digest = False
@@ -1702,7 +1838,12 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     is_historical, inflight_as_of = _classify_refresh_time(flight)
     if is_historical:
         do_gramet = False
+        gramet_skip_reason = GRAMET_HISTORICAL
         do_llm_digest = False
+    elif do_gramet and not autorouter_creds:
+        # run_gramet would skip anyway; record why so the apps can say it.
+        do_gramet = False
+        gramet_skip_reason = GRAMET_NOT_LINKED
     # Pin GRIB run-selection to departure for an in-progress flight so the run
     # covers the window instead of clamping pre-init hours to f000. An explicit
     # admin as_of_date (already in `as_of_time`) takes precedence.
@@ -1712,6 +1853,7 @@ def _prepare_refresh(flight, db_path, user_id, flight_id, db=None, *, is_privile
     options = BriefingOptions(
         enrich_grib=True,
         fetch_gramet=do_gramet,
+        gramet_skip_reason=gramet_skip_reason,
         generate_skewt=False,
         generate_llm_digest=do_llm_digest,
         output_dir=pack_path,
@@ -1952,6 +2094,7 @@ def _build_pack_meta(
         fetch_timestamp=fetch_ts,
         days_out=days_out,
         has_gramet=result.gramet_path is not None,
+        gramet_skip_reason=None if result.gramet_path is not None else result.gramet_skip_reason,
         has_skewt=len(result.skewt_paths) > 0,
         has_digest=has_digest,
         llm_digest_requested=result.llm_digest_requested,
@@ -3227,6 +3370,9 @@ def get_pack(
     audit_pack_access(user_id, flight_id, "get_pack", request)
     return _meta_to_response(
         meta, flexibility=flight.flexibility, departure_time=flight.departure_time,
+        gramet_owner_can_fetch=(
+            None if meta.has_gramet else _owner_can_fetch_for_viewer(db, flight, user_id)
+        ),
     )
 
 

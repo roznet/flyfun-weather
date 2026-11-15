@@ -21,7 +21,7 @@ import pytest
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 
 # Callable directly only from the module that owns the boundary.
-GUARDED = {"decide_refresh", "apply_params_change_override"}
+GUARDED = {"decide_refresh", "apply_params_change_override", "apply_gramet_override"}
 BOUNDARY_MODULE = SRC_ROOT / "weatherbrief" / "api" / "packs.py"
 
 

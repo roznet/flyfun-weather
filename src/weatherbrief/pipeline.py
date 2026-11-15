@@ -75,6 +75,10 @@ class BriefingOptions:
     advisory_models: list[str] | None = None  # subset of models for advisories
     enrich_grib: bool = False  # Enable GFS GRIB2 enrichment (CLWMR/ICMR)
     fetch_gramet: bool = False
+    # Why fetch_gramet is False, when the caller decided it (#994): one of
+    # tasks.outputs.GRAMET_SKIP_REASONS. Copied to the result's
+    # gramet_skip_reason so the pack records it.
+    gramet_skip_reason: str | None = None
     generate_skewt: bool = False
     generate_llm_digest: bool = False
     digest_config_name: str | None = None
@@ -160,6 +164,9 @@ class BriefingResult:
     # re-reading route_advisories.json from disk (the file was just written).
     route_advisories_manifest: RouteAdvisoriesManifest | None = None
     gramet_path: Path | None = None
+    # Why there is no GRAMET (#994), None when gramet_path is set or the run
+    # never meant to fetch one without saying why.
+    gramet_skip_reason: str | None = None
     skewt_paths: list[Path] = field(default_factory=list)
     digest_path: Path | None = None
     digest_text: str | None = None
@@ -790,7 +797,9 @@ def _execute_briefing_stages(
         result.alt_advisory_result = alt_advisory_result
 
     # === 5. Optional: GRAMET ===
-    if options.fetch_gramet:
+    if not options.fetch_gramet:
+        result.gramet_skip_reason = options.gramet_skip_reason
+    else:
         _notify("fetch_gramet")
         _t0 = perf_counter()
         gramet_result = run_gramet(
@@ -806,6 +815,8 @@ def _execute_briefing_stages(
         if gramet_result.path:
             result.gramet_path = gramet_result.path
             result.usage.gramet_fetched = gramet_result.fetched
+        else:
+            result.gramet_skip_reason = gramet_result.skip_reason
         if gramet_result.failed:
             result.usage.gramet_failed = True
         if gramet_result.diagnostic:
