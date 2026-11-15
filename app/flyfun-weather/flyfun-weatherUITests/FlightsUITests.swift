@@ -322,7 +322,7 @@ final class FlightsUITests: FlyfunUITestCase {
                       "fixture-1 should be listed before the delete")
 
         app.buttons["More"].firstMatch.tap()
-        let menuItem = app.buttons["bulkSelectMenuItem"].firstMatch
+        let menuItem = self.menuItem(app, "bulkSelectMenuItem", label: "Select & Delete Flights\u{2026}")
         XCTAssertTrue(menuItem.waitForExistence(timeout: Self.uiTimeout),
                       "the More menu should offer Select & Delete Flights")
         menuItem.tap()

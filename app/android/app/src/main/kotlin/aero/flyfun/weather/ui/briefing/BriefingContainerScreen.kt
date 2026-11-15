@@ -86,7 +86,9 @@ import aero.flyfun.weather.service.FlightTrackingService
 import aero.flyfun.weather.ui.crosssection.CrossSectionTabScreen
 import aero.flyfun.weather.ui.help.FeedbackSheet
 import aero.flyfun.weather.ui.map.RouteMapTabScreen
+import aero.flyfun.weather.data.ApiClient
 import aero.flyfun.weather.ui.observed.ObservedTabScreen
+import aero.flyfun.weather.ui.observed.rememberIsOnline
 import aero.flyfun.weather.ui.observed.rememberFlightTrackingToggle
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import java.util.Locale
@@ -841,8 +843,9 @@ private fun RefreshGatedButton(gate: RefreshGate) {
 }
 
 /**
- * Top-bar ⋮ (#996): the owner's Edit / Duplicate, Share link for a non-private flight, and
- * feedback on the pack on screen. Hidden only when it would be empty.
+ * Top-bar ⋮ (#996): the owner's Edit / Duplicate (disabled offline, like iOS), Share link
+ * for a non-private flight, and feedback on the pack on screen. Hidden only when it would
+ * be empty.
  */
 @Composable
 private fun BriefingMoreMenu(
@@ -856,6 +859,7 @@ private fun BriefingMoreMenu(
     val shareCode = ownFlight?.takeIf { !it.private }?.shareCode
     val canEdit = ownFlight != null && (onEdit != null || onDuplicate != null)
     if (!canEdit && shareCode == null && onSendFeedback == null) return
+    val isOnline by rememberIsOnline()
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("briefingMoreMenu")) {
@@ -865,6 +869,7 @@ private fun BriefingMoreMenu(
             if (ownFlight != null && onEdit != null) {
                 DropdownMenuItem(
                     text = { Text("Edit flight") },
+                    enabled = isOnline,
                     leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -875,11 +880,20 @@ private fun BriefingMoreMenu(
             if (ownFlight != null && onDuplicate != null) {
                 DropdownMenuItem(
                     text = { Text("Duplicate\u2026") },
+                    enabled = isOnline,
                     leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                     onClick = {
                         expanded = false
                         onDuplicate(ownFlight)
                     },
+                )
+            }
+            if (canEdit && !isOnline) {
+                Text(
+                    text = "Editing needs a connection",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
             if (canEdit && (shareCode != null || onSendFeedback != null)) HorizontalDivider()
@@ -891,7 +905,7 @@ private fun BriefingMoreMenu(
                         expanded = false
                         val send = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, "https://weather.flyfun.aero/s/$shareCode")
+                            putExtra(Intent.EXTRA_TEXT, "${ApiClient.DEFAULT_BASE_URL.trimEnd('/')}/s/$shareCode")
                         }
                         context.startActivity(Intent.createChooser(send, "Share flight"))
                     },
