@@ -466,8 +466,8 @@ def hazardous_icing_zones(zones: list[IcingZone]) -> list[IcingZone]:
     nothing to pass — :class:`SfipZone` has no such field. The real SLD detector
     output lives in a separate ``sounding.sld_zones`` list, which
     ``aircraft_icing`` reads directly with its own two-level grade
-    (meteorology-decisions §84) rather than through this flag. So the clause is a *forward contract*, not an observed path,
-    and this helper is behaviourally ``risk != NONE`` on real data.
+    (meteorology-decisions §84) rather than through this flag. So the clause
+    is a *forward contract*, not an observed path, and this helper is behaviourally ``risk != NONE`` on real data.
 
     It is kept deliberately rather than simplified away. Supercooled large
     droplets are a hazard in their own right regardless of the index, so if

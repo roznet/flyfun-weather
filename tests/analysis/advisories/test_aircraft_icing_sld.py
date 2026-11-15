@@ -16,6 +16,7 @@ from weatherbrief.analysis.advisories.aircraft_icing import (
     AircraftIcingEvaluator,
     grade_aircraft_icing_model,
     icing_cell_cost,
+    icing_picture,
     resolve_aircraft_icing_params,
     sld_icing_mode,
 )
@@ -228,3 +229,25 @@ def test_off_skips_it(monkeypatch):
     monkeypatch.setenv(SLD_MODE_ENV, "off")
     g = _grade(_ctx({0: {"sld_zones": [CONFIRMED]}}))
     assert g.status == AdvisoryStatus.GREEN and g.shadow == []
+
+
+def test_column_zone_is_clipped_to_cruise(live):
+    tall = SldZone(base_ft=0, top_ft=12000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
+    ctx = _ctx({0: {"sld_zones": [tall]}})
+    point = icing_picture(ctx, "gfs", resolve_aircraft_icing_params(ctx))[0]
+    assert [(z.base_ft, z.top_ft) for z in point.sld_column] == [(0, CRUISE)]
+    assert [(z.base_ft, z.top_ft) for z in point.sld_cruise] == [(0, 12000)]
+
+
+def test_solver_cache_returns_the_same_cost(live):
+    aloft = _make_sounding().model_copy(update={"derived_levels": _aloft_levels(7000, 9000)})
+    cache: dict = {}
+    first = icing_cell_cost(aloft, 8000, fiki=True, sld_cache=cache)
+    assert id(aloft) in cache
+    assert icing_cell_cost(aloft, 8000, fiki=True, sld_cache=cache) == first
+
+
+def test_unknown_mode_warns_and_shadows(monkeypatch, caplog):
+    monkeypatch.setenv(SLD_MODE_ENV, "liv")
+    assert sld_icing_mode() == "shadow"
+    assert "liv" in caplog.text
