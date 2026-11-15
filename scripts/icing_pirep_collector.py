@@ -107,7 +107,8 @@ SAMPLE_STATUSES = (
     "step_missing",  # the run is on disk but not the a2 file for this valid hour
     "pruned",        # the run was seen on disk earlier and is gone
     "run_missing",   # the run never showed up before RUN_WAIT_H
-    "error",         # decode failed (detail says why); re-run with --retry
+    "error",         # decode failed (detail says why); retried every pass until
+                     # it decodes or the run is gone (then ``pruned``)
 )
 
 EXTRA_SCHEMA = """
@@ -178,6 +179,10 @@ def nearest_hour(dt: datetime) -> datetime:
 #: Truth class for a report with a turbulence group and no icing group. Not
 #: one of the hindcast's TRUTH_CLASSES, so icing scores never count it.
 NO_ICING = "no_icing"
+#: An icing group the truth classifier can't read (no intensity, type or NEG
+#: word). Kept apart from ``no_icing`` so the turbulence set stays clean, and
+#: not an icing class either, so the scores skip it.
+ICING_UNCLASSIFIED = "icing_unclassified"
 
 
 @dataclass
@@ -265,7 +270,7 @@ def parse_awc_report(row: dict) -> AwcReport | None:
     if truth is None:
         if not turb_layers:
             return None
-        truth = NO_ICING
+        truth = ICING_UNCLASSIFIED if icing_layers else NO_ICING
     try:
         temp = None if row.get("temp") is None else float(row["temp"])
     except (TypeError, ValueError):
@@ -297,7 +302,8 @@ def fetch_awc_window(session: requests.Session, end: datetime, hours: float,
         except requests.RequestException:
             if attempt == 3:
                 raise
-        time.sleep(2 ** attempt)
+        if attempt < 3:
+            time.sleep(2 ** attempt)
     resp.raise_for_status()
     rows = resp.json() if resp.content.strip() else []
     if len(rows) >= AWC_MAX_ROWS and hours / 2 >= AWC_MIN_WINDOW_H:
@@ -319,6 +325,8 @@ def store_reports(conn: sqlite3.Connection, reports: list[AwcReport]) -> int:
             cur = conn.execute(
                 "INSERT INTO pireps (valid, lat, lon, alt_ft, aircraft, icing, report, truth)"
                 " VALUES (?,?,?,?,?,?,?,?)"
+                # First version wins: a later AWC copy of the same report is
+                # the re-fetch for late receipts, not a correction.
                 " ON CONFLICT (valid, lat, lon, alt_ft, aircraft) DO NOTHING",
                 (_iso(r.valid), r.lat, r.lon, r.alt_ft, r.aircraft, r.icing, r.report, r.truth))
             if cur.rowcount == 0:
@@ -624,14 +632,15 @@ def update_runs_seen(conn, disk: RunFiles, now: datetime) -> set[datetime]:
 
 
 def cmd_sample(conn, grib_dir: Path, cycles: tuple[int, ...], max_lead: int,
-               retry: bool = False, now: datetime | None = None,
+               now: datetime | None = None,
                disk: RunFiles | None = None) -> Counter:
     now = now or datetime.now(UTC)
     disk = disk if disk is not None else RunFiles.scan(grib_dir)
     seen = update_runs_seen(conn, disk, now)
-    if retry:
-        with conn:
-            conn.execute("DELETE FROM samples WHERE model=? AND status='error'", (MODEL,))
+    # A decode error is often a file caught mid-sync: retry it every pass. It
+    # ends as ``ok`` or, once the run is gone, ``pruned`` / ``run_missing``.
+    with conn:
+        conn.execute("DELETE FROM samples WHERE model=? AND status='error'", (MODEL,))
     pending: dict[datetime, list[tuple[int, float, float]]] = defaultdict(list)
     for pid, valid_s, lat, lon in conn.execute(
             "SELECT p.id, p.valid, p.lat, p.lon FROM pireps p LEFT JOIN samples s"
@@ -806,14 +815,32 @@ def _hour(s: str) -> datetime:
 def _lock(out: Path):
     """One writer at a time: a slow decode must not overlap the next cron run."""
     out.mkdir(parents=True, exist_ok=True)
-    with open(out / ".lock", "w") as fh:
+    lock = out / ".lock"
+    with open(lock, "a") as fh:  # "a": a waiting run must not touch the holder's mtime
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.utime(lock)  # mtime = when the holder took the lock
         except BlockingIOError:
-            logger.info("another run holds %s; skipping", out / ".lock")
+            age = time.time() - lock.stat().st_mtime
+            logger.warning("another run has held %s for %.0f min; skipping", lock, age / 60)
             yield False
             return
         yield True
+
+
+def lock_state(out: Path) -> str:
+    """One line for ``status``: is a collect run holding the lock, and since when."""
+    lock = out / ".lock"
+    if not lock.exists():
+        return "lock: free"
+    with open(lock, "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            age = (time.time() - lock.stat().st_mtime) / 60
+            return f"lock: HELD for {age:.0f} min" + (" (stuck? a collect run takes minutes)" if age > 50 else "")
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    return "lock: free"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -827,7 +854,6 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--cycles", default=",".join(map(str, DEFAULT_CYCLES)),
                        help="run init hours to sample from (phase B: 0,6,12,18)")
         p.add_argument("--max-lead", type=int, default=DEFAULT_MAX_LEAD_H)
-        p.add_argument("--retry", action="store_true", help="retry reports that failed to decode")
 
     p = sub.add_parser("collect")
     p.add_argument("--hours", type=int, default=3,
@@ -863,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
         conn = open_db(out)
         if args.cmd == "status":
             cmd_status(conn)
+            print(lock_state(out))
         else:
             cmd_report(conn, args.start, args.end, args.all_temperatures, not args.no_product)
         return 0
@@ -883,7 +910,7 @@ def main(argv: list[str] | None = None) -> int:
             except requests.RequestException as exc:
                 # AWC down: still sample what is pending; the next run re-fetches.
                 logger.warning("AWC fetch failed: %s", exc)
-        cmd_sample(conn, grib_dir, cycles, args.max_lead, retry=args.retry)
+        cmd_sample(conn, grib_dir, cycles, args.max_lead)
     return 0
 
 
