@@ -12,7 +12,8 @@ surface METARs cannot do:
   is the same global model we run in Europe and the only one with rain water
   on levels (our ECMWF feed has none).
 - **ECMWF open data** from its AWS archive: ``ptype`` + ``tprate`` and the
-  13-level profile (t / r / q / gh).
+  profile (t / r / q / gh) on the 8 levels from 1000 to 300 hPa
+  (``MIN_LEVEL_HPA``).
 
 Model columns are sampled at each report's grid cell and its 3×3 neighbourhood
 and stored (compressed) in SQLite; the GRIB itself is discarded. Storing the
@@ -27,6 +28,7 @@ Commands::
              reports, sample columns (idempotent per model × valid time)
     report   flag rate per signal × truth class (+ chance level)
     status   what is stored, and download throughput so far
+    estimate extrapolate download volume and time for a date range
 
 Everything lives in one SQLite file, ``--out``/sld_pirep_hindcast.sqlite
 (default ``$DATA_DIR/sld_pirep_hindcast``). Nothing is pruned; delete the
@@ -270,8 +272,15 @@ def cmd_pireps(conn: sqlite3.Connection, start: date, end: date, force: bool) ->
         params = {"sts": sts.strftime("%Y-%m-%dT%H:%MZ"),
                   "ets": (sts + timedelta(days=1)).strftime("%Y-%m-%dT%H:%MZ"),
                   "fmt": "csv"}
-        resp = session.get(IEM_PIREPS, params=params, timeout=120)
-        resp.raise_for_status()
+        try:
+            resp = session.get(IEM_PIREPS, params=params, timeout=120)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            # Not marked done: the next run retries this day.
+            logger.warning("%s: IEM request failed (%s), skipped", day, exc)
+            day += timedelta(days=1)
+            time.sleep(1.0)
+            continue
         rows, reports = parse_pirep_csv(resp.text)
         with conn:
             for p in reports:
@@ -524,7 +533,7 @@ def _fetch_one(session, conn, model: str, valid: datetime, points, workers: int)
     else:  # ECMWF open data: <base>.index beside <base>.grib2
         index_url, url = url + ".index", url + ".grib2"
     t0 = time.monotonic()
-    row = dict(model=model, valid=_iso(valid), run=_iso(run), lead_h=lead,
+    row = dict(model=model, valid=_iso(valid), run=_iso(run), lead_h=lead, status="error",
                n_bytes=None, seconds=None, n_columns=None, grid=None, error=None)
     try:
         for attempt in range(4):  # S3 answers 503 "slow down" under load
@@ -576,7 +585,7 @@ def report_points(conn, valid: datetime) -> list[tuple[float, float]]:
 
 
 def cmd_fetch(conn, start: date, end: date, models: list[str], workers: int,
-              force: bool, limit: int | None) -> None:
+              force: bool, limit: int | None, retry_missing: bool = False) -> None:
     session = requests.Session()
     valid = datetime.combine(start, datetime.min.time(), UTC)
     stop = datetime.combine(end + timedelta(days=1), datetime.min.time(), UTC)
@@ -587,7 +596,8 @@ def cmd_fetch(conn, start: date, end: date, models: list[str], workers: int,
             for model in models:
                 row = conn.execute("SELECT status FROM fetches WHERE model=? AND valid=?",
                                    (model, _iso(valid))).fetchone()
-                if row and row[0] in ("ok", "missing") and not force:
+                final = ("ok",) if retry_missing else ("ok", "missing")
+                if row and row[0] in final and not force:
                     continue
                 _fetch_one(session, conn, model, valid, points, workers)
                 done += 1
@@ -802,7 +812,12 @@ def score(conn, models: list[str], start: date | None, end: date | None,
                     skipped[model]["no_column"] += 1
                     continue
                 t_alt = temperature_at(column_levels(cols[centre]), alt)
-                if subzero and (t_alt is None or not SUBZERO_RANGE_C[0] <= t_alt <= SUBZERO_RANGE_C[1]):
+                if subzero and t_alt is None:
+                    # Below the lowest stored level or above the top one:
+                    # unknown, not warm, so counted apart from not_subzero.
+                    skipped[model]["no_temperature"] += 1
+                    continue
+                if subzero and not SUBZERO_RANGE_C[0] <= t_alt <= SUBZERO_RANGE_C[1]:
                     skipped[model]["not_subzero"] += 1
                     continue
                 sig = column_signals(cols[centre], alt)
@@ -814,9 +829,12 @@ def score(conn, models: list[str], start: date | None, end: date | None,
                         if other.get(k):
                             sig[k] = True
                 if with_product:
-                    key = (centre, alt // 500)
+                    key = (centre, alt)  # exact altitude: a bucket can flip prod_sld_alt at zone edges
                     if key not in product_cache:
                         product_cache[key] = product_signals(cols[centre], valid, alt, model)
+                    if product_cache[key]["prod_sld_alt"] is None:
+                        # analyze_sounding failed: the prod_* rows lose this report.
+                        skipped[model]["product_failed"] += 1
                     sig.update(product_cache[key])
                 scored[model] += 1
                 for name in SIGNALS[model]:
@@ -852,7 +870,11 @@ def format_report(res: dict, models: list[str]) -> str:
             out.append(row)
     out.append("\nCells: % of reports in that class where the signal was set. "
                "'all' is the chance level. A useful signal is well above 'all' on "
-               "fz_remark / clr_mxd_mod and well below it on neg.")
+               "fz_remark / clr_mxd_mod and well below it on neg.\n"
+               f"Spatial tolerance differs: {', '.join(NEIGHBOURHOOD)} fire on any cell "
+               "of the 3×3 neighbourhood (~40 km); prod_* signals and the sub-zero "
+               "filter read the nearest column only. Compare a signal with its own "
+               "'all' column, not across the two kinds.")
     return "\n".join(out)
 
 
@@ -866,6 +888,8 @@ def cmd_status(conn) -> None:
             " FROM fetches GROUP BY model, status ORDER BY model, status"):
         rate = f", {mb / secs:.1f} MB/s" if secs and mb else ""
         print(f"{model:<6} {status:<8} {n:>5} valid times, {mb:,.0f} MB in {secs:,.0f} s{rate}")
+        if status == "missing":
+            print("       ^ excluded from the report; `fetch --retry-missing` tries them again")
     n_cols, size = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(payload)),0) FROM columns").fetchone()
     print(f"columns stored: {n_cols} ({size / 1e6:.1f} MB compressed)")
 
@@ -918,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--force", action="store_true")
     p.add_argument("--limit", type=int, default=None, help="stop after N model × valid fetches")
+    p.add_argument("--retry-missing", action="store_true",
+                   help="re-try valid times stored as missing (index 403/404, e.g. a transient S3 error)")
     p = sub.add_parser("report")
     p.add_argument("--start", type=date.fromisoformat)
     p.add_argument("--end", type=date.fromisoformat)
@@ -942,7 +968,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd_pireps(conn, args.start, args.end, args.force)
     elif args.cmd == "fetch":
         cmd_fetch(conn, args.start, args.end, args.models.split(","), args.workers,
-                  args.force, args.limit)
+                  args.force, args.limit, args.retry_missing)
     elif args.cmd == "report":
         models = args.models.split(",")
         res = score(conn, models, args.start, args.end,
