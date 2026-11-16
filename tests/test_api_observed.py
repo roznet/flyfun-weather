@@ -75,7 +75,10 @@ def stocked(observed_env):
     """
     from weatherbrief.observed import ctth, lightning, opera
 
-    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    # A second back before truncating: the frame is always strictly in the past,
+    # so a 0.001-minute trail (test_flashes_trail_can_be_shortened) never
+    # catches it when the test runs just after a minute boundary.
+    now = (datetime.now(timezone.utc) - timedelta(seconds=1)).replace(second=0, microsecond=0)
     store = FrameStore(observed_env / "observed")
     for source, filename, describe in (
         (SOURCE_OPERA_DBZH, "opera_dbzh.h5", lambda p: opera.read_metadata(p, "DBZH")),

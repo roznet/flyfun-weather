@@ -728,7 +728,9 @@ class TestSchedulerAdmitsTripLegs:
 
         row = session.get(FlightRow, "solo")
         row.auto_refresh = True
-        row.auto_refresh_hour = _NOW.hour
+        # The scheduler's clock, not import time: a run straddling midnight UTC
+        # would otherwise compare hour 23 with hour 0.
+        row.auto_refresh_hour = datetime.now(timezone.utc).hour
         session.commit()
         assert self._due_ids(session) == {"solo"}
 
@@ -741,7 +743,9 @@ class TestSchedulerAdmitsTripLegs:
 
         leg = session.get(FlightRow, "leg2")
         leg.auto_refresh = True
-        leg.auto_refresh_hour = _NOW.hour
+        # The scheduler's clock, not import time: a run straddling midnight UTC
+        # would otherwise compare hour 23 with hour 0.
+        leg.auto_refresh_hour = datetime.now(timezone.utc).hour
         session.commit()
         # Trip opted out — the due leg runs alone, no mates pulled in.
         assert self._due_ids(session) == {"leg2"}
