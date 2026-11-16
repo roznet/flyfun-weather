@@ -387,3 +387,37 @@ def test_lock_skips_second_run_and_status_reports_it(tmp_path):
             assert not second
         assert ic.lock_state(tmp_path).startswith("lock: HELD")
     assert ic.lock_state(tmp_path) == "lock: free"
+
+
+def test_report_above_the_stored_levels_is_skipped_as_no_temperature(tmp_path):
+    # #1001 review: a report outside the stored levels has no temperature, which
+    # is "unknown", not "warm", so it gets its own skip reason.
+    grib = tmp_path / "grib"
+    grib.mkdir()
+    valid = T0 + timedelta(hours=9)
+    _make_run(grib, T0, valid)
+    conn = ic.open_db(tmp_path / "out")
+    _add_report(conn, valid, 40.0, -100.0, alt=8000)
+    _add_report(conn, valid, 40.0, -100.0, alt=24000)  # above 500 hPa, the top stored level
+    ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10))
+    res = hc.score(conn, ["ecmwf"], None, None, subzero=True, with_product=False, step_h=1)
+    assert res["scored"]["ecmwf"] == 1
+    assert dict(res["skipped"]["ecmwf"]) == {"no_temperature": 1}
+
+
+def test_late_report_waits_while_its_runs_file_is_resyncing(tmp_path):
+    # #1004 review: an hour already sampled from run R whose a2 file is briefly
+    # unreadable (re-synced, inside the settle window) is not final `pruned`.
+    grib = tmp_path / "grib"
+    grib.mkdir()
+    valid = T0 + timedelta(hours=9)
+    _make_run(grib, T0, valid)
+    conn = ic.open_db(tmp_path / "out")
+    _add_report(conn, valid, 40.0, -100.0)
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"ok": 1}
+    late = _add_report(conn, valid + timedelta(minutes=5), 40.2, -100.1)
+    a2 = grib / _name("a2", T0, valid)
+    assert a2.exists()
+    os.utime(a2, None)  # just re-written: inside FILE_SETTLE_S
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"waiting": 1}
+    assert conn.execute("SELECT 1 FROM samples WHERE pirep_id=?", (late,)).fetchone() is None

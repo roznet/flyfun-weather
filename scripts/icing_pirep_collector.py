@@ -153,7 +153,8 @@ CREATE TABLE IF NOT EXISTS runs_seen (
 
 def open_db(out: Path) -> sqlite3.Connection:
     out.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(out / DB_NAME)
+    # status / report open the DB without the collect lock: wait out a long write.
+    conn = sqlite3.connect(out / DB_NAME, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")  # status / report can read while cron writes
     conn.executescript(hc.SCHEMA + EXTRA_SCHEMA)
     return conn
@@ -655,7 +656,14 @@ def cmd_sample(conn, grib_dir: Path, cycles: tuple[int, ...], max_lead: int,
             # Later reports for an hour already sampled stay on the same run, so
             # one valid time's columns never mix runs (``fetches`` holds one run).
             run = used[valid]
-            status = "ok" if disk.a2(run, valid) is not None else "pruned"
+            if disk.a2(run, valid) is not None:
+                status = "ok"
+            elif run in disk.files:
+                # The run is still on disk but this file is not readable now
+                # (e.g. re-synced, inside the settle window): try next pass.
+                status = "wait"
+            else:
+                status = "pruned"
         else:
             status, run = choose_run(valid, cycles, max_lead, disk, seen, now)
         if status == "wait":
