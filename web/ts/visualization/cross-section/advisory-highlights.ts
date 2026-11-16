@@ -269,6 +269,8 @@ const RIBBON_REASON_CODES = new Set<string>([
   // aircraft_icing (#827; also emits `sld` / `severe_icing` above, and
   // `sld_aloft` for unconfirmed SLD aloft, #411 §84)
   'long_no_escape', 'long_escape', 'short_no_escape', 'short_escape', 'sld_aloft',
+  // freezing_precip_column: the model's own freezing precip type (ECMWF ptype, #411 §82)
+  'model_ptype',
   // convective — `dd_trigger` was renamed from `thermo_floor` in #442 and this
   // set was never updated, so the tooltip has shown no reason on a DD-raised
   // point since. `dd_fallback` is the #568 sibling: no native track at all.

@@ -370,6 +370,7 @@
   "advisories.reason.warm_escape": "Wärmere Luft darunter — ein Ausweg besteht",
   "advisories.reason.sld": "SLD — unterkühlte große Tropfen",
   "advisories.reason.sld_aloft": "Mögliches SLD in der Höhe (Regenwasser unter 0 °C), nicht durch Bodenmeldungen bestätigt",
+  "advisories.reason.model_ptype": "Modell erwartet hier gefrierenden Niederschlag (eigener Niederschlagstyp)",
   "advisories.reason.severe_icing": "Starke Vereisung — jenseits der Flugzeugfähigkeit",
   "advisories.reason.thick_transit": "Dicke Schicht — lange Durchflugexposition",
   "advisories.reason.icing_at_cruise": "Vereisung in Reiseflughöhe — Sie würden darin verweilen",

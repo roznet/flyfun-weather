@@ -441,6 +441,7 @@
   "advisories.reason.warm_escape": "Above-freezing air below — you have an out",
   "advisories.reason.sld": "SLD — supercooled large drops",
   "advisories.reason.sld_aloft": "Possible SLD aloft (rain water below freezing), not confirmed by surface reports",
+  "advisories.reason.model_ptype": "Model forecasts freezing precipitation here (its own precipitation type)",
   "advisories.reason.severe_icing": "Severe icing — beyond aircraft capability",
   "advisories.reason.thick_transit": "Thick layer — long exposure to transit",
   "advisories.reason.icing_at_cruise": "Ice at cruise — you would be loitering in it",

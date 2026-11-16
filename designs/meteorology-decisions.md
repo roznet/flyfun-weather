@@ -8186,7 +8186,9 @@ sessions cannot reach. Run it on the Mac with
 (sweep the two thresholds through the env variables, **per model**: the
 depth is measured between level centres, so 1,000 ft spans a different number
 of levels on GFS (25 hPa) than on AROME or ICON-D2, and a single level never
-makes a band), and read
+makes a band; a level with no rain water value ends a band, so on sparse-level
+models one missing level splits a real band in two and each half can fail the
+depth cut: check for that before reading a low hit rate as "no SLD"), and read
 `per_model[].shadow` on production briefings once this is deployed. GFS rain
 water only exists on briefings made after §83 is deployed, so a replay of
 older packs measures ICON-D2, AROME and HRRR only.

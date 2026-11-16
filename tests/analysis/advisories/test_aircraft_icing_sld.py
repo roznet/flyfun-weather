@@ -23,7 +23,9 @@ from weatherbrief.analysis.advisories.aircraft_icing import (
 from weatherbrief.analysis.advisories.vertical_profile import INF
 from weatherbrief.analysis.sounding.sld import (
     SLD_ALOFT_MAX_TEMP_C,
+    SLD_ALOFT_MIN_DEPTH_FT,
     assess_sld_aloft_zones,
+    sld_aloft_thresholds,
 )
 from weatherbrief.models import (
     AdvisoryStatus,
@@ -106,6 +108,14 @@ def test_aloft_band_shape_and_thresholds_are_tunable(monkeypatch):
     monkeypatch.setenv("WB_SLD_ALOFT_MAX_TEMP_C", "-6")
     monkeypatch.setenv("WB_SLD_ALOFT_MIN_DEPTH_FT", "1000")
     assert assess_sld_aloft_zones(_aloft_levels(7000, 9000, t=-5.0)) == []
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "minus two"])
+def test_non_finite_or_garbled_threshold_falls_back_to_the_default(monkeypatch, raw):
+    # nan would make every comparison False and silently disable the bands.
+    monkeypatch.setenv("WB_SLD_ALOFT_MAX_TEMP_C", raw)
+    monkeypatch.setenv("WB_SLD_ALOFT_MIN_DEPTH_FT", raw)
+    assert sld_aloft_thresholds() == (SLD_ALOFT_MAX_TEMP_C, SLD_ALOFT_MIN_DEPTH_FT)
 
 
 def test_aloft_band_overlapping_a_confirmed_zone_is_dropped():

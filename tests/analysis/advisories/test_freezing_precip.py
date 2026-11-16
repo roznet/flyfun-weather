@@ -467,3 +467,17 @@ def test_floor_flag_is_on_the_model_result():
     by = {m.model: m for m in result.per_model}
     assert by["ecmwf"].floors_aggregate is True
     assert by["gfs"].floors_aggregate is False  # primed profile
+
+
+def test_ptype_and_primed_points_are_counted_once_each_and_both_named():
+    """#1002 review: a ptype point and a separate primed point on one route.
+    Each point counts once (ptype is the stronger population), the card is the
+    ptype AMBER, and the sentence still names the primed extent."""
+    ctx = _ctx([_dry()] * 8 + [_ptype(12), _primed()])
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    pm = result.per_model[0]
+    assert pm.status == AdvisoryStatus.AMBER
+    assert pm.detail.startswith("Model forecasts freezing drizzle")
+    assert "; primed profile" in pm.detail
+    assert pm.affected_points == 2
+    assert pm.floors_aggregate is True

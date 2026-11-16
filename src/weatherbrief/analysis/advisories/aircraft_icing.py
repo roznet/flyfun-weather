@@ -134,12 +134,17 @@ SLD_MODE_ENV = "WB_SLD_ICING"
 SLD_SHADOW_RULE = "sld_icing"
 
 
+_warned_sld_modes: set[str] = set()
+
+
 def sld_icing_mode() -> str:
     """``live``, ``off`` or ``shadow`` (the default, and any other value)."""
     mode = os.environ.get(SLD_MODE_ENV, "").strip().lower()
     if mode in ("live", "off", "shadow"):
         return mode
-    if mode:
+    if mode and mode not in _warned_sld_modes:
+        # Called per solver cell: warn once per bad value, not per call.
+        _warned_sld_modes.add(mode)
         logger.warning("%s=%r is not live, shadow or off: running in shadow", SLD_MODE_ENV, mode)
     return "shadow"
 

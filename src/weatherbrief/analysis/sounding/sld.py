@@ -26,6 +26,8 @@ aircraft icing card computes them on demand, graded AMBER at most.
 
 from __future__ import annotations
 
+import logging
+import math
 import os
 
 from weatherbrief.analysis.sounding.icing_common import (
@@ -39,6 +41,8 @@ from weatherbrief.models import (
     PrecipitationAssessment,
     SldZone,
 )
+
+logger = logging.getLogger(__name__)
 
 # ── Mechanism 1: Warm-nose freezing rain ────────────────────────────
 
@@ -272,9 +276,14 @@ def _env_float(name: str, default: float) -> float:
     if not raw:
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
+        value = math.nan
+    if not math.isfinite(value):
+        # nan would make every comparison False: the bands would never fire.
+        logger.warning("%s=%r is not a finite number: using %s", name, raw, default)
         return default
+    return value
 
 
 def sld_aloft_thresholds() -> tuple[float, float]:
