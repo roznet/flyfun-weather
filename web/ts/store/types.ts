@@ -2054,6 +2054,24 @@ export interface RouteAnalysesManifest {
   analyses: RoutePointAnalysis[];
   /** Solar analysis (issue #227) — absent on old packs. */
   sun?: RouteSunAnalysis | null;
+  /** Climb / cruise / descent path (#1005) — absent on old packs and when off. */
+  flight_path?: FlightPath | null;
+  /** WB_FLIGHT_PATH mode the path was built under: the cards grade on it only when 'live'. */
+  flight_path_mode?: 'shadow' | 'live' | null;
+}
+
+/** The briefing's flight path (#1005), computed on the server. */
+export interface FlightPath {
+  cruise_altitude_ft: number;
+  total_distance_nm: number;
+  toc_nm: number;
+  tod_nm: number;
+  cruise_reached: boolean;
+  peak_ft: number;
+  duration_h: number;
+  time_scale: number;
+  /** Dense path: [distance_nm, altitude_ft, time_s] in route order. */
+  profile: [number, number, number][];
 }
 
 export interface ElevationPoint {

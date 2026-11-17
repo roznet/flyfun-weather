@@ -73,7 +73,29 @@
               <input type="number" id="ac-ceiling" placeholder="e.g. 25000" min="1000" max="60000" step="500" class="input-narrow">
             </div>
           </div>
+          <p class="muted section-hint" id="ac-climb-descent-label">Climb and descent (optional, blank = typical for the type)</p>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="ac-climb-ias">Climb speed (IAS kt)</label>
+              <input type="number" id="ac-climb-ias" min="40" max="400" class="input-narrow">
+            </div>
+            <div class="form-group">
+              <label for="ac-climb-rate">Climb rate (ft/min)</label>
+              <input type="number" id="ac-climb-rate" min="100" max="8000" step="50" class="input-narrow">
+            </div>
+            <div class="form-group">
+              <label for="ac-descent-rate">Descent rate (ft/min)</label>
+              <input type="number" id="ac-descent-rate" min="100" max="8000" step="50" class="input-narrow">
+            </div>
+            <div class="form-group">
+              <label for="ac-descent-angle">or descent angle (°)</label>
+              <input type="number" id="ac-descent-angle" min="1" max="6" step="0.5" class="input-narrow">
+            </div>
+          </div>
           <div class="form-row model-checkboxes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="ac-turbo"> <span id="ac-turbo-label">Turbocharged</span>
+            </label>
             <label class="checkbox-label">
               <input type="checkbox" id="ac-ifr"> <span id="ac-ifr-label">IFR capable</span>
             </label>

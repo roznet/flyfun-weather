@@ -15,6 +15,11 @@ from typing import Callable
 
 from weatherbrief.analysis.advisories.engine_methods import ENGINE_METHOD_DEFAULTS
 from weatherbrief.analysis.advisories.registry import grade_neutral_ids
+from weatherbrief.analysis.flight_path import (
+    analyses_flight_path,
+    flight_path_mode,
+    route_flight_path,
+)
 from weatherbrief.analysis.sounding import compute_sounding_ceiling_ft
 from weatherbrief.models import (
     AircraftEquipage,
@@ -27,6 +32,8 @@ from weatherbrief.models import (
     AltitudeTableResult,
     ElevationProfile,
     EnhancedCloudLayer,
+    FlightPath,
+    FlightPathSummary,
     IcingZone,
     RouteAdvisoriesManifest,
     RouteConfig,
@@ -520,8 +527,12 @@ def run_advisories(
     altitude_table_step_ft: int | None = None,
     declared_approach_icaos: list[str] | None = None,
     models_failed: dict[str, str] | None = None,
+    flight_path: FlightPath | None = None,
 ) -> AdvisoryResult:
     """Evaluate route advisories from analysis results.
+
+    ``flight_path`` is the analysis stage's path (#1005); None builds one from
+    the analyses unless ``WB_FLIGHT_PATH=off``.
 
     If *pack_dir* is set, persists the advisory manifest to disk.
 
@@ -558,6 +569,12 @@ def run_advisories(
             models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
         else:
             models_failed = _restrict_to_advisory_models(models_failed, advisory_models)
+        flight_path = analyses_flight_path(
+            rp_analyses, route.cruise_altitude_ft, stored=flight_path,
+            elevation=elevation_profile, equipage=equipage,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            planned_duration_h=route.flight_duration_hours,
+        )
         ctx = RouteContext(
             analyses=rp_analyses,
             cross_sections=cross_sections,
@@ -580,6 +597,8 @@ def run_advisories(
             equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
             models_failed=models_failed,
+            flight_path=flight_path,
+            flight_path_live=flight_path_mode() == "live",
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -595,6 +614,7 @@ def run_advisories(
             airport_conditions=airport_conds,
             aircraft=equipage,
             models_failed=models_failed,
+            flight_path=_path_summary(ctx),
         )
         logger.info("Route advisories: %d evaluated (%d models)",
                      len(advisory_results), len(advisory_model_names))
@@ -632,6 +652,7 @@ def run_advisories(
                     cruise_speed_ias_kt=cruise_speed_ias_kt,
                     equipage=equipage,
                     flight_duration_hours=route.flight_duration_hours,
+                    flight_path=flight_path,
                 )
                 if pack_dir and altitude_table is not None:
                     from weatherbrief.tasks.artifacts import save_altitude_table_artifacts
@@ -649,6 +670,13 @@ def run_advisories(
     except Exception as exc:
         logger.warning("Route advisory evaluation failed", exc_info=True)
         return AdvisoryResult(manifest=None, error=str(exc))
+
+
+def _path_summary(ctx) -> FlightPathSummary | None:
+    """The path the cards read, for the manifest (#1005)."""
+    if ctx.flight_path is None:
+        return None
+    return FlightPathSummary.of(ctx.flight_path, ctx.flight_path_live)
 
 
 def run_advisories_from_pack(
@@ -742,6 +770,14 @@ def run_advisories_from_pack(
             route_sun = manifest.sun
 
         models_failed = _models_failed_for_ctx(pack_dir, advisory_models)
+        flight_path = analyses_flight_path(
+            analyses, effective_cruise, stored=getattr(manifest, "flight_path", None),
+            elevation=elevation, equipage=equipage,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            planned_duration_h=(
+                flight_duration_hours or getattr(manifest, "flight_duration_hours", 0.0)
+            ),
+        )
         ctx = RouteContext(
             analyses=analyses,
             cross_sections=cross_sections,
@@ -770,6 +806,8 @@ def run_advisories_from_pack(
             equipage=equipage,
             flight_duration_hours=flight_duration_hours,
             models_failed=models_failed,
+            flight_path=flight_path,
+            flight_path_live=flight_path_mode() == "live",
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -785,6 +823,7 @@ def run_advisories_from_pack(
             airport_conditions=airport_conds,
             aircraft=equipage,
             models_failed=models_failed,
+            flight_path=_path_summary(ctx),
         )
 
         if persist:
@@ -1097,7 +1136,13 @@ def run_alt_from_pack(
     if not cross_sections or route_points is None:
         return AdvisoryResult(manifest=None, error="Missing cross-section or route-point data")
 
-    # Re-run analysis at the alt departure time
+    # Re-run analysis at the alt departure time, on the same flight path (#1005).
+    flight_path = route_flight_path(
+        route_points, route.cruise_altitude_ft, elevation=elevation, equipage=equipage,
+        cruise_speed_ias_kt=cruise_speed_ias_kt,
+        planned_duration_h=route.flight_duration_hours,
+    )
+    path_live = flight_path_mode() == "live"
     rp_analyses = analyze_all_route_points(
         cross_sections=cross_sections,
         route_points=route_points,
@@ -1106,6 +1151,8 @@ def run_alt_from_pack(
         cruise_altitude_ft=route.cruise_altitude_ft,
         flight_ceiling_ft=route.flight_ceiling_ft,
         elevation=elevation,
+        flight_path=flight_path,
+        path_times=path_live,
     )
 
     if not rp_analyses:
@@ -1189,6 +1236,8 @@ def run_alt_from_pack(
             equipage=equipage,
             flight_duration_hours=route.flight_duration_hours,
             models_failed=models_failed,
+            flight_path=flight_path,
+            flight_path_live=path_live,
         )
         effective_aggregation = aggregation or AdvisoryAggregation.MAJORITY
         advisory_results = evaluate_all(ctx, enabled_ids, user_params, aggregation=effective_aggregation)
@@ -1204,6 +1253,7 @@ def run_alt_from_pack(
             airport_conditions=airport_conds,
             aircraft=equipage,
             models_failed=models_failed,
+            flight_path=_path_summary(ctx),
         )
 
         if persist:

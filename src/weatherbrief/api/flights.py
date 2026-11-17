@@ -1144,6 +1144,77 @@ def compute_route_distance(
     )
 
 
+class DurationEstimateRequest(BaseModel):
+    """The new-flight form's duration estimate, from the flight path (#1005)."""
+
+    total_distance_nm: float = Field(gt=0, le=20000)
+    cruise_altitude_ft: int = Field(ge=0, le=60000)
+    # The aircraft the flight will fly; omitted = the user's default aircraft.
+    aircraft_id: int | None = None
+    # Departure / arrival ICAO, for the field elevations (sea level when unknown).
+    origin: str | None = Field(default=None, max_length=8)
+    destination: str | None = Field(default=None, max_length=8)
+
+
+class DurationEstimateResponse(BaseModel):
+    duration_hours: float
+    preset: str
+    toc_nm: float
+    tod_nm: float
+    cruise_reached: bool
+
+
+@router.post("/duration-estimate", response_model=DurationEstimateResponse)
+def estimate_flight_duration(
+    req: DurationEstimateRequest,
+    request: Request,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+):
+    """Still-air flight duration from the climb / cruise / descent path (#1005).
+
+    Replaces the clients' distance / cruise-TAS estimate: the server owns the
+    path, so every client shows the same figure. The pilot can still
+    overwrite the duration on the form; the briefing's path then scales its
+    times to that duration.
+    """
+    from weatherbrief.analysis.flight_path import compute_flight_path
+    from weatherbrief.storage.aircraft import aircraft_performance, get_aircraft, get_default_aircraft
+
+    row = None
+    if req.aircraft_id:
+        row = get_aircraft(db, req.aircraft_id)
+        if row is not None and row.user_id != user_id:
+            row = None
+    if row is None:
+        row = get_default_aircraft(db, user_id)
+    cruise_ias = row.cruise_speed_kt if row is not None else None
+    perf = aircraft_performance(row)
+
+    dep = arr = 0.0
+    db_path = getattr(request.app.state, "db_path", "")
+    icaos = [c.strip().upper() for c in (req.origin, req.destination) if c]
+    if db_path and icaos:
+        try:
+            from weatherbrief.airports import get_airport_elevations
+
+            elevations = get_airport_elevations(icaos, db_path)
+            dep = (elevations.get((req.origin or "").strip().upper()) or 0.0) if req.origin else 0.0
+            arr = (elevations.get((req.destination or "").strip().upper()) or 0.0) if req.destination else 0.0
+        except Exception:
+            logger.warning("duration-estimate: elevation lookup failed", exc_info=True)
+
+    path = compute_flight_path(
+        [0.0, req.total_distance_nm], req.cruise_altitude_ft, perf, dep, arr,
+        cruise_ias_kt=cruise_ias,
+    )
+    return DurationEstimateResponse(
+        duration_hours=round(path.duration_h, 4), preset=perf.preset,
+        toc_nm=round(path.toc_nm, 1), tod_nm=round(path.tod_nm, 1),
+        cruise_reached=path.cruise_reached,
+    )
+
+
 class InterpretRouteRequest(BaseModel):
     """Request body for interpreting a route string with smart waypoint filtering."""
 

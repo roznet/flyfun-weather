@@ -4,6 +4,7 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import {
   AutorouterNotLinkedError,
   fetchAutorouterRoutes,
+  fetchDurationEstimate,
   fetchRouteDistance,
   parseFpl,
   type AutorouterRouteSummary,
@@ -218,13 +219,33 @@ function setDurationControls(decimalHours: number): void {
  *  rounded UP to the next 15-minute unit when populating the dropdowns. */
 function recalcDurationEstimate(): void {
   if (durationManuallyEdited || lastTotalDistanceNm <= 0) return;
-  const iasKt = getCruiseSpeedIAS();
-  if (!iasKt || iasKt <= 0) return;
   const altFt = parseInt(
     (document.getElementById('input-altitude') as HTMLInputElement)?.value || '8000', 10);
-  const tasKt = iasToTasISA(iasKt, altFt);
-  setDurationControls(lastTotalDistanceNm / tasKt);
+  // The server computes the duration from the aircraft's climb / cruise /
+  // descent path (#1005), so every client shows the same figure. The local
+  // cruise-TAS estimate is only the fallback when the call fails.
+  const seq = ++durationEstimateSeq;
+  const distanceNm = lastTotalDistanceNm;
+  fetchDurationEstimate({
+    total_distance_nm: distanceNm,
+    cruise_altitude_ft: Number.isFinite(altFt) ? altFt : 8000,
+    aircraft_id: getSelectedAircraft()?.id ?? null,
+    origin: lastWaypoints[0]?.icao ?? null,
+    destination: lastWaypoints[lastWaypoints.length - 1]?.icao ?? null,
+  }).then((resp) => {
+    // A newer request (altitude / aircraft change) or a manual edit wins.
+    if (seq !== durationEstimateSeq || durationManuallyEdited) return;
+    setDurationControls(resp.duration_hours);
+  }).catch(() => {
+    if (seq !== durationEstimateSeq || durationManuallyEdited) return;
+    const iasKt = getCruiseSpeedIAS();
+    if (!iasKt || iasKt <= 0) return;
+    setDurationControls(distanceNm / iasToTasISA(iasKt, altFt));
+  });
 }
+
+/** Sequence number of the latest duration-estimate request (drops stale replies). */
+let durationEstimateSeq = 0;
 
 /** Populate the Recent Routes dropdown from the user's flight history.
  *  Shows the most-recent distinct waypoint sets (up to 8). Hidden if fewer

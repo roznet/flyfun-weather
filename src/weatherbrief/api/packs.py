@@ -1744,13 +1744,20 @@ def _resolve_equipage(db, flight):
         try:
             from weatherbrief.storage.aircraft import resolve_flight_aircraft
 
+            from weatherbrief.storage.aircraft import aircraft_performance
+
             ac = resolve_flight_aircraft(db, flight)
             if ac is not None and not ac.is_placeholder:
                 fiki = bool(ac.is_fiki)
                 return AircraftEquipage(
                     known=True, fiki=fiki, ceiling_ft=ac.ceiling_ft,
                     profile_fiki=not fiki and _flight_profile_says_fiki(db, flight),
+                    performance=aircraft_performance(ac),
                 )
+            if ac is not None:
+                # The placeholder: unknown aircraft, but its cruise speed
+                # still picks trainer vs high-performance (#1005).
+                return AircraftEquipage(performance=aircraft_performance(ac))
         except Exception:
             logger.warning("equipage: aircraft lookup failed", exc_info=True)
     return AircraftEquipage()

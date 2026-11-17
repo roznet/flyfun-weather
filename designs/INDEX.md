@@ -74,6 +74,11 @@ Key exports: `run_alternate_requirement`, `compute_faa_trigger`, `compute_easa_t
 Key exports: `run_time_scan`, `compute_model_coverage`, `candidate_valid_times`, `extend_ecmwf_daylight`, `extend_openmeteo_adjacent_day`, `confirm_candidate`, `compute_daylight_window`, `TimeScanStatus`, `TimeCandidate`, `ModelCoverage`
 → Full doc: timing-scenarios.md
 
+### flight-path
+Per-aircraft climb / cruise / descent path of a briefing (#1005): class presets from the ICAO category (trainer, high-performance, turbo piston, twin, turboprops, unadvertised light jet with Mach) with pilot overrides on the aircraft, still-air integration with a headwind hook, server-side duration estimate, path stored on the route-analyses manifest, `WB_FLIGHT_PATH` shadow/live/off. Phase-1 consumers: aircraft icing (exposure along the path, non-FIKI iced rate × 0.7), VMC / cloud tops (graded on each cell's flown band, in-cloud stretches on climb and descent), solver `rate_limit`.
+Key exports: `compute_flight_path`, `resolve_performance`, `PRESETS`, `recompute_for_cruise`, `route_flight_path`, `analyses_flight_path`, `flight_path_mode`, `FlightPath`, `AircraftPerformance`, `with_path_shadow`, `flown_band`, `path_rate_limit`
+→ Full doc: flight-path.md
+
 ### vertical-profile-solver
 Shared `(route-distance × altitude)` cost-field path-finder behind altitude-dependent advisories: one solver replaces the per-axis VFR mitigation gates and is reused by icing-escape, superseding the ad-hoc #328/#330 corridor logic. Produces the climb/descent profile a mitigation suggests.
 Key exports: `vertical_profile.solve`, `CostModel`, `Profile`, `Blockage`, `floor_reachable_bins`, `build_cost_model`, `MitigationProfile`

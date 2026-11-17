@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories._flight_path import flown_band, with_path_shadow
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
@@ -88,120 +89,127 @@ class CloudTopEvaluator:
 
     @staticmethod
     def evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
-        margin_ft = params.get("margin_ft", 1000)
-        extent_pct_amber = params.get("extent_pct_amber", 25)
-        extent_pct_red = params.get("extent_pct_red", 60)
-        extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
-        ceiling = ctx.flight_ceiling_ft
+        return with_path_shadow(_evaluate, ctx, params)
 
-        per_model: list[ModelAdvisoryResult] = []
 
-        for model in ctx.models:
-            max_top: float | None = None
-            # One evidence sample per route point (#393): the grade count
-            # (above_ceiling) and the ribbon/scrim both derive from this list.
-            # Binary per point: green = toppable or no cloud, amber = can't get on
-            # top here; the cutout is the blocking deck.
-            samples: list[EvidenceSample] = []
+def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResult:
+    margin_ft = params.get("margin_ft", 1000)
+    extent_pct_amber = params.get("extent_pct_amber", 25)
+    extent_pct_red = params.get("extent_pct_red", 60)
+    extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
+    ceiling = ctx.flight_ceiling_ft
 
-            for rpa in ctx.analyses:
-                dist = rpa.distance_from_origin_nm or 0.0
-                sounding = rpa.sounding.get(model)
-                if sounding is None:
-                    samples.append(EvidenceSample(
-                        distance_nm=dist, assessed=False,
-                        severity=HighlightSeverity.UNAVAILABLE,
-                    ))
-                    continue
+    per_model: list[ModelAdvisoryResult] = []
 
-                # Only consider layers the pilot would actually encounter:
-                # base must be within margin of cruise altitude (close enough
-                # to enter) AND below flight ceiling.  Layers well above
-                # cruise are irrelevant — the pilot flies clear below them.
-                cruise = ctx.cruise_altitude_ft
-                reachable = [
-                    cl for cl in sounding.cloud_layers
-                    if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
+    for model in ctx.models:
+        max_top: float | None = None
+        # One evidence sample per route point (#393): the grade count
+        # (above_ceiling) and the ribbon/scrim both derive from this list.
+        # Binary per point: green = toppable or no cloud, amber = can't get on
+        # top here; the cutout is the blocking deck.
+        samples: list[EvidenceSample] = []
+
+        for idx, rpa in enumerate(ctx.analyses):
+            dist = rpa.distance_from_origin_nm or 0.0
+            sounding = rpa.sounding.get(model)
+            if sounding is None:
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=False,
+                    severity=HighlightSeverity.UNAVAILABLE,
+                ))
+                continue
+
+            # Only consider layers the pilot would actually encounter:
+            # base must be within margin of cruise altitude (close enough
+            # to enter) AND below flight ceiling.  Layers well above
+            # cruise are irrelevant — the pilot flies clear below them.
+            # Flight path (#1005): a climb / descent cell only meets the
+            # layers its own band reaches, not those near cruise.
+            flown = flown_band(ctx, idx)
+            cruise = flown[1] if flown is not None else ctx.cruise_altitude_ft
+            reachable = [
+                cl for cl in sounding.cloud_layers
+                if cl.base_ft <= cruise + margin_ft and cl.base_ft <= ceiling
+            ]
+            if not reachable:
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True,
+                    severity=HighlightSeverity.GREEN,
+                ))
+                continue
+
+            highest_top = max(cl.top_ft for cl in reachable)
+            if max_top is None or highest_top > max_top:
+                max_top = highest_top
+
+            if highest_top + margin_ft > ceiling:
+                # The blocking deck: the reachable layers whose tops violate
+                # the ceiling margin.
+                blocking = [
+                    cl for cl in reachable if cl.top_ft + margin_ft > ceiling
                 ]
-                if not reachable:
-                    samples.append(EvidenceSample(
-                        distance_nm=dist, assessed=True,
-                        severity=HighlightSeverity.GREEN,
-                    ))
-                    continue
-
-                highest_top = max(cl.top_ft for cl in reachable)
-                if max_top is None or highest_top > max_top:
-                    max_top = highest_top
-
-                if highest_top + margin_ft > ceiling:
-                    # The blocking deck: the reachable layers whose tops violate
-                    # the ceiling margin.
-                    blocking = [
-                        cl for cl in reachable if cl.top_ft + margin_ft > ceiling
-                    ]
-                    samples.append(EvidenceSample(
-                        distance_nm=dist, assessed=True,
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True,
+                    severity=HighlightSeverity.AMBER,
+                    region=FlaggedCell(
+                        kind="blocking_deck",
                         severity=HighlightSeverity.AMBER,
-                        region=FlaggedCell(
-                            kind="blocking_deck",
-                            severity=HighlightSeverity.AMBER,
-                            base_ft=int(min(cl.base_ft for cl in blocking)),
-                            top_ft=int(max(cl.top_ft for cl in blocking)),
-                            metric_id="cloud_cover",
-                            # The cloud method behind these layers (#408).
-                            method_id=sounding.cloud_method_effective,
-                        ),
-                    ))
-                else:
-                    samples.append(EvidenceSample(
-                        distance_nm=dist, assessed=True,
-                        severity=HighlightSeverity.GREEN,
-                    ))
-
-            summary = summarize_evidence(
-                samples, ctx.total_distance_nm,
-                speed_kt=ctx.cruise_groundspeed_kt,
-            )
-            total = summary.assessed
-            above_ceiling = summary.affected
-            loc = ctx.locale
-            if total == 0:
-                status = AdvisoryStatus.UNAVAILABLE
-                detail = adv_t("no_data", loc)
-            elif above_ceiling == 0:
-                status = AdvisoryStatus.GREEN
-                if max_top is not None:
-                    detail = adv_t("cloud_top.reachable", loc, top=f"{max_top:.0f}", ceiling=ceiling)
-                else:
-                    detail = adv_t("cloud_top.no_layers", loc)
+                        base_ft=int(min(cl.base_ft for cl in blocking)),
+                        top_ft=int(max(cl.top_ft for cl in blocking)),
+                        metric_id="cloud_cover",
+                        # The cloud method behind these layers (#408).
+                        method_id=sounding.cloud_method_effective,
+                    ),
+                ))
             else:
-                status = grade_extent(
-                    summary.extent,
-                    amber_pct=extent_pct_amber, red_pct=extent_pct_red,
-                    min_nm=extent_min_nm,
-                )
-                ext = format_extent(summary.extent)
-                detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
+                samples.append(EvidenceSample(
+                    distance_nm=dist, assessed=True,
+                    severity=HighlightSeverity.GREEN,
+                ))
 
-            # Coverage tolerance (#391): a clear verdict on a sounding subset that
-            # is too small to represent the route becomes UNAVAILABLE — a clear
-            # 2-of-20-points model has not established the other 18 are clear. A
-            # flagged verdict is never downgraded (real hazard evidence stands).
-            if status == AdvisoryStatus.GREEN and summary.below_coverage:
-                status = AdvisoryStatus.UNAVAILABLE
-                detail = adv_t("no_data", loc)
+        summary = summarize_evidence(
+            samples, ctx.total_distance_nm,
+            speed_kt=ctx.cruise_groundspeed_kt,
+        )
+        total = summary.assessed
+        above_ceiling = summary.affected
+        loc = ctx.locale
+        if total == 0:
+            status = AdvisoryStatus.UNAVAILABLE
+            detail = adv_t("no_data", loc)
+        elif above_ceiling == 0:
+            status = AdvisoryStatus.GREEN
+            if max_top is not None:
+                detail = adv_t("cloud_top.reachable", loc, top=f"{max_top:.0f}", ceiling=ceiling)
+            else:
+                detail = adv_t("cloud_top.no_layers", loc)
+        else:
+            status = grade_extent(
+                summary.extent,
+                amber_pct=extent_pct_amber, red_pct=extent_pct_red,
+                min_nm=extent_min_nm,
+            )
+            ext = format_extent(summary.extent)
+            detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 
-            # Highlights (#375) only when the model has data.
-            highlights = summary.highlights if total > 0 else None
+        # Coverage tolerance (#391): a clear verdict on a sounding subset that
+        # is too small to represent the route becomes UNAVAILABLE — a clear
+        # 2-of-20-points model has not established the other 18 are clear. A
+        # flagged verdict is never downgraded (real hazard evidence stands).
+        if status == AdvisoryStatus.GREEN and summary.below_coverage:
+            status = AdvisoryStatus.UNAVAILABLE
+            detail = adv_t("no_data", loc)
 
-            per_model.append(ModelAdvisoryResult.build(
-                model=model, status=status, detail=detail,
-                affected=above_ceiling, total=total,
-                total_distance_nm=ctx.total_distance_nm,
-                extent=summary.extent,
-                highlights=highlights,
-                primary_method_id=driving_method_id(highlights, status),
-            ))
+        # Highlights (#375) only when the model has data.
+        highlights = summary.highlights if total > 0 else None
 
-        return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)
+        per_model.append(ModelAdvisoryResult.build(
+            model=model, status=status, detail=detail,
+            affected=above_ceiling, total=total,
+            total_distance_nm=ctx.total_distance_nm,
+            extent=summary.extent,
+            highlights=highlights,
+            primary_method_id=driving_method_id(highlights, status),
+        ))
+
+    return RouteAdvisoryResult.from_per_model("cloud_top", per_model, params)

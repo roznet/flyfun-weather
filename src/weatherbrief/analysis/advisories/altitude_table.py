@@ -18,6 +18,7 @@ from weatherbrief.models import (
     AltitudeAdvisoryRow,
     AltitudeTableResult,
     ElevationProfile,
+    FlightPath,
     RouteCrossSection,
     RoutePointAnalysis,
 )
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Terrain clearance for a recommendable altitude — the same 1,000 ft the §8a
 # descent-escape guard and the IcingEscape route advisory (terrain_margin_ft)
 # use, so "an altitude we would offer" means one thing across the app (#807).
+from weatherbrief.analysis.flight_path import flight_path_mode, recompute_for_cruise  # noqa: E402
 from weatherbrief.analysis.sounding.advisories import (  # noqa: E402
     _TERRAIN_CLEARANCE_FT as TERRAIN_CLEARANCE_FT,
 )
@@ -114,8 +116,14 @@ def compute_altitude_table(
     cruise_speed_ias_kt: float | None = None,
     equipage: AircraftEquipage | None = None,
     flight_duration_hours: float = 0.0,
+    flight_path: FlightPath | None = None,
 ) -> AltitudeTableResult:
     """Sweep altitude-dependent advisories across a range of altitudes.
+
+    With a ``flight_path`` (#1005) each row is flown on the same aircraft's
+    path to that row's altitude (``recompute_for_cruise``), so the planned
+    row agrees with the cards; ``WB_FLIGHT_PATH`` decides, as on the cards,
+    whether the path is graded or only shadowed.
 
     Args:
         analyses: Route point analyses (already method-swapped).
@@ -181,7 +189,9 @@ def compute_altitude_table(
 
     # Evaluate at each altitude
     rows: list[AltitudeAdvisoryRow] = []
+    path_live = flight_path_mode() == "live"
     for alt in sorted_alts:
+        row_path = recompute_for_cruise(flight_path, alt) if flight_path is not None else None
         ctx = RouteContext(
             analyses=analyses,
             cross_sections=cross_sections,
@@ -195,6 +205,10 @@ def compute_altitude_table(
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             equipage=equipage,
             flight_duration_hours=flight_duration_hours,
+            # Shadow records are not stored on the table: only the live path
+            # is worth the per-row recompute.
+            flight_path=row_path if path_live else None,
+            flight_path_live=path_live,
         )
         results = evaluate_all(ctx, enabled_ids=alt_dep_ids, user_params=user_params, aggregation=aggregation)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from flyfun_common.db import current_user_id, get_db
@@ -60,7 +60,32 @@ class AircraftResponse(BaseModel):
     # Synthesised for a user who never set an aircraft up (#777): clients show
     # "Set up your aircraft". Cleared by any PUT.
     is_placeholder: bool = False
+    # Climb / descent overrides (#1005). None = the class preset.
+    is_turbo: bool = False
+    climb_ias_kt: int | None = None
+    climb_rate_fpm: int | None = None
+    descent_rate_fpm: int | None = None
+    descent_angle_deg: float | None = None
+    # What the briefing's flight path actually uses: the overrides over the
+    # class preset of the ICAO category, so a form can show the preset values.
+    performance: AircraftPerformanceResponse | None = None
     created_at: str
+
+
+class AircraftPerformanceResponse(BaseModel):
+    """The resolved climb / descent performance of one aircraft (#1005)."""
+
+    preset: str
+    source: str
+    climb_ias_kt: float
+    climb_rate_fpm: float
+    ceiling_ft: float
+    descent_mode: str
+    descent_rate_fpm: float | None = None
+    descent_angle_deg: float | None = None
+
+
+AircraftResponse.model_rebuild()
 
 
 def _row_to_response(row, *, include_tail: bool = True) -> AircraftResponse:
@@ -82,7 +107,28 @@ def _row_to_response(row, *, include_tail: bool = True) -> AircraftResponse:
         ceiling_ft=row.ceiling_ft,
         is_default=row.is_default,
         is_placeholder=bool(row.is_placeholder),
+        is_turbo=bool(getattr(row, "is_turbo", False)),
+        climb_ias_kt=row.climb_ias_kt,
+        climb_rate_fpm=row.climb_rate_fpm,
+        descent_rate_fpm=row.descent_rate_fpm,
+        descent_angle_deg=row.descent_angle_deg,
+        performance=_performance_response(row),
         created_at=row.created_at.isoformat(),
+    )
+
+
+def _performance_response(row) -> AircraftPerformanceResponse | None:
+    from weatherbrief.storage.aircraft import aircraft_performance
+
+    try:
+        perf = aircraft_performance(row)
+    except Exception:
+        return None
+    return AircraftPerformanceResponse(
+        preset=perf.preset, source=perf.source, climb_ias_kt=perf.climb_ias_kt,
+        climb_rate_fpm=perf.climb_rate_low_fpm, ceiling_ft=perf.ceiling_ft,
+        descent_mode=perf.descent_mode, descent_rate_fpm=perf.descent_rate_fpm,
+        descent_angle_deg=perf.descent_angle_deg,
     )
 
 
@@ -101,6 +147,13 @@ class CreateAircraftRequest(BaseModel):
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool = False
+    # Climb / descent overrides (#1005). Omitted = unchanged / preset; on an
+    # update, 0 clears the override back to the class preset.
+    is_turbo: bool | None = None
+    climb_ias_kt: int | None = Field(default=None, ge=0, le=400)
+    climb_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
+    descent_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
+    descent_angle_deg: float | None = Field(default=None, ge=0, le=6)
 
     @field_validator("icao_type")
     @classmethod
@@ -130,6 +183,13 @@ class UpdateAircraftRequest(BaseModel):
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool | None = None
+    # Climb / descent overrides (#1005). Omitted = unchanged / preset; on an
+    # update, 0 clears the override back to the class preset.
+    is_turbo: bool | None = None
+    climb_ias_kt: int | None = Field(default=None, ge=0, le=400)
+    climb_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
+    descent_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
+    descent_angle_deg: float | None = Field(default=None, ge=0, le=6)
 
     @field_validator("icao_type")
     @classmethod
@@ -152,6 +212,9 @@ class UpdateAircraftRequest(BaseModel):
         if not TAIL_NUMBER_RE.match(v):
             raise ValueError("Tail number must be 2-10 alphanumeric characters or hyphens")
         return v
+
+
+_PERFORMANCE_OVERRIDES = ("climb_ias_kt", "climb_rate_fpm", "descent_rate_fpm", "descent_angle_deg")
 
 
 # --- Endpoints ---
@@ -220,6 +283,11 @@ def add_aircraft(
         cruise_speed_kt=req.cruise_speed_kt,
         ceiling_ft=req.ceiling_ft,
         is_default=req.is_default,
+        is_turbo=bool(req.is_turbo),
+        climb_ias_kt=req.climb_ias_kt or None,
+        climb_rate_fpm=req.climb_rate_fpm or None,
+        descent_rate_fpm=req.descent_rate_fpm or None,
+        descent_angle_deg=req.descent_angle_deg or None,
     )
     if placeholder is not None:
         replace_placeholder(db, placeholder, row)
@@ -253,6 +321,10 @@ def edit_aircraft(
         updates["tail_number"] = req.tail_number
     if req.nickname is not None:
         updates["nickname"] = req.nickname
+
+    for key in _PERFORMANCE_OVERRIDES:
+        if updates.get(key) == 0:
+            updates[key] = None  # 0 clears the override back to the preset
 
     if updates.get("is_default") is False and row.is_default:
         updates.pop("is_default")

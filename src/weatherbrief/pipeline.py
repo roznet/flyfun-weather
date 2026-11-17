@@ -413,6 +413,8 @@ def _execute_briefing_stages(
         pack_dir=pack_dir,
         progress_callback=progress_callback,
         elevation=fetch_result.elevation_profile,
+        equipage=options.equipage,
+        cruise_speed_ias_kt=options.cruise_speed_ias_kt,
     )
     stage_timings["analyze"] = perf_counter() - _t0
     rss = _current_rss_mb()
@@ -486,6 +488,7 @@ def _execute_briefing_stages(
             # block and the client-side lever; default 2000ft step (#259).
             altitude_table_step_ft=2000,
             models_failed=fetch_result.models_failed,
+            flight_path=analysis_result.route_analyses_manifest.flight_path,
         )
         route_advisories_manifest = advisory_result.manifest
         altitude_table_manifest = advisory_result.altitude_table

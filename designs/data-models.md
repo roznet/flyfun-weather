@@ -155,7 +155,7 @@ Fields: `point_index`, `lat`, `lon`, `distance_from_origin_nm`, `waypoint_icao`,
 
 Container for all route point analyses, saved as `route_analyses.json` in the pack directory.
 
-Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`, `sun: RouteSunAnalysis | None` (optional, old packs deserialize fine without it).
+Fields: `route_name`, `target_date`, `departure_time`, `flight_duration_hours`, `total_distance_nm`, `cruise_altitude_ft`, `models`, `analyses: list[RoutePointAnalysis]`, `sun: RouteSunAnalysis | None` (optional, old packs deserialize fine without it). `flight_path: FlightPath | None` and `flight_path_mode` (`shadow` / `live`) carry the briefing's climb / cruise / descent path (#1005, `models/flight_path.py`, see `flight-path.md`); `RoutePointAnalysis.planned_altitude_ft` / `phase` stamp each point with it. All None on old packs and with `WB_FLIGHT_PATH=off`. `AircraftEquipage.performance` holds the resolved `AircraftPerformance`; `RouteAdvisoriesManifest.flight_path` a `FlightPathSummary` (TOC / TOD / live).
 
 ### Route Solar Analysis
 

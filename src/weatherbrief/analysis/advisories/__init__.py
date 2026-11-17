@@ -22,6 +22,8 @@ from weatherbrief.models import (
     AirportApproaches,
     AirportConditions,
     ElevationProfile,
+    FlightPath,
+    PathSlice,
     RouteAdvisoryResult,
     RouteCrossSection,
     RouteFrontsManifest,
@@ -95,6 +97,38 @@ class RouteContext:
     # the model-agreement advisory so its summary never says "models agree"
     # across a model it never had. Empty on old packs and outside the pipeline.
     models_failed: dict[str, str] = field(default_factory=dict)
+    # The briefing's climb / cruise / descent path (#1005), or None (old pack,
+    # ``WB_FLIGHT_PATH=off``). ``flight_path_live`` says whether the phase-1
+    # cards (aircraft icing, cloud / VMC) grade on it; in shadow they grade
+    # flat cruise and record the path grade on ``per_model[].shadow``. Read
+    # through :meth:`path_slice`, never ``flight_path`` directly.
+    flight_path: FlightPath | None = None
+    flight_path_live: bool = False
+
+    def path_slice(self, idx: int) -> PathSlice | None:
+        """What the aircraft flies in the cell owned by ``analyses[idx]``.
+
+        The cell runs between the midpoints to the neighbouring analysed
+        points (the convention of the extent and exposure code). None when the
+        path is not live for this context: callers then read flat cruise.
+        """
+        if not self.flight_path_live or self.flight_path is None:
+            return None
+        dists = self._analysis_distances
+        d = dists[idx]
+        lo = 0.0 if idx == 0 else (dists[idx - 1] + d) / 2
+        hi = self.total_distance_nm if idx == len(dists) - 1 else (d + dists[idx + 1]) / 2
+        return self.flight_path.slice(lo, hi)
+
+    def planned_altitude_ft(self, idx: int) -> float:
+        """The altitude the aircraft is at, at ``analyses[idx]``: path when live, else cruise."""
+        if not self.flight_path_live or self.flight_path is None:
+            return float(self.cruise_altitude_ft)
+        return self.flight_path.altitude_at(self._analysis_distances[idx])
+
+    @cached_property
+    def _analysis_distances(self) -> list[float]:
+        return [a.distance_from_origin_nm or 0.0 for a in self.analyses]
 
     @cached_property
     def departure_frost(self):  # -> DepartureFrostAnalysis | None

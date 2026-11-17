@@ -125,6 +125,7 @@ def build_digest_context(
         f"(~{snapshot.route.cruise_pressure_hpa}hPa)\n"
         f"PILOT CAPABILITY: {capability}"
         + _aircraft_header_line(route_advisories)
+        + _flight_path_header_line(route_advisories)
         + _models_header_line(route_advisories)
     )
 
@@ -987,6 +988,30 @@ def _aircraft_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
     if eq.ceiling_ft:
         line += f", ceiling {eq.ceiling_ft:,} ft"
     return f"\nAIRCRAFT: {line}"
+
+
+def _flight_path_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
+    """``\nFLIGHT PATH: ...`` top of climb / descent, when the cards graded on it (#1005).
+
+    Only when live: in shadow the icing and cloud findings are still graded at
+    cruise everywhere, and naming a path they did not read would mislead.
+    Empty on old packs, so their replayed context is unchanged.
+    """
+    fp = manifest.flight_path if manifest is not None else None
+    if fp is None or not fp.live:
+        return ""
+    out_nm = max(fp.total_distance_nm - fp.tod_nm, 0.0)
+    level = f"{fp.peak_ft:,.0f} ft"
+    if not fp.cruise_reached:
+        return (
+            f"\nFLIGHT PATH: short leg, climbs to about {level} by nm {fp.toc_nm:.0f} "
+            f"and descends from there (cruise altitude not reached)"
+        )
+    return (
+        f"\nFLIGHT PATH: top of climb ({level}) at nm {fp.toc_nm:.0f}, "
+        f"top of descent {out_nm:.0f} nm before arrival; icing and cloud findings "
+        f"tagged climb / descent are where the aircraft is below cruise"
+    )
 
 
 def _format_icing_escape_context(manifest: RouteAdvisoriesManifest) -> str | None:

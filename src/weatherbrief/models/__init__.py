@@ -80,6 +80,14 @@ from weatherbrief.models.diagnostic_codes import (  # noqa: F401
     GrametCode,
     SkewtCode,
 )
+from weatherbrief.models.flight_path import (  # noqa: F401
+    AircraftPerformance,
+    FlightPath,
+    FlightPathPoint,
+    FlightPathSummary,
+    PathSlice,
+    VerticalPart,
+)
 from weatherbrief.models.advisories import (  # noqa: F401
     AircraftEquipage,
     AdvisoryAggregation,
