@@ -102,6 +102,17 @@ The mode is read at evaluation time, so `WB_FLIGHT_PATH=live
 scripts/rerun_advisories_diff.py` replays stored packs on a path (old packs
 get one built from their analyses; their point times stay linear).
 
+**Before flipping to `live`** (from the #1006 review):
+- The path is **still air** (`wind_at` is not wired yet). The card ranges
+  ("climb, nm 3 to 14"), the icing exposure minutes and "in cloud … about N
+  min" ignore the wind, so in a strong head or tailwind they can be off by
+  tens of percent. Either feed the consensus wind into `wind_at` first, or
+  accept the still-air figures knowingly.
+- Compare the replay **per model**: `ICED_RATE_FACTOR` and the presets are
+  model-independent, but a cell's iced thickness comes from each model's
+  pressure-level spacing, so the climb minutes in an iced layer are coarser
+  on the sparse-level models.
+
 ## Choices and gotchas
 
 - **Extent denominator:** climb / descent cells stay in the route-extent
