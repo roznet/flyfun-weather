@@ -5,65 +5,60 @@ description: Run LLM digest eval — replay saved weather contexts through the L
 
 # Digest Eval
 
-Evaluate the LLM weather digest pipeline against saved fixtures. Each fixture contains a real context string (the exact user message sent to the LLM) and the original digest output for comparison.
+Evaluate the LLM weather digest against the labelled eval set. Each entry is a prod pack with its byte-faithful `digest_context.txt` (the exact user message the briefer saw) and an SME golden label per guidance preset; the eval replays the context and scores the new GREEN/AMBER/RED against that label.
 
 > Building or maintaining the eval **set** itself — pulling prod briefings, attaching pilot debriefs, re-running advisories vs saved baselines, promoting staging→corpus — is the **`eval-workbench`** skill. This one is only the LLM replay.
 
 ## Setup
 
 ```bash
-source venv/bin/activate
+source venv/bin/activate   # .env must set EVAL_CORPUS_DIR (see eval-workbench)
 ```
 
 ## Workflow
 
-### 1. Re-extract fixtures (if packs or context assembly changed)
-
-```bash
-python scripts/extract_digest_eval.py --dedupe --prune
-```
-
-This reads `data/packs/`, builds context strings via `build_digest_context()`, and saves compact fixtures to `tests/eval_data/digests/`. The `--prune` flag keeps ~30 fixtures (endpoints + assessment transitions, no redundant same-route/same-assessment repeats).
-
-### 2. Dry run — review what will be tested
+### 1. Dry run — review what will be scored
 
 ```bash
 python scripts/run_digest_eval.py --dry-run
 ```
 
-Shows all fixtures with their assessment, advisory counts, and context size. No LLM calls.
+Lists what would run and what is excluded from scoring (long-range entries, entries whose context isn't pulled yet, unlabelled entries). No LLM calls. Missing contexts come back with `scripts/pull_eval_corpus.py`.
 
-### 3. Run the eval
+### 2. Run the eval
 
 ```bash
-# Full run (all fixtures, ~30 LLM calls)
+# Corpus, every labelled guidance preset
 python scripts/run_digest_eval.py --output eval_results.json
 
-# Subset runs
-python scripts/run_digest_eval.py --limit 3                    # first N only
-python scripts/run_digest_eval.py --filter "egtf_lfat"         # by fixture ID
-python scripts/run_digest_eval.py --assessment AMBER            # by original assessment
+# Subsets
+python scripts/run_digest_eval.py --guidance balanced           # one preset (balanced / conservative / tolerant)
+python scripts/run_digest_eval.py --area both                   # corpus + staging
+python scripts/run_digest_eval.py --filter egtf_lfat --limit 3  # by corpus_id
+python scripts/run_digest_eval.py --priority 1                  # SME triage priority
+python scripts/run_digest_eval.py --situation icing             # situation tag
 
-# With alternative prompt
-python scripts/run_digest_eval.py --prompt configs/weather_digest/prompts/briefer_v2.md --output eval_v2.json
+# Candidate prompt or config, with drift against a previous run
+python scripts/run_digest_eval.py --prompt configs/weather_digest/prompts/<candidate>.md \
+  --baseline eval_results.json --output eval_candidate.json
 ```
 
-### 4. Inspect a specific fixture
+### 3. Inspect one entry
 
 ```bash
-python scripts/run_digest_eval.py --show <fixture_id>
+python scripts/run_digest_eval.py --show <corpus_id>
 ```
 
-Prints the full context string, original assessment, and advisory breakdown. No LLM call.
+Prints the full context string. No LLM call.
 
-### 5. Compare results
+### 4. Compare results
 
 After a run, load the results JSON and compare old vs new assessments. Key metrics:
 - **Changed count**: how many assessments shifted
 - **Distribution**: GREEN/AMBER/RED balance (watch for AMBER over-cautiousness)
 - **Direction**: `v` = downgraded (e.g. AMBER→GREEN), `^` = upgraded (e.g. GREEN→AMBER)
 
-### 6. Model / prompt A/B on recent prod briefings (#717)
+### 5. Model / prompt A/B on recent prod briefings (#717)
 
 The labelled corpus is small and ages; a candidate model or prompt also needs
 checking against what pilots see today. Each recent prod pack stores the
@@ -88,22 +83,18 @@ report them apart). `sonnet46` is the pre-#717 production config for baselines.
 
 | File | Purpose |
 |------|---------|
-| `scripts/extract_digest_eval.py` | Extracts fixtures from `data/packs/` |
-| `scripts/run_digest_eval.py` | Replays fixtures through LLM |
+| `scripts/run_digest_eval.py` | Replays the eval-set corpus through the LLM and scores against golden labels |
 | `scripts/export_digest_replay.py` / `scripts/replay_prod_digests.py` | Prod-pack A/B export (droplet) / replay (local) |
-| `tests/eval_data/digests/` | Fixture directory (context.txt + digest.json + meta.json per fixture) |
-| `configs/weather_digest/prompts/briefer_v2.md` | Current system prompt (v1 kept for rollback/diff) |
+| `configs/weather_digest/default.json` | Production config: model and briefer prompt (`prompts/briefer_v6.md` at the time of writing) |
 | `src/weatherbrief/digest/prompt_builder.py` | Context string assembly |
 | `src/weatherbrief/digest/llm_digest.py` | WeatherDigest model + LangGraph pipeline |
 
 ## Golden labels + the labelling workbench (#254)
 
 The eval scores against **golden** labels (the SME's correct assessment), not
-the model's own output. Two ways to label:
+the model's own output. Label in the visual workbench:
 
-- **Interactive CLI** — `python scripts/label_digest_eval.py --situation icing
-  --unlabeled`. Writes `meta["golden"]["assessments"]` into a fixture.
-- **Visual workbench** (preferred) — render the real briefing view for a corpus
+- **Visual workbench** — render the real briefing view for a corpus
   of pulled prod packs and label in-view, blind-first. See
   `designs/eval-digest-workbench.md`. Flow: `scripts/export_eval_candidates.py`
   → copy to dev → `scripts/pull_eval_corpus.py` → `WEATHERBRIEF_EVAL_WORKBENCH=1`
@@ -119,4 +110,4 @@ original assessment).
 Known issue: ~70% of digests are AMBER. Suspects to check:
 - Fixtures with **all-green advisories but AMBER assessment** — LLM is being overcautious
 - Check if `assessment_reason` cites model uncertainty or minor concerns that shouldn't override green advisories
-- The prompt calibration section in `briefer_v2.md` controls GREEN/AMBER/RED thresholds
+- The prompt calibration section in the production briefer prompt (named in `configs/weather_digest/default.json`) controls GREEN/AMBER/RED thresholds

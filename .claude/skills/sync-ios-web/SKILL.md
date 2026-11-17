@@ -247,8 +247,8 @@ departure line.
 | Platform | File |
 |---|---|
 | Web | `web/ts/visualization/observed/airport-card-view.ts` (CSS `.ac-*` in `web/css/style.css`) |
-| iOS | #882 |
-| Android | #883 |
+| iOS | `app/flyfun-weather/flyfun-weather/Views/Briefing/AirportCardView.swift` (rules in `AirportCardRules.swift`) |
+| Android | `app/android/app/src/main/kotlin/aero/flyfun/weather/ui/observed/AirportCard.kt` (models in `model/AirportCardModels.kt`) |
 
 Fixture shared by every client: `web/tests/fixtures/airport_cards.json`
 (server-written by `scripts/export_airport_card_fixtures.py`, drift test
@@ -401,7 +401,6 @@ gap the branch introduced:
   `current-conditions` is ported since #641 (`CurrentConditionsLayer.swift`);
   expected differences: iOS uses its own flight-category palette (MVFR blue,
   web amber) and has no cross-section legend swatches.
-- Cross-section color themes (web-only; tracked in #320).
 - Skew-T overlay bands: the web has seven (`clouds-nwp`/`clouds-dd`,
   `icing-nwp`/`icing-dd`/`icing-sfip`, `inversions`, `convective`); iOS collapses
   them into three chips (Cloud / Icing / Inversion) with no method choice and no

@@ -33,7 +33,7 @@ that is not posted did not happen.** So:
 
 Before starting the review, read the following:
 
-- CLAUDE.md at the repo root for coding standards
+- `.claude/CLAUDE.md` for coding standards
 - Any design documents in /designs/ folder relevant to files being changed - use these for module intent and architecture
 
 ---

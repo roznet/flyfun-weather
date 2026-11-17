@@ -47,7 +47,7 @@ How to read it:
 
 ## Run tests
 
-Run each suite preflight listed, once, `timeout: 600000`, no `| tail` (root `CLAUDE.md`):
+Run each suite preflight listed, once, `timeout: 600000`, no `| tail`:
 pytest always (a failure **stops the deploy**), vitest when `web/` changed (hard gate),
 Playwright when web/api/models/configs changed (warn only). Scope rules: §D8.
 

@@ -23,7 +23,7 @@ the PR, so running this is the user's explicit opt-in to the review loop.
 
 The reviewer is the GitHub user **`claude`**, driven by a **GitHub Action that fires automatically on every push** to the PR. It posts a single **top-level PR comment** (not inline threads) whose **first line is `## Code Review`**, grouping findings under `### Critical` / `### Important` / `### Minor`. A clean review posts a brief approval comment with no findings.
 
-That shape is pinned in `.claude/commands/code-review.md` ("Output format"), but **match on the first line *containing* "Code Review", not on the exact `##` decoration.** It previously drifted to `**Code Review**` — the format was documented only here, on the reading side, and never stated to the reviewer, so it held by luck until a prompt/model change flipped the register. Both ends are fixed now; keep the matcher tolerant anyway so a future drift degrades into a cosmetic mismatch rather than a watch that silently never fires.
+That shape is pinned in `.claude/commands/code-review.md` ("Output format"), but **match on the first line *containing* "Code Review", not on the exact `##` decoration**, so a change in the bot's markdown degrades into a cosmetic mismatch rather than a watch that silently never fires.
 
 Because it is a top-level comment, it is **not** a GitHub "Review": `gh pr view --json reviews` and the inline `pulls/<n>/comments` endpoint are both always empty for this bot — an empty result there means nothing. The login also differs by API: `.author.login` is `claude` via `gh pr view --json comments` (used below), but `user.login` is `claude[bot]` via REST `issues/<n>/comments`. Keep the two straight if you change the query.
 
@@ -87,7 +87,7 @@ Before acting, post a short triage summary to me: a one-line-per-finding table w
 
 **Blockers → fix and push to the PR branch.**
 - Make the fixes. Reuse existing helpers; check sibling modules if the bot flagged a pattern that repeats (cross-metric/cross-model).
-- Sanity-check before pushing: run the relevant tests / `npm run build` if frontend, and re-read the finding to confirm the fix actually addresses it.
+- Sanity-check before pushing: run the relevant tests (for frontend, `npx tsc --noEmit` and `npx vitest run` in `web/`, not `npm run build`: the devserver's esbuild owns `dist/`), and re-read the finding to confirm the fix actually addresses it.
 - Stage **specific paths** (never `git add -A` — it pulls in `.claude` runtime files). Commit with a message referencing the finding, and end the commit body with the standard `Co-Authored-By` trailer.
 - Push to the PR branch. Then post a reply comment on the PR summarizing what was fixed and what was deferred (audit trail), so the next review round has context.
 
