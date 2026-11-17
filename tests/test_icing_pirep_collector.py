@@ -495,3 +495,20 @@ def test_late_report_waits_while_its_runs_file_is_resyncing(tmp_path):
     os.utime(a2, None)  # just re-written: inside FILE_SETTLE_S
     assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"waiting": 1}
     assert conn.execute("SELECT 1 FROM samples WHERE pirep_id=?", (late,)).fetchone() is None
+
+
+def test_late_report_for_a_step_pruned_while_its_run_keeps_other_steps(tmp_path):
+    # The node prunes a run step by step once the next run lands: a step that
+    # is gone is pruned, even though the run still has files on disk.
+    grib = tmp_path / "grib"
+    grib.mkdir()
+    valid = T0 + timedelta(hours=9)
+    _make_run(grib, T0, valid)
+    _make_run(grib, T0, valid + timedelta(hours=3))  # a later step of the same run stays
+    conn = ic.open_db(tmp_path / "out")
+    _add_report(conn, valid, 40.0, -100.0)
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"ok": 1}
+    late = _add_report(conn, valid + timedelta(minutes=5), 40.2, -100.1)
+    (grib / _name("a2", T0, valid)).unlink()
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"pruned": 1}
+    assert conn.execute("SELECT status FROM samples WHERE pirep_id=?", (late,)).fetchone()[0] == "pruned"

@@ -59,7 +59,7 @@ import sys
 import time
 import zlib
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -423,8 +423,13 @@ def cmd_pireps(conn, session, start: datetime, end: datetime, force: bool, get=N
 
 @dataclass
 class RunFiles:
-    """The a1 / a2 files of the runs on disk: {run: {part: {valid: path}}}."""
+    """The a1 / a2 files of the runs on disk: {run: {part: {valid: path}}}.
+
+    ``unsettled`` holds the (run, part, valid) of files present but younger
+    than FILE_SETTLE_S (being written or re-synced): left out of ``files``.
+    """
     files: dict[datetime, dict[str, dict[datetime, Path]]]
+    unsettled: set = field(default_factory=set)
 
     @classmethod
     def scan(cls, grib_dir: Path, now_ts: float | None = None) -> RunFiles:
@@ -432,16 +437,18 @@ class RunFiles:
 
         now_ts = now_ts if now_ts is not None else time.time()
         files: dict = defaultdict(lambda: defaultdict(dict))
+        unsettled: set = set()
         for f in scan_ecmwf_files(grib_dir):
             if f.feed not in ("a1", "a2"):
                 continue
             try:
                 if now_ts - f.path.stat().st_mtime < FILE_SETTLE_S:
+                    unsettled.add((f.base_time, f.feed, f.valid_time))
                     continue  # may still be being written
             except OSError:
                 continue
             files[f.base_time][f.feed][f.valid_time] = f.path
-        return cls({k: dict(v) for k, v in files.items()})
+        return cls({k: dict(v) for k, v in files.items()}, unsettled)
 
     def runs(self) -> set[datetime]:
         return set(self.files)
@@ -708,11 +715,13 @@ def cmd_sample(conn, grib_dir: Path, cycles: tuple[int, ...], max_lead: int,
             run = used[valid]
             if disk.a2(run, valid) is not None:
                 status = "ok"
-            elif run in disk.files:
-                # The run is still on disk but this file is not readable now
-                # (e.g. re-synced, inside the settle window): try next pass.
+            elif (run, "a2", valid) in disk.unsettled:
+                # The file is there but being re-synced (inside the settle
+                # window): try next pass.
                 status = "wait"
             else:
+                # Gone. The node prunes a run step by step once the next run
+                # lands, so other steps of the run may well still be on disk.
                 status = "pruned"
         else:
             status, run = choose_run(valid, cycles, max_lead, disk, seen, now)
