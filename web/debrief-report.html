@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flyfun Weather — Debrief report (prototype)</title>
+  <script>((d,s)=>{const t=s.getItem('wb_theme');d.dataset.theme=t==='light'||t==='dark'?t:matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'})(document.documentElement,localStorage)</script>
+  <!-- Phase 0 prototype of the debrief report (not for merge). Plain HTML, no
+       build step: the server builds everything, this page only draws it. -->
+  <style>
+    :root{--bg:#f6f7f8;--card:#fff;--fg:#1d2329;--muted:#5d6873;--line:#dde2e7;--accent:#2f5d8a;
+      --green:#e3f1e8;--amber:#e0a43a;--amber-soft:#f8eedb;--red:#c25050;--nodata:#c9d0d6;--rain:#7fb0de;--heavy:#2f5d8a}
+    [data-theme=dark]{--bg:#14181c;--card:#1c2227;--fg:#e4e8eb;--muted:#9aa5ae;--line:#2e363d;--accent:#7fb0de;
+      --green:#1d3127;--amber:#c99238;--amber-soft:#3a2f1a;--red:#c76a6a;--nodata:#3a434b;--rain:#4d7aa3;--heavy:#9cc4ea}
+    body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+    .wrap{max-width:440px;margin:0 auto;padding:20px 16px 60px;display:flex;flex-direction:column;gap:16px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+    h1{font-size:19px;margin:0}
+    .sub{color:var(--muted);font-size:13px}
+    .label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+    .summary{font-size:15px;margin:10px 0 0}
+    .strip{display:grid;grid-template-columns:62px 1fr;gap:4px 8px;align-items:center;font-size:12px}
+    .lane{display:flex;height:16px;border-radius:3px;overflow:hidden;gap:1px;position:relative}
+    .lane span{height:100%}
+    .f-green{background:var(--green)} .f-amber{background:var(--amber)} .f-red{background:var(--red)} .f-none{background:var(--line)}
+    .o-clear{background:var(--green)} .o-rain{background:var(--rain)} .o-heavy{background:var(--heavy)} .o-no_data{background:var(--nodata)} .o-not_recorded{background:transparent;border:1px dashed var(--line)}
+    .lane.you{background:repeating-linear-gradient(90deg,var(--line) 0 4px,transparent 4px 8px)}
+    .lane.you i{position:absolute;top:2px;width:12px;height:12px;border-radius:50%;background:var(--accent);transform:translateX(-6px)}
+    .ticks{grid-column:2;display:flex;justify-content:space-between;font:11px ui-monospace,Menlo,monospace;color:var(--muted)}
+    .q{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:8px}
+    .q p{margin:0 0 10px;font-size:14px}
+    .chips{display:flex;flex-wrap:wrap;gap:6px}
+    .chip{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:99px;padding:5px 12px;cursor:pointer}
+    .chip[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--card)}
+    .avoid{font-size:12.5px;color:var(--muted);margin-top:8px;display:flex;gap:6px;align-items:center}
+    .ap{display:grid;grid-template-columns:auto 1fr auto;gap:2px 10px;font-size:13px;align-items:baseline}
+    .ap code{font-size:12px}
+    .tag{font-size:11.5px;padding:0 6px;border-radius:4px;background:var(--green)}
+    .tag.lower{background:var(--amber-soft)} .tag.unverifiable{background:var(--line)}
+    .raw{font:11.5px ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all}
+    details{font-size:13px} pre{font-size:11px;overflow:auto;max-height:420px}
+    .dev{border-style:dashed}
+    a{color:var(--accent)}
+    .err{color:var(--red)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="report"><p class="sub">Loading…</p></div>
+  <div class="card dev" id="dev"></div>
+</div>
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const flightId = params.get('flight');
+  const el = document.getElementById('report');
+  const dev = document.getElementById('dev');
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const hhmm = (iso) => iso ? new Date(iso).toISOString().slice(11, 16) + 'Z' : '';
+  const ft = (v) => v == null ? '?' : (v >= 10000 ? 'FL' + String(Math.round(v / 100)).padStart(3, '0') : Math.round(v).toLocaleString('en') + ' ft');
+  const matchLabel = {as_forecast: 'as TAF', lower: 'lower', better: 'better', unverifiable: 'no TAF', untimed: '—'};
+
+  if (!flightId) { el.innerHTML = '<p class="err">Add ?flight=FLIGHT_ID to the address.</p>'; return; }
+
+  async function load(method, body) {
+    const opts = {credentials: 'same-origin', headers: {'Content-Type': 'application/json'}};
+    const url = method === 'PUT' ? `/api/flights/${encodeURIComponent(flightId)}/debrief/report/answers`
+                                 : `/api/flights/${encodeURIComponent(flightId)}/debrief/report`;
+    const res = await fetch(url, method === 'PUT' ? {...opts, method, body: JSON.stringify(body)} : opts);
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  }
+
+  function lane(strip, total, cls) {
+    return strip.map((s) => `<span class="${cls(s)}" style="flex:${Math.max(0.5, s.to_nm - s.from_nm)}" title="${esc(s.from_nm.toFixed(0))}–${esc(s.to_nm.toFixed(0))} NM ${esc(hhmm(s.at))}"></span>`).join('');
+  }
+
+  function render(r) {
+    const route = (r.route || []).join(' → ');
+    const fa = r.flown_altitude || {};
+    let h = `<div class="sub">Debrief${r.arrival_at ? (r.time_base === 'observed' ? ' · landed ' : ' · planned arrival ') + hhmm(r.arrival_at) : ''}</div>
+      <h1>${esc(route || r.flight_id)}</h1>
+      <div class="sub">${r.departed_at ? new Date(r.departed_at).toUTCString().slice(0, 16) : ''} · ${esc(ft(fa.ft))}${fa.source === 'planned' ? ' planned' : ''} · ${r.time_base === 'observed' ? 'times from your flight' : 'times from the plan'}</div>`;
+    if (r.status !== 'ok') {
+      el.innerHTML = h + `<p class="summary">${esc(r.message || 'No report for this flight.')}</p>`;
+      return;
+    }
+    h += `<p class="summary">${esc(r.summary && r.summary.text)}</p>`;
+    const strip = r.strip || [];
+    const total = r.route_nm || (strip.length ? strip[strip.length - 1].to_nm : 1);
+    const qs = r.questions || [];
+    const dots = qs.filter((q) => q.answer).map((q) => `<i style="left:${(100 * (q.stretch.from_nm + q.stretch.to_nm) / 2 / total).toFixed(1)}%" title="${esc(q.kind)}: ${esc(q.answer.answer)}"></i>`).join('');
+    const wps = r.waypoints || [];
+    h += `<div class="label">Along the route</div><div class="strip">
+      <span class="sub">Forecast</span><div class="lane">${lane(strip, total, (s) => 'f-' + (s.forecast || 'none'))}</div>
+      <span class="sub">Observed</span><div class="lane">${lane(strip, total, (s) => 'o-' + s.observed)}</div>
+      <span class="sub">You</span><div class="lane you">${dots}</div>
+      <div class="ticks"><span>${esc(hhmm(r.departed_at))}</span>${wps.length > 2 ? `<span>${esc(wps[Math.floor(wps.length / 2)].icao)}</span>` : ''}<span>${esc(hhmm(r.arrival_at))}</span></div></div>`;
+    if (qs.length) {
+      h += `<div class="label">${qs.length === 1 ? 'One quick question' : (qs.length === 2 ? 'Two quick questions' : 'Three quick questions')}</div>`;
+      for (const q of qs) {
+        const a = q.answer || {};
+        h += `<div class="q" data-q="${esc(q.id)}"><p>${esc(q.text)}</p><div class="chips">` +
+          q.options.map((o) => `<button class="chip" data-a="${esc(o.id)}" aria-pressed="${a.answer === o.id}">${esc(o.label)}</button>`).join('') +
+          `</div>${q.avoidable ? `<label class="avoid"><input type="checkbox" ${a.avoided ? 'checked' : ''}> I changed level or route to stay out of it</label>` : ''}</div>`;
+      }
+    }
+    const aps = r.airports || [];
+    if (aps.length) {
+      h += `<div class="label">Airports at your times</div><div class="ap">` + aps.map((a) =>
+        `<code>${esc(a.icao)}</code><span class="sub">${esc(hhmm(a.metar_time || a.at))} · ${esc(a.metar_category || 'no METAR')}${a.taf_category ? ' vs TAF ' + esc(a.taf_category) : ''}</span><span class="tag ${esc(a.match)}">${esc(matchLabel[a.match] || a.match)}</span>` +
+        (a.metar_raw ? `<span></span><span class="raw" style="grid-column:2/4">${esc(a.metar_raw)}</span>` : '')).join('') + `</div>`;
+    }
+    h += `<p class="sub" style="margin-top:14px"><a href="/briefing.html?flight=${encodeURIComponent(flightId)}&section=observed-ribbon">Replay the flight →</a></p>`;
+    el.innerHTML = h;
+
+    el.querySelectorAll('.q').forEach((qe) => {
+      const qid = qe.dataset.q;
+      const send = async (answer) => {
+        const avoided = !!(qe.querySelector('input[type=checkbox]') || {}).checked;
+        try { render(await load('PUT', {question_id: qid, answer, avoided})); } catch (e) { alert(e.message); }
+      };
+      qe.querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () =>
+        send(b.getAttribute('aria-pressed') === 'true' ? null : b.dataset.a)));
+      const cb = qe.querySelector('input[type=checkbox]');
+      if (cb) cb.addEventListener('change', () => {
+        const cur = qe.querySelector('.chip[aria-pressed=true]');
+        if (cur) send(cur.dataset.a);
+      });
+    });
+
+    const it = r.interest || {};
+    dev.innerHTML = `<div class="label" style="margin-top:0">Dev: would this flight get a push?</div>
+      <div>${it.interesting ? '<b>Yes</b>' : 'No'}${(it.reasons || []).length ? ': ' + it.reasons.map((x) => esc(x.kind + (x.advisories ? ' (' + x.advisories.join(', ') + ')' : ''))).join(', ') : ''}</div>
+      <div class="sub">Forecast pack ${esc(r.forecast_pack || 'none')} · ${esc(r.v)}</div>
+      <details><summary>Report JSON</summary><pre>${esc(JSON.stringify(r, null, 1))}</pre></details>`;
+  }
+
+  load('GET').then(render).catch((e) => { el.innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+})();
+</script>
+</body>
+</html>

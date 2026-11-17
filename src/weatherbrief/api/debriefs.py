@@ -184,3 +184,55 @@ def get_user_debrief_stats(
     debriefs = list_debriefs_for_user(db, user_id)
     stats = compute_stats(flights, debriefs, window_days=window_days)
     return StatsResponse.from_stats(stats)
+
+
+# --- Debrief report, phase 0 prototype (not for merge) ---
+
+
+class ReportAnswerRequest(BaseModel):
+    """Body for PUT /flights/{id}/debrief/report/answers. ``answer`` null
+    clears the answer to ``question_id``."""
+
+    question_id: str
+    answer: str | None = None
+    avoided: bool = False
+    note: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/flights/{flight_id}/debrief/report")
+def get_flight_debrief_report(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """The post-flight debrief report (prototype): summary line, forecast /
+    observed / you strip, airports at actual times, targeted questions with
+    their answers, and whether the flight would earn a push."""
+    _load_owned_flight_or_404(db, flight_id, user_id)
+    from weatherbrief.debriefs.report import report_for_flight
+
+    return report_for_flight(db, flight_id)
+
+
+@router.put("/flights/{flight_id}/debrief/report/answers")
+def put_flight_debrief_report_answer(
+    flight_id: str,
+    req: ReportAnswerRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """Store one answer (prototype: ``debrief_answers.json`` in the flight
+    dir). The question must be one the report currently asks."""
+    _load_owned_flight_or_404(db, flight_id, user_id)
+    from weatherbrief.debriefs.report import flight_dir_for, report_for_flight, save_answer
+
+    report = report_for_flight(db, flight_id)
+    question = next((q for q in report.get("questions") or [] if q["id"] == req.question_id), None)
+    flight_dir = flight_dir_for(db, flight_id)
+    if question is None or flight_dir is None:
+        raise HTTPException(status_code=404, detail="No such question for this flight")
+    try:
+        save_answer(flight_dir, question, req.answer, avoided=req.avoided, note=req.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return report_for_flight(db, flight_id)
