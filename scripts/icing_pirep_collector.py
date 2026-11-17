@@ -9,7 +9,8 @@ SLD signals (#411) can be scored on the inputs we use in Europe.
 
 - **PIREPs** from the AWC data API (``/api/data/pirep``, JSON, icing and
   turbulence already decoded), CONUS, at or below FL250. Reports with an
-  icing group (NEG included) or a turbulence group are kept. AWC answers at
+  icing group (NEG included), a turbulence group or a sky group (/SK: cloud
+  cover, base, top, for the cloud / IMC scoring) are kept. AWC answers at
   most 400 reports per call, so each hour is one call, split in halves when
   it comes back full. It keeps about a month of history, so a missed hour is
   re-fetched with ``pireps --start/--end``.
@@ -121,7 +122,8 @@ CREATE TABLE IF NOT EXISTS pirep_details (
     flt_lvl_type TEXT,            -- OTHER | DURC | DURD | ...
     temp_c REAL,
     icing_json TEXT,              -- [{"int","type","base_ft","top_ft"}, ...]
-    turb_json TEXT                -- [{"int","type","freq","base_ft","top_ft"}, ...]
+    turb_json TEXT,               -- [{"int","type","freq","base_ft","top_ft"}, ...]
+    clouds_json TEXT              -- [{"cover","base_ft","top_ft"}, ...] (the /SK group)
 );
 CREATE TABLE IF NOT EXISTS samples (
     pirep_id INTEGER NOT NULL,
@@ -157,6 +159,10 @@ def open_db(out: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(out / DB_NAME, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")  # status / report can read while cron writes
     conn.executescript(hc.SCHEMA + EXTRA_SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(pirep_details)")}
+    if "clouds_json" not in cols:  # databases created before the sky group was kept
+        with conn:
+            conn.execute("ALTER TABLE pirep_details ADD COLUMN clouds_json TEXT")
     return conn
 
 
@@ -184,6 +190,9 @@ NO_ICING = "no_icing"
 #: word). Kept apart from ``no_icing`` so the turbulence set stays clean, and
 #: not an icing class either, so the scores skip it.
 ICING_UNCLASSIFIED = "icing_unclassified"
+#: A report with a sky group (/SK: cover, base, top) and neither an icing nor
+#: a turbulence group: kept for the cloud / IMC scoring, skipped by icing scores.
+SKY_ONLY = "sky_only"
 
 
 @dataclass
@@ -202,6 +211,7 @@ class AwcReport:
     temp_c: float | None
     icing_layers: list[dict]
     turb_layers: list[dict]
+    sky_layers: list[dict]
 
     @property
     def valid(self) -> datetime:
@@ -241,13 +251,37 @@ def _layers(row: dict, prefix: str, n: int = 2) -> list[dict]:
     return out
 
 
+def _ft_or_none(v) -> int | None:
+    """AWC's cloud base/top in feet; 0 means not reported."""
+    try:
+        ft = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    return ft if ft > 0 else None
+
+
+def _sky_layers(row: dict) -> list[dict]:
+    """The decoded /SK group: [{"cover", "base_ft", "top_ft"}, ...]."""
+    out = []
+    for c in row.get("clouds") or []:
+        if not isinstance(c, dict):
+            continue
+        cover = _str(c.get("cover"))
+        if not cover:
+            continue
+        out.append({"cover": cover, "base_ft": _ft_or_none(c.get("base")),
+                    "top_ft": _ft_or_none(c.get("top"))})
+    return out
+
+
 def parse_awc_report(row: dict) -> AwcReport | None:
     """One AWC JSON report, or None when it is outside the study.
 
     Kept: inside CONUS, flight level 1-250 (hundreds of feet in ``fltLvl``),
-    with an icing group (NEG included) or a turbulence group. The truth class
-    is the hindcast's, from layer 1 of the icing group plus the raw report's
-    remarks; turbulence-only reports get ``no_icing``.
+    with an icing group (NEG included), a turbulence group or a sky group.
+    The truth class is the hindcast's, from layer 1 of the icing group plus
+    the raw report's remarks; turbulence-only reports get ``no_icing`` and
+    sky-only ones ``sky_only``.
     """
     try:
         obs = datetime.fromtimestamp(int(row["obsTime"]), UTC)
@@ -262,6 +296,7 @@ def parse_awc_report(row: dict) -> AwcReport | None:
         return None
     icing_layers = _layers(row, "icg")
     turb_layers = _layers(row, "tb")
+    sky_layers = _sky_layers(row)
     raw = _str(row.get("rawOb"))[: hc.MAX_REPORT_CHARS]
     icing = None
     truth = None
@@ -269,16 +304,21 @@ def parse_awc_report(row: dict) -> AwcReport | None:
         icing = f"{icing_layers[0]['int']} {icing_layers[0]['type']}".strip()
         truth = hc.classify_truth(icing, raw)
     if truth is None:
-        if not turb_layers:
+        # An unreadable icing group alone is noise; with a turbulence or sky
+        # group the report is still worth its other half.
+        if not (turb_layers or sky_layers):
             return None
-        truth = ICING_UNCLASSIFIED if icing_layers else NO_ICING
+        if icing_layers:
+            truth = ICING_UNCLASSIFIED
+        else:
+            truth = NO_ICING if turb_layers else SKY_ONLY
     try:
         temp = None if row.get("temp") is None else float(row["temp"])
     except (TypeError, ValueError):
         temp = None
     return AwcReport(obs, lat, lon, alt, _str(row.get("acType")), icing, raw, truth,
                      row.get("receiptTime"), row.get("pirepType"), row.get("fltLvlType"),
-                     temp, icing_layers, turb_layers)
+                     temp, icing_layers, turb_layers, sky_layers)
 
 
 def fetch_awc_window(session: requests.Session, end: datetime, hours: float,
@@ -330,15 +370,25 @@ def store_reports(conn: sqlite3.Connection, reports: list[AwcReport]) -> int:
                 # the re-fetch for late receipts, not a correction.
                 " ON CONFLICT (valid, lat, lon, alt_ft, aircraft) DO NOTHING",
                 (_iso(r.valid), r.lat, r.lon, r.alt_ft, r.aircraft, r.icing, r.report, r.truth))
+            clouds = json.dumps(r.sky_layers) if r.sky_layers else None
             if cur.rowcount == 0:
+                # Stored before the sky group was kept: fill it in on a re-fetch.
+                if clouds:
+                    conn.execute(
+                        "UPDATE pirep_details SET clouds_json=? WHERE clouds_json IS NULL AND"
+                        " pirep_id=(SELECT id FROM pireps WHERE valid=? AND lat=? AND lon=?"
+                        " AND alt_ft=? AND aircraft=?)",
+                        (clouds, _iso(r.valid), r.lat, r.lon, r.alt_ft, r.aircraft))
                 continue
             new += 1
             conn.execute(
-                "INSERT OR REPLACE INTO pirep_details VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO pirep_details (pirep_id, source, obs_time, receipt_time,"
+                " pirep_type, flt_lvl_type, temp_c, icing_json, turb_json, clouds_json)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (cur.lastrowid, "awc", r.obs_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                  r.receipt_time, r.pirep_type, r.flt_lvl_type, r.temp_c,
                  json.dumps(r.icing_layers) if r.icing_layers else None,
-                 json.dumps(r.turb_layers) if r.turb_layers else None))
+                 json.dumps(r.turb_layers) if r.turb_layers else None, clouds))
     return new
 
 
@@ -757,6 +807,8 @@ def cmd_status(conn) -> None:
         print(f"  {truth:<15} {k}")
     n_turb = conn.execute("SELECT COUNT(*) FROM pirep_details WHERE turb_json IS NOT NULL").fetchone()[0]
     print(f"  with a turbulence group: {n_turb}")
+    n_sky = conn.execute("SELECT COUNT(*) FROM pirep_details WHERE clouds_json IS NOT NULL").fetchone()[0]
+    print(f"  with a sky group: {n_sky}")
     last = conn.execute("SELECT MAX(hour), MAX(fetched_at) FROM pirep_hours").fetchone()
     print(f"last AWC hour {last[0]} (fetched {last[1]})")
     print("\nSamples:")

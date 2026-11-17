@@ -126,6 +126,80 @@ def test_store_and_backfill_idempotent(tmp_path):
     assert conn.execute("SELECT n_calls FROM pirep_hours").fetchone()[0] == 1
 
 
+# ── Sky group (/SK) ──────────────────────────────────────────────────────
+
+_SKY = [{"cover": "OVC", "base": 800, "top": 0}, {"cover": "BKN", "base": 0, "top": 2100}]
+
+
+def test_sky_only_report_is_kept_with_its_layers():
+    r = ic.parse_awc_report(_awc(clouds=_SKY))
+    assert r is not None and r.truth == ic.SKY_ONLY
+    # AWC writes a missing base or top as 0.
+    assert r.sky_layers == [{"cover": "OVC", "base_ft": 800, "top_ft": None},
+                            {"cover": "BKN", "base_ft": None, "top_ft": 2100}]
+
+
+def test_sky_group_never_changes_an_icing_or_turbulence_truth():
+    assert ic.parse_awc_report(_awc(clouds=_SKY, tbInt1="LGT")).truth == ic.NO_ICING
+    r = ic.parse_awc_report(_awc(clouds=_SKY, icgInt1="LGT", icgType1="RIME"))
+    assert r.truth == "rime_lgt" and len(r.sky_layers) == 2
+
+
+@pytest.mark.parametrize("clouds", [None, [], [{"cover": "", "base": 800}], ["junk"]])
+def test_empty_or_malformed_sky_group_alone_is_dropped(clouds):
+    assert ic.parse_awc_report(_awc(clouds=clouds)) is None
+
+
+def test_sky_layers_stored_and_filled_in_on_refetch(tmp_path):
+    conn = ic.open_db(tmp_path)
+    first = [_awc(icgInt1="LGT", icgType1="RIME")]          # stored before /SK was kept
+    second = [_awc(icgInt1="LGT", icgType1="RIME", clouds=_SKY), _awc(clouds=_SKY, acType="ZZ03")]
+    rows = first
+
+    def get(url, params, timeout, headers):
+        return _Resp(rows)
+
+    end = T0 + timedelta(hours=15)
+    assert ic.cmd_pireps(conn, None, end - timedelta(hours=1), end, force=False, get=get) == 1
+    assert conn.execute("SELECT clouds_json FROM pirep_details").fetchone()[0] is None
+    rows = second
+    assert ic.cmd_pireps(conn, None, end - timedelta(hours=1), end, force=True, get=get) == 1
+    got = dict(conn.execute("SELECT p.truth, d.clouds_json FROM pireps p"
+                            " JOIN pirep_details d ON d.pirep_id = p.id").fetchall())
+    assert json.loads(got["rime_lgt"])[0] == {"cover": "OVC", "base_ft": 800, "top_ft": None}
+    assert json.loads(got[ic.SKY_ONLY])[1]["top_ft"] == 2100
+
+
+def test_open_db_adds_clouds_column_to_an_older_database(tmp_path):
+    import sqlite3
+
+    tmp_path.mkdir(exist_ok=True)
+    old = sqlite3.connect(tmp_path / ic.DB_NAME)
+    old.execute("CREATE TABLE pirep_details (pirep_id INTEGER PRIMARY KEY, source TEXT NOT NULL,"
+                " obs_time TEXT NOT NULL, receipt_time TEXT, pirep_type TEXT, flt_lvl_type TEXT,"
+                " temp_c REAL, icing_json TEXT, turb_json TEXT)")
+    old.execute("INSERT INTO pirep_details VALUES (1,'awc','t',NULL,NULL,NULL,NULL,NULL,NULL)")
+    old.commit()
+    old.close()
+    conn = ic.open_db(tmp_path)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(pirep_details)")]
+    assert cols[-1] == "clouds_json"
+    assert conn.execute("SELECT clouds_json FROM pirep_details").fetchone() == (None,)
+    ic.open_db(tmp_path)  # idempotent
+
+
+def test_sky_only_reports_are_not_scored_as_icing(tmp_path):
+    grib = tmp_path / "grib"
+    grib.mkdir()
+    valid = T0 + timedelta(hours=9)
+    _make_run(grib, T0, valid)
+    conn = ic.open_db(tmp_path / "out")
+    _add_report(conn, valid, 40.0, -100.0, truth=ic.SKY_ONLY)
+    assert ic.cmd_sample(conn, grib, (0, 12), 12, now=T0 + timedelta(hours=10)) == {"ok": 1}
+    res = hc.score(conn, ["ecmwf"], None, None, subzero=False, with_product=False, step_h=1)
+    assert res["scored"]["ecmwf"] == 0
+
+
 # ── Run choice ───────────────────────────────────────────────────────────
 
 
