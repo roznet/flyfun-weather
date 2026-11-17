@@ -99,6 +99,17 @@ PRESETS: dict[str, AircraftPerformance] = {
     ),
 }
 
+#: Presets offered in the aircraft form, in display order. ``light_jet`` is
+#: not advertised (#1005 decision 8); it shows only for a JET type.
+FORM_PRESETS: tuple[str, ...] = (
+    "trainer_piston", "hp_piston", "turbo_piston", "twin_piston",
+    "single_turboprop", "twin_turboprop",
+)
+
+#: Altitude a turbocharged piston holds its sea-level climb rate to, when the
+#: pilot ticks Turbocharged on a preset that isn't turbo (turbo_piston's own).
+TURBO_CRITICAL_ALT_FT = 18000.0
+
 #: Typical cruise IAS (kt) per preset, used only when the aircraft has none.
 DEFAULT_CRUISE_IAS_KT: dict[str, float] = {
     "trainer_piston": 100, "hp_piston": 150, "turbo_piston": 150, "twin_piston": 160,
@@ -136,6 +147,7 @@ def resolve_performance(
     cruise_ias_kt: float | None,
     known: bool = True,
     turbo: bool = False,
+    preset: str | None = None,
     ceiling_ft: float | None = None,
     climb_ias_kt: float | None = None,
     climb_rate_fpm: float | None = None,
@@ -148,31 +160,49 @@ def resolve_performance(
     default, same pattern as ``AircraftEquipage``: high-performance piston, or
     trainer when the cruise IAS is below 120 kt.
 
+    ``preset`` is the one the pilot picked in the form (``source="preset"``);
+    then ``turbo`` is a value like the others: different from the preset's own
+    flag, it holds the climb rate flat to ``TURBO_CRITICAL_ALT_FT`` (or drops
+    it) and makes the result custom. Without ``preset``, the ICAO type picks
+    it and ``turbo`` selects the turbo piston for an SEP.
+
     ``climb_rate_fpm`` replaces the sea-level rate; the near-ceiling rate keeps
     the preset's proportion. A descent angle wins over a descent rate.
     """
-    preset_id = preset_for(category if known else None, cruise_ias_kt, turbo and known)
-    perf = PRESETS[preset_id]
-    update: dict = {"source": "category" if known and category else "default"}
+    explicit = known and preset in PRESETS
+    if explicit:
+        perf = PRESETS[preset]
+        update: dict = {"source": "preset"}
+    else:
+        perf = PRESETS[preset_for(category if known else None, cruise_ias_kt, turbo and known)]
+        update = {"source": "category" if known and category else "default"}
     overridden = False
+    if explicit and bool(turbo) != perf.turbo:
+        update["turbo"] = bool(turbo)
+        update["critical_alt_ft"] = TURBO_CRITICAL_ALT_FT if turbo else None
+        overridden = True
     if known and ceiling_ft and ceiling_ft > 0:
         update["ceiling_ft"] = float(ceiling_ft)
-        if perf.critical_alt_ft is not None and perf.critical_alt_ft >= ceiling_ft:
+        critical = update.get("critical_alt_ft", perf.critical_alt_ft)
+        if critical is not None and critical >= ceiling_ft:
             update["critical_alt_ft"] = float(ceiling_ft) * 0.8
-    if known and climb_ias_kt and climb_ias_kt > 0:
+    # A value equal to the preset's own is not an override (the form may send it).
+    if known and climb_ias_kt and climb_ias_kt > 0 and float(climb_ias_kt) != perf.climb_ias_kt:
         update["climb_ias_kt"] = float(climb_ias_kt)
         overridden = True
-    if known and climb_rate_fpm and climb_rate_fpm > 0:
+    if known and climb_rate_fpm and climb_rate_fpm > 0 and float(climb_rate_fpm) != perf.climb_rate_low_fpm:
         ratio = perf.climb_rate_high_fpm / perf.climb_rate_low_fpm
         update["climb_rate_low_fpm"] = float(climb_rate_fpm)
         update["climb_rate_high_fpm"] = float(climb_rate_fpm) * ratio
         overridden = True
     if known and descent_angle_deg and descent_angle_deg > 0:
-        update.update(descent_mode="angle", descent_angle_deg=float(descent_angle_deg))
-        overridden = True
+        if not (perf.descent_mode == "angle" and float(descent_angle_deg) == perf.descent_angle_deg):
+            update.update(descent_mode="angle", descent_angle_deg=float(descent_angle_deg))
+            overridden = True
     elif known and descent_rate_fpm and descent_rate_fpm > 0:
-        update.update(descent_mode="rate", descent_rate_fpm=float(descent_rate_fpm))
-        overridden = True
+        if not (perf.descent_mode == "rate" and float(descent_rate_fpm) == perf.descent_rate_fpm):
+            update.update(descent_mode="rate", descent_rate_fpm=float(descent_rate_fpm))
+            overridden = True
     if overridden:
         update["source"] = "aircraft"
     return perf.model_copy(update=update)

@@ -20,7 +20,7 @@ actually is. Nothing is computed on a client.
 | Library | `analysis/flight_path.py` | Presets, `resolve_performance`, `compute_flight_path`, `recompute_for_cruise`, `estimate_duration_h`, `flight_path_mode`, `build_flight_path` / `route_flight_path` / `analyses_flight_path` builders. Pure, no `tasks/` imports. |
 | Models | `models/flight_path.py` | `AircraftPerformance`, `FlightPath` (+ `FlightPathPoint`, `PathSlice`, `VerticalPart`), `FlightPathSummary`. |
 | Speeds | `atmo.py` | `cas_to_mach_isa`, `mach_to_tas_isa`, `cas_to_tas_isa`, ISA T / p. Server only (no `atmo.ts` mirror). |
-| Aircraft | `user_aircraft` (migration 119) | `is_turbo`, `climb_ias_kt`, `climb_rate_fpm`, `descent_rate_fpm`, `descent_angle_deg`, all optional. `storage.aircraft.aircraft_performance(row)` resolves. API returns the overrides and the resolved `performance`; PUT with 0 clears an override. |
+| Aircraft | `user_aircraft` (migrations 119, 120) | `performance_preset` (the preset picked in the form; NULL = follow the ICAO type), `is_turbo`, `climb_ias_kt`, `climb_rate_fpm`, `descent_rate_fpm`, `descent_angle_deg`, all optional. `storage.aircraft.aircraft_performance(row)` resolves. API returns them and the resolved `performance`; PUT with 0 clears an override, `performance_preset: ""` goes back to the type. `GET /api/aircraft/presets?icao_type=&cruise_speed_kt=` gives the form the preset table and the type's suggestion. |
 | Equipage | `AircraftEquipage.performance` | Set by `api/packs._resolve_equipage`; the placeholder gets the unknown-aircraft default with its own cruise speed. |
 | Pipeline | `tasks/analyze.run_analysis` | Builds the path (`route_flight_path`), stamps `RoutePointAnalysis.planned_altitude_ft` / `phase`, stores `RouteAnalysesManifest.flight_path` + `flight_path_mode`. Live: `interpolated_time` from the path. |
 | Advisories | `tasks/advise.py` | `RouteContext.flight_path` / `flight_path_live`; recalculation reuses the stored path (`recompute_for_cruise` on a cruise override) or builds one for old packs; alt departure and time scan build it from the route points. `RouteAdvisoriesManifest.flight_path` is the summary (TOC / TOD / live). |
@@ -65,7 +65,22 @@ actually is. Nothing is computed on a client.
 
 Overrides: climb IAS, climb rate (replaces the sea-level rate; the
 near-ceiling rate keeps the preset's proportion), descent rate or angle (angle
-wins), turbo flag (SEP only), the aircraft's service ceiling.
+wins), the aircraft's service ceiling. A value equal to the preset's own is not
+an override.
+
+**Picked preset and turbo.** The web aircraft form has a preset dropdown over
+a compact grid of its values (climb speed, climb rate, descent rate or angle,
+Turbocharged). Editing a value away from the preset shows "Custom (based on
+…)"; picking a preset restores its values. It saves the base preset
+(`performance_preset`, `source="preset"`) plus only the values that differ
+(`source="aircraft"` when any does). With a picked preset, turbo is a value
+like the others: ticked on a non-turbo preset it holds the sea-level climb rate
+to `TURBO_CRITICAL_ALT_FT` (18,000 ft, 80% of a lower ceiling), unticked on
+`turbo_piston` the rate decays from sea level. Without a picked preset (older
+rows, iOS / Android until #1008), the type picks it and `is_turbo` selects the
+turbo piston for an SEP. A preset that follows the type moves with the type and
+cruise speed in the form; a picked or custom one stays. The form logic is
+`web/ts/components/aircraft-performance-form.ts`.
 
 ## Phase-1 consumers
 

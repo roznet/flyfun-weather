@@ -45,6 +45,12 @@ import {
   type AircraftResponse,
 } from './adapters/aircraft-adapter';
 import { attachAircraftTypeTypeahead } from './components/aircraft-type-typeahead';
+import {
+  initPerformanceForm,
+  openPerformanceForm,
+  readPerformanceOverrides,
+  refreshSuggestedPreset,
+} from './components/aircraft-performance-form';
 import { applyCeilingWarning, parseCeilingInput } from './utils/ceiling-warning';
 import {
   fetchTokens,
@@ -464,6 +470,7 @@ function translateStaticElements(): void {
   set('label[for="ac-descent-rate"]', 'page.settings.aircraft.descentRate');
   set('label[for="ac-descent-angle"]', 'page.settings.aircraft.descentAngle');
   set('#ac-turbo-label', 'page.settings.aircraft.turbo');
+  set('label[for="ac-perf-preset"]', 'page.settings.aircraft.perf.preset');
   set('#btn-save-aircraft', 'page.settings.aircraft.save');
   set('#btn-cancel-aircraft', 'page.settings.aircraft.cancel');
   const icaoInput = document.getElementById('ac-icao-type') as HTMLInputElement | null;
@@ -830,8 +837,6 @@ async function applyDeepLink(aircraftLoaded: Promise<void>): Promise<void> {
     const ac = aircraftList.find(a => String(a.id) === aircraftParam);
     if (ac) {
       editAircraft(ac);
-      document.getElementById('aircraft-form-section')
-        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
     return;
   }
@@ -1983,8 +1988,16 @@ function initAircraftTab(): Promise<void> {
     attachAircraftTypeTypeahead(icaoInput, dropdown, (type) => {
       const label = document.getElementById('ac-type-label');
       if (label) label.textContent = `${type.manufacturer} ${type.model}`;
+      void refreshSuggestedPreset(type.icao, acSpeedKt());
     });
   }
+
+  // Climb / descent preset table (#1005): a preset that follows the type
+  // moves with the type and cruise speed.
+  initPerformanceForm();
+  const followType = () => void refreshSuggestedPreset(icaoInput?.value ?? '', acSpeedKt());
+  icaoInput?.addEventListener('change', followType);
+  document.getElementById('ac-speed')?.addEventListener('change', followType);
 
   // Re-check the Flight Defaults ceiling warning as the pilot edits the ceiling.
   document.getElementById('input-ceiling')?.addEventListener('input', updateProfileCeilingWarning);
@@ -2119,7 +2132,7 @@ function editAircraft(ac: AircraftResponse): void {
   (document.getElementById('ac-ifr') as HTMLInputElement).checked = ac.is_ifr;
   (document.getElementById('ac-fiki') as HTMLInputElement).checked = ac.is_fiki;
   (document.getElementById('ac-default') as HTMLInputElement).checked = ac.is_default;
-  setPerformanceInputs(ac);
+  void openPerformanceForm(ac);
 
   const label = document.getElementById('ac-type-label');
   if (label) {
@@ -2128,11 +2141,18 @@ function editAircraft(ac: AircraftResponse): void {
   }
 }
 
+/** The cruise speed field, for the type's suggested preset (trainer below 120 kt). */
+function acSpeedKt(): number | null {
+  return parseInt((document.getElementById('ac-speed') as HTMLInputElement | null)?.value ?? '') || null;
+}
+
 function showAircraftForm(title: string): void {
   const section = document.getElementById('aircraft-form-section');
   const titleEl = document.getElementById('aircraft-form-title');
   if (section) section.style.display = '';
   if (titleEl) titleEl.textContent = title;
+  // The form sits above a possibly long list: bring it into view on open.
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function hideAircraftForm(): void {
@@ -2149,61 +2169,13 @@ function clearAircraftForm(): void {
   (document.getElementById('ac-ceiling') as HTMLInputElement).value = '';
   (document.getElementById('ac-ifr') as HTMLInputElement).checked = false;
   (document.getElementById('ac-fiki') as HTMLInputElement).checked = false;
-  setPerformanceInputs(null);
+  void openPerformanceForm(null);
   // The server replaces a lone placeholder with the new aircraft and makes it
   // the default either way; reflect that in the form.
   const onlyPlaceholder = aircraftList.length > 0 && aircraftList.every(a => a.is_placeholder);
   (document.getElementById('ac-default') as HTMLInputElement).checked = onlyPlaceholder;
   const label = document.getElementById('ac-type-label');
   if (label) label.innerHTML = '&nbsp;';
-}
-
-/** Climb / descent override inputs (#1005). Blank = the class preset, shown
- *  as the placeholder when the server resolved one for this aircraft. */
-const PERF_INPUTS: [string, 'climb_ias_kt' | 'climb_rate_fpm' | 'descent_rate_fpm' | 'descent_angle_deg'][] = [
-  ['ac-climb-ias', 'climb_ias_kt'],
-  ['ac-climb-rate', 'climb_rate_fpm'],
-  ['ac-descent-rate', 'descent_rate_fpm'],
-  ['ac-descent-angle', 'descent_angle_deg'],
-];
-
-function setPerformanceInputs(ac: AircraftResponse | null): void {
-  const perf = ac?.performance ?? null;
-  const preset: Record<string, number | null | undefined> = {
-    climb_ias_kt: perf?.climb_ias_kt,
-    climb_rate_fpm: perf?.climb_rate_fpm,
-    descent_rate_fpm: perf?.descent_mode === 'rate' ? perf?.descent_rate_fpm : null,
-    descent_angle_deg: perf?.descent_mode === 'angle' ? perf?.descent_angle_deg : null,
-  };
-  for (const [id, key] of PERF_INPUTS) {
-    const input = document.getElementById(id) as HTMLInputElement | null;
-    if (!input) continue;
-    const own = ac?.[key];
-    input.value = own != null ? String(own) : '';
-    const hint = preset[key];
-    input.placeholder = hint != null ? String(Math.round(hint * 10) / 10) : '';
-  }
-  const turbo = document.getElementById('ac-turbo') as HTMLInputElement | null;
-  if (turbo) turbo.checked = !!ac?.is_turbo;
-}
-
-/** The override fields for a save. A blank field sends 0, which the server
- *  stores as "no override" (the class preset). */
-function readPerformanceInputs(): {
-  is_turbo: boolean; climb_ias_kt: number; climb_rate_fpm: number;
-  descent_rate_fpm: number; descent_angle_deg: number;
-} {
-  const num = (id: string): number => {
-    const v = parseFloat((document.getElementById(id) as HTMLInputElement | null)?.value ?? '');
-    return Number.isFinite(v) && v > 0 ? v : 0;
-  };
-  return {
-    is_turbo: !!(document.getElementById('ac-turbo') as HTMLInputElement | null)?.checked,
-    climb_ias_kt: Math.round(num('ac-climb-ias')),
-    climb_rate_fpm: Math.round(num('ac-climb-rate')),
-    descent_rate_fpm: Math.round(num('ac-descent-rate')),
-    descent_angle_deg: num('ac-descent-angle'),
-  };
 }
 
 async function saveAircraftForm(): Promise<void> {
@@ -2222,7 +2194,7 @@ async function saveAircraftForm(): Promise<void> {
     is_ifr: (document.getElementById('ac-ifr') as HTMLInputElement).checked,
     is_fiki: (document.getElementById('ac-fiki') as HTMLInputElement).checked,
     is_default: (document.getElementById('ac-default') as HTMLInputElement).checked,
-    ...readPerformanceInputs(),
+    ...(readPerformanceOverrides() ?? {}),
   };
 
   try {

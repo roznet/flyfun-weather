@@ -10289,3 +10289,14 @@ button.ac-near:hover { color: var(--primary); }
   font-size: 0.95rem;
   line-height: 1.4;
 }
+
+/* Aircraft form: climb / descent preset over a 3-column grid (#1005). */
+.perf-title { margin: 1rem 0 0.4rem; font-size: 0.95rem; }
+.perf-preset select { min-width: 14rem; }
+.perf-grid { display: grid; grid-template-columns: repeat(3, max-content); gap: 0.5rem 1.25rem; margin-top: 0.5rem; }
+.perf-grid .form-group { margin: 0; }
+.perf-turbo { align-self: center; }
+@media (max-width: 560px) {
+  .perf-grid { grid-template-columns: 1fr 1fr; }
+  .perf-gap { display: none; }
+}

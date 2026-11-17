@@ -63,6 +63,9 @@ class UserAircraftRow(Base):
     is_turbo: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False,
     )
+    # The preset the pilot picked in the aircraft form (an id of PRESETS);
+    # NULL = follow the ICAO type (preset_for). The overrides apply on top.
+    performance_preset: Mapped[str | None] = mapped_column(String(24), nullable=True)
     climb_ias_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     climb_rate_fpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     descent_rate_fpm: Mapped[int | None] = mapped_column(Integer, nullable=True)

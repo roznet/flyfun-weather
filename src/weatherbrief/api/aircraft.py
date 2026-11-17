@@ -60,7 +60,9 @@ class AircraftResponse(BaseModel):
     # Synthesised for a user who never set an aircraft up (#777): clients show
     # "Set up your aircraft". Cleared by any PUT.
     is_placeholder: bool = False
-    # Climb / descent overrides (#1005). None = the class preset.
+    # Climb / descent (#1005): the preset picked in the form (None = follow
+    # the ICAO type), and overrides on top of it (None = the preset's value).
+    performance_preset: str | None = None
     is_turbo: bool = False
     climb_ias_kt: int | None = None
     climb_rate_fpm: int | None = None
@@ -83,6 +85,25 @@ class AircraftPerformanceResponse(BaseModel):
     descent_mode: str
     descent_rate_fpm: float | None = None
     descent_angle_deg: float | None = None
+    turbo: bool = False
+
+
+class PerformancePresetResponse(BaseModel):
+    """One climb / descent preset, as the aircraft form shows it (#1005)."""
+
+    id: str
+    climb_ias_kt: float
+    climb_rate_fpm: float
+    descent_mode: str
+    descent_rate_fpm: float | None = None
+    descent_angle_deg: float | None = None
+    turbo: bool = False
+
+
+class PerformancePresetsResponse(BaseModel):
+    presets: list[PerformancePresetResponse]
+    # The preset the ICAO type (and cruise speed) points to.
+    suggested: str
 
 
 AircraftResponse.model_rebuild()
@@ -107,6 +128,7 @@ def _row_to_response(row, *, include_tail: bool = True) -> AircraftResponse:
         ceiling_ft=row.ceiling_ft,
         is_default=row.is_default,
         is_placeholder=bool(row.is_placeholder),
+        performance_preset=getattr(row, "performance_preset", None),
         is_turbo=bool(getattr(row, "is_turbo", False)),
         climb_ias_kt=row.climb_ias_kt,
         climb_rate_fpm=row.climb_rate_fpm,
@@ -128,11 +150,22 @@ def _performance_response(row) -> AircraftPerformanceResponse | None:
         preset=perf.preset, source=perf.source, climb_ias_kt=perf.climb_ias_kt,
         climb_rate_fpm=perf.climb_rate_low_fpm, ceiling_ft=perf.ceiling_ft,
         descent_mode=perf.descent_mode, descent_rate_fpm=perf.descent_rate_fpm,
-        descent_angle_deg=perf.descent_angle_deg,
+        descent_angle_deg=perf.descent_angle_deg, turbo=perf.turbo,
     )
 
 
 # --- Request models ---
+
+
+def _valid_preset(v: str | None) -> str | None:
+    """A preset id, or "" (follow the ICAO type). Unknown ids are rejected."""
+    from weatherbrief.analysis.flight_path import PRESETS
+
+    if v is None or v == "":
+        return v
+    if v not in PRESETS:
+        raise ValueError(f"Unknown performance preset: {v}")
+    return v
 
 
 class CreateAircraftRequest(BaseModel):
@@ -147,13 +180,20 @@ class CreateAircraftRequest(BaseModel):
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool = False
-    # Climb / descent overrides (#1005). Omitted = unchanged / preset; on an
-    # update, 0 clears the override back to the class preset.
+    # Climb / descent (#1005). ``performance_preset``: an id of PRESETS, ""
+    # = follow the ICAO type. Overrides: omitted = unchanged / preset; on an
+    # update, 0 clears the override back to the preset.
+    performance_preset: str | None = None
     is_turbo: bool | None = None
     climb_ias_kt: int | None = Field(default=None, ge=0, le=400)
     climb_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
     descent_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
     descent_angle_deg: float | None = Field(default=None, ge=0, le=6)
+
+    @field_validator("performance_preset")
+    @classmethod
+    def validate_performance_preset(cls, v: str | None) -> str | None:
+        return _valid_preset(v)
 
     @field_validator("icao_type")
     @classmethod
@@ -183,13 +223,20 @@ class UpdateAircraftRequest(BaseModel):
     cruise_speed_kt: int | None = None
     ceiling_ft: int | None = None
     is_default: bool | None = None
-    # Climb / descent overrides (#1005). Omitted = unchanged / preset; on an
-    # update, 0 clears the override back to the class preset.
+    # Climb / descent (#1005). ``performance_preset``: an id of PRESETS, ""
+    # = follow the ICAO type. Overrides: omitted = unchanged / preset; on an
+    # update, 0 clears the override back to the preset.
+    performance_preset: str | None = None
     is_turbo: bool | None = None
     climb_ias_kt: int | None = Field(default=None, ge=0, le=400)
     climb_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
     descent_rate_fpm: int | None = Field(default=None, ge=0, le=8000)
     descent_angle_deg: float | None = Field(default=None, ge=0, le=6)
+
+    @field_validator("performance_preset")
+    @classmethod
+    def validate_performance_preset(cls, v: str | None) -> str | None:
+        return _valid_preset(v)
 
     @field_validator("icao_type")
     @classmethod
@@ -238,6 +285,36 @@ def search_types(
     ]
 
 
+@router.get("/presets", response_model=PerformancePresetsResponse)
+def performance_presets(
+    icao_type: str = Query("", max_length=4),
+    cruise_speed_kt: float | None = Query(None, gt=0, le=600),
+    user_id: str = Depends(current_user_id),
+):
+    """The climb / descent presets for the aircraft form, and the one the
+    ICAO type (and cruise speed) suggests. The form fills its values from here
+    so the preset table lives only in ``analysis/flight_path.PRESETS``."""
+    from weatherbrief.analysis.flight_path import FORM_PRESETS, PRESETS, preset_for
+
+    type_info = get_aircraft_type(icao_type.strip().upper()) if icao_type.strip() else None
+    suggested = preset_for((type_info or {}).get("category"), cruise_speed_kt)
+    ids = list(FORM_PRESETS) + ([suggested] if suggested not in FORM_PRESETS else [])
+    return PerformancePresetsResponse(
+        presets=[
+            PerformancePresetResponse(
+                id=pid, climb_ias_kt=PRESETS[pid].climb_ias_kt,
+                climb_rate_fpm=PRESETS[pid].climb_rate_low_fpm,
+                descent_mode=PRESETS[pid].descent_mode,
+                descent_rate_fpm=PRESETS[pid].descent_rate_fpm if PRESETS[pid].descent_mode == "rate" else None,
+                descent_angle_deg=PRESETS[pid].descent_angle_deg if PRESETS[pid].descent_mode == "angle" else None,
+                turbo=PRESETS[pid].turbo,
+            )
+            for pid in ids
+        ],
+        suggested=suggested,
+    )
+
+
 @router.get("", response_model=list[AircraftResponse])
 def list_user_aircraft(
     user_id: str = Depends(current_user_id),
@@ -283,6 +360,7 @@ def add_aircraft(
         cruise_speed_kt=req.cruise_speed_kt,
         ceiling_ft=req.ceiling_ft,
         is_default=req.is_default,
+        performance_preset=req.performance_preset or None,
         is_turbo=bool(req.is_turbo),
         climb_ias_kt=req.climb_ias_kt or None,
         climb_rate_fpm=req.climb_rate_fpm or None,
@@ -325,6 +403,8 @@ def edit_aircraft(
     for key in _PERFORMANCE_OVERRIDES:
         if updates.get(key) == 0:
             updates[key] = None  # 0 clears the override back to the preset
+    if updates.get("performance_preset") == "":
+        updates["performance_preset"] = None  # back to following the ICAO type
 
     if updates.get("is_default") is False and row.is_default:
         updates.pop("is_default")

@@ -24,7 +24,9 @@ export interface AircraftResponse {
    *  user always has a default aircraft (#777). Any PUT clears it; a POST while
    *  it is the user's only aircraft replaces it server-side. */
   is_placeholder: boolean;
-  /** Climb / descent overrides (#1005); null = the class preset. */
+  /** Climb / descent (#1005): the preset picked in the form (null = follow the
+   *  ICAO type) and overrides on top of it (null = the preset's value). */
+  performance_preset?: string | null;
   is_turbo?: boolean;
   climb_ias_kt?: number | null;
   climb_rate_fpm?: number | null;
@@ -45,6 +47,24 @@ export interface AircraftPerformance {
   descent_mode: 'rate' | 'angle';
   descent_rate_fpm: number | null;
   descent_angle_deg: number | null;
+  turbo?: boolean;
+}
+
+/** One climb / descent preset, as the aircraft form offers it (#1005). */
+export interface PerformancePreset {
+  id: string;
+  climb_ias_kt: number;
+  climb_rate_fpm: number;
+  descent_mode: 'rate' | 'angle';
+  descent_rate_fpm: number | null;
+  descent_angle_deg: number | null;
+  turbo: boolean;
+}
+
+export interface PerformancePresetsResponse {
+  presets: PerformancePreset[];
+  /** The preset the ICAO type (and cruise speed) points to. */
+  suggested: string;
 }
 
 /** Display label for an aircraft in a picker: "TAIL — Type (nickname)".
@@ -64,7 +84,9 @@ export interface CreateAircraftRequest {
   cruise_speed_kt?: number | null;
   ceiling_ft?: number | null;
   is_default?: boolean;
-  /** Climb / descent overrides (#1005); on update, 0 clears back to the preset. */
+  /** Climb / descent (#1005): preset id ("" = follow the ICAO type) and
+   *  overrides; on update, 0 clears an override back to the preset. */
+  performance_preset?: string;
   is_turbo?: boolean;
   climb_ias_kt?: number | null;
   climb_rate_fpm?: number | null;
@@ -81,7 +103,9 @@ export interface UpdateAircraftRequest {
   cruise_speed_kt?: number | null;
   ceiling_ft?: number | null;
   is_default?: boolean;
-  /** Climb / descent overrides (#1005); on update, 0 clears back to the preset. */
+  /** Climb / descent (#1005): preset id ("" = follow the ICAO type) and
+   *  overrides; on update, 0 clears an override back to the preset. */
+  performance_preset?: string;
   is_turbo?: boolean;
   climb_ias_kt?: number | null;
   climb_rate_fpm?: number | null;
@@ -91,6 +115,14 @@ export interface UpdateAircraftRequest {
 
 export async function searchAircraftTypes(query: string): Promise<AircraftType[]> {
   return apiFetch<AircraftType[]>(`/aircraft/types?q=${encodeURIComponent(query)}`);
+}
+
+export async function fetchPerformancePresets(
+  icaoType: string, cruiseSpeedKt: number | null,
+): Promise<PerformancePresetsResponse> {
+  const q = new URLSearchParams({ icao_type: icaoType.trim().toUpperCase().slice(0, 4) });
+  if (cruiseSpeedKt && cruiseSpeedKt > 0) q.set('cruise_speed_kt', String(cruiseSpeedKt));
+  return apiFetch<PerformancePresetsResponse>(`/aircraft/presets?${q}`);
 }
 
 export async function fetchAircraft(): Promise<AircraftResponse[]> {

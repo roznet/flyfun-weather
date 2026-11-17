@@ -9,6 +9,7 @@ import pytest
 from weatherbrief.analysis.flight_path import (
     ICED_RATE_FACTOR,
     PRESETS,
+    TURBO_CRITICAL_ALT_FT,
     analyses_flight_path,
     build_flight_path,
     climb_rate_fpm,
@@ -178,6 +179,40 @@ def test_overrides_win_over_the_preset():
     assert perf.climb_rate_high_fpm == pytest.approx(80)
     assert perf.ceiling_ft == 15000
     assert perf.descent_mode == "angle" and perf.descent_angle_deg == 4
+
+
+def test_picked_preset_wins_over_the_type():
+    perf = resolve_performance(category="SEP", cruise_ias_kt=170, preset="twin_piston")
+    assert perf.preset == "twin_piston" and perf.source == "preset"
+    assert perf.climb_rate_low_fpm == 1300
+
+
+def test_values_equal_to_the_preset_are_not_custom():
+    perf = resolve_performance(
+        category="SEP", cruise_ias_kt=150, preset="hp_piston",
+        climb_ias_kt=110, climb_rate_fpm=1000, descent_rate_fpm=500,
+    )
+    assert perf.source == "preset"
+
+
+def test_turbo_is_a_value_of_the_picked_preset():
+    # Ticking Turbocharged on a non-turbo preset: custom, flat climb to 18,000 ft.
+    perf = resolve_performance(category="SEP", cruise_ias_kt=150, preset="hp_piston", turbo=True)
+    assert perf.preset == "hp_piston" and perf.source == "aircraft"
+    assert perf.turbo and perf.critical_alt_ft == TURBO_CRITICAL_ALT_FT
+    assert climb_rate_fpm(perf, 15000) == perf.climb_rate_low_fpm
+    # Capped below a lower service ceiling, like the turbo preset's own.
+    capped = resolve_performance(
+        category="SEP", cruise_ias_kt=150, preset="hp_piston", turbo=True, ceiling_ft=16000,
+    )
+    assert capped.critical_alt_ft == pytest.approx(12800)
+    # Unticking it on the turbo preset: custom, the rate decays from sea level.
+    off = resolve_performance(category="SEP", cruise_ias_kt=150, preset="turbo_piston", turbo=False)
+    assert not off.turbo and off.critical_alt_ft is None and off.source == "aircraft"
+    assert climb_rate_fpm(off, 15000) < off.climb_rate_low_fpm
+    # The turbo preset with its own flag is not custom.
+    same = resolve_performance(category="SEP", cruise_ias_kt=150, preset="turbo_piston", turbo=True)
+    assert same.source == "preset" and same.critical_alt_ft == 18000
 
 
 def test_unknown_aircraft_gets_the_default():

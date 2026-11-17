@@ -559,6 +559,41 @@ def test_performance_overrides_round_trip_and_resolve(client):
     assert body["performance"]["descent_mode"] == "angle"
 
 
+def test_picked_preset_round_trips_and_turbo_makes_it_custom(client):
+    r = client.post("/api/aircraft", json={"icao_type": "SR22", "performance_preset": "twin_piston"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["performance_preset"] == "twin_piston"
+    assert body["performance"]["preset"] == "twin_piston"
+    assert body["performance"]["source"] == "preset"
+
+    r = client.put(f"/api/aircraft/{body['id']}", json={"performance_preset": "hp_piston", "is_turbo": True})
+    body = r.json()
+    assert body["performance"]["preset"] == "hp_piston"
+    assert body["performance"]["turbo"] is True
+    assert body["performance"]["source"] == "aircraft"
+
+    # "" goes back to following the ICAO type; unknown ids are rejected.
+    r = client.put(f"/api/aircraft/{body['id']}", json={"performance_preset": "", "is_turbo": False})
+    assert r.json()["performance_preset"] is None
+    assert r.json()["performance"]["source"] == "category"
+    assert client.put(f"/api/aircraft/{body['id']}", json={"performance_preset": "rocket"}).status_code == 422
+
+
+def test_presets_endpoint_lists_the_table_and_suggests_one(client):
+    r = client.get("/api/aircraft/presets", params={"icao_type": "SR22", "cruise_speed_kt": 170})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["suggested"] == "hp_piston"
+    ids = [p["id"] for p in body["presets"]]
+    assert "turbo_piston" in ids and "light_jet" not in ids
+    turbo = next(p for p in body["presets"] if p["id"] == "turbo_piston")
+    assert turbo["turbo"] is True and turbo["climb_ias_kt"] == 120 and turbo["descent_rate_fpm"] == 700
+    tp = next(p for p in body["presets"] if p["id"] == "single_turboprop")
+    assert tp["descent_mode"] == "angle" and tp["descent_rate_fpm"] is None
+    assert client.get("/api/aircraft/presets", params={"cruise_speed_kt": 100}).json()["suggested"] == "trainer_piston"
+
+
 def test_performance_override_bounds_are_validated(client):
     r = client.post("/api/aircraft", json={"icao_type": "C172", "descent_angle_deg": 12})
     assert r.status_code == 422

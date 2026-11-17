@@ -33,12 +33,6 @@
 
       <!-- Aircraft tab -->
       <div id="tab-aircraft" class="tab-panel">
-        <div class="section">
-          <h3 id="aircraft-list-title">My Aircraft</h3>
-          <p id="aircraft-list-hint" class="muted section-hint">Manage your aircraft. The selected aircraft's cruise speed sets the flight duration estimate, and you are warned when a flight's ceiling is above its service ceiling.</p>
-          <div id="aircraft-list"></div>
-          <button type="button" id="btn-add-aircraft" class="btn btn-primary btn-sm" style="margin-top:0.75rem">+ Add Aircraft</button>
-        </div>
         <div id="aircraft-form-section" class="section" style="display:none">
           <h3 id="aircraft-form-title">Add Aircraft</h3>
           <div class="form-row">
@@ -73,8 +67,12 @@
               <input type="number" id="ac-ceiling" placeholder="e.g. 25000" min="1000" max="60000" step="500" class="input-narrow">
             </div>
           </div>
-          <p class="muted section-hint" id="ac-climb-descent-label">Climb and descent (optional, blank = typical for the type)</p>
-          <div class="form-row">
+          <h4 id="ac-climb-descent-label" class="perf-title">Climb and descent</h4>
+          <div class="form-group perf-preset">
+            <label for="ac-perf-preset">Preset</label>
+            <select id="ac-perf-preset"></select>
+          </div>
+          <div class="perf-grid">
             <div class="form-group">
               <label for="ac-climb-ias">Climb speed (IAS kt)</label>
               <input type="number" id="ac-climb-ias" min="40" max="400" class="input-narrow">
@@ -87,15 +85,19 @@
               <label for="ac-descent-rate">Descent rate (ft/min)</label>
               <input type="number" id="ac-descent-rate" min="100" max="8000" step="50" class="input-narrow">
             </div>
+            <div class="form-group perf-turbo">
+              <label class="checkbox-label">
+                <input type="checkbox" id="ac-turbo"> <span id="ac-turbo-label">Turbocharged</span>
+              </label>
+            </div>
+            <div class="perf-gap"></div>
             <div class="form-group">
               <label for="ac-descent-angle">or descent angle (°)</label>
               <input type="number" id="ac-descent-angle" min="1" max="6" step="0.5" class="input-narrow">
             </div>
           </div>
+          <p class="muted section-hint" id="ac-perf-hint"></p>
           <div class="form-row model-checkboxes">
-            <label class="checkbox-label">
-              <input type="checkbox" id="ac-turbo"> <span id="ac-turbo-label">Turbocharged</span>
-            </label>
             <label class="checkbox-label">
               <input type="checkbox" id="ac-ifr"> <span id="ac-ifr-label">IFR capable</span>
             </label>
@@ -110,6 +112,12 @@
             <button type="button" id="btn-save-aircraft" class="btn btn-primary btn-sm">Save</button>
             <button type="button" id="btn-cancel-aircraft" class="btn btn-secondary btn-sm">Cancel</button>
           </div>
+        </div>
+        <div class="section">
+          <h3 id="aircraft-list-title">My Aircraft</h3>
+          <p id="aircraft-list-hint" class="muted section-hint">Manage your aircraft. The selected aircraft's cruise speed sets the flight duration estimate, and you are warned when a flight's ceiling is above its service ceiling.</p>
+          <div id="aircraft-list"></div>
+          <button type="button" id="btn-add-aircraft" class="btn btn-primary btn-sm" style="margin-top:0.75rem">+ Add Aircraft</button>
         </div>
       </div>
       <!-- Services tab -->

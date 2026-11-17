@@ -254,6 +254,7 @@ def aircraft_performance(row: UserAircraftRow | None, cruise_ias_kt: float | Non
         category=type_info.get("category"),
         cruise_ias_kt=row.cruise_speed_kt,
         turbo=bool(getattr(row, "is_turbo", False)),
+        preset=getattr(row, "performance_preset", None),
         ceiling_ft=row.ceiling_ft,
         climb_ias_kt=row.climb_ias_kt,
         climb_rate_fpm=row.climb_rate_fpm,

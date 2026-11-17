@@ -18,13 +18,14 @@ FlightPhase = Literal["climb", "cruise", "descent"]
 class AircraftPerformance(BaseModel):
     """Climb / descent performance the flight path is flown with.
 
-    Resolved from the aircraft's own overrides, else the class preset of its
-    ICAO category, else the unknown-aircraft default (``source`` says which).
+    Resolved from the aircraft's own overrides (``aircraft``), over the preset
+    picked in the aircraft form (``preset``), else the class preset of its
+    ICAO category (``category``), else the unknown-aircraft default.
     Every figure is a still-air, ISA, POH-order planning number.
     """
 
     preset: str
-    source: Literal["aircraft", "category", "default"] = "default"
+    source: Literal["aircraft", "preset", "category", "default"] = "default"
     # Climb speed: IAS (kt). Jets: ``climb_ias_kt`` above ``low_alt_cap_ft``,
     # ``low_alt_ias_kt`` below it, and never above ``climb_mach``.
     climb_ias_kt: float
