@@ -550,6 +550,31 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": " (+{n} weitere Vereisungsabschnitt(e))",
         "es": " (+{n} tramo(s) de engelamiento más)",
     },
+    # --- flight path (#1005): where on the route a climb or descent is ---
+    "flight_path.where.climb": {
+        "en": "climb, nm {lo} to {hi}",
+        "fr": "montée, nm {lo} à {hi}",
+        "de": "Steigflug, NM {lo} bis {hi}",
+        "es": "ascenso, NM {lo} a {hi}",
+    },
+    "flight_path.where.descent": {
+        "en": "descent, {hi} to {lo} nm out",
+        "fr": "descente, de {hi} à {lo} nm de l'arrivée",
+        "de": "Sinkflug, {hi} bis {lo} NM vor dem Ziel",
+        "es": "descenso, de {hi} a {lo} NM del destino",
+    },
+    "flight_path.in_cloud.climb": {
+        "en": "; in cloud on the climb from nm {lo} to nm {hi}, about {minutes} min",
+        "fr": " ; dans les nuages en montée de nm {lo} à nm {hi}, environ {minutes} min",
+        "de": "; in Wolken im Steigflug von NM {lo} bis NM {hi}, etwa {minutes} min",
+        "es": "; en nube en el ascenso de NM {lo} a NM {hi}, unos {minutes} min",
+    },
+    "flight_path.in_cloud.descent": {
+        "en": "; in cloud on the descent from {far} nm out to {near} nm out, about {minutes} min",
+        "fr": " ; dans les nuages en descente de {far} nm à {near} nm de l'arrivée, environ {minutes} min",
+        "de": "; in Wolken im Sinkflug von {far} NM bis {near} NM vor dem Ziel, etwa {minutes} min",
+        "es": "; en nube en el descenso de {far} NM a {near} NM del destino, unos {minutes} min",
+    },
     "aircraft_icing.phase.climb": {
         "en": "climb", "fr": "montée", "de": "Steigflug", "es": "ascenso",
     },

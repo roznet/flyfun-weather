@@ -8192,3 +8192,60 @@ depth cut: check for that before reading a low hit rate as "no SLD"), and read
 `per_model[].shadow` on production briefings once this is deployed. GFS rain
 water only exists on briefings made after §83 is deployed, so a replay of
 older packs measures ICON-D2, AROME and HRRR only.
+
+## 85. The flight path: climb and descent per aircraft, in shadow until replayed (#1005)
+
+**Date:** 2026-11-17 · **Issue:** #1005 (phase 1) · **Related:** §56 (aircraft icing), §27 (route extent), §84 (shadow pattern)
+
+### Context
+
+Every route point was graded at cruise and timed linearly in distance; the
+icing card's only climb and descent were vertical columns over the first and
+last point at 500 fpm. On a 150 nm SR22-class leg at 10,000 ft, 82 nm are
+flown climbing or descending; on a turboprop at FL260, 147 of 250 nm. Owner
+decisions of 2026-11-16 (eight answers on the brainstorm page) and 2026-11-17
+("we can tweak rates later": FIKI flies the clean rate).
+
+### Choices
+
+- **One path per briefing**, from the aircraft (class preset from the ICAO
+  category + pilot overrides), still air, ISA. Presets and every rate live in
+  `analysis/flight_path.PRESETS` (`designs/flight-path.md`); they are
+  POH-order figures, not checked type by type.
+- **Iced climb / descent rate:** non-FIKI flies the iced part of a climb or
+  descent at the clean rate × **0.7** (`ICED_RATE_FACTOR`), so its minutes
+  in ice are 1/0.7 longer; FIKI flies the clean rate (decision 5, settled
+  2026-11-17). The factor applies to descent too, as the issue states.
+- **A cell is graded on the band it flies**, not on the point's altitude:
+  icing zones and BKN/OVC layers are clipped to the altitude band the path
+  crosses in each point's cell (midpoint to midpoint). Thin layers between
+  two points are not lost; the cost is a slightly more conservative grade.
+- **Extent:** climb and descent cells stay in the §27 denominator and are
+  graded at their own band. A deck near the airports now counts as in cloud
+  where the aircraft flies it, not at cruise; a deck at cruise over the
+  airports no longer counts there.
+- **Exposure minutes** on vertical parts = iced thickness / path rate;
+  level parts keep the cruise groundspeed of §56.
+- **Duration:** the stored flight duration (the server estimate, or the
+  pilot's overwrite) wins; the path's times are scaled to it.
+- **Shadow by default** (`WB_FLIGHT_PATH`): the path is stored and each
+  phase-1 card records `ShadowGrade(rule="flight_path")`; point times and
+  grades are unchanged until `live`.
+
+### Rejected
+
+- A per-model path: the wind would differ per model, but three paths would
+  print three different TOC distances for one flight. A consensus wind can be
+  added through the `wind_at` hook later.
+- Grading a climb cell at the point altitude only: misses layers between two
+  points 10 to 20 nm apart.
+- Keeping 500 fpm for FIKI aircraft (today's figure): the owner chose the
+  clean rate.
+
+### Measured
+
+Not yet. Before `live`: `WB_FLIGHT_PATH=live python scripts/rerun_advisories_diff.py --area corpus`
+on the Mac (stored packs get a path built from their analyses; their point
+times stay linear, so the replay measures the altitude effect, not the
+timing one), then read `per_model[].shadow` (`rule="flight_path"`) on
+production briefings for a week.

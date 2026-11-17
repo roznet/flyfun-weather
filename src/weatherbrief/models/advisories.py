@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     # keeps the annotation a string.
     from weatherbrief.analysis.route_geometry import RouteExtent
 
+from weatherbrief.models.flight_path import AircraftPerformance, FlightPathSummary  # noqa: E402
 from weatherbrief.models.airport_conditions import (  # noqa: F401
     AirportConditions,
     FlightCategory,
@@ -1038,6 +1039,11 @@ class AircraftEquipage(BaseModel):
     # retired FIKI Icing card switched on) while the aircraft is not marked
     # FIKI. Never changes the grade: it only lets the card say why (#850).
     profile_fiki: bool = False
+    # Climb / descent performance the flight path is flown with (#1005):
+    # the aircraft's overrides over its class preset. None on packs built
+    # before #1005 and when no aircraft resolved (the pipeline then uses the
+    # unknown-aircraft default).
+    performance: AircraftPerformance | None = None
 
     @property
     def graded_fiki(self) -> bool:
@@ -1065,6 +1071,10 @@ class RouteAdvisoriesManifest(BaseModel):
     # digest and MCP never imply agreement across a missing model. {} on old
     # packs.
     models_failed: dict[str, str] = Field(default_factory=dict)
+    # The flight path the cards read (#1005): top of climb, top of descent,
+    # and whether it was graded (``live``) or only shadowed. None on old packs
+    # and with WB_FLIGHT_PATH=off.
+    flight_path: FlightPathSummary | None = None
 
 
 class AltitudeAdvisoryRow(BaseModel):

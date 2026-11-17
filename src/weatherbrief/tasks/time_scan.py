@@ -268,16 +268,30 @@ def _intersect_spans(
 
 def candidate_valid_times(
     route_points, departure: datetime, flight_duration_hours: float,
+    flight_path=None,
 ) -> list[datetime]:
     """Per-route-point ETAs for a departure — the coverage-check inputs.
 
-    Uses the same ``compute_interpolated_time`` the analysis stage uses, so
-    the check matches exactly the hours the re-grade will read."""
+    Uses the same times the analysis stage uses (``compute_interpolated_time``,
+    or the flight path's when ``WB_FLIGHT_PATH=live``, #1005), so the check
+    matches exactly the hours the re-grade will read."""
     from weatherbrief.tasks.analyze import compute_interpolated_time
 
     dep = _aware(departure)
     if not route_points:
         return [dep]
+    if flight_path is not None:
+        out = []
+        for i, rp in enumerate(route_points):
+            pp = flight_path.point(i)
+            if pp is None:
+                out.append(_aware(compute_interpolated_time(
+                    dep, flight_duration_hours, rp.distance_from_origin_nm,
+                    route_points[-1].distance_from_origin_nm,
+                )))
+            else:
+                out.append(dep + timedelta(seconds=pp.time_offset_s))
+        return out
     total = route_points[-1].distance_from_origin_nm
     return [
         _aware(
@@ -904,7 +918,11 @@ def run_time_scan(
         per_model_status_from_manifest,
         run_alt_from_pack,
     )
-    from weatherbrief.tasks.artifacts import load_cross_sections, load_route_points
+    from weatherbrief.tasks.artifacts import (
+        load_cross_sections,
+        load_elevation_profile,
+        load_route_points,
+    )
 
     if flexibility == "none":
         return None
@@ -1028,7 +1046,18 @@ def run_time_scan(
 
     candidates: list[TimeCandidate] = []
     refused: list[datetime] = []
-    baseline_vts = candidate_valid_times(route_points, dep, duration)
+    # Live flight path (#1005): the re-grade reads the path's point times, so
+    # the coverage check must too.
+    from weatherbrief.analysis.flight_path import flight_path_mode, route_flight_path
+
+    scan_path = None
+    if flight_path_mode() == "live":
+        scan_path = route_flight_path(
+            route_points, route.cruise_altitude_ft, elevation=load_elevation_profile(pack_dir),
+            equipage=equipage, cruise_speed_ias_kt=cruise_speed_ias_kt,
+            planned_duration_h=duration,
+        )
+    baseline_vts = candidate_valid_times(route_points, dep, duration, scan_path)
     baseline_row = TimeCandidate(
         departure_time=dep,
         departure_shift_hours=0.0,
@@ -1054,7 +1083,7 @@ def run_time_scan(
             if is_alt:
                 alternate_row = baseline_row.model_copy(update={"is_alternate": True})
             continue
-        vts = candidate_valid_times(route_points, t, duration)
+        vts = candidate_valid_times(route_points, t, duration, scan_path)
         if not covers(per_point, graded_models, vts):
             # The honesty invariant: never grade an hour whose enriched fields
             # aren't actually there — at_time() would silently clamp to the

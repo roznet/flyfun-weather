@@ -104,9 +104,18 @@ export function extractVizData(
   const effectiveCruise = opts?.effectiveCruiseAltitudeFt ?? manifest.cruise_altitude_ft;
   const actualCeiling = flightCeilingFt ?? effectiveCruise;
 
+  // The path is drawn only where the cards graded on it (live) and only at
+  // the altitude it was built for: at another cruise it would mislead.
+  const fp = manifest.flight_path;
+  const flightPath = fp && manifest.flight_path_mode === 'live'
+    && Math.abs(fp.cruise_altitude_ft - effectiveCruise) < 1
+    ? fp.profile.map(([d, a]) => ({ distanceNm: d, altitudeFt: a }))
+    : null;
+
   return {
     points,
     cruiseAltitudeFt: effectiveCruise,
+    flightPath,
     ceilingAltitudeFt: actualCeiling,
     flightCeilingFt: Math.max(actualCeiling, effectiveCruise) + 5000,
     totalDistanceNm: manifest.total_distance_nm,

@@ -531,3 +531,49 @@ class TestReviewFollowUps:
         new = create_aircraft(s, DEV_USER_ID, icao_type="SR22", is_default=True)
         assert get_default_aircraft(s, DEV_USER_ID).id == new.id
         s.close()
+
+
+# --- climb / descent performance (#1005) ------------------------------------
+
+
+def test_performance_overrides_round_trip_and_resolve(client):
+    r = client.post("/api/aircraft", json={
+        "icao_type": "SR22", "cruise_speed_kt": 170, "is_turbo": True, "climb_rate_fpm": 900,
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["is_turbo"] is True and body["climb_rate_fpm"] == 900
+    perf = body["performance"]
+    assert perf["preset"] == "turbo_piston"
+    assert perf["climb_ias_kt"] == 120  # SR22T preset climb speed
+    assert perf["climb_rate_fpm"] == 900
+    assert perf["source"] == "aircraft"
+
+    # 0 clears an override back to the preset; omitted fields are unchanged.
+    r = client.put(f"/api/aircraft/{body['id']}", json={"climb_rate_fpm": 0, "descent_angle_deg": 3.5})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["climb_rate_fpm"] is None
+    assert body["is_turbo"] is True
+    assert body["performance"]["climb_rate_fpm"] == 1000
+    assert body["performance"]["descent_mode"] == "angle"
+
+
+def test_performance_override_bounds_are_validated(client):
+    r = client.post("/api/aircraft", json={"icao_type": "C172", "descent_angle_deg": 12})
+    assert r.status_code == 422
+
+
+def test_duration_estimate_uses_the_path(client):
+    client.post("/api/aircraft", json={"icao_type": "SR22", "cruise_speed_kt": 150, "is_default": True})
+    r = client.post("/api/flights/duration-estimate", json={
+        "total_distance_nm": 150, "cruise_altitude_ft": 10000,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["preset"] == "hp_piston"
+    assert body["cruise_reached"] is True
+    assert 0 < body["toc_nm"] < body["tod_nm"] < 150
+    from weatherbrief.atmo import ias_to_tas_isa
+    # Slower than cruise TAS all the way: the climb and descent cost time.
+    assert body["duration_hours"] > 150 / ias_to_tas_isa(150, 10000)

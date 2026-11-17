@@ -68,6 +68,11 @@ import os
 from dataclasses import dataclass, field
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories._flight_path import (
+    path_rate_limit,
+    path_shadow_ctx,
+    record_path_shadow,
+)
 from weatherbrief.analysis.advisories._helpers import (
     EvidenceSample,
     FlaggedCell,
@@ -82,6 +87,7 @@ from weatherbrief.analysis.advisories._helpers import (
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.advisories.vertical_profile import INF, Blockage, solve
+from weatherbrief.analysis.flight_path import ICED_RATE_FACTOR
 from weatherbrief.analysis.sounding.sld import assess_sld_aloft_zones, sld_aloft_thresholds
 from weatherbrief.models import (
     AdvisoryCatalogEntry,
@@ -97,8 +103,10 @@ from weatherbrief.models import (
     ModelAdvisoryResult,
     RouteAdvisoryResult,
     ShadowGrade,
+    PathSlice,
     SldZone,
     SoundingAnalysis,
+    VerticalPart,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +177,57 @@ def _worse(a: IcingRisk, b: IcingRisk) -> IcingRisk:
 
 
 @dataclass(frozen=True)
+class PathIcing:
+    """One climbing or descending part of a point's cell on the flight path (#1005)."""
+
+    part: VerticalPart
+    zones: tuple[IcingZone, ...] = ()
+    sld: tuple[SldZone, ...] = ()
+
+    @property
+    def phase(self) -> str:
+        return self.part.phase
+
+    def minutes(self, fiki: bool) -> float:
+        """Minutes in the iced part of the band at the path's rate.
+
+        Non-FIKI flies the iced band at the clean rate × ``ICED_RATE_FACTOR``
+        (#1005 decision 5); FIKI at the clean rate.
+        """
+        fpm = self.part.fpm
+        if fpm <= 0:
+            return 0.0
+        if not fiki:
+            fpm *= ICED_RATE_FACTOR
+        return _iced_thickness(self.zones) / fpm
+
+
+def _iced_thickness(zones) -> float:
+    """Feet of the band covered by at least one zone (overlaps counted once)."""
+    spans = sorted((z.base_ft, z.top_ft) for z in zones if z.top_ft > z.base_ft)
+    total = 0.0
+    cur_lo = cur_hi = None
+    for lo, hi in spans:
+        if cur_hi is None or lo > cur_hi:
+            if cur_hi is not None:
+                total += cur_hi - cur_lo
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    if cur_hi is not None:
+        total += cur_hi - cur_lo
+    return total
+
+
+def _clip(zones, base: float, top: float):
+    """Zones overlapping ``[base, top]``, clipped to it."""
+    return tuple(
+        z.model_copy(update={"base_ft": max(z.base_ft, base), "top_ft": min(z.top_ft, top)})
+        for z in zones if z.base_ft < top and z.top_ft > base
+    )
+
+
+@dataclass(frozen=True)
 class IcingPoint:
     """What one model says about icing at one route point, for the planned profile.
 
@@ -194,6 +253,17 @@ class IcingPoint:
     # column. Empty when ``WB_SLD_ICING=off``.
     sld_cruise: tuple[SldZone, ...] = ()
     sld_column: tuple[SldZone, ...] = ()
+    # Flight path (#1005), when live: what the aircraft flies in this point's
+    # cell. ``level_nm`` is None in flat mode (today's endpoint columns);
+    # otherwise the level distance at cruise, and ``vertical`` the climb and
+    # descent parts crossing the cell, each with its iced zones (clipped to
+    # the part's altitude band) and SLD zones.
+    level_nm: float | None = None
+    vertical: tuple[PathIcing, ...] = ()
+
+    @property
+    def on_path(self) -> bool:
+        return self.level_nm is not None
 
     @property
     def iced_at_cruise(self) -> bool:
@@ -276,6 +346,13 @@ def icing_picture(
         if sounding is None or not sounding.active_icing_available:
             points.append(IcingPoint(index=idx, distance_nm=dist, assessed=False))
             continue
+        cell = ctx.path_slice(idx)
+        if cell is not None:
+            points.append(_path_icing_point(
+                ctx, idx, dist, sounding, cell, band, terrain_margin, equipage,
+                ceiling, with_sld,
+            ))
+            continue
         zones = hazardous_icing_zones(sounding.icing_zones)
         cruise_zones = tuple(
             z for z in zones if z.base_ft <= cruise + band and z.top_ft >= cruise - band
@@ -318,6 +395,64 @@ def icing_picture(
             sld_cruise=sld_cruise, sld_column=sld_column,
         ))
     return points
+
+
+def _path_icing_point(
+    ctx: RouteContext, idx: int, dist: float, sounding: SoundingAnalysis,
+    cell: PathSlice, band: float, terrain_margin: float,
+    equipage: AircraftEquipage, ceiling: float, with_sld: bool,
+) -> IcingPoint:
+    """One point on the flight path (#1005): the zones its cell actually flies through.
+
+    The level part reads the cruise band around the path's level (cruise, or
+    the peak of a short leg); each climb / descent part reads the zones its
+    altitude band crosses at this point's sounding.
+    """
+    zones = hazardous_icing_zones(sounding.icing_zones)
+    sld = point_sld_zones(sounding) if with_sld else []
+    level = cell.level_ft
+    cruise_zones: tuple[IcingZone, ...] = ()
+    sld_cruise: tuple[SldZone, ...] = ()
+    if cell.level_nm > 0:
+        cruise_zones = tuple(
+            z for z in zones if z.base_ft <= level + band and z.top_ft >= level - band
+        )
+        sld_cruise = tuple(
+            z for z in sld if z.base_ft <= level + band and z.top_ft >= level - band
+        )
+    vertical = tuple(
+        PathIcing(
+            part=part,
+            zones=_clip(zones, part.base_ft, part.top_ft),
+            sld=_clip(sld, part.base_ft, part.top_ft),
+        )
+        for part in cell.vertical
+    )
+    column_zones = tuple(z for v in vertical for z in v.zones)
+    sld_column = tuple(z for v in vertical for z in v.sld)
+    fz = sounding.indices.freezing_level_ft if sounding.indices else None
+    # Warm: nothing iced anywhere in the cell and the whole cell is flown
+    # below the freezing level (the clock resets).
+    warm = (
+        not cruise_zones and not column_zones and fz is not None and cell.top_ft < fz
+    )
+    down_ft = down_block = up_ft = floor_ft = None
+    relevant = list(cruise_zones) + list(column_zones)
+    if relevant:
+        terrain = max_terrain_near_point(ctx.elevation, dist)
+        floor_ft = None if terrain is None else terrain + terrain_margin
+        down_ft, down_block = _escape_down(sounding, zones, relevant, terrain, terrain_margin)
+        if equipage.graded_fiki:
+            up_ft = _escape_up(zones, ceiling)
+    return IcingPoint(
+        index=idx, distance_nm=dist, assessed=True,
+        cruise_zones=cruise_zones, column_zones=column_zones,
+        warm_at_cruise=warm, escape_down_ft=down_ft, escape_floor_ft=floor_ft,
+        down_block=down_block, escape_up_ft=up_ft,
+        method_id=sounding.icing_method_effective,
+        sld_cruise=sld_cruise, sld_column=sld_column,
+        level_nm=cell.level_nm, vertical=vertical,
+    )
 
 
 def icing_cell_cost(
@@ -378,8 +513,14 @@ class _Stretch:
     zones: list[IcingZone] = field(default_factory=list)
     phases: list[str] = field(default_factory=list)
     escape: bool = True
+    # Where on the route each phase of the stretch is flown (path mode only,
+    # #1005): phase -> [lo_nm, hi_nm].
+    spans: dict[str, list[float]] = field(default_factory=dict)
 
-    def add(self, point: IcingPoint, zones, minutes: float, phase: str, fiki: bool) -> None:
+    def add(
+        self, point: IcingPoint, zones, minutes: float, phase: str, fiki: bool,
+        lo_nm: float | None = None, hi_nm: float | None = None,
+    ) -> None:
         self.minutes += minutes
         if all(p.index != point.index for p in self.points):
             self.points.append(point)
@@ -387,6 +528,12 @@ class _Stretch:
         if phase not in self.phases:
             self.phases.append(phase)
         self.escape = self.escape and point.has_escape(fiki)
+        if lo_nm is not None and hi_nm is not None:
+            span = self.spans.get(phase)
+            if span is None:
+                self.spans[phase] = [lo_nm, hi_nm]
+            else:
+                span[0], span[1] = min(span[0], lo_nm), max(span[1], hi_nm)
 
     @property
     def worst_risk(self) -> IcingRisk:
@@ -424,6 +571,8 @@ def build_stretches(
     picture: list[IcingPoint], total_nm: float, speed_kt: float, fiki: bool,
 ) -> list[_Stretch]:
     """Walk the planned profile in route order and cut it into icing stretches."""
+    if any(p.on_path for p in picture):
+        return _build_path_stretches(picture, speed_kt, fiki)
     ordered = sorted(picture, key=lambda p: p.distance_nm)
     stretches: list[_Stretch] = []
     current: _Stretch | None = None
@@ -464,6 +613,48 @@ def build_stretches(
         if current is None:
             current = _Stretch()
         current.add(last, last.column_zones, descent_min, "descent", fiki)
+    if current is not None:
+        stretches.append(current)
+    return stretches
+
+
+def _build_path_stretches(
+    picture: list[IcingPoint], speed_kt: float, fiki: bool,
+) -> list[_Stretch]:
+    """The exposure clock on the flight path (#1005).
+
+    Each point's cell is flown in route order: its climb part, its level
+    part, its descent part. Vertical minutes come from the path's rate over
+    the iced thickness (× ``ICED_RATE_FACTOR`` for non-FIKI); level minutes
+    from the cruise groundspeed, as in flat mode.
+    """
+    ordered = sorted(picture, key=lambda p: p.distance_nm)
+    stretches: list[_Stretch] = []
+    current: _Stretch | None = None
+
+    def add(point, zones, minutes, phase, lo, hi):
+        nonlocal current
+        if current is None:
+            current = _Stretch()
+        current.add(point, zones, minutes, phase, fiki, lo, hi)
+
+    for point in ordered:
+        if not point.assessed:
+            continue  # unknown: the clock neither runs nor resets
+        climb = [v for v in point.vertical if v.phase == "climb" and v.zones]
+        descent = [v for v in point.vertical if v.phase == "descent" and v.zones]
+        for v in climb:
+            add(point, v.zones, v.minutes(fiki), "climb", v.part.lo_nm, v.part.hi_nm)
+        if point.cruise_zones and point.level_nm:
+            add(
+                point, point.cruise_zones, point.level_nm / max(speed_kt, 1.0) * 60.0,
+                "cruise", point.distance_nm, point.distance_nm,
+            )
+        for v in descent:
+            add(point, v.zones, v.minutes(fiki), "descent", v.part.lo_nm, v.part.hi_nm)
+        if point.warm_at_cruise and current is not None:
+            stretches.append(current)
+            current = None
     if current is not None:
         stretches.append(current)
     return stretches
@@ -539,6 +730,18 @@ def sld_hits(picture: list[IcingPoint]) -> list[_SldHit]:
             if phase not in hit.phases:
                 hit.phases.append(phase)
 
+        if p.on_path:
+            # Flight path (#1005): the parts this point's cell actually flies.
+            for v in p.vertical:
+                if v.phase == "climb":
+                    take(v.sld, "climb")
+            take(p.sld_cruise, "cruise")
+            for v in p.vertical:
+                if v.phase == "descent":
+                    take(v.sld, "descent")
+            if hit.zones:
+                hits.append(hit)
+            continue
         if p is first:
             take(p.sld_column, "climb")
         take(p.sld_cruise, "cruise")
@@ -612,8 +815,26 @@ def _graded_label(equipage: AircraftEquipage, loc: str | None) -> str:
     return adv_t("aircraft_icing.graded_non_fiki", loc)
 
 
-def _stretch_sentence(stretch: _Stretch, reason: str, fiki: bool, count: int, loc: str | None) -> str:
-    phases = ", ".join(adv_t(f"aircraft_icing.phase.{p}", loc) for p in stretch.phases)
+def _phase_label(stretch: _Stretch, phase: str, total_nm: float, loc: str | None) -> str:
+    """The phase name, with where it is flown when the path placed it (#1005)."""
+    span = stretch.spans.get(phase)
+    if span is None or phase == "cruise":
+        return adv_t(f"aircraft_icing.phase.{phase}", loc)
+    lo, hi = span
+    if phase == "climb":
+        return adv_t("flight_path.where.climb", loc, lo=round(lo), hi=max(round(hi), round(lo) + 1))
+    out_lo, out_hi = total_nm - hi, total_nm - lo
+    return adv_t(
+        "flight_path.where.descent", loc,
+        hi=max(round(out_hi), round(out_lo) + 1), lo=round(out_lo),
+    )
+
+
+def _stretch_sentence(
+    stretch: _Stretch, reason: str, fiki: bool, count: int, loc: str | None,
+    total_nm: float = 0.0,
+) -> str:
+    phases = ", ".join(_phase_label(stretch, p, total_nm, loc) for p in stretch.phases)
     if reason == "sld":
         text = adv_t("aircraft_icing.sld", loc, phases=phases)
     elif reason == "severe_icing":
@@ -758,7 +979,7 @@ def grade_aircraft_icing_model(
                 g[0].minutes,
             ),
         )
-        detail = f"{label}: {_stretch_sentence(worst, worst_reason, fiki, len(graded), loc)}"
+        detail = f"{label}: {_stretch_sentence(worst, worst_reason, fiki, len(graded), loc, ctx.total_distance_nm)}"
         if sld_lead is not None:
             # SLD leads the sentence when it is at least as bad as the worst
             # stretch: it is the more specific hazard. Otherwise it follows.
@@ -824,7 +1045,9 @@ def _mitigations(
         params.get("terrain_margin_ft", 1000),
     )
     if cm is not None:
-        result = solve(cm, preferred_alt_ft=ctx.cruise_altitude_ft)
+        result = solve(
+            cm, preferred_alt_ft=ctx.cruise_altitude_ft, rate_limit=path_rate_limit(ctx),
+        )
         if not isinstance(result, Blockage) and result.total_cost == 0:
             alts = {s.alt_ft for s in result.segments}
             cruise = ctx.cruise_altitude_ft
@@ -927,4 +1150,15 @@ class AircraftIcingEvaluator:
             )
             result.shadow = grade.shadow
             per_model.append(result)
-        return RouteAdvisoryResult.from_per_model(ADVISORY_ID, per_model, params)
+        out = RouteAdvisoryResult.from_per_model(ADVISORY_ID, per_model, params)
+        # #1005 shadow: what the card would grade on the flight path. Grade
+        # only (no mitigations, no solver), so the shadow stays cheap.
+        shadow_ctx = path_shadow_ctx(ctx)
+        if shadow_ctx is not None:
+            by_model = {}
+            for model in ctx.models:
+                g = grade_aircraft_icing_model(shadow_ctx, model, params)
+                points = sum(1 for smp in g.samples if smp.region is not None)
+                by_model[model] = (g.status, g.detail, points, g.worst_reason)
+            record_path_shadow(out, by_model)
+        return out

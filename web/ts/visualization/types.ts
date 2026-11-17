@@ -171,6 +171,13 @@ export interface TerrainPoint {
 export interface VizRouteData {
   points: VizPoint[];
   cruiseAltitudeFt: number;
+  /**
+   * The flight path the advisories grade on (#1005): climb, cruise, descent
+   * as (distance, altitude) vertices. Present only when the server graded
+   * live on it and the view shows the planned cruise; the cruise reference
+   * line then follows it instead of being flat.
+   */
+  flightPath?: { distanceNm: number; altitudeFt: number }[] | null;
   /** Actual flight ceiling from route config (e.g. 18000). */
   ceilingAltitudeFt: number;
   /** Y-axis maximum = max(ceiling, cruise) + 5000. */

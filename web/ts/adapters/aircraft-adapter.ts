@@ -24,7 +24,27 @@ export interface AircraftResponse {
    *  user always has a default aircraft (#777). Any PUT clears it; a POST while
    *  it is the user's only aircraft replaces it server-side. */
   is_placeholder: boolean;
+  /** Climb / descent overrides (#1005); null = the class preset. */
+  is_turbo?: boolean;
+  climb_ias_kt?: number | null;
+  climb_rate_fpm?: number | null;
+  descent_rate_fpm?: number | null;
+  descent_angle_deg?: number | null;
+  /** What the briefing's flight path uses: overrides over the class preset. */
+  performance?: AircraftPerformance | null;
   created_at: string;
+}
+
+/** Resolved climb / descent performance (#1005), computed on the server. */
+export interface AircraftPerformance {
+  preset: string;
+  source: string;
+  climb_ias_kt: number;
+  climb_rate_fpm: number;
+  ceiling_ft: number;
+  descent_mode: 'rate' | 'angle';
+  descent_rate_fpm: number | null;
+  descent_angle_deg: number | null;
 }
 
 /** Display label for an aircraft in a picker: "TAIL — Type (nickname)".
@@ -44,6 +64,12 @@ export interface CreateAircraftRequest {
   cruise_speed_kt?: number | null;
   ceiling_ft?: number | null;
   is_default?: boolean;
+  /** Climb / descent overrides (#1005); on update, 0 clears back to the preset. */
+  is_turbo?: boolean;
+  climb_ias_kt?: number | null;
+  climb_rate_fpm?: number | null;
+  descent_rate_fpm?: number | null;
+  descent_angle_deg?: number | null;
 }
 
 export interface UpdateAircraftRequest {
@@ -55,6 +81,12 @@ export interface UpdateAircraftRequest {
   cruise_speed_kt?: number | null;
   ceiling_ft?: number | null;
   is_default?: boolean;
+  /** Climb / descent overrides (#1005); on update, 0 clears back to the preset. */
+  is_turbo?: boolean;
+  climb_ias_kt?: number | null;
+  climb_rate_fpm?: number | null;
+  descent_rate_fpm?: number | null;
+  descent_angle_deg?: number | null;
 }
 
 export async function searchAircraftTypes(query: string): Promise<AircraftType[]> {

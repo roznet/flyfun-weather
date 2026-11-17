@@ -268,6 +268,32 @@ export async function fetchRouteDistance(waypoints: string[]): Promise<RouteDist
   });
 }
 
+export interface DurationEstimateRequest {
+  total_distance_nm: number;
+  cruise_altitude_ft: number;
+  aircraft_id?: number | null;
+  origin?: string | null;
+  destination?: string | null;
+}
+
+export interface DurationEstimateResponse {
+  duration_hours: number;
+  preset: string;
+  toc_nm: number;
+  tod_nm: number;
+  cruise_reached: boolean;
+}
+
+/** Flight duration from the server's climb / cruise / descent path (#1005). */
+export async function fetchDurationEstimate(
+  req: DurationEstimateRequest,
+): Promise<DurationEstimateResponse> {
+  return apiFetch<DurationEstimateResponse>('/flights/duration-estimate', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
 // --- FPL parsing ---
 
 export interface ParseFplResponse {

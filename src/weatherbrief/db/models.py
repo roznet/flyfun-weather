@@ -58,6 +58,15 @@ class UserAircraftRow(Base):
     is_fiki: Mapped[bool] = mapped_column(Boolean, default=False)
     cruise_speed_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ceiling_ft: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Climb / descent overrides for the briefing's flight path (#1005). NULL =
+    # the class preset of the ICAO category (analysis/flight_path.py PRESETS).
+    is_turbo: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False,
+    )
+    climb_ias_kt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    climb_rate_fpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    descent_rate_fpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    descent_angle_deg: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     # Synthesised by ensure_default_aircraft / migration 103 for a user who
     # never set one up (#777). Cleared by any PUT; a POST while it is the

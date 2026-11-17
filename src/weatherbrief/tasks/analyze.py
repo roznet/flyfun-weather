@@ -17,12 +17,15 @@ from typing import Callable, Optional
 
 from weatherbrief.analysis.advisories._helpers import terrain_at_distance
 from weatherbrief.analysis.comparison import compare_models
+from weatherbrief.analysis.flight_path import flight_path_mode, route_flight_path
 from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
 from weatherbrief.analysis.wind import compute_wind_components, pick_wind_at_pressure
 from weatherbrief.models import (
+    AircraftEquipage,
     AltitudeAdvisories,
     ElevationProfile,
+    FlightPath,
     HourlyForecast,
     ModelDivergence,
     RouteAnalysesManifest,
@@ -328,8 +331,14 @@ def analyze_all_route_points(
     flight_ceiling_ft: int,
     icing_severity_enhance: bool = False,
     elevation: ElevationProfile | None = None,
+    flight_path: FlightPath | None = None,
+    path_times: bool = False,
 ) -> list[RoutePointAnalysis]:
     """Analyze all route points across all models.
+
+    ``flight_path`` (#1005) stamps each point with its planned altitude and
+    phase; with ``path_times`` (``WB_FLIGHT_PATH=live``) the point times come
+    from the path instead of being linear in distance.
 
     For each route point, gathers the forecast from each model's cross-section
     at the point's interpolated time, then runs the shared analysis. When an
@@ -349,9 +358,13 @@ def analyze_all_route_points(
     analyses: list[RoutePointAnalysis] = []
 
     for i, rp in enumerate(route_points):
-        interp_time = compute_interpolated_time(
-            departure_time, duration_hours, rp.distance_from_origin_nm, total_distance,
-        )
+        path_point = flight_path.point(i) if flight_path is not None else None
+        if path_times and path_point is not None:
+            interp_time = departure_time + timedelta(seconds=path_point.time_offset_s)
+        else:
+            interp_time = compute_interpolated_time(
+                departure_time, duration_hours, rp.distance_from_origin_nm, total_distance,
+            )
 
         # Gather closest forecast hour from each model
         forecasts_by_model: dict[str, HourlyForecast] = {}
@@ -395,6 +408,8 @@ def analyze_all_route_points(
             altitude_advisories=alt_advisories,
             model_divergence=divergences,
             cruise_temperature_c=cruise_temps,
+            planned_altitude_ft=path_point.altitude_ft if path_point is not None else None,
+            phase=path_point.phase if path_point is not None else None,
         ))
 
     # Post-processing: compute E-Shear turbulence using horizontal wind shear
@@ -474,8 +489,14 @@ def run_analysis(
     pack_dir: Path | None = None,
     progress_callback: Callable[[str, str | None], None] | None = None,
     elevation: ElevationProfile | None = None,
+    equipage: AircraftEquipage | None = None,
+    cruise_speed_ias_kt: float | None = None,
 ) -> AnalysisResult:
     """Run the analysis stage: waypoint + route-point analyses.
+
+    Builds the briefing's flight path (#1005) from ``equipage.performance``
+    (unknown-aircraft default when absent) and stores it on the manifest;
+    ``WB_FLIGHT_PATH`` says whether the point times read it.
 
     If *pack_dir* is set, persists analysis artifacts to disk. When
     *elevation* is not provided, it is loaded from *pack_dir* if available
@@ -501,12 +522,20 @@ def run_analysis(
         try:
             model_names = [cs.model.value for cs in cross_sections]
             total_distance = route_points[-1].distance_from_origin_nm
+            path_mode = flight_path_mode()
+            flight_path = route_flight_path(
+                route_points, route.cruise_altitude_ft, elevation=elevation,
+                equipage=equipage, cruise_speed_ias_kt=cruise_speed_ias_kt,
+                planned_duration_h=route.flight_duration_hours,
+            )
             rp_analyses = analyze_all_route_points(
                 cross_sections, route_points, target_dt,
                 route.flight_duration_hours, route.cruise_altitude_ft,
                 route.flight_ceiling_ft,
                 icing_severity_enhance=icing_severity_enhance,
                 elevation=elevation,
+                flight_path=flight_path,
+                path_times=path_mode == "live",
             )
             route_analyses_manifest = RouteAnalysesManifest(
                 route_name=route.name,
@@ -517,6 +546,8 @@ def run_analysis(
                 cruise_altitude_ft=route.cruise_altitude_ft,
                 models=model_names,
                 analyses=rp_analyses,
+                flight_path=flight_path,
+                flight_path_mode=path_mode if flight_path is not None else None,
             )
             # Solar analysis (issue #227): night/twilight shading + sun-side note.
             # Glare (takeoff/landing) needs airport wind, only available in the

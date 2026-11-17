@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from weatherbrief.models.alternates import RouteAlternates
 from weatherbrief.models.observations import RefreshDelta, RouteObservations, RouteSigmets
 from weatherbrief.models.observed import ObservedConditions
+from weatherbrief.models.flight_path import FlightPath
 
 
 # euro_aip ``point_type`` values → the abbreviation a pilot reads on a chart.
@@ -1397,6 +1398,12 @@ class RoutePointAnalysis(BaseModel):
     # model -> temperature (°C) at the elected cruise level, interpolated from
     # that model's sounding. The route graph derives ISA deviation from it.
     cruise_temperature_c: dict[str, float] = Field(default_factory=dict)
+    # The flight path at this point (#1005): planned altitude (ft MSL) and
+    # phase. None on packs built before #1005 or with WB_FLIGHT_PATH=off,
+    # which read as flat cruise. ``interpolated_time`` comes from the path
+    # only when it is live.
+    planned_altitude_ft: float | None = None
+    phase: Literal["climb", "cruise", "descent"] | None = None
 
 
 class NightInterval(BaseModel):
@@ -1479,6 +1486,10 @@ class RouteAnalysesManifest(BaseModel):
     analyses: list[RoutePointAnalysis]
     # Optional solar analysis (issue #227) — old packs deserialize fine without it.
     sun: RouteSunAnalysis | None = None
+    # The climb / cruise / descent path (#1005) and the WB_FLIGHT_PATH mode it
+    # was built under (``shadow`` / ``live``). None on old packs and when off.
+    flight_path: FlightPath | None = None
+    flight_path_mode: str | None = None
 
 
 class RoutePointWindOverlay(BaseModel):

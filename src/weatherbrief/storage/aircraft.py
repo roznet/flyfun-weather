@@ -236,6 +236,32 @@ def resolve_flight_aircraft(session: Session, flight) -> UserAircraftRow | None:
     return get_default_aircraft(session, user_id)
 
 
+def aircraft_performance(row: UserAircraftRow | None, cruise_ias_kt: float | None = None):
+    """The climb / descent performance the flight path flies with (#1005).
+
+    The aircraft's overrides over the class preset of its ICAO category; no
+    aircraft or the placeholder give the unknown-aircraft default. Returns an
+    ``AircraftPerformance``.
+    """
+    from weatherbrief.analysis.flight_path import resolve_performance
+    from weatherbrief.storage.aircraft_types import get_aircraft_type
+
+    if row is None or row.is_placeholder:
+        speed = cruise_ias_kt if cruise_ias_kt else (row.cruise_speed_kt if row is not None else None)
+        return resolve_performance(category=None, cruise_ias_kt=speed, known=False)
+    type_info = get_aircraft_type(row.icao_type or "") or {}
+    return resolve_performance(
+        category=type_info.get("category"),
+        cruise_ias_kt=row.cruise_speed_kt,
+        turbo=bool(getattr(row, "is_turbo", False)),
+        ceiling_ft=row.ceiling_ft,
+        climb_ias_kt=row.climb_ias_kt,
+        climb_rate_fpm=row.climb_rate_fpm,
+        descent_rate_fpm=row.descent_rate_fpm,
+        descent_angle_deg=row.descent_angle_deg,
+    )
+
+
 def _default_profile_row(session: Session, user_id: str) -> FlightProfileRow | None:
     return session.execute(
         select(FlightProfileRow).where(

@@ -28,6 +28,7 @@ import math
 from collections.abc import Iterator
 
 from weatherbrief.analysis.advisories import RouteContext
+from weatherbrief.analysis.advisories._flight_path import path_rate_limit
 from weatherbrief.analysis.advisories._helpers import (
     EXTENT_MIN_NM,
     extent_min_nm_param,
@@ -828,7 +829,8 @@ def _solver_mitigations(
         return []
 
     cruise = ctx.cruise_altitude_ft
-    result = solve(model_cm, preferred_alt_ft=cruise)
+    # #1005: never propose a climb or descent steeper than the aircraft flies.
+    result = solve(model_cm, preferred_alt_ft=cruise, rate_limit=path_rate_limit(ctx))
     if isinstance(result, Blockage):
         return []
 

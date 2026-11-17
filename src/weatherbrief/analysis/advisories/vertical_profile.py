@@ -211,10 +211,18 @@ def _crossing_cost(col_i: list[float], col_j: list[float], a: int, b: int) -> fl
     return max(sum_i, sum_j)
 
 
-def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = None) -> Profile | Blockage:
+def solve(
+    model: CostModel, preferred_alt_ft: int,
+    rate_limit: float | tuple[float, float] | None = None,
+) -> Profile | Blockage:
     """Return the lexicographically-best vertical profile, or a :class:`Blockage`.
 
-    ``rate_limit`` is an accepted-but-unused hook (design decision 4). The search is a
+    ``rate_limit`` (design decision 4, implemented in #1005) caps the altitude change
+    between two adjacent points at the aircraft's gradient, in **ft per nm**: one
+    number for both directions, or ``(climb, descent)``. A transition steeper than
+    ``gradient × Δdistance`` is not allowed, except that one bin step is always
+    allowed so a coarse grid cannot pin the aircraft. ``None`` (default) leaves the
+    search unconstrained, as before. The search is a
     forward dynamic program over points, vectorised over the ``(from-bin × to-bin)``
     transition matrix at each step (issue #704: the scalar triple loop cost ~0.2–0.6 s
     per solve on a 64-point grid and runs per model, per time-scan candidate).
@@ -255,6 +263,17 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
     # Track forward reachability for blockage localisation.
     reachable_upto = 0 if np.any(dp_h != INF) else -1
 
+    alt_arr = np.asarray(alts, dtype=float)
+    # rise[a, b]: altitude change from bin a to bin b.
+    rise = alt_arr[None, :] - alt_arr[:, None]
+    min_step = float(np.min(np.abs(np.diff(alt_arr)))) if nbins > 1 else 0.0
+    if rate_limit is None:
+        climb_g = descent_g = None
+    elif isinstance(rate_limit, tuple):
+        climb_g, descent_g = rate_limit
+    else:
+        climb_g = descent_g = float(rate_limit)
+
     cross_prev = _crossing_matrix(cf[0])
     for i in range(1, n):
         col_cur = cf[i]
@@ -263,6 +282,12 @@ def solve(model: CostModel, preferred_alt_ft: int, rate_limit: float | None = No
         np.fill_diagonal(edge_h, 0.0)
         # cand_*[a, b]: arrive at bin b of point i from bin a of point i-1.
         valid = (dp_h != INF)[:, None] & (edge_h != INF) & (col_cur != INF)[None, :]
+        if climb_g is not None or descent_g is not None:
+            dd = max(model.distances_nm[i] - model.distances_nm[i - 1], 0.0)
+            if climb_g is not None:
+                valid &= rise <= max(climb_g * dd, min_step) + 1e-6
+            if descent_g is not None:
+                valid &= -rise <= max(descent_g * dd, min_step) + 1e-6
         with np.errstate(invalid="ignore"):
             cand_h = np.where(valid, (dp_h[:, None] + edge_h) + col_cur[None, :], INF)
             cand_d = np.where(valid, (dp_d[:, None] + 0.0) + dev[None, :], INF)

@@ -80,7 +80,11 @@ equivalence is pinned).
    floor, ceiling cap, transition detection, and profile/blockage output are shared.
    Grading (R/A/G) and phrasing stay per-advisory and unchanged in v1.
 4. **v1 ignores climb/descent rate.** Leave a `rate_limit` hook in the signature; do
-   not implement the gradient constraint first.
+   not implement the gradient constraint first. *Implemented in #1005:* `rate_limit`
+   is ft per nm (one number, or `(climb, descent)`); a transition steeper than
+   `gradient × Δdistance` is invalid, one bin step always allowed. The VFR and icing
+   mitigations pass the flight path's mean gradients (`_flight_path.path_rate_limit`)
+   when `WB_FLIGHT_PATH=live`; otherwise `None`, as before. See `flight-path.md`.
 5. **Objective is lexicographic**, not a weighted multi-term cost (avoids a fragile
    6-weight function). Order as shipped: *no hard-wall (`∞`) crossing* → *lowest total
    finite hazard cost* → *closest to preferred cruise (deviation)* → *fewest vertical
@@ -145,7 +149,7 @@ class CostModel:
 def solve(
     model: CostModel,
     preferred_alt_ft: int,               # planned cruise; a preference, not a bound
-    rate_limit: float | None = None,     # hook (decision 4) — accepted, unused in v1
+    rate_limit: float | tuple[float, float] | None = None,  # ft/nm, decision 4 (#1005)
 ) -> Profile | Blockage: ...
 ```
 
@@ -305,7 +309,7 @@ data shape is shipped, the canvas layer is not).
   altitude) — the strategic prize the shared solver unlocks, but not v1. A coherent
   *feasibility grade* only exists once this does, which is another reason grade
   integration (issue decision C) waits past v1.
-- Climb/descent-rate constraint (`rate_limit` hook, decision 4).
+- ~~Climb/descent-rate constraint (`rate_limit` hook, decision 4).~~ Done in #1005.
 - Lateral / re-route escapes — the model is a 2-D vertical slice only (same limitation
   as today).
 - Letting the path drive the **grade** (RED→AMBER capping) — the A-now / C-later
