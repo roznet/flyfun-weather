@@ -142,9 +142,10 @@ import { readTafAtEta, shortTemporaryLabel, type TafAtEta } from '../helpers/taf
 import { autoRefreshControl, hourPatchValue } from '../helpers/auto-refresh-control';
 import { TEMSI_ZONE_DETAIL, temsiNeedsDay, temsiTabLabel, temsiValidityOffset } from '../utils/temsi';
 
-/** Render the stale-pack banner. Owner-only — non-owners can't trigger
- *  a refresh. Uses textContent (not innerHTML) so localized strings
- *  can't introduce markup. */
+/** Render the stale-pack banner: the one place the page says what an edit
+ *  left out of date and how to fix it (#987). Built from DOM nodes (never
+ *  innerHTML) so localized strings can't introduce markup. Non-owners only
+ *  get the informational Synopsis line, with no buttons. */
 export function renderStalePackBanner(
   flight: FlightResponse | null,
   manifest: RouteAnalysesManifest | null,
@@ -152,39 +153,67 @@ export function renderStalePackBanner(
   onRefresh: () => void,
   onReanchorAltitude?: (alt: number) => void,
   advisoriesCruiseAltFt?: number | null,
+  digestCruiseAltFt?: number | null,
 ): void {
   const el = $('stale-pack-banner');
   if (!el) return;
 
-  const state = computeStalePackBanner(flight, manifest, isOwner, advisoriesCruiseAltFt);
+  const state = computeStalePackBanner(flight, manifest, isOwner, advisoriesCruiseAltFt, digestCruiseAltFt);
   if (state === null) {
     el.style.display = 'none';
+    el.replaceChildren();
     return;
   }
 
   el.style.display = 'block';
   el.replaceChildren();
   const messageSpan = document.createElement('span');
-  messageSpan.textContent = state.message;
+  for (const seg of state.segments) {
+    if (typeof seg === 'string') {
+      messageSpan.appendChild(document.createTextNode(seg));
+      continue;
+    }
+    const a = document.createElement('a');
+    a.href = `#${seg.section}`;
+    a.className = 'stale-pack-section-link';
+    a.textContent = seg.text;
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      scrollToBriefingSection(seg.section);
+    });
+    messageSpan.appendChild(a);
+  }
   el.appendChild(messageSpan);
 
-  const btn = document.createElement('button');
-  btn.className = 'btn btn-sm btn-primary';
-  btn.style.marginLeft = '0.75rem';
+  const addButton = (id: string, label: string, primary: boolean, onClick: () => void) => {
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.className = `btn btn-sm ${primary ? 'btn-primary' : 'btn-secondary'}`;
+    btn.style.marginLeft = '0.75rem';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    el.appendChild(btn);
+  };
 
-  // Altitude-only change → cheap re-anchor (no full refresh, never auto-saves
-  // the altitude). Anything touching time/route → the real pipeline refresh.
-  if (state.altOnly && onReanchorAltitude && flight) {
-    btn.id = 'stale-pack-reanchor-btn';
-    btn.textContent = t('stalePack.updateBtn');
-    const targetAlt = flight.cruise_altitude_ft;
-    btn.addEventListener('click', () => onReanchorAltitude(targetAlt));
-  } else {
-    btn.id = 'stale-pack-refresh-btn';
-    btn.textContent = t('stalePack.refreshBtn');
-    btn.addEventListener('click', () => onRefresh());
+  // Altitude-only change: the cheap re-grade (never auto-saves the altitude)
+  // is the primary action; Refresh is offered beside it for the Synopsis.
+  const canUpdate = state.showUpdate && !!onReanchorAltitude && !!flight;
+  if (canUpdate) {
+    const targetAlt = flight!.cruise_altitude_ft;
+    addButton('stale-pack-reanchor-btn', t('stalePack.updateBtn'), true, () => onReanchorAltitude!(targetAlt));
   }
-  el.appendChild(btn);
+  if (state.showRefresh) {
+    addButton('stale-pack-refresh-btn', t('stalePack.refreshBtn'), !canUpdate, () => onRefresh());
+  }
+}
+
+/** Scroll to a briefing section by its `data-section` key, expanding it if
+ *  collapsed. Used by the stale-pack banner's section links. */
+function scrollToBriefingSection(key: string): void {
+  const section = document.querySelector<HTMLElement>(`[data-section="${key}"]`);
+  if (!section) return;
+  section.classList.remove('collapsed');
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // --- History dropdown ---
@@ -2728,27 +2757,6 @@ function buildDigestProfileWarning(
   // Profile mismatch
   const digestProfileName = digest.profile_name || `#${digest.profile_id}`;
   return `<div class="digest-profile-warning">${t('digest.profileMismatch', { name: escapeHtml(digestProfileName) })}</div>`;
-}
-
-/**
- * Render the same altitude warning at the top of the page, directly under the
- * assessment banner.
- *
- * The synopsis-section copy sits above the digest prose, which is correct but is
- * a long way down the page — and the assessment banner is itself stale digest
- * text (`pack.assessment_reason`; `recalculate_advisories` never calls
- * `update_pack_meta`). A pilot reading only the top line would otherwise get the
- * old altitude's verdict with nothing to flag it.
- */
-export function renderDigestAltitudeBanner(
-  flight: FlightResponse | null,
-  packCruiseAltFt: number | null,
-): void {
-  const el = $('digest-altitude-banner');
-  if (!el) return;
-  const html = flight ? buildDigestAltitudeWarning(flight, packCruiseAltFt) : '';
-  el.innerHTML = html;
-  el.style.display = html ? '' : 'none';
 }
 
 /**
