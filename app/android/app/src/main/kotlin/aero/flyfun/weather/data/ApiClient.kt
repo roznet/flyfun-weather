@@ -332,6 +332,10 @@ class ApiClient(
     suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         post("/api/flights/route-distance", RouteDistanceRequest(waypoints = waypoints))
 
+    /** The server's duration for the climb / cruise / descent path (#1005). */
+    suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse =
+        post("/api/flights/duration-estimate", req)
+
     // ========================================================================
     // Autorouter
     // ========================================================================
@@ -704,6 +708,16 @@ class ApiClient(
         val q = if (!query.isNullOrBlank()) listOf("q" to query) else emptyList()
         return get("/api/aircraft/types", q)
     }
+
+    /** The form's climb / descent presets and the one this type and cruise speed suggest (#1005). */
+    suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse =
+        get(
+            "/api/aircraft/presets",
+            buildList {
+                add("icao_type" to icaoType)
+                cruiseSpeedKt?.let { add("cruise_speed_kt" to it.toString()) }
+            },
+        )
 
     suspend fun listProfiles(): List<ProfileResponse> = get("/api/user/profiles")
 

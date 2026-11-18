@@ -41,6 +41,7 @@ import aero.flyfun.weather.model.viz.CloudStyle
 import aero.flyfun.weather.model.viz.ColorScales
 import aero.flyfun.weather.model.viz.CoordTransform
 import aero.flyfun.weather.model.viz.CrossSectionTheme
+import aero.flyfun.weather.model.viz.FlightPathDisplay
 import aero.flyfun.weather.model.viz.MonotoneCubicSpline
 import aero.flyfun.weather.model.viz.VizCloudLayer
 import aero.flyfun.weather.model.viz.VizCurrentConditions
@@ -1762,21 +1763,46 @@ private fun DrawScope.drawAltitudeLinesLayer(
             abs(cruiseY - transform.altitudeToY(vizData.flightCeilingFt)) < pillHeightPx + 2.dp.toPx()
         val cruiseTopY = if (ceilingCollides) cruiseY + 2.dp.toPx() else cruiseY - pillHeightPx
         val cruiseColor = Color(theme.cruiseLineColor)
-        drawLine(
-            color = cruiseColor,
-            start = Offset(transform.plotLeft, cruiseY),
-            end = Offset(transform.plotRight, cruiseY),
-            strokeWidth = 2.0f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f),
-        )
+        val cruiseDash = PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f)
         val cruiseLabel = "Cruise ${String.format(Locale.US, "%,d", vizData.cruiseAltitudeFt.roundToInt())} ft"
-        drawPillLabelLeftAligned(
-            text = cruiseLabel,
-            leftX = transform.plotLeft + 6.dp.toPx(),
-            topY = cruiseTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
-            bgColor = Color(0xCC0F172A),
-            textColor = cruiseColor,
-        )
+        val flightPath = vizData.flightPath
+        if (flightPath != null) {
+            // The line follows the climb and descent (#1005), labelled at the top of climb.
+            val line = Path()
+            flightPath.forEachIndexed { index, point ->
+                val x = transform.distanceToX(point.distanceNm)
+                val y = transform.altitudeToY(point.altitudeFt)
+                if (index == 0) line.moveTo(x, y) else line.lineTo(x, y)
+            }
+            drawPath(path = line, color = cruiseColor, style = Stroke(width = 2.0f, pathEffect = cruiseDash))
+            val top = FlightPathDisplay.labelPoint(flightPath, vizData.cruiseAltitudeFt)
+            val topY = transform.altitudeToY(top.altitudeFt)
+            val labelTopY = if (ceilingCollides) topY + 2.dp.toPx() else topY - pillHeightPx
+            drawPillLabelLeftAligned(
+                text = cruiseLabel,
+                leftX = (transform.distanceToX(top.distanceNm) + 4.dp.toPx())
+                    .coerceAtMost(transform.plotRight - pillLabelWidth(cruiseLabel))
+                    .coerceAtLeast(transform.plotLeft),
+                topY = labelTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
+                bgColor = Color(0xCC0F172A),
+                textColor = cruiseColor,
+            )
+        } else {
+            drawLine(
+                color = cruiseColor,
+                start = Offset(transform.plotLeft, cruiseY),
+                end = Offset(transform.plotRight, cruiseY),
+                strokeWidth = 2.0f,
+                pathEffect = cruiseDash,
+            )
+            drawPillLabelLeftAligned(
+                text = cruiseLabel,
+                leftX = transform.plotLeft + 6.dp.toPx(),
+                topY = cruiseTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
+                bgColor = Color(0xCC0F172A),
+                textColor = cruiseColor,
+            )
+        }
     }
 
     if (showCeiling) {
@@ -2122,6 +2148,15 @@ private fun DrawScope.drawPillLabel(
         topY + pillH - 3.5f,
         paint,
     )
+}
+
+/** Width of the pill [drawPillLabelLeftAligned] draws for [text]. */
+private fun DrawScope.pillLabelWidth(text: String): Float {
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 8.5.sp.toPx()
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+    return paint.measureText(text) + 4.dp.toPx() * 2f
 }
 
 private fun DrawScope.drawPillLabelLeftAligned(

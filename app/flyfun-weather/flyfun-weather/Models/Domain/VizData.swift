@@ -38,6 +38,23 @@ nonisolated struct VizRouteData {
     /// pack has no front artifact, the model carries none, or the pack predates
     /// vertical linking — the layer then greys out.
     var frontChains: [FrontChain] = []
+    /// The climb / cruise / descent line (#1005). nil draws the flat cruise line:
+    /// see `CrossSectionViewModel.drawnFlightPath` for when it is set.
+    var flightPath: [VizFlightPathPoint]? = nil
+}
+
+/// One point of the drawn flight path.
+nonisolated struct VizFlightPathPoint: Equatable, Sendable {
+    let distanceNm: Double
+    let altitudeFt: Double
+}
+
+nonisolated extension Array where Element == VizFlightPathPoint {
+    /// Where the path's label goes: the top of climb, or the start of the path
+    /// on a short leg that never reaches the cruise level (as on the web).
+    func labelPoint(cruiseFt: Double) -> VizFlightPathPoint? {
+        first { $0.altitudeFt >= cruiseFt - 1 } ?? first
+    }
 }
 
 /// Domain mirror of the API `AdvisoryHighlights` (#374). `Equatable` because the

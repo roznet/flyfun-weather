@@ -649,8 +649,26 @@ final class CrossSectionViewModel {
                 terrainProfile: terrainProfile),
             // Server-linked air-mass boundaries for the rendered model (#196).
             // Drawn as they come: nothing is merged or deduped on the phone.
-            frontChains: routeFronts?.frontChains?[model] ?? []
+            frontChains: routeFronts?.frontChains?[model] ?? [],
+            flightPath: drawnFlightPath(
+                from: manifest, effectiveCruiseFt: Double(manifest.cruiseAltitudeFt))
         )
+    }
+
+    /// The path to draw, or nil for the flat cruise line. Same rule as web
+    /// `data-extract.ts`: drawn only where the cards graded on it (`live`), and
+    /// only at the altitude it was built for, since at another cruise it would
+    /// mislead.
+    static func drawnFlightPath(from manifest: RouteAnalysesResponse,
+                                effectiveCruiseFt: Double) -> [VizFlightPathPoint]? {
+        guard manifest.flightPathMode == "live",
+              let path = manifest.flightPath,
+              abs(path.cruiseAltitudeFt - effectiveCruiseFt) < 1 else { return nil }
+        let points = path.profile.compactMap { row -> VizFlightPathPoint? in
+            guard row.count >= 2 else { return nil }
+            return VizFlightPathPoint(distanceNm: row[0], altitudeFt: row[1])
+        }
+        return points.count >= 2 ? points : nil
     }
 
     /// ISA standard temperature (°C) at an altitude. Port of web `isaTemperatureC`

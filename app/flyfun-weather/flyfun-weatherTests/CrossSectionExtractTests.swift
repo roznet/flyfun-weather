@@ -49,6 +49,82 @@ import Foundation
         #expect(detail.convective?["gfs"]?.nwp?.maxCoverPct == 2.0)  // blue-sky RED
     }
 
+    // MARK: - Flight path (#1005)
+
+    /// A manifest with the live fixture's path, changed the way a test needs.
+    private func manifest(mode: String?, keepPath: Bool = true) throws -> RouteAnalysesResponse {
+        var manifest = FixtureBriefingData.routeAnalysesLive
+        manifest.flightPathMode = mode
+        if !keepPath { manifest.flightPath = nil }
+        return manifest
+    }
+
+    @Test func liveFixtureDecodesThePathAndPointFields() throws {
+        let manifest = FixtureBriefingData.routeAnalysesLive
+        let path = try #require(manifest.flightPath)
+        #expect(manifest.flightPathMode == "live")
+        #expect(path.cruiseAltitudeFt == 8000)
+        #expect(path.cruiseReached)
+        #expect(path.tocNm < path.todNm)
+        #expect(path.profile.allSatisfy { $0.count == 3 })
+        #expect(manifest.analyses.first?.phase == "climb")
+        #expect(manifest.analyses.last?.phase == "descent")
+        #expect(manifest.analyses.first?.plannedAltitudeFt == 0)
+    }
+
+    @Test func packWithoutAPathDecodesAndDrawsFlat() {
+        let viz = CrossSectionViewModel.extractVizData(
+            from: FixtureBriefingData.routeAnalyses, model: "gfs",
+            elevation: FixtureBriefingData.elevation)
+        #expect(FixtureBriefingData.routeAnalyses.flightPath == nil)
+        #expect(viz.flightPath == nil)
+    }
+
+    @Test func livePathAtThePlannedCruiseIsDrawn() throws {
+        let viz = CrossSectionViewModel.extractVizData(
+            from: FixtureBriefingData.routeAnalysesLive, model: "gfs",
+            elevation: FixtureBriefingData.elevation)
+        let path = try #require(viz.flightPath)
+        let profile = try #require(FixtureBriefingData.routeAnalysesLive.flightPath?.profile)
+        #expect(path.count == profile.count)
+        #expect(path.first?.altitudeFt == profile.first?[1])
+        #expect(path.map(\.altitudeFt).max() == 8000)
+    }
+
+    @Test func shadowOrUnknownModeDrawsFlat() throws {
+        for mode in ["shadow", "off", nil] as [String?] {
+            let path = CrossSectionViewModel.drawnFlightPath(
+                from: try manifest(mode: mode), effectiveCruiseFt: 8000)
+            #expect(path == nil)
+        }
+    }
+
+    @Test func nullPathDrawsFlat() throws {
+        let path = CrossSectionViewModel.drawnFlightPath(
+            from: try manifest(mode: "live", keepPath: false), effectiveCruiseFt: 8000)
+        #expect(path == nil)
+    }
+
+    @Test func anotherAltitudeDrawsFlat() throws {
+        let live = try manifest(mode: "live")
+        #expect(CrossSectionViewModel.drawnFlightPath(from: live, effectiveCruiseFt: 9000) == nil)
+        #expect(CrossSectionViewModel.drawnFlightPath(from: live, effectiveCruiseFt: 8001) == nil)
+        #expect(CrossSectionViewModel.drawnFlightPath(from: live, effectiveCruiseFt: 8000.5) != nil)
+    }
+
+    @Test func pathLabelSitsAtTopOfClimb() throws {
+        let path = try #require(CrossSectionViewModel.drawnFlightPath(
+            from: FixtureBriefingData.routeAnalysesLive, effectiveCruiseFt: 8000))
+        let toc = try #require(FixtureBriefingData.routeAnalysesLive.flightPath?.tocNm)
+        let label = try #require(path.labelPoint(cruiseFt: 8000))
+        #expect(abs(label.distanceNm - toc) < 0.01)
+
+        // A short leg that never reaches cruise labels the start of the path.
+        let short = [VizFlightPathPoint(distanceNm: 0, altitudeFt: 0),
+                     VizFlightPathPoint(distanceNm: 5, altitudeFt: 3000)]
+        #expect(short.labelPoint(cruiseFt: 8000)?.distanceNm == 0)
+    }
+
     /// The main extractor: maps the route-analyses manifest into `VizRouteData`
     /// for a model, folding in the elevation profile.
     @Test func extractsVizDataForGFS() {

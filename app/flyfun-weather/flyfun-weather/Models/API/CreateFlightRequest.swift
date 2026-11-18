@@ -150,6 +150,17 @@ nonisolated struct AircraftResponse: Codable, Identifiable, Hashable, Sendable {
     /// a default aircraft; cleared by any `PUT`. The form offers "Set up your
     /// aircraft" for it. Absent from older servers, so it decodes as `false`.
     var isPlaceholder: Bool = false
+    /// The climb / descent preset picked in the form (#1005); nil follows the
+    /// ICAO type.
+    var performancePreset: String? = nil
+    var isTurbo: Bool = false
+    /// Overrides on top of the preset; nil = the preset's value.
+    var climbIasKt: Int? = nil
+    var climbRateFpm: Int? = nil
+    var descentRateFpm: Int? = nil
+    var descentAngleDeg: Double? = nil
+    /// What the briefing's path flies with: the overrides over the preset.
+    var performance: AircraftPerformanceResponse? = nil
 
     var displayName: String {
         if let nickname, !nickname.isEmpty { return nickname }
@@ -203,9 +214,12 @@ nonisolated extension AircraftResponse {
     enum CodingKeys: String, CodingKey {
         case id, icaoType, typeName, tailNumber, nickname, isIfr, isFiki
         case cruiseSpeedKt, ceilingFt, isDefault, createdAt, isPlaceholder
+        case performancePreset, isTurbo, climbIasKt, climbRateFpm
+        case descentRateFpm, descentAngleDeg, performance
     }
 
-    /// Tolerates a server that predates `is_placeholder` (#777).
+    /// Tolerates a server that predates `is_placeholder` (#777) or the climb /
+    /// descent fields (#1005).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -220,6 +234,13 @@ nonisolated extension AircraftResponse {
         isDefault = try c.decode(Bool.self, forKey: .isDefault)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         isPlaceholder = try c.decodeIfPresent(Bool.self, forKey: .isPlaceholder) ?? false
+        performancePreset = try c.decodeIfPresent(String.self, forKey: .performancePreset)
+        isTurbo = try c.decodeIfPresent(Bool.self, forKey: .isTurbo) ?? false
+        climbIasKt = try c.decodeIfPresent(Int.self, forKey: .climbIasKt)
+        climbRateFpm = try c.decodeIfPresent(Int.self, forKey: .climbRateFpm)
+        descentRateFpm = try c.decodeIfPresent(Int.self, forKey: .descentRateFpm)
+        descentAngleDeg = try c.decodeIfPresent(Double.self, forKey: .descentAngleDeg)
+        performance = try c.decodeIfPresent(AircraftPerformanceResponse.self, forKey: .performance)
     }
 }
 
@@ -233,6 +254,13 @@ nonisolated struct CreateAircraftRequest: Encodable {
     var cruiseSpeedKt: Int? = nil
     var ceilingFt: Int? = nil
     var isDefault: Bool = false
+    // Climb / descent (#1005). nil = omitted (the presets never loaded).
+    var performancePreset: String? = nil
+    var isTurbo: Bool? = nil
+    var climbIasKt: Int? = nil
+    var climbRateFpm: Int? = nil
+    var descentRateFpm: Int? = nil
+    var descentAngleDeg: Double? = nil
 }
 
 /// Request body for PUT /api/aircraft/{id}. Partial: a nil field is omitted
@@ -247,6 +275,33 @@ nonisolated struct UpdateAircraftRequest: Encodable {
     var cruiseSpeedKt: Int? = nil
     var ceilingFt: Int? = nil
     var isDefault: Bool? = nil
+    // Climb / descent (#1005). nil = unchanged; 0 clears an override back to
+    // the preset.
+    var performancePreset: String? = nil
+    var isTurbo: Bool? = nil
+    var climbIasKt: Int? = nil
+    var climbRateFpm: Int? = nil
+    var descentRateFpm: Int? = nil
+    var descentAngleDeg: Double? = nil
+}
+
+/// Request body for `POST /api/flights/duration-estimate` (#1005).
+nonisolated struct DurationEstimateRequest: Encodable, Equatable {
+    let totalDistanceNm: Double
+    let cruiseAltitudeFt: Int
+    /// nil = the account's default aircraft.
+    var aircraftId: Int? = nil
+    var origin: String? = nil
+    var destination: String? = nil
+}
+
+/// The still-air duration of the server's climb / cruise / descent path.
+nonisolated struct DurationEstimateResponse: Codable, Sendable {
+    let durationHours: Double
+    let preset: String
+    let tocNm: Double
+    let todNm: Double
+    let cruiseReached: Bool
 }
 
 /// Request body for parsing an ICAO flight plan string.

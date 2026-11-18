@@ -2,16 +2,22 @@ package aero.flyfun.weather.viewmodel
 
 import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.FixtureBriefingRepository
+import aero.flyfun.weather.model.AircraftResponse
 import aero.flyfun.weather.model.BriefingStatusInfo
+import aero.flyfun.weather.model.DurationEstimateRequest
+import aero.flyfun.weather.model.DurationEstimateResponse
 import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightInvalidation
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.TripLegRef
 import java.time.LocalDate
 import java.time.LocalTime
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -45,7 +51,29 @@ class AddFlightEditViewModelTest {
 
     private fun FixtureBriefingRepository.flight(id: String): FlightResponse = flights.first { it.id == id }
 
+    private fun newFlightForm(testScope: TestScope, repo: FixtureBriefingRepository) = AddFlightViewModel(
+        repository = repo,
+        apiClient = null,
+        airportDb = null,
+        scopeOverride = testScope,
+        initialAircraft = listOf(FAST_AIRCRAFT, SLOW_AIRCRAFT),
+    )
+
+    /** Answers each duration estimate only when the test completes its reply. */
+    private class GatedEstimates : FixtureBriefingRepository() {
+        val replies = mutableListOf<CompletableDeferred<DurationEstimateResponse>>()
+
+        override suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse {
+            durationEstimateRequests += req
+            val reply = CompletableDeferred<DurationEstimateResponse>().also { replies += it }
+            return withContext(NonCancellable) { reply.await() }
+        }
+    }
+
     private companion object {
+        val FAST_AIRCRAFT = AircraftResponse(id = 7, icaoType = "SR22", tailNumber = "ZZ-FST", cruiseSpeedKt = 200)
+        val SLOW_AIRCRAFT = AircraftResponse(id = 8, icaoType = "C172", tailNumber = "ZZ-SLW", cruiseSpeedKt = 100)
+
         /** Briefed (the repository has its pack) and leg 1 of a trip. */
         val BRIEFED_TRIP_LEG = FlightResponse(
             id = "fixture-1",
@@ -78,6 +106,108 @@ class AddFlightEditViewModelTest {
             flightDurationHours = 2.0,
             createdAt = "2099-06-30T00:00:00Z",
         )
+    }
+
+    @Test
+    fun aNewRouteTakesTheServersDuration() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = FixtureBriefingRepository()
+        val vm = newFlightForm(testScope, repo)
+        vm.selectAircraft(FAST_AIRCRAFT.id)
+
+        vm.updateRouteText("LFMD LFML")
+        testScope.testScheduler.advanceUntilIdle()
+
+        val req = repo.durationEstimateRequests.single()
+        assertEquals(78.0, req.totalDistanceNm, 1e-9)
+        assertEquals(8000, req.cruiseAltitudeFt)
+        assertEquals(FAST_AIRCRAFT.id, req.aircraftId)
+        assertEquals("LFMD", req.origin)
+        assertEquals("LFML", req.destination)
+        // 78 / 140 + 0.1 = 0.66 h, rounded up to the quarter hour.
+        assertEquals(0, vm.durationHours.value)
+        assertEquals(45, vm.durationMinutes.value)
+        assertFalse(vm.isDurationManual.value)
+    }
+
+    @Test
+    fun altitudeAndAircraftChangesAskAgain() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = FixtureBriefingRepository()
+        val vm = newFlightForm(testScope, repo)
+        vm.updateRouteText("LFMD LFML")
+        testScope.testScheduler.advanceUntilIdle()
+
+        vm.setCruiseAltitudeFt(10000)
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals(10000, repo.durationEstimateRequests.last().cruiseAltitudeFt)
+
+        vm.selectAircraft(SLOW_AIRCRAFT.id)
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals(SLOW_AIRCRAFT.id, repo.durationEstimateRequests.last().aircraftId)
+        assertEquals(3, repo.durationEstimateRequests.size)
+    }
+
+    @Test
+    fun aFailedEstimateFallsBackToTheSelectedAircraftsSpeed() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = FixtureBriefingRepository()
+        repo.durationEstimateError = java.io.IOException("offline")
+        val vm = newFlightForm(testScope, repo)
+
+        vm.selectAircraft(FAST_AIRCRAFT.id)
+        vm.updateRouteText("LFMD LFML")
+        testScope.testScheduler.advanceUntilIdle()
+        // 78 / 200 + 0.25 = 0.64 h.
+        assertEquals(0, vm.durationHours.value)
+        assertEquals(45, vm.durationMinutes.value)
+
+        vm.selectAircraft(SLOW_AIRCRAFT.id)
+        testScope.testScheduler.advanceUntilIdle()
+        // 78 / 100 + 0.25 = 1.03 h.
+        assertEquals(1, vm.durationHours.value)
+        assertEquals(15, vm.durationMinutes.value)
+    }
+
+    @Test
+    fun aStaleEstimateIsDropped() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = GatedEstimates()
+        val vm = newFlightForm(testScope, repo)
+        vm.updateRouteText("LFMD LFML")
+        testScope.testScheduler.advanceUntilIdle()
+
+        vm.setCruiseAltitudeFt(10000)
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals(2, repo.replies.size)
+
+        repo.replies[1].complete(DurationEstimateResponse(durationHours = 2.0))
+        testScope.testScheduler.advanceUntilIdle()
+        repo.replies[0].complete(DurationEstimateResponse(durationHours = 5.0))
+        testScope.testScheduler.advanceUntilIdle()
+
+        assertEquals(2, vm.durationHours.value)
+        assertEquals(0, vm.durationMinutes.value)
+    }
+
+    @Test
+    fun aPilotsDurationWinsOverAnEstimateInFlight() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = GatedEstimates()
+        val vm = newFlightForm(testScope, repo)
+        vm.updateRouteText("LFMD LFML")
+        testScope.testScheduler.advanceUntilIdle()
+
+        vm.setDuration(3, 30)
+        repo.replies.single().complete(DurationEstimateResponse(durationHours = 1.0))
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals(3, vm.durationHours.value)
+        assertEquals(30, vm.durationMinutes.value)
+
+        // Nor is it asked again once the pilot has set it.
+        vm.setCruiseAltitudeFt(10000)
+        testScope.testScheduler.advanceUntilIdle()
+        assertEquals(1, repo.durationEstimateRequests.size)
     }
 
     @Test

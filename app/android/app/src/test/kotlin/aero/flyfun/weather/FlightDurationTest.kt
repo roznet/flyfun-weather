@@ -47,6 +47,14 @@ class FlightDurationTest {
     }
 
     @Test
+    fun `local estimate is distance over cruise speed plus the allowance`() {
+        assertEquals(1.25, FlightDuration.localEstimateHours(150.0, 150), 1e-9)
+        // A speed too low to be real is floored, and the result fits the picker.
+        assertEquals(2.75, FlightDuration.localEstimateHours(100.0, 10), 1e-9)
+        assertEquals(12.75, FlightDuration.localEstimateHours(5000.0, 100), 1e-9)
+    }
+
+    @Test
     fun `format and label produce human readable strings`() {
         assertEquals("0h", FlightDuration.format(0.0))
         assertEquals("2h", FlightDuration.format(2.0))

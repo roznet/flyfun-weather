@@ -71,6 +71,13 @@ struct AddFlightView: View {
                 statusSection
             }
             .navigationTitle(viewModel.navigationTitle)
+            // On the Form, not a section: a section scrolled off screen would
+            // stop following the altitude and aircraft (#1005).
+            .task(id: viewModel.durationEstimateKey) {
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled, !viewModel.isPreparingSubmit else { return }
+                await viewModel.refreshDurationEstimate()
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
