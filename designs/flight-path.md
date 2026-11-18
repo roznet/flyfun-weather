@@ -25,8 +25,8 @@ actually is. Nothing is computed on a client.
 | Pipeline | `tasks/analyze.run_analysis` | Builds the path (`route_flight_path`), stamps `RoutePointAnalysis.planned_altitude_ft` / `phase`, stores `RouteAnalysesManifest.flight_path` + `flight_path_mode`. Live: `interpolated_time` from the path. |
 | Advisories | `tasks/advise.py` | `RouteContext.flight_path` / `flight_path_live`; recalculation reuses the stored path (`recompute_for_cruise` on a cruise override) or builds one for old packs; alt departure and time scan build it from the route points. `RouteAdvisoriesManifest.flight_path` is the summary (TOC / TOD / live). |
 | Card helpers | `analysis/advisories/_flight_path.py` | `with_path_shadow`, `record_path_shadow`, `flown_band`, `path_rate_limit`, `in_cloud_on_path`, `in_cloud_sentence`. |
-| Duration | `POST /api/flights/duration-estimate` | The new-flight form's estimate (web `recalcDurationEstimate`); the local cruise-TAS estimate is only the fallback when the call fails. |
-| Display | web `reference-lines.ts` | The cruise line follows the path, only when the pack's mode is `live` and the view is at the planned cruise. |
+| Duration | `POST /api/flights/duration-estimate` | The new-flight form's estimate on all three clients (web `recalcDurationEstimate`, iOS `AddFlightViewModel.refreshDurationEstimate`, Android `AddFlightViewModel`), rounded up to the quarter hour. A pilot's duration wins, as does one from an FPL or a copied flight. On failure: web a local cruise-TAS estimate, Android its distance / speed + 0.25 h, iOS keeps the field as it is (it never had a local estimate). |
+| Display | web `reference-lines.ts`, iOS `ReferenceLinesLayer`, Android `CrossSectionCanvas` | The cruise line follows the path, only when the pack's mode is `live` and the view is at the planned cruise (`CrossSectionViewModel.drawnFlightPath`, `FlightPathDisplay.pathToDraw`). Otherwise the flat line. |
 | Digest | `prompt_builder._flight_path_header_line` | `FLIGHT PATH:` TOC / TOD line, live only. |
 
 ## The model
@@ -77,10 +77,15 @@ Turbocharged). Editing a value away from the preset shows "Custom (based on
 like the others: ticked on a non-turbo preset it holds the sea-level climb rate
 to `TURBO_CRITICAL_ALT_FT` (18,000 ft, 80% of a lower ceiling), unticked on
 `turbo_piston` the rate decays from sea level. Without a picked preset (older
-rows, iOS / Android until #1008), the type picks it and `is_turbo` selects the
+rows, app versions before #1008), the type picks it and `is_turbo` selects the
 turbo piston for an SEP. A preset that follows the type moves with the type and
 cruise speed in the form; a picked or custom one stays. The form logic is
-`web/ts/components/aircraft-performance-form.ts`.
+`web/ts/components/aircraft-performance-form.ts`, ported to iOS
+(`AircraftPerformanceForm`, `AircraftFormModel`) and Android
+(`AircraftPerformanceForm`, `AircraftPerformanceFormController`). The preset
+values always come from `GET /api/aircraft/presets`. If that call fails the
+section stays closed and a save omits every performance field, so saved
+overrides survive; the apps retry the open on the next type or speed change.
 
 ## Phase-1 consumers
 
@@ -142,6 +147,7 @@ get one built from their analyses; their point times stay linear).
 - `FlightPath.point(i)` keys on the route-point index; analyses may skip
   points, so read cells through `RouteContext.path_slice(idx)` (analyses
   index), never by position in `points`.
-- The iOS / Android apps still estimate duration locally and draw a flat
-  cruise line; they can call `/flights/duration-estimate` and read
-  `route_analyses.flight_path` (follow-up).
+- Shared app fixtures: `app/fixtures/api/route-analyses-live.json` (a live path
+  from `compute_flight_path`) and `aircraft-presets.json` (the server's table).
+  Mock mode still serves the flat `route-analyses.json`, so the journeys don't
+  depend on the path.

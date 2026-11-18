@@ -1326,6 +1326,33 @@ data class RouteAnalysesResponse(
     val models: List<String> = emptyList(),
     val analyses: List<RoutePointAnalysis> = emptyList(),
     val sun: RouteSunAnalysis? = null,
+    /** The climb / cruise / descent path (#1005). Absent on older packs. */
+    @SerialName("flight_path")
+    val flightPath: FlightPath? = null,
+    /** `"shadow"`, `"live"` or absent. Only a live path is drawn. */
+    @SerialName("flight_path_mode")
+    val flightPathMode: String? = null,
+)
+
+/**
+ * The part of the server's `models/flight_path.py::FlightPath` the app reads. [profile] rows are
+ * `[distance_nm, altitude_ft, time_s]` in route order.
+ */
+@Serializable
+data class FlightPath(
+    @SerialName("cruise_altitude_ft")
+    val cruiseAltitudeFt: Double = 0.0,
+    @SerialName("total_distance_nm")
+    val totalDistanceNm: Double = 0.0,
+    @SerialName("toc_nm")
+    val tocNm: Double = 0.0,
+    @SerialName("tod_nm")
+    val todNm: Double = 0.0,
+    @SerialName("cruise_reached")
+    val cruiseReached: Boolean = true,
+    @SerialName("peak_ft")
+    val peakFt: Double = 0.0,
+    val profile: List<List<Double>> = emptyList(),
 )
 
 @Serializable
@@ -1353,6 +1380,11 @@ data class RoutePointAnalysis(
     val modelDivergence: List<ModelDivergence> = emptyList(),
     @SerialName("cruise_temperature_c")
     val cruiseTemperatureC: Map<String, Double>? = null,
+    /** Altitude of the flight path at this point (#1005). Absent on older packs. */
+    @SerialName("planned_altitude_ft")
+    val plannedAltitudeFt: Double? = null,
+    /** `"climb"`, `"cruise"` or `"descent"`. Absent on older packs. */
+    val phase: String? = null,
 ) {
     val id: Int
         get() = pointIndex

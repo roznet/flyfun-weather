@@ -66,6 +66,10 @@ protocol BriefingRepository: Sendable {
     func parseFpl(_ text: String) async throws -> ParseFplResponse
     func interpretRoute(rawRoute: String) async throws -> InterpretRouteResponse
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse
+    /// Still-air duration of the aircraft's climb / cruise / descent path (#1005).
+    func durationEstimate(_ request: DurationEstimateRequest) async throws -> DurationEstimateResponse
+    /// The climb / descent preset table and the ICAO type's suggestion (#1005).
+    func aircraftPresets(icaoType: String, cruiseSpeedKt: Int?) async throws -> AircraftPresetsResponse
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute]
     /// Short-lived signed URL that starts linking Autorouter in an in-app
     /// browser (`AutorouterLinker`), returning to `scheme://autorouter/callback`.
@@ -324,6 +328,17 @@ final class OnlineBriefingRepository: BriefingRepository {
     func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse {
         let body = try JSONEncoder.weatherBrief.encode(RouteDistanceRequest(waypoints: waypoints))
         return try await client.request("/api/flights/route-distance", method: "POST", body: body)
+    }
+
+    func durationEstimate(_ request: DurationEstimateRequest) async throws -> DurationEstimateResponse {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/flights/duration-estimate", method: "POST", body: body)
+    }
+
+    func aircraftPresets(icaoType: String, cruiseSpeedKt: Int?) async throws -> AircraftPresetsResponse {
+        var path = "/api/aircraft/presets?icao_type=\(Self.queryValueEncoded(icaoType))"
+        if let cruiseSpeedKt { path += "&cruise_speed_kt=\(cruiseSpeedKt)" }
+        return try await client.requestURL(path)
     }
 
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] {

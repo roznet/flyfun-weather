@@ -125,6 +125,12 @@ class CachingBriefingRepository(
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         online.routeDistance(waypoints)
 
+    override suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse =
+        online.durationEstimate(req)
+
+    override suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse =
+        online.aircraftPresets(icaoType, cruiseSpeedKt)
+
     override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse =
         online.fetchAutorouterRoutes(limit)
 

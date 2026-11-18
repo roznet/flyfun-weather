@@ -203,6 +203,8 @@ data class VizRouteData(
     val frontChains: List<FrontChain> = emptyList(),
     val currentConditions: VizCurrentConditions? = null,
     val advisoryHighlights: AdvisoryHighlights? = null,
+    /** The climb / cruise / descent line to draw, or null for the flat cruise line. */
+    val flightPath: List<VizFlightPathPoint>? = null,
 )
 
 object VizDataExtractor {
@@ -378,6 +380,7 @@ object VizDataExtractor {
             frontChains = routeFronts?.frontChains?.get(model).orEmpty(),
             currentConditions = currentConditions,
             advisoryHighlights = advisoryHighlights,
+            flightPath = FlightPathDisplay.pathToDraw(routeAnalyses, cruiseAltitudeFt),
         )
     }
 

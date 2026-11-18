@@ -12,6 +12,8 @@ import kotlin.math.min
 object FlightDuration {
     val minuteOptions: List<Int> = listOf(0, 15, 30, 45)
     const val maxHours: Int = 12
+    private const val MIN_ESTIMATE_SPEED_KT = 40
+    private const val LOCAL_ALLOWANCE_HOURS = 0.25
 
     /** Maximum value representable by the picker (`12h 45m` = `12.75` h). */
     val maxDecimalHours: Double = maxHours + (minuteOptions.lastOrNull() ?: 0) / 60.0
@@ -43,6 +45,13 @@ object FlightDuration {
     /** Clamp a decimal hour value to the range representable by the picker (`0 ... 12.75`). */
     fun clampToPickerRange(decimalHours: Double): Double =
         min(max(0.0, decimalHours), maxDecimalHours)
+
+    /**
+     * The local estimate, used only when `POST /flights/duration-estimate` fails: distance over
+     * the aircraft's cruise speed plus a 15-minute taxi and climb allowance.
+     */
+    fun localEstimateHours(distanceNm: Double, cruiseSpeedKt: Int): Double =
+        clampToPickerRange(distanceNm / max(cruiseSpeedKt, MIN_ESTIMATE_SPEED_KT) + LOCAL_ALLOWANCE_HOURS)
 
     /** Compact human label matching the quarter-hour rounding, e.g. `"2h"` or `"2h 30m"`. */
     fun label(decimalHours: Double): String {

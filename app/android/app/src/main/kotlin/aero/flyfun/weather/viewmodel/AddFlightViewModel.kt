@@ -10,6 +10,7 @@ import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.model.AircraftResponse
 import aero.flyfun.weather.model.AutorouterRouteOption
 import aero.flyfun.weather.model.CreateFlightRequest
+import aero.flyfun.weather.model.DurationEstimateRequest
 import aero.flyfun.weather.model.FlightDuration
 import aero.flyfun.weather.model.FlightEditRules
 import aero.flyfun.weather.model.FlightFlexibility
@@ -28,6 +29,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,7 +41,7 @@ import kotlinx.coroutines.launch
  * Supports:
  * - Natural route text interpretation (`/api/flights/interpret-route`) + airport autocomplete
  * - ICAO FPL string paste parsing (`/api/flights/parse-fpl`)
- * - Great-circle distance + auto-calculated flight duration from cruise speed
+ * - Great-circle distance + the server's duration estimate for the aircraft's flight path
  * - Autorouter route suggestions
  * - Aircraft selection (autofilling speed & ceiling) and Profile selection
  * - Flexibility (the server's timing-scenario mode, incl. a pinned alternate departure)
@@ -58,6 +60,8 @@ class AddFlightViewModel(
     private val scopeOverride: CoroutineScope? = null,
     /** Outlives the sheet: the 409 refresh retry keeps going after it closes. */
     private val backgroundScope: CoroutineScope? = null,
+    /** The aircraft to offer before [loadFormMetadata] has read them (tests, mock mode). */
+    initialAircraft: List<AircraftResponse> = emptyList(),
 ) : ViewModel() {
 
     /** What the sheet is doing. */
@@ -113,7 +117,7 @@ class AddFlightViewModel(
     private val _flightCeilingFt = MutableStateFlow(18000)
     val flightCeilingFt: StateFlow<Int> = _flightCeilingFt.asStateFlow()
 
-    private val _cruiseSpeedKt = MutableStateFlow(120)
+    private val _cruiseSpeedKt = MutableStateFlow(DEFAULT_CRUISE_SPEED_KT)
     val cruiseSpeedKt: StateFlow<Int> = _cruiseSpeedKt.asStateFlow()
 
     private val _durationHours = MutableStateFlow(1)
@@ -128,7 +132,7 @@ class AddFlightViewModel(
     private val _distanceNm = MutableStateFlow<Double?>(null)
     val distanceNm: StateFlow<Double?> = _distanceNm.asStateFlow()
 
-    private val _aircraftList = MutableStateFlow<List<AircraftResponse>>(emptyList())
+    private val _aircraftList = MutableStateFlow(initialAircraft)
     val aircraftList: StateFlow<List<AircraftResponse>> = _aircraftList.asStateFlow()
 
     private val _selectedAircraftId = MutableStateFlow<Int?>(null)
@@ -177,6 +181,11 @@ class AddFlightViewModel(
     /** Keep both (duplicate) joins the trip only when ticked (web default). */
     private val _addDuplicateToTrip = MutableStateFlow(false)
     val addDuplicateToTrip: StateFlow<Boolean> = _addDuplicateToTrip.asStateFlow()
+
+    /** The latest route-distance and duration requests: an older reply is dropped. */
+    private var routeDistanceSeq = 0
+    private var durationEstimateSeq = 0
+    private var durationEstimateJob: Job? = null
 
     val totalDurationHours: Double
         get() = FlightDuration.combine(_durationHours.value, _durationMinutes.value)
@@ -381,7 +390,7 @@ class AddFlightViewModel(
         if (tokens.size >= 2) {
             recomputeDistanceAndDuration(tokens)
         } else {
-            _distanceNm.value = null
+            clearRouteDistance()
         }
     }
 
@@ -402,6 +411,8 @@ class AddFlightViewModel(
         _airportSuggestions.value = emptyList()
         if (currentTokens.size >= 2) {
             recomputeDistanceAndDuration(currentTokens)
+        } else {
+            clearRouteDistance()
         }
     }
 
@@ -449,7 +460,10 @@ class AddFlightViewModel(
                         ?: resp.waypoints.joinToString(" ")
                     if (resp.waypoints.size >= 2) recomputeDistanceAndDuration(resp.waypoints)
                 }
-                resp.altitudeFt?.let { _cruiseAltitudeFt.value = it }
+                resp.altitudeFt?.let {
+                    _cruiseAltitudeFt.value = it
+                    requestDurationEstimate()
+                }
                 resp.durationHours?.let { dur ->
                     val parts = FlightDuration.split(FlightDuration.clampToPickerRange(dur))
                     _durationHours.value = parts.hours
@@ -505,19 +519,15 @@ class AddFlightViewModel(
 
     fun selectAircraft(aircraftId: Int?) {
         _selectedAircraftId.value = aircraftId
-        val ac = _aircraftList.value.firstOrNull { it.id == aircraftId } ?: return
-        ac.cruiseSpeedKt?.let { speed ->
-            _cruiseSpeedKt.value = speed
-            if (_waypoints.value.size >= 2 && !_isDurationManual.value) {
-                recomputeDistanceAndDuration(_waypoints.value)
-            }
-        }
-        ac.ceilingFt?.let { ceiling ->
+        val ac = _aircraftList.value.firstOrNull { it.id == aircraftId }
+        _cruiseSpeedKt.value = ac?.cruiseSpeedKt ?: DEFAULT_CRUISE_SPEED_KT
+        ac?.ceilingFt?.let { ceiling ->
             _flightCeilingFt.value = ceiling
             if (_cruiseAltitudeFt.value > ceiling) {
                 _cruiseAltitudeFt.value = ceiling
             }
         }
+        requestDurationEstimate()
     }
 
     fun selectProfile(profileId: Int?) {
@@ -525,7 +535,7 @@ class AddFlightViewModel(
         val profile = _profiles.value.firstOrNull { it.id == profileId } ?: return
         profile.settings.cruiseAltitudeFt?.let { _cruiseAltitudeFt.value = it }
         profile.settings.flightCeilingFt?.let { _flightCeilingFt.value = it }
-        profile.settings.speedKt?.let { _cruiseSpeedKt.value = it }
+        requestDurationEstimate()
     }
 
     fun setDepartureDate(date: LocalDate) {
@@ -550,6 +560,7 @@ class AddFlightViewModel(
         if (_flightCeilingFt.value < _cruiseAltitudeFt.value) {
             _flightCeilingFt.value = _cruiseAltitudeFt.value
         }
+        requestDurationEstimate()
     }
 
     fun setFlightCeilingFt(ceilingFt: Int) {
@@ -560,6 +571,7 @@ class AddFlightViewModel(
         _durationHours.value = hours.coerceIn(0, 12)
         _durationMinutes.value = minutes.coerceIn(0, 55)
         _isDurationManual.value = manual
+        if (manual) cancelDurationEstimate()
     }
 
     fun setKeepInTripOnMove(keep: Boolean) {
@@ -838,7 +850,16 @@ class AddFlightViewModel(
         _errorMessage.value = null
     }
 
+    private fun clearRouteDistance() {
+        routeDistanceSeq++
+        _distanceNm.value = null
+        cancelDurationEstimate()
+    }
+
     private fun recomputeDistanceAndDuration(tokens: List<String>) {
+        val seq = ++routeDistanceSeq
+        // Whatever is in flight was asked for the previous route.
+        cancelDurationEstimate()
         // First try local airport DB for instant great-circle calculation
         val localAirports = tokens.mapNotNull { airportDb?.lookup(it) }
         if (localAirports.size == tokens.size && localAirports.size >= 2) {
@@ -847,33 +868,72 @@ class AddFlightViewModel(
                 totalNm += localAirports[i].coord.distanceNmTo(localAirports[i + 1].coord)
             }
             _distanceNm.value = totalNm
-            updateDurationFromDistance(totalNm)
+            requestDurationEstimate()
             return
         }
 
         // Fall back to server route-distance endpoint
-        val api = apiClient ?: return
         scope.launch {
             runCatching {
-                api.routeDistance(tokens)
+                repository.routeDistance(tokens)
             }.onSuccess { resp ->
+                if (seq != routeDistanceSeq) return@onSuccess
                 _distanceNm.value = resp.totalDistanceNm
-                updateDurationFromDistance(resp.totalDistanceNm)
+                requestDurationEstimate()
             }
         }
     }
 
-    private fun updateDurationFromDistance(distanceNm: Double) {
-        if (_isDurationManual.value) return
-        val speed = _cruiseSpeedKt.value.coerceAtLeast(40)
-        // Add 15 minutes (0.25h) taxi/climb allowance
-        val estHours = FlightDuration.clampToPickerRange((distanceNm / speed) + 0.25)
-        val parts = FlightDuration.split(estHours)
-        _durationHours.value = parts.hours
-        _durationMinutes.value = parts.minutes
+    private fun cancelDurationEstimate() {
+        durationEstimateSeq++
+        durationEstimateJob?.cancel()
     }
 
+    /**
+     * Ask the server for the duration of the current route, altitude and aircraft (#1005). A
+     * pilot's own duration always wins, and only the latest request may fill the picker. When
+     * the call fails the local estimate fills it instead.
+     */
+    private fun requestDurationEstimate() {
+        cancelDurationEstimate()
+        val seq = durationEstimateSeq
+        if (_isDurationManual.value) return
+        val distanceNm = _distanceNm.value?.takeIf { it > 0.0 } ?: return
+        val request = DurationEstimateRequest(
+            totalDistanceNm = distanceNm,
+            cruiseAltitudeFt = _cruiseAltitudeFt.value,
+            aircraftId = _selectedAircraftId.value,
+            origin = _waypoints.value.firstOrNull()?.takeIf { it.length <= MAX_ESTIMATE_IDENT_LENGTH },
+            destination = _waypoints.value.lastOrNull()?.takeIf { it.length <= MAX_ESTIMATE_IDENT_LENGTH },
+        )
+        durationEstimateJob = scope.launch {
+            delay(DURATION_ESTIMATE_DEBOUNCE_MS)
+            val serverHours = try {
+                repository.durationEstimate(request).durationHours
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                null
+            }
+            if (seq != durationEstimateSeq || _isDurationManual.value) return@launch
+            val hours = serverHours ?: FlightDuration.localEstimateHours(distanceNm, selectedCruiseSpeedKt())
+            val parts = FlightDuration.split(FlightDuration.clampToPickerRange(hours))
+            _durationHours.value = parts.hours
+            _durationMinutes.value = parts.minutes
+        }
+    }
+
+    /** The selected aircraft's cruise speed, also when it was set before the list loaded. */
+    private fun selectedCruiseSpeedKt(): Int =
+        _aircraftList.value.firstOrNull { it.id == _selectedAircraftId.value }?.cruiseSpeedKt
+            ?: _cruiseSpeedKt.value
+
     companion object {
+        private const val DEFAULT_CRUISE_SPEED_KT = 120
+        private const val DURATION_ESTIMATE_DEBOUNCE_MS = 300L
+
+        /** The endpoint refuses a longer `origin` / `destination`; a Field-15 token can be. */
+        private const val MAX_ESTIMATE_IDENT_LENGTH = 8
         private const val QUEUE_REFRESH_ATTEMPTS = 6
         private const val QUEUE_REFRESH_RETRY_MS = 30_000L
         private const val RESIDUAL_RETRY_MS = 2_000L

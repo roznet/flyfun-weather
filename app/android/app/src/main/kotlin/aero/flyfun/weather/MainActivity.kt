@@ -213,6 +213,7 @@ fun FlyFunWeatherRoot(
     val aircraftViewModel: AircraftListViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "aircraft") {
         AircraftListViewModel(
             apiClient = if (isMockMode || isGuestBrowsing) null else appState.apiClient,
+            repository = appState.repository,
         )
     }
 
