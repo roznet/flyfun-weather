@@ -684,10 +684,14 @@ def column_signals(payload: dict, alt_ft: float) -> dict[str, bool | None]:
     else:
         sig["cat_fzra_pl"] = None
     if "ptype" in sfc:
-        rate_mm_h = (sfc.get("prate") or 0.0) * 3600.0
+        # The paid ECPDS delivery (#1003) has ptype but no instantaneous rate
+        # (only ``tp``, accumulated). No rate is "gate unavailable", not a zero
+        # rate: ptype is already 0 where the model has no precipitation.
+        rate = sfc.get("prate")
+        wet = rate is None or rate * 3600.0 >= PTYPE_GATE_MM_H
         code = int(round(sfc["ptype"]))
-        sig["ptype_fz"] = code in PTYPE_FREEZING and rate_mm_h >= PTYPE_GATE_MM_H
-        sig["ptype_fzdz"] = code == 12 and rate_mm_h >= PTYPE_GATE_MM_H
+        sig["ptype_fz"] = code in PTYPE_FREEZING and wet
+        sig["ptype_fzdz"] = code == 12 and wet
     else:
         sig["ptype_fz"] = sig["ptype_fzdz"] = None
     return sig
