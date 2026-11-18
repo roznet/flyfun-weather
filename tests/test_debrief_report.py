@@ -10,12 +10,18 @@ import pytest
 
 from weatherbrief.debriefs.report import (
     ANSWERS_FILE,
+    _metar_conditions,
     airport_at,
+    airport_line,
+    build_headline,
+    build_interest,
     build_questions,
     build_report,
     build_summary,
+    flight_alerts,
     flown_altitude,
     forecast_at,
+    forecast_at_level,
     hazard_stretches,
     load_answers,
     observed_class,
@@ -113,7 +119,7 @@ METAR_EHRD = "METAR EHRD 141145Z 24012KT 6000 -RA BKN009 09/08 Q1008"
 TAF_EHRD = "TAF EHRD 140500Z 1406/1512 24010KT 9999 SCT020 BKN035 TEMPO 1410/1414 6000 -RA BKN012"
 
 
-def test_airport_lower_than_the_taf_the_pilot_had():
+def test_airport_worse_than_the_taf_the_pilot_had():
     hist = [
         {"type": "report", "kind": "taf", "icao": "EHRD", "issued_at": "2026-11-14T05:00:00+00:00",
          "raw": TAF_EHRD, "tick_at": "2026-11-14T07:00:00+00:00"},
@@ -123,8 +129,61 @@ def test_airport_lower_than_the_taf_the_pilot_had():
     a = airport_at(hist, "EHRD", datetime(2026, 11, 14, 11, 40, tzinfo=UTC), datetime(2026, 11, 14, 10, 0, tzinfo=UTC))
     assert a["metar_category"] == "IFR"
     assert a["taf_category"] == "VFR"
-    assert a["match"] == "lower"
+    assert a["match"] == "worse"
+    line = airport_line(a, "Arrival")
+    # Both sides written out, no "as forecast" verdict.
+    assert line.startswith("Arrival EHRD: 11:45Z IFR") and "TAF: VFR" in line
+    assert line.endswith("Worse than the TAF allowed.")
     assert airport_at([], "EHRD", datetime(2026, 11, 14, 11, 40, tzinfo=UTC), None)["match"] == "unverifiable"
+
+
+def _metar(icao, hhmm, raw_tail):
+    return {"type": "report", "kind": "metar", "icao": icao,
+            "observed_at": f"2026-10-31T{hhmm[:2]}:{hhmm[2:]}:00+00:00",
+            "raw": f"METAR {icao} 31{hhmm}Z AUTO {raw_tail}"}
+
+
+def test_airport_reads_the_proxy_and_the_fog_before_departure():
+    """EGTF has no reports: EGLL's are read. The fog that lifted before
+    departure is shown, and a TAF inside a BECMG window says it was lifting."""
+    taf = ("TAF AMD EGLL 310738Z 3107/0112 10005KT 1500 BR BKN002 "
+           "BECMG 3108/3111 9999 NSW SCT020")
+    hist = [
+        _metar("EGLL", "0820", "10006KT 3100 BR OVC003 09/09 Q1032"),
+        _metar("EGLL", "1050", "VRB02KT 9000 NCD 11/09 Q1032"),
+        {"type": "report", "kind": "taf", "icao": "EGLL", "issued_at": "2026-10-31T07:38:00+00:00", "raw": taf},
+        # Issued before departure but valid only from 12Z: the older one is read.
+        {"type": "report", "kind": "taf", "icao": "EGLL", "issued_at": "2026-10-31T10:55:00+00:00",
+         "raw": "TAF EGLL 311055Z 3112/0118 08005KT 9999 SCT020"},
+    ]
+    dep = datetime(2026, 10, 31, 10, 57, tzinfo=UTC)
+    a = airport_at(hist, "EGTF", dep, dep, metar_station="EGLL", taf_station="EGLL", around="before")
+    assert a["metar_station"] == "EGLL" and a["metar_category"] == "VFR"
+    assert a["worst_around"]["category"] == "LIFR"
+    assert a["taf_becoming"]["category"] == "VFR"
+    line = airport_line(a, "Departure")
+    assert line.startswith("Departure EGTF (via EGLL): 10:50Z VFR, 9000 NCD.")
+    assert "Before departure: LIFR at 08:20Z, 3100 BR OVC003." in line
+    assert "becoming VFR between 08 and 11Z" in line
+
+
+def test_airport_cell_after_landing_without_a_category_change():
+    hist = [
+        _metar("EGLL", "1250", "05012KT 9999 SCT040 14/04 Q1029"),
+        _metar("EGLL", "1320", "04015G30KT 350V070 9999 -RA SCT037/// BKN043/// //////CB 13/05 Q1029"),
+    ]
+    a = airport_at(hist, "EGTF", datetime(2026, 10, 31, 12, 58, tzinfo=UTC), None,
+                   metar_station="EGLL", around="after")
+    assert a["worst_around"]["conditions"] == "9999 -RA SCT037 BKN043 CB gusts 30 kt"
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("METAR LFAT 311200Z AUTO 07007KT 040V120 CAVOK 13/09 Q1031 NOSIG", "CAVOK"),
+    ("METAR LFAT 231000Z AUTO 16021G35KT 120V210 3000 RA BR OVC008/// ///TCU 12/11 Q0979 TEMPO 25025G50KT 1200",
+     "3000 RA BR OVC008 TCU gusts 35 kt"),
+])
+def test_metar_conditions(raw, expected):
+    assert _metar_conditions(raw) == expected
 
 
 # --- Questions and summary -------------------------------------------------------
@@ -132,8 +191,10 @@ def test_airport_lower_than_the_taf_the_pilot_had():
 
 def test_questions_icing_first_one_per_kind_at_most_three():
     m = _manifest({
-        "vmc_cruise": {"ecmwf": [_region(0, 30, 6000, 8000, kind="cruise_imc")]},
-        "turbulence": {"gfs": [_region(10, 40, 5000, 9000, kind="cat_layer")]},
+        "vmc_cruise": {"ecmwf": [_region(0, 30, 6000, 8000, kind="cruise_imc")],
+                       "gfs": [_region(0, 30, 6000, 8000, kind="cruise_imc")]},
+        "turbulence": {"gfs": [_region(10, 40, 5000, 9000, kind="cat_layer")],
+                       "icon": [_region(10, 40, 5000, 9000, kind="cat_layer")]},
         "aircraft_icing": {"ecmwf": [_region(40, 70, 5000, 9000)], "icon": [_region(42, 72, 5000, 9000)]},
         "fiki_icing": {"ecmwf": [_region(80, 90, 5000, 9000)]},
         "convective": {"ecmwf": [_region(0, 100, None, None, kind="tower")]},
@@ -148,6 +209,15 @@ def test_questions_icing_first_one_per_kind_at_most_three():
     assert [o["id"] for o in ice["options"]] == ["none", "light", "moderate_plus", "not_in_cloud"]
 
 
+def test_one_model_alone_asks_nothing_and_pushes_nothing():
+    m = _manifest({"fiki_icing": {"gfs": [_region(0, 40, 4400, 6800)]}})
+    segs = [{"from_nm": 0, "to_nm": 40, "status": "observed", "radar_status": "measured"}]
+    flown = {"ft": 3900, "source": "fixes"}
+    assert build_questions(m, segs, flown, _Progress(), None) == []
+    assert forecast_at_level(m, 3900) == []
+    assert build_interest([], [], [], [], [])["interesting"] is False
+
+
 def test_no_question_above_or_below_the_hazard_nor_where_radar_saw():
     m = _manifest({"aircraft_icing": {"ecmwf": [_region(40, 70, 3000, 5000)]},
                    "convective": {"ecmwf": [_region(0, 50, None, None, kind="tower")]}})
@@ -155,13 +225,68 @@ def test_no_question_above_or_below_the_hazard_nor_where_radar_saw():
     assert build_questions(m, segs, {"ft": 9000, "source": "planned"}, _Progress(), None) == []
 
 
-def test_summary_never_claims_as_forecast_when_nothing_was_checked():
+def test_summary_writes_both_sides_and_never_says_as_forecast():
     strip = [{"from_nm": 0, "to_nm": 10, "observed": "no_data", "forecast_hazards": []}]
-    s = build_summary(strip, [{"role": "arrival", "icao": "EHRD", "match": "unverifiable"}], [], None)
-    assert s["text"].startswith("Little the instruments could check")
-    s = build_summary(strip, [{"role": "arrival", "icao": "EHRD", "match": "lower",
-                               "metar_category": "IFR", "taf_category": "VFR"}], [], None)
-    assert s["text"].startswith("Some differences") and "lower than the TAF (IFR against VFR)" in s["text"]
+    ap = {"role": "arrival", "icao": "EHRD", "match": "within", "metar_category": "VFR",
+          "metar_time": "2026-11-14T11:45:00+00:00", "metar_conditions": "CAVOK", "taf_category": "VFR"}
+    s = build_summary(strip, [ap], [], None, flown={"ft": 5000, "source": "fixes"})
+    assert [line["kind"] for line in s["lines"]] == ["forecast", "radar", "arrival"]
+    assert "as forecast" not in s["text"].lower() and "as the taf" not in s["text"].lower()
+    assert "Arrival EHRD: 11:45Z VFR, CAVOK. TAF: VFR." in s["text"]
+    assert "Radar: no coverage along the route." in s["text"]
+    assert "nothing most models agreed on" in s["text"]
+
+
+def _seg(obs):
+    return {"from_nm": 0, "to_nm": 10, "observed": obs, "forecast_hazards": []}
+
+
+SHOWERS = [{"kind": "showers", "stretch": {}}]
+
+
+@pytest.mark.parametrize("obs, hazards, text, differs", [
+    ("clear", [], "Clear, as forecast.", False),
+    ("rain", [], "Mostly clear with a few light showers.", False),
+    ("rain", SHOWERS, "Some showers en route, as forecast.", False),
+    ("heavy", SHOWERS, "Heavy showers en route, as forecast.", False),
+    ("heavy", [], "Heavy showers en route that the forecast did not have.", True),
+    ("clear", SHOWERS, "Clear: the forecast showers did not show.", True),
+    ("no_data", [], "No radar along the route.", False),
+])
+def test_headline_judges_only_what_radar_sees(obs, hazards, text, differs):
+    h = build_headline([_seg(obs)], [], hazards)
+    assert h == {"text": text, "differs_from_forecast": differs}
+
+
+def test_headline_airports_only_when_they_matter():
+    vfr = {"role": "departure", "icao": "EGTF", "metar_category": "VFR", "match": "within"}
+    mvfr = {"role": "arrival", "icao": "LFAT", "metar_category": "MVFR", "match": "within"}
+    assert build_headline([_seg("clear")], [vfr, mvfr], [])["text"] == \
+        "Clear, as forecast. MVFR arrival at LFAT, as the TAF had it."
+    fog = {**vfr, "worst_around": {"when": "before", "category": "LIFR", "conditions": "3100 BR OVC003"}}
+    assert build_headline([_seg("clear")], [fog], [])["text"] == \
+        "Clear, as forecast. The fog at EGTF lifted before you left."
+    cell = {**vfr, "role": "arrival", "worst_around": {"when": "after", "category": "VFR", "raw": "METAR EGLL 181320Z 9999 BKN043CB"}}
+    assert build_headline([_seg("rain")], [cell], [])["text"].endswith("A storm cell reached EGTF after you landed.")
+    ifr = [{"role": r, "icao": i, "metar_category": "IFR", "match": "within"} for r, i in (("departure", "EGTF"), ("arrival", "LFAT"))]
+    assert build_headline([_seg("heavy")], ifr, SHOWERS, cancelled=True)["text"] == \
+        "Cancelled. Heavy showers en route, as forecast. IFR at both ends, as the TAFs had it."
+    worse = {**mvfr, "metar_category": "IFR", "match": "worse"}
+    assert build_headline([_seg("clear")], [worse], [])["differs_from_forecast"] is True
+
+
+def test_alerts_count_only_between_departure_and_landing():
+    alerts = [{"at": f"2026-10-31T{h}:00:00+00:00", "tier": "alert", "event": "raised", "message": h}
+              for h in ("07", "11", "13")]
+    got = flight_alerts(alerts, "2026-10-31T10:57:00+00:00", "2026-10-31T12:00:00+00:00")
+    assert [a["message"] for a in got] == ["11"]
+
+
+def test_cancelled_flight_has_no_push_and_says_so():
+    s = build_summary([], [], [], None, cancelled=True)
+    assert s["lines"][0]["kind"] == "cancelled"
+    it = build_interest([{"kind": "icing"}], [{"observed": "heavy"}], [], [{"tier": "alert"}], [], cancelled=True)
+    assert it == {"interesting": False, "reasons": [], "cancelled": True}
 
 
 # --- Answers ---------------------------------------------------------------------
@@ -199,7 +324,8 @@ def test_report_on_the_lell_lemi_replay(tmp_path):
     progress = flight_progress(route, dep, ticks[-1].at, load_progress_events(flight_dir))
     recap = build_recap(load_snapshots(flight_dir), history, progress)
     total = recap["route_nm"]
-    manifest = _manifest({"convective": {"ecmwf": [_region(0, total / 2, None, None, "red", "tower")]}})
+    manifest = _manifest({"convective": {"ecmwf": [_region(0, total / 2, None, None, "red", "tower")],
+                                         "icon": [_region(0, total / 2, None, None, "red", "tower")]}})
     lane = {"aggregation": "majority", "cruise_altitude_ft": route.cruise_altitude_ft, "advisories": [
         {"advisory_id": "convective", "aggregate_status": "red", "per_model": [
             {"model": "ecmwf", "status": "red", "ribbon": [[0, total / 2, "red"], [total / 2, total, "green"]]}]}]}
@@ -209,9 +335,9 @@ def test_report_on_the_lell_lemi_replay(tmp_path):
     assert len(r["strip"]) == len(recap["segments"])
     assert {a["role"] for a in r["airports"]} == {"departure", "arrival"}
     # No radar in the scenario: the only question is the showers one, and
-    # the summary does not call the flight "as forecast".
+    # the summary never calls the flight "as forecast".
     assert [q["kind"] for q in r["questions"]] == ["showers"]
-    assert not r["summary"]["text"].startswith("Mostly as forecast")
+    assert "as forecast" not in r["summary"]["text"].lower()
     assert r["interest"]["interesting"] is True
 
 

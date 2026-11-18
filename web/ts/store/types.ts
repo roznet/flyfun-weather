@@ -2069,3 +2069,42 @@ export interface ElevationProfile {
   max_elevation_ft: number;
   total_distance_nm: number;
 }
+
+
+// --- Debrief report, phase 0 prototype (`/flights/{id}/debrief/report`) ---
+
+export interface DebriefReportOption { id: string; label: string }
+
+export interface DebriefReportAnswer {
+  answer: string;
+  avoided: boolean;
+  note: string | null;
+  answered_at: string;
+}
+
+export interface DebriefReportQuestion {
+  id: string;
+  kind: 'icing' | 'cloud' | 'turbulence' | 'showers';
+  text: string;
+  options: DebriefReportOption[];
+  avoidable: boolean;
+  answer: DebriefReportAnswer | null;
+}
+
+/** The report's read-out: one headline, then the detail lines. */
+export interface DebriefReportSummary {
+  headline: string;
+  differs_from_forecast: boolean;
+  lines: { kind: string; text: string }[];
+}
+
+export interface DebriefReport {
+  v: string;
+  flight_id: string;
+  status: string;
+  message?: string | null;
+  cancelled?: boolean;
+  summary: DebriefReportSummary | null;
+  questions: DebriefReportQuestion[];
+  interest?: { interesting: boolean; reasons: { kind: string }[]; cancelled?: boolean };
+}

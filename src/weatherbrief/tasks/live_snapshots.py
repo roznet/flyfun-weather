@@ -56,10 +56,14 @@ _OBSERVED_KEEP = (
     "summary", "summary_entries", "summary_lines", "sources",
 )
 _OBSERVED_FIELDS = ("reflectivity", "rain_rate", "cloud_tops", "lightning")
-#: Per-airport geometry kept so the METAR/TAF rows can be rebuilt.
+#: Per-airport geometry kept so the METAR/TAF rows can be rebuilt, plus the
+#: proxy a field without its own reports was read through (#767): it lives
+#: otherwise only in ``live.json``, which goes at T1 (30 days), and a replay
+#: or a debrief after that would show EGTF blank instead of via EGLL.
 _AIRPORT_GEOMETRY = (
     "icao", "name", "distance_from_route_nm", "enroute_distance_nm",
     "nearest_waypoint_icao", "eta_hour_offset", "lat", "lon",
+    "metar_proxy", "taf_proxy",
 )
 
 _capped: set[str] = set()

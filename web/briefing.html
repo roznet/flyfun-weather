@@ -181,6 +181,17 @@
          reads as the tick it shows. Hidden on the live / recap view. -->
     <div id="observed-mode-bar" class="observed-mode-bar" data-testid="observed-mode-bar" hidden></div>
 
+    <!-- Debrief (prototype): after the flight, the Observed tab opens on how
+         it went against the forecast — one headline, the questions only the
+         pilot can answer, the details collapsed. Hidden until the window has
+         passed and the owner's report is loaded. -->
+    <div id="observed-debrief-wrapper" class="section collapsible" data-section="observed-debrief" style="display: none;">
+      <h3>Debrief</h3>
+      <div class="section-body">
+        <div id="observed-debrief-section"></div>
+      </div>
+    </div>
+
     <!-- Flight-day nutshell (#690): the server's one line per phase plus the
          comparison with the briefing. Hidden unless the live layer carries a
          glance (only built inside the live window). -->

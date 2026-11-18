@@ -10289,3 +10289,24 @@ button.ac-near:hover { color: var(--primary); }
   font-size: 0.95rem;
   line-height: 1.4;
 }
+
+/* --- Debrief report (prototype): top of Observed after the flight --------- */
+.debrief-report { display: flex; flex-direction: column; gap: 0.75rem; }
+.debrief-headline { font-size: 1.05rem; font-weight: 600; line-height: 1.4; margin: 0; }
+.debrief-headline-differs { border-left: 3px solid var(--amber, #e0a43a); padding-left: 0.5rem; }
+.debrief-q-count { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.25rem; }
+.debrief-q { border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.75rem; margin-top: 0.4rem; }
+.debrief-q p { margin: 0 0 0.5rem; font-size: 0.9rem; }
+.debrief-q-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.debrief-q-chip {
+  font: inherit; font-size: 0.82rem; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); border-radius: 999px; padding: 0.25rem 0.75rem; cursor: pointer;
+}
+.debrief-q-chip[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: var(--surface); }
+.debrief-q-avoid { display: flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; color: var(--text-muted); margin-top: 0.45rem; }
+.debrief-details summary { cursor: pointer; color: var(--primary); font-size: 0.85rem; }
+.debrief-lines { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.88rem; }
+.debrief-line { padding-left: 0.6rem; border-left: 3px solid var(--border); }
+.debrief-line-cancelled { border-left-color: var(--amber, #e0a43a); font-weight: 600; }
+.debrief-line-forecast { border-left-color: var(--primary); }
+.debrief-line-alerts { border-left-color: var(--red); }

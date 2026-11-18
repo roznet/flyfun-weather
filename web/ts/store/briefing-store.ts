@@ -1,7 +1,8 @@
 /** Zustand vanilla store for the Briefing report page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, LiveLayer, LiveTickEntry, PackMeta, RecapForecast, RecapResponse, RouteAnalysesManifest, WeatherDigest } from './types';
+import type { DataStatus, ElevationProfile, FlightResponse, ForecastSnapshot, LiveLayer, LiveTickEntry, PackMeta, RecapForecast, DebriefReport,
+  RecapResponse, RouteAnalysesManifest, WeatherDigest } from './types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
 import type { RouteWindOverlay, TimeOptionsResponse } from '../adapters/api-adapter';
@@ -253,6 +254,10 @@ export interface BriefingState {
   recap: RecapResponse | null;
   recapForecast: RecapForecast | null;
   replay: ReplayState;
+  /** Debrief report (prototype): headline, questions and details at the top
+   *  of the Observed tab after the window. Null until loaded or when not
+   *  available (not the owner, no live window). */
+  debriefReport: DebriefReport | null;
 
   // Actions
   loadFlight: (id: string) => Promise<void>;
@@ -307,6 +312,10 @@ export interface BriefingState {
   /** Re-fetch the recap for another pack's forecast row; only the forecast
    *  lane changes (`recapForecast`). */
   loadRecapForecast: (packTimestamp: string) => Promise<void>;
+  /** Load the debrief report (after the window, owner only). */
+  loadDebriefReport: () => Promise<void>;
+  /** Answer (or, with null, clear) one debrief question. */
+  answerDebriefQuestion: (questionId: string, answer: string | null, avoided: boolean) => Promise<void>;
   /** Show the Observed section as it stood at a recorded tick. */
   viewTick: (tick: string) => Promise<void>;
   /** Back to live (in the window) or the recap (after it). */
@@ -485,6 +494,7 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
   recap: null,
   recapForecast: null,
   replay: REPLAY_BASE,
+  debriefReport: null,
 
   loadFlight: async (id: string) => {
     set({ loading: true, error: null });
@@ -1188,6 +1198,26 @@ export const briefingStore = createStore<BriefingState>((set, get) => ({
     }
     if (seq !== recapForecastSeq || get().flight?.id !== flightId) return;
     set({ recapForecast: forecast });
+  },
+
+  loadDebriefReport: async () => {
+    const flightId = get().flight?.id;
+    if (!flightId) return;
+    try {
+      const report = await api.fetchDebriefReport(flightId);
+      if (get().flight?.id !== flightId) return;
+      set({ debriefReport: report });
+    } catch {
+      // Not the owner (404) or not built: the section stays hidden.
+      if (get().flight?.id === flightId) set({ debriefReport: null });
+    }
+  },
+
+  answerDebriefQuestion: async (questionId, answer, avoided) => {
+    const flightId = get().flight?.id;
+    if (!flightId) return;
+    const report = await api.putDebriefAnswer(flightId, { question_id: questionId, answer, avoided });
+    if (get().flight?.id === flightId) set({ debriefReport: report });
   },
 
   viewTick: async (tick: string) => {

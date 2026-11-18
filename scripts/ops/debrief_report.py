@@ -25,21 +25,16 @@ def _text(r: dict) -> str:
     if r.get("message"):
         lines.append(f"  {r['message']}")
     it = r.get("interest") or {}
-    lines.append(f"  interesting: {it.get('interesting')}  "
-                 + ", ".join(x["kind"] for x in it.get("reasons") or []))
+    lines.append(f"  push: {it.get('interesting')}  "
+                 + ", ".join(x["kind"] + (f" {x['hazards']}" if x.get("hazards") else "") for x in it.get("reasons") or []))
     if r.get("summary"):
-        lines.append(f"\n  {r['summary']['text']}")
+        lines += ["", f"  >> {r['summary']['headline']}", ""]
+        lines += [f"     {l['text']}" for l in r["summary"]["lines"]]
     strip = r.get("strip") or []
     if strip:
-        f = "".join({"red": "R", "amber": "a", "green": "."}.get(s["forecast"] or "", " ") for s in strip)
         o = "".join({"heavy": "H", "rain": "r", "clear": ".", "no_data": "?", "not_recorded": " "}[s["observed"]]
                     for s in strip)
-        lines += ["", f"  forecast |{f}|", f"  observed |{o}|"]
-    for a in r.get("airports") or []:
-        lines.append(f"  {a['role']:<9} {a['icao']}  {a.get('metar_category') or '-':<5} vs TAF "
-                     f"{a.get('taf_category') or '-'}"
-                     + (f"/{a.get('taf_temporary_type')} {a.get('taf_temporary_category')}" if a.get("taf_temporary_category") else "")
-                     + f"  -> {a.get('match')}   {a.get('metar_raw') or ''}")
+        lines += [f"  radar |{o}|"]
     for q in r.get("questions") or []:
         lines.append(f"\n  Q [{q['id']}] {q['text']}")
         lines.append("     " + " / ".join(o["label"] for o in q["options"])

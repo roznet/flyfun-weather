@@ -521,3 +521,36 @@ def test_tick_index_flags_the_ticks_where_the_alerts_changed():
         {"tick_at": "t7", "changes": None},
     ]
     assert [t["alert_changed"] for t in tick_index(snaps)] == [False, True, False, True, True, False, True, True]
+
+
+def test_snapshot_keeps_the_terminal_proxy_past_live_json(tmp_path):
+    """The proxy a field without reports was read through (#767) lives in
+    ``live.json``, which goes at T1: the snapshot keeps it, so a replay and
+    the debrief still read EGTF via EGLL after that."""
+    from weatherbrief.debriefs.report import load_proxies
+    from weatherbrief.models.live import LiveLayer
+    from weatherbrief.models.observations import AirportObservation, ObsProxy, RouteObservations
+    from weatherbrief.tasks.live_snapshots import observations_as_of, snapshot_record
+
+    at = datetime(2026, 10, 31, 10, 57, tzinfo=UTC)
+    obs = RouteObservations(
+        corridor_nm=10, fetch_time=at, airports_found=2, airports_with_metar=1, airports_with_taf=1,
+        airports=[
+            AirportObservation(icao="EGTF", distance_from_route_nm=0, nearest_waypoint_icao="EGTF",
+                               metar_proxy=ObsProxy(icao="EGLL", distance_nm=8.2, source="auto")),
+            AirportObservation(icao="EGLL", distance_from_route_nm=8.2, nearest_waypoint_icao="EGTF"),
+        ],
+    )
+    layer = LiveLayer(flight_id="f", pack_timestamp=at.isoformat(), pack_dir_name="p", route_observations=obs)
+    snap = snapshot_record(layer, tick_at=at)
+    egtf = snap["observations"]["airports"][0]
+    assert egtf["metar_proxy"]["icao"] == "EGLL" and egtf["taf_proxy"] is None
+    rebuilt = observations_as_of([], snap)
+    assert rebuilt.airport("EGTF").metar_proxy.icao == "EGLL"
+
+    # No live.json (purged at T1): the report reads the proxy from the snapshot.
+    flight_dir = tmp_path / "flight"
+    flight_dir.mkdir()
+    with gzip.open(flight_dir / LIVE_SNAPSHOTS_FILE, "wt") as f:
+        f.write(json.dumps(snap) + "\n")
+    assert load_proxies(flight_dir) == {"EGTF": ("EGLL", None)}

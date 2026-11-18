@@ -23,6 +23,7 @@ import {
   tickTimePoints,
 } from './helpers/debrief-replay';
 import { GRID_WIDE_PX, modeBarHtml, mountRecap, tickStepperHtml, type RecapHandle } from './visualization/observed/recap-view';
+import { debriefReportHtml, mountDebriefReport } from './components/debrief-report';
 import { fetchProfiles, type ProfileResponse } from './adapters/profiles-adapter';
 import { fetchAdvisoryCatalog, foldBriefingUpdates, ENGINE_METHOD_DEFAULTS_FALLBACK, type BriefingUpdates, type EngineMethodDefaults } from './adapters/preferences-adapter';
 import type { DisplayMode } from './types/metrics';
@@ -2328,7 +2329,11 @@ async function init(): Promise<void> {
     const glanceEl = document.getElementById('observed-glance-section');
     const ribbonEl = document.getElementById('observed-ribbon-section');
 
-    const hasGlance = !!glance && (glance.lines ?? []).length > 0;
+    // After the flight the debrief leads: the last tick's nutshell ("now")
+    // only shows while a recorded tick is on screen.
+    const debriefLeads = !isReplaying(state.replay) && windowPast(state.flight, state.live)
+      && !!debriefReportHtml(state.debriefReport);
+    const hasGlance = !!glance && (glance.lines ?? []).length > 0 && !debriefLeads;
     if (glanceWrapper) glanceWrapper.style.display = hasGlance ? '' : 'none';
     if (glanceEl && !hasGlance) glanceEl.innerHTML = '';
     if (hasGlance && glanceEl && glance) {
@@ -2600,7 +2605,27 @@ async function init(): Promise<void> {
     if (!windowStarted(s.flight)) return;
     const past = windowPast(s.flight, s.live);
     void s.loadTicks(past);
-    if (past) void s.loadRecap();
+    if (past) {
+      void s.loadRecap();
+      void s.loadDebriefReport();
+    }
+  }
+
+  /** The debrief block at the top of Observed (prototype): after the window,
+   *  owner only (the report is not loaded otherwise). */
+  function renderDebriefReportSection(state: BriefingState): void {
+    const wrapper = document.getElementById('observed-debrief-wrapper');
+    const el = document.getElementById('observed-debrief-section');
+    if (!wrapper || !el) return;
+    const show = windowPast(state.flight, state.live) && !!debriefReportHtml(state.debriefReport);
+    wrapper.style.display = show ? '' : 'none';
+    if (!show) { el.innerHTML = ''; return; }
+    mountDebriefReport(el, state.debriefReport, {
+      onAnswer: (qid, answer, avoided) => {
+        store.getState().answerDebriefQuestion(qid, answer, avoided)
+          .catch((err) => console.warn('Debrief answer failed', err));
+      },
+    });
   }
 
   store.subscribe((state, prev) => {
@@ -2705,6 +2730,11 @@ async function init(): Promise<void> {
     // a live update while replaying leaves them alone (observedSnapshot).
     if (state.replay !== prev.replay) {
       renderObservedSources(state);
+    }
+    if (state.debriefReport !== prev.debriefReport || state.flight !== prev.flight) {
+      renderDebriefReportSection(state);
+      // The nutshell steps aside once the debrief leads (see renderObservedLive).
+      if (state.debriefReport !== prev.debriefReport) renderObservedLive(state);
     }
     if (
       state.replay !== prev.replay

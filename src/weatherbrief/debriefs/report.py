@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -69,6 +70,12 @@ HEAVY_DBZ = 41.0
 RAIN_DBZ = 20.0
 #: METAR at the departure / arrival: the report nearest the time, within this.
 METAR_WINDOW = timedelta(minutes=60)
+#: How far around the departure / arrival to look for a worse METAR (the
+#: fog that lifted just before you left, the cell that hit after you landed).
+AROUND_BEFORE = timedelta(hours=3)
+AROUND_AFTER = timedelta(hours=1)
+#: Gusts at or above this are kept when a METAR is read back.
+GUST_KT = 25
 
 SEV_RANK = {"green": 0, "amber": 1, "red": 2}
 CATEGORY_RANK = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
@@ -285,24 +292,130 @@ def flown_altitude(history: list[dict], route_nm: float | None, planned_ft: floa
     return {"ft": planned_ft, "source": "planned", "fixes": len(alts)}
 
 
-def airport_at(history: list[dict], icao: str, at: datetime | None, taf_before: datetime | None) -> dict:
-    """METAR nearest ``at`` and the TAF the pilot had (latest issued before
-    ``taf_before``) read at ``at``; ``match`` compares their categories."""
+def _metar_conditions(raw: str | None) -> str | None:
+    """The weather part of a METAR, for reading back: visibility, weather,
+    cloud ("2700 BR OVC002", "CAVOK"); wind, temperatures, pressure and the
+    trend left out."""
+    if not raw:
+        return None
+    toks = raw.split()
+    out = []
+    gust = None
+    started = False
+    for tok in toks:
+        if tok in ("TEMPO", "BECMG", "NOSIG", "RMK") or tok.startswith("RE"):
+            break
+        if re.fullmatch(r"\d{6}Z", tok):
+            started = True
+            continue
+        if not started or tok in ("AUTO", "COR", "METAR", "SPECI"):
+            continue
+        wind = re.fullmatch(r"(\d{3}|VRB)\d{2,3}(?:G(\d{2,3}))?(KT|MPS)", tok)
+        if wind:
+            if wind.group(2) and int(wind.group(2)) >= GUST_KT:
+                gust = f"gusts {int(wind.group(2))} kt"
+            continue
+        if re.fullmatch(r"\d{3}V\d{3}", tok):
+            continue
+        if re.fullmatch(r"M?\d{2}/M?\d{2}", tok) or re.fullmatch(r"[QA]\d{4}", tok):
+            continue
+        tok = tok.replace("///", "").strip("/")
+        if tok:
+            out.append(tok)
+    if gust:
+        out.append(gust)
+    return " ".join(out) or None
+
+
+def _convective(raw: str | None) -> bool:
+    """CB, TCU, thunder, hail or heavy showers in a METAR's present weather
+    or cloud (the trend left out)."""
+    body = re.split(r"\b(?:TEMPO|BECMG|NOSIG|RMK)\b", raw or "")[0]
+    return bool(re.search(r"CB\b|TCU\b|\bTS|\+(?:SH|TS)?RA|\bGR\b|\bGS\b|\+SH", body))
+
+
+def _severity(cat: str | None, raw: str | None) -> tuple[int, int]:
+    return (CATEGORY_RANK.get(cat, -1), int(_convective(raw)))
+
+
+def _ft_plain(v: float | None) -> str:
+    return f"{int(round(v, -2)):,} ft" if v is not None else "?"
+
+
+def _taf_conditions(reading) -> str | None:
+    """Visibility, ceiling and weather of the TAF group behind the reading."""
+    bits = []
+    if reading.visibility_m is not None and reading.visibility_m < 9999:
+        bits.append(f"{reading.visibility_m:,} m")
+    if reading.ceiling_ft is not None:
+        bits.append(f"ceiling {_ft_plain(reading.ceiling_ft)}")
+    bits += list(reading.significant_weather or [])
+    return " ".join(bits) or None
+
+
+def _becoming_at(taf, at: datetime) -> dict | None:
+    """The BECMG group whose transition window contains ``at``: the TAF
+    reads the old conditions until it ends, which alone says "LIFR" for a
+    fog forecast to lift over the next hours."""
+    for g in getattr(taf, "trends", None) or []:
+        if getattr(g, "trend_type", None) != "BECMG" or g.flight_category is None:
+            continue
+        lo, hi = g.validity_start, g.validity_end
+        if lo is not None and hi is not None and lo <= at < hi:
+            return {"category": g.flight_category.value, "from": lo.isoformat(), "to": hi.isoformat()}
+    return None
+
+
+def _metar_category(r: dict, t: datetime) -> str | None:
+    from euro_aip.briefing.weather.parser import WeatherParser
+
+    cat = r.get("flight_category")
+    if cat is None:
+        rep = WeatherParser.parse_metar(r["raw"], source="live_history", reference=t)
+        cat = rep.flight_category.value if rep is not None and rep.flight_category is not None else None
+    return cat
+
+
+def _metars(history: list[dict], station: str) -> list[tuple[datetime, dict]]:
+    out, seen = [], set()
+    for r in history:
+        if r.get("type") != "report" or r.get("kind") != "metar" or (r.get("icao") or "").upper() != station:
+            continue
+        t = _utc(r.get("observed_at"))
+        if t is None or not r.get("raw") or r["raw"] in seen:
+            continue
+        seen.add(r["raw"])
+        out.append((t, r))
+    return sorted(out, key=lambda x: x[0])
+
+
+def airport_at(history: list[dict], icao: str, at: datetime | None, taf_before: datetime | None, *,
+               metar_station: str | None = None, taf_station: str | None = None,
+               around: str = "before") -> dict:
+    """What the airport did at ``at`` and what the TAF the pilot had (latest
+    issued before ``taf_before``) said for then, both written out.
+
+    ``metar_station`` / ``taf_station``: the proxy the live layer read for a
+    field without its own reports (EGTF -> EGLL). ``around`` adds the worst
+    METAR in the hours before departure (``"before"``) or the hour after
+    landing (``"after"``) when it was worse than the one at ``at``.
+    ``match`` stays as data: ``within`` (inside what the TAF allowed),
+    ``worse`` (worse than all of it), ``better`` (better than all of it)."""
     from euro_aip.briefing.weather.parser import WeatherParser
 
     from weatherbrief.analysis.taf_reading import read_taf_at
 
-    out: dict = {"icao": icao, "at": at.isoformat() if at else None}
+    m_st = (metar_station or icao).upper()
+    t_st = (taf_station or icao).upper()
+    out: dict = {"icao": icao, "at": at.isoformat() if at else None,
+                 "metar_station": m_st if m_st != icao else None,
+                 "taf_station": t_st if t_st != icao else None}
     if at is None:
         out["match"] = "untimed"
         return out
-    metars = [r for r in history if r.get("type") == "report" and r.get("kind") == "metar"
-              and (r.get("icao") or "").upper() == icao and r.get("raw")]
+    metars = _metars(history, m_st)
     best = None
-    for r in metars:
-        t = _utc(r.get("observed_at"))
-        if t is None:
-            continue
+    for t, r in metars:
         d = abs(t - at)
         if d <= METAR_WINDOW and (best is None or d < best[0]):
             best = (d, r, t)
@@ -310,36 +423,92 @@ def airport_at(history: list[dict], icao: str, at: datetime | None, taf_before: 
         _, r, t = best
         out["metar_raw"] = r["raw"]
         out["metar_time"] = t.isoformat()
-        cat = r.get("flight_category")
-        if cat is None:
-            rep = WeatherParser.parse_metar(r["raw"], source="live_history", reference=t)
-            cat = rep.flight_category.value if rep is not None and rep.flight_category is not None else None
-        out["metar_category"] = cat
+        out["metar_category"] = _metar_category(r, t)
+        out["metar_conditions"] = _metar_conditions(r["raw"])
+    lo, hi = (at - AROUND_BEFORE, at) if around == "before" else (at, at + AROUND_AFTER)
+    worst = None
+    for t, r in metars:
+        if not (lo <= t <= hi):
+            continue
+        c = _metar_category(r, t)
+        if c in CATEGORY_RANK and (worst is None or _severity(c, r["raw"]) > _severity(worst[0], worst[2]["raw"])):
+            worst = (c, t, r)
+    if worst is not None and out.get("metar_category") in CATEGORY_RANK \
+            and _severity(worst[0], worst[2]["raw"]) > _severity(out["metar_category"], out.get("metar_raw")):
+        out["worst_around"] = {"when": around, "category": worst[0], "time": worst[1].isoformat(),
+                               "conditions": _metar_conditions(worst[2]["raw"]), "raw": worst[2]["raw"]}
     tafs = [r for r in history if r.get("type") == "report" and r.get("kind") == "taf"
-            and (r.get("icao") or "").upper() == icao and r.get("raw")]
+            and (r.get("icao") or "").upper() == t_st and r.get("raw")]
     cutoff = taf_before or at
     had = [r for r in tafs if (_utc(r.get("issued_at")) or _utc(r.get("tick_at")) or cutoff) <= cutoff]
-    taf_rec = max(had or tafs, key=lambda r: r.get("issued_at") or "", default=None)
-    if taf_rec is not None:
+    # Newest first, the first one valid at ``at``: a TAF issued just before
+    # departure can start after it (EGLL 10:55Z valid from 12Z).
+    reading = None
+    for taf_rec in sorted(had or tafs, key=lambda r: r.get("issued_at") or "", reverse=True):
         taf = WeatherParser.parse_taf(taf_rec["raw"], source="live_history",
                                       reference=_utc(taf_rec.get("issued_at")) or at)
         reading = read_taf_at(taf, at) if taf is not None else None
-        out["taf_issued_at"] = taf_rec.get("issued_at")
         if reading is not None:
-            out["taf_category"] = reading.prevailing_category
-            out["taf_temporary_category"] = reading.temporary_category
-            out["taf_temporary_type"] = reading.temporary_type
+            out["taf_issued_at"] = taf_rec.get("issued_at")
+            becmg = _becoming_at(taf, at)
+            if becmg is not None and becmg["category"] != reading.prevailing_category:
+                out["taf_becoming"] = becmg
+            break
+    if reading is not None:
+        out["taf_category"] = reading.prevailing_category
+        out["taf_temporary_category"] = reading.temporary_category
+        out["taf_temporary_type"] = reading.temporary_type
+        out["taf_conditions"] = _taf_conditions(reading)
     m = out.get("metar_category")
     cats = [c for c in (out.get("taf_category"), out.get("taf_temporary_category")) if c in CATEGORY_RANK]
     if m not in CATEGORY_RANK or not cats:
         out["match"] = "unverifiable"
-    elif m in cats:
-        out["match"] = "as_forecast"
     elif CATEGORY_RANK[m] > max(CATEGORY_RANK[c] for c in cats):
-        out["match"] = "lower"
-    else:
+        out["match"] = "worse"
+    elif CATEGORY_RANK[m] < min(CATEGORY_RANK[c] for c in cats):
         out["match"] = "better"
+    else:
+        out["match"] = "within"
     return out
+
+
+def airport_line(a: dict, role_label: str) -> str:
+    """"Arrival LFAT 10:00Z: IFR, 3000 RA BR OVC008 TCU. TAF: VFR, PROB40
+    TEMPO LIFR (1,200 m ceiling 900 ft +SHRA)." No verdict word: the two
+    side by side, with a flag only when it was worse than anything allowed."""
+    via = f" (via {a['metar_station']})" if a.get("metar_station") else ""
+    head = f"{role_label} {a['icao']}{via}"
+    if a.get("match") == "untimed":
+        return f"{head}: no time to read it at."
+    if a.get("metar_category"):
+        obs = f"{_hhmmz(_utc(a['metar_time']))} {a['metar_category']}" \
+            + (f", {a['metar_conditions']}" if a.get("metar_conditions") else "")
+    else:
+        obs = "no METAR near the time"
+    parts = [f"{head}: {obs}."]
+    w = a.get("worst_around")
+    if w:
+        when = "Before departure" if w["when"] == "before" else "After landing"
+        parts.append(f"{when}: {w['category']} at {_hhmmz(_utc(w['time']))}"
+                     + (f", {w['conditions']}" if w.get("conditions") else "") + ".")
+    if a.get("taf_category"):
+        taf = a["taf_category"]
+        tmp = a.get("taf_temporary_category")
+        if tmp:
+            taf += f", {a.get('taf_temporary_type') or 'TEMPO'} {tmp}"
+        if a.get("taf_conditions"):
+            taf += f" ({a['taf_conditions']})"
+        b = a.get("taf_becoming")
+        if b:
+            taf += (f", becoming {b['category']} between {_utc(b['from']).strftime('%H')}"
+                    f" and {_utc(b['to']).strftime('%H')}Z")
+        src = f" ({a['taf_station']})" if a.get("taf_station") else ""
+        parts.append(f"TAF{src}: {taf}.")
+    else:
+        parts.append("No TAF for the time.")
+    if a.get("match") == "worse":
+        parts.append("Worse than the TAF allowed.")
+    return " ".join(parts)
 
 
 # --- Questions -----------------------------------------------------------------
@@ -356,6 +525,13 @@ def _span(locator, s: dict) -> str:
         except Exception:
             logger.debug("locator span failed", exc_info=True)
     return f"from {s['from_nm']:.0f} to {s['to_nm']:.0f} NM"
+
+
+def _majority(s: dict) -> bool:
+    """More than half of the models that ran flagged the stretch: one model
+    alone is not enough to ask about it or to push for it."""
+    total = s.get("models_total") or len(s["models"])
+    return 2 * len(s["models"]) > total
 
 
 def _models_phrase(s: dict) -> str:
@@ -378,7 +554,7 @@ def build_questions(manifest, segments, flown, progress, locator) -> list[dict]:
         ("icing", ICING_ADVISORIES, 0), ("cloud", CLOUD_ADVISORIES, 2), ("turbulence", TURBULENCE_ADVISORIES, 1),
     ):
         for s in hazard_stretches(manifest, advisories, flown_ft):
-            if s["at_level"] is False:
+            if s["at_level"] is False or not _majority(s):
                 continue
             band = (f"between {_ft(s['base_ft'])} and {_ft(s['top_ft'])}"
                     if s["base_ft"] is not None and s["top_ft"] is not None else "")
@@ -407,6 +583,8 @@ def build_questions(manifest, segments, flown, progress, locator) -> list[dict]:
 
     # Showers only where radar could not see a forecast convective stretch.
     for s in hazard_stretches(manifest, CONVECTIVE_ADVISORIES, None):
+        if not _majority(s):
+            continue
         segs = [g for g in segments if g.get("to_nm", 0) > s["from_nm"] and g.get("from_nm", 0) < s["to_nm"]]
         if segs and any(observed_class(g) not in ("no_data", "not_recorded") for g in segs):
             continue
@@ -438,67 +616,240 @@ def build_questions(manifest, segments, flown, progress, locator) -> list[dict]:
 # --- Summary and interest --------------------------------------------------------
 
 
-def build_summary(strip: list[dict], airports: list[dict], alerts: list[dict], locator) -> dict:
-    """One deterministic line, plus the parts it was built from."""
-    parts, diffs, checked = [], 0, 0
-    heavy = [s for s in strip if s["observed"] == "heavy"]
-    if heavy:
-        lo, hi = heavy[0]["from_nm"], heavy[-1]["to_nm"]
-        forecast = any("showers" in s["forecast_hazards"] for s in heavy)
-        where = _span(locator, {"from_nm": lo, "to_nm": hi})
-        checked += 1
-        if forecast:
-            parts.append(f"Heavy showers {where}, as forecast.")
+def forecast_at_level(manifest: dict | None, flown_ft: float | None) -> list[dict]:
+    """The hazards most models had at the flown level (showers at any level),
+    as ``{"kind", "stretch"}``, in route order."""
+    out = []
+    for kind, advisories, level in (("icing", ICING_ADVISORIES, flown_ft), ("cloud", CLOUD_ADVISORIES, flown_ft),
+                                    ("turbulence", TURBULENCE_ADVISORIES, flown_ft),
+                                    ("showers", CONVECTIVE_ADVISORIES, None)):
+        for s in hazard_stretches(manifest, advisories, level):
+            if s["at_level"] is False or not _majority(s):
+                continue
+            out.append({"kind": kind, "stretch": s})
+    return sorted(out, key=lambda h: h["stretch"]["from_nm"])
+
+
+def _forecast_text(hazards: list[dict], flown: dict, locator) -> str:
+    level = _ft(flown.get("ft")) + (" planned" if flown.get("source") == "planned" else "")
+    if not hazards:
+        return f"Forecast at your level ({level}): nothing most models agreed on."
+    bits = []
+    for h in hazards:
+        s = h["stretch"]
+        band = (f" {_ft(s['base_ft'])}–{_ft(s['top_ft'])}"
+                if h["kind"] in ("icing", "turbulence") and s["base_ft"] is not None and s["top_ft"] is not None
+                else "")
+        what = {"icing": "icing", "cloud": "in cloud", "turbulence": "turbulence",
+                "showers": "showers or CB"}[h["kind"]]
+        bits.append(f"{what}{band} {_span(locator, s)} ({_models_phrase(s)})")
+    return f"Forecast at your level ({level}): " + "; ".join(bits) + "."
+
+
+def _runs(strip: list[dict], cls: str) -> list[list[dict]]:
+    runs, cur = [], []
+    for s in strip:
+        if s["observed"] == cls:
+            cur.append(s)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def _cells_text(storms: list[dict], locator) -> str | None:
+    """The strongest cell near the route (the recap's storms, the red and
+    orange blocks of the ribbon): "a 54 dBZ cell 23 NM left of track near WOD"."""
+    strong = [c for c in storms or [] if (c.get("peak_dbz") or 0) >= HEAVY_DBZ]
+    if not strong:
+        return None
+    c = max(strong, key=lambda c: c["peak_dbz"])
+    where = ""
+    if locator is not None and c.get("along_nm") is not None:
+        try:
+            where = " " + locator.span(c["along_nm"], c["along_nm"])
+        except Exception:
+            where = ""
+    off = f" {c['offtrack_nm']:.0f} NM {c.get('side') or 'off'} of track" if c.get("offtrack_nm") else " on track"
+    flashes = ", lightning" if c.get("flashes") else ""
+    n = len({x.get("id") for x in strong})
+    more = f" ({n} cells of {HEAVY_DBZ:.0f}+ dBZ in all)" if n > 1 else ""
+    return f"strongest cell {c['peak_dbz']:.0f} dBZ{off}{where}{flashes}{more}"
+
+
+def _radar_text(strip: list[dict], locator, storms: list[dict] | None = None) -> str | None:
+    """What radar saw along the route, in words."""
+    if not strip:
+        return None
+    seen = [s for s in strip if s["observed"] in ("clear", "rain", "heavy")]
+    if not seen:
+        return "Radar: no coverage along the route."
+    bits = []
+    for cls, word in (("heavy", "heavy rain"), ("rain", "rain")):
+        runs = _runs(strip, cls)
+        if not runs:
+            continue
+        if len(runs) > 2:
+            span = _span(locator, {"from_nm": runs[0][0]["from_nm"], "to_nm": runs[-1][-1]["to_nm"]})
+            where = f"in {len(runs)} patches {span}"
         else:
-            diffs += 1
-            parts.append(f"Heavy showers {where} that the forecast did not have.")
+            where = " and ".join(_span(locator, {"from_nm": r[0]["from_nm"], "to_nm": r[-1]["to_nm"]}) for r in runs)
+        segs = [s for r in runs for s in r]
+        dbz = max((s["radar_max_dbz"] for s in segs if s.get("radar_max_dbz") is not None), default=None)
+        extra = [f"max {dbz:.0f} dBZ"] if dbz is not None else []
+        if any(s.get("lightning") for s in segs):
+            extra.append("lightning")
+        bits.append(f"{word} {where}" + (f" ({', '.join(extra)})" if extra else ""))
+    gaps = _runs([{**s, "observed": "gap" if s["observed"] == "no_data" else s["observed"]} for s in strip], "gap")
+    text = "Radar: " + ("; ".join(bits) if bits else ("dry all the way" if not gaps else "dry where it could see"))
+    if gaps:
+        text += "; no coverage " + " and ".join(
+            _span(locator, {"from_nm": g[0]["from_nm"], "to_nm": g[-1]["to_nm"]}) for g in gaps)
+    cells = _cells_text(storms or [], locator)
+    if cells:
+        text += f"; {cells}"
+    return text + "."
+
+
+def flight_alerts(alerts: list[dict], departed_at, arrival_at) -> list[dict]:
+    """Alerts raised while the aircraft was flying (departure to landing):
+    the ones before departure belong to the briefing, the ones after landing
+    to the next flight."""
+    dep, arr = _utc(departed_at), _utc(arrival_at)
+    out = []
+    for a in alerts:
+        t = _utc(a.get("at"))
+        if a.get("tier") != "alert" or a.get("event") != "raised" or t is None:
+            continue
+        if dep is not None and t < dep or arr is not None and t > arr:
+            continue
+        out.append(a)
+    return out
+
+
+def _route_phrase(strip: list[dict], hazards: list[dict]) -> tuple[str | None, bool]:
+    """What radar saw en route against the forecast, and whether that broke
+    "as forecast". Only radar-visible weather is judged: heavy showers the
+    forecast did not have break it, forecast showers that did not show say
+    so, light rain does not. Icing, cloud and turbulence are never judged
+    here: they are the questions."""
+    seen = [s for s in strip if s["observed"] in ("clear", "rain", "heavy")]
+    if not seen:
+        return None, False
+    forecast_showers = any(h["kind"] == "showers" for h in hazards)
+    heavy = any(s["observed"] == "heavy" for s in seen)
+    rain = any(s["observed"] == "rain" for s in seen)
+    if heavy:
+        return ("Heavy showers en route, as forecast" if forecast_showers
+                else "Heavy showers en route that the forecast did not have"), not forecast_showers
+    if rain:
+        return ("Some showers en route, as forecast" if forecast_showers
+                else "Mostly clear with a few light showers"), False
+    if forecast_showers:
+        return "Clear: the forecast showers did not show", True
+    return "Clear, as forecast", False
+
+
+def _airport_phrase(a: dict) -> str | None:
+    """An airport earns the headline only when it was below VFR at your
+    time, worse than the TAF allowed, or had something notable just before
+    departure or just after landing."""
+    role = a["role"]
+    icao = a["icao"]
+    cat = a.get("metar_category")
+    out = []
+    if cat in CATEGORY_RANK and cat != "VFR":
+        verdict = (", worse than the TAF" if a.get("match") == "worse"
+                   else ", as the TAF had it" if a.get("match") in ("within", "better") else "")
+        out.append(f"{cat} {role} at {icao}{verdict}")
+    w = a.get("worst_around")
+    if w:
+        cond = w.get("conditions") or ""
+        if w["when"] == "before" and CATEGORY_RANK.get(w["category"], 0) >= CATEGORY_RANK["IFR"]:
+            what = "fog" if re.search(r"\b(FG|BR)\b", cond) else "low cloud"
+            out.append(f"the {what} at {icao} lifted before you left" if cat == "VFR"
+                       else f"{icao} was {w['category']} before you left")
+        elif w["when"] == "after":
+            out.append(f"a storm cell reached {icao} after you landed" if _convective(w.get("raw"))
+                       else f"{icao} went {w['category']} after you landed")
+    return "; ".join(out) or None
+
+
+def build_headline(strip: list[dict], airports: list[dict], hazards: list[dict], *,
+                   cancelled: bool = False) -> dict:
+    """One line for the top of the report: "Clear, as forecast. The fog at
+    EGTF lifted before you left." The details hold the rest."""
+    route, differs = _route_phrase(strip, hazards)
+    sentences = []
+    if cancelled:
+        sentences.append("Cancelled")
+    sentences.append(route or "No radar along the route")
+    dep = next((a for a in airports if a["role"] == "departure"), None)
+    arr = next((a for a in airports if a["role"] == "arrival"), None)
+    both = (dep is not None and arr is not None and dep.get("metar_category") == arr.get("metar_category")
+            and dep.get("metar_category") in ("MVFR", "IFR", "LIFR") and dep.get("match") == arr.get("match")
+            and not dep.get("worst_around") and not arr.get("worst_around"))
+    if both:
+        verdict = (", worse than the TAFs" if dep.get("match") == "worse"
+                   else ", as the TAFs had it" if dep.get("match") in ("within", "better") else "")
+        sentences.append(f"{dep['metar_category']} at both ends{verdict}")
+        differs = differs or dep.get("match") == "worse"
     else:
-        quiet = [s for s in strip if "showers" in s["forecast_hazards"] and s["observed"] in ("clear", "rain")]
-        if quiet:
-            checked += 1
-            where = _span(locator, {"from_nm": quiet[0]["from_nm"], "to_nm": quiet[-1]["to_nm"]})
-            parts.append(f"Showers were forecast {where}; radar saw nothing heavy.")
+        for a in airports:
+            p = _airport_phrase(a)
+            if p:
+                sentences.append(p[0].upper() + p[1:])
+                differs = differs or a.get("match") == "worse"
+    return {"text": ". ".join(sentences) + ".", "differs_from_forecast": differs}
+
+
+def build_summary(strip: list[dict], airports: list[dict], alerts: list[dict], locator, *,
+                  hazards: list[dict] | None = None, flown: dict | None = None,
+                  cancelled: bool = False, storms: list[dict] | None = None) -> dict:
+    """The report in a few lines, each saying what was forecast and what was
+    observed side by side. No "as forecast" verdict: the pilot reads both.
+    ``alerts`` are the in-flight ones (:func:`flight_alerts`)."""
+    lines = []
+    if cancelled:
+        lines.append({"kind": "cancelled", "text": "You cancelled this flight. The weather at the planned times:"})
     names = {"departure": "Departure", "arrival": "Arrival"}
-    for a in airports:
-        label = f"{names[a['role']]} {a['icao']}"
-        if a.get("match") in ("as_forecast", "lower", "better"):
-            checked += 1
-        if a.get("match") == "as_forecast":
-            parts.append(f"{label} as the TAF said.")
-        elif a.get("match") == "lower":
-            diffs += 1
-            parts.append(f"{label} came in lower than the TAF ({a.get('metar_category')} against {a.get('taf_category')}).")
-        elif a.get("match") == "better":
-            parts.append(f"{label} better than the TAF.")
-    raised = [a for a in alerts if a.get("tier") == "alert" and a.get("event") == "raised"]
-    if raised:
-        parts.append(f"{len(raised)} alert{'s' if len(raised) > 1 else ''} during the flight.")
-    no_data = sum(1 for s in strip if s["observed"] == "no_data")
-    if strip and no_data == len(strip):
-        parts.append("Radar had no coverage along the route.")
-    if diffs:
-        lead = "Some differences from the forecast."
-    elif checked:
-        lead = "Mostly as forecast."
-    else:
-        # Nothing the instruments could compare: never read that as "as forecast".
-        lead = "Little the instruments could check on this flight."
-    return {"text": " ".join([lead, *parts]), "differences": diffs, "checked": checked, "parts": parts}
+    dep = [a for a in airports if a["role"] == "departure"]
+    arr = [a for a in airports if a["role"] == "arrival"]
+    for a in dep:
+        lines.append({"kind": "departure", "text": airport_line(a, names["departure"])})
+    lines.append({"kind": "forecast", "text": _forecast_text(hazards or [], flown or {}, locator)})
+    radar = _radar_text(strip, locator, storms)
+    if radar:
+        lines.append({"kind": "radar", "text": radar})
+    if alerts and not cancelled:
+        msgs = "; ".join(a.get("message") or "" for a in alerts[:2])
+        more = f" and {len(alerts) - 2} more" if len(alerts) > 2 else ""
+        lines.append({"kind": "alerts",
+                      "text": f"{len(alerts)} alert{'s' if len(alerts) > 1 else ''} while you flew: {msgs}{more}."})
+    for a in arr:
+        lines.append({"kind": "arrival", "text": airport_line(a, names["arrival"])})
+    headline = build_headline(strip, airports, hazards or [], cancelled=cancelled)
+    return {"headline": headline["text"], "differs_from_forecast": headline["differs_from_forecast"],
+            "text": "\n".join(l["text"] for l in lines), "lines": lines}
 
 
-def build_interest(lane, strip, airports, alerts, questions) -> dict:
-    """Would this flight earn a push? Any reason below makes it interesting."""
+def build_interest(hazards, strip, airports, alerts, questions, *, cancelled: bool = False) -> dict:
+    """Would this flight earn a push? Any reason below makes it interesting.
+    ``hazards`` are :func:`forecast_at_level` (most models, at your level),
+    ``alerts`` the in-flight ones. A cancelled flight never does."""
+    if cancelled:
+        return {"interesting": False, "reasons": [], "cancelled": True}
     reasons = []
-    flagged = [a["advisory_id"] for a in (lane or {}).get("advisories") or []
-               if a.get("advisory_id") in ROUTE_WEATHER_ADVISORIES and a.get("aggregate_status") in ("amber", "red")]
-    if flagged:
-        reasons.append({"kind": "forecast_flagged", "advisories": sorted(set(flagged))})
-    if any(a.get("tier") == "alert" for a in alerts):
-        reasons.append({"kind": "alert_in_flight"})
+    if hazards:
+        reasons.append({"kind": "forecast_at_level", "hazards": sorted({h["kind"] for h in hazards})})
+    if alerts:
+        reasons.append({"kind": "alert_in_flight", "count": len(alerts)})
     if any(s["observed"] == "heavy" for s in strip):
         reasons.append({"kind": "heavy_precip_observed"})
-    if any(a.get("match") == "lower" for a in airports):
-        reasons.append({"kind": "airport_lower_than_taf"})
+    if any(a.get("match") == "worse" for a in airports):
+        reasons.append({"kind": "airport_worse_than_taf"})
     if questions:
         reasons.append({"kind": "questions", "count": len(questions)})
     return {"interesting": bool(reasons), "reasons": reasons}
@@ -542,7 +893,8 @@ def save_answer(flight_dir: Path, question: dict, answer: str | None, *, avoided
 
 
 def build_report(recap: dict, *, lane: dict | None, manifest: dict | None, history: list[dict],
-                 progress, route, locator, answers: dict | None = None) -> dict:
+                 progress, route, locator, answers: dict | None = None,
+                 proxies: dict[str, tuple[str | None, str | None]] | None = None) -> dict:
     """The report from its inputs (pure apart from euro_aip parsing)."""
     answers = answers or {}
     out: dict = {
@@ -554,7 +906,10 @@ def build_report(recap: dict, *, lane: dict | None, manifest: dict | None, histo
         "departed_at": recap.get("departed_at"),
         "arrival_at": recap.get("arrival_at"),
         "forecast_pack": (recap.get("forecast") or {}).get("pack_timestamp"),
+        "cancelled": bool(recap.get("cancelled")),
     }
+    cancelled = out["cancelled"]
+    proxies = proxies or {}
     if route is not None and route.waypoints:
         out["route"] = [w.icao for w in route.waypoints]
     planned_ft = (lane or {}).get("cruise_altitude_ft") or (manifest or {}).get("cruise_altitude_ft") \
@@ -584,26 +939,33 @@ def build_report(recap: dict, *, lane: dict | None, manifest: dict | None, histo
         for role, icao, at in (("departure", route.waypoints[0].icao, dep_at),
                                ("arrival", route.waypoints[-1].icao, arr_at)):
             try:
-                airports.append({"role": role, **airport_at(history, icao.upper(), at, dep_at)})
+                m_st, t_st = proxies.get(icao.upper(), (None, None))
+                # No TAF proxy recorded: the METAR proxy station's TAF.
+                t_st = t_st or m_st
+                airports.append({"role": role, **airport_at(
+                    history, icao.upper(), at, dep_at, metar_station=m_st, taf_station=t_st,
+                    around="before" if role == "departure" else "after")})
             except Exception:
                 logger.warning("Airport %s failed", icao, exc_info=True)
                 airports.append({"role": role, "icao": icao, "match": "unverifiable"})
 
-    questions = build_questions(manifest, recap.get("segments") or [], flown, progress, locator)
+    # A cancelled flight: nobody was there to answer.
+    questions = [] if cancelled else build_questions(manifest, recap.get("segments") or [], flown, progress, locator)
     for q in questions:
         q["answer"] = answers.get(q["id"])
-    alerts = recap.get("alerts") or []
+    alerts = flight_alerts(recap.get("alerts") or [], recap.get("departed_at"), recap.get("arrival_at"))
+    hazards = forecast_at_level(manifest, flown.get("ft"))
     out.update(
         route_nm=recap.get("route_nm"),
         waypoints=[{"icao": w.get("icao") or w.get("ident"), "along_nm": w.get("along_nm"), "eta": w.get("eta")}
                    for w in recap.get("waypoints") or []],
-        summary=build_summary(strip, airports, alerts, locator),
+        summary=build_summary(strip, airports, alerts, locator, hazards=hazards, flown=flown, cancelled=cancelled,
+                              storms=recap.get("storms")),
         strip=strip,
         airports=airports,
         questions=questions,
-        interest=build_interest(lane, strip, airports, alerts, questions),
-        alerts=[{k: a.get(k) for k in ("at", "event", "tier", "message", "aircraft_nm")}
-                for a in alerts if a.get("tier") == "alert"],
+        interest=build_interest(hazards, strip, airports, alerts, questions, cancelled=cancelled),
+        alerts=[{k: a.get(k) for k in ("at", "event", "tier", "message", "aircraft_nm")} for a in alerts],
         # Answers to questions no longer asked (rules changed): kept visible.
         orphan_answers={k: v for k, v in answers.items() if k not in {q["id"] for q in questions}},
     )
@@ -648,9 +1010,39 @@ def report_for_flight(db, flight_id: str, *, now: datetime | None = None) -> dic
         except Exception:
             logger.warning("Locator failed for %s", flight_id, exc_info=True)
     report = build_report(recap, lane=lane, manifest=manifest, history=history, progress=progress,
-                          route=route, locator=locator, answers=load_answers(flight_dir))
+                          route=route, locator=locator, answers=load_answers(flight_dir),
+                          proxies=load_proxies(flight_dir))
     report["flight_id"] = flight_id
     return report
+
+
+def load_proxies(flight_dir: Path | None) -> dict[str, tuple[str | None, str | None]]:
+    """The METAR / TAF proxy station per field the live layer used (#767):
+    EGTF reads EGLL. From ``live.json`` while it exists, else from the newest
+    per-tick snapshot that recorded one (kept past T1; snapshots written
+    before the proxy was recorded have none)."""
+    if flight_dir is None:
+        return {}
+    try:
+        from weatherbrief.analysis.obs_proxy import pins_from
+        from weatherbrief.tasks.live_layer import load_live
+        from weatherbrief.tasks.live_snapshots import load_snapshots
+
+        layer = load_live(flight_dir)
+        pins = pins_from(layer.route_observations if layer is not None else None)
+        if pins:
+            return pins
+        for snap in reversed(load_snapshots(flight_dir)):
+            out = {}
+            for a in ((snap.get("observations") or {}).get("airports") or []):
+                m, t = a.get("metar_proxy"), a.get("taf_proxy")
+                if m or t:
+                    out[(a.get("icao") or "").upper()] = ((m or {}).get("icao"), (t or {}).get("icao"))
+            if out:
+                return out
+    except Exception:
+        logger.warning("No proxies for %s", flight_dir, exc_info=True)
+    return {}
 
 
 def flight_dir_for(db, flight_id: str) -> Path | None:
@@ -663,5 +1055,6 @@ __all__ = [
     "REPORT_VERSION", "build_report", "report_for_flight", "save_answer", "load_answers",
     "hazard_stretches", "forecast_at", "observed_class", "flown_altitude", "airport_at",
     "build_questions", "build_summary", "build_interest", "flight_dir_for",
+    "airport_line", "build_headline", "flight_alerts", "forecast_at_level", "load_proxies",
 ]
 

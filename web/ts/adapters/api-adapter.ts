@@ -15,6 +15,7 @@ import type {
   RouteAnalysesManifest,
   RouteObservations,
   RouteSigmets,
+  DebriefReport,
 } from '../store/types';
 import type { AltitudeTableResult, RouteAdvisoriesManifest } from '../types/advisories';
 import type { RouteFrontsManifest } from '../types/fronts';
@@ -831,6 +832,22 @@ export async function fetchLiveAt(flightId: string, tick: string): Promise<LiveT
   return apiFetch<LiveTickResponse>(
     `/flights/${encodeURIComponent(flightId)}/live/at?tick=${encodeURIComponent(tick)}`,
   );
+}
+
+/** The debrief report (prototype): headline, questions, detail lines. Owner only. */
+export async function fetchDebriefReport(flightId: string): Promise<DebriefReport> {
+  return apiFetch<DebriefReport>(`/flights/${encodeURIComponent(flightId)}/debrief/report`);
+}
+
+/** Answer one report question (``answer`` null clears it); returns the report. */
+export async function putDebriefAnswer(
+  flightId: string,
+  body: { question_id: string; answer: string | null; avoided?: boolean },
+): Promise<DebriefReport> {
+  return apiFetch<DebriefReport>(`/flights/${encodeURIComponent(flightId)}/debrief/report/answers`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
 }
 
 export async function fetchRecap(flightId: string, pack: string | null = null): Promise<RecapResponse> {
