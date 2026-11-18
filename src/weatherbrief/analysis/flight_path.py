@@ -357,7 +357,9 @@ def compute_flight_path(
     path's own time. ``wind_at(distance_nm, altitude_ft)`` returns the
     headwind (kt), default still air; ``wind_grid`` (the pipeline's pooled
     forecast wind) is used when ``wind_at`` is not given and is kept on the
-    path, so a recompute flies the same wind.
+    path, so a recompute flies the same wind. ``wind`` reads ``consensus``
+    whenever a wind was flown; only a grid survives ``recompute_for_cruise``
+    (a bare ``wind_at``, as in tests, recomputes in still air).
     """
     if wind_at is None and wind_grid is not None:
         wind_at = wind_grid.headwind_at
@@ -550,11 +552,12 @@ def build_flight_path(
     briefing reads as flat cruise, as before #1005.
 
     Wind (#1007): with ``cross_sections`` and ``tracks_deg`` (one per point),
-    the path is flown in the pooled headwind of every cross-section model. The wind is read at ``times`` (one per point, e.g. the analyses' own
-    hours) or, given only ``departure_time``, at the still-air path's planned
-    times: a first still-air pass, then the path in that wind (one pass; the
-    total stays the planned duration, so only where the time goes moves).
-    Without winds the path is the still-air one.
+    the path is flown in the pooled headwind of every given cross-section
+    model. The wind is read at ``times`` (one per point, e.g. the analyses'
+    own hours) or, given only ``departure_time``, at the still-air path's
+    planned times: a first still-air pass, then the path in that wind (one
+    pass; the total stays the planned duration, so only where the time goes
+    moves). Without winds the path is the still-air one.
     """
     import logging
 
@@ -700,7 +703,7 @@ def analyses_flight_path(
         cruise_ias_kt=cruise_speed_ias_kt,
         planned_duration_h=planned_duration_h,
         cross_sections=cross_sections,
-        tracks_deg=[float(a.track_deg or 0.0) for a in analyses],
+        tracks_deg=[float(a.track_deg) for a in analyses],
         times=[a.interpolated_time for a in analyses],
     )
 
@@ -713,7 +716,7 @@ def _analyses_headwind_grid(analyses, top_ft, cross_sections) -> HeadwindGrid | 
 
     try:
         samples = [
-            (a.point_index, float(a.distance_from_origin_nm or 0.0), float(a.track_deg or 0.0),
+            (a.point_index, float(a.distance_from_origin_nm), float(a.track_deg),
              a.interpolated_time)
             for a in analyses
         ]

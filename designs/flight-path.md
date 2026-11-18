@@ -62,7 +62,10 @@ actually is. Nothing is computed on a client.
   still-air path its wind). No winds in the pack: the still-air path,
   unchanged. The alt departure and every time-scan candidate read the wind at
   their own time; the scan builds the candidate's path once and hands it to
-  `run_alt_from_pack(flight_path=...)` so coverage and grade agree. The
+  `run_alt_from_pack(flight_path=...)` so coverage and grade agree; the
+  ECMWF-only provisional tier builds its path in ECMWF's wind (the other models
+  are clamped outside their window). Cost: about 1 ms per route point per grid
+  (4 models, 26 levels), once per candidate. The
   new-flight estimate stays still air. One path per briefing, not per model.
 
 ## Presets (tune in `PRESETS`)

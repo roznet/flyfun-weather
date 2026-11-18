@@ -1057,14 +1057,19 @@ def run_time_scan(
     path_live = flight_path_mode() == "live"
     scan_elevation = load_elevation_profile(pack_dir) if path_live else None
 
-    def _scan_path(t: datetime):
+    def _scan_path(t: datetime, models: list[str] | None = None):
+        """The live path at ``t``, in the wind of ``models`` (default all)."""
         if not path_live:
             return None
+        sections = cross_sections
+        if models is not None:
+            wanted = {m.lower() for m in models}
+            sections = [cs for cs in cross_sections if cs.model.value in wanted]
         return route_flight_path(
             route_points, route.cruise_altitude_ft, elevation=scan_elevation,
             equipage=equipage, cruise_speed_ias_kt=cruise_speed_ias_kt,
             planned_duration_h=duration,
-            cross_sections=cross_sections, departure_time=t,
+            cross_sections=sections, departure_time=t,
         )
 
     base_path = _scan_path(dep)
@@ -1088,8 +1093,6 @@ def run_time_scan(
     # (time, is_alternate) pairs the free tier couldn't grade — the daylight
     # ECMWF extension (below) gives them a second, provisional chance.
     deferred: list[tuple[datetime, bool, list[datetime]]] = []
-    # The live path each deferred candidate's coverage was checked on.
-    deferred_paths: dict[datetime, object] = {}
 
     for t, is_alt in considered:
         if abs((t - dep).total_seconds()) < 60:
@@ -1104,7 +1107,6 @@ def run_time_scan(
             # window edge and label OM values as the GRIB model. Deferred to
             # the ECMWF-only tier rather than refused outright.
             deferred.append((t, is_alt, vts))
-            deferred_paths[t] = cand_path
             continue
         # The pinned alternate keeps feeding route_advisories_alt.json (the
         # existing planned↔alt web UI) and re-runs alt front detection like the
@@ -1156,13 +1158,20 @@ def run_time_scan(
             ecmwf_per_point = {_ECMWF_MODEL: ecmwf_spans}
             base_e_manifest = _grade(
                 dep, persist=False, detect_fronts=False,
-                models_override=[_ECMWF_MODEL], flight_path=base_path,
+                models_override=[_ECMWF_MODEL],
             )
             if base_e_manifest is not None:
                 base_e_assess, base_e_reason = derive_assessment_from_advisories(base_e_manifest)
                 span_his = [s[1] for s in ecmwf_spans if s]
                 horizon = min(span_his) if span_his else None
                 for t, is_alt, vts in deferred:
+                    # Live: this tier grades ECMWF only, on the extended
+                    # sections, so its path flies ECMWF's wind (the other
+                    # models are clamped outside their window) and the
+                    # coverage check reads that path's times (#1007).
+                    e_path = _scan_path(t, [_ECMWF_MODEL])
+                    if e_path is not None:
+                        vts = candidate_valid_times(route_points, t, duration, e_path)
                     if not covers(ecmwf_per_point, [_ECMWF_MODEL], vts):
                         refused.append(t)
                         if horizon and vts and vts[-1] > horizon:
@@ -1178,7 +1187,7 @@ def run_time_scan(
                     manifest = _grade(
                         t, persist=is_alt, detect_fronts=is_alt,
                         models_override=[_ECMWF_MODEL],
-                        flight_path=deferred_paths.get(t),
+                        flight_path=e_path,
                     )
                     if manifest is None:
                         continue

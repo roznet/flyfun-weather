@@ -2070,6 +2070,8 @@ export interface FlightPath {
   peak_ft: number;
   duration_h: number;
   time_scale: number;
+  /** The wind the path was flown in (#1007): the models' median, or none. */
+  wind?: 'consensus' | 'still_air';
   /** Dense path: [distance_nm, altitude_ft, time_s] in route order. */
   profile: [number, number, number][];
 }
