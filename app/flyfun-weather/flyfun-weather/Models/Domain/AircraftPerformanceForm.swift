@@ -19,13 +19,14 @@ nonisolated struct AircraftPresetsResponse: Codable, Sendable {
 }
 
 /// The resolved climb / descent performance the briefing's path flies with.
-/// `source` and `turbo` are optional so a server that predates them still decodes.
+/// Only `preset` and `descentMode` are required: this block is nested in
+/// `AircraftResponse`, so a missing figure must not stop the aircraft list loading.
 nonisolated struct AircraftPerformanceResponse: Codable, Hashable, Sendable {
     let preset: String
     let source: String?
-    let climbIasKt: Double
-    let climbRateFpm: Double
-    let ceilingFt: Double
+    let climbIasKt: Double?
+    let climbRateFpm: Double?
+    let ceilingFt: Double?
     let descentMode: String
     let descentRateFpm: Double?
     let descentAngleDeg: Double?
@@ -52,6 +53,8 @@ nonisolated struct AircraftPerformanceOverrides: Equatable, Sendable {
 }
 
 /// Port of the pure rules in web `aircraft-performance-form.ts`.
+/// SYNC: `web/ts/components/aircraft-performance-form.ts` and Android
+/// `model/rules/AircraftPerformanceForm.kt`. Change the three together.
 nonisolated enum AircraftPerformanceForm {
     /// A preset's own values, as the form shows them (the unused descent field empty).
     static func values(of preset: AircraftPerformancePreset) -> AircraftPerformanceValues {

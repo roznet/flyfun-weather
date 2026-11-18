@@ -18,13 +18,15 @@ nonisolated struct RouteAnalysesResponse: Codable, Sendable {
 }
 
 /// The fields of the server's `FlightPath` the app reads. `profile` is
-/// `[distance_nm, altitude_ft, time_s]` every 500 ft, in route order.
+/// `[distance_nm, altitude_ft, time_s]` every 500 ft, in route order. Only the
+/// altitude and profile are required: a missing summary field must not stop the
+/// whole cross-section from loading.
 nonisolated struct FlightPathResponse: Codable, Sendable {
     let cruiseAltitudeFt: Double
-    let tocNm: Double
-    let todNm: Double
-    let cruiseReached: Bool
-    let peakFt: Double
+    let tocNm: Double?
+    let todNm: Double?
+    let cruiseReached: Bool?
+    let peakFt: Double?
     let profile: [[Double]]
 }
 

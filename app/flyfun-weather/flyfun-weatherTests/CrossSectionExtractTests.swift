@@ -64,12 +64,21 @@ import Foundation
         let path = try #require(manifest.flightPath)
         #expect(manifest.flightPathMode == "live")
         #expect(path.cruiseAltitudeFt == 8000)
-        #expect(path.cruiseReached)
-        #expect(path.tocNm < path.todNm)
+        #expect(path.cruiseReached == true)
+        #expect(try #require(path.tocNm) < (try #require(path.todNm)))
         #expect(path.profile.allSatisfy { $0.count == 3 })
         #expect(manifest.analyses.first?.phase == "climb")
         #expect(manifest.analyses.last?.phase == "descent")
         #expect(manifest.analyses.first?.plannedAltitudeFt == 0)
+    }
+
+    /// The app draws from the altitude and profile alone, so a path without the
+    /// summary fields must still decode rather than lose the cross-section.
+    @Test func pathWithoutSummaryFieldsStillDecodes() throws {
+        let json = #"{"cruise_altitude_ft":8000,"profile":[[0,0,0],[5,8000,60]]}"#
+        let path = try JSONDecoder.weatherBrief.decode(FlightPathResponse.self, from: Data(json.utf8))
+        #expect(path.tocNm == nil)
+        #expect(path.profile.count == 2)
     }
 
     @Test func packWithoutAPathDecodesAndDrawsFlat() {

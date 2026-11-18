@@ -1785,7 +1785,7 @@ private fun DrawScope.drawAltitudeLinesLayer(
                     .coerceAtLeast(transform.plotLeft),
                 topY = labelTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
                 bgColor = Color(0xCC0F172A),
-                textColor = cruiseColor,
+                textColor = Color.White,
             )
         } else {
             drawLine(
@@ -1800,7 +1800,7 @@ private fun DrawScope.drawAltitudeLinesLayer(
                 leftX = transform.plotLeft + 6.dp.toPx(),
                 topY = cruiseTopY.coerceIn(transform.plotTop + 2f, transform.plotBottom - pillHeightPx),
                 bgColor = Color(0xCC0F172A),
-                textColor = cruiseColor,
+                textColor = Color.White,
             )
         }
     }

@@ -246,8 +246,6 @@ data class ProfileSettings(
     val cruiseAltitudeFt: Int? = null,
     @SerialName("flight_ceiling_ft")
     val flightCeilingFt: Int? = null,
-    @SerialName("speed_kt")
-    val speedKt: Int? = null,
     val models: List<String>? = null,
     @SerialName("advisory_models")
     val advisoryModels: List<String>? = null,
