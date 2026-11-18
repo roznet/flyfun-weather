@@ -572,6 +572,8 @@ test.describe('Observed airport cards (#881)', () => {
     await expect(details.locator('[data-testid="glance-line-enroute"]')).toBeHidden();
     await details.locator('summary').click();
     await expect(details.locator('[data-testid="glance-headline"]')).toBeVisible();
+    // The open state is saved on the `toggle` event, which fires after the click.
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('observedDetailsExpanded'))).toBe('1');
     await page.reload();
     await expect(page.locator('[data-testid="glance-details"] [data-testid="glance-headline"]')).toBeVisible();
   });
