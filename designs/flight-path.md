@@ -1,8 +1,9 @@
 # Flight path: climb, cruise and descent per aircraft (#1005)
 
 > Status: phase 1 shipped behind `WB_FLIGHT_PATH` (default `shadow`). Consumers:
-> aircraft icing and cloud / VMC. Phase 2 (turbulence, winds aloft, convective,
-> fronts, time scan grading, consensus wind) is not built.
+> aircraft icing and cloud / VMC. The path flies the pooled forecast wind
+> (#1007). Phase 2 (turbulence, winds aloft, convective, fronts, time scan
+> grading) is not built.
 
 ## Intent
 
@@ -43,13 +44,26 @@ actually is. Nothing is computed on a client.
   (`[distance_nm, altitude_ft, time_s]`), interpolated onto the route points.
 - **Short leg:** climb and descent meet at `peak_ft` below cruise
   (`cruise_reached=False`, `toc_nm == tod_nm`).
-- **Duration:** the path's own (still-air) duration is what the form shows.
+- **Duration:** the path's own still-air duration is what the form shows.
   The flight's stored duration (the estimate, or the pilot's overwrite) wins:
   `time_scale` stretches the path's times to it. Vertical rates are read
   unscaled (aircraft performance, not wind).
-- **Wind hook:** `compute_flight_path(..., wind_at=None)`, where
-  `wind_at(distance_nm, altitude_ft) -> headwind_kt`. Default still air. One
-  path per briefing, not per model.
+- **Wind (#1007):** `compute_flight_path(..., wind_at=None, wind_grid=None)`,
+  `wind_at(distance_nm, altitude_ft) -> headwind_kt`. The pipeline passes a
+  `HeadwindGrid` from `analysis/wind.route_headwind_grid`: the models' median
+  headwind on the route track, at every route point and every 1,000 ft up to
+  max(cruise, ceiling), read at the still-air path's planned times (one pass;
+  meteorology-decisions §86). The grid is stored on the path
+  (`FlightPath.wind_grid`, `wind: "consensus" | "still_air"`, also on
+  `FlightPathSummary`), so `recompute_for_cruise` (altitude table, cruise
+  override) flies the same wind without the cross-sections. Builders take
+  `cross_sections` + `departure_time` (`route_flight_path`) or the analyses'
+  own times (`analyses_flight_path`, which also gives a stored pre-#1007
+  still-air path its wind). No winds in the pack: the still-air path,
+  unchanged. The alt departure and every time-scan candidate read the wind at
+  their own time; the scan builds the candidate's path once and hands it to
+  `run_alt_from_pack(flight_path=...)` so coverage and grade agree. The
+  new-flight estimate stays still air. One path per briefing, not per model.
 
 ## Presets (tune in `PRESETS`)
 
@@ -118,11 +132,6 @@ scripts/rerun_advisories_diff.py` replays stored packs on a path (old packs
 get one built from their analyses; their point times stay linear).
 
 **Before flipping to `live`** (from the #1006 review):
-- The path is **still air** (`wind_at` is not wired yet). The card ranges
-  ("climb, nm 3 to 14"), the icing exposure minutes and "in cloud … about N
-  min" ignore the wind, so in a strong head or tailwind they can be off by
-  tens of percent. Either feed the consensus wind into `wind_at` first, or
-  accept the still-air figures knowingly.
 - Compare the replay **per model**: `ICED_RATE_FACTOR` and the presets are
   model-independent, but a cell's iced thickness comes from each model's
   pressure-level spacing, so the climb minutes in an iced layer are coarser

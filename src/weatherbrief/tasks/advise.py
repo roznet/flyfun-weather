@@ -574,6 +574,7 @@ def run_advisories(
             elevation=elevation_profile, equipage=equipage,
             cruise_speed_ias_kt=cruise_speed_ias_kt,
             planned_duration_h=route.flight_duration_hours,
+            cross_sections=cross_sections,
         )
         ctx = RouteContext(
             analyses=rp_analyses,
@@ -777,6 +778,7 @@ def run_advisories_from_pack(
             planned_duration_h=(
                 flight_duration_hours or getattr(manifest, "flight_duration_hours", 0.0)
             ),
+            cross_sections=cross_sections,
         )
         ctx = RouteContext(
             analyses=analyses,
@@ -1103,6 +1105,7 @@ def run_alt_from_pack(
     persist: bool = True,
     detect_fronts: bool = True,
     declared_approach_icaos: list[str] | None = None,
+    flight_path: FlightPath | None = None,
 ) -> AdvisoryResult:
     """Re-run analysis + advisories at an alt departure time using existing pack data.
 
@@ -1118,7 +1121,8 @@ def run_alt_from_pack(
     writing ``route_advisories_alt.json`` (candidates live in
     ``time_options.json``); ``detect_fronts=False`` skips the alt front re-run
     (``fronts`` is timing-``none`` and re-detecting per candidate would write
-    files in a tight loop).
+    files in a tight loop). ``flight_path`` reuses a path already built for
+    this departure (default: built here, in the wind at that time).
     """
     from weatherbrief.tasks.analyze import analyze_all_route_points
     from weatherbrief.tasks.artifacts import (
@@ -1136,12 +1140,16 @@ def run_alt_from_pack(
     if not cross_sections or route_points is None:
         return AdvisoryResult(manifest=None, error="Missing cross-section or route-point data")
 
-    # Re-run analysis at the alt departure time, on the same flight path (#1005).
-    flight_path = route_flight_path(
-        route_points, route.cruise_altitude_ft, elevation=elevation, equipage=equipage,
-        cruise_speed_ias_kt=cruise_speed_ias_kt,
-        planned_duration_h=route.flight_duration_hours,
-    )
+    # Re-run analysis at the alt departure time, on the same aircraft's path
+    # (#1005), flown in the wind at that time (#1007). The time scan passes the
+    # path its coverage check read, so both see the same point times.
+    if flight_path is None:
+        flight_path = route_flight_path(
+            route_points, route.cruise_altitude_ft, elevation=elevation, equipage=equipage,
+            cruise_speed_ias_kt=cruise_speed_ias_kt,
+            planned_duration_h=route.flight_duration_hours,
+            cross_sections=cross_sections, departure_time=alt_departure_time,
+        )
     path_live = flight_path_mode() == "live"
     rp_analyses = analyze_all_route_points(
         cross_sections=cross_sections,

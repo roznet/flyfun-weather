@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+import statistics
+from collections.abc import Sequence
+from datetime import datetime
+from typing import TYPE_CHECKING, Optional
 
 from weatherbrief.models import WindComponent
 from weatherbrief.models.analysis import (
     HourlyForecast,
     PressureLevelData,
+    bearing_between_coords,
     pressure_hpa_to_altitude_m,
 )
+
+if TYPE_CHECKING:
+    from weatherbrief.models.analysis import RoutePoint
 
 
 def compute_wind_components(
@@ -125,3 +132,114 @@ def pick_wind_at_pressure(
     if abs(_isa_alt_ft(nearest.pressure_hpa) - _isa_alt_ft(target)) > max_snap_ft:
         return None
     return _result(nearest.wind_speed_kt, nearest.wind_direction_deg)
+
+
+def compute_route_tracks(route_points: list["RoutePoint"]) -> list[float]:
+    """Compute bearing at each route point using neighbor points."""
+    n = len(route_points)
+    tracks: list[float] = []
+    for i in range(n):
+        if n == 1:
+            tracks.append(0.0)
+        elif i == 0:
+            tracks.append(bearing_between_coords(
+                route_points[0].lat, route_points[0].lon,
+                route_points[1].lat, route_points[1].lon,
+            ))
+        elif i == n - 1:
+            tracks.append(bearing_between_coords(
+                route_points[-2].lat, route_points[-2].lon,
+                route_points[-1].lat, route_points[-1].lon,
+            ))
+        else:
+            # Circular mean of incoming and outgoing bearings
+            b1 = bearing_between_coords(
+                route_points[i - 1].lat, route_points[i - 1].lon,
+                route_points[i].lat, route_points[i].lon,
+            )
+            b2 = bearing_between_coords(
+                route_points[i].lat, route_points[i].lon,
+                route_points[i + 1].lat, route_points[i + 1].lon,
+            )
+            x = math.cos(math.radians(b1)) + math.cos(math.radians(b2))
+            y = math.sin(math.radians(b1)) + math.sin(math.radians(b2))
+            tracks.append(math.degrees(math.atan2(y, x)) % 360)
+    return tracks
+
+
+# --- pooled headwind along the route (#1007) ---------------------------------
+
+#: Altitude spacing of the flight path's headwind grid. Model winds come on
+#: pressure levels 25-100 hPa apart (~700-3,000 ft at piston levels), so a
+#: finer grid would only interpolate between them.
+HEADWIND_GRID_STEP_FT = 1000.0
+
+
+def route_headwind_grid(
+    cross_sections,
+    samples: Sequence[tuple[int, float, float, datetime]],
+    top_ft: float,
+    *,
+    models: Sequence[str] | None = None,
+):
+    """The briefing's pooled headwind along the route, or None without winds.
+
+    ``samples`` are ``(point_index, distance_nm, track_deg, time)`` in route
+    order: the cross-section index to read, where it is, the route track
+    there, and when the aircraft is planned there. For every sample and every
+    ``HEADWIND_GRID_STEP_FT`` from sea level to ``top_ft``, each model's wind
+    (``pick_wind_at_pressure``: u/v interpolated between levels, ``None``
+    beyond the 2,000 ft snap) is projected on the track
+    (``compute_wind_components``) and the models' **median** is kept
+    (meteorology-decisions §86). A cell no model has a wind for reads 0
+    (still air). ``models`` restricts the pool (default every cross-section).
+
+    Returns ``None`` when no cell has any model wind (a pack without
+    cross-section winds keeps the still-air path).
+    """
+    from weatherbrief.models import altitude_to_pressure_hpa
+    from weatherbrief.models.flight_path import HeadwindGrid
+
+    if not cross_sections or not samples:
+        return None
+    wanted = set(models) if models is not None else None
+    sections = [cs for cs in cross_sections if wanted is None or cs.model.value in wanted]
+    if not sections:
+        return None
+    n_alt = max(int(math.ceil(max(top_ft, 0.0) / HEADWIND_GRID_STEP_FT)), 1) + 1
+    altitudes = [i * HEADWIND_GRID_STEP_FT for i in range(n_alt)]
+    pressures = [altitude_to_pressure_hpa(int(a)) for a in altitudes]
+
+    rows: list[list[float]] = []
+    distances: list[float] = []
+    any_wind = False
+    for point_index, distance_nm, track_deg, when in samples:
+        hourlies = []
+        for cs in sections:
+            if 0 <= point_index < len(cs.point_forecasts):
+                hourly = cs.point_forecasts[point_index].at_time(when)
+                if hourly is not None:
+                    hourlies.append(hourly)
+        row: list[float] = []
+        for pressure in pressures:
+            values = []
+            for hourly in hourlies:
+                lv = pick_wind_at_pressure(hourly, pressure)
+                if lv is None or lv.wind_speed_kt is None or lv.wind_direction_deg is None:
+                    continue
+                values.append(
+                    compute_wind_components(lv.wind_speed_kt, lv.wind_direction_deg, track_deg).headwind_kt
+                )
+            if values:
+                any_wind = True
+                row.append(round(statistics.median(values), 1))
+            else:
+                row.append(0.0)
+        distances.append(float(distance_nm))
+        rows.append(row)
+    if not any_wind:
+        return None
+    return HeadwindGrid(
+        distances_nm=distances, altitudes_ft=altitudes, headwind_kt=rows,
+        models=[cs.model.value for cs in sections],
+    )
