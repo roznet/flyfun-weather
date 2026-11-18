@@ -140,6 +140,66 @@ test.describe('Briefing page', () => {
 // sidebar-layout.ts builds around the (unchanged) section rendering.
 // ---------------------------------------------------------------------------
 
+// #987: an altitude edit used to show two banners that read as contradicting
+// each other ("no full refresh needed" vs "Refresh the briefing"). Now one
+// banner names both fixes and what each covers.
+test.describe('Altitude edit banner', () => {
+  const EDITED_ALT = 6000;
+
+  test.beforeEach(async ({ page }) => {
+    await mockBriefingApi(page);
+    // Registered last, so it wins over the fixture flight (packs are at 2,000 ft).
+    await page.route(`**/api/flights/${FLIGHT_ID}`, route => {
+      if (route.request().url().includes('/packs')) return route.fallthrough();
+      const flight = {
+        ...fixture('flight.json'), id: FLIGHT_ID,
+        departure_time: `${FUTURE_DATE}T17:00:00+00:00`, target_date: FUTURE_DATE,
+        cruise_altitude_ft: EDITED_ALT,
+      };
+      return route.fulfill({ json: flight });
+    });
+    // The fixture pack is dated 2026-02-25; align its departure with the flight
+    // so only the altitude differs.
+    await page.route(`**/packs/${encodeURIComponent(TIMESTAMP)}/route-analyses`, route =>
+      route.fulfill({ json: {
+        ...fixture('route_analyses.json'),
+        departure_time: `${FUTURE_DATE}T17:00:00+00:00`, target_date: FUTURE_DATE,
+      } }),
+    );
+    await page.route(`**/packs/${encodeURIComponent(TIMESTAMP)}/advisories/recalculate**`, route =>
+      route.fulfill({ json: {
+        manifest: { ...fixture('advisories.json'), cruise_altitude_ft: EDITED_ALT },
+        wind_overlay: null,
+      } }),
+    );
+  });
+
+  test('shows one notice with both actions, then shrinks after the update', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    const banner = page.locator('#stale-pack-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).not.toContainText('no full refresh needed');
+    await expect(banner.locator('a.stale-pack-section-link')).toHaveText(['Route Advisories', 'Synopsis']);
+    await expect(banner.locator('#stale-pack-reanchor-btn')).toHaveText('Update Route Advisories');
+    await expect(banner.locator('#stale-pack-refresh-btn')).toBeVisible();
+    // The old second banner under the assessment is gone.
+    await expect(page.locator('#digest-altitude-banner')).toHaveCount(0);
+    await banner.screenshot({ path: 'test-results/altitude-banner-before.png' });
+
+    await banner.locator('#stale-pack-reanchor-btn').click();
+    await expect(banner).toContainText('Route Advisories are graded for');
+    await expect(banner.locator('#stale-pack-reanchor-btn')).toHaveCount(0);
+    await expect(banner.locator('#stale-pack-refresh-btn')).toBeVisible();
+    await banner.screenshot({ path: 'test-results/altitude-banner-after.png' });
+  });
+
+  test('section links scroll to the section', async ({ page }) => {
+    await page.goto(`/briefing.html?flight=${FLIGHT_ID}`);
+    await page.locator('#stale-pack-banner a.stale-pack-section-link', { hasText: 'Synopsis' }).click();
+    await expect(page.locator('[data-section="synopsis"]')).toBeInViewport();
+  });
+});
+
 test.describe('Briefing sidebar layout', () => {
 
   test.beforeEach(async ({ page }) => {
@@ -168,6 +228,8 @@ test.describe('Briefing sidebar layout', () => {
 
     // The Synopsis section has a derived nav entry that can focus/scroll to it.
     await expect(page.locator('.rail-nav-item[data-nav-key="synopsis"]')).toBeVisible();
+    // #987: the top of the briefing is in SECTIONS too.
+    await expect(page.locator('.rail-nav-item[data-nav-key="advisories"] .rail-nav-label')).toHaveText('Route Advisories');
   });
 
   test('focus mode isolates a section and can be exited', async ({ page }) => {

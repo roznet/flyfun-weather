@@ -18,6 +18,10 @@ const RAIL_MAX_WIDTH = 560;
 // The main pane (web/briefing.html) lists these sections in the same order —
 // tests/unit/briefing-section-order.test.ts enforces it.
 export const NAV_GROUPS: { title: string; keys: string[] }[] = [
+  // The top of the briefing (#987): the advisories are also listed in the
+  // glance summary, but a pilot looking for them in SECTIONS should find them,
+  // and Timing Scenarios had no shortcut anywhere.
+  { title: 'Briefing', keys: ['advisories', 'time-scenarios'] },
   { title: 'Explore', keys: ['cross-section', 'skewt'] },
   // Flight-day reading order, the same as the iOS Observed tab (#690): what
   // you need to know first, then the route picture, then the detail by
@@ -42,19 +46,15 @@ const NAV_LABELS: Record<string, string> = {
   'gramet': 'GRAMET',
   'sounding': 'Sounding analysis',
   'comparison': 'Model comparison',
-  // Not in the nav (surfaced via the glance summary) but focusable from outside.
-  'advisories': 'Route advisories',
+  'advisories': 'Route Advisories',
+  'time-scenarios': 'Timing Scenarios',
 };
 
 /**
- * Sections a framing page or a `?section=` link may focus: every nav section,
- * plus the advisories (not in the nav, but a self-contained section). Each is a
- * direct child of the main pane, which the focus-mode CSS requires.
+ * Sections a framing page or a `?section=` link may focus: every nav section.
+ * Each is a direct child of the main pane, which the focus-mode CSS requires.
  */
-export const FOCUSABLE_SECTIONS: readonly string[] = [
-  ...NAV_GROUPS.flatMap((g) => g.keys),
-  'advisories',
-];
+export const FOCUSABLE_SECTIONS: readonly string[] = NAV_GROUPS.flatMap((g) => g.keys);
 
 export function isFocusableSection(key: unknown): key is string {
   return typeof key === 'string' && FOCUSABLE_SECTIONS.includes(key);

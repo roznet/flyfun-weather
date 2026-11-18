@@ -82,7 +82,8 @@
     <!-- One-time tour offer for users who never saw the welcome wizard's tour CTA -->
     <div id="tour-offer-banner" class="tour-offer-banner" style="display: none;"></div>
 
-    <!-- Stale pack banner — pack altitude/time differs from flight (after edit) -->
+    <!-- Stale pack banner (#987): the one notice for what an edit left out of date
+         (Route Advisories vs Synopsis/headline) and how to fix each. -->
     <div id="stale-pack-banner" class="invalidation-banner invalidation-warning" style="display: none;"></div>
 
     <div id="error-message"></div>
@@ -91,12 +92,6 @@
     <div id="assessment-banner" class="assessment-banner assessment-none">
       Loading...
     </div>
-
-    <!-- The assessment banner above carries the digest's reason sentence, which an
-         altitude edit does not regenerate (advisories/recalculate leaves
-         assessment_reason alone). Same warning as the one in the synopsis section,
-         repeated here because this is the line people actually read. -->
-    <div id="digest-altitude-banner" style="display: none;"></div>
 
     <!-- Live layer (#637): the digest/assessment above were written before the
          observed changes listed under "Since this briefing". -->

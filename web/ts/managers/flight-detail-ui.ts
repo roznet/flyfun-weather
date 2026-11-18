@@ -614,10 +614,14 @@ export function renderInvalidationBanner(invalidation: string | null, flightId: 
 
   if (invalidation === 'advisories_only') {
     el.className = 'invalidation-banner invalidation-info';
-    el.innerHTML = `Profile or altitude changed. Advisories can be recalculated from saved data on the <a href="${briefingUrl}">briefing page</a>.`;
+    // Same split as the briefing page's banner (#987): what the cheap update
+    // fixes, and what only a full refresh does.
+    el.innerHTML = escapeHtml(t('flightDetail.advisoriesOnlyNote'))
+      .replace('{link}', `<a href="${briefingUrl}">${escapeHtml(t('flightDetail.briefingPageLink'))}</a>`);
   } else if (invalidation === 'refetch_needed') {
     el.className = 'invalidation-banner invalidation-warning';
-    el.innerHTML = `Time or duration changed. A new briefing refresh is needed on the <a href="${briefingUrl}">briefing page</a> for updated forecasts.`;
+    el.innerHTML = escapeHtml(t('flightDetail.refetchNeededNote'))
+      .replace('{link}', `<a href="${briefingUrl}">${escapeHtml(t('flightDetail.briefingPageLink'))}</a>`);
   }
 }
 

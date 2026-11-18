@@ -2616,9 +2616,10 @@ async function init(): Promise<void> {
       state.flight !== prev.flight
       || state.routeAnalyses !== prev.routeAnalyses
       || state.routeAdvisories !== prev.routeAdvisories
+      || state.snapshot !== prev.snapshot
     ) {
       const isOwner = !!user && state.flight?.user_id === user.id;
-      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, state.routeAdvisories?.cruise_altitude_ft ?? null);
+      ui.renderStalePackBanner(state.flight, state.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, state.routeAdvisories?.cruise_altitude_ft ?? null, state.snapshot?.route?.cruise_altitude_ft ?? null);
     }
     // The manifest carries the profile's graded methods (#410) — recompute the
     // preferred methods that drive the compact cross-section (and re-apply the
@@ -2672,7 +2673,6 @@ async function init(): Promise<void> {
       // packs in place and a refresh lands one, so a chip painted beside a
       // GREEN pack would otherwise still be sitting there on a RED one.
       void initDonateNudge(state.currentPack?.assessment);
-      ui.renderDigestAltitudeBanner(state.flight, state.snapshot?.route?.cruise_altitude_ft ?? null);
       ui.togglePackSections(!!state.currentPack);
       renderAdvisories(getEffectiveAdvisories(state), () => store.getState().recalculateAdvisories(), state.displayMode, getAltitudeOverrideConfig(state), handleAltitudeTable, getAltTimeToggleConfig(state), getProfileSelectorConfig(state), handleAdvisoryChip, isFlightOwner(state));
       ui.renderDigestLiveCaveat(state.currentPack, state.snapshot);
@@ -3310,7 +3310,7 @@ async function init(): Promise<void> {
     ui.renderHeader(s.flight, s.snapshot);
     {
       const isOwner = !!user && s.flight?.user_id === user.id;
-      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, s.routeAdvisories?.cruise_altitude_ft ?? null);
+      ui.renderStalePackBanner(s.flight, s.routeAnalyses, isOwner, stalePackOnRefresh, stalePackOnReanchor, s.routeAdvisories?.cruise_altitude_ft ?? null, s.snapshot?.route?.cruise_altitude_ft ?? null);
     }
     // renderBriefingSharing already ran via the store subscriber above when
     // flight was set; don't re-invoke (it would waste a clone+replace cycle).
@@ -3333,7 +3333,6 @@ async function init(): Promise<void> {
     // server does not know the grade. Re-entrant: the store subscriber above
     // calls it again on every assessment change.
     void initDonateNudge(s.currentPack?.assessment);
-    ui.renderDigestAltitudeBanner(s.flight, s.snapshot?.route?.cruise_altitude_ft ?? null);
     ui.togglePackSections(!!s.currentPack);
     renderAdvisories(getEffectiveAdvisories(s), () => store.getState().recalculateAdvisories(), s.displayMode, getAltitudeOverrideConfig(s), handleAltitudeTable, getAltTimeToggleConfig(s), getProfileSelectorConfig(s), handleAdvisoryChip, isFlightOwner(s));
     ui.renderDigestLiveCaveat(s.currentPack, s.snapshot);
