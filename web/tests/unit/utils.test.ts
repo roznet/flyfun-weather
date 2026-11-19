@@ -281,6 +281,15 @@ describe('modelSlotLabel', () => {
     expect(modelSlotLabel('gfs', '')).toBe('GFS');
   });
 
+  it('does not double-badge the meteofrance slot: AROME is its name', () => {
+    initModelCatalog([{ key: 'meteofrance', name: 'AROME', default: false }]);
+    expect(modelSlotLabel('meteofrance', 'arome:mf')).toBe('AROME');
+    initModelCatalog([
+      { key: 'gfs', name: 'GFS', default: true },
+      { key: 'icon', name: 'ICON', default: true },
+    ]);
+  });
+
   it('falls back to modelLabel semantics for a model outside the catalog', () => {
     expect(modelSlotLabel('arome', 'hrrr:noaa')).toBe('AROME (HRRR)');
   });

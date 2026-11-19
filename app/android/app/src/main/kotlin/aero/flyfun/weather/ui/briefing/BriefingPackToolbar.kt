@@ -92,12 +92,14 @@ internal fun formatUtcTimestamp(iso: String?): String {
     return PACK_TIME_FORMATTER.format(Instant.ofEpochMilli(ms))
 }
 
+// Slots are named after the model that fills them (mirrors the server's
+// `short_name` in /api/models): the ukmo slot is UKV, meteofrance is AROME.
 internal fun String.shortModelName(): String = when (this.trim().lowercase()) {
-    "meteofrance", "meteo_france", "arpege" -> "MF"
+    "meteofrance", "meteo_france", "arpege" -> "AROME"
     "ecmwf" -> "ECMWF"
     "icon", "icon_eu", "icon-eu" -> "ICON"
     "gfs" -> "GFS"
-    "ukmo" -> "UKMO"
+    "ukmo" -> "UKV"
     else -> this.uppercase()
 }
 

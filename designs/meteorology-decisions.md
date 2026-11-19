@@ -7514,6 +7514,10 @@ inside its footprint, ARPEGE outside, an unmarked seam), with AROME condensate
 patched on when `WB_AROME_ENABLED` was set (#529). It was the last mainstream
 slot still billed on Open-Meteo.
 
+**Display name (2026-11-19).** The slot is shown as **AROME** everywhere (and
+the `ukmo` slot as **UKV**); the key `meteofrance` is unchanged. See
+`fetch.md` "Slot key vs displayed name".
+
 **Decisions.**
 
 - **The slot is AROME 0.025° from the Météo-France mirror, or nothing.** Whole

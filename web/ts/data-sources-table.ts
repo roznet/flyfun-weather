@@ -318,8 +318,8 @@ function familyLabel(rows: DataSourceEntry[]): string {
     icon_eu: 'ICON-EU',
     ecmwf: 'ECMWF IFS',
     gfs: 'GFS',
-    ukmo: 'UK Met Office',
-    meteofrance: 'Météo-France',
+    ukmo: 'UKV',
+    meteofrance: 'AROME',
   };
   return families[rows[0].model] || rows[0].model.toUpperCase();
 }
