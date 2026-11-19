@@ -340,7 +340,12 @@ _LOCAL_COVER_SOURCES = frozenset({"nwp_3d"})
 def _local_deck_cover_pct(
     lv: DerivedLevel, clouds: list[EnhancedCloudLayer],
 ) -> float | None:
-    """Highest ``mean_cloud_cover_pct`` of the 3D-fraction decks containing *lv*."""
+    """Highest ``mean_cloud_cover_pct`` of the 3D-fraction decks containing *lv*.
+
+    Reached only when the level has no fraction of its own. A deck's mean can
+    sit below the band cover, so ECMWF/ICON icing can drop where a thin deck
+    sits inside a wide band (#1013, intended); GFS and HRRR never reach here.
+    """
     alt = lv.altitude_ft
     if alt is None:
         return None

@@ -359,6 +359,11 @@ def freezing_bounds_ft(
     level above it (a warm nose aloft). Read from the profile itself, not from
     one ``freezing_level_ft``, so a warm nose caps the zone against the level
     that is actually below 0 °C. ``None`` where the column stays sub-freezing.
+
+    *all_levels* must be ordered by ascending altitude (the sounding order
+    every icing method iterates), so ``j + 1`` / ``j - 1`` is the neighbour on
+    the zone's side. Levels are matched by identity: a zone built from copies
+    of the levels is left uncapped.
     """
     pos = {id(lv): i for i, lv in enumerate(all_levels)}
     i_first, i_last = pos.get(id(first)), pos.get(id(last))
