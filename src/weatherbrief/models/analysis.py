@@ -898,8 +898,9 @@ class DerivedLevel(BaseModel):
     # "not detected here", never "no rain here" — see meteorology-decisions §24.
     supercooled_rain: bool = False
     # The model's own 3D cloud fraction at this level (ECMWF cc, ICON clc),
-    # 0–100. Scales the NWP-gated icing methods by the cover at the level
-    # (#1013). None for models without a per-level fraction (GFS, HRRR).
+    # 0–100. Not read by icing today: scaling by it under-called real icing
+    # (#1013, meteorology-decisions §88); kept for a gate-by-fraction rule.
+    # None for models without a per-level fraction (GFS, HRRR).
     cloud_area_fraction_pct: Optional[float] = None
     sfip_raw: Optional[float] = None  # SFIP index 0.0–1.0
     sfip_100: Optional[float] = None  # SFIP index 0–100

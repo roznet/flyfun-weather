@@ -331,34 +331,6 @@ def _envelope_cover_pct(
     return max(pcts) if pcts else None
 
 
-# Cloud sources whose deck cover is the model's own cover *at the level*
-# (the per-level 3D fraction), as opposed to a band cover spread over a slab
-# (GFS ``grib`` band geometry, HRRR ``nwp_condensate`` with NCEP band cover).
-_LOCAL_COVER_SOURCES = frozenset({"nwp_3d"})
-
-
-def _local_deck_cover_pct(
-    lv: DerivedLevel, clouds: list[EnhancedCloudLayer],
-) -> float | None:
-    """Highest ``mean_cloud_cover_pct`` of the 3D-fraction decks containing *lv*.
-
-    Reached only when the level has no fraction of its own. A deck's mean can
-    sit below the band cover, so ECMWF/ICON icing can drop where a thin deck
-    sits inside a wide band (#1013, intended); GFS and HRRR never reach here.
-    """
-    alt = lv.altitude_ft
-    if alt is None:
-        return None
-    pcts = [
-        cl.mean_cloud_cover_pct
-        for cl in clouds
-        if cl.source in _LOCAL_COVER_SOURCES
-        and cl.mean_cloud_cover_pct is not None
-        and (cl.base_ft - CLOUD_MARGIN_FT) <= alt <= (cl.top_ft + CLOUD_MARGIN_FT)
-    ]
-    return max(pcts) if pcts else None
-
-
 def _level_nwp_cover_pct(
     lv: DerivedLevel,
     clouds: list[EnhancedCloudLayer],
@@ -367,29 +339,18 @@ def _level_nwp_cover_pct(
     nwp_cloud_high_pct: float | None,
     nwp_cloud_diagnostics: NWPCloudDiagnostics | None,
 ) -> float | None:
-    """NWP cover (%) scaling icing at a level the NWP envelope admitted.
+    """NWP cover (%) scaling icing at a level the NWP envelope admitted (#844).
 
-    The cover **at the level** first (#1013, decisions §88, amending §54):
-
-    1. the level's own 3D cloud fraction (``cloud_area_fraction_pct``: ECMWF
-       ``cc``, ICON ``clc``), a known 0 % included;
-    2. otherwise the cover of the 3D-fraction deck containing the level;
-    3. otherwise, as before (#844), the higher of the band cover
-       (``nwp_cloud_cover_at_altitude``: the model's GRIB band cover,
-       Open-Meteo bulk only when there is none) and the gating deck's own
-       ``mean_cloud_cover_pct``. GFS and HRRR always land here: their band
-       carries its own base and top, so its cover is theirs at the level.
-
-    Why: ECMWF's ``lcc`` is the low-cloud cover from the surface to ~6,500 ft.
-    One thin OVC deck in it scored every level of the slab as that cover, a
-    15 % FEW level at −4 °C included (#1013). ``None`` only when nothing is
-    known.
+    The higher of two model-native answers: the band cover
+    (``nwp_cloud_cover_at_altitude`` — the model's GRIB band cover, Open-Meteo
+    bulk only when there is none) and the gating deck's own
+    ``mean_cloud_cover_pct`` (``_envelope_cover_pct``). Taking the max means a
+    known 0 % band answer can no longer erase a deck the model drew, and a
+    deck's *mean* fraction — usually below the band cover — never scales
+    icing down on its own. Deck-cover-first was measured and rejected: it
+    lowered ECMWF/ICON icing on ~5 % of GRIB-hour soundings (decisions §54).
+    ``None`` only when neither is known.
     """
-    if lv.cloud_area_fraction_pct is not None:
-        return lv.cloud_area_fraction_pct
-    deck = _local_deck_cover_pct(lv, clouds)
-    if deck is not None:
-        return deck
     known = [
         pct
         for pct in (

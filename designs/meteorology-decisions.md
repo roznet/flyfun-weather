@@ -6396,6 +6396,12 @@ Ogimet-NWP went 13 up / 84 down and IENG 32 up / 98 down (ICON similar). The
 max keeps the "never erase a drawn deck" fix without that drift. Revisit with
 verification data if the band cover over-states icing.
 
+**Revisited 2026-11-19 (§88, #1013).** A pilot report showed the band cover
+over-stating icing (ECMWF `lcc` 92 % from a 60 ft deck scored a 15 % level
+MODERATE), and US PIREPs showed the level's own fraction under-stating it
+(Ogimet-NWP POD 34 % → 24 %). Both are cover *multipliers*; the finding is
+that cover should gate, not scale. The max stays until #1017 is scored.
+
 ### Measured effect (sounding replay, old vs new code, identical inputs)
 
 Dev packs + eval corpus, 21,025 sampled soundings, worst icing risk per
@@ -6504,7 +6510,8 @@ if it is". The aircraft wins over the profile (#777).
 
 **Agent choices (owner to confirm).**
 - *Cruise band 1,000 ft* (tunable `cruise_band_ft`): icing "at cruise" is a zone within
-  1,000 ft. The old cards used 2,000 ft; 1,000 still absorbs the models' vertical
+  1,000 ft. *Owner confirmed 2026-11-19 (§88): kept at 1,000 ft, but a cruise above
+  0 °C is warm whatever sits in the band.* The old cards used 2,000 ft; 1,000 still absorbs the models' vertical
   spacing without flagging a layer well above or below the flown level.
 - *Climb/descent at 500 fpm, at the first/last assessed point*: the column from the
   ground to cruise there, converted to minutes. A climb stretch carries into cruise if
@@ -8269,7 +8276,8 @@ droplet logged none in 7 days and the mini 6 in 31 cycles.
 
 ### Choice
 
-- **The deck is kept, 1,000 ft thick, centred on its level**, with pressures
+- **The deck is kept, 1,000 ft thick, centred on its level** (an icing zone
+  widened this way is now capped at 0 °C, §88), with pressures
   interpolated in log-pressure along the column. This is the thin-layer
   convention every icing zone already used (single-level Ogimet, SFIP and SLD
   zones are widened to ±500 ft).
@@ -8336,11 +8344,22 @@ Not yet. Replay before and after with
 `WB_FLIGHT_PATH=live python scripts/rerun_advisories_diff.py --area corpus`
 on the Mac (stored packs now get the wind from their cross-sections).
 
-## 88. Icing below a thin deck: local cover, one source, 0 °C cap, warm cruise, trimmed edges (#1013)
+## 88. Icing below a thin deck: one source, 0 °C cap, warm cruise, trimmed edges (#1013)
 
-**Date:** 2026-11-19 · **Amends:** §54 (icing cover), §56 (warm cruise) · **Related:** §58, §86
+**Date:** 2026-11-19 · **Amends:** §56 (warm cruise) · **Revisits:** §54 (icing cover, kept) · **Related:** §58, §86
 
 ### Context
+
+Evidence came from three places, and each one changed the decision:
+
+- **A pilot's own flight and rating.** Feedback #204 (thumbs-down, comment: "flagged
+  red with multiple serious warnings… the actual flight was successful in unlimited
+  visibility"), flight `ekrk_ekkl_ekrs_ekrk-2026-11-19-3557`, its one pack, and the
+  live layer's METARs.
+- **Replays of that pack** on main, on each candidate rule, and with each knob
+  turned (`cruise_band_ft` 0/500/1,000, terrain margin, cover rule).
+- **US pilot reports** from the #1003 collector, used before landing to check the
+  cover change, which reversed it.
 
 Pilot thumbs-down on a local VFR flight (non-FIKI motorglider, cruise 1,500 ft,
 pack built at D-2): aircraft icing RED, "moderate icing for about 48 min; no
@@ -8359,16 +8378,9 @@ model had icing *at* 1,500 ft; five things together made it RED:
 
 ### Decision (agreed with the owner, 2026-11-19)
 
-1. **Icing scales by the cover at the level** (`icing._level_nwp_cover_pct`,
-   Ogimet-NWP, IENG and the severity-enhance corroboration): the level's own 3D
-   fraction (`DerivedLevel.cloud_area_fraction_pct`, ECMWF `cc` / ICON `clc`,
-   copied in `_enrich_lwc`), a known 0 % included; else the cover of the
-   `nwp_3d` deck containing the level; else §54's `max(band, deck)`. GFS and
-   HRRR always reach the last step: their band carries its own base and top
-   (HRRR's condensate decks carry an NCEP band cover), so it is theirs at the
-   level. This **reverses §54's rejection of "deck cover first"** for the
-   3D-fraction models, on this flight's evidence that the band cover over-states
-   icing in thin decks (the revisit §54 asked for).
+1. **Cover: §54 kept.** Icing still scales by `max(band cover, deck cover)`.
+   Scaling by the level's own fraction was built, scored and dropped before
+   landing; see "Rejected" below.
 2. **One icing source.** The advisory manifest records the engine methods it
    graded on (`RouteAdvisoriesManifest.engine_methods`); the digest prompt
    resolves its waypoint soundings with them (`advise.resolve_waypoint_analyses`,
@@ -8406,11 +8418,57 @@ freezing level 1,250–1,420 ft is below cruise and one light point sits ~1,000 
 above it); the owner accepts that, and majority aggregation lets ECMWF and GFS
 outvote it.
 
-### Expected effect, still to measure
+### Rejected: scaling icing by the level's own cloud fraction
 
-A down-shift on ECMWF/ICON GRIB hours (§54 measured "deck first" at 13 up /
-84 down on Ogimet-NWP). Before deploying: the flight's replay (ECMWF and GFS
-GREEN, card not RED, digest zones = graded zones), a winter-pack replay with
-per-model grade changes, and Ogimet-NWP scored before and after on the US PIREP
-collector (#1003) to see whether thin real decks are now under-called. Record
-the numbers here.
+Built in #1014 (the level's 3D fraction, ECMWF `cc` / ICON `clc`, then the
+`nwp_3d` deck's cover, then §54) and scored on the US PIREP collector (#1003,
+ECMWF, 4 days, 663 reports with a known icing altitude, 71 NEG, nearest column,
+±1,000 ft):
+
+| Ogimet-NWP | POD | false | skill | moderate+ on MOD reports |
+|---|---|---|---|---|
+| §54 cover (main) | 34 % | 18 % | +0.16 | 25 % |
+| §54 cover + changes 2–5 (landed) | 32 % | 17 % | +0.15 | 22 % |
+| local cover + changes 2–5 | 24 % | 13 % | +0.11 | 10 % |
+
+Not an altitude mismatch: the POD gap stays 8–13 points from ±1,000 to
+±8,000 ft, and 34 of the 51 reports lost have no light-or-worse zone anywhere
+in the column. At those reports the model's own level has a 20 % median
+fraction (2 % below 10 %), RH 91 % and cloud liquid in 96 %: cloud is there,
+partial. **A cloud fraction is the share of the grid box that is cloudy, not
+how bad the ice is in it**, and the pilot in the cloud part gets the full
+icing. Multiplying severity by it removes real icing; the column cover only
+looked better because it is a bigger multiplier.
+
+The local fraction is a good *gate*: NEG reports sit at 0 % (70 % below 10 %).
+Gate at ≥ 10 % with no scaling scored POD 35 %, false 20 %, skill +0.15,
+moderate+ on MOD reports 28 %. That rule is the follow-up, **#1017**, to be scored
+on more PIREP data before it changes grades.
+
+### Measured effect
+
+- This flight (deep replay, landed code): aircraft icing GREEN by majority,
+  ECMWF and GFS GREEN (warm cruise), ICON RED alone (light, ~6 min).
+- Eval corpus (15 packs, all 8,000–10,000 ft): no icing grade change. Says
+  little; there is no winter corpus yet.
+- PIREP collector: the table above, landed row.
+
+### What we learned
+
+- **A cloud fraction is coverage, not intensity.** It answers "is there cloud at
+  this level?" well (NEG reports sit at 0 %), and "how bad is the ice?" badly. Any
+  cover multiplier, column or local, mixes the two. This holds wherever a method
+  scales a hazard by cloud cover.
+- **The logical fix was wrong in the data.** Scaling by the level's own
+  fraction fixed the flight and passed every test, then removed a third of
+  the icing pilots reported. A meteorology change that lowers a hazard is
+  scored against observations (PIREPs, METARs) before it lands, not after.
+- **Check that the miss is real before blaming geometry.** An altitude-mismatch
+  explanation was tested by widening the hit window from ±1,000 to ±8,000 ft. The
+  gap did not close, so the icing had been removed, not misplaced.
+- **One over-call usually has several small causes.** None of the five here
+  was RED alone: band, column cover, "no icing" edge levels, widening across
+  0 °C, and one moderate point naming the stretch. Each knob was replayed
+  separately on the pilot's pack to find its share.
+- **The digest and the card must read the same zones.** Two pictures of the same
+  icing on one briefing is a defect, not a nuance.

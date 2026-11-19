@@ -1,7 +1,8 @@
 """#1013: icing over-called below a thin deck.
 
-Five changes, one test group each: local cover, trimmed zone edges, the
-freezing-level cap, the warm cruise, and one icing source for digest and card.
+Four changes, one test group each: trimmed zone edges, the freezing-level cap,
+the warm cruise, and one icing source for digest and card. The fifth, scaling by
+the level's own cloud fraction, was dropped before landing; group 1 pins that.
 """
 
 from __future__ import annotations
@@ -63,11 +64,16 @@ def _lv(p, alt, t, td=None, caf=None):
     )
 
 
-# ── 1. local cover ─────────────────────────────────────────────────
+# ── 1. cover: kept as #844 (local cover deferred) ──────────────────
 
 
-class TestLocalCover:
-    """ECMWF shape: band covers without geometry, a thin nwp_3d deck."""
+class TestCoverKept:
+    """Scaling by the level's own fraction was dropped before landing (#1014).
+
+    Scored on US PIREPs it removed real icing: a 20 % cloud fraction still has
+    cloud, and the pilot in it gets the full icing. The cover stays
+    ``max(band cover, deck cover)`` (§54) until a gate-not-scale rule is scored.
+    """
 
     DIAG = NWPCloudDiagnostics(
         low=NWPCloudLayerDiag(cover_pct=92.0),
@@ -78,46 +84,16 @@ class TestLocalCover:
         base_ft=2400, top_ft=2500, coverage=CloudCoverage.OVC,
         mean_cloud_cover_pct=95.0, source="nwp_3d",
     )
-    # A sub-zero level 500 ft above the deck, within its gating margin.
     FEW_LEVEL = dict(p=920, alt=2950, t=-4.1)
 
-    def test_level_fraction_wins_over_band_cover(self):
+    def test_level_fraction_does_not_lower_the_cover(self):
         lv = _lv(**self.FEW_LEVEL, caf=15.0)
-        assert _level_nwp_cover_pct(lv, [self.DECK], 92.0, 0.0, 0.0, self.DIAG) == 15.0
-
-    def test_deck_cover_when_level_has_no_fraction(self):
-        lv = _lv(**self.FEW_LEVEL)
         assert _level_nwp_cover_pct(lv, [self.DECK], 92.0, 0.0, 0.0, self.DIAG) == 95.0
 
-    def test_band_cover_kept_for_band_geometry_decks(self):
-        """GFS: the deck cover is a band cover, so the #844 max still applies."""
-        gfs_deck = self.DECK.model_copy(update={"source": "grib", "mean_cloud_cover_pct": 40.0})
-        lv = _lv(**self.FEW_LEVEL)
-        assert _level_nwp_cover_pct(lv, [gfs_deck], 92.0, 0.0, 0.0, self.DIAG) == 92.0
-
-    def test_few_level_under_high_band_cover_is_not_moderate(self):
-        """The #1013 case: 15 % at the level, 92 % band cover. Moderate before."""
+    def test_band_cover_when_above_the_deck_cover(self):
+        deck = self.DECK.model_copy(update={"mean_cloud_cover_pct": 40.0})
         lv = _lv(**self.FEW_LEVEL, caf=15.0)
-        zones = assess_icing_zones_ogimet_nwp(
-            [lv], [self.DECK], nwp_cloud_low_pct=92.0, nwp_cloud_mid_pct=0.0,
-            nwp_cloud_high_pct=0.0, nwp_cloud_diagnostics=self.DIAG,
-        )
-        assert all(z.risk in (IcingRisk.NONE, IcingRisk.LIGHT) for z in zones)
-
-        band_scaled = assess_icing_zones_ogimet_nwp(
-            [_lv(**self.FEW_LEVEL)],
-            [self.DECK.model_copy(update={"source": "grib"})],
-            nwp_cloud_low_pct=92.0, nwp_cloud_mid_pct=0.0, nwp_cloud_high_pct=0.0,
-            nwp_cloud_diagnostics=self.DIAG,
-        )
-        assert band_scaled and band_scaled[0].risk == IcingRisk.MODERATE
-
-    def test_known_zero_fraction_drops_the_level(self):
-        lv = _lv(**self.FEW_LEVEL, caf=0.0)
-        zones = assess_icing_zones_ogimet_nwp(
-            [lv], [self.DECK], nwp_cloud_low_pct=92.0, nwp_cloud_diagnostics=self.DIAG,
-        )
-        assert zones == []
+        assert _level_nwp_cover_pct(lv, [deck], 92.0, 0.0, 0.0, self.DIAG) == 92.0
 
 
 # ── 2. trimmed zone edges ──────────────────────────────────────────
