@@ -8249,3 +8249,47 @@ on the Mac (stored packs get a path built from their analyses; their point
 times stay linear, so the replay measures the altitude effect, not the
 timing one), then read `per_model[].shadow` (`rule="flight_path"`) on
 production briefings for a week.
+
+## 86. A cloud deck flat on a category threshold keeps the thin-layer thickness (#1003)
+
+**Date:** 2026-11-19 · **Related:** §56 (aircraft icing)
+
+### Context
+
+The NWP-3D cloud builder (`clouds.build_nwp_cloud_layers_from_fraction`)
+places a deck's base and top where cloud fraction crosses the category
+threshold. A single-level peak whose cover sits exactly on its own category's
+lower bound (12.5 / 25 / 50 / 87.5 %) has that crossing on the level on both
+sides: `base == top`, and the deck was dropped with a "degenerate layer
+geometry" warning. ECMWF `cc` is packed in 1/128 steps, so exact hits are
+common in the raw GRIB: about 4 % of single-level peaks per field. On the
+US PIREP collector's nearest-cell columns (#1003), 4.3 % of columns lost a
+deck. In production, where values are interpolated between grid points, the
+droplet logged none in 7 days and the mini 6 in 31 cycles.
+
+### Choice
+
+- **The deck is kept, 1,000 ft thick, centred on its level**, with pressures
+  interpolated in log-pressure along the column. This is the thin-layer
+  convention every icing zone already used (single-level Ogimet, SFIP and SLD
+  zones are widened to ±500 ft).
+- **One place for that convention**: `analysis/sounding/thin_layers.py`
+  (`widen_thin_layer`, `MIN_LAYER_HALF_THICKNESS_FT`). The four copies in
+  `icing.py`, `sfip.py` and `sld.py` now call it, so changing the thickness,
+  or capping it at halfway to the neighbouring levels, is one edit.
+- **Only flat decks change.** Thin decks that survived before keep their
+  crossing geometry, so ceilings and the cross-section do not move. Flooring
+  every single-level deck would lower some bases by up to 500 ft and needs a
+  replay first.
+- **Halfway to the next level was not used**: with 100 hPa between upper
+  levels it makes a deck that barely reaches the threshold ~4,300 ft thick.
+- **The DD builder is unchanged.** A DD deck cannot collapse as a peak (a
+  level is in its category only while DD is strictly below the bound); it
+  collapses only between two wetter decks that already meet at that level, so
+  dropping it loses nothing.
+
+### Effect
+
+On the #1003 columns (3 days, 625 icing / NEG reports) at most 2 reports
+change for any method, skill by at most +0.005. The value is that the decks
+exist: the cross-section draws them and icing gating sees them.

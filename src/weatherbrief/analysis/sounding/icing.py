@@ -13,13 +13,13 @@ from dataclasses import dataclass
 
 from weatherbrief.analysis.sounding.icing_common import (
     CLOUD_MARGIN_FT,
-    MIN_ZONE_HALF_THICKNESS_FT as _MIN_ZONE_HALF_THICKNESS_FT,
     classify_icing_type,
     glaciation_factor,
     group_icing_levels,
     is_in_cloud_layer,
     nwp_cloud_cover_at_altitude,
 )
+from weatherbrief.analysis.sounding.thin_layers import widen_thin_layer
 from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
@@ -56,8 +56,6 @@ def _dd_attenuation_factor(dewpoint_depression_c: float) -> float:
 # SLD thick-cloud threshold (kept for reference, currently disabled)
 SLD_THICK_CLOUD_FT = 3000
 SLD_WARM_TOP_C = -12.0
-
-# _MIN_ZONE_HALF_THICKNESS_FT imported from icing_common
 
 # Ogimet icing index severity thresholds
 _INDEX_LIGHT = 10.0
@@ -424,10 +422,7 @@ def _build_zone_simple(
     top_ft = round(top.altitude_ft)
 
     # Expand thin zones (single pressure level) to minimum thickness
-    if top_ft - base_ft < _MIN_ZONE_HALF_THICKNESS_FT * 2:
-        mid_ft = (base_ft + top_ft) / 2
-        base_ft = round(mid_ft - _MIN_ZONE_HALF_THICKNESS_FT)
-        top_ft = round(mid_ft + _MIN_ZONE_HALF_THICKNESS_FT)
+    base_ft, top_ft = (round(v) for v in widen_thin_layer(base_ft, top_ft))
 
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]
     worst_risk = max(risks, key=lambda r: risk_order.index(r))

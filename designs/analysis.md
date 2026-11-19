@@ -245,7 +245,7 @@ The **Ogimet-family** methods (Ogimet-DD, Ogimet-NWP, IENG) use `classify_icing_
 #### Zone Formation
 
 - Adjacent levels grouped into zones (gap ≤ 100 hPa pressure gap between levels)
-- Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility
+- Minimum zone thickness: single-level zones expanded to ±500ft (1000ft total) for cross-section visibility. One convention for every thin layer (Ogimet, SFIP, SLD zones and flat NWP-3D cloud decks): `sounding/thin_layers.widen_thin_layer`, constant `MIN_LAYER_HALF_THICKNESS_FT` (meteorology-decisions §86)
 - SLD detection: warm-nose freezing rain only (active). Collision-coalescence mechanism disabled — over-triggers on common deep stratiform clouds. See `designs/known-issues.md`.
 
 ### CLW/ICMR Interpolation
