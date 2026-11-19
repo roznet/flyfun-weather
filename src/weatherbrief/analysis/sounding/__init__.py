@@ -113,8 +113,8 @@ def _enrich_lwc(
             raw.rain_water_kg_kg, dl.temperature_c,
         )
 
-        # Per-level 3D cloud fraction, so icing scales by the cover at the
-        # level rather than a band's (#1013).
+        # Per-level 3D cloud fraction, carried for a gate-by-fraction icing
+        # rule (#1013, §88); the icing cover itself is unchanged (§54).
         if raw.cloud_area_fraction_pct is not None:
             dl.cloud_area_fraction_pct = raw.cloud_area_fraction_pct
 
