@@ -48,6 +48,7 @@ from weatherbrief.fetch.grib.cache import (
     purge_old_runs,
     put_cached,
 )
+from weatherbrief.fetch.variables import model_short_label
 from weatherbrief.fetch.grib.gfs_idx import plan_byte_ranges, plan_cloud_diag_byte_ranges
 from weatherbrief.fetch.grib.grib_fetch import (
     fetch_byte_ranges,
@@ -2374,11 +2375,11 @@ def _enrich_forecasts_phases(
         if icon_ctx is not None:
             pending_labels.append(icon_ctx.variant.slug.upper())
         if arome_ctx is not None:
-            pending_labels.append("AROME")
+            pending_labels.append(model_short_label(ModelSource.METEOFRANCE.value))
         if ModelSource.UKMO in grib_primary and any(
             cs.model == ModelSource.UKMO for cs in cross_sections
         ):
-            pending_labels.append("UKV")
+            pending_labels.append(model_short_label(ModelSource.UKMO.value))
         if pending_labels:
             progress_callback("grib_enrichment", ", ".join(pending_labels))
 
@@ -2439,7 +2440,7 @@ def _enrich_forecasts_phases(
                 arome_dl_future = _submit_with_context(
                     pool, _prefetch_arome_data, arome_ctx,
                 )
-                arome_dl_future.add_done_callback(_phase1_model_done("AROME"))
+                arome_dl_future.add_done_callback(_phase1_model_done(model_short_label(ModelSource.METEOFRANCE.value)))
             else:
                 arome_dl_future = None
             # UKV (#937): range reads over HTTP plus light numpy, so it runs
@@ -2454,7 +2455,7 @@ def _enrich_forecasts_phases(
                     data_dir=data_dir, flight_duration_hours=flight_duration_hours,
                     as_of_time=as_of_time,
                 )
-                ukmo_future.add_done_callback(_phase1_model_done("UKV"))
+                ukmo_future.add_done_callback(_phase1_model_done(model_short_label(ModelSource.UKMO.value)))
             else:
                 ukmo_future = None
 
@@ -2532,7 +2533,7 @@ def _enrich_forecasts_phases(
     with _grib_time("phase2_arome_decode"):
         if arome_ctx is not None:
             if progress_callback is not None:
-                progress_callback("grib_enrichment", "AROME")
+                progress_callback("grib_enrichment", model_short_label(ModelSource.METEOFRANCE.value))
             try:
                 arome_ts, arome_skip = _decode_and_merge_arome(
                     arome_ctx, cross_sections, all_forecasts, route_points,

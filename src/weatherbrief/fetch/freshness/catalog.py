@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from weatherbrief.fetch.variables import model_short_label
+
 from . import registry
 from .markers import Marker, MarkerStore, get_store
 
@@ -145,7 +147,7 @@ def build(
         out.append(SourceCatalogEntry(
             key=key,
             model=model,
-            model_label=cfg.model_label or model.upper(),
+            model_label=cfg.model_label or model_short_label(model),
             provider_label=cfg.provider_label or key.split(":", 1)[1].title(),
             provider_url=cfg.provider_url,
             role=cfg.role,
