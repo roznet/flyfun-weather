@@ -190,7 +190,8 @@ def route_headwind_grid(
     ``HEADWIND_GRID_STEP_FT`` from sea level to ``top_ft``, each model's wind
     (``pick_wind_at_pressure``: u/v interpolated between levels, ``None``
     beyond the 2,000 ft snap) is projected on the track
-    (``compute_wind_components``) and the models' **median** is kept
+    (``compute_wind_components``) and the models' **median** is kept (the
+    mean of the middle pair for an even count)
     (meteorology-decisions §87). A cell no model has a wind for reads 0
     (still air). ``models`` restricts the pool (default every cross-section).
 

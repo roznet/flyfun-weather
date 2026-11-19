@@ -65,7 +65,9 @@ actually is. Nothing is computed on a client.
   `run_alt_from_pack(flight_path=...)` so coverage and grade agree; the
   ECMWF-only provisional tier builds its path in ECMWF's wind (the other models
   are clamped outside their window). Cost: about 1 ms per route point per grid
-  (4 models, 26 levels), once per candidate. The
+  (4 models, 26 levels), once per candidate. The grid ships with the stored
+  path (`route_analyses.flight_path`): route points × 1,000 ft levels, a few
+  KB per briefing (tens for a jet), kept as long as the pack. The
   new-flight estimate stays still air. One path per briefing, not per model.
 
 ## Presets (tune in `PRESETS`)

@@ -594,7 +594,7 @@ def build_flight_path(
             planned_duration_h=planned_duration_h, wind_grid=grid,
         )
     except Exception:
-        logging.getLogger(__name__).warning("flight path: wind failed, still air", exc_info=True)
+        logging.getLogger(__name__).warning("flight path: route wind grid failed, still air", exc_info=True)
         return path
 
 
@@ -646,7 +646,11 @@ def route_flight_path(
         try:
             tracks = compute_route_tracks(route_points)
         except (AttributeError, TypeError):
-            tracks = None  # points without coordinates: still air
+            # Points without coordinates: no track to project the wind on.
+            import logging
+
+            logging.getLogger(__name__).info("flight path: route points have no coordinates, still air")
+            tracks = None
     return build_flight_path(
         [float(rp.distance_from_origin_nm or 0.0) for rp in route_points],
         list(range(len(route_points))),
@@ -722,5 +726,5 @@ def _analyses_headwind_grid(analyses, top_ft, cross_sections) -> HeadwindGrid | 
         ]
         return route_headwind_grid(cross_sections, samples, top_ft)
     except Exception:
-        logging.getLogger(__name__).warning("flight path: wind failed, still air", exc_info=True)
+        logging.getLogger(__name__).warning("flight path: analyses wind grid failed, still air", exc_info=True)
         return None

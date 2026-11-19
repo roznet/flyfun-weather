@@ -8321,7 +8321,10 @@ winds. One path per briefing (§85), so one wind.
   cruise and the aircraft ceiling, stored on the path (`FlightPath.wind_grid`)
   so the altitude table and cruise overrides fly the same wind. A cell no
   model reaches reads still air; a pack with no winds keeps the still-air path
-  exactly.
+  exactly. Known bias: next to such a cell (above a model's top level plus the
+  2,000 ft snap) the bilinear read blends the real wind toward 0 over one
+  1,000 ft step. Holding the nearest valid level instead was raised in review
+  and left as an option.
 - **When:** the wind is read at the still-air path's planned times (the
   analyses' own times on a recalculation of an older pack). One pass, no
   iteration: the total stays the planned duration (`time_scale`), so the
