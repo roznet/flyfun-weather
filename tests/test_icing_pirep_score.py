@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 import zlib
 from datetime import UTC, datetime
@@ -24,6 +25,17 @@ _spec.loader.exec_module(ic)
 import icing_pirep_score as sc  # noqa: E402
 
 hc = ic.hc
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging():
+    """``ic.main`` configures logging for the CLI; keep that out of other tests."""
+    loggers = [logging.getLogger(n) for n in ("", "urllib3", "metpy", "weatherbrief")]
+    saved = [(lg, lg.level, list(lg.handlers)) for lg in loggers]
+    yield
+    for lg, level, handlers in saved:
+        lg.setLevel(level)
+        lg.handlers[:] = handlers
 VALID = datetime(2026, 1, 10, 14, tzinfo=UTC)
 #            hPa: (T °C, gh m)
 _PROFILE = {1000: (6.0, 100.0), 950: (3.0, 540.0), 925: (1.5, 770.0), 900: (0.0, 1000.0), 850: (-3.0, 1460.0),
