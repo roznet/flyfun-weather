@@ -389,6 +389,8 @@ def icing_picture(
             for z in zones if z.base_ft < cruise and z.top_ft > ground
         )
         sld = point_sld_zones(sounding) if with_sld else []
+        # SLD keeps the cruise band even when cruise is warm (§88), as on the
+        # flight path: a separate hazard, graded by ``sld_hits``.
         sld_cruise = tuple(
             z for z in sld if z.base_ft <= cruise + band and z.top_ft >= cruise - band
         )
@@ -450,6 +452,9 @@ def _path_icing_point(
         cruise_zones = tuple(
             z for z in zones if z.base_ft <= level + band and z.top_ft >= level - band
         )
+    if cell.level_nm > 0:
+        # SLD keeps the cruise band even over a warm level (§88): a separate
+        # hazard, graded by ``sld_hits``, not by the exposure clock.
         sld_cruise = tuple(
             z for z in sld if z.base_ft <= level + band and z.top_ft >= level - band
         )

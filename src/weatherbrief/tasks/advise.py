@@ -139,9 +139,9 @@ def _resolve_analyses(
     cloud_source = cloud_source or ENGINE_METHOD_DEFAULTS["cloud_source"]
     convective_method = convective_method or ENGINE_METHOD_DEFAULTS["convective_method"]
 
-    swap_icing = icing_method != "ogimet_dd"
-    swap_cloud = cloud_source == "nwp"
-    swap_convective = convective_method != "thermo"
+    swap_icing, swap_cloud, swap_convective = _swap_flags(
+        icing_method, cloud_source, convective_method,
+    )
 
     # NOTE: no early return for the all-DD/thermo case. The ``swap_*`` flags say
     # whether the *data* needs replacing; provenance is stamped either way. A
@@ -170,6 +170,13 @@ def _resolve_analyses(
         else:
             resolved.append(rpa)
     return resolved
+
+
+def _swap_flags(
+    icing_method: str, cloud_source: str, convective_method: str,
+) -> tuple[bool, bool, bool]:
+    """Whether each axis's data needs replacing (icing, cloud, convective)."""
+    return icing_method != "ogimet_dd", cloud_source == "nwp", convective_method != "thermo"
 
 
 def _resolve_sounding(
@@ -329,14 +336,16 @@ def resolve_waypoint_analyses(
     convective_method = (
         engine_methods.get("convective_method") or ENGINE_METHOD_DEFAULTS["convective_method"]
     )
+    swap_icing, swap_cloud, swap_convective = _swap_flags(
+        icing_method, cloud_source, convective_method,
+    )
     out = []
     for wa in analyses:
         soundings = {
             key: _resolve_sounding(
                 sa, icing_method, cloud_source, convective_method,
-                swap_icing=icing_method != "ogimet_dd",
-                swap_cloud=cloud_source == "nwp",
-                swap_convective=convective_method != "thermo",
+                swap_icing=swap_icing, swap_cloud=swap_cloud,
+                swap_convective=swap_convective,
             )
             for key, sa in wa.sounding.items()
         }
