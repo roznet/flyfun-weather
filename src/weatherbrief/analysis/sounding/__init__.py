@@ -113,6 +113,11 @@ def _enrich_lwc(
             raw.rain_water_kg_kg, dl.temperature_c,
         )
 
+        # Per-level 3D cloud fraction, so icing scales by the cover at the
+        # level rather than a band's (#1013).
+        if raw.cloud_area_fraction_pct is not None:
+            dl.cloud_area_fraction_pct = raw.cloud_area_fraction_pct
+
         # Propagate spatial interpolation flag
         if raw.clw_interpolated:
             dl.clw_interpolated = True

@@ -1044,6 +1044,44 @@ def wind_at_altitude(
     return None
 
 
+def temperature_at_altitude(
+    cross_sections: list[RouteCrossSection],
+    model: str,
+    point_index: int,
+    target_alt_ft: float,
+    target_time: datetime,
+) -> float | None:
+    """The model's temperature (°C) at *target_alt_ft* MSL at one route point.
+
+    Linear in altitude between the two pressure levels bracketing the target,
+    on each level's own geopotential height (not the ISA pressure a
+    ``temperature_at_pressure`` lookup would use: near the freezing level a
+    few hundred feet of ISA error flips the sign). ``None`` when the point has
+    no hourly data, or the target lies outside the levels' heights (no
+    extrapolation). Read by the aircraft icing card's warm-cruise test (#1013).
+    """
+    for cs in cross_sections:
+        if cs.model.value != model:
+            continue
+        if point_index >= len(cs.point_forecasts):
+            return None
+        hourly = cs.point_forecasts[point_index].at_time(target_time)
+        if hourly is None:
+            return None
+        pts = sorted(
+            (lv.geopotential_height_m * 3.28084, lv.temperature_c)
+            for lv in hourly.pressure_levels
+            if lv.geopotential_height_m is not None and lv.temperature_c is not None
+        )
+        for (a_lo, t_lo), (a_hi, t_hi) in zip(pts, pts[1:]):
+            if a_lo <= target_alt_ft <= a_hi:
+                if a_hi == a_lo:
+                    return t_lo
+                return t_lo + (t_hi - t_lo) * (target_alt_ft - a_lo) / (a_hi - a_lo)
+        return None
+    return None
+
+
 def cross_section_has_winds(
     cross_sections: list[RouteCrossSection],
     model: str,

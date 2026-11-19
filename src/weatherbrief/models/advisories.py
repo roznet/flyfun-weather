@@ -1075,6 +1075,11 @@ class RouteAdvisoriesManifest(BaseModel):
     # and whether it was graded (``live``) or only shadowed. None on old packs
     # and with WB_FLIGHT_PATH=off.
     flight_path: FlightPathSummary | None = None
+    # The engine methods the advisories graded on, defaults applied
+    # (``icing_method`` / ``cloud_source`` / ``convective_method``), so the
+    # digest prompt resolves its soundings the same way and describes the
+    # icing the card graded (#1013). None on packs built before #1013.
+    engine_methods: dict[str, str] | None = None
 
 
 class AltitudeAdvisoryRow(BaseModel):

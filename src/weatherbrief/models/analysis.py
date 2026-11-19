@@ -897,6 +897,10 @@ class DerivedLevel(BaseModel):
     # Only a model publishing qr can set it (ICON-D2 today), so False means
     # "not detected here", never "no rain here" — see meteorology-decisions §24.
     supercooled_rain: bool = False
+    # The model's own 3D cloud fraction at this level (ECMWF cc, ICON clc),
+    # 0–100. Scales the NWP-gated icing methods by the cover at the level
+    # (#1013). None for models without a per-level fraction (GFS, HRRR).
+    cloud_area_fraction_pct: Optional[float] = None
     sfip_raw: Optional[float] = None  # SFIP index 0.0–1.0
     sfip_100: Optional[float] = None  # SFIP index 0–100
     sfip_severity: Optional[str] = None  # "NONE"/"LIGHT"/"MODERATE"/"SEVERE" (GA mapping)

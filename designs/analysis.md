@@ -184,7 +184,7 @@ Ogimet index gated by NWP cloud layers, scaled by cloud fraction and glaciation.
 
 **Gating:** `is_in_cloud_layer(level, nwp_cloud_layers)` — uses pure NWP model cloud layers (same blue bands drawn on the cross-section).
 
-**Severity:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude) × glaciation_factor(CLW, ICMR)` — NWP cloud cover percentage modulates severity; glaciation factor (when CLW/ICMR available) reduces index in glaciated cloud. `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks all diagnostic layers regardless of ICAO band, then the model's own GRIB band cover, then Open-Meteo bulk band percentages; the icing scaler is `max(band cover, gating deck's mean cover)` (#844).
+**Severity:** `effective_index = ogimet_index(T) × nwp_cloud_fraction(altitude) × glaciation_factor(CLW, ICMR)` — NWP cloud cover percentage modulates severity; glaciation factor (when CLW/ICMR available) reduces index in glaciated cloud. `nwp_cloud_cover_at_altitude()` (shared in `icing_common.py`) checks all diagnostic layers regardless of ICAO band, then the model's own GRIB band cover, then Open-Meteo bulk band percentages. The icing scaler is the cover **at the level** (#1013, [meteorology-decisions §88](./meteorology-decisions.md)): the level's own 3D fraction (`DerivedLevel.cloud_area_fraction_pct`, ECMWF `cc` / ICON `clc`), else the containing `nwp_3d` deck's cover, else `max(band cover, gating deck's mean cover)` (#844) — where GFS/HRRR always land, since their band has its own geometry. IENG and the severity-enhance corroboration use the same `_level_nwp_cover_pct`.
 
 Per-level index stored in `icing_index_nwp` on DerivedLevel (separate from `icing_index` used by Ogimet-DD).
 
@@ -234,6 +234,12 @@ Physically-based continuous index peaking at −7°C, matching observed supercoo
 | 15–30 | LIGHT |
 | 30–55 | MODERATE |
 | ≥ 55 | SEVERE |
+
+#### Zone edges and the 0 °C cap (#1013, §88)
+
+`group_icing_levels` builds every zone (all four methods). Two rules apply on the `all_levels` path:
+- **Trimmed edges** (`min_edge_index`, Ogimet-DD/NWP and IENG pass `_INDEX_LIGHT`): a zone's base and top are its outermost levels at LIGHT or above; a "no icing" level between iced ones stays, so the zone is not split. SFIP never admits NONE levels.
+- **0 °C cap** (`cap_zone_at_freezing`): after `widen_thin_layer`, base and top are clamped to the 0 °C crossings with the nearest above-freezing level below / above the zone, interpolated in altitude from the profile (so a warm nose caps against the level actually below 0 °C, not a single `freezing_level_ft`).
 
 #### Icing Type Classification
 
