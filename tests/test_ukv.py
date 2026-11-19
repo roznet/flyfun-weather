@@ -492,5 +492,5 @@ def test_run_fetch_skips_ukmo_when_no_run_covers_the_window(monkeypatch):
     assert "ukmo" not in result.models_fetched
     from weatherbrief.models.diagnostic_codes import FetchCode
 
-    assert any(d.code == FetchCode.MODEL_SKIPPED_HORIZON and "UKMO" in d.message
+    assert any(d.code == FetchCode.MODEL_SKIPPED_HORIZON and "UKV" in d.message
                for d in result.diagnostics)

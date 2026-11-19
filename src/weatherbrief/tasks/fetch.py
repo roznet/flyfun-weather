@@ -230,7 +230,7 @@ def _build_fetch_diagnostics(
             diags.append(Diagnostic.create(
                 level="warn", stage="fetch",
                 code=FetchCode.MODEL_FETCH_FAILED,
-                message=f"{m.upper()} forecast fetch failed ({failed[m]})",
+                message=f"{_model_label(m)} forecast fetch failed ({failed[m]})",
             ))
     fetched_or_skipped = (
         set(models_fetched)
@@ -246,7 +246,7 @@ def _build_fetch_diagnostics(
             diags.append(Diagnostic.create(
                 level="warn", stage="fetch",
                 code=FetchCode.MODEL_FETCH_FAILED,
-                message=f"{m.upper()} forecast fetch failed",
+                message=f"{_model_label(m)} forecast fetch failed",
             ))
 
     for m in models_disabled or []:
@@ -261,7 +261,7 @@ def _build_fetch_diagnostics(
         diags.append(Diagnostic.create(
             level="info", stage="fetch",
             code=FetchCode.MODEL_SKIPPED_RANGE,
-            message=f"{m.upper()} skipped ({days_out} days out exceeds {max_days}-day range)",
+            message=f"{_model_label(m)} skipped ({days_out} days out exceeds {max_days}-day range)",
         ))
 
     # Models skipped because flight window is past the run's actual horizon
@@ -273,7 +273,7 @@ def _build_fetch_diagnostics(
                 f"{_model_label(m)} skipped (beyond AROME's ~48 h, newest run "
                 f"ends {data_end.strftime('%Y-%m-%d %H:%MZ')})"
                 if m == "meteofrance" else
-                f"{m.upper()} skipped — current run only serves data through "
+                f"{_model_label(m)} skipped — current run only serves data through "
                 f"{data_end.strftime('%Y-%m-%d %H:%MZ')}"
             ),
         ))
@@ -283,7 +283,7 @@ def _build_fetch_diagnostics(
         diags.append(Diagnostic.create(
             level="warn", stage="fetch",
             code=FetchCode.MODEL_RETURNED_EMPTY,
-            message=f"{m.upper()} returned no values (likely past provider horizon)",
+            message=f"{_model_label(m)} returned no values (likely past provider horizon)",
         ))
 
     # Models skipped for region
@@ -294,7 +294,7 @@ def _build_fetch_diagnostics(
             message=(
                 f"{_model_label(m)} skipped (route outside the AROME area)"
                 if m == "meteofrance" else
-                f"{m.upper()} skipped (not available for this route region)"
+                f"{_model_label(m)} skipped (not available for this route region)"
             ),
         ))
 
@@ -319,25 +319,25 @@ def _build_fetch_diagnostics(
                         diags.append(Diagnostic.create(
                             level="info", stage="fetch",
                             code=FetchCode.GRIB_SKIPPED_OUT_OF_RANGE,
-                            message=f"{m.upper()} GRIB skipped — flight exceeds forecast range",
+                            message=f"{_model_label(m)} GRIB skipped — flight exceeds forecast range",
                         ))
                     elif skip_reason == "out_of_domain":
                         diags.append(Diagnostic.create(
                             level="info", stage="fetch",
                             code=FetchCode.GRIB_SKIPPED_OUT_OF_DOMAIN,
-                            message=f"{m.upper()} GRIB skipped — route outside model coverage area",
+                            message=f"{_model_label(m)} GRIB skipped — route outside model coverage area",
                         ))
                     else:
                         diags.append(Diagnostic.create(
                             level="warn", stage="fetch",
                             code=FetchCode.GRIB_UNAVAILABLE_FOR_MODEL,
-                            message=f"{m.upper()} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
+                            message=f"{_model_label(m)} GRIB enrichment unavailable — cloud microphysics and diagnostics not available for this model",
                         ))
             for m in sorted(enriched_models):
                 diags.append(Diagnostic.create(
                     level="info", stage="fetch",
                     code=FetchCode.GRIB_ENRICHMENT_APPLIED,
-                    message=f"{m.upper()} GRIB enrichment applied (cloud water + cloud diagnostics)",
+                    message=f"{_model_label(m)} GRIB enrichment applied (cloud water + cloud diagnostics)",
                 ))
 
     return diags

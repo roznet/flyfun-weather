@@ -25,6 +25,7 @@ from metpy.units import units  # noqa: E402
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
 
+from weatherbrief.fetch.variables import model_short_label  # noqa: E402
 from weatherbrief.models import ForecastSnapshot, HourlyForecast  # noqa: E402
 from weatherbrief.models.analysis import SoundingAnalysis  # noqa: E402
 
@@ -376,7 +377,7 @@ def generate_skewt(
     # --- Title ---
     time_str = forecast.time.strftime("%Y-%m-%d %H:%MZ")
     fig.suptitle(
-        f"{label}  \u00b7  {model_name.upper()}  \u00b7  {time_str}",
+        f"{label}  \u00b7  {model_short_label(model_name)}  \u00b7  {time_str}",
         fontsize=14, fontweight="bold", y=1.0,
     )
 

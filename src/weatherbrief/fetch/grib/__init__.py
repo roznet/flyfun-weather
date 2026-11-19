@@ -2378,7 +2378,7 @@ def _enrich_forecasts_phases(
         if ModelSource.UKMO in grib_primary and any(
             cs.model == ModelSource.UKMO for cs in cross_sections
         ):
-            pending_labels.append("UKMO")
+            pending_labels.append("UKV")
         if pending_labels:
             progress_callback("grib_enrichment", ", ".join(pending_labels))
 
@@ -2454,7 +2454,7 @@ def _enrich_forecasts_phases(
                     data_dir=data_dir, flight_duration_hours=flight_duration_hours,
                     as_of_time=as_of_time,
                 )
-                ukmo_future.add_done_callback(_phase1_model_done("UKMO"))
+                ukmo_future.add_done_callback(_phase1_model_done("UKV"))
             else:
                 ukmo_future = None
 

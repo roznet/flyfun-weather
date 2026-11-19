@@ -12,6 +12,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import quote
+from weatherbrief.fetch.variables import model_short_label
 
 import httpx
 from pydantic import BaseModel
@@ -280,7 +281,7 @@ def _render_airport_card_html(apt: dict, role: str) -> str:
         wind = _format_wind(cond)
         rows.append(
             f'<tr>'
-            f'<td style="padding:2px 6px;font-size:12px;">{html.escape(cond.get("model", "").upper())}</td>'
+            f'<td style="padding:2px 6px;font-size:12px;">{html.escape(model_short_label(cond.get("model", "")))}</td>'
             f'<td style="padding:2px 6px;"><span style="color:{color};font-weight:600;">{cat}</span></td>'
             f'<td style="padding:2px 6px;font-size:12px;">{html.escape(vis)}</td>'
             f'<td style="padding:2px 6px;font-size:12px;">{html.escape(ceil)}</td>'
