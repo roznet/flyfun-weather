@@ -111,6 +111,16 @@ def test_descent_through_ice_names_the_distance_out():
     assert "nm out" in grade.detail
 
 
+def test_iced_rate_factor_is_climb_only():
+    """A non-FIKI descent through ice is timed at the clean rate, like FIKI."""
+    zone = _zone(3000, 5000)
+    iced = {i: {"freezing_level_ft": 2500, "icing_zones": [zone]} for i in range(15, N)}
+    fiki = _grade(_ctx(iced, FIKI)).stretches[-1]
+    non = _grade(_ctx(iced, NON_FIKI)).stretches[-1]
+    assert fiki.phases == non.phases == ["descent"]
+    assert non.minutes == pytest.approx(fiki.minutes, rel=1e-6)
+
+
 def test_shadow_records_the_path_grade_and_keeps_the_flat_one(monkeypatch):
     monkeypatch.delenv("WB_SLD_ICING", raising=False)
     iced = {0: {"freezing_level_ft": 5000, "icing_zones": [_zone(7000, 9000)]}}

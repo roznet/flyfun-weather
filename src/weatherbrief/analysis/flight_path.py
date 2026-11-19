@@ -45,9 +45,9 @@ PROFILE_KEEP_FT = 500.0
 # A level stretch with wind is integrated in steps of this many nm.
 LEVEL_STEP_NM = 2.0
 
-#: Rate factor for a non-FIKI aircraft climbing or descending in icing (#1005
-#: decision 5): the iced path is flown at the clean rate × this. FIKI aircraft
-#: fly the clean rate. Read by the aircraft-icing card.
+#: Rate factor for a non-FIKI aircraft climbing in icing (#1005 decision 5):
+#: the iced climb is flown at the clean rate × this. Descents, and FIKI
+#: aircraft, fly the clean rate. Read by the aircraft-icing card.
 ICED_RATE_FACTOR = 0.7
 
 #: Cruise IAS below which an SEP aircraft gets the trainer preset.

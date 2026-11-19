@@ -191,13 +191,14 @@ class PathIcing:
     def minutes(self, fiki: bool) -> float:
         """Minutes in the iced part of the band at the path's rate.
 
-        Non-FIKI flies the iced band at the clean rate × ``ICED_RATE_FACTOR``
-        (#1005 decision 5); FIKI at the clean rate.
+        A non-FIKI climb flies the iced band at the clean rate ×
+        ``ICED_RATE_FACTOR`` (#1005 decision 5); a descent, and FIKI, at the
+        clean rate (the factor is a climb-performance argument).
         """
         fpm = self.part.fpm
         if fpm <= 0:
             return 0.0
-        if not fiki:
+        if not fiki and self.part.phase == "climb":
             fpm *= ICED_RATE_FACTOR
         return _iced_thickness(self.zones) / fpm
 
@@ -625,7 +626,7 @@ def _build_path_stretches(
 
     Each point's cell is flown in route order: its climb part, its level
     part, its descent part. Vertical minutes come from the path's rate over
-    the iced thickness (× ``ICED_RATE_FACTOR`` for non-FIKI); level minutes
+    the iced thickness (× ``ICED_RATE_FACTOR`` on a non-FIKI climb); level minutes
     from the cruise groundspeed, as in flat mode.
     """
     ordered = sorted(picture, key=lambda p: p.distance_nm)

@@ -8212,10 +8212,12 @@ decisions of 2026-11-16 (eight answers on the brainstorm page) and 2026-11-17
   category + pilot overrides), still air, ISA. Presets and every rate live in
   `analysis/flight_path.PRESETS` (`designs/flight-path.md`); they are
   POH-order figures, not checked type by type.
-- **Iced climb / descent rate:** non-FIKI flies the iced part of a climb or
-  descent at the clean rate × **0.7** (`ICED_RATE_FACTOR`), so its minutes
-  in ice are 1/0.7 longer; FIKI flies the clean rate (decision 5, settled
-  2026-11-17). The factor applies to descent too, as the issue states.
+- **Iced climb rate:** non-FIKI flies the iced part of a climb at the clean
+  rate × **0.7** (`ICED_RATE_FACTOR`), so its minutes in ice are 1/0.7
+  longer; FIKI flies the clean rate (decision 5, settled 2026-11-17). A
+  descent is flown at the clean rate for every aircraft (Brice 2026-11-19):
+  the factor is a climb-performance argument (ice degrades climb, a descent
+  rate is the pilot's choice).
 - **A cell is graded on the band it flies**, not on the point's altitude:
   icing zones and BKN/OVC layers are clipped to the altitude band the path
   crosses in each point's cell (midpoint to midpoint). Thin layers between

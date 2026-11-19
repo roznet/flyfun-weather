@@ -94,7 +94,7 @@ overrides survive; the apps retry the open on the next type or speed change.
   The level part reads the cruise band around the path level; each vertical
   part the zones its altitude band crosses at that point (`PathIcing`).
   Vertical minutes = iced thickness / path rate, × 1 / `ICED_RATE_FACTOR`
-  (0.7) for non-FIKI, clean rate for FIKI. Stretches record where each phase
+  (0.7) on a non-FIKI climb; descents and FIKI at the clean rate. Stretches record where each phase
   is (`_Stretch.spans`) and the sentence names it ("climb, nm 3 to 14",
   "descent, 30 to 12 nm out"). SLD hits use the same parts. The flat endpoint
   columns stay for flat mode.
