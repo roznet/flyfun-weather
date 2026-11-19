@@ -81,6 +81,7 @@ from weatherbrief.analysis.advisories._helpers import (
     hazardous_icing_zones,
     max_terrain_near_point,
     summarize_evidence,
+    temperature_at_altitude,
     terrain_at_distance,
     to_mitigation_profile,
 )
@@ -329,6 +330,25 @@ def _escape_up(zones: list[IcingZone], ceiling_ft: float) -> float | None:
     return level if level <= ceiling_ft - CEILING_MARGIN_FT else None
 
 
+def _warm_at(
+    ctx: RouteContext, rpa, model: str, alt_ft: float,
+) -> bool | None:
+    """Whether the profile is above 0 °C at *alt_ft* here (#1013), or None if unknown.
+
+    The model's own temperature at the flown level. Above freezing, the point
+    is warm whatever icing zone sits within the cruise band: no exposure
+    minutes there, and the clock resets (ice sheds). Owner's choice, no
+    margin above 0 °C. Unknown (no cross-section data at that level) leaves
+    the caller on the freezing-level rule.
+    """
+    t = temperature_at_altitude(
+        ctx.cross_sections, model, rpa.point_index, alt_ft, rpa.forecast_hour,
+    )
+    if t is None and alt_ft == ctx.cruise_altitude_ft:
+        t = rpa.cruise_temperature_c.get(model)
+    return None if t is None else t > 0
+
+
 def icing_picture(
     ctx: RouteContext, model: str, params: dict[str, float],
 ) -> list[IcingPoint]:
@@ -350,11 +370,15 @@ def icing_picture(
         if cell is not None:
             points.append(_path_icing_point(
                 ctx, idx, dist, sounding, cell, band, terrain_margin, equipage,
-                ceiling, with_sld,
+                ceiling, with_sld, warm_level=(
+                    _warm_at(ctx, rpa, model, cell.level_ft) if cell.level_nm > 0 else None
+                ),
             ))
             continue
         zones = hazardous_icing_zones(sounding.icing_zones)
-        cruise_zones = tuple(
+        warm_cruise = _warm_at(ctx, rpa, model, cruise)
+        # Above-freezing cruise: the band does not apply (#1013).
+        cruise_zones = () if warm_cruise else tuple(
             z for z in zones if z.base_ft <= cruise + band and z.top_ft >= cruise - band
         )
         # Clipped to the column a climb or descent here flies through: from
@@ -375,7 +399,10 @@ def icing_picture(
             for z in sld if z.base_ft < cruise and z.top_ft > ground
         )
         fz = sounding.indices.freezing_level_ft if sounding.indices else None
-        warm = not cruise_zones and fz is not None and cruise < fz
+        if warm_cruise is not None:
+            warm = warm_cruise
+        else:
+            warm = not cruise_zones and fz is not None and cruise < fz
         down_ft = down_block = up_ft = floor_ft = None
         relevant = list(cruise_zones or column_zones)
         if relevant:
@@ -401,19 +428,25 @@ def _path_icing_point(
     ctx: RouteContext, idx: int, dist: float, sounding: SoundingAnalysis,
     cell: PathSlice, band: float, terrain_margin: float,
     equipage: AircraftEquipage, ceiling: float, with_sld: bool,
+    warm_level: bool | None = None,
 ) -> IcingPoint:
     """One point on the flight path (#1005): the zones its cell actually flies through.
 
     The level part reads the cruise band around the path's level (cruise, or
     the peak of a short leg); each climb / descent part reads the zones its
     altitude band crosses at this point's sounding.
+
+    *warm_level*: whether the level part is flown above 0 °C (#1013). True
+    empties its cruise band and makes the point warm (the clock resets after
+    the climb part); None (unknown, or no level part) keeps the
+    freezing-level rule.
     """
     zones = hazardous_icing_zones(sounding.icing_zones)
     sld = point_sld_zones(sounding) if with_sld else []
     level = cell.level_ft
     cruise_zones: tuple[IcingZone, ...] = ()
     sld_cruise: tuple[SldZone, ...] = ()
-    if cell.level_nm > 0:
+    if cell.level_nm > 0 and not warm_level:
         cruise_zones = tuple(
             z for z in zones if z.base_ft <= level + band and z.top_ft >= level - band
         )
@@ -433,9 +466,12 @@ def _path_icing_point(
     fz = sounding.indices.freezing_level_ft if sounding.indices else None
     # Warm: nothing iced anywhere in the cell and the whole cell is flown
     # below the freezing level (the clock resets).
-    warm = (
-        not cruise_zones and not column_zones and fz is not None and cell.top_ft < fz
-    )
+    if warm_level is not None:
+        warm = warm_level
+    else:
+        warm = (
+            not cruise_zones and not column_zones and fz is not None and cell.top_ft < fz
+        )
     down_ft = down_block = up_ft = floor_ft = None
     relevant = list(cruise_zones) + list(column_zones)
     if relevant:
@@ -650,11 +686,14 @@ def _build_path_stretches(
                 point, point.cruise_zones, point.level_nm / max(speed_kt, 1.0) * 60.0,
                 "cruise", point.distance_nm, point.distance_nm,
             )
-        for v in descent:
-            add(point, v.zones, v.minutes(fiki), "descent", v.part.lo_nm, v.part.hi_nm)
+        # A warm level resets the clock between this cell's climb and its
+        # descent (#1013); a point warm by the freezing-level rule has no
+        # iced part at all, so the position makes no difference there.
         if point.warm_at_cruise and current is not None:
             stretches.append(current)
             current = None
+        for v in descent:
+            add(point, v.zones, v.minutes(fiki), "descent", v.part.lo_nm, v.part.hi_nm)
     if current is not None:
         stretches.append(current)
     return stretches

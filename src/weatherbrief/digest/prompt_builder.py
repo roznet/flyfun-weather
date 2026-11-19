@@ -101,6 +101,19 @@ def build_digest_context(
     """
     sections: list[str] = []
 
+    # One icing source (#1013): print the soundings resolved with the methods
+    # the advisories graded on (icing / cloud / convective), not the stored
+    # Ogimet-DD defaults, so the digest describes the zones the card graded.
+    # Old manifests carry no record and keep the stored soundings.
+    if route_advisories is not None and route_advisories.engine_methods is not None:
+        from weatherbrief.tasks.advise import resolve_waypoint_analyses
+
+        snapshot = snapshot.model_copy(update={
+            "analyses": resolve_waypoint_analyses(
+                snapshot.analyses, route_advisories.engine_methods,
+            ),
+        })
+
     # --- Header ---
     # Identify each point as precisely as the data allows: full airport name
     # where we have one, chart abbreviation for navaids/fixes, bare code
@@ -640,7 +653,12 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft (Tw={zone.mean_wet_bulb_c:.0f}C){sld}"
             )
 
-        for cl in sa.cloud_layers:
+        # Graded on the NWP envelope (resolved, #1013): the "NWP cloud" lines
+        # above are these layers already, so don't print them twice.
+        graded_on_nwp = (
+            sa.nwp_cloud_layers is not None and sa.cloud_layers == sa.nwp_cloud_layers
+        )
+        for cl in ([] if graded_on_nwp else sa.cloud_layers):
             t_str = f" T={cl.mean_temperature_c:.0f}C" if cl.mean_temperature_c is not None else ""
             lines.append(
                 f"  Cloud [{model}]: {cl.coverage.value.upper()} "

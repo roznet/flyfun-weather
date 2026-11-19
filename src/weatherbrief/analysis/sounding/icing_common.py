@@ -321,11 +321,92 @@ ZONE_MAX_PRESSURE_GAP_HPA = 100
 # sounding (several levels dropped by ``prepare_profile``); it must stay ≥ 150.
 ZONE_MAX_NATIVE_GAP_HPA = 200
 
+def trim_zone_edges(
+    group: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
+    min_index: float,
+) -> list[tuple[DerivedLevel, IcingType, IcingRisk, float]]:
+    """*group* without its leading and trailing levels below *min_index* (#1013).
+
+    A zone's base and top are its outermost levels the method rates at least
+    LIGHT. A "no icing" level *between* two iced ones stays, so the zone is
+    not split. A group with no level at *min_index* is returned whole: it
+    builds a NONE zone (assessed, not icing), as before.
+    """
+    kept = [i for i, item in enumerate(group) if item[3] >= min_index]
+    if not kept:
+        return group
+    return group[kept[0]:kept[-1] + 1]
+
+
+def _zero_crossing_ft(warm: DerivedLevel, cold: DerivedLevel) -> float | None:
+    """Altitude of 0 °C between an above-freezing level and a sub-freezing one."""
+    tw, tc = warm.temperature_c, cold.temperature_c
+    aw, ac = warm.altitude_ft, cold.altitude_ft
+    if tw is None or tc is None or aw is None or ac is None or tw <= tc:
+        return None
+    return aw + (ac - aw) * tw / (tw - tc)
+
+
+def freezing_bounds_ft(
+    first: DerivedLevel,
+    last: DerivedLevel,
+    all_levels: list[DerivedLevel],
+) -> tuple[float | None, float | None]:
+    """The 0 °C crossings that bound a zone running from *first* to *last* (#1013).
+
+    ``floor`` is the crossing between the zone and the nearest above-freezing
+    level below it; ``ceiling`` the crossing with the nearest above-freezing
+    level above it (a warm nose aloft). Read from the profile itself, not from
+    one ``freezing_level_ft``, so a warm nose caps the zone against the level
+    that is actually below 0 °C. ``None`` where the column stays sub-freezing.
+    """
+    pos = {id(lv): i for i, lv in enumerate(all_levels)}
+    i_first, i_last = pos.get(id(first)), pos.get(id(last))
+    floor = ceiling = None
+    if i_first is not None:
+        for j in range(i_first - 1, -1, -1):
+            t = all_levels[j].temperature_c
+            if t is not None and t > 0:
+                floor = _zero_crossing_ft(all_levels[j], all_levels[j + 1])
+                break
+    if i_last is not None:
+        for j in range(i_last + 1, len(all_levels)):
+            t = all_levels[j].temperature_c
+            if t is not None and t > 0:
+                ceiling = _zero_crossing_ft(all_levels[j], all_levels[j - 1])
+                break
+    return floor, ceiling
+
+
+def cap_zone_at_freezing(zone, first: DerivedLevel, last: DerivedLevel, all_levels: list[DerivedLevel]):
+    """*zone* with base and top kept inside sub-freezing air (#1013).
+
+    ``widen_thin_layer`` widens a single-level zone ±500 ft around its middle
+    with no 0 °C floor, so a zone one level above the freezing level reached
+    into warm air (and onto a cruise flown there). Any zone model with
+    ``base_ft`` / ``top_ft`` works (IcingZone, SfipZone).
+    """
+    floor, ceiling = freezing_bounds_ft(first, last, all_levels)
+    if (floor is None and ceiling is None) or not hasattr(zone, "base_ft"):
+        return zone
+    base, top = zone.base_ft, zone.top_ft
+    if floor is not None and base < floor:
+        base = round(floor)
+    if ceiling is not None and top > ceiling:
+        top = round(ceiling)
+    if top < base:  # rounding only; a zone's own levels are sub-freezing
+        top = base
+    if (base, top) == (zone.base_ft, zone.top_ft):
+        return zone
+    return zone.model_copy(update={"base_ft": base, "top_ft": top})
+
+
 def group_icing_levels(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     build_zone_fn: Callable,
     *,
     all_levels: list[DerivedLevel] | None = None,
+    min_edge_index: float | None = None,
 ) -> list:
     """Group adjacent icing levels into zones using shared adjacency logic.
 
@@ -353,11 +434,26 @@ def group_icing_levels(
             index-based adjacency (the principled behaviour). When
             None, uses the legacy pressure-gap heuristic.
 
+        min_edge_index: When set, each zone's leading and trailing levels
+            with an index below it are dropped before the zone is built
+            (:func:`trim_zone_edges`, #1013). Interior levels stay.
+
+    On the *all_levels* path every zone is also capped at the 0 °C crossings
+    around it (:func:`cap_zone_at_freezing`, #1013).
+
     Returns:
         List of zone objects, ordered by ascending altitude.
     """
     if not icing_levels:
         return []
+
+    def _build(group: list[tuple[DerivedLevel, IcingType, IcingRisk, float]]):
+        if min_edge_index is not None:
+            group = trim_zone_edges(group, min_edge_index)
+        zone = build_zone_fn(group)
+        if all_levels is not None:
+            zone = cap_zone_at_freezing(zone, group[0][0], group[-1][0], all_levels)
+        return zone
 
     def _pressure_close(prev_lv: DerivedLevel, this_lv: DerivedLevel) -> bool:
         return abs(prev_lv.pressure_hpa - this_lv.pressure_hpa) <= ZONE_MAX_PRESSURE_GAP_HPA
@@ -393,8 +489,8 @@ def group_icing_levels(
         if _adjacent(prev_lv, this_lv):
             current.append(item)
         else:
-            zones.append(build_zone_fn(current))
+            zones.append(_build(current))
             current = [item]
 
-    zones.append(build_zone_fn(current))
+    zones.append(_build(current))
     return zones

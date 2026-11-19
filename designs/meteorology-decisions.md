@@ -8338,3 +8338,82 @@ winds. One path per briefing (§85), so one wind.
 Not yet. Replay before and after with
 `WB_FLIGHT_PATH=live python scripts/rerun_advisories_diff.py --area corpus`
 on the Mac (stored packs now get the wind from their cross-sections).
+
+## 88. Icing below a thin deck: local cover, one source, 0 °C cap, warm cruise, trimmed edges (#1013)
+
+**Date:** 2026-11-19 · **Amends:** §54 (icing cover), §56 (warm cruise) · **Related:** §58, §86
+
+### Context
+
+Pilot thumbs-down on a local VFR flight (non-FIKI motorglider, cruise 1,500 ft,
+pack built at D-2): aircraft icing RED, "moderate icing for about 48 min; no
+escape". The pilot flew in clear air (EKRK FEW/SCT 1,800–2,400 ft, 2–4 °C). No
+model had icing *at* 1,500 ft; five things together made it RED:
+
+1. ECMWF's `lcc` (surface to ~6,500 ft) was 92 %, almost all from a 60 ft OVC
+   deck at ~2,450 ft, and the §54 `max(band cover, deck cover)` scored every
+   level of the slab as 92 % cloud: 850 hPa at −4.1 °C, RH 65 %, its own 3D
+   fraction 15 %, came out MODERATE.
+2. The digest read the stored Ogimet-DD zones; the card graded Ogimet-NWP.
+3. A single-level zone widened ±500 ft (§86) reached below the freezing level.
+4. ECMWF's cruise sat 30–100 ft below its freezing level, but a zone within the
+   ±1,000 ft band kept the exposure clock running over the whole route.
+5. Zone edges were set by levels the method itself rates "no icing" (index < 10).
+
+### Decision (agreed with the owner, 2026-11-19)
+
+1. **Icing scales by the cover at the level** (`icing._level_nwp_cover_pct`,
+   Ogimet-NWP, IENG and the severity-enhance corroboration): the level's own 3D
+   fraction (`DerivedLevel.cloud_area_fraction_pct`, ECMWF `cc` / ICON `clc`,
+   copied in `_enrich_lwc`), a known 0 % included; else the cover of the
+   `nwp_3d` deck containing the level; else §54's `max(band, deck)`. GFS and
+   HRRR always reach the last step: their band carries its own base and top
+   (HRRR's condensate decks carry an NCEP band cover), so it is theirs at the
+   level. This **reverses §54's rejection of "deck cover first"** for the
+   3D-fraction models, on this flight's evidence that the band cover over-states
+   icing in thin decks (the revisit §54 asked for).
+2. **One icing source.** The advisory manifest records the engine methods it
+   graded on (`RouteAdvisoriesManifest.engine_methods`); the digest prompt
+   resolves its waypoint soundings with them (`advise.resolve_waypoint_analyses`,
+   the same per-sounding rule as `_resolve_analyses`). Icing, cloud and
+   convective lines all follow the graded method; when the cloud axis graded on
+   the NWP envelope the duplicate "Cloud" lines are dropped. A manifest from
+   before this has no record and keeps the old prompt.
+3. **No icing zone extends into above-freezing air** (`icing_common.
+   cap_zone_at_freezing`, on every `group_icing_levels` zone: Ogimet-DD/NWP,
+   IENG, SFIP). The cap is the 0 °C crossing between the zone and the nearest
+   above-freezing level below it, interpolated in altitude, read from the
+   profile rather than one `freezing_level_ft`, so a warm nose is honoured. The
+   same rule caps the **top** against a warm layer above (agent choice: the
+   issue named the floor; a zone widened into a warm nose is the same error).
+   SLD zones are not capped (a different hazard, §84).
+4. **Warm cruise = the model's temperature at the flown level > 0 °C** (owner's
+   choice, no margin): no cruise zones, no exposure minutes, the clock resets.
+   At or below 0 °C the ±1,000 ft band applies as before. The temperature is
+   interpolated in altitude on the cross-section's geopotential heights
+   (`_helpers.temperature_at_altitude`), not the ISA pressure of
+   `cruise_temperature_c`, which can be a few hundred feet off right where the
+   sign matters; that value is only the fallback. Unknown keeps the §56
+   freezing-level rule. On the flight path (#1005) the level part decides, and
+   the reset falls between the cell's climb and descent. The cruise band for
+   SLD (§84) is unchanged.
+5. **Zone edges are the outermost levels at LIGHT or above**
+   (`icing_common.trim_zone_edges`, `min_edge_index=_INDEX_LIGHT` for the
+   Ogimet-DD/NWP and IENG grouping). A "no icing" level between two iced ones
+   stays, so the zone is not split. A group with no level at LIGHT is left
+   whole (a NONE zone, assessed and clean, as before). SFIP already drops its
+   NONE levels.
+
+**Kept:** `cruise_band_ft` 1,000 ft. ICON alone keeps this flight RED (its
+freezing level 1,250–1,420 ft is below cruise and one light point sits ~1,000 ft
+above it); the owner accepts that, and majority aggregation lets ECMWF and GFS
+outvote it.
+
+### Expected effect, still to measure
+
+A down-shift on ECMWF/ICON GRIB hours (§54 measured "deck first" at 13 up /
+84 down on Ogimet-NWP). Before deploying: the flight's replay (ECMWF and GFS
+GREEN, card not RED, digest zones = graded zones), a winter-pack replay with
+per-model grade changes, and Ogimet-NWP scored before and after on the US PIREP
+collector (#1003) to see whether thin real decks are now under-called. Record
+the numbers here.

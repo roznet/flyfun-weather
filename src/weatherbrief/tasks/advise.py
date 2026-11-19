@@ -157,133 +157,204 @@ def _resolve_analyses(
         new_soundings: dict = {}
         changed = False
         for key, sounding in rpa.sounding.items():
-            updates: dict = {}
-
-            # --- cloud resolution ---
-            if swap_cloud:
-                if cloud_source == "nwp" and sounding.nwp_cloud_layers is not None:
-                    updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
-                    _repoint_ceiling(
-                        sounding, updates,
-                        layers=sounding.nwp_cloud_layers,
-                        stored=(
-                            sounding.indices.nwp_sounding_ceiling_ft
-                            if sounding.indices else None
-                        ),
-                    )
-                    # Determine effective method from layer source tags. The
-                    # shared NATIVE_NWP_CLOUD_SOURCES set classifies all
-                    # three native envelope builders (GFS band geometry,
-                    # ECMWF/ICON 3D fraction, HRRR condensate #457) as plain
-                    # "nwp"; "nwp_synthesized" is reserved for genuinely
-                    # synthesized/heuristic layers. The old classifier keyed
-                    # on "grib" alone and mislabeled the other two native
-                    # sources in pilot-facing provenance (PR #508 review).
-                    from weatherbrief.models.analysis import (
-                        NATIVE_NWP_CLOUD_SOURCES,
-                    )
-
-                    sources = {cl.source for cl in sounding.nwp_cloud_layers}
-                    if not sources or sources <= NATIVE_NWP_CLOUD_SOURCES:
-                        updates["cloud_method_effective"] = "nwp"
-                    else:
-                        updates["cloud_method_effective"] = "nwp_synthesized"
-                else:
-                    # Fallback: restore DD source
-                    updates["cloud_layers"] = list(sounding.dd_cloud_layers)
-                    updates["cloud_method_effective"] = "dd"
-                    _repoint_ceiling(
-                        sounding, updates,
-                        layers=sounding.dd_cloud_layers,
-                        stored=(
-                            sounding.indices.dd_sounding_ceiling_ft
-                            if sounding.indices else None
-                        ),
-                    )
-            else:
-                # DD source requested: ``cloud_layers`` already holds the
-                # DD-derived layers, so there is nothing to swap — but the grade
-                # was still produced *by* a method, and it must say so.
-                updates["cloud_method_effective"] = "dd"
-
-            # --- icing resolution ---
-            if swap_icing:
-                if icing_method == "ogimet_nwp":
-                    updates["icing_zones"] = list(sounding.icing_ogimet_nwp_zones)
-                    # Ogimet-NWP needs a model-native cloud envelope. Without
-                    # one it returns [] (assess_icing_zones_ogimet_nwp bails on
-                    # `not clouds`), which is "method unavailable", NOT "ran,
-                    # found nothing". Flag it so the icing evaluators grade
-                    # UNAVAILABLE rather than clear-by-absence (#391). Clear
-                    # ``icing_method_effective`` explicitly when it could not run
-                    # — there is no honest method to badge (#408). Set on every
-                    # branch (like cloud/convective) so a stale value can never
-                    # survive ``model_copy(update=updates)``.
-                    # ``None`` is "no envelope"; ``[]`` is an envelope that
-                    # reports clear sky, so no cloud and no icing: assessed.
-                    if sounding.nwp_cloud_layers is None:
-                        updates["active_icing_available"] = False
-                        updates["icing_method_effective"] = None
-                    else:
-                        updates["icing_method_effective"] = "ogimet_nwp"
-                elif icing_method == "sfip_nwp":
-                    updates["icing_method_effective"] = "sfip_nwp"
-                    updates["icing_zones"] = [
-                        IcingZone(
-                            base_ft=z.base_ft,
-                            top_ft=z.top_ft,
-                            base_pressure_hpa=z.base_pressure_hpa,
-                            top_pressure_hpa=z.top_pressure_hpa,
-                            risk=z.risk,
-                            icing_type=z.icing_type,
-                            mean_temperature_c=z.mean_temperature_c,
-                            mean_rh_pct=z.mean_rh_pct,
-                            mean_icing_index=z.mean_sfip_100,
-                        )
-                        for z in sounding.sfip_zones
-                    ]
-            else:
-                # Explicit "ogimet_dd": ``icing_zones`` already holds the
-                # DD-derived zones — no swap, but the method still graded them.
-                updates["icing_method_effective"] = "ogimet_dd"
-
-            # --- convective resolution ---
-            if swap_convective:
-                nwp = sounding.convective_nwp
-                updates["convective"] = nwp if nwp is not None else sounding.convective_thermo
-                # Record which track actually graded (#408). "thermo" whenever
-                # the model-native NWP convective was absent and we silently fell
-                # back — the honesty gap this closes: a pilot who asked for NWP
-                # convective grades on thermo wherever ``convective_nwp`` is None,
-                # and until now nothing recorded that it happened.
-                updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
-                # Dedicated fallback marker (#568). ``convective_method_effective``
-                # cannot carry this: "thermo" there means *either* silent fallback
-                # or an explicit thermo request, and the §18 DD-amber cap must
-                # apply to the first and never to the second. This is the only
-                # place that knows the requested method was "nwp", so the marker
-                # is set here. Set on BOTH branches (like the method badge) so a
-                # stale True can never survive ``model_copy(update=updates)``.
-                updates["convective_nwp_fallback"] = nwp is None
-            else:
-                # Explicit "thermo": ``convective`` already holds the thermo
-                # assessment — no swap, but badge the method that produced it.
-                updates["convective_method_effective"] = "thermo"
-                # The user asked for thermo and got thermo — not a fallback, so
-                # the §18 cap must not fire and silently override their choice.
-                updates["convective_nwp_fallback"] = False
-
-            if updates:
-                new_soundings[key] = sounding.model_copy(update=updates)
-                changed = True
-            else:
-                new_soundings[key] = sounding
+            new = _resolve_sounding(
+                sounding, icing_method, cloud_source, convective_method,
+                swap_icing=swap_icing, swap_cloud=swap_cloud,
+                swap_convective=swap_convective,
+            )
+            new_soundings[key] = new
+            changed = changed or new is not sounding
 
         if changed:
             resolved.append(rpa.model_copy(update={"sounding": new_soundings}))
         else:
             resolved.append(rpa)
     return resolved
+
+
+def _resolve_sounding(
+    sounding,
+    icing_method: str,
+    cloud_source: str,
+    convective_method: str,
+    *,
+    swap_icing: bool,
+    swap_cloud: bool,
+    swap_convective: bool,
+):
+    """One sounding resolved per the (already defaulted) engine methods.
+
+    The body of :func:`_resolve_analyses`, one sounding at a time, so the
+    digest prompt can resolve the waypoint soundings it prints with exactly
+    the same rule (#1013). Returns a ``model_copy`` (never mutates).
+    """
+    updates: dict = {}
+
+    # --- cloud resolution ---
+    if swap_cloud:
+        if cloud_source == "nwp" and sounding.nwp_cloud_layers is not None:
+            updates["cloud_layers"] = list(sounding.nwp_cloud_layers)
+            _repoint_ceiling(
+                sounding, updates,
+                layers=sounding.nwp_cloud_layers,
+                stored=(
+                    sounding.indices.nwp_sounding_ceiling_ft
+                    if sounding.indices else None
+                ),
+            )
+            # Determine effective method from layer source tags. The
+            # shared NATIVE_NWP_CLOUD_SOURCES set classifies all
+            # three native envelope builders (GFS band geometry,
+            # ECMWF/ICON 3D fraction, HRRR condensate #457) as plain
+            # "nwp"; "nwp_synthesized" is reserved for genuinely
+            # synthesized/heuristic layers. The old classifier keyed
+            # on "grib" alone and mislabeled the other two native
+            # sources in pilot-facing provenance (PR #508 review).
+            from weatherbrief.models.analysis import (
+                NATIVE_NWP_CLOUD_SOURCES,
+            )
+
+            sources = {cl.source for cl in sounding.nwp_cloud_layers}
+            if not sources or sources <= NATIVE_NWP_CLOUD_SOURCES:
+                updates["cloud_method_effective"] = "nwp"
+            else:
+                updates["cloud_method_effective"] = "nwp_synthesized"
+        else:
+            # Fallback: restore DD source
+            updates["cloud_layers"] = list(sounding.dd_cloud_layers)
+            updates["cloud_method_effective"] = "dd"
+            _repoint_ceiling(
+                sounding, updates,
+                layers=sounding.dd_cloud_layers,
+                stored=(
+                    sounding.indices.dd_sounding_ceiling_ft
+                    if sounding.indices else None
+                ),
+            )
+    else:
+        # DD source requested: ``cloud_layers`` already holds the
+        # DD-derived layers, so there is nothing to swap — but the grade
+        # was still produced *by* a method, and it must say so.
+        updates["cloud_method_effective"] = "dd"
+
+    # --- icing resolution ---
+    if swap_icing:
+        if icing_method == "ogimet_nwp":
+            updates["icing_zones"] = list(sounding.icing_ogimet_nwp_zones)
+            # Ogimet-NWP needs a model-native cloud envelope. Without
+            # one it returns [] (assess_icing_zones_ogimet_nwp bails on
+            # `not clouds`), which is "method unavailable", NOT "ran,
+            # found nothing". Flag it so the icing evaluators grade
+            # UNAVAILABLE rather than clear-by-absence (#391). Clear
+            # ``icing_method_effective`` explicitly when it could not run
+            # — there is no honest method to badge (#408). Set on every
+            # branch (like cloud/convective) so a stale value can never
+            # survive ``model_copy(update=updates)``.
+            # ``None`` is "no envelope"; ``[]`` is an envelope that
+            # reports clear sky, so no cloud and no icing: assessed.
+            if sounding.nwp_cloud_layers is None:
+                updates["active_icing_available"] = False
+                updates["icing_method_effective"] = None
+            else:
+                updates["icing_method_effective"] = "ogimet_nwp"
+        elif icing_method == "sfip_nwp":
+            updates["icing_method_effective"] = "sfip_nwp"
+            updates["icing_zones"] = [
+                IcingZone(
+                    base_ft=z.base_ft,
+                    top_ft=z.top_ft,
+                    base_pressure_hpa=z.base_pressure_hpa,
+                    top_pressure_hpa=z.top_pressure_hpa,
+                    risk=z.risk,
+                    icing_type=z.icing_type,
+                    mean_temperature_c=z.mean_temperature_c,
+                    mean_rh_pct=z.mean_rh_pct,
+                    mean_icing_index=z.mean_sfip_100,
+                )
+                for z in sounding.sfip_zones
+            ]
+    else:
+        # Explicit "ogimet_dd": ``icing_zones`` already holds the
+        # DD-derived zones — no swap, but the method still graded them.
+        updates["icing_method_effective"] = "ogimet_dd"
+
+    # --- convective resolution ---
+    if swap_convective:
+        nwp = sounding.convective_nwp
+        updates["convective"] = nwp if nwp is not None else sounding.convective_thermo
+        # Record which track actually graded (#408). "thermo" whenever
+        # the model-native NWP convective was absent and we silently fell
+        # back — the honesty gap this closes: a pilot who asked for NWP
+        # convective grades on thermo wherever ``convective_nwp`` is None,
+        # and until now nothing recorded that it happened.
+        updates["convective_method_effective"] = "nwp" if nwp is not None else "thermo"
+        # Dedicated fallback marker (#568). ``convective_method_effective``
+        # cannot carry this: "thermo" there means *either* silent fallback
+        # or an explicit thermo request, and the §18 DD-amber cap must
+        # apply to the first and never to the second. This is the only
+        # place that knows the requested method was "nwp", so the marker
+        # is set here. Set on BOTH branches (like the method badge) so a
+        # stale True can never survive ``model_copy(update=updates)``.
+        updates["convective_nwp_fallback"] = nwp is None
+    else:
+        # Explicit "thermo": ``convective`` already holds the thermo
+        # assessment — no swap, but badge the method that produced it.
+        updates["convective_method_effective"] = "thermo"
+        # The user asked for thermo and got thermo — not a fallback, so
+        # the §18 cap must not fire and silently override their choice.
+        updates["convective_nwp_fallback"] = False
+
+    if updates:
+        return sounding.model_copy(update=updates)
+    return sounding
+
+
+def resolve_waypoint_analyses(
+    analyses: list,
+    engine_methods: dict[str, str | None] | None,
+) -> list:
+    """Waypoint analyses (``ForecastSnapshot.analyses``) resolved like the advisories'.
+
+    The digest prompt printed the stored, unresolved ``icing_zones`` (the
+    Ogimet-DD variant) while the card graded the profile's method, so the
+    digest and the card described different icing (#1013). *engine_methods*
+    is the manifest's record of what the advisories graded on
+    (``RouteAdvisoriesManifest.engine_methods``); ``None`` (a manifest from
+    before #1013) returns *analyses* unchanged, the old prompt exactly.
+    """
+    if engine_methods is None:
+        return analyses
+    icing_method = engine_methods.get("icing_method") or ENGINE_METHOD_DEFAULTS["icing_method"]
+    cloud_source = engine_methods.get("cloud_source") or ENGINE_METHOD_DEFAULTS["cloud_source"]
+    convective_method = (
+        engine_methods.get("convective_method") or ENGINE_METHOD_DEFAULTS["convective_method"]
+    )
+    out = []
+    for wa in analyses:
+        soundings = {
+            key: _resolve_sounding(
+                sa, icing_method, cloud_source, convective_method,
+                swap_icing=icing_method != "ogimet_dd",
+                swap_cloud=cloud_source == "nwp",
+                swap_convective=convective_method != "thermo",
+            )
+            for key, sa in wa.sounding.items()
+        }
+        out.append(wa.model_copy(update={"sounding": soundings}))
+    return out
+
+
+def engine_methods_record(
+    icing_method: str | None,
+    cloud_source: str | None,
+    convective_method: str | None,
+) -> dict[str, str]:
+    """The engine methods the advisories graded on, defaults applied (#1013)."""
+    return {
+        "icing_method": icing_method or ENGINE_METHOD_DEFAULTS["icing_method"],
+        "cloud_source": cloud_source or ENGINE_METHOD_DEFAULTS["cloud_source"],
+        "convective_method": convective_method or ENGINE_METHOD_DEFAULTS["convective_method"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +687,9 @@ def run_advisories(
             aircraft=equipage,
             models_failed=models_failed,
             flight_path=_path_summary(ctx),
+            engine_methods=engine_methods_record(
+                icing_method, cloud_source, convective_method,
+            ),
         )
         logger.info("Route advisories: %d evaluated (%d models)",
                      len(advisory_results), len(advisory_model_names))
@@ -826,6 +900,9 @@ def run_advisories_from_pack(
             aircraft=equipage,
             models_failed=models_failed,
             flight_path=_path_summary(ctx),
+            engine_methods=engine_methods_record(
+                icing_method, cloud_source, convective_method,
+            ),
         )
 
         if persist:
@@ -1262,6 +1339,9 @@ def run_alt_from_pack(
             aircraft=equipage,
             models_failed=models_failed,
             flight_path=_path_summary(ctx),
+            engine_methods=engine_methods_record(
+                icing_method, cloud_source, convective_method,
+            ),
         )
 
         if persist:
