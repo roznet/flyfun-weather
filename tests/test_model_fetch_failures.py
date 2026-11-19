@@ -202,6 +202,25 @@ def test_agreement_names_missing_model():
     assert "all models" not in detail
 
 
+def test_agreement_names_missing_model_by_model_name():
+    """Keys stay ukmo / meteofrance; the text shows the model: UKV, AROME."""
+    ctx = _agreement_ctx(["gfs", "icon"], {"ukmo": "timeout", "meteofrance": "error"})
+    detail = ModelAgreementEvaluator.evaluate(ctx, _PARAMS).per_model[0].detail
+    assert "UKV" in detail and "AROME" in detail
+    assert "UKMO" not in detail and "METEOFRANCE" not in detail
+
+
+def test_fetch_failed_diagnostic_uses_model_name():
+    diags = _build_fetch_diagnostics(
+        requested_models=["gfs", "meteofrance"], models_fetched=["gfs"],
+        models_skipped_region=[], models_failed={"meteofrance": "timeout"},
+        enrich_grib=False, grib_enriched=False, grib_enrichment_failed=False,
+        grib_init_times={},
+    )
+    failed = [d for d in diags if d.code == FetchCode.MODEL_FETCH_FAILED]
+    assert [d.message for d in failed] == ["AROME forecast fetch failed (timeout)"]
+
+
 def test_agreement_unchanged_when_nothing_failed():
     ctx = _agreement_ctx(["gfs", "icon"], {})
     detail = ModelAgreementEvaluator.evaluate(ctx, _PARAMS).per_model[0].detail

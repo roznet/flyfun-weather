@@ -12,6 +12,7 @@ from weatherbrief.models.verification import (
     NotableMiss,
     VerificationDigestData,
 )
+from weatherbrief.fetch.variables import model_short_label
 from weatherbrief.notify.email import SmtpConfig, send_message
 
 logger = logging.getLogger(__name__)
@@ -179,7 +180,7 @@ def _render_accuracy_table(data: VerificationDigestData) -> str:
         parts.append("<tr>")
         parts.append(
             f'<td style="{_STYLE_TD} font-weight:600;">'
-            f"{html.escape(model.upper())}</td>"
+            f"{html.escape(model_short_label(model))}</td>"
         )
         for d in days_out_cols:
             pct = today_map.get((model, d))
@@ -241,7 +242,7 @@ def _render_notable_misses(misses: list[NotableMiss]) -> str:
         parts.append(f'<tr style="{row_bg}">')
         parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(m.icao)}</td>')
         parts.append(f'<td style="{_STYLE_TD}">{_fmt_time(m.observation_time)}</td>')
-        parts.append(f'<td style="{_STYLE_TD}">{html.escape(m.model.upper())}</td>')
+        parts.append(f'<td style="{_STYLE_TD}">{html.escape(model_short_label(m.model))}</td>')
         parts.append(f'<td style="{_STYLE_TD} text-align:center;">D-{m.days_out}</td>')
         parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(m.obs_category)}</td>')
         parts.append(f'<td style="{_STYLE_TD}">{html.escape(m.model_category)}</td>')
@@ -272,7 +273,7 @@ def _render_wind_section(data: VerificationDigestData) -> str:
             parts.append("<tr>")
             parts.append(
                 f'<td style="{_STYLE_TD} font-weight:600;">'
-                f"{html.escape(w.model.upper())}</td>"
+                f"{html.escape(model_short_label(w.model))}</td>"
             )
             parts.append(
                 f'<td style="{_STYLE_TD} text-align:center; {color}">'
@@ -299,7 +300,7 @@ def _render_wind_section(data: VerificationDigestData) -> str:
             parts.append('<tr style="background:#fff0f0;">')
             parts.append(f'<td style="{_STYLE_TD} font-weight:600;">{html.escape(w.icao)}</td>')
             parts.append(f'<td style="{_STYLE_TD}">{_fmt_time(w.observation_time)}</td>')
-            parts.append(f'<td style="{_STYLE_TD}">{html.escape(w.model.upper())}</td>')
+            parts.append(f'<td style="{_STYLE_TD}">{html.escape(model_short_label(w.model))}</td>')
             parts.append(f'<td style="{_STYLE_TD}">D-{w.days_out}</td>')
             parts.append(
                 f'<td style="{_STYLE_TD}">'
@@ -346,7 +347,7 @@ def _render_gust_section(data: VerificationDigestData) -> str:
         parts.append("<tr>")
         parts.append(
             f'<td style="{_STYLE_TD} font-weight:600;">'
-            f"{html.escape(g.model.upper())}</td>"
+            f"{html.escape(model_short_label(g.model))}</td>"
         )
         for c in cells:
             parts.append(f'<td style="{_STYLE_TD} text-align:center;">{c}</td>')
@@ -399,7 +400,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
 
         today_map = {(r.model, r.days_out): r for r in data.category_accuracy_today}
         for model in models:
-            row = f"{model.upper():<10}"
+            row = f"{model_short_label(model):<10}"
             for d in (0, 1, 2, 3, 5, 7):
                 r = today_map.get((model, d))
                 if r and r.accuracy_pct is not None:
@@ -419,7 +420,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
             tag = f"[{m.direction} +{m.severity}]" if m.direction else ""
             lines.append(
                 f"  {m.icao} {_fmt_time(m.observation_time)} — "
-                f"{m.model.upper()}(D-{m.days_out}): {m.model_category}, "
+                f"{model_short_label(m.model)}(D-{m.days_out}): {m.model_category}, "
                 f"Actual: {m.obs_category}{ceiling} {tag}"
             )
         lines.append("")
@@ -429,7 +430,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
         lines.append("WIND ADVISORY ACCURACY")
         for w in data.wind_advisory:
             pct = f"{w.accuracy_pct:.0f}%" if w.accuracy_pct is not None else "—"
-            lines.append(f"  {w.model.upper():<10} {pct:>6}  (n={w.sample_count})")
+            lines.append(f"  {model_short_label(w.model):<10} {pct:>6}  (n={w.sample_count})")
         lines.append("")
 
     # Gust — both conditionings, D-0 only (see _render_gust_section)
@@ -448,7 +449,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
             mae = f"{g.gust_mae_kt:.1f}kt" if g.gust_mae_kt is not None else "—"
             bias = f"{g.gust_bias_kt:+.1f}kt" if g.gust_bias_kt is not None else "—"
             lines.append(
-                f"  {g.model.upper():<10} n={g.n_flagged:<5} vs peak {peak:>7} "
+                f"  {model_short_label(g.model):<10} n={g.n_flagged:<5} vs peak {peak:>7} "
                 f"over-warn {warn:>5} | n={g.n_gust:<5} MAE {mae:>7} bias {bias:>7}"
             )
         lines.append("")
@@ -458,7 +459,7 @@ def _build_digest_plain(data: VerificationDigestData) -> str:
         for w in data.missed_warnings:
             lines.append(
                 f"  {w.icao} {_fmt_time(w.observation_time)} — "
-                f"{w.model.upper()}(D-{w.days_out}): predicted {w.model_wind_advisory}"
+                f"{model_short_label(w.model)}(D-{w.days_out}): predicted {w.model_wind_advisory}"
             )
         lines.append("")
 

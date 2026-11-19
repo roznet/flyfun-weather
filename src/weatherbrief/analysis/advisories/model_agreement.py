@@ -13,6 +13,7 @@ from weatherbrief.analysis.advisories._helpers import (
 )
 from weatherbrief.analysis.advisories.registry import register
 from weatherbrief.analysis.advisories.strings import adv_t
+from weatherbrief.fetch.variables import model_short_label
 from weatherbrief.models import (
     AgreementLevel,
     AdvisoryCatalogEntry,
@@ -176,7 +177,7 @@ class ModelAgreementEvaluator:
             partial = adv_t(
                 "model_agreement.partial", loc,
                 n=n_avail, m=n_avail + len(missing),
-                missing=", ".join(m.upper() for m in missing),
+                missing=", ".join(model_short_label(m) for m in missing),
             )
             detail = f"{detail} ({partial})"
 
