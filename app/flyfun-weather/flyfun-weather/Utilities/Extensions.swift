@@ -58,9 +58,12 @@ nonisolated extension Date {
 
 nonisolated extension String {
     /// Short display name for weather models — used in compact badges where space is tight.
+    /// Slots are named after the model that fills them (mirrors the server's
+    /// `short_name` in `/api/models`): the `ukmo` slot is UKV, `meteofrance` is AROME.
     var shortModelName: String {
         switch self.lowercased() {
-        case "meteofrance": "MF"
+        case "meteofrance": "AROME"
+        case "ukmo": "UKV"
         case "best_match": "BEST"
         case "ecmwf": "ECMWF"
         default: self.uppercased()

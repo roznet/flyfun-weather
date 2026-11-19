@@ -103,7 +103,8 @@ private func sameColor(_ a: Color, _ b: Color, tol: Double = 0.001) -> Bool {
 
 @Suite struct ExtensionsTests {
     @Test func shortModelName() {
-        #expect("meteofrance".shortModelName == "MF")
+        #expect("meteofrance".shortModelName == "AROME")
+        #expect("ukmo".shortModelName == "UKV")
         #expect("best_match".shortModelName == "BEST")
         #expect("ecmwf".shortModelName == "ECMWF")
         #expect("ECMWF".shortModelName == "ECMWF")   // case-insensitive

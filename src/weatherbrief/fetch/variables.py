@@ -115,6 +115,12 @@ class ModelEndpoint:
     name: str
     base_url: str
     max_days: int
+    # Compact label for badges, chips and generated text (fetch notices, the
+    # digest prompt). Defaults to the upper-cased key. Slots are named after
+    # the MODEL that fills them, not the provider: the ukmo slot is UKV and
+    # the meteofrance slot is AROME. The key stays as is because it is
+    # persisted in packs, profiles and the API (see designs/fetch.md).
+    short_name: str | None = None
     # If set, passed as ?models= query param (for generic /v1/forecast endpoint)
     model_param: str | None = None
     unavailable_surface: list[str] = field(default_factory=list)
@@ -169,7 +175,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
     # and limited to UKV's 5 days. This Open-Meteo endpoint now serves only
     # historical briefings and the WB_GRIB_PRIMARY rollback.
     "ukmo": ModelEndpoint(
-        name="UK Met Office",
+        name="UKV",
+        short_name="UKV",
         base_url="https://api.open-meteo.com/v1/forecast",
         max_days=5,
         model_param="ukmo_seamless",
@@ -178,7 +185,8 @@ MODEL_ENDPOINTS: dict[str, ModelEndpoint] = {
         region=ModelRegion.EUROPE,
     ),
     "meteofrance": ModelEndpoint(
-        name="Météo-France",
+        name="AROME",
+        short_name="AROME",
         base_url="https://api.open-meteo.com/v1/meteofrance",
         max_days=6,
         unavailable_surface=["precipitation_probability",
@@ -216,6 +224,18 @@ DUAL_MODEL_KEYS = ("ecmwf", "gfs")
 # to the frontend via ``/api/models/config`` so the date picker and the backend
 # gate share one source. See ``api/flights.py:_reject_if_beyond_booking_cap``.
 MAX_BOOKING_LEAD_DAYS = 180
+
+
+def model_short_label(model: str) -> str:
+    """Compact display label for a model slot key (``ukmo`` -> ``UKV``).
+
+    The one server-side table for it; clients get it as ``short_name`` from
+    ``/api/models``. Unknown keys fall back to the upper-cased key.
+    """
+    endpoint = MODEL_ENDPOINTS.get(model)
+    if endpoint is not None and endpoint.short_name:
+        return endpoint.short_name
+    return model.upper()
 
 
 def dual_model_horizon_days() -> int:

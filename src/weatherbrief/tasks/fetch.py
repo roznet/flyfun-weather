@@ -24,6 +24,7 @@ from weatherbrief.fetch.variables import (
     MODEL_ENDPOINTS,
     ModelRegion,
     detect_model_region,
+    model_short_label,
     route_covers_prefixes,
 )
 from weatherbrief.models import (
@@ -193,8 +194,8 @@ class FetchResult:
 
 
 def _model_label(model: str) -> str:
-    """Display name in a fetch notice. The meteofrance slot is AROME (#940)."""
-    return "Météo-France (AROME)" if model == "meteofrance" else model.upper()
+    """Display name in a fetch notice (``meteofrance`` -> ``AROME``)."""
+    return model_short_label(model)
 
 
 def _build_fetch_diagnostics(

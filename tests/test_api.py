@@ -178,6 +178,26 @@ class TestModelsConfig:
         assert body["max_booking_lead_days"] == MAX_BOOKING_LEAD_DAYS
         assert body["forecast_horizon_days"] == dual_model_horizon_days()
 
+    def test_catalog_names_slots_after_their_model(self, client):
+        """Keys stay as persisted (``ukmo``, ``meteofrance``); the names the
+        clients show are the model's: UKV and AROME, not the provider."""
+        resp = client.get("/api/models")
+        assert resp.status_code == 200
+        by_key = {m["key"]: m for m in resp.json()}
+        assert by_key["ukmo"]["name"] == "UKV"
+        assert by_key["ukmo"]["short_name"] == "UKV"
+        assert by_key["meteofrance"]["name"] == "AROME"
+        assert by_key["meteofrance"]["short_name"] == "AROME"
+        assert by_key["gfs"]["short_name"] == "GFS"  # default: upper-cased key
+
+    def test_model_short_label(self):
+        from weatherbrief.fetch.variables import model_short_label
+
+        assert model_short_label("meteofrance") == "AROME"
+        assert model_short_label("ukmo") == "UKV"
+        assert model_short_label("ecmwf") == "ECMWF"
+        assert model_short_label("not_a_model") == "NOT_A_MODEL"
+
 
 
 # --- Flights ---

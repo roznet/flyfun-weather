@@ -8,6 +8,7 @@ from weatherbrief.fetch.variables import (
     MAX_BOOKING_LEAD_DAYS,
     MODEL_ENDPOINTS,
     dual_model_horizon_days,
+    model_short_label,
 )
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -18,8 +19,10 @@ def list_models():
     # Per-model catalog for the model picker. ``max_days`` is each endpoint's
     # own horizon (informational). The booking cap + forecast-coverage horizon
     # the date picker actually gates on come from ``/models/config`` below.
+    # ``short_name`` is the compact badge label (``UKV``, ``AROME``).
     return [
-        {"key": k, "name": v.name, "default": v.default, "max_days": v.max_days}
+        {"key": k, "name": v.name, "short_name": model_short_label(k),
+         "default": v.default, "max_days": v.max_days}
         for k, v in MODEL_ENDPOINTS.items()
     ]
 

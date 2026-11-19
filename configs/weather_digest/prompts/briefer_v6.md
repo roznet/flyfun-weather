@@ -207,6 +207,10 @@ Structure your response as JSON with these exact fields:
   `assessment_reason` or the lead of `synoptic`. Name the model that carries it
   ("GFS alone puts the ceiling at 57 ft; ECMWF and ICON keep it VFR") and give
   the majority picture alongside.
+- **Name models as the app does.** The data tags each model by its key; in
+  your text write ECMWF, GFS, ICON, UKV (key `ukmo`) and AROME (key
+  `meteofrance`). Never write "UKMO", "UK Met Office" or "Météo-France" for a
+  model: those are the providers.
 - **Read AIRCRAFT for icing.** The Icing advisory is already graded for the
   aircraft flown and says which way ("graded for FIKI" / "graded for
   non-FIKI"): take its colour as given, never re-grade it for a different

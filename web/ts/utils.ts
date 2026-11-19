@@ -249,7 +249,7 @@ export function isFlightPast(targetDate: string, targetTimeUtc: number, duration
 
 // --- Model catalog (populated from /api/models at startup) ---
 
-export interface ModelCatalogEntry { key: string; name: string; default: boolean; max_days?: number; }
+export interface ModelCatalogEntry { key: string; name: string; short_name?: string; default: boolean; max_days?: number; }
 
 let _catalog: ModelCatalogEntry[] = [];
 
@@ -308,13 +308,12 @@ export function modelLabel(model: string): string {
 const MODEL_SLOT_BADGES: Record<string, string> = {
   'icon_d2:dwd': 'D2',
   'hrrr:noaa': 'HRRR',
-  // The meteofrance slot is AROME only since #940: "Météo-France (AROME)".
-  'arome:mf': 'AROME',
+  // No 'arome:mf' row: the meteofrance slot is AROME only (#940) and its
+  // catalog name already says so; a badge would print "AROME (AROME)".
 };
 
 /** `modelLabel()` plus a variant badge when the slot was served by a
- *  higher-resolution source — e.g. `ICON (D2)`, `GFS (HRRR)`,
- *  `Météo-France (AROME)`. An unknown or
+ *  higher-resolution source — e.g. `ICON (D2)`, `GFS (HRRR)`. An unknown or
  *  missing source key is not an error: it just means the slot ran on its
  *  default model, so the plain label is correct. */
 export function modelSlotLabel(model: string, source?: string | null): string {

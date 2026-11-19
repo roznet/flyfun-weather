@@ -134,8 +134,8 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
         { key: 'ecmwf', name: 'ECMWF', default: true },
         { key: 'gfs', name: 'GFS', default: true },
         { key: 'icon', name: 'ICON', default: true },
-        { key: 'ukmo', name: 'UKMO', default: true },
-        { key: 'meteofrance', name: 'Météo-France', default: true },
+        { key: 'ukmo', name: 'UKV', default: true },
+        { key: 'meteofrance', name: 'AROME', default: true },
       ],
     }),
   );

@@ -15,6 +15,7 @@ from weatherbrief.analysis.advisories.airport_wind import spell_out_runway_wind
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.analysis.sounding.convective import convective_cross_check
 from weatherbrief.digest.format_utils import format_flight_level, terminal_proxy_lines, terminal_roles
+from weatherbrief.fetch.variables import model_short_label
 from weatherbrief.units import format_visibility
 from weatherbrief.models import (
     ALT_AXIS_LABELS,
@@ -986,8 +987,10 @@ def _models_header_line(manifest: RouteAdvisoriesManifest | None) -> str:
     failed = manifest.models_failed if manifest is not None else {}
     if not failed:
         return ""
-    used = ", ".join(m.upper() for m in manifest.models) or "none"
-    missing = ", ".join(f"{m.upper()} ({r})" for m, r in sorted(failed.items()))
+    used = ", ".join(model_short_label(m) for m in manifest.models) or "none"
+    missing = ", ".join(
+        f"{model_short_label(m)} ({r})" for m, r in sorted(failed.items())
+    )
     return (
         f"\nMODELS: {used}. UNAVAILABLE: {missing}: fetch failed, not in this "
         "data. Any statement about model agreement covers only the models listed."
