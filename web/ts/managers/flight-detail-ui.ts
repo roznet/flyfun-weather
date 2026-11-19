@@ -611,17 +611,18 @@ export function renderInvalidationBanner(invalidation: string | null, flightId: 
 
   el.style.display = 'block';
   const briefingUrl = `/briefing.html?flight=${encodeURIComponent(flightId)}`;
+  const link = `<a href="${briefingUrl}">${escapeHtml(t('flightDetail.briefingPageLink'))}</a>`;
 
   if (invalidation === 'advisories_only') {
     el.className = 'invalidation-banner invalidation-info';
     // Same split as the briefing page's banner (#987): what the cheap update
     // fixes, and what only a full refresh does.
     el.innerHTML = escapeHtml(t('flightDetail.advisoriesOnlyNote'))
-      .replace('{link}', `<a href="${briefingUrl}">${escapeHtml(t('flightDetail.briefingPageLink'))}</a>`);
+      .replace('{link}', () => link);
   } else if (invalidation === 'refetch_needed') {
     el.className = 'invalidation-banner invalidation-warning';
     el.innerHTML = escapeHtml(t('flightDetail.refetchNeededNote'))
-      .replace('{link}', `<a href="${briefingUrl}">${escapeHtml(t('flightDetail.briefingPageLink'))}</a>`);
+      .replace('{link}', () => link);
   }
 }
 
