@@ -21,6 +21,8 @@ interface BriefingRepository {
     suspend fun parseFpl(fplText: String): ParseFplResponse
     suspend fun interpretRoute(rawRoute: String): InterpretRouteResponse
     suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse
+    suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse
+    suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse
     suspend fun fetchAutorouterRoutes(limit: Int = 25): AutorouterRoutesResponse
 
     // Pack metadata
@@ -155,6 +157,12 @@ open class OnlineBriefingRepository(
 
     override suspend fun routeDistance(waypoints: List<String>): RouteDistanceResponse =
         api.routeDistance(waypoints)
+
+    override suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse =
+        api.durationEstimate(req)
+
+    override suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse =
+        api.aircraftPresets(icaoType, cruiseSpeedKt)
 
     override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse =
         api.fetchAutorouterRoutes(limit)

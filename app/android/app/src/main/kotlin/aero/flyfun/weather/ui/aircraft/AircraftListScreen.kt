@@ -86,6 +86,7 @@ fun AircraftListScreen(
             ExtendedFloatingActionButton(
                 onClick = {
                     editingAircraft = null
+                    viewModel.openPerformanceForm(null)
                     showFormSheet = true
                 },
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
@@ -159,6 +160,7 @@ fun AircraftListScreen(
                                 .fillMaxWidth()
                                 .clickable {
                                     editingAircraft = ac
+                                    viewModel.openPerformanceForm(ac)
                                     showFormSheet = true
                                 },
                         ) {

@@ -67,6 +67,12 @@ enum FixtureBriefingData {
     /// the convective advisory + drill-down narrate.
     static let routeAnalyses: RouteAnalysesResponse = FixtureFiles.decode(RouteAnalysesResponse.self, "route-analyses")
 
+    /// The same route with a live climb / cruise / descent path (#1005).
+    static let routeAnalysesLive: RouteAnalysesResponse = FixtureFiles.decode(RouteAnalysesResponse.self, "route-analyses-live")
+
+    /// The aircraft form's climb / descent presets (#1005).
+    static let aircraftPresets: AircraftPresetsResponse = FixtureFiles.decode(AircraftPresetsResponse.self, "aircraft-presets")
+
     // MARK: - Elevation (terrain profile)
 
     static let elevation: ElevationResponse = FixtureFiles.decode(ElevationResponse.self, "elevation")

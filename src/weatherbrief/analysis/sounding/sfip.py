@@ -15,11 +15,11 @@ from __future__ import annotations
 import math
 
 from weatherbrief.analysis.sounding.icing_common import (
-    MIN_ZONE_HALF_THICKNESS_FT,
     group_icing_levels,
     is_in_cloud_layer,
     nwp_cloud_cover_at_altitude,
 )
+from weatherbrief.analysis.sounding.thin_layers import widen_thin_layer
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
@@ -431,10 +431,7 @@ def _build_sfip_zone(
     # is invisible: the cross-section fills its polygon and nothing appears, so a
     # genuine MODERATE/SEVERE SFIP signal renders as blank sky. Single-level
     # zones are the common case, not the edge case, at ECMWF/GFS level spacing.
-    if top_ft - base_ft < MIN_ZONE_HALF_THICKNESS_FT * 2:
-        mid_ft = (base_ft + top_ft) / 2
-        base_ft = round(mid_ft - MIN_ZONE_HALF_THICKNESS_FT)
-        top_ft = round(mid_ft + MIN_ZONE_HALF_THICKNESS_FT)
+    base_ft, top_ft = (round(v) for v in widen_thin_layer(base_ft, top_ft))
 
     # Worst risk in zone
     risk_order = [IcingRisk.NONE, IcingRisk.LIGHT, IcingRisk.MODERATE, IcingRisk.SEVERE]

@@ -191,7 +191,7 @@ def route_headwind_grid(
     (``pick_wind_at_pressure``: u/v interpolated between levels, ``None``
     beyond the 2,000 ft snap) is projected on the track
     (``compute_wind_components``) and the models' **median** is kept
-    (meteorology-decisions §86). A cell no model has a wind for reads 0
+    (meteorology-decisions §87). A cell no model has a wind for reads 0
     (still air). ``models`` restricts the pool (default every cross-section).
 
     Returns ``None`` when no cell has any model wind (a pack without

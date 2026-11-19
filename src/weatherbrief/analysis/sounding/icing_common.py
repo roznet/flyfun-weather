@@ -321,10 +321,6 @@ ZONE_MAX_PRESSURE_GAP_HPA = 100
 # sounding (several levels dropped by ``prepare_profile``); it must stay ≥ 150.
 ZONE_MAX_NATIVE_GAP_HPA = 200
 
-# Minimum half-thickness for single-level zones (cross-section visibility).
-MIN_ZONE_HALF_THICKNESS_FT = 500
-
-
 def group_icing_levels(
     icing_levels: list[tuple[DerivedLevel, IcingType, IcingRisk, float]],
     build_zone_fn: Callable,

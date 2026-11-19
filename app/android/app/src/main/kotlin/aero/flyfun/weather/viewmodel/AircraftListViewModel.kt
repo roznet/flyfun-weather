@@ -3,10 +3,14 @@ package aero.flyfun.weather.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aero.flyfun.weather.data.ApiClient
+import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.model.AircraftResponse
 import aero.flyfun.weather.model.AircraftTypeResult
 import aero.flyfun.weather.model.CreateAircraftRequest
+import aero.flyfun.weather.model.PerformancePresetsResponse
 import aero.flyfun.weather.model.UpdateAircraftRequest
+import aero.flyfun.weather.model.rules.AircraftPerformanceForm
+import aero.flyfun.weather.model.rules.PerformanceOverrides
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +30,8 @@ class AircraftListViewModel(
     private val apiClient: ApiClient? = null,
     private val initialFixtureAircraft: List<AircraftResponse> = emptyList(),
     private val scopeOverride: CoroutineScope? = null,
+    /** Serves the form's climb / descent presets, including in mock mode. */
+    private val repository: BriefingRepository? = null,
 ) : ViewModel() {
 
     private val scope: CoroutineScope
@@ -45,6 +51,24 @@ class AircraftListViewModel(
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    /** The climb / descent part of the form sheet. */
+    val performanceForm: AircraftPerformanceFormController by lazy {
+        AircraftPerformanceFormController(scope = scope, fetch = ::fetchPresets)
+    }
+
+    private suspend fun fetchPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse =
+        checkNotNull(repository) { "No presets source" }.aircraftPresets(icaoType, cruiseSpeedKt)
+
+    /** Call when the form sheet opens, for [aircraft] or for a new one when null. */
+    fun openPerformanceForm(aircraft: AircraftResponse?) {
+        _errorMessage.value = null
+        performanceForm.open(
+            aircraft = aircraft,
+            formIcaoType = aircraft?.icaoType.orEmpty(),
+            formCruiseSpeedKt = aircraft?.cruiseSpeedKt ?: DEFAULT_FORM_CRUISE_SPEED_KT,
+        )
+    }
 
     fun loadAircraft() {
         val api = apiClient ?: return
@@ -102,6 +126,7 @@ class AircraftListViewModel(
         isIfr: Boolean,
         isFiki: Boolean,
         isDefault: Boolean,
+        performance: PerformanceOverrides? = null,
         onSaved: (AircraftResponse) -> Unit = {},
     ) {
         val trimmedIcao = icaoType.trim().uppercase()
@@ -118,6 +143,12 @@ class AircraftListViewModel(
             isIfr = isIfr,
             isFiki = isFiki,
             isDefault = isDefault,
+            performancePreset = performance?.performancePreset,
+            isTurbo = performance?.isTurbo,
+            climbIasKt = performance?.climbIasKt,
+            climbRateFpm = performance?.climbRateFpm,
+            descentRateFpm = performance?.descentRateFpm,
+            descentAngleDeg = performance?.descentAngleDeg,
         )
         val api = apiClient
         if (api == null) {
@@ -132,7 +163,7 @@ class AircraftListViewModel(
                 isIfr = req.isIfr,
                 isFiki = req.isFiki,
                 isDefault = req.isDefault,
-            )
+            ).withLocalPerformance(performance)
             val updated = if (req.isDefault) {
                 _aircraft.value.map { it.copy(isDefault = false) } + mock
             } else {
@@ -169,6 +200,7 @@ class AircraftListViewModel(
         isIfr: Boolean?,
         isFiki: Boolean?,
         isDefault: Boolean?,
+        performance: PerformanceOverrides? = null,
         onSaved: (AircraftResponse) -> Unit = {},
     ) {
         val req = UpdateAircraftRequest(
@@ -180,6 +212,12 @@ class AircraftListViewModel(
             isIfr = isIfr,
             isFiki = isFiki,
             isDefault = isDefault,
+            performancePreset = performance?.performancePreset,
+            isTurbo = performance?.isTurbo,
+            climbIasKt = performance?.climbIasKt,
+            climbRateFpm = performance?.climbRateFpm,
+            descentRateFpm = performance?.descentRateFpm,
+            descentAngleDeg = performance?.descentAngleDeg,
         )
         val api = apiClient
         if (api == null) {
@@ -193,7 +231,7 @@ class AircraftListViewModel(
                 isIfr = req.isIfr ?: existing.isIfr,
                 isFiki = req.isFiki ?: existing.isFiki,
                 isDefault = req.isDefault ?: existing.isDefault,
-            )
+            ).withLocalPerformance(performance)
             _aircraft.value = _aircraft.value.map { item ->
                 if (item.id == aircraftId) updatedItem
                 else if (updatedItem.isDefault) item.copy(isDefault = false)
@@ -240,7 +278,25 @@ class AircraftListViewModel(
         _errorMessage.value = null
     }
 
+    /** Without a server (mock mode), resolve the saved values the way it would. */
+    private fun AircraftResponse.withLocalPerformance(overrides: PerformanceOverrides?): AircraftResponse {
+        val saved = overrides ?: return this
+        val base = performanceForm.state.value.presets.firstOrNull { it.id == saved.performancePreset } ?: return this
+        return copy(
+            performancePreset = saved.performancePreset,
+            isTurbo = saved.isTurbo,
+            climbIasKt = saved.climbIasKt.takeIf { it > 0 },
+            climbRateFpm = saved.climbRateFpm.takeIf { it > 0 },
+            descentRateFpm = saved.descentRateFpm.takeIf { it > 0 },
+            descentAngleDeg = saved.descentAngleDeg.takeIf { it > 0.0 },
+            performance = AircraftPerformanceForm.resolved(saved, base),
+        )
+    }
+
     companion object {
+        /** The cruise speed the form starts from for a new aircraft. */
+        const val DEFAULT_FORM_CRUISE_SPEED_KT = 130
+
         val DEFAULT_AIRCRAFT_TYPES = listOf(
             AircraftTypeResult("SR22", "Cirrus", "SR22", "SEP", 175, 17500),
             AircraftTypeResult("SR20", "Cirrus", "SR20", "SEP", 145, 17500),

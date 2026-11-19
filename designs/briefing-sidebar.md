@@ -39,12 +39,14 @@ renders.
   existing (direct or delegated) listeners, which is why nothing else breaks.
 - **Section nav**: `NAV_GROUPS` is the whitelist — the nav iterates its groups
   and keeps the keys whose `[data-section="<key>"]` element exists and is not
-  `display:none`. So `data-section` alone is necessary but not sufficient
-  (`advisories` and `time-scenarios` carry the attribute and are deliberately
-  absent from the nav; advisories are surfaced via the glance summary instead).
+  `display:none`. So `data-section` alone is necessary but not sufficient.
+  `advisories` and `time-scenarios` form the first group, "Briefing" (#987):
+  they used to be left out because the glance summary already lists the
+  non-green advisories, but a user looking for them under SECTIONS did not
+  find them, and Timing Scenarios had no shortcut at all.
   `NAV_LABELS` supplies friendly labels and is optional — the fallback is the
   section's `h3` text, then the key. **The main pane lists the nav sections in
-  `NAV_GROUPS` order** (Explore → Observations → Discussion → Detail), so
+  `NAV_GROUPS` order** (Briefing → Explore → Observations → Discussion → Detail), so
   scroll-spy moves monotonically; `tests/unit/briefing-section-order.test.ts`
   parses `briefing.html` and fails on drift. Banners that are not nav sections
   (`#alt-assessment-banner`, `#refresh-delta-banner` "Since this briefing") sit
@@ -88,13 +90,22 @@ rendering later cannot push the section off-screen, and nothing waits for data
   the resizer are hidden and the main pane takes the full width, so a framed
   section looks like an embed. CSS only, read once on load, never persisted.
   The stale-pack and error banners sit outside both panes and stay visible.
+  The stale-pack banner is the one notice for what a flight edit left out of
+  date (#987): on an altitude edit it names both fixes, "Update Route
+  Advisories" (instant re-grade from the saved forecast) and a full Refresh
+  (needed for the Synopsis and headline), links the section names, and shrinks
+  to the Synopsis line once the advisories are re-graded. Non-owners get only
+  that informational line, without buttons. Logic in
+  `web/ts/helpers/stale-pack-banner.ts` (pure, unit-tested); it replaced a
+  separate `#digest-altitude-banner` whose "Refresh" advice read as
+  contradicting the stale-pack banner's "no full refresh needed".
   With the rail gone the "✕ Exit focus" button goes too; the framer drives
   focus by message.
 - `{type: 'wb-frame:section', section: '<key>' | null}` posted by the parent
   (only when framed, and only when `ev.source === window.parent`) switches the
   focused section without a reload; `section: null` exits focus.
-- Valid keys are `FOCUSABLE_SECTIONS`: every `NAV_GROUPS` key plus
-  `advisories`. Anything else (unknown key, wrong type, missing field) is
+- Valid keys are `FOCUSABLE_SECTIONS`: every `NAV_GROUPS` key (which
+  includes `advisories` and `time-scenarios`). Anything else (unknown key, wrong type, missing field) is
   ignored — by both the param and the message — so neither can do more than
   change which section is shown. A known section that has no content for this
   briefing (still `display:none`) focuses to an empty pane; the framer picks

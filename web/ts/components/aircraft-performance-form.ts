@@ -5,6 +5,10 @@
  *  "Custom (based on …)"; picking a preset again restores its values. The
  *  preset table comes from the server (`GET /aircraft/presets`), never copied
  *  here. Saved as the base preset plus the values that differ from it.
+ *
+ *  SYNC: iOS `Models/Domain/AircraftPerformanceForm.swift` and Android
+ *  `model/rules/AircraftPerformanceForm.kt` port these rules. Change the three
+ *  together.
  */
 
 import { t } from '../i18n/i18n';

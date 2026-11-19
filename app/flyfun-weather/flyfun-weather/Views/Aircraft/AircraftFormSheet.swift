@@ -73,6 +73,10 @@ struct AircraftFormSheet: View {
                         .disabled(form.editingAircraft?.isDefault == true)
                 }
 
+                if !form.presets.isEmpty {
+                    climbDescentSection
+                }
+
                 if let error = form.errorMessage {
                     Section {
                         Text(error)
@@ -108,6 +112,57 @@ struct AircraftFormSheet: View {
                 guard !Task.isCancelled else { return }
                 await form.searchTypes()
             }
+            // The preset table follows the type and cruise speed (#1005).
+            .task(id: "\(form.icaoType)|\(form.cruiseSpeedKt)") {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                await form.refreshPresets()
+            }
+        }
+    }
+
+    /// Preset picker over the values it sets. Labels follow the web form.
+    private var climbDescentSection: some View {
+        Section {
+            Picker("Preset", selection: Binding(
+                get: { form.presetSelection },
+                set: { form.selectPreset($0) }
+            )) {
+                ForEach(form.presets) { preset in
+                    Text(AircraftPerformanceForm.presetName(preset.id)).tag(preset.id)
+                }
+                if form.isPerformanceCustom {
+                    Text(form.customPresetTitle).tag(AircraftFormModel.customPresetSelection)
+                }
+            }
+            .accessibilityIdentifier("aircraftPresetPicker")
+
+            performanceField("Climb speed (IAS kt)", text: $form.climbIasText,
+                             keyboard: .numberPad, identifier: "aircraftClimbIasField")
+            performanceField("Climb rate (ft/min)", text: $form.climbRateText,
+                             keyboard: .numberPad, identifier: "aircraftClimbRateField")
+            performanceField("Descent rate (ft/min)", text: $form.descentRateText,
+                             keyboard: .numberPad, identifier: "aircraftDescentRateField")
+            performanceField("or descent angle (\u{00b0})", text: $form.descentAngleText,
+                             keyboard: .decimalPad, identifier: "aircraftDescentAngleField")
+            Toggle("Turbocharged", isOn: $form.isTurbo)
+                .accessibilityIdentifier("aircraftTurboToggle")
+        } header: {
+            Text("Climb and descent")
+        } footer: {
+            Text(form.performanceHint)
+        }
+    }
+
+    private func performanceField(_ title: String, text: Binding<String>,
+                                  keyboard: UIKeyboardType, identifier: String) -> some View {
+        LabeledContent(title) {
+            // No prompt: the row's label already names the field.
+            TextField("", text: text)
+                .accessibilityLabel(title)
+                .multilineTextAlignment(.trailing)
+                .keyboardType(keyboard)
+                .accessibilityIdentifier(identifier)
         }
     }
 }

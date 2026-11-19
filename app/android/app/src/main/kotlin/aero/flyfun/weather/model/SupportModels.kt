@@ -37,6 +37,21 @@ data class AircraftResponse(
     /** The server's synthesised "My aircraft" (`ZZZZ`, #777); cleared by any PUT. */
     @SerialName("is_placeholder")
     val isPlaceholder: Boolean = false,
+    /** The preset picked in the form (#1005); null follows the ICAO type. */
+    @SerialName("performance_preset")
+    val performancePreset: String? = null,
+    @SerialName("is_turbo")
+    val isTurbo: Boolean = false,
+    @SerialName("climb_ias_kt")
+    val climbIasKt: Int? = null,
+    @SerialName("climb_rate_fpm")
+    val climbRateFpm: Int? = null,
+    @SerialName("descent_rate_fpm")
+    val descentRateFpm: Int? = null,
+    @SerialName("descent_angle_deg")
+    val descentAngleDeg: Double? = null,
+    /** What the briefing's flight path actually uses. */
+    val performance: AircraftPerformanceResponse? = null,
 ) {
     val displayLabel: String
         get() = when {
@@ -45,6 +60,76 @@ data class AircraftResponse(
             else -> typeName
         }
 }
+
+/** The resolved climb / descent performance of one aircraft (#1005). */
+@Serializable
+data class AircraftPerformanceResponse(
+    val preset: String = "",
+    /** `preset`, `aircraft` (custom), `category` or `default`. */
+    val source: String = "default",
+    @SerialName("climb_ias_kt")
+    val climbIasKt: Double = 0.0,
+    @SerialName("climb_rate_fpm")
+    val climbRateFpm: Double = 0.0,
+    @SerialName("ceiling_ft")
+    val ceilingFt: Double = 0.0,
+    @SerialName("descent_mode")
+    val descentMode: String = "rate",
+    @SerialName("descent_rate_fpm")
+    val descentRateFpm: Double? = null,
+    @SerialName("descent_angle_deg")
+    val descentAngleDeg: Double? = null,
+    val turbo: Boolean = false,
+)
+
+/** One climb / descent preset of the aircraft form, from `GET /api/aircraft/presets`. */
+@Serializable
+data class PerformancePreset(
+    val id: String = "",
+    @SerialName("climb_ias_kt")
+    val climbIasKt: Double = 0.0,
+    @SerialName("climb_rate_fpm")
+    val climbRateFpm: Double = 0.0,
+    @SerialName("descent_mode")
+    val descentMode: String = "rate",
+    @SerialName("descent_rate_fpm")
+    val descentRateFpm: Double? = null,
+    @SerialName("descent_angle_deg")
+    val descentAngleDeg: Double? = null,
+    val turbo: Boolean = false,
+)
+
+@Serializable
+data class PerformancePresetsResponse(
+    val presets: List<PerformancePreset> = emptyList(),
+    val suggested: String = "",
+)
+
+/** `POST /api/flights/duration-estimate` (#1005). */
+@Serializable
+data class DurationEstimateRequest(
+    @SerialName("total_distance_nm")
+    val totalDistanceNm: Double,
+    @SerialName("cruise_altitude_ft")
+    val cruiseAltitudeFt: Int,
+    @SerialName("aircraft_id")
+    val aircraftId: Int? = null,
+    val origin: String? = null,
+    val destination: String? = null,
+)
+
+@Serializable
+data class DurationEstimateResponse(
+    @SerialName("duration_hours")
+    val durationHours: Double = 0.0,
+    val preset: String = "",
+    @SerialName("toc_nm")
+    val tocNm: Double = 0.0,
+    @SerialName("tod_nm")
+    val todNm: Double = 0.0,
+    @SerialName("cruise_reached")
+    val cruiseReached: Boolean = true,
+)
 
 @Serializable
 data class AircraftTypeResponse(
@@ -86,6 +171,18 @@ data class CreateAircraftRequest(
     val isFiki: Boolean = false,
     @SerialName("is_default")
     val isDefault: Boolean = false,
+    @SerialName("performance_preset")
+    val performancePreset: String? = null,
+    @SerialName("is_turbo")
+    val isTurbo: Boolean? = null,
+    @SerialName("climb_ias_kt")
+    val climbIasKt: Int? = null,
+    @SerialName("climb_rate_fpm")
+    val climbRateFpm: Int? = null,
+    @SerialName("descent_rate_fpm")
+    val descentRateFpm: Int? = null,
+    @SerialName("descent_angle_deg")
+    val descentAngleDeg: Double? = null,
 )
 
 @Serializable
@@ -105,6 +202,19 @@ data class UpdateAircraftRequest(
     val isFiki: Boolean? = null,
     @SerialName("is_default")
     val isDefault: Boolean? = null,
+    /** Null leaves the performance unchanged; a value of 0 clears that override. */
+    @SerialName("performance_preset")
+    val performancePreset: String? = null,
+    @SerialName("is_turbo")
+    val isTurbo: Boolean? = null,
+    @SerialName("climb_ias_kt")
+    val climbIasKt: Int? = null,
+    @SerialName("climb_rate_fpm")
+    val climbRateFpm: Int? = null,
+    @SerialName("descent_rate_fpm")
+    val descentRateFpm: Int? = null,
+    @SerialName("descent_angle_deg")
+    val descentAngleDeg: Double? = null,
 )
 
 // ============================================================================
@@ -136,8 +246,6 @@ data class ProfileSettings(
     val cruiseAltitudeFt: Int? = null,
     @SerialName("flight_ceiling_ft")
     val flightCeilingFt: Int? = null,
-    @SerialName("speed_kt")
-    val speedKt: Int? = null,
     val models: List<String>? = null,
     @SerialName("advisory_models")
     val advisoryModels: List<String>? = null,

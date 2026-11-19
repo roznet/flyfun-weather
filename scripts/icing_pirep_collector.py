@@ -36,6 +36,8 @@ Commands::
               on disk with their age (changes nothing)
     status    reports, sample outcomes, leads, runs seen and how long they stayed
     report    the #1000 flag-rate report on this database
+    score     the product's icing methods, temperature and sky against the
+              reports (``icing_pirep_score.py``)
 
 Cron on the compute node (hourly, after AWC's top-of-hour batch)::
 
@@ -849,6 +851,23 @@ def cmd_report(conn, start: date | None, end: date | None, all_temps: bool, prod
     print(hc.format_report(res, [MODEL]))
 
 
+def cmd_score(conn, start: date | None, end: date | None) -> None:
+    import warnings
+
+    import icing_pirep_score as score
+
+    product_log = logging.getLogger("weatherbrief")
+    level = product_log.level
+    product_log.setLevel(logging.ERROR)  # one line per odd sounding would bury the tables
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # MetPy on every sounding
+            data = score.collect(conn, start, end)
+    finally:
+        product_log.setLevel(level)
+    print(score.format_score(data))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════
@@ -942,6 +961,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--end", type=date.fromisoformat)
     p.add_argument("--all-temperatures", action="store_true")
     p.add_argument("--no-product", action="store_true")
+    p = sub.add_parser("score")
+    p.add_argument("--start", type=date.fromisoformat)
+    p.add_argument("--end", type=date.fromisoformat)
 
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -954,11 +976,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "coverage":
         cmd_coverage(grib_dir, args.run)
         return 0
-    if args.cmd in ("status", "report"):
+    if args.cmd in ("status", "report", "score"):
         conn = open_db(out)
         if args.cmd == "status":
             cmd_status(conn)
             print(lock_state(out))
+        elif args.cmd == "score":
+            cmd_score(conn, args.start, args.end)
         else:
             cmd_report(conn, args.start, args.end, args.all_temperatures, not args.no_product)
         return 0

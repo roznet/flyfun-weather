@@ -209,7 +209,27 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         lastInterpretRawRoute = rawRoute
         return try interpretRouteResult.get()
     }
-    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse { throw MockError.notStubbed("routeDistance") }
+    var routeDistanceResult: Result<RouteDistanceResponse, Error> = .failure(MockError.notStubbed("routeDistance"))
+    private(set) var routeDistanceCallCount = 0
+    func routeDistance(waypoints: [String]) async throws -> RouteDistanceResponse {
+        routeDistanceCallCount += 1
+        return try routeDistanceResult.get()
+    }
+    var durationEstimateResult: Result<DurationEstimateResponse, Error> = .failure(MockError.notStubbed("durationEstimate"))
+    private(set) var lastDurationEstimateRequest: DurationEstimateRequest?
+    /// Runs while the estimate is out, to act during the call.
+    var durationEstimateHook: (@MainActor () -> Void)?
+    func durationEstimate(_ request: DurationEstimateRequest) async throws -> DurationEstimateResponse {
+        lastDurationEstimateRequest = request
+        if let durationEstimateHook { await durationEstimateHook() }
+        return try durationEstimateResult.get()
+    }
+    var aircraftPresetsResult: Result<AircraftPresetsResponse, Error> = .failure(MockError.notStubbed("aircraftPresets"))
+    private(set) var lastAircraftPresetsQuery: (icaoType: String, cruiseSpeedKt: Int?)?
+    func aircraftPresets(icaoType: String, cruiseSpeedKt: Int?) async throws -> AircraftPresetsResponse {
+        lastAircraftPresetsQuery = (icaoType, cruiseSpeedKt)
+        return try aircraftPresetsResult.get()
+    }
     var autorouterRoutesResults: [Result<[AutorouterRoute], Error>] = []
     private(set) var autorouterRoutesCallCount = 0
     /// Pops the next stubbed result per call; `[]` once they run out.

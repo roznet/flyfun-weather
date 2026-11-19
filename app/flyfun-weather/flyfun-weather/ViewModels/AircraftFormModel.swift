@@ -20,6 +20,29 @@ final class AircraftFormModel {
     var isIfr: Bool = false
     var isFiki: Bool = false
     var isDefault: Bool = false
+
+    // Climb / descent (#1005): the preset picker over the values it sets.
+    var climbIasText: String = ""
+    var climbRateText: String = ""
+    /// A descent is a rate or an angle: filling one clears the other.
+    var descentRateText: String = "" {
+        didSet { if !descentRateText.isEmpty, descentRateText != oldValue { descentAngleText = "" } }
+    }
+    var descentAngleText: String = "" {
+        didSet { if !descentAngleText.isEmpty, descentAngleText != oldValue { descentRateText = "" } }
+    }
+    var isTurbo: Bool = false
+    /// Empty until the table loads; the section stays hidden and a save leaves
+    /// the aircraft's climb and descent unchanged.
+    private(set) var presets: [AircraftPerformancePreset] = []
+    private(set) var suggestedPresetId: String = ""
+    private(set) var basePresetId: String = ""
+    /// The selection tracks the ICAO type's suggestion (not picked by hand).
+    private var followsType = true
+    /// The next table to arrive opens the form on this aircraft's values.
+    private var needsPerformanceOpen = true
+    private var presetLoadSeq = 0
+
     private(set) var selectedType: AircraftTypeResponse?
     private(set) var typeSuggestions: [AircraftTypeResponse] = []
     private(set) var isSearchingTypes: Bool = false
@@ -34,6 +57,78 @@ final class AircraftFormModel {
 
     init(repository: any BriefingRepository) {
         self.repository = repository
+    }
+
+    /// The picker's value when the fields differ from the base preset.
+    static let customPresetSelection = "custom"
+
+    var basePreset: AircraftPerformancePreset? {
+        presets.first { $0.id == basePresetId }
+    }
+
+    var performanceValues: AircraftPerformanceValues {
+        AircraftPerformanceValues(
+            climbIasKt: AircraftPerformanceForm.number(from: climbIasText),
+            climbRateFpm: AircraftPerformanceForm.number(from: climbRateText),
+            descentRateFpm: AircraftPerformanceForm.number(from: descentRateText),
+            descentAngleDeg: AircraftPerformanceForm.number(from: descentAngleText),
+            turbo: isTurbo
+        )
+    }
+
+    var isPerformanceCustom: Bool {
+        guard let basePreset else { return false }
+        return AircraftPerformanceForm.isCustom(performanceValues, base: basePreset)
+    }
+
+    var presetSelection: String {
+        isPerformanceCustom ? Self.customPresetSelection : basePresetId
+    }
+
+    var customPresetTitle: String {
+        "Custom (based on \(AircraftPerformanceForm.presetName(basePresetId)))"
+    }
+
+    var performanceHint: String {
+        let name = AircraftPerformanceForm.presetName(basePresetId)
+        return isPerformanceCustom
+            ? "Your own values, starting from \(name). Pick a preset again to restore its values."
+            : "\(name) values, used for the briefing's climb and descent. Change any value to make it your own."
+    }
+
+    /// Picking a preset writes all its values back, turbo included.
+    func selectPreset(_ id: String) {
+        guard id != Self.customPresetSelection,
+              let preset = presets.first(where: { $0.id == id }) else { return }
+        basePresetId = id
+        followsType = id == suggestedPresetId
+        writePerformance(AircraftPerformanceForm.values(of: preset))
+    }
+
+    /// Load the preset table for the type and cruise speed in the form. The first
+    /// table opens the form; later ones move a preset that follows the type to
+    /// the new suggestion. A picked or custom preset stays.
+    func refreshPresets() async {
+        presetLoadSeq += 1
+        let seq = presetLoadSeq
+        let response: AircraftPresetsResponse
+        do {
+            response = try await repository.aircraftPresets(
+                icaoType: presetQueryType, cruiseSpeedKt: presetQueryCruiseSpeed)
+        } catch {
+            Self.logger.debug("Aircraft presets unavailable: \(error)")
+            return
+        }
+        guard seq == presetLoadSeq, !Task.isCancelled else { return }
+        presets = response.presets
+        suggestedPresetId = response.suggested
+        if needsPerformanceOpen {
+            openPerformance()
+        } else if followsType, !isPerformanceCustom, response.suggested != basePresetId,
+                  let preset = basePresetCandidate(response.suggested) {
+            basePresetId = preset.id
+            writePerformance(AircraftPerformanceForm.values(of: preset))
+        }
     }
 
     /// The sheet is editing a saved aircraft rather than adding one.
@@ -72,6 +167,7 @@ final class AircraftFormModel {
         selectedType = nil
         typeSuggestions = []
         errorMessage = nil
+        resetPerformance()
     }
 
     /// Prefill the sheet from a saved aircraft for an edit (`PUT`). A
@@ -99,6 +195,7 @@ final class AircraftFormModel {
         isDefault = aircraft.isDefault
         typeSuggestions = []
         errorMessage = nil
+        resetPerformance()
     }
 
     /// Save the sheet: `PUT` when editing, `POST` when adding. Returns the
@@ -158,6 +255,80 @@ final class AircraftFormModel {
 
     // MARK: - Private
 
+    /// The server's query limit is four characters: a longer or half-typed entry
+    /// asks for the table without a type rather than getting a 422.
+    private var presetQueryType: String {
+        let value = icaoType.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return value.range(of: #"^[A-Z0-9]{1,4}$"#, options: .regularExpression) != nil ? value : ""
+    }
+
+    private var presetQueryCruiseSpeed: Int? {
+        guard let speed = Int(cruiseSpeedKt.trimmingCharacters(in: .whitespacesAndNewlines)),
+              speed > 0, speed <= 600 else { return nil }
+        return speed
+    }
+
+    private func basePresetCandidate(_ id: String) -> AircraftPerformancePreset? {
+        presets.first { $0.id == id }
+    }
+
+    private func resetPerformance() {
+        presetLoadSeq += 1  // a table still on its way belongs to the previous aircraft
+        presets = []
+        suggestedPresetId = ""
+        basePresetId = ""
+        followsType = true
+        needsPerformanceOpen = true
+        writePerformance(AircraftPerformanceValues(turbo: false))
+    }
+
+    /// Picker = the resolved preset; values = the resolved performance.
+    private func openPerformance() {
+        needsPerformanceOpen = false
+        let aircraft = editingAircraft
+        let performance = aircraft?.performance
+        if let performance, basePresetCandidate(performance.preset) != nil {
+            basePresetId = performance.preset
+        } else {
+            basePresetId = suggestedPresetId
+        }
+        let picked = aircraft?.performancePreset ?? ""
+        followsType = picked.isEmpty || picked == suggestedPresetId
+        if let performance, aircraft?.isPlaceholder == false, basePreset != nil {
+            writePerformance(AircraftPerformanceForm.values(of: performance))
+        } else if let basePreset {
+            writePerformance(AircraftPerformanceForm.values(of: basePreset))
+        }
+    }
+
+    private func writePerformance(_ values: AircraftPerformanceValues) {
+        climbIasText = AircraftPerformanceForm.text(from: values.climbIasKt)
+        climbRateText = AircraftPerformanceForm.text(from: values.climbRateFpm)
+        descentRateText = AircraftPerformanceForm.text(from: values.descentRateFpm)
+        descentAngleText = AircraftPerformanceForm.text(from: values.descentAngleDeg)
+        isTurbo = values.turbo
+    }
+
+    /// The save payload, or nil when the table never loaded (leave unchanged).
+    private var performanceOverrides: AircraftPerformanceOverrides? {
+        basePreset.map { AircraftPerformanceForm.overrides(for: performanceValues, base: $0) }
+    }
+
+    /// The server's limits, said in the form's words rather than as a 422.
+    private func validatePerformance() {
+        guard basePreset != nil else { return }
+        let values = performanceValues
+        if (values.climbIasKt ?? 0) > 400 {
+            errorMessage = "Climb speed must be 400 kt or less."
+        } else if (values.climbRateFpm ?? 0) > 8000 {
+            errorMessage = "Climb rate must be 8,000 ft/min or less."
+        } else if (values.descentRateFpm ?? 0) > 8000 {
+            errorMessage = "Descent rate must be 8,000 ft/min or less."
+        } else if (values.descentAngleDeg ?? 0) > 6 {
+            errorMessage = "Descent angle must be 6\u{00b0} or less."
+        }
+    }
+
     private func create() async -> AircraftResponse? {
         guard let icaoType = resolvedIcaoType else {
             errorMessage = "Enter a valid ICAO aircraft type, for example C172."
@@ -168,10 +339,13 @@ final class AircraftFormModel {
         guard errorMessage == nil else { return nil }
         let ceiling = optionalPositiveInt(ceilingFt, fieldName: "Service ceiling")
         guard errorMessage == nil else { return nil }
+        validatePerformance()
+        guard errorMessage == nil else { return nil }
 
         isSaving = true
         defer { isSaving = false }
 
+        let performance = performanceOverrides
         let request = CreateAircraftRequest(
             icaoType: icaoType,
             tailNumber: optionalText(tailNumber)?.uppercased(),
@@ -180,7 +354,13 @@ final class AircraftFormModel {
             isFiki: isFiki,
             cruiseSpeedKt: cruiseSpeed,
             ceilingFt: ceiling,
-            isDefault: isDefault
+            isDefault: isDefault,
+            performancePreset: performance?.performancePreset,
+            isTurbo: performance?.isTurbo,
+            climbIasKt: performance?.climbIasKt,
+            climbRateFpm: performance?.climbRateFpm,
+            descentRateFpm: performance?.descentRateFpm,
+            descentAngleDeg: performance?.descentAngleDeg
         )
 
         do {
@@ -207,10 +387,13 @@ final class AircraftFormModel {
         guard errorMessage == nil else { return nil }
         let ceiling = optionalPositiveInt(ceilingFt, fieldName: "Service ceiling")
         guard errorMessage == nil else { return nil }
+        validatePerformance()
+        guard errorMessage == nil else { return nil }
 
         isSaving = true
         defer { isSaving = false }
 
+        let performance = performanceOverrides
         let request = UpdateAircraftRequest(
             icaoType: icaoTypeToSend,
             // Always sent: "" clears a tail number / nickname the pilot erased.
@@ -223,7 +406,13 @@ final class AircraftFormModel {
             ceilingFt: ceiling,
             // Only ever *promote*: the server keeps one default per account, so
             // un-defaulting is done by making another aircraft the default.
-            isDefault: (isDefault && !original.isDefault) ? true : nil
+            isDefault: (isDefault && !original.isDefault) ? true : nil,
+            performancePreset: performance?.performancePreset,
+            isTurbo: performance?.isTurbo,
+            climbIasKt: performance?.climbIasKt,
+            climbRateFpm: performance?.climbRateFpm,
+            descentRateFpm: performance?.descentRateFpm,
+            descentAngleDeg: performance?.descentAngleDeg
         )
 
         do {

@@ -8,8 +8,10 @@ in analysis/clouds.py.
 from __future__ import annotations
 
 import logging
+import math
 from typing import cast
 
+from weatherbrief.analysis.sounding.thin_layers import widen_thin_layer
 from weatherbrief.models import (
     CloudCoverage,
     DerivedLevel,
@@ -179,6 +181,45 @@ def _dd_category(
     return _classify_coverage(dd)
 
 
+def _pressure_at_altitude(points: list[tuple[float, float]], altitude_ft: float) -> float:
+    """Pressure (hPa) at an altitude, linear in log-pressure along the column.
+
+    ``points`` are the column's ``(altitude_ft, pressure_hpa)``; beyond the
+    end levels the end segment is extended.
+    """
+    pts = sorted(points)
+    if len(pts) < 2:
+        return pts[0][1]
+    k = 1
+    while k < len(pts) - 1 and pts[k][0] < altitude_ft:
+        k += 1
+    (a_ft, a_p), (b_ft, b_p) = pts[k - 1], pts[k]
+    if b_ft == a_ft:
+        return a_p
+    frac = (altitude_ft - a_ft) / (b_ft - a_ft)
+    return math.exp(math.log(a_p) + frac * (math.log(b_p) - math.log(a_p)))
+
+
+def _flat_deck_extent(
+    altitude_ft: float,
+    points: list[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Edges of an NWP-3D deck that collapsed onto its one level.
+
+    A deck collapses (``base == top``) only when it is a single-level PEAK
+    whose cover sits exactly on its own category's lower bound: the crossing
+    then lands on the level on both sides. ECMWF ``cc`` comes in 1/128 steps,
+    so 12.5 / 25 / 50 / 87.5 % are hit often. It is a real deck, so it gets
+    the product's thin-layer convention (``thin_layers.widen_thin_layer``)
+    instead of being dropped (meteorology-decisions §86). Toward a denser
+    neighbour the crossing is always strictly inside the segment, so a level
+    between two denser decks cannot collapse.
+    """
+    base_ft, top_ft = widen_thin_layer(altitude_ft, altitude_ft)
+    return ((base_ft, _pressure_at_altitude(points, base_ft)),
+            (top_ft, _pressure_at_altitude(points, top_ft)))
+
+
 def _dd_crossing_edge(
     a: DerivedLevel,
     b: DerivedLevel,
@@ -346,6 +387,12 @@ def detect_cloud_layers(
         base_edge = _dd_layer_edge_below(sorted_levels, cats, i, cat)
         top_edge = _dd_layer_edge_above(sorted_levels, cats, j, cat)
         if base_edge is None or top_edge is None or top_edge[0] <= base_edge[0]:
+            # Unlike the NWP-3D path, a DD deck never collapses as a peak: a
+            # level is in its category only while DD is strictly below the
+            # category bound, so the crossing toward a drier neighbour lies
+            # strictly away from the level. It collapses only between two WETTER
+            # decks whose bounds it sits on, and those decks already meet at
+            # this level, so dropping it loses nothing (meteorology-decisions §86).
             logger.debug(
                 "Dropping DD cloud deck at run [%d..%d] (cat=%s): "
                 "base_edge=%s top_edge=%s — degenerate layer geometry",
@@ -584,10 +631,17 @@ def build_nwp_cloud_layers_from_fraction(
 
         base_edge = _layer_edge_below(levels, cats, i, cat)
         top_edge = _layer_edge_above(levels, cats, j, cat)
+        if base_edge is not None and top_edge is not None and top_edge[0] == base_edge[0]:
+            base_edge, top_edge = _flat_deck_extent(
+                base_edge[0],
+                [(lv.geopotential_height_m * _M_TO_FT, lv.pressure_hpa)
+                 for lv in levels if lv.geopotential_height_m is not None],
+            )
         if base_edge is None or top_edge is None or top_edge[0] <= base_edge[0]:
             # Should not happen with well-formed sounding data: a category run
             # always has at least one level with valid CAF + geopotential, and
-            # well-ordered geopotential should give top > base. Logged so a
+            # well-ordered geopotential should give top > base (a flat deck,
+            # top == base, is handled above by ``_flat_deck_extent``). Logged so a
             # pathological GRIB (e.g. inverted geopotential) doesn't silently
             # disappear from the cross-section.
             logger.warning(

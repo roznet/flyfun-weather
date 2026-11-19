@@ -47,6 +47,10 @@ object FixtureBriefingData {
     val soundingProfile: SoundingProfileResponse by lazy {
         FixtureFiles.decode(SoundingProfileResponse.serializer(), "sounding-profile")
     }
+
+    val aircraftPresets: PerformancePresetsResponse by lazy {
+        FixtureFiles.decode(PerformancePresetsResponse.serializer(), "aircraft-presets")
+    }
 }
 
 /**
@@ -70,6 +74,10 @@ open class FixtureBriefingRepository(
     var interpretRouteError: Throwable? = null
     var triggerRefreshError: Throwable? = null
     var recalculateAdvisoriesError: Throwable? = null
+    /** When set, [durationEstimate] / [aircraftPresets] throw it (tests). */
+    var durationEstimateError: Throwable? = null
+    var aircraftPresetsError: Throwable? = null
+    val durationEstimateRequests = mutableListOf<DurationEstimateRequest>()
     var savedDebrief: DebriefResponse? = null
 
     override suspend fun listFlights(): List<FlightResponse> = flights.toList()
@@ -190,6 +198,25 @@ open class FixtureBriefingRepository(
             ),
             totalDistanceNm = 78.0,
         )
+
+    /** A still-air figure at a fixed 140 kt plus six minutes for the climb and descent. */
+    override suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse {
+        durationEstimateRequests += req
+        durationEstimateError?.let { throw it }
+        val distance = req.totalDistanceNm
+        return DurationEstimateResponse(
+            durationHours = distance / 140.0 + 0.1,
+            preset = FixtureBriefingData.aircraftPresets.suggested,
+            tocNm = minOf(20.0, distance / 2.0),
+            todNm = maxOf(distance - 20.0, distance / 2.0),
+            cruiseReached = distance >= 40.0,
+        )
+    }
+
+    override suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse {
+        aircraftPresetsError?.let { throw it }
+        return FixtureBriefingData.aircraftPresets
+    }
 
     override suspend fun fetchAutorouterRoutes(limit: Int): AutorouterRoutesResponse = AutorouterRoutesResponse()
 

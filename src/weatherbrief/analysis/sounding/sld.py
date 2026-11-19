@@ -31,9 +31,9 @@ import math
 import os
 
 from weatherbrief.analysis.sounding.icing_common import (
-    MIN_ZONE_HALF_THICKNESS_FT,
     SUPERCOOLED_RAIN_MIN_QR_KG_KG,
 )
+from weatherbrief.analysis.sounding.thin_layers import widen_thin_layer
 from weatherbrief.models import (
     DerivedLevel,
     EnhancedCloudLayer,
@@ -83,10 +83,7 @@ def _warm_nose_sld_zones(
     base_ft = surface_ft
     top_ft = warm_nose_base
 
-    if top_ft - base_ft < 2 * MIN_ZONE_HALF_THICKNESS_FT:
-        mid = (top_ft + base_ft) / 2
-        base_ft = mid - MIN_ZONE_HALF_THICKNESS_FT
-        top_ft = mid + MIN_ZONE_HALF_THICKNESS_FT
+    base_ft, top_ft = widen_thin_layer(base_ft, top_ft)
 
     # Severity: deeper warm nose → heavier melting → more intense FZRA
     warm_nose_depth = warm_nose_top - warm_nose_base
@@ -220,10 +217,7 @@ def _coalescence_sld_zones(
             continue
 
         # Expand thin zones
-        if sld_top - sld_base < 2 * MIN_ZONE_HALF_THICKNESS_FT:
-            mid = (sld_top + sld_base) / 2
-            sld_base = mid - MIN_ZONE_HALF_THICKNESS_FT
-            sld_top = mid + MIN_ZONE_HALF_THICKNESS_FT
+        sld_base, sld_top = widen_thin_layer(sld_base, sld_top)
 
         # Risk grading: deeper cloud or CLMR corroboration → higher risk
         has_clmr = _has_clmr_corroboration(levels, sld_base, sld_top)

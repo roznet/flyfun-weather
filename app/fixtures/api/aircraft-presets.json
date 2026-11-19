@@ -1,0 +1,59 @@
+{
+  "presets": [
+    {
+      "id": "trainer_piston",
+      "climb_ias_kt": 75.0,
+      "climb_rate_fpm": 700.0,
+      "descent_mode": "rate",
+      "descent_rate_fpm": 500.0,
+      "descent_angle_deg": null,
+      "turbo": false
+    },
+    {
+      "id": "hp_piston",
+      "climb_ias_kt": 110.0,
+      "climb_rate_fpm": 1000.0,
+      "descent_mode": "rate",
+      "descent_rate_fpm": 500.0,
+      "descent_angle_deg": null,
+      "turbo": false
+    },
+    {
+      "id": "turbo_piston",
+      "climb_ias_kt": 120.0,
+      "climb_rate_fpm": 1000.0,
+      "descent_mode": "rate",
+      "descent_rate_fpm": 700.0,
+      "descent_angle_deg": null,
+      "turbo": true
+    },
+    {
+      "id": "twin_piston",
+      "climb_ias_kt": 120.0,
+      "climb_rate_fpm": 1300.0,
+      "descent_mode": "rate",
+      "descent_rate_fpm": 700.0,
+      "descent_angle_deg": null,
+      "turbo": false
+    },
+    {
+      "id": "single_turboprop",
+      "climb_ias_kt": 150.0,
+      "climb_rate_fpm": 2000.0,
+      "descent_mode": "angle",
+      "descent_rate_fpm": null,
+      "descent_angle_deg": 3.0,
+      "turbo": false
+    },
+    {
+      "id": "twin_turboprop",
+      "climb_ias_kt": 160.0,
+      "climb_rate_fpm": 2500.0,
+      "descent_mode": "angle",
+      "descent_rate_fpm": null,
+      "descent_angle_deg": 3.0,
+      "turbo": false
+    }
+  ],
+  "suggested": "hp_piston"
+}

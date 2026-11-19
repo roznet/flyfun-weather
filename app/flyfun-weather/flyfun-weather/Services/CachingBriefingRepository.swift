@@ -174,6 +174,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.routeDistance(waypoints: waypoints)
     }
 
+    func durationEstimate(_ request: DurationEstimateRequest) async throws -> DurationEstimateResponse {
+        try await online.durationEstimate(request)
+    }
+
+    func aircraftPresets(icaoType: String, cruiseSpeedKt: Int?) async throws -> AircraftPresetsResponse {
+        try await online.aircraftPresets(icaoType: icaoType, cruiseSpeedKt: cruiseSpeedKt)
+    }
+
     func autorouterRoutes(limit: Int) async throws -> [AutorouterRoute] {
         try await online.autorouterRoutes(limit: limit)
     }

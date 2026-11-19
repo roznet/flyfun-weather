@@ -32,13 +32,25 @@ final class AddFlightViewModel {
     /// 1h15 flight round-trips instead of being coerced to the nearest half hour.
     var durationHours: Int {
         get { FlightDuration.split(flightDurationHours).hours }
-        set { flightDurationHours = FlightDuration.combine(hours: newValue, minutes: durationMinutes) }
+        set {
+            durationSetByPilot = true
+            flightDurationHours = FlightDuration.combine(hours: newValue, minutes: durationMinutes)
+        }
     }
 
     var durationMinutes: Int {
         get { FlightDuration.split(flightDurationHours).minutes }
-        set { flightDurationHours = FlightDuration.combine(hours: durationHours, minutes: newValue) }
+        set {
+            durationSetByPilot = true
+            flightDurationHours = FlightDuration.combine(hours: durationHours, minutes: newValue)
+        }
     }
+
+    /// The duration came from the pilot, a flight plan or the flight being
+    /// copied or edited: the server's estimate no longer replaces it (#1005).
+    private(set) var durationSetByPilot = false
+    /// The last route measured, so an altitude change doesn't measure it again.
+    private var measuredRoute: (waypoints: [String], distanceNm: Double)?
 
     /// The Field-15 text the pilot actually typed, captured *before*
     /// `applyInterpretedRoute()` normalises the field to the resolved waypoints.
@@ -227,6 +239,7 @@ final class AddFlightViewModel {
             // Clamped so the pickers can represent it: otherwise editing either
             // one silently truncates the hours the pilot never touched.
             flightDurationHours = FlightDuration.clampToPickerRange(flight.flightDurationHours)
+            durationSetByPilot = true
             selectedAircraftId = flight.aircraftId
             selectedProfileId = flight.profileId
             flexibility = flight.effectiveFlexibility
@@ -795,6 +808,54 @@ final class AddFlightViewModel {
         waypointsText = waypoints.joined(separator: " ")
     }
 
+    // MARK: - Duration estimate (#1005)
+
+    /// What the estimate depends on: the view re-requests when this changes. The
+    /// whole aircraft, so saving new climb figures in the sheet re-estimates.
+    struct DurationEstimateKey: Hashable {
+        let waypoints: [String]
+        let cruiseAltitudeFt: Int
+        let aircraft: AircraftResponse?
+        let aircraftId: Int?
+    }
+
+    var durationEstimateKey: DurationEstimateKey {
+        DurationEstimateKey(waypoints: waypoints, cruiseAltitudeFt: cruiseAltitudeFt,
+                            aircraft: selectedAircraft, aircraftId: selectedAircraftId)
+    }
+
+    /// Fill the duration from the server's climb / cruise / descent path, rounded
+    /// up to the quarter hour the pickers show. A pilot's duration always wins,
+    /// and a failed call leaves the field as it is.
+    func refreshDurationEstimate() async {
+        guard !isEditing, !durationSetByPilot else { return }
+        let route = waypoints
+        guard route.count >= 2 else { return }
+        do {
+            let distanceNm: Double
+            if let measuredRoute, measuredRoute.waypoints == route {
+                distanceNm = measuredRoute.distanceNm
+            } else {
+                distanceNm = try await repository.routeDistance(waypoints: route).totalDistanceNm
+                measuredRoute = (route, distanceNm)
+            }
+            guard distanceNm > 0, !Task.isCancelled else { return }
+            let estimate = try await repository.durationEstimate(DurationEstimateRequest(
+                totalDistanceNm: distanceNm,
+                cruiseAltitudeFt: cruiseAltitudeFt,
+                aircraftId: selectedAircraftId,
+                origin: route.first,
+                destination: route.last
+            ))
+            // The pilot may have touched the pickers while the call was out.
+            guard !Task.isCancelled, !durationSetByPilot else { return }
+            let parts = FlightDuration.split(estimate.durationHours)
+            flightDurationHours = FlightDuration.combine(hours: parts.hours, minutes: parts.minutes)
+        } catch {
+            Self.logger.debug("Duration estimate unavailable: \(error)")
+        }
+    }
+
     // MARK: - Aircraft picker
 
     var selectedAircraft: AircraftResponse? {
@@ -972,6 +1033,7 @@ final class AddFlightViewModel {
                 // pickers' 12h45 ceiling — clamp it here rather than let the
                 // pickers drop the excess on the pilot's first edit.
                 flightDurationHours = FlightDuration.clampToPickerRange(duration)
+                durationSetByPilot = true
             }
 
             // Build departure date from parsed date + time

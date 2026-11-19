@@ -205,6 +205,24 @@ def test_ptype_gate(ptype, rate_kg_m2_s, fz, fzdz):
     assert (sig["ptype_fz"], sig["ptype_fzdz"]) == (fz, fzdz)
 
 
+@pytest.mark.parametrize("ptype, fz, fzdz", [
+    (3.0, True, False),
+    (12.0, True, True),
+    (1.0, False, False),
+    (0.0, False, False),
+])
+def test_ptype_without_a_rate_field_is_not_gated_to_zero(ptype, fz, fzdz):
+    # The ECPDS delivery (#1003) carries ptype but no instantaneous rate.
+    col = _column({850: _lv(-4.0, 1500)}, {"ptype": ptype})
+    sig = hc.column_signals(col, alt_ft=5000)
+    assert (sig["ptype_fz"], sig["ptype_fzdz"]) == (fz, fzdz)
+
+
+def test_ptype_with_a_zero_rate_stays_gated():
+    col = _column({850: _lv(-4.0, 1500)}, {"ptype": 12.0, "prate": 0.0})
+    assert hc.column_signals(col, alt_ft=5000)["ptype_fz"] is False
+
+
 def test_categorical_flags():
     col = _column({850: _lv(-4.0, 1500)}, {"cfrzr": 1.0, "cicep": 0.0})
     assert hc.column_signals(col, alt_ft=5000)["cat_fzra_pl"] is True

@@ -10,6 +10,24 @@ nonisolated struct RouteAnalysesResponse: Codable, Sendable {
     let cruiseAltitudeFt: Int
     let models: [String]
     let analyses: [RoutePointAnalysis]
+    /// The climb / cruise / descent path (#1005). nil on packs built before it
+    /// or with the path switched off.
+    var flightPath: FlightPathResponse? = nil
+    /// `"shadow"` or `"live"`; only a live path is drawn.
+    var flightPathMode: String? = nil
+}
+
+/// The fields of the server's `FlightPath` the app reads. `profile` is
+/// `[distance_nm, altitude_ft, time_s]` every 500 ft, in route order. Only the
+/// altitude and profile are required: a missing summary field must not stop the
+/// whole cross-section from loading.
+nonisolated struct FlightPathResponse: Codable, Sendable {
+    let cruiseAltitudeFt: Double
+    let tocNm: Double?
+    let todNm: Double?
+    let cruiseReached: Bool?
+    let peakFt: Double?
+    let profile: [[Double]]
 }
 
 nonisolated struct RoutePointAnalysis: Codable, Sendable {
@@ -29,6 +47,10 @@ nonisolated struct RoutePointAnalysis: Codable, Sendable {
     /// the route graph's ISA-deviation metric reads nil there rather than
     /// deriving a deviation from a surface temperature.
     let cruiseTemperatureC: [String: Double]?
+    /// Where the flight path puts the aircraft at this point (#1005).
+    var plannedAltitudeFt: Double? = nil
+    /// `"climb"`, `"cruise"` or `"descent"`.
+    var phase: String? = nil
 }
 
 /// Full sounding analysis for cross-section rendering.

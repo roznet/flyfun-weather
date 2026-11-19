@@ -7867,6 +7867,12 @@ html {
   font-weight: 500;
 }
 
+/* #987: section names in the stale-pack banner link to their section. */
+.invalidation-banner a.stale-pack-section-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .invalidation-info {
   background: var(--green-bg);
   color: var(--green);
