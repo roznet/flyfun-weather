@@ -8389,13 +8389,17 @@ model had icing *at* 1,500 ft; five things together made it RED:
    resolves its waypoint soundings with them (`advise.resolve_waypoint_analyses`,
    the same per-sounding rule as `_resolve_analyses`). Icing, cloud and
    convective lines all follow the graded method; when the cloud axis graded on
-   the NWP envelope the duplicate "Cloud" lines are dropped. A manifest from
+   the NWP envelope (the resolver's `cloud_method_effective` stamp) the duplicate
+   "Cloud" lines are dropped. The plain-text digest (`digest/text.format_digest`)
+   resolves the same way. A manifest from
    before this has no record and keeps the old prompt.
 3. **No icing zone extends into above-freezing air** (`icing_common.
    cap_zone_at_freezing`, on every `group_icing_levels` zone: Ogimet-DD/NWP,
    IENG, SFIP). The cap is the 0 °C crossing between the zone and the nearest
    above-freezing level below it, interpolated in altitude, read from the
-   profile rather than one `freezing_level_ft`, so a warm nose is honoured. The
+   profile rather than one `freezing_level_ft`, so a warm nose is honoured. Levels
+   are matched by identity, then by pressure, so a zone built from copied levels
+   is still capped. The
    same rule caps the **top** against a warm layer above (agent choice: the
    issue named the floor; a zone widened into a warm nose is the same error).
    SLD zones are not capped (a different hazard, §84).
@@ -8405,7 +8409,9 @@ model had icing *at* 1,500 ft; five things together made it RED:
    interpolated in altitude on the cross-section's geopotential heights
    (`_helpers.temperature_at_altitude`), not the ISA pressure of
    `cruise_temperature_c`, which can be a few hundred feet off right where the
-   sign matters; that value is only the fallback. Unknown keeps the §56
+   sign matters; that value is only the fallback. A level up to 1,000 ft below
+   the lowest delivered pressure level reads that level's temperature (a low
+   cruise over terrain; on the flight path there is no other fallback). Unknown keeps the §56
    freezing-level rule. On the flight path (#1005) the level part decides, and
    the reset falls between the cell's climb and descent. The cruise band for
    SLD (§84) is unchanged.

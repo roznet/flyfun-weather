@@ -330,6 +330,11 @@ def _escape_up(zones: list[IcingZone], ceiling_ft: float) -> float | None:
     return level if level <= ceiling_ft - CEILING_MARGIN_FT else None
 
 
+# How far under the lowest delivered pressure level the warm-cruise test still
+# reads that level's temperature (#1013 review): one level spacing near the ground.
+WARM_EXTEND_BELOW_FT = 1000
+
+
 def _warm_at(
     ctx: RouteContext, rpa, model: str, alt_ft: float,
 ) -> bool | None:
@@ -338,11 +343,15 @@ def _warm_at(
     The model's own temperature at the flown level. Above freezing, the point
     is warm whatever icing zone sits within the cruise band: no exposure
     minutes there, and the clock resets (ice sheds). Owner's choice, no
-    margin above 0 °C. Unknown (no cross-section data at that level) leaves
-    the caller on the freezing-level rule.
+    margin above 0 °C. A level up to ``WARM_EXTEND_BELOW_FT`` under the lowest
+    pressure level reads that level's temperature (a low cruise over terrain,
+    on the flight path too, where there is no cruise-temperature fallback).
+    Unknown (no cross-section data at that level) leaves the caller on the
+    freezing-level rule.
     """
     t = temperature_at_altitude(
         ctx.cross_sections, model, rpa.point_index, alt_ft, rpa.forecast_hour,
+        extend_below_ft=WARM_EXTEND_BELOW_FT,
     )
     if t is None and alt_ft == ctx.cruise_altitude_ft:
         t = rpa.cruise_temperature_c.get(model)

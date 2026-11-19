@@ -973,7 +973,10 @@ def _execute_briefing_stages(
     if result.digest_path:
         output_paths.append(str(result.digest_path))
 
-    result.text_digest = format_digest(snapshot, target_dt, output_paths=output_paths)
+    result.text_digest = format_digest(
+        snapshot, target_dt, output_paths=output_paths,
+        route_advisories=route_advisories_manifest,
+    )
 
     # Rewrite fetch_meta.json with the merged diagnostics from all stages
     # (fetch + analyze + advisories + gramet + skewt + digest). The fetch

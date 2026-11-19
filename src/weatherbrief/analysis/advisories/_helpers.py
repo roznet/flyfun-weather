@@ -1050,6 +1050,7 @@ def temperature_at_altitude(
     point_index: int,
     target_alt_ft: float,
     target_time: datetime,
+    extend_below_ft: float = 0.0,
 ) -> float | None:
     """The model's temperature (°C) at *target_alt_ft* MSL at one route point.
 
@@ -1058,7 +1059,10 @@ def temperature_at_altitude(
     ``temperature_at_pressure`` lookup would use: near the freezing level a
     few hundred feet of ISA error flips the sign). ``None`` when the point has
     no hourly data, or the target lies outside the levels' heights (no
-    extrapolation). Read by the aircraft icing card's warm-cruise test (#1013).
+    extrapolation), except that a target up to *extend_below_ft* below the
+    lowest level reads that level's temperature: a low cruise over terrain can
+    sit just under the lowest pressure level the model delivers there. Read by
+    the aircraft icing card's warm-cruise test (#1013).
     """
     for cs in cross_sections:
         if cs.model.value != model:
@@ -1078,6 +1082,8 @@ def temperature_at_altitude(
                 if a_hi == a_lo:
                     return t_lo
                 return t_lo + (t_hi - t_lo) * (target_alt_ft - a_lo) / (a_hi - a_lo)
+        if pts and pts[0][0] - extend_below_ft <= target_alt_ft < pts[0][0]:
+            return pts[0][1]
         return None
     return None
 

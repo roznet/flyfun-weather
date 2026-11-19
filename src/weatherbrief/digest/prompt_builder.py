@@ -654,9 +654,12 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             )
 
         # Graded on the NWP envelope (resolved, #1013): the "NWP cloud" lines
-        # above are these layers already, so don't print them twice.
+        # above are these layers already, so don't print them twice. Keyed on
+        # the resolver's stamp, not on the two lists comparing equal: an
+        # unresolved sounding (old manifest) never carries it.
         graded_on_nwp = (
-            sa.nwp_cloud_layers is not None and sa.cloud_layers == sa.nwp_cloud_layers
+            sa.cloud_method_effective in ("nwp", "nwp_synthesized")
+            and sa.nwp_cloud_layers is not None
         )
         for cl in ([] if graded_on_nwp else sa.cloud_layers):
             t_str = f" T={cl.mean_temperature_c:.0f}C" if cl.mean_temperature_c is not None else ""

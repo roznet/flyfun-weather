@@ -362,11 +362,18 @@ def freezing_bounds_ft(
 
     *all_levels* must be ordered by ascending altitude (the sounding order
     every icing method iterates), so ``j + 1`` / ``j - 1`` is the neighbour on
-    the zone's side. Levels are matched by identity: a zone built from copies
-    of the levels is left uncapped.
+    the zone's side. Levels are matched by identity, then by pressure (unique
+    within one sounding), so a zone built from copies of the levels is still
+    capped.
     """
     pos = {id(lv): i for i, lv in enumerate(all_levels)}
-    i_first, i_last = pos.get(id(first)), pos.get(id(last))
+    by_pressure = {lv.pressure_hpa: i for i, lv in enumerate(all_levels)}
+
+    def _index(lv: DerivedLevel) -> int | None:
+        i = pos.get(id(lv))
+        return i if i is not None else by_pressure.get(lv.pressure_hpa)
+
+    i_first, i_last = _index(first), _index(last)
     floor = ceiling = None
     if i_first is not None:
         for j in range(i_first - 1, -1, -1):

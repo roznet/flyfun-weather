@@ -260,3 +260,59 @@ def test_digest_prints_the_zones_the_card_graded(sample_route):
     # A manifest from before #1013 keeps the stored zones (old prompt exactly).
     old = build_digest_context(snapshot, target_time, route_advisories=RouteAdvisoriesManifest())
     assert "1609-2609ft" in old
+
+
+# ── follow-ups after landing (#1014 review) ────────────────────────
+
+
+def test_freezing_cap_matches_copied_levels_by_pressure():
+    """A zone built from copies of the levels is still capped (was skipped)."""
+    warm = _lv(950, 1500, 1.0)
+    cold = _lv(925, 2000, -1.0)
+    zone = IcingZone(base_ft=1500, top_ft=2500, risk=IcingRisk.LIGHT)
+    copy = cold.model_copy()
+    capped = cap_zone_at_freezing(zone, copy, copy, [warm, cold])
+    assert capped.base_ft == 1750
+
+
+def test_warm_lookup_reads_the_lowest_level_just_below_it():
+    """A low cruise just under the lowest delivered level reads its temperature."""
+    cs = _cross_section({0: [(2000, 1.5), (4000, -2.0)]}, 1)
+    t = datetime(2026, 3, 1, 9, 0)
+    assert temperature_at_altitude([cs], "gfs", 0, 1500, t) is None
+    assert temperature_at_altitude([cs], "gfs", 0, 1500, t, extend_below_ft=1000) == 1.5
+    assert temperature_at_altitude([cs], "gfs", 0, 500, t, extend_below_ft=1000) is None
+
+
+def test_text_digest_prints_the_zones_the_card_graded(sample_route):
+    from weatherbrief.digest.text import format_digest
+
+    target_time = datetime(2026, 2, 17, 9, 0, 0)
+    dd = IcingZone(base_ft=1609, top_ft=2609, risk=IcingRisk.LIGHT,
+                   icing_type=IcingType.CLEAR, mean_wet_bulb_c=-1.0)
+    nwp = IcingZone(base_ft=2467, top_ft=3949, risk=IcingRisk.MODERATE,
+                    icing_type=IcingType.MIXED, mean_wet_bulb_c=-4.0)
+    sounding = SoundingAnalysis(
+        icing_zones=[dd], icing_ogimet_dd_zones=[dd], icing_ogimet_nwp_zones=[nwp],
+        nwp_cloud_layers=[],
+    )
+    snapshot = ForecastSnapshot(
+        route=sample_route, target_date="2026-02-17", fetch_date="2026-02-15",
+        days_out=2,
+        # The text digest prints a waypoint's analysis only under its forecast.
+        forecasts=[WaypointForecast(
+            waypoint=sample_route.waypoints[0], model=ModelSource.ECMWF,
+            fetched_at=datetime(2026, 2, 15, tzinfo=timezone.utc),
+            hourly=[HourlyForecast(time=target_time)],
+        )],
+        analyses=[WaypointAnalysis(
+            waypoint=sample_route.waypoints[0], target_time=target_time,
+            sounding={"ecmwf": sounding},
+        )],
+    )
+    graded = RouteAdvisoriesManifest(engine_methods={
+        "icing_method": "ogimet_nwp", "cloud_source": "nwp", "convective_method": "nwp",
+    })
+    text = format_digest(snapshot, target_time, route_advisories=graded)
+    assert "2467" in text and "1609" not in text
+    assert "1609" in format_digest(snapshot, target_time)

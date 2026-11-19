@@ -7,6 +7,8 @@ or from persisted pack_dir artifacts.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -318,7 +320,7 @@ def _resolve_sounding(
 
 def resolve_waypoint_analyses(
     analyses: list,
-    engine_methods: dict[str, str | None] | None,
+    engine_methods: Mapping[str, str | None] | None,
 ) -> list:
     """Waypoint analyses (``ForecastSnapshot.analyses``) resolved like the advisories'.
 

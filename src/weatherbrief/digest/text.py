@@ -14,6 +14,7 @@ from weatherbrief.models import (
     ForecastSnapshot,
     IcingRisk,
     PrecipPhase,
+    RouteAdvisoriesManifest,
     RouteAlternates,
     RouteObservations,
     RouteSigmets,
@@ -31,8 +32,22 @@ def format_digest(
     snapshot: ForecastSnapshot,
     target_time: datetime,
     output_paths: list[str] | None = None,
+    route_advisories: RouteAdvisoriesManifest | None = None,
 ) -> str:
-    """Format a plain-text weather digest from a forecast snapshot."""
+    """Format a plain-text weather digest from a forecast snapshot.
+
+    With *route_advisories*, the soundings are resolved with the methods the
+    cards graded on, as in the LLM digest (#1013): the text shows the icing
+    the card graded, not the stored Ogimet-DD zones.
+    """
+    if route_advisories is not None and route_advisories.engine_methods is not None:
+        from weatherbrief.tasks.advise import resolve_waypoint_analyses
+
+        snapshot = snapshot.model_copy(update={
+            "analyses": resolve_waypoint_analyses(
+                snapshot.analyses, route_advisories.engine_methods,
+            ),
+        })
     lines: list[str] = []
 
     # Header
