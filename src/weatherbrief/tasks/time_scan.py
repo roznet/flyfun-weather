@@ -962,8 +962,10 @@ def run_time_scan(
     )
 
     def _grade(t: datetime, *, persist: bool, detect_fronts: bool,
-               models_override: list[str] | None = None):
+               models_override: list[str] | None = None, flight_path=None):
         kwargs = dict(grade_kwargs)
+        if flight_path is not None:
+            kwargs["flight_path"] = flight_path
         if models_override is not None:
             kwargs["advisory_models"] = models_override
             # Analyze only the graded models' cross-sections — the analysis
@@ -1047,17 +1049,31 @@ def run_time_scan(
     candidates: list[TimeCandidate] = []
     refused: list[datetime] = []
     # Live flight path (#1005): the re-grade reads the path's point times, so
-    # the coverage check must too.
+    # the coverage check must too. The path is flown in the wind at each
+    # candidate's own time (#1007), so it is built per candidate and handed to
+    # the re-grade: both read the same point times.
     from weatherbrief.analysis.flight_path import flight_path_mode, route_flight_path
 
-    scan_path = None
-    if flight_path_mode() == "live":
-        scan_path = route_flight_path(
-            route_points, route.cruise_altitude_ft, elevation=load_elevation_profile(pack_dir),
+    path_live = flight_path_mode() == "live"
+    scan_elevation = load_elevation_profile(pack_dir) if path_live else None
+
+    def _scan_path(t: datetime, models: list[str] | None = None):
+        """The live path at ``t``, in the wind of ``models`` (default all)."""
+        if not path_live:
+            return None
+        sections = cross_sections
+        if models is not None:
+            wanted = {m.lower() for m in models}
+            sections = [cs for cs in cross_sections if cs.model.value in wanted]
+        return route_flight_path(
+            route_points, route.cruise_altitude_ft, elevation=scan_elevation,
             equipage=equipage, cruise_speed_ias_kt=cruise_speed_ias_kt,
             planned_duration_h=duration,
+            cross_sections=sections, departure_time=t,
         )
-    baseline_vts = candidate_valid_times(route_points, dep, duration, scan_path)
+
+    base_path = _scan_path(dep)
+    baseline_vts = candidate_valid_times(route_points, dep, duration, base_path)
     baseline_row = TimeCandidate(
         departure_time=dep,
         departure_shift_hours=0.0,
@@ -1083,7 +1099,8 @@ def run_time_scan(
             if is_alt:
                 alternate_row = baseline_row.model_copy(update={"is_alternate": True})
             continue
-        vts = candidate_valid_times(route_points, t, duration, scan_path)
+        cand_path = _scan_path(t)
+        vts = candidate_valid_times(route_points, t, duration, cand_path)
         if not covers(per_point, graded_models, vts):
             # The honesty invariant: never grade an hour whose enriched fields
             # aren't actually there — at_time() would silently clamp to the
@@ -1094,7 +1111,7 @@ def run_time_scan(
         # The pinned alternate keeps feeding route_advisories_alt.json (the
         # existing planned↔alt web UI) and re-runs alt front detection like the
         # retired in-pipeline stage did.
-        manifest = _grade(t, persist=is_alt, detect_fronts=is_alt)
+        manifest = _grade(t, persist=is_alt, detect_fronts=is_alt, flight_path=cand_path)
         if manifest is None:
             continue
         improves, worsens, margin = _diff_manifests(baseline_manifest, manifest, scan_ids)
@@ -1148,6 +1165,13 @@ def run_time_scan(
                 span_his = [s[1] for s in ecmwf_spans if s]
                 horizon = min(span_his) if span_his else None
                 for t, is_alt, vts in deferred:
+                    # Live: this tier grades ECMWF only, on the extended
+                    # sections, so its path flies ECMWF's wind (the other
+                    # models are clamped outside their window) and the
+                    # coverage check reads that path's times (#1007).
+                    e_path = _scan_path(t, [_ECMWF_MODEL])
+                    if e_path is not None:
+                        vts = candidate_valid_times(route_points, t, duration, e_path)
                     if not covers(ecmwf_per_point, [_ECMWF_MODEL], vts):
                         refused.append(t)
                         if horizon and vts and vts[-1] > horizon:
@@ -1163,6 +1187,7 @@ def run_time_scan(
                     manifest = _grade(
                         t, persist=is_alt, detect_fronts=is_alt,
                         models_override=[_ECMWF_MODEL],
+                        flight_path=e_path,
                     )
                     if manifest is None:
                         continue

@@ -5,7 +5,7 @@ computes one path per briefing (not per model) and the phase-1 advisories
 (aircraft icing, cloud / VMC) read the weather where and when the aircraft
 actually is, instead of treating every route point as being at cruise.
 
-Model (still air in v1, ISA):
+Model (ISA, in the briefing's pooled forecast wind when it has one):
 
 * **Climb** at the preset's climb IAS (jets: 250 kt below FL100, then CAS until
   the Mach cap). Rate of climb falls linearly from ``climb_rate_low_fpm`` at
@@ -20,8 +20,10 @@ Integrated in ``STEP_FT`` altitude steps and interpolated onto the route
 points. A short leg where the climb and the descent meet before cruise flies
 up to ``peak_ft`` (``cruise_reached=False``).
 
-Wind: ``wind_at(distance_nm, altitude_ft) -> headwind_kt`` (default still air)
-lets a consensus wind be added later without reshaping the API.
+Wind (#1007): ``wind_at(distance_nm, altitude_ft) -> headwind_kt`` (default
+still air). The pipeline builders pass the briefing's ``HeadwindGrid`` (the
+models' median headwind along the route, ``analysis.wind.route_headwind_grid``),
+which is stored on the path so ``recompute_for_cruise`` flies the same wind.
 
 Every number below is a typical POH-order figure, not checked type by type,
 and is meant to be tuned (decision of 2026-11-17: "we can tweak rates later").
@@ -31,9 +33,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
+from datetime import datetime
 
 from weatherbrief.atmo import cas_to_mach_isa, cas_to_tas_isa, ias_to_tas_isa, mach_to_tas_isa
-from weatherbrief.models.flight_path import AircraftPerformance, FlightPath, FlightPathPoint
+from weatherbrief.models.flight_path import (
+    AircraftPerformance,
+    FlightPath,
+    FlightPathPoint,
+    HeadwindGrid,
+)
 
 # Integration step (ft) and the floor below which the groundspeed never falls.
 STEP_FT = 100.0
@@ -339,6 +347,7 @@ def compute_flight_path(
     point_indices: Sequence[int] | None = None,
     planned_duration_h: float | None = None,
     wind_at: HeadwindFn | None = None,
+    wind_grid: HeadwindGrid | None = None,
 ) -> FlightPath:
     """The flight path over the route points at ``distances_nm`` (route order).
 
@@ -346,8 +355,14 @@ def compute_flight_path(
     (the flight's duration, the pilot's when overwritten) scales the path's
     times so it ends at the planned arrival; ``None`` or ``<= 0`` keeps the
     path's own time. ``wind_at(distance_nm, altitude_ft)`` returns the
-    headwind (kt), default still air.
+    headwind (kt), default still air; ``wind_grid`` (the pipeline's pooled
+    forecast wind) is used when ``wind_at`` is not given and is kept on the
+    path, so a recompute flies the same wind. ``wind`` reads ``consensus``
+    whenever a wind was flown; only a grid survives ``recompute_for_cruise``
+    (a bare ``wind_at``, as in tests, recomputes in still air).
     """
+    if wind_at is None and wind_grid is not None:
+        wind_at = wind_grid.headwind_at
     headwind = wind_at or _no_wind
     perf = performance
     ias = cruise_ias_kt if cruise_ias_kt and cruise_ias_kt > 0 else DEFAULT_CRUISE_IAS_KT.get(perf.preset, 150)
@@ -435,6 +450,7 @@ def compute_flight_path(
         total_distance_nm=total, toc_nm=round(toc, 3), tod_nm=round(tod, 3),
         cruise_reached=reached, peak_ft=round(peak, 1),
         duration_h=duration_s / 3600.0, time_scale=scale, profile=dense,
+        wind="consensus" if wind_at is not None else "still_air", wind_grid=wind_grid,
     )
     indices = list(point_indices) if point_indices is not None else list(range(len(distances_nm)))
     path.points = [
@@ -449,14 +465,19 @@ def compute_flight_path(
     return path
 
 
-def recompute_for_cruise(path: FlightPath, cruise_ft: float) -> FlightPath:
+def recompute_for_cruise(
+    path: FlightPath, cruise_ft: float, *, wind_grid: HeadwindGrid | None = None,
+) -> FlightPath:
     """The same flight flown at another cruise altitude (altitude table, overrides).
 
-    Keeps the stored inputs (route points, performance, elevations, cruise IAS
-    and the planned-duration scale's target) so a recalculation never needs
-    the aircraft again.
+    Keeps the stored inputs (route points, performance, elevations, cruise IAS,
+    the planned-duration scale's target and the wind grid) so a recalculation
+    never needs the aircraft or the cross-sections again. A path built with a
+    bare ``wind_at`` callable (tests) has no grid and recomputes in still air.
+    ``wind_grid`` replaces the stored grid (a pre-#1007 path given its wind).
     """
-    if abs(cruise_ft - path.cruise_altitude_ft) < 1e-6:
+    grid = wind_grid if wind_grid is not None else path.wind_grid
+    if abs(cruise_ft - path.cruise_altitude_ft) < 1e-6 and grid is path.wind_grid:
         return path
     planned_h = path.duration_h * path.time_scale if path.time_scale != 1.0 else None
     return compute_flight_path(
@@ -465,6 +486,7 @@ def recompute_for_cruise(path: FlightPath, cruise_ft: float) -> FlightPath:
         cruise_ias_kt=path.cruise_ias_kt,
         point_indices=[p.point_index for p in path.points],
         planned_duration_h=planned_h,
+        wind_grid=grid,
     )
 
 
@@ -517,6 +539,10 @@ def build_flight_path(
     performance: AircraftPerformance | None = None,
     cruise_ias_kt: float | None = None,
     planned_duration_h: float | None = None,
+    cross_sections=None,
+    tracks_deg: Sequence[float] | None = None,
+    departure_time: datetime | None = None,
+    times: Sequence[datetime] | None = None,
 ) -> FlightPath | None:
     """The briefing's path over its route points, or None when it cannot be built.
 
@@ -524,6 +550,14 @@ def build_flight_path(
     field elevations (sea level when unknown). ``performance`` None is the
     unknown-aircraft default. Never raises: a failure is logged and the
     briefing reads as flat cruise, as before #1005.
+
+    Wind (#1007): with ``cross_sections`` and ``tracks_deg`` (one per point),
+    the path is flown in the pooled headwind of every given cross-section
+    model. The wind is read at ``times`` (one per point, e.g. the analyses'
+    own hours) or, given only ``departure_time``, at the still-air path's
+    planned times: a first still-air pass, then the path in that wind (one
+    pass; the total stays the planned duration, so only where the time goes
+    moves). Without winds the path is the still-air one.
     """
     import logging
 
@@ -537,7 +571,7 @@ def build_flight_path(
         perf = performance or resolve_performance(
             category=None, cruise_ias_kt=cruise_ias_kt, known=False,
         )
-        return compute_flight_path(
+        path = compute_flight_path(
             distances_nm, cruise_ft, perf, dep, arr,
             cruise_ias_kt=cruise_ias_kt, point_indices=point_indices,
             planned_duration_h=planned_duration_h,
@@ -545,6 +579,43 @@ def build_flight_path(
     except Exception:
         logging.getLogger(__name__).warning("flight path: build failed", exc_info=True)
         return None
+    if not cross_sections or tracks_deg is None or (times is None and departure_time is None):
+        return path
+    try:
+        grid = _headwind_grid(
+            path, distances_nm, point_indices, cruise_ft, cross_sections, tracks_deg,
+            departure_time, times,
+        )
+        if grid is None:
+            return path
+        return compute_flight_path(
+            distances_nm, cruise_ft, path.performance, dep, arr,
+            cruise_ias_kt=cruise_ias_kt, point_indices=point_indices,
+            planned_duration_h=planned_duration_h, wind_grid=grid,
+        )
+    except Exception:
+        logging.getLogger(__name__).warning("flight path: wind failed, still air", exc_info=True)
+        return path
+
+
+def _headwind_grid(
+    path: FlightPath, distances_nm, point_indices, cruise_ft, cross_sections,
+    tracks_deg, departure_time, times,
+) -> HeadwindGrid | None:
+    """The pooled headwind grid for a path's points (see ``build_flight_path``)."""
+    from datetime import timedelta
+
+    from weatherbrief.analysis.wind import route_headwind_grid
+
+    if times is None:
+        times = [departure_time + timedelta(seconds=p.time_offset_s) for p in path.points]
+    if not (len(times) == len(tracks_deg) == len(distances_nm) == len(point_indices)):
+        return None
+    # Up to the higher of cruise and the ceiling, so the altitude table's rows
+    # (recomputed at other cruise levels) read the same grid.
+    top = max(float(cruise_ft), path.performance.ceiling_ft)
+    samples = list(zip(point_indices, distances_nm, tracks_deg, times))
+    return route_headwind_grid(cross_sections, samples, top)
 
 
 def route_flight_path(
@@ -555,15 +626,27 @@ def route_flight_path(
     equipage=None,
     cruise_speed_ias_kt: float | None = None,
     planned_duration_h: float | None = None,
+    cross_sections=None,
+    departure_time: datetime | None = None,
 ) -> FlightPath | None:
     """The path over a route's points for an aircraft equipage, unless ``WB_FLIGHT_PATH=off``.
 
-    ``route_points`` are ``RoutePoint``s (or anything with
-    ``distance_from_origin_nm``), indexed by position; ``equipage`` an
+    ``route_points`` are ``RoutePoint``s (``distance_from_origin_nm``,
+    ``lat`` / ``lon``), indexed by position; ``equipage`` an
     ``AircraftEquipage`` whose ``performance`` is used (None: unknown aircraft).
+    With ``cross_sections`` and ``departure_time`` the path is flown in the
+    pooled forecast wind (``build_flight_path``).
     """
     if flight_path_mode() == "off" or not route_points:
         return None
+    tracks = None
+    if cross_sections and departure_time is not None:
+        from weatherbrief.analysis.wind import compute_route_tracks
+
+        try:
+            tracks = compute_route_tracks(route_points)
+        except (AttributeError, TypeError):
+            tracks = None  # points without coordinates: still air
     return build_flight_path(
         [float(rp.distance_from_origin_nm or 0.0) for rp in route_points],
         list(range(len(route_points))),
@@ -572,6 +655,9 @@ def route_flight_path(
         performance=getattr(equipage, "performance", None),
         cruise_ias_kt=cruise_speed_ias_kt,
         planned_duration_h=planned_duration_h,
+        cross_sections=cross_sections,
+        tracks_deg=tracks,
+        departure_time=departure_time,
     )
 
 
@@ -584,17 +670,28 @@ def analyses_flight_path(
     equipage=None,
     cruise_speed_ias_kt: float | None = None,
     planned_duration_h: float | None = None,
+    cross_sections=None,
 ) -> FlightPath | None:
     """The path for a recalculation: the stored one at this cruise, else built anew.
 
-    For packs built before #1005 (no stored path) the path is built from the
-    analyses' own distances, so a ``WB_FLIGHT_PATH=live`` replay of an old
-    pack still grades on a path (with the pack's linear point times).
+    The stored path keeps its wind grid (``recompute_for_cruise``). For packs
+    built before #1005 (no stored path) the path is built from the analyses'
+    own distances, so a ``WB_FLIGHT_PATH=live`` replay of an old pack still
+    grades on a path (with the pack's linear point times); with
+    ``cross_sections`` it is flown in the pooled wind read at the analyses'
+    own forecast hours and tracks. A stored path built before #1007 has no
+    grid and stays still air (rebuild the pack to get the wind).
     """
     if flight_path_mode() == "off":
         return None
     if stored is not None:
-        return recompute_for_cruise(stored, cruise_ft)
+        grid = None
+        if stored.wind_grid is None and cross_sections and analyses:
+            grid = _analyses_headwind_grid(
+                analyses, max(float(cruise_ft), stored.performance.ceiling_ft),
+                cross_sections,
+            )
+        return recompute_for_cruise(stored, cruise_ft, wind_grid=grid)
     if not analyses:
         return None
     return build_flight_path(
@@ -605,4 +702,25 @@ def analyses_flight_path(
         performance=getattr(equipage, "performance", None),
         cruise_ias_kt=cruise_speed_ias_kt,
         planned_duration_h=planned_duration_h,
+        cross_sections=cross_sections,
+        tracks_deg=[float(a.track_deg) for a in analyses],
+        times=[a.interpolated_time for a in analyses],
     )
+
+
+def _analyses_headwind_grid(analyses, top_ft, cross_sections) -> HeadwindGrid | None:
+    """The pooled headwind at the analyses' own points, tracks and times."""
+    import logging
+
+    from weatherbrief.analysis.wind import route_headwind_grid
+
+    try:
+        samples = [
+            (a.point_index, float(a.distance_from_origin_nm), float(a.track_deg),
+             a.interpolated_time)
+            for a in analyses
+        ]
+        return route_headwind_grid(cross_sections, samples, top_ft)
+    except Exception:
+        logging.getLogger(__name__).warning("flight path: wind failed, still air", exc_info=True)
+        return None

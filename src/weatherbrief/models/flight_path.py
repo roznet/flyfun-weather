@@ -13,6 +13,49 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 FlightPhase = Literal["climb", "cruise", "descent"]
+PathWind = Literal["consensus", "still_air"]
+
+
+class HeadwindGrid(BaseModel):
+    """The briefing's pooled headwind along the route, by distance and altitude (#1007).
+
+    ``headwind_kt[i][j]`` is the headwind (kt, negative = tailwind) at
+    ``distances_nm[i]`` and ``altitudes_ft[j]``: the median across the
+    briefing's models of the forecast wind projected on the route track, read
+    at the time the aircraft is planned there. A cell no model has a wind for
+    is 0 (still air). Stored on the path so every recompute (altitude table,
+    cruise override, replay) flies the same wind without the cross-sections.
+    """
+
+    distances_nm: list[float]
+    altitudes_ft: list[float]
+    headwind_kt: list[list[float]]
+    models: list[str] = Field(default_factory=list)
+
+    def headwind_at(self, distance_nm: float, altitude_ft: float) -> float:
+        """Bilinear in distance and altitude, clamped to the grid's edges."""
+        if not self.distances_nm or not self.altitudes_ft:
+            return 0.0
+        i0, i1, fi = _bracket(self.distances_nm, distance_nm)
+        j0, j1, fj = _bracket(self.altitudes_ft, altitude_ft)
+        rows = self.headwind_kt
+
+        def _row(i: int) -> float:
+            return rows[i][j0] + (rows[i][j1] - rows[i][j0]) * fj
+
+        return _row(i0) + (_row(i1) - _row(i0)) * fi
+
+
+def _bracket(axis: list[float], x: float) -> tuple[int, int, float]:
+    """Indices around ``x`` on a sorted axis and the fraction between them."""
+    if x <= axis[0]:
+        return 0, 0, 0.0
+    if x >= axis[-1]:
+        n = len(axis) - 1
+        return n, n, 0.0
+    j = bisect.bisect_right(axis, x)
+    a0, a1 = axis[j - 1], axis[j]
+    return j - 1, j, 0.0 if a1 <= a0 else (x - a0) / (a1 - a0)
 
 
 class AircraftPerformance(BaseModel):
@@ -79,11 +122,16 @@ class FlightPath(BaseModel):
     tod_nm: float
     cruise_reached: bool = True
     peak_ft: float
-    # Computed (still-air in v1) duration, hours.
+    # Computed duration (with ``wind``), hours.
     duration_h: float
     time_scale: float = 1.0
     profile: list[list[float]] = Field(default_factory=list)
     points: list[FlightPathPoint] = Field(default_factory=list)
+    # The wind the path was flown in (#1007): the pooled forecast
+    # (``consensus``, with its grid) or none (``still_air``: no forecast
+    # winds, an old pack, or the new-flight duration estimate).
+    wind: PathWind = "still_air"
+    wind_grid: HeadwindGrid | None = None
 
     # --- reading the path -------------------------------------------------
 
@@ -173,6 +221,7 @@ class FlightPathSummary(BaseModel):
     peak_ft: float
     cruise_reached: bool = True
     duration_h: float
+    wind: PathWind = "still_air"
 
     @classmethod
     def of(cls, path: "FlightPath", live: bool) -> "FlightPathSummary":
@@ -180,7 +229,7 @@ class FlightPathSummary(BaseModel):
             preset=path.performance.preset, live=live, toc_nm=path.toc_nm,
             tod_nm=path.tod_nm, total_distance_nm=path.total_distance_nm,
             peak_ft=path.peak_ft, cruise_reached=path.cruise_reached,
-            duration_h=path.duration_h * path.time_scale,
+            duration_h=path.duration_h * path.time_scale, wind=path.wind,
         )
 
 

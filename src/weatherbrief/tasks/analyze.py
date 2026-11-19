@@ -9,7 +9,6 @@ backward compatibility.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +19,11 @@ from weatherbrief.analysis.comparison import compare_models
 from weatherbrief.analysis.flight_path import flight_path_mode, route_flight_path
 from weatherbrief.analysis.sounding import analyze_sounding
 from weatherbrief.analysis.sounding.advisories import compute_altitude_advisories
-from weatherbrief.analysis.wind import compute_wind_components, pick_wind_at_pressure
+from weatherbrief.analysis.wind import (
+    compute_route_tracks,
+    compute_wind_components,
+    pick_wind_at_pressure,
+)
 from weatherbrief.models import (
     AircraftEquipage,
     AltitudeAdvisories,
@@ -40,7 +43,6 @@ from weatherbrief.models import (
     WaypointForecast,
     WindComponent,
     altitude_to_pressure_hpa,
-    bearing_between_coords,
     temperature_at_pressure,
 )
 
@@ -278,39 +280,6 @@ def compute_wind_overlay_at_altitude(
     )
 
 
-def compute_route_tracks(route_points: list[RoutePoint]) -> list[float]:
-    """Compute bearing at each route point using neighbor points."""
-    n = len(route_points)
-    tracks: list[float] = []
-    for i in range(n):
-        if n == 1:
-            tracks.append(0.0)
-        elif i == 0:
-            tracks.append(bearing_between_coords(
-                route_points[0].lat, route_points[0].lon,
-                route_points[1].lat, route_points[1].lon,
-            ))
-        elif i == n - 1:
-            tracks.append(bearing_between_coords(
-                route_points[-2].lat, route_points[-2].lon,
-                route_points[-1].lat, route_points[-1].lon,
-            ))
-        else:
-            # Circular mean of incoming and outgoing bearings
-            b1 = bearing_between_coords(
-                route_points[i - 1].lat, route_points[i - 1].lon,
-                route_points[i].lat, route_points[i].lon,
-            )
-            b2 = bearing_between_coords(
-                route_points[i].lat, route_points[i].lon,
-                route_points[i + 1].lat, route_points[i + 1].lon,
-            )
-            x = math.cos(math.radians(b1)) + math.cos(math.radians(b2))
-            y = math.sin(math.radians(b1)) + math.sin(math.radians(b2))
-            tracks.append(math.degrees(math.atan2(y, x)) % 360)
-    return tracks
-
-
 def compute_interpolated_time(
     departure: datetime, duration_hours: float,
     distance_nm: float, total_distance_nm: float,
@@ -527,6 +496,7 @@ def run_analysis(
                 route_points, route.cruise_altitude_ft, elevation=elevation,
                 equipage=equipage, cruise_speed_ias_kt=cruise_speed_ias_kt,
                 planned_duration_h=route.flight_duration_hours,
+                cross_sections=cross_sections, departure_time=target_dt,
             )
             rp_analyses = analyze_all_route_points(
                 cross_sections, route_points, target_dt,

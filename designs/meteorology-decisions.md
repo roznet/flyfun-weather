@@ -8293,3 +8293,45 @@ droplet logged none in 7 days and the mini 6 in 31 cycles.
 On the #1003 columns (3 days, 625 icing / NEG reports) at most 2 reports
 change for any method, skill by at most +0.005. The value is that the decks
 exist: the cross-section draws them and icing gating sees them.
+
+## 87. The flight path flies the models' median headwind (#1007)
+
+**Date:** 2026-11-18 · **Issue:** #1007 · **Related:** §85 (flight path), §56 (exposure minutes), `cruise_groundspeed_kt` (#571)
+
+### Context
+
+The §85 path was still air: in a 30 kt headwind a piston climb to 8,000 ft
+covers ~4 nm less ground than the still-air path says, so the card ranges
+("climb, nm 3 to 14"), the icing exposure minutes per stretch and the
+"in cloud … about N min" figures were off by tens of percent in strong
+winds. One path per briefing (§85), so one wind.
+
+### Choices
+
+- **Pooled wind = median across models, per cell**, of each model's wind
+  (`pick_wind_at_pressure`: u/v interpolated between levels, none beyond the
+  2,000 ft snap) projected on the route track. Median over mean because one
+  model with a misplaced jet should not drag the shared path; with two models
+  it is their mean. `cruise_groundspeed_kt` (a display figure at cruise only)
+  stays a mean.
+- **Every cross-section model** pools, not only the advisory models: the path
+  is built in the analysis stage, before the advisory-model preference is
+  applied, and one path serves every recompute.
+- **Grid**: route points × every 1,000 ft from sea level to the higher of the
+  cruise and the aircraft ceiling, stored on the path (`FlightPath.wind_grid`)
+  so the altitude table and cruise overrides fly the same wind. A cell no
+  model reaches reads still air; a pack with no winds keeps the still-air path
+  exactly.
+- **When:** the wind is read at the still-air path's planned times (the
+  analyses' own times on a recalculation of an older pack). One pass, no
+  iteration: the total stays the planned duration (`time_scale`), so the
+  wind only moves where along the route the time goes, and the hourly
+  forecasts snap to the hour anyway.
+- **Not in the new-flight duration estimate** (`/flights/duration-estimate`):
+  no forecast there, it stays still air.
+
+### Measured
+
+Not yet. Replay before and after with
+`WB_FLIGHT_PATH=live python scripts/rerun_advisories_diff.py --area corpus`
+on the Mac (stored packs now get the wind from their cross-sections).
