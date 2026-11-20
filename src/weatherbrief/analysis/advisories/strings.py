@@ -951,7 +951,22 @@ _STRINGS: dict[str, dict[str, str]] = {
     # geometry ("wind favours 24, the ILS serves 06") and never issues a
     # usability verdict. Runway designators and approach classes are aviation
     # abbreviations and stay untranslated.
-    # Follows "Arr {icao}: VFR — " (the category is the clause head, #823).
+    # The forecast ceiling, printed right after the category in every arrival
+    # clause ("Arr EGTF: MVFR, ceiling 1400ft — ...", #1019). "No ceiling" is
+    # the model finding no BKN/OVC layer — FEW/SCT cloud may still be there.
+    "approach_feasibility.ceiling": {
+        "en": "ceiling {ceiling}ft",
+        "fr": "plafond {ceiling}ft",
+        "de": "Decke {ceiling}ft",
+        "es": "techo {ceiling}ft",
+    },
+    "approach_feasibility.no_ceiling": {
+        "en": "no ceiling",
+        "fr": "pas de plafond",
+        "de": "keine Decke",
+        "es": "sin techo",
+    },
+    # Follows "Arr {icao}: VFR, ceiling …ft — " (the category is the clause head, #823).
     "approach_feasibility.vfr": {
         "en": "Reachable visually, approach not a factor",
         "fr": "Accessible à vue, l'approche n'est pas un facteur",

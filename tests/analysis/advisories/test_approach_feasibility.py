@@ -181,6 +181,32 @@ class TestCategoryGating:
         )
         assert _grade(ctx) == AdvisoryStatus.GREEN
 
+    def test_vfr_prints_the_forecast_ceiling(self):
+        """#1019: a VFR arrival still shows its cloud figure, not just "visual"."""
+        ctx = _ctx(
+            _conditions(FlightCategory.VFR, [_RWY_24], ceiling_ft=3200),
+            _approaches(has_procedure_data=False),
+        )
+        result = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults())
+        assert result.aggregate_detail.startswith("Arr EGKA: VFR, ceiling 3200ft — ")
+        assert all("ceiling 3200ft" in m.detail for m in result.per_model)
+
+    def test_no_bkn_ovc_layer_reads_no_ceiling(self):
+        conditions = _conditions(FlightCategory.VFR, [_RWY_24])
+        for cond in conditions.arrival.conditions:
+            cond.ceiling_ft = None
+        ctx = _ctx(conditions, _approaches(has_procedure_data=False))
+        detail = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults()).aggregate_detail
+        assert detail.startswith("Arr EGKA: VFR, no ceiling — ")
+
+    def test_ifr_prints_the_ceiling_too(self):
+        ctx = _ctx(
+            _conditions(FlightCategory.IFR, [_RWY_02, _RWY_20], ceiling_ft=700),
+            _approaches(_ILS_20),
+        )
+        detail = ApproachFeasibilityEvaluator.evaluate(ctx, _defaults()).aggregate_detail
+        assert detail.startswith("Arr EGKA: IFR, ceiling 700ft — ")
+
     def test_mvfr_with_any_approach_is_green(self):
         """Alignment is not a penalty when the landing can be completed visually."""
         ctx = _ctx(

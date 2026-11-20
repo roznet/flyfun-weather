@@ -281,6 +281,17 @@ def _plan_wind_status(
     return AdvisoryStatus.GREEN
 
 
+def _ceiling_text(cond: AirportModelCondition, loc: str | None) -> str:
+    """The forecast ceiling as the arrival clause prints it (#1019).
+
+    Printed at every category, VFR included: a VFR pilot reading this card
+    otherwise sees no cloud figure at all. ``None`` is "no BKN/OVC layer".
+    """
+    if cond.ceiling_ft is None:
+        return adv_t("approach_feasibility.no_ceiling", loc)
+    return adv_t("approach_feasibility.ceiling", loc, ceiling=int(cond.ceiling_ft))
+
+
 def _band_status(value: float | None, lo: float, hi: float) -> AdvisoryStatus:
     """Grade a forecast value against an estimated-minima band ``[lo, hi]``.
 
@@ -645,11 +656,14 @@ class ApproachFeasibilityEvaluator:
                 status, detail = _grade_mvfr(approaches, loc)
 
             # The category is structured so the aggregate prints the
-            # cross-model consensus rather than this model's (#823).
+            # cross-model consensus rather than this model's (#823). The
+            # ceiling rides in the suffix, which the aggregate prints only when
+            # this model's category IS the consensus — so the figure shown
+            # always belongs to the category beside it (#1019).
             clause = AirportClause(
                 end="arr", category=cond.flight_category, printed=True,
                 head=f"{adv_t('airport.arr', loc)} {arr.icao}: ",
-                suffix=f" — {detail}", locale=loc,
+                suffix=f", {_ceiling_text(cond, loc)} — {detail}", locale=loc,
             )
             per_model.append(ModelAdvisoryResult.build(
                 model=model, status=status,
