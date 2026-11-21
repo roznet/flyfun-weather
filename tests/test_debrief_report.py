@@ -448,6 +448,8 @@ def test_api_answers_fold_into_the_debrief(client, past_flight, one_question, ap
     s = app_db()
     assert s.query(FlightDebriefAnswerRow).count() == 0
     s.close()
+    # Every answer cleared: no "flown, nothing to report" left behind.
+    assert client.get(f"/api/flights/{past_flight.id}/debrief").status_code == 404
 
 
 def test_api_old_form_is_marked_legacy_and_questions_form_derives_outcomes(client, past_flight, one_question):
