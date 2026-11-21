@@ -54,6 +54,13 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
     /// a "debriefed ✓" glyph and the briefing seed its debrief card without a
     /// per-flight round-trip.
     var debrief: DebriefResponse? = nil
+    /// #1023: the server built this flight's debrief report at window close
+    /// (owner only). The Debrief section on the Observed tab loads the report
+    /// once this is set. Absent on older servers → nil.
+    var debriefReady: Bool? = nil
+    /// #1023: how many of the report's questions are still unanswered. Drives
+    /// the list's "Needs debrief" glyph (#1024). Absent → nil (= 0).
+    var questionsOpen: Int? = nil
 
     /// Short base62 token for the flight's share link (`/s/{shareCode}`). The
     /// server emits `share_code` on every flight created after migration 049; the
@@ -132,6 +139,16 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
 
     /// Whether this flight already has a stored debrief.
     var hasDebrief: Bool { debrief != nil }
+
+    /// #1024: unanswered debrief questions (server count), 0 when absent.
+    var openDebriefQuestions: Int { questionsOpen ?? 0 }
+
+    /// The list's "Needs debrief" glyph (#1024): owner only, while the report
+    /// has open questions, or on a recent past flight with no debrief yet.
+    var needsDebrief: Bool {
+        guard isEditable else { return false }
+        return openDebriefQuestions > 0 || (flightSection == .recent && !hasDebrief)
+    }
 
     /// Parsed departure date for display.
     var departureDate: Date? {

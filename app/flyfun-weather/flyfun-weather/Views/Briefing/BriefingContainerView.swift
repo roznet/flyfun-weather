@@ -250,6 +250,8 @@ struct BriefingContainerView: View {
                 vm.openObservedFromPush()
             }
             await vm.loadBriefing()
+            // After the window (#1024): the Debrief section on the Observed tab.
+            await loadDebriefSection(vm)
             // D-0 live observations (#637): keep the layer moving while the
             // briefing stays open (no-op outside the live window). Started
             // before `checkActiveRefresh`, which can poll for minutes.
@@ -297,6 +299,8 @@ struct BriefingContainerView: View {
             // (#754): switch to Observed and fetch the live layer now.
             guard let vm = viewModel, appState.takeObservedRequest(flightId: flight.id) else { return }
             vm.openObservedFromPush()
+            // A debrief push (#1024) lands on the section once it loads.
+            Task { await loadDebriefSection(vm) }
             Task { await vm.syncLatestPack(forceLive: true) }
         }
         .onChange(of: viewModel?.selectedTab, initial: true) {
@@ -332,6 +336,16 @@ struct BriefingContainerView: View {
     /// Hidden for flown flights (matches web's renderNotifyOverrideBar isPast
     /// guard): an override on a past flight is a no-op.
     private var canSetNotifications: Bool { flight.isEditable && !flight.isPast }
+    /// The Debrief section (#1024), with the served taxonomy for the cancel
+    /// reasons. A save re-syncs the flights list (its "Needs debrief" glyph
+    /// reads the server's open-question count).
+    private func loadDebriefSection(_ vm: BriefingViewModel) async {
+        let flightId = flight.id
+        await vm.loadDebriefSection(taxonomy: appState.helpCatalog.debriefTaxonomy) { _ in
+            appState.signalExternalSync(flightId: flightId)
+        }
+    }
+
     /// No in-flight-window gate: a PIREP is a position report, and the
     /// reporting form grabs its own GPS fix.
     private var canReportPirep: Bool {

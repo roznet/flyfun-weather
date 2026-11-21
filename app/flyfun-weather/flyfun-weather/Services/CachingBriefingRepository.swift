@@ -490,6 +490,14 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.deleteDebrief(flightId: flightId)
     }
 
+    func debriefReport(flightId: String) async throws -> DebriefReport {
+        try await online.debriefReport(flightId: flightId)
+    }
+
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport {
+        try await online.saveDebriefAnswers(flightId: flightId, request: request)
+    }
+
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {
         try await online.submitDigestFeedback(request)
     }

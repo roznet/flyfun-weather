@@ -23,6 +23,9 @@ nonisolated struct DebriefResponse: Codable, Sendable, Equatable {
     /// tag id → outcome value (`consistent` | `better` | `worse`), flown only.
     let outcomes: [String: String]
     let note: String?
+    /// #1023: `questions` (flown outcomes derived from the report's answers)
+    /// or `legacy` (the old 8-category form). Absent on older servers.
+    var form: String? = nil
     let createdAt: String
     let updatedAt: String
 }
@@ -38,6 +41,9 @@ nonisolated struct DebriefRequest: Encodable, Sendable, Equatable {
     let reasons: [String]
     let outcomes: [String: String]
     let note: String?
+    /// #1023: `questions` from the Debrief section (#1024); nil = the old
+    /// form, omitted from the body (synthesized `encodeIfPresent`).
+    var form: String? = nil
 
     /// JSON body with tag-id dictionary keys preserved verbatim.
     func encoded() throws -> Data {
