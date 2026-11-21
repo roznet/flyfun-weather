@@ -847,18 +847,21 @@ def _escalated_detail(
 ) -> str:
     """The flagged representative's sentence, saying which models hold it.
 
-    "Freezing precipitation 40nm/400nm (10%) (gfs: 1 of 3 models)": the
+    "Freezing precipitation 40nm/400nm (10%) (GFS: 1 of 3 models)": the
     grade was raised over a calmer majority, so the card names the minority
-    it speaks for instead of reading as a consensus.
+    it speaks for instead of reading as a consensus. Models are named by their
+    display label (``ukmo`` -> UKV, #1018): this sentence reaches the card
+    and the digest prompt as-is.
     """
     # Lazy: the strings catalog lives in the analysis layer, which imports models.
     from weatherbrief.analysis.advisories.strings import adv_t
+    from weatherbrief.fetch.variables import model_short_label
 
     valid = [m for m in per_model if m.status != AdvisoryStatus.UNAVAILABLE]
     return adv_t(
         "aggregate.escalated", locale,
         detail=detail,
-        models=", ".join(m.model for m in flagged),
+        models=", ".join(model_short_label(m.model) for m in flagged),
         n=len(flagged),
         total=len(valid),
     )

@@ -41,22 +41,22 @@ def _text(aggregate: AdvisoryStatus, **models: AdvisoryStatus) -> str:
 
 def test_one_model_against_two_is_a_minority_view():
     text = _text(R, gfs=R, ecmwf=G, icon=G)
-    assert "(minority view — only gfs sees RED; ecmwf sees GREEN; icon sees GREEN)" in text
+    assert "(minority view — only GFS sees RED; ECMWF sees GREEN; ICON sees GREEN)" in text
     assert "outlier" not in text
 
 
 def test_one_dissenter_is_still_an_outlier():
     text = _text(R, gfs=R, ecmwf=R, icon=G)
-    assert "(outlier: icon sees GREEN)" in text
+    assert "(outlier: ICON sees GREEN)" in text
     assert "minority" not in text
 
 
 def test_two_against_three_names_both_agreeing_models():
     text = _text(R, gfs=R, ukmo=R, ecmwf=A, icon=G, meteofrance=G)
-    assert "(minority view — only gfs, ukmo see RED;" in text
+    assert "(minority view — only GFS, UKV see RED;" in text
 
 
 def test_aggregate_no_model_matches_keeps_the_outlier_list():
     # A floored aggregate (e.g. DD convective) has no minority to name.
     text = _text(R, gfs=A, ecmwf=G)
-    assert "(outlier: gfs sees AMBER; ecmwf sees GREEN)" in text
+    assert "(outlier: GFS sees AMBER; ECMWF sees GREEN)" in text

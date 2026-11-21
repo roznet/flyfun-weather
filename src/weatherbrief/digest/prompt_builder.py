@@ -183,7 +183,7 @@ def build_digest_context(
             if not hourly:
                 continue
 
-            quant_lines.append(f"[{wf.model.value}]:")
+            quant_lines.append(f"[{model_short_label(wf.model.value)}]:")
 
             # Surface conditions
             sfc_parts = []
@@ -259,9 +259,9 @@ def build_digest_context(
             wc_parts = []
             for model, wc in wp_analysis.wind_components.items():
                 if wc.headwind_kt > 0:
-                    wc_parts.append(f"[{model}] {wc.headwind_kt:.0f}kt headwind")
+                    wc_parts.append(f"[{model_short_label(model)}] {wc.headwind_kt:.0f}kt headwind")
                 else:
-                    wc_parts.append(f"[{model}] {abs(wc.headwind_kt):.0f}kt tailwind")
+                    wc_parts.append(f"[{model_short_label(model)}] {abs(wc.headwind_kt):.0f}kt tailwind")
             quant_lines.append(f"  Wind components: {'; '.join(wc_parts)}")
 
         # Sounding analysis
@@ -442,7 +442,7 @@ def _build_coarse_quant(snapshot: ForecastSnapshot, target_time: datetime) -> st
                     "notable instability" if hourly.cape_jkg >= 500 else "some instability"
                 )
             if parts:
-                lines.append(f"[{wf.model.value}]: {', '.join(parts)}")
+                lines.append(f"[{model_short_label(wf.model.value)}]: {', '.join(parts)}")
 
         wp_analysis = next(
             (a for a in snapshot.analyses if a.waypoint.icao == wp.icao), None
@@ -564,7 +564,7 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
             if idx.bulk_shear_0_6km_kt is not None:
                 parts.append(f"Shear0-6km={idx.bulk_shear_0_6km_kt:.0f}kt")
             if parts:
-                lines.append(f"  Sounding [{model}]: {', '.join(parts)}")
+                lines.append(f"  Sounding [{model_short_label(model)}]: {', '.join(parts)}")
 
         # Cloud, split by provenance so the LLM (and the MCP client reading this
         # via get_digest_context) can tell the model's *native* cloud envelope
@@ -586,15 +586,15 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
         if sa.nwp_cloud_layers is None:
             if sa.cloud_cover_low_pct is not None:
                 lines.append(
-                    f"  Bulk cloud [{model}] (Open-Meteo summary, no native NWP layer): "
+                    f"  Bulk cloud [{model_short_label(model)}] (Open-Meteo summary, no native NWP layer): "
                     f"Low={sa.cloud_cover_low_pct:.0f}%"
                     f", Mid={sa.cloud_cover_mid_pct:.0f}%"
                     f", High={sa.cloud_cover_high_pct:.0f}%"
                 )
             else:
-                lines.append(f"  NWP cloud [{model}]: no native NWP cloud layer")
+                lines.append(f"  NWP cloud [{model_short_label(model)}]: no native NWP cloud layer")
         elif not sa.nwp_cloud_layers:
-            lines.append(f"  NWP cloud [{model}]: none (model clear)")
+            lines.append(f"  NWP cloud [{model_short_label(model)}]: none (model clear)")
         else:
             for cl in sa.nwp_cloud_layers:
                 cc_str = (
@@ -606,14 +606,14 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                     if cl.mean_temperature_c is not None else ""
                 )
                 lines.append(
-                    f"  NWP cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"  NWP cloud [{model_short_label(model)}]: {cl.coverage.value.upper()} "
                     f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{cc_str}{t_str}"
                 )
 
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             conv = sa.convective
             regime = f" [{conv.regime.label}]" if conv.regime else ""
-            lines.append(f"  Convective [{model}]: {conv.risk_level.value}{regime}")
+            lines.append(f"  Convective [{model_short_label(model)}]: {conv.risk_level.value}{regime}")
             for drv in conv.drivers:
                 lines.append(f"    + {drv}")
             for sup in conv.suppressors:
@@ -634,7 +634,7 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 mparts.append(f"top={nwp_conv.top_ft:.0f}ft")
             if mparts:
                 lines.append(
-                    f"  Convective model scheme [{model}] ({nwp_conv.method}): "
+                    f"  Convective model scheme [{model_short_label(model)}] ({nwp_conv.method}): "
                     f"{', '.join(mparts)}"
                 )
 
@@ -650,7 +650,7 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
         for zone in (z for z in sa.icing_zones if z.is_hazardous):
             sld = " SLD!" if zone.sld_risk else ""
             lines.append(
-                f"  Icing zone [{model}]: {zone.risk.value} {zone.icing_type.value} "
+                f"  Icing zone [{model_short_label(model)}]: {zone.risk.value} {zone.icing_type.value} "
                 f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft (Tw={zone.mean_wet_bulb_c:.0f}C){sld}"
             )
 
@@ -665,7 +665,7 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
         for cl in ([] if graded_on_nwp else sa.cloud_layers):
             t_str = f" T={cl.mean_temperature_c:.0f}C" if cl.mean_temperature_c is not None else ""
             lines.append(
-                f"  Cloud [{model}]: {cl.coverage.value.upper()} "
+                f"  Cloud [{model_short_label(model)}]: {cl.coverage.value.upper()} "
                 f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft{t_str}"
             )
 
@@ -679,7 +679,7 @@ def _format_sounding_context(soundings: dict[str, SoundingAnalysis]) -> list[str
                 parts.append(f"snow={p.snow_cm:.1f}cm")
             if p.freezing_rain_risk:
                 parts.append("FREEZING RAIN RISK")
-            lines.append(f"  Precip [{model}]: {', '.join(parts)}")
+            lines.append(f"  Precip [{model_short_label(model)}]: {', '.join(parts)}")
             for zone in p.precipitation_zones:
                 tw_str = f" Tw={zone.mean_wet_bulb_c:.0f}C" if zone.mean_wet_bulb_c is not None else ""
                 lines.append(
@@ -1143,17 +1143,17 @@ def _format_route_advisories_context(manifest: RouteAdvisoriesManifest) -> str:
                         # already treats it as complete.
                         scope = f" {m.affected_domain}" if m.affected_domain else ""
                         parts.append(
-                            f"{m.model} sees {m_status} "
+                            f"{model_short_label(m.model)} sees {m_status} "
                             f"({m.affected_pct:.0f}%{scope} affected)"
                         )
                     else:
-                        parts.append(f"{m.model} sees {m_status}")
+                        parts.append(f"{model_short_label(m.model)} sees {m_status}")
                 # A worst-of aggregate can be one model against the rest:
                 # labelling the rest "outlier" then names the majority as the
                 # dissenters, and the briefer wrote GFS-only LIFR up as
                 # "across models". Say whose view the aggregate is instead.
                 agreeing = [
-                    m.model for m in result.per_model
+                    model_short_label(m.model) for m in result.per_model
                     if m.status.value.upper() == status_tag
                 ]
                 # An aggregate no model matches (a floor, e.g. DD convective)

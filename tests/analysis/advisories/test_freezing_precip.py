@@ -197,7 +197,7 @@ def test_one_red_among_greens_floors_at_amber():
     # The model that raised it speaks for it, and the card says it is alone.
     assert result.representative_model == "gfs"
     assert result.aggregate_detail.startswith("Freezing precipitation")
-    assert "(gfs: 1 of 3 models)" in result.aggregate_detail
+    assert "(GFS: 1 of 3 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
@@ -210,7 +210,7 @@ def test_two_reds_are_red_even_against_a_larger_majority():
     assert result.aggregate_status == AdvisoryStatus.RED
     assert result.escalated_from == AdvisoryStatus.GREEN
     assert result.representative_model in {"ecmwf", "gfs"}
-    assert "(ecmwf, gfs: 2 of 5 models)" in result.aggregate_detail
+    assert "(ECMWF, GFS: 2 of 5 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
@@ -303,8 +303,8 @@ def test_escalation_is_opt_in():
 
 
 @pytest.mark.parametrize("locale, text", [
-    ("fr", "(gfs : 1 modèle(s) sur 3)"),
-    ("de", "(gfs: 1 von 3 Modellen)"),
+    ("fr", "(GFS : 1 modèle(s) sur 3)"),
+    ("de", "(GFS: 1 von 3 Modellen)"),
 ])
 def test_escalated_note_is_localised(locale, text):
     ctx = _multi_ctx({"ecmwf": _GREEN, "gfs": _RED, "icon": _GREEN})
@@ -382,7 +382,7 @@ def test_ecmwf_type_amber_floors_the_card_against_a_green_majority():
     assert result.aggregate_status == AdvisoryStatus.AMBER
     assert result.escalated_from == AdvisoryStatus.GREEN
     assert result.representative_model == "ecmwf"
-    assert "(ecmwf: 1 of 3 models)" in result.aggregate_detail
+    assert "(ECMWF: 1 of 3 models)" in result.aggregate_detail
     assert invariants.check_advisory(result) == []
 
 
