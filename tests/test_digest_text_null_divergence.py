@@ -35,6 +35,6 @@ def test_format_model_agreement_renders_none_as_na():
     lines = _format_model_agreement(_snapshot_with_poor_null_divergence())
     text = "\n".join(lines)
     assert "POOR temperature_c" in text
-    assert "icon=N/A" in text
-    assert "ecmwf=4.0" in text
-    assert "gfs=12.0" in text
+    assert "ICON=N/A" in text
+    assert "ECMWF=4.0" in text
+    assert "GFS=12.0" in text
