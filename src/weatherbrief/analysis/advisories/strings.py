@@ -563,17 +563,34 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Sinkflug, {hi} bis {lo} NM vor dem Ziel",
         "es": "descenso, de {hi} a {lo} NM del destino",
     },
+    # In-cloud breakdown of the VMC headline extent (#1011): the climb / descent
+    # cells are already in the headline, so the sentence says it includes them.
+    "flight_path.in_cloud.includes": {
+        "en": "; this includes {parts}",
+        "fr": " ; dont {parts}",
+        "de": "; davon {parts}",
+        "es": "; incluye {parts}",
+    },
+    "flight_path.in_cloud.joiner": {
+        "en": ", and ", "fr": ", et ", "de": ", und ", "es": ", y ",
+    },
     "flight_path.in_cloud.climb": {
-        "en": "; in cloud on the climb from nm {lo} to nm {hi}, about {minutes} min",
-        "fr": " ; dans les nuages en montée de nm {lo} à nm {hi}, environ {minutes} min",
-        "de": "; in Wolken im Steigflug von NM {lo} bis NM {hi}, etwa {minutes} min",
-        "es": "; en nube en el ascenso de NM {lo} a NM {hi}, unos {minutes} min",
+        "en": "the climb in cloud from nm {lo} to nm {hi}, about {minutes} min",
+        "fr": "la montée dans les nuages de nm {lo} à nm {hi}, environ {minutes} min",
+        "de": "Steigflug in Wolken von NM {lo} bis NM {hi}, etwa {minutes} min",
+        "es": "el ascenso en nube de NM {lo} a NM {hi}, unos {minutes} min",
     },
     "flight_path.in_cloud.descent": {
-        "en": "; in cloud on the descent from {far} nm out to {near} nm out, about {minutes} min",
-        "fr": " ; dans les nuages en descente de {far} nm à {near} nm de l'arrivée, environ {minutes} min",
-        "de": "; in Wolken im Sinkflug von {far} NM bis {near} NM vor dem Ziel, etwa {minutes} min",
-        "es": "; en nube en el descenso de {far} NM a {near} NM del destino, unos {minutes} min",
+        "en": "the descent in cloud from {far} nm out to {near} nm out, about {minutes} min",
+        "fr": "la descente dans les nuages de {far} nm à {near} nm de l'arrivée, environ {minutes} min",
+        "de": "Sinkflug in Wolken von {far} NM bis {near} NM vor dem Ziel, etwa {minutes} min",
+        "es": "el descenso en nube de {far} NM a {near} NM del destino, unos {minutes} min",
+    },
+    "flight_path.list_and": {
+        "en": "{head} and {last}",
+        "fr": "{head} et {last}",
+        "de": "{head} und {last}",
+        "es": "{head} y {last}",
     },
     "aircraft_icing.phase.climb": {
         "en": "climb", "fr": "montée", "de": "Steigflug", "es": "ascenso",
@@ -651,6 +668,33 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "Dégagé à l'altitude de croisière",
         "de": "Klar auf Reiseflughöhe",
         "es": "Despejado a altitud de crucero",
+    },
+
+    # Flight path live (#1011): the cells are graded on the band flown, so
+    # the text names the phases with cloud instead of "at cruise".
+    "vmc_cruise.path.ovc": {
+        "en": "OVC on the {phases} over {extent}",
+        "fr": "OVC en {phases} sur {extent}",
+        "de": "OVC im {phases} über {extent}",
+        "es": "OVC en {phases} sobre {extent}",
+    },
+    "vmc_cruise.path.imc": {
+        "en": "IMC on the {phases} over {extent}",
+        "fr": "IMC en {phases} sur {extent}",
+        "de": "IMC im {phases} über {extent}",
+        "es": "IMC en {phases} sobre {extent}",
+    },
+    "vmc_cruise.path.mostly_clear": {
+        "en": "Mostly clear, IMC on the {phases} over {extent}",
+        "fr": "Majoritairement dégagé, IMC en {phases} sur {extent}",
+        "de": "Überwiegend klar, IMC im {phases} über {extent}",
+        "es": "Mayormente despejado, IMC en {phases} sobre {extent}",
+    },
+    "vmc_cruise.path.clear": {
+        "en": "Clear on the {phases}",
+        "fr": "Dégagé en {phases}",
+        "de": "Klar im {phases}",
+        "es": "Despejado en {phases}",
     },
 
     # --- model_agreement ---
