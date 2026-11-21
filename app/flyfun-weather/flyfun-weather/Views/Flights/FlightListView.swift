@@ -577,6 +577,11 @@ struct FlightListView: View {
             Task { await viewModel?.loadFlights() }
         }
         .onChange(of: selection) { _, newValue in
+            // A row showing the "Debrief" nudge opens its briefing on the
+            // Observed tab's Debrief section (#1024), like the debrief push.
+            if case .flight(let flight) = newValue, flight.needsDebrief {
+                appState.requestObservedTab(flightId: flight.id)
+            }
             // Returned from a briefing (or the map) to the list — re-pull so any
             // per-flight field edited elsewhere (flexibility, departure times,
             // name, alternates config) is current, not just what was cached when

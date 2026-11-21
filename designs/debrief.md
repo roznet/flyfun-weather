@@ -192,7 +192,10 @@ the same section, with the open question count.
 iOS and Android: the briefing's Advisory tab keeps a `DebriefCard` (owner, past flight) with the
 stored decision and an Answer / Open button that switches to the Observed tab. The flights list
 shows the "Needs debrief" glyph from `FlightResponse.needsDebrief`: owner only, and
-`questions_open > 0` or a recent flight with no debrief. `/api/flights` still inlines `debrief`.
+`questions_open > 0` or a recent flight with no debrief. Tapping such a row opens the briefing on
+the Observed tab's Debrief section, through the same request the debrief push uses (iOS
+`AppState.requestObservedTab`, Android `openBriefing(openObserved = true)`); the web list's
+Debrief button links to `briefing.html?flight=…#debrief`. `/api/flights` still inlines `debrief`.
 No stats panel on the apps: `/api/debriefs/stats` is web-only.
 
 ### Cancel reasons
